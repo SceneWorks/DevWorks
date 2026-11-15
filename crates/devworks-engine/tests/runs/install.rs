@@ -408,6 +408,19 @@ fn script_free_install(
     executables: Vec<RegisteredExecutable>,
     environments: &Path,
 ) -> OperationState {
+    script_free_decision(fx, checkout, name, bytes, executables, environments)
+        .unwrap_or_else(|decision| panic!("expected an accepted install, got {decision:?}"))
+}
+
+/// Like [`script_free_install`], but an install that is not accepted returns its decision.
+fn script_free_decision(
+    fx: &Fx,
+    checkout: &Path,
+    name: &str,
+    bytes: &[u8],
+    executables: Vec<RegisteredExecutable>,
+    environments: &Path,
+) -> Result<OperationState, Box<DomainDecision>> {
     std::fs::write(checkout.join(name), bytes).unwrap();
     let rt = runtime();
     rt.block_on(async {
@@ -418,19 +431,19 @@ fn script_free_install(
         );
         let (agent, _) = agent_context(fx);
         let manifest = register_manifest(fx, checkout, name, bytes, "text/plain");
-        let state = settled(
+        let decision = decide(
             &app,
-            decide(
-                &app,
-                &agent,
-                "process.install_project_dependencies",
-                install(None, &manifest),
-                "install-python",
-            ),
-        )
-        .await;
+            &agent,
+            "process.install_project_dependencies",
+            install(None, &manifest),
+            "install-python",
+        );
+        let outcome = match decision {
+            DomainDecision::Accepted { .. } => Ok(settled(&app, decision).await),
+            refused => Err(Box::new(refused)),
+        };
         app.shutdown().await;
-        state
+        outcome
     })
 }
 
@@ -877,4 +890,97 @@ fn a_script_free_install_runs_no_program_repository_configuration_names() {
         ran.is_empty(),
         "a script-free install ran the program repository configuration names: {ran:#?}"
     );
+}
+
+/// Like `cargo fetch`: queries the compiler (`build.rustc`, run through `build.rustc-wrapper`
+/// when one is set) that `.cargo/config.toml` names, and runs a registry's
+/// `credential-provider`; it records that it ran.
+const FAKE_CARGO: &str = "#!/bin/sh\n\
+setting() { sed -n \"s/^$1 *= *\\\"\\(.*\\)\\\"/\\1/p\" .cargo/config.toml 2>/dev/null; }\n\
+for program in \"$(setting rustc)\" \"$(setting rustc-wrapper)\" \"$(setting credential-provider)\"; do\n\
+  if [ -n \"$program\" ]; then \"$program\" -vV > /dev/null 2>&1; fi\n\
+done\n\
+pwd > .install-ran\n";
+
+/// DW-319: an agent's script-free Cargo install runs when the repository's Cargo
+/// configuration only names registries or other inert settings, and is refused, before
+/// anything runs, when it names a program.
+#[test]
+fn a_script_free_cargo_install_accepts_inert_configuration_and_refuses_a_named_program() {
+    let _native_case = native_runtime_case();
+    let manifest = b"[package]\nname = \"fixture\"\nversion = \"0.1.0\"\nedition = \"2021\"\n";
+    // (case, `.cargo/config.toml`, accepted)
+    let cases = [
+        (
+            "registries only",
+            "[registries.internal]\nindex = \"sparse+https://cargo.example.invalid/index/\"\n",
+            true,
+        ),
+        (
+            "vendored source replacement and an alias",
+            "[source.crates-io]\nreplace-with = \"vendored\"\n[source.vendored]\n\
+             directory = \"vendor\"\n[alias]\nxtask = \"run --package xtask --\"\n",
+            true,
+        ),
+        (
+            "tokio_unstable rustflags",
+            "[build]\nrustflags = [\"--cfg\", \"tokio_unstable\"]\n",
+            true,
+        ),
+        (
+            "build.rustc",
+            "[build]\nrustc = \"./planted-program\"\n",
+            false,
+        ),
+        (
+            "build.rustc-wrapper",
+            "[build]\nrustc-wrapper = \"./planted-program\"\n",
+            false,
+        ),
+        (
+            "registries credential-provider",
+            "[registries.internal]\nindex = \"https://example.invalid/i\"\n\
+             credential-provider = \"./planted-program\"\n",
+            false,
+        ),
+        (
+            "target linker",
+            "[target.x86_64-unknown-linux-gnu]\nlinker = \"./planted-program\"\n",
+            false,
+        ),
+    ];
+    let mut wrong = Vec::new();
+    for (case, config, accepted) in cases {
+        let fx = Fx::new();
+        let work = python_work(&fx, "cargo-config-work");
+        let checkout = work.join("checkout");
+        write_script(&checkout.join("planted-program"), PLANTED);
+        std::fs::create_dir_all(checkout.join(".cargo")).unwrap();
+        std::fs::write(checkout.join(".cargo/config.toml"), config).unwrap();
+        let cargo = work.join("tools/cargo");
+        write_script(&cargo, FAKE_CARGO);
+        let outcome = script_free_decision(
+            &fx,
+            &checkout,
+            "Cargo.toml",
+            manifest,
+            vec![RegisteredExecutable {
+                id: id("cargo"),
+                path: cargo,
+            }],
+            &work.join("environments"),
+        );
+        let right = match (&outcome, accepted) {
+            (Ok(state), true) => {
+                *state == OperationState::ObservedComplete && checkout.join(".install-ran").exists()
+            }
+            (Err(decision), false) => matches!(&**decision, DomainDecision::Refused { fault }
+                if fault.code == DomainErrorCode::InvalidArgument),
+            _ => false,
+        };
+        if !right || checkout.join("program-ran").exists() {
+            wrong.push(format!("{case}: {outcome:?}"));
+        }
+    }
+    assert!(wrong.is_empty(), "{wrong:#?}");
 }

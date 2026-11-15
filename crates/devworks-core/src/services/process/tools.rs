@@ -910,10 +910,12 @@ fn binary_only_requirements(manifest: &[u8]) -> bool {
 /// - Yarn: any rc file in the repository root or in the install's home (inside the
 ///   repository). An rc file can name a Yarn release (`yarnPath`, `yarn-path`) or plugins, and
 ///   YAML can spell those keys in ways a text search misses, so any rc file counts.
-/// - Cargo: a Cargo configuration in the repository root or in the install's `CARGO_HOME`
-///   (inside the repository), which can name the compiler, wrappers or credential providers
-///   that even `cargo fetch` runs; and a toolchain file naming a toolchain by path (a TOML key
-///   spelled with an escape needs `\`, so a file with `path`, `/` or `\` counts).
+/// - Cargo: a Cargo configuration in the repository root (`.cargo/config` or
+///   `.cargo/config.toml`) with any setting outside [`inert_cargo_config`]'s allow-list, which
+///   could name the compiler, a wrapper or a credential provider that even `cargo fetch` runs;
+///   any configuration in the old in-repository `CARGO_HOME`; and a toolchain file naming a
+///   toolchain by path (a TOML key spelled with an escape needs `\`, so a file with `path`, `/`
+///   or `\` counts).
 /// - npm, pnpm and Yarn: a `package.json` `packageManager` that is not a plain
 ///   `name@version`, since Corepack (behind a manager shim) downloads and runs the release a
 ///   URL there names; and a `package.json` that does not parse, whose field cannot be checked.
@@ -936,10 +938,17 @@ fn install_runs_repository_code(name: &str, root: &Path) -> bool {
             .flat_map(|directory| [directory.join(".yarnrc.yml"), directory.join(".yarnrc")])
             .any(present),
         "Cargo.toml" | "Cargo.lock" => {
-            let configured = [root.join(".cargo"), root.join(".devworks-cache/cargo")]
+            let repository_config =
+                ["config", "config.toml"].iter().any(|file| {
+                    match std::fs::read(root.join(".cargo").join(file)) {
+                        Ok(bytes) => !inert_cargo_config(&bytes),
+                        Err(error) => error.kind() != std::io::ErrorKind::NotFound,
+                    }
+                });
+            let old_home_config = ["config", "config.toml"]
                 .iter()
-                .flat_map(|directory| [directory.join("config"), directory.join("config.toml")])
-                .any(present);
+                .any(|file| present(root.join(".devworks-cache/cargo").join(file)));
+            let configured = repository_config || old_home_config;
             let toolchain_path = ["rust-toolchain", "rust-toolchain.toml"]
                 .iter()
                 .any(|file| match std::fs::read(root.join(file)) {
@@ -953,6 +962,190 @@ fn install_runs_repository_code(name: &str, root: &Path) -> bool {
         }
         _ => false,
     }
+}
+
+/// Whether a repository's Cargo configuration file holds only settings that name no program a
+/// script-free install (`cargo fetch`) could run. It fails closed: a file that does not parse,
+/// and any table or key not listed here, counts as naming one.
+///
+/// Allowed: `[alias]` (Cargo ignores an alias that shadows a built-in command such as `fetch`),
+/// `[cargo-new]`, `[future-incompat-report]`, `[cache]`, `[gc]`, `[http]`, `[patch]`, `[term]`,
+/// `[resolver]`, `[install]`, `paths`; `build.jobs`, `build.target-dir`, `build.incremental`,
+/// `build.dep-info-basedir`, a `build.target` that is a plain target name (not a `.json` target
+/// specification), and `build.rustflags` of [`inert_rustflags`]; `target.<triple or cfg>`
+/// holding only such `rustflags`; `net.retry`, `net.offline`, `net.git-fetch-with-cli` (it runs
+/// the host's `git`, under the script-free Git overrides, in Cargo's own database) and `net.ssh`;
+/// `[profile]` without `rustflags` or `codegen-backend`; `registry.default`, `registry.token`;
+/// `registries.<name>.index`, `.token`, `.protocol`; and `[source]` replacement (`replace-with`,
+/// `directory`, `registry`, `local-registry`, `git`, `branch`, `tag`, `rev`).
+///
+/// Everything else counts, notably `build.rustc`, `build.rustc-wrapper`,
+/// `build.rustc-workspace-wrapper`, `build.rustdoc`, `target.*.runner`, `target.*.linker`,
+/// `[host]`, `[env]` (it can set variables such as `LD_PRELOAD` for the compiler Cargo queries),
+/// `[unstable]`, `include`, `doc.browser`, `registry.credential-provider`,
+/// `registry.global-credential-providers`, `registries.*.credential-provider` and
+/// `[credential-alias]`.
+fn inert_cargo_config(bytes: &[u8]) -> bool {
+    use toml::Value;
+    let Some(config) = std::str::from_utf8(bytes)
+        .ok()
+        .and_then(|text| text.parse::<toml::Table>().ok())
+    else {
+        return false;
+    };
+    let only = |value: &Value, keys: &[&str]| {
+        value
+            .as_table()
+            .is_some_and(|table| table.keys().all(|key| keys.contains(&key.as_str())))
+    };
+    let each = |value: &Value, keys: &[&str]| {
+        value
+            .as_table()
+            .is_some_and(|table| table.values().all(|entry| only(entry, keys)))
+    };
+    let plain_target = |value: &Value| {
+        let name = |value: &Value| {
+            value.as_str().is_some_and(|name| {
+                !name.is_empty()
+                    && !name.to_ascii_lowercase().ends_with(".json")
+                    && name
+                        .chars()
+                        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
+            })
+        };
+        name(value) || value.as_array().is_some_and(|names| names.iter().all(name))
+    };
+    fn compiler_settings(value: &Value) -> bool {
+        value.as_table().is_some_and(|table| {
+            table.iter().any(|(key, value)| {
+                matches!(key.as_str(), "rustflags" | "codegen-backend") || compiler_settings(value)
+            })
+        })
+    }
+    config.iter().all(|(key, value)| match key.as_str() {
+        "alias"
+        | "cargo-new"
+        | "future-incompat-report"
+        | "cache"
+        | "gc"
+        | "http"
+        | "patch"
+        | "term"
+        | "resolver"
+        | "install"
+        | "paths" => true,
+        "build" => value.as_table().is_some_and(|build| {
+            build.iter().all(|(key, value)| match key.as_str() {
+                "jobs" | "target-dir" | "incremental" | "dep-info-basedir" => true,
+                "target" => plain_target(value),
+                "rustflags" => inert_rustflags(value),
+                _ => false,
+            })
+        }),
+        "target" => value.as_table().is_some_and(|targets| {
+            targets.values().all(|target| {
+                target.as_table().is_some_and(|target| {
+                    target
+                        .iter()
+                        .all(|(key, value)| key == "rustflags" && inert_rustflags(value))
+                })
+            })
+        }),
+        "net" => only(value, &["retry", "offline", "git-fetch-with-cli", "ssh"]),
+        "profile" => value.is_table() && !compiler_settings(value),
+        "registry" => only(value, &["default", "token"]),
+        "registries" => each(value, &["index", "token", "protocol"]),
+        "source" => each(
+            value,
+            &[
+                "replace-with",
+                "directory",
+                "registry",
+                "local-registry",
+                "git",
+                "branch",
+                "tag",
+                "rev",
+            ],
+        ),
+        _ => false,
+    })
+}
+
+/// Whether Cargo `rustflags` (a string of space-separated flags or an array of flags) are only
+/// lint levels (`-D`, `-W`, `-A`, `-F`, `--cap-lints`), `--cfg`/`--check-cfg`, `-g`, `-O`, or
+/// codegen options (`-C`, `--codegen`) that choose how code is generated (`target-cpu`,
+/// `target-feature`, `opt-level`, `debuginfo`, `force-frame-pointers`, `overflow-checks`,
+/// `panic`, `relocation-model`, `code-model`, `strip`, `symbol-mangling-version`,
+/// `split-debuginfo`, `embed-bitcode`, `lto`, `codegen-units`, `debug-assertions`). Cargo passes
+/// them to the compiler it queries during `cargo fetch`; anything else (`-Z`, an `@file`,
+/// `--sysroot`, `linker`, `codegen-backend`, `link-arg`) counts as naming a program.
+fn inert_rustflags(value: &toml::Value) -> bool {
+    const CODEGEN: &[&str] = &[
+        "target-cpu",
+        "target-feature",
+        "opt-level",
+        "debuginfo",
+        "force-frame-pointers",
+        "overflow-checks",
+        "panic",
+        "relocation-model",
+        "code-model",
+        "strip",
+        "symbol-mangling-version",
+        "split-debuginfo",
+        "embed-bitcode",
+        "lto",
+        "codegen-units",
+        "debug-assertions",
+    ];
+    let flags: Vec<&str> = match value {
+        toml::Value::String(flags) => flags.split_whitespace().collect(),
+        toml::Value::Array(flags) => {
+            let Some(flags) = flags.iter().map(toml::Value::as_str).collect::<Option<_>>() else {
+                return false;
+            };
+            flags
+        }
+        _ => return false,
+    };
+    let codegen = |option: &str| CODEGEN.contains(&option.split('=').next().unwrap_or_default());
+    let mut flags = flags.into_iter();
+    while let Some(flag) = flags.next() {
+        let next_is = |flags: &mut std::vec::IntoIter<&str>, check: &dyn Fn(&str) -> bool| {
+            flags
+                .next()
+                .is_some_and(|value| !value.starts_with('-') && check(value))
+        };
+        let inert = match flag {
+            "-g" | "-O" => true,
+            "-D" | "-W" | "-A" | "-F" | "--cap-lints" | "--cfg" | "--check-cfg" => {
+                next_is(&mut flags, &|_| true)
+            }
+            "-C" | "--codegen" => next_is(&mut flags, &codegen),
+            _ => {
+                if let Some(option) = flag
+                    .strip_prefix("--codegen=")
+                    .or_else(|| flag.strip_prefix("-C"))
+                {
+                    codegen(option)
+                } else if let Some(lint) = ["-D", "-W", "-A", "-F"]
+                    .iter()
+                    .find_map(|prefix| flag.strip_prefix(prefix))
+                {
+                    !lint.is_empty() && !lint.starts_with('-')
+                } else {
+                    ["--cfg=", "--check-cfg=", "--cap-lints="]
+                        .iter()
+                        .any(|prefix| flag.starts_with(prefix))
+                }
+            }
+        };
+        if !inert {
+            return false;
+        }
+    }
+    true
 }
 
 /// Whether the `packageManager` of the checkout's `package.json` could name a release other
@@ -4162,6 +4355,97 @@ mod tests {
                 None => std::fs::remove_file(root.join(file)).expect("remove config"),
             }
         }
+        std::fs::remove_dir_all(root).expect("remove test root");
+    }
+
+    /// DW-319: a Cargo configuration of only inert settings installs without scripts; one
+    /// naming a program (or anything not on the allow-list, or that does not parse) does not.
+    #[test]
+    fn only_cargo_configuration_naming_no_program_installs_without_scripts() {
+        let root = std::env::temp_dir().join(format!("devworks-tool-cargo-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join(".cargo")).expect("test root");
+        let inert = [
+            "",
+            "[registries.internal]\nindex = \"sparse+https://cargo.example.invalid/index/\"\n",
+            "[registries.internal]\nindex = \"https://example.invalid/i\"\ntoken = \"t\"\n\
+             protocol = \"sparse\"\n[registry]\ndefault = \"internal\"\n",
+            "[source.crates-io]\nreplace-with = \"vendored\"\n\
+             [source.vendored]\ndirectory = \"vendor\"\n",
+            "[alias]\nxtask = \"run --package xtask --\"\nfetch = \"run\"\n",
+            "[net]\nretry = 3\ngit-fetch-with-cli = true\noffline = false\n",
+            "[http]\nproxy = \"http://proxy.example.invalid:3128\"\ntimeout = 30\n",
+            "[build]\njobs = 4\ntarget-dir = \"out\"\ntarget = \"thumbv7em-none-eabihf\"\n",
+            "[build]\ntarget = [\"x86_64-unknown-linux-gnu\", \"wasm32-unknown-unknown\"]\n",
+            "[build]\nrustflags = [\"--cfg\", \"tokio_unstable\", \"-C\", \"target-cpu=native\"]\n",
+            "[build]\nrustflags = \"-Dwarnings -Ctarget-feature=+crt-static --cfg=x\"\n",
+            "[target.'cfg(target_os = \"linux\")']\nrustflags = [\"-W\", \"unused\"]\n",
+            "[profile.release]\nlto = true\ncodegen-units = 1\n[term]\nverbose = true\n",
+            "[patch.crates-io]\nfoo = { path = \"../foo\" }\n[cargo-new]\nvcs = \"none\"\n",
+            "paths = [\"../local\"]\n[resolver]\nincompatible-rust-versions = \"fallback\"\n",
+        ];
+        for file in ["config.toml", "config"] {
+            for text in inert {
+                std::fs::write(root.join(".cargo").join(file), text).expect("config");
+                for name in ["Cargo.toml", "Cargo.lock"] {
+                    assert!(!install_runs_repository_code(name, &root), "{file}: {text}");
+                }
+            }
+            std::fs::remove_file(root.join(".cargo").join(file)).expect("remove config");
+        }
+        let naming = [
+            "[build]\nrustc = \"./planted\"\n",
+            "[build]\nrustc-wrapper = \"./planted\"\n",
+            "[build]\nrustc-workspace-wrapper = \"./planted\"\n",
+            "[build]\nrustdoc = \"./planted\"\n",
+            "build.rustc = \"./planted\"\n",
+            "[build]\n\"rustc\\u002dwrapper\" = \"./planted\"\n",
+            "[build]\nrustc_wrapper = \"./planted\"\n",
+            "[build]\ntarget = \"./planted-spec.json\"\n",
+            "[build]\ntarget = \"custom.JSON\"\n",
+            "[build]\nrustflags = [\"-Z\", \"codegen-backend=./planted.so\"]\n",
+            "[build]\nrustflags = \"-Ccodegen-backend=./planted.so\"\n",
+            "[build]\nrustflags = [\"-C\", \"linker=./planted\"]\n",
+            "[build]\nrustflags = [\"@./planted-args\"]\n",
+            "[build]\nrustflags = [\"--sysroot\", \"./planted\"]\n",
+            "[build]\nrustflags = [\"-C\"]\n",
+            "[build]\nrustdocflags = [\"--cfg\", \"x\"]\n",
+            "[target.x86_64-unknown-linux-gnu]\nrunner = \"./planted\"\n",
+            "[target.x86_64-unknown-linux-gnu]\nlinker = \"./planted\"\n",
+            "[target.'cfg(unix)']\nrustflags = [\"-C\", \"link-arg=-fuse-ld=./planted\"]\n",
+            "[target.x86_64-unknown-linux-gnu.openssl]\nrustc-link-lib = [\"ssl\"]\n",
+            "[host]\nlinker = \"./planted\"\n",
+            "[env]\nLD_PRELOAD = \"./planted.so\"\n",
+            "[unstable]\nbuild-std = [\"std\"]\n",
+            "include = \"./other.toml\"\n",
+            "[doc]\nbrowser = \"./planted\"\n",
+            "[registry]\ncredential-provider = \"./planted\"\n",
+            "[registry]\nglobal-credential-providers = [\"./planted\"]\n",
+            "[registries.internal]\ncredential-provider = [\"./planted\"]\n",
+            "[credential-alias]\nplanted = \"./planted\"\n",
+            "[net]\ngit-fetch-with-cli = true\ncommand = \"./planted\"\n",
+            "[profile.dev]\nrustflags = [\"-Z\", \"x\"]\n",
+            "[profile.dev.package.foo]\ncodegen-backend = \"./planted\"\n",
+            "[source.planted]\nprocess = \"./planted\"\n",
+            "[build]\nrustc = \"a\"\n[build]\njobs = 1\n",
+            "not toml = = =\n",
+        ];
+        for text in naming {
+            std::fs::write(root.join(".cargo/config.toml"), text).expect("config");
+            assert!(install_runs_repository_code("Cargo.toml", &root), "{text}");
+            // Other managers do not read it.
+            assert!(!install_runs_repository_code("package.json", &root));
+        }
+        // An unsafe `config` counts even beside an inert `config.toml`, and invalid UTF-8 counts.
+        std::fs::write(root.join(".cargo/config.toml"), "[net]\nretry = 1\n").expect("config");
+        std::fs::write(
+            root.join(".cargo/config"),
+            "[build]\nrustc = \"./planted\"\n",
+        )
+        .expect("config");
+        assert!(install_runs_repository_code("Cargo.lock", &root));
+        std::fs::write(root.join(".cargo/config"), [0xff, 0xfe]).expect("config");
+        assert!(install_runs_repository_code("Cargo.lock", &root));
         std::fs::remove_dir_all(root).expect("remove test root");
     }
 
