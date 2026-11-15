@@ -323,6 +323,9 @@ fn invoke(st: Arc<State>, id: Value, inv: Value, cancel: mpsc::Receiver<()>, pac
             let mut last_data = Value::Null;
             let calls = script["calls"].as_array().cloned().unwrap_or_default();
             for (n, step) in calls.iter().enumerate() {
+                if let Some(ms) = step["sleepMs"].as_u64() {
+                    std::thread::sleep(std::time::Duration::from_millis(ms));
+                }
                 let mut call = step["call"].clone();
                 // `"$input"` names this invocation's input; `"$last"` the previous result.
                 for (k, v) in call.as_object().cloned().unwrap_or_default() {

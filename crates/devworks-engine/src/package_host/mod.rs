@@ -267,7 +267,7 @@ struct SlotContext {
     /// Artifact versions of this invocation: its input and the broker's results for it.
     artifacts: Mutex<BTreeSet<(String, String, String)>>,
     /// Pending artifact writes, by the package's write ID ([`artifact_io`]).
-    writes: Mutex<std::collections::BTreeMap<String, Vec<u8>>>,
+    writes: Mutex<artifact_io::Writes>,
 }
 impl SlotContext {
     fn in_scope(&self, artifact: &wire::ArtifactRef) -> bool {

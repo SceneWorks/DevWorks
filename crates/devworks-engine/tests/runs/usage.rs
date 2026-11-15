@@ -1438,6 +1438,9 @@ mod auxiliary_embedding;
 #[path = "mcp_sampling_budget.rs"]
 mod mcp_sampling_budget;
 
+#[path = "package_inference_budget.rs"]
+mod package_inference_budget;
+
 #[path = "budget_warning.rs"]
 mod budget_warning;
 

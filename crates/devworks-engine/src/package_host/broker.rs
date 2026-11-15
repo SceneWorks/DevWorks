@@ -216,13 +216,21 @@ pub(super) fn call(
             super::artifact_io::read(host, ctx, artifact, offset.as_ref())
         }
         BrokerCall::ArtifactAppend { write_id, data } => {
-            super::artifact_io::append(ctx, write_id.as_str(), data)
+            super::artifact_io::append(ctx, params.action_key.as_str(), write_id.as_str(), data)
         }
         BrokerCall::ArtifactPublish {
             write_id,
             media_type,
             sha256,
-        } => super::artifact_io::publish(host, ctx, write_id.as_str(), media_type, sha256),
+        } => super::artifact_io::publish(
+            host,
+            ctx,
+            slot,
+            params.action_key.as_str(),
+            write_id.as_str(),
+            media_type,
+            sha256,
+        ),
         BrokerCall::ArtifactWrite { .. } => Err(rpc_error(
             RpcErrorClass::Unavailable,
             "brokered artifact writes are not yet active",

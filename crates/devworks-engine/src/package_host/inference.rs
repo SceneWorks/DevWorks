@@ -119,7 +119,8 @@ impl PackageInferenceRequest {
     }
 }
 impl PackageInferenceRequest {
-    fn sampling_call(&self) -> Option<SamplingCall> {
+    /// The routed sampling call of this request, when it is within its bounds.
+    pub fn sampling_call(&self) -> Option<SamplingCall> {
         let valid = !self.messages.is_empty()
             && self.messages.len() <= 64
             && (1..=MAX_TOKENS).contains(&self.max_tokens)
@@ -361,8 +362,13 @@ pub(super) fn call(
         .project_id()
         .cloned()
         .map_or(ArtifactScope::Workspace, ArtifactScope::Project);
-    let operation = ctx.operation_id.clone();
+    let (operation, live) = (ctx.operation_id.clone(), slot.clone());
     let committed = run_write(&*host.store, WriteOptions::default(), move |tx| {
+        // Serialized with revocation: a cancelled or expired invocation publishes nothing.
+        let _guard = live.state.lock().unwrap_or_else(|p| p.into_inner());
+        if live.revoked.load(std::sync::atomic::Ordering::SeqCst) {
+            return Err(devworks_core::ports::storage::StorageError::ScopeDenied);
+        }
         let version = service.commit_host_bytes_in_scope(
             tx,
             &pending,
