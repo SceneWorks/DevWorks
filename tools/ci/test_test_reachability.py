@@ -189,5 +189,30 @@ class Reachability(unittest.TestCase):
         self.assertEqual(orphan_names(root), ['group/child.rs'])
 
 
+    def test_descendants_of_an_unevaluable_cfg_attr_path_stay_optional(self):
+        root = crate(self.root, {
+            'root.rs': '#[cfg_attr(windows, path = "../src/win/mod.rs")]\nmod suite;\n',
+            'suite.rs': '',
+        })
+        (root / 'src' / 'win').mkdir()
+        (root / 'src' / 'win' / 'mod.rs').write_text('mod absent;\n', encoding='utf-8')
+        self.assertEqual(orphan_names(root), [])
+
+    def test_cfg_inside_a_true_cfg_attr_disables_the_module_before_its_path_is_followed(self):
+        root = crate(self.root, {
+            'root.rs': ('#[cfg_attr(test, cfg(any()), path = "missing.rs")]\nmod suite;\n'
+                        '#[cfg_attr(test, cfg_attr(test, cfg(any())))]\nmod nested;\n'),
+            'suite.rs': '', 'nested/mod.rs': '',
+        })
+        self.assertEqual(orphan_names(root), ['nested/mod.rs'])
+
+    def test_cfg_inside_an_unevaluable_cfg_attr_does_not_disable_the_module(self):
+        root = crate(self.root, {
+            'root.rs': '#[cfg_attr(windows, cfg(any()))]\nmod suite;\n',
+            'suite/mod.rs': '',
+        })
+        self.assertEqual(orphan_names(root), [])
+
+
 if __name__ == '__main__':
     unittest.main()

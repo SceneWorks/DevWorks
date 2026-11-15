@@ -19,6 +19,7 @@
 //!   pipe within a bound is visible through [`Session::write_stalled`], and terminating the
 //!   process (which never needs the writer) unblocks it.
 use devworks_core::framing;
+use devworks_core::ports::storage::Cancellation;
 use devworks_extension_protocol::frame::{self, FrameError, MAX_FRAME_BYTES};
 use devworks_extension_protocol::package::{
     ContributionEvent, HostRequest, PackageNotification, PackageRequest, RpcError, RpcErrorClass,
@@ -67,6 +68,9 @@ pub struct Slot {
     pub contribution_id: String,
     /// Set first on cancel, timeout, disable or stop: later broker calls are refused.
     pub revoked: AtomicBool,
+    /// Cancelled with the revocation: a brokered call still preparing (a retained receive's
+    /// wait) stops early instead of holding the call until its own bound.
+    pub cancellation: Cancellation,
     pub state: Mutex<SlotState>,
     pub changed: Condvar,
     /// Host-side context the broker resolves calls against.
@@ -81,10 +85,12 @@ pub struct SlotState {
     pub cancel_acknowledged: bool,
 }
 impl Slot {
-    /// Serialize revocation with broker mutations already executing in a store transaction.
+    /// Serialize revocation with broker mutations already executing in a store transaction (a
+    /// brokered call holds the state lock only for its final decision, never its preparation).
     pub fn revoke(&self) {
         let _guard = self.state.lock().unwrap_or_else(|p| p.into_inner());
         self.revoked.store(true, Ordering::SeqCst);
+        self.cancellation.cancel();
     }
     pub fn terminal(&self) -> Option<Reply> {
         self.state

@@ -37,8 +37,8 @@ use devworks_core::gateway::{CommandOutcome, GatewayFailure, QueryOutcome};
 use devworks_core::ports::IdKind;
 use devworks_core::ports::packages::Inspection;
 use devworks_core::ports::storage::{
-    ArtifactScope, AttemptBinding, NewEvent, NewOperation, StorageError, WriteOptions,
-    WriteTransaction, run_write,
+    ArtifactScope, AttemptBinding, Cancellation, NewEvent, NewOperation, StorageError,
+    WriteOptions, WriteTransaction, run_write,
 };
 use devworks_core::protocol::provider::ArtifactRef as HostArtifact;
 use devworks_core::protocol::results::DomainQueryReply;
@@ -60,10 +60,24 @@ pub const APPLICATION_CAPABILITY: &str = "package.broker.application";
 /// Largest arguments artifact a brokered call reads.
 const MAX_ARGUMENTS: u64 = 8 * 1024 * 1024;
 
+/// Runs a command's final transactional decision (the closure) under the caller's fence;
+/// `None` when the fence refused it, so nothing was decided.
+pub type Fence<'a> = &'a dyn Fn(&mut dyn FnMut() -> CommandOutcome) -> Option<CommandOutcome>;
+
 /// The gateway the broker admits application calls through (the runtime's command path).
 pub trait GatewayCalls: Send + Sync {
     fn query(&self, ctx: &InvocationContext, operation: &str, raw: &[u8]) -> QueryOutcome;
-    fn command(&self, ctx: &InvocationContext, operation: &str, raw: &[u8]) -> CommandOutcome;
+    /// Admits a command whose final transactional decision runs inside `fence` (`None` when the
+    /// fence refused it). Preparation that may wait (a retained receive) runs outside the fence
+    /// and stops early once `cancellation` is cancelled.
+    fn command(
+        &self,
+        ctx: &InvocationContext,
+        operation: &str,
+        raw: &[u8],
+        cancellation: Cancellation,
+        fence: Fence<'_>,
+    ) -> Option<CommandOutcome>;
 }
 
 /// What the broker needs besides the package host, attached once by the runtime at boot. The
@@ -370,8 +384,10 @@ fn application(
                 OperationState::Failed,
             ),
         },
-        // A command is admitted and committed under the invocation's revocation lock (as a state
+        // A command's final decision is made under the invocation's revocation lock (as a state
         // compare-and-set is): a cancelled or expired invocation never applies one afterwards.
+        // Its preparation (a retained receive's wait) runs outside the lock and stops when the
+        // invocation is revoked, so the revocation and `host.cancel` are never held behind it.
         Mode::Command => {
             match fenced_command(&*gateway, slot, principal, admitted.descriptor.name, &frame) {
                 None => Ended::Failed(
@@ -435,8 +451,8 @@ fn application(
     }
 }
 
-/// Runs a command while holding the invocation's revocation lock; `None` when it was already
-/// revoked (nothing ran).
+/// Runs a command whose final decision holds the invocation's revocation lock; `None` when the
+/// invocation was revoked before that decision (nothing was decided).
 fn fenced_command(
     gateway: &dyn GatewayCalls,
     slot: &Slot,
@@ -444,11 +460,19 @@ fn fenced_command(
     operation: &str,
     frame: &[u8],
 ) -> Option<CommandOutcome> {
-    let _guard = slot.state.lock().unwrap_or_else(|p| p.into_inner());
-    if slot.revoked.load(std::sync::atomic::Ordering::SeqCst) {
-        return None;
-    }
-    Some(gateway.command(principal, operation, frame))
+    gateway.command(
+        principal,
+        operation,
+        frame,
+        slot.cancellation.clone(),
+        &|decide| {
+            let _guard = slot.state.lock().unwrap_or_else(|p| p.into_inner());
+            if slot.revoked.load(std::sync::atomic::Ordering::SeqCst) {
+                return None;
+            }
+            Some(decide())
+        },
+    )
 }
 
 /// Journals an admitted call before it runs: its operation (`Dispatching`) and a history event
