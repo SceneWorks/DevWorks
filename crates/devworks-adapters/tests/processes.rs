@@ -1653,7 +1653,7 @@ fn approved_container_build_pull_start_and_exec_review_replay_and_refuse_changes
             .set_members(&project("project-a"), &[id("build-repo")])
     });
     fx.cases = fx.cases.clone().with_containers(service.clone());
-    let owners = Arc::new(NativeOwnerPreviews::default().with_containers(Some(service)));
+    let owners = Arc::new(NativeOwnerPreviews::default().with_containers(Some(service.clone())));
     for operation in [
         "containers.build",
         "containers.pull",
@@ -1982,6 +1982,50 @@ fn approved_container_build_pull_start_and_exec_review_replay_and_refuse_changes
             other => panic!("{operation}: a changed input must refuse the replay: {other:?}"),
         }
     }
+
+    // A file of the approved build context that changes after approval (a script the Dockerfile
+    // copies or runs) refuses the build immediately before the engine runs; an unchanged context
+    // passes that check (and fails later only because no engine executable is registered here).
+    let built = |key: &str, tag: &str, edit: Option<&str>| {
+        let input = build(tag);
+        let (p, _) = propose(
+            key,
+            "containers.build",
+            &input,
+            ("project-a", project_revision()),
+        );
+        assert!(p["reviewedContent"]["context"]["sha256"].is_string(), "{p}");
+        assert!(
+            matches!(approve(key, &p), DomainDecision::Applied { .. }),
+            "build approval recorded"
+        );
+        let command = ready(&p);
+        if let Some(content) = edit {
+            std::fs::write(fx.h.root.join("ctx").join("run.sh"), content).unwrap();
+        }
+        let operation_id = match recorded(replay(&command)).0 {
+            DomainDecision::Accepted { operation_id } => operation_id,
+            other => panic!("the approved build is admitted: {other:?}"),
+        };
+        let operation = fx
+            .read(|snapshot| snapshot.operations().operation(&operation_id))
+            .unwrap();
+        service.execute_effect(&operation, &fx.authority())
+    };
+    assert!(
+        matches!(
+            built("build-edited", "app:3", Some("rm -rf /")),
+            ContainerEffectOutcome::Failed(reason) if reason.contains("changed since it was approved")
+        ),
+        "an edited build context is refused before the engine runs"
+    );
+    assert!(
+        !matches!(
+            built("build-unchanged", "app:4", None),
+            ContainerEffectOutcome::Failed(reason) if reason.contains("changed since it was approved")
+        ),
+        "an unchanged build context passes the approval check"
+    );
 
     // The deciding transaction rechecks the same binding: a container that changed after the
     // proposal is not approved.

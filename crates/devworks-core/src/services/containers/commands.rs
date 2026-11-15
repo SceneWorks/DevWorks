@@ -147,13 +147,14 @@ impl CommandHandler for ContainerService {
                         .into()),
                     );
                 }
-                if let Err(failure) = super::approval::recheck_reviewed(
+                match super::approval::recheck_reviewed(
                     tx,
                     ctx,
                     admitted,
                     super::approval::Reviewable::Build(input),
                 ) {
-                    return decided(tx, Err(failure));
+                    Ok(digest) => intent.approved_context_digest = digest,
+                    Err(failure) => return decided(tx, Err(failure)),
                 }
                 match requested_backend(tx, ctx, &input.engine_id, Some(&input.project_id))? {
                     Ok(_) => {}

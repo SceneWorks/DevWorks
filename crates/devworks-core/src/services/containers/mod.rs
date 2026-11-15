@@ -1,6 +1,7 @@
 //! Selected container backend operations and owned agent-work lifecycle (DW-49).
 pub mod approval;
 pub mod backend;
+pub mod build_context;
 mod commands;
 mod effects;
 pub use commands::{CONSUMER as EFFECT_CONSUMER, STOP_CONSUMER};

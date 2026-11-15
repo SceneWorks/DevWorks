@@ -12,6 +12,7 @@
 //! The approval still binds the exact request digest; this review only adds what the owner
 //! currently resolves for it. The deciding transaction and an approved replay recheck the same
 //! binding and refuse with `SourceChanged` when it moved.
+use super::build_context::{self, ContextDigest};
 use super::service::ContainerService;
 use crate::admission::DecodedRequest;
 use crate::authority::redact::{REDACTED, Redactor, sensitive_name};
@@ -405,21 +406,31 @@ fn summary(item: Reviewable<'_>, container: Option<&StoredContainer>) -> String 
     }
 }
 
+/// The approved build context digest a recheck carries over unverified: the transaction does
+/// no filesystem I/O, so the build effect recomputes it immediately before the engine runs.
+fn carry_context_digest(item: Reviewable<'_>, current: &mut Bound, approved: &Value) {
+    if matches!(item, Reviewable::Build(_)) {
+        current.binding["contextDigest"] = approved["contextDigest"].clone();
+    }
+}
+
 /// Readmission of an approved container operation: the project, repositories, Dockerfile
 /// artifact or owned container must still be the ones the person reviewed. An unreviewed request
-/// (no approved binding) is unaffected.
+/// (no approved binding) is unaffected. Returns the approved build context digest, which the
+/// build effect checks against the folder before the engine runs.
 pub(crate) fn recheck_reviewed(
     tx: &mut dyn WriteTransaction,
     ctx: &InvocationContext,
     command: &crate::gateway::AdmittedCommand,
     item: Reviewable<'_>,
-) -> Result<(), Failure> {
+) -> Result<Option<String>, Failure> {
     let Some(approved) =
         crate::services::approvals::owner_preview::approved_binding(tx, ctx, command)?
     else {
-        return Ok(());
+        return Ok(None);
     };
-    let current = binding(&mut Transaction(tx), ctx, item)?;
+    let mut current = binding(&mut Transaction(tx), ctx, item)?;
+    carry_context_digest(item, &mut current, &approved);
     if current.binding != approved {
         return Err(refuse(
             DomainErrorCode::SourceChanged,
@@ -427,7 +438,7 @@ pub(crate) fn recheck_reviewed(
             Some(current.target_id),
         ));
     }
-    Ok(())
+    Ok(approved["contextDigest"].as_str().map(str::to_owned))
 }
 
 impl ContainerService {
@@ -487,6 +498,7 @@ impl ContainerService {
         ctx: &InvocationContext,
         item: Reviewable<'_>,
         container: Option<&StoredContainer>,
+        context: Option<&ContextDigest>,
     ) -> Result<Value, Failure> {
         Ok(match item {
             Reviewable::Create(spec) => {
@@ -517,7 +529,13 @@ impl ContainerService {
                     "engineId": input.engine_id,
                     "projectId": input.project_id,
                     "tag": input.tag,
-                    "context": {"source": input.context, "hostPath": host_path},
+                    "context": {
+                        "source": input.context,
+                        "hostPath": host_path,
+                        "sha256": context.map(|c| c.sha256.as_str()),
+                        "entries": context.map(|c| c.entries),
+                        "bytes": context.map(|c| c.bytes),
+                    },
                     "definition": {
                         "artifactId": input.definition.artifact_id,
                         "versionId": input.definition.version_id,
@@ -559,8 +577,31 @@ impl ContainerService {
         env: &Preparation<'_>,
     ) -> Result<OwnerPreview, Failure> {
         let item = Reviewable::from_request(request)?;
-        let bound = env.read(|snapshot| Ok(binding(&mut Snapshot(snapshot), ctx, item)))??;
-        let reviewed = self.reviewed_content(ctx, item, bound.container.as_ref())?;
+        let mut bound = env.read(|snapshot| Ok(binding(&mut Snapshot(snapshot), ctx, item)))??;
+        // A build is bound to every file of its context, not only the Dockerfile: a script the
+        // Dockerfile copies or runs cannot change after approval unnoticed.
+        let context = match item {
+            Reviewable::Build(input) => {
+                let host = self.reviewed_host_path(
+                    ctx,
+                    &input.context,
+                    &input.project_id,
+                    "container_build_context",
+                )?;
+                let context = build_context::digest(std::path::Path::new(&host)).map_err(|_| {
+                    refuse(
+                        DomainErrorCode::InvalidArgument,
+                        "container_build_context",
+                        Some(input.context.root_id.clone()),
+                    )
+                })?;
+                bound.binding["contextDigest"] = json!(context.sha256);
+                Some(context)
+            }
+            _ => None,
+        };
+        let reviewed =
+            self.reviewed_content(ctx, item, bound.container.as_ref(), context.as_ref())?;
         Ok(OwnerPreview {
             scope: bound.scope,
             target_id: bound.target_id,
@@ -581,7 +622,8 @@ impl ContainerService {
         preview: &OwnerPreview,
     ) -> Result<(), Failure> {
         let item = Reviewable::from_request(request)?;
-        let current = binding(&mut Transaction(tx), ctx, item)?;
+        let mut current = binding(&mut Transaction(tx), ctx, item)?;
+        carry_context_digest(item, &mut current, &preview.binding);
         if preview.scope != current.scope
             || preview.target_id != current.target_id
             || preview.target_revision != current.target_revision
