@@ -534,17 +534,20 @@ fn native_execute_has_receipt_identity_completion_and_bounded_output() {
         proposal.state,
         devworks_core::protocol::records::ApprovalState::Pending
     ));
-    let decided = ops::command_result(backend.human_decision(&ops::command_frame(
-        &*backend,
-        "approvals.record_human_decision",
-        json!({
-            "proposalId": proposal.id,
-            "expectedRevision": proposal.revision,
-            "contentDigest": proposal.content_digest,
-            "decision":"Approve",
-            "rationale":"Consent to the reviewed request; no install was run"
-        }),
-    )))
+    let decided = ops::command_result(backend.human_decision(
+        &ops::command_frame(
+            &*backend,
+            "approvals.record_human_decision",
+            json!({
+                "proposalId": proposal.id,
+                "expectedRevision": proposal.revision,
+                "contentDigest": proposal.content_digest,
+                "decision":"Approve",
+                "rationale":"Consent to the reviewed request; no install was run"
+            }),
+        ),
+        backend.control_epoch(),
+    ))
     .expect("trusted human decision");
     let OperationResult::ApprovalsRecordHumanDecision { value: decision } = decided else {
         panic!("wrong approval result")
