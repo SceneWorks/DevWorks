@@ -204,11 +204,18 @@ pub fn verified(criteria: &[AcceptanceCriterion]) -> bool {
             .all(|c| matches!(c.state, CriterionState::Met) && !c.evidence_ids.0.is_empty())
 }
 
+/// The activation an agent works on an item under, and the item's live primary assignment.
+#[derive(Clone, Debug, PartialEq)]
+pub struct LiveAttempt {
+    pub execution_id: Id,
+    pub assignment_id: Option<crate::protocol::AssignmentId>,
+}
+
 /// What a record projection reads besides the stored item.
 pub struct Extras {
     pub budget: Option<crate::protocol::records::FeatureBudgetView>,
-    /// The root's live activation (its execution ID), if it has one.
-    pub live_execution: Option<Id>,
+    /// The item's live attempt, if an agent works on it.
+    pub live_attempt: Option<LiveAttempt>,
     /// The assessment of the active plan (the readiness that gates work).
     pub readiness: Option<ReadinessAssessment>,
     /// The assessment of the pending replacement draft (gates nothing until adopted).
@@ -323,11 +330,11 @@ pub fn record(
     let (comments, more_comments) = window(&brief.comments, &extras.detail, SUMMARY_COMMENTS);
     let (handoffs, more_handoffs) = window(&brief.handoffs, &extras.detail, SUMMARY_HANDOFFS);
     let attempts: Vec<WorkAttempt> = extras
-        .live_execution
+        .live_attempt
         .iter()
-        .map(|e| WorkAttempt {
-            id: e.clone(),
-            assignment_id: None,
+        .map(|live| WorkAttempt {
+            id: live.execution_id.clone(),
+            assignment_id: live.assignment_id.clone(),
             state: OperationState::Dispatching,
             git_links: BoundedList(Vec::new()),
             checkpoint: None,

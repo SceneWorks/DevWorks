@@ -1108,3 +1108,133 @@ fn a_next_work_claim_costs_the_same_behind_tenfold_completed_history() {
     let large = measure();
     assert_no_growth("next_work claim", small, large);
 }
+
+impl Fx {
+    /// The item's record as `tasks.get` (or `features.get`) answers it.
+    fn record(&self, op: &str, work: &str) -> devworks_core::protocol::records::WorkRecord {
+        let frame = json!({"mode":"Query","protocol":"1.0-draft.1","schemaRevision":1,
+            "queryId":"record","body":{"kind":op,"workId":work,"detailLevel":"Summary"}});
+        match self
+            .cases
+            .query(
+                &self.gateway(),
+                &self.user,
+                op,
+                frame.to_string().as_bytes(),
+            )
+            .unwrap()
+        {
+            devworks_core::protocol::results::DomainQueryReply::Result { result, .. } => {
+                match result {
+                    OperationResult::TasksGet { value }
+                    | OperationResult::FeaturesGet { value } => value,
+                    other => panic!("{other:?}"),
+                }
+            }
+            other => panic!("{other:?}"),
+        }
+    }
+}
+
+#[test]
+fn a_task_record_carries_its_live_assignment_and_counts_as_worked_only_while_it_lives() {
+    let f = Fx::new();
+    f.seed("feature", None, "feature", 1);
+    f.seed("task-a", Some("feature"), "task", 2);
+    f.seed("task-b", Some("feature"), "task", 1);
+    f.scope.approve(&RootId(id("feature")), 1, &[]);
+    f.start(&id("feature"));
+    let coordinator_session = f.session(&id("feature"));
+    let worker_session = f.session(&id("feature"));
+    let service = f.control.clone();
+    let (activation, coordinator, worker) = write(&*f.store, move |tx| {
+        let a = service.claim_activation(tx, &id("supervisor"))?.unwrap();
+        let a = service.start_activation(tx, &a.id, a.owner_epoch)?.unwrap();
+        let actor = tx.store().host_actor.clone();
+        let register = |tx: &mut dyn WriteTransaction, work: &str, parent, session| {
+            service
+                .register_assignment(
+                    tx,
+                    &actor,
+                    devworks_core::services::runs::substrate::NewRunAssignment {
+                        root: RootId(id("feature")),
+                        work: RootId(id(work)),
+                        parent,
+                        session,
+                        scope_key: None,
+                    },
+                )
+                .map(|r| r.unwrap())
+        };
+        let coordinator = register(tx, "feature", None, coordinator_session)?;
+        let worker = register(tx, "task-a", Some(coordinator.id.clone()), worker_session)?;
+        Ok((a, coordinator, worker))
+    })
+    .unwrap();
+    // The worked task runs under its feature's activation and carries its own assignment; the
+    // feature carries its coordinator's; the other task has no attempt.
+    let task = f.record("tasks.get", "task-a");
+    let attempts: Vec<_> = task
+        .attempts
+        .0
+        .iter()
+        .map(|a| (a.id.clone(), a.assignment_id.clone()))
+        .collect();
+    assert_eq!(attempts, [(activation.id.clone(), Some(worker.id.clone()))]);
+    assert_eq!(task.attempt_count.get(), 1);
+    let feature = f.record("features.get", "feature");
+    assert_eq!(
+        feature.attempts.0[0].assignment_id.as_ref(),
+        Some(&coordinator.id)
+    );
+    assert!(f.record("tasks.get", "task-b").attempts.0.is_empty());
+    // The board counts items with an attempt as worked: the feature and its worked task.
+    let worked = ["feature", "task-a", "task-b"]
+        .iter()
+        .map(|w| {
+            f.record(
+                if *w == "feature" {
+                    "features.get"
+                } else {
+                    "tasks.get"
+                },
+                w,
+            )
+        })
+        .filter(|r| !r.attempts.0.is_empty())
+        .count();
+    assert_eq!(worked, 2);
+    // The card records that assignment, and clears it again.
+    let OperationResult::TasksAssign { value } = applied(f.command(
+        "tasks.assign",
+        json!({"taskId":"task-a","expectedRevision":task.revision,
+            "assignmentId":worker.id,"clearAssignment":false}),
+    )) else {
+        panic!()
+    };
+    assert!(value.assigned_agent_id.is_some());
+    let OperationResult::TasksAssign { value } = applied(f.command(
+        "tasks.assign",
+        json!({"taskId":"task-a","expectedRevision":value.revision,"clearAssignment":true}),
+    )) else {
+        panic!()
+    };
+    assert!(value.assigned_agent_id.is_none());
+    // An ended assignment is no longer an attempt.
+    let service = f.control.clone();
+    write(&*f.store, move |tx| {
+        let actor = tx.store().host_actor.clone();
+        service
+            .set_assignment_state(
+                tx,
+                &actor,
+                &worker.id,
+                worker.revision,
+                AssignmentState::Completed,
+                None,
+            )
+            .map(|r| r.unwrap())
+    })
+    .unwrap();
+    assert!(f.record("tasks.get", "task-a").attempts.0.is_empty());
+}
