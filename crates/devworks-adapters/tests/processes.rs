@@ -1890,10 +1890,29 @@ fn approved_container_build_pull_start_and_exec_review_replay_and_refuse_changes
                     json!([{"name":"API_TOKEN","value":"[REDACTED]","credentialRef":null},
                         {"name":"MODE","value":"fast","credentialRef":null}])
                 );
-                assert!(
-                    !reviewed.to_string().contains("s3cr3t-value-1234"),
-                    "{reviewed}"
-                );
+                // Neither the proposal nor its inspection (what the desktop approval detail
+                // shows) carries the secret, in the reviewed content or the saved payload; the
+                // payload keeps the variable and an ordinary value.
+                let inspected = serde_json::to_value(result(fx.query_at(
+                    &human,
+                    "approvals.inspect",
+                    json!({"proposalId":p["id"]}),
+                    Some(3),
+                )))
+                .unwrap()["value"]
+                    .clone();
+                for (what, shown) in [("proposal", &p), ("inspection", &inspected)] {
+                    assert!(
+                        !shown.to_string().contains("s3cr3t-value-1234"),
+                        "{what}: {shown}"
+                    );
+                    assert_eq!(
+                        shown["payload"]["input"]["environment"],
+                        json!([{"name":"API_TOKEN","value":"[REDACTED]"},
+                            {"name":"MODE","value":"fast"}]),
+                        "{what}"
+                    );
+                }
             }
             _ => unreachable!(),
         }

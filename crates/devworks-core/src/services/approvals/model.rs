@@ -79,8 +79,10 @@ pub(crate) fn generic(
         v["rationale"] = json!(content(r));
     }
     if full {
-        v["payload"] = p.payload["content"].clone();
-        v["reviewedContent"] = p.payload["reviewed"].clone();
+        // People and agents read a redacted projection; the stored content stays exact for
+        // digest validation and replay.
+        v["payload"] = public(&p.payload["content"]);
+        v["reviewedContent"] = public(&p.payload["reviewed"]);
         v["operationPreview"] = p
             .payload
             .get("operationPreview")
@@ -97,6 +99,38 @@ pub(crate) fn generic(
             .unwrap_or(Value::Null);
     }
     wire(v)
+}
+/// A proposal's saved input or reviewed content as it is shown: a `{"name", "value"}` pair whose
+/// name marks it as a secret (an environment variable such as `API_TOKEN`) has its value
+/// redacted, and the shared JSON redaction then removes values under secret field names and
+/// credential shapes anywhere. References (`credentialRef`, ids) are kept.
+fn public(content: &Value) -> Value {
+    use crate::authority::redact::{REDACTED, Redactor, sensitive_name};
+    fn named(value: &Value) -> Value {
+        match value {
+            Value::Array(items) => Value::Array(items.iter().map(named).collect()),
+            Value::Object(map) => {
+                let secret = map
+                    .get("name")
+                    .and_then(Value::as_str)
+                    .is_some_and(sensitive_name);
+                Value::Object(
+                    map.iter()
+                        .map(|(k, v)| {
+                            let v = if secret && k == "value" && !v.is_null() {
+                                Value::String(REDACTED.into())
+                            } else {
+                                named(v)
+                            };
+                            (k.clone(), v)
+                        })
+                        .collect(),
+                )
+            }
+            other => other.clone(),
+        }
+    }
+    Redactor::new().redact_json(&named(content))
 }
 pub(crate) fn scope_wire(scope: &crate::ports::storage::ConfigScope) -> Value {
     match scope {
