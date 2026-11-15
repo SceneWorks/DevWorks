@@ -1332,6 +1332,57 @@ impl devworks_core::ports::indexing::StructuralParser for CapturedForeignCall {
         Ok(result)
     }
 }
+/// For every node of the published views of `repositories` together, the edges the graph's node
+/// detail and walks read through the endpoint indexes at either end are the full scan's, in its
+/// order. Returns how many node ends were compared.
+fn foreign_walk_parity(store: &Arc<dyn ApplicationStore>, repositories: &[String]) -> usize {
+    use devworks_core::protocol::data::Direction;
+    use devworks_core::services::graph::{indexed_incident, scanned_incident};
+    use devworks_core::services::indexing::views;
+    let repositories: Vec<devworks_core::protocol::Id> =
+        repositories.iter().map(|r| id(r)).collect();
+    read(&**store, move |s| {
+        let failed = |f| StorageError::InvalidRecord(format!("{f:?}"));
+        let mut layers = Vec::new();
+        for repository in &repositories {
+            let published = s.indexing().published(repository)?.expect("published");
+            layers.push(views::layers(s.indexing(), &published.view_id).map_err(failed)?);
+        }
+        let scope = GraphScope {
+            views: layers
+                .iter()
+                .map(|v| GraphViewBinding {
+                    repository_id: v.view.repository_id.clone(),
+                    view_id: v.view.view_id.clone(),
+                    view_digest: v.view.view_digest.clone(),
+                })
+                .collect(),
+        };
+        let mut compared = 0;
+        for view in &layers {
+            for unit in views::visible_units(s.indexing(), view, 10_000)? {
+                for node in views::unit_nodes(s.indexing(), view, &unit)? {
+                    let node = GraphNodeIdentity {
+                        repository_id: view.view.repository_id.clone(),
+                        unit_key: unit.clone(),
+                        node_id: node.node_id,
+                    };
+                    for direction in [Direction::Forward, Direction::Reverse] {
+                        let expected = scanned_incident(s, &scope, &layers, &node, &direction)
+                            .map_err(failed)?;
+                        if let Some(found) = indexed_incident(s, &scope, &layers, &node, &direction)
+                            .map_err(failed)?
+                        {
+                            assert_eq!(found, expected, "{direction:?} edges of {node:?}");
+                            compared += 1;
+                        }
+                    }
+                }
+            }
+        }
+        Ok(compared)
+    })
+}
 #[test]
 fn native_captured_foreign_identity_never_selects_ordinal_zero_when_the_view_is_ambiguous() {
     let _case = native_runtime_case();
@@ -1419,6 +1470,51 @@ fn native_captured_foreign_identity_never_selects_ordinal_zero_when_the_view_is_
         1,
         "the captured fact initially resolves"
     );
+    // The callee's inbound path finds the foreign call; so it does when the call's stored target
+    // ID is stale, because the graph matches an edge into another repository by its target's
+    // qualified name (read through the qualified-name index).
+    let inbound = || {
+        let answer = page(
+            &app,
+            &ctx,
+            "code.call_path",
+            json!({"kind":"Path","selection":{"target":{"kind":"Name","name":"target","repositoryId":ids["callee"]},"direction":"Inbound","depth":1}}),
+            Some(json!({"kind":"Published","repositoryIds":repositories})),
+            None,
+        );
+        let GraphResult::CallTrace { value } = answer.result else {
+            panic!("inbound")
+        };
+        let callers: Vec<_> = value
+            .entries
+            .0
+            .iter()
+            .map(|e| e.node.name.0.clone())
+            .collect();
+        (value.start.expect("the callee").node_id, callers)
+    };
+    let (target_id, callers) = inbound();
+    assert_eq!(callers, ["caller"]);
+    assert!(foreign_walk_parity(&store, &repositories) > 0);
+    let database = rusqlite::Connection::open(
+        h.root
+            .join(devworks_adapters::storage::sqlite::DATABASE_FILE),
+    )
+    .unwrap();
+    let retarget = |from: &str, to: &str| {
+        let changed = database
+            .execute(
+                "UPDATE graph_edges SET target_node_id=?2 WHERE target_node_id=?1 AND \
+                 json_extract(payload_json,'$.targetQualifiedName') IS NOT NULL",
+                [from, to],
+            )
+            .unwrap();
+        assert_eq!(changed, 1);
+    };
+    retarget(target_id.as_str(), "n-stale");
+    assert_eq!(inbound(), (target_id.clone(), vec!["caller".to_owned()]));
+    assert!(foreign_walk_parity(&store, &repositories) > 0);
+    retarget("n-stale", target_id.as_str());
     let callee = src.join("callee");
     std::fs::write(
         callee.join("src/lib.rs"),
@@ -1619,4 +1715,173 @@ fn native_tied_spans_select_methods_and_complete_overlay_coverage_matches_its_ma
     executor.block_on(app.shutdown());
     let _ = std::fs::remove_dir_all(src);
     assert!(failures.is_empty(), "{}", failures.join("; "));
+}
+
+/// Indexes one repository, `src/lib.rs` (`target`, its caller and theirs) beside ten unrelated
+/// files of 30 functions that each call `calls` others of their file, and returns the store work
+/// of one node detail and of each neighbour walk from `target`, and the edges the index stores.
+fn neighbour_work(calls: usize) -> (Vec<(&'static str, StoreWork)>, usize) {
+    let h = Harness::new();
+    let executor = runtime();
+    let counted = h.open_counted();
+    let store = counted.store.clone();
+    let src = sources();
+    let repo = src.join("neighbours");
+    std::fs::create_dir_all(repo.join("src")).unwrap();
+    std::fs::write(
+        repo.join("src/lib.rs"),
+        "pub fn target() {}\npub fn caller(){target();}\npub fn outer(){caller();}\n",
+    )
+    .unwrap();
+    for i in 0..10 {
+        let body: String = (0..30)
+            .map(|j| {
+                let called: String = (1..=calls)
+                    .map(|k| format!("u{i}_{}();", (j + k) % 30))
+                    .collect();
+                format!("pub fn u{i}_{j}() {{ {called} }}\n")
+            })
+            .collect();
+        std::fs::write(repo.join(format!("src/u{i}.rs")), body).unwrap();
+    }
+    git(&repo, &["init", "-q"]);
+    git(&repo, &["add", "-A"]);
+    git(&repo, &["commit", "-q", "-m", "neighbours"]);
+    let app = executor
+        .block_on(boot(composition(&h, store.clone(), "git")))
+        .unwrap();
+    let ctx = principal(&*store, "user", PrincipalKind::Human);
+    base_directory(&store, &ctx, &src);
+    let repositories = discovered(&app, &ctx);
+    let run = index(&app, &ctx, &repositories[0], "neighbours-index");
+    executor.block_on(within("neighbour index publishes", async {
+        loop {
+            let state = run_state(&store, &run);
+            if state.state == RUN_SUCCEEDED {
+                break;
+            }
+            assert!(!run_terminal(&state.state), "{state:?}");
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    }));
+    let repository = id(&repositories[0]);
+    let edges = read(&*store, move |s| {
+        let published = s.indexing().published(&repository)?.expect("published");
+        let view = s.indexing().view(&published.view_id)?.expect("view");
+        let (mut edges, mut after) = (0, None::<String>);
+        loop {
+            let units = s
+                .indexing()
+                .units(&view.baseline_id, after.as_deref(), 100)?;
+            for unit in &units {
+                edges += s.indexing().edges(&view.baseline_id, &unit.unit_key)?.len();
+            }
+            if units.len() < 100 {
+                return Ok(edges);
+            }
+            after = units.last().map(|u| u.unit_key.clone());
+        }
+    });
+    let found = page(
+        &app,
+        &ctx,
+        "code.search",
+        json!({"kind":"Search","selection":{"mode":"NodeList","text":"target","repositoryId":repositories[0]}}),
+        None,
+        None,
+    );
+    let GraphResult::CodeSearch { value } = &found.result else {
+        panic!("{found:?}")
+    };
+    let target = value
+        .items
+        .0
+        .iter()
+        .find_map(|hit| match hit {
+            devworks_core::protocol::records::CodeSearchHit::Node { node }
+                if node.name.0 == "target" =>
+            {
+                Some(node.node_id.clone())
+            }
+            _ => None,
+        })
+        .unwrap();
+    executor.block_on(app.shutdown());
+    // Measured without the runtime, whose background supervision would share the store.
+    let cases = devworks_core::services::UseCases::new().with_graph(Arc::new(
+        devworks_core::services::graph::GraphService::new(
+            store.clone(),
+            h.clock(),
+            h.ids.clone(),
+            composition(&h, store.clone(), "git").artifacts,
+        ),
+    ));
+    let gateway = devworks_core::gateway::Gateway {
+        authority: &Authority,
+        store: &*store,
+        ids: &*h.ids,
+    };
+    let ask = |operation: &str, query: &Value| {
+        let frame = json!({"protocol":"1.0-draft.1","schemaRevision":3,"queryId":"neighbours","scope":{"kind":"Workspace"},"query":query,"limits":{"maxResults":100,"maxVisited":100000,"deadlineMs":30000},"current":true});
+        match cases
+            .query(&gateway, &ctx, operation, frame.to_string().as_bytes())
+            .expect("addressable")
+        {
+            DomainQueryReply::Result { result, .. } => {
+                let value = serde_json::to_value(result).unwrap();
+                serde_json::from_value::<GraphPage>(value["value"].clone()).unwrap()
+            }
+            other => panic!("{operation}: {other:?}"),
+        }
+    };
+    let mut work = Vec::new();
+    for (operation, query) in [
+        ("code.node_detail", json!({"kind":"Node","nodeId":target})),
+        (
+            "code.traverse",
+            json!({"kind":"Traverse","startIds":[target],"direction":"Reverse","edgeKinds":["CALLS"],"maxDepth":3}),
+        ),
+        (
+            "code.call_path",
+            json!({"kind":"Path","selection":{"target":{"kind":"Node","nodeId":target},"direction":"Inbound","depth":3}}),
+        ),
+        (
+            "code.data_lineage",
+            json!({"kind":"DataLineage","selection":{"kind":"Node","nodeId":target}}),
+        ),
+    ] {
+        // The first request prepares the statements; the second is measured.
+        let first = ask(operation, &query);
+        let (answer, measured) = counted.count(|| ask(operation, &query));
+        assert_eq!(
+            serde_json::to_value(&answer.result).unwrap(),
+            serde_json::to_value(&first.result).unwrap(),
+            "{operation}"
+        );
+        if let GraphResult::NodeDetail { value } = &answer.result {
+            let calls = value.incoming.0.iter().filter(|e| e.edge_kind.0 == "CALLS");
+            assert_eq!(calls.count(), 1, "{value:?}");
+        }
+        if let GraphResult::CallTrace { value } = &answer.result {
+            assert_eq!(value.entries.0.len(), 2, "{value:?}");
+        }
+        work.push((operation, measured));
+    }
+    let _ = std::fs::remove_dir_all(src);
+    (work, edges)
+}
+
+#[test]
+fn node_detail_and_neighbour_walks_read_only_the_edges_of_the_nodes_they_reach() {
+    let _case = native_runtime_case();
+    let (small, small_edges) = neighbour_work(1);
+    let (large, large_edges) = neighbour_work(29);
+    eprintln!("stored edges {small_edges} -> {large_edges}");
+    assert!(
+        large_edges >= 10 * small_edges,
+        "{small_edges} -> {large_edges} stored edges"
+    );
+    for ((operation, small), (_, large)) in small.iter().zip(&large) {
+        assert_no_growth(operation, *small, *large);
+    }
 }

@@ -3931,6 +3931,15 @@ impl GraphRead for Unsupported {
     ) -> Result<Option<GraphPage<GraphEdge>>, StorageError> {
         nope()
     }
+    fn graph_candidate_edges(
+        &self,
+        _: &GraphScope,
+        _: &GraphCandidateFilter,
+        _: Option<&GraphPosition>,
+        _: u16,
+    ) -> Result<Option<GraphPage<GraphEdge>>, StorageError> {
+        nope()
+    }
     fn graph_unlinked_views(
         &self,
         _: Option<&Id>,

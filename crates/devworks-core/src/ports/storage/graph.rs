@@ -165,6 +165,18 @@ pub trait GraphRead {
         after: Option<&GraphPosition>,
         limit: u16,
     ) -> Result<Option<GraphPage<GraphEdge>>, StorageError>;
+    /// The composed edges of `scope` that may end at a node, by the stored endpoint indexes:
+    /// those whose `filter.end` node ID is one of `filter.values` in any unit and repository, or
+    /// (for [`GraphEndpointKey::TargetQualifiedName`]) whose `targetQualifiedName` is one of them.
+    /// A superset of the node's edges: the caller resolves each endpoint itself. Overlay links
+    /// and `None` are as in [`GraphRead::graph_incident_edges`].
+    fn graph_candidate_edges(
+        &self,
+        scope: &GraphScope,
+        filter: &GraphCandidateFilter,
+        after: Option<&GraphPosition>,
+        limit: u16,
+    ) -> Result<Option<GraphPage<GraphEdge>>, StorageError>;
     /// Overlay views (with a branch or worktree layer) whose links are not stored yet.
     fn graph_unlinked_views(
         &self,
@@ -184,6 +196,23 @@ pub struct GraphIncidentFilter {
     pub end: GraphEdgeEnd,
     /// Exact composite identities, at most [`GRAPH_MAX_PAGE`].
     pub nodes: Vec<GraphNodeIdentity>,
+    /// Empty means every kind.
+    pub kinds: Vec<String>,
+}
+/// What [`GraphRead::graph_candidate_edges`] compares with its values.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum GraphEndpointKey {
+    /// The stored, or view-linked, endpoint node ID.
+    NodeId,
+    /// The `targetQualifiedName` of an edge into another repository (target end only).
+    TargetQualifiedName,
+}
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct GraphCandidateFilter {
+    pub end: GraphEdgeEnd,
+    pub key: GraphEndpointKey,
+    /// At most [`GRAPH_MAX_PAGE`].
+    pub values: Vec<String>,
     /// Empty means every kind.
     pub kinds: Vec<String>,
 }
