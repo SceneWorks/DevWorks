@@ -3437,8 +3437,27 @@ impl Admitter {
         options: WriteOptions,
         wake_resumes: bool,
     ) -> CommandOutcome {
+        self.fenced_command(ctx, operation, raw, options, wake_resumes, &|decide| {
+            Some(decide())
+        })
+        .expect("an open fence always decides")
+    }
+
+    /// [`Self::command_with_wakeup`] whose final transactional decision runs inside the caller's
+    /// `fence`; `None` when the fence refused it (nothing was decided). A retained receive's
+    /// preparation runs outside the fence.
+    fn fenced_command(
+        &self,
+        ctx: &InvocationContext,
+        operation: &str,
+        raw: &[u8],
+        options: WriteOptions,
+        wake_resumes: bool,
+        fence: crate::package_host::broker::Fence<'_>,
+    ) -> Option<CommandOutcome> {
         // A retained receive may wait 55 seconds. Its read-only preparation happens without
-        // holding the shutdown fence; only the final transactional decision holds that fence.
+        // holding the shutdown fence or the caller's; only the final transactional decision
+        // holds them.
         let outcome = if operation == "agents.receive" {
             let mut options = options;
             let token = options
@@ -3448,10 +3467,10 @@ impl Admitter {
             let wait_guard = {
                 let open = self.admission.read().unwrap_or_else(|p| p.into_inner());
                 if *open {
-                    return closing_reply(
+                    return Some(closing_reply(
                         raw,
                         self.ids.next_id(devworks_core::ports::IdKind::Correlation),
-                    );
+                    ));
                 }
                 let id = self.next_receive_waiter.fetch_add(1, Ordering::Relaxed);
                 self.receive_waiters
@@ -3467,35 +3486,35 @@ impl Admitter {
                 .use_cases
                 .prepare_receive(&self.gateway(), ctx, raw, options);
             drop(wait_guard);
-            let open = self.admission.read().unwrap_or_else(|p| p.into_inner());
-            if *open {
-                return closing_reply(
-                    raw,
-                    self.ids.next_id(devworks_core::ports::IdKind::Correlation),
-                );
-            }
-            let outcome = match prepared {
-                Ok(prepared) => self
-                    .use_cases
-                    .finish_receive(&self.gateway(), ctx, prepared),
-                Err(outcome) => outcome,
-            };
-            drop(open);
-            outcome
+            let mut prepared = Some(prepared);
+            fence(&mut || {
+                let open = self.admission.read().unwrap_or_else(|p| p.into_inner());
+                if *open {
+                    return closing_reply(
+                        raw,
+                        self.ids.next_id(devworks_core::ports::IdKind::Correlation),
+                    );
+                }
+                match prepared.take().expect("a fence decides once") {
+                    Ok(prepared) => self
+                        .use_cases
+                        .finish_receive(&self.gateway(), ctx, prepared),
+                    Err(outcome) => outcome,
+                }
+            })?
         } else {
-            // Ordinary commands keep the fence through preparation and commit.
-            let open = self.admission.read().unwrap_or_else(|p| p.into_inner());
-            if *open {
-                return closing_reply(
-                    raw,
-                    self.ids.next_id(devworks_core::ports::IdKind::Correlation),
-                );
-            }
-            let outcome =
+            // Ordinary commands keep the fences through preparation and commit.
+            fence(&mut || {
+                let open = self.admission.read().unwrap_or_else(|p| p.into_inner());
+                if *open {
+                    return closing_reply(
+                        raw,
+                        self.ids.next_id(devworks_core::ports::IdKind::Correlation),
+                    );
+                }
                 self.use_cases
-                    .command_with(&self.gateway(), ctx, operation, raw, options);
-            drop(open);
-            outcome
+                    .command_with(&self.gateway(), ctx, operation, raw, options.clone())
+            })?
         };
         let (committed, released) = match &outcome {
             Ok(CommandReply::Recorded { receipt, .. }) => (
@@ -3596,7 +3615,7 @@ impl Admitter {
                 |s| ka.refresh(s.configuration()),
             );
         }
-        outcome
+        Some(outcome)
     }
 }
 impl crate::package_host::broker::GatewayCalls for Admitter {
@@ -3609,8 +3628,19 @@ impl crate::package_host::broker::GatewayCalls for Admitter {
             devworks_core::ports::storage::ReadOptions::default(),
         )
     }
-    fn command(&self, ctx: &InvocationContext, operation: &str, raw: &[u8]) -> CommandOutcome {
-        self.command_with(ctx, operation, raw, WriteOptions::default())
+    fn command(
+        &self,
+        ctx: &InvocationContext,
+        operation: &str,
+        raw: &[u8],
+        cancellation: Cancellation,
+        fence: crate::package_host::broker::Fence<'_>,
+    ) -> Option<CommandOutcome> {
+        let options = WriteOptions {
+            cancellation: Some(cancellation),
+            ..WriteOptions::default()
+        };
+        self.fenced_command(ctx, operation, raw, options, true, fence)
     }
 }
 impl NativeJobDispatch for Admitter {
