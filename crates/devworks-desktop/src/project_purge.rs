@@ -352,11 +352,14 @@ impl ProjectPurgeClient for NativePurgeClient {
         state.live.paths.remove(key);
         state.cleaned.push(scope.clone());
         self.sources.revoke_project(&scope.project_id);
+        // The shell must acknowledge the cleanup before any retry through the fence can settle.
+        if state.online {
+            state.awaiting_ui.insert(key.into());
+        }
         // After the fence is durable: a failure here (or a restart) is retried through the
         // fence above, never against a witness the removal already changed.
         remove_set_aside(&state)?;
         if state.online {
-            state.awaiting_ui.insert(key.into());
             Err(PurgeFileFault::InUse)
         } else {
             Ok(())
@@ -667,6 +670,46 @@ mod tests {
             Err(PurgeFileFault::InUse)
         );
         assert!(!set_aside(&path).exists());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+    #[cfg(unix)]
+    #[test]
+    fn a_purge_whose_set_aside_removal_failed_waits_for_the_shell_on_retry() {
+        use std::os::unix::fs::PermissionsExt;
+        let root =
+            std::env::temp_dir().join(format!("dw323-ack-{}", HostIds::new().token("fixture")));
+        let held = root.join("held");
+        std::fs::create_dir_all(&held).unwrap();
+        let path = root.join("ui-state.json");
+        let client = client(path.clone());
+        client
+            .publish(Memory::default(), Live::default(), true)
+            .unwrap();
+        // The copy sits in a read-only directory, so it stays readable for the review but
+        // cannot be removed, while the fence save beside the saved state still succeeds.
+        let aside = held.join("ui-state.rejected.json");
+        std::fs::write(&aside, b"{\"drafts\":\"PRIVATE\"}").unwrap();
+        client.state.lock().unwrap().set_aside = aside.clone();
+        let reviewed = client.inspect(&scope()).unwrap();
+        let mode = |m| std::fs::set_permissions(&held, std::fs::Permissions::from_mode(m));
+        mode(0o555).unwrap();
+        assert_eq!(
+            client.remove_reviewed(&scope(), &reviewed.digest),
+            Err(PurgeFileFault::Io)
+        );
+        mode(0o755).unwrap();
+        // The retry removes the copy, but the shell has not yet dropped the project's state.
+        assert_eq!(
+            client.remove_reviewed(&scope(), &reviewed.digest),
+            Err(PurgeFileFault::InUse)
+        );
+        assert!(!aside.exists());
+        assert_eq!(
+            client.remove_reviewed(&scope(), &reviewed.digest),
+            Err(PurgeFileFault::InUse)
+        );
+        client.acknowledge(&scope());
+        assert_eq!(client.remove_reviewed(&scope(), &reviewed.digest), Ok(()));
         std::fs::remove_dir_all(root).unwrap();
     }
 }
