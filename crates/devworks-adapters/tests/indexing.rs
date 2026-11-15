@@ -3353,3 +3353,303 @@ fn review_overlay_records_its_build_configuration_when_the_queued_request_is_old
         );
     }
 }
+
+fn graph_scope(view: &views::ViewLayers) -> GraphScope {
+    GraphScope {
+        views: vec![GraphViewBinding {
+            repository_id: view.view.repository_id.clone(),
+            view_id: view.view.view_id.clone(),
+            view_digest: view.view.view_digest.clone(),
+        }],
+    }
+}
+
+/// The composed edges incident to `node` through the stored endpoint indexes, read two per page
+/// so the continuation is exercised; `None` while the view has no stored links.
+fn incident_edges(
+    fx: &Fx,
+    view: &views::ViewLayers,
+    end: GraphEdgeEnd,
+    node: &GraphNodeIdentity,
+) -> Option<Vec<GraphEdge>> {
+    let mut after: Option<GraphPosition> = None;
+    let mut out = Vec::new();
+    loop {
+        let (scope, a) = (graph_scope(view), after.clone());
+        let filter = GraphIncidentFilter {
+            end,
+            nodes: vec![node.clone()],
+            kinds: Vec::new(),
+        };
+        let page = fx.read(move |s| {
+            s.graph()
+                .graph_incident_edges(&scope, &filter, a.as_ref(), 2)
+        })?;
+        let more = page.has_more;
+        after = page.items.last().map(|e| GraphPosition {
+            repository_id: e.repository_id.clone(),
+            unit_key: e.edge.unit_key.clone(),
+            item_id: e.edge.edge_id.clone(),
+        });
+        out.extend(page.items);
+        if !more {
+            return Some(out);
+        }
+    }
+}
+
+/// Whether `edge` (as composed) has `node` at `end`, by the identity [`GraphEdgeFilter`]
+/// documents.
+fn at_end(edge: &GraphEdge, end: GraphEdgeEnd, node: &GraphNodeIdentity) -> bool {
+    let p = &edge.edge.payload;
+    let repo = |key: &str| {
+        p.get(key)
+            .and_then(Value::as_str)
+            .unwrap_or(edge.repository_id.as_str())
+            .to_owned()
+    };
+    match end {
+        GraphEdgeEnd::Source => {
+            repo("sourceRepositoryId") == node.repository_id.as_str()
+                && p.get("sourceUnit")
+                    .and_then(Value::as_str)
+                    .unwrap_or(&edge.edge.unit_key)
+                    == node.unit_key
+                && edge.edge.source_node_id == node.node_id
+        }
+        GraphEdgeEnd::Target => {
+            repo("targetRepositoryId") == node.repository_id.as_str()
+                && p.get("targetUnit").and_then(Value::as_str) == Some(node.unit_key.as_str())
+                && edge.edge.target_node_id == node.node_id
+        }
+    }
+}
+
+/// For every node of the view and every endpoint the scan reports, the indexed read returns
+/// exactly the edges the graph scan (with its overlay relinking) has at that endpoint, in the
+/// same order. Returns how many edges were compared.
+fn assert_incident_parity(fx: &Fx, view: &views::ViewLayers) -> usize {
+    let (s, v) = (graph_scope(view), view.clone());
+    let scanned = fx.read(move |r| {
+        devworks_core::services::graph::scanned_edges(r, &s, std::slice::from_ref(&v))
+            .map_err(|f| StorageError::InvalidRecord(format!("{f:?}")))
+    });
+    let v = view.clone();
+    let units = fx.read(move |s| views::visible_units(s.indexing(), &v, 10_000));
+    let mut nodes = std::collections::BTreeSet::new();
+    for unit in &units {
+        for n in fx.nodes(view, unit) {
+            nodes.insert((unit.clone(), n.node_id));
+        }
+    }
+    for e in &scanned {
+        nodes.insert((e.edge.unit_key.clone(), e.edge.source_node_id.clone()));
+        if let Some(unit) = e.edge.payload.get("targetUnit").and_then(Value::as_str) {
+            nodes.insert((unit.to_owned(), e.edge.target_node_id.clone()));
+        }
+    }
+    let mut compared = 0;
+    for (unit_key, node_id) in nodes {
+        let node = GraphNodeIdentity {
+            repository_id: view.view.repository_id.clone(),
+            unit_key,
+            node_id,
+        };
+        for end in [GraphEdgeEnd::Source, GraphEdgeEnd::Target] {
+            let expected: Vec<&GraphEdge> =
+                scanned.iter().filter(|e| at_end(e, end, &node)).collect();
+            let found = incident_edges(fx, view, end, &node).expect("the view has stored links");
+            assert_eq!(
+                found.iter().collect::<Vec<_>>(),
+                expected,
+                "{end:?} edges of {node:?}"
+            );
+            compared += found.len();
+        }
+    }
+    compared
+}
+
+#[test]
+fn indexed_incident_edge_reads_match_the_composed_scan_and_follow_a_rebound_target() {
+    let _s = serial();
+    let fx = Fx::new(|_| {});
+    let src = Temp::new("incident-edges");
+    let dir = src.join("repo");
+    repo(
+        &dir,
+        &[
+            (
+                "a.rs",
+                "fn caller() { ping(); helper(); }\nfn helper() { ping(); }\n",
+            ),
+            ("b.rs", "fn ping() {}\n"),
+            ("d.rs", "fn other() { helper(); }\n"),
+        ],
+    );
+    fx.base_directory(&src.0);
+    fx.scan();
+    let r = fx.repository_at(&dir);
+    run_of(decision(fx.index(&r, false, "1")));
+    fx.drain();
+    let baseline = fx.published(&r);
+    let ping = |view: &views::ViewLayers, unit: &str| {
+        let node = fx
+            .nodes(view, unit)
+            .into_iter()
+            .find(|n| n.name == "ping")
+            .expect("a ping definition");
+        GraphNodeIdentity {
+            repository_id: r.clone(),
+            unit_key: unit.into(),
+            node_id: node.node_id,
+        }
+    };
+    let callers = |edges: &[GraphEdge]| {
+        edges
+            .iter()
+            .filter(|e| e.edge.kind == "CALLS")
+            .map(|e| e.edge.unit_key.clone())
+            .collect::<Vec<_>>()
+    };
+    let b_ping = ping(&baseline, "b.rs");
+    let into_b = incident_edges(&fx, &baseline, GraphEdgeEnd::Target, &b_ping).unwrap();
+    assert_eq!(callers(&into_b), ["a.rs", "a.rs"], "{into_b:?}");
+    assert!(assert_incident_parity(&fx, &baseline) > 0);
+
+    // The worktree deletes b.rs and defines ping in c.rs: a.rs's inherited calls rebind there.
+    write(&dir, "c.rs", "fn ping() {}\n");
+    std::fs::remove_file(dir.join("b.rs")).unwrap();
+    let w = worktree_id(&r, &fx.identity(&dir));
+    run_of(decision(fx.index_command(
+        "indexing.refresh_overlay",
+        json!({"kind":"RefreshOverlay","repositoryId":r,"worktreeId":w,"expectedSourceRevision":"1"}),
+    )));
+    fx.drain();
+    let (r2, w2) = (r.clone(), w.clone());
+    let overlay = fx
+        .read(move |s| s.indexing().overlay_for(&r2, &w2))
+        .unwrap();
+    assert_eq!(overlay.state, OVERLAY_READY);
+    let view = exact_view(&fx, overlay.view_id.as_ref().unwrap());
+    let c_ping = ping(&view, "c.rs");
+    let into_c = incident_edges(&fx, &view, GraphEdgeEnd::Target, &c_ping).unwrap();
+    assert_eq!(callers(&into_c), ["a.rs", "a.rs"], "{into_c:?}");
+    assert!(
+        into_c
+            .iter()
+            .filter(|e| e.edge.kind == "CALLS")
+            .all(|e| e.generation_id == baseline.view.baseline_id),
+        "the calls are the baseline layer's inherited edges, read through the view's links: {:?} in {:?}",
+        into_c.iter().map(|e| &e.generation_id).collect::<Vec<_>>(),
+        view.layers
+    );
+    assert!(
+        incident_edges(&fx, &view, GraphEdgeEnd::Target, &b_ping)
+            .unwrap()
+            .is_empty(),
+        "the stored target in the deleted unit is not an endpoint of the view"
+    );
+    assert!(assert_incident_parity(&fx, &view) > 0);
+    let store = fx.root.join("data").join("workspace.sqlite");
+    let raw = rusqlite::Connection::open(&store).unwrap();
+    let view_id = view.view.view_id.as_str().to_owned();
+    let stored_links: i64 = raw
+        .query_row(
+            "SELECT count(*) FROM graph_view_links WHERE view_id=?1",
+            [&view_id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert!(stored_links >= 2, "{stored_links}");
+
+    // An overlay view from before migration 58 has no stored links: the read says so, and
+    // housekeeping links it.
+    raw.execute("DELETE FROM graph_view_links WHERE view_id=?1", [&view_id])
+        .unwrap();
+    raw.execute(
+        "DELETE FROM graph_view_link_sets WHERE view_id=?1",
+        [&view_id],
+    )
+    .unwrap();
+    assert!(incident_edges(&fx, &view, GraphEdgeEnd::Target, &c_ping).is_none());
+    let hk = fx.worker.housekeeping(false, &|| false).unwrap();
+    assert_eq!(hk.linked_views, 1);
+    assert_eq!(
+        incident_edges(&fx, &view, GraphEdgeEnd::Target, &c_ping).unwrap(),
+        into_c
+    );
+    assert!(assert_incident_parity(&fx, &view) > 0);
+}
+
+/// Measures what storing an overlay view's links adds to its publication: the link pass over a
+/// generated repository, against the whole overlay refresh and one composed scan of the view.
+/// Run with `--ignored --nocapture`; it asserts nothing about time.
+#[test]
+#[ignore]
+fn measure_overlay_link_cost() {
+    let _s = serial();
+    let files: usize = std::env::var("DW_LINK_FILES")
+        .ok()
+        .and_then(|n| n.parse().ok())
+        .unwrap_or(1_000);
+    let fx = Fx::new(|_| {});
+    let src = Temp::new("link-cost");
+    let dir = src.join("repo");
+    let sources: Vec<(String, String)> = (0..files)
+        .map(|i| {
+            (
+                format!("m{i}.rs"),
+                format!(
+                    "fn f{i}() {{ f{}(); shared(); }}\nfn g{i}() {{ f{i}(); }}\n",
+                    (i + 1) % files
+                ),
+            )
+        })
+        .chain([("shared.rs".to_owned(), "fn shared() {}\n".to_owned())])
+        .collect();
+    let refs: Vec<(&str, &str)> = sources
+        .iter()
+        .map(|(p, t)| (p.as_str(), t.as_str()))
+        .collect();
+    repo(&dir, &refs);
+    fx.base_directory(&src.0);
+    fx.scan();
+    let r = fx.repository_at(&dir);
+    run_of(decision(fx.index(&r, false, "1")));
+    fx.drain();
+    // The worktree moves `shared` to another file, so every inherited call to it rebinds.
+    std::fs::remove_file(dir.join("shared.rs")).unwrap();
+    write(&dir, "moved.rs", "fn shared() {}\n");
+    let w = worktree_id(&r, &fx.identity(&dir));
+    run_of(decision(fx.index_command(
+        "indexing.refresh_overlay",
+        json!({"kind":"RefreshOverlay","repositoryId":r,"worktreeId":w,"expectedSourceRevision":"1"}),
+    )));
+    let refresh = Instant::now();
+    fx.drain();
+    let refresh = refresh.elapsed();
+    let (r2, w2) = (r.clone(), w.clone());
+    let overlay = fx
+        .read(move |s| s.indexing().overlay_for(&r2, &w2))
+        .unwrap();
+    let view = exact_view(&fx, overlay.view_id.as_ref().unwrap());
+    let (layers, repository) = (view.layers.clone(), r.clone());
+    let started = Instant::now();
+    let links = fx.read(move |s| {
+        devworks_core::services::indexing::worker::view_links(s.indexing(), &repository, &layers)
+    });
+    let link_pass = started.elapsed();
+    let (scope, v) = (graph_scope(&view), view.clone());
+    let started = Instant::now();
+    let scanned = fx.read(move |s| {
+        devworks_core::services::graph::scanned_edges(s, &scope, std::slice::from_ref(&v))
+            .map_err(|f| StorageError::InvalidRecord(format!("{f:?}")))
+    });
+    let scan = started.elapsed();
+    println!(
+        "files={files} edges={} links={} link_pass={link_pass:?} overlay_refresh={refresh:?} one_scan={scan:?}",
+        scanned.len(),
+        links.len()
+    );
+}

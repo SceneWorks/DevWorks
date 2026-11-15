@@ -379,3 +379,35 @@ pub(super) fn edges(
     }
     Ok(())
 }
+
+/// Every visible edge of `scope` as the graph operators read it today, an overlay view's
+/// inherited edges relinked against that view; derived package dependencies are left out. The
+/// reference the stored endpoint reads are checked against.
+#[doc(hidden)]
+pub fn scanned_edges(
+    read: &dyn ReadSnapshot,
+    scope: &GraphScope,
+    layers: &[ViewLayers],
+) -> Result<Vec<GraphEdge>, Failure> {
+    let mut budget = Budget::new(&crate::protocol::data::QueryLimits {
+        max_results: 500,
+        max_visited: 1_000_000,
+        deadline_ms: 300_000,
+    });
+    let mut out = Vec::new();
+    edges(read, scope, layers, &[], &mut budget, |edge, _| {
+        let raw = match edge {
+            Ok(edge) => edge.raw,
+            Err(unmapped) => unmapped.raw,
+        };
+        // A derived package dependency is not a stored edge (see `packages`).
+        if !raw.edge.edge_id.starts_with("derived-") {
+            out.push(raw);
+        }
+        Ok(true)
+    })?;
+    if let Some(reason) = budget.exhausted {
+        return Err(StorageError::InvalidRecord(reason.into()).into());
+    }
+    Ok(out)
+}
