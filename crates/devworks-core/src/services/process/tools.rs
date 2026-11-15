@@ -3843,6 +3843,11 @@ mod tests {
         let root = Path::new("/repo");
         let home = Path::new("/host/home");
         let at = |relative: &str| root.join(relative).to_string_lossy().into_owned();
+        let store = home.join("pnpm-store").to_string_lossy().into_owned();
+        let cache = format!(
+            "--config.cache-dir={}",
+            home.join(".cache/pnpm").to_string_lossy()
+        );
         let names = |args: &[&str]| args.iter().map(|arg| (*arg).to_owned()).collect::<Vec<_>>();
         let requirements = b"requests==2.32.3 --hash=sha256:abc\n".as_slice();
         let host = HostPython {
@@ -3886,8 +3891,8 @@ mod tests {
                     "--config.manage-package-manager-versions=false",
                     "--config.pm-on-fail=ignore",
                     "--store-dir",
-                    "/host/home/pnpm-store",
-                    "--config.cache-dir=/host/home/.cache/pnpm",
+                    &store,
+                    &cache,
                     "--dir",
                     "/repo",
                 ]),
@@ -3895,8 +3900,8 @@ mod tests {
                     "install",
                     "--frozen-lockfile",
                     "--store-dir",
-                    "/host/home/pnpm-store",
-                    "--config.cache-dir=/host/home/.cache/pnpm",
+                    &store,
+                    &cache,
                     "--dir",
                     "/repo",
                 ]),
