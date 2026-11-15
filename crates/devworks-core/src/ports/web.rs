@@ -160,6 +160,23 @@ impl std::fmt::Debug for HopResponse {
 /// credentials, and must bound the response head they accept.
 pub trait HopTransport: Send + Sync {
     fn get(&self, request: &HopRequest<'_>) -> Result<HopResponse, NetFault>;
+    /// Sends `method` (`GET`, `POST`, `PUT`, `DELETE` or `PATCH`) with `body` (sent with its
+    /// `Content-Length`). A transport that only fetches sends a `GET` without a body and refuses
+    /// anything else unsent.
+    fn send(
+        &self,
+        request: &HopRequest<'_>,
+        method: &str,
+        body: &[u8],
+    ) -> Result<HopResponse, NetFault> {
+        if method == "GET" && body.is_empty() {
+            return self.get(request);
+        }
+        Err(NetFault::NotSent {
+            reason: "this transport sends only GET".into(),
+            timed_out: false,
+        })
+    }
 }
 
 /// One page request to a search provider.

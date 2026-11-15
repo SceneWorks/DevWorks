@@ -174,6 +174,18 @@ Package index sources.
 
 Signed publisher indexes the Add-ons screen lists available packs from: an https index URL or a local directory holding devworks-index.json, each with the publisher's Ed25519 public key (hex) the index must be signed with. Only a person applies a change (an agent's change is a proposal). None by default.
 
+## packages.connections
+
+Package connections.
+
+- Default: `Vec::<serde_json::Value>::new()`
+- Scope: Workspace only
+- Adoption: NextAdmission
+- Policy: Configurable
+- Section: Tools
+
+Named connections add-ons reach over HTTPS: each has a name, the network endpoint an add-on must be granted, a base URL, and optionally a credential kept in the OS secret store and sent only in its header to that URL. Requests follow the web fetch network rules. None by default.
+
 ## tools.shell
 
 Shell commands.

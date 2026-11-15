@@ -137,6 +137,11 @@ pub enum ValueKind {
     /// location an `https://` index URL or an absolute local directory, the key 64 hex digits
     /// of an Ed25519 public key.
     PackageIndexSources,
+    /// Named host connections packages reach through `broker.call` HTTP: at most 32
+    /// `{"name", "endpointId", "baseUrl", "credential"?, "credentialHeader"?}` objects, the base an
+    /// `https://` URL without query or fragment, the credential a secret-store reference sent
+    /// only in its header (default `Authorization`) to that origin.
+    PackageConnections,
     /// A host-minted secret-store reference `{"secretRef": "dwsecret-<opaque id>"}` (see
     /// [`super::validate::is_secret_ref`]); never a credential value.
     SecretRef,
@@ -313,6 +318,19 @@ impl SettingDescriptor {
                     "properties": {
                         "location": {"type": "string", "minLength": 1, "maxLength": 2048},
                         "publicKey": {"type": "string", "pattern": "^[0-9a-f]{64}$"}}}
+            }),
+            ValueKind::PackageConnections => json!({
+                "type": "array", "maxItems": 32,
+                "items": {"type": "object", "required": ["name", "endpointId", "baseUrl"],
+                    "additionalProperties": false,
+                    "properties": {
+                        "name": {"type": "string", "pattern": "^[A-Za-z0-9_-]{1,128}$"},
+                        "endpointId": {"type": "string", "pattern": "^[A-Za-z0-9_-]{1,128}$"},
+                        "baseUrl": {"type": "string", "minLength": 9, "maxLength": 2048},
+                        "credential": {"type": "object", "required": ["secretRef"],
+                            "additionalProperties": false,
+                            "properties": {"secretRef": {"type": "string", "pattern": "^dwsecret-[A-Za-z0-9]{16,96}$"}}},
+                        "credentialHeader": {"type": "string", "pattern": "^[A-Za-z0-9-]{1,64}$"}}}
             }),
             ValueKind::SecretRef => json!({
                 "type": "object", "required": ["secretRef"], "additionalProperties": false,
@@ -532,6 +550,16 @@ fn build() -> Vec<SettingDescriptor> {
             Tools,
             WORKSPACE,
             ValueKind::PackageIndexSources,
+            Vec::<serde_json::Value>::new(),
+            NextAdmission
+        ),
+        setting!(
+            PACKAGE_CONNECTIONS_KEY,
+            "Package connections",
+            "Named connections add-ons reach over HTTPS: each has a name, the network endpoint an add-on must be granted, a base URL, and optionally a credential kept in the OS secret store and sent only in its header to that URL. Requests follow the web fetch network rules. None by default.",
+            Tools,
+            WORKSPACE,
+            ValueKind::PackageConnections,
             Vec::<serde_json::Value>::new(),
             NextAdmission
         ),
@@ -957,6 +985,8 @@ pub const ARTIFACT_QUOTA_KEY: &str = "storage.artifactQuotaBytes";
 pub const ARTIFACT_MAX_FILE_KEY: &str = "storage.artifactMaxFileBytes";
 /// Signed publisher index sources of available packages.
 pub const PACKAGE_INDEX_SOURCES_KEY: &str = "packages.indexSources";
+/// Named host connections of brokered package HTTP calls.
+pub const PACKAGE_CONNECTIONS_KEY: &str = "packages.connections";
 /// Days a diagnostic log record is retained.
 pub const LOG_RETENTION_DAYS_KEY: &str = "diagnostics.logRetentionDays";
 /// Most diagnostic log records retained.

@@ -184,6 +184,22 @@ pub fn check_value(d: &SettingDescriptor, v: &Value) -> Vec<Issue> {
             Some(_) => out.push(ty("at most 16 index sources")),
             None => out.push(ty("a list of index sources")),
         },
+        ValueKind::PackageConnections => match v.as_array() {
+            Some(items) if items.len() <= 32 => {
+                let mut names = std::collections::HashSet::new();
+                for (i, item) in items.iter().enumerate() {
+                    if let Some(why) = connection_issue(item, &mut names) {
+                        out.push(Issue::blocking(
+                            key,
+                            codes::TYPE,
+                            format!("Connection {}: {why}", i + 1),
+                        ));
+                    }
+                }
+            }
+            Some(_) => out.push(ty("at most 32 connections")),
+            None => out.push(ty("a list of connections")),
+        },
         ValueKind::SecretRef => {
             let reference = v
                 .as_object()
@@ -217,6 +233,87 @@ pub const SECRET_REF_PREFIX: &str = "dwsecret-";
 /// Whether `s` is a host-minted secret-store reference: [`SECRET_REF_PREFIX`] followed by an
 /// opaque id of 16..=96 ASCII letters and digits. Neither the reference nor its id may look
 /// like a credential, so a pasted token wrapped in the reference shape is still refused.
+/// Header names a connection credential may not travel in (the transport sets them).
+const RESERVED_HEADERS: [&str; 7] = [
+    "host",
+    "content-length",
+    "transfer-encoding",
+    "connection",
+    "user-agent",
+    "accept",
+    "accept-encoding",
+];
+
+/// Why one `packages.connections` entry is invalid, if it is.
+fn connection_issue(item: &Value, names: &mut std::collections::HashSet<String>) -> Option<String> {
+    let Some(o) = item.as_object() else {
+        return Some("needs an object".into());
+    };
+    let allowed = [
+        "name",
+        "endpointId",
+        "baseUrl",
+        "credential",
+        "credentialHeader",
+    ];
+    if o.keys().any(|k| !allowed.contains(&k.as_str())) {
+        return Some("has an unknown field".into());
+    }
+    let id = |field: &str| {
+        o.get(field)
+            .and_then(Value::as_str)
+            .filter(|s| crate::protocol::Id::new(*s).is_ok())
+    };
+    let Some(name) = id("name") else {
+        return Some("needs a name of letters, digits, _ and -".into());
+    };
+    if !names.insert(name.to_owned()) {
+        return Some("repeats another connection's name".into());
+    }
+    if id("endpointId").is_none() {
+        return Some("needs an endpoint ID of letters, digits, _ and -".into());
+    }
+    let base = o.get("baseUrl").and_then(Value::as_str).unwrap_or("");
+    let parsed = (base.len() <= 2048)
+        .then(|| crate::services::web::egress::parse(base).ok())
+        .flatten();
+    match parsed {
+        Some(u) if u.scheme() == "https" && u.query().is_none() && !base.contains('#') => {}
+        _ => {
+            return Some(
+                "needs an https:// base URL without credentials, query or fragment".into(),
+            );
+        }
+    }
+    match o.get("credential") {
+        None => {}
+        Some(c)
+            if c.as_object().is_some_and(|c| c.len() == 1)
+                && c["secretRef"].as_str().is_some_and(is_secret_ref) => {}
+        Some(_) => return Some("accepts only a secret-store reference as its credential".into()),
+    }
+    match o.get("credentialHeader") {
+        None => {}
+        Some(h) => {
+            let header = h.as_str().unwrap_or("");
+            let token = !header.is_empty()
+                && header.len() <= 64
+                && header
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b == b'-');
+            if !token
+                || RESERVED_HEADERS.contains(&header.to_ascii_lowercase().as_str())
+                || !o.contains_key("credential")
+            {
+                return Some(
+                    "needs a credential and a header name the transport does not set".into(),
+                );
+            }
+        }
+    }
+    None
+}
+
 pub fn is_secret_ref(s: &str) -> bool {
     let Some(opaque) = s.strip_prefix(SECRET_REF_PREFIX) else {
         return false;

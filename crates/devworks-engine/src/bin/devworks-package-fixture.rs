@@ -32,7 +32,8 @@
 //! mid-invocation) and `call` (makes each `broker.call` of `calls` in
 //! `devworks-fixture-<package>-call.json` in the temporary directory, `"$input"` naming its input
 //! and `"$last"` the previous result, reports `call:<actionKey>:<class>` as progress (followed by
-//! `:<error message>` when the step sets `reportMessage`) and completes
+//! `:<error message>` when the step sets `reportMessage`; with `dumpEnv` it first writes its
+//! environment to `devworks-fixture-<package>-env` in the temporary directory) and completes
 //! with the results, plus a forged artifact when `forge` and its input when `returnInput`).
 use devworks_extension_protocol::frame::{MAX_FRAME_BYTES, read_frame, write_frame};
 use serde_json::{Value, json};
@@ -310,6 +311,14 @@ fn invoke(st: Arc<State>, id: Value, inv: Value, cancel: mpsc::Receiver<()>, pac
                 .ok()
                 .and_then(|b| serde_json::from_slice(&b).ok())
                 .unwrap_or(json!({}));
+            if script["dumpEnv"] == json!(true) {
+                // What the host gave this process: its environment, for a test to inspect.
+                let env: String = std::env::vars()
+                    .map(|(k, v)| format!("{k}={v}\n"))
+                    .collect();
+                let dump = std::env::temp_dir().join(format!("devworks-fixture-{package}-env"));
+                let _ = std::fs::write(dump, env);
+            }
             let mut produced = Vec::new();
             let calls = script["calls"].as_array().cloned().unwrap_or_default();
             for (n, step) in calls.iter().enumerate() {
