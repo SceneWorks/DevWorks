@@ -325,10 +325,19 @@ pub(crate) fn reviewed(spec: &ContainerSpec, host_paths: &[String]) -> Value {
 
 /// A command is shown exactly, argument by argument. One the shared redaction would change (a
 /// `--password=…` argument, a credential shape, a key block) cannot be shown both safely and in
-/// full, so the request is refused as unreviewable rather than shown redacted or truncated.
+/// full, so the request is refused as unreviewable rather than shown redacted or truncated. The
+/// check also reads the arguments joined with spaces, as a command line: a secret flag and its
+/// value in separate arguments (`--password`, `hunter2`) is caught as well.
 fn reviewable_command(argv: &[crate::protocol::support::Text]) -> Result<(), Failure> {
     let redactor = Redactor::new();
-    if argv.iter().any(|arg| redactor.redact_text(&arg.0) != arg.0) {
+    let line = argv
+        .iter()
+        .map(|arg| arg.0.as_str())
+        .collect::<Vec<_>>()
+        .join(" ");
+    if redactor.redact_text(&line) != line
+        || argv.iter().any(|arg| redactor.redact_text(&arg.0) != arg.0)
+    {
         return Err(refuse(
             DomainErrorCode::InvalidArgument,
             "container_command_unreviewable",

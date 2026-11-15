@@ -101,7 +101,7 @@ pub static SCREENS: [Screen; 21] = [
         summary_strip: &[],
         pending: None,
         link: None,
-        owner: ScreenId::Legacy,
+        owner: ScreenId::Chat,
     },
     Screen {
         route: Route::Approvals,

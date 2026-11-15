@@ -37,6 +37,8 @@ pub enum ScreenId {
     Projects,
     Indexing,
     Watchers,
+    /// Home and the coordinator sidebar: one conversation.
+    Chat,
 }
 impl ScreenId {
     /// The screen's key in persisted pending state (`PendingMemory::screens`).
@@ -55,6 +57,7 @@ impl ScreenId {
             Self::Projects => "projects",
             Self::Indexing => "indexing",
             Self::Watchers => "watchers",
+            Self::Chat => "chat",
         }
     }
 }
@@ -92,6 +95,12 @@ pub enum Effect {
     ConfirmOutcomes,
     /// Opens Settings on the embedding setup.
     OpenEmbeddingSetup,
+    /// Opens Settings on the Instructions category.
+    OpenInstructions,
+    /// An artifact was stored or deleted: the Artifacts screen re-reads its list.
+    ArtifactsChanged,
+    /// Work for the watcher lists (a watcher section drawn by another screen).
+    Watch(Vec<crate::watchers_screen::WatchAction>),
 }
 
 /// What the coordinator is told about the visible screen.
@@ -121,6 +130,10 @@ pub struct Cx<'a> {
     pub(crate) job_status: &'a BTreeMap<String, String>,
     /// Each counted project's features and issues, and how many have agents working now.
     pub(crate) archive_counts: &'a BTreeMap<String, (usize, usize)>,
+    /// The window's context, once a frame has run (textures are made through it).
+    pub(crate) ctx: Option<eframe::egui::Context>,
+    /// The watcher lists, for a screen that shows a watcher section (Chat's sidebar).
+    pub(crate) watchers: Option<&'a crate::watchers_screen::WatchersScreen>,
     pub(crate) effects: Vec<Effect>,
 }
 impl Cx<'_> {

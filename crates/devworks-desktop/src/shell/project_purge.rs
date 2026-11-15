@@ -146,25 +146,9 @@ impl Shell {
         }
 
         let work = |id: &str| scope.work_ids.iter().any(|x| x.as_str() == id);
-        let session = |id: &str| scope.session_ids.iter().any(|x| x.as_str() == id);
         if let Some(c) = &mut self.client {
             c.invalidate_project_queries(scope);
         }
-        self.chat.text_preview = None;
-        self.chat.routing.status.retain(|id, _| !session(id));
-        self.chat.routing.rechecked.retain(|id, _| !session(id));
-        self.chat.routing.first_in_flight.retain(|id| !session(id));
-        self.chat.routing.pin_in_flight.retain(|id| !session(id));
-        self.chat.routing.status_asked.retain(|id, _| !session(id));
-        self.chat.sessions.retain(|r| !session(r.id.as_str()));
-        self.chat.drafts.retain(|id, _| !session(id));
-        self.chat.transcripts.retain(|id, _| !session(id));
-        if self.chat.selected.as_deref().is_some_and(session) {
-            self.chat.selected = None;
-            self.chat.text_preview = None;
-        }
-        self.chat.routing.selections.retain(|id, _| !session(id));
-        self.chat.routing.first_route.retain(|id| !session(id));
         if self.selected_project.as_deref() == Some(p) {
             self.selected_project = None;
         }
