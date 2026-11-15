@@ -1899,6 +1899,7 @@ fn every_repository_removal_path_refuses_a_removal_without_a_matching_confirmati
                         targets: vec![repo.clone()],
                         working_directory: None,
                         scope: IntendedScope::Ordinary,
+                        literal: false,
                     },
                 )
                 .verdict,

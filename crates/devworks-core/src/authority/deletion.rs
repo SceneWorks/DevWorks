@@ -333,6 +333,8 @@ pub fn delete<F: FilesystemResolver + DestructiveExecutor>(
         targets: vec![current.location.clone()],
         working_directory: None,
         scope: IntendedScope::PrimaryRepositoryDeletion(permit),
+        // The registered location names itself: it is never expanded as a pattern.
+        literal: true,
     };
     let decision = destructive::preflight(fs, &registry, &plan);
     let IntendedScope::PrimaryRepositoryDeletion(permit) = plan.scope else {
