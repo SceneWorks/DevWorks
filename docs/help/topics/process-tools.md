@@ -37,7 +37,11 @@ After a restart DevWorks reconciles processes from the earlier run. It kills a r
 
 The program must be registered like any other executable. An unsupported manifest is refused.
 
+Every install keeps its home folder, temporary files and package caches in the DevWorks data folder, one folder per checkout, never inside the repository. Files in the repository therefore cannot act as the package manager's user settings.
+
 Unless the request sets `allowScripts`, the Python installs run no code from the repository. pip runs in Python's isolated mode (`-I`), so a `pip` module in the checkout is not imported. uv uses the registered `python3` and syncs an environment in the DevWorks data folder instead of the checkout's `.venv`.
+
+Without `allowScripts`, DevWorks also overrides repository settings that name a program to run. These include the `git`, `shell` and `script-shell` settings in an `.npmrc`, pnpm switching to the version that `packageManager` names, a `.corepack.env` file, a Go `env` file and `toolchain` line (Go uses only the installed toolchain), and programs that the checkout's own Git configuration names. An install that DevWorks cannot make safe this way needs `allowScripts`: a Yarn settings file, a Cargo configuration, a Rust toolchain named by path, or a `packageManager` that is not a plain version.
 
 ## Request a system install
 

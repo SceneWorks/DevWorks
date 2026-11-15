@@ -83,8 +83,9 @@ pub struct ToolBindings {
     path_executables: Option<(Arc<PathExecutables>, Option<&'static [&'static str]>)>,
     roots: HashMap<String, RegisteredWorkingRoot>,
     credentials: HashMap<String, RegisteredCredential>,
-    /// A host-owned directory, outside every repository, that holds the environment of each
-    /// script-free uv install. Without one, a script-free uv install is refused.
+    /// A host-owned directory, outside every repository, that holds each checkout's install
+    /// home (its home, temporary folder and package caches) and the environment of each
+    /// script-free uv install. Without one, every dependency install is refused.
     install_environments: Option<PathBuf>,
 }
 
@@ -107,6 +108,8 @@ pub enum BindingRefusal {
     /// The manifest's install cannot run without package lifecycle scripts; the request must
     /// set `allowScripts`.
     ScriptsRequired,
+    /// The host keeps no folder for install homes outside the repository.
+    NoInstallHome,
 }
 
 impl ToolBindings {
@@ -312,8 +315,8 @@ impl ToolBindings {
         Ok(bindings)
     }
 
-    /// Lets script-free uv installs keep their environments under `directory`, which the host
-    /// owns and no repository contains.
+    /// Lets dependency installs keep their homes, package caches and script-free uv
+    /// environments under `directory`, which the host owns and no repository contains.
     pub fn with_install_environments(mut self, directory: PathBuf) -> Self {
         self.install_environments = Some(directory);
         self
@@ -531,16 +534,22 @@ struct HostPython {
 }
 
 /// The package-manager command for the bound manifest `name` (with contents `manifest`) in
-/// `root`. Unless `allow_scripts`, it runs no package lifecycle scripts:
+/// `root`, with its home and caches in `home` (see [`install_home_environment`]). Unless
+/// `allow_scripts`, it runs no package lifecycle scripts, and no program that repository
+/// configuration names (see also [`script_free_environment`]):
 ///
 /// - Cargo: `cargo fetch` (downloads only; nothing is compiled, so no `build.rs` runs) instead
 ///   of `cargo build`.
-/// - npm, pnpm and Yarn 1: `--ignore-scripts`; pnpm also `--ignore-pnpmfile` (its hooks run
-///   regardless of scripts). Yarn 2+ (told apart by its lockfile) does not accept
+/// - npm, pnpm and Yarn 1: `--ignore-scripts`; pnpm also `--ignore-pnpmfile` (its hooks, a
+///   global pnpmfile and config-dependency plugins run regardless of scripts), and it does not
+///   switch to the pnpm version `packageManager` names, which it would fetch from the registry
+///   the repository's `.npmrc` names (`manage-package-manager-versions` before pnpm 11,
+///   `pm-on-fail` since). pnpm always keeps its store and cache in `home`, since an `.npmrc` can
+///   point them into the repository. Yarn 2+ (told apart by its lockfile) does not accept
 ///   `--ignore-scripts`; it gets `--mode=skip-build` (no build script runs at all) and
 ///   `YARN_ENABLE_SCRIPTS=false`, which overrides its rc files. A Yarn release or plugin the
 ///   repository configures is refused separately (see [`install_runs_repository_code`], which
-///   also covers Cargo configuration and toolchain files).
+///   also covers Cargo configuration and toolchain files and a Corepack `packageManager` URL).
 /// - uv: `--no-build` (no source distribution is built, so no build backend runs) and
 ///   `--no-install-workspace` (the project and its workspace members are not built either).
 ///   uv runs the interpreter of the environment it syncs, and an interpreter that
@@ -551,12 +560,15 @@ struct HostPython {
 ///   re-enable a source build (see [`binary_only_requirements`]). Python runs isolated (`-I`),
 ///   so a `pip` module in the repository (the working directory) is not imported.
 /// - Composer: `--no-scripts` and `--no-plugins` (plugins run code on install).
-/// - Go: `go mod download` runs no package code either way.
+/// - Go: `go mod download` runs no package code either way; `GOENV=off` and
+///   `GOTOOLCHAIN=local` (see [`script_free_environment`]) keep a Go `env` file and a `go.mod`
+///   or `go.work` `toolchain` line from choosing a proxy or a toolchain to download and run.
 /// - Bundler has no switch that stops the Gemfile (Ruby) or native gem extensions from
 ///   running, so a Bundler install needs `allow_scripts`.
 fn install_command(
     name: &str,
     root: &Path,
+    home: &Path,
     manifest: &[u8],
     allow_scripts: bool,
     host_python: Option<&HostPython>,
@@ -580,10 +592,7 @@ fn install_command(
             InstallCommand {
                 program: "cargo",
                 args,
-                env: vec![
-                    pair("CARGO_HOME", path(".devworks-cache/cargo")),
-                    pair("CARGO_TARGET_DIR", path("target")),
-                ],
+                env: vec![pair("CARGO_TARGET_DIR", path("target"))],
             }
         }
         "package-lock.json" | "package.json" => {
@@ -597,14 +606,32 @@ fn install_command(
             InstallCommand {
                 program: "npm",
                 args,
-                env: vec![pair("NPM_CONFIG_CACHE", path(".devworks-cache/npm"))],
+                env: vec![],
             }
         }
         "pnpm-lock.yaml" => {
             let mut args = strings(&["install", "--frozen-lockfile"]);
-            // `.pnpmfile.cjs` hooks run even with `--ignore-scripts`.
-            no_scripts(&mut args, &["--ignore-scripts", "--ignore-pnpmfile"]);
-            args.extend(["--dir".into(), root_text]);
+            // `.pnpmfile.cjs` hooks run even with `--ignore-scripts`, and a `packageManager`
+            // version switch runs another pnpm.
+            no_scripts(
+                &mut args,
+                &[
+                    "--ignore-scripts",
+                    "--ignore-pnpmfile",
+                    "--config.manage-package-manager-versions=false",
+                    "--config.pm-on-fail=ignore",
+                ],
+            );
+            args.extend([
+                "--store-dir".into(),
+                home.join("pnpm-store").to_string_lossy().into_owned(),
+                format!(
+                    "--config.cache-dir={}",
+                    home.join(".cache/pnpm").to_string_lossy()
+                ),
+                "--dir".into(),
+                root_text,
+            ]);
             InstallCommand {
                 program: "pnpm",
                 args,
@@ -642,7 +669,7 @@ fn install_command(
                 args.push("--frozen".into());
             }
             no_scripts(&mut args, &["--no-build", "--no-install-workspace"]);
-            let mut env = vec![pair("UV_CACHE_DIR", path(".devworks-cache/uv"))];
+            let mut env = vec![];
             if !allow_scripts {
                 let host = host_python.ok_or(BindingRefusal::ScriptsRequired)?;
                 args.extend(["--python".into(), host.interpreter.clone()]);
@@ -674,13 +701,13 @@ fn install_command(
             InstallCommand {
                 program: "python3",
                 args,
-                env: vec![pair("PIP_CACHE_DIR", path(".devworks-cache/pip"))],
+                env: vec![],
             }
         }
         "go.mod" => InstallCommand {
             program: "go",
             args: strings(&["mod", "download"]),
-            env: vec![pair("GOMODCACHE", path(".devworks-deps/go"))],
+            env: vec![],
         },
         "Gemfile.lock" => {
             if !allow_scripts {
@@ -705,6 +732,95 @@ fn install_command(
         _ => return Err(BindingRefusal::UnsupportedManifest),
     };
     Ok(command)
+}
+
+/// The home, temporary folder and package caches of every dependency install, all inside
+/// `home`: a folder the host owns for the checkout, outside every repository. A manager's user
+/// configuration (a Go `env` file, a Corepack cache, an npm, pip or Composer user file) is then
+/// never a repository file, and where repository configuration can also name a cache
+/// (`.npmrc` `cache`, `uv.toml` `cache-dir`, `composer.json` `cache-*-dir`), the variable here
+/// takes precedence over it.
+fn install_home_environment(home: &Path) -> Vec<(String, String)> {
+    let at = |relative: &str| home.join(relative).to_string_lossy().into_owned();
+    [
+        ("HOME", home.to_string_lossy().into_owned()),
+        ("TMPDIR", at("tmp")),
+        ("XDG_CONFIG_HOME", at(".config")),
+        ("XDG_CACHE_HOME", at(".cache")),
+        ("XDG_DATA_HOME", at(".local/share")),
+        ("XDG_STATE_HOME", at(".local/state")),
+        ("CARGO_HOME", at(".cargo")),
+        ("npm_config_cache", at(".npm")),
+        ("YARN_CACHE_FOLDER", at(".cache/yarn")),
+        ("COREPACK_HOME", at(".cache/node/corepack")),
+        ("PIP_CACHE_DIR", at(".cache/pip")),
+        ("UV_CACHE_DIR", at(".cache/uv")),
+        ("GOPATH", at("go")),
+        ("GOMODCACHE", at("go/pkg/mod")),
+        ("COMPOSER_HOME", at(".config/composer")),
+        ("COMPOSER_CACHE_DIR", at(".cache/composer")),
+        ("COMPOSER_CACHE_FILES_DIR", at(".cache/composer/files")),
+        ("COMPOSER_CACHE_REPO_DIR", at(".cache/composer/repo")),
+        ("COMPOSER_CACHE_VCS_DIR", at(".cache/composer/vcs")),
+    ]
+    .into_iter()
+    .map(|(name, value)| (name.to_owned(), value))
+    .collect()
+}
+
+/// Settings of every script-free install that override repository configuration naming a
+/// program the install would run, whichever manager reads it:
+///
+/// - Git reads no global or system configuration, but the checkout's own `.git/config` (and
+///   the `config` of a bare repository embedded in the checkout) still applies to Git run in
+///   the checkout, for example a manager's `git ls-remote` or Composer's version query. The
+///   environment overrides its `core.sshCommand`, `core.gitProxy` and `core.askPass`;
+///   command-scope settings empty its credential helpers (an empty `credential.helper` resets
+///   the list, URL-scoped helpers included), turn off `core.fsmonitor`, point
+///   `core.hooksPath` at nothing, forbid the `ext::` transport (which a `url.*.insteadOf` could
+///   select) and ignore embedded bare repositories.
+/// - npm: `git` (run for Git dependencies), `shell` and `script-shell` from an `.npmrc` yield
+///   to the environment, and `npm_config_ignore_scripts` reaches the nested `npm install` that
+///   npm runs to prepare a Git dependency, which `--ignore-scripts` does not; with no script
+///   running, `node-options` and `node-gyp` name nothing that runs.
+/// - Corepack (behind a `yarn`, `pnpm` or `npm` shim) reads no `.corepack.env`, which could
+///   name a registry, drop signature checks or allow custom URLs.
+/// - Go reads no `env` file and runs only the local toolchain.
+fn script_free_environment() -> Vec<(String, String)> {
+    let null = if cfg!(windows) { "NUL" } else { "/dev/null" };
+    let shell = if cfg!(windows) { "cmd.exe" } else { "/bin/sh" };
+    let git_settings = [
+        ("credential.helper", ""),
+        ("core.fsmonitor", "false"),
+        ("core.hooksPath", null),
+        ("protocol.ext.allow", "never"),
+        ("safe.bareRepository", "explicit"),
+    ];
+    let mut env: Vec<(String, String)> = [
+        ("GIT_CONFIG_GLOBAL", null),
+        ("GIT_CONFIG_NOSYSTEM", "1"),
+        ("GIT_SSH_COMMAND", "ssh"),
+        ("GIT_PROXY_COMMAND", ""),
+        ("GIT_ASKPASS", ""),
+        ("GIT_TERMINAL_PROMPT", "0"),
+        ("npm_config_git", "git"),
+        ("npm_config_shell", shell),
+        ("npm_config_script_shell", shell),
+        ("npm_config_ignore_scripts", "true"),
+        ("COREPACK_ENV_FILE", "0"),
+        ("COREPACK_ENABLE_UNSAFE_CUSTOM_URLS", "0"),
+        ("GOENV", "off"),
+        ("GOTOOLCHAIN", "local"),
+    ]
+    .into_iter()
+    .map(|(name, value)| (name.to_owned(), value.to_owned()))
+    .collect();
+    env.push(("GIT_CONFIG_COUNT".into(), git_settings.len().to_string()));
+    for (index, (key, value)) in git_settings.into_iter().enumerate() {
+        env.push((format!("GIT_CONFIG_KEY_{index}"), key.into()));
+        env.push((format!("GIT_CONFIG_VALUE_{index}"), value.into()));
+    }
+    env
 }
 
 /// Whether a pip requirements file names only packages from an index, so that
@@ -798,12 +914,22 @@ fn binary_only_requirements(manifest: &[u8]) -> bool {
 ///   (inside the repository), which can name the compiler, wrappers or credential providers
 ///   that even `cargo fetch` runs; and a toolchain file naming a toolchain by path (a TOML key
 ///   spelled with an escape needs `\`, so a file with `path`, `/` or `\` counts).
+/// - npm, pnpm and Yarn: a `package.json` `packageManager` that is not a plain
+///   `name@version`, since Corepack (behind a manager shim) downloads and runs the release a
+///   URL there names; and a `package.json` that does not parse, whose field cannot be checked.
 fn install_runs_repository_code(name: &str, root: &Path) -> bool {
     let present = |path: PathBuf| match std::fs::symlink_metadata(&path) {
         Ok(_) => true,
         // An entry that cannot be inspected cannot be ruled out.
         Err(error) => error.kind() != std::io::ErrorKind::NotFound,
     };
+    let node = matches!(
+        name,
+        "package-lock.json" | "package.json" | "pnpm-lock.yaml" | "yarn.lock"
+    );
+    if node && corepack_release_unchecked(root) {
+        return true;
+    }
     match name {
         "yarn.lock" => [root.to_path_buf(), root.join(".devworks-home")]
             .iter()
@@ -826,6 +952,30 @@ fn install_runs_repository_code(name: &str, root: &Path) -> bool {
             configured || toolchain_path
         }
         _ => false,
+    }
+}
+
+/// Whether the `packageManager` of the checkout's `package.json` could name a release other
+/// than a registry version: a value that is not `name@version` (letters, digits and `.+-_`
+/// only, so no URL), or a file that cannot be read or parsed.
+fn corepack_release_unchecked(root: &Path) -> bool {
+    let bytes = match std::fs::read(root.join("package.json")) {
+        Ok(bytes) => bytes,
+        Err(error) => return error.kind() != std::io::ErrorKind::NotFound,
+    };
+    let Ok(Value::Object(package)) = serde_json::from_slice::<Value>(&bytes) else {
+        return true;
+    };
+    match package.get("packageManager") {
+        None => false,
+        Some(Value::String(spec)) => !spec.split_once('@').is_some_and(|(name, version)| {
+            !name.is_empty()
+                && !version.is_empty()
+                && format!("{name}{version}")
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '+' | '-' | '_'))
+        }),
+        Some(_) => true,
     }
 }
 
@@ -1202,6 +1352,8 @@ impl InstallJob {
 
 struct InstallPlan {
     spec: NativeProcessSpec,
+    /// The install's home, in the host's folder for the checkout.
+    home: PathBuf,
 }
 
 impl ExecuteJob {
@@ -1957,32 +2109,38 @@ impl ProcessToolService {
         if !allow_scripts && install_runs_repository_code(&name, &root) {
             return Err(BindingRefusal::ScriptsRequired);
         }
-        // A script-free uv install runs the host's interpreter and keeps its environment in a
-        // host directory, one per checkout, so no interpreter in the repository runs.
-        let host_python = match (name.as_str(), &self.bindings.install_environments) {
-            ("pyproject.toml" | "uv.lock", Some(directory)) if !allow_scripts => {
+        // Every install keeps its home and caches in a host directory, one per checkout, so no
+        // repository file configures the manager as user configuration. A script-free uv
+        // install also runs the host's interpreter and keeps its environment there, so no
+        // interpreter in the repository runs.
+        let directory = self
+            .bindings
+            .install_environments
+            .as_ref()
+            .ok_or(BindingRefusal::NoInstallHome)?;
+        let checkout = sha256_hex(root.to_string_lossy().as_bytes());
+        let home = directory.join("home").join(&checkout);
+        let host_python = match name.as_str() {
+            "pyproject.toml" | "uv.lock" if !allow_scripts => {
                 let (interpreter, _) = self.bindings.resolve_launch("python3")?;
-                let checkout = sha256_hex(root.to_string_lossy().as_bytes());
                 Some(HostPython {
                     interpreter,
-                    environment: directory.join("uv").join(checkout),
+                    environment: directory.join("uv").join(&checkout),
                 })
             }
             _ => None,
         };
-        let command = install_command(&name, &root, &bytes, allow_scripts, host_python.as_ref())?;
+        let command = install_command(
+            &name,
+            &root,
+            &home,
+            &bytes,
+            allow_scripts,
+            host_python.as_ref(),
+        )?;
         let (executable, arg0) = self.bindings.resolve_launch(command.program)?;
-        let mut env = vec![
-            (
-                "HOME".into(),
-                root.join(".devworks-home").to_string_lossy().into_owned(),
-            ),
-            (
-                "TMPDIR".into(),
-                root.join(".devworks-tmp").to_string_lossy().into_owned(),
-            ),
-            ("PATH".into(), std::env::var("PATH").unwrap_or_default()),
-        ];
+        let mut env = install_home_environment(&home);
+        env.push(("PATH".into(), std::env::var("PATH").unwrap_or_default()));
         if command.program == "cargo" {
             let rustup_home = std::env::var_os("RUSTUP_HOME")
                 .map(PathBuf::from)
@@ -1995,14 +2153,10 @@ impl ProcessToolService {
         }
         env.extend(command.env);
         if !allow_scripts {
-            // HOME is inside the repository, so its Git configuration (an `sshCommand`, a
-            // credential helper) is repository-controlled; a manager fetching a Git dependency
-            // reads no global or system Git configuration.
-            let null = if cfg!(windows) { "NUL" } else { "/dev/null" };
-            env.push(("GIT_CONFIG_GLOBAL".into(), null.into()));
-            env.push(("GIT_CONFIG_NOSYSTEM".into(), "1".into()));
+            env.extend(script_free_environment());
         }
         Ok(InstallPlan {
+            home,
             spec: NativeProcessSpec {
                 program: executable,
                 arg0: Some(arg0),
@@ -2224,7 +2378,7 @@ impl ProcessToolService {
             job.spec.output_limit_bytes.get() as usize,
             job.tail_bytes as usize,
             redactions,
-            false,
+            None,
             launched,
             job.watch.as_ref().and_then(|w| w.pattern.as_deref()),
         )
@@ -2284,7 +2438,7 @@ impl ProcessToolService {
             1_048_576,
             0,
             Vec::new(),
-            true,
+            Some(&plan.home),
             None,
             None,
         )
@@ -2301,21 +2455,18 @@ impl ProcessToolService {
         output_limit: usize,
         tail_limit: usize,
         redactions: Vec<String>,
-        install: bool,
+        install_home: Option<&Path>,
         launched: Option<&LaunchReport>,
         pattern: Option<&str>,
     ) -> EffectOutcome {
-        if install {
+        if let Some(home) = install_home {
             let Some(root) = spec.cwd.as_ref() else {
                 return EffectOutcome::Failed("project install has no working root".into());
             };
-            for name in [
-                ".devworks-home",
-                ".devworks-tmp",
-                ".devworks-cache",
-                ".devworks-deps",
-            ] {
-                if std::fs::create_dir_all(root.join(name)).is_err() {
+            // The home and its temporary folder are the host's; only the pip install target
+            // stays in the checkout.
+            for directory in [home.join("tmp"), root.join(".devworks-deps")] {
+                if std::fs::create_dir_all(directory).is_err() {
                     return EffectOutcome::Failed("project install workspace unavailable".into());
                 }
             }
@@ -2490,7 +2641,7 @@ impl ProcessToolService {
         };
         drop(output);
         let mut evidence = json!({
-            "result": if install {
+            "result": if install_home.is_some() {
                 OperationResult::ProcessInstallProjectDependencies { value: record }
             } else {
                 OperationResult::ProcessExecute { value: record }
@@ -3103,6 +3254,7 @@ pub(crate) fn binding_refusal(reason: BindingRefusal) -> Refusal {
         BindingRefusal::ChangedManifest => (DomainErrorCode::SourceChanged, "manifest"),
         BindingRefusal::UnsupportedManifest => (DomainErrorCode::UnsupportedCapability, "manifest"),
         BindingRefusal::ScriptsRequired => (DomainErrorCode::InvalidArgument, "install_scripts"),
+        BindingRefusal::NoInstallHome => (DomainErrorCode::UnsupportedCapability, "install_home"),
         BindingRefusal::DuplicateEnvironment | BindingRefusal::InvalidLimits => {
             (DomainErrorCode::InvalidArgument, "process_spec")
         }
@@ -3689,7 +3841,13 @@ mod tests {
     #[test]
     fn each_manager_installs_without_lifecycle_scripts_unless_allowed() {
         let root = Path::new("/repo");
+        let home = Path::new("/host/home");
         let at = |relative: &str| root.join(relative).to_string_lossy().into_owned();
+        let store = home.join("pnpm-store").to_string_lossy().into_owned();
+        let cache = format!(
+            "--config.cache-dir={}",
+            home.join(".cache/pnpm").to_string_lossy()
+        );
         let names = |args: &[&str]| args.iter().map(|arg| (*arg).to_owned()).collect::<Vec<_>>();
         let requirements = b"requests==2.32.3 --hash=sha256:abc\n".as_slice();
         let host = HostPython {
@@ -3730,10 +3888,23 @@ mod tests {
                     "--frozen-lockfile",
                     "--ignore-scripts",
                     "--ignore-pnpmfile",
+                    "--config.manage-package-manager-versions=false",
+                    "--config.pm-on-fail=ignore",
+                    "--store-dir",
+                    &store,
+                    &cache,
                     "--dir",
                     "/repo",
                 ]),
-                names(&["install", "--frozen-lockfile", "--dir", "/repo"]),
+                names(&[
+                    "install",
+                    "--frozen-lockfile",
+                    "--store-dir",
+                    &store,
+                    &cache,
+                    "--dir",
+                    "/repo",
+                ]),
                 vec![],
             ),
             (
@@ -3823,8 +3994,9 @@ mod tests {
             ),
         ];
         for (name, without, with, extra) in cases {
-            let off = install_command(name, root, requirements, false, Some(&host)).expect(name);
-            let on = install_command(name, root, requirements, true, None).expect(name);
+            let off =
+                install_command(name, root, home, requirements, false, Some(&host)).expect(name);
+            let on = install_command(name, root, home, requirements, true, None).expect(name);
             assert_eq!(off.program, on.program, "{name}");
             assert_eq!(off.args, without, "{name} without scripts");
             assert_eq!(on.args, with, "{name} with scripts");
@@ -3845,30 +4017,30 @@ mod tests {
         // Without a host interpreter and environment, a script-free uv install is refused.
         for name in ["pyproject.toml", "uv.lock"] {
             assert_eq!(
-                install_command(name, root, b"", false, None),
+                install_command(name, root, home, b"", false, None),
                 Err(BindingRefusal::ScriptsRequired),
                 "{name}"
             );
         }
         // Bundler has no switch that keeps the Gemfile and native extensions from running.
         assert_eq!(
-            install_command("Gemfile.lock", root, b"", false, None),
+            install_command("Gemfile.lock", root, home, b"", false, None),
             Err(BindingRefusal::ScriptsRequired)
         );
-        let bundle = install_command("Gemfile.lock", root, b"", true, None).expect("bundler");
+        let bundle = install_command("Gemfile.lock", root, home, b"", true, None).expect("bundler");
         assert_eq!(
             bundle.args,
             names(&["install", "--gemfile", &at("Gemfile")])
         );
         // A requirements file that could build from source needs allowScripts.
         assert_eq!(
-            install_command("requirements.txt", root, b"-e .\n", false, None),
+            install_command("requirements.txt", root, home, b"-e .\n", false, None),
             Err(BindingRefusal::ScriptsRequired)
         );
-        assert!(install_command("requirements.txt", root, b"-e .\n", true, None).is_ok());
+        assert!(install_command("requirements.txt", root, home, b"-e .\n", true, None).is_ok());
         // A Yarn 2+ lockfile selects Yarn 2+'s own switch; it has no `--ignore-scripts`.
         let berry = b"__metadata:\n  version: 8\n".as_slice();
-        let off = install_command("yarn.lock", root, berry, false, None).expect("yarn 2+");
+        let off = install_command("yarn.lock", root, home, berry, false, None).expect("yarn 2+");
         assert_eq!(
             off.args,
             names(&["install", "--immutable", "--mode=skip-build"])
@@ -3877,7 +4049,7 @@ mod tests {
             off.env
                 .contains(&("YARN_ENABLE_SCRIPTS".into(), "false".into()))
         );
-        let on = install_command("yarn.lock", root, berry, true, None).expect("yarn 2+");
+        let on = install_command("yarn.lock", root, home, berry, true, None).expect("yarn 2+");
         assert_eq!(on.args, names(&["install", "--immutable"]));
         assert!(on.env.is_empty());
     }
@@ -3991,6 +4163,129 @@ mod tests {
             }
         }
         std::fs::remove_dir_all(root).expect("remove test root");
+    }
+
+    /// DW-318: Corepack downloads and runs the release a `packageManager` URL names before any
+    /// manager sees a script flag, so a Node install with one (or with a `package.json` whose
+    /// field cannot be checked) needs `allowScripts`; a registry version is fine.
+    #[test]
+    fn a_corepack_release_url_in_package_json_needs_install_scripts() {
+        let root =
+            std::env::temp_dir().join(format!("devworks-tool-corepack-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).expect("test root");
+        let managers = [
+            "package-lock.json",
+            "package.json",
+            "pnpm-lock.yaml",
+            "yarn.lock",
+        ];
+        for name in managers {
+            assert!(!install_runs_repository_code(name, &root), "{name}");
+        }
+        for safe in [
+            r#"{"name":"x"}"#,
+            r#"{"packageManager":"yarn@1.22.22"}"#,
+            r#"{"packageManager":"pnpm@9.15.0+sha512.76e2379760a4328ec4415815bcd6628dee727af3779aaa4c914e3944156c4299921a89f976381ee107d41f12cfa4b66681ca9c718f0668fa0831ed4c6d8ba56c"}"#,
+        ] {
+            std::fs::write(root.join("package.json"), safe).expect("package.json");
+            for name in managers {
+                assert!(!install_runs_repository_code(name, &root), "{name}: {safe}");
+            }
+        }
+        for unsafe_file in [
+            r#"{"packageManager":"yarn@https://example.invalid/yarn-4.0.0.tgz"}"#,
+            r#"{"packageManager":"yarn@https://example.invalid/yarn.tgz#sha1.0"}"#,
+            r#"{"packageManager":"yarn@1.22.22","packageManager":"yarn@file:./yarn.js"}"#,
+            r#"{"packageManager":"yarn@ 1.22.22"}"#,
+            r#"{"packageManager":["yarn@1.22.22"]}"#,
+            r#"{"packageManager":"yarn@1.22.22","x":"\ud800"}"#,
+            "[]",
+        ] {
+            std::fs::write(root.join("package.json"), unsafe_file).expect("package.json");
+            for name in managers {
+                assert!(
+                    install_runs_repository_code(name, &root),
+                    "{name}: {unsafe_file}"
+                );
+            }
+            // Other managers do not read the field.
+            assert!(!install_runs_repository_code("go.mod", &root));
+        }
+        std::fs::remove_dir_all(root).expect("remove test root");
+    }
+
+    /// DW-318: every install keeps its home, temporary folder and package caches in the host's
+    /// folder for the checkout, and a script-free install overrides each repository setting
+    /// the audit found that names a program.
+    #[test]
+    fn install_homes_and_caches_are_the_hosts_and_program_settings_are_overridden() {
+        let home = Path::new("/host/home");
+        let env = install_home_environment(home);
+        for name in [
+            "HOME",
+            "TMPDIR",
+            "XDG_CONFIG_HOME",
+            "XDG_CACHE_HOME",
+            "XDG_DATA_HOME",
+            "XDG_STATE_HOME",
+            "CARGO_HOME",
+            "npm_config_cache",
+            "YARN_CACHE_FOLDER",
+            "COREPACK_HOME",
+            "PIP_CACHE_DIR",
+            "UV_CACHE_DIR",
+            "GOPATH",
+            "GOMODCACHE",
+            "COMPOSER_HOME",
+            "COMPOSER_CACHE_DIR",
+        ] {
+            let value = env
+                .iter()
+                .find(|(key, _)| key == name)
+                .map(|(_, value)| Path::new(value))
+                .unwrap_or_else(|| panic!("{name} is unset"));
+            assert!(value.starts_with(home), "{name}={value:?}");
+        }
+        let env = script_free_environment();
+        let value = |name: &str| {
+            env.iter()
+                .find(|(key, _)| key == name)
+                .map(|(_, value)| value.as_str())
+        };
+        let shell = if cfg!(windows) { "cmd.exe" } else { "/bin/sh" };
+        for (name, expected) in [
+            ("GIT_SSH_COMMAND", "ssh"),
+            ("GIT_PROXY_COMMAND", ""),
+            ("GIT_ASKPASS", ""),
+            ("npm_config_git", "git"),
+            ("npm_config_shell", shell),
+            ("npm_config_script_shell", shell),
+            ("npm_config_ignore_scripts", "true"),
+            ("COREPACK_ENV_FILE", "0"),
+            ("GOENV", "off"),
+            ("GOTOOLCHAIN", "local"),
+        ] {
+            assert_eq!(value(name), Some(expected), "{name}");
+        }
+        let count: usize = value("GIT_CONFIG_COUNT").expect("count").parse().unwrap();
+        let git: Vec<(&str, &str)> = (0..count)
+            .map(|index| {
+                (
+                    value(&format!("GIT_CONFIG_KEY_{index}")).unwrap(),
+                    value(&format!("GIT_CONFIG_VALUE_{index}")).unwrap(),
+                )
+            })
+            .collect();
+        for setting in [
+            ("credential.helper", ""),
+            ("core.fsmonitor", "false"),
+            ("protocol.ext.allow", "never"),
+            ("safe.bareRepository", "explicit"),
+        ] {
+            assert!(git.contains(&setting), "{setting:?} in {git:?}");
+        }
+        assert!(git.iter().any(|(key, _)| *key == "core.hooksPath"));
     }
 
     #[test]

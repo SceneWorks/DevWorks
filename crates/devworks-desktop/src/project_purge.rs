@@ -45,6 +45,9 @@ struct State {
     fences: BTreeMap<String, Fence>,
     /// Where an undecodable saved state is set aside (see [`load_checked`]).
     set_aside: PathBuf,
+    /// Test-only: the next removal of the set-aside copy fails.
+    #[cfg(test)]
+    fail_set_aside_removal: std::cell::Cell<bool>,
 }
 pub struct NativePurgeClient {
     path: PathBuf,
@@ -88,6 +91,10 @@ fn load_checked(path: &std::path::Path) -> Option<Memory> {
 /// Removes the reviewed set-aside copy, which may hold a purged project's drafts and frames and
 /// cannot be partitioned by project.
 fn remove_set_aside(state: &State) -> Result<(), PurgeFileFault> {
+    #[cfg(test)]
+    if state.fail_set_aside_removal.take() {
+        return Err(PurgeFileFault::Io);
+    }
     match std::fs::remove_file(&state.set_aside) {
         Ok(()) => Ok(()),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
@@ -182,6 +189,8 @@ impl NativePurgeClient {
                 awaiting_ui: BTreeSet::new(),
                 fences: BTreeMap::new(),
                 set_aside,
+                #[cfg(test)]
+                fail_set_aside_removal: Default::default(),
             }),
         }
     }
@@ -352,11 +361,14 @@ impl ProjectPurgeClient for NativePurgeClient {
         state.live.paths.remove(key);
         state.cleaned.push(scope.clone());
         self.sources.revoke_project(&scope.project_id);
+        // The shell must acknowledge the cleanup before any retry through the fence can settle.
+        if state.online {
+            state.awaiting_ui.insert(key.into());
+        }
         // After the fence is durable: a failure here (or a restart) is retried through the
         // fence above, never against a witness the removal already changed.
         remove_set_aside(&state)?;
         if state.online {
-            state.awaiting_ui.insert(key.into());
             Err(PurgeFileFault::InUse)
         } else {
             Ok(())
@@ -667,6 +679,45 @@ mod tests {
             Err(PurgeFileFault::InUse)
         );
         assert!(!set_aside(&path).exists());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn a_purge_whose_set_aside_removal_failed_waits_for_the_shell_on_retry() {
+        let root =
+            std::env::temp_dir().join(format!("dw323-ack-{}", HostIds::new().token("fixture")));
+        std::fs::create_dir_all(&root).unwrap();
+        let path = root.join("ui-state.json");
+        let client = client(path.clone());
+        client
+            .publish(Memory::default(), Live::default(), true)
+            .unwrap();
+        let aside = set_aside(&path);
+        std::fs::write(&aside, b"{\"drafts\":\"PRIVATE\"}").unwrap();
+        let reviewed = client.inspect(&scope()).unwrap();
+        // The removal after the fence save fails once, as a sharing violation would.
+        client
+            .state
+            .lock()
+            .unwrap()
+            .fail_set_aside_removal
+            .set(true);
+        assert_eq!(
+            client.remove_reviewed(&scope(), &reviewed.digest),
+            Err(PurgeFileFault::Io)
+        );
+        assert!(aside.exists());
+        // The retry removes the copy, but the shell has not yet dropped the project's state.
+        assert_eq!(
+            client.remove_reviewed(&scope(), &reviewed.digest),
+            Err(PurgeFileFault::InUse)
+        );
+        assert!(!aside.exists());
+        assert_eq!(
+            client.remove_reviewed(&scope(), &reviewed.digest),
+            Err(PurgeFileFault::InUse)
+        );
+        client.acknowledge(&scope());
+        assert_eq!(client.remove_reviewed(&scope(), &reviewed.digest), Ok(()));
         std::fs::remove_dir_all(root).unwrap();
     }
 }

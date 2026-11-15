@@ -138,6 +138,257 @@ fn mkdir_plans_a_write_of_each_new_folder() {
 }
 
 #[test]
+fn appending_redirects_plan_a_write_of_their_target() {
+    use DestructiveKind::Truncate;
+    for script in [
+        "echo x >> /a/f",
+        "echo x >>/a/f",
+        "echo x 1>> /a/f",
+        "echo x 2>> /a/f",
+        "echo x &>> /a/f",
+        "echo x &>>/a/f",
+        "echo x 2>>/dev/null >> /a/f",
+    ] {
+        assert_eq!(
+            plans(&["sh", "-c", script]),
+            [(Truncate, vec!["/a/f".into()])],
+            "{script}"
+        );
+    }
+    assert_eq!(
+        plans(&["cmd", "/c", "echo x >> C:\\x\\f"]),
+        [(Truncate, vec!["C:\\x\\f".into()])]
+    );
+    assert_eq!(
+        plans(&["pwsh", "-Command", "'x' >> /x/f"]),
+        [(Truncate, vec!["/x/f".into()])]
+    );
+    // A dynamic append target is held like a dynamic `>` target.
+    assert_eq!(
+        needs(&["sh", "-c", "echo x >> \"$F\""]),
+        InputNeeded::UnresolvedExpansion
+    );
+}
+
+#[test]
+fn powershell_write_targets_are_read_as_powershell_reads_them() {
+    use DestructiveKind::{Truncate, Unlink};
+    let ps = |s: &str| plans(&["pwsh", "-Command", s]);
+    let held = |s: &str| needs(&["pwsh", "-Command", s]);
+    // A `FileSystem::` provider prefix names the same path; it is removed before planning.
+    for script in [
+        "Set-Content -Path FileSystem::/x/f -Value hi",
+        "Set-Content -Path 'filesystem::/x/f' -Value hi",
+        "Add-Content Microsoft.PowerShell.Core\\FileSystem::/x/f hi",
+        "'hi' > FileSystem::/x/f",
+    ] {
+        assert_eq!(ps(script), [(Truncate, vec!["/x/f".into()])], "{script}");
+    }
+    // Any other provider or drive qualifier is not a file the resolver can check.
+    for script in [
+        "Set-Content Registry::HKLM\\Software\\x hi",
+        "Set-Content Env:X hi",
+        "Set-Content Variable:x hi",
+        "New-Item -Path Temp:/x",
+        "'hi' >> Function:f",
+    ] {
+        assert_eq!(held(script), InputNeeded::UnresolvedTarget, "{script}");
+    }
+    // A doubled apostrophe inside a PowerShell single-quoted string is one apostrophe.
+    assert_eq!(
+        ps("Set-Content '/home/O''Brien/f' hi"),
+        [(Truncate, vec!["/home/O'Brien/f".into()])]
+    );
+    assert_eq!(
+        ps("'hi' >> '/home/O''Brien/f'"),
+        [(Truncate, vec!["/home/O'Brien/f".into()])]
+    );
+    // Doubled quotes, backtick escapes and typographic quotes inside a double-quoted (or
+    // otherwise quoted) PowerShell string are not decoded here: held.
+    for script in [
+        "Set-Content \"/home/a\"\"b/f\" hi",
+        "Set-Content \"/home/a`tb/f\" hi",
+        "Set-Content \"/home/a`\"b/f\" hi",
+        "Set-Content \u{2018}/home/a/f\u{2019} hi",
+    ] {
+        assert_eq!(held(script), InputNeeded::UnresolvedExpansion, "{script}");
+    }
+    // POSIX keeps adjacent single-quoted segments as concatenation.
+    assert_eq!(
+        plans(&["sh", "-c", "rm 'a''b'"]),
+        [(Unlink, vec!["ab".into()])]
+    );
+    // `-LiteralPath` (and every path of `New-Item` and `Out-File`) names wildcard characters
+    // literally, which a pattern expansion cannot check: held.
+    for script in [
+        "Set-Content -LiteralPath '/x/a[1]/f' hi",
+        "Add-Content -lp /x/a*/f hi",
+        "New-Item -Path '/x/a[1]'",
+        "mkdir '/x/a?'",
+        "'hi' | Out-File '/x/a[1]/f'",
+        "'hi' > '/x/a[1]/f'",
+    ] {
+        assert_eq!(held(script), InputNeeded::UnresolvedTarget, "{script}");
+    }
+}
+
+#[test]
+fn powershell_writers_are_held_unless_every_target_is_checked_exactly() {
+    use DestructiveKind::Truncate;
+    let held = |s: &str| {
+        matches!(
+            assess_command(&argv(&["pwsh", "-Command", s]), Some("/work")),
+            ShellAssessment::NeedsInput(_)
+        )
+    };
+    let mut cases = vec![
+        // An unquoted backtick continues the line; the next line is the path.
+        "Set-Content `\n/x/f hi",
+        "Set-Content -Path /x/f `\n -Value hi",
+        "'hi' > `\n/x/f",
+        // PowerShell wildcards match case-insensitively, which the pattern expansion does not:
+        // every wildcard target is held, under `-Path` or positional.
+        "Set-Content -Path C:/work/devworks*/state.json -Value x",
+        "Set-Content -Path '/x/a[1]/f' hi",
+        "Add-Content /x/a?/f hi",
+        "'hi' | Out-File -FilePath /x/*.log",
+        "New-Item /x/[ab]",
+        "mkdir /x/new*",
+        // `-Force` expands wildcards over hidden entries too.
+        "Set-Content -Path /x/*/f -Value hi -Force",
+        "Add-Content -Force /x/s?/f hi",
+        // Splatting binds named parameters the command text does not show.
+        "Set-Content @p",
+        "$p = @{Path = '/x/f'; Value = 'hi'}; Set-Content @p",
+        "New-Item @('/x/a', '/x/b')",
+        // Computed arguments, even in a value position.
+        "Set-Content -Path /x/f -Value $v",
+        "Set-Content /x/f $(Get-Date)",
+        // `New-Item -Name` is joined to a path PowerShell resolves itself (an empty `-Path` is the
+        // working directory, an omitted one may bind from the pipeline).
+        "New-Item -Path '' -Name '.git/config' -ItemType File -Force",
+        "New-Item -Path /x -Name f",
+        "New-Item -Name f",
+        "New-Item -Path FileSystem::/x -Name f",
+        // Pipeline input can bind a writer's target parameters by property name.
+        "Import-Csv ./paths.csv | New-Item -Name state.json -ItemType File",
+        "Get-Item a | New-Item /x/f",
+        "'hi' | Set-Content /x/f",
+        "'hi' | Add-Content -Path /x/f",
+        "'hi' | Out-File -FilePath /x/f -Append",
+        // An alternate data stream.
+        "Set-Content -Stream s -Path /x/f -Value hi",
+        // A cmdlet reached through an alias or code the analysis does not read.
+        "Set-Alias w New-Item; w /x/f",
+        "New-Alias w Add-Content; w /x/f hi",
+        "iex 'ni /x/f'",
+        "Invoke-Expression 'Add-Content /x/f hi'",
+    ];
+    // A drive mapped with `New-PSDrive` can point anywhere, a protected root included.
+    cases.extend([
+        "New-PSDrive -Name X -PSProvider FileSystem -Root /x; Set-Content X:/a/f hi",
+        "ndr X FileSystem /x; ni X:/f",
+        "mount X FileSystem /x; ni X:/f",
+    ]);
+    // PowerShell on Unix reads `\` as a separator too, and a drive-qualified path names a
+    // PowerShell drive, never a native relative path.
+    if cfg!(not(windows)) {
+        cases.extend([
+            "Set-Content X:/a/SKILL.md x",
+            "Add-Content -LiteralPath C:/x/f hi",
+            "New-Item -Path C:/x -Name f",
+            "'hi' >> D:/x/f",
+            "Set-Content -LiteralPath '/x\\f' -Value hi",
+            "New-Item /x\\new",
+            "'hi' >> '/x\\f'",
+        ]);
+    }
+    let mut missed: Vec<String> = cases
+        .into_iter()
+        .filter(|s| !held(s))
+        .map(|s| format!("not held: {s:?}"))
+        .collect();
+    // The call and dot-source operators run the named cmdlet with the same arguments.
+    for script in ["& ni /x/f", "& 'Set-Content' /x/f hi", ". ni /x/f"] {
+        let got = assess_command(&argv(&["pwsh", "-Command", script]), Some("/work"));
+        let exact = matches!(&got, ShellAssessment::Destructive { plans, .. }
+            if plans.len() == 1 && plans[0].kind == Truncate && plans[0].targets == ["/x/f"]);
+        if !exact {
+            missed.push(format!("not planned: {script:?}: {got:?}"));
+        }
+    }
+    assert!(missed.is_empty(), "{}", missed.join("\n"));
+}
+
+#[test]
+fn powershell_file_and_folder_writers_plan_a_write_of_each_path() {
+    use DestructiveKind::Truncate;
+    let ps = |s: &str| plans(&["pwsh", "-Command", s]);
+    for script in [
+        "New-Item -ItemType Directory -Path /x/f",
+        "New-Item /x/f -ItemType File -Force",
+        "New-Item -Path:/x/f -Type file -Value hi",
+        "ni -p /x/f",
+        "mkdir /x/f",
+        "md -Force /x/f",
+        "Set-Content /x/f hi",
+        "Set-Content -Value hi /x/f",
+        "sc -LiteralPath /x/f -Value hi -NoNewline",
+        "Set-Content -lp /x/f hi",
+        "Add-Content -Path /x/f hi",
+        "ac /x/f -Value hi -Encoding utf8",
+        "Out-File -InputObject hi -LiteralPath /x/f -Force",
+        "Out-File /x/f utf8",
+        "Set-Content -- /x/f hi",
+    ] {
+        assert_eq!(ps(script), [(Truncate, vec!["/x/f".into()])], "{script}");
+    }
+    assert_eq!(
+        ps("New-Item -Path /x/a -Path /x/b"),
+        [(Truncate, vec!["/x/a".into(), "/x/b".into()])]
+    );
+    // Unknown parameters, extra positional words, links and dynamic paths hold the command.
+    let held = |s: &str| needs(&["pwsh", "-Command", s]);
+    for (script, expected) in [
+        (
+            "New-Item -ItemType SymbolicLink -Path /x/l -Target C:/y",
+            InputNeeded::UnmodeledConsequentialCommand,
+        ),
+        (
+            "New-Item -ItemType $t /x/f",
+            InputNeeded::UnmodeledConsequentialCommand,
+        ),
+        (
+            "New-Item -Credential $c /x/f",
+            InputNeeded::UnmodeledConsequentialCommand,
+        ),
+        (
+            "Add-Content -Wait /x/f hi",
+            InputNeeded::UnmodeledConsequentialCommand,
+        ),
+        (
+            "Set-Content /x/f hi there",
+            InputNeeded::UnmodeledConsequentialCommand,
+        ),
+        // `-p` is ambiguous between `-Path` and `-PassThru`.
+        (
+            "Set-Content -p /x/f hi",
+            InputNeeded::UnmodeledConsequentialCommand,
+        ),
+        ("Add-Content $p hi", InputNeeded::UnresolvedExpansion),
+        ("mkdir /x/a,/x/b", InputNeeded::UnresolvedExpansion),
+        (
+            "New-Item -Path /x -Name $n",
+            InputNeeded::UnresolvedExpansion,
+        ),
+        ("'hi' | Out-File", InputNeeded::UnresolvedTarget),
+        ("Set-Content -Value hi", InputNeeded::UnresolvedTarget),
+    ] {
+        assert_eq!(held(script), expected, "{script}");
+    }
+}
+
+#[test]
 fn unresolved_expansion_and_opaque_targets_are_held() {
     assert_eq!(
         needs(&["sh", "-c", "rm -rf \"$HOME\"/x"]),
@@ -638,10 +889,27 @@ fn consequential_git_and_file_writers_are_refused_planned_or_held_never_residual
         );
     }
     let ps = |s: &str| assess_command(&argv(&["pwsh", "-Command", s]), None);
+    // File writers with a literal path are planned as writes (refused for protected roots).
+    for script in ["Set-Content /x/repo/.git/HEAD x"] {
+        match ps(script) {
+            ShellAssessment::Destructive { plans, .. } => assert_eq!(
+                plans
+                    .into_iter()
+                    .map(|p| (p.kind, p.targets))
+                    .collect::<Vec<_>>(),
+                [(Truncate, vec!["/x/repo/.git/HEAD".to_owned()])],
+                "{script}"
+            ),
+            other => panic!("{script}: {other:?}"),
+        }
+    }
+    // Pipeline input can bind the target: held.
+    assert!(matches!(
+        ps("'x' | Out-File C:/x/repo/.git/HEAD"),
+        ShellAssessment::NeedsInput(_)
+    ));
     for script in [
-        "Set-Content C:/x/repo/.git/HEAD x",
         "Clear-Content C:/x/repo/.git/HEAD",
-        "'x' | Out-File C:/x/repo/.git/HEAD",
         "Rename-Item C:/x/repo gone",
         "Copy-Item a C:/x/repo/.git/HEAD",
         "[IO.File]::Delete($p)",

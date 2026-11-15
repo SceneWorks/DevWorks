@@ -760,11 +760,23 @@ fn lineage(
             id: id.clone(),
         };
         let row = match src {
-            0 => LineageRow::Work {
-                key,
-                work: work_root(conn, &RootId(id_of(id)?))?
-                    .ok_or_else(|| corrupt("lineage work item vanished"))?,
-            },
+            0 => {
+                let work = work_root(conn, &RootId(id_of(id.clone())?))?
+                    .ok_or_else(|| corrupt("lineage work item vanished"))?;
+                // A work row without a detail row, or a detail row without a creator, was
+                // stored before creators were recorded: its creator is unknown.
+                let creator: Option<String> = db(db(
+                    conn.prepare_cached("SELECT created_by FROM work_details WHERE work_id=?1")
+                )?
+                .query_row([id.as_str()], |r| r.get(0))
+                .optional())?
+                .flatten();
+                LineageRow::Work {
+                    key,
+                    work,
+                    creator: creator.map(id_of).transpose()?.map(ActorId),
+                }
+            }
             1 => LineageRow::Link {
                 key,
                 link: link(conn, &id_of(id)?)?.ok_or_else(|| corrupt("lineage link vanished"))?,

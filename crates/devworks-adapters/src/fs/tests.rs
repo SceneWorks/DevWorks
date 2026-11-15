@@ -704,6 +704,292 @@ fn writes_with_missing_parents_under_a_linked_protected_root_are_refused() {
     }
 }
 
+/// Appending redirections and PowerShell file and folder writers write their target like `>`:
+/// refused inside every protected root, allowed outside them.
+#[test]
+fn appending_redirects_and_powershell_writes_into_protected_roots_are_refused() {
+    use devworks_core::authority::shell::{CommandVerdict, preflight_command};
+    let mut t = tree("append");
+    let skills = t.s.p("data/skills");
+    std::fs::create_dir_all(format!("{skills}/beta")).unwrap();
+    std::fs::write(format!("{skills}/beta/SKILL.md"), "Do beta.").unwrap();
+    t.roots = t
+        .roots
+        .clone()
+        .with_skill_roots([skills.clone(), t.s.p("home/.agents/skills")]);
+    let fs = NativeFilesystem::new();
+    let cwd = t.s.p("outside");
+    let verdicts = |argv: &[&str]| match assess_command(
+        &argv.iter().map(|a| (*a).to_owned()).collect::<Vec<_>>(),
+        Some(&cwd),
+    ) {
+        ShellAssessment::Destructive { plans, .. } => plans
+            .iter()
+            .map(|p| preflight(&fs, &t.roots, p).verdict)
+            .collect::<Vec<_>>(),
+        other => panic!("{argv:?}: {other:?}"),
+    };
+    let skill = PreflightVerdict::Blocked(BlockReason::SkillDirectory);
+    let data = PreflightVerdict::Blocked(BlockReason::ApplicationData);
+    let metadata = PreflightVerdict::Blocked(BlockReason::RepositoryMetadata {
+        repository_id: id("repo-a"),
+    });
+    let primary = PreflightVerdict::Blocked(BlockReason::PrimaryRepository {
+        repository_id: id("repo-a"),
+    });
+    let home = PreflightVerdict::Blocked(BlockReason::ProtectedUserDirectory);
+    let slashed = |p: &str| p.replace('\\', "/");
+    let ps_quote = |p: &str| format!("'{}'", p.replace('\'', "''"));
+    let command = |script: &str| {
+        let argv = ["pwsh", "-Command", script].map(str::to_owned);
+        preflight_command(&fs, &t.roots, &argv, Some(&cwd), &[])
+    };
+    let targets = [
+        (t.s.p("data/skills/new/SKILL.md"), &skill),
+        (t.s.p("data/skills/beta/SKILL.md"), &skill),
+        (t.s.p("home/.agents/skills/new/SKILL.md"), &skill),
+        (t.s.p("data/state.json"), &data),
+        (t.s.p("repo/.git/config"), &metadata),
+    ];
+    for (target, refused) in &targets {
+        let q = sh_quote(&slashed(target));
+        for op in [">>", "1>>", "2>>", "&>>"] {
+            let script = format!("echo x {op} {q}");
+            assert_eq!(
+                verdicts(&["bash", "-c", &script]),
+                std::slice::from_ref(*refused),
+                "{script}"
+            );
+        }
+        let q = ps_quote(target);
+        for script in [
+            format!("'x' >> {q}"),
+            format!("New-Item -ItemType File -Path {q} -Force"),
+            format!("ni {q}"),
+            format!("mkdir {q}"),
+            format!("md -Path:{q}"),
+            format!("Set-Content {q} x"),
+            format!("sc -LiteralPath {q} -Value x"),
+            format!("Add-Content -Path {q} x"),
+            format!("ac {q} x"),
+            format!("Out-File -FilePath {q} -InputObject x -Append"),
+            format!("Out-File {q} utf8 -InputObject x"),
+        ] {
+            assert_eq!(
+                verdicts(&["pwsh", "-Command", &script]),
+                std::slice::from_ref(*refused),
+                "{script}"
+            );
+        }
+        // Pipeline input holds a writer, but its named target is still refused.
+        for script in [
+            format!("'x' | Out-File -FilePath {q} -Append"),
+            format!("'x' | Set-Content {q}"),
+        ] {
+            assert!(
+                matches!(command(&script), CommandVerdict::Blocked { .. }),
+                "{script}"
+            );
+        }
+    }
+    // `-Name` is joined to a path PowerShell resolves itself: held, never allowed.
+    let script = format!(
+        "New-Item -ItemType Directory -Path {} -Name new",
+        ps_quote(&skills)
+    );
+    assert!(
+        matches!(command(&script), CommandVerdict::NeedsInput { .. }),
+        "{script}"
+    );
+    // An append onto the repository root or the home directory itself.
+    let repo = sh_quote(&slashed(&t.s.p("repo")));
+    assert_eq!(
+        verdicts(&["bash", "-c", &format!("echo x >> {repo}")]),
+        std::slice::from_ref(&primary)
+    );
+    assert_eq!(verdicts(&["bash", "-c", "echo x >> ~"]), [home]);
+    // Outside every protected root: allowed.
+    let outside = t.s.p("outside/notes.md");
+    for op in [">>", "2>>", "&>>"] {
+        let script = format!("echo x {op} {}", sh_quote(&slashed(&outside)));
+        assert_eq!(
+            verdicts(&["bash", "-c", &script]),
+            [PreflightVerdict::Allowed],
+            "{script}"
+        );
+    }
+    for script in [
+        format!("'x' >> {}", ps_quote(&outside)),
+        format!("New-Item -Path {} -Force", ps_quote(&outside)),
+        format!("mkdir {}", ps_quote(&t.s.p("outside/new"))),
+        format!("Add-Content {} x", ps_quote(&outside)),
+        format!("Out-File {} -InputObject x", ps_quote(&outside)),
+    ] {
+        assert_eq!(
+            verdicts(&["pwsh", "-Command", &script]),
+            [PreflightVerdict::Allowed],
+            "{script}"
+        );
+    }
+    // Piped, the same write outside the roots is held, not allowed.
+    let script = format!("'x' | Out-File {}", ps_quote(&outside));
+    assert!(
+        matches!(command(&script), CommandVerdict::NeedsInput { .. }),
+        "{script}"
+    );
+}
+
+/// PowerShell writes into protected roots named with a provider prefix, an apostrophe or
+/// wildcard characters are refused or held, never allowed.
+#[test]
+fn powershell_writes_through_provider_quote_and_bracket_forms_are_never_allowed() {
+    use devworks_core::authority::shell::{CommandVerdict, preflight_command};
+    let s = Scratch::new("ps-forms");
+    // A data root with brackets in its name and a skill folder under a name with an apostrophe.
+    let data = s.p("devworks[prod]");
+    let skills = s.p("O'Brien/.agents/skills");
+    let work = s.p("work");
+    for d in [&data, &skills, &work] {
+        std::fs::create_dir_all(d).unwrap();
+    }
+    std::fs::write(format!("{data}/state.json"), "{}").unwrap();
+    let roots = ProtectedRoots::new(Vec::new(), Vec::new(), Some(data.clone()))
+        .with_skill_roots([skills.clone()]);
+    let fs = NativeFilesystem::new();
+    let ps_quote = |p: &str| format!("'{}'", p.replace('\'', "''"));
+    let verdict = |argv: &[&str]| {
+        let argv: Vec<String> = argv.iter().map(|a| (*a).to_owned()).collect();
+        preflight_command(&fs, &roots, &argv, Some(&work), &[])
+    };
+    let state = format!("{data}/state.json");
+    let skill = format!("{skills}/new/SKILL.md");
+    let slashed = |p: &str| p.replace('\\', "/");
+    let mut leaks = Vec::new();
+    for script in [
+        format!(
+            "Set-Content -Path {} -Value x",
+            ps_quote(&format!("FileSystem::{skill}"))
+        ),
+        format!(
+            "Add-Content {} x",
+            ps_quote(&format!("Microsoft.PowerShell.Core\\FileSystem::{skill}"))
+        ),
+        format!("Set-Content {} x", ps_quote(&skill)),
+        format!("'x' >> {}", ps_quote(&skill)),
+        format!("Set-Content -LiteralPath {} -Value x", ps_quote(&state)),
+        format!("Set-Content -Path {} -Value x", ps_quote(&state)),
+        format!("Set-Content {} x", ps_quote(&state)),
+        format!("New-Item -Path {} -Force", ps_quote(&state)),
+        format!("'x' | Out-File {}", ps_quote(&state)),
+        format!("'x' > {}", ps_quote(&state)),
+    ] {
+        let v = verdict(&["pwsh", "-Command", &script]);
+        if matches!(
+            v,
+            CommandVerdict::Allowed { .. } | CommandVerdict::Residual { .. }
+        ) {
+            leaks.push(format!("{script}: {v:?}"));
+        }
+    }
+    // A POSIX write pattern that matches nothing names the literal file: never allowed.
+    let script = format!("echo x > {}", sh_quote(&slashed(&state)));
+    let v = verdict(&["bash", "-c", &script]);
+    if matches!(
+        v,
+        CommandVerdict::Allowed { .. } | CommandVerdict::Residual { .. }
+    ) {
+        leaks.push(format!("{script}: {v:?}"));
+    }
+    assert!(
+        leaks.is_empty(),
+        "{} leaks:\n{}",
+        leaks.len(),
+        leaks.join("\n")
+    );
+    // The apostrophe is decoded, so the skill folder itself is what is refused.
+    let script = format!("Set-Content {} x", ps_quote(&skill));
+    assert!(matches!(
+        verdict(&["pwsh", "-Command", &script]),
+        CommandVerdict::Blocked { .. }
+    ));
+}
+
+/// PowerShell wildcards match case-insensitively, but the pattern expansion is case-sensitive:
+/// a pattern that matches only an unprotected folder here may also write into a mixed-case
+/// protected root, so a PowerShell writer with a wildcard target is held, never allowed.
+#[test]
+fn powershell_wildcard_writes_are_held_whatever_the_case_of_a_protected_root() {
+    use devworks_core::authority::shell::{CommandVerdict, preflight_command};
+    let s = Scratch::new("ps-case");
+    let data = s.p("DevWorks-Data");
+    let other = s.p("devworks-other");
+    let work = s.p("work");
+    for d in [&data, &other, &work] {
+        std::fs::create_dir_all(d).unwrap();
+    }
+    std::fs::write(format!("{data}/state.json"), "{}").unwrap();
+    std::fs::write(format!("{other}/state.json"), "{}").unwrap();
+    let roots = ProtectedRoots::new(Vec::new(), Vec::new(), Some(data.clone()));
+    let fs = NativeFilesystem::new();
+    let ps_quote = |p: &str| format!("'{}'", p.replace('\'', "''"));
+    let pattern = ps_quote(&s.p("devworks*/state.json"));
+    let mut leaks = Vec::new();
+    for script in [
+        format!("Set-Content -Path {pattern} -Value x"),
+        format!("Set-Content {pattern} x"),
+        format!("Add-Content -Path {pattern} x"),
+        format!("'x' | Out-File {pattern}"),
+        format!("New-Item {pattern} -Force"),
+    ] {
+        let argv = ["pwsh", "-Command", &script].map(str::to_owned);
+        match preflight_command(&fs, &roots, &argv, Some(&work), &[]) {
+            CommandVerdict::NeedsInput { .. } | CommandVerdict::Blocked { .. } => {}
+            other => leaks.push(format!("{script}: {other:?}")),
+        }
+    }
+    assert!(
+        leaks.is_empty(),
+        "{} leaks:\n{}",
+        leaks.len(),
+        leaks.join("\n")
+    );
+}
+
+/// A write pattern that matches nothing is held, but never hides a protected operand of the same
+/// step: every operand is still checked and a refusal wins.
+#[test]
+fn an_unmatched_write_pattern_does_not_hide_a_protected_operand() {
+    use devworks_core::authority::shell::{Blocking, CommandVerdict, preflight_command};
+    let t = tree("unmatched");
+    let fs = NativeFilesystem::new();
+    let cwd = t.s.p("outside");
+    let slashed = |p: &str| p.replace('\\', "/");
+    let verdict = |script: &str| {
+        let argv = ["bash", "-c", script].map(str::to_owned);
+        preflight_command(&fs, &t.roots, &argv, Some(&cwd), &[])
+    };
+    let pattern = sh_quote(&slashed(&t.s.p("outside/[x]")));
+    let protected = sh_quote(&slashed(&t.s.p("data/new")));
+    for script in [
+        format!("mkdir {pattern} {protected}"),
+        format!("mkdir {protected} {pattern}"),
+    ] {
+        match verdict(&script) {
+            CommandVerdict::Blocked { blocked, .. } => assert_eq!(
+                blocked.iter().map(Blocking::reason).collect::<Vec<_>>(),
+                ["ApplicationData"],
+                "{script}"
+            ),
+            other => panic!("{script}: {other:?}"),
+        }
+    }
+    // Alone, the unmatched pattern is held, not allowed.
+    assert!(matches!(
+        verdict(&format!("mkdir {pattern}")),
+        CommandVerdict::NeedsInput { .. }
+    ));
+}
+
 #[test]
 fn shell_plans_resolve_to_actual_targets_before_dispatch() {
     let t = tree("shell");

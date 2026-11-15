@@ -41,7 +41,7 @@ fn install_composition(fx: &Fx, tools: &Path) -> Composition {
                 path: "/bin/sh".into(),
             },
         ],
-        None,
+        Some(&tools.with_file_name("environments")),
     )
 }
 
@@ -211,7 +211,7 @@ fn a_dependency_install_runs_no_lifecycle_script_unless_approved_and_shares_the_
     let fx = Fx::new();
     let work = fx.h.root.with_extension("install-scripts-work");
     let _ = std::fs::remove_dir_all(&work);
-    for directory in ["tools", "primary", "worktree"] {
+    for directory in ["tools", "primary", "worktree", "environments"] {
         std::fs::create_dir_all(work.join(directory)).unwrap();
     }
     let work = work.canonicalize().unwrap();
@@ -249,7 +249,7 @@ fn a_dependency_install_runs_no_lifecycle_script_unless_approved_and_shares_the_
         assert_eq!(state, OperationState::ObservedComplete);
         assert!(ran(&primary));
         assert!(!scripted(&primary), "an install ran a lifecycle script");
-        // Git reads no global configuration from the home inside the repository.
+        // Git reads no global or system configuration.
         assert_eq!(
             std::fs::read_to_string(primary.join(".git-config-global")).unwrap(),
             "/dev/null"
@@ -526,5 +526,355 @@ fn a_script_free_uv_install_runs_no_interpreter_from_the_repository() {
     assert!(
         Path::new(&synced).starts_with(&environments) && !Path::new(&synced).starts_with(&checkout),
         "{synced}"
+    );
+}
+
+/// Writes `text` to `path` as an executable shell script.
+fn write_script(path: &Path, text: &str) {
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(path, text).unwrap();
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
+}
+
+/// Like `go mod download`: reads the Go `env` file (`$GOENV`, else
+/// `$XDG_CONFIG_HOME/go/env`, else `$HOME/.config/go/env`) unless `GOENV=off` and records the
+/// proxy it chose; and unless `GOTOOLCHAIN=local`, runs the toolchain the `go.mod` `toolchain`
+/// line names from the module cache, where Go keeps a toolchain it downloaded. It also records
+/// where its home, temporary folder and caches are.
+const FAKE_GO: &str = "#!/bin/sh\n\
+config=${GOENV:-${XDG_CONFIG_HOME:-$HOME/.config}/go/env}\n\
+proxy=https://proxy.golang.org\n\
+if [ \"$config\" != off ] && [ -f \"$config\" ]; then\n\
+  proxy=$(sed -n 's/^GOPROXY=//p' \"$config\")\n\
+fi\n\
+printf %s \"$proxy\" > .go-proxy\n\
+for value in \"$HOME\" \"$TMPDIR\" \"$XDG_CONFIG_HOME\" \"$XDG_CACHE_HOME\" \"$XDG_DATA_HOME\" \
+\"$XDG_STATE_HOME\" \"$CARGO_HOME\" \"$npm_config_cache\" \"$YARN_CACHE_FOLDER\" \
+\"$COREPACK_HOME\" \"$PIP_CACHE_DIR\" \"$UV_CACHE_DIR\" \"$GOPATH\" \"$GOMODCACHE\" \
+\"$COMPOSER_HOME\" \"$COMPOSER_CACHE_DIR\"; do\n\
+  printf '%s\\n' \"$value\"\n\
+done > .install-homes\n\
+toolchain=$(sed -n 's/^toolchain //p' go.mod)\n\
+if [ -n \"$toolchain\" ] && [ \"${GOTOOLCHAIN:-auto}\" != local ]; then\n\
+  release=\"${GOMODCACHE:-$HOME/go/pkg/mod}/golang.org/toolchain@v0.0.1-$toolchain/bin/go\"\n\
+  if [ -x \"$release\" ]; then \"$release\" \"$@\"; fi\n\
+fi\n";
+
+/// Like a Corepack `yarn` shim: reads `.corepack.env` unless `COREPACK_ENV_FILE=0`, and runs
+/// the release its `COREPACK_NPM_REGISTRY` (a `file://` folder) holds; then runs the release
+/// `packageManager` names from the Corepack home (`$COREPACK_HOME`, else
+/// `$XDG_CACHE_HOME/node/corepack`, else `$HOME/.cache/node/corepack`) when it is there.
+const FAKE_COREPACK_YARN: &str = "#!/bin/sh\n\
+if [ \"$COREPACK_ENV_FILE\" != 0 ] && [ -f .corepack.env ]; then\n\
+  registry=$(sed -n 's|^COREPACK_NPM_REGISTRY=file://||p' .corepack.env)\n\
+  if [ -n \"$registry\" ] && [ -f \"$registry/yarn.js\" ]; then sh \"$registry/yarn.js\"; fi\n\
+fi\n\
+version=$(sed -n 's/.*\"packageManager\": *\"yarn@\\([^\"]*\\)\".*/\\1/p' package.json)\n\
+corepack=${COREPACK_HOME:-${XDG_CACHE_HOME:-$HOME/.cache}/node/corepack}\n\
+release=\"$corepack/v1/yarn/$version/yarn.js\"\n\
+if [ -n \"$version\" ] && [ -f \"$release\" ]; then sh \"$release\"; fi\n\
+pwd > .install-ran\n";
+
+/// Like npm: runs the `git` an `.npmrc` names (unless `npm_config_git` overrides it) to fetch
+/// a Git dependency, and to prepare that dependency runs a nested install whose scripts run
+/// with the `.npmrc` `script-shell` and `node-options` (unless `npm_config_script_shell`
+/// overrides the shell), which `npm_config_ignore_scripts=true` stops.
+const FAKE_NPM_GIT_DEPENDENCY: &str = "#!/bin/sh\n\
+setting() { sed -n \"s/^$1=//p\" .npmrc; }\n\
+git=${npm_config_git:-$(setting git)}\n\
+\"${git:-git}\" --version > /dev/null 2>&1\n\
+if [ \"$npm_config_ignore_scripts\" != true ]; then\n\
+  shell=${npm_config_script_shell:-$(setting script-shell)}\n\
+  NODE_OPTIONS=$(setting node-options) \"${shell:-sh}\" -c true\n\
+fi\n\
+pwd > .install-ran\n";
+
+/// Like pnpm: unless `--ignore-pnpmfile`, loads `.pnpmfile.cjs`; and unless version switching
+/// is off, runs the pnpm `packageManager` names, fetched from the `.npmrc` `registry` (a
+/// `file://` folder).
+const FAKE_PNPM: &str = "#!/bin/sh\n\
+pnpmfile=yes\n\
+switch=yes\n\
+for argument in \"$@\"; do\n\
+  case \"$argument\" in\n\
+    --ignore-pnpmfile) pnpmfile=no ;;\n\
+    --config.manage-package-manager-versions=false|--config.pm-on-fail=ignore) switch=no ;;\n\
+  esac\n\
+done\n\
+if [ $pnpmfile = yes ] && [ -f .pnpmfile.cjs ]; then sh .pnpmfile.cjs; fi\n\
+version=$(sed -n 's/.*\"packageManager\": *\"pnpm@\\([^\"]*\\)\".*/\\1/p' package.json)\n\
+registry=$(sed -n 's|^registry=file://||p' .npmrc 2>/dev/null)\n\
+if [ $switch = yes ] && [ -n \"$version\" ] && [ -f \"$registry/pnpm-$version.js\" ]; then\n\
+  sh \"$registry/pnpm-$version.js\"\n\
+fi\n\
+pwd > .install-ran\n";
+
+/// Runs real Git in the checkout the way a manager does (`git ls-remote` over SSH, the Git
+/// protocol and HTTPS, a credential lookup, `git status`), so the checkout's `.git/config`
+/// applies.
+const FAKE_NPM_GIT: &str = "#!/bin/sh\n\
+git ls-remote ssh://127.0.0.1:1/x > /dev/null 2>&1\n\
+git ls-remote git://127.0.0.1:1/x > /dev/null 2>&1\n\
+git ls-remote https://example.invalid/x > /dev/null 2>&1\n\
+printf 'protocol=https\\nhost=example.invalid\\n\\n' | git credential fill > /dev/null 2>&1\n\
+git status > /dev/null 2>&1\n\
+pwd > .install-ran\n";
+
+/// Each planted program touches this marker in its working directory, the checkout.
+const PLANTED: &str = "#!/bin/sh\ntouch program-ran\nexit 1\n";
+
+/// DW-318: an install's home, temporary folder and caches are the host's, outside the
+/// repository, so a Go `env` file, a Go toolchain in the module cache and a Corepack release
+/// that the repository plants where the old in-repository home and caches were are ignored.
+#[test]
+fn a_script_free_install_ignores_a_home_and_caches_the_repository_plants() {
+    let _native_case = native_runtime_case();
+    // Go: a planted `env` file selects a proxy and turns the checksum database off, and a
+    // planted toolchain sits in the module cache for the `go.mod` `toolchain` line.
+    let fx = Fx::new();
+    let work = python_work(&fx, "go-home-work");
+    let (checkout, environments) = (work.join("checkout"), work.join("environments"));
+    let config = checkout.join(".devworks-home/.config/go/env");
+    std::fs::create_dir_all(config.parent().unwrap()).unwrap();
+    std::fs::write(&config, "GOPROXY=https://attacker.invalid\nGOSUMDB=off\n").unwrap();
+    for cache in [".devworks-deps/go", ".devworks-home/go/pkg/mod"] {
+        write_script(
+            &checkout
+                .join(cache)
+                .join("golang.org/toolchain@v0.0.1-go1.99.0/bin/go"),
+            PLANTED,
+        );
+    }
+    let go = work.join("tools/go");
+    write_script(&go, FAKE_GO);
+    let state = script_free_install(
+        &fx,
+        &checkout,
+        "go.mod",
+        b"module example.invalid/fixture\n\ngo 1.22\n\ntoolchain go1.99.0\n",
+        vec![RegisteredExecutable {
+            id: id("go"),
+            path: go,
+        }],
+        &environments,
+    );
+    assert_eq!(state, OperationState::ObservedComplete);
+    let mut failures = Vec::new();
+    if checkout.join("program-ran").exists() {
+        failures.push("a script-free Go install ran a toolchain the repository planted".into());
+    }
+    let proxy = std::fs::read_to_string(checkout.join(".go-proxy")).unwrap();
+    if proxy != "https://proxy.golang.org" {
+        failures.push(format!(
+            "a script-free Go install read a planted env file: {proxy}"
+        ));
+    }
+    let homes = std::fs::read_to_string(checkout.join(".install-homes")).unwrap();
+    assert_eq!(homes.lines().count(), 16, "{homes}");
+    for home in homes.lines() {
+        if !Path::new(home).starts_with(&environments) || Path::new(home).starts_with(&checkout) {
+            failures.push(format!(
+                "an install home or cache is not the host's: {home:?}"
+            ));
+        }
+    }
+
+    // Corepack: a planted Yarn release in the old home's Corepack cache.
+    let fx = Fx::new();
+    let work = python_work(&fx, "corepack-home-work");
+    let checkout = work.join("checkout");
+    std::fs::write(
+        checkout.join("package.json"),
+        r#"{"name":"fixture","packageManager":"yarn@1.22.22"}"#,
+    )
+    .unwrap();
+    write_script(
+        &checkout.join(".devworks-home/.cache/node/corepack/v1/yarn/1.22.22/yarn.js"),
+        PLANTED,
+    );
+    let yarn = work.join("tools/yarn");
+    write_script(&yarn, FAKE_COREPACK_YARN);
+    let state = script_free_install(
+        &fx,
+        &checkout,
+        "yarn.lock",
+        b"# yarn lockfile v1\n",
+        vec![RegisteredExecutable {
+            id: id("yarn"),
+            path: yarn,
+        }],
+        &work.join("environments"),
+    );
+    assert_eq!(state, OperationState::ObservedComplete);
+    assert!(checkout.join(".install-ran").exists());
+    if checkout.join("program-ran").exists() {
+        failures.push("a script-free Yarn install ran a planted Corepack release".into());
+    }
+    assert!(failures.is_empty(), "{failures:#?}");
+}
+
+/// DW-318: repository configuration that names a program does not run it during a
+/// script-free install; the install overrides the setting and still completes. Settings the
+/// install refuses instead are covered by the core tests of `install_runs_repository_code`.
+#[test]
+fn a_script_free_install_runs_no_program_repository_configuration_names() {
+    let _native_case = native_runtime_case();
+    let switching = br#"{"name":"fixture","packageManager":"pnpm@9.0.0"}"#.as_slice();
+    // (case, manager, fake manager, manifest, manifest bytes, planted files)
+    type Case<'a> = (
+        &'a str,
+        &'a str,
+        &'a str,
+        &'a str,
+        &'a [u8],
+        Vec<(&'a str, &'a [u8])>,
+    );
+    let mut cases: Vec<Case> = vec![
+        (
+            "npm .npmrc git",
+            "npm",
+            FAKE_NPM_GIT_DEPENDENCY,
+            "package.json",
+            br#"{"name":"fixture"}"#,
+            vec![(".npmrc", b"git=./planted-program\n")],
+        ),
+        (
+            "npm .npmrc script-shell and node-options",
+            "npm",
+            FAKE_NPM_GIT_DEPENDENCY,
+            "package.json",
+            br#"{"name":"fixture"}"#,
+            vec![(
+                ".npmrc",
+                b"script-shell=./planted-program\nnode-options=--require ./planted.js\n",
+            )],
+        ),
+        (
+            "pnpm .pnpmfile.cjs",
+            "pnpm",
+            FAKE_PNPM,
+            "pnpm-lock.yaml",
+            b"lockfileVersion: '9.0'\n",
+            vec![
+                ("package.json", br#"{"name":"fixture"}"#),
+                (".pnpmfile.cjs", PLANTED.as_bytes()),
+            ],
+        ),
+        (
+            "pnpm packageManager switch from the .npmrc registry",
+            "pnpm",
+            FAKE_PNPM,
+            "pnpm-lock.yaml",
+            b"lockfileVersion: '9.0'\n",
+            vec![
+                ("package.json", switching),
+                (".npmrc", b"registry=file://planted-registry\n"),
+                ("planted-registry/pnpm-9.0.0.js", PLANTED.as_bytes()),
+            ],
+        ),
+        (
+            "Corepack .corepack.env registry",
+            "yarn",
+            FAKE_COREPACK_YARN,
+            "yarn.lock",
+            b"# yarn lockfile v1\n",
+            vec![
+                ("package.json", br#"{"name":"fixture"}"#),
+                (
+                    ".corepack.env",
+                    b"COREPACK_NPM_REGISTRY=file://planted-registry\nCOREPACK_INTEGRITY_KEYS=0\n",
+                ),
+                ("planted-registry/yarn.js", PLANTED.as_bytes()),
+            ],
+        ),
+    ];
+    // The checkout's own Git configuration, one setting per case.
+    for (case, config) in [
+        (
+            "Git core.sshCommand",
+            "[core]\n\tsshCommand = ./planted-program\n",
+        ),
+        (
+            "Git core.gitProxy",
+            "[core]\n\tgitProxy = ./planted-program\n",
+        ),
+        (
+            "Git core.askPass",
+            "[core]\n\taskPass = ./planted-program\n",
+        ),
+        (
+            "Git core.fsmonitor",
+            "[core]\n\tfsmonitor = ./planted-program\n",
+        ),
+        (
+            "Git credential.helper",
+            "[credential]\n\thelper = !./planted-program\n",
+        ),
+        (
+            "Git URL-scoped credential.helper",
+            "[credential \"https://example.invalid\"]\n\thelper = !./planted-program\n",
+        ),
+        (
+            "Git url.insteadOf to the ext transport",
+            "[protocol \"ext\"]\n\tallow = always\n\
+             [url \"ext::./planted-program %S \"]\n\tinsteadOf = https://example.invalid/\n",
+        ),
+    ] {
+        cases.push((
+            case,
+            "npm",
+            FAKE_NPM_GIT,
+            "package.json",
+            br#"{"name":"fixture"}"#,
+            vec![(".git/config", config.as_bytes())],
+        ));
+    }
+    let mut ran = Vec::new();
+    for (case, manager, fake, manifest, bytes, planted) in cases {
+        let fx = Fx::new();
+        let work = python_work(&fx, "program-config-work");
+        let checkout = work.join("checkout");
+        if planted.iter().any(|(path, _)| path.starts_with(".git/")) {
+            let status = std::process::Command::new("git")
+                .args(["init", "-q"])
+                .current_dir(&checkout)
+                .status()
+                .unwrap();
+            assert!(status.success(), "{case}: git init");
+        }
+        write_script(&checkout.join("planted-program"), PLANTED);
+        for (path, text) in planted {
+            let target = checkout.join(path);
+            std::fs::create_dir_all(target.parent().unwrap()).unwrap();
+            let mut contents = if path == ".git/config" {
+                std::fs::read(&target).unwrap()
+            } else {
+                Vec::new()
+            };
+            contents.extend_from_slice(text);
+            std::fs::write(&target, contents).unwrap();
+        }
+        let program = work.join("tools").join(manager);
+        write_script(&program, fake);
+        let state = script_free_install(
+            &fx,
+            &checkout,
+            manifest,
+            bytes,
+            vec![RegisteredExecutable {
+                id: id(manager),
+                path: program,
+            }],
+            &work.join("environments"),
+        );
+        assert_eq!(state, OperationState::ObservedComplete, "{case}");
+        assert!(checkout.join(".install-ran").exists(), "{case}: no install");
+        if checkout.join("program-ran").exists() {
+            ran.push(case);
+        }
+    }
+    assert!(
+        ran.is_empty(),
+        "a script-free install ran the program repository configuration names: {ran:#?}"
     );
 }
