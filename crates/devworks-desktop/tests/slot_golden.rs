@@ -8,10 +8,12 @@ use devworks_desktop::backend::{CommandDispatch, Slot};
 use devworks_desktop::chat::ChatSlot;
 use devworks_desktop::conventions_ops::ConventionsSlot;
 use devworks_desktop::databases_ops::DatabasesSlot;
+use devworks_desktop::decision_ops::DecisionsSlot;
 use devworks_desktop::graph_ops::GraphSlot;
 use devworks_desktop::help_ops::HelpSlot;
 use devworks_desktop::indexing_ops::IndexingSlot;
 use devworks_desktop::instructions_ops::InstructionsSlot;
+use devworks_desktop::jobs_ops::JobsSlot;
 use devworks_desktop::memory::Memory;
 use devworks_desktop::projects_ops::ProjectsSlot;
 use devworks_desktop::screen::ScreenId;
@@ -50,19 +52,19 @@ fn samples() -> Vec<Slot> {
         Slot::Help(HelpSlot::HelpProbe(7)),
         Slot::Help(HelpSlot::HelpRead(7)),
         Slot::Help(HelpSlot::HelpGenerate),
-        Slot::ApprovalsList,
-        Slot::ApprovalInspect("s".into()),
-        Slot::ApprovalRefresh("s".into()),
-        Slot::ApprovalContent("s".into()),
-        Slot::ApprovalDecision("s".into()),
-        Slot::ReviewQueue,
-        Slot::NotificationsList,
-        Slot::CompletionList,
-        Slot::NotificationRead("s".into()),
-        Slot::NotificationChange("s".into()),
-        Slot::NotificationSettings,
-        Slot::NotificationSettingsSave,
-        Slot::OsNotificationPermission,
+        Slot::Decisions(DecisionsSlot::ApprovalsList),
+        Slot::Decisions(DecisionsSlot::ApprovalInspect("s".into())),
+        Slot::Decisions(DecisionsSlot::ApprovalRefresh("s".into())),
+        Slot::Decisions(DecisionsSlot::ApprovalContent("s".into())),
+        Slot::Decisions(DecisionsSlot::ApprovalDecision("s".into())),
+        Slot::Decisions(DecisionsSlot::ReviewQueue),
+        Slot::Decisions(DecisionsSlot::NotificationsList),
+        Slot::Decisions(DecisionsSlot::CompletionList),
+        Slot::Decisions(DecisionsSlot::NotificationRead("s".into())),
+        Slot::Decisions(DecisionsSlot::NotificationChange("s".into())),
+        Slot::Decisions(DecisionsSlot::NotificationSettings),
+        Slot::Decisions(DecisionsSlot::NotificationSettingsSave),
+        Slot::Decisions(DecisionsSlot::OsNotificationPermission),
         Slot::SettingsRead,
         Slot::ContainerCapabilities,
         Slot::SettingsValidate,
@@ -154,16 +156,16 @@ fn samples() -> Vec<Slot> {
         Slot::KnowledgeImportPreview,
         Slot::KnowledgeImport,
         Slot::KnowledgeWrite,
-        Slot::JobsList,
-        Slot::JobsMore(7),
-        Slot::JobsRefresh(7),
-        Slot::ProjectJobs("s".into()),
-        Slot::JobInspect("s".into()),
-        Slot::JobHistory("s".into()),
-        Slot::JobActiveRun("s".into()),
-        Slot::JobPrompts(7, Some("o".into())),
-        Slot::JobCreate,
-        Slot::JobCommand("s".into()),
+        Slot::Jobs(JobsSlot::JobsList),
+        Slot::Jobs(JobsSlot::JobsMore(7)),
+        Slot::Jobs(JobsSlot::JobsRefresh(7)),
+        Slot::Jobs(JobsSlot::ProjectJobs("s".into())),
+        Slot::Jobs(JobsSlot::JobInspect("s".into())),
+        Slot::Jobs(JobsSlot::JobHistory("s".into())),
+        Slot::Jobs(JobsSlot::JobActiveRun("s".into())),
+        Slot::Jobs(JobsSlot::JobPrompts(7, Some("o".into()))),
+        Slot::Jobs(JobsSlot::JobCreate),
+        Slot::Jobs(JobsSlot::JobCommand("s".into())),
         Slot::WorkFeatures("s".into()),
         Slot::WorkWorkflow("s".into(), 7),
         Slot::WorkWorkflowCommand("s".into()),
@@ -243,6 +245,8 @@ fn screen_variants() -> Vec<(ScreenId, Vec<String>)> {
         (ScreenId::Indexing, variant_names::<IndexingSlot>()),
         (ScreenId::Watchers, variant_names::<WatchSlot>()),
         (ScreenId::Chat, variant_names::<ChatSlot>()),
+        (ScreenId::Jobs, variant_names::<JobsSlot>()),
+        (ScreenId::Decisions, variant_names::<DecisionsSlot>()),
     ]
 }
 
@@ -276,6 +280,10 @@ fn reported(slot: &Slot) -> String {
         ScreenId::Indexing => format!("{:?}", IndexingSlot::try_from(slot.clone()).unwrap()),
         ScreenId::Watchers => format!("{:?}", WatchSlot::try_from(slot.clone()).unwrap()),
         ScreenId::Chat => format!("{:?}", ChatSlot::try_from(slot.clone()).unwrap()),
+        ScreenId::Jobs => format!("{:?}", JobsSlot::try_from(slot.clone()).unwrap()),
+        ScreenId::Decisions => {
+            format!("{:?}", DecisionsSlot::try_from(slot.clone()).unwrap())
+        }
     }
 }
 
@@ -336,7 +344,7 @@ fn ui_state_saved_by_main_restores_its_pending_commands() {
             registry: 4,
             download: None,
         },
-        Slot::ApprovalDecision("approval-1".into()),
+        Slot::Decisions(DecisionsSlot::ApprovalDecision("approval-1".into())),
     ];
     let saved: Vec<Slot> = memory
         .pending

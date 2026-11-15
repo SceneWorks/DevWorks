@@ -231,7 +231,6 @@ pub struct Shell {
     /// The settings revision each pending `settings.explain_source` was asked at; a chain read
     /// before the view moved to another revision is stale.
     explained_at: BTreeMap<String, Option<i64>>,
-    notifications_open: bool,
     updates_open: bool,
     shutdown_summary: Option<String>,
     /// The text scale the native minimum window size was last set for.
@@ -243,21 +242,39 @@ pub struct Shell {
 /// The migrated screens: `screens!(Id => field, ...)` binds each [`ScreenId`] to the `Shell`
 /// field holding that screen. Indexing (`projects.indexing`) is bound in the macro itself: every
 /// other screen's context reads it. So is Chat: every other screen's context reads its router
-/// catalog, and its own context lends it the watcher lists its sidebar shows.
+/// catalog, and its own context lends it the watcher lists its sidebar shows. And so is Jobs:
+/// every other screen's context reads its projects' run status.
+/// The run status a context lends while Jobs, which holds it, is the screen called.
+static NO_JOB_STATUS: BTreeMap<String, String> = BTreeMap::new();
+
 macro_rules! screens {
     ($($id:ident => $($field:ident).+),* $(,)?) => {
         impl Shell {
             fn screens(&self) -> Vec<&dyn DynScreen> {
-                vec![$(&self.$($field).+,)* &self.projects.indexing, &self.chat]
+                vec![
+                    $(&self.$($field).+,)*
+                    &self.projects.indexing,
+                    &self.chat,
+                    &self.jobs,
+                    &self.decisions,
+                ]
             }
             fn screens_mut(&mut self) -> Vec<&mut dyn DynScreen> {
-                vec![$(&mut self.$($field).+,)* &mut self.projects.indexing, &mut self.chat]
+                vec![
+                    $(&mut self.$($field).+,)*
+                    &mut self.projects.indexing,
+                    &mut self.chat,
+                    &mut self.jobs,
+                    &mut self.decisions,
+                ]
             }
             fn screen(&self, id: ScreenId) -> Option<&dyn DynScreen> {
                 match id {
                     $(ScreenId::$id => Some(&self.$($field).+),)*
                     ScreenId::Indexing => Some(&self.projects.indexing),
                     ScreenId::Chat => Some(&self.chat),
+                    ScreenId::Jobs => Some(&self.jobs),
+                    ScreenId::Decisions => Some(&self.decisions),
                     ScreenId::Legacy => None,
                 }
             }
@@ -284,28 +301,46 @@ macro_rules! screens {
                         indexing: None,
                     },
                     catalog: &[],
-                    job_status: &self.jobs.project_status,
+                    job_status: &NO_JOB_STATUS,
                     archive_counts: &self.work.archive_counts,
                     ctx: self.egui.clone(),
                     watchers: None,
+                    completions: None,
                     effects: Vec::new(),
                 };
                 match id {
                     $(ScreenId::$id => {
                         cx.projects.indexing = Some(&self.projects.indexing);
                         cx.catalog = &self.chat.routing.catalog;
+                        cx.job_status = &self.jobs.project_status;
                         Some((&mut self.$($field).+, cx))
                     })*
                     // The Indexing screen's own context does not hold its state.
                     ScreenId::Indexing => {
                         cx.catalog = &self.chat.routing.catalog;
+                        cx.job_status = &self.jobs.project_status;
                         Some((&mut self.projects.indexing, cx))
                     }
                     // Nor does Chat's: it reads its own catalog.
                     ScreenId::Chat => {
                         cx.projects.indexing = Some(&self.projects.indexing);
+                        cx.job_status = &self.jobs.project_status;
                         cx.watchers = Some(&self.watchers);
                         Some((&mut self.chat, cx))
+                    }
+                    // Decisions keeps the shell's completion cards current.
+                    ScreenId::Decisions => {
+                        cx.projects.indexing = Some(&self.projects.indexing);
+                        cx.catalog = &self.chat.routing.catalog;
+                        cx.job_status = &self.jobs.project_status;
+                        cx.completions = Some(&mut self.completions);
+                        Some((&mut self.decisions, cx))
+                    }
+                    // Nor does Jobs': it reads its own run status.
+                    ScreenId::Jobs => {
+                        cx.projects.indexing = Some(&self.projects.indexing);
+                        cx.catalog = &self.chat.routing.catalog;
+                        Some((&mut self.jobs, cx))
                     }
                     ScreenId::Legacy => None,
                 }
@@ -388,7 +423,6 @@ impl Shell {
             egui: None,
             validated_drafts: None,
             explained_at: BTreeMap::new(),
-            notifications_open: false,
             updates_open: false,
             shutdown_summary: None,
             applied_scale: 0.0,
@@ -504,7 +538,9 @@ impl Shell {
                     self.jobs.set_scope(Some(p));
                     self.navigate(Route::Jobs);
                 }
-                Effect::LoadProjectJobs(p) => self.load_project_jobs(&p),
+                Effect::LoadProjectJobs(p) => {
+                    self.with_typed(|j: &mut jobs::JobsUi, cx| j.load_project_jobs(cx, &p))
+                }
                 Effect::CountArchiveWork(p) => self.count_archive_work(&p),
                 Effect::ForgetArchiveCount(p) => self.work.forget_archive_count(&p),
                 Effect::ReviewPurge(p) => self.start_purge_review(p),
@@ -524,6 +560,17 @@ impl Shell {
                     self.navigate(Route::Settings);
                 }
                 Effect::ArtifactsChanged => self.artifacts.mutations += 1,
+                Effect::OpenConnections => {
+                    self.settings.show_connections = true;
+                    self.load_connections();
+                }
+                Effect::OpenHelp(screen) => self.open_help_context(&screen),
+                Effect::InspectApproval(id) => {
+                    self.with_typed(|d: &mut decisions::DecisionsUi, cx| d.inspect_approval(cx, id))
+                }
+                Effect::SelectKnowledge(id) => {
+                    self.knowledge_actions(vec![KnowledgeAction::Select(id)]);
+                }
                 Effect::Watch(actions) => self.watch_act(actions),
             }
         }
@@ -558,6 +605,9 @@ impl Shell {
     fn open_session(&mut self, id: String) {
         self.with_typed(|c: &mut Chat, cx| c.open_session(cx, id));
         self.navigate(Route::Chat);
+    }
+    pub fn load_jobs(&mut self) {
+        self.with_typed(|j: &mut jobs::JobsUi, cx| j.load_jobs(cx));
     }
     pub fn load_sessions(&mut self) {
         self.with_typed(|c: &mut Chat, cx| c.load_sessions(cx));
@@ -612,7 +662,6 @@ impl Shell {
         });
         let tab = match self.route {
             _ if screen_context.is_some() => screen_context.as_ref().map_or(0, |c| c.tab),
-            Route::Approvals => self.decisions.tab,
             Route::Knowledge => self.knowledge.tab,
             _ => self.routes.get(&self.route).map_or(0, |view| view.tab),
         };
@@ -620,9 +669,7 @@ impl Shell {
             _ if screen_context.is_some() => {
                 screen_context.as_ref().and_then(|c| c.selection.as_deref())
             }
-            Route::Approvals => self.decisions.selected.as_ref().map(|v| v.id.as_str()),
             Route::Knowledge => self.knowledge.selected.as_ref().map(Id::as_str),
-            Route::Jobs => self.jobs.selected.as_deref(),
             Route::AddOns => self.addons.selected.as_deref(),
             _ => self
                 .routes
@@ -670,14 +717,14 @@ impl Shell {
 
     fn load_route(&mut self) {
         let route = self.route;
+        if route == Route::Jobs {
+            // The job form's route selectors.
+            self.load_router_catalog();
+        }
         if self.with_screen(route.screen().owner, |s, cx| s.load(cx, route)) {
             return;
         }
         match self.route {
-            Route::Approvals => {
-                self.decisions.tab = self.routes.entry(Route::Approvals).or_default().tab;
-                self.load_approvals();
-            }
             Route::Settings if self.settings.view.is_none() && !self.settings.loading => {
                 self.load_settings();
             }
@@ -704,13 +751,6 @@ impl Shell {
                     && self.knowledge.listing.is_none()
                 {
                     self.load_knowledge();
-                }
-            }
-            Route::Jobs => {
-                self.load_router_catalog();
-                self.load_jobs();
-                if !self.projects.list.loaded {
-                    self.load_projects();
                 }
             }
             Route::Overview | Route::Features | Route::Issues => {
@@ -1366,13 +1406,7 @@ impl Shell {
         let Some((slot, reply)) = self.apply_purge(slot, reply) else {
             return;
         };
-        let Some((slot, reply)) = self.apply_jobs(slot, reply) else {
-            return;
-        };
         let Some((slot, reply)) = self.apply_work(slot, reply) else {
-            return;
-        };
-        let Some((slot, reply)) = self.apply_decisions(slot, reply) else {
             return;
         };
         match (slot, reply) {
@@ -2201,16 +2235,7 @@ impl Shell {
             return;
         }
         self.with_typed(|c: &mut Chat, cx| c.refresh_conversation(cx));
-        self.load_completion_notifications();
-        if self.route == Route::Approvals
-            && !self.pending(&Slot::ApprovalsList)
-            && !self.pending(&Slot::ReviewQueue)
-        {
-            self.load_approvals();
-        }
-        if self.notifications_open && !self.pending(&Slot::NotificationsList) {
-            self.load_notification_history();
-        }
+        self.with_typed(|d: &mut decisions::DecisionsUi, cx| d.refresh_decisions(cx));
         // Background discovery commits independently of the manual refresh command. Read the
         // completed inventory on normal hints/periodic repair, including while Settings is open.
         // Loading keeps unsaved model edits and leaves unknown configure outcomes untouched.
@@ -2237,10 +2262,6 @@ impl Shell {
                     && self.knowledge.items.len() <= knowledge_screen::PAGE as usize =>
             {
                 self.load_knowledge();
-            }
-            // Run status moves while the screen is open (claims, runs, cancellations).
-            Route::Jobs if !self.pending(&Slot::JobsList) && self.jobs.list_refresh.is_none() => {
-                self.load_jobs();
             }
             // Changes an agent made reach the work screens (the lists are read in full again).
             Route::Overview | Route::Features | Route::Issues if !self.work_loading() => {
@@ -2328,7 +2349,7 @@ impl Shell {
                 SettingsAction::OpenAddOns => self.navigate(Route::AddOns),
                 SettingsAction::OpenJobs => self.navigate(Route::Jobs),
                 SettingsAction::OpenNotifications => {
-                    self.notifications_open = true;
+                    self.decisions.notifications_open = true;
                 }
                 SettingsAction::OpenConnections => self.load_connections(),
                 SettingsAction::OpenHelp(topic) => self.open_help_context(&topic),
@@ -3084,7 +3105,9 @@ impl Shell {
                 });
             }
             self.load_sessions();
-            self.load_completion_notifications();
+            self.with_typed(|d: &mut decisions::DecisionsUi, cx| {
+                d.load_completion_notifications(cx)
+            });
             // The navigation's project selector lists the projects on every screen.
             if self.route != Route::Portfolio && self.route != Route::Repositories {
                 self.load_projects();
@@ -3205,11 +3228,11 @@ impl Shell {
                             "Notifications",
                             "Notifications",
                             true,
-                            Some(self.notifications_open),
+                            Some(self.decisions.notifications_open),
                         )
                         .clicked()
                         {
-                            self.notifications_open = !self.notifications_open;
+                            self.decisions.notifications_open = !self.decisions.notifications_open;
                         }
                         ui.add_enabled(false, egui::Button::new("Find work, code, knowledge"))
                             .on_disabled_hover_text(
@@ -3581,8 +3604,6 @@ impl Shell {
                 self.routes.entry(Route::Knowledge).or_default().tab = self.knowledge.tab;
                 self.knowledge_actions(actions);
             }
-            Route::Approvals => self.approvals_screen(ui),
-            Route::Jobs => self.jobs_screen(ui),
             Route::Overview => self.overview_screen(ui),
             Route::Features => self.features_screen(ui),
             Route::Issues => self.issues_screen(ui),
@@ -3683,12 +3704,12 @@ impl Shell {
     fn overlays(&mut self, ctx: &egui::Context) {
         let card_actions = self.completions.ui(ctx, TOOLBAR + 8.0);
         for a in card_actions {
-            self.completion_action(ctx, a);
+            self.with_typed(|d: &mut decisions::DecisionsUi, cx| d.completion_action(cx, ctx, a));
         }
         if let Some(text) = self.completions.take_announcement() {
             self.announce(text);
         }
-        self.notification_center(ctx);
+        self.with_typed(|d: &mut decisions::DecisionsUi, cx| d.notification_center(cx, ctx));
         if self.updates_open {
             let mut open = true;
             egui::Window::new("Updates")
