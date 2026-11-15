@@ -14,6 +14,7 @@ use devworks_core::services::agents::AgentService;
 use devworks_core::services::agents::retained::{
     AckSelection, MessageKind, PostSpec, Recipient, inbox_binding, inbox_cursor, post_message,
 };
+use devworks_core::services::failure::Failure;
 use devworks_core::services::runs::ControlService;
 use devworks_core::services::runs::scope::ScriptedScope;
 use devworks_engine::agent_inbox::{InboxSelection, RetainedInboxDriver};
@@ -129,6 +130,24 @@ fn agent_rules_refuse_with_their_target_and_a_corrupt_message_row_is_a_storage_f
             json!({"projectId":"project-a","limit":"101"}),
         )),
         (DomainErrorCode::InvalidArgument, Some("limit".into()))
+    );
+    // The retained-message helpers name the rule a request breaks, not one target per use case.
+    assert_eq!(
+        refusal(command(
+            "agents.post",
+            "rules-two-targets",
+            json!({"projectId":"project-a","body":"Hello","toHuman":true,
+                "resourceName":"build"}),
+        )),
+        (DomainErrorCode::InvalidArgument, Some("target".into()))
+    );
+    assert_eq!(
+        refusal(command(
+            "agents.post",
+            "rules-missing-item",
+            json!({"projectId":"project-a","body":"Hello","itemId":"no-such-item"}),
+        )),
+        (DomainErrorCode::PermissionDenied, Some("item".into()))
     );
     let posted = command(
         "agents.post",
@@ -794,6 +813,7 @@ async fn delivered_message_replays_until_read_acknowledgment() {
                 idempotency_key: Some("inbox-replay".into()),
             },
         )
+        .map_err(Failure::into_storage)
     })
     .unwrap();
     assert!(posted.created);
@@ -898,6 +918,7 @@ async fn delivered_message_replays_until_read_acknowledgment() {
                 idempotency_key: None,
             },
         )
+        .map_err(Failure::into_storage)
     })
     .unwrap();
     assert_eq!(question.item_versions[0].version, 2);

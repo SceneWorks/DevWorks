@@ -5,9 +5,27 @@ use crate::ports::storage::{
     ANY_QUEUE, AgentMessageHistoryFilter, ReadSnapshot, StorageError, StoredAgentDelivery,
     StoredAgentMessage, StoredAgentMessageEvent, Unavailable, WriteTransaction,
 };
-use crate::protocol::{AssignmentId, Id, ProjectId, Revision, RevisionDimension, RootId};
+use crate::protocol::{
+    AssignmentId, DomainErrorCode, Id, ProjectId, RetryAdvice, Revision, RevisionDimension, RootId,
+};
 use crate::services::cursor::CursorBinding;
+use crate::services::failure::{Failure, Refusal};
 use std::collections::HashSet;
+
+/// A rule the caller's authority or scope does not satisfy, naming what it concerns.
+fn denied(kind: &'static str) -> Failure {
+    Refusal::new(DomainErrorCode::PermissionDenied, kind, None).into()
+}
+/// A malformed request argument, naming the argument.
+fn invalid(kind: &'static str) -> Failure {
+    Refusal::new(DomainErrorCode::InvalidArgument, kind, None).into()
+}
+/// A cursor this caller cannot continue from; a refreshed read gives a new one.
+fn expired(kind: &'static str) -> Failure {
+    Refusal::new(DomainErrorCode::CursorExpired, kind, None)
+        .retry(RetryAdvice::RefreshAndNewRequest)
+        .into()
+}
 
 mod post;
 pub use post::{MessageKind, PostSpec, PostedMessage, post_host_notice, post_message};
@@ -42,21 +60,25 @@ pub fn inbox_binding(
 
 /// The inbox cursor at delivery `sequence`. It is an observation position, never authority;
 /// every read and acknowledgment rechecks the current recipient and project before using it.
-pub fn inbox_cursor(binding: &CursorBinding, sequence: i64) -> Result<String, StorageError> {
+pub fn inbox_cursor(binding: &CursorBinding, sequence: i64) -> Result<String, Failure> {
     if sequence < 0 {
-        return Err(StorageError::InvalidRecord("negative inbox cursor".into()));
+        return Err(invalid("cursor"));
     }
     Ok(binding.encode(&sequence.to_string()))
 }
 
 /// The delivery sequence of an inbox cursor; any other cursor is `CursorExpired`.
-pub fn parse_inbox_cursor(binding: &CursorBinding, cursor: &str) -> Result<i64, StorageError> {
-    binding
-        .decode(cursor)?
+pub fn parse_inbox_cursor(binding: &CursorBinding, cursor: &str) -> Result<i64, Failure> {
+    let position = match binding.decode(cursor) {
+        Ok(position) => position,
+        Err(StorageError::CursorExpired) => return Err(expired("agent_inbox_cursor")),
+        Err(error) => return Err(error.into()),
+    };
+    position
         .parse::<i64>()
         .ok()
         .filter(|sequence| *sequence >= 0)
-        .ok_or(StorageError::CursorExpired)
+        .ok_or_else(|| expired("agent_inbox_cursor"))
 }
 
 pub struct MessageHistoryQuery {
@@ -89,24 +111,28 @@ pub fn events(
     project: &ProjectId,
     after: Option<i64>,
     limit: u16,
-) -> Result<MessageEventPage, StorageError> {
-    if limit == 0 || limit > 100 || after.is_some_and(|cursor| cursor < 0) {
-        return Err(StorageError::InvalidRecord(
-            "invalid message event cursor or limit".into(),
-        ));
+) -> Result<MessageEventPage, Failure> {
+    if limit == 0 || limit > 100 {
+        return Err(invalid("limit"));
+    }
+    if after.is_some_and(|cursor| cursor < 0) {
+        return Err(invalid("cursor"));
     }
     if ctx.principal_kind() != PrincipalKind::Human
         || ctx.session_id().is_some()
-        || ctx.project_id().is_some_and(|scope| scope != project)
         || snapshot.actors().actor_kind(ctx.principal())? != Some(PrincipalKind::Human)
+    {
+        return Err(denied("principal"));
+    }
+    if ctx.project_id().is_some_and(|scope| scope != project)
         || !snapshot.sessions().project_exists(project)?
     {
-        return Err(StorageError::ScopeDenied);
+        return Err(denied("project"));
     }
     let head = snapshot.runs().agent_event_head()?;
     let position = after.unwrap_or(head);
     if position > head {
-        return Err(StorageError::CursorExpired);
+        return Err(expired("agent_event_cursor"));
     }
     let items = snapshot
         .runs()
@@ -124,42 +150,48 @@ pub fn history(
     snapshot: &dyn ReadSnapshot,
     ctx: &InvocationContext,
     query: &MessageHistoryQuery,
-) -> Result<MessageHistoryPage, StorageError> {
-    if query.limit == 0
-        || query.limit > 200
-        || query.before.is_some_and(|n| n < 0)
-        || query.channel.as_deref().is_some_and(|channel| {
-            !matches!(
-                channel,
-                "Item" | "Project" | "Feature" | "Resource" | "Session" | "Human"
-            )
-        })
-        || query.resource.as_deref().is_some_and(str::is_empty)
-    {
-        return Err(StorageError::InvalidRecord(
-            "invalid message history filter".into(),
-        ));
+) -> Result<MessageHistoryPage, Failure> {
+    if query.limit == 0 || query.limit > 200 {
+        return Err(invalid("limit"));
+    }
+    if query.before.is_some_and(|n| n < 0) {
+        return Err(invalid("before"));
+    }
+    if query.channel.as_deref().is_some_and(|channel| {
+        !matches!(
+            channel,
+            "Item" | "Project" | "Feature" | "Resource" | "Session" | "Human"
+        )
+    }) {
+        return Err(invalid("channel"));
+    }
+    if query.resource.as_deref().is_some_and(str::is_empty) {
+        return Err(invalid("resource"));
     }
     if ctx.principal_kind() != PrincipalKind::Human
         || ctx.session_id().is_some()
-        || ctx
-            .project_id()
-            .is_some_and(|scope| scope != &query.project)
         || snapshot.actors().actor_kind(ctx.principal())? != Some(ctx.principal_kind())
     {
-        return Err(StorageError::ScopeDenied);
+        return Err(denied("principal"));
     }
-    if !snapshot.sessions().project_exists(&query.project)? {
-        return Err(StorageError::ScopeDenied);
+    if ctx
+        .project_id()
+        .is_some_and(|scope| scope != &query.project)
+        || !snapshot.sessions().project_exists(&query.project)?
+    {
+        return Err(denied("project"));
     }
-    for (target, kind) in [(query.item.as_ref(), false), (query.feature.as_ref(), true)] {
+    for (target, feature, kind) in [
+        (query.item.as_ref(), false, "item"),
+        (query.feature.as_ref(), true, "feature"),
+    ] {
         if let Some(target) = target {
             let work = snapshot
                 .sessions()
                 .work_root(target)?
-                .ok_or(StorageError::ScopeDenied)?;
-            if work.project_id != query.project || (work.kind == "feature") != kind {
-                return Err(StorageError::ScopeDenied);
+                .ok_or_else(|| denied(kind))?;
+            if work.project_id != query.project || (work.kind == "feature") != feature {
+                return Err(denied(kind));
             }
         }
     }
@@ -228,12 +260,12 @@ pub(super) fn awaiting_human_change(
     ctx: &InvocationContext,
     item: &RootId,
     before: bool,
-) -> Result<Option<ItemVersion>, StorageError> {
+) -> Result<Option<ItemVersion>, Failure> {
     let after = tx.runs().open_blocking_question(item)?;
     if before == after {
         return Ok(None);
     }
-    let mut work = tx.work().work(&item.0)?.ok_or(StorageError::ScopeDenied)?;
+    let mut work = tx.work().work(&item.0)?.ok_or_else(|| denied("item"))?;
     let statuses = tx.work().statuses(&work.project_id)?;
     let finished = work
         .status_id
@@ -273,22 +305,22 @@ fn authorize_recipient(
     ctx: &InvocationContext,
     project: &ProjectId,
     recipient: &Recipient,
-) -> Result<(), StorageError> {
+) -> Result<(), Failure> {
     if tx.actors().actor_kind(ctx.principal())? != Some(ctx.principal_kind()) {
-        return Err(StorageError::ScopeDenied);
+        return Err(denied("principal"));
     }
     if ctx.project_id().is_some_and(|scope| scope != project) {
-        return Err(StorageError::ScopeDenied);
+        return Err(denied("project"));
     }
     match recipient {
         Recipient::Session(id) => {
             if ctx.principal_kind() != PrincipalKind::Agent || ctx.session_id() != Some(id) {
-                return Err(StorageError::ScopeDenied);
+                return Err(denied("session"));
             }
             let session = tx
                 .sessions()
                 .session(id)?
-                .ok_or(StorageError::ScopeDenied)?;
+                .ok_or_else(|| denied("session"))?;
             let root_project = match &session.root_id {
                 Some(root) => tx.sessions().work_root(root)?.map(|work| work.project_id),
                 None => None,
@@ -297,7 +329,7 @@ fn authorize_recipient(
                 && root_project.is_some()
                 && session.project_id != root_project
             {
-                return Err(StorageError::ScopeDenied);
+                return Err(denied("session"));
             }
             let session_project = session.project_id.clone().or(root_project);
             if session.closed()
@@ -307,15 +339,15 @@ fn authorize_recipient(
                     .root_id()
                     .is_some_and(|root| session.root_id.as_ref() != Some(root))
             {
-                return Err(StorageError::ScopeDenied);
+                return Err(denied("session"));
             }
         }
         Recipient::Human => {
             if ctx.principal_kind() != PrincipalKind::Human || ctx.session_id().is_some() {
-                return Err(StorageError::ScopeDenied);
+                return Err(denied("principal"));
             }
             if tx.projects().project(project)?.is_none() {
-                return Err(StorageError::ScopeDenied);
+                return Err(denied("project"));
             }
         }
     }
@@ -327,12 +359,12 @@ fn delivery_for(
     project: &ProjectId,
     recipient: &Recipient,
     message_id: &Id,
-) -> Result<(StoredAgentDelivery, StoredAgentMessage), StorageError> {
+) -> Result<(StoredAgentDelivery, StoredAgentMessage), Failure> {
     let delivery = match recipient {
         Recipient::Session(id) => tx.runs().agent_session_delivery(message_id, id)?,
         Recipient::Human => tx.runs().agent_delivery(message_id, None)?,
     }
-    .ok_or(StorageError::ScopeDenied)?;
+    .ok_or_else(|| denied("agent_message"))?;
     if delivery.project_id != *project
         || delivery.recipient_human != matches!(recipient, Recipient::Human)
         || delivery.recipient_session_id.as_ref()
@@ -341,12 +373,12 @@ fn delivery_for(
                 Recipient::Human => None,
             }
     {
-        return Err(StorageError::ScopeDenied);
+        return Err(denied("agent_message"));
     }
     let message = tx
         .runs()
         .agent_message(message_id)?
-        .ok_or(StorageError::ScopeDenied)?;
+        .ok_or_else(|| denied("agent_message"))?;
     Ok((delivery, message))
 }
 
@@ -360,14 +392,13 @@ pub fn deliver_inbox(
     after: i64,
     include_read: bool,
     limit: u16,
-) -> Result<DeliveredInbox, StorageError> {
-    if after < 0 || limit == 0 || limit > 100 {
-        return Err(StorageError::InvalidRecord(
-            "invalid inbox cursor or limit".into(),
-        ));
+) -> Result<DeliveredInbox, Failure> {
+    if limit == 0 || limit > 100 {
+        return Err(invalid("limit"));
     }
-    if after > tx.runs().agent_delivery_head()? {
-        return Err(StorageError::CursorExpired);
+    // A cursor ahead of the inbox head cannot be one this inbox issued.
+    if after < 0 || after > tx.runs().agent_delivery_head()? {
+        return Err(invalid("cursor"));
     }
     authorize_recipient(tx, ctx, project, recipient)?;
     let now = tx.now_ms();
@@ -403,7 +434,7 @@ pub fn deliver_inbox(
 pub(super) fn delegated_item_ids(
     tx: &mut dyn WriteTransaction,
     assignment: &crate::ports::storage::StoredAssignment,
-) -> Result<Vec<RootId>, StorageError> {
+) -> Result<Vec<RootId>, Failure> {
     if assignment.purpose != crate::ports::storage::AssignmentPurpose::Child
         || assignment.work_id == assignment.root_id
     {
@@ -413,7 +444,10 @@ pub(super) fn delegated_item_ids(
         return Ok(Vec::new());
     };
     let tasks: Vec<Id> = serde_json::from_value(context.task_ids).map_err(|_| {
-        StorageError::unavailable(Unavailable::Corrupt, "stored delegated task scope")
+        Failure::from(StorageError::unavailable(
+            Unavailable::Corrupt,
+            "stored delegated task scope",
+        ))
     })?;
     if !tasks.contains(&assignment.work_id.0) {
         return Ok(Vec::new());
@@ -421,7 +455,7 @@ pub(super) fn delegated_item_ids(
     let root = tx
         .sessions()
         .work_root(&assignment.root_id)?
-        .ok_or(StorageError::ScopeDenied)?;
+        .ok_or_else(|| denied("root"))?;
     let mut current = Vec::new();
     for task in tasks {
         let id = RootId(task);
@@ -445,13 +479,13 @@ pub(super) fn delegated_item_ids(
 pub fn handover_item(
     tx: &mut dyn WriteTransaction,
     assignment_id: &AssignmentId,
-) -> Result<usize, StorageError> {
+) -> Result<usize, Failure> {
     let assignment = tx
         .runs()
         .assignment(assignment_id)?
-        .ok_or(StorageError::ScopeDenied)?;
+        .ok_or_else(|| denied("assignment"))?;
     if !assignment.state.is_live() {
-        return Err(StorageError::ScopeDenied);
+        return Err(denied("assignment"));
     }
     let items = if assignment.purpose == crate::ports::storage::AssignmentPurpose::Child {
         let items = delegated_item_ids(tx, &assignment)?;
@@ -466,13 +500,13 @@ pub fn handover_item(
     let work = tx
         .sessions()
         .work_root(&assignment.work_id)?
-        .ok_or(StorageError::ScopeDenied)?;
+        .ok_or_else(|| denied("item"))?;
     let session = tx
         .sessions()
         .session(session_id)?
-        .ok_or(StorageError::ScopeDenied)?;
+        .ok_or_else(|| denied("session"))?;
     if session.closed() || post::session_project(tx, &session)?.as_ref() != Some(&work.project_id) {
-        return Err(StorageError::ScopeDenied);
+        return Err(denied("session"));
     }
     let mut before: Option<Id> = None;
     let mut handed_over = 0;
@@ -547,18 +581,15 @@ const SILENT_SESSION_MS: i64 = 15 * 60 * 1_000;
 /// Passes an unread or still-open itemless direct message once from an ended or silent holder to
 /// a new session with the same project and repository scope. The original delivery is immutable
 /// to its recipient except for the successor marker; the new copy has its own inbox sequence.
-pub fn handover_direct(
-    tx: &mut dyn WriteTransaction,
-    session_id: &Id,
-) -> Result<usize, StorageError> {
+pub fn handover_direct(tx: &mut dyn WriteTransaction, session_id: &Id) -> Result<usize, Failure> {
     let session = tx
         .sessions()
         .session(session_id)?
-        .ok_or(StorageError::ScopeDenied)?;
+        .ok_or_else(|| denied("session"))?;
     if session.closed() {
-        return Err(StorageError::ScopeDenied);
+        return Err(denied("session"));
     }
-    let project = post::session_project(tx, &session)?.ok_or(StorageError::ScopeDenied)?;
+    let project = post::session_project(tx, &session)?.ok_or_else(|| denied("session"))?;
     let repositories = tx.sessions().session_repository_scope(session_id)?;
     let primary_sessions: HashSet<Id> = match &session.root_id {
         Some(root) => crate::services::runs::root_assignments(tx.runs(), root, false)?
@@ -602,11 +633,11 @@ pub fn handover_direct(
             let holder = tx
                 .sessions()
                 .session(holder_id)?
-                .ok_or(StorageError::ScopeDenied)?;
+                .ok_or_else(|| denied("session"))?;
             let original = tx
                 .sessions()
                 .session(original_id)?
-                .ok_or(StorageError::ScopeDenied)?;
+                .ok_or_else(|| denied("session"))?;
             if post::session_project(tx, &holder)?.as_ref() != Some(&project)
                 || post::session_project(tx, &original)?.as_ref() != Some(&project)
                 || tx.sessions().session_repository_scope(original_id)? != repositories
@@ -705,19 +736,15 @@ pub fn acknowledge(
     recipient: &Recipient,
     selection: AckSelection,
     resolution: Option<Resolution>,
-) -> Result<Acknowledged, StorageError> {
+) -> Result<Acknowledged, Failure> {
     if resolution.is_some() && !matches!(selection, AckSelection::Messages(_)) {
-        return Err(StorageError::InvalidRecord(
-            "resolution requires named messages".into(),
-        ));
+        return Err(invalid("resolution"));
     }
     authorize_recipient(tx, ctx, project, recipient)?;
     let ids = match selection {
         AckSelection::Messages(ids) => {
             if ids.is_empty() || ids.len() > 100 {
-                return Err(StorageError::InvalidRecord(
-                    "ack message count must be 1 to 100".into(),
-                ));
+                return Err(invalid("message_ids"));
             }
             let mut seen = HashSet::new();
             ids.into_iter()
@@ -725,8 +752,9 @@ pub fn acknowledge(
                 .collect::<Vec<_>>()
         }
         AckSelection::Through(up_to) => {
+            // An `up_to` ahead of the inbox head cannot be a cursor this inbox issued.
             if up_to < 0 || up_to > tx.runs().agent_delivery_head()? {
-                return Err(StorageError::CursorExpired);
+                return Err(invalid("up_to"));
             }
             let mut ids = Vec::new();
             let mut after = 0;
@@ -823,16 +851,14 @@ pub(super) fn resolve_message(
     recipient: &Recipient,
     message: &StoredAgentMessage,
     resolution: Resolution,
-) -> Result<Option<(StoredAgentDelivery, StoredAgentMessage)>, StorageError> {
+) -> Result<Option<(StoredAgentDelivery, StoredAgentMessage)>, Failure> {
     authorize_recipient(tx, ctx, project, recipient)?;
     let (mut delivery, _) = delivery_for(tx, project, recipient, &message.id)?;
     if message.to_human && !matches!(recipient, Recipient::Human) {
-        return Err(StorageError::ScopeDenied);
+        return Err(denied("agent_message"));
     }
     if !matches!(message.message_class.as_str(), "Question" | "Request") {
-        return Err(StorageError::InvalidRecord(
-            "only a question or request can be resolved".into(),
-        ));
+        return Err(invalid("message_class"));
     }
     if message.state.as_deref() == Some(resolution.state())
         && message.resolved_by_actor_id.as_ref() == Some(ctx.principal())
@@ -847,7 +873,8 @@ pub(super) fn resolve_message(
             message.id.clone(),
             Revision::new((message.revision - 1).max(1)).expect("positive revision"),
             Revision::new(message.revision).expect("positive revision"),
-        ));
+        )
+        .into());
     }
     let now = tx.now_ms();
     let mut resolved = message.clone();

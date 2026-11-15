@@ -15,6 +15,7 @@ pub mod cursor;
 pub mod desktop;
 pub mod diagnostics;
 pub mod evals;
+pub mod failure;
 pub mod git;
 pub mod github;
 pub mod graph;

@@ -68,8 +68,14 @@ fn itemless_direct_messages_pass_once_to_same_repository_successor() {
             idempotency_key: None,
         };
         Ok((
-            post_message(tx, &human, &spec("unread"))?.message.id,
-            post_message(tx, &human, &spec("already read"))?.message.id,
+            post_message(tx, &human, &spec("unread"))
+                .map_err(Failure::into_storage)?
+                .message
+                .id,
+            post_message(tx, &human, &spec("already read"))
+                .map_err(Failure::into_storage)?
+                .message
+                .id,
         ))
     })
     .unwrap();
@@ -106,7 +112,13 @@ fn itemless_direct_messages_pass_once_to_same_repository_successor() {
                 idempotency_key: None,
             },
         );
-        assert!(matches!(result, Err(StorageError::ScopeDenied)));
+        assert!(matches!(
+            result,
+            Err(Failure::Refused(Refusal {
+                code: DomainErrorCode::PermissionDenied,
+                ..
+            }))
+        ));
         Ok(())
     })
     .unwrap();
@@ -118,7 +130,8 @@ fn itemless_direct_messages_pass_once_to_same_repository_successor() {
             &Recipient::Session(id("session-old")),
             AckSelection::Messages(vec![read]),
             None,
-        )?;
+        )
+        .map_err(Failure::into_storage)?;
         Ok(())
     })
     .unwrap();
@@ -146,10 +159,22 @@ fn itemless_direct_messages_pass_once_to_same_repository_successor() {
                 .session_repository_scope(&id("session-next"))?,
             vec![id("repo-a")]
         );
-        assert_eq!(handover_direct(tx, &id("session-other"))?, 0);
-        assert_eq!(handover_direct(tx, &id("session-unrelated"))?, 0);
-        assert_eq!(handover_direct(tx, &id("session-next"))?, 1);
-        assert_eq!(handover_direct(tx, &id("session-next"))?, 0);
+        assert_eq!(
+            handover_direct(tx, &id("session-other")).map_err(Failure::into_storage)?,
+            0
+        );
+        assert_eq!(
+            handover_direct(tx, &id("session-unrelated")).map_err(Failure::into_storage)?,
+            0
+        );
+        assert_eq!(
+            handover_direct(tx, &id("session-next")).map_err(Failure::into_storage)?,
+            1
+        );
+        assert_eq!(
+            handover_direct(tx, &id("session-next")).map_err(Failure::into_storage)?,
+            0
+        );
         let original = tx
             .runs()
             .agent_session_delivery(&unread, &id("session-old"))?
@@ -194,7 +219,8 @@ fn itemless_direct_messages_pass_once_to_same_repository_successor() {
                 resolves: None,
                 idempotency_key: None,
             },
-        )?;
+        )
+        .map_err(Failure::into_storage)?;
         Ok(())
     })
     .unwrap();
@@ -203,7 +229,10 @@ fn itemless_direct_messages_pass_once_to_same_repository_successor() {
            VALUES('session-later','conv-a','agent-a','root-a',0,1,'project-a',1700000960000,'["repo-a"]');"#
     ).unwrap();
     run_write(&s, WriteOptions::default(), |tx| {
-        assert_eq!(handover_direct(tx, &id("session-later"))?, 0);
+        assert_eq!(
+            handover_direct(tx, &id("session-later")).map_err(Failure::into_storage)?,
+            0
+        );
         Ok(())
     })
     .unwrap();
@@ -228,7 +257,8 @@ fn itemless_direct_messages_pass_once_to_same_repository_successor() {
             head,
             false,
             10,
-        )?;
+        )
+        .map_err(Failure::into_storage)?;
         assert!(page.items.is_empty());
         assert_eq!(
             tx.sessions().session_activity_at_ms(&id("session-next"))?,
@@ -243,7 +273,10 @@ fn itemless_direct_messages_pass_once_to_same_repository_successor() {
            VALUES('session-after-silence','conv-a','agent-a','root-a',0,1,'project-a',1700001920000,'["repo-a"]');"#
     ).unwrap();
     run_write(&s, WriteOptions::default(), move |tx| {
-        assert_eq!(handover_direct(tx, &id("session-after-silence"))?, 0);
+        assert_eq!(
+            handover_direct(tx, &id("session-after-silence")).map_err(Failure::into_storage)?,
+            0
+        );
         Ok(())
     })
     .unwrap();
@@ -253,7 +286,10 @@ fn itemless_direct_messages_pass_once_to_same_repository_successor() {
            VALUES('session-inherits-silent','conv-a','agent-a','root-a',0,1,'project-a',1700002820000,'["repo-a"]');"#
     ).unwrap();
     run_write(&s, WriteOptions::default(), move |tx| {
-        assert_eq!(handover_direct(tx, &id("session-inherits-silent"))?, 1);
+        assert_eq!(
+            handover_direct(tx, &id("session-inherits-silent")).map_err(Failure::into_storage)?,
+            1
+        );
         assert_eq!(
             tx.runs()
                 .agent_session_delivery(&inherited_id, &id("session-next"))?
@@ -290,7 +326,8 @@ fn itemless_direct_messages_pass_once_to_same_repository_successor() {
                 resolves: None,
                 idempotency_key: None,
             },
-        )?;
+        )
+        .map_err(Failure::into_storage)?;
         Ok(())
     })
     .unwrap();
@@ -300,7 +337,10 @@ fn itemless_direct_messages_pass_once_to_same_repository_successor() {
            VALUES('session-expired','conv-a','agent-a','root-a',0,1,'project-a',1700691200000,'["repo-a"]');"#
     ).unwrap();
     run_write(&s, WriteOptions::default(), |tx| {
-        assert_eq!(handover_direct(tx, &id("session-expired"))?, 0);
+        assert_eq!(
+            handover_direct(tx, &id("session-expired")).map_err(Failure::into_storage)?,
+            0
+        );
         Ok(())
     })
     .unwrap();
@@ -615,7 +655,8 @@ fn message_delivery_replays_after_reopen_and_rejects_cross_project_links() {
                 0,
                 false,
                 10,
-            )?;
+            )
+            .map_err(Failure::into_storage)?;
             assert_eq!(page.items.len(), 1);
             assert_eq!(page.next_sequence, 2);
             assert_eq!(page.items[0].0.state, "Delivered");
@@ -646,7 +687,8 @@ fn message_delivery_replays_after_reopen_and_rejects_cross_project_links() {
                     "message-direct",
                 )]),
                 None,
-            )?;
+            )
+            .map_err(Failure::into_storage)?;
             assert_eq!(result.changed.len(), expected);
             Ok(())
         })
@@ -683,7 +725,8 @@ fn message_delivery_replays_after_reopen_and_rejects_cross_project_links() {
             &devworks_core::services::agents::retained::Recipient::Session(id("session-home")),
             devworks_core::services::agents::retained::AckSelection::Through(3),
             None,
-        )?;
+        )
+        .map_err(Failure::into_storage)?;
         assert_eq!(result.changed.len(), 1);
         assert_eq!(result.changed[0].1.id, id("message-rootless"));
         Ok(())
@@ -701,7 +744,8 @@ fn message_delivery_replays_after_reopen_and_rejects_cross_project_links() {
                     "message-rootless",
                 )]),
                 Some(devworks_core::services::agents::retained::Resolution::Answered),
-            )?;
+            )
+            .map_err(Failure::into_storage)?;
             assert_eq!(result.changed.len(), expected);
             if expected == 1 {
                 assert_eq!(result.changed[0].1.state.as_deref(), Some("Answered"));
@@ -726,9 +770,10 @@ fn message_delivery_replays_after_reopen_and_rejects_cross_project_links() {
     };
     let context = child_context.clone();
     let (new_message, replay) = run_write(&s, WriteOptions::default(), move |tx| {
-        let created = devworks_core::services::agents::retained::post_message(tx, &context, &spec)?;
-        let repeated =
-            devworks_core::services::agents::retained::post_message(tx, &context, &spec)?;
+        let created = devworks_core::services::agents::retained::post_message(tx, &context, &spec)
+            .map_err(Failure::into_storage)?;
+        let repeated = devworks_core::services::agents::retained::post_message(tx, &context, &spec)
+            .map_err(Failure::into_storage)?;
         Ok((created, repeated))
     })
     .unwrap();
@@ -786,6 +831,7 @@ fn message_delivery_replays_after_reopen_and_rejects_cross_project_links() {
                 },
             )
             .map(|_| ())
+            .map_err(Failure::into_storage)
         }),
         Err(StorageError::ScopeDenied)
     ));
@@ -816,7 +862,8 @@ fn message_delivery_replays_after_reopen_and_rejects_cross_project_links() {
                 resolves: Some(devworks_core::services::agents::retained::Resolution::Answered),
                 idempotency_key: None,
             },
-        )?;
+        )
+        .map_err(Failure::into_storage)?;
         assert_eq!(reply.message.channel, "Session");
         assert_eq!(reply.recipients, 1);
         assert_eq!(
@@ -866,13 +913,16 @@ fn message_delivery_replays_after_reopen_and_rejects_cross_project_links() {
                 resolves: None,
                 idempotency_key: None,
             },
-        )?;
+        )
+        .map_err(Failure::into_storage)?;
         assert_eq!(
-            devworks_core::services::agents::retained::handover_item(tx, &assignment("recipient"))?,
+            devworks_core::services::agents::retained::handover_item(tx, &assignment("recipient"))
+                .map_err(Failure::into_storage)?,
             0
         );
         assert_eq!(
-            devworks_core::services::agents::retained::handover_item(tx, &assignment("recipient"))?,
+            devworks_core::services::agents::retained::handover_item(tx, &assignment("recipient"))
+                .map_err(Failure::into_storage)?,
             0
         );
         let broadcast = devworks_core::services::agents::retained::post_message(
@@ -892,7 +942,8 @@ fn message_delivery_replays_after_reopen_and_rejects_cross_project_links() {
                 resolves: None,
                 idempotency_key: None,
             },
-        )?;
+        )
+        .map_err(Failure::into_storage)?;
         assert_eq!(broadcast.recipients, 0);
         Ok(posted)
     })
@@ -927,18 +978,21 @@ fn message_delivery_replays_after_reopen_and_rejects_cross_project_links() {
             limit: 1,
         };
         let first =
-            devworks_core::services::agents::retained::history(snap, &history_context, &query)?;
+            devworks_core::services::agents::retained::history(snap, &history_context, &query)
+                .map_err(Failure::into_storage)?;
         assert_eq!(first.items.len(), 1);
         query.before = first.next_before;
         assert!(query.before.is_some());
         let second =
-            devworks_core::services::agents::retained::history(snap, &history_context, &query)?;
+            devworks_core::services::agents::retained::history(snap, &history_context, &query)
+                .map_err(Failure::into_storage)?;
         assert_eq!(second.items.len(), 1);
         assert_ne!(first.items[0].id, second.items[0].id);
         query.open_only = true;
         query.before = None;
         let open =
-            devworks_core::services::agents::retained::history(snap, &history_context, &query)?;
+            devworks_core::services::agents::retained::history(snap, &history_context, &query)
+                .map_err(Failure::into_storage)?;
         assert_eq!(open.items[0].id, direct.message.id);
         let fresh = devworks_core::services::agents::retained::events(
             snap,
@@ -946,7 +1000,8 @@ fn message_delivery_replays_after_reopen_and_rejects_cross_project_links() {
             &project("project-a"),
             None,
             100,
-        )?;
+        )
+        .map_err(Failure::into_storage)?;
         assert!(fresh.items.is_empty());
         let replay = devworks_core::services::agents::retained::events(
             snap,
@@ -954,7 +1009,8 @@ fn message_delivery_replays_after_reopen_and_rejects_cross_project_links() {
             &project("project-a"),
             Some(0),
             100,
-        )?;
+        )
+        .map_err(Failure::into_storage)?;
         assert!(replay.items.iter().all(|event| event.kind != "HandedOver"));
         assert_eq!(replay.next_sequence, fresh.next_sequence);
         Ok(())

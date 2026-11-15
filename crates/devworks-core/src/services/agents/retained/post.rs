@@ -1,5 +1,6 @@
 use super::{
-    ItemVersion, Recipient, Resolution, authorize_recipient, awaiting_human_change, resolve_message,
+    ItemVersion, Recipient, Resolution, authorize_recipient, awaiting_human_change, denied,
+    invalid, resolve_message,
 };
 use crate::context::{InvocationContext, PrincipalKind};
 use crate::fingerprint::sha256_hex;
@@ -10,6 +11,7 @@ use crate::ports::storage::{
     StoredSession, Unavailable, WriteTransaction,
 };
 use crate::protocol::{Id, ProjectId, RootId};
+use crate::services::failure::Failure;
 use std::collections::HashSet;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -59,14 +61,14 @@ pub struct PostedMessage {
 pub(super) fn session_project(
     tx: &mut dyn WriteTransaction,
     session: &crate::ports::storage::StoredSession,
-) -> Result<Option<ProjectId>, StorageError> {
+) -> Result<Option<ProjectId>, Failure> {
     let root_project = match &session.root_id {
         Some(root) => tx.sessions().work_root(root)?.map(|work| work.project_id),
         None => None,
     };
     if session.project_id.is_some() && root_project.is_some() && session.project_id != root_project
     {
-        return Err(StorageError::ScopeDenied);
+        return Err(denied("session"));
     }
     Ok(session.project_id.clone().or(root_project))
 }
@@ -74,7 +76,7 @@ pub(super) fn session_project(
 pub(super) fn active_assignment(
     tx: &mut dyn WriteTransaction,
     session: &StoredSession,
-) -> Result<Option<StoredAssignment>, StorageError> {
+) -> Result<Option<StoredAssignment>, Failure> {
     let Some(root) = &session.root_id else {
         return Ok(None);
     };
@@ -114,7 +116,7 @@ pub(super) fn active_assignment(
 fn project_sessions(
     tx: &mut dyn WriteTransaction,
     project: &ProjectId,
-) -> Result<Vec<(StoredSession, StoredAssignment)>, StorageError> {
+) -> Result<Vec<(StoredSession, StoredAssignment)>, Failure> {
     let mut after: Option<SessionPosition> = None;
     let mut sessions = Vec::new();
     loop {
@@ -151,7 +153,7 @@ fn recipients(
     feature: &Option<RootId>,
     to_session: &Option<Id>,
     to_human: bool,
-) -> Result<Vec<Recipient>, StorageError> {
+) -> Result<Vec<Recipient>, Failure> {
     if to_human {
         return Ok(vec![Recipient::Human]);
     }
@@ -194,15 +196,13 @@ pub fn post_message(
     tx: &mut dyn WriteTransaction,
     ctx: &InvocationContext,
     spec: &PostSpec,
-) -> Result<PostedMessage, StorageError> {
+) -> Result<PostedMessage, Failure> {
     let body = spec.body.trim();
     if body.is_empty() || body.chars().count() > 8000 || body.contains('\0') {
-        return Err(StorageError::InvalidRecord(
-            "message body must be 1 to 8000 characters".into(),
-        ));
+        return Err(invalid("body"));
     }
     if ctx.principal_kind() == PrincipalKind::Agent {
-        let session = ctx.session_id().ok_or(StorageError::ScopeDenied)?;
+        let session = ctx.session_id().ok_or_else(|| denied("session"))?;
         authorize_recipient(tx, ctx, &spec.project, &Recipient::Session(session.clone()))?;
     } else {
         authorize_recipient(tx, ctx, &spec.project, &Recipient::Human)?;
@@ -211,24 +211,24 @@ pub fn post_message(
         let root = tx
             .sessions()
             .work_root(item)?
-            .ok_or(StorageError::ScopeDenied)?;
+            .ok_or_else(|| denied("item"))?;
         if root.project_id != spec.project || root.kind == "feature" {
-            return Err(StorageError::ScopeDenied);
+            return Err(denied("item"));
         }
     }
     if let Some(feature) = &spec.feature {
         let root = tx
             .sessions()
             .work_root(feature)?
-            .ok_or(StorageError::ScopeDenied)?;
+            .ok_or_else(|| denied("feature"))?;
         if root.project_id != spec.project || root.kind != "feature" {
-            return Err(StorageError::ScopeDenied);
+            return Err(denied("feature"));
         }
     }
     if let Some(resource) = &spec.resource
         && (resource.is_empty() || resource.len() > 200 || resource.chars().any(char::is_control))
     {
-        return Err(StorageError::InvalidRecord("invalid resource name".into()));
+        return Err(invalid("resource"));
     }
     let exclusive_targets = usize::from(spec.feature.is_some())
         + usize::from(spec.resource.is_some())
@@ -237,69 +237,64 @@ pub fn post_message(
     if exclusive_targets > 1
         || spec.item.is_some() && (spec.feature.is_some() || spec.resource.is_some())
     {
-        return Err(StorageError::InvalidRecord(
-            "incompatible message targets".into(),
-        ));
+        return Err(invalid("target"));
     }
     if spec.blocking
         && (spec.kind != MessageKind::Question || !spec.to_human || spec.item.is_none())
     {
-        return Err(StorageError::InvalidRecord(
-            "blocking requires a human item question".into(),
-        ));
+        return Err(invalid("blocking"));
     }
     if let Some(target) = &spec.item
         && ctx.principal_kind() == PrincipalKind::Agent
     {
-        let own_root = ctx.root_id().ok_or(StorageError::ScopeDenied)?;
-        let assignment_id = ctx.assignment_id().ok_or(StorageError::ScopeDenied)?;
+        let own_root = ctx.root_id().ok_or_else(|| denied("assignment"))?;
+        let assignment_id = ctx.assignment_id().ok_or_else(|| denied("assignment"))?;
         let assignment = tx
             .runs()
             .assignment(assignment_id)?
-            .ok_or(StorageError::ScopeDenied)?;
+            .ok_or_else(|| denied("assignment"))?;
         if &assignment.root_id != own_root || ctx.session_id() != Some(&assignment.session_id) {
-            return Err(StorageError::ScopeDenied);
+            return Err(denied("assignment"));
         }
         if target != own_root {
             let target_work = tx
                 .sessions()
                 .work_root(target)?
-                .ok_or(StorageError::ScopeDenied)?;
+                .ok_or_else(|| denied("item"))?;
             let own_work = tx
                 .sessions()
                 .work_root(own_root)?
-                .ok_or(StorageError::ScopeDenied)?;
+                .ok_or_else(|| denied("item"))?;
             if own_work.kind != "feature"
                 || target_work.parent_feature_id.as_ref() != Some(own_root)
             {
-                return Err(StorageError::ScopeDenied);
+                return Err(denied("item"));
             }
         }
         if assignment.parent_id.is_some() {
             let context = tx
                 .runs()
                 .agent_assignment_context(assignment_id)?
-                .ok_or(StorageError::ScopeDenied)?;
+                .ok_or_else(|| denied("assignment"))?;
             let delegated: Vec<Id> = serde_json::from_value(context.task_ids).map_err(|_| {
-                StorageError::unavailable(Unavailable::Corrupt, "stored assignment task references")
+                Failure::from(StorageError::unavailable(
+                    Unavailable::Corrupt,
+                    "stored assignment task references",
+                ))
             })?;
             if target != &assignment.work_id && !delegated.contains(&target.0) {
-                return Err(StorageError::ScopeDenied);
+                return Err(denied("item"));
             }
         }
     }
     if spec.resolves.is_some() && spec.in_reply_to.is_none() {
-        return Err(StorageError::InvalidRecord(
-            "resolution requires in_reply_to".into(),
-        ));
+        return Err(invalid("resolves"));
     }
     let key = match &spec.idempotency_key {
         Some(key)
             if key.is_empty() || key.len() > 128 || key.bytes().any(|c| c <= b' ' || c > b'~') =>
         {
-            return Err(StorageError::InvalidRecord(
-                "invalid idempotency key".into(),
-            ));
+            return Err(invalid("idempotency_key"));
         }
         Some(key) => Some(sha256_hex(
             format!("{}\0{key}", ctx.principal().0.as_str()).as_bytes(),
@@ -335,9 +330,9 @@ pub fn post_message(
             let parent = tx
                 .runs()
                 .agent_message(id)?
-                .ok_or(StorageError::ScopeDenied)?;
+                .ok_or_else(|| denied("in_reply_to"))?;
             if parent.project_id != spec.project {
-                return Err(StorageError::ScopeDenied);
+                return Err(denied("in_reply_to"));
             }
             if !explicit {
                 item = parent.target_item_id.clone();
@@ -371,20 +366,18 @@ pub fn post_message(
     };
     if let Some(session_id) = &to_session {
         if ctx.session_id() == Some(session_id) {
-            return Err(StorageError::InvalidRecord(
-                "cannot message own session".into(),
-            ));
+            return Err(invalid("to_session"));
         }
         let session = tx
             .sessions()
             .session(session_id)?
-            .ok_or(StorageError::ScopeDenied)?;
+            .ok_or_else(|| denied("to_session"))?;
         if session_project(tx, &session)?.as_ref() != Some(&spec.project) {
-            return Err(StorageError::ScopeDenied);
+            return Err(denied("to_session"));
         }
         if ctx.principal_kind() == PrincipalKind::Agent && ctx.root_id() != session.root_id.as_ref()
         {
-            return Err(StorageError::ScopeDenied);
+            return Err(denied("to_session"));
         }
     }
     if ctx.principal_kind() == PrincipalKind::Agent
@@ -392,7 +385,7 @@ pub fn post_message(
             .as_ref()
             .is_some_and(|target| ctx.root_id() != Some(target))
     {
-        return Err(StorageError::ScopeDenied);
+        return Err(denied("feature"));
     }
     let channel = if to_human {
         "Human"
@@ -528,12 +521,10 @@ pub fn post_host_notice(
     session_id: &Id,
     feature: Option<&RootId>,
     body: &str,
-) -> Result<Option<Id>, StorageError> {
+) -> Result<Option<Id>, Failure> {
     let body = body.trim();
     if body.is_empty() || body.chars().count() > 8000 || body.contains('\0') {
-        return Err(StorageError::InvalidRecord(
-            "message body must be 1 to 8000 characters".into(),
-        ));
+        return Err(invalid("body"));
     }
     let Some(session) = tx.sessions().session(session_id)? else {
         return Ok(None);

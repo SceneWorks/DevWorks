@@ -8,6 +8,7 @@ use devworks_core::services::agents::retained::{
     AckSelection, Acknowledged, DeliveredInbox, MessageEventPage, Recipient, Resolution,
     acknowledge, deliver_inbox, events,
 };
+use devworks_core::services::failure::Failure;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -81,6 +82,7 @@ impl RetainedInboxDriver {
                         include_read,
                         limit,
                     )
+                    .map_err(Failure::into_storage)
                 },
             )
             .await?;
@@ -111,6 +113,7 @@ impl RetainedInboxDriver {
     ) -> Result<Acknowledged, StorageError> {
         store::write(&self.store, move |tx| {
             acknowledge(tx, &context, &project, &recipient, selection, resolution)
+                .map_err(Failure::into_storage)
         })
         .await
     }
@@ -133,7 +136,7 @@ impl RetainedInboxDriver {
             let context = context.clone();
             let project = project.clone();
             let page = store::read(&self.store, move |snapshot| {
-                events(snapshot, &context, &project, cursor, 100)
+                events(snapshot, &context, &project, cursor, 100).map_err(Failure::into_storage)
             })
             .await?;
             cursor = Some(page.next_sequence);

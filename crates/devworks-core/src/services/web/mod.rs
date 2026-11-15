@@ -256,15 +256,7 @@ pub(crate) fn fault(
 }
 
 fn storage_fault(e: &StorageError, correlation: &CorrelationId) -> DomainFault {
-    let retry = match e {
-        StorageError::IncompatibleSchema(_) => RetryAdvice::Never,
-        _ => RetryAdvice::SameCommand,
-    };
-    let code = match e {
-        StorageError::IncompatibleSchema(_) => DomainErrorCode::SchemaMismatch,
-        StorageError::Cancelled => DomainErrorCode::Cancelled,
-        _ => DomainErrorCode::StorageUnavailable,
-    };
+    let (code, retry) = crate::services::failure::storage_fault(e);
     fault(code, retry, "web_store", correlation, None)
 }
 

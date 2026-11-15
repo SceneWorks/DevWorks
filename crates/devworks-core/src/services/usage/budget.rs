@@ -344,6 +344,8 @@ fn warn_coordinator(
         reserved = usd(totals.reserved_micro_usd),
         uncommitted = usd(uncommitted),
     );
-    crate::services::agents::retained::post_host_notice(tx, &session, Some(&root), &body)?;
+    // The notice body is host-authored, so its only rule (body length) is a host invariant.
+    crate::services::agents::retained::post_host_notice(tx, &session, Some(&root), &body)
+        .map_err(crate::services::failure::Failure::into_storage)?;
     Ok(())
 }

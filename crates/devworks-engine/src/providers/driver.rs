@@ -222,7 +222,7 @@ impl NativePreparation {
                     .owner
                     .artifacts
                     .read_exact(store, ctx, context, 8 * 1024 * 1024)
-                    .map_err(|_| StorageError::ScopeDenied)?;
+                    .map_err(crate::turn_error::artifact_read_fault)?;
                 let material = serde_json::from_slice::<
                     devworks_core::providers::context::ProviderContext,
                 >(&bytes)
@@ -342,7 +342,7 @@ impl NativeProviders {
         let bytes = self
             .artifacts
             .read_exact(self.store.as_ref(), ctx, context, 8 * 1024 * 1024)
-            .map_err(|_| StorageError::ScopeDenied)?
+            .map_err(crate::turn_error::artifact_read_fault)?
             .0;
         let material: devworks_core::providers::context::ProviderContext =
             serde_json::from_slice(&bytes).map_err(|_| invalid("provider instruction context"))?;

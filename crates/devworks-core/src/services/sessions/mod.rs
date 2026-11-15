@@ -100,83 +100,18 @@ pub const EPOCH_CHANGED: &str = "context_epoch";
 // ---------------------------------------------------------------------------------------------
 // Refusals and helpers shared with the history service
 
-/// A typed refusal: a durable `Refused` decision for commands, a fault for queries.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Refusal {
-    pub code: DomainErrorCode,
-    pub retry: RetryAdvice,
-    pub target_kind: &'static str,
-    pub target_id: Option<Id>,
-}
-impl Refusal {
-    pub fn new(code: DomainErrorCode, target_kind: &'static str, target_id: Option<Id>) -> Self {
-        Self {
-            code,
-            retry: RetryAdvice::Never,
-            target_kind,
-            target_id,
-        }
-    }
-    pub fn retry(mut self, retry: RetryAdvice) -> Self {
-        self.retry = retry;
-        self
-    }
-    pub fn fault(self, correlation_id: CorrelationId) -> DomainFault {
-        let mut f = crate::services::fault(self.code, self.retry, &correlation_id);
-        f.target_id = self.target_id;
-        f.target_kind = Some(BoundedText(self.target_kind.to_owned()));
-        f
-    }
-}
+pub use crate::services::failure::{Failure, Refusal};
 pub(crate) fn not_found(kind: &'static str, id: &Id) -> Refusal {
     Refusal::new(DomainErrorCode::NotFound, kind, Some(id.clone()))
 }
 
-/// A use-case failure: a typed refusal or a storage error.
-#[derive(Debug)]
-pub enum Failure {
-    Refused(Refusal),
-    Storage(StorageError),
-}
-impl From<StorageError> for Failure {
-    fn from(e: StorageError) -> Self {
-        Self::Storage(e)
-    }
-}
-impl From<Refusal> for Failure {
-    fn from(r: Refusal) -> Self {
-        Self::Refused(r)
-    }
-}
-
-/// The query fault of a failure (cursor expiry, cancellation and storage map to their codes).
+/// The query fault of a failure; a storage error maps through the shared storage fault.
 pub(crate) fn query_fault(
     f: Failure,
     kind: &'static str,
     correlation: CorrelationId,
 ) -> DomainFault {
-    match f {
-        Failure::Refused(r) => r.fault(correlation),
-        Failure::Storage(e) => {
-            let (code, retry) = match e {
-                StorageError::CursorExpired => (
-                    DomainErrorCode::CursorExpired,
-                    RetryAdvice::RefreshAndNewRequest,
-                ),
-                StorageError::Cancelled => (DomainErrorCode::Cancelled, RetryAdvice::Never),
-                StorageError::IncompatibleSchema(_) => {
-                    (DomainErrorCode::SchemaMismatch, RetryAdvice::Never)
-                }
-                _ => (
-                    DomainErrorCode::StorageUnavailable,
-                    RetryAdvice::SameCommand,
-                ),
-            };
-            Refusal::new(code, kind, None)
-                .retry(retry)
-                .fault(correlation)
-        }
-    }
+    f.query_fault(kind, correlation)
 }
 
 /// The command decision of a use-case outcome.

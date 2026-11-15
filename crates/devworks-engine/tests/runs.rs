@@ -2460,6 +2460,7 @@ fn feature_delegate_binds_all_tasks_and_constrains_nested_scope() {
                 idempotency_key: None,
             },
         )
+        .map_err(devworks_core::services::failure::Failure::into_storage)
     });
     assert_eq!(pending.recipients, 0);
     let human = fx.user.clone();
@@ -2482,6 +2483,7 @@ fn feature_delegate_binds_all_tasks_and_constrains_nested_scope() {
                 idempotency_key: None,
             },
         )
+        .map_err(devworks_core::services::failure::Failure::into_storage)
     });
     assert_eq!(pending_second.recipients, 0);
     let session = read(&*fx.store, |snapshot| {
@@ -2560,6 +2562,7 @@ fn feature_delegate_binds_all_tasks_and_constrains_nested_scope() {
                 idempotency_key: None,
             },
         )
+        .map_err(devworks_core::services::failure::Failure::into_storage)
     });
     assert_eq!(sibling.recipients, 0);
     let child_session = read(&*fx.store, |snapshot| {
@@ -2633,6 +2636,7 @@ fn feature_delegate_binds_all_tasks_and_constrains_nested_scope() {
                 idempotency_key: None,
             },
         )
+        .map_err(devworks_core::services::failure::Failure::into_storage)
     });
     assert_eq!(live_second.recipients, 1);
     assert!(
@@ -2663,7 +2667,8 @@ fn feature_delegate_binds_all_tasks_and_constrains_nested_scope() {
                     resolves: None,
                     idempotency_key: None,
                 },
-            ),
+            )
+            .map_err(devworks_core::services::failure::Failure::into_storage),
             Err(StorageError::ScopeDenied)
         ))
     });
@@ -2691,6 +2696,7 @@ fn feature_delegate_binds_all_tasks_and_constrains_nested_scope() {
                 idempotency_key: None,
             },
         )
+        .map_err(devworks_core::services::failure::Failure::into_storage)
     });
     let root = fx.root("root-f");
     let eligibility = read(&*fx.store, |snapshot| {
@@ -2746,6 +2752,7 @@ fn feature_delegate_binds_all_tasks_and_constrains_nested_scope() {
                     idempotency_key: None,
                 },
             )
+            .map_err(devworks_core::services::failure::Failure::into_storage)
         })
     };
     let broad = send(None, None, None).unwrap();
@@ -2799,12 +2806,14 @@ fn feature_delegate_binds_all_tasks_and_constrains_nested_scope() {
                 idempotency_key: None,
             },
         )
+        .map_err(devworks_core::services::failure::Failure::into_storage)
     });
     assert_eq!(stale.recipients, 0);
     let child_id = child.assignment_id.clone();
     assert_eq!(
         fx.tx(move |_, tx| {
             devworks_core::services::agents::retained::handover_item(tx, &child_id)
+                .map_err(devworks_core::services::failure::Failure::into_storage)
         }),
         0
     );

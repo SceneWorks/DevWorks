@@ -57,6 +57,7 @@ use crate::protocol::{
     EventId, Id, Protocol, QueryId, Receipt, Rejection, RequestKey, RetryAdvice, Revision,
 };
 use crate::registry::{EffectClass, Mode, ModeBinding, OperationDescriptor, SchemaRevision};
+use crate::services::failure::storage_fault;
 use serde_json::json;
 use std::cell::RefCell;
 use std::fmt;
@@ -853,24 +854,6 @@ impl Gateway<'_> {
 /// Fault target kind of a policy denial: `authority:<DenialReason>`.
 pub fn denial_target(reason: crate::authority::DenialReason) -> String {
     format!("authority:{}", reason.as_str())
-}
-
-fn storage_fault(e: &StorageError) -> (DomainErrorCode, RetryAdvice) {
-    match e {
-        StorageError::IncompatibleSchema(_) => {
-            (DomainErrorCode::SchemaMismatch, RetryAdvice::Never)
-        }
-        StorageError::ViewUnavailable => (DomainErrorCode::ViewUnavailable, RetryAdvice::Never),
-        StorageError::CursorExpired => (
-            DomainErrorCode::CursorExpired,
-            RetryAdvice::RefreshAndNewRequest,
-        ),
-        StorageError::Cancelled => (DomainErrorCode::Cancelled, RetryAdvice::Never),
-        _ => (
-            DomainErrorCode::StorageUnavailable,
-            RetryAdvice::SameCommand,
-        ),
-    }
 }
 
 /// The command's write unit of work. Runs on the sole write owner inside one transaction.
