@@ -143,7 +143,7 @@ fn late_decision(stale: bool) {
         receipt,
         replayed: true,
         ..
-    } = real.human_decision(&frame).unwrap()
+    } = real.human_decision(&frame, real.control_epoch()).unwrap()
     else {
         panic!("the UI's exact decision must already have a durable replayable receipt")
     };

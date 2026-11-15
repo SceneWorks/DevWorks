@@ -305,7 +305,7 @@ fn native_review_purge_preserves_shared_git_and_other_drafts_and_recovers_after_
         json!({"projectId":p.id,"manifestId":prepared.id,"expectedRevision":prepared.revision,"expectedDigest":prepared.digest,"expectedProjectRevision":deleted.revision,"confirm":true}),
         false,
     );
-    assert!(ops::command_result(b.confirm_project_purge(&stale)).is_err());
+    assert!(ops::command_result(b.confirm_project_purge(&stale, b.control_epoch())).is_err());
     wait_quiescent(&engine, &p.id);
     let prepared = manifest(
         ops::command_result(b.command(
@@ -357,7 +357,9 @@ fn native_review_purge_preserves_shared_git_and_other_drafts_and_recovers_after_
         original.policy_digest, fresh.planning.digest,
         "changed rows: {changed:?}"
     );
-    let committed = manifest(ops::command_result(b.confirm_project_purge(&confirm)).unwrap());
+    let committed = manifest(
+        ops::command_result(b.confirm_project_purge(&confirm, b.control_epoch())).unwrap(),
+    );
     assert!(matches!(committed.phase, PurgePhase::RemovingBytes));
     let deadline = Instant::now() + SETTLE_BOUND;
     loop {

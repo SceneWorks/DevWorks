@@ -184,6 +184,41 @@ pub struct DesktopService {
     git_source: Option<Arc<crate::services::git::GitService>>,
 }
 
+/// Who could have produced a UI interaction at one moment: the desktop resource's last grant
+/// fence (it advances with every control lease granted) and whether anyone holds control.
+///
+/// A human-only confirmation captures it when the UI receives the click and checks it again
+/// when its worker acts ([`ControlEpoch::quiet_through`]). A holder that queued native
+/// accessibility actions and released control before the worker ran is still seen: control was
+/// held when the click was received.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ControlEpoch {
+    grants: i64,
+    held: bool,
+}
+impl ControlEpoch {
+    /// No desktop control exists in this host.
+    pub const QUIET: Self = Self {
+        grants: 0,
+        held: false,
+    };
+    /// The control state could not be read: treated as held.
+    pub const UNKNOWN: Self = Self {
+        grants: i64::MAX,
+        held: true,
+    };
+    /// Whether someone holds desktop control.
+    pub fn held(&self) -> bool {
+        self.held
+    }
+    /// Whether an interaction received at `self` and acted on at `now` can only be a person's:
+    /// nobody held control when it was received or holds it now, and no control was granted in
+    /// between.
+    pub fn quiet_through(&self, now: &Self) -> bool {
+        !self.held && !now.held && self.grants == now.grants
+    }
+}
+
 impl DesktopService {
     pub fn new(
         platform: Arc<dyn DesktopPlatform>,
@@ -237,6 +272,11 @@ impl DesktopService {
     /// Native automation can generate ordinary UI events. Trusted confirmation ingress stays
     /// closed while any desktop holder may inject them, regardless of that holder's project.
     pub fn automation_may_be_active(&self) -> bool {
+        self.control_epoch().held()
+    }
+
+    /// The desktop control state now ([`ControlEpoch`]); unreadable state is held.
+    pub fn control_epoch(&self) -> ControlEpoch {
         read_snapshot(&*self.store, &ReadOptions::default(), |snapshot| {
             let key = canonical_key(
                 ResourceScopeKind::Machine,
@@ -244,11 +284,14 @@ impl DesktopService {
                 crate::services::resources::DESKTOP,
             );
             let Some(resource) = snapshot.resources().resource_by_key(&key)? else {
-                return Ok(false);
+                return Ok(ControlEpoch::QUIET);
             };
-            Ok(!snapshot.resources().holders(&resource.id, 0, 1)?.is_empty())
+            Ok(ControlEpoch {
+                grants: resource.fence_seq,
+                held: !snapshot.resources().holders(&resource.id, 0, 1)?.is_empty(),
+            })
         })
-        .unwrap_or(true)
+        .unwrap_or(ControlEpoch::UNKNOWN)
     }
 
     /// Scoped typed completion for an accepted input effect. Success attests OS injection only;
