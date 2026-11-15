@@ -2052,6 +2052,7 @@ fn the_host_enforces_deadlines_and_caps_concurrent_invocations() {
             started.elapsed(),
         )
     });
+    // The fifth invocation must stay queued. No event marks that this did not happen, so the test waits a fixed time.
     std::thread::sleep(Duration::from_millis(400));
     assert!(
         !fifth.is_finished(),
@@ -2929,8 +2930,9 @@ fn a_helper_that_stops_reading_is_restarted_through_its_budget_and_then_recorded
         code == "HelperStalled" || code == "CancellationIgnored",
         "{code}"
     );
-    // Restarted through its budget (2 instances), then never again.
-    std::thread::sleep(Duration::from_millis(500));
+    // Restarted through its budget (2 instances), then never again: a reconciliation pass,
+    // which is what starts instances, starts none on the spent budget.
+    a.app().packages().unwrap().reconcile();
     assert_eq!(helper_ready_events(&*a.store, "deaf-pack"), 2);
 }
 
@@ -3233,7 +3235,8 @@ fn automatic_rollback_never_returns_to_a_version_that_just_failed() {
     });
     drop(fail);
     assert_eq!(rec.version.0, "1.0.0");
-    std::thread::sleep(Duration::from_secs(2));
+    // A reconciliation pass (what would roll forward or restart) leaves the failure as it is.
+    a.app().packages().unwrap().reconcile();
     let rec = a.record("loop-pack");
     assert_eq!(
         (rec.version.0.as_str(), availability(&rec)),
@@ -3771,8 +3774,8 @@ fn a_spent_restart_budget_never_starts_its_key_again_before_the_failure_is_recor
     a.until("spent-pack", "the failure is recorded", |r| {
         matches!(r.availability, Some(PackageAvailability::Failed))
     });
-    std::thread::sleep(Duration::from_secs(1));
-    // No third instance was started on the spent budget.
+    // No third instance was started on the spent budget, by a later pass either.
+    host.reconcile();
     assert_eq!(helper_ready_events(&*a.store, "spent-pack"), 2);
     assert_eq!(availability(&a.record("spent-pack")), "Failed");
     // And the spent budget itself is forgotten once the key is no longer the intent.

@@ -717,6 +717,7 @@ fn selected_receive_cancellation_keeps_the_request_key_retryable() {
                 )
                 .unwrap()
         });
+        // The receive is waiting and must consume nothing. No event marks that this did not happen, so the test waits a fixed time.
         std::thread::sleep(Duration::from_millis(50));
         assert_eq!(
             write(store.as_ref(), |tx| tx.runs().agent_delivery_head()).unwrap(),

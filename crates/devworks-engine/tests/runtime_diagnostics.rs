@@ -35,7 +35,7 @@ use devworks_engine::runtime::PurgeComposition;
 use devworks_engine::{BootError, Composition, Consumer, Outcome, Runtime, RuntimeConfig, boot};
 use serde_json::{Value, json};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 macro_rules! text {
     ($v:expr) => {
@@ -1229,6 +1229,7 @@ fn a_failed_late_step_leaves_nothing_running(table: &str, purge: bool) {
         Ok(_) => panic!("boot succeeded without {table}"),
     }
     // A task the failed boot left running would deliver, or keep the store open, meanwhile.
+    // No event marks that this did not happen, so the test waits a fixed time.
     rt.block_on(async { tokio::time::sleep(Duration::from_millis(300)).await });
     assert_eq!(
         recorder.calls.load(std::sync::atomic::Ordering::SeqCst),
@@ -1236,11 +1237,14 @@ fn a_failed_late_step_leaves_nothing_running(table: &str, purge: bool) {
         "a task of the failed boot delivered"
     );
     drop(parts);
-    rt.block_on(async { tokio::time::sleep(Duration::from_millis(50)).await });
-    assert!(
-        held.upgrade().is_none(),
-        "a task of the failed boot still holds the store"
-    );
+    let released = Instant::now() + Duration::from_secs(10);
+    while held.upgrade().is_some() {
+        assert!(
+            Instant::now() < released,
+            "a task of the failed boot still holds the store"
+        );
+        rt.block_on(async { tokio::time::sleep(Duration::from_millis(5)).await });
+    }
     drop(h.open());
     let db = rusqlite::Connection::open(h.root.join("workspace.sqlite")).unwrap();
     let output: String = db
