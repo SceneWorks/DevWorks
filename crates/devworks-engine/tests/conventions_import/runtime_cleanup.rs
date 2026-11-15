@@ -76,10 +76,12 @@ fn captures(store: &dyn ApplicationStore, op: &OperationId) -> Vec<StoredConvent
     })
 }
 
+/// Installs or drops the cleanup fault through a raw connection. Only while no store owns the
+/// data root: an open store's writer can hold the write lock past any busy timeout on a slow
+/// runner, so the raw DDL must never overlap it.
 fn cleanup_fault(h: &Harness, enabled: bool) {
+    h.wait_released();
     let db = rusqlite::Connection::open(h.root.join("workspace.sqlite")).unwrap();
-    // The open store's writer or its maintenance may hold the lock; wait for it like the store does.
-    db.busy_timeout(Duration::from_secs(5)).unwrap();
     db.execute_batch(if enabled {
         "CREATE TRIGGER refuse_private_import_cleanup BEFORE DELETE ON convention_import_artifacts BEGIN SELECT RAISE(ABORT,'controlled cleanup interruption'); END;"
     } else {
@@ -123,10 +125,13 @@ fn cleanup_pass_deletes_only_one_bounded_capture_page_and_keeps_queued_owners() 
 #[test]
 fn runtime_failed_trailing_manifest_cleans_on_reopen_without_manual_recovery_and_preserves_history()
 {
-    let f = Fx::new();
     // Keep the terminal private captures durable through the first runtime's drop, like an
     // unavailable cleanup writer. The second boot must discover them without a manual call.
-    cleanup_fault(&f.h, true);
+    // Install the fault on the migrated store before the fixture opens it.
+    let h = Harness::new();
+    drop(h.open());
+    cleanup_fault(&h, true);
+    let f = Fx::on(h);
     let mut invalid = manifest(70);
     invalid["unknown"] = json!(true);
     let private_body = "# Failed private body";
