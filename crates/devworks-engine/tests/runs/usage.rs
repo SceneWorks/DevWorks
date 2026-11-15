@@ -666,9 +666,15 @@ fn actual_coordinator_and_worker_transports_hold_quiescence_until_owned_close() 
                     phase.step.set("bounded application shutdown");
                     let began = std::time::Instant::now();
                     let report = app.shutdown().await;
+                    // The source's close blocks on `gate`, which opens only below: the producer
+                    // still running proves shutdown returned without awaiting that close. The
+                    // wall-clock bound only catches a long wait on it; shutdown's own durable
+                    // commits (held run control, reconciliation, diagnostics) are fsync-bound
+                    // and took over 2 s under concurrent load.
+                    assert!(!produce.is_finished(), "shutdown awaited foreign close");
                     assert!(
-                        began.elapsed() < Duration::from_secs(2),
-                        "shutdown awaited foreign close"
+                        began.elapsed() < Duration::from_secs(15),
+                        "shutdown waited past its bound"
                     );
                     close.await.unwrap();
                     assert_eq!(report.unclosed_inference_attempts.len(), 1);
