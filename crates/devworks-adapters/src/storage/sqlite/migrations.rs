@@ -699,7 +699,7 @@ pub const MIGRATIONS: &[Migration] = &[
         minimum_reader: 57,
         minimum_writer: 61,
         sql: include_str!("migrations/0061_graph_view_unresolved.sql"),
-        expected_sha256: "5d73eb985caaa38ce7d1093793b5d4bcbd20e25f41100d05d9911a6bc11e47b3",
+        expected_sha256: "910fd21382ea8c47bd6daf7b0afad5ad9d4b0991bd51612abfa44186ce86d002",
         rebuilds_tables: false,
     },
 ];

@@ -82,7 +82,7 @@ const VISIBLE_CANDIDATE: &str = "u.action='Replace' AND NOT EXISTS(SELECT 1 FROM
 /// inside that view, by the graph reader's endpoint rules: a non-text unit annotation, or a source
 /// or target that is not exactly one visible node (the annotated unit's, or by ID alone). Migration
 /// 61 records the same count for the views it finds.
-pub(super) const UNRESOLVED_EDGES: &str = "SELECT count(*) FROM source_units u JOIN graph_edges e ON e.generation_id=u.generation_id AND e.unit_key=u.unit_key WHERE u.generation_id=?1 AND u.action='Replace' AND json_type(e.payload_json,'$.sourceRepositoryId') IS NULL AND json_type(e.payload_json,'$.targetRepositoryId') IS NULL AND (coalesce(json_type(e.payload_json,'$.sourceUnit'),'text')!='text' OR coalesce(json_type(e.payload_json,'$.targetUnit'),'text')!='text' OR (SELECT count(*) FROM graph_nodes n JOIN source_units nu ON nu.generation_id=n.generation_id AND nu.unit_key=n.unit_key WHERE n.generation_id=u.generation_id AND n.node_id=e.source_node_id AND nu.action='Replace' AND (json_type(e.payload_json,'$.sourceUnit') IS NULL OR n.unit_key=json_extract(e.payload_json,'$.sourceUnit')))!=1 OR (SELECT count(*) FROM graph_nodes n JOIN source_units nu ON nu.generation_id=n.generation_id AND nu.unit_key=n.unit_key WHERE n.generation_id=u.generation_id AND n.node_id=e.target_node_id AND nu.action='Replace' AND (json_type(e.payload_json,'$.targetUnit') IS NULL OR n.unit_key=json_extract(e.payload_json,'$.targetUnit')))!=1)";
+pub(super) const UNRESOLVED_EDGES: &str = "SELECT count(*) FROM source_units u JOIN graph_edges e ON e.generation_id=u.generation_id AND e.unit_key=u.unit_key WHERE u.generation_id=?1 AND u.action='Replace' AND json_type(e.payload_json,'$.sourceRepositoryId') IS NULL AND json_type(e.payload_json,'$.targetRepositoryId') IS NULL AND (coalesce(json_type(e.payload_json,'$.sourceUnit'),'text')!='text' OR coalesce(json_type(e.payload_json,'$.targetUnit'),'text')!='text' OR (SELECT count(*) FROM graph_nodes n INDEXED BY graph_nodes_by_id JOIN source_units nu ON nu.generation_id=n.generation_id AND nu.unit_key=n.unit_key WHERE n.generation_id=u.generation_id AND n.node_id=e.source_node_id AND nu.action='Replace' AND (json_type(e.payload_json,'$.sourceUnit') IS NULL OR n.unit_key=json_extract(e.payload_json,'$.sourceUnit')))!=1 OR (SELECT count(*) FROM graph_nodes n INDEXED BY graph_nodes_by_id JOIN source_units nu ON nu.generation_id=n.generation_id AND nu.unit_key=n.unit_key WHERE n.generation_id=u.generation_id AND n.node_id=e.target_node_id AND nu.action='Replace' AND (json_type(e.payload_json,'$.targetUnit') IS NULL OR n.unit_key=json_extract(e.payload_json,'$.targetUnit')))!=1)";
 /// The visible edges naming a source or target repository (`graph_edges_named_repository`) of
 /// one-layer views (?1 scope, ?3 after, ?4 limit), in edge order.
 fn repository_edges_sql() -> String {
@@ -987,6 +987,90 @@ fn validate_unavailable(
 mod tests {
     use super::super::migrations::MIGRATIONS;
     use super::*;
+
+    /// A store with every migration and one generation `g` of `callers` functions in each of
+    /// seven units calling that unit's leaf, as the large review fixture is shaped.
+    fn calling_generation(callers: usize) -> Connection {
+        let conn = Connection::open_in_memory().unwrap();
+        super::super::project_purge::guard::register(&conn, false).unwrap();
+        super::register_name_match(&conn).unwrap();
+        for migration in MIGRATIONS {
+            conn.execute_batch(migration.sql).unwrap();
+        }
+        conn.execute_batch("PRAGMA foreign_keys=OFF").unwrap();
+        for unit in 0..7 {
+            let key = format!("src/unit_{unit}.rs");
+            conn.execute(
+                "INSERT INTO source_units(generation_id,unit_key,content_digest,action,payload_json) VALUES('g',?1,'d','Replace','{}')",
+                [&key],
+            )
+            .unwrap();
+            let leaf = format!("leaf-{unit}");
+            conn.execute(
+                "INSERT INTO graph_nodes(generation_id,unit_key,node_id,kind,name,payload_json) VALUES('g',?1,?2,'Function',?2,'{}')",
+                [&key, &leaf],
+            )
+            .unwrap();
+            for caller in 0..callers {
+                let source = format!("caller-{unit}-{caller}");
+                conn.execute(
+                    "INSERT INTO graph_nodes(generation_id,unit_key,node_id,kind,name,payload_json) VALUES('g',?1,?2,'Function',?2,'{}')",
+                    [&key, &source],
+                )
+                .unwrap();
+                conn.execute(
+                    "INSERT INTO graph_edges(generation_id,unit_key,edge_id,source_node_id,target_node_id,kind,payload_json) VALUES('g',?1,?2,?2,?3,'CALLS',json_object('targetUnit',?1,'resolution','Inferred'))",
+                    [&key, &source, &leaf],
+                )
+                .unwrap();
+            }
+        }
+        conn
+    }
+
+    /// The SQLite steps the unresolved count of a view's insertion takes, and its value.
+    fn unresolved_steps(conn: &Connection) -> (i64, i32) {
+        let mut statement = conn.prepare(UNRESOLVED_EDGES).unwrap();
+        let count: i64 = statement.query_row(["g"], |r| r.get(0)).unwrap();
+        (
+            count,
+            statement.get_status(rusqlite::StatementStatus::VmStep),
+        )
+    }
+
+    #[test]
+    fn a_view_insertion_counts_unresolved_edges_in_store_work_linear_in_its_edges() {
+        // Each edge's endpoints are looked up by node ID: never a scan of the layer's nodes,
+        // whose work would grow with the edges times the nodes.
+        let conn = calling_generation(1);
+        let plan: Vec<String> = conn
+            .prepare(&format!("EXPLAIN QUERY PLAN {UNRESOLVED_EDGES}"))
+            .unwrap()
+            .query_map(["g"], |r| r.get::<_, String>(3))
+            .unwrap()
+            .map(Result::unwrap)
+            .collect();
+        let text = plan.join("\n");
+        assert_eq!(
+            text.matches("graph_nodes_by_id (generation_id=? AND node_id=?)")
+                .count(),
+            2,
+            "{text}"
+        );
+        assert!(!text.contains("SCAN"), "{text}");
+        // The same bound per edge at two sizes, tenfold apart.
+        for callers in [300, 3_000] {
+            let conn = calling_generation(callers);
+            let (count, steps) = unresolved_steps(&conn);
+            let edges = 7 * callers as i64;
+            assert_eq!(count, 0);
+            eprintln!("{edges} edges: {steps} SQLite steps");
+            assert!(
+                i64::from(steps) <= 200 * edges,
+                "{steps} SQLite steps for {edges} edges"
+            );
+        }
+    }
 
     #[test]
     fn migration_61_records_the_unresolved_count_insert_view_records() {
