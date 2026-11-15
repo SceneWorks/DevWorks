@@ -92,6 +92,7 @@ record_kinds! {
     GraphTrustChanges,
     GraphViewLinkSets,
     GraphViewLinks,
+    GraphViewUnresolved,
     HelpContents,
     HelpGenerations,
     HelpHead,

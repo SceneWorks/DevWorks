@@ -631,7 +631,37 @@ pub(super) fn related(
     } else {
         &["CONSUMES", "CALLS", "HTTP_CALLS", "USES_TYPE", "HANDLES"][..]
     };
-    let edges = reader.filtered_edges(kinds)?;
+    // Every edge kept below ends at a start. Without an overlay view in scope there is no
+    // unmapped inbound count to read every unresolved edge for.
+    let indexed = if super::incident::overlay(reader) {
+        None
+    } else {
+        let identities = super::unmapped::identities(&starts);
+        let (read, selected) = (reader.read, reader.selected);
+        let (found, partial) = reader.budget.reserve_visits(|budget| {
+            super::incident::around_all(
+                read,
+                &selected.pin.scope,
+                &selected.layers,
+                &identities,
+                &Direction::Reverse,
+                kinds,
+                budget,
+            )
+        });
+        let found = found?;
+        if found.is_some() && partial && !reader.gaps.contains(&"graph_visited_limit") {
+            reader.gaps.push("graph_visited_limit");
+        }
+        found
+    };
+    let edges = match indexed {
+        Some(linked) => dataset::Edges {
+            linked,
+            unmapped: Vec::new(),
+        },
+        None => reader.filtered_edges(kinds)?,
+    };
     let unmapped = super::unmapped::count(
         reader,
         &edges.unmapped,

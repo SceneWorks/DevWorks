@@ -3378,10 +3378,36 @@ fn graph_scope(view: &views::ViewLayers) -> GraphScope {
     }
 }
 
+/// Impact's check for an unresolved edge in scope agrees with the full scan, and each one-layer
+/// view's recorded count is the scan's count of that view's unresolved edges naming no repository.
+fn assert_unresolved_parity(fx: &Fx, views: &[views::ViewLayers]) {
+    let scope = GraphScope {
+        views: views.iter().flat_map(|v| graph_scope(v).views).collect(),
+    };
+    let layers = views.to_vec();
+    let (indexed, scanned, counts) = fx.read(move |r| {
+        devworks_core::services::graph::unresolved_parity(r, &scope, &layers)
+            .map_err(|f| StorageError::InvalidRecord(format!("{f:?}")))
+    });
+    for (view, (stored, local)) in views.iter().zip(&counts) {
+        if view.layers.len() == 1 {
+            assert_eq!(*stored, Some(*local), "{:?}", view.view.view_id);
+        } else {
+            assert_eq!(*stored, None, "an overlay view records no count");
+        }
+    }
+    if views.iter().all(|v| v.layers.len() == 1) {
+        assert_eq!(indexed, Some(scanned));
+    } else {
+        assert_eq!(indexed, None, "an overlay view is read by the scan");
+    }
+}
+
 /// For every node of `views` together, the indexed node lookups (by ID, with or without its
 /// unit, and by kind) return what the unit-ranking scan returns, and its project owner read from
 /// its directory chain is the one every project of the scope gives. Returns the nodes checked.
 fn assert_node_parity(fx: &Fx, views: &[views::ViewLayers]) -> usize {
+    assert_unresolved_parity(fx, views);
     let scope = GraphScope {
         views: views.iter().flat_map(|v| graph_scope(v).views).collect(),
     };

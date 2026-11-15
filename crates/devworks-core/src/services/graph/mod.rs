@@ -6,7 +6,9 @@ mod dataset;
 mod impact;
 mod incident;
 #[doc(hidden)]
-pub use incident::{ResolvedEdge, indexed_incident, scanned_incident};
+pub use incident::{
+    ResolvedEdge, UnresolvedParity, indexed_incident, scanned_incident, unresolved_parity,
+};
 mod languages;
 pub(crate) mod lease;
 mod linking;

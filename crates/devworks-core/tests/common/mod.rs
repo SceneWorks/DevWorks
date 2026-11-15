@@ -3958,6 +3958,17 @@ impl GraphRead for Unsupported {
     ) -> Result<GraphPage<GraphNode>, StorageError> {
         nope()
     }
+    fn graph_view_unresolved(&self, _: &Id) -> Result<Option<u64>, StorageError> {
+        nope()
+    }
+    fn graph_repository_edges(
+        &self,
+        _: &GraphScope,
+        _: Option<&GraphPosition>,
+        _: u16,
+    ) -> Result<Option<GraphPage<GraphEdge>>, StorageError> {
+        nope()
+    }
     fn graph_unlinked_views(
         &self,
         _: Option<&Id>,

@@ -1,5 +1,12 @@
 //! Shared query context and bounded wire-page assembly for every graph operator.
-use super::{budget::Budget, dataset, lease::Selected, model, modules::Modules, properties};
+use super::{
+    budget::Budget,
+    dataset,
+    lease::Selected,
+    model,
+    modules::{Modules, Owners},
+    properties,
+};
 use crate::context::InvocationContext;
 use crate::ports::storage::*;
 use crate::protocol::data::DataScope;
@@ -151,8 +158,7 @@ pub(super) struct Reader<'a> {
     pub limit: usize,
     pub next: Option<Position>,
     pub gaps: Vec<&'static str>,
-    /// Project owners by the repository and unit they were read for.
-    modules: std::collections::BTreeMap<(String, String), Modules>,
+    owners: Owners,
     encoded_bytes: usize,
     indexing: Option<&'a crate::services::indexing::IndexEnv>,
     cursors: Option<&'a super::cursor::Cursors>,
@@ -174,7 +180,7 @@ impl<'a> Reader<'a> {
             limit,
             next: None,
             gaps: Vec::new(),
-            modules: Default::default(),
+            owners: Owners::default(),
             encoded_bytes: 0,
             indexing: None,
             cursors: None,
@@ -347,21 +353,17 @@ impl<'a> Reader<'a> {
     }
 
     pub fn internal_module(&mut self, raw: &GraphNode) -> Result<Option<String>, Failure> {
-        let key = (
-            raw.repository_id.as_str().to_owned(),
-            raw.node.unit_key.clone(),
-        );
-        if Modules::needed(raw) && !self.modules.contains_key(&key) {
-            let modules =
-                Modules::chain(self.read, &self.selected.pin.scope, raw, &mut self.budget)?;
-            self.modules.insert(key.clone(), modules);
-        }
-        let none = Modules::default();
-        let (owner, ambiguous) = self.modules.get(&key).unwrap_or(&none).owner(raw);
+        let (read, selected) = (self.read, self.selected);
+        let Some((owner, ambiguous)) = self.owners.owner(raw, &mut self.budget, |budget| {
+            Modules::chain(read, &selected.pin.scope, raw, budget)
+        })?
+        else {
+            return Ok(None);
+        };
         if ambiguous && !self.gaps.contains(&"ambiguous_internal_module") {
             self.gaps.push("ambiguous_internal_module");
         }
-        Ok(owner.map(str::to_owned))
+        Ok(owner)
     }
 
     pub fn module_matches(&mut self, raw: &GraphNode, requested: &str) -> Result<bool, Failure> {

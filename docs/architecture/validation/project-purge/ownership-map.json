@@ -100,6 +100,7 @@
       "graph_trust_changes",
       "graph_view_link_sets",
       "graph_view_links",
+      "graph_view_unresolved",
       "index_batches",
       "index_generations",
       "index_overlays",

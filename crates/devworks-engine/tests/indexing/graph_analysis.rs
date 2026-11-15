@@ -337,3 +337,96 @@ fn recorded_modules_page_full_semantic_arrays_and_indexed_drilldowns_without_fab
     assert!(modules[0]["endpoints"]["nodes"].as_array().unwrap().len() <= 100);
     executor.block_on(app.shutdown());
 }
+
+/// A unit nested deeper than one read's 500 directories still finds its project: the directories
+/// on its path are read in batches and ownership is decided over every project they hold.
+#[test]
+fn a_unit_nested_498_directories_deep_finds_its_project_owner() {
+    let h = Harness::new();
+    let store = h.open();
+    let deep: String = (0..498).map(|i| format!("d{i}/")).collect();
+    let middle: String = (0..10).map(|i| format!("d{i}/")).collect();
+    write(&*store, move |tx| {
+        let repository = id("deep-repository");
+        let generation = id("deep-generation");
+        let view = id("deep-view");
+        tx.projects().insert_repository(&StoredRepository {
+            id: repository.clone(),
+            location: "/captured/deep".into(),
+            name: "Deep".into(),
+            remote_url: None,
+            primary: true,
+            lifecycle: ACTIVE.into(),
+            languages: vec!["csharp".into()],
+            revision: 1,
+            registered_at_ms: 1,
+        })?;
+        let sealed = |state: &str, watermark: i64| StoredGeneration {
+            id: generation.clone(),
+            repository_id: repository.clone(),
+            layer: LAYER_BASELINE.into(),
+            state: state.into(),
+            source_digest: "a".repeat(40),
+            watermark,
+            manifest: json!({}),
+        };
+        tx.indexing().insert_generation(&sealed(GEN_STAGING, 0))?;
+        for (unit, node, kind, name) in [
+            (
+                "Root.csproj".to_owned(),
+                "root-project",
+                "DotnetProject",
+                "Root",
+            ),
+            (
+                format!("{middle}Middle.csproj"),
+                "middle-project",
+                "DotnetProject",
+                "Middle",
+            ),
+            (format!("{deep}Leaf.cs"), "leaf-class", "Class", "Leaf"),
+        ] {
+            tx.indexing().put_unit(
+                &StoredUnit {
+                    generation_id: generation.clone(),
+                    unit_key: unit.clone(),
+                    content_digest: format!("content-{node}"),
+                    action: UNIT_REPLACE.into(),
+                    payload: json!({}),
+                },
+                &[StoredNode {
+                    unit_key: unit,
+                    node_id: node.into(),
+                    kind: kind.into(),
+                    name: name.into(),
+                    payload: json!({"properties":{}}),
+                }],
+                &[],
+            )?;
+        }
+        tx.indexing().update_generation(&sealed(GEN_SEALED, 3))?;
+        tx.indexing().insert_view(&StoredView {
+            view_id: view,
+            repository_id: repository,
+            view_digest: devworks_core::fingerprint::sha256_hex(b"deep-view"),
+            baseline_id: generation,
+            branch_id: None,
+            worktree_id: None,
+            coverage: json!({"state":"Complete"}),
+        })
+    })
+    .unwrap();
+    let (checked, differences) = read(&*store, |s| {
+        let scope = GraphScope {
+            views: vec![GraphViewBinding {
+                repository_id: id("deep-repository"),
+                view_id: id("deep-view"),
+                view_digest: devworks_core::fingerprint::sha256_hex(b"deep-view"),
+            }],
+        };
+        devworks_core::services::graph::node_lookup_parity(s, &scope)
+            .map_err(|f| StorageError::InvalidRecord(format!("{f:?}")))
+    });
+    assert_eq!(checked, 3);
+    assert!(differences.is_empty(), "{differences:#?}");
+}

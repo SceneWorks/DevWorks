@@ -692,6 +692,16 @@ pub const MIGRATIONS: &[Migration] = &[
         expected_sha256: "40e14b2566cee47db4daeb04f96427fd6ff34f21951cf482bc1868b4942e0325",
         rebuilds_tables: false,
     },
+    // A prior writer would remove a view without removing its unresolved count, so it may not
+    // open the store; a prior reader never reads it. No existing table changes.
+    Migration {
+        version: 61,
+        minimum_reader: 57,
+        minimum_writer: 61,
+        sql: include_str!("migrations/0061_graph_view_unresolved.sql"),
+        expected_sha256: "5d73eb985caaa38ce7d1093793b5d4bcbd20e25f41100d05d9911a6bc11e47b3",
+        rebuilds_tables: false,
+    },
 ];
 /// Recorded checksum of migration 17; a test fails if the shipped text changes.
 pub const MIGRATION_0017_SHA256: &str =

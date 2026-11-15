@@ -78,6 +78,44 @@ const SELECTED: &str = "WITH selected AS (SELECT json_extract(j.value,'$.reposit
 /// `view_id`, `priority`, `generation_id` and `unit_key`) joined to its own unit row `u`: the
 /// candidate's layer replaces the unit and no higher layer of its view mentions it.
 const VISIBLE_CANDIDATE: &str = "u.action='Replace' AND NOT EXISTS(SELECT 1 FROM layers h JOIN source_units hu ON hu.generation_id=h.generation_id AND hu.unit_key=c.unit_key WHERE h.view_id=c.view_id AND h.priority<c.priority)";
+/// How many edges of the one-layer view of generation ?1 name no repository and do not resolve
+/// inside that view, by the graph reader's endpoint rules: a non-text unit annotation, or a source
+/// or target that is not exactly one visible node (the annotated unit's, or by ID alone). Migration
+/// 61 records the same count for the views it finds.
+pub(super) const UNRESOLVED_EDGES: &str = "SELECT count(*) FROM source_units u JOIN graph_edges e ON e.generation_id=u.generation_id AND e.unit_key=u.unit_key WHERE u.generation_id=?1 AND u.action='Replace' AND json_type(e.payload_json,'$.sourceRepositoryId') IS NULL AND json_type(e.payload_json,'$.targetRepositoryId') IS NULL AND (coalesce(json_type(e.payload_json,'$.sourceUnit'),'text')!='text' OR coalesce(json_type(e.payload_json,'$.targetUnit'),'text')!='text' OR (SELECT count(*) FROM graph_nodes n JOIN source_units nu ON nu.generation_id=n.generation_id AND nu.unit_key=n.unit_key WHERE n.generation_id=u.generation_id AND n.node_id=e.source_node_id AND nu.action='Replace' AND (json_type(e.payload_json,'$.sourceUnit') IS NULL OR n.unit_key=json_extract(e.payload_json,'$.sourceUnit')))!=1 OR (SELECT count(*) FROM graph_nodes n JOIN source_units nu ON nu.generation_id=n.generation_id AND nu.unit_key=n.unit_key WHERE n.generation_id=u.generation_id AND n.node_id=e.target_node_id AND nu.action='Replace' AND (json_type(e.payload_json,'$.targetUnit') IS NULL OR n.unit_key=json_extract(e.payload_json,'$.targetUnit')))!=1)";
+/// The visible edges naming a source or target repository (`graph_edges_named_repository`) of
+/// one-layer views (?1 scope, ?3 after, ?4 limit), in edge order.
+fn repository_edges_sql() -> String {
+    format!(
+        "{SELECTED}, c AS (SELECT l.repo,l.view_id,l.priority,e.generation_id,e.unit_key,e.edge_id,e.source_node_id,e.target_node_id,e.kind,e.payload_json FROM layers l CROSS JOIN graph_edges e INDEXED BY graph_edges_named_repository WHERE e.generation_id=l.generation_id AND (json_type(e.payload_json,'$.sourceRepositoryId') IS NOT NULL OR json_type(e.payload_json,'$.targetRepositoryId') IS NOT NULL)) SELECT c.repo,c.view_id,c.generation_id,u.content_digest,c.unit_key,c.edge_id,c.source_node_id,c.target_node_id,c.kind,c.payload_json FROM c JOIN source_units u ON u.generation_id=c.generation_id AND u.unit_key=c.unit_key WHERE {VISIBLE_CANDIDATE} AND (json_extract(?3,'$.repository_id') IS NULL OR (c.repo,c.unit_key,c.edge_id)>(json_extract(?3,'$.repository_id'),json_extract(?3,'$.unit_key'),json_extract(?3,'$.item_id'))) ORDER BY c.repo,c.unit_key,c.edge_id LIMIT ?4"
+    )
+}
+fn repository_edges(
+    conn: &Connection,
+    scope: &GraphScope,
+    after: Option<&GraphPosition>,
+    limit: u16,
+) -> Result<Option<GraphPage<GraphEdge>>, StorageError> {
+    let scope_text = scope_json(conn, scope)?;
+    let overlay: bool = db(conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM json_each(?1,'$.views') j JOIN index_views v ON v.id=json_extract(j.value,'$.view_id') WHERE v.branch_id IS NOT NULL OR v.worktree_id IS NOT NULL)",
+        [&scope_text],
+        |r| r.get(0),
+    ))?;
+    if overlay {
+        return Ok(None);
+    }
+    probed(
+        conn,
+        scope,
+        false,
+        "null",
+        &repository_edges_sql(),
+        after,
+        limit,
+    )
+}
+
 /// The keyset continuation after ?3 in node order.
 const NODE_AFTER: &str = "(json_extract(?3,'$.repository_id') IS NULL OR (c.repo,c.unit_key,c.node_id)>(json_extract(?3,'$.repository_id'),json_extract(?3,'$.unit_key'),json_extract(?3,'$.item_id')))";
 
@@ -222,8 +260,18 @@ fn scan_nodes(
     let scope_json = scope_json(conn, scope)?;
     let (count, after_json) = bounded(limit, after)?;
     let filter_json=json!({"pattern":filter.pattern,"name":filter.name.as_ref().map(|n|json!({"query":n.name,"contains":n.contains})),"kinds":filter.kinds,"unit":filter.unit_key,"node":filter.node_id,"excludeUntrusted":filter.exclude_untrusted}).to_string();
+    // Unit selection commutes with the per-(repository,unit) layer ranking: apply it before the
+    // window, keeping every layer's row of that unit, so one file's nodes rank no other unit.
+    let composed = if filter.unit_key.is_some() {
+        COMPOSED.replace(
+            "u.generation_id=l.generation_id)",
+            "u.generation_id=l.generation_id WHERE u.unit_key=json_extract(?2,'$.unit'))",
+        )
+    } else {
+        COMPOSED.to_owned()
+    };
     let units_sql = format!(
-        "{COMPOSED}SELECT v.repo,v.view_id,v.generation_id,v.content_digest,v.unit_key FROM visible v WHERE (json_extract(?2,'$.unit') IS NULL OR v.unit_key=json_extract(?2,'$.unit')) AND (json_extract(?3,'$.repository_id') IS NULL OR (v.repo,v.unit_key)>=(json_extract(?3,'$.repository_id'),json_extract(?3,'$.unit_key'))) ORDER BY v.repo,v.unit_key"
+        "{composed}SELECT v.repo,v.view_id,v.generation_id,v.content_digest,v.unit_key FROM visible v WHERE (json_extract(?2,'$.unit') IS NULL OR v.unit_key=json_extract(?2,'$.unit')) AND (json_extract(?3,'$.repository_id') IS NULL OR (v.repo,v.unit_key)>=(json_extract(?3,'$.repository_id'),json_extract(?3,'$.unit_key'))) ORDER BY v.repo,v.unit_key"
     );
     let mut units = db(conn.prepare_cached(&units_sql))?;
     let mut units = db(units.query(params![scope_json, filter_json, after_json]))?;
@@ -509,6 +557,11 @@ macro_rules! graph_reads {($t:ty)=>{impl GraphRead for $t {
         Ok(nodes(self.conn,&scoped,&GraphNodeFilter{unit_key:Some(key.unit_key.clone()),node_id:Some(key.node_id.clone()),..Default::default()},None,1)?.items.pop())
     }
     fn graph_nodes_of_kind(&self,scope:&GraphScope,kind:&str,after:Option<&GraphPosition>,limit:u16)->Result<GraphPage<GraphNode>,StorageError>{probed_nodes(self.conn,scope,&kind_nodes_sql(),kind,after,limit)}
+    fn graph_view_unresolved(&self,view:&Id)->Result<Option<u64>,StorageError>{
+        let count:Option<i64>=db(self.conn.query_row("SELECT edge_count FROM graph_view_unresolved WHERE view_id=?1",[view.as_str()],|r|r.get(0)).optional())?;
+        count.map(|c|u64::try_from(c).map_err(|_|corrupt("invalid unresolved edge count"))).transpose()
+    }
+    fn graph_repository_edges(&self,scope:&GraphScope,after:Option<&GraphPosition>,limit:u16)->Result<Option<GraphPage<GraphEdge>>,StorageError>{repository_edges(self.conn,scope,after,limit)}
     fn graph_project_nodes(&self,scope:&GraphScope,directories:&[String],after:Option<&GraphPosition>,limit:u16)->Result<GraphPage<GraphNode>,StorageError>{
         if directories.len()>usize::from(GRAPH_MAX_PAGE){return Err(invalid("a project node read names at most 500 directories"));}
         let directories=serde_json::to_string(directories).map_err(|_|invalid("invalid graph directories"))?;
@@ -936,6 +989,12 @@ mod tests {
     use super::*;
 
     #[test]
+    fn migration_61_records_the_unresolved_count_insert_view_records() {
+        let migration = include_str!("migrations/0061_graph_view_unresolved.sql");
+        assert!(migration.contains(&UNRESOLVED_EDGES.replace("?1", "v.baseline_id")));
+    }
+
+    #[test]
     fn node_lookups_search_node_indexes_and_rank_no_unit_table() {
         let conn = Connection::open_in_memory().unwrap();
         super::super::project_purge::guard::register(&conn, false).unwrap();
@@ -964,6 +1023,11 @@ mod tests {
                 "project",
                 project_nodes_sql(),
                 "graph_nodes_project_directory (generation_id=? AND <expr>=?)",
+            ),
+            (
+                "repository edges",
+                repository_edges_sql(),
+                "graph_edges_named_repository (generation_id=?)",
             ),
         ] {
             let mut statement = conn.prepare(&format!("EXPLAIN QUERY PLAN {sql}")).unwrap();

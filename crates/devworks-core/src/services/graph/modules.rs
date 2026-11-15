@@ -8,6 +8,41 @@ fn captured_directory(unit: &str) -> &str {
     unit.rsplit_once('/').map_or("", |(parent, _)| parent)
 }
 
+/// Each projected node's project owner, read once per repository and unit.
+#[derive(Default)]
+pub(super) struct Owners {
+    read: std::collections::BTreeMap<(String, String), Modules>,
+}
+
+impl Owners {
+    /// `node`'s owner and whether it is ambiguous, reading the projects with `load` the first
+    /// time its unit is seen. Every unit read is charged to `budget`; `None` once that runs out
+    /// (`graph_memory_limit`).
+    pub fn owner(
+        &mut self,
+        node: &GraphNode,
+        budget: &mut Budget,
+        load: impl FnOnce(&mut Budget) -> Result<Modules, Failure>,
+    ) -> Result<Option<(Option<String>, bool)>, Failure> {
+        let key = (
+            node.repository_id.as_str().to_owned(),
+            node.node.unit_key.clone(),
+        );
+        if Modules::needed(node) && !self.read.contains_key(&key) {
+            if !budget.retain(
+                key.0.len() + key.1.len() + std::mem::size_of::<((String, String), Modules)>() + 64,
+            ) {
+                return Ok(None);
+            }
+            let modules = load(budget)?;
+            self.read.insert(key.clone(), modules);
+        }
+        let none = Modules::default();
+        let (owner, ambiguous) = self.read.get(&key).unwrap_or(&none).owner(node);
+        Ok(Some((owner.map(str::to_owned), ambiguous)))
+    }
+}
+
 /// Retains one project node; `false` when the memory budget is spent.
 fn push(modules: &mut Vec<Module>, node: &GraphNode, budget: &mut Budget) -> bool {
     let name = node.node.payload["properties"]["dotnet_project"]
@@ -105,26 +140,30 @@ impl Modules {
         directories.insert(format!("{path}/"));
         let directories: Vec<String> = directories.into_iter().collect();
         let mut modules = Vec::new();
-        let mut after = None;
-        'pages: while !local.views.is_empty() {
-            let page =
-                read.graph()
-                    .graph_project_nodes(&local, &directories, after.as_ref(), 32)?;
-            for node in page.items {
-                if !budget.visit() {
-                    break 'pages;
+        // A read names at most GRAPH_MAX_PAGE directories: a deeper unit's are read in batches,
+        // and ownership is decided over all of their projects together.
+        'batches: for batch in directories.chunks(usize::from(GRAPH_MAX_PAGE)) {
+            let mut after = None;
+            while !local.views.is_empty() {
+                let page = read
+                    .graph()
+                    .graph_project_nodes(&local, batch, after.as_ref(), 32)?;
+                for node in page.items {
+                    if !budget.visit() {
+                        break 'batches;
+                    }
+                    after = Some(GraphPosition {
+                        repository_id: node.repository_id.clone(),
+                        unit_key: node.node.unit_key.clone(),
+                        item_id: node.node.node_id.clone(),
+                    });
+                    if !push(&mut modules, &node, budget) {
+                        break 'batches;
+                    }
                 }
-                after = Some(GraphPosition {
-                    repository_id: node.repository_id.clone(),
-                    unit_key: node.node.unit_key.clone(),
-                    item_id: node.node.node_id.clone(),
-                });
-                if !push(&mut modules, &node, budget) {
-                    break 'pages;
+                if !page.has_more {
+                    break;
                 }
-            }
-            if !page.has_more {
-                break;
             }
         }
         Ok(Self {
@@ -188,7 +227,7 @@ impl Modules {
 }
 
 /// Every node of `scope` checked against the unit-ranking reads the lookups replaced: by node
-/// ID (alone, with its unit, and through [`GraphRead::graph_node`]), by kind, and its project owner
+/// ID (alone, with its unit, and through [`GraphRead::graph_node`]), by unit, by kind, and its project owner
 /// from its directory chain against every project of the scope. Returns how many nodes were
 /// checked and a description of each difference (none when they agree).
 #[doc(hidden)]
@@ -237,6 +276,22 @@ pub fn node_lookup_parity(
         })?;
         if found != expected {
             differences.push(format!("node {id}: {found:?} != {expected:?}"));
+        }
+    }
+    let units: std::collections::BTreeSet<&str> =
+        all.iter().map(|n| n.node.unit_key.as_str()).collect();
+    for unit in units {
+        let expected: Vec<_> = all
+            .iter()
+            .filter(|n| n.node.unit_key == unit)
+            .cloned()
+            .collect();
+        let found = pages(&GraphNodeFilter {
+            unit_key: Some(unit.into()),
+            ..Default::default()
+        })?;
+        if found != expected {
+            differences.push(format!("unit {unit}: {found:?} != {expected:?}"));
         }
     }
     let kinds: std::collections::BTreeSet<&str> =
@@ -309,6 +364,40 @@ mod tests {
             },
         }
     }
+    #[test]
+    fn each_unit_read_for_its_owner_is_charged_until_the_memory_limit() {
+        let mut budget = Budget::new(&crate::protocol::data::QueryLimits {
+            max_results: 1,
+            max_visited: 1_000_000,
+            deadline_ms: 300_000,
+        });
+        // Leave 64 KiB of the 16 MiB bound: a few hundred units fill it.
+        assert!(budget.retain(16 * 1024 * 1024 - 64 * 1024));
+        let mut owners = Owners::default();
+        let mut read = 0;
+        let mut stopped = None;
+        for unit in 0..100_000 {
+            let node = symbol(&format!("src/unit_{unit}.cs"));
+            match owners
+                .owner(&node, &mut budget, |_| {
+                    read += 1;
+                    Ok(Modules::default())
+                })
+                .unwrap()
+            {
+                Some(owner) => assert_eq!(owner, (None, false)),
+                None => {
+                    stopped = Some(unit);
+                    break;
+                }
+            }
+        }
+        let stopped = stopped.expect("the cache reaches the memory limit");
+        assert!(stopped > 0 && stopped < 1_000, "{stopped}");
+        assert_eq!(read, stopped);
+        assert_eq!(budget.exhausted, Some("graph_memory_limit"));
+    }
+
     #[test]
     fn captured_git_directory_spelling_distinguishes_project_owners() {
         let modules = Modules {

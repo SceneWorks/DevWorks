@@ -1852,6 +1852,22 @@ fn neighbour_work(files: usize, calls: usize) -> (Vec<(&'static str, StoreWork)>
             "code.data_lineage",
             json!({"kind":"DataLineage","selection":{"kind":"Node","nodeId":target}}),
         ),
+        (
+            "code.impact",
+            json!({"kind":"NodeImpact","selection":{"target":{"kind":"Node","nodeId":target},"depth":3}}),
+        ),
+        (
+            "code.file_impact",
+            json!({"kind":"FileImpact","selection":{"repositoryId":repositories[0],"path":"src/lib.rs","depth":3}}),
+        ),
+        (
+            "code.consumers",
+            json!({"kind":"Consumers","selection":{"kind":"Node","nodeId":target}}),
+        ),
+        (
+            "code.publishers",
+            json!({"kind":"Publishers","selection":{"kind":"Node","nodeId":target}}),
+        ),
     ] {
         // The first request prepares the statements; the second is measured.
         let first = ask(operation, &query);
@@ -1867,6 +1883,17 @@ fn neighbour_work(files: usize, calls: usize) -> (Vec<(&'static str, StoreWork)>
         }
         if let GraphResult::CallTrace { value } = &answer.result {
             assert_eq!(value.entries.0.len(), 2, "{value:?}");
+        }
+        if let GraphResult::Impact { value } = &answer.result
+            && operation == "code.impact"
+        {
+            // caller and, through it, outer depend on target.
+            assert!(value.affected.0.len() >= 2, "{value:?}");
+        }
+        if let GraphResult::Related { value } = &answer.result
+            && operation == "code.consumers"
+        {
+            assert_eq!(value.nodes.0.len(), 1, "{value:?}");
         }
         work.push((operation, measured));
     }
