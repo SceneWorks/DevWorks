@@ -160,8 +160,8 @@ fn appending_redirects_plan_a_write_of_their_target() {
         [(Truncate, vec!["C:\\x\\f".into()])]
     );
     assert_eq!(
-        plans(&["pwsh", "-Command", "'x' >> C:/x/f"]),
-        [(Truncate, vec!["C:/x/f".into()])]
+        plans(&["pwsh", "-Command", "'x' >> /x/f"]),
+        [(Truncate, vec!["/x/f".into()])]
     );
     // A dynamic append target is held like a dynamic `>` target.
     assert_eq!(
@@ -273,9 +273,20 @@ fn powershell_writers_are_held_unless_every_target_is_checked_exactly() {
         "iex 'ni /x/f'",
         "Invoke-Expression 'Add-Content /x/f hi'",
     ];
-    // PowerShell on Unix reads `\` as a separator too.
+    // A drive mapped with `New-PSDrive` can point anywhere, a protected root included.
+    cases.extend([
+        "New-PSDrive -Name X -PSProvider FileSystem -Root /x; Set-Content X:/a/f hi",
+        "ndr X FileSystem /x; ni X:/f",
+        "mount X FileSystem /x; ni X:/f",
+    ]);
+    // PowerShell on Unix reads `\` as a separator too, and a drive-qualified path names a
+    // PowerShell drive, never a native relative path.
     if cfg!(not(windows)) {
         cases.extend([
+            "Set-Content X:/a/SKILL.md x",
+            "Add-Content -LiteralPath C:/x/f hi",
+            "New-Item -Path C:/x -Name f",
+            "'hi' >> D:/x/f",
             "Set-Content -LiteralPath '/x\\f' -Value hi",
             "New-Item /x\\new",
             "'hi' >> '/x\\f'",
@@ -303,31 +314,31 @@ fn powershell_file_and_folder_writers_plan_a_write_of_each_path() {
     use DestructiveKind::Truncate;
     let ps = |s: &str| plans(&["pwsh", "-Command", s]);
     for script in [
-        "New-Item -ItemType Directory -Path C:/x/f",
-        "New-Item C:/x/f -ItemType File -Force",
-        "New-Item -Path:C:/x/f -Type file -Value hi",
-        "ni -p C:/x/f",
-        "mkdir C:/x/f",
-        "md -Force C:/x/f",
-        "New-Item -Path C:/x -Name f",
-        "New-Item -Path C:/x/ -Name f -ItemType Directory",
-        "Set-Content C:/x/f hi",
-        "Set-Content -Value hi C:/x/f",
-        "sc -LiteralPath C:/x/f -Value hi -NoNewline",
-        "Set-Content -lp C:/x/f hi",
-        "Add-Content -Path C:/x/f hi",
-        "ac C:/x/f -Value hi -Encoding utf8",
-        "'hi' | Out-File C:/x/f",
-        "'hi' | Out-File -FilePath C:/x/f -Append",
-        "Out-File -InputObject hi -LiteralPath C:/x/f -Force",
-        "Out-File C:/x/f utf8",
-        "Set-Content -- C:/x/f hi",
+        "New-Item -ItemType Directory -Path /x/f",
+        "New-Item /x/f -ItemType File -Force",
+        "New-Item -Path:/x/f -Type file -Value hi",
+        "ni -p /x/f",
+        "mkdir /x/f",
+        "md -Force /x/f",
+        "New-Item -Path /x -Name f",
+        "New-Item -Path /x/ -Name f -ItemType Directory",
+        "Set-Content /x/f hi",
+        "Set-Content -Value hi /x/f",
+        "sc -LiteralPath /x/f -Value hi -NoNewline",
+        "Set-Content -lp /x/f hi",
+        "Add-Content -Path /x/f hi",
+        "ac /x/f -Value hi -Encoding utf8",
+        "'hi' | Out-File /x/f",
+        "'hi' | Out-File -FilePath /x/f -Append",
+        "Out-File -InputObject hi -LiteralPath /x/f -Force",
+        "Out-File /x/f utf8",
+        "Set-Content -- /x/f hi",
     ] {
-        assert_eq!(ps(script), [(Truncate, vec!["C:/x/f".into()])], "{script}");
+        assert_eq!(ps(script), [(Truncate, vec!["/x/f".into()])], "{script}");
     }
     assert_eq!(
-        ps("New-Item -Path C:/x/a -Path C:/x/b"),
-        [(Truncate, vec!["C:/x/a".into(), "C:/x/b".into()])]
+        ps("New-Item -Path /x/a -Path /x/b"),
+        [(Truncate, vec!["/x/a".into(), "/x/b".into()])]
     );
     // A `-Name` without a path is relative to the working directory.
     assert_eq!(ps("New-Item -Name f"), [(Truncate, vec!["f".into()])]);
@@ -335,34 +346,34 @@ fn powershell_file_and_folder_writers_plan_a_write_of_each_path() {
     let held = |s: &str| needs(&["pwsh", "-Command", s]);
     for (script, expected) in [
         (
-            "New-Item -ItemType SymbolicLink -Path C:/x/l -Target C:/y",
+            "New-Item -ItemType SymbolicLink -Path /x/l -Target C:/y",
             InputNeeded::UnmodeledConsequentialCommand,
         ),
         (
-            "New-Item -ItemType $t C:/x/f",
+            "New-Item -ItemType $t /x/f",
             InputNeeded::UnmodeledConsequentialCommand,
         ),
         (
-            "New-Item -Credential $c C:/x/f",
+            "New-Item -Credential $c /x/f",
             InputNeeded::UnmodeledConsequentialCommand,
         ),
         (
-            "Add-Content -Wait C:/x/f hi",
+            "Add-Content -Wait /x/f hi",
             InputNeeded::UnmodeledConsequentialCommand,
         ),
         (
-            "Set-Content C:/x/f hi there",
+            "Set-Content /x/f hi there",
             InputNeeded::UnmodeledConsequentialCommand,
         ),
         // `-p` is ambiguous between `-Path` and `-PassThru`.
         (
-            "Set-Content -p C:/x/f hi",
+            "Set-Content -p /x/f hi",
             InputNeeded::UnmodeledConsequentialCommand,
         ),
         ("Add-Content $p hi", InputNeeded::UnresolvedExpansion),
-        ("mkdir C:/x/a,C:/x/b", InputNeeded::UnresolvedExpansion),
+        ("mkdir /x/a,/x/b", InputNeeded::UnresolvedExpansion),
         (
-            "New-Item -Path C:/x -Name $n",
+            "New-Item -Path /x -Name $n",
             InputNeeded::UnresolvedExpansion,
         ),
         ("'hi' | Out-File", InputNeeded::UnresolvedTarget),
@@ -875,8 +886,8 @@ fn consequential_git_and_file_writers_are_refused_planned_or_held_never_residual
     let ps = |s: &str| assess_command(&argv(&["pwsh", "-Command", s]), None);
     // File writers with a literal path are planned as writes (refused for protected roots).
     for script in [
-        "Set-Content C:/x/repo/.git/HEAD x",
-        "'x' | Out-File C:/x/repo/.git/HEAD",
+        "Set-Content /x/repo/.git/HEAD x",
+        "'x' | Out-File /x/repo/.git/HEAD",
     ] {
         match ps(script) {
             ShellAssessment::Destructive { plans, .. } => assert_eq!(
@@ -884,7 +895,7 @@ fn consequential_git_and_file_writers_are_refused_planned_or_held_never_residual
                     .into_iter()
                     .map(|p| (p.kind, p.targets))
                     .collect::<Vec<_>>(),
-                [(Truncate, vec!["C:/x/repo/.git/HEAD".to_owned()])],
+                [(Truncate, vec!["/x/repo/.git/HEAD".to_owned()])],
                 "{script}"
             ),
             other => panic!("{script}: {other:?}"),

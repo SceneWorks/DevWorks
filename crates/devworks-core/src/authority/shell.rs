@@ -1236,10 +1236,19 @@ fn command(words: &[Word], dialect: Dialect, piped: bool, c: &mut Collector, dep
         if dialect == Dialect::PowerShell
             && matches!(
                 t.to_ascii_lowercase().as_str(),
-                "set-alias" | "sal" | "new-alias" | "nal" | "invoke-expression" | "iex"
+                "set-alias"
+                    | "sal"
+                    | "new-alias"
+                    | "nal"
+                    | "invoke-expression"
+                    | "iex"
+                    | "new-psdrive"
+                    | "ndr"
+                    | "mount"
             )
         {
-            // An alias can name any command, and code run from a string is not read here.
+            // An alias can name any command, code run from a string is not read here, and a
+            // new drive can map any letter onto a protected root.
             c.hold(InputNeeded::OpaqueCommand);
             return;
         }
@@ -2630,8 +2639,9 @@ fn ps_write(writer: PsWriter, args: &[Word], c: &mut Collector) -> bool {
 
 /// A PowerShell write target as a file-system path the resolver can check, or `None` (held for
 /// its target) when it cannot be checked exactly: a `FileSystem::` provider prefix is removed;
-/// any other provider (`Registry::`, …) or a drive name longer than one letter (`Env:`,
-/// `Variable:`, `Temp:`, a custom drive) is not a path the resolver reads; and a wildcard target
+/// any other provider (`Registry::`, …), a drive name longer than one letter (`Env:`,
+/// `Variable:`, `Temp:`, a custom drive) or, on Unix, any drive-qualified path is not a path the
+/// resolver reads; and a wildcard target
 /// (literal, or a case-insensitive pattern) cannot be checked by the case-sensitive expansion. A `\` separator on Unix,
 /// a backtick in the script or a line break in the word holds the command but is still planned.
 fn ps_target(w: Word, literal: bool, c: &mut Collector) -> Option<Word> {
@@ -2641,8 +2651,14 @@ fn ps_target(w: Word, literal: bool, c: &mut Collector) -> Option<Word> {
         .find_map(|p| lower.starts_with(p).then(|| &w.text[p.len()..]))
         .unwrap_or(&w.text);
     let drive = rest.split_once(':').map(|(d, _)| d);
+    // A drive name longer than a letter is a PowerShell drive; on Unix every drive-qualified
+    // path is one too (`New-PSDrive` maps a letter anywhere), never a native relative path.
     let qualified = rest.contains("::")
-        || drive.is_some_and(|d| d.chars().count() > 1 && !d.contains(['/', '\\']));
+        || drive.is_some_and(|d| {
+            !d.is_empty()
+                && !d.contains(['/', '\\'])
+                && (d.chars().count() > 1 || cfg!(not(windows)))
+        });
     // A literal path names wildcard characters literally; a pattern matches case-insensitively
     // and (with `-Force`) over hidden entries. The pattern expansion does neither, so no
     // wildcard target is checked exactly: held, never expanded.
