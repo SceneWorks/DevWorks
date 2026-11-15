@@ -12509,6 +12509,20 @@
     "schemaValid": false
   },
   {
+    "id": "dw13-r3-admission-history.work_lineage-Query",
+    "entry": "domain-request.r3",
+    "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"history.work_lineage\",\"rootId\":\"root-a\",\"page\":{\"limit\":20}},\"schemaRevision\":3}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "dw13-r3-binding-history.work_lineage",
+    "entry": "operation-result.r3",
+    "raw": "{\"kind\":\"history.work_lineage\",\"value\":{\"items\":[],\"hasMore\":false}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
     "id": "dw13-r3-admission-router.connections-Query",
     "entry": "domain-request.r3",
     "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"router.connections\",\"page\":{\"limit\":20}},\"schemaRevision\":3}",

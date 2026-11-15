@@ -359,7 +359,7 @@ fn shared_operation_fixtures_match_recorded_outcomes() {
 
 #[test]
 fn domain_fixtures_match_recorded_outcomes() {
-    assert_eq!(run("domain-fixtures.json", 2003), 2003);
+    assert_eq!(run("domain-fixtures.json", 2005), 2005);
 }
 
 #[test]
@@ -450,8 +450,9 @@ fn every_catalog_input_has_a_positive_recorded_fixture_admitted_natively() {
     // of its eight operations; the four watch operations arrive at revision 8; mcp.disable
     // and mcp.remove arrive at revision 8, and so does mcp.classify_tool; containers.create adds
     // revision 8 for the explicit wider port bind, and process.install_project_dependencies
-    // adds revision 8 for the explicit allowScripts.
-    assert_eq!(admitted.len(), 630);
+    // adds revision 8 for the explicit allowScripts. history.work_lineage revision 3 (actor
+    // attribution) adds one.
+    assert_eq!(admitted.len(), 631);
 }
 
 #[test]

@@ -624,14 +624,23 @@
         "actor_id": "?ActorId",
         "occurred_at_ms": "?Counter",
         "repository_id": "?Id",
-        "revision": "?Text"
+        "revision": "?Text",
+        "actor_attribution": "?ActorAttribution"
       },
       "since": {
         "actor_id": 2,
         "occurred_at_ms": 2,
         "repository_id": 2,
-        "revision": 2
+        "revision": 2,
+        "actor_attribution": 3
       }
+    },
+    "ActorAttribution": {
+      "kind": "enum",
+      "values": [
+        "Recorded",
+        "Unknown"
+      ]
     },
     "AgentRecord": {
       "kind": "record",
@@ -7519,7 +7528,7 @@
       "result": "HistoryPage<LineageRecord>",
       "effect": "Local",
       "authority": "Scoped",
-      "rules": "Schema revision 2: every page carries a continuation checkpoint, including at the current tail; records carry structured attribution."
+      "rules": "Schema revision 2: every page carries a continuation checkpoint, including at the current tail; records carry structured attribution. Schema revision 3: every record states whether its actor is Recorded (actorId present) or Unknown (actorId absent); a work item stored without a creator is Unknown, never a guessed actor."
     },
     "history.git_links": {
       "operation": "history.git_links",
@@ -11420,7 +11429,8 @@
     ],
     "history.work_lineage": [
       1,
-      2
+      2,
+      3
     ],
     "history.git_links": [
       1,

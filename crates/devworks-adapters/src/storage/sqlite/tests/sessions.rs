@@ -18,8 +18,8 @@ use devworks_core::protocol::provider::{
     ProviderEvent, TranscriptBatch, TranscriptBody, TranscriptPage,
 };
 use devworks_core::protocol::records::{
-    AttributedGitLink, ContextSource, EvidenceLink, LineageRecord, ReceiptLookupState,
-    SessionRecord, ToolInvocationOutcome, UsageItem,
+    ActorAttribution, AttributedGitLink, ContextSource, EvidenceLink, LineageRecord,
+    ReceiptLookupState, SessionRecord, ToolInvocationOutcome, UsageItem,
 };
 use devworks_core::protocol::results::{
     DomainCommandReply, DomainDecision, DomainQueryReply, OperationResult,
@@ -3293,15 +3293,96 @@ fn revision_two_lineage_evidence_and_git_records_carry_structured_attribution() 
     assert!(git.summary.0.contains("by user-a"));
     for op in ["history.work_lineage", "history.git_links"] {
         assert_eq!(
-            fault(fx.at(
-                &user,
-                op,
-                body.clone(),
-                Some(if op == "history.git_links" { 4 } else { 3 })
-            ))
-            .code,
+            fault(fx.at(&user, op, body.clone(), Some(4))).code,
             DomainErrorCode::SchemaMismatch
         );
+    }
+}
+
+#[test]
+fn revision_three_lineage_reads_work_stored_without_a_creator_as_an_explicit_unknown_actor() {
+    let fx = Fx::new();
+    let user = fx.user();
+    // Two work rows written before creators were recorded: `task-a` has no detail row (the
+    // fixture's migration-1 shape) and `task-old` has a detail row without a creator.
+    fx.store
+        .with_writer_connection(|c| {
+            super::super::conn::db(c.execute_batch(
+                "INSERT INTO work_items VALUES('task-old','project-a','task','root-a',NULL,NULL,'Old task',1,0,1,1,2,'{}');
+                 INSERT INTO work_details(work_id,project_id,search_key,caller_ref,completion,created_by,updated_by,updated_at)
+                 VALUES('task-old','project-a','old task',NULL,NULL,NULL,NULL,2);",
+            ))
+        })
+        .unwrap();
+    let ctx = user.clone();
+    fx.write(move |tx| {
+        record_link(
+            tx,
+            &ctx,
+            NewHistoryLink {
+                root_id: root("root-a"),
+                kind: LinkKind::Evidence,
+                git: None,
+                artifact: Some(serde_json::from_value(art()).unwrap()),
+                target: None,
+                summary: "Report".into(),
+                supersedes: None,
+            },
+        )?
+        .map_err(|r| StorageError::InvalidRecord(format!("{r:?}")))
+    });
+    let body = json!({"rootId": "root-a", "page": {"limit": 50}});
+    let OperationResult::HistoryWorkLineage { value } =
+        result(fx.at(&user, "history.work_lineage", body.clone(), Some(3)))
+    else {
+        panic!()
+    };
+    for work_id in ["task-a", "task-old"] {
+        let work = value
+            .items
+            .0
+            .iter()
+            .find(|l| l.related_id == id(work_id))
+            .unwrap();
+        assert_eq!(work.kind.0, "task", "{work_id}");
+        assert!(work.actor_id.is_none(), "{work_id} has a guessed actor");
+        assert!(
+            matches!(work.actor_attribution, Some(ActorAttribution::Unknown)),
+            "{work_id}: {:?}",
+            work.actor_attribution
+        );
+    }
+    // A fact that records its actor says so.
+    let evidence = value
+        .items
+        .0
+        .iter()
+        .find(|l| l.kind.0 == "evidence")
+        .unwrap();
+    assert_eq!(evidence.actor_id, Some(actor("user-a")));
+    assert!(matches!(
+        evidence.actor_attribution,
+        Some(ActorAttribution::Recorded)
+    ));
+    let r3 = serde_json::to_value(result(fx.at(
+        &user,
+        "history.work_lineage",
+        body.clone(),
+        Some(3),
+    )))
+    .unwrap();
+    let unknown = r3["value"]["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|i| i["relatedId"] == "task-old")
+        .unwrap();
+    assert_eq!(unknown["actorAttribution"], "Unknown");
+    assert!(unknown.get("actorId").is_none());
+    // Revisions 1 and 2 keep their shape: the attribution state is a revision-3 member.
+    for r in [None, Some(2)] {
+        let page = result(fx.at(&user, "history.work_lineage", body.clone(), r));
+        assert!(!wire(&page).contains("actorAttribution"), "{r:?}");
     }
 }
 

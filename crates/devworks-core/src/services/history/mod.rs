@@ -50,8 +50,11 @@
 //! continuation at the tail). From revision 2, lineage and evidence records carry their actor,
 //! time (UTC ms), repository and repository revision as fields, and Git links their actor and
 //! time (the repository and head are already fields); the summaries keep the same text at every
-//! revision. A related work item records no creator, so its actor is absent; its time is its
+//! revision. A related work item's actor is the principal that created it and its time is its
 //! creation. Facts with no repository (sessions, commands, artifacts, evidence) have none.
+//! Revision 3 of `history.work_lineage` adds `actorAttribution` to every record: `Recorded` when
+//! `actorId` names the actor, `Unknown` for a work item stored without a creator (before creators
+//! were recorded), whose `actorId` stays absent rather than guessed.
 //!
 //! `history.tool_usage` revision 2 names a root, a project or the workspace (Home sessions; only a
 //! workspace invocation of a principal authorized for the workspace) and interleaves tool
@@ -92,8 +95,9 @@ use crate::ports::{IdKind, IdSource, QueryAnswer, QueryHandler};
 use crate::protocol::data::GitOid;
 use crate::protocol::provider::ArtifactRef;
 use crate::protocol::records::{
-    AttributedGitLink, EvidenceLink, LineageRecord, OperationRef, PageRequest, ReceiptLookupState,
-    ReceiptObservation, ToolInvocation, ToolInvocationOutcome, UsageItem, UsagePage,
+    ActorAttribution, AttributedGitLink, EvidenceLink, LineageRecord, OperationRef, PageRequest,
+    ReceiptLookupState, ReceiptObservation, ToolInvocation, ToolInvocationOutcome, UsageItem,
+    UsagePage,
 };
 use crate::protocol::results::OperationResult;
 use crate::protocol::shared::{Event, EventBody, EventRevisionKind, EventSubject, Query};
@@ -647,7 +651,7 @@ impl HistoryService {
 
     fn lineage_record(row: LineageRow, root: &WorkRoot) -> Result<LineageRecord, Failure> {
         Ok(match row {
-            LineageRow::Work { work, .. } => {
+            LineageRow::Work { work, creator, .. } => {
                 let parent = root.parent_feature_id.as_ref() == Some(&work.id);
                 LineageRecord {
                     id: work.id.0.clone(),
@@ -661,8 +665,14 @@ impl HistoryService {
                         work.project_id.0.as_str(),
                         work.revision
                     )),
-                    // Work items record no creator; the time is the item's creation.
-                    actor_id: None,
+                    // The recorded creator, or an explicit unknown for an item stored without
+                    // one; the time is the item's creation.
+                    actor_attribution: Some(if creator.is_some() {
+                        ActorAttribution::Recorded
+                    } else {
+                        ActorAttribution::Unknown
+                    }),
+                    actor_id: creator,
                     occurred_at_ms: Some(counter(work.created_at_ms)),
                     repository_id: None,
                     revision: None,
@@ -693,6 +703,7 @@ impl HistoryService {
                         link.sequence,
                     )),
                     actor_id: Some(link.actor.clone()),
+                    actor_attribution: Some(ActorAttribution::Recorded),
                     occurred_at_ms: Some(counter(link.created_at_ms)),
                     revision: link
                         .revision
@@ -731,6 +742,7 @@ impl HistoryService {
                         event.sequence,
                     )),
                     actor_id: Some(event.actor.clone()),
+                    actor_attribution: Some(ActorAttribution::Recorded),
                     occurred_at_ms: Some(counter(event.created_at_ms)),
                     repository_id: None,
                     revision: None,
