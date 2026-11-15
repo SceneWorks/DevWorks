@@ -39,9 +39,11 @@ type Definitions = Vec<(String, String, String, Option<String>)>;
 /// job_run_usage, with their policy rows, after copying their items into usage_origins; adds
 /// usage_origins.committed_seq, four usage_origins indexes and the recreated update trigger.
 /// usage_origins keeps its project owner (`project_id`), so a project's purge removes the copied
-/// rows with it, and adds no table or ownership edge.
+/// rows with it, and adds no table or ownership edge. Migration 58 adds graph_view_links and
+/// graph_view_link_sets (schema58 extension): derived rows of an overlay index view, preserved
+/// with every other repository index row; they hold no project rows and add no ownership edge.
 pub(super) const REVIEWED_SCHEMA_SHA256: &str =
-    "742cb9e72c67fa0d852a15c656d83e589ae6c0db89e708fbde54edbf74e2cbc0";
+    "d0bb7807b72cdb7a49529ef4813bb573feb067aaf50254f74ee43b11d106a7b6";
 
 fn definitions(conn: &Connection) -> Result<Definitions, StorageError> {
     let mut statement = db(conn.prepare(

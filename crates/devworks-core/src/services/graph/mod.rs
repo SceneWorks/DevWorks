@@ -12,6 +12,8 @@ mod modules;
 mod properties;
 mod read;
 mod scan;
+#[doc(hidden)]
+pub use scan::scanned_edges;
 mod scope;
 mod search;
 

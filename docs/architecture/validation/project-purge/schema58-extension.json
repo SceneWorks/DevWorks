@@ -1,0 +1,20 @@
+{
+  "schema": 58,
+  "policy": "dw365-graph-view-links-v1",
+  "additionalTables": [
+    {
+      "table": "graph_view_links",
+      "class": "global_repository_index",
+      "disposition": "preserve_independent",
+      "purpose": "An overlay view's composed edge links are derived from that view's own layers and follow the view, which a project purge preserves like every other repository index row; they hold no project rows."
+    },
+    {
+      "table": "graph_view_link_sets",
+      "class": "global_repository_index",
+      "disposition": "preserve_independent",
+      "purpose": "The record that an overlay view's links were computed follows that view and holds no project rows."
+    }
+  ],
+  "readerFloor": 57,
+  "writerFloor": 58
+}
