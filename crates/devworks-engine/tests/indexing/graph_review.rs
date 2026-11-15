@@ -1,6 +1,6 @@
 //! PR42 regressions through the real SQLite/index/parser/runtime, without model execution.
 use super::*;
-use devworks_core::protocol::data::{GraphPage, GraphResult};
+use devworks_core::protocol::data::{GraphCompletion, GraphPage, GraphResult};
 
 fn graph(
     rt: &Runtime,
@@ -479,8 +479,33 @@ fn native_direct_id_traversal_retains_useful_relationships_when_edge_scan_is_par
     base_directory(&store, &ctx, &src);
     let repository = discovered(&app, &ctx).remove(0);
     let run = index(&app, &ctx, &repository, "large-calls-index");
-    wait(&executor, &store, &run);
+    // Each step takes seconds unloaded; the generous waits keep a loaded host from turning
+    // wall-clock time into the partial coverage that only the visit budget should cause.
+    wait_within(&executor, &store, &run, std::time::Duration::from_secs(300));
     let selected = scope(&*store, &repository);
+    // maxVisited is the bound under test. deadlineMs is the protocol maximum so it is never
+    // the bound reached, and every page asserts that it was not.
+    let limits =
+        |max_results: u32| json!({"maxResults":max_results,"maxVisited":20000,"deadlineMs":300000});
+    let query = |operation: &str, frame: &Value| {
+        let reply = app
+            .query(&ctx, operation, frame.to_string().as_bytes())
+            .unwrap();
+        let DomainQueryReply::Result { result, .. } = reply else {
+            panic!("bounded {operation}: {reply:?}")
+        };
+        let page: GraphPage =
+            serde_json::from_value(serde_json::to_value(result).unwrap()["value"].clone()).unwrap();
+        assert!(
+            !matches!(
+                page.completion,
+                GraphCompletion::Deadline | GraphCompletion::Cancelled
+            ),
+            "{operation} stopped on wall-clock time, not the visit budget: {:?}",
+            page.completion
+        );
+        page
+    };
     let mut position = None;
     let mut first = None;
     let mut count = 0;
@@ -514,13 +539,11 @@ fn native_direct_id_traversal_retains_useful_relationships_when_edge_scan_is_par
         "actual selected edges exceed the unchanged visit budget"
     );
     let edge = first.unwrap();
-    let result = graph(
-        &app,
-        &ctx,
+    let result = query(
         "code.traverse",
-        json!({"kind":"Traverse","startIds":[edge.edge.source_node_id],"direction":"Forward","edgeKinds":["CALLS"],"maxDepth":1}),
-        None,
-        None,
+        &json!({"protocol":"1.0-draft.1","schemaRevision":3,"queryId":"review-native","scope":{"kind":"Workspace"},"current":true,
+            "query":{"kind":"Traverse","startIds":[edge.edge.source_node_id],"direction":"Forward","edgeKinds":["CALLS"],"maxDepth":1},
+            "limits":limits(100)}),
     );
     assert!(matches!(
         result.scope_coverage.as_ref().unwrap().coverage.state,
@@ -547,18 +570,8 @@ fn native_direct_id_traversal_retains_useful_relationships_when_edge_scan_is_par
         .clone();
     let mut frame = json!({"protocol":"1.0-draft.1","schemaRevision":3,"queryId":"large-call-path","scope":{"kind":"Workspace"},"current":true,
         "query":{"kind":"Path","selection":{"target":{"kind":"Node","nodeId":target},"direction":"Inbound","depth":1}},
-        "limits":{"maxResults":1,"maxVisited":20000,"deadlineMs":30000}});
-    let query = |frame: &Value| {
-        let DomainQueryReply::Result { result, .. } = app
-            .query(&ctx, "code.call_path", frame.to_string().as_bytes())
-            .unwrap()
-        else {
-            panic!("bounded call path")
-        };
-        serde_json::from_value::<GraphPage>(serde_json::to_value(result).unwrap()["value"].clone())
-            .unwrap()
-    };
-    let first = query(&frame);
+        "limits":limits(1)});
+    let first = query("code.call_path", &frame);
     let GraphResult::CallTrace { value: first_trace } = &first.result else {
         panic!("call trace")
     };
@@ -579,7 +592,7 @@ fn native_direct_id_traversal_retains_useful_relationships_when_edge_scan_is_par
             .next_cursor
             .expect("retained callers have continuation")
     );
-    let next = query(&frame);
+    let next = query("code.call_path", &frame);
     let GraphResult::CallTrace { value: next_trace } = next.result else {
         panic!("continued trace")
     };
