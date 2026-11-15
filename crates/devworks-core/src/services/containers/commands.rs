@@ -147,6 +147,14 @@ impl CommandHandler for ContainerService {
                         .into()),
                     );
                 }
+                if let Err(failure) = super::approval::recheck_reviewed(
+                    tx,
+                    ctx,
+                    admitted,
+                    super::approval::Reviewable::Build(input),
+                ) {
+                    return decided(tx, Err(failure));
+                }
                 match requested_backend(tx, ctx, &input.engine_id, Some(&input.project_id))? {
                     Ok(_) => {}
                     Err(refusal) => return decided(tx, Err(refusal.into())),
@@ -154,6 +162,14 @@ impl CommandHandler for ContainerService {
                 operation.0.as_str().to_owned()
             }
             ContainerCommand::Pull(input) => {
+                if let Err(failure) = super::approval::recheck_reviewed(
+                    tx,
+                    ctx,
+                    admitted,
+                    super::approval::Reviewable::Pull(input),
+                ) {
+                    return decided(tx, Err(failure));
+                }
                 match requested_backend(tx, ctx, &input.engine_id, None)? {
                     Ok(_) => {}
                     Err(refusal) => return decided(tx, Err(refusal.into())),
@@ -173,7 +189,12 @@ impl CommandHandler for ContainerService {
                         .into()),
                     );
                 }
-                if let Err(failure) = super::approval::recheck_reviewed(tx, ctx, admitted, spec) {
+                if let Err(failure) = super::approval::recheck_reviewed(
+                    tx,
+                    ctx,
+                    admitted,
+                    super::approval::Reviewable::Create(spec),
+                ) {
                     return decided(tx, Err(failure));
                 }
                 let backend =
@@ -316,6 +337,14 @@ impl CommandHandler for ContainerService {
                         .into()),
                     );
                 }
+                if let Err(failure) = super::approval::recheck_reviewed(
+                    tx,
+                    ctx,
+                    admitted,
+                    super::approval::Reviewable::Start(input),
+                ) {
+                    return decided(tx, Err(failure));
+                }
                 let expected = row.revision;
                 let mut next = row;
                 if next.phase == ContainerPhase::Stopped && !next.resource_lease_ids.is_empty() {
@@ -407,6 +436,14 @@ impl CommandHandler for ContainerService {
                         )
                         .into()),
                     );
+                }
+                if let Err(failure) = super::approval::recheck_reviewed(
+                    tx,
+                    ctx,
+                    admitted,
+                    super::approval::Reviewable::Exec(input),
+                ) {
+                    return decided(tx, Err(failure));
                 }
                 row.id.as_str().to_owned()
             }
