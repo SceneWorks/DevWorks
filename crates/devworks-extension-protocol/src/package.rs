@@ -285,7 +285,8 @@ fn safe_relative(p: &str) -> bool {
 }
 impl PackageManifest {
     pub fn validate(&self) -> Result<(), &'static str> {
-        if semver::Version::parse(&self.version).is_err()
+        if self.version.len() > 128
+            || semver::Version::parse(&self.version).is_err()
             || semver::Version::parse(&self.minimum_host_version).is_err()
         {
             return Err("invalid semantic version");
@@ -734,11 +735,13 @@ impl PackageNotification {
             {
                 return Err("credit bounds");
             }
-            Self::Event { params, .. } => {
-                if let ContributionEvent::Provider { event } = &params.event {
-                    event.validate()?;
+            Self::Event { params, .. } => match &params.event {
+                ContributionEvent::Provider { event } => event.validate()?,
+                ContributionEvent::Verification { evidence, .. } if evidence.len() > 128 => {
+                    return Err("too much verification evidence");
                 }
-            }
+                _ => {}
+            },
             _ => {}
         }
         Ok(())
@@ -799,6 +802,28 @@ pub enum RpcResult {
         operation_ids: Vec<OperationId>,
     },
 }
+impl RpcResult {
+    /// The declared list bounds of a result.
+    fn validate(&self) -> Result<(), &'static str> {
+        match self {
+            Self::Initialized {
+                contribution_ids,
+                features,
+                ..
+            } if contribution_ids.len() > 256 || features.len() > 64 => {
+                Err("initialization result bounds")
+            }
+            Self::InvocationFinished {
+                outcome: InvocationOutcome::Completed { artifacts },
+                ..
+            } if artifacts.len() > 128 => Err("too many invocation artifacts"),
+            Self::EventCommitAccepted { operation_ids, .. } if operation_ids.len() > 64 => {
+                Err("too many event commit operations")
+            }
+            _ => Ok(()),
+        }
+    }
+}
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct RpcSuccess {
@@ -854,7 +879,10 @@ pub enum RpcResponse {
 impl RpcResponse {
     pub fn validate(&self) -> Result<(), &'static str> {
         let id = match self {
-            Self::Success(s) => &s.id,
+            Self::Success(s) => {
+                s.result.validate()?;
+                &s.id
+            }
             Self::Failure(f) => {
                 if f.error.message.is_empty() || f.error.message.len() > 4096 {
                     return Err("invalid error message");
