@@ -615,6 +615,7 @@ pub fn preflight(
     // Expand globs into a bounded explicit set; whole-content erasure of a protected directory
     // is refused even though the directory itself would survive.
     let mut expanded = Vec::new();
+    let mut unmatched: Option<&String> = None;
     for requested in &plan.targets {
         if !has_wildcard(requested) {
             expanded.push(requested.clone());
@@ -649,6 +650,13 @@ pub fn preflight(
             }
         }
         match fs.expand(requested, cwd, MAX_TARGETS) {
+            // A write whose pattern matches nothing creates the name as written (a quoted
+            // POSIX word, or a path the shell does not expand), which may lie inside a protected
+            // root that the pattern does not match: held rather than allowed with no target. The
+            // other targets are still checked, so a refused one blocks the step.
+            Ok(paths) if paths.is_empty() && plan.kind == DestructiveKind::Truncate => {
+                unmatched.get_or_insert(requested);
+            }
             Ok(paths) => expanded.extend(paths),
             Err(ResolveError::TooMany { .. }) => {
                 return decide(
@@ -724,6 +732,14 @@ pub fn preflight(
                 );
             }
         }
+    }
+    if let Some(requested) = unmatched {
+        return decide(
+            PreflightVerdict::NeedsInput(InputNeeded::UnresolvedTarget),
+            Some(requested),
+            Vec::new(),
+            Vec::new(),
+        );
     }
     if plan.kind == DestructiveKind::Consequential {
         // Not refused, but its exact effect is not modeled: never allowed by default.

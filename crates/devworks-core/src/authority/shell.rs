@@ -13,8 +13,10 @@
 //!    `rmdir`, `unlink`, `shred`, `dd of=`, `mv`, `rsync`, `find`, `mkdir` (a write of each new
 //!    folder), a set of `git` subcommands, cmd `rd`/`rmdir`/`del`/`erase` (joined switches such
 //!    as `/s/q` included), cmd `mkdir`/`md`, PowerShell
-//!    `Remove-Item`/`Move-Item` and their aliases, `[IO.Directory]::Delete('…')` with a literal
-//!    path, and `>` redirections. A command counts as **fully modeled** only when every one of
+//!    `Remove-Item`/`Move-Item` and their aliases, PowerShell `New-Item`/`mkdir`/`Set-Content`/
+//!    `Add-Content`/`Out-File` and their aliases (a write of each path),
+//!    `[IO.Directory]::Delete('…')` with a literal path, and `>`/`>>` redirections (`&>`, `&>>`,
+//!    `2>`, `2>>` included). A command counts as **fully modeled** only when every one of
 //!    its words was understood: every option is known to that program's model, no word is
 //!    dynamic (`$VAR`, substitutions, `~user`/`~+`/`~-`, brace expansion, a glob in the program
 //!    word, `(` adjacent to a word, PowerShell commas/arrays/blocks), no semantics-changing
@@ -224,9 +226,9 @@ enum Token {
     },
     /// `(` or `)`.
     Group,
-    Redirect {
-        truncate: bool,
-    },
+    /// `>`, `>>`, `&>`, `&>>` or a descriptor-numbered form (`2>`, `2>>`): a write of the next
+    /// word, whether it truncates or appends.
+    Redirect,
     /// `<`, `<<`, `<<<` or `<(` input redirection.
     Input,
 }
@@ -265,9 +267,15 @@ fn tokenize(script: &str, dialect: Dialect) -> Lexed {
             let brace = dialect != Dialect::Cmd && brace_expansion(unquoted);
             let tilde = dialect != Dialect::Cmd && dynamic_tilde(unquoted);
             let array = dialect == Dialect::PowerShell && unquoted.contains(',');
+            // PowerShell also quotes with typographic quotes, which are not decoded here.
+            let smart = dialect == Dialect::PowerShell
+                && word.contains([
+                    '\u{2018}', '\u{2019}', '\u{201A}', '\u{201B}', '\u{201C}', '\u{201D}',
+                    '\u{201E}',
+                ]);
             lx.tokens.push(Token::Word(Word {
                 text: std::mem::take(word),
-                dynamic: *dynamic || brace || tilde || array,
+                dynamic: *dynamic || brace || tilde || array || smart,
             }));
         }
         unquoted.clear();
@@ -324,6 +332,12 @@ fn tokenize(script: &str, dialect: Dialect) -> Lexed {
                 let mut closed = false;
                 while i < chars.len() {
                     if chars[i] == '\'' {
+                        // PowerShell: a doubled apostrophe inside the string is one apostrophe.
+                        if dialect == Dialect::PowerShell && chars.get(i + 1) == Some(&'\'') {
+                            word.push('\'');
+                            i += 2;
+                            continue;
+                        }
                         closed = true;
                         break;
                     }
@@ -338,6 +352,17 @@ fn tokenize(script: &str, dialect: Dialect) -> Lexed {
                 let mut closed = false;
                 while i < chars.len() {
                     let q = chars[i];
+                    // PowerShell `""` and backtick escapes (`` `t ``, `` `" ``, …) are not
+                    // decoded here; the word is held, and the escaped character never ends the
+                    // string.
+                    if dialect == Dialect::PowerShell
+                        && (q == '`' || (q == '"' && chars.get(i + 1) == Some(&'"')))
+                    {
+                        dynamic = true;
+                        word.extend(chars.get(i..i + 2).unwrap_or(&chars[i..]));
+                        i += 2;
+                        continue;
+                    }
                     if q == '"' {
                         closed = true;
                         break;
@@ -420,8 +445,12 @@ fn tokenize(script: &str, dialect: Dialect) -> Lexed {
                     &mut dynamic,
                 );
                 if c == '&' && chars.get(i + 1) == Some(&'>') {
+                    // `&>` and `&>>`.
                     i += 2;
-                    lx.tokens.push(Token::Redirect { truncate: true });
+                    if chars.get(i) == Some(&'>') {
+                        i += 1;
+                    }
+                    lx.tokens.push(Token::Redirect);
                     continue;
                 }
                 let pipe = c == '|' && chars.get(i + 1) != Some(&'|');
@@ -487,11 +516,11 @@ fn tokenize(script: &str, dialect: Dialect) -> Lexed {
                         &mut dynamic,
                     );
                 }
-                let append = chars.get(i + 1) == Some(&'>');
-                if append {
+                // `>>` appends; it writes its target like `>`.
+                if chars.get(i + 1) == Some(&'>') {
                     i += 1;
                 }
-                lx.tokens.push(Token::Redirect { truncate: !append });
+                lx.tokens.push(Token::Redirect);
             }
             c if c.is_whitespace() => flush(
                 &mut lx,
@@ -557,6 +586,9 @@ struct Collector<'p> {
     protected_branches: &'p [String],
     /// Consequential tokens accounted for by fully modeled commands.
     claimed: BTreeMap<String, usize>,
+    /// A PowerShell script contains a backtick (an escape or a line continuation), which the
+    /// tokenizer does not decode exactly: PowerShell writers are held.
+    ps_backtick: bool,
 }
 impl Collector<'_> {
     fn hold(&mut self, n: InputNeeded) {
@@ -678,6 +710,7 @@ fn analyze(
         cwd: Cwd::Known(working_directory.map(str::to_owned)),
         protected_branches,
         claimed: BTreeMap::new(),
+        ps_backtick: false,
     };
     command(&words, Dialect::Posix, false, &mut c, 0);
     // The backstop: every consequential token in the raw input must have been accounted for
@@ -921,9 +954,10 @@ fn script(text: &str, dialect: Dialect, c: &mut Collector, depth: u8) {
     }
     if dialect == Dialect::PowerShell {
         io_api(text, c);
+        c.ps_backtick |= text.contains('`');
     }
     let mut current: Vec<Word> = Vec::new();
-    let mut redirect = None;
+    let mut redirect = false;
     // Whether the command being collected reads a pipeline, whether the last separator was a
     // pipe, and whether it reads redirected input (`<`, `<<`, `<<<`, `<(`).
     let mut piped = false;
@@ -954,25 +988,30 @@ fn script(text: &str, dialect: Dialect, c: &mut Collector, depth: u8) {
                 fed = false;
             }
             Token::Input => fed = true,
-            Token::Redirect { truncate } => redirect = Some(truncate),
-            Token::Word(w) => match redirect.take() {
-                Some(truncate) => {
-                    let sink = w.text.to_ascii_lowercase();
-                    if sink == "/dev/null" || sink == "nul" || sink == "$null" {
-                        continue;
-                    }
-                    if truncate {
-                        c.push(DestructiveKind::Truncate, &[w]);
-                    }
+            Token::Redirect => redirect = true,
+            Token::Word(w) if std::mem::take(&mut redirect) => {
+                // Truncating and appending redirections both write their target.
+                let sink = w.text.to_ascii_lowercase();
+                if sink == "/dev/null" || sink == "nul" || sink == "$null" {
+                    continue;
                 }
-                None => {
-                    if current.is_empty() {
-                        piped = after_pipe;
-                        after_pipe = false;
-                    }
-                    current.push(w)
+                // A PowerShell redirection is `Out-File`, whose path is literal.
+                let w = if dialect == Dialect::PowerShell {
+                    ps_target(w, true, c)
+                } else {
+                    Some(w)
+                };
+                if let Some(w) = w {
+                    c.push(DestructiveKind::Truncate, &[w]);
                 }
-            },
+            }
+            Token::Word(w) => {
+                if current.is_empty() {
+                    piped = after_pipe;
+                    after_pipe = false;
+                }
+                current.push(w)
+            }
         }
     }
     run(&mut current, piped, fed, c);
@@ -1188,6 +1227,30 @@ fn command(words: &[Word], dialect: Dialect, piped: bool, c: &mut Collector, dep
             // Keywords and block-taking cmdlets whose block was split off as its own command.
             i += 1;
             continue;
+        }
+        if dialect == Dialect::PowerShell && t == "." {
+            // Dot-sourcing a command runs it with the same arguments (in the caller's scope).
+            i += 1;
+            continue;
+        }
+        if dialect == Dialect::PowerShell
+            && matches!(
+                t.to_ascii_lowercase().as_str(),
+                "set-alias"
+                    | "sal"
+                    | "new-alias"
+                    | "nal"
+                    | "invoke-expression"
+                    | "iex"
+                    | "new-psdrive"
+                    | "ndr"
+                    | "mount"
+            )
+        {
+            // An alias can name any command, code run from a string is not read here, and a
+            // new drive can map any letter onto a protected root.
+            c.hold(InputNeeded::OpaqueCommand);
+            return;
         }
         if dialect == Dialect::PowerShell
             && matches!(
@@ -1523,6 +1586,13 @@ fn command(words: &[Word], dialect: Dialect, piped: bool, c: &mut Collector, dep
         }
         "mkdir" if dialect == Dialect::Posix => posix_mkdir(args, c),
         "mkdir" | "md" if dialect == Dialect::Cmd => cmd_mkdir(args, c),
+        "new-item" | "ni" | "mkdir" | "md" if dialect == Dialect::PowerShell => {
+            ps_write(PsWriter::NewItem, args, piped, c)
+        }
+        "set-content" | "sc" | "add-content" | "ac" if dialect == Dialect::PowerShell => {
+            ps_write(PsWriter::Content, args, piped, c)
+        }
+        "out-file" if dialect == Dialect::PowerShell => ps_write(PsWriter::OutFile, args, piped, c),
         "rd" | "rmdir" | "del" | "erase" if dialect != Dialect::PowerShell => {
             cmd_removal(&name, args, c)
         }
@@ -2345,6 +2415,270 @@ fn cmd_mkdir(args: &[Word], c: &mut Collector) -> bool {
         c.push(DestructiveKind::Truncate, args);
     }
     true
+}
+
+/// A PowerShell cmdlet that creates or writes a file or folder.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum PsWriter {
+    /// `New-Item`/`ni`, and `mkdir`/`md` (a function over `New-Item -ItemType Directory`).
+    NewItem,
+    /// `Set-Content`/`sc` and `Add-Content`/`ac`.
+    Content,
+    /// `Out-File`.
+    OutFile,
+}
+
+/// What a PowerShell writer parameter binds.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum PsParam {
+    /// The item written as a wildcard pattern (`Set-Content`/`Add-Content` `-Path`).
+    Path,
+    /// The item written literally (`-LiteralPath`, and every path of `New-Item` and `Out-File`).
+    LiteralPath,
+    /// `New-Item -Name` (not modeled: the command is held).
+    Name,
+    /// `New-Item -ItemType`.
+    ItemType,
+    /// A parameter taking a value that names no written item.
+    Value,
+    Switch,
+}
+
+/// Resolves a parameter name as PowerShell does: an exact name or alias, else the one parameter
+/// it is a prefix of. Every parameter that names a written item is listed, so a name PowerShell
+/// binds to one of them never resolves to another parameter here (it is ambiguous or unknown).
+fn ps_param(opt: &str, params: &[(&'static str, PsParam)]) -> Option<(&'static str, PsParam)> {
+    if let Some(p) = params.iter().find(|(n, _)| *n == opt) {
+        return Some(*p);
+    }
+    let mut prefixed = params.iter().filter(|(n, _)| n.starts_with(opt));
+    match (prefixed.next(), prefixed.next()) {
+        (Some(p), None) => Some(*p),
+        _ => None,
+    }
+}
+
+/// PowerShell `New-Item`, `mkdir`, `Set-Content`, `Add-Content` and `Out-File` (and their
+/// aliases) write each path operand, named (`-Path`, `-LiteralPath`, `-FilePath`, joined forms
+/// such as `-Path:x` included) or positional: planned as a write so a new or changed item inside
+/// a protected root is refused like a redirection there. An unknown parameter, an extra
+/// positional word or a link `-ItemType` holds the command (`New-Item` and `Add-Content` are not
+/// consequential tokens, so the hold is explicit here); a missing path, `New-Item -Name` and
+/// pipeline input (which can bind the target by property name) hold it for its target.
+fn ps_write(writer: PsWriter, args: &[Word], piped: bool, c: &mut Collector) -> bool {
+    use PsParam::*;
+    const COMMON: &[(&str, PsParam)] = &[
+        ("force", Switch),
+        ("whatif", Switch),
+        ("confirm", Switch),
+        ("verbose", Switch),
+        ("erroraction", Value),
+        ("ea", Value),
+    ];
+    let (own, positional): (&[(&str, PsParam)], &[&str]) = match writer {
+        PsWriter::NewItem => (
+            &[
+                ("path", LiteralPath),
+                ("name", Name),
+                ("itemtype", ItemType),
+                ("type", ItemType),
+                ("value", Value),
+                ("target", Value),
+            ],
+            &["path"],
+        ),
+        PsWriter::Content => (
+            &[
+                ("path", Path),
+                ("literalpath", LiteralPath),
+                ("pspath", LiteralPath),
+                ("lp", LiteralPath),
+                ("value", Value),
+                ("encoding", Value),
+                ("filter", Value),
+                ("include", Value),
+                ("exclude", Value),
+                ("nonewline", Switch),
+                ("passthru", Switch),
+                ("asbytestream", Switch),
+            ],
+            &["path", "value"],
+        ),
+        PsWriter::OutFile => (
+            &[
+                ("filepath", LiteralPath),
+                ("path", LiteralPath),
+                ("literalpath", LiteralPath),
+                ("pspath", LiteralPath),
+                ("lp", LiteralPath),
+                ("encoding", Value),
+                ("width", Value),
+                ("inputobject", Value),
+                ("append", Switch),
+                ("noclobber", Switch),
+                ("nonewline", Switch),
+            ],
+            &["path", "encoding"],
+        ),
+    };
+    let params: Vec<(&str, PsParam)> = own.iter().chain(COMMON).copied().collect();
+    let mut paths = Vec::new();
+    let mut name = None;
+    let mut item_type = None;
+    let mut bound: Vec<&str> = Vec::new();
+    let mut words = Vec::new();
+    let mut known = true;
+    let mut rest_positional = false;
+    // Forms whose effect the words do not show: splatting (`@p`, `@(…)`) binds parameters,
+    // any computed argument (`$v`, `$(…)`), and a backtick escape or line continuation anywhere
+    // in the script.
+    let opaque = c.ps_backtick || args.iter().any(|a| a.dynamic || a.text.starts_with('@'));
+    let mut j = 0;
+    while let Some(a) = args.get(j) {
+        j += 1;
+        if rest_positional || !a.text.starts_with('-') || a.text.len() < 2 {
+            words.push(a.clone());
+            continue;
+        }
+        if a.text == "--" {
+            rest_positional = true;
+            continue;
+        }
+        let l = a.text[1..].to_ascii_lowercase();
+        let (opt, attached) = match l.split_once(':') {
+            Some((n, _)) => (n.to_owned(), Some(a.text[n.len() + 2..].to_owned())),
+            None => (l, None),
+        };
+        // A computed parameter name could bind anything.
+        let Some((param, role)) = (!a.dynamic).then(|| ps_param(&opt, &params)).flatten() else {
+            known = false;
+            break;
+        };
+        let value = match (role, attached) {
+            (Switch, _) => None,
+            (_, Some(v)) => Some(Word {
+                text: v,
+                dynamic: a.dynamic,
+            }),
+            (_, None) => {
+                j += 1;
+                args.get(j - 1).cloned()
+            }
+        };
+        if role != Switch && value.is_none() {
+            known = false;
+            break;
+        }
+        bound.push(if matches!(role, Path | LiteralPath) {
+            "path"
+        } else {
+            param
+        });
+        match role {
+            Path => paths.extend(value.map(|v| (v, false))),
+            LiteralPath => paths.extend(value.map(|v| (v, true))),
+            Name => name = value,
+            ItemType => item_type = value,
+            Value | Switch => {}
+        }
+    }
+    // Positional words bind to the positional parameters not bound by name, in order (any named
+    // path parameter binds the path position).
+    for w in words {
+        match positional.iter().find(|p| !bound.contains(p)) {
+            Some(&"path") => {
+                bound.push("path");
+                // Only `Set-Content`/`Add-Content` read a positional path as a pattern.
+                paths.push((w, writer != PsWriter::Content));
+            }
+            Some(p) => bound.push(p),
+            None => known = false,
+        }
+    }
+    // Links (`SymbolicLink`, `Junction`, `HardLink`) are not modeled.
+    if item_type.is_some_and(|t| {
+        t.dynamic || !matches!(t.text.to_ascii_lowercase().as_str(), "file" | "directory")
+    }) {
+        known = false;
+    }
+    if !known {
+        c.unmodeled();
+    }
+    // `New-Item -Name` is joined to a path PowerShell resolves itself (an empty or omitted
+    // `-Path` is the working directory or a pipeline value): not planned, held below.
+    let named = name.is_some();
+    let targets = if named { Vec::new() } else { paths };
+    if targets.is_empty() && !named {
+        // The path arrives on the pipeline or at a prompt.
+        c.hold(InputNeeded::UnresolvedTarget);
+    }
+    let targets: Vec<Word> = targets
+        .into_iter()
+        .filter_map(|(w, literal)| ps_target(w, literal, c))
+        .collect();
+    if !targets.is_empty() {
+        c.push(DestructiveKind::Truncate, &targets);
+    }
+    if opaque {
+        c.hold(InputNeeded::UnresolvedExpansion);
+    }
+    // Pipeline input can bind the target parameters by property name.
+    if named || piped {
+        c.hold(InputNeeded::UnresolvedTarget);
+    }
+    true
+}
+
+/// A PowerShell write target as a file-system path the resolver can check, or `None` (held for
+/// its target) when it cannot be checked exactly: a `FileSystem::` provider prefix is removed;
+/// any other provider (`Registry::`, …), a drive name longer than one letter (`Env:`,
+/// `Variable:`, `Temp:`, a custom drive) or, on Unix, any drive-qualified path is not a path the
+/// resolver reads; and a wildcard target
+/// (literal, or a case-insensitive pattern) cannot be checked by the case-sensitive expansion. A `\` separator on Unix,
+/// a backtick in the script or a line break in the word holds the command but is still planned.
+fn ps_target(w: Word, literal: bool, c: &mut Collector) -> Option<Word> {
+    let lower = w.text.to_ascii_lowercase();
+    let rest = ["microsoft.powershell.core\\filesystem::", "filesystem::"]
+        .iter()
+        .find_map(|p| lower.starts_with(p).then(|| &w.text[p.len()..]))
+        .unwrap_or(&w.text);
+    let drive = rest.split_once(':').map(|(d, _)| d);
+    // A drive name longer than a letter is a PowerShell drive; on Unix every drive-qualified
+    // path is one too (`New-PSDrive` maps a letter anywhere), never a native relative path.
+    let qualified = rest.contains("::")
+        || drive.is_some_and(|d| {
+            !d.is_empty()
+                && !d.contains(['/', '\\'])
+                && (d.chars().count() > 1 || cfg!(not(windows)))
+        });
+    // A literal path names wildcard characters literally; a pattern matches case-insensitively
+    // and (with `-Force`) over hidden entries. The pattern expansion does neither, so no
+    // wildcard target is checked exactly: held, never expanded.
+    let wildcard = if literal {
+        &['*', '?', '[', ']'][..]
+    } else {
+        &['*', '?', '['][..]
+    };
+    if qualified || rest.contains(wildcard) {
+        c.hold(InputNeeded::UnresolvedTarget);
+        return None;
+    }
+    let mut text = rest.to_owned();
+    // PowerShell on Unix also reads `\` as a separator. The command is held, and the path is
+    // still planned as PowerShell reads it so a protected target is refused.
+    if cfg!(not(windows)) && text.contains('\\') {
+        c.hold(InputNeeded::UnresolvedTarget);
+        text = text.replace('\\', "/");
+    }
+    // A backtick anywhere in the script (an escape or a line continuation the tokenizer keeps)
+    // or a line break in the word: the path may not be what the words show.
+    if c.ps_backtick || text.contains(['\n', '\r']) {
+        c.hold(InputNeeded::UnresolvedExpansion);
+    }
+    Some(Word {
+        text,
+        dynamic: w.dynamic,
+    })
 }
 
 /// cmd `rd`/`rmdir`/`del`/`erase`, switches separate (`/s /q`) or joined (`/s/q`, `/f/s/q`).
