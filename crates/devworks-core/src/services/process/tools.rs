@@ -1079,7 +1079,10 @@ fn inert_cargo_config(bytes: &[u8]) -> bool {
 /// `panic`, `relocation-model`, `code-model`, `strip`, `symbol-mangling-version`,
 /// `split-debuginfo`, `embed-bitcode`, `lto`, `codegen-units`, `debug-assertions`). Cargo passes
 /// them to the compiler it queries during `cargo fetch`; anything else (`-Z`, an `@file`,
-/// `--sysroot`, `linker`, `codegen-backend`, `link-arg`) counts as naming a program.
+/// `--sysroot`, `linker`, `codegen-backend`, `link-arg`) counts as naming a program. Values are
+/// checked too: a lint name, a `--cap-lints` level, a `--cfg` of `name` or `name="value"`, a
+/// `--check-cfg` of `cfg(...)`, and a codegen value of letters, digits and `+-_.,`, so no
+/// element anywhere can be an `@file` that rustc would expand into other flags.
 fn inert_rustflags(value: &toml::Value) -> bool {
     const CODEGEN: &[&str] = &[
         "target-cpu",
@@ -1109,35 +1112,79 @@ fn inert_rustflags(value: &toml::Value) -> bool {
         }
         _ => return false,
     };
-    let codegen = |option: &str| CODEGEN.contains(&option.split('=').next().unwrap_or_default());
+    // Every value is checked as strictly as a flag: rustc expands any argument that starts with
+    // `@` (a response file) before it parses options, so no element may start with `@` or `-`
+    // where a value is expected.
+    let identifier = |name: &str| {
+        name.chars()
+            .next()
+            .is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
+            && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+    };
+    // `name` or `name="value"`, with no quote or backslash inside the value.
+    let cfg = |spec: &str| match spec.split_once('=') {
+        None => identifier(spec),
+        Some((name, value)) => {
+            identifier(name)
+                && value.len() >= 2
+                && value.starts_with('"')
+                && value.ends_with('"')
+                && !value[1..value.len() - 1].contains(['"', '\\'])
+        }
+    };
+    // `cfg(...)` of names, string literals, commas, spaces and `values`/`any()`.
+    let check_cfg = |spec: &str| {
+        spec.starts_with("cfg(")
+            && spec.ends_with(')')
+            && spec.chars().all(|c| {
+                c.is_ascii_alphanumeric()
+                    || matches!(c, '_' | '(' | ')' | ',' | ' ' | '"' | '.' | '-')
+            })
+    };
+    let lint = |name: &str| {
+        name.chars().next().is_some_and(|c| c.is_ascii_alphabetic())
+            && name
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | ':'))
+    };
+    let cap = |level: &str| matches!(level, "allow" | "warn" | "deny" | "forbid");
+    // An allowed codegen option, with a value of letters, digits and `+-_.,` only.
+    let codegen = |option: &str| {
+        let (key, value) = option.split_once('=').unwrap_or((option, ""));
+        CODEGEN.contains(&key)
+            && value
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '_' | '.' | ','))
+    };
     let mut flags = flags.into_iter();
     while let Some(flag) = flags.next() {
-        let next_is = |flags: &mut std::vec::IntoIter<&str>, check: &dyn Fn(&str) -> bool| {
-            flags
-                .next()
-                .is_some_and(|value| !value.starts_with('-') && check(value))
-        };
+        let mut value = |check: &dyn Fn(&str) -> bool| flags.next().is_some_and(check);
         let inert = match flag {
             "-g" | "-O" => true,
-            "-D" | "-W" | "-A" | "-F" | "--cap-lints" | "--cfg" | "--check-cfg" => {
-                next_is(&mut flags, &|_| true)
-            }
-            "-C" | "--codegen" => next_is(&mut flags, &codegen),
+            "-D" | "-W" | "-A" | "-F" => value(&lint),
+            "--cap-lints" => value(&cap),
+            "--cfg" => value(&cfg),
+            "--check-cfg" => value(&check_cfg),
+            "-C" | "--codegen" => value(&codegen),
             _ => {
                 if let Some(option) = flag
                     .strip_prefix("--codegen=")
                     .or_else(|| flag.strip_prefix("-C"))
                 {
                     codegen(option)
-                } else if let Some(lint) = ["-D", "-W", "-A", "-F"]
+                } else if let Some(name) = ["-D", "-W", "-A", "-F"]
                     .iter()
                     .find_map(|prefix| flag.strip_prefix(prefix))
                 {
-                    !lint.is_empty() && !lint.starts_with('-')
+                    lint(name)
+                } else if let Some(spec) = flag.strip_prefix("--cfg=") {
+                    cfg(spec)
+                } else if let Some(spec) = flag.strip_prefix("--check-cfg=") {
+                    check_cfg(spec)
+                } else if let Some(level) = flag.strip_prefix("--cap-lints=") {
+                    cap(level)
                 } else {
-                    ["--cfg=", "--check-cfg=", "--cap-lints="]
-                        .iter()
-                        .any(|prefix| flag.starts_with(prefix))
+                    false
                 }
             }
         };
@@ -4379,6 +4426,8 @@ mod tests {
             "[build]\ntarget = [\"x86_64-unknown-linux-gnu\", \"wasm32-unknown-unknown\"]\n",
             "[build]\nrustflags = [\"--cfg\", \"tokio_unstable\", \"-C\", \"target-cpu=native\"]\n",
             "[build]\nrustflags = \"-Dwarnings -Ctarget-feature=+crt-static --cfg=x\"\n",
+            "[build]\nrustflags = [\"--cfg\", \"feature=\\\"serde\\\"\", \"--cap-lints\", \"warn\", \
+             \"-D\", \"clippy::all\", \"--check-cfg\", \"cfg(tokio_unstable, values(\\\"x\\\"))\"]\n",
             "[target.'cfg(target_os = \"linux\")']\nrustflags = [\"-W\", \"unused\"]\n",
             "[profile.release]\nlto = true\ncodegen-units = 1\n[term]\nverbose = true\n",
             "[patch.crates-io]\nfoo = { path = \"../foo\" }\n[cargo-new]\nvcs = \"none\"\n",
@@ -4409,6 +4458,21 @@ mod tests {
             "[build]\nrustflags = [\"@./planted-args\"]\n",
             "[build]\nrustflags = [\"--sysroot\", \"./planted\"]\n",
             "[build]\nrustflags = [\"-C\"]\n",
+            // rustc expands an `@file` argument wherever it stands, value positions included.
+            "[build]\nrustflags = [\"--cfg\", \"@./args\"]\n",
+            "[build]\nrustflags = [\"--check-cfg\", \"@./args\"]\n",
+            "[build]\nrustflags = [\"-W\", \"@./args\"]\n",
+            "[build]\nrustflags = [\"--cap-lints\", \"@./args\"]\n",
+            "[build]\nrustflags = [\"-C\", \"@./args\"]\n",
+            "[build]\nrustflags = [\"-C\", \"target-cpu=@./args\"]\n",
+            "[build]\nrustflags = \"--cfg=@./args\"\n",
+            "[build]\nrustflags = \"--cfg @./args\"\n",
+            "[target.'cfg(unix)']\nrustflags = [\"--cfg\", \"@./args\"]\n",
+            "[build]\nrustflags = [\"-D\", \"-Zcodegen-backend=./planted.so\"]\n",
+            "[build]\nrustflags = [\"--cfg\", \"x=unquoted\"]\n",
+            "[build]\nrustflags = [\"--cfg\", \"x=\\\"a\\\" --y\"]\n",
+            "[build]\nrustflags = [\"--check-cfg\", \"values(@x)\"]\n",
+            "[build]\nrustflags = [\"--cap-lints\", \"warnings\"]\n",
             "[build]\nrustdocflags = [\"--cfg\", \"x\"]\n",
             "[target.x86_64-unknown-linux-gnu]\nrunner = \"./planted\"\n",
             "[target.x86_64-unknown-linux-gnu]\nlinker = \"./planted\"\n",
