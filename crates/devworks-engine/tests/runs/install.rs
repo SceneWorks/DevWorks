@@ -894,11 +894,16 @@ fn a_script_free_install_runs_no_program_repository_configuration_names() {
 
 /// Like `cargo fetch`: queries the compiler (`build.rustc`, run through `build.rustc-wrapper`
 /// when one is set) that `.cargo/config.toml` names, and runs a registry's
-/// `credential-provider`; it records that it ran.
+/// `credential-provider`; like the compiler it queries, it expands an `@file` in `rustflags`
+/// (printing the file, as rustc's diagnostic for an invalid `--cfg` does, and marking that a
+/// file was read); it records that it ran.
 const FAKE_CARGO: &str = "#!/bin/sh\n\
 setting() { sed -n \"s/^$1 *= *\\\"\\(.*\\)\\\"/\\1/p\" .cargo/config.toml 2>/dev/null; }\n\
 for program in \"$(setting rustc)\" \"$(setting rustc-wrapper)\" \"$(setting credential-provider)\"; do\n\
   if [ -n \"$program\" ]; then \"$program\" -vV > /dev/null 2>&1; fi\n\
+done\n\
+for file in $(sed -n 's/.*\"@\\([^\"]*\\)\".*/\\1/p' .cargo/config.toml 2>/dev/null); do\n\
+  cat \"$file\" && touch program-ran\n\
 done\n\
 pwd > .install-ran\n";
 
@@ -944,6 +949,12 @@ fn a_script_free_cargo_install_accepts_inert_configuration_and_refuses_a_named_p
             false,
         ),
         (
+            // rustc would expand the file into flags (or print it in a diagnostic).
+            "rustflags --cfg @file",
+            "[build]\nrustflags = [\"--cfg\", \"@planted-args\"]\n",
+            false,
+        ),
+        (
             "target linker",
             "[target.x86_64-unknown-linux-gnu]\nlinker = \"./planted-program\"\n",
             false,
@@ -955,6 +966,11 @@ fn a_script_free_cargo_install_accepts_inert_configuration_and_refuses_a_named_p
         let work = python_work(&fx, "cargo-config-work");
         let checkout = work.join("checkout");
         write_script(&checkout.join("planted-program"), PLANTED);
+        std::fs::write(
+            checkout.join("planted-args"),
+            "-Zcodegen-backend=./planted.so\n",
+        )
+        .unwrap();
         std::fs::create_dir_all(checkout.join(".cargo")).unwrap();
         std::fs::write(checkout.join(".cargo/config.toml"), config).unwrap();
         let cargo = work.join("tools/cargo");
