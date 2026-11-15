@@ -280,7 +280,10 @@ mod tests {
             });
             let mut workers = Workers::default();
             workers.start(StopAt::Work, None, worker.clone());
-            tokio::time::sleep(Duration::from_millis(50)).await;
+            // The first pass runs once the worker task is polled; the next waits an hour.
+            while worker.passes.load(Ordering::SeqCst) == 0 {
+                tokio::task::yield_now().await;
+            }
             assert_eq!(worker.passes.load(Ordering::SeqCst), 1);
             let bound = Duration::from_secs(30);
             let started = Instant::now();

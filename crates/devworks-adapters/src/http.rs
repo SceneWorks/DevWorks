@@ -369,8 +369,8 @@ mod tests {
             .unwrap();
         assert_eq!(r.status, 302);
         seen.recv().unwrap();
-        // Only the one request was made.
-        assert!(seen.recv_timeout(Duration::from_millis(200)).is_err());
+        // Only the one request was made: the server answers one and ends, closing the channel.
+        assert!(seen.recv().is_err());
     }
 
     #[test]

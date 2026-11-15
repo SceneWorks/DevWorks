@@ -3244,6 +3244,9 @@ impl FilesystemResolver for ChildResolver<'_> {
     fn gitfile_target(&self, gitfile: &std::path::Path) -> Option<String> {
         self.inner.gitfile_target(gitfile)
     }
+    fn destructive_steps_supported(&self) -> bool {
+        self.inner.destructive_steps_supported()
+    }
 }
 
 /// [`preflight_command`] for a command that will run with `env`: `~` resolves to the child's

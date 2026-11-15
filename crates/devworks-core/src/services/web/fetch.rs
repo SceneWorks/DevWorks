@@ -1,12 +1,12 @@
 //! `web.fetch`: the hop loop, its egress decisions, content handling and publication.
-use super::egress::{self, AddressClass, Destination, UrlRefusal};
+use super::egress::{self, AddressClass, Admission, UrlRefusal};
 use super::extract::{self, ContentKind};
 use super::{ARTIFACT_TAGS, FETCH_COMPONENT, USER_AGENT, WebPolicy, WebService, fault};
 use crate::authority::redact::{REDACTED, Redactor};
 use crate::context::InvocationContext;
 use crate::fingerprint::sha256_hex;
 use crate::operations::web::FetchInput;
-use crate::ports::web::{HopRequest, HopResponse, NetFault};
+use crate::ports::web::{HopResponse, NetFault};
 use crate::ports::{Authorization, Preparation};
 use crate::protocol::provider::Digest;
 use crate::protocol::records::{
@@ -20,7 +20,7 @@ use crate::services::artifacts::observed::{AUTHORITY_CHANGED, Observed, Observed
 use crate::services::diagnostics::LogEntry;
 use serde_json::{Value, json};
 use std::io::{ErrorKind, Read};
-use std::net::{IpAddr, SocketAddr};
+use std::net::IpAddr;
 use std::time::{Duration, Instant};
 
 /// Bytes read from a body per wait.
@@ -469,58 +469,37 @@ impl WebService {
                 format!("Fetch of {shown} refused: {} address", class.as_str()),
             )
         };
-        let addrs = match egress::destination(url) {
-            Destination::Literal(ip) => vec![ip],
-            Destination::Domain(domain) => {
-                if let Some(class) = egress::name_class(&domain)
-                    && !class.allowed(policy.allow_private)
-                {
-                    return Err(blocked(trail, &[(domain, class.as_str())], class));
-                }
-                match self
-                    .ports
-                    .resolver
-                    .resolve(&domain, port, deadline, &self.cancels(env))
-                {
-                    Ok(a) if !a.is_empty() => a,
-                    Ok(_) => {
-                        trail.decide(json!({"step": "resolve", "url": shown, "verdict": "failed", "reason": "no addresses"}));
-                        return Err(Stop::net(
-                            &NetFault::NotSent {
-                                reason: "the name has no addresses".into(),
-                                timed_out: false,
-                            },
-                            shown,
-                        ));
-                    }
-                    Err(f) => {
-                        trail.decide(json!({"step": "resolve", "url": shown, "verdict": "failed", "reason": f.reason()}));
-                        return Err(Stop::net(&f, shown));
-                    }
-                }
+        match egress::admit_destination(
+            &*self.ports.resolver,
+            url,
+            port,
+            policy.allow_private,
+            deadline,
+            &self.cancels(env),
+        ) {
+            Admission::Allowed { addrs, listed } => {
+                trail.decide(json!({
+                    "step": "destination", "url": shown, "verdict": "allowed",
+                    "addresses": listed.iter().map(|(a, c)| json!({"address": a, "class": c})).collect::<Vec<_>>(),
+                }));
+                Ok(addrs)
             }
-        };
-        let classes: Vec<(IpAddr, AddressClass)> = addrs
-            .iter()
-            .map(|ip| (*ip, egress::classify(*ip)))
-            .collect();
-        let listed: Vec<(String, &str)> = classes
-            .iter()
-            .map(|(ip, c)| (ip.to_string(), c.as_str()))
-            .collect();
-        // Every answer must be allowed: one refused address refuses the hop, so a resolver
-        // cannot mix a public and a private answer to slip past the check.
-        if let Some((_, class)) = classes
-            .iter()
-            .find(|(_, c)| !c.allowed(policy.allow_private))
-        {
-            return Err(blocked(trail, &listed, *class));
+            Admission::Blocked { class, listed } => Err(blocked(trail, &listed, class)),
+            Admission::NoAddresses => {
+                trail.decide(json!({"step": "resolve", "url": shown, "verdict": "failed", "reason": "no addresses"}));
+                Err(Stop::net(
+                    &NetFault::NotSent {
+                        reason: "the name has no addresses".into(),
+                        timed_out: false,
+                    },
+                    shown,
+                ))
+            }
+            Admission::Unresolved(f) => {
+                trail.decide(json!({"step": "resolve", "url": shown, "verdict": "failed", "reason": f.reason()}));
+                Err(Stop::net(&f, shown))
+            }
         }
-        trail.decide(json!({
-            "step": "destination", "url": shown, "verdict": "allowed",
-            "addresses": listed.iter().map(|(a, c)| json!({"address": a, "class": c})).collect::<Vec<_>>(),
-        }));
-        Ok(addrs)
     }
 
     /// Sends the hop to the checked addresses in order until one connects.
@@ -535,44 +514,29 @@ impl WebService {
         shown: &str,
         trail: &mut Trail,
     ) -> Result<HopResponse, Stop> {
-        let host_header = egress::host_header(url);
-        let server_name = egress::server_name(url);
-        let target = egress::request_target(url);
-        let mut last = NetFault::NotSent {
-            reason: "no address".into(),
-            timed_out: false,
+        let request = egress::Outgoing {
+            method: "GET",
+            body: &[],
+            deadline,
+            cancel: self.cancels(env),
+            user_agent: USER_AGENT,
+            accept: ACCEPT,
+            // A fetch never carries a credential, cookie or authorization of any kind.
+            headers: &[],
         };
-        for ip in addrs {
-            let request = HopRequest {
-                scheme: egress::scheme(url),
-                host_header: &host_header,
-                server_name: &server_name,
-                target: &target,
-                addr: SocketAddr::new(*ip, port),
-                deadline,
-                cancel: self.cancels(env),
-                user_agent: USER_AGENT,
-                accept: ACCEPT,
-                // A fetch never carries a credential, cookie or authorization of any kind.
-                headers: &[],
-            };
-            match self.ports.transport.get(&request) {
-                Ok(r) => {
-                    trail.decide(json!({"step": "connect", "url": shown, "address": ip.to_string(), "verdict": "answered", "status": r.status}));
-                    return Ok(r);
-                }
-                // Not sent: the next checked address may still connect.
-                Err(f @ NetFault::NotSent { .. }) if !f.timed_out() => {
-                    trail.decide(json!({"step": "connect", "url": shown, "address": ip.to_string(), "verdict": "failed", "reason": f.reason()}));
-                    last = f;
-                }
-                Err(f) => {
-                    trail.decide(json!({"step": "connect", "url": shown, "address": ip.to_string(), "verdict": "failed", "sent": f.dispatched(), "reason": f.reason()}));
-                    return Err(Stop::net(&f, shown));
-                }
-            }
-        }
-        Err(Stop::net(&last, shown))
+        egress::send(
+            &*self.ports.transport,
+            url,
+            port,
+            addrs,
+            &request,
+            &mut |ip, result| match result {
+                Ok(status) => trail.decide(json!({"step": "connect", "url": shown, "address": ip.to_string(), "verdict": "answered", "status": status})),
+                Err(f @ NetFault::NotSent { .. }) if !f.timed_out() => trail.decide(json!({"step": "connect", "url": shown, "address": ip.to_string(), "verdict": "failed", "reason": f.reason()})),
+                Err(f) => trail.decide(json!({"step": "connect", "url": shown, "address": ip.to_string(), "verdict": "failed", "sent": f.dispatched(), "reason": f.reason()})),
+            },
+        )
+        .map_err(|f| Stop::net(&f, shown))
     }
 
     /// Checks a 2xx answer's media type and encoding, then reads its body within the limits.

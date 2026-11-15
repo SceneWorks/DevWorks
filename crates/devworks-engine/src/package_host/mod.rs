@@ -63,6 +63,7 @@
 //! service's trust model).
 pub mod broker;
 pub mod discovery;
+pub mod http;
 pub mod intents;
 pub(crate) mod recovery;
 pub mod session;
@@ -508,6 +509,8 @@ pub struct PackageHost {
     me: Mutex<std::sync::Weak<PackageHost>>,
     /// What brokered application calls need (attached by the runtime once composed).
     broker: OnceLock<broker::BrokerPorts>,
+    /// What brokered HTTP calls need (attached by the host's composer).
+    network: OnceLock<http::NetworkPorts>,
 }
 
 struct Gate {
@@ -593,6 +596,7 @@ impl PackageHost {
             shutdown_by: Mutex::new(None),
             me: Mutex::new(std::sync::Weak::new()),
             broker: OnceLock::new(),
+            network: OnceLock::new(),
         });
         *host.me.lock().unwrap_or_else(|p| p.into_inner()) = Arc::downgrade(&host);
         host
@@ -610,6 +614,11 @@ impl PackageHost {
     /// Attaches what brokered application calls need (once; later calls change nothing).
     pub fn attach_broker(&self, ports: broker::BrokerPorts) {
         let _ = self.broker.set(ports);
+    }
+    /// Attaches the network ports brokered HTTP calls use (once; later calls change nothing).
+    /// Without them a granted HTTP call is answered `Unavailable`.
+    pub fn attach_network(&self, ports: http::NetworkPorts) {
+        let _ = self.network.set(ports);
     }
     /// How many restart budgets the host tracks (one per desired instance key at most).
     pub fn tracked_budgets(&self) -> usize {

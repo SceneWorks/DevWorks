@@ -547,7 +547,8 @@ fn selected_receive_waits_replays_and_acknowledges_through_the_native_gateway() 
         harness.ids.clone(),
         Arc::new(ScriptedScope::new()),
     ));
-    let cases = UseCases::new().with_agents(Arc::new(AgentService::new(harness.ids.clone(), runs)));
+    let agents = Arc::new(AgentService::new(harness.ids.clone(), runs));
+    let cases = UseCases::new().with_agents(agents.clone());
     let authority = HostAuthority {
         store: store.as_ref(),
         clock: harness.clock.as_ref(),
@@ -581,6 +582,8 @@ fn selected_receive_waits_replays_and_acknowledges_through_the_native_gateway() 
         ).unwrap())),
         "{empty:?}"
     );
+    // A receive of an empty inbox waits its whole `waitSeconds`: the pause count is live.
+    assert!(agents.receive_waits() > 0, "the empty receive waited");
     let receive = json!({"kind":"agents.receive","projectId":"project-a","waitSeconds":2});
     let (posted, first) = std::thread::scope(|scope| {
         let waiting = scope.spawn(|| command("agents.receive", "receive-first", receive.clone()));
@@ -619,12 +622,31 @@ fn selected_receive_waits_replays_and_acknowledges_through_the_native_gateway() 
         },
         other => panic!("unexpected receive reply: {other:?}"),
     };
+    // The replay answers from the recorded receipt (the same decision) without pausing at all.
+    // The elapsed bound only guards against a hang.
+    let waits_before = agents.receive_waits();
     let replay_start = std::time::Instant::now();
-    assert!(matches!(
-        command("agents.receive", "receive-first", receive.clone()),
-        CommandReply::Recorded { replayed: true, .. }
-    ));
-    assert!(replay_start.elapsed() < Duration::from_secs(1));
+    let replay = command("agents.receive", "receive-first", receive.clone());
+    let (
+        CommandReply::Recorded {
+            receipt: replayed,
+            replayed: true,
+            ..
+        },
+        CommandReply::Recorded {
+            receipt: recorded, ..
+        },
+    ) = (&replay, &first)
+    else {
+        panic!("the replay is the recorded receipt: {replay:?}");
+    };
+    assert_eq!(format!("{replayed:?}"), format!("{recorded:?}"));
+    assert_eq!(
+        agents.receive_waits(),
+        waits_before,
+        "the replay never waited"
+    );
+    assert!(replay_start.elapsed() < Duration::from_secs(30));
     assert!(
         matches!(command("agents.receive", "receive-again", receive),
         CommandReply::Recorded { receipt, .. }
@@ -717,6 +739,7 @@ fn selected_receive_cancellation_keeps_the_request_key_retryable() {
                 )
                 .unwrap()
         });
+        // The receive is waiting and must consume nothing. No event marks that this did not happen, so the test waits a fixed time.
         std::thread::sleep(Duration::from_millis(50));
         assert_eq!(
             write(store.as_ref(), |tx| tx.runs().agent_delivery_head()).unwrap(),

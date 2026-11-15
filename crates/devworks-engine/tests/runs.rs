@@ -6828,6 +6828,7 @@ fn shutdown_does_not_wait_for_a_retained_receive_long_poll() {
                 .unwrap()
         });
         entered.recv_timeout(Duration::from_secs(3)).unwrap();
+        // The receive must stay in its long poll. No event marks that this did not happen, so the test waits a fixed time.
         std::thread::sleep(Duration::from_millis(100));
         assert!(
             !waiting.is_finished(),
