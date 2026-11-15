@@ -104,8 +104,36 @@ fn connections(read: &dyn ConfigurationRead) -> Result<Vec<Connection>, StorageE
         .collect())
 }
 
-/// `relative` under `base`, or `None` when it would leave the base's origin or path.
+/// Whether a call path (before its query) carries an encoded `/`, `\` or `.`, at any depth of
+/// percent-encoding (`%2f`, `%252f`, ...). URL parsing keeps them encoded, so the prefix check
+/// would pass, while a server that decodes and normalises the path could route `..%2f` out of
+/// the connection's base path with its credential.
+fn encoded_separator(relative: &str) -> bool {
+    let mut path = relative
+        .split('?')
+        .next()
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    // Each round removes one level of encoding of `%` itself; a path still encoded after this
+    // many levels is refused too.
+    for _ in 0..8 {
+        if ["%2f", "%5c", "%2e"].iter().any(|e| path.contains(e)) {
+            return true;
+        }
+        if !path.contains("%25") {
+            return false;
+        }
+        path = path.replace("%25", "%");
+    }
+    true
+}
+
+/// `relative` under `base`, or `None` when it would leave the base's origin or path (or could,
+/// once a server decodes it: see [`encoded_separator`]).
 fn target(base: &egress::Url, relative: &str) -> Option<egress::Url> {
+    if encoded_separator(relative) {
+        return None;
+    }
     let url = egress::parse(&format!(
         "{}{relative}",
         base.as_str().trim_end_matches('/')

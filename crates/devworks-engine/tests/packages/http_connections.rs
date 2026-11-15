@@ -213,8 +213,13 @@ fn a_granted_package_calls_its_endpoint_through_a_named_connection_without_seein
         {"actionKey": "ungranted", "call": http("other", "other", "Get", "/items", None)},
         // A granted endpoint whose connection resolves to a refused (metadata) address.
         {"actionKey": "metadata", "call": http("meta", "api", "Get", "/latest", None)},
-        // A path that would leave the connection's base path.
+        // Paths that would leave the connection's base path, directly or once a server decodes
+        // and normalises them.
         {"actionKey": "escape", "call": http("main", "api", "Get", "/%2e%2e/admin", None)},
+        {"actionKey": "slash", "call": http("main", "api", "Get", "/..%2fadmin", None)},
+        {"actionKey": "backslash", "call": http("main", "api", "Get", "/..%5Cadmin", None)},
+        {"actionKey": "nested", "call": http("main", "api", "Get", "/%252e%252e/admin", None)},
+        {"actionKey": "nested-slash", "call": http("main", "api", "Get", "/..%252Fadmin", None)},
         // No connection of this name serves the endpoint.
         {"actionKey": "unknown", "call": http("missing", "api", "Get", "/items", None)},
     ]});
@@ -226,6 +231,10 @@ fn a_granted_package_calls_its_endpoint_through_a_named_connection_without_seein
             "call:ungranted:PermissionDenied",
             "call:metadata:PermissionDenied",
             "call:escape:PermissionDenied",
+            "call:slash:PermissionDenied",
+            "call:backslash:PermissionDenied",
+            "call:nested:PermissionDenied",
+            "call:nested-slash:PermissionDenied",
             "call:unknown:PermissionDenied",
         ]
     );
