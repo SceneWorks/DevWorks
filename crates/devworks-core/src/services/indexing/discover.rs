@@ -22,6 +22,7 @@ use crate::fingerprint::sha256_hex;
 use crate::ports::IdKind;
 use crate::ports::indexing::{EntryKind, GitMarker};
 use crate::ports::storage::*;
+use crate::protocol::records::Severity;
 use crate::protocol::{Id, ProjectId};
 use crate::services::indexing::config::EffectiveConfig;
 use crate::services::projects::carries_credentials;
@@ -394,6 +395,44 @@ pub fn scan(
         }
     }
     Ok(report)
+}
+
+/// Most scan problems one [`log_scan`] records individually; the rest are counted in one record.
+const LOGGED_PROBLEMS: usize = 32;
+
+/// Records on the `indexing.repository` channel what a scan could not do: a warning for each
+/// reported problem and an error for a scan that failed, so a discovery that found less than
+/// expected names its cause. A scan without problems records nothing.
+pub fn log_scan(env: &IndexEnv, scan: &Result<DiscoveryReport, StorageError>) {
+    let Some(d) = &env.diagnostics else { return };
+    let log = d.run(
+        crate::services::diagnostics::channels::REPOSITORY_INDEXING,
+        "indexing.discover",
+    );
+    match scan {
+        Ok(report) => {
+            for problem in report.problems.iter().take(LOGGED_PROBLEMS) {
+                let _ = log.stage("discover", Severity::Warning, problem, None);
+            }
+            if report.problems.len() > LOGGED_PROBLEMS {
+                let more = report.problems.len() - LOGGED_PROBLEMS;
+                let _ = log.stage(
+                    "discover",
+                    Severity::Warning,
+                    &format!("{more} more discovery problems were not recorded"),
+                    None,
+                );
+            }
+        }
+        Err(e) => {
+            let _ = log.stage(
+                "discover",
+                Severity::Error,
+                &format!("discovery scan failed: {e}"),
+                None,
+            );
+        }
+    }
 }
 
 fn source_event(

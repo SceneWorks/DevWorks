@@ -68,6 +68,10 @@ const WATCHDOG: Duration = Duration::from_secs(300);
 /// waits for it). A loaded machine launches each helper slowly (files re-verified, process
 /// spawned, handshake), and a restart budget's failure takes several launches.
 const PATIENCE: Duration = Duration::from_secs(60);
+/// The handshake bound of a test of the startup timeout, whose helper never answers in time
+/// however loaded the machine is (load only delays an answer). Every other test gets
+/// [`config`]'s bound, which a loaded machine cannot miss.
+const TIMEOUT_HANDSHAKE: Duration = Duration::from_millis(1500);
 
 /// The binary's one test slot (the tests spawn processes, so they run one at a time), with a
 /// watchdog: a test still holding it after [`WATCHDOG`] aborts the binary, naming the test,
@@ -453,7 +457,9 @@ struct App {
 }
 fn config() -> HostConfig {
     HostConfig {
-        handshake: Duration::from_millis(1500),
+        // Failure-only: a loaded machine can take seconds to launch a helper (the slow-initialize
+        // fixture alone answers after 1.2 s), and a start that misses the bound fails the test.
+        handshake: PATIENCE / 2,
         cancel_grace: Duration::from_millis(500),
         admission_wait: Duration::from_secs(10),
         restart_limit: 2,
@@ -478,6 +484,13 @@ fn seed_project(h: &Harness) {
 impl App {
     fn new() -> Self {
         Self::over(Harness::new(), None)
+    }
+    /// A booted app whose host bounds each handshake by `bound` (a test of the timeout).
+    fn with_handshake(bound: Duration) -> Self {
+        let mut me = Self::unbooted(Harness::new(), None, None);
+        me.handshake = Some(bound);
+        me.boot();
+        me
     }
     fn probing(path: &std::path::Path) -> Self {
         Self::over(Harness::new(), Some(path.display().to_string()))
@@ -1474,17 +1487,6 @@ fn a_new_version_that_fails_to_start_is_rolled_back_before_any_work_was_admitted
     a.ready("flaky-pack");
 
     // Without a predecessor the failure is recorded and only this package is unavailable.
-    package(a.install(
-        &a.user,
-        &Spec {
-            mode: "hang-initialize".into(),
-            ..Spec::new("hung-pack", "1.0.0")
-        },
-    ));
-    let rec = a.until("hung-pack", "startup failure recorded", |r| {
-        matches!(r.availability, Some(PackageAvailability::Failed))
-    });
-    assert_eq!(rec.failure_code.unwrap().0, "StartupTimeout");
     for (mode, code) in [
         ("wrong-digest", "ManifestMismatch"),
         ("wrong-inventory", "InventoryMismatch"),
@@ -1510,6 +1512,24 @@ fn a_new_version_that_fails_to_start_is_rolled_back_before_any_work_was_admitted
         finished(h.wait(Duration::from_secs(10))),
         InvocationOutcome::Completed { .. }
     ));
+}
+
+#[test]
+fn a_helper_that_never_answers_its_handshake_fails_with_a_startup_timeout() {
+    let _s = serial();
+    // The helper never answers `host.initialize`: load can only delay the timeout, not avoid it.
+    let a = App::with_handshake(TIMEOUT_HANDSHAKE);
+    package(a.install(
+        &a.user,
+        &Spec {
+            mode: "hang-initialize".into(),
+            ..Spec::new("hung-pack", "1.0.0")
+        },
+    ));
+    let rec = a.until("hung-pack", "startup failure recorded", |r| {
+        matches!(r.availability, Some(PackageAvailability::Failed))
+    });
+    assert_eq!(rec.failure_code.unwrap().0, "StartupTimeout");
     // Enabling again is the explicit retry of a failed helper.
     assert!(
         package(a.simple(&a.user, "addons.enable", "Enable", "hung-pack"))
@@ -3300,8 +3320,8 @@ fn a_cancellation_shares_one_grace_between_the_acknowledgement_and_the_stop() {
 #[test]
 fn the_handshake_shares_one_deadline_between_initialize_and_activate() {
     let _s = serial();
-    let a = App::new();
-    // Each answer takes 1 s: within a 1.5 s bound each, not 2 s together.
+    // Each answer takes 1 s: within a 1.5 s bound each, not 2 s together (load only delays them).
+    let a = App::with_handshake(TIMEOUT_HANDSHAKE);
     package(a.install(
         &a.user,
         &Spec {
@@ -3826,7 +3846,7 @@ fn launches_queued_in_a_reconciliation_pass_never_outlive_shutdown() {
     ));
     let host = a.app().packages().unwrap().clone();
     // Usually it is still starting (its handshake takes 1.2 s; on a loaded machine this thread
-    // may look later, when it is running or, past its handshake bound, failed).
+    // may look later, when it is running).
     let until = Instant::now() + PATIENCE;
     while !launched(&a, "a-slow") {
         assert!(Instant::now() < until, "a-slow never started");
@@ -4014,13 +4034,7 @@ fn the_registry_is_read_whole_and_a_new_identity_beyond_capacity_is_refused() {
 fn an_explicit_retry_restarts_a_helper_even_before_reconciliation_saw_its_failure() {
     let _s = serial();
     let fail = Marker::absent("retry-pack", "fail-on-activate");
-    let mut a = App::unbooted(Harness::new(), None, None);
-    // Every start except the deliberate failure must succeed, but a loaded machine can take
-    // longer than the shared 1.5 s handshake bound to launch a helper (z-busy alone answers
-    // after 1.2 s): with a budget of one, a single timeout records the failure and the package
-    // never becomes ready. The deliberate failure exits at once and needs no bound.
-    a.handshake = Some(PATIENCE / 2);
-    a.boot();
+    let mut a = App::new();
     // One start per budget: the first failure spends it.
     a.restart_limit = Some(1);
     package(a.install(&a.user, &Spec::new("retry-pack", "1.0.0")));
