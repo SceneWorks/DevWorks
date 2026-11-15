@@ -267,9 +267,15 @@ fn tokenize(script: &str, dialect: Dialect) -> Lexed {
             let brace = dialect != Dialect::Cmd && brace_expansion(unquoted);
             let tilde = dialect != Dialect::Cmd && dynamic_tilde(unquoted);
             let array = dialect == Dialect::PowerShell && unquoted.contains(',');
+            // PowerShell also quotes with typographic quotes, which are not decoded here.
+            let smart = dialect == Dialect::PowerShell
+                && word.contains([
+                    '\u{2018}', '\u{2019}', '\u{201A}', '\u{201B}', '\u{201C}', '\u{201D}',
+                    '\u{201E}',
+                ]);
             lx.tokens.push(Token::Word(Word {
                 text: std::mem::take(word),
-                dynamic: *dynamic || brace || tilde || array,
+                dynamic: *dynamic || brace || tilde || array || smart,
             }));
         }
         unquoted.clear();
@@ -326,6 +332,12 @@ fn tokenize(script: &str, dialect: Dialect) -> Lexed {
                 let mut closed = false;
                 while i < chars.len() {
                     if chars[i] == '\'' {
+                        // PowerShell: a doubled apostrophe inside the string is one apostrophe.
+                        if dialect == Dialect::PowerShell && chars.get(i + 1) == Some(&'\'') {
+                            word.push('\'');
+                            i += 2;
+                            continue;
+                        }
                         closed = true;
                         break;
                     }
@@ -340,6 +352,17 @@ fn tokenize(script: &str, dialect: Dialect) -> Lexed {
                 let mut closed = false;
                 while i < chars.len() {
                     let q = chars[i];
+                    // PowerShell `""` and backtick escapes (`` `t ``, `` `" ``, …) are not
+                    // decoded here; the word is held, and the escaped character never ends the
+                    // string.
+                    if dialect == Dialect::PowerShell
+                        && (q == '`' || (q == '"' && chars.get(i + 1) == Some(&'"')))
+                    {
+                        dynamic = true;
+                        word.extend(chars.get(i..i + 2).unwrap_or(&chars[i..]));
+                        i += 2;
+                        continue;
+                    }
                     if q == '"' {
                         closed = true;
                         break;
@@ -967,7 +990,15 @@ fn script(text: &str, dialect: Dialect, c: &mut Collector, depth: u8) {
                 if sink == "/dev/null" || sink == "nul" || sink == "$null" {
                     continue;
                 }
-                c.push(DestructiveKind::Truncate, &[w]);
+                // A PowerShell redirection is `Out-File`, whose path is literal.
+                let w = if dialect == Dialect::PowerShell {
+                    ps_target(w, true, c)
+                } else {
+                    Some(w)
+                };
+                if let Some(w) = w {
+                    c.push(DestructiveKind::Truncate, &[w]);
+                }
             }
             Token::Word(w) => {
                 if current.is_empty() {
@@ -2371,8 +2402,10 @@ enum PsWriter {
 /// What a PowerShell writer parameter binds.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum PsParam {
-    /// The item written (`-Path`, `-LiteralPath`, `-FilePath`).
+    /// The item written as a wildcard pattern (`Set-Content`/`Add-Content` `-Path`).
     Path,
+    /// The item written literally (`-LiteralPath`, and every path of `New-Item` and `Out-File`).
+    LiteralPath,
     /// `New-Item -Name`, joined to each path.
     Name,
     /// `New-Item -ItemType`.
@@ -2415,7 +2448,7 @@ fn ps_write(writer: PsWriter, args: &[Word], c: &mut Collector) -> bool {
     let (own, positional): (&[(&str, PsParam)], &[&str]) = match writer {
         PsWriter::NewItem => (
             &[
-                ("path", Path),
+                ("path", LiteralPath),
                 ("name", Name),
                 ("itemtype", ItemType),
                 ("type", ItemType),
@@ -2427,9 +2460,9 @@ fn ps_write(writer: PsWriter, args: &[Word], c: &mut Collector) -> bool {
         PsWriter::Content => (
             &[
                 ("path", Path),
-                ("literalpath", Path),
-                ("pspath", Path),
-                ("lp", Path),
+                ("literalpath", LiteralPath),
+                ("pspath", LiteralPath),
+                ("lp", LiteralPath),
                 ("value", Value),
                 ("encoding", Value),
                 ("filter", Value),
@@ -2444,11 +2477,11 @@ fn ps_write(writer: PsWriter, args: &[Word], c: &mut Collector) -> bool {
         ),
         PsWriter::OutFile => (
             &[
-                ("filepath", Path),
-                ("path", Path),
-                ("literalpath", Path),
-                ("pspath", Path),
-                ("lp", Path),
+                ("filepath", LiteralPath),
+                ("path", LiteralPath),
+                ("literalpath", LiteralPath),
+                ("pspath", LiteralPath),
+                ("lp", LiteralPath),
                 ("encoding", Value),
                 ("width", Value),
                 ("inputobject", Value),
@@ -2503,9 +2536,14 @@ fn ps_write(writer: PsWriter, args: &[Word], c: &mut Collector) -> bool {
             known = false;
             break;
         }
-        bound.push(if role == Path { "path" } else { param });
+        bound.push(if matches!(role, Path | LiteralPath) {
+            "path"
+        } else {
+            param
+        });
         match role {
-            Path => paths.extend(value),
+            Path => paths.extend(value.map(|v| (v, false))),
+            LiteralPath => paths.extend(value.map(|v| (v, true))),
             Name => name = value,
             ItemType => item_type = value,
             Value | Switch => {}
@@ -2517,7 +2555,8 @@ fn ps_write(writer: PsWriter, args: &[Word], c: &mut Collector) -> bool {
         match positional.iter().find(|p| !bound.contains(p)) {
             Some(&"path") => {
                 bound.push("path");
-                paths.push(w);
+                // Only `Set-Content`/`Add-Content` read a positional path as a pattern.
+                paths.push((w, writer != PsWriter::Content));
             }
             Some(p) => bound.push(p),
             None => known = false,
@@ -2532,17 +2571,19 @@ fn ps_write(writer: PsWriter, args: &[Word], c: &mut Collector) -> bool {
     if !known {
         c.unmodeled();
     }
-    let targets: Vec<Word> = match name {
-        Some(n) if paths.is_empty() => vec![n],
+    let targets: Vec<(Word, bool)> = match name {
+        // `-Name` is literal, like `New-Item -Path`.
+        Some(n) if paths.is_empty() => vec![(n, true)],
         Some(n) => paths
             .iter()
-            .map(|p| Word {
-                text: if p.text.ends_with(['/', '\\']) {
+            .map(|(p, literal)| {
+                let text = if p.text.ends_with(['/', '\\']) {
                     format!("{}{}", p.text, n.text)
                 } else {
                     format!("{}/{}", p.text, n.text)
-                },
-                dynamic: p.dynamic || n.dynamic,
+                };
+                let dynamic = p.dynamic || n.dynamic;
+                (Word { text, dynamic }, *literal)
             })
             .collect(),
         None => paths,
@@ -2550,10 +2591,39 @@ fn ps_write(writer: PsWriter, args: &[Word], c: &mut Collector) -> bool {
     if targets.is_empty() {
         // The path arrives on the pipeline or at a prompt.
         c.hold(InputNeeded::UnresolvedTarget);
-    } else {
+    }
+    let targets: Vec<Word> = targets
+        .into_iter()
+        .filter_map(|(w, literal)| ps_target(w, literal, c))
+        .collect();
+    if !targets.is_empty() {
         c.push(DestructiveKind::Truncate, &targets);
     }
     true
+}
+
+/// A PowerShell write target as a file-system path the resolver can check, or `None` (held for
+/// its target) when it cannot be checked exactly: a `FileSystem::` provider prefix is removed;
+/// any other provider (`Registry::`, …) or a drive name longer than one letter (`Env:`,
+/// `Variable:`, `Temp:`, a custom drive) is not a path the resolver reads; and a literal path with
+/// wildcard characters would be expanded as a pattern by the preflight.
+fn ps_target(w: Word, literal: bool, c: &mut Collector) -> Option<Word> {
+    let lower = w.text.to_ascii_lowercase();
+    let rest = ["microsoft.powershell.core\\filesystem::", "filesystem::"]
+        .iter()
+        .find_map(|p| lower.starts_with(p).then(|| &w.text[p.len()..]))
+        .unwrap_or(&w.text);
+    let drive = rest.split_once(':').map(|(d, _)| d);
+    let qualified = rest.contains("::")
+        || drive.is_some_and(|d| d.chars().count() > 1 && !d.contains(['/', '\\']));
+    if qualified || (literal && rest.contains(['*', '?', '[', ']'])) {
+        c.hold(InputNeeded::UnresolvedTarget);
+        return None;
+    }
+    Some(Word {
+        text: rest.to_owned(),
+        dynamic: w.dynamic,
+    })
 }
 
 /// cmd `rd`/`rmdir`/`del`/`erase`, switches separate (`/s /q`) or joined (`/s/q`, `/f/s/q`).

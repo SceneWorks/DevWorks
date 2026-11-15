@@ -171,6 +171,73 @@ fn appending_redirects_plan_a_write_of_their_target() {
 }
 
 #[test]
+fn powershell_write_targets_are_read_as_powershell_reads_them() {
+    use DestructiveKind::{Truncate, Unlink};
+    let ps = |s: &str| plans(&["pwsh", "-Command", s]);
+    let held = |s: &str| needs(&["pwsh", "-Command", s]);
+    // A `FileSystem::` provider prefix names the same path; it is removed before planning.
+    for script in [
+        "Set-Content -Path FileSystem::/x/f -Value hi",
+        "Set-Content -Path 'filesystem::/x/f' -Value hi",
+        "Add-Content Microsoft.PowerShell.Core\\FileSystem::/x/f hi",
+        "New-Item -Path FileSystem::/x -Name f",
+        "'hi' > FileSystem::/x/f",
+    ] {
+        assert_eq!(ps(script), [(Truncate, vec!["/x/f".into()])], "{script}");
+    }
+    // Any other provider or drive qualifier is not a file the resolver can check.
+    for script in [
+        "Set-Content Registry::HKLM\\Software\\x hi",
+        "Set-Content Env:X hi",
+        "Set-Content Variable:x hi",
+        "New-Item -Path Temp:/x",
+        "'hi' >> Function:f",
+    ] {
+        assert_eq!(held(script), InputNeeded::UnresolvedTarget, "{script}");
+    }
+    // A doubled apostrophe inside a PowerShell single-quoted string is one apostrophe.
+    assert_eq!(
+        ps("Set-Content '/home/O''Brien/f' hi"),
+        [(Truncate, vec!["/home/O'Brien/f".into()])]
+    );
+    assert_eq!(
+        ps("'hi' >> '/home/O''Brien/f'"),
+        [(Truncate, vec!["/home/O'Brien/f".into()])]
+    );
+    // Doubled quotes, backtick escapes and typographic quotes inside a double-quoted (or
+    // otherwise quoted) PowerShell string are not decoded here: held.
+    for script in [
+        "Set-Content \"/home/a\"\"b/f\" hi",
+        "Set-Content \"/home/a`tb/f\" hi",
+        "Set-Content \"/home/a`\"b/f\" hi",
+        "Set-Content \u{2018}/home/a/f\u{2019} hi",
+    ] {
+        assert_eq!(held(script), InputNeeded::UnresolvedExpansion, "{script}");
+    }
+    // POSIX keeps adjacent single-quoted segments as concatenation.
+    assert_eq!(
+        plans(&["sh", "-c", "rm 'a''b'"]),
+        [(Unlink, vec!["ab".into()])]
+    );
+    // `-LiteralPath` (and every path of `New-Item` and `Out-File`) names wildcard characters
+    // literally, which a pattern expansion cannot check: held. `-Path` stays a pattern.
+    for script in [
+        "Set-Content -LiteralPath '/x/a[1]/f' hi",
+        "Add-Content -lp /x/a*/f hi",
+        "New-Item -Path '/x/a[1]'",
+        "mkdir '/x/a?'",
+        "'hi' | Out-File '/x/a[1]/f'",
+        "'hi' > '/x/a[1]/f'",
+    ] {
+        assert_eq!(held(script), InputNeeded::UnresolvedTarget, "{script}");
+    }
+    assert_eq!(
+        ps("Set-Content -Path '/x/a[1]/f' hi"),
+        [(Truncate, vec!["/x/a[1]/f".into()])]
+    );
+}
+
+#[test]
 fn powershell_file_and_folder_writers_plan_a_write_of_each_path() {
     use DestructiveKind::Truncate;
     let ps = |s: &str| plans(&["pwsh", "-Command", s]);

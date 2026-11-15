@@ -819,6 +819,81 @@ fn appending_redirects_and_powershell_writes_into_protected_roots_are_refused() 
     }
 }
 
+/// PowerShell writes into protected roots named with a provider prefix, an apostrophe or
+/// wildcard characters are refused or held, never allowed.
+#[test]
+fn powershell_writes_through_provider_quote_and_bracket_forms_are_never_allowed() {
+    use devworks_core::authority::shell::{CommandVerdict, preflight_command};
+    let s = Scratch::new("ps-forms");
+    // A data root with brackets in its name and a skill folder under a name with an apostrophe.
+    let data = s.p("devworks[prod]");
+    let skills = s.p("O'Brien/.agents/skills");
+    let work = s.p("work");
+    for d in [&data, &skills, &work] {
+        std::fs::create_dir_all(d).unwrap();
+    }
+    std::fs::write(format!("{data}/state.json"), "{}").unwrap();
+    let roots = ProtectedRoots::new(Vec::new(), Vec::new(), Some(data.clone()))
+        .with_skill_roots([skills.clone()]);
+    let fs = NativeFilesystem::new();
+    let ps_quote = |p: &str| format!("'{}'", p.replace('\'', "''"));
+    let verdict = |argv: &[&str]| {
+        let argv: Vec<String> = argv.iter().map(|a| (*a).to_owned()).collect();
+        preflight_command(&fs, &roots, &argv, Some(&work), &[])
+    };
+    let state = format!("{data}/state.json");
+    let skill = format!("{skills}/new/SKILL.md");
+    let slashed = |p: &str| p.replace('\\', "/");
+    let mut leaks = Vec::new();
+    for script in [
+        format!(
+            "Set-Content -Path {} -Value x",
+            ps_quote(&format!("FileSystem::{skill}"))
+        ),
+        format!(
+            "Add-Content {} x",
+            ps_quote(&format!("Microsoft.PowerShell.Core\\FileSystem::{skill}"))
+        ),
+        format!("Set-Content {} x", ps_quote(&skill)),
+        format!("'x' >> {}", ps_quote(&skill)),
+        format!("Set-Content -LiteralPath {} -Value x", ps_quote(&state)),
+        format!("Set-Content -Path {} -Value x", ps_quote(&state)),
+        format!("Set-Content {} x", ps_quote(&state)),
+        format!("New-Item -Path {} -Force", ps_quote(&state)),
+        format!("'x' | Out-File {}", ps_quote(&state)),
+        format!("'x' > {}", ps_quote(&state)),
+    ] {
+        let v = verdict(&["pwsh", "-Command", &script]);
+        if matches!(
+            v,
+            CommandVerdict::Allowed { .. } | CommandVerdict::Residual { .. }
+        ) {
+            leaks.push(format!("{script}: {v:?}"));
+        }
+    }
+    // A POSIX write pattern that matches nothing names the literal file: never allowed.
+    let script = format!("echo x > {}", sh_quote(&slashed(&state)));
+    let v = verdict(&["bash", "-c", &script]);
+    if matches!(
+        v,
+        CommandVerdict::Allowed { .. } | CommandVerdict::Residual { .. }
+    ) {
+        leaks.push(format!("{script}: {v:?}"));
+    }
+    assert!(
+        leaks.is_empty(),
+        "{} leaks:\n{}",
+        leaks.len(),
+        leaks.join("\n")
+    );
+    // The apostrophe is decoded, so the skill folder itself is what is refused.
+    let script = format!("Set-Content {} x", ps_quote(&skill));
+    assert!(matches!(
+        verdict(&["pwsh", "-Command", &script]),
+        CommandVerdict::Blocked { .. }
+    ));
+}
+
 #[test]
 fn shell_plans_resolve_to_actual_targets_before_dispatch() {
     let t = tree("shell");

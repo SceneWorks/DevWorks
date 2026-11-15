@@ -649,6 +649,17 @@ pub fn preflight(
             }
         }
         match fs.expand(requested, cwd, MAX_TARGETS) {
+            // A write whose pattern matches nothing creates the name as written (a quoted
+            // POSIX word, or a path the shell does not expand), which may lie inside a protected
+            // root that the pattern does not match: held rather than allowed with no target.
+            Ok(paths) if paths.is_empty() && plan.kind == DestructiveKind::Truncate => {
+                return decide(
+                    PreflightVerdict::NeedsInput(InputNeeded::UnresolvedTarget),
+                    Some(requested),
+                    Vec::new(),
+                    Vec::new(),
+                );
+            }
             Ok(paths) => expanded.extend(paths),
             Err(ResolveError::TooMany { .. }) => {
                 return decide(
