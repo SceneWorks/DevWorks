@@ -2350,6 +2350,42 @@ fn the_work_card_assigns_its_working_agent_and_clears_the_assignment_through_tas
             .unwrap()
             .unwrap()
     };
+    // An agent works on it: every read of its record carries that live assignment, as the
+    // runtime reports it while the agent runs under the issue's activation. The shell's own
+    // refreshes therefore keep it, however late they land.
+    let attempt = serde_json::to_value(WorkAttempt {
+        id: Id::new("execution-live").unwrap(),
+        assignment_id: Some(live.id.clone()),
+        state: OperationState::Dispatching,
+        git_links: devworks_core::protocol::support::BoundedList(Vec::new()),
+        checkpoint: None,
+    })
+    .unwrap();
+    let worked = issue.id.as_str().to_owned();
+    spy.rewrite_queries(move |reply| {
+        fn visit(value: &mut serde_json::Value, worked: &str, attempt: &serde_json::Value) {
+            match value {
+                serde_json::Value::Object(map) => {
+                    if map.get("id").and_then(serde_json::Value::as_str) == Some(worked)
+                        && map.contains_key("attempts")
+                    {
+                        map.insert("attempts".into(), json!([attempt]));
+                        map.insert("attemptCount".into(), json!("1"));
+                    }
+                    for child in map.values_mut() {
+                        visit(child, worked, attempt);
+                    }
+                }
+                serde_json::Value::Array(items) => {
+                    for child in items {
+                        visit(child, worked, attempt);
+                    }
+                }
+                _ => {}
+            }
+        }
+        visit(reply, &worked, &attempt);
+    });
     let mut h = harness(
         shell_with(Ok(spy.clone()), &root, Script::default(), None),
         1600.0,
@@ -2360,24 +2396,7 @@ fn the_work_card_assigns_its_working_agent_and_clears_the_assignment_through_tas
     h.state_mut().navigate(Route::Issues);
     settle(&mut h);
     click_row(&mut h, "Crash  ·");
-    assert!(has_text(
-        &h,
-        "An agent can be assigned while one is working on it."
-    ));
-    // An agent works on it: its record carries the live assignment.
-    let mut working = issue.clone();
-    working.attempts.0 = vec![WorkAttempt {
-        id: Id::new("execution-live").unwrap(),
-        assignment_id: Some(live.id.clone()),
-        state: OperationState::Dispatching,
-        git_links: devworks_core::protocol::support::BoundedList(Vec::new()),
-        checkpoint: None,
-    }];
-    h.state_mut()
-        .work
-        .detail
-        .insert(issue.id.as_str().into(), working.clone());
-    settle(&mut h);
+    assert!(has_text(&h, "An agent is working on it now."));
     click(&mut h, Role::Button, "Assign to the working agent");
     let sent = |n: usize| -> serde_json::Value {
         let frames = spy.frames.lock().unwrap();
