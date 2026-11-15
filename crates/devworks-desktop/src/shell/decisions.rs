@@ -944,12 +944,7 @@ impl Shell {
                     self.navigate(Route::Artifacts);
                 }
                 "feature" | "issue" | "task" | "work" | "root" => self.open_work(id.as_str()),
-                "session" | "chat" => {
-                    let id = id.as_str().to_owned();
-                    self.chat.selected = Some(id.clone());
-                    self.load_transcript(&id);
-                    self.navigate(Route::Chat);
-                }
+                "session" | "chat" => self.open_session(id.as_str().to_owned()),
                 "project" => {
                     self.select_project(Some(id.as_str().into()));
                     self.navigate(Route::Overview);

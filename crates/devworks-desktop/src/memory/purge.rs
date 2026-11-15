@@ -175,16 +175,19 @@ fn paths(draft: &DraftMemory, owned_only: bool) -> BTreeSet<PathBuf> {
         .collect()
 }
 fn session_slot(slot: &Slot) -> Option<&str> {
+    use crate::chat::ChatSlot;
     match slot {
-        Slot::Append(id)
-        | Slot::Attach(id, _)
-        | Slot::Preview(id, _)
-        | Slot::RouteSession(id)
-        | Slot::RouteStatus(id)
-        | Slot::RoutePin(id)
-        | Slot::RouteFirst(id)
-        | Slot::Transcript(id)
-        | Slot::TextPreview(id, _) => Some(id),
+        Slot::Chat(
+            ChatSlot::Append(id)
+            | ChatSlot::Attach(id, _)
+            | ChatSlot::Preview(id, _)
+            | ChatSlot::RouteSession(id)
+            | ChatSlot::RouteStatus(id)
+            | ChatSlot::RoutePin(id)
+            | ChatSlot::RouteFirst(id)
+            | ChatSlot::Transcript(id)
+            | ChatSlot::TextPreview(id, _),
+        ) => Some(id),
         _ => None,
     }
 }
@@ -229,7 +232,7 @@ pub fn project_sessions(
         .collect::<Vec<_>>();
     let sending = unsettled_commands
         .iter()
-        .any(|c| matches!(c.slot, Slot::Append(_)));
+        .any(|c| matches!(c.slot, Slot::Chat(crate::chat::ChatSlot::Append(_))));
     after
         .pending
         .commands
@@ -406,7 +409,7 @@ mod tests {
         let frame =
             br#"{"requestKey":"original-key","body":{"text":"private submitted text"}}"#.to_vec();
         memory.pending.commands.push(PendingCommand {
-            slot: Slot::Append("p-session".into()),
+            slot: Slot::Chat(crate::chat::ChatSlot::Append("p-session".into())),
             label: "Append".into(),
             operation: "sessions.append_message".into(),
             frame: frame.clone(),
