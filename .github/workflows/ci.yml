@@ -367,13 +367,6 @@ jobs:
         with:
           shared-key: test-foundation
           save-if: ${{ github.ref == 'refs/heads/main' }}
-      - name: Qualify Windows filesystem and Git source boundaries
-        shell: bash
-        timeout-minutes: 30
-        run: |
-          cargo test -p devworks-adapters --lib --locked fs::tests::physical_identity_survives_rename_and_refuses_replaced_read_roots -- --exact
-          cargo test -p devworks-engine --test browser --locked browser_evidence_resolves_its_invocation_worktree_and_preserves_old_sources -- --exact
-          cargo test -p devworks-engine --test git --locked
       - name: Run complete foundation partition
         shell: bash
         run: bash tools/ci/native-tests.sh foundation

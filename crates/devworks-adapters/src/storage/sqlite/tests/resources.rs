@@ -1605,6 +1605,7 @@ fn reading_keep_awake_health_never_undoes_a_disable() {
             s
         })
     };
+    // No event marks that this did not happen, so the test waits a fixed time.
     assert!(
         done.recv_timeout(std::time::Duration::from_millis(100))
             .is_err(),

@@ -5,6 +5,8 @@ on:
       - 'crates/devworks-core/src/services/containers/**'
       - 'crates/devworks-core/src/services/resources/**'
       - 'crates/devworks-adapters/tests/processes.rs'
+      - 'crates/devworks-adapters/src/containers.rs'
+      - 'crates/devworks-adapters/src/process/**'
       - 'crates/devworks-adapters/src/storage/sqlite/resources.rs'
       - 'crates/devworks-engine/src/containers.rs'
       - 'crates/devworks-engine/src/runtime.rs'
@@ -21,6 +23,8 @@ env:
 concurrency:
   group: native-containers-${{ github.ref }}
   cancel-in-progress: true
+# The image the tests pull is pinned by digest in one place, QUALIFIED_IMAGE in
+# crates/devworks-adapters/tests/processes.rs; each job reads it from there.
 jobs:
   docker:
     name: Docker native owned lifecycle
@@ -36,14 +40,27 @@ jobs:
           # PR-only workflow: restores the main branch's foundation cache, which builds the same adapters tests.
           shared-key: test-foundation
           save-if: ${{ github.ref == 'refs/heads/main' }}
-      - name: Qualify Docker ownership, resources and shutdown
+      - name: Pull the pinned test image
+        shell: bash
+        run: |
+          image="$(grep -o 'docker.io/library/alpine@sha256:[0-9a-f]\{64\}' crates/devworks-adapters/tests/processes.rs | head -n 1)"
+          test -n "$image"
+          docker pull "$image"
+      - name: Qualify Docker probe, lifecycle, build, ownership, resources and shutdown
+        shell: bash
         env:
           DW_NATIVE_DOCKER: /usr/bin/docker
+          DEVWORKS_TEST_DOCKER_PATH: /usr/bin/docker
         run: |
-          docker pull docker.io/library/alpine:latest
-          cargo test -p devworks-adapters --test processes \
+          # Every Docker engine test by its exact name; the count check fails a renamed one
+          # that would otherwise match nothing. They run one at a time (they share a lock).
+          cargo test -p devworks-adapters --test processes --locked -- --exact --ignored --nocapture \
+            native_docker_probe_uses_registered_executable_and_owned_processes \
+            native_docker_owned_lifecycle_uses_the_exact_planned_container \
+            native_docker_build_uses_artifact_bytes_on_stdin_and_registered_context \
             native_docker_container_effects_commit_owned_create_start_and_stop \
-            -- --exact --ignored --nocapture
+            2>&1 | tee "$RUNNER_TEMP/docker-tests.log"
+          grep -q 'test result: ok. 4 passed' "$RUNNER_TEMP/docker-tests.log"
   podman:
     name: Podman native owned lifecycle
     runs-on: ubuntu-latest
@@ -63,7 +80,9 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y -qq podman
           sudo podman info --format json >/dev/null
-          sudo podman pull docker.io/library/alpine:latest
+          image="$(grep -o 'docker.io/library/alpine@sha256:[0-9a-f]\{64\}' crates/devworks-adapters/tests/processes.rs | head -n 1)"
+          test -n "$image"
+          sudo podman pull "$image"
       - name: Qualify Podman ownership, resources and shutdown
         run: |
           # Hand the runner user's own toolchain homes to sudo; ask the tools where they are.

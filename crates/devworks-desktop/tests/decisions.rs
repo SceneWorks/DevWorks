@@ -441,7 +441,7 @@ fn finding_specific_native_risk_acceptance_keeps_prerequisites_blocking_and_ack_
     let b = engine.backend();
     let feature = feature_plan(&*b, &root, "Finding risk scope");
     let p = request(&*b, &feature);
-    dops::decided(b.human_decision(&dops::command(&*b,"approvals.record_human_decision",json!({"proposalId":p.id,"expectedRevision":p.revision,"contentDigest":p.content_digest,"decision":"Approve","rationale":"Approve exact plan for readiness assessment."})))).unwrap();
+    dops::decided(b.human_decision(&dops::command(&*b,"approvals.record_human_decision",json!({"proposalId":p.id,"expectedRevision":p.revision,"contentDigest":p.content_digest,"decision":"Approve","rationale":"Approve exact plan for readiness assessment."})), b.control_epoch())).unwrap();
     let feature = get(&*b, &feature);
     let approval = feature.approval.as_ref().unwrap();
     let finding = |id: &str, prerequisite: bool| json!({"id":id,"disposition":"NeedsUserDecision","blocking":true,"prerequisite":prerequisite,"state":"Open","requirementIds":["E1"],"scopeKey":"E1","affectedWorkIds":[],"summary":if prerequisite{"Required dependency unavailable"}else{"Product choice remains uncertain"},"missing":"A scoped decision","consequence":"Verification remains blocked","attempts":["Read repository conventions"],"insufficiency":"Requires an explicit product decision","closureCondition":"Resolve this exact finding","evidence":[],"question":"Which supported behavior is intended?","recommendation":"Keep the current supported behavior","closureEvidence":[]});

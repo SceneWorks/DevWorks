@@ -591,7 +591,7 @@ pub(super) fn exercise(f: Fixture<'_>) {
     command.current_dir(path);
     let environment = f.state.control_environment();
     f.state.assert_control_auth(path, &environment);
-    command.env_clear().envs(environment);
+    command.env_clear().envs(environment.clone());
     command
         .env("HOME", &f.state.home)
         .env("XDG_CONFIG_HOME", &f.state.home)
@@ -606,10 +606,20 @@ pub(super) fn exercise(f: Fixture<'_>) {
     if !local {
         assert!(!output.status.success());
     }
-    assert!(
-        f.state.marker.exists(),
-        "unconfined repository client helper executes marker"
-    );
+    // The local control injects a configuration-defined hook (`hook.<name>.command`), which only
+    // a Git that supports such hooks runs (Git 2.54 does, 2.53 does not). Where the installed Git
+    // cannot run it, the injection is no attack on that Git, so there is nothing to show unconfined.
+    let control_applies = !local || runs_configured_hooks(&f.state.home, &environment);
+    if control_applies {
+        assert!(
+            f.state.marker.exists(),
+            "unconfined repository client helper executes marker"
+        );
+    } else {
+        eprintln!(
+            "this Git does not run configuration-defined hooks: the unconfined control does not apply"
+        );
+    }
     for key in [
         "core.sshCommand",
         "credential.helper",
@@ -626,7 +636,9 @@ pub(super) fn exercise(f: Fixture<'_>) {
             f.state.credential_key.lock().unwrap().as_ref().unwrap(),
         ],
     );
-    std::fs::remove_file(&f.state.marker).unwrap();
+    if control_applies {
+        std::fs::remove_file(&f.state.marker).unwrap();
+    }
     f.state.armed.store(false, Ordering::SeqCst);
     f.state.block_observation.store(false, Ordering::SeqCst);
     let recovered = f.service.observe(&record);
@@ -722,4 +734,37 @@ impl Drop for TlsServer {
         let _ = child.kill();
         let _ = child.wait();
     }
+}
+
+/// Whether the installed Git, in `environment`, runs a hook defined only in configuration
+/// (`hook.<name>.event` and `hook.<name>.command`), probed in a fresh repository under `home`.
+fn runs_configured_hooks(home: &Path, environment: &[(String, String)]) -> bool {
+    let probe = home.join("configured-hook-probe");
+    let _ = std::fs::remove_dir_all(&probe);
+    std::fs::create_dir_all(&probe).unwrap();
+    let marker = probe.join("ran");
+    let run = |args: &[&str]| {
+        Command::new("git")
+            .current_dir(&probe)
+            .env_clear()
+            .envs(environment.iter().map(|(k, v)| (k.as_str(), v.as_str())))
+            .env("HOME", home)
+            .env("XDG_CONFIG_HOME", home)
+            .args(args)
+            .output()
+            .unwrap()
+    };
+    run(&["init", "-q"]);
+    run(&[
+        "-c",
+        "hook.probe.event=pre-push",
+        "-c",
+        &format!("hook.probe.command=printf ran > '{}'", marker.display()),
+        "hook",
+        "run",
+        "pre-push",
+    ]);
+    let ran = marker.exists();
+    let _ = std::fs::remove_dir_all(&probe);
+    ran
 }
