@@ -2186,6 +2186,10 @@ fn fake(dir: &std::path::Path, name: &str, unix: &str, windows: &str) {
     }
 }
 
+/// Probe bound of runtimes that answer: far above any host stall, so the answer, not the
+/// bound, decides each observation. A runtime that never answers has its own test.
+const ANSWER_BOUND: Duration = Duration::from_secs(60);
+
 #[test]
 fn declared_runtimes_are_probed_as_owned_processes_and_reported_with_their_versions() {
     let _s = serial();
@@ -2194,7 +2198,6 @@ fn declared_runtimes_are_probed_as_owned_processes_and_reported_with_their_versi
     std::fs::create_dir_all(&dir).unwrap();
     fake(&dir, "node", "echo v20.11.1", "echo v20.11.1");
     fake(&dir, "dotnet", "echo 8.0.204", "echo 8.0.204");
-    fake(&dir, "swift", "exec /bin/sleep 20", ":spin\r\ngoto spin");
     fake(
         &dir,
         "cargo",
@@ -2210,18 +2213,15 @@ fn declared_runtimes_are_probed_as_owned_processes_and_reported_with_their_versi
     fake(&dir, "zig", "echo '0.13.0'", "echo 0.13.0");
     // A file that is not a command (no execute bit; no PATHEXT extension) is not resolved.
     std::fs::write(dir.join("deno"), "not a program").unwrap();
-    let a = App::probing(&dir);
+    let mut a = App::unbooted(Harness::new(), Some(dir.display().to_string()), None);
+    a.probe_timeout = Some(ANSWER_BOUND);
+    a.boot();
     let host = a.app().packages().unwrap().clone();
     // Booting probed already; a refresh probes again (and the declared zig once declared).
     let seen = host.refresh_runtimes();
     assert_eq!(seen["node"], RuntimeObservation::Found("20.11.1".into()));
     assert_eq!(seen["dotnet"], RuntimeObservation::Found("8.0.204".into()));
     assert_eq!(seen["cargo"], RuntimeObservation::Found("1.82.0".into()));
-    assert!(
-        matches!(&seen["swift"], RuntimeObservation::Missing(w) if w.contains("did not answer")),
-        "{:?}",
-        seen["swift"]
-    );
     assert!(
         matches!(&seen["rustc"], RuntimeObservation::Missing(w) if w.contains("failed")),
         "{:?}",
@@ -2266,7 +2266,46 @@ fn declared_runtimes_are_probed_as_owned_processes_and_reported_with_their_versi
         ),
         ("Incompatible".into(), "20.11.1")
     );
-    let gone = package(a.install(&a.user, &needs("swift-pack", "swift", ">=5")));
+    // Every probe ran as an owned process that is settled now.
+    let unsettled = read(&*a.store, |s| {
+        s.resources()
+            .processes(&ProcessFilter::Unsettled, None, 100)
+    });
+    assert!(
+        unsettled
+            .iter()
+            .all(|p| !["node", "dotnet", "cargo", "rustc", "zig"]
+                .iter()
+                .any(|r| p.program.starts_with(r))),
+        "{unsettled:?}"
+    );
+    drop(a);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn a_runtime_that_never_answers_its_probe_is_stopped_and_reported_missing() {
+    let _s = serial();
+    let dir = std::env::temp_dir().join(format!("devworks-silent-runtime-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    // It never answers, so the ordinary short bound always expires, however loaded the host.
+    fake(&dir, "swift", "exec /bin/sleep 20", ":spin\r\ngoto spin");
+    let a = App::probing(&dir);
+    let host = a.app().packages().unwrap().clone();
+    let seen = host.refresh_runtimes();
+    assert!(
+        matches!(&seen["swift"], RuntimeObservation::Missing(w) if w.contains("did not answer")),
+        "{:?}",
+        seen["swift"]
+    );
+    let needs = Spec {
+        runtimes: vec![
+            json!({"runtimeId": "swift", "versionRequirement": ">=5", "required": true}),
+        ],
+        ..Spec::new("swift-pack", "1.0.0")
+    };
+    let gone = package(a.install(&a.user, &needs));
     let q = &gone.prerequisites.unwrap().0[0];
     assert_eq!(format!("{:?}", q.state.clone().unwrap()), "Missing");
     assert!(q.detected_version.is_none());
@@ -2276,7 +2315,7 @@ fn declared_runtimes_are_probed_as_owned_processes_and_reported_with_their_versi
             .0
             .contains("did not answer")
     );
-    // Every probe ran as an owned process that is settled now.
+    // The probe that did not answer ran as an owned process, stopped and settled now.
     let unsettled = read(&*a.store, |s| {
         s.resources()
             .processes(&ProcessFilter::Unsettled, None, 100)
