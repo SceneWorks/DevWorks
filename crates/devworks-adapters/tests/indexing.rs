@@ -3626,7 +3626,7 @@ fn measure_overlay_link_cost() {
         "indexing.refresh_overlay",
         json!({"kind":"RefreshOverlay","repositoryId":r,"worktreeId":w,"expectedSourceRevision":"1"}),
     )));
-    let refresh = Instant::now();
+    let refresh = std::time::Instant::now();
     fx.drain();
     let refresh = refresh.elapsed();
     let (r2, w2) = (r.clone(), w.clone());
@@ -3635,13 +3635,13 @@ fn measure_overlay_link_cost() {
         .unwrap();
     let view = exact_view(&fx, overlay.view_id.as_ref().unwrap());
     let (layers, repository) = (view.layers.clone(), r.clone());
-    let started = Instant::now();
+    let started = std::time::Instant::now();
     let links = fx.read(move |s| {
         devworks_core::services::indexing::worker::view_links(s.indexing(), &repository, &layers)
     });
     let link_pass = started.elapsed();
     let (scope, v) = (graph_scope(&view), view.clone());
-    let started = Instant::now();
+    let started = std::time::Instant::now();
     let scanned = fx.read(move |s| {
         devworks_core::services::graph::scanned_edges(s, &scope, std::slice::from_ref(&v))
             .map_err(|f| StorageError::InvalidRecord(format!("{f:?}")))
