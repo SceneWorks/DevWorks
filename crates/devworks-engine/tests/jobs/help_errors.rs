@@ -180,26 +180,30 @@ fn transient_help_fault_case(
     else {
         panic!("{reply:?}")
     };
-    rt.block_on(within("transient Help fault remains recoverable", async {
-        loop {
-            app.runtime.dispatcher().run_until_idle().await.unwrap();
-            let op = read(&*app.store, |s| s.operations().operation(&operation_id)).unwrap();
-            if matches!(
-                op.state,
-                OperationState::OutcomeUnknown
-                    | OperationState::Failed
-                    | OperationState::ObservedComplete
-            ) {
-                assert_eq!(
+    rt.block_on(durable(
+        "transient Help fault remains recoverable",
+        || app.ids.issued(),
+        async {
+            loop {
+                app.runtime.dispatcher().run_until_idle().await.unwrap();
+                let op = read(&*app.store, |s| s.operations().operation(&operation_id)).unwrap();
+                if matches!(
                     op.state,
-                    OperationState::OutcomeUnknown,
-                    "generated={generated}, mode={mode}: {op:?}"
-                );
-                break;
+                    OperationState::OutcomeUnknown
+                        | OperationState::Failed
+                        | OperationState::ObservedComplete
+                ) {
+                    assert_eq!(
+                        op.state,
+                        OperationState::OutcomeUnknown,
+                        "generated={generated}, mode={mode}: {op:?}"
+                    );
+                    break;
+                }
+                tokio::task::yield_now().await;
             }
-            tokio::task::yield_now().await;
-        }
-    }));
+        },
+    ));
     assert!(
         files.hits.load(Ordering::SeqCst) > hits_before,
         "the actual source path was faulted"
@@ -334,17 +338,21 @@ fn repair_same_source_bundle(rt: &tokio::runtime::Runtime, app: &HelpApp, files:
     else {
         panic!("{reply:?}")
     };
-    rt.block_on(within("repair identical bundled Help source", async {
-        loop {
-            app.runtime.dispatcher().run_until_idle().await.unwrap();
-            let op = read(&*app.store, |s| s.operations().operation(&operation_id)).unwrap();
-            if is_terminal(op.state) {
-                assert_eq!(op.state, OperationState::ObservedComplete, "{op:?}");
-                break;
+    rt.block_on(durable(
+        "repair identical bundled Help source",
+        || app.ids.issued(),
+        async {
+            loop {
+                app.runtime.dispatcher().run_until_idle().await.unwrap();
+                let op = read(&*app.store, |s| s.operations().operation(&operation_id)).unwrap();
+                if is_terminal(op.state) {
+                    assert_eq!(op.state, OperationState::ObservedComplete, "{op:?}");
+                    break;
+                }
+                tokio::task::yield_now().await;
             }
-            tokio::task::yield_now().await;
-        }
-    }));
+        },
+    ));
     let after = app.head();
     assert_eq!(after.revision, before.revision);
     assert_eq!(after.generation_id, before.generation_id);
