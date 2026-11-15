@@ -12,6 +12,7 @@ use devworks_core::ports::storage::{
 };
 use devworks_core::ports::{Clock, IdSource};
 use rusqlite::Connection;
+use std::fs::File;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
@@ -67,7 +68,13 @@ pub(crate) struct WriterConfig {
 }
 
 impl WriterHandle {
-    pub fn start(conn: Connection, cfg: WriterConfig) -> Result<Self, StorageError> {
+    /// Starts the write owner. It closes `conn` when it stops and only then unlocks
+    /// `data_root_lock`, so no new store can open the data root while this one still writes.
+    pub fn start(
+        conn: Connection,
+        data_root_lock: File,
+        cfg: WriterConfig,
+    ) -> Result<Self, StorageError> {
         let (a_tx, a_rx) = mpsc::channel(cfg.capacity.max(1));
         let (b_tx, b_rx) = mpsc::channel(cfg.capacity.max(1));
         let doorbell = Arc::new(Doorbell::default());
@@ -86,7 +93,13 @@ impl WriterHandle {
         };
         let thread = std::thread::Builder::new()
             .name("devworks-store-writer".into())
-            .spawn(move || worker.run())
+            .spawn(move || {
+                worker.run();
+                // Unlock explicitly: Windows releases a lock left on a closing handle only after
+                // a delay that depends on system load, so an immediate reopen could see
+                // `DataRootInUse`.
+                let _ = data_root_lock.unlock();
+            })
             .map_err(|e| StorageError::unavailable(Unavailable::WriterStopped, e.to_string()))?;
         Ok(Self {
             authoritative: a_tx,
@@ -136,10 +149,15 @@ impl WriterHandle {
     }
 
     /// Stops admission, finishes queued jobs as not dispatched, records clean shutdown and joins.
+    /// A job can hold the last store handle, so the store can be dropped on the write owner
+    /// itself. That thread cannot join itself (on Windows the wait never returns); it finishes
+    /// the stop on its own once the job returns, and releases the data root when it ends.
     pub fn stop(&mut self) {
         self.stopping.store(true, Ordering::SeqCst);
         self.doorbell.ring();
-        if let Some(t) = self.thread.take() {
+        if let Some(t) = self.thread.take()
+            && t.thread().id() != std::thread::current().id()
+        {
             let _ = t.join();
         }
     }

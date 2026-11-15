@@ -77,6 +77,13 @@ pub trait GitRead {
         limit: u16,
     ) -> Result<Vec<StoredGitWorktree>, StorageError>;
     fn git_worktree(&self, id: &Id) -> Result<Option<StoredGitWorktree>, StorageError>;
+    /// The repository's recorded worktrees (removed ones included) after `after`, by ID.
+    fn git_repository_worktrees(
+        &self,
+        repository: &Id,
+        after: Option<&Id>,
+        limit: u16,
+    ) -> Result<Vec<StoredGitWorktree>, StorageError>;
     fn git_worktrees(
         &self,
         work: &Id,

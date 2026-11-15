@@ -344,9 +344,17 @@ impl ProcessSupervisor {
             &spec.env,
             self.host.platform() == "windows",
         );
+        // The registered repositories are read now, so a repository registered after boot is
+        // protected too; a registry that cannot be read holds the command (fail closed).
+        let Ok(roots) = policy.roots.with_registered(&*self.store) else {
+            return CommandVerdict::NeedsInput {
+                held: vec![crate::authority::destructive::InputNeeded::UnresolvedProtectedRoot],
+                allowed: Vec::new(),
+            };
+        };
         preflight_command_in(
             policy.fs,
-            policy.roots,
+            &roots,
             &argv,
             cwd.as_deref(),
             policy.protected_branches,

@@ -19,6 +19,9 @@ pub enum ProjectsSlot {
     /// The artifact content of a repository's README (`true`) or summary.
     RepositoryContent(String, bool),
     RemoveIndex(String),
+    /// What deleting a repository's folder removes, and the confirmed deletion (repository ID).
+    RepositoryDeletionPreview(String),
+    RepositoryDeletion(String),
     /// A repository's source control state (repository ID).
     GitInspect(String),
     /// A patch between two commits of a repository, and its artifact text.

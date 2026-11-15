@@ -283,7 +283,9 @@ pub struct SqliteStore {
     path: PathBuf,
     previous_shutdown: Option<String>,
     work_probe: Option<Arc<WorkProbe>>,
-    _lock: File,
+    /// The data-root lock of a read-only store. A writable store hands it to its write owner,
+    /// which releases it after closing the write connection.
+    lock: Option<File>,
 }
 
 impl SqliteStore {
@@ -377,18 +379,22 @@ impl SqliteStore {
                 }),
             ))?;
         }
-        let writer = match writer_conn {
-            Some(writer_conn) => Some(WriterHandle::start(
-                writer_conn,
-                WriterConfig {
-                    capacity: config.mailbox_capacity,
-                    bulk_share: config.bulk_share,
-                    clock: config.clock.clone(),
-                    ids: config.ids.clone(),
-                    info: info.clone(),
-                },
-            )?),
-            None => None,
+        let (writer, lock) = match writer_conn {
+            Some(writer_conn) => (
+                Some(WriterHandle::start(
+                    writer_conn,
+                    lock,
+                    WriterConfig {
+                        capacity: config.mailbox_capacity,
+                        bulk_share: config.bulk_share,
+                        clock: config.clock.clone(),
+                        ids: config.ids.clone(),
+                        info: info.clone(),
+                    },
+                )?),
+                None,
+            ),
+            None => (None, Some(lock)),
         };
         Ok(Self {
             writer,
@@ -404,7 +410,7 @@ impl SqliteStore {
             path,
             previous_shutdown,
             work_probe: config.work_probe,
-            _lock: lock,
+            lock,
         })
     }
 
@@ -524,12 +530,16 @@ impl Drop for SqliteStore {
             .lock()
             .unwrap_or_else(|p| p.into_inner())
             .clear();
+        // The write owner releases the data root once it has closed the write connection.
         if let Some(mut w) = self.writer.take() {
             w.stop();
         }
-        // Unlock explicitly: Windows releases a lock left on a closing handle only after a delay
-        // that depends on system load, so an immediate reopen could see `DataRootInUse`.
-        let _ = self._lock.unlock();
+        // A read-only store keeps its own lock. Unlock explicitly: Windows releases a lock left
+        // on a closing handle only after a delay that depends on system load, so an immediate
+        // reopen could see `DataRootInUse`.
+        if let Some(lock) = &self.lock {
+            let _ = lock.unlock();
+        }
     }
 }
 
