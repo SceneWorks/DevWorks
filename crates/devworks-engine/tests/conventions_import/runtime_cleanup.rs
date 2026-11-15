@@ -125,6 +125,50 @@ fn cleanup_pass_deletes_only_one_bounded_capture_page_and_keeps_queued_owners() 
 #[test]
 fn runtime_failed_trailing_manifest_cleans_on_reopen_without_manual_recovery_and_preserves_history()
 {
+    reopen_scenario();
+}
+
+/// TEMP DW-361 diagnostics: the reopen scenario, four at a time, three rounds.
+#[test]
+fn zz_dw361_diag_repeat_reopen_scenario() {
+    for _ in 0..3 {
+        let copies = (0..4)
+            .map(|_| std::thread::spawn(reopen_scenario))
+            .collect::<Vec<_>>();
+        for copy in copies {
+            copy.join().unwrap();
+        }
+    }
+}
+
+/// TEMP DW-361 diagnostics: a write job holds the last store handle, so the store drops on
+/// its own writer thread.
+#[test]
+fn zz_dw361_diag_store_dropped_on_its_writer_thread() {
+    let h = Harness::new();
+    let store = h.open();
+    let (started, ready) = std::sync::mpsc::channel();
+    let held = store.clone();
+    store
+        .submit_write(
+            WriteOptions::default(),
+            write_job(
+                move |_| {
+                    let _ = started.send(());
+                    std::thread::sleep(Duration::from_millis(200));
+                    drop(held);
+                    Ok(())
+                },
+                |_: Result<(), StorageError>| {},
+            ),
+        )
+        .unwrap();
+    ready.recv().unwrap();
+    drop(store);
+    h.wait_released();
+}
+
+fn reopen_scenario() {
     // Keep the terminal private captures durable through the first runtime's drop, like an
     // unavailable cleanup writer. The second boot must discover them without a manual call.
     // Install the fault on the migrated store before the fixture opens it.
@@ -185,6 +229,11 @@ fn runtime_failed_trailing_manifest_cleans_on_reopen_without_manual_recovery_and
     } = f;
     drop(service);
     drop(catalog);
+    eprintln!(
+        "DBG361 strong_count before drop(store) = {} root={}",
+        Arc::strong_count(&store),
+        h.root.display()
+    );
     drop(store);
     cleanup_fault(&h, false);
     let store = h.open();

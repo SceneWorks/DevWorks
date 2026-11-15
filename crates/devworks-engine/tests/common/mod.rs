@@ -77,6 +77,8 @@ pub struct Harness {
     pub ids: Arc<TestIds>,
     /// Read connections of every store opened (0: the adapter's default).
     pub readers: AtomicUsize,
+    /// TEMP DW-361 diagnostics: every store this harness opened.
+    pub opened: Mutex<Vec<std::sync::Weak<dyn ApplicationStore>>>,
 }
 impl Harness {
     pub fn new() -> Self {
@@ -95,11 +97,14 @@ impl Harness {
             clock: Arc::new(TestClock(AtomicI64::new(T0))),
             ids: Arc::new(TestIds(AtomicU64::new(0))),
             readers: AtomicUsize::new(0),
+            opened: Mutex::new(Vec::new()),
         }
     }
     /// Opens (or reopens, as a new boot) the store.
     pub fn open(&self) -> Arc<dyn ApplicationStore> {
-        Arc::new(self.open_sqlite())
+        let store: Arc<dyn ApplicationStore> = Arc::new(self.open_sqlite());
+        self.opened.lock().unwrap().push(Arc::downgrade(&store));
+        store
     }
     pub fn open_sqlite(&self) -> SqliteStore {
         self.open_sqlite_with(None)
@@ -121,11 +126,39 @@ impl Harness {
         let deadline = std::time::Instant::now() + HANG_BUDGET;
         loop {
             match lock.try_lock_shared() {
-                Ok(()) => return lock.unlock().expect("release probe lock"),
+                Ok(()) => {
+                    eprintln!(
+                        "DBG361 {} released after {:?} root={}",
+                        std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .unwrap()
+                            .as_millis(),
+                        HANG_BUDGET - deadline.saturating_duration_since(std::time::Instant::now()),
+                        self.root.display()
+                    );
+                    return lock.unlock().expect("release probe lock");
+                }
                 Err(std::fs::TryLockError::WouldBlock) if std::time::Instant::now() < deadline => {
                     std::thread::sleep(std::time::Duration::from_millis(5));
                 }
-                Err(e) => panic!("data root not released within 30 s: {e:?}"),
+                Err(e) => {
+                    let counts = self
+                        .opened
+                        .lock()
+                        .unwrap()
+                        .iter()
+                        .map(std::sync::Weak::strong_count)
+                        .collect::<Vec<_>>();
+                    eprintln!(
+                        "DBG361 {} not released root={} store strong counts={counts:?}",
+                        std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .unwrap()
+                            .as_millis(),
+                        self.root.display()
+                    );
+                    panic!("data root not released within 30 s: {e:?}")
+                }
             }
         }
     }

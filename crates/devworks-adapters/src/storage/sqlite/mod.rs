@@ -518,6 +518,16 @@ fn record_boot(
 
 impl Drop for SqliteStore {
     fn drop(&mut self) {
+        let __t = std::time::Instant::now();
+        eprintln!(
+            "DBG361 {} store drop start thread={:?} root={}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_millis(),
+            std::thread::current().name(),
+            self.path.display()
+        );
         // Readers first so the last connection to close is the writer (the only checkpointer).
         self.readers
             .idle
@@ -529,7 +539,26 @@ impl Drop for SqliteStore {
         }
         // Unlock explicitly: Windows releases a lock left on a closing handle only after a delay
         // that depends on system load, so an immediate reopen could see `DataRootInUse`.
-        let _ = self._lock.unlock();
+        eprintln!(
+            "DBG361 {} store writer stopped thread={:?} took={:?}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_millis(),
+            std::thread::current().name(),
+            __t.elapsed()
+        );
+        let __u = self._lock.unlock();
+        eprintln!(
+            "DBG361 {} store drop end thread={:?} unlock={:?} took={:?}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_millis(),
+            std::thread::current().name(),
+            __u,
+            __t.elapsed()
+        );
     }
 }
 
