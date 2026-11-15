@@ -815,7 +815,7 @@ fn native_price_paging_keeps_loaded_rows_and_draft_until_explicit_catalog_reload
     let _case = native_runtime_case();
     let root = Root::new("usage-native-price-paging");
     let engine = start(&root);
-    startup::settled(&engine);
+    startup::settled(&engine, &root);
     let b = engine.backend();
     let model = "paged-price-model";
     ops::configured(b.command("router.configure",&ops::router_configure(&*b,json!({"kind":"Model","model":{"id":model,"displayName":"Paged price model","endpointProfile":"CompatibleChat","upstreamModelId":"fixture/paged-price","enabled":true,"tierMemberships":[],"efforts":[],"imageInput":false,"tools":false,"revision":"1"}})))).unwrap();
@@ -1278,7 +1278,7 @@ fn native_usage_paging_keeps_applied_filters_and_preserves_unsubmitted_filter_dr
             tx.usage().insert_usage_origin(&StoredUsageOrigin{source_kind:"SessionUsage".into(),source_id:format!("page-{i:03}"),attempt_id:None,request_id:Some(Id::new(format!("recorded-page-{i:03}")).unwrap()),project_id:Some(project_id.clone()),feature_id:None,work_id:None,session_id:Some(session.clone()),job_run_id:None,payload:json!({"actorId":format!("recorded-user-{i:03}"),"providerId":"openrouter","reportCategory":"Assistant","item":{"purpose":"Conversation","modelId":format!("recorded-model-{i:03}"),"inputTokens":"1","outputTokens":"1"}}),recorded_at_ms:1000,priced_micro_usd:None,classification:"Untracked".into(),monetary_complete:false,incomplete:true,unknown_tail:false,committed_sequence:Some(1)})?;
         }Ok(())
     }).unwrap();
-    startup::settled(&engine);
+    startup::settled(&engine, &root);
     let mut h = harness(shell(&engine, &root, Script::default()), 1800.0, 1800.0);
     settle(&mut h);
     h.state_mut().navigate(Route::Usage);
