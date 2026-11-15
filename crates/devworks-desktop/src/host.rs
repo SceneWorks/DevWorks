@@ -1082,6 +1082,38 @@ impl Backend for DesktopBackend {
             .runtime
             .confirm_project_purge(&self.host.ctx, frame)
     }
+    fn repository_deletion_preview(
+        &self,
+        repository: &Id,
+    ) -> Result<devworks_core::authority::deletion::DeletionPreview, String> {
+        devworks_core::authority::deletion::preview(
+            &**self.host.runtime.store(),
+            &NativeFilesystem::new(),
+            Some(self.host.data_root.display().to_string()),
+            repository,
+        )
+        .map_err(|r| crate::repository_deletion::refusal_text(&r))
+    }
+    fn delete_repository(
+        &self,
+        reviewed: &devworks_core::authority::deletion::DeletionPreview,
+    ) -> Result<devworks_core::authority::destructive::RemovalOutcome, String> {
+        // Desktop automation can generate the confirming click: the dedicated confirmation stays
+        // closed while it may be active, so an agent never confirms through the UI.
+        if self.host.runtime.desktop_automation_may_be_active() {
+            return Err(crate::repository_deletion::refusal_text(
+                &devworks_core::authority::deletion::DeletionRefusal::HumanOnly,
+            ));
+        }
+        devworks_core::authority::deletion::delete(
+            &**self.host.runtime.store(),
+            &NativeFilesystem::new(),
+            Some(self.host.data_root.display().to_string()),
+            &self.host.ctx,
+            reviewed,
+        )
+        .map_err(|r| crate::repository_deletion::refusal_text(&r))
+    }
     fn text_preview(
         &self,
         session: &Id,

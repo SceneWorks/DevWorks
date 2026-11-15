@@ -1818,6 +1818,110 @@ fn primary_repository_deletion_is_only_the_users_dedicated_confirmation() {
     assert_eq!(fx.count("RepositoryDeletionAuthorized"), 1);
 }
 
+// Every production path that could remove a registered primary repository's folder (DW-327):
+// the dedicated deletion the desktop offers, a command an agent runs (every launch preflights it
+// with `preflight_command` against the registered repositories; `tests/processes.rs` shows the
+// supervisor reads them at launch) and a typed tool deletion (an ordinary `EffectPlan`). None
+// removes it without the user's confirmation of exactly what is removed.
+#[cfg(unix)]
+#[test]
+fn every_repository_removal_path_refuses_a_removal_without_a_matching_confirmation() {
+    use devworks_core::authority::shell::{CommandVerdict, preflight_command};
+    let fx = Fx::new();
+    let scratch = Scratch::new("removal-paths");
+    let repo = scratch.path("repo");
+    std::fs::create_dir_all(format!("{repo}/.git/objects")).unwrap();
+    std::fs::write(format!("{repo}/src.txt"), b"source").unwrap();
+    register_repository(&fx, "repo-a", &repo);
+    let fs = NativeFilesystem::new();
+    let user = fx.ctx("user-a", PrincipalKind::Human);
+    let agent = fx.agent("agent-a");
+    let reviewed = deletion::preview(&*fx.store, &fs, None, &id("repo-a")).unwrap();
+    assert!(reviewed.blockers.is_empty(), "{:?}", reviewed.blockers);
+    // A preview the user reviewed before something it binds (here, a project reference) changed.
+    let stale = deletion::prepare(
+        &fs,
+        &roots(&fx),
+        &id("repo-a"),
+        RepositoryDependencies {
+            project_references: vec![ProjectId(id("project-a"))],
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let (u, a) = (user.clone(), agent.clone());
+    let refusals: Vec<(&str, bool)> = vec![
+        (
+            "dedicated deletion by an agent",
+            matches!(
+                deletion::delete(&*fx.store, &fs, None, &a, &reviewed),
+                Err(DeletionRefusal::HumanOnly)
+            ),
+        ),
+        (
+            "dedicated deletion of a preview that no longer matches",
+            matches!(
+                deletion::delete(&*fx.store, &fs, None, &u, &stale),
+                Err(DeletionRefusal::Changed)
+            ),
+        ),
+        (
+            "dedicated deletion step with no confirmation",
+            matches!(
+                deletion::authorize(&*fx.store, &u, &id("grant-none"), &reviewed),
+                Err(DeletionRefusal::ConfirmationUnavailable)
+            ),
+        ),
+        (
+            "a command an agent runs",
+            matches!(
+                preflight_command(
+                    &fs,
+                    &roots(&fx),
+                    &["rm".to_owned(), "-rf".to_owned(), repo.clone()],
+                    None,
+                    &[],
+                ),
+                CommandVerdict::Blocked { .. }
+            ),
+        ),
+        (
+            "a typed tool deletion",
+            matches!(
+                destructive::preflight(
+                    &fs,
+                    &roots(&fx),
+                    &EffectPlan {
+                        kind: DestructiveKind::RemoveTree,
+                        targets: vec![repo.clone()],
+                        working_directory: None,
+                        scope: IntendedScope::Ordinary,
+                    },
+                )
+                .verdict,
+                PreflightVerdict::Blocked(BlockReason::PrimaryRepository { .. })
+            ),
+        ),
+    ];
+    for (path, refused) in &refusals {
+        assert!(refused, "{path}: removed without a matching confirmation");
+    }
+    assert!(std::path::Path::new(&format!("{repo}/src.txt")).exists());
+    assert_eq!(fx.count("RepositoryDeletionAuthorized"), 0);
+    // The user's confirmation of the preview as it is now removes exactly that folder, once.
+    let current = deletion::preview(&*fx.store, &fs, None, &id("repo-a")).unwrap();
+    let outcome = deletion::delete(&*fx.store, &fs, None, &user, &current).unwrap();
+    assert!(outcome.complete, "{outcome:?}");
+    assert!(!std::path::Path::new(&repo).exists());
+    assert_eq!(fx.count("RepositoryDeletionAuthorized"), 1);
+    assert_eq!(fx.count("RepositoryDeletionCompleted"), 1);
+    // The registration stays; the removed folder can no longer be previewed or deleted again.
+    assert!(matches!(
+        deletion::delete(&*fx.store, &fs, None, &user, &current),
+        Err(DeletionRefusal::Unresolvable)
+    ));
+}
+
 #[test]
 fn host_roles_resolve_only_active_agent_bindings_and_settings_fail_closed_otherwise() {
     let fx = Fx::new();

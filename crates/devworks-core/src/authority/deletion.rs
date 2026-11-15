@@ -22,14 +22,15 @@
 //! user-ingress path, not something an operation handler (which only ever holds the gateway's
 //! handler view of a transaction) can reach.
 use super::destructive::{
-    FileIdentity, FilesystemResolver, OwnedWorktree, ProtectedRoots, RemovalOutcome,
+    self, DestructiveExecutor, DestructiveKind, EffectPlan, FileIdentity, FilesystemResolver,
+    IntendedScope, OwnedWorktree, PreflightVerdict, ProtectedRoots, RemovalOutcome,
 };
 use super::service::{self, AdminError, GrantBounds};
 use crate::context::{InvocationContext, PrincipalKind};
 use crate::ports::GrantUse;
 use crate::ports::storage::{
-    ApplicationStore, AuthorityGrant, EventFilter, GrantKind, StorageError, WriteOptions,
-    WriteTransaction, run_write,
+    ApplicationStore, AuthorityGrant, EventFilter, GrantKind, ReadOptions, StorageError,
+    WriteOptions, WriteTransaction, read_snapshot, run_write,
 };
 use crate::protocol::{ActorId, Id, ProjectId, StoreId};
 use serde_json::{Value, json};
@@ -121,6 +122,10 @@ pub enum DeletionRefusal {
     ConfirmationUnavailable,
     /// The target, its references or the registry changed since confirmation.
     Changed,
+    /// The destructive-operation guard refused the removal step (its rationale).
+    Guarded(&'static str),
+    /// The removal started and failed; the partial outcome is recorded.
+    Failed(String),
     Storage(StorageError),
 }
 impl From<StorageError> for DeletionRefusal {
@@ -205,6 +210,114 @@ pub fn prepare(
     })
 }
 
+/// Most work roots of one project read per page when looking for live work.
+const ROOTS_PAGE: u16 = 500;
+
+/// The repository's live dependencies as the store records them: the projects it is a member of
+/// and the live activations of those projects' work (any live work there may use its folder).
+pub fn dependencies(
+    store: &dyn ApplicationStore,
+    repository: &Id,
+) -> Result<RepositoryDependencies, StorageError> {
+    let repository = repository.clone();
+    read_snapshot(store, &ReadOptions::default(), move |s| {
+        let projects = s.projects().repository_projects(&repository)?;
+        let mut active_work = Vec::new();
+        for project in &projects {
+            let mut after = None;
+            loop {
+                let page = s
+                    .runs()
+                    .project_roots(project, after.as_ref(), ROOTS_PAGE)?;
+                for root in &page {
+                    if let Some(a) = s.runs().live_activation(root)? {
+                        active_work.push(a.id.clone());
+                    }
+                }
+                if page.len() < usize::from(ROOTS_PAGE) {
+                    break;
+                }
+                after = page.last().cloned();
+            }
+        }
+        Ok(RepositoryDependencies {
+            project_references: projects,
+            external_users: 0,
+            active_work,
+        })
+    })
+}
+
+/// The preview of `repository` as it is now: the protected roots and dependencies read from the
+/// store. Like [`prepare`], it confers nothing.
+pub fn preview(
+    store: &dyn ApplicationStore,
+    fs: &dyn FilesystemResolver,
+    app_data_root: Option<String>,
+    repository: &Id,
+) -> Result<DeletionPreview, DeletionRefusal> {
+    let roots = ProtectedRoots::read(store, Vec::new(), app_data_root)?;
+    prepare(fs, &roots, repository, dependencies(store, repository)?)
+}
+
+/// The dedicated primary repository deletion of the user's trusted surface, after the user
+/// reviewed `reviewed`: re-prepares the repository as it is now, confirms exactly the reviewed
+/// preview and spends that confirmation only if the current one matches it ([`authorize`]), then
+/// removes the folder through the destructive-operation guard and records the outcome. The
+/// registration, work history, remotes and artifacts are kept ([`RETAINED`]). An agent is
+/// refused before anything is confirmed.
+pub fn delete<F: FilesystemResolver + DestructiveExecutor>(
+    store: &dyn ApplicationStore,
+    fs: &F,
+    app_data_root: Option<String>,
+    ctx: &InvocationContext,
+    reviewed: &DeletionPreview,
+) -> Result<RemovalOutcome, DeletionRefusal> {
+    let current = preview(store, fs, app_data_root.clone(), &reviewed.repository_id)?;
+    let grant = confirm_within(store, ctx, reviewed, MAX_CONFIRMATION_LIFETIME_MS)?;
+    let permit = authorize(store, ctx, &grant.id, &current)?;
+    let registry = ProtectedRoots::read(store, Vec::new(), app_data_root)?;
+    let plan = EffectPlan {
+        kind: DestructiveKind::RemoveTree,
+        targets: vec![current.location.clone()],
+        working_directory: None,
+        scope: IntendedScope::PrimaryRepositoryDeletion(permit),
+    };
+    let decision = destructive::preflight(fs, &registry, &plan);
+    let IntendedScope::PrimaryRepositoryDeletion(permit) = plan.scope else {
+        unreachable!("the plan keeps its scope")
+    };
+    let target = match (&decision.verdict, decision.allowed_targets()) {
+        (PreflightVerdict::Allowed, Some([target])) => target,
+        _ => return Err(DeletionRefusal::Guarded(decision.rationale())),
+    };
+    let step = destructive::revalidate(fs, &decision, &registry.revision)
+        .map_err(|_| DeletionRefusal::Changed)
+        .and_then(|()| {
+            fs.execute(
+                target,
+                DestructiveKind::RemoveTree,
+                decision.protected_identities(),
+            )
+            .map_err(|e| DeletionRefusal::Failed(format!("{e:?}")))
+        });
+    let outcome = match step {
+        Ok(outcome) => outcome,
+        Err(DeletionRefusal::Failed(why)) => {
+            let partial = RemovalOutcome {
+                removed_entries: 0,
+                remaining: vec![current.location.clone()],
+                complete: false,
+            };
+            record_outcome(store, ctx, &permit, &partial)?;
+            return Err(DeletionRefusal::Failed(why));
+        }
+        Err(other) => return Err(other),
+    };
+    record_outcome(store, ctx, &permit, &outcome)?;
+    Ok(outcome)
+}
+
 fn require_user(
     tx: &mut dyn WriteTransaction,
     ctx: &InvocationContext,
@@ -261,9 +374,31 @@ pub fn confirm(
     preview: &DeletionPreview,
     expires_at_ms: i64,
 ) -> Result<AuthorityGrant, DeletionRefusal> {
+    confirm_at(store, ctx, preview, move |_| expires_at_ms)
+}
+
+/// [`confirm`] expiring `lifetime_ms` after the store's current time.
+fn confirm_within(
+    store: &dyn ApplicationStore,
+    ctx: &InvocationContext,
+    preview: &DeletionPreview,
+    lifetime_ms: i64,
+) -> Result<AuthorityGrant, DeletionRefusal> {
+    confirm_at(store, ctx, preview, move |now| {
+        now.saturating_add(lifetime_ms)
+    })
+}
+
+fn confirm_at(
+    store: &dyn ApplicationStore,
+    ctx: &InvocationContext,
+    preview: &DeletionPreview,
+    expiry: impl FnOnce(i64) -> i64 + Send + 'static,
+) -> Result<AuthorityGrant, DeletionRefusal> {
     let (ctx, preview) = (ctx.clone(), preview.clone());
     dedicated(store, move |tx| {
         require_user(tx, &ctx)?;
+        let expires_at_ms = expiry(tx.now_ms());
         if !preview.blockers.is_empty() {
             return Err(DeletionRefusal::Blocked(preview.blockers.clone()));
         }

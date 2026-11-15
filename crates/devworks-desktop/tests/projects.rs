@@ -1039,3 +1039,81 @@ fn a_base_directory_draft_saves_after_the_editor_changes_the_access_profile() {
     );
     assert!(h.state().projects.base[&pid].error.is_none());
 }
+
+// Deleting a registered repository's folder is the dedicated confirmation (SEC-04): the person
+// reviews exactly what is removed and kept, acknowledges it, and confirms. Primary deletion
+// needs stable directory identities, which the filesystem adapter has only on Unix.
+#[cfg(unix)]
+#[test]
+fn a_person_reviews_and_confirms_a_repository_folder_deletion() {
+    let root = Root::new("repository-deletion");
+    let engine = start(&root);
+    let checkout = root.dir("checkout");
+    std::fs::create_dir_all(checkout.join(".git/objects")).unwrap();
+    std::fs::write(checkout.join("src.txt"), b"source").unwrap();
+    let location = checkout.display().to_string();
+    let r = StoredRepository {
+        id: Id::new("repo-a").unwrap(),
+        location: location.clone(),
+        name: "engine".into(),
+        remote_url: None,
+        primary: true,
+        lifecycle: "Active".into(),
+        languages: vec![],
+        revision: 1,
+        registered_at_ms: 1,
+    };
+    run_write(
+        &**engine.host().runtime().store(),
+        WriteOptions::default(),
+        move |tx| tx.projects().insert_repository(&r),
+    )
+    .unwrap();
+    let mut h = harness(shell(&engine, &root, Script::default()), 1440.0, 900.0);
+    settle(&mut h);
+    click_nav(&mut h, "Repositories");
+    click_row(&mut h, "engine  ·");
+    click(&mut h, Role::Button, "Delete repository folder…");
+    // The review names the folder and what is kept; nothing is deleted before confirming.
+    assert!(has_text(&h, "permanently deletes this folder"));
+    assert!(has_text(&h, "Kept: network remotes"));
+    assert!(
+        h.get_by_role_and_label(Role::Button, "Delete repository folder")
+            .accesskit_node()
+            .is_disabled(),
+        "confirming needs the acknowledgement"
+    );
+    assert!(checkout.join("src.txt").exists());
+    click(
+        &mut h,
+        Role::CheckBox,
+        "I understand this permanently deletes the folder",
+    );
+    click(&mut h, Role::Button, "Delete repository folder");
+    assert!(!checkout.exists(), "the confirmed folder is deleted");
+    assert!(has_text(&h, "The folder of engine was deleted"));
+    let events = devworks_core::ports::storage::read_snapshot(
+        &**engine.host().runtime().store(),
+        &Default::default(),
+        |s| {
+            s.history().page(
+                &devworks_core::ports::storage::EventFilter::Aggregate {
+                    kind: devworks_core::authority::deletion::DELETION_AGGREGATE.into(),
+                    id: "repo-a".into(),
+                },
+                0,
+                10,
+            )
+        },
+    )
+    .unwrap();
+    let kinds: Vec<&str> = events.events.iter().map(|e| e.kind.as_str()).collect();
+    assert_eq!(
+        kinds,
+        [
+            "RepositoryDeletionConfirmed",
+            "RepositoryDeletionAuthorized",
+            "RepositoryDeletionCompleted"
+        ]
+    );
+}

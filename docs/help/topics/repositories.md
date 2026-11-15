@@ -10,6 +10,10 @@ Work belongs to an identified repository/worktree and current physical source. G
 
 Never remove files or worktrees to repair a pending operation. The original action might already have happened. Inspect its journal/evidence and reconcile first. Removing an index affects managed index data, not source files. Archiving or deleting a project does not delete repositories or GitHub resources.
 
+## Deleting a repository folder
+
+Only you can delete a registered repository's folder, with Delete repository folder… on its Repositories detail. DevWorks first shows the exact folder it would delete, its task worktrees, and what is kept: network remotes, work history and outcomes, artifacts, and the registration. You then acknowledge that the deletion is permanent and confirm. There is no undo or backup. DevWorks refuses the deletion when the folder, its project references, or the registered repositories changed after you reviewed it. It also refuses while more than one project uses the repository, while work is live in a project that uses it, and while an agent may be controlling the desktop. Agents cannot delete a repository folder, whatever their access mode or approvals. A drive or filesystem root is never deleted.
+
 ## A practical sequence
 
 Register the repository, inspect its source, run an available indexing action, review diagnostics, then open the relevant work record. Let an owned task branch record changes. Verify and review the actual tested head before delivery. See [Git and delivery](help:git-delivery), [Indexing](help:indexing), [Browser evidence](help:browser), and [Permissions](help:permissions).

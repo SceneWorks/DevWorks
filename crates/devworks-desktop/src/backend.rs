@@ -90,6 +90,22 @@ pub trait Backend: Send + Sync {
             "trusted native project purge confirmation ingress".into(),
         ))
     }
+    /// What deleting a registered primary repository's folder would remove (SEC-04). It
+    /// confers nothing.
+    fn repository_deletion_preview(
+        &self,
+        _repository: &Id,
+    ) -> Result<devworks_core::authority::deletion::DeletionPreview, String> {
+        Err("Repository deletion is unavailable".into())
+    }
+    /// Trusted native user confirmation only: deletes the folder exactly as `reviewed` describes
+    /// it, refused when anything it binds changed since the review.
+    fn delete_repository(
+        &self,
+        _reviewed: &devworks_core::authority::deletion::DeletionPreview,
+    ) -> Result<devworks_core::authority::destructive::RemovalOutcome, String> {
+        Err("Repository deletion is unavailable".into())
+    }
     fn purge_client_publish(
         &self,
         _memory: crate::memory::Memory,
@@ -528,6 +544,10 @@ pub enum TaskOutput {
     Refreshed,
     /// The text of an MCP resource or prompt a person opened in Settings.
     McpContent(String),
+    /// What deleting a repository's folder would remove, for the person to review.
+    RepositoryDeletionPreview(Box<devworks_core::authority::deletion::DeletionPreview>),
+    /// The outcome of a confirmed repository folder deletion.
+    RepositoryDeleted(devworks_core::authority::destructive::RemovalOutcome),
 }
 
 type Job = Box<dyn FnOnce(&dyn Backend) -> Reply + Send>;

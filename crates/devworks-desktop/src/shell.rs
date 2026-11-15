@@ -2405,7 +2405,9 @@ impl Shell {
                         | TaskOutput::TextPreview(_)
                         | TaskOutput::Convention(_)
                         | TaskOutput::Instruction(_)
-                        | TaskOutput::McpContent(_),
+                        | TaskOutput::McpContent(_)
+                        | TaskOutput::RepositoryDeletionPreview(_)
+                        | TaskOutput::RepositoryDeleted(_),
                     ) => AttachState::Failed("unexpected reply".into()),
                     Err(e) => AttachState::Failed(e),
                 };
@@ -2471,7 +2473,9 @@ impl Shell {
                             | TaskOutput::TextPreview(_)
                             | TaskOutput::Convention(_)
                             | TaskOutput::Instruction(_)
-                            | TaskOutput::McpContent(_),
+                            | TaskOutput::McpContent(_)
+                            | TaskOutput::RepositoryDeletionPreview(_)
+                            | TaskOutput::RepositoryDeleted(_),
                         ) => {}
                         Err(e) => a.preview_note = Some(format!("No preview: {e}")),
                     }

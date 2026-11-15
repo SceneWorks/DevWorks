@@ -1,7 +1,8 @@
 //! All projects and Repositories (DW-11): the project portfolio with its lifecycle tabs and a
 //! right inner sidebar for the selected project (edit, repository membership, archive, restore,
 //! delete and its repository base directory override, SET-07/08), and the Repositories screen
-//! (registrations, README/summary texts, source control and index removal). The views report
+//! (registrations, README/summary texts, source control, index removal and the reviewed
+//! repository folder deletion of [`crate::repository_deletion`]). The views report
 //! what the user asked for as actions; the controller submits them.
 use crate::indexing_screen::{self, IndexAction, IndexingScreen};
 use crate::memory::RouteMemory;
@@ -148,6 +149,8 @@ pub struct ProjectsScreen {
     pub edit_saving: BTreeMap<String, EditForm>,
     pub membership_saving: BTreeMap<String, MembershipForm>,
     pub confirm: Option<Confirm>,
+    /// A repository folder deletion under review (SEC-04).
+    pub deletion: Option<crate::repository_deletion::DeletionReview>,
     pub message: Option<(Tone, String)>,
     pub base: BTreeMap<String, BaseDirectory>,
     pub texts: BTreeMap<(String, bool), TextState>,
@@ -182,6 +185,10 @@ pub(crate) enum Action {
     InspectGit(String),
     DiffGit(String),
     RemoveIndex(RepositoryRecord),
+    /// Read what deleting the repository's folder removes, for review.
+    ReviewDeletion(RepositoryRecord),
+    /// The person confirmed the reviewed deletion.
+    DeleteRepository(devworks_core::authority::deletion::DeletionPreview),
     Index(IndexAction),
     /// Scheduled jobs scoped to the project.
     OpenJobs(String),
@@ -1445,6 +1452,16 @@ fn repository_detail(
                 .clicked()
             {
                 projects.confirm = Some(Confirm::RemoveIndex(r.clone()));
+            }
+            if r.primary
+                && ui
+                    .add_enabled(
+                        enabled && projects.deletion.is_none(),
+                        egui::Button::new("Delete repository folder…"),
+                    )
+                    .clicked()
+            {
+                actions.push(Action::ReviewDeletion(r.clone()));
             }
         });
 }

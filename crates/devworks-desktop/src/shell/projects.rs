@@ -329,6 +329,35 @@ impl ProjectsCtl<'_, '_> {
                 }
                 Action::Index(a) => self.index(a),
                 Action::OpenJobs(p) => self.effects.push(Effect::OpenJobs(p)),
+                Action::ReviewDeletion(r) => {
+                    let id = r.id.clone();
+                    self.projects.deletion =
+                        Some(crate::repository_deletion::DeletionReview::new(r));
+                    if let Some(c) = &mut self.cx.client {
+                        c.task(
+                            ProjectsSlot::RepositoryDeletionPreview(id.as_str().to_owned()).into(),
+                            "Reading what deleting the repository removes",
+                            move |b| {
+                                b.repository_deletion_preview(&id).map(|p| {
+                                    crate::backend::TaskOutput::RepositoryDeletionPreview(Box::new(
+                                        p,
+                                    ))
+                                })
+                            },
+                        );
+                    }
+                }
+                Action::DeleteRepository(reviewed) => {
+                    let slot = ProjectsSlot::RepositoryDeletion(
+                        reviewed.repository_id.as_str().to_owned(),
+                    );
+                    if let Some(c) = &mut self.cx.client {
+                        c.task(slot.into(), "Deleting the repository folder", move |b| {
+                            b.delete_repository(&reviewed)
+                                .map(crate::backend::TaskOutput::RepositoryDeleted)
+                        });
+                    }
+                }
                 Action::RemoveIndex(r) => {
                     let slot = ProjectsSlot::RemoveIndex(r.id.as_str().to_owned());
                     self.command(
@@ -645,9 +674,89 @@ impl ProjectsCtl<'_, '_> {
                 }
                 Err(e) => self.project_failure("Removing the index", e),
             },
+            (ProjectsSlot::RepositoryDeletionPreview(r), Reply::Task(result)) => {
+                if let Some(review) = self
+                    .projects
+                    .deletion
+                    .as_mut()
+                    .filter(|d| d.repository.id.as_str() == r)
+                {
+                    match result {
+                        Ok(crate::backend::TaskOutput::RepositoryDeletionPreview(p)) => {
+                            review.preview = Some(*p)
+                        }
+                        Ok(_) => review.error = Some("Unexpected reply".into()),
+                        Err(e) => review.error = Some(e),
+                    }
+                }
+            }
+            (ProjectsSlot::RepositoryDeletion(r), Reply::Task(result)) => {
+                let name = self
+                    .projects
+                    .deletion
+                    .as_ref()
+                    .filter(|d| d.repository.id.as_str() == r)
+                    .map_or(r.clone(), |d| d.repository.name.0.clone());
+                match result {
+                    Ok(crate::backend::TaskOutput::RepositoryDeleted(outcome)) => {
+                        self.projects.deletion = None;
+                        let (tone, text) = if outcome.complete {
+                            (
+                                Tone::Good,
+                                format!(
+                                    "The folder of {name} was deleted. Its registration, \
+                                     memberships, work history and remotes were kept."
+                                ),
+                            )
+                        } else {
+                            (
+                                Tone::Attention,
+                                format!(
+                                    "The folder of {name} was only partly deleted; {} entries \
+                                     remain.",
+                                    outcome.remaining.len()
+                                ),
+                            )
+                        };
+                        self.projects.message = Some((tone, text.clone()));
+                        self.announce(text);
+                        self.load_repositories();
+                    }
+                    Ok(_) => {}
+                    Err(e) => {
+                        if let Some(review) = self.projects.deletion.as_mut() {
+                            review.acknowledged = false;
+                            review.preview = None;
+                            review.error = Some(e.clone());
+                        }
+                        self.announce(e);
+                    }
+                }
+            }
             (slot, reply) => return Some((slot, reply)),
         }
         None
+    }
+
+    fn deletion_dialog(&mut self, ctx: &egui::Context, actions: &mut Vec<Action>) {
+        let busy = self.projects.deletion.as_ref().is_some_and(|d| {
+            let id = d.repository.id.as_str().to_owned();
+            self.waiting(&ProjectsSlot::RepositoryDeletion(id.clone()))
+                || self.waiting(&ProjectsSlot::RepositoryDeletionPreview(id))
+        });
+        let Some(review) = self.projects.deletion.as_mut() else {
+            return;
+        };
+        match crate::repository_deletion::review_window(ctx, review, busy) {
+            Some(true) => {
+                if let Some(p) = review.preview.clone() {
+                    review.error = None;
+                    actions.push(Action::DeleteRepository(p));
+                }
+            }
+            Some(false) => self.projects.deletion = None,
+            None => {}
+        }
     }
 
     fn project_failure(&mut self, what: &str, e: Failure) {
@@ -867,6 +976,7 @@ impl ProjectsCtl<'_, '_> {
         let selected = mem.selection.clone();
         self.routes.insert(Route::Repositories, mem);
         self.confirm_dialog(ui.ctx(), &mut actions);
+        self.deletion_dialog(ui.ctx(), &mut actions);
         if reload {
             actions.push(Action::Reload);
             // Refresh reads the selected repository's README and summary again too (a view
