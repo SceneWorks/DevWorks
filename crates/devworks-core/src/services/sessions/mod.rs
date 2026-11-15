@@ -1025,6 +1025,10 @@ impl SessionService {
     ///   beneath the other, compared by whole segments with `/` and `\` both separating (no
     ///   globs: a stored path is literal). A rule naming no path is not path knowledge and is
     ///   never added; without `paths` no rule is added. A rule's estimate covers its text.
+    ///   A rule restricted to repositories is added only when one of them is a repository the
+    ///   session captured at creation (its work item's); a rule naming no repository applies to
+    ///   any. A session with no captured repository gets only the unrestricted rules. The
+    ///   briefing knows no activity, tool or harness, so those restrictions are not checked.
     /// - `budgetTokens` caps the briefing's estimated size: the sum of its sources'
     ///   `tokenEstimate`s (the attributed estimate of the material each source names: 4 bytes
     ///   per token, rounded up, over the artifact length or work title; 0 for the references to
@@ -1144,13 +1148,17 @@ impl SessionService {
             });
         }
         if let Some(paths) = &input.paths {
+            // The repositories the session captured at creation (its work's; none without work).
+            let repositories = read.session_repository_scope(&session.id)?;
             for rule in rules_for(snapshot, session.project_id.as_ref(), None)? {
                 let scoped = rule.lesson.as_ref().is_some_and(|l| {
-                    l.applicability
-                        .paths
-                        .0
-                        .iter()
-                        .any(|scope| paths.0.iter().any(|p| related_paths(&scope.0, &p.0)))
+                    let a = &l.applicability;
+                    (a.repository_ids.0.is_empty()
+                        || a.repository_ids.0.iter().any(|r| repositories.contains(r)))
+                        && a.paths
+                            .0
+                            .iter()
+                            .any(|scope| paths.0.iter().any(|p| related_paths(&scope.0, &p.0)))
                 });
                 if !scoped {
                     continue;
