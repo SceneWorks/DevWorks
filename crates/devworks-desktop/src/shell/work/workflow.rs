@@ -494,7 +494,7 @@ fn lease(work: &WorkUi) -> Option<u64> {
         .ok()
         .filter(|n| *n > 0)
 }
-pub(super) fn next_task(
+pub(crate) fn next_task(
     ui: &mut Ui,
     work: &WorkUi,
     feature: &str,
