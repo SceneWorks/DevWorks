@@ -1,4 +1,5 @@
 //! Native Human decisions through the real gateway; no provider or inference execution.
+#![allow(clippy::result_large_err)]
 mod common;
 use common::*;
 use devworks_core::protocol::records::{ApprovalViewRecord, WorkRecord};
