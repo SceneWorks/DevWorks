@@ -526,6 +526,83 @@ fn git_pathspecs_and_first_pass_expansions_are_held_unless_checked_exactly() {
             ));
         }
     }
+    // A held source never drops the destination's plan (so a refused destination still
+    // blocks the step).
+    for (shell, script, target) in [
+        (
+            "sh",
+            "shopt -s nocaseglob; mv -f /outside/* /protected/file",
+            "/protected/file",
+        ),
+        ("pwsh", "Move-Item /x/a* /protected/file", "/protected/file"),
+        (
+            "sh",
+            "dd of=/protected/file conv=notrunc -x",
+            "/protected/file",
+        ),
+    ] {
+        let flag = if shell == "pwsh" { "-Command" } else { "-c" };
+        let a = devworks_core::authority::shell::analyze_command(
+            &argv(&[shell, flag, script]),
+            Some("/work"),
+            &[],
+        );
+        if !a.plans.iter().any(|p| p.targets == [target]) {
+            missed.push(format!("{target} not planned: {script}: {:?}", a.plans));
+        }
+    }
+    // Extended glob syntax (zsh `^`, `#`, `~`; ksh/bash `@( )`, `!( )`): after a glob option
+    // change, or under zsh (whose options can come from its startup files), such a target is
+    // held, and so is every later `eval` or nested shell script.
+    for (shell, script) in [
+        ("sh", "setopt EXTENDED_GLOB; eval 'rm -rf /parent/^work'"),
+        ("sh", "setopt EXTENDED_GLOB; rm -rf /parent/^work"),
+        ("sh", "setopt EXTENDED_GLOB; rm -rf /parent/a#"),
+        ("sh", "setopt EXTENDED_GLOB; rm -rf /parent/a~b"),
+        ("sh", "shopt -s extglob; rm -rf /parent/!(work)"),
+        ("sh", "shopt -s extglob; sh -c 'rm -rf /x/y'"),
+        ("zsh", "rm -rf /parent/^work"),
+        ("zsh", "rm -rf /parent/a#"),
+        ("zsh", "rm -rf /parent/a~b"),
+        ("zsh", "eval 'rm -rf /parent/^work'"),
+    ] {
+        if !held(&[shell, "-c", script]) {
+            missed.push(format!(
+                "not held: {shell} -c {script}: {:?}",
+                assess(&[shell, "-c", script])
+            ));
+        }
+    }
+    // The same characters are plain under sh with no option change, and a leading `~` is home.
+    for (shell, script) in [("sh", "rm -rf /parent/a^b"), ("zsh", "rm -rf ~/x")] {
+        if held(&[shell, "-c", script]) {
+            missed.push(format!(
+                "held: {shell} -c {script}: {:?}",
+                assess(&[shell, "-c", script])
+            ));
+        }
+    }
+    // Tilde expansion happens before `eval` joins its words (a home path can hold code).
+    for script in [
+        "eval rm -rf ~/x",
+        "eval echo x '>>' ~",
+        "eval rm -rf a:~/x",
+        "eval X=~/x rm -rf y",
+    ] {
+        if !held(&["sh", "-c", script]) {
+            missed.push(format!(
+                "not held: {script}: {:?}",
+                assess(&["sh", "-c", script])
+            ));
+        }
+    }
+    // The shell expands an unquoted glob before Git sees it, so under `--literal-pathspecs`
+    // only a quoted pathspec is a literal name; an unquoted one is a shell pattern.
+    match assess(&["sh", "-c", "git --literal-pathspecs clean -fdx cache*"]) {
+        ShellAssessment::Destructive { plans, .. }
+            if plans.len() == 1 && !plans[0].literal && plans[0].targets == ["cache*"] => {}
+        other => missed.push(format!("not a pattern: {other:?}")),
+    }
     // Inside POSIX double quotes a backslash escapes only `$`, a backtick, `"`, `\` and a
     // newline; before anything else it stays part of the word.
     for (script, target) in [

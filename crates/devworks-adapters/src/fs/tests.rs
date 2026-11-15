@@ -1177,7 +1177,7 @@ fn git_pathspecs_and_eval_globs_are_never_checked_as_literal_words() {
         let dir = sh_quote(&outside.replace('\\', "/"));
         scripts.push(format!("eval rm -rf {dir}/*"));
     }
-    let leaks: Vec<String> = scripts
+    let mut leaks: Vec<String> = scripts
         .iter()
         .filter_map(|script| match verdict(script) {
             v @ (CommandVerdict::Allowed { .. } | CommandVerdict::Residual { .. }) => {
@@ -1186,6 +1186,20 @@ fn git_pathspecs_and_eval_globs_are_never_checked_as_literal_words() {
             _ => None,
         })
         .collect();
+    // These name the protected folder exactly and must be refused, not only held: the shell
+    // expands an unquoted glob before `--literal-pathspecs` applies, and a held `mv` source
+    // never drops its destination's check.
+    let into = sh_quote(&format!("{data}/file").replace('\\', "/"));
+    let from = sh_quote(&outside.replace('\\', "/"));
+    for script in [
+        "git --literal-pathspecs clean -fdx cache*".to_owned(),
+        format!("shopt -s nocaseglob; mv -f {from}/* {into}"),
+    ] {
+        match verdict(&script) {
+            CommandVerdict::Blocked { .. } => {}
+            v => leaks.push(format!("not refused: {script}: {v:?}")),
+        }
+    }
     assert!(
         leaks.is_empty(),
         "{} leaks:\n{}",

@@ -644,8 +644,17 @@ impl Collector<'_> {
         let mut resolved = Vec::new();
         let mut literal = Vec::new();
         let mut complete = true;
+        // After a glob option change (or under zsh), extended glob syntax is a pattern too:
+        // zsh `^`, `#` and a `~` past the start; ksh/bash `@( )`, `!( )`, `+( )`.
+        let extended = |t: &str| {
+            t.contains(['^', '#', '(', ')', '|'])
+                || t.char_indices().any(|(i, ch)| ch == '~' && i > 0)
+        };
         for w in words {
-            if self.glob_options && !w.literal && w.text.contains(['*', '?', '[']) {
+            if self.glob_options
+                && !w.literal
+                && (w.text.contains(['*', '?', '[']) || extended(&w.text))
+            {
                 // Still planned below, so a refused match blocks the step.
                 self.hold(InputNeeded::UnresolvedTarget);
                 complete = false;
@@ -1663,9 +1672,11 @@ fn command(words: &[Word], dialect: Dialect, piped: bool, c: &mut Collector, dep
                     })
                 })
                 .collect();
+            // The output is planned even when another operand is not modeled.
+            let planned = outputs.is_empty() || c.push(DestructiveKind::Truncate, &outputs);
             args.iter()
                 .all(|a| a.text.contains('=') && !a.text.starts_with('-'))
-                && (outputs.is_empty() || c.push(DestructiveKind::Truncate, &outputs))
+                && planned
         }
         "rm" | "rmdir" | "unlink" | "shred" if dialect == Dialect::Posix => {
             posix_removal(&name, args, c)
@@ -1717,14 +1728,25 @@ fn nested(words: &[Word], dialect: Dialect, c: &mut Collector, depth: u8) {
     // The shell expands each word before `eval` joins them, so an unquoted glob can turn file
     // names into code: only words the first pass leaves as written are reparsed. A backslash
     // (in any quoting) means the decoded word may differ from the first pass's: held too.
+    // A `~` at the start of a word or after `:`/`=` expands to the home path first, which can
+    // itself hold code once reparsed.
     let first_pass = |w: &Word| {
         w.dynamic
             || (dialect == Dialect::Posix
-                && (w.text.contains('\\') || (!w.literal && w.text.contains(['*', '?', '[']))))
+                && (w.text.contains('\\')
+                    || w.text.starts_with('~')
+                    || w.text.contains(":~")
+                    || w.text.contains("=~")
+                    || (!w.literal && w.text.contains(['*', '?', '[']))))
     };
     if words.iter().any(first_pass) {
         c.hold(InputNeeded::UnresolvedExpansion);
         return;
+    }
+    if dialect == Dialect::Posix && c.glob_options {
+        // Glob options changed earlier: the reparsed script may match differently. Still
+        // planned, so a refused target blocks it.
+        c.hold(InputNeeded::UnresolvedExpansion);
     }
     let code: Vec<&str> = words.iter().map(|w| w.text.as_str()).collect();
     script(&code.join(" "), dialect, c, depth + 1);
@@ -1752,6 +1774,10 @@ fn shell(name: &str, args: &[Word], piped: bool, c: &mut Collector, depth: u8) {
     // first operand after the options.
     let mut j = 0;
     let mut inline = false;
+    // A script reparsed after a glob option change may match differently.
+    let after_option = c.glob_options;
+    // zsh's startup files can set any glob option (`EXTENDED_GLOB`, `NO_CASE_GLOB`, …).
+    c.glob_options |= name == "zsh";
     while let Some(a) = args.get(j) {
         let t = a.text.as_str();
         if t == "--" || t == "-" {
@@ -1784,6 +1810,9 @@ fn shell(name: &str, args: &[Word], piped: bool, c: &mut Collector, depth: u8) {
         break;
     }
     if inline {
+        if after_option {
+            c.hold(InputNeeded::OpaqueCommand);
+        }
         match args.get(j) {
             Some(body) if body.dynamic => c.hold(InputNeeded::UnresolvedExpansion),
             Some(body) => script(&body.text, Dialect::Posix, c, depth + 1),
@@ -2209,7 +2238,8 @@ fn git(args: &[Word], c: &mut Collector) -> bool {
             let pathspecs: Vec<Word> = paths
                 .iter()
                 .map(|p| Word {
-                    literal: literal_pathspecs,
+                    // An unquoted glob is expanded by the shell before Git sees it.
+                    literal: literal_pathspecs && (p.literal || !p.text.contains(['*', '?', '['])),
                     ..p.clone()
                 })
                 .collect();
@@ -2363,8 +2393,11 @@ fn mv(args: &[Word], c: &mut Collector) -> bool {
             _ => return false,
         },
     };
-    // The sources leave their location, and the destination may be overwritten.
-    c.push(DestructiveKind::Move, &sources) && c.push(DestructiveKind::Truncate, &[destination])
+    // The sources leave their location, and the destination may be overwritten. Both are
+    // planned even when one is held, so a refused destination always blocks the step.
+    let moved = c.push(DestructiveKind::Move, &sources);
+    let written = c.push(DestructiveKind::Truncate, &[destination]);
+    moved && written
 }
 
 fn move_item(args: &[Word], c: &mut Collector) -> bool {
@@ -2404,9 +2437,12 @@ fn move_item(args: &[Word], c: &mut Collector) -> bool {
         return false;
     };
     ps_pattern_hold(&sources, c);
-    !sources.is_empty()
-        && c.push(DestructiveKind::Move, &sources)
-        && c.push(DestructiveKind::Truncate, &[destination])
+    if sources.is_empty() {
+        return false;
+    }
+    let moved = c.push(DestructiveKind::Move, &sources);
+    let written = c.push(DestructiveKind::Truncate, &[destination]);
+    moved && written
 }
 
 fn remote_path(p: &str) -> bool {
