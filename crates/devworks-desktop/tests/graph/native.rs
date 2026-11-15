@@ -1,10 +1,14 @@
 use super::*;
 use devworks_core::{
-    ports::storage::{ConfigScope, StorageError, WriteOptions, run_write},
+    ports::storage::{
+        ConfigScope, DiagnosticFilter, ReadOptions, StorageError, WriteOptions, read_snapshot,
+        run_write,
+    },
     protocol::{
         data::GraphResult,
         records::{IndexFreshnessState, RepositoryRecord},
     },
+    services::diagnostics::channels::REPOSITORY_INDEXING,
     settings::catalog::descriptor,
 };
 use devworks_desktop::{backend::Backend, host::Engine, ops, shell::Shell};
@@ -38,6 +42,31 @@ fn git(path: &Path, args: &[&str]) {
         "{}",
         String::from_utf8_lossy(&out.stderr)
     );
+}
+/// What the runtime recorded about its discovery scans (shown when a discovery assertion fails).
+fn discovery_problems(engine: &Engine) -> Vec<String> {
+    read_snapshot(
+        &**engine.host().runtime().store(),
+        &ReadOptions::default(),
+        |s| {
+            s.diagnostics().diagnostics(
+                &DiagnosticFilter {
+                    component: Some(REPOSITORY_INDEXING.into()),
+                    operation: Some("indexing.discover".into()),
+                    ..DiagnosticFilter::default()
+                },
+                50,
+            )
+        },
+    )
+    .map_or_else(
+        |e| vec![format!("diagnostics unreadable: {e}")],
+        |rows| {
+            rows.into_iter()
+                .map(|d| format!("{}: {}", d.severity, d.message))
+                .collect()
+        },
+    )
 }
 struct Fx {
     root: Root,
@@ -99,7 +128,12 @@ impl Fx {
         let (records, more) =
             ops::discover_result(b.query("indexing.discover", &ops::discover(&*b))).unwrap();
         assert!(!more);
-        assert_eq!(records.len(), 1);
+        assert_eq!(
+            records.len(),
+            1,
+            "recorded discovery problems: {:?}",
+            discovery_problems(&engine)
+        );
         Self {
             root,
             engine,
@@ -221,10 +255,12 @@ fn native_indexed_graph_exposes_all_operations_and_recovers_exact_trust_request(
         !has_text(&h, "Foundational: No"),
         "unknown repository metadata must not become a negative fact"
     );
+    wait_for_screen_help(&f.engine, &f.root, "code-exploration", "code-exploration");
     click(&mut h, Role::Button, "Help for current screen");
-    step_until(
+    step_until_progressing(
         &mut h,
         "captured graph context documentation",
+        || f.root.write_progress(),
         |s| matches!(&s.help.read,Some(devworks_core::protocol::records::HelpReadView::Available{topic,..})if topic.id.as_str()=="code-exploration"),
     );
     assert!(has_text(&h, "Explore repository code"));

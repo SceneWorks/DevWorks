@@ -283,6 +283,41 @@ fn discovery_scans_only_after_admission_and_only_for_people() {
 }
 
 #[test]
+fn a_persons_discovery_records_why_its_scan_found_nothing() {
+    let _case = native_runtime_case();
+    let h = Harness::new();
+    let rt = runtime();
+    let src = sources();
+    let missing = src.join("missing");
+    let store = h.open();
+    let runtime_ = rt
+        .block_on(boot(composition(&h, store.clone(), "git")))
+        .unwrap();
+    let user = principal(&*store, "user", PrincipalKind::Human);
+    base_directory(&store, &user, &missing);
+    assert!(discovered(&runtime_, &user).is_empty());
+    let recorded = read(&*store, |s| {
+        s.diagnostics().diagnostics(
+            &DiagnosticFilter {
+                component: Some("indexing.repository".into()),
+                operation: Some("indexing.discover".into()),
+                ..DiagnosticFilter::default()
+            },
+            50,
+        )
+    });
+    let base = missing.display().to_string();
+    assert!(
+        recorded
+            .iter()
+            .any(|d| d.severity == "Warning" && d.message.contains(&base)),
+        "the unavailable base directory is recorded: {recorded:?}"
+    );
+    rt.block_on(runtime_.shutdown());
+    let _ = std::fs::remove_dir_all(&src);
+}
+
+#[test]
 fn provider_instructions_use_current_registered_checkout_and_scope() {
     let _case = native_runtime_case();
     let h = Harness::new();
