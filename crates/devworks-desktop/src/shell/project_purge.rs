@@ -400,12 +400,14 @@ impl Shell {
             .manifest
             .as_ref()
             .is_some_and(|m| matches!(m.phase, PurgePhase::RemovingBytes | PurgePhase::Held));
-        if (retry
-            || (active
-                && self
-                    .purge
-                    .last_poll
-                    .is_none_or(|t| t.elapsed() > std::time::Duration::from_secs(1))))
+        // A close in this frame wins: a poll started now would set busy and drop the close.
+        if !close
+            && (retry
+                || (active
+                    && self
+                        .purge
+                        .last_poll
+                        .is_none_or(|t| t.elapsed() > std::time::Duration::from_secs(1))))
             && !self.purge.busy
         {
             self.refresh_purge_status();
