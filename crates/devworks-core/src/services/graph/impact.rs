@@ -242,16 +242,23 @@ fn build(
     file: Option<(&Id, &str)>,
     selection: Option<&CodeNodeSelection>,
 ) -> Result<GraphResult, Failure> {
+    // A package that owns the file has dependent crates only the scan derives (across the whole
+    // scope). That is decided first, so the budget is charged once, by the path that answers.
+    let owner = match file {
+        Some((repository, path)) if !starts.is_empty() => crate_owner(reader, repository, path)?,
+        _ => Owner::None,
+    };
     // An overlay view's unmapped inbound count needs every unresolved edge: only the scan reads
     // them. Otherwise the reached nodes' own edges answer, unless a package takes part.
-    if !super::incident::overlay(reader)
-        && let Some(result) = assess(reader, starts.clone(), depth, file, selection, None)?
+    if !matches!(owner, Owner::Found(_))
+        && !super::incident::overlay(reader)
+        && let Some(result) = assess(reader, starts.clone(), depth, file, selection, &owner, None)?
     {
         return Ok(result);
     }
     let edges = reader.raw_edges()?;
     Ok(
-        assess(reader, starts, depth, file, selection, Some(&edges))?
+        assess(reader, starts, depth, file, selection, &owner, Some(&edges))?
             .expect("the scan answers every impact"),
     )
 }
@@ -289,6 +296,7 @@ fn assess(
     depth: u16,
     file: Option<(&Id, &str)>,
     selection: Option<&CodeNodeSelection>,
+    owner: &Owner,
     scanned: Option<&dataset::Edges>,
 ) -> Result<Option<GraphResult>, Failure> {
     let unresolved = match scanned {
@@ -482,17 +490,15 @@ fn assess(
             );
         }
     }
-    if let Some((repository, path)) = file.filter(|_| !start_keys.is_empty())
-        && !crate_dependents(
-            reader,
-            repository,
-            path,
-            depth,
-            scanned.map(|edges| &edges.linked[..]),
-            &mut links,
-        )?
-    {
-        return Ok(None);
+    if file.is_some() && !start_keys.is_empty() {
+        match (owner, scanned) {
+            (Owner::Ambiguous, _) => reader.gaps.push("ambiguous_impact_package_owner"),
+            (Owner::Found(owner), Some(edges)) => {
+                crate_dependents(reader, owner, depth, &edges.linked, &mut links)
+            }
+            (Owner::Found(_), None) => return Ok(None),
+            (Owner::None, _) => {}
+        }
     }
     let mut counts = [0u64; 4];
     let mut low = 0;
@@ -648,26 +654,26 @@ fn assess(
     }))
 }
 
-/// Adds the crates that depend on the package owning `path`; `false` when that needs the scan's
-/// edges (`edges`), which derive the package dependencies across the whole scope.
-fn crate_dependents(
-    reader: &mut Reader<'_>,
-    repository: &Id,
-    path: &str,
-    depth: u16,
-    edges: Option<&[scan::Edge]>,
-    links: &mut Links,
-) -> Result<bool, Failure> {
+/// The package definition that owns a file: the nearest crate (`.rs`) or Swift package
+/// (`.swift`) manifest on its path that defines one.
+enum Owner {
+    None,
+    /// Two definitions share the nearest manifest: no owner is chosen.
+    Ambiguous,
+    Found(GraphNode),
+}
+
+fn crate_owner(reader: &mut Reader<'_>, repository: &Id, path: &str) -> Result<Owner, Failure> {
     let manifest = if path.to_lowercase().ends_with(".rs") {
         "Cargo.toml"
     } else if path.to_lowercase().ends_with(".swift") {
         "Package.swift"
     } else {
-        return Ok(true);
+        return Ok(Owner::None);
     };
     let scope = reader.scoped_repository(repository)?;
     let mut directory = path.rsplit_once('/').map_or("", |(p, _)| p);
-    let owner = loop {
+    loop {
         let path = if directory.is_empty() {
             manifest.into()
         } else {
@@ -687,19 +693,28 @@ fn crate_dependents(
         });
         let owner = definitions.next();
         if definitions.next().is_some() {
-            reader.gaps.push("ambiguous_impact_package_owner");
-            return Ok(true);
+            return Ok(Owner::Ambiguous);
         }
-        if owner.is_some() || directory.is_empty() || reader.budget.exhausted.is_some() {
-            break owner;
+        if let Some(owner) = owner {
+            return Ok(Owner::Found(owner));
+        }
+        if directory.is_empty() || reader.budget.exhausted.is_some() {
+            return Ok(Owner::None);
         }
         directory = directory.rsplit_once('/').map_or("", |(p, _)| p);
-    };
-    let Some(owner) = owner else { return Ok(true) };
-    let Some(edges) = edges else {
-        return Ok(false);
-    };
-    let mut visited = BTreeSet::from([dataset::node_key(&owner)]);
+    }
+}
+
+/// Adds the crates that depend on `owner` (a file's package), over the scan's `edges`, which
+/// derive the package dependencies across the whole scope.
+fn crate_dependents(
+    reader: &mut Reader<'_>,
+    owner: &GraphNode,
+    depth: u16,
+    edges: &[scan::Edge],
+    links: &mut Links,
+) {
+    let mut visited = BTreeSet::from([dataset::node_key(owner)]);
     let mut frontier = visited.clone();
     let mut dependents = BTreeSet::new();
     for _ in 0..depth {
@@ -742,7 +757,6 @@ fn crate_dependents(
             links.insert((source, target), value);
         }
     }
-    Ok(true)
 }
 
 /// Ordinary unresolved symbols are not evidence that a previously mapped endpoint was lost.
