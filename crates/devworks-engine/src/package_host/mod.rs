@@ -2271,6 +2271,7 @@ impl Broker for HostBroker {
                     ));
                 }
                 let (inv, commit) = (inv.as_ref().clone(), params.clone());
+                let package = ctx.package_id.clone();
                 let outcome = run_write(&*self.host.store, WriteOptions::default(), move |tx| {
                     let _guard = slot.state.lock().unwrap_or_else(|p| p.into_inner());
                     if slot.revoked.load(Ordering::SeqCst) {
@@ -2280,14 +2281,14 @@ impl Broker for HostBroker {
                 });
                 match outcome {
                     Ok(CommitOutcome::Accepted(r)) | Ok(CommitOutcome::Replayed(r)) => Ok(r),
-                    Ok(CommitOutcome::Refused(why)) => Err(match why {
-                        CommitRefusal::Invalid(e) => rpc_error(RpcErrorClass::ProtocolViolation, e),
-                        CommitRefusal::BindingMismatch | CommitRefusal::StaleInvocation => {
-                            rpc_error(RpcErrorClass::PermissionDenied, &format!("{why:?}"))
-                        }
-                        other => rpc_error(RpcErrorClass::Conflict, &format!("{other:?}")),
-                    }),
-                    Err(e) => Err(rpc_error(RpcErrorClass::OutcomeUnknown, &format!("{e:?}"))),
+                    Ok(CommitOutcome::Refused(why)) => Err(commit_refused(&why)),
+                    Err(e) => Err(broker::host_failure(
+                        &self.host,
+                        &package,
+                        RpcErrorClass::OutcomeUnknown,
+                        "the event commit's outcome is unknown",
+                        &e,
+                    )),
                 }
             }
         }
@@ -2304,7 +2305,15 @@ impl HostBroker {
         let state = read_snapshot(&*self.host.store, &ReadOptions::default(), move |s| {
             s.packages().package_state(&pkg)
         })
-        .map_err(|e| rpc_error(RpcErrorClass::Unavailable, &format!("{e:?}")))?;
+        .map_err(|e| {
+            broker::host_failure(
+                &self.host,
+                package,
+                RpcErrorClass::Unavailable,
+                "the package state could not be read",
+                &e,
+            )
+        })?;
         match state {
             Some(st) if st.generation == generation => {
                 Ok(snapshot(&st.state, generation, st.revision))
@@ -2368,9 +2377,50 @@ impl HostBroker {
                 RpcErrorClass::Conflict,
                 "the state revision changed",
             )),
-            Err(e) => Err(rpc_error(RpcErrorClass::OutcomeUnknown, &format!("{e:?}"))),
+            Err(e) => Err(broker::host_failure(
+                &self.host,
+                package,
+                RpcErrorClass::OutcomeUnknown,
+                "the state change's outcome is unknown",
+                &e,
+            )),
         }
     }
+}
+
+/// The package's error for a refused event commit: its class and a fixed message.
+fn commit_refused(why: &CommitRefusal) -> devworks_extension_protocol::package::RpcError {
+    let (class, message) = match why {
+        CommitRefusal::Invalid(e) => (RpcErrorClass::ProtocolViolation, *e),
+        CommitRefusal::BindingMismatch => (
+            RpcErrorClass::PermissionDenied,
+            "the commit does not name this invocation's delivery",
+        ),
+        CommitRefusal::StaleInvocation => (
+            RpcErrorClass::PermissionDenied,
+            "the invocation no longer holds its delivery",
+        ),
+        CommitRefusal::Cancelled => (
+            RpcErrorClass::Conflict,
+            "the delivery was cancelled after the invocation started",
+        ),
+        CommitRefusal::CheckpointConflict { .. } => (
+            RpcErrorClass::Conflict,
+            "the subscription checkpoint changed",
+        ),
+        CommitRefusal::GenerationMismatch { .. } => (
+            RpcErrorClass::Conflict,
+            "the state generation is no longer the pinned one",
+        ),
+        CommitRefusal::StateConflict { .. } => {
+            (RpcErrorClass::Conflict, "the state revision changed")
+        }
+        CommitRefusal::ChangedReplay => (
+            RpcErrorClass::Conflict,
+            "a different commit was already processed for this event",
+        ),
+    };
+    rpc_error(class, message)
 }
 
 fn snapshot(state: &Value, generation: i64, revision: i64) -> RpcResult {

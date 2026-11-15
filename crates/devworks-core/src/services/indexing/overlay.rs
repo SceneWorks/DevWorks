@@ -1182,6 +1182,20 @@ pub(crate) fn execute(exec: &mut Exec<'_>) -> Result<(), Stop> {
     // Publication: the view of exactly these layers, while the baseline is still the one it
     // composes over.
     exec.stage("publishing")?;
+    // The view's links: its inherited edges as its own composition links them, stored once
+    // here so an endpoint lookup reads them through an index instead of relinking every edge.
+    let composed_layers: Vec<Id> = [
+        wgen.clone(),
+        branch_generation.clone(),
+        Some(snap.base_generation.clone()),
+    ]
+    .into_iter()
+    .flatten()
+    .collect();
+    let links = read_snapshot(&*env.store, &ReadOptions::default(), |s| {
+        super::worker::view_links(s.indexing(), &repo_id, &composed_layers)
+    })
+    .map_err(Stop::storage)?;
     let view_id = env.ids.next_id(IdKind::View);
     let (o_id, base_gen, repo2) = (
         overlay_id.clone(),
@@ -1229,6 +1243,9 @@ pub(crate) fn execute(exec: &mut Exec<'_>) -> Result<(), Stop> {
             }),
         };
         tx.indexing().insert_view(&view)?;
+        if view.branch_id.is_some() || view.worktree_id.is_some() {
+            tx.indexing().insert_view_links(&view.view_id, &links)?;
+        }
         // The previous view of this overlay and its layers go. Its layers are read from the
         // view itself: this build's `new_layer` already replaced the IDs on the record.
         let previous = o.clone();

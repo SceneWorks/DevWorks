@@ -31,7 +31,8 @@
 //! `devworks-fixture-<package>-late-state` in the temporary directory), `crash` (exits 5
 //! mid-invocation) and `call` (makes each `broker.call` of `calls` in
 //! `devworks-fixture-<package>-call.json` in the temporary directory, `"$input"` naming its input
-//! and `"$last"` the previous result, reports `call:<actionKey>:<class>` as progress and completes
+//! and `"$last"` the previous result, reports `call:<actionKey>:<class>` as progress (followed by
+//! `:<error message>` when the step sets `reportMessage`) and completes
 //! with the results, plus a forged artifact when `forge` and its input when `returnInput`).
 use devworks_extension_protocol::frame::{MAX_FRAME_BYTES, read_frame, write_frame};
 use serde_json::{Value, json};
@@ -326,7 +327,12 @@ fn invoke(st: Arc<State>, id: Value, inv: Value, cancel: mpsc::Receiver<()>, pac
                     "actionKey": step["actionKey"], "call": call});
                 let r = st.call("broker.call", params);
                 let key = step["actionKey"].as_str().unwrap_or("-");
-                st.progress(&inv, n as u64 + 1, &format!("call:{key}:{}", class(&r)));
+                let mut text = format!("call:{key}:{}", class(&r));
+                if step["reportMessage"] == json!(true) {
+                    text.push(':');
+                    text.push_str(r["error"]["message"].as_str().unwrap_or(""));
+                }
+                st.progress(&inv, n as u64 + 1, &text);
                 if let Some(a) = r["result"].get("artifact") {
                     produced.push(a.clone());
                 }

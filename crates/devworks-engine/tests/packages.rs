@@ -4630,3 +4630,6 @@ mod help_allocations;
 
 #[path = "packages/compact_inspection.rs"]
 mod compact_inspection;
+
+#[path = "packages/broker_limits.rs"]
+mod broker_limits;
