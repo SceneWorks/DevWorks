@@ -203,3 +203,108 @@ pub fn scanned_incident(
         .map(|e| (e.raw, e.source, e.target))
         .collect())
 }
+
+/// [`around`] for several nodes: their edges merged in the scan's order, each once. `None` when
+/// one of them needs the scan.
+pub(super) fn around_all<'n>(
+    read: &dyn ReadSnapshot,
+    scope: &GraphScope,
+    layers: &[ViewLayers],
+    nodes: impl IntoIterator<Item = &'n GraphNodeIdentity>,
+    direction: &Direction,
+    kinds: &[&str],
+    budget: &mut Budget,
+) -> Result<Option<Vec<Edge>>, Failure> {
+    let mut merged = BTreeMap::new();
+    for node in nodes {
+        let Some(edges) = around(read, scope, layers, node, direction, kinds, budget)? else {
+            return Ok(None);
+        };
+        for edge in edges {
+            let order = (
+                edge.raw.repository_id.as_str().to_owned(),
+                edge.raw.edge.unit_key.clone(),
+                edge.raw.edge.edge_id.clone(),
+            );
+            merged.entry(order).or_insert(edge);
+        }
+        if budget.exhausted.is_some() {
+            break;
+        }
+    }
+    Ok(Some(merged.into_values().collect()))
+}
+
+/// Whether the full scan of `scope` would find an edge that does not resolve, without it: each
+/// one-layer view's recorded count of its edges that name no repository and do not resolve
+/// inside it, then the edges that name a repository, resolved against `scope` by the scan's
+/// rules. `None` when only the scan can tell: an overlay view, or a view stored without a count.
+pub(super) fn unresolved(
+    read: &dyn ReadSnapshot,
+    scope: &GraphScope,
+    layers: &[ViewLayers],
+    budget: &mut Budget,
+) -> Result<Option<bool>, Failure> {
+    for view in &scope.views {
+        match read.graph().graph_view_unresolved(&view.view_id)? {
+            None => return Ok(None),
+            Some(0) => {}
+            Some(_) => return Ok(Some(true)),
+        }
+    }
+    let mut after = None;
+    loop {
+        let Some(page) = read
+            .graph()
+            .graph_repository_edges(scope, after.as_ref(), READ_PAGE)?
+        else {
+            return Ok(None);
+        };
+        for raw in page.items {
+            if !budget.visit() {
+                return Ok(Some(false));
+            }
+            after = Some(GraphPosition {
+                repository_id: raw.repository_id.clone(),
+                unit_key: raw.edge.unit_key.clone(),
+                item_id: raw.edge.edge_id.clone(),
+            });
+            if let Resolved::Edge(Err(_)) = scan::resolve(read, scope, layers, None, raw, budget)? {
+                return Ok(Some(true));
+            }
+        }
+        if !page.has_more {
+            return Ok(Some(false));
+        }
+    }
+}
+
+/// What [`unresolved`] reads against the full scan, as the parity tests compare them: its answer
+/// and the scan's for the whole scope, then for each view its recorded count and the number of the
+/// scan's unresolved edges of that view that name no repository (`None` where it records none).
+#[doc(hidden)]
+pub fn unresolved_parity(
+    read: &dyn ReadSnapshot,
+    scope: &GraphScope,
+    layers: &[ViewLayers],
+) -> Result<UnresolvedParity, Failure> {
+    let indexed = unresolved(read, scope, layers, &mut test_budget())?;
+    let edges = super::dataset::edges(read, scope, layers, &[], &mut test_budget())?;
+    let mut views = Vec::new();
+    for view in &scope.views {
+        let local = edges
+            .unmapped
+            .iter()
+            .filter(|e| {
+                e.original.view_id == view.view_id
+                    && e.original.edge.payload.get("sourceRepositoryId").is_none()
+                    && e.original.edge.payload.get("targetRepositoryId").is_none()
+            })
+            .count() as u64;
+        views.push((read.graph().graph_view_unresolved(&view.view_id)?, local));
+    }
+    Ok((indexed, !edges.unmapped.is_empty(), views))
+}
+
+/// See [`unresolved_parity`].
+pub type UnresolvedParity = (Option<bool>, bool, Vec<(Option<u64>, u64)>);

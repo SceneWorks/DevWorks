@@ -1391,6 +1391,13 @@ impl IndexRepository for Unit<'_> {
             v.worktree_id.as_ref().map(Id::as_str),
             text(&v.coverage)
         ]))?;
+        if v.branch_id.is_none() && v.worktree_id.is_none() {
+            db(db(self.conn.prepare_cached(&format!(
+                "INSERT INTO graph_view_unresolved(view_id,edge_count) VALUES(?2,({}))",
+                super::graph::UNRESOLVED_EDGES
+            )))?
+            .execute(params![v.baseline_id.as_str(), v.view_id.as_str()]))?;
+        }
         Ok(())
     }
     fn insert_view_links(&mut self, view: &Id, links: &[ViewLink]) -> Result<(), StorageError> {
@@ -1488,6 +1495,7 @@ impl IndexRepository for Unit<'_> {
             "DELETE FROM index_pins WHERE view_id=?1",
             "DELETE FROM graph_view_links WHERE view_id=?1",
             "DELETE FROM graph_view_link_sets WHERE view_id=?1",
+            "DELETE FROM graph_view_unresolved WHERE view_id=?1",
             "DELETE FROM index_views WHERE id=?1",
         ] {
             db(db(self.conn.prepare_cached(sql))?.execute([view.as_str()]))?;
@@ -1690,6 +1698,7 @@ pub(crate) fn remove_repository_index(
         "DELETE FROM index_pins WHERE view_id IN (SELECT id FROM index_views WHERE source_key=?1)",
         "DELETE FROM graph_view_links WHERE view_id IN (SELECT id FROM index_views WHERE source_key=?1)",
         "DELETE FROM graph_view_link_sets WHERE view_id IN (SELECT id FROM index_views WHERE source_key=?1)",
+        "DELETE FROM graph_view_unresolved WHERE view_id IN (SELECT id FROM index_views WHERE source_key=?1)",
         "DELETE FROM index_views WHERE source_key=?1",
         "UPDATE index_generations SET state='Retired' WHERE source_key=?1",
     ] {

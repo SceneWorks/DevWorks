@@ -683,6 +683,25 @@ pub const MIGRATIONS: &[Migration] = &[
         expected_sha256: "78a4b778482cc81cf7e48ec8daf29cce7c97af15b9d40f6ba88622b3bc244024",
         rebuilds_tables: false,
     },
+    // Two indexes only: prior builds read and write the store unchanged.
+    Migration {
+        version: 60,
+        minimum_reader: 57,
+        minimum_writer: 58,
+        sql: include_str!("migrations/0060_graph_node_lookups.sql"),
+        expected_sha256: "40e14b2566cee47db4daeb04f96427fd6ff34f21951cf482bc1868b4942e0325",
+        rebuilds_tables: false,
+    },
+    // A prior writer would remove a view without removing its unresolved count, so it may not
+    // open the store; a prior reader never reads it. No existing table changes.
+    Migration {
+        version: 61,
+        minimum_reader: 57,
+        minimum_writer: 61,
+        sql: include_str!("migrations/0061_graph_view_unresolved.sql"),
+        expected_sha256: "910fd21382ea8c47bd6daf7b0afad5ad9d4b0991bd51612abfa44186ce86d002",
+        rebuilds_tables: false,
+    },
 ];
 /// Recorded checksum of migration 17; a test fails if the shipped text changes.
 pub const MIGRATION_0017_SHA256: &str =

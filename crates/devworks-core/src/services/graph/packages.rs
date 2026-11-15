@@ -1,10 +1,6 @@
 //! Package links derived only from definitions in the complete selected composition.
 //! Structural manifests do not authorize cross-repository symbol-name guessing.
-use super::{
-    budget::Budget,
-    dataset,
-    scan::{self, Edge},
-};
+use super::{budget::Budget, dataset, scan::Edge};
 use crate::{ports::storage::*, services::sessions::Failure};
 use serde_json::{Value, json};
 use std::collections::BTreeSet;
@@ -43,26 +39,33 @@ impl Packages {
         budget: &mut Budget,
     ) -> Result<Self, Failure> {
         let mut definitions = Vec::new();
-        scan::nodes(
-            read,
-            scope,
-            &GraphNodeFilter {
-                kinds: vec!["Package".into()],
-                ..Default::default()
-            },
-            budget,
-            |node, budget| {
+        let mut after = None;
+        'pages: loop {
+            let page = read
+                .graph()
+                .graph_nodes_of_kind(scope, "Package", after.as_ref(), 32)?;
+            for node in page.items {
+                if !budget.visit() {
+                    break 'pages;
+                }
+                after = Some(GraphPosition {
+                    repository_id: node.repository_id.clone(),
+                    unit_key: node.node.unit_key.clone(),
+                    item_id: node.node.node_id.clone(),
+                });
                 if definition(&node) {
                     if !budget.retain(
                         node.node.payload.to_string().len() + std::mem::size_of::<GraphNode>(),
                     ) {
-                        return Ok(false);
+                        break 'pages;
                     }
                     definitions.push(node);
                 }
-                Ok(true)
-            },
-        )?;
+            }
+            if !page.has_more {
+                break;
+            }
+        }
         Ok(Self {
             definitions,
             complete: budget.exhausted.is_none(),
