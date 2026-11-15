@@ -97,4 +97,76 @@ mod tests {
              crates/devworks-adapters/src/storage/sqlite/project_purge/schema.rs to {actual}."
         );
     }
+
+    #[test]
+    fn schema_baseline_lists_only_tables_columns_foreign_keys_and_triggers_the_migrated_schema_has()
+    {
+        // schema-baseline.json is the frozen schema 35 inventory that every later policy
+        // document extends. Later migrations add to the schema, so the baseline may list fewer
+        // entries than the migrated schema, but it must not list a table, column, foreign key or
+        // trigger a migration dropped.
+        let reference = Connection::open_in_memory().unwrap();
+        super::super::guard::register(&reference, false).unwrap();
+        for migration in MIGRATIONS {
+            reference.execute_batch(migration.sql).unwrap();
+        }
+        let baseline: serde_json::Value = serde_json::from_str(include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../docs/architecture/validation/project-purge/schema-baseline.json"
+        )))
+        .unwrap();
+        let mut stale = Vec::new();
+        for table in baseline["tables"].as_array().unwrap() {
+            let name = table["name"].as_str().unwrap();
+            let live: std::collections::BTreeSet<String> = reference
+                .prepare(&format!("SELECT name FROM pragma_table_xinfo('{name}')"))
+                .unwrap()
+                .query_map([], |row| row.get(0))
+                .unwrap()
+                .map(Result::unwrap)
+                .collect();
+            if live.is_empty() {
+                stale.push(format!("table {name}"));
+                continue;
+            }
+            for column in table["columns"].as_array().unwrap() {
+                let column = column.as_str().unwrap();
+                if !live.contains(column) {
+                    stale.push(format!("column {name}.{column}"));
+                }
+            }
+            for key in table["foreignKeys"].as_array().unwrap() {
+                let from = key["from"].as_str().unwrap();
+                let target = key["target"].as_str().unwrap();
+                let target_exists: i64 = reference
+                    .query_row(
+                        "SELECT count(*) FROM main.sqlite_schema WHERE type='table' AND name=?1",
+                        [target],
+                        |row| row.get(0),
+                    )
+                    .unwrap();
+                if target_exists == 0 || !live.contains(from) {
+                    stale.push(format!("foreign key {name}.{from} -> {target}"));
+                }
+            }
+        }
+        for trigger in baseline["triggers"].as_array().unwrap() {
+            let name = trigger["name"].as_str().unwrap();
+            let exists: i64 = reference
+                .query_row(
+                    "SELECT count(*) FROM main.sqlite_schema WHERE type='trigger' AND name=?1",
+                    [name],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            if exists == 0 {
+                stale.push(format!("trigger {name}"));
+            }
+        }
+        assert!(
+            stale.is_empty(),
+            "schema-baseline.json lists schema objects the migrations dropped; remove them from \
+             docs/architecture/validation/project-purge/schema-baseline.json: {stale:#?}"
+        );
+    }
 }
