@@ -7,6 +7,8 @@ struct HelpApp {
     store: Arc<dyn ApplicationStore>,
     runtime: Arc<Runtime>,
     n: AtomicUsize,
+    /// The composition's ID source: its issue count is the progress of durable Help work.
+    ids: Arc<TestIds>,
 }
 fn boot_help(rt: &tokio::runtime::Runtime, h: &Harness) -> HelpApp {
     boot_help_with_files(
@@ -87,32 +89,38 @@ fn boot_help_with_metadata(
             .drain(tokio::time::Instant::now() + Duration::from_secs(10))
             .await;
         let _diagnostics = crate::common::help_startup_diagnostics(&*store, runtime.dispatcher());
-        within("native Help startup generation", async {
-            loop {
-                runtime.dispatcher().run_until_idle().await.unwrap();
-                let ready = read(&*store, |s| {
-                    let head = s.help().help_head()?;
-                    let ended = match head.generation_operation_id.as_ref() {
-                        Some(op) => s
-                            .operations()
-                            .operation(op)?
-                            .is_some_and(|o| is_terminal(o.state)),
-                        None => false,
-                    };
-                    Ok(head.generation_id.is_some() && ended)
-                });
-                if ready {
-                    break;
+        let ids = h.ids.clone();
+        durable(
+            "native Help startup generation",
+            move || ids.issued(),
+            async {
+                loop {
+                    runtime.dispatcher().run_until_idle().await.unwrap();
+                    let ready = read(&*store, |s| {
+                        let head = s.help().help_head()?;
+                        let ended = match head.generation_operation_id.as_ref() {
+                            Some(op) => s
+                                .operations()
+                                .operation(op)?
+                                .is_some_and(|o| is_terminal(o.state)),
+                            None => false,
+                        };
+                        Ok(head.generation_id.is_some() && ended)
+                    });
+                    if ready {
+                        break;
+                    }
+                    tokio::task::yield_now().await;
                 }
-                tokio::task::yield_now().await;
-            }
-        })
+            },
+        )
         .await;
     });
     HelpApp {
         store,
         runtime,
         n: AtomicUsize::new(0),
+        ids: h.ids.clone(),
     }
 }
 impl HelpApp {
@@ -177,24 +185,28 @@ impl HelpApp {
         scheduler: &Arc<devworks_engine::Scheduler>,
         job: &Id,
     ) -> StoredJobRun {
-        rt.block_on(within("Help generation and job settlement", async {
-            loop {
-                self.runtime.dispatcher().run_until_idle().await.unwrap();
-                scheduler.tick().await.unwrap();
-                scheduler
-                    .drain(tokio::time::Instant::now() + Duration::from_secs(10))
-                    .await;
-                let run = self
-                    .runs(job)
-                    .into_iter()
-                    .max_by_key(|run| run.seq)
-                    .expect("scheduled run");
-                if !matches!(run.status.as_str(), "Queued" | "Running" | "Holding") {
-                    return run;
+        rt.block_on(durable(
+            "Help generation and job settlement",
+            || self.ids.issued(),
+            async {
+                loop {
+                    self.runtime.dispatcher().run_until_idle().await.unwrap();
+                    scheduler.tick().await.unwrap();
+                    scheduler
+                        .drain(tokio::time::Instant::now() + Duration::from_secs(10))
+                        .await;
+                    let run = self
+                        .runs(job)
+                        .into_iter()
+                        .max_by_key(|run| run.seq)
+                        .expect("scheduled run");
+                    if !matches!(run.status.as_str(), "Queued" | "Running" | "Holding") {
+                        return run;
+                    }
+                    tokio::task::yield_now().await;
                 }
-                tokio::task::yield_now().await;
-            }
-        }))
+            },
+        ))
     }
 }
 struct Native {
@@ -287,6 +299,22 @@ fn captured(run: &StoredJobRun) -> Value {
     serde_json::from_str(saved["frame"].as_str().unwrap()).unwrap()
 }
 
+/// A Help generation that never completes still fails its wait: the bound restarts only while
+/// the generation makes durable progress. The never-completing body issues no IDs, as a stalled
+/// generation does not, and the stall bound is shortened to keep the case fast.
+#[test]
+#[should_panic(expected = "never-completing Help generation: no progress for")]
+fn a_help_generation_wait_fails_once_its_progress_stops() {
+    let h = Harness::new();
+    let ids = h.ids.clone();
+    runtime().block_on(durable_for(
+        "never-completing Help generation",
+        Duration::from_millis(500),
+        move || ids.issued(),
+        std::future::pending::<()>(),
+    ));
+}
+
 #[test]
 fn empty_scheduled_help_jobs_capture_current_revisions_for_each_run_and_explicit_stale_stays_stale()
 {
@@ -339,15 +367,19 @@ fn empty_scheduled_help_jobs_capture_current_revisions_for_each_run_and_explicit
         ),
         "{regenerate:?}"
     );
-    rt.block_on(within("changed Help generation", async {
-        loop {
-            app.runtime.dispatcher().run_until_idle().await.unwrap();
-            if app.head().registry_revision == next_registry {
-                break;
+    rt.block_on(durable(
+        "changed Help generation",
+        || app.ids.issued(),
+        async {
+            loop {
+                app.runtime.dispatcher().run_until_idle().await.unwrap();
+                if app.head().registry_revision == next_registry {
+                    break;
+                }
+                tokio::task::yield_now().await;
             }
-            tokio::task::yield_now().await;
-        }
-    }));
+        },
+    ));
     let current_head = app.head();
     assert!(current_head.revision > first_head.revision);
     h.advance(3_600_000);

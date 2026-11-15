@@ -213,19 +213,24 @@ fn boot_paid(rt: &tokio::runtime::Runtime, h: &Harness, wire: Arc<Wire>) -> Help
         store,
         runtime,
         n: AtomicUsize::new(0),
+        ids: h.ids.clone(),
     };
     {
         let _diagnostics =
             crate::common::help_startup_diagnostics(&*app.store, app.runtime.dispatcher());
-        rt.block_on(within("paid runtime Help startup", async {
-            loop {
-                app.runtime.dispatcher().run_until_idle().await.unwrap();
-                if app.head().generation_id.is_some() {
-                    break;
+        rt.block_on(durable(
+            "paid runtime Help startup",
+            || app.ids.issued(),
+            async {
+                loop {
+                    app.runtime.dispatcher().run_until_idle().await.unwrap();
+                    if app.head().generation_id.is_some() {
+                        break;
+                    }
+                    tokio::task::yield_now().await;
                 }
-                tokio::task::yield_now().await;
-            }
-        }));
+            },
+        ));
     }
     app
 }
