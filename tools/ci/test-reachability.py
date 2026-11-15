@@ -125,9 +125,12 @@ def predicate(tokens, i, true_names=()):
     return {"true": True, "false": False}.get(name), j
 
 
-def expand_cfg_attr(attribute):
-    """Yield the attribute, then the attributes inside each cfg_attr whose predicate is true or unknown."""
-    yield attribute
+def expand_cfg_attr(attribute, definite=True):
+    """Yield (attribute, definite), then the attributes inside each cfg_attr whose predicate is true or unknown.
+
+    `definite` is False once an enclosing cfg_attr predicate is unknown, so the attribute may not apply.
+    """
+    yield attribute, definite
     if len(attribute) > 3 and attribute[0] == "cfg_attr" and attribute[1] == "(":
         value, j = predicate(attribute, 2, ("test",))
         if value is False:
@@ -135,18 +138,18 @@ def expand_cfg_attr(attribute):
         group, depth = [], 0
         for token in attribute[j + 1:-1]:  # skip the comma after the predicate and the final ")"
             if token == "," and depth == 0:
-                yield from expand_cfg_attr(group)
+                yield from expand_cfg_attr(group, definite and value is True)
                 group = []
                 continue
             depth += (token in "([{") - (token in ")]}")
             group.append(token)
-        yield from expand_cfg_attr(group)
+        yield from expand_cfg_attr(group, definite and value is True)
 
 
 def never_compiled(attribute):
-    """True when the attribute, or a cfg_attr it may expand to, is a cfg that is false on every platform."""
-    return any(len(a) > 2 and a[0] == "cfg" and a[1] == "(" and predicate(a, 2)[0] is False
-               for a in expand_cfg_attr(attribute))
+    """True when the attribute, or a cfg_attr that surely applies, is a cfg that is false on every platform."""
+    return any(definite and len(a) > 2 and a[0] == "cfg" and a[1] == "(" and predicate(a, 2)[0] is False
+               for a, definite in expand_cfg_attr(attribute))
 
 
 def path_overrides(attribute, strings, definite):

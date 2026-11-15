@@ -206,6 +206,13 @@ class Reachability(unittest.TestCase):
         })
         self.assertEqual(orphan_names(root), ['nested/mod.rs'])
 
+    def test_cfg_inside_an_unevaluable_cfg_attr_does_not_disable_the_module(self):
+        root = crate(self.root, {
+            'root.rs': '#[cfg_attr(windows, cfg(any()))]\nmod suite;\n',
+            'suite/mod.rs': '',
+        })
+        self.assertEqual(orphan_names(root), [])
+
 
 if __name__ == '__main__':
     unittest.main()
