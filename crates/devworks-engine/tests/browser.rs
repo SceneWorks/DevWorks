@@ -3312,13 +3312,14 @@ fn an_action_never_overtakes_a_predecessor_that_outlasts_the_order_bound() {
     let h = Harness::new();
     let platform = Arc::new(FakePlatform::new(&h.root));
     let real: Arc<dyn BrowserPlatform> = platform.clone();
-    // The predecessor (text input that is never answered) runs far longer than the order bound.
+    // The predecessor (text input that is never answered) runs far longer than the order bound;
+    // its call bound is far longer than the waits below, so a loaded host cannot end it first.
     let fx = Fx::boot_with(
         h,
         platform,
         real,
         BrowserConfig {
-            call_timeout: Duration::from_secs(3),
+            call_timeout: Duration::from_secs(60),
             order_bound: Duration::from_millis(200),
             ..config()
         },
@@ -3328,31 +3329,52 @@ fn an_action_never_overtakes_a_predecessor_that_outlasts_the_order_bound() {
     let snap = fx.snapshot(fx.navigate(&user, &session, Some("t1"), "https://app.test/form"));
     let ax = fx.json(&snap.accessibility);
     let rev = fx.session(&session).revision.to_string();
-    fx.platform
-        .browser(&session)
-        .lock()
-        .unwrap()
-        .hang
-        .insert("Input.insertText".into());
+    let b = fx.platform.browser(&session);
+    b.lock().unwrap().hang.insert("Input.insertText".into());
     let slow = fx.accepted(
         &user,
         "browser.input",
         json!({"sessionId": session.as_str(), "expectedRevision": rev, "action": {"kind": "Text", "node": node(&snap, &ax, "Name"), "text": "a"}}),
     );
     let key = json!({"kind": "Key", "target": target_json(&snap), "key": "Tab", "modifiers": []});
-    fx.accepted(
+    let next = fx.accepted(
         &user,
         "browser.input",
         json!({"sessionId": session.as_str(), "expectedRevision": rev, "action": key}),
     );
-    // Past the order bound, with the text input still running, the key has not been sent.
-    fx.drive(1500);
-    let b = fx.platform.browser(&session);
+    let operation = |id: &OperationId| {
+        let id = id.clone();
+        read(&**fx.app().store(), move |s| s.operations().operation(&id))
+    };
+    // The predecessor is inside its unanswered call.
+    let deadline = Instant::now() + Duration::from_secs(60);
+    while operation(&slow).map(|o| o.state) != Some(OperationState::Dispatching)
+        || requests(&b, "Input.insertText") == 0
+    {
+        assert!(
+            Instant::now() < deadline,
+            "the predecessor never sent its call"
+        );
+        fx.drive(10);
+    }
+    // The successor's order bound ran out and an attempt of it ended, with the predecessor
+    // still running.
+    let deadline = Instant::now() + Duration::from_secs(60);
+    while operation(&next).is_none_or(|o| {
+        o.attempts.is_empty()
+            || matches!(
+                o.state,
+                OperationState::Preflighted | OperationState::Dispatching
+            )
+    }) {
+        assert!(
+            Instant::now() < deadline,
+            "the successor was never attempted"
+        );
+        fx.drive(10);
+    }
     assert_eq!(
-        read(&**fx.app().store(), move |s| s
-            .operations()
-            .operation(&slow))
-        .map(|o| o.state),
+        operation(&slow).map(|o| o.state),
         Some(OperationState::Dispatching),
         "the predecessor is still running"
     );
@@ -3361,6 +3383,9 @@ fn an_action_never_overtakes_a_predecessor_that_outlasts_the_order_bound() {
         0,
         "the successor overtook its running predecessor"
     );
+    // Close ends the unanswered call instead of leaving it to its call bound.
+    let closed = fx.close(&user, &session);
+    assert_eq!(closed.phase, BrowserPhase::Closed);
 }
 
 #[test]
