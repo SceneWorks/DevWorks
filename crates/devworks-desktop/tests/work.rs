@@ -2278,3 +2278,140 @@ fn an_inbox_reply_read_before_mark_read_landed_does_not_restore_the_message() {
     );
     assert!(shown.iter().any(|m| m.body.0 == "Arrived meanwhile"));
 }
+
+#[test]
+fn the_work_card_assigns_its_working_agent_and_clears_the_assignment_through_tasks_assign() {
+    use devworks_core::protocol::records::WorkAttempt;
+    use devworks_core::protocol::{Id, OperationState};
+    let root = Root::new("work-card-assignment");
+    let engine = start(&root);
+    let backend = engine.backend();
+    let spy = LoseAcks::over(backend.clone(), "tasks.assign", 0);
+    let project = ops::project_changed(backend.command(
+        "projects.create",
+        &ops::project_create(&*backend, "Shop", "", &[]),
+    ))
+    .unwrap();
+    let pid = project.id.0.as_str().to_owned();
+    let backlog = default_status_id(&project.id, "backlog")
+        .as_str()
+        .to_owned();
+    let issue = command(
+        &*backend,
+        "issues.create",
+        json!({"projectId": pid, "title": "Crash", "description": "", "repositoryIds": [],
+            "statusId": backlog, "priority": 0}),
+    );
+    // A live primary assignment of the issue, registered through the run substrate as a
+    // starting agent registers one (no agent runs in this test).
+    let mut frame: serde_json::Value = serde_json::from_slice(&ops::command_frame(
+        &*backend,
+        "sessions.start",
+        json!({"scope": {"kind": "Project", "projectId": pid}, "rootId": issue.id,
+            "title": "Work"}),
+    ))
+    .unwrap();
+    frame["schemaRevision"] = json!(ops::SESSION_REVISION);
+    let session =
+        ops::started(backend.command("sessions.start", frame.to_string().as_bytes())).unwrap();
+    let live = {
+        use devworks_core::ports::storage::write_job;
+        use devworks_core::protocol::RootId;
+        use devworks_core::services::runs::substrate::NewRunAssignment;
+        let control =
+            std::sync::Arc::new(devworks_core::services::runs::ControlService::with_scope(
+                std::sync::Arc::new(devworks_desktop::platform::HostIds::new()),
+                std::sync::Arc::new(devworks_core::services::runs::scope::ScriptedScope::new()),
+            ));
+        let new = NewRunAssignment {
+            root: RootId(issue.id.clone()),
+            work: RootId(issue.id.clone()),
+            parent: None,
+            session: session.id.clone(),
+            scope_key: None,
+        };
+        let (tx, rx) = std::sync::mpsc::sync_channel(1);
+        engine
+            .host()
+            .runtime()
+            .store()
+            .submit_write(
+                Default::default(),
+                write_job(
+                    move |tx| {
+                        let host = tx.store().host_actor.clone();
+                        Ok(control.register_assignment(tx, &host, new)?.unwrap())
+                    },
+                    move |result| tx.send(result).unwrap(),
+                ),
+            )
+            .unwrap();
+        rx.recv_timeout(std::time::Duration::from_secs(30))
+            .unwrap()
+            .unwrap()
+    };
+    let mut h = harness(
+        shell_with(Ok(spy.clone()), &root, Script::default(), None),
+        1600.0,
+        1000.0,
+    );
+    settle(&mut h);
+    h.state_mut().select_project(Some(pid.clone()));
+    h.state_mut().navigate(Route::Issues);
+    settle(&mut h);
+    click_row(&mut h, "Crash  ·");
+    assert!(has_text(
+        &h,
+        "An agent can be assigned while one is working on it."
+    ));
+    // An agent works on it: its record carries the live assignment.
+    let mut working = issue.clone();
+    working.attempts.0 = vec![WorkAttempt {
+        id: Id::new("execution-live").unwrap(),
+        assignment_id: Some(live.id.clone()),
+        state: OperationState::Dispatching,
+        git_links: devworks_core::protocol::support::BoundedList(Vec::new()),
+        checkpoint: None,
+    }];
+    h.state_mut()
+        .work
+        .detail
+        .insert(issue.id.as_str().into(), working.clone());
+    settle(&mut h);
+    click(&mut h, Role::Button, "Assign to the working agent");
+    let sent = |n: usize| -> serde_json::Value {
+        let frames = spy.frames.lock().unwrap();
+        serde_json::from_slice::<serde_json::Value>(&frames[n]).unwrap()["body"].clone()
+    };
+    let assign = sent(0);
+    assert_eq!(assign["kind"], "tasks.assign");
+    assert_eq!(assign["taskId"], json!(issue.id));
+    assert_eq!(assign["expectedRevision"], json!(issue.revision));
+    assert_eq!(assign["assignmentId"], json!(live.id));
+    assert_eq!(assign["clearAssignment"], false);
+    // The reply's record names the agent of that assignment's session.
+    let assigned = h.state().work.freshest(issue.id.as_str()).unwrap();
+    let agent = assigned
+        .assigned_agent_id
+        .clone()
+        .expect("the card names the assignment's agent");
+    assert!(has_text(&h, &format!("Assigned to {}", agent.as_str())));
+    click(&mut h, Role::Button, "Clear assignment");
+    let clear = sent(1);
+    assert_eq!(clear["kind"], "tasks.assign");
+    assert_eq!(clear["clearAssignment"], true);
+    assert!(clear.get("assignmentId").is_none());
+    assert_eq!(clear["expectedRevision"], json!(assigned.revision));
+    assert!(
+        h.state()
+            .work
+            .freshest(issue.id.as_str())
+            .unwrap()
+            .assigned_agent_id
+            .is_none()
+    );
+    assert!(
+        h.query_by_role_and_label(Role::Button, "Clear assignment")
+            .is_none()
+    );
+}

@@ -96,7 +96,8 @@
       "issues.edit",
       "tasks.dependency_links",
       "issues.prioritize",
-      "tasks.edit"
+      "tasks.edit",
+      "tasks.assign"
     ]
   },
   {

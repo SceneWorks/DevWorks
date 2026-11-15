@@ -8,6 +8,10 @@ A clear actionable standalone issue can proceed without a separate feature-plan 
 
 Use the shared membership edit with the current work revision. Linking makes resolution part of feature delivery and transfers supervision without creating another identity. An existing worker continues through the controlled handoff; otherwise eligible unowned work can be selected. Unlinking pauses work until explicitly resumed. Direct transfers preserve the worker/session and existing branches while changing future supervision and budget attribution at the reconciled boundary. Past spending remains historical.
 
+## Assign the working agent
+
+While an agent works on an issue or task, its card offers **Assign to the working agent**: the card then records that agent's live assignment, and its Agents section names the agent. **Clear assignment** removes the record. Neither starts, stops or hands over the work.
+
 ## Dependencies
 
 Blockers have stable IDs. Self-links, duplicates, cycles, invalid scope, and stale revisions are refused atomically. Adding a blocker fences affected future dispatch. Finishing or removing one dependency does not clear user pauses, approval waits, budgets, or resource holds. Independent work can continue.
