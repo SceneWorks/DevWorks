@@ -4613,3 +4613,6 @@ mod provider_schema;
 
 #[path = "packages/help_allocations.rs"]
 mod help_allocations;
+
+#[path = "packages/compact_inspection.rs"]
+mod compact_inspection;

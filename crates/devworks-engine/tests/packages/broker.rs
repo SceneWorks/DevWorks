@@ -6,7 +6,7 @@ use devworks_core::registry::{Mode, SchemaRevision};
 use devworks_engine::package_host::broker::APPLICATION_CAPABILITY;
 
 /// The registered input schema reference of `operation` in `mode` at `revision`.
-fn input_schema(operation: &str, mode: Mode, revision: Option<u32>) -> Value {
+pub(super) fn input_schema(operation: &str, mode: Mode, revision: Option<u32>) -> Value {
     let descriptor = devworks_core::registry::find(operation).unwrap();
     let revision = revision.map_or(*descriptor.revisions.last().unwrap(), SchemaRevision);
     let schema = descriptor
@@ -23,13 +23,13 @@ fn input_schema(operation: &str, mode: Mode, revision: Option<u32>) -> Value {
         "revision": revision.0.to_string(), "sha256": sha256_hex(canonical.as_bytes())})
 }
 
-fn application(operation: &str, schema: Value, arguments: Value) -> Value {
+pub(super) fn application(operation: &str, schema: Value, arguments: Value) -> Value {
     json!({"kind": "Application", "operation": format!("devworks/{operation}"),
         "inputSchema": schema, "arguments": arguments})
 }
 
 /// Runs the package's `call` contribution with `script` as `principal` on `input`.
-fn run_calls(
+pub(super) fn run_calls(
     a: &App,
     package: &str,
     script: Value,

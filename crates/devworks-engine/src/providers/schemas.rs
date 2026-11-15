@@ -366,24 +366,10 @@ impl RegisteredSchemas {
             .map_err(|_| ProviderError::MaterialUnavailable)?;
         let mut inspection =
             package_policy::inspection(&version).ok_or(ProviderError::MaterialUnavailable)?;
-        if inspection.schema_assets.is_empty()
-            || inspection
-                .contributions
-                .iter()
-                .any(|c| c.descriptor.is_none())
-        {
+        if crate::package_host::recovery::compact(&inspection) {
             // The legacy record still binds its original bundle. Reinspection never accepts a
             // caller substitute or weakens original visibility to obtain it.
-            let source =
-                version
-                    .provenance
-                    .get("source")
-                    .cloned()
-                    .ok_or(ProviderError::Unsupported(
-                        "legacy package metadata needs reinstall",
-                    ))?;
-            let reference =
-                serde_json::from_value(source).map_err(|_| ProviderError::MaterialUnavailable)?;
+            use crate::package_host::recovery::{Refused, recover};
             let info = self.store.info();
             let metadata_context = devworks_core::context::HostIngress::new(self.store.as_ref())
                 .context(
@@ -395,27 +381,23 @@ impl RegisteredSchemas {
                         .map_err(|_| ProviderError::MaterialUnavailable)?,
                     Revision::new(1).expect("positive"),
                 );
-            let bytes = self
-                .artifacts
-                .read_exact(
-                    self.store.as_ref(),
-                    &metadata_context,
-                    &reference,
-                    128 * 1024 * 1024,
-                )
-                .map_err(|_| {
+            inspection = recover(
+                self.store.as_ref(),
+                &self.artifacts,
+                service,
+                &metadata_context,
+                &version,
+            )
+            .map_err(|refused| match refused {
+                Refused::NoSource => {
+                    ProviderError::Unsupported("legacy package metadata needs reinstall")
+                }
+                Refused::Unreadable => {
                     ProviderError::Unsupported("legacy package source unavailable; reinstall")
-                })?
-                .0;
-            if sha256_hex(&bytes) != version.bundle_digest {
-                return Err(ProviderError::MaterialUnavailable);
-            }
-            inspection = service
-                .inspect(&bytes)
-                .map_err(|_| ProviderError::MaterialUnavailable)?;
-            if inspection.manifest_digest != version.manifest_digest
-                || inspection.package_id != record.package_id
-            {
+                }
+                Refused::Mismatch => ProviderError::MaterialUnavailable,
+            })?;
+            if inspection.package_id != record.package_id {
                 return Err(ProviderError::MaterialUnavailable);
             }
         }
