@@ -523,7 +523,10 @@ pub struct LoseAcks {
     requests: bool,
     losses: std::sync::atomic::AtomicUsize,
     pub frames: Mutex<Vec<Vec<u8>>>,
+    /// Applied to every query reply (as JSON) before the shell sees it.
+    rewrite: Mutex<Option<QueryRewrite>>,
 }
+type QueryRewrite = Box<dyn Fn(&mut serde_json::Value) + Send + Sync>;
 impl LoseAcks {
     pub fn over(inner: Arc<dyn Backend>, operation: &'static str, losses: usize) -> Arc<Self> {
         Arc::new(Self {
@@ -532,6 +535,7 @@ impl LoseAcks {
             requests: false,
             losses: std::sync::atomic::AtomicUsize::new(losses),
             frames: Mutex::new(Vec::new()),
+            rewrite: Mutex::new(None),
         })
     }
     /// Loses the first `losses` requests before they reach the runtime (nothing commits).
@@ -546,7 +550,15 @@ impl LoseAcks {
             requests: true,
             losses: std::sync::atomic::AtomicUsize::new(losses),
             frames: Mutex::new(Vec::new()),
+            rewrite: Mutex::new(None),
         })
+    }
+    /// Rewrites every later query reply, as the runtime would answer once its state changed.
+    pub fn rewrite_queries(
+        &self,
+        rewrite: impl Fn(&mut serde_json::Value) + Send + Sync + 'static,
+    ) {
+        *self.rewrite.lock().unwrap() = Some(Box::new(rewrite));
     }
     /// Request keys of every admission of the command, in order.
     pub fn request_keys(&self) -> Vec<String> {
@@ -565,7 +577,16 @@ impl LoseAcks {
 }
 impl Backend for LoseAcks {
     fn query(&self, operation: &str, frame: &[u8]) -> devworks_core::gateway::QueryOutcome {
-        self.inner.query(operation, frame)
+        let reply = self.inner.query(operation, frame);
+        let rewrite = self.rewrite.lock().unwrap();
+        match (rewrite.as_ref(), reply) {
+            (Some(rewrite), Ok(reply)) => {
+                let mut value = serde_json::to_value(&reply).unwrap();
+                rewrite(&mut value);
+                Ok(serde_json::from_value(value).unwrap())
+            }
+            (_, reply) => reply,
+        }
     }
     fn command(&self, operation: &str, frame: &[u8]) -> devworks_core::gateway::CommandOutcome {
         if operation != self.operation {

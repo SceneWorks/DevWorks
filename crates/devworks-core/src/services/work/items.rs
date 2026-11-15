@@ -114,12 +114,27 @@ pub(crate) fn issue_view(mut r: WorkRecord) -> WorkRecord {
     r
 }
 
-/// The live activation of the item when it is (or was) a root of its own.
-fn live_execution(read: &dyn ReadSnapshot, w: &StoredWork) -> Result<Option<Id>, StorageError> {
-    Ok(read
-        .runs()
-        .live_activation(&RootId(w.id.clone()))?
-        .map(|a| a.id))
+/// The item's live attempt: the activation an agent works on it under (its own when it is a
+/// root, otherwise its root's live activation when its live primary assignment is bound to
+/// it) and that assignment.
+fn live_attempt(
+    runs: &dyn crate::ports::storage::RunRead,
+    w: &StoredWork,
+) -> Result<Option<model::LiveAttempt>, StorageError> {
+    let root = RootId(w.id.clone());
+    let assignment = runs.live_assignment_for_work(&root)?;
+    let execution = match (runs.live_activation(&root)?, &assignment) {
+        (Some(activation), _) => Some(activation.id),
+        (None, Some(a)) => runs
+            .live_activation(&a.root_id)?
+            .map(|activation| activation.id)
+            .filter(|id| a.execution_id.as_ref() == Some(id)),
+        (None, None) => None,
+    };
+    Ok(execution.map(|execution_id| model::LiveAttempt {
+        execution_id,
+        assignment_id: assignment.map(|a| a.id),
+    }))
 }
 /// The wire record of `w` read from a snapshot.
 pub(crate) fn snapshot_record(
@@ -135,7 +150,7 @@ pub(crate) fn snapshot_record(
     } else {
         (None, None)
     };
-    let live = live_execution(read, w)?;
+    let live = live_attempt(read.runs(), w)?;
     model::record(
         read.work(),
         w,
@@ -145,7 +160,7 @@ pub(crate) fn snapshot_record(
             } else {
                 None
             },
-            live_execution: live,
+            live_attempt: live,
             readiness,
             pending_readiness,
             detail,
@@ -154,10 +169,7 @@ pub(crate) fn snapshot_record(
 }
 /// The wire record of `w` read inside a write transaction.
 pub(crate) fn tx_record(tx: &mut dyn WriteTransaction, w: &StoredWork) -> R<WorkRecord> {
-    let live = tx
-        .runs()
-        .live_activation(&RootId(w.id.clone()))?
-        .map(|a| a.id);
+    let live = live_attempt(tx.runs(), w)?;
     let (readiness, pending_readiness) = if w.kind == FEATURE {
         (
             super::readiness::assessment(tx.work(), w)?,
@@ -176,7 +188,7 @@ pub(crate) fn tx_record(tx: &mut dyn WriteTransaction, w: &StoredWork) -> R<Work
         w,
         Extras {
             budget,
-            live_execution: live,
+            live_attempt: live,
             readiness,
             pending_readiness,
             detail: Detail::Summary,
