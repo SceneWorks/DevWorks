@@ -586,6 +586,9 @@ struct Collector<'p> {
     protected_branches: &'p [String],
     /// Consequential tokens accounted for by fully modeled commands.
     claimed: BTreeMap<String, usize>,
+    /// A PowerShell script contains a backtick (an escape or a line continuation), which the
+    /// tokenizer does not decode exactly: PowerShell writers are held.
+    ps_backtick: bool,
 }
 impl Collector<'_> {
     fn hold(&mut self, n: InputNeeded) {
@@ -707,6 +710,7 @@ fn analyze(
         cwd: Cwd::Known(working_directory.map(str::to_owned)),
         protected_branches,
         claimed: BTreeMap::new(),
+        ps_backtick: false,
     };
     command(&words, Dialect::Posix, false, &mut c, 0);
     // The backstop: every consequential token in the raw input must have been accounted for
@@ -950,6 +954,7 @@ fn script(text: &str, dialect: Dialect, c: &mut Collector, depth: u8) {
     }
     if dialect == Dialect::PowerShell {
         io_api(text, c);
+        c.ps_backtick |= text.contains('`');
     }
     let mut current: Vec<Word> = Vec::new();
     let mut redirect = false;
@@ -1222,6 +1227,21 @@ fn command(words: &[Word], dialect: Dialect, piped: bool, c: &mut Collector, dep
             // Keywords and block-taking cmdlets whose block was split off as its own command.
             i += 1;
             continue;
+        }
+        if dialect == Dialect::PowerShell && t == "." {
+            // Dot-sourcing a command runs it with the same arguments (in the caller's scope).
+            i += 1;
+            continue;
+        }
+        if dialect == Dialect::PowerShell
+            && matches!(
+                t.to_ascii_lowercase().as_str(),
+                "set-alias" | "sal" | "new-alias" | "nal" | "invoke-expression" | "iex"
+            )
+        {
+            // An alias can name any command, and code run from a string is not read here.
+            c.hold(InputNeeded::OpaqueCommand);
+            return;
         }
         if dialect == Dialect::PowerShell
             && matches!(
@@ -2468,7 +2488,6 @@ fn ps_write(writer: PsWriter, args: &[Word], c: &mut Collector) -> bool {
                 ("filter", Value),
                 ("include", Value),
                 ("exclude", Value),
-                ("stream", Value),
                 ("nonewline", Switch),
                 ("passthru", Switch),
                 ("asbytestream", Switch),
@@ -2500,6 +2519,11 @@ fn ps_write(writer: PsWriter, args: &[Word], c: &mut Collector) -> bool {
     let mut words = Vec::new();
     let mut known = true;
     let mut rest_positional = false;
+    let mut force = false;
+    // Forms whose effect the words do not show: splatting (`@p`, `@(…)`) binds parameters,
+    // any computed argument (`$v`, `$(…)`), and a backtick escape or line continuation anywhere
+    // in the script.
+    let opaque = c.ps_backtick || args.iter().any(|a| a.dynamic || a.text.starts_with('@'));
     let mut j = 0;
     while let Some(a) = args.get(j) {
         j += 1;
@@ -2541,6 +2565,7 @@ fn ps_write(writer: PsWriter, args: &[Word], c: &mut Collector) -> bool {
         } else {
             param
         });
+        force |= param == "force";
         match role {
             Path => paths.extend(value.map(|v| (v, false))),
             LiteralPath => paths.extend(value.map(|v| (v, true))),
@@ -2592,12 +2617,23 @@ fn ps_write(writer: PsWriter, args: &[Word], c: &mut Collector) -> bool {
         // The path arrives on the pipeline or at a prompt.
         c.hold(InputNeeded::UnresolvedTarget);
     }
+    // `-Force` expands wildcards over hidden entries too, which the pattern expansion skips.
+    if force
+        && targets
+            .iter()
+            .any(|(w, _)| w.text.contains(['*', '?', '[']))
+    {
+        c.hold(InputNeeded::UnresolvedTarget);
+    }
     let targets: Vec<Word> = targets
         .into_iter()
         .filter_map(|(w, literal)| ps_target(w, literal, c))
         .collect();
     if !targets.is_empty() {
         c.push(DestructiveKind::Truncate, &targets);
+    }
+    if opaque {
+        c.hold(InputNeeded::UnresolvedExpansion);
     }
     true
 }
@@ -2606,7 +2642,8 @@ fn ps_write(writer: PsWriter, args: &[Word], c: &mut Collector) -> bool {
 /// its target) when it cannot be checked exactly: a `FileSystem::` provider prefix is removed;
 /// any other provider (`Registry::`, …) or a drive name longer than one letter (`Env:`,
 /// `Variable:`, `Temp:`, a custom drive) is not a path the resolver reads; and a literal path with
-/// wildcard characters would be expanded as a pattern by the preflight.
+/// wildcard characters would be expanded as a pattern by the preflight. A `\` separator on Unix,
+/// a backtick in the script or a line break in the word holds the command but is still planned.
 fn ps_target(w: Word, literal: bool, c: &mut Collector) -> Option<Word> {
     let lower = w.text.to_ascii_lowercase();
     let rest = ["microsoft.powershell.core\\filesystem::", "filesystem::"]
@@ -2620,8 +2657,20 @@ fn ps_target(w: Word, literal: bool, c: &mut Collector) -> Option<Word> {
         c.hold(InputNeeded::UnresolvedTarget);
         return None;
     }
+    let mut text = rest.to_owned();
+    // PowerShell on Unix also reads `\` as a separator. The command is held, and the path is
+    // still planned as PowerShell reads it so a protected target is refused.
+    if cfg!(not(windows)) && text.contains('\\') {
+        c.hold(InputNeeded::UnresolvedTarget);
+        text = text.replace('\\', "/");
+    }
+    // A backtick anywhere in the script (an escape or a line continuation the tokenizer keeps)
+    // or a line break in the word: the path may not be what the words show.
+    if c.ps_backtick || text.contains(['\n', '\r']) {
+        c.hold(InputNeeded::UnresolvedExpansion);
+    }
     Some(Word {
-        text: rest.to_owned(),
+        text,
         dynamic: w.dynamic,
     })
 }

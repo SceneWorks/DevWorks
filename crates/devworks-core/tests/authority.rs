@@ -238,6 +238,63 @@ fn powershell_write_targets_are_read_as_powershell_reads_them() {
 }
 
 #[test]
+fn powershell_writers_are_held_unless_every_target_is_checked_exactly() {
+    use DestructiveKind::Truncate;
+    let held = |s: &str| {
+        matches!(
+            assess_command(&argv(&["pwsh", "-Command", s]), Some("/work")),
+            ShellAssessment::NeedsInput(_)
+        )
+    };
+    let mut cases = vec![
+        // An unquoted backtick continues the line; the next line is the path.
+        "Set-Content `\n/x/f hi",
+        "Set-Content -Path /x/f `\n -Value hi",
+        "'hi' > `\n/x/f",
+        // `-Force` expands wildcards over hidden entries too.
+        "Set-Content -Path /x/*/f -Value hi -Force",
+        "Add-Content -Force /x/s?/f hi",
+        // Splatting binds named parameters the command text does not show.
+        "Set-Content @p",
+        "$p = @{Path = '/x/f'; Value = 'hi'}; Set-Content @p",
+        "New-Item @('/x/a', '/x/b')",
+        // Computed arguments, even in a value position.
+        "Set-Content -Path /x/f -Value $v",
+        "Set-Content /x/f $(Get-Date)",
+        // An alternate data stream.
+        "Set-Content -Stream s -Path /x/f -Value hi",
+        // A cmdlet reached through an alias or code the analysis does not read.
+        "Set-Alias w New-Item; w /x/f",
+        "New-Alias w Add-Content; w /x/f hi",
+        "iex 'ni /x/f'",
+        "Invoke-Expression 'Add-Content /x/f hi'",
+    ];
+    // PowerShell on Unix reads `\` as a separator too.
+    if cfg!(not(windows)) {
+        cases.extend([
+            "Set-Content -LiteralPath '/x\\f' -Value hi",
+            "New-Item /x\\new",
+            "'hi' >> '/x\\f'",
+        ]);
+    }
+    let mut missed: Vec<String> = cases
+        .into_iter()
+        .filter(|s| !held(s))
+        .map(|s| format!("not held: {s:?}"))
+        .collect();
+    // The call and dot-source operators run the named cmdlet with the same arguments.
+    for script in ["& ni /x/f", "& 'Set-Content' /x/f hi", ". ni /x/f"] {
+        let got = assess_command(&argv(&["pwsh", "-Command", script]), Some("/work"));
+        let exact = matches!(&got, ShellAssessment::Destructive { plans, .. }
+            if plans.len() == 1 && plans[0].kind == Truncate && plans[0].targets == ["/x/f"]);
+        if !exact {
+            missed.push(format!("not planned: {script:?}: {got:?}"));
+        }
+    }
+    assert!(missed.is_empty(), "{}", missed.join("\n"));
+}
+
+#[test]
 fn powershell_file_and_folder_writers_plan_a_write_of_each_path() {
     use DestructiveKind::Truncate;
     let ps = |s: &str| plans(&["pwsh", "-Command", s]);

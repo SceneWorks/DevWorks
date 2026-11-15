@@ -894,6 +894,41 @@ fn powershell_writes_through_provider_quote_and_bracket_forms_are_never_allowed(
     ));
 }
 
+/// A write pattern that matches nothing is held, but never hides a protected operand of the same
+/// step: every operand is still checked and a refusal wins.
+#[test]
+fn an_unmatched_write_pattern_does_not_hide_a_protected_operand() {
+    use devworks_core::authority::shell::{Blocking, CommandVerdict, preflight_command};
+    let t = tree("unmatched");
+    let fs = NativeFilesystem::new();
+    let cwd = t.s.p("outside");
+    let slashed = |p: &str| p.replace('\\', "/");
+    let verdict = |script: &str| {
+        let argv = ["bash", "-c", script].map(str::to_owned);
+        preflight_command(&fs, &t.roots, &argv, Some(&cwd), &[])
+    };
+    let pattern = sh_quote(&slashed(&t.s.p("outside/[x]")));
+    let protected = sh_quote(&slashed(&t.s.p("data/new")));
+    for script in [
+        format!("mkdir {pattern} {protected}"),
+        format!("mkdir {protected} {pattern}"),
+    ] {
+        match verdict(&script) {
+            CommandVerdict::Blocked { blocked, .. } => assert_eq!(
+                blocked.iter().map(Blocking::reason).collect::<Vec<_>>(),
+                ["ApplicationData"],
+                "{script}"
+            ),
+            other => panic!("{script}: {other:?}"),
+        }
+    }
+    // Alone, the unmatched pattern is held, not allowed.
+    assert!(matches!(
+        verdict(&format!("mkdir {pattern}")),
+        CommandVerdict::NeedsInput { .. }
+    ));
+}
+
 #[test]
 fn shell_plans_resolve_to_actual_targets_before_dispatch() {
     let t = tree("shell");
