@@ -1,6 +1,6 @@
 name: PR size
 
-# Fails a pull request that changes more than 5000 hand-written lines.
+# Fails a non-feature pull request that changes more than 5000 hand-written lines.
 # Generated files (linguist-generated in .gitattributes) are not counted.
 # The `large-pr-approved` label skips the check.
 on:
@@ -24,11 +24,11 @@ jobs:
         with:
           fetch-depth: 0
       - name: Check hand-written diff size
-        if: ${{ !contains(github.event.pull_request.labels.*.name, 'large-pr-approved') }}
+        if: ${{ !(startsWith(github.head_ref, 'feature/') && github.base_ref == 'main') && !contains(github.event.pull_request.labels.*.name, 'large-pr-approved') }}
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: python3 tools/pr-size/check.py "$BASE_SHA" "$HEAD_SHA" --limit 5000
-      - name: Size check skipped by label
-        if: ${{ contains(github.event.pull_request.labels.*.name, 'large-pr-approved') }}
-        run: echo "large-pr-approved label present; size check skipped."
+      - name: Size check skipped for a feature PR or approved exception
+        if: ${{ (startsWith(github.head_ref, 'feature/') && github.base_ref == 'main') || contains(github.event.pull_request.labels.*.name, 'large-pr-approved') }}
+        run: echo "Feature PR or large-pr-approved exception; size check skipped."

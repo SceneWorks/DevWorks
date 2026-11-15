@@ -1,12 +1,10 @@
 # DevWorks agent notes
 
-## Pull requests
+## Pull requests and feature delivery
 
-- Group related CodeGraph items into one PR instead of opening a PR per item. Items are related when a reviewer would read them together: the same subsystem or files, the same kind of change (for example several flaky-test fixes, or several hardening fixes in one service), or follow-ups to the same feature. Keep unrelated items in separate PRs, and name every item the PR carries in its body. Every grouped item still needs its own tests and acceptance report.
-- Do not merge one open PR's branch into another; if work depends on an unmerged PR, add it to that PR's branch while it is open, wait for it to merge, or put both on a feature integration branch.
-- Keep each PR at or under 5000 hand-written changed lines. The `PR size` workflow enforces this (`tools/pr-size/check.py`); files marked `linguist-generated` in `.gitattributes` are not counted.
-- Merge each slice as soon as its CI passes. Land incomplete capabilities unwired (not reachable from the UI or agent tools) rather than holding a long-lived draft PR.
-- Automated review runs for at most 3 rounds. After the third round, file each remaining finding as a CodeGraph bug, link it in the thread reply, and merge on passing CI.
+- For a CodeGraph feature, create a local `feature/<key>-<slug>` branch and push it before task work. Give every story, task and bug its own local branch and worktree. Run focused local checks, obtain one independent subagent review of the exact task diff, fix valid findings, and merge the task locally into the feature branch. Push the feature branch and begin the highest-priority dependency-ready task without waiting for CI. Do not open task or group PRs for feature work.
+- When all required feature tasks are integrated and the full feature acceptance passes, open one PR from the feature branch to `main` per affected repository. Run CI and automated review on that PR. Fix CI failures and review findings for at most three automated review rounds. After round three, file each remaining actionable review finding as a CodeGraph bug and link it in the PR thread. Merge when required CI, branch protection and approvals are green.
+- Keep the 5000 hand-written-line PR limit for standalone issues and other non-feature PRs. Final feature PRs are exempt because they collect the feature's locally reviewed tasks. Files marked `linguist-generated` in `.gitattributes` remain excluded from the count.
 
 ## Review guidelines
 

@@ -287,7 +287,7 @@
         "view": "Delivery"
       },
       "preview": "ui-08/06-feature-delivery.png",
-      "coverage": "Task PRs to feature branches, independent review gates, final delivery and cleanup."
+      "coverage": "Locally reviewed task integrations, one final feature PR per repository, and cleanup."
     },
     {
       "title": "Agents and sessions",

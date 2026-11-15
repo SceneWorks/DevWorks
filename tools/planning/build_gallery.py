@@ -15,7 +15,7 @@ groups=[
 ('08-issue-workspace','Issue coordinator','issue',{},'A dedicated conversation, task history, worktree/branch/PR links and direct delivery to main.')]),
 ('work','Follow the work','Inspect any agent, source change, review or artifact without losing its work history.',[
 ('05-feature-changes','Changes across repositories','feature',{'view':'Changes'},'Read source diffs with the feature conversation and linked repository PR.'),
-('06-feature-delivery','Feature delivery','feature',{'view':'Delivery'},'Task PRs to feature branches, independent review gates, final delivery and cleanup.'),
+('06-feature-delivery','Feature delivery','feature',{'view':'Delivery'},'Locally reviewed task integrations, one final feature PR per repository, and cleanup.'),
 ('24-agents','Agents and sessions','agents',{},'Coordinator and worker activity, context usage, model route, pause and inspection.'),
 ('27-agent-transcript','Inspect and redirect an agent','agents',{'inspect':'engine-worker'},'Transcript, tool calls, context, effective tool access and worktree scope. Redirect at the next safe step.'),
 ('22-artifacts','Project artifacts','artifacts',{},'Upload, preview, export and explicitly delete retained files with project/feature/task provenance.')]),

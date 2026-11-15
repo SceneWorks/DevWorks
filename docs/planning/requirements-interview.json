@@ -21,7 +21,9 @@
     {
       "id": "review_gate",
       "source": "User interview answer",
-      "decision": "Resolve every actionable finding."
+      "decision": "Resolve every actionable finding.",
+      "superseded_in_part_by": "feature_delivery_single_pr_20261115",
+      "current_interpretation": "On a final feature PR, fix actionable findings for at most three automated review rounds, then file each remaining actionable finding as a linked CodeGraph bug. Required CI, protection and full feature acceptance still gate merge."
     },
     {
       "id": "review_adjudication",
@@ -37,7 +39,9 @@
     {
       "id": "fix_cycle_limit",
       "source": "User interview answer",
-      "decision": "Fix-cycle count is configurable, with a default of 3."
+      "decision": "Fix-cycle count is configurable, with a default of 3.",
+      "superseded_in_part_by": "feature_delivery_single_pr_20261115",
+      "current_interpretation": "Feature task local review has one round. Final feature PR automated review/fix rounds have a maximum of three; settings may lower the maximum."
     },
     {
       "id": "coordinator_escalation",
@@ -142,7 +146,9 @@
     {
       "id": "feature_branch_and_grouped_task_prs",
       "source": "User clarified PR strategy",
-      "decision": "Always use feature branches for feature work. Task PRs target the feature branch; related tasks may share a PR, with grouping decided by the feature coordinator. Only open PRs to main when the feature implementation is complete."
+      "decision": "Always use feature branches for feature work. Task PRs target the feature branch; related tasks may share a PR, with grouping decided by the feature coordinator. Only open PRs to main when the feature implementation is complete.",
+      "superseded_in_part_by": "feature_delivery_single_pr_20261115",
+      "current_interpretation": "Each task uses a local branch and worktree, receives one independent local review, merges locally into the pushed feature branch, and advances without CI wait. Open one final PR per affected repository after full feature implementation and acceptance."
     },
     {
       "id": "start_reviews_feature_planning_readiness",
@@ -396,21 +402,23 @@
     {
       "id": "auto_merge_enabled_by_default",
       "source": "User interview answer: On by default, with project and repository overrides.",
-      "decision": "Auto-Merge is enabled by default. Project settings can override the inherited default, and repository overrides take precedence for that repository. Effective values and their sources remain visible. Auto-Merge does not bypass required reviews, checks, unresolved actionable findings, approval requirements or other existing merge gates."
+      "decision": "Auto-Merge is enabled by default. Project settings can override the inherited default, and repository overrides take precedence for that repository. Effective values and their sources remain visible. Auto-Merge does not bypass required reviews, checks, unresolved actionable findings, approval requirements or other existing merge gates.",
+      "superseded_in_part_by": "feature_delivery_single_pr_20261115",
+      "current_interpretation": "After three final feature PR review rounds, remaining actionable findings become linked CodeGraph bugs; required CI, branch protection, approvals and full feature acceptance still gate Auto-Merge."
     },
     {
       "id": "mandatory_review_enabled_by_default",
       "source": "User interview answer: Yes, on by default, with project and repository overrides.",
       "decision": "Mandatory independent code review is enabled by default. Project settings may override the inherited default, and explicit repository settings take precedence for that repository, independently of Auto-Merge. Effective values and sources remain visible. Separate-agent review, GitHub review awareness, resolution of every actionable finding and the configured fix cycle remain part of the review workflow. The user subsequently selected configured GitHub automated reviews as sufficient, with an in-app reviewer only for repositories without automated reviews configured.",
       "superseded_in_part_by": "github_review_unavailable_independent_fallback_20261102",
-      "current_interpretation": "Configured GitHub review remains the normal source. If it fails or never completes, use an independent in-app reviewer automatically; retain all review findings and other delivery gates."
+      "current_interpretation": "Every feature task gets one independent local review. Configured GitHub review runs on the final feature PR; if it fails or never completes, use an independent in-app reviewer. Final feature PR review stops after at most three rounds and files remaining actionable findings as bugs."
     },
     {
       "id": "github_automated_reviews_satisfy_review_gate",
       "source": "User interview answer: GitHub automated reviews should satisfy it. Only run an in-app reviewer when the repository does not already have automated reviews configured.",
       "decision": "Configured GitHub automated reviews satisfy mandatory independent review. Do not launch an additional in-app reviewer for such repositories. When mandatory review is enabled and no automated reviews are configured, run a separate in-app reviewer. Both sources feed the existing fix cycle and must complete with every actionable finding resolved before merge. Exact configuration discovery, review completion signals and missing/failed-review handling remain open.",
       "superseded_in_part_by": "github_review_unavailable_independent_fallback_20261102",
-      "current_interpretation": "Configured GitHub review remains the normal source. If it fails or never completes, use an independent in-app reviewer automatically; retain all review findings and other delivery gates."
+      "current_interpretation": "Configured GitHub review runs on the final feature PR; if it fails or never completes, use an independent in-app reviewer. Every feature task gets one independent local review. After at most three final PR review rounds, file remaining actionable findings as bugs."
     },
     {
       "id": "keep_awake_default_off",
@@ -1196,6 +1204,15 @@
         "WATCH-11",
         "WATCH-12"
       ]
+    },
+    {
+      "id": "feature_delivery_single_pr_20261115",
+      "date": "2026-11-15",
+      "source": "User process decision",
+      "status": "Confirmed requirements and workflow; native DevWorks implementation pending",
+      "decision": "Push one feature branch per repository before task work. Work each story, task and bug on a local branch and worktree. Obtain one independent local review, fix valid findings, merge locally into the feature branch, push and take the highest-priority dependency-ready task without waiting for CI. Open one final PR per repository to main after full feature implementation. Fix final PR CI failures and review findings for at most three automated review rounds; file remaining actionable findings as linked CodeGraph bugs and merge when required checks and protection are green.",
+      "codegraph_feature": "DW-F9",
+      "implementation_item": "DW-382"
     }
   ],
   "open_next": "Execute native work from CodeGraph items after revalidation; all native items remain backlog. DW-64 tracks the current commit/push closeout.",

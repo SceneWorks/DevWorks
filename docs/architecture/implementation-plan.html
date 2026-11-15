@@ -248,7 +248,7 @@
 </tr>
 <tr>
 <td><a href="#dw-039">DW-039</a></td>
-<td>Manage owned worktrees, commits, pushes and task PRs</td>
+<td>Manage owned worktrees, commits and feature integration</td>
 <td>DW-012, DW-006, DW-005, DW-007</td>
 <td>G07</td>
 </tr>
@@ -809,8 +809,8 @@
 <p><strong>Supporting requirements:</strong> DB-01, DB-02, DB-03, DB-04, DB-05, DB-06, DB-07, DB-08, DB-09, SCHEMA-01, SCHEMA-02</p>
 <p><strong>Behavior/workload obligations:</strong> CAP-DATABASE. Frozen source entries bound: 4. Pending input schemas: 0.</p>
 <h3 id="dw-039">DW-039</h3>
-<p><strong>Manage owned worktrees, commits, pushes and task PRs</strong> · Feature · Planned; implementation not authorized or started.</p>
-<p>Task/group PRs integrate to feature branches; issue PRs target main. Persist all associations and expected heads. Force-with-lease is limited to owned task branches; feature force-push needs exact approval and main is always forbidden. Linked issues keep existing branches/worktrees; coordinator owns feature integration and reconciles PR targets. Unlink pauses work without deleting code or remote artifacts; historical costs stay fixed, later calls use current membership budget.</p>
+<p><strong>Manage owned worktrees, commits and feature integration</strong> · Feature · Planned; implementation not authorized or started.</p>
+<p>Feature tasks retain isolated local worktrees and branches for coordinator integration; standalone issues open PRs to main. Persist repository, worktree, branch, commit and final feature-PR associations with expected heads. Force-with-lease remains limited to owned task branches; feature force-push needs exact approval and main is forbidden. Linked issues keep existing branches and worktrees; unlink pauses work without deleting code or remote artifacts. Historical costs stay fixed and later calls use current membership budget.</p>
 <p>Implement the recorded strict input/result/error schemas and selected-operation/mode binding, current authority, durable receipt/effect/cancellation/recovery behavior, and meaningful native success/fault cases. Expose the same domain service to native UI and applicable agent tools; no parallel business implementation. Preserve source arguments/results/quirks traced here. Do not advertise unqualified targets or infer product acceptance from fixture tests.</p>
 <p><strong>Operations:</strong> <code>git.worktree</code>, <code>git.inspect</code>, <code>git.diff</code>, <code>git.commit</code>, <code>git.push</code>, <code>git.pull_request</code></p>
 <p><strong>Primary requirement cases:</strong> AT-GIT-01, AT-GIT-02, AT-GIT-03, AT-GIT-04, AT-GIT-05, AT-GIT-06, AT-GIT-07, AT-GIT-08, AT-GIT-09, AT-GIT-10, AT-GIT-11, AT-GIT-12, AT-GIT-13, AT-GIT-14, AT-GIT-15, AT-GIT-16, AT-GIT-17</p>
@@ -818,7 +818,7 @@
 <p><strong>Behavior/workload obligations:</strong> CAP-GITHUB. Frozen source entries bound: 0. Pending input schemas: 0.</p>
 <h3 id="dw-040">DW-040</h3>
 <p><strong>Reconcile final delivery and clean up owned Git resources</strong> · Feature · Planned; implementation not authorized or started.</p>
-<p>All-repo exact-head readiness before first submission, acyclic order and revalidation preserve partial merges. Async accepted/queued/unknown states reconcile through authoritative PR/head/method evidence, including squash/rebase and expiry. Cleanup preserves dirty/unintegrated/new concurrent commits.</p>
+<p>Integrate each locally reviewed feature task into its pushed feature branch without task PR or CI wait. Open one final PR per repository after full local acceptance; reconcile all-repository exact-head readiness, acyclic order and partial merges. Async accepted/queued/unknown states use authoritative PR/head/method evidence, including squash/rebase and expiry. Cleanup preserves dirty, unintegrated and new concurrent commits.</p>
 <p>Implement the recorded strict input/result/error schemas and selected-operation/mode binding, current authority, durable receipt/effect/cancellation/recovery behavior, and meaningful native success/fault cases. Expose the same domain service to native UI and applicable agent tools; no parallel business implementation. Preserve source arguments/results/quirks traced here. Do not advertise unqualified targets or infer product acceptance from fixture tests.</p>
 <p><strong>Operations:</strong> <code>git.integrate</code>, <code>git.cleanup</code></p>
 <p><strong>Primary requirement cases:</strong> AT-DELIVERY-01, AT-DELIVERY-02, AT-DELIVERY-03, AT-DELIVERY-04, AT-DELIVERY-05, AT-DELIVERY-06, AT-DELIVERY-07, AT-DELIVERY-08, AT-DELIVERY-09</p>
@@ -834,7 +834,7 @@
 <p><strong>Behavior/workload obligations:</strong> CAP-GITHUB. Frozen source entries bound: 1. Pending input schemas: 0.</p>
 <h3 id="dw-042">DW-042</h3>
 <p><strong>Resolve exact-head reviews and merge readiness</strong> · Feature · Planned; implementation not authorized or started.</p>
-<p>Configured GitHub automation satisfies review; absent automation uses independent verified-read reviewers. Fix every actionable finding, persist adjudication, enforce configured cycles and scope-bound readiness across changed heads and policies. Failed/stalled automation automatically uses one independent in-app fallback. Normalize source/run/head/policy/cycle evidence, zero-finding completion, finite wait, changed-head invalidation and late external findings. Fallback does not bypass required checks/branch protection.</p>
+<p>Review each feature task locally with an independent agent once before integration. Run configured GitHub review on the final feature PR; failed or stalled automation uses one independent in-app fallback. Persist exact-head findings and adjudication, explicit zero-finding completion, source/run/head/policy/cycle evidence, changed-head invalidation, finite waits and late external findings. Stop final PR review/fix cycles after three rounds and file remaining actionable findings as linked CodeGraph bugs. Fallback and the review cap do not bypass required CI, full acceptance or branch protection.</p>
 <p>Implement the recorded strict input/result/error schemas and selected-operation/mode binding, current authority, durable receipt/effect/cancellation/recovery behavior, and meaningful native success/fault cases. Expose the same domain service to native UI and applicable agent tools; no parallel business implementation. Preserve source arguments/results/quirks traced here. Do not advertise unqualified targets or infer product acceptance from fixture tests.</p>
 <p><strong>Operations:</strong> <code>reviews.list</code>, <code>reviews.inspect</code>, <code>reviews.request</code>, <code>reviews.findings</code>, <code>reviews.respond</code>, <code>reviews.adjudicate</code>, <code>reviews.readiness</code></p>
 <p><strong>Primary requirement cases:</strong> AT-REVIEW-01, AT-REVIEW-02, AT-REVIEW-03, AT-CODEREVIEW-01, AT-CODEREVIEW-02</p>

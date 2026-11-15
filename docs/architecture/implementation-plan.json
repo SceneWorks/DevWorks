@@ -10,13 +10,13 @@
     }
   ],
   "sourceSha256": {
-    "implementation-slices.json": "8b3d18d5b86fa2904b3ddb55ac117cfdcc93973ee2bc96bde9e32d982b14a8a4",
+    "implementation-slices.json": "8dd99c561a823f5706ba488935ef42eabd3eaca371a3bbf7c7e603630acec515",
     "devworks-capability-catalog.json": "2391f8849a5385a0a3f995473402068e9e610ff5d4984fe51b4d8b9aefad0f81",
-    "devworks-requirements-traceability.json": "24555c0cb565ec79ffec089f598fbdf9e1b3eeb291f2222a58c458dd1cc8a4d6",
+    "devworks-requirements-traceability.json": "a5021ce1f94be48ce3634703d56951322cf1e72c78f548659855b129adfb8a03",
     "codegraph-capability-inventory.json": "54da948de48de4a7d00353ae14d7464feac80cca9bdab6d2a6bb2679caae2c09",
     "capability-validation-contracts.json": "9722c1fe17c9aaed5c65fc43f1f4f412cca2813276e5108c7daf15585ae2ed81",
     "validation-workloads.json": "62c76bba3f262331403a5a38fa3d1aa1c7dc649737e36369ca4736780cfc3dcf",
-    "contracts/family-coverage.json": "608b011df133168f063eb75cf64299c9193068c76746e05e02af6c5bf52f9165",
+    "contracts/family-coverage.json": "0dd6927ab14fa5ed0b9209888d434b82446179a30c4f2f7bbb289f3e82569f14",
     "mcp-publication-candidates.json": "64a782ea1c6dc3ef8d40d799d000f143e60b8f06ff86c34b97c10c33ee598b2d",
     "codegraph-work-map.json": "93c551768cd75091f954a0db1757b585b3b6fbaf21b6f6fb8dbab7527c127e25"
   },
@@ -3239,7 +3239,7 @@
       "key": "git_tasks",
       "id": "DW-039",
       "type": "Feature",
-      "title": "Manage owned worktrees, commits, pushes and task PRs",
+      "title": "Manage owned worktrees, commits and feature integration",
       "operations": [
         "git.worktree",
         "git.inspect",
@@ -3254,7 +3254,7 @@
         "authority",
         "files"
       ],
-      "acceptance": "Task/group PRs integrate to feature branches; issue PRs target main. Persist all associations and expected heads. Force-with-lease is limited to owned task branches; feature force-push needs exact approval and main is always forbidden. Linked issues keep existing branches/worktrees; coordinator owns feature integration and reconciles PR targets. Unlink pauses work without deleting code or remote artifacts; historical costs stay fixed, later calls use current membership budget.",
+      "acceptance": "Feature tasks retain isolated local worktrees and branches for coordinator integration; standalone issues open PRs to main. Persist repository, worktree, branch, commit and final feature-PR associations with expected heads. Force-with-lease remains limited to owned task branches; feature force-push needs exact approval and main is forbidden. Linked issues keep existing branches and worktrees; unlink pauses work without deleting code or remote artifacts. Historical costs stay fixed and later calls use current membership budget.",
       "gates": [
         "G07"
       ],
@@ -3332,7 +3332,7 @@
         "queue",
         "reviews"
       ],
-      "acceptance": "All-repo exact-head readiness before first submission, acyclic order and revalidation preserve partial merges. Async accepted/queued/unknown states reconcile through authoritative PR/head/method evidence, including squash/rebase and expiry. Cleanup preserves dirty/unintegrated/new concurrent commits.",
+      "acceptance": "Integrate each locally reviewed feature task into its pushed feature branch without task PR or CI wait. Open one final PR per repository after full local acceptance; reconcile all-repository exact-head readiness, acyclic order and partial merges. Async accepted/queued/unknown states use authoritative PR/head/method evidence, including squash/rebase and expiry. Cleanup preserves dirty, unintegrated and new concurrent commits.",
       "gates": [
         "G07"
       ],
@@ -3472,7 +3472,7 @@
         "graph",
         "approvals"
       ],
-      "acceptance": "Configured GitHub automation satisfies review; absent automation uses independent verified-read reviewers. Fix every actionable finding, persist adjudication, enforce configured cycles and scope-bound readiness across changed heads and policies. Failed/stalled automation automatically uses one independent in-app fallback. Normalize source/run/head/policy/cycle evidence, zero-finding completion, finite wait, changed-head invalidation and late external findings. Fallback does not bypass required checks/branch protection.",
+      "acceptance": "Review each feature task locally with an independent agent once before integration. Run configured GitHub review on the final feature PR; failed or stalled automation uses one independent in-app fallback. Persist exact-head findings and adjudication, explicit zero-finding completion, source/run/head/policy/cycle evidence, changed-head invalidation, finite waits and late external findings. Stop final PR review/fix cycles after three rounds and file remaining actionable findings as linked CodeGraph bugs. Fallback and the review cap do not bypass required CI, full acceptance or branch protection.",
       "gates": [
         "G04",
         "G07"
@@ -8253,7 +8253,7 @@
     {
       "requirement": "GIT-08",
       "requirementStatus": "Confirmed",
-      "statement": "Features must always use a feature branch in each affected repository. Task PRs target that feature branch. The feature coordinator chooses whether related tasks share a PR or have separate PRs; one PR per task is not required. Open the final feature PR to main only once the feature implementation is complete, never as an early task-delivery path. The final feature PRs remain linked to the same feature and its task/group PR history.",
+      "statement": "For each affected repository, create a local feature branch and push it to GitHub before task implementation. Implement every feature story, task, or bug on its own local branch and worktree. After local acceptance and one independent subagent review round, merge the task branch locally into the feature branch and push the feature branch. Continue with the highest-priority dependency-ready task without waiting for feature-branch CI. Do not open task or group PRs. Once feature implementation is complete, open exactly one feature PR per affected repository to main, linked to the feature and its included tasks.",
       "sourceSection": "12 Source control and complete work history",
       "architectureSection": "git-delivery-and-github-synchronization",
       "owner": "GitService and delivery coordinator",
@@ -8271,7 +8271,7 @@
     {
       "requirement": "GIT-09",
       "requirementStatus": "Proposed",
-      "statement": "Distinguish implementation completion, final PR delivery, and cleanup in execution state and the UI. Implementation completion permits the final feature PR to main; review/fix/check and Auto-Merge policies still govern its merge. Keep needed worktrees and branches while final delivery is pending. Run feature-completion cleanup after final integration is verified across the affected repositories, and show cleanup failures explicitly. This sequencing preserves the required branch while its final PR is open.",
+      "statement": "Distinguish task completion on the pushed feature branch, final PR delivery to main, and cleanup in execution state and the UI. A task can complete after its own local acceptance and independent review without waiting for the final feature PR; the feature remains open. Implementation completion permits the final feature PR to main; review/fix/check and Auto-Merge policies still govern its merge. Keep needed worktrees and branches while final delivery is pending. Run feature-completion cleanup after final integration is verified across the affected repositories, and show cleanup failures explicitly. This sequencing preserves the required branch while its final PR is open.",
       "sourceSection": "12 Source control and complete work history",
       "architectureSection": "git-delivery-and-github-synchronization",
       "owner": "GitService and delivery coordinator",
@@ -8289,7 +8289,7 @@
     {
       "requirement": "GIT-10",
       "requirementStatus": "Confirmed",
-      "statement": "Every task must document its associated current worktrees, branches and PRs so the user can easily find where its work lives. Show the repository, worktree path, branch name and PR link on the task, including each relevant repository for cross-repository work. Grouped-task PRs must be linked from every covered task. Preserve historical associations after cleanup and distinguish removed or closed resources from current ones.",
+      "statement": "Every task must show its repository, current worktree path, local task branch, source commit, and the feature branch into which it was integrated. Show the final feature PR link on every included task after that PR opens. Preserve historical associations after cleanup and distinguish removed or closed resources from current ones. Standalone issues continue to show their own PR links.",
       "sourceSection": "12 Source control and complete work history",
       "architectureSection": "git-delivery-and-github-synchronization",
       "owner": "GitService and delivery coordinator",
@@ -10489,7 +10489,7 @@
     {
       "requirement": "DELIVERY-02",
       "requirementStatus": "Confirmed",
-      "statement": "Mandatory independent code review before merge defaults to on, with project/repository overrides and a separate-agent fix/review cycle. Configured GitHub automated reviews normally satisfy it. Use an independent in-app reviewer when automation is absent, fails or never completes. Automation failure must not indefinitely prevent delivery; fallback still requires complete review and resolution of every actionable finding.",
+      "statement": "Before a feature task is integrated into the local feature branch, a separate in-app agent must independently review its exact task diff once. The coordinator fixes valid findings and verifies the fixes without requesting a second local review round. The final feature PR receives the configured GitHub automated review; use an independent in-app reviewer if that automation is absent, fails or never completes. Review evidence must name its source revision and reviewer.",
       "sourceSection": "18 Settings integrations and tool access",
       "architectureSection": "git-delivery-and-github-synchronization",
       "owner": "Delivery policies and review service",
@@ -10507,7 +10507,7 @@
     {
       "requirement": "DELIVERY-03",
       "requirementStatus": "Confirmed",
-      "statement": "Use configured GitHub review automation normally; automatically fall back to an independent in-app reviewer if it fails or never completes. Avoid duplicate fallback launches. Bind review evidence and findings to the exact current head and source identity, including explicit completion with zero findings. Keep actionable external findings in the fix cycle even if fallback is used. Fallback satisfies the DevWorks review requirement without bypassing required checks, permissions or branch protection. Changed heads need current review evidence; all actionable findings must be resolved before merge.",
+      "statement": "Use configured GitHub review automation on the one final feature PR per repository; automatically fall back to one independent in-app reviewer if it fails or never completes. Avoid duplicate fallback launches. Bind findings to the reviewed head and source identity, including explicit completion with zero findings. Changed heads invalidate affected review conclusions. At most three automated review/fix rounds run for the feature PR; after the third, record remaining findings as CodeGraph bug tasks and link them to the PR. Preserve required checks, permissions and branch protection.",
       "sourceSection": "18 Settings integrations and tool access",
       "architectureSection": "git-delivery-and-github-synchronization",
       "owner": "Delivery policies and review service",
@@ -10525,7 +10525,7 @@
     {
       "requirement": "DELIVERY-04",
       "requirementStatus": "Confirmed",
-      "statement": "Auto-Merge and mandatory-review policy must be configurable per repository with inherited defaults from project and workspace settings. Auto-Merge and mandatory independent review both default to on; project settings may override each inherited value, and repository settings may override each project value. The effective value and source of each value, including local overrides, must be visible. One repository\u2019s review setup must not be assumed to apply to every repository in its project.",
+      "statement": "Auto-Merge and final-PR mandatory-review policy must be configurable per repository with inherited defaults from project and workspace settings. Both default to on; project settings may override each inherited value, and repository settings may override each project value. The effective value and source of each value, including local overrides, must be visible. One repository\u2019s review setup must not be assumed to apply to every repository in its project. The final-PR review override does not disable the one independent local review required for each feature task.",
       "sourceSection": "18 Settings integrations and tool access",
       "architectureSection": "git-delivery-and-github-synchronization",
       "owner": "Delivery policies and review service",
@@ -10543,7 +10543,7 @@
     {
       "requirement": "DELIVERY-05",
       "requirementStatus": "Confirmed",
-      "statement": "Every actionable review finding must be resolved before an automatic merge, including minor findings. A severity threshold alone must not permit unresolved actionable findings. The feature coordinator adjudicates disputed or non-actionable findings, recording its rationale in the linked review history. Findings it judges actionable must still be fixed.",
+      "statement": "Resolve actionable final-PR review findings within at most three review/fix rounds. After round three, create a CodeGraph bug task for every remaining actionable finding, retain its PR/revision/thread link and response, and merge once required CI and repository protection are green. The coordinator records evidence and rationale for disputed or non-actionable findings. A filed bug is visible unfinished work, not a claim that the finding was fixed.",
       "sourceSection": "18 Settings integrations and tool access",
       "architectureSection": "git-delivery-and-github-synchronization",
       "owner": "Delivery policies and review service",
@@ -10561,7 +10561,7 @@
     {
       "requirement": "DELIVERY-06",
       "requirementStatus": "Proposed",
-      "statement": "Merge readiness must reconcile the current code revision, required checks, the review source selected under DELIVERY-02\u201303, all actionable findings, effective policy, and cross-repository dependencies. Apply the effective repository review and Auto-Merge policy to both task/group PRs into the feature branch and the final feature PR into main. Review findings, fixes, re-reviews, dismissals and reasons must remain linked to the feature, PR, revision, and participating agents.",
+      "statement": "Merge readiness reconciles the final feature PR's current head, required checks, review evidence and up-to-three-round finding disposition, effective policy and cross-repository dependencies. Task branches merge locally into the feature branch after one independent local review round; they have no task/group PR or per-task remote CI gate. The final feature PR, its included tasks, findings, fixes and bug tasks retain repository, feature, revision and agent links.",
       "sourceSection": "18 Settings integrations and tool access",
       "architectureSection": "git-delivery-and-github-synchronization",
       "owner": "Delivery policies and review service",
@@ -10579,7 +10579,7 @@
     {
       "requirement": "DELIVERY-07",
       "requirementStatus": "Confirmed",
-      "statement": "The maximum number of fix/review cycles must be configurable in Settings, with a default of 3. Execution must honor the configured limit rather than continue an unbounded fix loop. Reaching the limit does not waive the requirement to resolve every actionable finding before merge.",
+      "statement": "Feature task local review has exactly one independent review round. Final feature PR automated review/fix cycles have a maximum of three. Settings may lower the maximum but may not raise it above three for feature delivery. At the cap, file each remaining actionable review finding as a CodeGraph bug task and continue toward merge when required CI and branch protection permit it; do not request another automatic review round.",
       "sourceSection": "18 Settings integrations and tool access",
       "architectureSection": "git-delivery-and-github-synchronization",
       "owner": "Delivery policies and review service",
@@ -10597,7 +10597,7 @@
     {
       "requirement": "DELIVERY-08",
       "requirementStatus": "Confirmed",
-      "statement": "If the feature coordinator cannot reach a decision, it must raise the issue to the user and publish an in-app notification. This applies to unresolved review disputes or fix-cycle outcomes it cannot resolve. The escalation must retain the relevant findings, attempts, evidence, and coordinator rationale; unresolved actionable findings continue to block that merge. Escalation must not pause independent feature work: only the affected task and its dependent work wait.",
+      "statement": "If the feature coordinator cannot adjudicate a finding or a required repository rule blocks merge after the review cap, raise the specific decision to the user with an in-app notification, retaining findings, attempts, evidence and rationale. Independent feature work continues. Reaching the three-round cap by itself is handled by filing bug tasks and is not an escalation.",
       "sourceSection": "18 Settings integrations and tool access",
       "architectureSection": "git-delivery-and-github-synchronization",
       "owner": "Delivery policies and review service",

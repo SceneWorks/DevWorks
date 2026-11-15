@@ -67,7 +67,7 @@ DW-001 → DW-002 → DW-003 → DW-004 → DW-005 → DW-006 → DW-007 → DW-
 | [DW-035](#dw-035) | Ingest and retrieve retained documents with exact citations | DW-007, DW-017, DW-021, DW-028 | G06, G08, G12 |
 | [DW-036](#dw-036) | Index SQL database structural metadata | DW-023, DW-005 | G08 |
 | [DW-037](#dw-037) | Execute separately permitted database operations | DW-036, DW-014 | G04, G08 |
-| [DW-039](#dw-039) | Manage owned worktrees, commits, pushes and task PRs | DW-012, DW-006, DW-005, DW-007 | G07 |
+| [DW-039](#dw-039) | Manage owned worktrees, commits and feature integration | DW-012, DW-006, DW-005, DW-007 | G07 |
 | [DW-040](#dw-040) | Reconcile final delivery and clean up owned Git resources | DW-039, DW-014, DW-003, DW-042 | G07 |
 | [DW-041](#dw-041) | Synchronize GitHub accounts, issues and observed changes | DW-018, DW-011, DW-012, DW-039 | G07, G10 |
 | [DW-042](#dw-042) | Resolve exact-head reviews and merge readiness | DW-041, DW-039, DW-028, DW-014 | G04, G07 |
@@ -719,9 +719,9 @@ Implement the recorded strict input/result/error schemas and selected-operation/
 
 ### DW-039
 
-**Manage owned worktrees, commits, pushes and task PRs** · Feature · Planned; implementation not authorized or started.
+**Manage owned worktrees, commits and feature integration** · Feature · Planned; implementation not authorized or started.
 
-Task/group PRs integrate to feature branches; issue PRs target main. Persist all associations and expected heads. Force-with-lease is limited to owned task branches; feature force-push needs exact approval and main is always forbidden. Linked issues keep existing branches/worktrees; coordinator owns feature integration and reconciles PR targets. Unlink pauses work without deleting code or remote artifacts; historical costs stay fixed, later calls use current membership budget.
+Feature tasks retain isolated local worktrees and branches for coordinator integration; standalone issues open PRs to main. Persist repository, worktree, branch, commit and final feature-PR associations with expected heads. Force-with-lease remains limited to owned task branches; feature force-push needs exact approval and main is forbidden. Linked issues keep existing branches and worktrees; unlink pauses work without deleting code or remote artifacts. Historical costs stay fixed and later calls use current membership budget.
 
 Implement the recorded strict input/result/error schemas and selected-operation/mode binding, current authority, durable receipt/effect/cancellation/recovery behavior, and meaningful native success/fault cases. Expose the same domain service to native UI and applicable agent tools; no parallel business implementation. Preserve source arguments/results/quirks traced here. Do not advertise unqualified targets or infer product acceptance from fixture tests.
 
@@ -737,7 +737,7 @@ Implement the recorded strict input/result/error schemas and selected-operation/
 
 **Reconcile final delivery and clean up owned Git resources** · Feature · Planned; implementation not authorized or started.
 
-All-repo exact-head readiness before first submission, acyclic order and revalidation preserve partial merges. Async accepted/queued/unknown states reconcile through authoritative PR/head/method evidence, including squash/rebase and expiry. Cleanup preserves dirty/unintegrated/new concurrent commits.
+Integrate each locally reviewed feature task into its pushed feature branch without task PR or CI wait. Open one final PR per repository after full local acceptance; reconcile all-repository exact-head readiness, acyclic order and partial merges. Async accepted/queued/unknown states use authoritative PR/head/method evidence, including squash/rebase and expiry. Cleanup preserves dirty, unintegrated and new concurrent commits.
 
 Implement the recorded strict input/result/error schemas and selected-operation/mode binding, current authority, durable receipt/effect/cancellation/recovery behavior, and meaningful native success/fault cases. Expose the same domain service to native UI and applicable agent tools; no parallel business implementation. Preserve source arguments/results/quirks traced here. Do not advertise unqualified targets or infer product acceptance from fixture tests.
 
@@ -769,7 +769,7 @@ Implement the recorded strict input/result/error schemas and selected-operation/
 
 **Resolve exact-head reviews and merge readiness** · Feature · Planned; implementation not authorized or started.
 
-Configured GitHub automation satisfies review; absent automation uses independent verified-read reviewers. Fix every actionable finding, persist adjudication, enforce configured cycles and scope-bound readiness across changed heads and policies. Failed/stalled automation automatically uses one independent in-app fallback. Normalize source/run/head/policy/cycle evidence, zero-finding completion, finite wait, changed-head invalidation and late external findings. Fallback does not bypass required checks/branch protection.
+Review each feature task locally with an independent agent once before integration. Run configured GitHub review on the final feature PR; failed or stalled automation uses one independent in-app fallback. Persist exact-head findings and adjudication, explicit zero-finding completion, source/run/head/policy/cycle evidence, changed-head invalidation, finite waits and late external findings. Stop final PR review/fix cycles after three rounds and file remaining actionable findings as linked CodeGraph bugs. Fallback and the review cap do not bypass required CI, full acceptance or branch protection.
 
 Implement the recorded strict input/result/error schemas and selected-operation/mode binding, current authority, durable receipt/effect/cancellation/recovery behavior, and meaningful native success/fault cases. Expose the same domain service to native UI and applicable agent tools; no parallel business implementation. Preserve source arguments/results/quirks traced here. Do not advertise unqualified targets or infer product acceptance from fixture tests.
 
