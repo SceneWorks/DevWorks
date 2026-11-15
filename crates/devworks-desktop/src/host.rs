@@ -45,6 +45,7 @@ use devworks_core::protocol::{ActorId, Counter, Id, Revision};
 use devworks_core::services::UseCases;
 use devworks_core::services::agents::AgentService;
 use devworks_core::services::artifacts::ArtifactService;
+use devworks_core::services::desktop::ControlEpoch;
 use devworks_core::services::diagnostics::DiagnosticService;
 use devworks_core::services::history::HistoryService;
 use devworks_core::services::indexing::IndexSettings;
@@ -1081,15 +1082,18 @@ impl Backend for DesktopBackend {
             None => Ok(None),
         }
     }
-    fn human_decision(&self, frame: &[u8]) -> CommandOutcome {
-        self.host
-            .runtime
-            .record_human_decision(&self.host.ctx, frame)
+    fn control_epoch(&self) -> ControlEpoch {
+        self.host.runtime.desktop_control_epoch()
     }
-    fn confirm_project_purge(&self, frame: &[u8]) -> CommandOutcome {
+    fn human_decision(&self, frame: &[u8], received: ControlEpoch) -> CommandOutcome {
         self.host
             .runtime
-            .confirm_project_purge(&self.host.ctx, frame)
+            .record_human_decision_received(&self.host.ctx, frame, received)
+    }
+    fn confirm_project_purge(&self, frame: &[u8], received: ControlEpoch) -> CommandOutcome {
+        self.host
+            .runtime
+            .confirm_project_purge_received(&self.host.ctx, frame, received)
     }
     fn repository_deletion_supported(&self) -> bool {
         use devworks_core::authority::destructive::FilesystemResolver;
@@ -1110,10 +1114,12 @@ impl Backend for DesktopBackend {
     fn delete_repository(
         &self,
         reviewed: &devworks_core::authority::deletion::DeletionPreview,
+        received: ControlEpoch,
     ) -> Result<devworks_core::authority::destructive::RemovalOutcome, String> {
-        // Desktop automation can generate the confirming click: the dedicated confirmation stays
-        // closed while it may be active, so an agent never confirms through the UI.
-        if self.host.runtime.desktop_automation_may_be_active() {
+        // Desktop automation can generate the confirming click: the dedicated confirmation is
+        // refused unless nobody held desktop control from the click until now, so an agent never
+        // confirms through the UI (not even by releasing control before this worker runs).
+        if !self.host.runtime.control_quiet_since(received) {
             return Err(crate::repository_deletion::refusal_text(
                 &devworks_core::authority::deletion::DeletionRefusal::HumanOnly,
             ));
