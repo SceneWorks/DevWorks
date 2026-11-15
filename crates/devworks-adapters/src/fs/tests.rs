@@ -985,23 +985,17 @@ fn an_unmatched_write_pattern_does_not_hide_a_protected_operand() {
             other => panic!("{script}: {other:?}"),
         }
     }
-    // Alone, the name as written is what the shell creates. Quoted, it is checked as written
-    // and allowed outside every root; an unquoted pattern that matches nothing is passed on as
-    // written too, so the same name inside application data is refused.
+    // Alone, a quoted name is checked as written and allowed outside every root; an unquoted
+    // write pattern that matches nothing is held (a shell option can change what it matches).
     assert!(matches!(
         verdict(&format!("mkdir {pattern}")),
         CommandVerdict::Allowed { .. }
     ));
-    // (One folder down: a pattern directly inside a protected folder is refused as whole-content
-    // erasure before it is expanded.)
-    let unquoted = format!("{}/new/[x]", sh_quote(&slashed(&t.s.p("data"))));
-    match verdict(&format!("mkdir {unquoted}")) {
-        CommandVerdict::Blocked { blocked, .. } => assert_eq!(
-            blocked.iter().map(Blocking::reason).collect::<Vec<_>>(),
-            ["ApplicationData"]
-        ),
-        other => panic!("mkdir {unquoted}: {other:?}"),
-    }
+    let unquoted = format!("{}/[x]", sh_quote(&slashed(&t.s.p("outside"))));
+    assert!(matches!(
+        verdict(&format!("mkdir {unquoted}")),
+        CommandVerdict::NeedsInput { .. }
+    ));
 }
 
 /// A target that cannot be checked (too many matches, an expansion error, a name that does not
@@ -1198,6 +1192,82 @@ fn git_pathspecs_and_eval_globs_are_never_checked_as_literal_words() {
         leaks.len(),
         leaks.join("\n")
     );
+}
+
+/// An unmatched write glob is held (shell options can make it match a protected file), and a
+/// shell option that changes glob matching holds every later glob target.
+#[test]
+fn unmatched_write_globs_and_glob_options_are_never_allowed() {
+    use devworks_core::authority::shell::{CommandVerdict, preflight_command};
+    let s = Scratch::new("glob-options");
+    let cased = s.p("DevWorks");
+    let other = s.p("devworks-other");
+    let work = s.p("work");
+    for d in [&cased, &other, &work] {
+        std::fs::create_dir_all(d).unwrap();
+    }
+    std::fs::write(format!("{cased}/state.db"), b"").unwrap();
+    std::fs::write(format!("{other}/state.json"), b"").unwrap();
+    let roots = ProtectedRoots::new(Vec::new(), Vec::new(), Some(cased.clone()));
+    let fs = NativeFilesystem::new();
+    let base = sh_quote(&s.p("").replace('\\', "/"));
+    let mut leaks = Vec::new();
+    for script in [
+        format!("echo x > {base}/devworks*/state.db"),
+        format!("shopt -s nocaseglob; echo x > {base}/devworks*/state.*"),
+        format!("shopt -s nocaseglob; rm -rf {base}/devworks*"),
+        format!("set -o noglob; rm -rf {base}/DevWork?"),
+    ] {
+        let argv = ["bash", "-c", &script].map(str::to_owned);
+        if let v @ (CommandVerdict::Allowed { .. } | CommandVerdict::Residual { .. }) =
+            preflight_command(&fs, &roots, &argv, Some(&work), &[])
+        {
+            leaks.push(format!("{script}: {v:?}"));
+        }
+    }
+    assert!(
+        leaks.is_empty(),
+        "{} leaks:\n{}",
+        leaks.len(),
+        leaks.join("\n")
+    );
+}
+
+/// Inside POSIX double quotes a backslash before an ordinary character stays in the name, so a
+/// protected folder named with one is refused; an `eval` word with a backslash is held. Unix
+/// only: a backslash is a separator on Windows.
+#[cfg(unix)]
+#[test]
+fn double_quoted_backslashes_and_eval_escapes_name_what_the_shell_runs() {
+    use devworks_core::authority::shell::{CommandVerdict, preflight_command};
+    let s = Scratch::new("dq-backslash");
+    let work = s.p("work");
+    let data = s.p("a\\b");
+    let spaced = s.p("cache data");
+    for d in [&work, &data, &spaced] {
+        std::fs::create_dir_all(d).unwrap();
+    }
+    let fs = NativeFilesystem::new();
+    let verdict = |roots: &ProtectedRoots, script: &str| {
+        let argv = ["bash", "-c", script].map(str::to_owned);
+        preflight_command(&fs, roots, &argv, Some(&work), &[])
+    };
+    let mut leaks = Vec::new();
+    let roots = ProtectedRoots::new(Vec::new(), Vec::new(), Some(data.clone()));
+    let script = format!("rm -rf \"{data}\"");
+    match verdict(&roots, &script) {
+        CommandVerdict::Blocked { .. } => {}
+        other => leaks.push(format!("{script}: {other:?}")),
+    }
+    let roots = ProtectedRoots::new(Vec::new(), Vec::new(), Some(spaced.clone()));
+    let escaped = spaced.replace(' ', "\\ ");
+    let script = format!("eval \"rm -rf {escaped}\"");
+    if let v @ (CommandVerdict::Allowed { .. } | CommandVerdict::Residual { .. }) =
+        verdict(&roots, &script)
+    {
+        leaks.push(format!("{script}: {v:?}"));
+    }
+    assert!(leaks.is_empty(), "{}", leaks.join("\n"));
 }
 
 #[test]

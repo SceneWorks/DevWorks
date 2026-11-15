@@ -451,6 +451,8 @@ fn git_pathspecs_and_first_pass_expansions_are_held_unless_checked_exactly() {
     // `eval` runs its words after the shell expanded them: an unquoted glob can name files
     // whose names are code, so only words the first pass leaves as written are reparsed.
     for script in [
+        "eval \"rm -rf /x/cache\\ data\"",
+        "eval rm -rf /x/cache\\\\\\ data",
         "eval rm -rf /outside/*",
         "eval echo x '>>' /x/f?",
         "eval rm -rf ~user/x",
@@ -485,6 +487,59 @@ fn git_pathspecs_and_first_pass_expansions_are_held_unless_checked_exactly() {
                 "not held: {script}: {:?}",
                 assess(&["pwsh", "-Command", script])
             ));
+        }
+    }
+    // Shell options and variables that change glob matching (case, null/fail globs, `**`,
+    // extended globs, `noglob`, ignored names) hold every later glob target.
+    for script in [
+        "shopt -s nocaseglob; rm -rf /x/devworks*",
+        "shopt -s globstar && rm -rf /x/**/cache",
+        "set -f; rm -f /x/*.o",
+        "set -o noglob; rm -f /x/*",
+        "set -ef; echo x > /x/*.log",
+        "GLOBIGNORE='*.keep' rm -f /x/*",
+        "GLOBIGNORE=x; rm -f /x/*",
+        "setopt NO_CASE_GLOB; rm -rf /x/d*",
+        "unsetopt CASE_GLOB; rm -rf /x/d*",
+    ] {
+        if !held(&["sh", "-c", script]) {
+            missed.push(format!(
+                "not held: {script}: {:?}",
+                assess(&["sh", "-c", script])
+            ));
+        }
+    }
+    if !held(&["bash", "-O", "nocaseglob", "-c", "rm -rf /x/d*"]) {
+        missed.push("not held: bash -O nocaseglob -c 'rm -rf /x/d*'".to_owned());
+    }
+    // Options that leave globbing alone, or a glob before the change, are still planned.
+    for script in [
+        "set -euo pipefail; rm -f /x/*.o",
+        "set -x; rm -f /x/*.o",
+        "rm -f /x/*.o; shopt -s nullglob",
+        "shopt -s nocaseglob; rm -rf /x/plain",
+    ] {
+        if held(&["sh", "-c", script]) {
+            missed.push(format!(
+                "held: {script}: {:?}",
+                assess(&["sh", "-c", script])
+            ));
+        }
+    }
+    // Inside POSIX double quotes a backslash escapes only `$`, a backtick, `"`, `\` and a
+    // newline; before anything else it stays part of the word.
+    for (script, target) in [
+        ("rm -rf \"/x/a\\b\"", "/x/a\\b"),
+        ("rm -rf \"/x/cache\\ data\"", "/x/cache\\ data"),
+        ("rm -rf \"/x/a\\\\b\"", "/x/a\\b"),
+        ("rm -rf \"/x/a\\\"b\"", "/x/a\"b"),
+        ("rm -rf \"/x/a\\$b\"", "/x/a$b"),
+        ("rm -rf \"/x/a\\\nb\"", "/x/ab"),
+    ] {
+        match assess(&["sh", "-c", script]) {
+            ShellAssessment::Destructive { plans, .. }
+                if plans.len() == 1 && plans[0].targets == [target] => {}
+            other => missed.push(format!("not planned as {target:?}: {script}: {other:?}")),
         }
     }
     assert!(missed.is_empty(), "{}", missed.join("\n"));

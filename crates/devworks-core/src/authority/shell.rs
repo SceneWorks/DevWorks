@@ -381,8 +381,20 @@ fn tokenize(script: &str, dialect: Dialect) -> Lexed {
                         break;
                     }
                     if dialect == Dialect::Posix && q == '\\' && i + 1 < chars.len() {
-                        word.push(chars[i + 1]);
-                        i += 2;
+                        // Inside double quotes a backslash escapes only `$`, a backtick, `"`,
+                        // `\` and a newline (a line continuation); before anything else it
+                        // stays part of the word.
+                        match chars[i + 1] {
+                            '$' | '`' | '"' | '\\' => {
+                                word.push(chars[i + 1]);
+                                i += 2;
+                            }
+                            '\n' => i += 2,
+                            _ => {
+                                word.push('\\');
+                                i += 1;
+                            }
+                        }
                         continue;
                     }
                     if q == '$' && dialect != Dialect::Cmd {
@@ -602,6 +614,9 @@ struct Collector<'p> {
     /// A PowerShell script contains a backtick (an escape or a line continuation), which the
     /// tokenizer does not decode exactly: PowerShell writers are held.
     ps_backtick: bool,
+    /// A shell option or variable that changes glob matching (`shopt`, `set -f`, `setopt`,
+    /// `GLOBIGNORE=`, `bash -O …`) ran earlier: every later glob target is held.
+    glob_options: bool,
 }
 impl Collector<'_> {
     fn hold(&mut self, n: InputNeeded) {
@@ -630,6 +645,11 @@ impl Collector<'_> {
         let mut literal = Vec::new();
         let mut complete = true;
         for w in words {
+            if self.glob_options && !w.literal && w.text.contains(['*', '?', '[']) {
+                // Still planned below, so a refused match blocks the step.
+                self.hold(InputNeeded::UnresolvedTarget);
+                complete = false;
+            }
             if drive_relative(&w.text) {
                 // `C:repo` means "repo in drive C's own current directory", which no saved
                 // working directory determines.
@@ -733,6 +753,7 @@ fn analyze(
         protected_branches,
         claimed: BTreeMap::new(),
         ps_backtick: false,
+        glob_options: false,
     };
     command(&words, Dialect::Posix, false, &mut c, 0);
     // The backstop: every consequential token in the raw input must have been accounted for
@@ -1336,6 +1357,9 @@ fn command(words: &[Word], dialect: Dialect, piped: bool, c: &mut Collector, dep
             && !t.starts_with('=')
         {
             git_env |= t.starts_with("GIT_");
+            c.glob_options |= ["GLOBIGNORE=", "BASHOPTS=", "SHELLOPTS="]
+                .iter()
+                .any(|v| t.starts_with(v));
             i += 1;
             continue;
         }
@@ -1646,6 +1670,14 @@ fn command(words: &[Word], dialect: Dialect, piped: bool, c: &mut Collector, dep
         "rm" | "rmdir" | "unlink" | "shred" if dialect == Dialect::Posix => {
             posix_removal(&name, args, c)
         }
+        "shopt" | "setopt" | "unsetopt" | "emulate" if dialect == Dialect::Posix => {
+            c.glob_options = true;
+            return;
+        }
+        "set" if dialect == Dialect::Posix => {
+            c.glob_options |= set_changes_globbing(args);
+            return;
+        }
         "mkdir" if dialect == Dialect::Posix => posix_mkdir(args, c),
         "mkdir" | "md" if dialect == Dialect::Cmd => cmd_mkdir(args, c),
         "new-item" | "ni" | "mkdir" | "md" if dialect == Dialect::PowerShell => {
@@ -1683,9 +1715,12 @@ fn nested(words: &[Word], dialect: Dialect, c: &mut Collector, depth: u8) {
         return;
     }
     // The shell expands each word before `eval` joins them, so an unquoted glob can turn file
-    // names into code: only words the first pass leaves as written are reparsed.
+    // names into code: only words the first pass leaves as written are reparsed. A backslash
+    // (in any quoting) means the decoded word may differ from the first pass's: held too.
     let first_pass = |w: &Word| {
-        w.dynamic || (dialect == Dialect::Posix && !w.literal && w.text.contains(['*', '?', '[']))
+        w.dynamic
+            || (dialect == Dialect::Posix
+                && (w.text.contains('\\') || (!w.literal && w.text.contains(['*', '?', '[']))))
     };
     if words.iter().any(first_pass) {
         c.hold(InputNeeded::UnresolvedExpansion);
@@ -1693,6 +1728,23 @@ fn nested(words: &[Word], dialect: Dialect, c: &mut Collector, depth: u8) {
     }
     let code: Vec<&str> = words.iter().map(|w| w.text.as_str()).collect();
     script(&code.join(" "), dialect, c, depth + 1);
+}
+
+/// Whether `set` changes glob matching: `-f`/`+f` in any option cluster, or `-o`/`+o noglob`.
+fn set_changes_globbing(args: &[Word]) -> bool {
+    let mut words = args.iter().map(|w| w.text.as_str());
+    while let Some(t) = words.next() {
+        let Some(letters) = t.strip_prefix(['-', '+']).filter(|_| t != "--") else {
+            break;
+        };
+        if letters.contains('f') {
+            return true;
+        }
+        if letters.ends_with('o') && words.next().is_some_and(|o| o == "noglob") {
+            return true;
+        }
+    }
+    false
 }
 
 fn shell(name: &str, args: &[Word], piped: bool, c: &mut Collector, depth: u8) {
@@ -1708,6 +1760,8 @@ fn shell(name: &str, args: &[Word], piped: bool, c: &mut Collector, depth: u8) {
         }
         if t == "-o" || t == "+o" || t == "-O" || t == "+O" || t == "--rcfile" || t == "--init-file"
         {
+            // A shell option (`-o noglob`, `-O nocaseglob`, …) can change glob matching.
+            c.glob_options |= t != "--rcfile" && t != "--init-file";
             j += 2;
             continue;
         }
@@ -1722,6 +1776,8 @@ fn shell(name: &str, args: &[Word], piped: bool, c: &mut Collector, depth: u8) {
         }
         if t.starts_with('-') || t.starts_with('+') {
             inline |= !t.starts_with("--") && t[1..].contains('c');
+            // `-f` (in any cluster) turns globbing off.
+            c.glob_options |= !t.starts_with("--") && t[1..].contains(['f', 'o', 'O']);
             j += 1;
             continue;
         }

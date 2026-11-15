@@ -659,8 +659,15 @@ pub fn preflight(
             }
         }
         match fs.expand(requested, cwd, MAX_TARGETS) {
-            // A pattern that matches nothing is passed on as written (a POSIX shell's default),
-            // so the name itself is checked. On Windows `*` and `?` cannot be in a name.
+            // A write whose pattern matches nothing may still reach a protected file (a shell
+            // option such as `nocaseglob` changes matching): held, and the other targets are
+            // still checked.
+            Ok(paths) if paths.is_empty() && plan.kind == DestructiveKind::Truncate => {
+                hold(InputNeeded::UnresolvedTarget, requested);
+            }
+            // A removal pattern that matches nothing is passed on as written (a POSIX shell's
+            // default), so the name itself is checked. On Windows `*` and `?` cannot be in a
+            // name.
             Ok(paths) if paths.is_empty() => {
                 if !(cfg!(windows) && requested.contains(['*', '?'])) {
                     expanded.push(requested.clone());
