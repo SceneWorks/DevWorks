@@ -394,6 +394,7 @@ fn paid_native_index_waits_for_actual_accepted_job_link_and_accounts_seven_token
                 {
                     // Keep the real owner ACK blocked while the claimed delivery gets
                     // multiple executor turns; a claim alone precedes transaction A.
+                    // No event marks that this did not happen, so the test waits a fixed time.
                     tokio::time::sleep(Duration::from_millis(150)).await;
                     assert_eq!(
                         read(app.store.as_ref(), |s| s.operations().operation(&inner))

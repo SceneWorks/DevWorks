@@ -214,6 +214,7 @@ fn http_independent_close_interrupts_blocked_read_and_disconnects_server() {
             .send(stream.read(&mut [0; 8], &Cancellation::new()))
             .unwrap();
     });
+    // The read is still blocked. No event marks that this did not happen, so the test waits a fixed time.
     assert_eq!(
         received.recv_timeout(Duration::from_millis(20)),
         Err(mpsc::RecvTimeoutError::Timeout)
@@ -419,6 +420,7 @@ fn http_tls_verifies_roots_and_close_interrupts_a_stalled_tls_body() {
             .send(stream.read(&mut [0; 8], &Cancellation::new()))
             .unwrap();
     });
+    // The read is still blocked. No event marks that this did not happen, so the test waits a fixed time.
     assert_eq!(
         received.recv_timeout(Duration::from_millis(20)),
         Err(mpsc::RecvTimeoutError::Timeout)
@@ -447,6 +449,7 @@ fn http_environment_proxy_is_preserved_in_a_scoped_child_process() {
         .args([
             "--exact",
             "provider_stream::tests::proxy_child",
+            "--ignored",
             "--nocapture",
         ])
         .env("DW_STREAM_PROXY_CHILD", "1")
@@ -461,11 +464,14 @@ fn http_environment_proxy_is_preserved_in_a_scoped_child_process() {
     assert!(status.success());
     server.finish();
 }
+/// The child process of `http_environment_proxy_is_preserved_in_a_scoped_child_process`.
 #[test]
+#[ignore = "child process of the scoped proxy test, which runs it"]
 fn proxy_child() {
-    if std::env::var_os("DW_STREAM_PROXY_CHILD").is_none() {
-        return;
-    }
+    assert!(
+        std::env::var_os("DW_STREAM_PROXY_CHILD").is_some(),
+        "run by the scoped proxy test"
+    );
     let mut stream = NativeStreamingHttp::new()
         .unwrap()
         .open(
