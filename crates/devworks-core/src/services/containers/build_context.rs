@@ -3,7 +3,9 @@
 //!
 //! The digest covers the whole folder, including entries a `.dockerignore` would exclude. That
 //! is deliberately stricter than the engine: a change to an ignored file refuses an approved
-//! build too, but no file the engine sends can change unnoticed.
+//! build too, but no file the engine sends can change unnoticed. It also covers the permission
+//! bits the engine preserves for files and folders: on Unix `mode & 0o7777` (so removing a
+//! script's exec bit is a change); on Windows, which has no Unix mode, the read-only attribute.
 use sha2::{Digest, Sha256};
 use std::io::Read;
 use std::path::Path;
@@ -77,9 +79,11 @@ fn walk(
             field(b"T", target.to_string_lossy().as_bytes());
         } else if kind.is_dir() {
             field(b"D", relative.as_bytes());
+            field(b"M", &permissions(&entry)?.to_be_bytes());
             walk(&entry.path(), &relative, hasher, total)?;
         } else if kind.is_file() {
             field(b"F", relative.as_bytes());
+            field(b"M", &permissions(&entry)?.to_be_bytes());
             let mut file = std::fs::File::open(entry.path()).map_err(|_| unreadable)?;
             let mut content = Sha256::new();
             let mut buffer = [0u8; 64 * 1024];
@@ -106,6 +110,23 @@ fn walk(
     Ok(())
 }
 
+/// The permission bits an entry keeps in the build: `mode & 0o7777` on Unix; on Windows `1` for
+/// a read-only entry and `0` otherwise. Read without following a link.
+fn permissions(entry: &std::fs::DirEntry) -> Result<u32, &'static str> {
+    let metadata = entry
+        .metadata()
+        .map_err(|_| "container build context unreadable")?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        Ok(metadata.permissions().mode() & 0o7777)
+    }
+    #[cfg(not(unix))]
+    {
+        Ok(u32::from(metadata.permissions().readonly()))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     #[test]
@@ -130,6 +151,20 @@ mod tests {
         std::fs::write(root.join("scripts/run.sh"), "echo one").unwrap();
         assert_eq!(super::digest(&root).unwrap(), first);
         std::fs::rename(root.join("README"), root.join("README.md")).unwrap();
+        assert_ne!(super::digest(&root).unwrap().sha256, first.sha256);
+        std::fs::rename(root.join("README.md"), root.join("README")).unwrap();
+        assert_eq!(super::digest(&root).unwrap(), first);
+        // A permission-only change is a change too.
+        let script = root.join("scripts/run.sh");
+        let mut permissions = std::fs::metadata(&script).unwrap().permissions();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            permissions.set_mode(permissions.mode() ^ 0o100);
+        }
+        #[cfg(not(unix))]
+        permissions.set_readonly(!permissions.readonly());
+        std::fs::set_permissions(&script, permissions).unwrap();
         assert_ne!(super::digest(&root).unwrap().sha256, first.sha256);
         let _ = std::fs::remove_dir_all(&root);
     }

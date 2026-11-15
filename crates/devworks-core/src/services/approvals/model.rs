@@ -100,29 +100,49 @@ pub(crate) fn generic(
     }
     wire(v)
 }
-/// A proposal's saved input or reviewed content as it is shown: a `{"name", "value"}` pair whose
-/// name marks it as a secret (an environment variable such as `API_TOKEN`) has its value
-/// redacted, and the shared JSON redaction then removes values under secret field names and
-/// credential shapes anywhere. References (`credentialRef`, ids) are kept.
+/// A proposal's saved input or reviewed content as it is shown. Only typed secret fields are
+/// redacted: the value of a field whose name marks it as a secret, the `value` of a
+/// `{"name", "value"}` pair whose name does (an environment variable such as `API_TOKEN`), and
+/// credential shapes inside such a `value`. Every other text, including commands and
+/// definitions a person approves, is shown exactly: never cut or partly replaced. References
+/// (`credentialRef`, ids) are kept.
 fn public(content: &Value) -> Value {
     use crate::authority::redact::{REDACTED, Redactor, sensitive_name};
-    fn named(value: &Value) -> Value {
+    fn secret(value: &Value) -> Value {
         match value {
-            Value::Array(items) => Value::Array(items.iter().map(named).collect()),
+            Value::Null | Value::Bool(_) => value.clone(),
+            Value::Array(items) => Value::Array(items.iter().map(secret).collect()),
             Value::Object(map) => {
-                let secret = map
+                Value::Object(map.iter().map(|(k, v)| (k.clone(), secret(v))).collect())
+            }
+            Value::String(s) if s.is_empty() => value.clone(),
+            _ => Value::String(REDACTED.into()),
+        }
+    }
+    fn walk(value: &Value, redactor: &Redactor) -> Value {
+        match value {
+            Value::Array(items) => Value::Array(items.iter().map(|v| walk(v, redactor)).collect()),
+            Value::Object(map) => {
+                let named_secret = map
                     .get("name")
                     .and_then(Value::as_str)
                     .is_some_and(sensitive_name);
                 Value::Object(
                     map.iter()
                         .map(|(k, v)| {
-                            let v = if secret && k == "value" && !v.is_null() {
-                                Value::String(REDACTED.into())
+                            let shown = if sensitive_name(k) || (named_secret && k == "value") {
+                                secret(v)
+                            } else if k == "value" && map.contains_key("name") {
+                                // An environment-style value is data, not something that runs:
+                                // credential shapes in it are redacted too.
+                                match v {
+                                    Value::String(s) => Value::String(redactor.redact_text(s)),
+                                    other => walk(other, redactor),
+                                }
                             } else {
-                                named(v)
+                                walk(v, redactor)
                             };
-                            (k.clone(), v)
+                            (k.clone(), shown)
                         })
                         .collect(),
                 )
@@ -130,7 +150,7 @@ fn public(content: &Value) -> Value {
             other => other.clone(),
         }
     }
-    Redactor::new().redact_json(&named(content))
+    walk(content, &Redactor::new())
 }
 pub(crate) fn scope_wire(scope: &crate::ports::storage::ConfigScope) -> Value {
     match scope {

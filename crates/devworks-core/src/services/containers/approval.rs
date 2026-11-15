@@ -323,6 +323,21 @@ pub(crate) fn reviewed(spec: &ContainerSpec, host_paths: &[String]) -> Value {
     })
 }
 
+/// A command is shown exactly, argument by argument. One the shared redaction would change (a
+/// `--password=…` argument, a credential shape, a key block) cannot be shown both safely and in
+/// full, so the request is refused as unreviewable rather than shown redacted or truncated.
+fn reviewable_command(argv: &[crate::protocol::support::Text]) -> Result<(), Failure> {
+    let redactor = Redactor::new();
+    if argv.iter().any(|arg| redactor.redact_text(&arg.0) != arg.0) {
+        return Err(refuse(
+            DomainErrorCode::InvalidArgument,
+            "container_command_unreviewable",
+            None,
+        ));
+    }
+    Ok(())
+}
+
 /// An exec environment as a person reviews it: a value whose name marks it as a secret, or that
 /// looks like a credential, is redacted; a credential reference is shown by its id only.
 fn redacted_environment(entries: &[EnvironmentEntry]) -> Vec<Value> {
@@ -471,8 +486,10 @@ impl ContainerService {
             })
     }
 
-    /// The Dockerfile text a build would send, as the person reviews it (credential shapes
-    /// redacted); the binding still holds the artifact's exact identity and digest.
+    /// The Dockerfile text a build would send, shown exactly: what a person approves is what
+    /// runs. A definition the shared redaction would change (a credential shape, or a key block
+    /// that would cut the rest of the text) cannot be shown both safely and in full, so it is
+    /// refused as unreviewable rather than shown redacted or truncated.
     fn reviewed_definition(
         &self,
         ctx: &InvocationContext,
@@ -490,7 +507,14 @@ impl ContainerService {
             .read_exact(&*self.store, ctx, &input.definition, DEFINITION_LIMIT)
             .map_err(|_| unavailable())?;
         let text = String::from_utf8(bytes).map_err(|_| unavailable())?;
-        Ok(Redactor::new().redact_text(&text))
+        if Redactor::new().redact_text(&text) != text {
+            return Err(refuse(
+                DomainErrorCode::InvalidArgument,
+                "container_definition_unreviewable",
+                Some(input.definition.artifact_id.clone()),
+            ));
+        }
+        Ok(text)
     }
 
     fn reviewed_content(
@@ -502,6 +526,7 @@ impl ContainerService {
     ) -> Result<Value, Failure> {
         Ok(match item {
             Reviewable::Create(spec) => {
+                reviewable_command(&spec.command.0)?;
                 let host_paths = spec
                     .mounts
                     .0
@@ -557,7 +582,9 @@ impl ContainerService {
                 "operation": "containers.start",
                 "container": container.map(container_view),
             }),
-            Reviewable::Exec(input) => json!({
+            Reviewable::Exec(input) => {
+                reviewable_command(&input.command.0)?;
+                json!({
                 "operation": "containers.exec",
                 "container": container.map(container_view),
                 "command": input.command,
@@ -566,7 +593,8 @@ impl ContainerService {
                 // container's own default.
                 "workingDirectory": "container default",
                 "timeoutMs": input.timeout_ms,
-            }),
+                })
+            }
         })
     }
 

