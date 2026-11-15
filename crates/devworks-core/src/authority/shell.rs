@@ -1587,12 +1587,12 @@ fn command(words: &[Word], dialect: Dialect, piped: bool, c: &mut Collector, dep
         "mkdir" if dialect == Dialect::Posix => posix_mkdir(args, c),
         "mkdir" | "md" if dialect == Dialect::Cmd => cmd_mkdir(args, c),
         "new-item" | "ni" | "mkdir" | "md" if dialect == Dialect::PowerShell => {
-            ps_write(PsWriter::NewItem, args, c)
+            ps_write(PsWriter::NewItem, args, piped, c)
         }
         "set-content" | "sc" | "add-content" | "ac" if dialect == Dialect::PowerShell => {
-            ps_write(PsWriter::Content, args, c)
+            ps_write(PsWriter::Content, args, piped, c)
         }
-        "out-file" if dialect == Dialect::PowerShell => ps_write(PsWriter::OutFile, args, c),
+        "out-file" if dialect == Dialect::PowerShell => ps_write(PsWriter::OutFile, args, piped, c),
         "rd" | "rmdir" | "del" | "erase" if dialect != Dialect::PowerShell => {
             cmd_removal(&name, args, c)
         }
@@ -2435,7 +2435,7 @@ enum PsParam {
     Path,
     /// The item written literally (`-LiteralPath`, and every path of `New-Item` and `Out-File`).
     LiteralPath,
-    /// `New-Item -Name`, joined to each path.
+    /// `New-Item -Name` (not modeled: the command is held).
     Name,
     /// `New-Item -ItemType`.
     ItemType,
@@ -2463,8 +2463,9 @@ fn ps_param(opt: &str, params: &[(&'static str, PsParam)]) -> Option<(&'static s
 /// such as `-Path:x` included) or positional: planned as a write so a new or changed item inside
 /// a protected root is refused like a redirection there. An unknown parameter, an extra
 /// positional word or a link `-ItemType` holds the command (`New-Item` and `Add-Content` are not
-/// consequential tokens, so the hold is explicit here); a missing path is held for its target.
-fn ps_write(writer: PsWriter, args: &[Word], c: &mut Collector) -> bool {
+/// consequential tokens, so the hold is explicit here); a missing path, `New-Item -Name` and
+/// pipeline input (which can bind the target by property name) hold it for its target.
+fn ps_write(writer: PsWriter, args: &[Word], piped: bool, c: &mut Collector) -> bool {
     use PsParam::*;
     const COMMON: &[(&str, PsParam)] = &[
         ("force", Switch),
@@ -2603,24 +2604,11 @@ fn ps_write(writer: PsWriter, args: &[Word], c: &mut Collector) -> bool {
     if !known {
         c.unmodeled();
     }
-    let targets: Vec<(Word, bool)> = match name {
-        // `-Name` is literal, like `New-Item -Path`.
-        Some(n) if paths.is_empty() => vec![(n, true)],
-        Some(n) => paths
-            .iter()
-            .map(|(p, literal)| {
-                let text = if p.text.ends_with(['/', '\\']) {
-                    format!("{}{}", p.text, n.text)
-                } else {
-                    format!("{}/{}", p.text, n.text)
-                };
-                let dynamic = p.dynamic || n.dynamic;
-                (Word { text, dynamic }, *literal)
-            })
-            .collect(),
-        None => paths,
-    };
-    if targets.is_empty() {
+    // `New-Item -Name` is joined to a path PowerShell resolves itself (an empty or omitted
+    // `-Path` is the working directory or a pipeline value): not planned, held below.
+    let named = name.is_some();
+    let targets = if named { Vec::new() } else { paths };
+    if targets.is_empty() && !named {
         // The path arrives on the pipeline or at a prompt.
         c.hold(InputNeeded::UnresolvedTarget);
     }
@@ -2633,6 +2621,10 @@ fn ps_write(writer: PsWriter, args: &[Word], c: &mut Collector) -> bool {
     }
     if opaque {
         c.hold(InputNeeded::UnresolvedExpansion);
+    }
+    // Pipeline input can bind the target parameters by property name.
+    if named || piped {
+        c.hold(InputNeeded::UnresolvedTarget);
     }
     true
 }

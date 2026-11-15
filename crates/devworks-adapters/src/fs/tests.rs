@@ -708,6 +708,7 @@ fn writes_with_missing_parents_under_a_linked_protected_root_are_refused() {
 /// refused inside every protected root, allowed outside them.
 #[test]
 fn appending_redirects_and_powershell_writes_into_protected_roots_are_refused() {
+    use devworks_core::authority::shell::{CommandVerdict, preflight_command};
     let mut t = tree("append");
     let skills = t.s.p("data/skills");
     std::fs::create_dir_all(format!("{skills}/beta")).unwrap();
@@ -739,6 +740,10 @@ fn appending_redirects_and_powershell_writes_into_protected_roots_are_refused() 
     let home = PreflightVerdict::Blocked(BlockReason::ProtectedUserDirectory);
     let slashed = |p: &str| p.replace('\\', "/");
     let ps_quote = |p: &str| format!("'{}'", p.replace('\'', "''"));
+    let command = |script: &str| {
+        let argv = ["pwsh", "-Command", script].map(str::to_owned);
+        preflight_command(&fs, &t.roots, &argv, Some(&cwd), &[])
+    };
     let targets = [
         (t.s.p("data/skills/new/SKILL.md"), &skill),
         (t.s.p("data/skills/beta/SKILL.md"), &skill),
@@ -767,8 +772,8 @@ fn appending_redirects_and_powershell_writes_into_protected_roots_are_refused() 
             format!("sc -LiteralPath {q} -Value x"),
             format!("Add-Content -Path {q} x"),
             format!("ac {q} x"),
-            format!("'x' | Out-File -FilePath {q} -Append"),
-            format!("'x' | Out-File {q} utf8"),
+            format!("Out-File -FilePath {q} -InputObject x -Append"),
+            format!("Out-File {q} utf8 -InputObject x"),
         ] {
             assert_eq!(
                 verdicts(&["pwsh", "-Command", &script]),
@@ -776,15 +781,24 @@ fn appending_redirects_and_powershell_writes_into_protected_roots_are_refused() 
                 "{script}"
             );
         }
+        // Pipeline input holds a writer, but its named target is still refused.
+        for script in [
+            format!("'x' | Out-File -FilePath {q} -Append"),
+            format!("'x' | Set-Content {q}"),
+        ] {
+            assert!(
+                matches!(command(&script), CommandVerdict::Blocked { .. }),
+                "{script}"
+            );
+        }
     }
-    // `-Name` is joined to the path: a new folder inside a skill folder.
+    // `-Name` is joined to a path PowerShell resolves itself: held, never allowed.
     let script = format!(
         "New-Item -ItemType Directory -Path {} -Name new",
         ps_quote(&skills)
     );
-    assert_eq!(
-        verdicts(&["pwsh", "-Command", &script]),
-        std::slice::from_ref(&skill),
+    assert!(
+        matches!(command(&script), CommandVerdict::NeedsInput { .. }),
         "{script}"
     );
     // An append onto the repository root or the home directory itself.
@@ -809,7 +823,7 @@ fn appending_redirects_and_powershell_writes_into_protected_roots_are_refused() 
         format!("New-Item -Path {} -Force", ps_quote(&outside)),
         format!("mkdir {}", ps_quote(&t.s.p("outside/new"))),
         format!("Add-Content {} x", ps_quote(&outside)),
-        format!("'x' | Out-File {}", ps_quote(&outside)),
+        format!("Out-File {} -InputObject x", ps_quote(&outside)),
     ] {
         assert_eq!(
             verdicts(&["pwsh", "-Command", &script]),
@@ -817,6 +831,12 @@ fn appending_redirects_and_powershell_writes_into_protected_roots_are_refused() 
             "{script}"
         );
     }
+    // Piped, the same write outside the roots is held, not allowed.
+    let script = format!("'x' | Out-File {}", ps_quote(&outside));
+    assert!(
+        matches!(command(&script), CommandVerdict::NeedsInput { .. }),
+        "{script}"
+    );
 }
 
 /// PowerShell writes into protected roots named with a provider prefix, an apostrophe or

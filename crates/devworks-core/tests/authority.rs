@@ -180,7 +180,6 @@ fn powershell_write_targets_are_read_as_powershell_reads_them() {
         "Set-Content -Path FileSystem::/x/f -Value hi",
         "Set-Content -Path 'filesystem::/x/f' -Value hi",
         "Add-Content Microsoft.PowerShell.Core\\FileSystem::/x/f hi",
-        "New-Item -Path FileSystem::/x -Name f",
         "'hi' > FileSystem::/x/f",
     ] {
         assert_eq!(ps(script), [(Truncate, vec!["/x/f".into()])], "{script}");
@@ -265,6 +264,18 @@ fn powershell_writers_are_held_unless_every_target_is_checked_exactly() {
         // Computed arguments, even in a value position.
         "Set-Content -Path /x/f -Value $v",
         "Set-Content /x/f $(Get-Date)",
+        // `New-Item -Name` is joined to a path PowerShell resolves itself (an empty `-Path` is the
+        // working directory, an omitted one may bind from the pipeline).
+        "New-Item -Path '' -Name '.git/config' -ItemType File -Force",
+        "New-Item -Path /x -Name f",
+        "New-Item -Name f",
+        "New-Item -Path FileSystem::/x -Name f",
+        // Pipeline input can bind a writer's target parameters by property name.
+        "Import-Csv ./paths.csv | New-Item -Name state.json -ItemType File",
+        "Get-Item a | New-Item /x/f",
+        "'hi' | Set-Content /x/f",
+        "'hi' | Add-Content -Path /x/f",
+        "'hi' | Out-File -FilePath /x/f -Append",
         // An alternate data stream.
         "Set-Content -Stream s -Path /x/f -Value hi",
         // A cmdlet reached through an alias or code the analysis does not read.
@@ -320,16 +331,12 @@ fn powershell_file_and_folder_writers_plan_a_write_of_each_path() {
         "ni -p /x/f",
         "mkdir /x/f",
         "md -Force /x/f",
-        "New-Item -Path /x -Name f",
-        "New-Item -Path /x/ -Name f -ItemType Directory",
         "Set-Content /x/f hi",
         "Set-Content -Value hi /x/f",
         "sc -LiteralPath /x/f -Value hi -NoNewline",
         "Set-Content -lp /x/f hi",
         "Add-Content -Path /x/f hi",
         "ac /x/f -Value hi -Encoding utf8",
-        "'hi' | Out-File /x/f",
-        "'hi' | Out-File -FilePath /x/f -Append",
         "Out-File -InputObject hi -LiteralPath /x/f -Force",
         "Out-File /x/f utf8",
         "Set-Content -- /x/f hi",
@@ -340,8 +347,6 @@ fn powershell_file_and_folder_writers_plan_a_write_of_each_path() {
         ps("New-Item -Path /x/a -Path /x/b"),
         [(Truncate, vec!["/x/a".into(), "/x/b".into()])]
     );
-    // A `-Name` without a path is relative to the working directory.
-    assert_eq!(ps("New-Item -Name f"), [(Truncate, vec!["f".into()])]);
     // Unknown parameters, extra positional words, links and dynamic paths hold the command.
     let held = |s: &str| needs(&["pwsh", "-Command", s]);
     for (script, expected) in [
@@ -885,10 +890,7 @@ fn consequential_git_and_file_writers_are_refused_planned_or_held_never_residual
     }
     let ps = |s: &str| assess_command(&argv(&["pwsh", "-Command", s]), None);
     // File writers with a literal path are planned as writes (refused for protected roots).
-    for script in [
-        "Set-Content /x/repo/.git/HEAD x",
-        "'x' | Out-File /x/repo/.git/HEAD",
-    ] {
+    for script in ["Set-Content /x/repo/.git/HEAD x"] {
         match ps(script) {
             ShellAssessment::Destructive { plans, .. } => assert_eq!(
                 plans
@@ -901,6 +903,11 @@ fn consequential_git_and_file_writers_are_refused_planned_or_held_never_residual
             other => panic!("{script}: {other:?}"),
         }
     }
+    // Pipeline input can bind the target: held.
+    assert!(matches!(
+        ps("'x' | Out-File C:/x/repo/.git/HEAD"),
+        ShellAssessment::NeedsInput(_)
+    ));
     for script in [
         "Clear-Content C:/x/repo/.git/HEAD",
         "Rename-Item C:/x/repo gone",
