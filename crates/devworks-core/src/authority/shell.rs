@@ -26,7 +26,8 @@
 //!    is scanned for [consequential tokens](consequential_token): programs and verbs that delete,
 //!    move or overwrite (`rm`, `mv`, `cp`, `ln`, `tee`, `truncate`, `rsync`, `find`, `git`, cmd
 //!    `rd`/`del`/`move`/`ren`/`copy`, PowerShell `Remove-Item`/`Move-Item`/`Rename-Item`/
-//!    `Set-Content`/`Clear-Content`/`Out-File`/`Copy-Item` and aliases, `[IO.*]::Delete/Move/…`).
+//!    `Set-Content`/`Add-Content`/`Clear-Content`/`Out-File`/`New-Item`/`mkdir`/`Copy-Item` and
+//!    aliases, `[IO.*]::Delete/Move/…`).
 //!    Every occurrence must be accounted for by a fully modeled command; otherwise the result is
 //!    `NeedsInput(UnmodeledConsequentialCommand)`, never "nothing destructive".
 //!
@@ -157,7 +158,8 @@ pub fn consequential_token(name: &str) -> bool {
             | "rd" | "del" | "erase" | "move" | "ren" | "rename" | "copy"
             // PowerShell
             | "remove-item" | "ri" | "move-item" | "mi" | "rename-item" | "rni" | "set-content"
-            | "sc" | "clear-content" | "clc" | "out-file" | "copy-item" | "cpi"
+            | "sc" | "clear-content" | "clc" | "out-file" | "copy-item" | "cpi" | "add-content"
+            | "ac" | "new-item" | "ni" | "mkdir" | "md"
     )
 }
 
@@ -1267,15 +1269,36 @@ fn command(words: &[Word], dialect: Dialect, piped: bool, c: &mut Collector, dep
         if dialect == Dialect::PowerShell
             && matches!(t.to_ascii_lowercase().as_str(), "invoke-expression" | "iex")
         {
-            // `Invoke-Expression 'code'` runs its one literal string as a script.
-            let mut rest = &words[i + 1..];
-            if rest
-                .first()
-                .is_some_and(|w| w.text.eq_ignore_ascii_case("-command"))
-            {
-                rest = &rest[1..];
+            // `Invoke-Expression 'code'` runs its one literal string as a script. Only the plain
+            // form is reparsed: one positional string, or `-Command` (any prefix: no other
+            // parameter starts with `c`) and one string. Every other shape is held.
+            let command = |w: &Word| {
+                let l = w.text.to_ascii_lowercase();
+                let name = l.strip_prefix('-')?;
+                let (name, value) = match name.split_once(':') {
+                    Some((n, _)) => (n, Some(w.text[n.len() + 2..].to_owned())),
+                    None => (name, None),
+                };
+                (!name.is_empty() && "command".starts_with(name)).then_some(value)
+            };
+            let plain = |w: &Word| !w.text.starts_with(['-', '@']);
+            let code = match &words[i + 1..] {
+                [w] if plain(w) => Some(w.clone()),
+                [flag, w] if command(flag) == Some(None) && plain(w) => Some(w.clone()),
+                [flag] => match command(flag) {
+                    Some(Some(text)) => Some(Word {
+                        text,
+                        dynamic: flag.dynamic,
+                        literal: false,
+                    }),
+                    _ => None,
+                },
+                _ => None,
+            };
+            match code {
+                Some(code) if !piped => nested(&[code], Dialect::PowerShell, c, depth),
+                _ => c.hold(InputNeeded::OpaqueCommand),
             }
-            nested(rest, Dialect::PowerShell, c, depth);
             return;
         }
         if dialect == Dialect::Posix && t == "eval" {
@@ -1659,7 +1682,12 @@ fn nested(words: &[Word], dialect: Dialect, c: &mut Collector, depth: u8) {
         }
         return;
     }
-    if words.iter().any(|w| w.dynamic) {
+    // The shell expands each word before `eval` joins them, so an unquoted glob can turn file
+    // names into code: only words the first pass leaves as written are reparsed.
+    let first_pass = |w: &Word| {
+        w.dynamic || (dialect == Dialect::Posix && !w.literal && w.text.contains(['*', '?', '[']))
+    };
+    if words.iter().any(first_pass) {
         c.hold(InputNeeded::UnresolvedExpansion);
         return;
     }
@@ -1962,8 +1990,13 @@ fn git(args: &[Word], c: &mut Collector) -> bool {
 
     let mut j = 0;
     let mut dir: Option<Word> = None;
+    let mut literal_pathspecs = false;
     while let Some(a) = args.get(j) {
         match a.text.as_str() {
+            "--literal-pathspecs" => {
+                literal_pathspecs = true;
+                j += 1;
+            }
             "-C" => {
                 if dir.is_some() {
                     // Stacked `-C` paths compose; hold rather than join.
@@ -1986,7 +2019,6 @@ fn git(args: &[Word], c: &mut Collector) -> bool {
             | "--paginate"
             | "-P"
             | "--no-replace-objects"
-            | "--literal-pathspecs"
             | "--no-optional-locks" => j += 1,
             // Repository relocation (`--git-dir`, `--work-tree`, …) is not modeled.
             t if t.starts_with('-') => return false,
@@ -2114,10 +2146,28 @@ fn git(args: &[Word], c: &mut Collector) -> bool {
                 return false;
             }
             let base = git_dir(&dir);
+            // Git matches pathspecs itself, quoted or not: `*` crosses `/`, and magic
+            // (`:(glob)`, `:(icase)`, `:!…`) and `\` escapes change the match. Only
+            // `--literal-pathspecs` makes them names; otherwise a wildcard or magic pathspec is
+            // held (and still planned as a pattern, so a refused match blocks it).
+            let pathspecs: Vec<Word> = paths
+                .iter()
+                .map(|p| Word {
+                    literal: literal_pathspecs,
+                    ..p.clone()
+                })
+                .collect();
+            if !literal_pathspecs
+                && paths
+                    .iter()
+                    .any(|p| p.text.starts_with(':') || p.text.contains(['*', '?', '[', '\\']))
+            {
+                c.hold(InputNeeded::UnresolvedTarget);
+            }
             let targets = if paths.is_empty() {
                 vec![base]
             } else if dir.is_none() {
-                paths.to_vec()
+                pathspecs
             } else {
                 // Pathspecs relative to `-C`: hold rather than guess the join.
                 c.hold(InputNeeded::UnresolvedTarget);
@@ -2444,7 +2494,7 @@ fn posix_removal(name: &str, args: &[Word], c: &mut Collector) -> bool {
 
 /// `mkdir` writes a new entry at each operand (and its missing parents): planned as a write so a
 /// new folder inside a protected root is refused like a new file there. An option it does not
-/// know holds the command (`mkdir` is not a consequential token, so the hold is explicit here).
+/// know holds the command.
 fn posix_mkdir(args: &[Word], c: &mut Collector) -> bool {
     let mut seen = Vec::new();
     match parse_options(
@@ -2523,8 +2573,7 @@ fn ps_param(opt: &str, params: &[(&'static str, PsParam)]) -> Option<(&'static s
 /// aliases) write each path operand, named (`-Path`, `-LiteralPath`, `-FilePath`, joined forms
 /// such as `-Path:x` included) or positional: planned as a write so a new or changed item inside
 /// a protected root is refused like a redirection there. An unknown parameter, an extra
-/// positional word or a link `-ItemType` holds the command (`New-Item` and `Add-Content` are not
-/// consequential tokens, so the hold is explicit here); a missing path, `New-Item -Name` and
+/// positional word or a link `-ItemType` holds the command; a missing path, `New-Item -Name` and
 /// pipeline input (which can bind the target by property name) hold it for its target.
 fn ps_write(writer: PsWriter, args: &[Word], piped: bool, c: &mut Collector) -> bool {
     use PsParam::*;

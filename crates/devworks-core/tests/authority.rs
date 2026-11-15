@@ -319,6 +319,9 @@ fn powershell_writers_are_held_unless_every_target_is_checked_exactly() {
         ". ni /x/f",
         "iex 'ni /x/f'",
         "Invoke-Expression -Command 'Add-Content /x/f hi'",
+        "iex -C 'ni /x/f'",
+        "Invoke-Expression -Comm 'ni /x/f'",
+        "iex -Command:'ni /x/f'",
     ] {
         let got = assess_command(&argv(&["pwsh", "-Command", script]), Some("/work"));
         let exact = matches!(&got, ShellAssessment::Destructive { plans, .. }
@@ -406,6 +409,85 @@ fn quoted_names_nested_scripts_and_powershell_patterns_are_planned_exactly_or_he
         planned(&["pwsh", "-Command", "Invoke-Expression 'Set-Content /x/f y'"]),
         [(Truncate, vec!["/x/f".into()], false)]
     );
+}
+
+#[test]
+fn git_pathspecs_and_first_pass_expansions_are_held_unless_checked_exactly() {
+    use DestructiveKind::EraseContents;
+    let assess = |a: &[&str]| assess_command(&argv(a), Some("/work"));
+    let held = |a: &[&str]| matches!(assess(a), ShellAssessment::NeedsInput(_));
+    let mut missed = Vec::new();
+    // Git matches pathspecs itself (`*` crosses `/`, magic such as `:(glob)`), quoted or not:
+    // a wildcard or magic pathspec is held.
+    for script in [
+        "git clean -fdx 'cache*'",
+        "git clean -fdx cache*",
+        "git clean -fdx -- \"*.db\"",
+        "git clean -fd 'a[1]'",
+        "git clean -fdx ':(glob)**/x'",
+        "git clean -fdx ':!keep'",
+        "git clean -fdx ':(icase)cache'",
+    ] {
+        if !held(&["sh", "-c", script]) {
+            missed.push(format!(
+                "not held: {script}: {:?}",
+                assess(&["sh", "-c", script])
+            ));
+        }
+    }
+    // A plain pathspec, or one made literal by `--literal-pathspecs`, is a path.
+    for (script, target) in [
+        ("git clean -fdx cache", "cache"),
+        ("git --literal-pathspecs clean -fdx 'a[1]'", "a[1]"),
+    ] {
+        match assess(&["sh", "-c", script]) {
+            ShellAssessment::Destructive { plans, .. }
+                if plans.len() == 1
+                    && plans[0].kind == EraseContents
+                    && plans[0].targets == [target] => {}
+            other => missed.push(format!("not planned: {script}: {other:?}")),
+        }
+    }
+    // `eval` runs its words after the shell expanded them: an unquoted glob can name files
+    // whose names are code, so only words the first pass leaves as written are reparsed.
+    for script in [
+        "eval rm -rf /outside/*",
+        "eval echo x '>>' /x/f?",
+        "eval rm -rf ~user/x",
+        "eval rm -rf /x/{a,b}",
+    ] {
+        if !held(&["sh", "-c", script]) {
+            missed.push(format!(
+                "not held: {script}: {:?}",
+                assess(&["sh", "-c", script])
+            ));
+        }
+    }
+    // `Invoke-Expression` takes one string: extra words or parameters are not modeled.
+    for script in [
+        "iex 'ni /x/f' extra",
+        "Invoke-Expression -Verbose 'ni /x/f'",
+        "iex \"ni $(Get-Location)/f\"",
+        // `-C` binds `-Command`; anything beyond the plain form is held.
+        "iex -C 'ac /x/f x' -Verbose",
+        "iex -Command:'ni /x/f' -ErrorAction Stop",
+        "iex -Command 'ni /x/f' 'more'",
+        "iex @a",
+        // A writer alias the structured analysis does not reach is held by the backstop.
+        "Write-Output 'ac /x/f x'",
+        "Write-Output 'ni /x/f'",
+        "Write-Output 'md /x/f'",
+        "Write-Output 'Add-Content /x/f x'",
+        "Write-Output 'New-Item /x/f'",
+    ] {
+        if !held(&["pwsh", "-Command", script]) {
+            missed.push(format!(
+                "not held: {script}: {:?}",
+                assess(&["pwsh", "-Command", script])
+            ));
+        }
+    }
+    assert!(missed.is_empty(), "{}", missed.join("\n"));
 }
 
 #[test]

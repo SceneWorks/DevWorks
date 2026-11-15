@@ -1154,6 +1154,52 @@ fn literal_names_case_insensitive_patterns_and_nested_scripts_are_checked() {
     assert!(missed.is_empty(), "{}", missed.join("\n"));
 }
 
+/// Git matches a quoted pathspec itself, and `eval` reparses the names an unquoted glob expands
+/// to: neither may be checked as the literal word, so neither is ever allowed unseen.
+#[test]
+fn git_pathspecs_and_eval_globs_are_never_checked_as_literal_words() {
+    use devworks_core::authority::shell::{CommandVerdict, preflight_command};
+    let s = Scratch::new("pathspec-eval");
+    let work = s.p("work");
+    let data = s.p("work/cache-data");
+    let outside = s.p("outside");
+    for d in [&data, &outside] {
+        std::fs::create_dir_all(d).unwrap();
+    }
+    // A file whose name is code once `eval` reparses the expanded glob (not a valid name on
+    // Windows, so the eval case runs on Unix only).
+    let code_name = cfg!(unix) && std::fs::write(format!("{outside}/x;rm -rf ~"), b"").is_ok();
+    let roots = ProtectedRoots::new(Vec::new(), Vec::new(), Some(data.clone()));
+    let fs = NativeFilesystem::new();
+    let verdict = |script: &str| {
+        let argv = ["bash", "-c", script].map(str::to_owned);
+        preflight_command(&fs, &roots, &argv, Some(&work), &[])
+    };
+    let mut scripts = vec![
+        "git clean -fdx 'cache*'".to_owned(),
+        "git clean -fdx \"cache-*\"".to_owned(),
+    ];
+    if code_name {
+        let dir = sh_quote(&outside.replace('\\', "/"));
+        scripts.push(format!("eval rm -rf {dir}/*"));
+    }
+    let leaks: Vec<String> = scripts
+        .iter()
+        .filter_map(|script| match verdict(script) {
+            v @ (CommandVerdict::Allowed { .. } | CommandVerdict::Residual { .. }) => {
+                Some(format!("{script}: {v:?}"))
+            }
+            _ => None,
+        })
+        .collect();
+    assert!(
+        leaks.is_empty(),
+        "{} leaks:\n{}",
+        leaks.len(),
+        leaks.join("\n")
+    );
+}
+
 #[test]
 fn shell_plans_resolve_to_actual_targets_before_dispatch() {
     let t = tree("shell");
