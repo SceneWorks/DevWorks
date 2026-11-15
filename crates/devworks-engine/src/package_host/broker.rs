@@ -144,6 +144,25 @@ fn denied(message: &str) -> RpcError {
     rpc_error(RpcErrorClass::PermissionDenied, message)
 }
 
+/// A host-side failure as the package sees it: its class and a fixed message. The detail goes
+/// to the package's host log (best effort), never to the helper.
+pub(super) fn host_failure(
+    host: &PackageHost,
+    package: &str,
+    class: RpcErrorClass,
+    message: &str,
+    detail: &dyn std::fmt::Debug,
+) -> RpcError {
+    host.service.record_log(
+        package,
+        devworks_core::protocol::records::Severity::Warning,
+        "PackageBrokerHostFailure",
+        message,
+        Some(format!("{detail:?}")),
+    );
+    rpc_error(class, message)
+}
+
 /// The identity of an artifact version an invocation may use: `(artifact, version, digest)`.
 pub(super) fn artifact_key(a: &wire::ArtifactRef) -> (String, String, String) {
     (
@@ -303,7 +322,9 @@ pub(super) fn package_actor(package: &str) -> ActorId {
 /// How a brokered call ended in the journal.
 enum Ended {
     Answered(OperationState, Vec<u8>),
-    Failed(RpcError, OperationState),
+    /// The package's error (a class and a fixed message), the journal state and the host-only
+    /// detail recorded in the journal.
+    Failed(RpcError, OperationState, String),
 }
 
 fn application(
@@ -377,11 +398,9 @@ fn application(
                 Ended::Answered(state, serde_json::to_vec(&reply).unwrap_or_default())
             }
             Err(e) => Ended::Failed(
-                rpc_error(
-                    RpcErrorClass::Unavailable,
-                    &format!("the query failed: {e:?}"),
-                ),
+                rpc_error(RpcErrorClass::Unavailable, "the query could not be run"),
                 OperationState::Failed,
+                e.to_string(),
             ),
         },
         // A command's final decision is made under the invocation's revocation lock (as a state
@@ -393,6 +412,7 @@ fn application(
                 None => Ended::Failed(
                     denied("the invocation is no longer live"),
                     OperationState::Failed,
+                    "the invocation was revoked before the command's decision".into(),
                 ),
                 Some(outcome) => match outcome {
                     Ok(reply @ CommandReply::Recorded { .. }) => Ended::Answered(
@@ -406,42 +426,50 @@ fn application(
                     Ok(other) => Ended::Failed(
                         rpc_error(
                             RpcErrorClass::OutcomeUnknown,
-                            &format!("the command's status is unknown: {other:?}"),
+                            "the command's status is unknown",
                         ),
                         OperationState::OutcomeUnknown,
+                        format!("{other:?}"),
                     ),
                     // Nothing was admitted or recorded for these.
                     Err(
                         e @ (GatewayFailure::NoUseCase(_) | GatewayFailure::Unaddressable { .. }),
                     ) => Ended::Failed(
-                        rpc_error(
-                            RpcErrorClass::Unavailable,
-                            &format!("the command was not admitted: {e}"),
-                        ),
+                        rpc_error(RpcErrorClass::Unavailable, "the command was not admitted"),
                         OperationState::Failed,
+                        e.to_string(),
                     ),
                     Err(e) => Ended::Failed(
                         rpc_error(
                             RpcErrorClass::OutcomeUnknown,
-                            &format!("the command failed before its receipt: {e}"),
+                            "the command failed before its receipt",
                         ),
                         OperationState::OutcomeUnknown,
+                        e.to_string(),
                     ),
                 },
             }
         }
     };
     match ended {
-        Ended::Failed(error, state) => {
+        Ended::Failed(error, state, detail) => {
             let _ = run_write(&*host.store, WriteOptions::default(), {
-                let (operation, note) = (operation.clone(), error.message.clone());
-                move |tx| settle(tx, &operation, state, json!({"failed": note}))
+                let operation = operation.clone();
+                move |tx| settle(tx, &operation, state, json!({"failed": detail}))
             });
             Err(error)
         }
         Ended::Answered(state, reply) => {
             let produced = publish(host, &ports.artifacts, principal, &operation, state, &reply)
-                .map_err(|e| rpc_error(RpcErrorClass::OutcomeUnknown, &format!("{e:?}")))?;
+                .map_err(|e| {
+                    host_failure(
+                        host,
+                        &ctx.package_id,
+                        RpcErrorClass::OutcomeUnknown,
+                        "the call's reply could not be published",
+                        &e,
+                    )
+                })?;
             let produced: wire::ArtifactRef = serde_json::to_value(&produced)
                 .and_then(serde_json::from_value)
                 .map_err(|_| rpc_error(RpcErrorClass::OutcomeUnknown, "invalid result artifact"))?;
@@ -569,7 +597,13 @@ fn journal(
             RpcErrorClass::Conflict,
             "a different call was already made under this action key",
         )),
-        Err(e) => Err(rpc_error(RpcErrorClass::Unavailable, &format!("{e:?}"))),
+        Err(e) => Err(host_failure(
+            host,
+            &ctx.package_id,
+            RpcErrorClass::Unavailable,
+            "the call could not be journaled",
+            &e,
+        )),
     }
 }
 

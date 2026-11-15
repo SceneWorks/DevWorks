@@ -10,8 +10,8 @@
 //!   request outside its namespace fails the session visibly (the host then stops the process).
 //! * The control reader always drains: package requests go to one bounded broker worker; when
 //!   its queue is full the reader answers `Busy` at once instead of blocking.
-//! * Progress is bounded per invocation and coalesces with a dropped-count marker; terminal
-//!   results never drop.
+//! * Progress and produced events are bounded per invocation and count what they drop;
+//!   terminal results never drop. A finished invocation is forgotten entirely.
 //! * Frames to the helper go through a bounded outbox drained by the session's own writer
 //!   thread: sending never blocks on the helper's input pipe, so a helper that stops reading
 //!   cannot hold a request, a cancellation or shutdown past its own deadline. A full outbox
@@ -35,7 +35,7 @@ use std::time::{Duration, Instant};
 
 /// Most progress notifications kept per invocation (older ones are dropped and counted).
 pub const PROGRESS_KEPT: usize = 64;
-/// Most produced events kept per invocation.
+/// Most produced events kept per invocation (later ones are dropped and counted).
 pub const EVENTS_KEPT: usize = 256;
 /// Most bytes queued for a helper that has not read them yet (the session fails beyond it).
 pub const OUTBOX_BYTES: usize = 4 * MAX_FRAME_BYTES;
@@ -81,6 +81,8 @@ pub struct SlotState {
     pub progress: VecDeque<(i64, String)>,
     pub dropped_progress: i64,
     pub events: Vec<ContributionEvent>,
+    /// Events dropped beyond [`EVENTS_KEPT`].
+    pub dropped_events: i64,
     pub terminal: Option<Reply>,
     pub cancel_acknowledged: bool,
 }
@@ -434,12 +436,18 @@ impl Session {
             .filter(|s| s.token == token && !s.revoked.load(Ordering::SeqCst))
             .cloned()
     }
-    /// Forgets a finished invocation.
+    /// Forgets a finished invocation: its slot and its `host.invoke` request, if no answer
+    /// removed that already (the session closed first). The host forgets only terminal
+    /// invocations, so a later answer to that request is a duplicate terminal response.
     pub fn forget(&self, invocation_id: &str) {
         self.slots
             .lock()
             .unwrap_or_else(|p| p.into_inner())
             .remove(invocation_id);
+        self.invokes
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .retain(|_, slot| slot.invocation_id != invocation_id);
     }
 
     fn respond(&self, id: &str, outcome: Result<RpcResult, RpcError>) {
@@ -620,6 +628,8 @@ impl Session {
                 let mut s = slot.state.lock().unwrap_or_else(|p| p.into_inner());
                 if s.events.len() < EVENTS_KEPT {
                     s.events.push(params.event);
+                } else {
+                    s.dropped_events += 1;
                 }
             }
             // No host stream grants credit yet; a credit grant is validated and ignored.
