@@ -13,8 +13,10 @@
 //!    `rmdir`, `unlink`, `shred`, `dd of=`, `mv`, `rsync`, `find`, `mkdir` (a write of each new
 //!    folder), a set of `git` subcommands, cmd `rd`/`rmdir`/`del`/`erase` (joined switches such
 //!    as `/s/q` included), cmd `mkdir`/`md`, PowerShell
-//!    `Remove-Item`/`Move-Item` and their aliases, `[IO.Directory]::Delete('…')` with a literal
-//!    path, and `>` redirections. A command counts as **fully modeled** only when every one of
+//!    `Remove-Item`/`Move-Item` and their aliases, PowerShell `New-Item`/`mkdir`/`Set-Content`/
+//!    `Add-Content`/`Out-File` and their aliases (a write of each path),
+//!    `[IO.Directory]::Delete('…')` with a literal path, and `>`/`>>` redirections (`&>`, `&>>`,
+//!    `2>`, `2>>` included). A command counts as **fully modeled** only when every one of
 //!    its words was understood: every option is known to that program's model, no word is
 //!    dynamic (`$VAR`, substitutions, `~user`/`~+`/`~-`, brace expansion, a glob in the program
 //!    word, `(` adjacent to a word, PowerShell commas/arrays/blocks), no semantics-changing
@@ -224,9 +226,9 @@ enum Token {
     },
     /// `(` or `)`.
     Group,
-    Redirect {
-        truncate: bool,
-    },
+    /// `>`, `>>`, `&>`, `&>>` or a descriptor-numbered form (`2>`, `2>>`): a write of the next
+    /// word, whether it truncates or appends.
+    Redirect,
     /// `<`, `<<`, `<<<` or `<(` input redirection.
     Input,
 }
@@ -420,8 +422,12 @@ fn tokenize(script: &str, dialect: Dialect) -> Lexed {
                     &mut dynamic,
                 );
                 if c == '&' && chars.get(i + 1) == Some(&'>') {
+                    // `&>` and `&>>`.
                     i += 2;
-                    lx.tokens.push(Token::Redirect { truncate: true });
+                    if chars.get(i) == Some(&'>') {
+                        i += 1;
+                    }
+                    lx.tokens.push(Token::Redirect);
                     continue;
                 }
                 let pipe = c == '|' && chars.get(i + 1) != Some(&'|');
@@ -487,11 +493,11 @@ fn tokenize(script: &str, dialect: Dialect) -> Lexed {
                         &mut dynamic,
                     );
                 }
-                let append = chars.get(i + 1) == Some(&'>');
-                if append {
+                // `>>` appends; it writes its target like `>`.
+                if chars.get(i + 1) == Some(&'>') {
                     i += 1;
                 }
-                lx.tokens.push(Token::Redirect { truncate: !append });
+                lx.tokens.push(Token::Redirect);
             }
             c if c.is_whitespace() => flush(
                 &mut lx,
@@ -923,7 +929,7 @@ fn script(text: &str, dialect: Dialect, c: &mut Collector, depth: u8) {
         io_api(text, c);
     }
     let mut current: Vec<Word> = Vec::new();
-    let mut redirect = None;
+    let mut redirect = false;
     // Whether the command being collected reads a pipeline, whether the last separator was a
     // pipe, and whether it reads redirected input (`<`, `<<`, `<<<`, `<(`).
     let mut piped = false;
@@ -954,25 +960,22 @@ fn script(text: &str, dialect: Dialect, c: &mut Collector, depth: u8) {
                 fed = false;
             }
             Token::Input => fed = true,
-            Token::Redirect { truncate } => redirect = Some(truncate),
-            Token::Word(w) => match redirect.take() {
-                Some(truncate) => {
-                    let sink = w.text.to_ascii_lowercase();
-                    if sink == "/dev/null" || sink == "nul" || sink == "$null" {
-                        continue;
-                    }
-                    if truncate {
-                        c.push(DestructiveKind::Truncate, &[w]);
-                    }
+            Token::Redirect => redirect = true,
+            Token::Word(w) if std::mem::take(&mut redirect) => {
+                // Truncating and appending redirections both write their target.
+                let sink = w.text.to_ascii_lowercase();
+                if sink == "/dev/null" || sink == "nul" || sink == "$null" {
+                    continue;
                 }
-                None => {
-                    if current.is_empty() {
-                        piped = after_pipe;
-                        after_pipe = false;
-                    }
-                    current.push(w)
+                c.push(DestructiveKind::Truncate, &[w]);
+            }
+            Token::Word(w) => {
+                if current.is_empty() {
+                    piped = after_pipe;
+                    after_pipe = false;
                 }
-            },
+                current.push(w)
+            }
         }
     }
     run(&mut current, piped, fed, c);
@@ -1523,6 +1526,13 @@ fn command(words: &[Word], dialect: Dialect, piped: bool, c: &mut Collector, dep
         }
         "mkdir" if dialect == Dialect::Posix => posix_mkdir(args, c),
         "mkdir" | "md" if dialect == Dialect::Cmd => cmd_mkdir(args, c),
+        "new-item" | "ni" | "mkdir" | "md" if dialect == Dialect::PowerShell => {
+            ps_write(PsWriter::NewItem, args, c)
+        }
+        "set-content" | "sc" | "add-content" | "ac" if dialect == Dialect::PowerShell => {
+            ps_write(PsWriter::Content, args, c)
+        }
+        "out-file" if dialect == Dialect::PowerShell => ps_write(PsWriter::OutFile, args, c),
         "rd" | "rmdir" | "del" | "erase" if dialect != Dialect::PowerShell => {
             cmd_removal(&name, args, c)
         }
@@ -2343,6 +2353,205 @@ fn cmd_mkdir(args: &[Word], c: &mut Collector) -> bool {
         c.unmodeled();
     } else {
         c.push(DestructiveKind::Truncate, args);
+    }
+    true
+}
+
+/// A PowerShell cmdlet that creates or writes a file or folder.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum PsWriter {
+    /// `New-Item`/`ni`, and `mkdir`/`md` (a function over `New-Item -ItemType Directory`).
+    NewItem,
+    /// `Set-Content`/`sc` and `Add-Content`/`ac`.
+    Content,
+    /// `Out-File`.
+    OutFile,
+}
+
+/// What a PowerShell writer parameter binds.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum PsParam {
+    /// The item written (`-Path`, `-LiteralPath`, `-FilePath`).
+    Path,
+    /// `New-Item -Name`, joined to each path.
+    Name,
+    /// `New-Item -ItemType`.
+    ItemType,
+    /// A parameter taking a value that names no written item.
+    Value,
+    Switch,
+}
+
+/// Resolves a parameter name as PowerShell does: an exact name or alias, else the one parameter
+/// it is a prefix of. Every parameter that names a written item is listed, so a name PowerShell
+/// binds to one of them never resolves to another parameter here (it is ambiguous or unknown).
+fn ps_param(opt: &str, params: &[(&'static str, PsParam)]) -> Option<(&'static str, PsParam)> {
+    if let Some(p) = params.iter().find(|(n, _)| *n == opt) {
+        return Some(*p);
+    }
+    let mut prefixed = params.iter().filter(|(n, _)| n.starts_with(opt));
+    match (prefixed.next(), prefixed.next()) {
+        (Some(p), None) => Some(*p),
+        _ => None,
+    }
+}
+
+/// PowerShell `New-Item`, `mkdir`, `Set-Content`, `Add-Content` and `Out-File` (and their
+/// aliases) write each path operand, named (`-Path`, `-LiteralPath`, `-FilePath`, joined forms
+/// such as `-Path:x` included) or positional: planned as a write so a new or changed item inside
+/// a protected root is refused like a redirection there. An unknown parameter, an extra
+/// positional word or a link `-ItemType` holds the command (`New-Item` and `Add-Content` are not
+/// consequential tokens, so the hold is explicit here); a missing path is held for its target.
+fn ps_write(writer: PsWriter, args: &[Word], c: &mut Collector) -> bool {
+    use PsParam::*;
+    const COMMON: &[(&str, PsParam)] = &[
+        ("force", Switch),
+        ("whatif", Switch),
+        ("confirm", Switch),
+        ("verbose", Switch),
+        ("erroraction", Value),
+        ("ea", Value),
+    ];
+    let (own, positional): (&[(&str, PsParam)], &[&str]) = match writer {
+        PsWriter::NewItem => (
+            &[
+                ("path", Path),
+                ("name", Name),
+                ("itemtype", ItemType),
+                ("type", ItemType),
+                ("value", Value),
+                ("target", Value),
+            ],
+            &["path"],
+        ),
+        PsWriter::Content => (
+            &[
+                ("path", Path),
+                ("literalpath", Path),
+                ("pspath", Path),
+                ("lp", Path),
+                ("value", Value),
+                ("encoding", Value),
+                ("filter", Value),
+                ("include", Value),
+                ("exclude", Value),
+                ("stream", Value),
+                ("nonewline", Switch),
+                ("passthru", Switch),
+                ("asbytestream", Switch),
+            ],
+            &["path", "value"],
+        ),
+        PsWriter::OutFile => (
+            &[
+                ("filepath", Path),
+                ("path", Path),
+                ("literalpath", Path),
+                ("pspath", Path),
+                ("lp", Path),
+                ("encoding", Value),
+                ("width", Value),
+                ("inputobject", Value),
+                ("append", Switch),
+                ("noclobber", Switch),
+                ("nonewline", Switch),
+            ],
+            &["path", "encoding"],
+        ),
+    };
+    let params: Vec<(&str, PsParam)> = own.iter().chain(COMMON).copied().collect();
+    let mut paths = Vec::new();
+    let mut name = None;
+    let mut item_type = None;
+    let mut bound: Vec<&str> = Vec::new();
+    let mut words = Vec::new();
+    let mut known = true;
+    let mut rest_positional = false;
+    let mut j = 0;
+    while let Some(a) = args.get(j) {
+        j += 1;
+        if rest_positional || !a.text.starts_with('-') || a.text.len() < 2 {
+            words.push(a.clone());
+            continue;
+        }
+        if a.text == "--" {
+            rest_positional = true;
+            continue;
+        }
+        let l = a.text[1..].to_ascii_lowercase();
+        let (opt, attached) = match l.split_once(':') {
+            Some((n, _)) => (n.to_owned(), Some(a.text[n.len() + 2..].to_owned())),
+            None => (l, None),
+        };
+        // A computed parameter name could bind anything.
+        let Some((param, role)) = (!a.dynamic).then(|| ps_param(&opt, &params)).flatten() else {
+            known = false;
+            break;
+        };
+        let value = match (role, attached) {
+            (Switch, _) => None,
+            (_, Some(v)) => Some(Word {
+                text: v,
+                dynamic: a.dynamic,
+            }),
+            (_, None) => {
+                j += 1;
+                args.get(j - 1).cloned()
+            }
+        };
+        if role != Switch && value.is_none() {
+            known = false;
+            break;
+        }
+        bound.push(if role == Path { "path" } else { param });
+        match role {
+            Path => paths.extend(value),
+            Name => name = value,
+            ItemType => item_type = value,
+            Value | Switch => {}
+        }
+    }
+    // Positional words bind to the positional parameters not bound by name, in order (any named
+    // path parameter binds the path position).
+    for w in words {
+        match positional.iter().find(|p| !bound.contains(p)) {
+            Some(&"path") => {
+                bound.push("path");
+                paths.push(w);
+            }
+            Some(p) => bound.push(p),
+            None => known = false,
+        }
+    }
+    // Links (`SymbolicLink`, `Junction`, `HardLink`) are not modeled.
+    if item_type.is_some_and(|t| {
+        t.dynamic || !matches!(t.text.to_ascii_lowercase().as_str(), "file" | "directory")
+    }) {
+        known = false;
+    }
+    if !known {
+        c.unmodeled();
+    }
+    let targets: Vec<Word> = match name {
+        Some(n) if paths.is_empty() => vec![n],
+        Some(n) => paths
+            .iter()
+            .map(|p| Word {
+                text: if p.text.ends_with(['/', '\\']) {
+                    format!("{}{}", p.text, n.text)
+                } else {
+                    format!("{}/{}", p.text, n.text)
+                },
+                dynamic: p.dynamic || n.dynamic,
+            })
+            .collect(),
+        None => paths,
+    };
+    if targets.is_empty() {
+        // The path arrives on the pipeline or at a prompt.
+        c.hold(InputNeeded::UnresolvedTarget);
+    } else {
+        c.push(DestructiveKind::Truncate, &targets);
     }
     true
 }

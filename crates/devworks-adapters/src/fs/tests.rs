@@ -704,6 +704,121 @@ fn writes_with_missing_parents_under_a_linked_protected_root_are_refused() {
     }
 }
 
+/// Appending redirections and PowerShell file and folder writers write their target like `>`:
+/// refused inside every protected root, allowed outside them.
+#[test]
+fn appending_redirects_and_powershell_writes_into_protected_roots_are_refused() {
+    let mut t = tree("append");
+    let skills = t.s.p("data/skills");
+    std::fs::create_dir_all(format!("{skills}/beta")).unwrap();
+    std::fs::write(format!("{skills}/beta/SKILL.md"), "Do beta.").unwrap();
+    t.roots = t
+        .roots
+        .clone()
+        .with_skill_roots([skills.clone(), t.s.p("home/.agents/skills")]);
+    let fs = NativeFilesystem::new();
+    let cwd = t.s.p("outside");
+    let verdicts = |argv: &[&str]| match assess_command(
+        &argv.iter().map(|a| (*a).to_owned()).collect::<Vec<_>>(),
+        Some(&cwd),
+    ) {
+        ShellAssessment::Destructive { plans, .. } => plans
+            .iter()
+            .map(|p| preflight(&fs, &t.roots, p).verdict)
+            .collect::<Vec<_>>(),
+        other => panic!("{argv:?}: {other:?}"),
+    };
+    let skill = PreflightVerdict::Blocked(BlockReason::SkillDirectory);
+    let data = PreflightVerdict::Blocked(BlockReason::ApplicationData);
+    let metadata = PreflightVerdict::Blocked(BlockReason::RepositoryMetadata {
+        repository_id: id("repo-a"),
+    });
+    let primary = PreflightVerdict::Blocked(BlockReason::PrimaryRepository {
+        repository_id: id("repo-a"),
+    });
+    let home = PreflightVerdict::Blocked(BlockReason::ProtectedUserDirectory);
+    let slashed = |p: &str| p.replace('\\', "/");
+    let ps_quote = |p: &str| format!("'{}'", p.replace('\'', "''"));
+    let targets = [
+        (t.s.p("data/skills/new/SKILL.md"), &skill),
+        (t.s.p("data/skills/beta/SKILL.md"), &skill),
+        (t.s.p("home/.agents/skills/new/SKILL.md"), &skill),
+        (t.s.p("data/state.json"), &data),
+        (t.s.p("repo/.git/config"), &metadata),
+    ];
+    for (target, refused) in &targets {
+        let q = sh_quote(&slashed(target));
+        for op in [">>", "1>>", "2>>", "&>>"] {
+            let script = format!("echo x {op} {q}");
+            assert_eq!(
+                verdicts(&["bash", "-c", &script]),
+                std::slice::from_ref(*refused),
+                "{script}"
+            );
+        }
+        let q = ps_quote(target);
+        for script in [
+            format!("'x' >> {q}"),
+            format!("New-Item -ItemType File -Path {q} -Force"),
+            format!("ni {q}"),
+            format!("mkdir {q}"),
+            format!("md -Path:{q}"),
+            format!("Set-Content {q} x"),
+            format!("sc -LiteralPath {q} -Value x"),
+            format!("Add-Content -Path {q} x"),
+            format!("ac {q} x"),
+            format!("'x' | Out-File -FilePath {q} -Append"),
+            format!("'x' | Out-File {q} utf8"),
+        ] {
+            assert_eq!(
+                verdicts(&["pwsh", "-Command", &script]),
+                std::slice::from_ref(*refused),
+                "{script}"
+            );
+        }
+    }
+    // `-Name` is joined to the path: a new folder inside a skill folder.
+    let script = format!(
+        "New-Item -ItemType Directory -Path {} -Name new",
+        ps_quote(&skills)
+    );
+    assert_eq!(
+        verdicts(&["pwsh", "-Command", &script]),
+        std::slice::from_ref(&skill),
+        "{script}"
+    );
+    // An append onto the repository root or the home directory itself.
+    let repo = sh_quote(&slashed(&t.s.p("repo")));
+    assert_eq!(
+        verdicts(&["bash", "-c", &format!("echo x >> {repo}")]),
+        std::slice::from_ref(&primary)
+    );
+    assert_eq!(verdicts(&["bash", "-c", "echo x >> ~"]), [home]);
+    // Outside every protected root: allowed.
+    let outside = t.s.p("outside/notes.md");
+    for op in [">>", "2>>", "&>>"] {
+        let script = format!("echo x {op} {}", sh_quote(&slashed(&outside)));
+        assert_eq!(
+            verdicts(&["bash", "-c", &script]),
+            [PreflightVerdict::Allowed],
+            "{script}"
+        );
+    }
+    for script in [
+        format!("'x' >> {}", ps_quote(&outside)),
+        format!("New-Item -Path {} -Force", ps_quote(&outside)),
+        format!("mkdir {}", ps_quote(&t.s.p("outside/new"))),
+        format!("Add-Content {} x", ps_quote(&outside)),
+        format!("'x' | Out-File {}", ps_quote(&outside)),
+    ] {
+        assert_eq!(
+            verdicts(&["pwsh", "-Command", &script]),
+            [PreflightVerdict::Allowed],
+            "{script}"
+        );
+    }
+}
+
 #[test]
 fn shell_plans_resolve_to_actual_targets_before_dispatch() {
     let t = tree("shell");

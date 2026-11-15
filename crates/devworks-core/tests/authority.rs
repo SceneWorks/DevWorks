@@ -138,6 +138,113 @@ fn mkdir_plans_a_write_of_each_new_folder() {
 }
 
 #[test]
+fn appending_redirects_plan_a_write_of_their_target() {
+    use DestructiveKind::Truncate;
+    for script in [
+        "echo x >> /a/f",
+        "echo x >>/a/f",
+        "echo x 1>> /a/f",
+        "echo x 2>> /a/f",
+        "echo x &>> /a/f",
+        "echo x &>>/a/f",
+        "echo x 2>>/dev/null >> /a/f",
+    ] {
+        assert_eq!(
+            plans(&["sh", "-c", script]),
+            [(Truncate, vec!["/a/f".into()])],
+            "{script}"
+        );
+    }
+    assert_eq!(
+        plans(&["cmd", "/c", "echo x >> C:\\x\\f"]),
+        [(Truncate, vec!["C:\\x\\f".into()])]
+    );
+    assert_eq!(
+        plans(&["pwsh", "-Command", "'x' >> C:/x/f"]),
+        [(Truncate, vec!["C:/x/f".into()])]
+    );
+    // A dynamic append target is held like a dynamic `>` target.
+    assert_eq!(
+        needs(&["sh", "-c", "echo x >> \"$F\""]),
+        InputNeeded::UnresolvedExpansion
+    );
+}
+
+#[test]
+fn powershell_file_and_folder_writers_plan_a_write_of_each_path() {
+    use DestructiveKind::Truncate;
+    let ps = |s: &str| plans(&["pwsh", "-Command", s]);
+    for script in [
+        "New-Item -ItemType Directory -Path C:/x/f",
+        "New-Item C:/x/f -ItemType File -Force",
+        "New-Item -Path:C:/x/f -Type file -Value hi",
+        "ni -p C:/x/f",
+        "mkdir C:/x/f",
+        "md -Force C:/x/f",
+        "New-Item -Path C:/x -Name f",
+        "New-Item -Path C:/x/ -Name f -ItemType Directory",
+        "Set-Content C:/x/f hi",
+        "Set-Content -Value hi C:/x/f",
+        "sc -LiteralPath C:/x/f -Value hi -NoNewline",
+        "Set-Content -lp C:/x/f hi",
+        "Add-Content -Path C:/x/f hi",
+        "ac C:/x/f -Value hi -Encoding utf8",
+        "'hi' | Out-File C:/x/f",
+        "'hi' | Out-File -FilePath C:/x/f -Append",
+        "Out-File -InputObject hi -LiteralPath C:/x/f -Force",
+        "Out-File C:/x/f utf8",
+        "Set-Content -- C:/x/f hi",
+    ] {
+        assert_eq!(ps(script), [(Truncate, vec!["C:/x/f".into()])], "{script}");
+    }
+    assert_eq!(
+        ps("New-Item -Path C:/x/a -Path C:/x/b"),
+        [(Truncate, vec!["C:/x/a".into(), "C:/x/b".into()])]
+    );
+    // A `-Name` without a path is relative to the working directory.
+    assert_eq!(ps("New-Item -Name f"), [(Truncate, vec!["f".into()])]);
+    // Unknown parameters, extra positional words, links and dynamic paths hold the command.
+    let held = |s: &str| needs(&["pwsh", "-Command", s]);
+    for (script, expected) in [
+        (
+            "New-Item -ItemType SymbolicLink -Path C:/x/l -Target C:/y",
+            InputNeeded::UnmodeledConsequentialCommand,
+        ),
+        (
+            "New-Item -ItemType $t C:/x/f",
+            InputNeeded::UnmodeledConsequentialCommand,
+        ),
+        (
+            "New-Item -Credential $c C:/x/f",
+            InputNeeded::UnmodeledConsequentialCommand,
+        ),
+        (
+            "Add-Content -Wait C:/x/f hi",
+            InputNeeded::UnmodeledConsequentialCommand,
+        ),
+        (
+            "Set-Content C:/x/f hi there",
+            InputNeeded::UnmodeledConsequentialCommand,
+        ),
+        // `-p` is ambiguous between `-Path` and `-PassThru`.
+        (
+            "Set-Content -p C:/x/f hi",
+            InputNeeded::UnmodeledConsequentialCommand,
+        ),
+        ("Add-Content $p hi", InputNeeded::UnresolvedExpansion),
+        ("mkdir C:/x/a,C:/x/b", InputNeeded::UnresolvedExpansion),
+        (
+            "New-Item -Path C:/x -Name $n",
+            InputNeeded::UnresolvedExpansion,
+        ),
+        ("'hi' | Out-File", InputNeeded::UnresolvedTarget),
+        ("Set-Content -Value hi", InputNeeded::UnresolvedTarget),
+    ] {
+        assert_eq!(held(script), expected, "{script}");
+    }
+}
+
+#[test]
 fn unresolved_expansion_and_opaque_targets_are_held() {
     assert_eq!(
         needs(&["sh", "-c", "rm -rf \"$HOME\"/x"]),
@@ -638,10 +745,25 @@ fn consequential_git_and_file_writers_are_refused_planned_or_held_never_residual
         );
     }
     let ps = |s: &str| assess_command(&argv(&["pwsh", "-Command", s]), None);
+    // File writers with a literal path are planned as writes (refused for protected roots).
     for script in [
         "Set-Content C:/x/repo/.git/HEAD x",
-        "Clear-Content C:/x/repo/.git/HEAD",
         "'x' | Out-File C:/x/repo/.git/HEAD",
+    ] {
+        match ps(script) {
+            ShellAssessment::Destructive { plans, .. } => assert_eq!(
+                plans
+                    .into_iter()
+                    .map(|p| (p.kind, p.targets))
+                    .collect::<Vec<_>>(),
+                [(Truncate, vec!["C:/x/repo/.git/HEAD".to_owned()])],
+                "{script}"
+            ),
+            other => panic!("{script}: {other:?}"),
+        }
+    }
+    for script in [
+        "Clear-Content C:/x/repo/.git/HEAD",
         "Rename-Item C:/x/repo gone",
         "Copy-Item a C:/x/repo/.git/HEAD",
         "[IO.File]::Delete($p)",
