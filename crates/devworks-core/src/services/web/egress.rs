@@ -19,9 +19,14 @@
 //!   secret-named query parameters and credential-shaped path segments are replaced, and the
 //!   result is redacted again for known secret shapes.
 use crate::authority::redact::{Redactor, redact_url};
-use crate::ports::web::{Scheme, ServerName};
-use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
-use url::{Host, Url};
+use crate::ports::storage::Cancellation;
+use crate::ports::web::{
+    HopRequest, HopResponse, HopTransport, NetFault, Resolver, Scheme, ServerName,
+};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
+use std::time::Instant;
+use url::Host;
+pub use url::Url;
 
 /// Longest URL accepted, requested or recorded (the contract's `Url` bound).
 pub const URL_LIMIT: usize = 4096;
@@ -573,4 +578,129 @@ mod tests {
         let u = parse("https://example.com/p/supersecretvalue").unwrap();
         assert!(!redacted(&u, &known).contains("supersecretvalue"));
     }
+}
+
+/// What checking one hop's destination found ([`admit_destination`]).
+#[derive(Clone, Debug)]
+pub enum Admission {
+    /// Every address is allowed: the hop may connect to exactly these.
+    Allowed {
+        addrs: Vec<IpAddr>,
+        /// Each address with its class name, for records.
+        listed: Vec<(String, &'static str)>,
+    },
+    /// A name or address is refused; `listed` is what was checked.
+    Blocked {
+        class: AddressClass,
+        listed: Vec<(String, &'static str)>,
+    },
+    /// The resolver answered with no address.
+    NoAddresses,
+    /// The resolver failed.
+    Unresolved(NetFault),
+}
+
+/// Resolves a hop's host once and classifies **every** address it returned: one refused address
+/// refuses the hop, so a resolver cannot mix a public and a private answer to slip past the
+/// check, and the hop then connects only to an address checked here (no rebinding between the
+/// check and the connection). The one admission of `web.fetch` and brokered package HTTP.
+pub fn admit_destination(
+    resolver: &dyn Resolver,
+    url: &Url,
+    port: u16,
+    allow_private: bool,
+    deadline: Instant,
+    cancel: &[Cancellation],
+) -> Admission {
+    let addrs = match destination(url) {
+        Destination::Literal(ip) => vec![ip],
+        Destination::Domain(domain) => {
+            if let Some(class) = name_class(&domain)
+                && !class.allowed(allow_private)
+            {
+                return Admission::Blocked {
+                    class,
+                    listed: vec![(domain, class.as_str())],
+                };
+            }
+            match resolver.resolve(&domain, port, deadline, cancel) {
+                Ok(a) if !a.is_empty() => a,
+                Ok(_) => return Admission::NoAddresses,
+                Err(f) => return Admission::Unresolved(f),
+            }
+        }
+    };
+    let classes: Vec<(IpAddr, AddressClass)> =
+        addrs.iter().map(|ip| (*ip, classify(*ip))).collect();
+    let listed = classes
+        .iter()
+        .map(|(ip, c)| (ip.to_string(), c.as_str()))
+        .collect();
+    match classes.iter().find(|(_, c)| !c.allowed(allow_private)) {
+        Some((_, class)) => Admission::Blocked {
+            class: *class,
+            listed,
+        },
+        None => Admission::Allowed { addrs, listed },
+    }
+}
+
+/// One request [`send`] makes to the checked addresses of a hop.
+pub struct Outgoing<'a> {
+    /// `GET`, `POST`, `PUT`, `DELETE` or `PATCH`.
+    pub method: &'a str,
+    pub body: &'a [u8],
+    pub deadline: Instant,
+    pub cancel: Vec<Cancellation>,
+    pub user_agent: &'a str,
+    pub accept: &'a str,
+    pub headers: &'a [(&'a str, &'a str)],
+}
+
+/// Sends `request` for `url` to the checked `addrs` in order until one answers. An address that
+/// did not connect (nothing sent, not a timeout) yields to the next; any other fault ends the
+/// hop. `attempt` sees each address's result (its status, or its fault).
+pub fn send(
+    transport: &dyn HopTransport,
+    url: &Url,
+    port: u16,
+    addrs: &[IpAddr],
+    request: &Outgoing<'_>,
+    attempt: &mut dyn FnMut(IpAddr, Result<u16, &NetFault>),
+) -> Result<HopResponse, NetFault> {
+    let (host_header, server_name, target) =
+        (host_header(url), server_name(url), request_target(url));
+    let mut last = NetFault::NotSent {
+        reason: "no address".into(),
+        timed_out: false,
+    };
+    for ip in addrs {
+        let hop = HopRequest {
+            scheme: scheme(url),
+            host_header: &host_header,
+            server_name: &server_name,
+            target: &target,
+            addr: SocketAddr::new(*ip, port),
+            deadline: request.deadline,
+            cancel: request.cancel.clone(),
+            user_agent: request.user_agent,
+            accept: request.accept,
+            headers: request.headers,
+        };
+        match transport.send(&hop, request.method, request.body) {
+            Ok(r) => {
+                attempt(*ip, Ok(r.status));
+                return Ok(r);
+            }
+            Err(f @ NetFault::NotSent { .. }) if !f.timed_out() => {
+                attempt(*ip, Err(&f));
+                last = f;
+            }
+            Err(f) => {
+                attempt(*ip, Err(&f));
+                return Err(f);
+            }
+        }
+    }
+    Err(last)
 }

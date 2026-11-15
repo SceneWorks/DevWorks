@@ -451,6 +451,13 @@ async fn compose(
             }),
         )
     };
+    // Brokered package HTTP calls use the same resolver, pinned-address transport and egress
+    // policy, and resolve connection credentials through the same secret store.
+    let package_network = devworks_engine::package_host::http::NetworkPorts {
+        resolver: web_ports.resolver.clone(),
+        transport: web_ports.transport.clone(),
+        secrets: web_ports.secrets.clone(),
+    };
     let web = Arc::new(WebService::new(
         store.clone(),
         artifacts.clone(),
@@ -673,6 +680,9 @@ async fn compose(
     };
     // Recovery and every required consumer start here, before any request below is admitted.
     let runtime = Arc::new(boot(composition).await.map_err(StartError::Boot)?);
+    if let Some(host) = runtime.packages() {
+        host.attach_network(package_network);
+    }
     // A previous boot cannot still be producing a paste. Live draft files require the
     // client keeper snapshot; this owner only reconciles incomplete reserved writes.
     if let Err(error) = ManagedFileCustody::new(store.clone()).recover_client_staging(
