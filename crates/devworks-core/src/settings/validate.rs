@@ -314,6 +314,13 @@ fn connection_issue(item: &Value, names: &mut std::collections::HashSet<String>)
     None
 }
 
+/// Fields whose names mention a credential but whose values are non-secret metadata, as the
+/// validator above defines them: `credentialHeader` is the HTTP header name a connection's
+/// secret reference is sent in (for example `X-Api-Key`). The proposal review shows them as
+/// written: they skip the redaction's secret-field-name rule, but their text is still checked for
+/// credential shapes, so a header name that holds a token is still refused.
+pub const NON_SECRET_CREDENTIAL_FIELDS: &[&str] = &["credentialHeader"];
+
 pub fn is_secret_ref(s: &str) -> bool {
     let Some(opaque) = s.strip_prefix(SECRET_REF_PREFIX) else {
         return false;

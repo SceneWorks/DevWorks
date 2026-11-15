@@ -209,6 +209,11 @@ fn settings_proposals_whose_values_would_be_redacted_are_refused_before_review()
     let f = Fx::new();
     let instructions = descriptor(AgentRole::ALL[0].instructions_key()).unwrap();
     let index = descriptor("packages.indexSources").unwrap();
+    let connections = descriptor("packages.connections").unwrap();
+    let connection = |header: &str| {
+        json!([{"name":"api","endpointId":"ep1","baseUrl":"https://api.example/v1",
+            "credential":{"secretRef":"dwsecret-0123456789abcdefABCDEF"},"credentialHeader":header}])
+    };
     let entry = |d: &devworks_core::settings::catalog::SettingDescriptor, value: Value| {
         serde_json::from_value::<SettingAssignment>(
             json!({"key":d.key,"value":{"schema":d.schema_ref(),"value":value}}),
@@ -263,6 +268,14 @@ fn settings_proposals_whose_values_would_be_redacted_are_refused_before_review()
             )],
             ["settings_proposal_unreviewable"].as_slice(),
         ),
+        // A connection header name is shown as written, but one holding a token is refused.
+        (
+            vec![entry(
+                connections,
+                connection("sk-proj0123456789abcdefghijklmn"),
+            )],
+            ["credential_value", "settings_proposal_unreviewable"].as_slice(),
+        ),
     ] {
         match stage(entries.clone()) {
             Err(refusal) => {
@@ -287,6 +300,16 @@ fn settings_proposals_whose_values_would_be_redacted_are_refused_before_review()
     assert!(
         !listed.contains(token) && !listed.contains(password),
         "{listed}"
+    );
+
+    // A connection's header name and secret reference are metadata, not secrets: the proposal is
+    // staged and shown exactly.
+    let header = vec![entry(connections, connection("X-Api-Key"))];
+    let staged = stage(header.clone()).expect("a connection with a header name is staged");
+    let inspected = proposal(f.query("approvals.inspect", json!({"proposalId":staged.id})));
+    assert_eq!(
+        serde_json::to_value(&inspected).unwrap()["reviewedSource"]["entries"],
+        serde_json::to_value(&header).unwrap()
     );
 
     // An ordinary value is staged, inspected exactly, and approved as stored.

@@ -554,21 +554,52 @@ pub fn mirror_role_instructions(
     Ok(Some(commit(tx, ctx, &current, &planned, origin)?.revision))
 }
 
-/// Stages a proposal for human approval, bound to the scope revision the author read. This is
-/// the transaction-scoped seam behind the approvals and roles proposal commands: it validates
-/// exactly like a save, writes nothing to the effective configuration and records the proposal
-/// plus its `SettingsProposalStaged` history. Read-only roles, packages, schedules and the host
-/// cannot propose; humans save directly but may also propose.
 /// A pending proposal's entries are shown exactly wherever it is reviewed: in Approvals, in the
 /// settings proposal list and in the decision audit. A value the shared redaction would change (a
 /// credential in an index URL, a token pasted into role instructions) cannot be shown both safely
 /// and in full, so the proposal is refused rather than shown redacted or cut. A secret belongs in
 /// a secret reference (`{"secretRef": "dwsecret-…"}`), which is not itself a secret and is kept.
+/// The validator's [`NON_SECRET_CREDENTIAL_FIELDS`](super::validate::NON_SECRET_CREDENTIAL_FIELDS)
+/// skip the secret-field-name rule (their names mention a credential, their values do not hold
+/// one), but their text is still checked for credential shapes.
 fn reviewable_entries(entries: &[SettingAssignment]) -> Result<(), Failure> {
+    use super::validate::{NON_SECRET_CREDENTIAL_FIELDS, is_secret_ref};
+    /// The entries with known non-secret metadata and secret references blanked for the
+    /// name-based pass; the blanked metadata texts are returned for the shape check.
+    fn masked(value: &Value, texts: &mut Vec<String>) -> Value {
+        match value {
+            Value::Object(fields) => Value::Object(
+                fields
+                    .iter()
+                    .map(|(k, v)| {
+                        let shown = match v {
+                            Value::String(text)
+                                if NON_SECRET_CREDENTIAL_FIELDS.contains(&k.as_str()) =>
+                            {
+                                texts.push(text.clone());
+                                Value::String(String::new())
+                            }
+                            Value::String(text) if is_secret_ref(text) => {
+                                Value::String(String::new())
+                            }
+                            other => masked(other, texts),
+                        };
+                        (k.clone(), shown)
+                    })
+                    .collect(),
+            ),
+            Value::Array(items) => Value::Array(items.iter().map(|v| masked(v, texts)).collect()),
+            other => other.clone(),
+        }
+    }
     let redactor = crate::authority::redact::Redactor::new();
     let shown =
         serde_json::to_value(entries).map_err(|e| StorageError::InvalidRecord(e.to_string()))?;
-    if redactor.redact_json(&shown) != shown {
+    let mut texts = Vec::new();
+    let checked = masked(&shown, &mut texts);
+    if redactor.redact_json(&checked) != checked
+        || texts.iter().any(|text| redactor.redact_text(text) != *text)
+    {
         return Err(Refusal::new(
             DomainErrorCode::InvalidArgument,
             "settings_proposal_unreviewable",
@@ -579,6 +610,11 @@ fn reviewable_entries(entries: &[SettingAssignment]) -> Result<(), Failure> {
     Ok(())
 }
 
+/// Stages a proposal for human approval, bound to the scope revision the author read. This is
+/// the transaction-scoped seam behind the approvals and roles proposal commands: it validates
+/// exactly like a save, writes nothing to the effective configuration and records the proposal
+/// plus its `SettingsProposalStaged` history. Read-only roles, packages, schedules and the host
+/// cannot propose; humans save directly but may also propose.
 pub fn stage_proposal(
     tx: &mut dyn WriteTransaction,
     ctx: &InvocationContext,
