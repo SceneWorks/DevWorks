@@ -98,6 +98,8 @@
       "graph_source_captures",
       "graph_trust",
       "graph_trust_changes",
+      "graph_view_link_sets",
+      "graph_view_links",
       "index_batches",
       "index_generations",
       "index_overlays",

@@ -2420,6 +2420,9 @@ impl IndexRepository for Unsupported {
     fn insert_view(&mut self, _: &StoredView) -> Result<(), StorageError> {
         nope()
     }
+    fn insert_view_links(&mut self, _: &Id, _: &[ViewLink]) -> Result<(), StorageError> {
+        nope()
+    }
     fn publish(&mut self, _: &Id, _: &Id, _: i64) -> Result<i64, StorageError> {
         nope()
     }
@@ -3917,6 +3920,22 @@ impl GraphRead for Unsupported {
         &self,
         _: &Id,
     ) -> Result<Option<StoredGraphSourceCapture>, StorageError> {
+        nope()
+    }
+    fn graph_incident_edges(
+        &self,
+        _: &GraphScope,
+        _: &GraphIncidentFilter,
+        _: Option<&GraphPosition>,
+        _: u16,
+    ) -> Result<Option<GraphPage<GraphEdge>>, StorageError> {
+        nope()
+    }
+    fn graph_unlinked_views(
+        &self,
+        _: Option<&Id>,
+        _: u16,
+    ) -> Result<GraphPage<StoredView>, StorageError> {
         nope()
     }
 }

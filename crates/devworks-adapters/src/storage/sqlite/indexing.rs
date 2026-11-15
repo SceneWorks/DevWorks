@@ -1393,6 +1393,53 @@ impl IndexRepository for Unit<'_> {
         ]))?;
         Ok(())
     }
+    fn insert_view_links(&mut self, view: &Id, links: &[ViewLink]) -> Result<(), StorageError> {
+        let Some(v) = self.view(view)? else {
+            return Err(StorageError::NotFound {
+                kind: "index_view",
+                id: view.as_str().into(),
+            });
+        };
+        let layers: Vec<&Id> = [
+            v.worktree_id.as_ref(),
+            v.branch_id.as_ref(),
+            Some(&v.baseline_id),
+        ]
+        .into_iter()
+        .flatten()
+        .collect();
+        if layers.len() < 2 {
+            return Err(invalid("only an overlay view has links"));
+        }
+        if links.iter().any(|l| !layers.contains(&&l.generation_id)) {
+            return Err(invalid("a view link names an edge of one of its layers"));
+        }
+        let count = i64::try_from(links.len()).map_err(|_| invalid("too many view links"))?;
+        db(db(self.conn.prepare_cached(
+            "INSERT INTO graph_view_link_sets(view_id,link_count) VALUES(?1,?2)",
+        ))?
+        .execute(params![view.as_str(), count]))?;
+        let mut statement = db(self.conn.prepare_cached(
+            "INSERT INTO graph_view_links(view_id,generation_id,unit_key,edge_id,source_node_id,\
+             target_node_id,payload_json) SELECT ?1,?2,?3,?4,?5,?6,?7 WHERE EXISTS(SELECT 1 FROM \
+             graph_edges WHERE generation_id=?2 AND unit_key=?3 AND edge_id=?4)",
+        ))?;
+        for l in links {
+            let inserted = db(statement.execute(params![
+                view.as_str(),
+                l.generation_id.as_str(),
+                l.link.unit_key,
+                l.link.edge_id,
+                l.link.source_node_id,
+                l.link.target_node_id,
+                text(&l.link.payload)
+            ]))?;
+            if inserted != 1 {
+                return Err(invalid("a view link names a stored edge"));
+            }
+        }
+        Ok(())
+    }
     fn publish(&mut self, repository: &Id, view: &Id, expected: i64) -> Result<i64, StorageError> {
         match self.view(view)? {
             Some(v)
@@ -1439,6 +1486,8 @@ impl IndexRepository for Unit<'_> {
             "DELETE FROM repository_texts WHERE view_id=?1",
             "DELETE FROM repository_index_views WHERE view_id=?1",
             "DELETE FROM index_pins WHERE view_id=?1",
+            "DELETE FROM graph_view_links WHERE view_id=?1",
+            "DELETE FROM graph_view_link_sets WHERE view_id=?1",
             "DELETE FROM index_views WHERE id=?1",
         ] {
             db(db(self.conn.prepare_cached(sql))?.execute([view.as_str()]))?;
@@ -1639,6 +1688,8 @@ pub(crate) fn remove_repository_index(
     for sql in [
         "DELETE FROM published_views WHERE source_key=?1",
         "DELETE FROM index_pins WHERE view_id IN (SELECT id FROM index_views WHERE source_key=?1)",
+        "DELETE FROM graph_view_links WHERE view_id IN (SELECT id FROM index_views WHERE source_key=?1)",
+        "DELETE FROM graph_view_link_sets WHERE view_id IN (SELECT id FROM index_views WHERE source_key=?1)",
         "DELETE FROM index_views WHERE source_key=?1",
         "UPDATE index_generations SET state='Retired' WHERE source_key=?1",
     ] {

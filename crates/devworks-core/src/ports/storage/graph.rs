@@ -154,6 +154,38 @@ pub trait GraphRead {
         &self,
         id: &Id,
     ) -> Result<Option<StoredGraphSourceCapture>, StorageError>;
+    /// The composed edges of `scope` whose `filter.end` is one of `filter.nodes`, by the stored
+    /// endpoint indexes: an overlay view's inherited edge is read at the endpoint its view links
+    /// it to, never at the one its own layer stored. Endpoint identity is as in
+    /// [`GraphEdgeFilter`]. `None` when an overlay view in scope has no stored links yet.
+    fn graph_incident_edges(
+        &self,
+        scope: &GraphScope,
+        filter: &GraphIncidentFilter,
+        after: Option<&GraphPosition>,
+        limit: u16,
+    ) -> Result<Option<GraphPage<GraphEdge>>, StorageError>;
+    /// Overlay views (with a branch or worktree layer) whose links are not stored yet.
+    fn graph_unlinked_views(
+        &self,
+        after: Option<&Id>,
+        limit: u16,
+    ) -> Result<GraphPage<super::StoredView>, StorageError>;
+}
+
+/// Which endpoint of an edge [`GraphRead::graph_incident_edges`] matches.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum GraphEdgeEnd {
+    Source,
+    Target,
+}
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct GraphIncidentFilter {
+    pub end: GraphEdgeEnd,
+    /// Exact composite identities, at most [`GRAPH_MAX_PAGE`].
+    pub nodes: Vec<GraphNodeIdentity>,
+    /// Empty means every kind.
+    pub kinds: Vec<String>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
