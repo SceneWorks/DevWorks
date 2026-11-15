@@ -112,6 +112,17 @@ pub struct RemovedMemory {
     pub frame: Vec<u8>,
 }
 
+/// What the conversation keeps for its unconfirmed commands (`Screen::pending_memory` of
+/// Chat). Its fields are saved as the [`PendingMemory`] fields of the same names, which they
+/// were before the conversation had its own screen.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct ChatPendingMemory {
+    pub starting: Option<crate::chat::StartReason>,
+    pub submitted: Option<SubmittedMemory>,
+    pub removed_while_sending: Vec<Value>,
+    pub removed: Vec<RemovedMemory>,
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct PendingMemory {
     #[serde(default)]
