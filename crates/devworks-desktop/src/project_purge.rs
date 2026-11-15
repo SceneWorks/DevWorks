@@ -695,7 +695,12 @@ mod tests {
         std::fs::write(&aside, b"{\"drafts\":\"PRIVATE\"}").unwrap();
         let reviewed = client.inspect(&scope()).unwrap();
         // The removal after the fence save fails once, as a sharing violation would.
-        client.state.lock().unwrap().fail_set_aside_removal.set(true);
+        client
+            .state
+            .lock()
+            .unwrap()
+            .fail_set_aside_removal
+            .set(true);
         assert_eq!(
             client.remove_reviewed(&scope(), &reviewed.digest),
             Err(PurgeFileFault::Io)
