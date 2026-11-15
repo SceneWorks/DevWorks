@@ -63,12 +63,15 @@
 //! service's trust model).
 pub mod broker;
 pub mod discovery;
+pub mod intents;
 pub(crate) mod recovery;
 pub mod session;
 
 pub use discovery::{IndexPorts, RuntimePorts};
 
-use crate::package::{CommitOutcome, CommitRefusal, PackageInvocation, commit_event};
+use crate::package::{
+    CommitOutcome, CommitRefusal, IntentOrigin, PackageInvocation, commit_event_from,
+};
 use devworks_core::authority::destructive::{FilesystemResolver, ProtectedRoots};
 use devworks_core::context::{HostIngress, InvocationContext, PrincipalKind};
 use devworks_core::ports::packages::{Inspection, PackageActivity, QuiescenceGuard};
@@ -249,6 +252,8 @@ pub enum InvocationKind {
 /// Host context of one invocation slot.
 struct SlotContext {
     package_id: String,
+    /// Manifest digest of the version the invocation runs.
+    manifest_digest: String,
     state_generation: i64,
     kind: InvocationKind,
     access: BTreeSet<String>,
@@ -1850,6 +1855,7 @@ impl PackageHost {
             changed: Condvar::new(),
             context: Box::new(SlotContext {
                 package_id: req.package_id.clone(),
+                manifest_digest: inst.key.digest.clone(),
                 state_generation: p.state_generation,
                 kind,
                 access: inst.inspection.access.iter().cloned().collect(),
@@ -2270,14 +2276,24 @@ impl Broker for HostBroker {
                         "the package did not request state writes",
                     ));
                 }
+                // Every intent must be one the approved manifest grants this contribution; an
+                // intent outside it refuses the whole commit, so nothing of it is recorded.
+                for intent in &params.intents {
+                    ctx.grants
+                        .permits_intent(&intent.call, |a| ctx.in_scope(a))?;
+                }
                 let (inv, commit) = (inv.as_ref().clone(), params.clone());
                 let package = ctx.package_id.clone();
+                let origin = IntentOrigin {
+                    contribution_id: slot.contribution_id.clone(),
+                    manifest_digest: ctx.manifest_digest.clone(),
+                };
                 let outcome = run_write(&*self.host.store, WriteOptions::default(), move |tx| {
                     let _guard = slot.state.lock().unwrap_or_else(|p| p.into_inner());
                     if slot.revoked.load(Ordering::SeqCst) {
                         return Ok(CommitOutcome::Refused(CommitRefusal::StaleInvocation));
                     }
-                    commit_event(tx, &inv, &commit)
+                    commit_event_from(tx, &inv, Some(&origin), &commit)
                 });
                 match outcome {
                     Ok(CommitOutcome::Accepted(r)) | Ok(CommitOutcome::Replayed(r)) => Ok(r),
