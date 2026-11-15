@@ -125,9 +125,31 @@ def predicate(tokens, i, true_names=()):
     return {"true": True, "false": False}.get(name), j
 
 
+def expand_cfg_attr(attribute, definite=True):
+    """Yield (attribute, definite), then the attributes inside each cfg_attr whose predicate is true or unknown.
+
+    `definite` is False once an enclosing cfg_attr predicate is unknown, so the attribute may not apply.
+    """
+    yield attribute, definite
+    if len(attribute) > 3 and attribute[0] == "cfg_attr" and attribute[1] == "(":
+        value, j = predicate(attribute, 2, ("test",))
+        if value is False:
+            return
+        group, depth = [], 0
+        for token in attribute[j + 1:-1]:  # skip the comma after the predicate and the final ")"
+            if token == "," and depth == 0:
+                yield from expand_cfg_attr(group, definite and value is True)
+                group = []
+                continue
+            depth += (token in "([{") - (token in ")]}")
+            group.append(token)
+        yield from expand_cfg_attr(group, definite and value is True)
+
+
 def never_compiled(attribute):
-    """True when the attribute's tokens are a cfg that is false on every platform."""
-    return len(attribute) > 2 and attribute[0] == "cfg" and attribute[1] == "(" and predicate(attribute, 2)[0] is False
+    """True when the attribute, or a cfg_attr that surely applies, is a cfg that is false on every platform."""
+    return any(definite and len(a) > 2 and a[0] == "cfg" and a[1] == "(" and predicate(a, 2)[0] is False
+               for a, definite in expand_cfg_attr(attribute))
 
 
 def path_overrides(attribute, strings, definite):
@@ -254,7 +276,7 @@ def mod_declarations(source):
         raise Unsupported(f"macro {', '.join(used)} declares modules and is invoked; declare them without a macro")
 
 
-def child_files(file, owns_directory, source):
+def child_files(file, owns_directory, source, inherited=False):
     """Resolve module declarations in `file` the way rustc does.
 
     A file "owns its directory" when it is a target root, a mod.rs, or was loaded through #[path];
@@ -262,7 +284,8 @@ def child_files(file, owns_directory, source):
     `dir/foo/`. Each enclosing inline module adds its name as a directory, or replaces it with its
     own #[path]. A #[path] outside any inline module is relative to the declaring file's directory;
     inside one it is relative to the inline module's directory. Returns (child path, child owns its
-    directory) pairs.
+    directory, optional) triples. `optional` is set for a child reached only through an unevaluable
+    cfg_attr path, or found inside such a file (`inherited`): a missing file there is skipped, not an error.
     """
     children = []
     for inline, paths, default, name in mod_declarations(source):
@@ -280,21 +303,21 @@ def child_files(file, owns_directory, source):
         for directory, directory_optional in directories:
             for path, optional in paths:
                 target = ((file.parent if directory is None else directory) / path).resolve()
-                if (optional or directory_optional) and not target.is_file():
+                if (inherited or optional or directory_optional) and not target.is_file():
                     continue  # an unevaluable cfg_attr path may not apply
-                children.append((target, True))
+                children.append((target, True, inherited or optional or directory_optional))
                 found = True
             if not default:
                 continue
             where = base if directory is None else directory
             flat, nested = where / f"{name}.rs", where / name / "mod.rs"
             if flat.is_file():
-                children.append((flat.resolve(), False))
+                children.append((flat.resolve(), False, inherited or directory_optional))
                 found = True
             elif nested.is_file():
-                children.append((nested.resolve(), True))
+                children.append((nested.resolve(), True, inherited or directory_optional))
                 found = True
-        if not found:
+        if not found and not inherited:
             where = base if directories[0][0] is None else directories[0][0]
             raise FileNotFoundError(
                 f"{file}: `mod {name};` matches neither {where / f'{name}.rs'} nor {where / name / 'mod.rs'}")
@@ -323,7 +346,7 @@ def test_roots(crate):
 def orphans(crate):
     """Return the .rs files under `crate`/tests that no test target reaches, sorted."""
     tests = crate / "tests"
-    pending = [(root, True) for root in test_roots(crate) if root.is_file()]
+    pending = [(root, True, False) for root in test_roots(crate) if root.is_file()]
     # A file can be both a target root and another module's child, with different directory rules.
     visited = set()
     while pending:
@@ -331,10 +354,10 @@ def orphans(crate):
         if node in visited:
             continue
         visited.add(node)
-        file, owns_directory = node
-        pending.extend(child_files(file, owns_directory, file.read_text(encoding="utf-8")))
+        file, owns_directory, optional = node
+        pending.extend(child_files(file, owns_directory, file.read_text(encoding="utf-8"), optional))
     present = {p.resolve() for p in tests.rglob("*.rs")}
-    return sorted(present - {file for file, _ in visited})
+    return sorted(present - {file for file, _, _ in visited})
 
 
 def crates(repo):
