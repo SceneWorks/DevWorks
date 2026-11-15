@@ -1137,3 +1137,136 @@ fn the_folder_deletion_is_not_offered_where_the_host_cannot_perform_it() {
         "the action is not offered"
     );
 }
+
+/// A registered primary repository `id` named `name` with a real checkout folder.
+#[cfg(unix)]
+fn register_checkout(
+    engine: &devworks_desktop::host::Engine,
+    root: &Root,
+    id: &str,
+    name: &str,
+) -> std::path::PathBuf {
+    let checkout = root.dir(name);
+    std::fs::create_dir_all(checkout.join(".git")).unwrap();
+    std::fs::write(checkout.join("src.txt"), b"source").unwrap();
+    let r = StoredRepository {
+        id: Id::new(id).unwrap(),
+        location: checkout.display().to_string(),
+        name: name.into(),
+        remote_url: None,
+        primary: true,
+        lifecycle: "Active".into(),
+        languages: vec![],
+        revision: 1,
+        registered_at_ms: 1,
+    };
+    run_write(
+        &**engine.host().runtime().store(),
+        WriteOptions::default(),
+        move |tx| tx.projects().insert_repository(&r),
+    )
+    .unwrap();
+    checkout
+}
+
+/// Steps the frame loop (bounded) until `done` holds.
+#[cfg(unix)]
+fn step_until(
+    h: &mut egui_kittest::Harness<'_, devworks_desktop::shell::Shell>,
+    what: &str,
+    done: impl Fn(&devworks_desktop::shell::Shell) -> bool,
+) {
+    let deadline = std::time::Instant::now() + SETTLE_BOUND;
+    while !done(h.state()) {
+        assert!(std::time::Instant::now() < deadline, "{what}");
+        h.step();
+        std::thread::sleep(std::time::Duration::from_millis(2));
+    }
+}
+
+// A slow deletion reply for one repository leaves a review opened since for another as it is.
+#[cfg(unix)]
+#[test]
+fn a_late_deletion_reply_leaves_another_repositorys_review_unchanged() {
+    let root = Root::new("repository-deletion-late");
+    let engine = start(&root);
+    let alpha = register_checkout(&engine, &root, "repo-a", "alpha");
+    let beta = register_checkout(&engine, &root, "repo-b", "beta");
+    let gate = Gate::holding_replies("delete_repository");
+    gate.close();
+    let mut h = harness(
+        shell_with(
+            Ok(gate.over(engine.backend())),
+            &root,
+            Script::default(),
+            None,
+        ),
+        1440.0,
+        900.0,
+    );
+    settle(&mut h);
+    click_nav(&mut h, "Repositories");
+    click_row(&mut h, "alpha  ·");
+    click(&mut h, Role::Button, "Delete repository folder…");
+    click(
+        &mut h,
+        Role::CheckBox,
+        "I understand this permanently deletes the folder",
+    );
+    h.get_by_role_and_label(Role::Button, "Delete repository folder")
+        .click();
+    step_until(&mut h, "alpha's deletion is held", |_| gate.has_waiter());
+    h.get_by_role_and_label(Role::Button, "Cancel").click();
+    step_until(&mut h, "the review closed", |s| {
+        s.projects.deletion.is_none()
+    });
+    // Open beta's review while alpha's reply is still held.
+    h.query_all_by_label_contains("beta  ·")
+        .find(|n| {
+            n.accesskit_node()
+                .label()
+                .is_some_and(|l| l.starts_with("beta  ·"))
+        })
+        .unwrap()
+        .click();
+    // Beta is selected and its detail laid out before its action is clicked (a click on a
+    // frame that still shows alpha's detail would be lost under load).
+    step_until(&mut h, "beta is selected", |s| {
+        s.route_memory(Route::Repositories).selection.as_deref() == Some("repo-b")
+    });
+    let deadline = std::time::Instant::now() + SETTLE_BOUND;
+    while h.state().projects.deletion.is_none() {
+        assert!(std::time::Instant::now() < deadline, "beta's review opened");
+        h.get_by_role_and_label(Role::Button, "Delete repository folder…")
+            .click();
+        h.run_steps(2);
+    }
+    assert_eq!(
+        h.state()
+            .projects
+            .deletion
+            .as_ref()
+            .map(|d| d.repository.id.as_str()),
+        Some("repo-b")
+    );
+    step_until(&mut h, "beta's preview", |s| {
+        s.projects
+            .deletion
+            .as_ref()
+            .is_some_and(|d| d.repository.id.as_str() == "repo-b" && d.preview.is_some())
+    });
+    h.state_mut()
+        .projects
+        .deletion
+        .as_mut()
+        .unwrap()
+        .acknowledged = true;
+    let before = format!("{:?}", h.state().projects.deletion);
+    // Alpha's reply arrives: alpha's folder is gone, beta's review is untouched.
+    gate.open();
+    settle(&mut h);
+    assert!(!alpha.exists(), "alpha's confirmed deletion ran");
+    assert_eq!(format!("{:?}", h.state().projects.deletion), before);
+    assert!(beta.join("src.txt").exists());
+    assert!(has_text(&h, "The folder of alpha was deleted"));
+}

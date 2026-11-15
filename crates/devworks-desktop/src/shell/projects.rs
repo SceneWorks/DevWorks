@@ -691,15 +691,26 @@ impl ProjectsCtl<'_, '_> {
                 }
             }
             (ProjectsSlot::RepositoryDeletion(r), Reply::Task(result)) => {
-                let name = self
+                // The reply settles only the review of its own repository: one opened since
+                // for another repository is left as it is.
+                let own = self
                     .projects
                     .deletion
                     .as_ref()
-                    .filter(|d| d.repository.id.as_str() == r)
-                    .map_or(r.clone(), |d| d.repository.name.0.clone());
+                    .is_some_and(|d| d.repository.id.as_str() == r);
+                let name = self
+                    .cx
+                    .projects
+                    .repositories
+                    .items
+                    .iter()
+                    .find(|x| x.id.as_str() == r)
+                    .map_or(r.clone(), |x| x.name.0.clone());
                 match result {
                     Ok(crate::backend::TaskOutput::RepositoryDeleted(outcome)) => {
-                        self.projects.deletion = None;
+                        if own {
+                            self.projects.deletion = None;
+                        }
                         let (tone, text) = if outcome.complete {
                             (
                                 Tone::Good,
@@ -720,11 +731,10 @@ impl ProjectsCtl<'_, '_> {
                         };
                         self.projects.message = Some((tone, text.clone()));
                         self.announce(text);
-                        self.load_repositories();
                     }
                     Ok(_) => {}
                     Err(e) => {
-                        if let Some(review) = self.projects.deletion.as_mut() {
+                        if own && let Some(review) = self.projects.deletion.as_mut() {
                             review.acknowledged = false;
                             review.preview = None;
                             review.error = Some(e.clone());
@@ -732,6 +742,8 @@ impl ProjectsCtl<'_, '_> {
                         self.announce(e);
                     }
                 }
+                // Whatever review is open, the list shows what the deletion did.
+                self.load_repositories();
             }
             (slot, reply) => return Some((slot, reply)),
         }

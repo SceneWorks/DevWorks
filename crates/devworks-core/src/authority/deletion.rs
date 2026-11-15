@@ -181,6 +181,19 @@ pub fn prepare(
         .cloned()
         .collect();
     let mut blockers = Vec::new();
+    // The application data and skill folders are never deleted with a checkout that holds
+    // them: refused before anything is confirmed (the guard refuses the step as well).
+    let holds = |path: &str| {
+        fs.resolve(path, None).is_ok_and(|r| {
+            r.entry.identity == Some(identity) || r.entry.ancestors.contains(&identity)
+        })
+    };
+    if roots.skill_roots.iter().any(|s| holds(s)) {
+        blockers.push("the folder holds a skill folder");
+    }
+    if roots.app_data_root.as_deref().is_some_and(holds) {
+        blockers.push("the folder holds DevWorks application data");
+    }
     if dependencies.project_references.len() > 1 {
         blockers.push("another project still references this repository");
     }
@@ -216,6 +229,15 @@ pub fn prepare(
         blockers,
         digest,
     })
+}
+
+/// The host folders the destructive-operation guard protects besides registered repositories:
+/// the application data folder and the skill folders ([`ProtectedRoots::with_skill_roots`]),
+/// the same ones the host checks every launch against.
+#[derive(Clone, Debug, Default)]
+pub struct HostFolders {
+    pub app_data_root: Option<String>,
+    pub skill_roots: Vec<String>,
 }
 
 /// Most work roots of one project read per page when looking for live work.
@@ -298,10 +320,15 @@ pub fn worktrees(
 /// The protected roots as they are now, with `repository`'s recorded task worktrees.
 fn current_roots(
     store: &dyn ApplicationStore,
-    app_data_root: Option<String>,
+    host: &HostFolders,
     repository: &Id,
 ) -> Result<ProtectedRoots, StorageError> {
-    ProtectedRoots::read(store, worktrees(store, repository)?, app_data_root)
+    Ok(ProtectedRoots::read(
+        store,
+        worktrees(store, repository)?,
+        host.app_data_root.clone(),
+    )?
+    .with_skill_roots(host.skill_roots.clone()))
 }
 
 /// The preview of `repository` as it is now: the protected roots, its recorded task worktrees
@@ -309,10 +336,10 @@ fn current_roots(
 pub fn preview(
     store: &dyn ApplicationStore,
     fs: &dyn FilesystemResolver,
-    app_data_root: Option<String>,
+    host: &HostFolders,
     repository: &Id,
 ) -> Result<DeletionPreview, DeletionRefusal> {
-    let roots = current_roots(store, app_data_root, repository)?;
+    let roots = current_roots(store, host, repository)?;
     prepare(fs, &roots, repository, dependencies(store, repository)?)
 }
 
@@ -325,15 +352,15 @@ pub fn preview(
 pub fn delete<F: FilesystemResolver + DestructiveExecutor>(
     store: &dyn ApplicationStore,
     fs: &F,
-    app_data_root: Option<String>,
+    host: &HostFolders,
     ctx: &InvocationContext,
     reviewed: &DeletionPreview,
 ) -> Result<RemovalOutcome, DeletionRefusal> {
-    let current = preview(store, fs, app_data_root.clone(), &reviewed.repository_id)?;
+    let current = preview(store, fs, host, &reviewed.repository_id)?;
     let grant = confirm_within(store, ctx, reviewed, MAX_CONFIRMATION_LIFETIME_MS)?;
     let permit = authorize(store, ctx, &grant.id, &current)?;
     let repository = &current.repository_id;
-    let registry = current_roots(store, app_data_root.clone(), repository)?;
+    let registry = current_roots(store, host, repository)?;
     let plan = EffectPlan {
         kind: DestructiveKind::RemoveTree,
         targets: vec![current.location.clone()],
@@ -353,7 +380,7 @@ pub fn delete<F: FilesystemResolver + DestructiveExecutor>(
     // Everything the preview binds is read again immediately before the step: a repository
     // registered, a worktree recorded or a project membership or live work added since the
     // preflight changes it and refuses the step.
-    let now = preview(store, fs, app_data_root, repository)?;
+    let now = preview(store, fs, host, repository)?;
     if now.digest != current.digest {
         return Err(DeletionRefusal::Changed);
     }

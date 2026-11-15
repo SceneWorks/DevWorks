@@ -1839,7 +1839,7 @@ fn every_repository_removal_path_refuses_a_removal_without_a_matching_confirmati
     let fs = NativeFilesystem::new();
     let user = fx.ctx("user-a", PrincipalKind::Human);
     let agent = fx.agent("agent-a");
-    let reviewed = deletion::preview(&*fx.store, &fs, None, &id("repo-a")).unwrap();
+    let reviewed = deletion::preview(&*fx.store, &fs, &none(), &id("repo-a")).unwrap();
     assert!(reviewed.blockers.is_empty(), "{:?}", reviewed.blockers);
     // A preview the user reviewed before something it binds (here, a project reference) changed.
     let stale = deletion::prepare(
@@ -1857,14 +1857,14 @@ fn every_repository_removal_path_refuses_a_removal_without_a_matching_confirmati
         (
             "dedicated deletion by an agent",
             matches!(
-                deletion::delete(&*fx.store, &fs, None, &a, &reviewed),
+                deletion::delete(&*fx.store, &fs, &none(), &a, &reviewed),
                 Err(DeletionRefusal::HumanOnly)
             ),
         ),
         (
             "dedicated deletion of a preview that no longer matches",
             matches!(
-                deletion::delete(&*fx.store, &fs, None, &u, &stale),
+                deletion::delete(&*fx.store, &fs, &none(), &u, &stale),
                 Err(DeletionRefusal::Changed)
             ),
         ),
@@ -1913,15 +1913,15 @@ fn every_repository_removal_path_refuses_a_removal_without_a_matching_confirmati
     assert!(std::path::Path::new(&format!("{repo}/src.txt")).exists());
     assert_eq!(fx.count("RepositoryDeletionAuthorized"), 0);
     // The user's confirmation of the preview as it is now removes exactly that folder, once.
-    let current = deletion::preview(&*fx.store, &fs, None, &id("repo-a")).unwrap();
-    let outcome = deletion::delete(&*fx.store, &fs, None, &user, &current).unwrap();
+    let current = deletion::preview(&*fx.store, &fs, &none(), &id("repo-a")).unwrap();
+    let outcome = deletion::delete(&*fx.store, &fs, &none(), &user, &current).unwrap();
     assert!(outcome.complete, "{outcome:?}");
     assert!(!std::path::Path::new(&repo).exists());
     assert_eq!(fx.count("RepositoryDeletionAuthorized"), 1);
     assert_eq!(fx.count("RepositoryDeletionCompleted"), 1);
     // The registration stays; the removed folder can no longer be previewed or deleted again.
     assert!(matches!(
-        deletion::delete(&*fx.store, &fs, None, &user, &current),
+        deletion::delete(&*fx.store, &fs, &none(), &user, &current),
         Err(DeletionRefusal::Unresolvable)
     ));
 }
@@ -2033,6 +2033,12 @@ impl DestructiveExecutor for Interfering {
     }
 }
 
+/// No application data or skill folders.
+#[cfg(unix)]
+fn none() -> deletion::HostFolders {
+    deletion::HostFolders::default()
+}
+
 /// A repository with a folder and a source file, registered as `repo-a`.
 #[cfg(unix)]
 fn deletable(fx: &Fx, scratch: &Scratch) -> String {
@@ -2069,7 +2075,7 @@ fn a_deletion_preview_lists_recorded_worktrees_and_a_changed_worktree_refuses_th
     record_worktree(&fx, "worktree-a", &first, "refs/heads/task-a");
     let fs = NativeFilesystem::new();
     let user = fx.ctx("user-a", PrincipalKind::Human);
-    let reviewed = deletion::preview(&*fx.store, &fs, None, &id("repo-a")).unwrap();
+    let reviewed = deletion::preview(&*fx.store, &fs, &none(), &id("repo-a")).unwrap();
     let listed: Vec<&str> = reviewed
         .worktrees
         .iter()
@@ -2085,7 +2091,7 @@ fn a_deletion_preview_lists_recorded_worktrees_and_a_changed_worktree_refuses_th
         "refs/heads/task-b",
     );
     assert!(matches!(
-        deletion::delete(&*fx.store, &fs, None, &user, &reviewed),
+        deletion::delete(&*fx.store, &fs, &none(), &user, &reviewed),
         Err(DeletionRefusal::Changed)
     ));
     assert!(std::path::Path::new(&format!("{repo}/src.txt")).exists());
@@ -2102,8 +2108,8 @@ fn a_repository_registered_inside_the_target_after_the_preflight_refuses_the_del
     let mut fs = Interfering::new(fx.store.clone());
     fs.register_inside = Some(nested.clone());
     let user = fx.ctx("user-a", PrincipalKind::Human);
-    let reviewed = deletion::preview(&*fx.store, &fs, None, &id("repo-a")).unwrap();
-    let refused = deletion::delete(&*fx.store, &fs, None, &user, &reviewed);
+    let reviewed = deletion::preview(&*fx.store, &fs, &none(), &id("repo-a")).unwrap();
+    let refused = deletion::delete(&*fx.store, &fs, &none(), &user, &reviewed);
     assert!(fs.fired.load(Ordering::SeqCst), "the registration happened");
     assert!(
         matches!(refused, Err(DeletionRefusal::Changed)),
@@ -2123,9 +2129,9 @@ fn a_project_membership_added_after_the_review_refuses_the_deletion() {
     let mut fs = Interfering::new(fx.store.clone());
     fs.add_membership = true;
     let user = fx.ctx("user-a", PrincipalKind::Human);
-    let reviewed = deletion::preview(&*fx.store, &fs, None, &id("repo-a")).unwrap();
+    let reviewed = deletion::preview(&*fx.store, &fs, &none(), &id("repo-a")).unwrap();
     assert!(reviewed.dependencies.project_references.is_empty());
-    let refused = deletion::delete(&*fx.store, &fs, None, &user, &reviewed);
+    let refused = deletion::delete(&*fx.store, &fs, &none(), &user, &reviewed);
     assert!(fs.fired.load(Ordering::SeqCst), "the membership was added");
     assert!(
         matches!(refused, Err(DeletionRefusal::Changed)),
@@ -2146,17 +2152,41 @@ fn the_deletion_is_refused_before_any_confirmation_where_destructive_steps_are_u
     fs.unsupported = true;
     let user = fx.ctx("user-a", PrincipalKind::Human);
     assert!(matches!(
-        deletion::preview(&*fx.store, &fs, None, &id("repo-a")),
+        deletion::preview(&*fx.store, &fs, &none(), &id("repo-a")),
         Err(DeletionRefusal::Unsupported)
     ));
     // Even a preview reviewed elsewhere spends no confirmation here.
-    let reviewed = deletion::preview(&*fx.store, &supported, None, &id("repo-a")).unwrap();
+    let reviewed = deletion::preview(&*fx.store, &supported, &none(), &id("repo-a")).unwrap();
     assert!(matches!(
-        deletion::delete(&*fx.store, &fs, None, &user, &reviewed),
+        deletion::delete(&*fx.store, &fs, &none(), &user, &reviewed),
         Err(DeletionRefusal::Unsupported)
     ));
     assert_eq!(fx.count("RepositoryDeletionConfirmed"), 0);
     assert!(std::path::Path::new(&format!("{repo}/src.txt")).exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn a_checkout_holding_a_skill_folder_is_refused_before_any_confirmation() {
+    let fx = Fx::new();
+    let scratch = Scratch::new("deletion-skills");
+    let repo = deletable(&fx, &scratch);
+    let skills = format!("{repo}/agents/skills");
+    std::fs::create_dir_all(format!("{skills}/review")).unwrap();
+    let host = deletion::HostFolders {
+        app_data_root: None,
+        skill_roots: vec![skills.clone()],
+    };
+    let fs = NativeFilesystem::new();
+    let user = fx.ctx("user-a", PrincipalKind::Human);
+    let reviewed = deletion::preview(&*fx.store, &fs, &host, &id("repo-a")).unwrap();
+    assert_eq!(reviewed.blockers, ["the folder holds a skill folder"]);
+    assert!(matches!(
+        deletion::delete(&*fx.store, &fs, &host, &user, &reviewed),
+        Err(DeletionRefusal::Blocked(_))
+    ));
+    assert_eq!(fx.count("RepositoryDeletionConfirmed"), 0);
+    assert!(std::path::Path::new(&format!("{skills}/review")).exists());
 }
 
 #[cfg(unix)]
@@ -2168,8 +2198,8 @@ fn a_history_failure_after_the_folder_was_removed_reports_what_was_removed() {
     let mut fs = Interfering::new(fx.store.clone());
     fs.fail_history_after_execute = true;
     let user = fx.ctx("user-a", PrincipalKind::Human);
-    let reviewed = deletion::preview(&*fx.store, &fs, None, &id("repo-a")).unwrap();
-    let result = deletion::delete(&*fx.store, &fs, None, &user, &reviewed);
+    let reviewed = deletion::preview(&*fx.store, &fs, &none(), &id("repo-a")).unwrap();
+    let result = deletion::delete(&*fx.store, &fs, &none(), &user, &reviewed);
     assert!(!std::path::Path::new(&repo).exists());
     match result {
         Err(DeletionRefusal::Unrecorded(outcome)) => assert!(outcome.complete, "{outcome:?}"),

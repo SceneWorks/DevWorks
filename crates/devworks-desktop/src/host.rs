@@ -255,6 +255,8 @@ pub struct Host {
     sources: Arc<HostArtifactSources>,
     purge_client: Arc<crate::project_purge::NativePurgeClient>,
     data_root: PathBuf,
+    /// The folders a repository folder deletion never removes (application data, skills).
+    deletion_folders: devworks_core::authority::deletion::HostFolders,
     ids: Arc<HostIds>,
     waker: Arc<Mutex<Option<Waker>>>,
     /// The same authority the runtime admits with (stream handles are re-authorized by it).
@@ -725,6 +727,13 @@ async fn compose(
         sources,
         purge_client,
         data_root: config.data_root.clone(),
+        deletion_folders: {
+            let roots = protected_roots(config);
+            devworks_core::authority::deletion::HostFolders {
+                app_data_root: roots.app_data_root,
+                skill_roots: roots.skill_roots,
+            }
+        },
         ids,
         waker: Arc::new(Mutex::new(None)),
         authority,
@@ -1093,7 +1102,7 @@ impl Backend for DesktopBackend {
         devworks_core::authority::deletion::preview(
             &**self.host.runtime.store(),
             &NativeFilesystem::new(),
-            Some(self.host.data_root.display().to_string()),
+            &self.host.deletion_folders,
             repository,
         )
         .map_err(|r| crate::repository_deletion::refusal_text(&r))
@@ -1112,7 +1121,7 @@ impl Backend for DesktopBackend {
         devworks_core::authority::deletion::delete(
             &**self.host.runtime.store(),
             &NativeFilesystem::new(),
-            Some(self.host.data_root.display().to_string()),
+            &self.host.deletion_folders,
             &self.host.ctx,
             reviewed,
         )
