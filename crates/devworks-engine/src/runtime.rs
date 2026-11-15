@@ -37,6 +37,7 @@ use devworks_core::services::artifacts::lifecycle::{
 };
 use devworks_core::services::artifacts::replies::ReceiptReplies;
 use devworks_core::services::browser::{BrowserRecovery, BrowserService};
+use devworks_core::services::desktop::ControlEpoch;
 use devworks_core::services::diagnostics::{DiagnosticService, ExportFailure, LogQuery};
 use devworks_core::services::evals::EvalService;
 use devworks_core::services::jobs::runner::{
@@ -2921,7 +2922,18 @@ impl Runtime {
     /// Dedicated trusted native-human interaction. The ordinary command/tool path cannot
     /// mint this private exact-content witness, even for a context whose kind is Human.
     pub fn record_human_decision(&self, ctx: &InvocationContext, frame: &[u8]) -> CommandOutcome {
-        let outcome = self.decide_as_human(ctx, frame);
+        self.record_human_decision_received(ctx, frame, self.desktop_control_epoch())
+    }
+
+    /// [`Self::record_human_decision`] for a click the UI received at `received`: refused as a
+    /// trusted decision unless desktop control stayed quiet from then until now.
+    pub fn record_human_decision_received(
+        &self,
+        ctx: &InvocationContext,
+        frame: &[u8],
+        received: ControlEpoch,
+    ) -> CommandOutcome {
+        let outcome = self.decide_as_human(ctx, frame, received);
         // A rejection settles an approval staged for an agent's refused call; tell that agent.
         if let Ok(CommandReply::Recorded { receipt, .. }) = &outcome
             && let DomainDecision::Applied {
@@ -2936,13 +2948,14 @@ impl Runtime {
         outcome
     }
 
-    fn decide_as_human(&self, ctx: &InvocationContext, frame: &[u8]) -> CommandOutcome {
+    fn decide_as_human(
+        &self,
+        ctx: &InvocationContext,
+        frame: &[u8],
+        received: ControlEpoch,
+    ) -> CommandOutcome {
         const OPERATION: &str = "approvals.record_human_decision";
-        if self
-            .desktop
-            .as_ref()
-            .is_some_and(|desktop| desktop.automation_may_be_active())
-        {
+        if !self.control_quiet_since(received) {
             return self.command(ctx, OPERATION, frame);
         }
         let decoded = devworks_core::admission::decode(
@@ -2968,12 +2981,19 @@ impl Runtime {
     /// Dedicated native confirmation. Generic command/MCP dispatch never mints
     /// this proof; current authority and manifest freshness remain required.
     pub fn confirm_project_purge(&self, ctx: &InvocationContext, frame: &[u8]) -> CommandOutcome {
+        self.confirm_project_purge_received(ctx, frame, self.desktop_control_epoch())
+    }
+
+    /// [`Self::confirm_project_purge`] for a click the UI received at `received`: refused as a
+    /// trusted confirmation unless desktop control stayed quiet from then until now.
+    pub fn confirm_project_purge_received(
+        &self,
+        ctx: &InvocationContext,
+        frame: &[u8],
+        received: ControlEpoch,
+    ) -> CommandOutcome {
         const OPERATION: &str = "projects.purge";
-        if self
-            .desktop
-            .as_ref()
-            .is_some_and(|desktop| desktop.automation_may_be_active())
-        {
+        if !self.control_quiet_since(received) {
             return self.command(ctx, OPERATION, frame);
         }
         let decoded = devworks_core::admission::decode(
@@ -2995,12 +3015,19 @@ impl Runtime {
         self.command(ctx, OPERATION, frame)
     }
 
-    /// Whether desktop automation may be generating UI events: trusted native confirmation
-    /// ingress (such as a repository deletion) stays closed while it may.
-    pub fn desktop_automation_may_be_active(&self) -> bool {
+    /// The desktop control state now: a human-only confirmation captures it when the UI
+    /// receives the click ([`ControlEpoch`]).
+    pub fn desktop_control_epoch(&self) -> ControlEpoch {
         self.desktop
             .as_ref()
-            .is_some_and(|desktop| desktop.automation_may_be_active())
+            .map_or(ControlEpoch::QUIET, |desktop| desktop.control_epoch())
+    }
+
+    /// Whether a human-only confirmation the UI received at `received` may act now: desktop
+    /// automation could not have produced it (nobody held control then or now, and none was
+    /// granted in between). Trusted native confirmation ingress stays closed otherwise.
+    pub fn control_quiet_since(&self, received: ControlEpoch) -> bool {
+        received.quiet_through(&self.desktop_control_epoch())
     }
 
     pub fn approvals(&self) -> &Arc<ApprovalService> {

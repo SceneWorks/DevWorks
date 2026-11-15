@@ -13,6 +13,7 @@ use devworks_core::gateway::{CommandOutcome, QueryOutcome};
 use devworks_core::ports::secrets::Secret;
 use devworks_core::protocol::CommandReply;
 use devworks_core::protocol::Id;
+use devworks_core::services::desktop::ControlEpoch;
 use devworks_core::settings::view::Health;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -79,13 +80,20 @@ pub trait Backend: Send + Sync {
     > {
         Ok(None)
     }
+    /// The desktop control state now. A human-only confirmation captures it when the UI receives
+    /// the click and its worker passes it on, so the host can tell whether desktop automation
+    /// could have produced the click. Unknown here: treated as held.
+    fn control_epoch(&self) -> ControlEpoch {
+        ControlEpoch::UNKNOWN
+    }
     /// Trusted native user interaction only. Generic commands never select this ingress.
-    fn human_decision(&self, _frame: &[u8]) -> CommandOutcome {
+    /// `received` is the control state when the UI received the click.
+    fn human_decision(&self, _frame: &[u8], _received: ControlEpoch) -> CommandOutcome {
         Err(devworks_core::gateway::GatewayFailure::NoUseCase(
             "trusted native human decision ingress".into(),
         ))
     }
-    fn confirm_project_purge(&self, _frame: &[u8]) -> CommandOutcome {
+    fn confirm_project_purge(&self, _frame: &[u8], _received: ControlEpoch) -> CommandOutcome {
         Err(devworks_core::gateway::GatewayFailure::NoUseCase(
             "trusted native project purge confirmation ingress".into(),
         ))
@@ -108,6 +116,7 @@ pub trait Backend: Send + Sync {
     fn delete_repository(
         &self,
         _reviewed: &devworks_core::authority::deletion::DeletionPreview,
+        _received: ControlEpoch,
     ) -> Result<devworks_core::authority::destructive::RemovalOutcome, String> {
         Err("Repository deletion is unavailable".into())
     }
@@ -553,19 +562,28 @@ pub fn is_unknown(outcome: &CommandOutcome) -> bool {
 /// recorded receipt of a command that committed, and decides one that did not, so a
 /// resubmission never duplicates an effect. A fresh request key is never used for a retry.
 pub fn resolve_command(backend: &dyn Backend, operation: &str, frame: &[u8]) -> CommandOutcome {
-    resolve_dispatched(backend, CommandDispatch::Generic, operation, frame)
+    resolve_dispatched(
+        backend,
+        CommandDispatch::Generic,
+        operation,
+        frame,
+        ControlEpoch::UNKNOWN,
+    )
 }
 
+/// `received` is the desktop control state when the UI received the interaction (it matters
+/// only to the human-only dispatches).
 fn resolve_dispatched(
     backend: &dyn Backend,
     dispatch: CommandDispatch,
     operation: &str,
     frame: &[u8],
+    received: ControlEpoch,
 ) -> CommandOutcome {
     let invoke = || match dispatch {
         CommandDispatch::Generic => backend.command(operation, frame),
-        CommandDispatch::HumanDecision => backend.human_decision(frame),
-        CommandDispatch::ProjectPurge => backend.confirm_project_purge(frame),
+        CommandDispatch::HumanDecision => backend.human_decision(frame, received),
+        CommandDispatch::ProjectPurge => backend.confirm_project_purge(frame, received),
     };
     let mut outcome = invoke();
     for _ in 0..UNKNOWN_RESUBMISSIONS {
@@ -1031,8 +1049,11 @@ impl Client {
             return false;
         }
         let kept = frame.clone();
-        let job: Job =
-            Box::new(move |b| Reply::Command(resolve_dispatched(b, dispatch, operation, &frame)));
+        // Captured as the UI receives the interaction, before any worker runs it.
+        let received = self.backend.control_epoch();
+        let job: Job = Box::new(move |b| {
+            Reply::Command(resolve_dispatched(b, dispatch, operation, &frame, received))
+        });
         if self
             .submit(
                 slot.clone(),
@@ -1104,6 +1125,12 @@ impl Client {
             None,
         )
         .is_some()
+    }
+
+    /// The desktop control state now, captured by a human-only confirmation as the UI receives
+    /// its click ([`Backend::control_epoch`]).
+    pub fn control_epoch(&self) -> ControlEpoch {
+        self.backend.control_epoch()
     }
 
     /// Runs a multi-step task (for example: mint a ticket, hash the file, save the artifact).
@@ -1461,7 +1488,8 @@ mod human_dispatch_tests {
                 &b,
                 CommandDispatch::HumanDecision,
                 "approvals.record_human_decision",
-                b"exact"
+                b"exact",
+                ControlEpoch::QUIET
             ),
             Err(GatewayFailure::NoUseCase(_))
         ));
@@ -1475,7 +1503,8 @@ mod human_dispatch_tests {
                 &b,
                 CommandDispatch::ProjectPurge,
                 "projects.purge",
-                b"exact"
+                b"exact",
+                ControlEpoch::QUIET
             ),
             Err(GatewayFailure::NoUseCase(_))
         ));
@@ -1510,6 +1539,7 @@ mod human_dispatch_tests {
             restored.dispatch,
             restored.operation(),
             restored.frame(),
+            ControlEpoch::QUIET,
         );
         assert_eq!(backend.generic.load(Ordering::SeqCst), 1);
         assert_eq!(
