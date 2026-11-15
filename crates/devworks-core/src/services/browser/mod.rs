@@ -205,7 +205,8 @@ pub enum EffectOutcome {
 /// Every connection goes through the session's egress proxy at `proxy`: loopback is not
 /// bypassed (`<-loopback>`), QUIC (which a proxy cannot carry) and DNS-over-HTTPS are off, and
 /// WebRTC may not send UDP outside the proxy. The browser then never resolves a name it
-/// connects to: the proxy resolves and checks it.
+/// connects to: the proxy resolves and checks it. Chrome 157 ignores the WebRTC flag; the
+/// platform's new profile sets the same policy as a preference, which Chrome honours (DW-284).
 pub fn launch_args(profile: &Profile, proxy: std::net::SocketAddr) -> Vec<String> {
     vec![
         format!("--proxy-server=http://{proxy}"),

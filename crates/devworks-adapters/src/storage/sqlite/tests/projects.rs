@@ -2924,9 +2924,18 @@ fn purge_candidate_snapshot_witnesses_independent_references_without_expanding_o
     assert_eq!(edge.kind, ProjectPurgeReferenceKind::ForeignKey);
     assert_eq!(edge.to_table, "operations");
     assert_eq!(edge.to_key_digest, operation.key_digest);
-    assert_eq!(edge.from_columns, ["refresh_operation_id"]);
+    // The columns an edge runs through stay in the adapter; the core port carries only the edge.
+    let scoped = store
+        .with_writer_connection(|c| {
+            super::super::project_purge::candidates::scoped(c, &project("purge-a"))
+        })
+        .unwrap()
+        .unwrap()
+        .1;
+    let columns = scoped.iter().find(|r| r.edge == *edge).unwrap();
+    assert_eq!(columns.from_columns, ["refresh_operation_id"]);
     assert_eq!(
-        edge.to_columns,
+        columns.to_columns,
         ["id"],
         "implicit REFERENCES resolves the actual parent primary key"
     );

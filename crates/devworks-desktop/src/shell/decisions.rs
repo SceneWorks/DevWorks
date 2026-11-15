@@ -211,6 +211,90 @@ fn container_create_review(p: &ApprovalViewRecord) -> Option<Vec<String>> {
     }
     Some(lines)
 }
+/// The readable review of an agent's `containers.build`, `pull`, `start` or `exec`, with its
+/// heading: the build context and Dockerfile, the image and registry, or the container with its
+/// owner, and for exec the command and environment (secret values arrive already redacted).
+/// `None` when the proposal is not one or its review is held in an evidence artifact instead.
+fn container_operation_review(p: &ApprovalViewRecord) -> Option<(&'static str, Vec<String>)> {
+    let reviewed = &p.reviewed_content.as_ref()?.0;
+    if reviewed["operation"] != p.operation_kind.0 {
+        return None;
+    }
+    let text = |v: &serde_json::Value| v.as_str().unwrap_or("?").to_owned();
+    let container = |lines: &mut Vec<String>| {
+        let c = &reviewed["container"];
+        lines.push(format!(
+            "Container {} from image {}, {}",
+            text(&c["containerId"]),
+            text(&c["image"]),
+            text(&c["phase"])
+        ));
+        lines.push(format!(
+            "Owner {} ({}), session {}",
+            text(&c["owner"]["actor"]),
+            text(&c["owner"]["ownerKind"]),
+            c["owner"]["sessionId"].as_str().unwrap_or("none")
+        ));
+    };
+    let mut lines = Vec::new();
+    let heading = match p.operation_kind.0.as_str() {
+        "containers.build" => {
+            let context = &reviewed["context"];
+            let definition = &reviewed["definition"];
+            lines.push(format!("Tag: {}", text(&reviewed["tag"])));
+            lines.push(format!(
+                "Context {} ({} / {})",
+                text(&context["hostPath"]),
+                text(&context["source"]["rootId"]),
+                text(&context["source"]["relative"])
+            ));
+            lines.push(format!(
+                "Dockerfile {} bytes, sha256 {}",
+                text(&definition["byteLength"]),
+                text(&definition["sha256"])
+            ));
+            lines.extend(text(&definition["text"]).lines().map(|l| format!("  {l}")));
+            "Image to build"
+        }
+        "containers.pull" => {
+            lines.push(format!("Image: {}", text(&reviewed["image"])));
+            lines.push(format!("Registry: {}", text(&reviewed["registry"])));
+            if let Some(credential) = reviewed["credentialRef"].as_str() {
+                lines.push(format!("Registry credential {credential}"));
+            }
+            "Image to pull"
+        }
+        "containers.start" => {
+            container(&mut lines);
+            "Container to start"
+        }
+        "containers.exec" => {
+            container(&mut lines);
+            let command: Vec<String> = reviewed["command"].as_array()?.iter().map(text).collect();
+            lines.push(format!("Command: {}", command.join(" ")));
+            lines.push(format!(
+                "Working directory: {}",
+                text(&reviewed["workingDirectory"])
+            ));
+            for entry in reviewed["environment"].as_array().into_iter().flatten() {
+                lines.push(match entry["credentialRef"].as_str() {
+                    Some(credential) => format!(
+                        "Environment {} from credential {credential}",
+                        text(&entry["name"])
+                    ),
+                    None => format!(
+                        "Environment {}={}",
+                        text(&entry["name"]),
+                        text(&entry["value"])
+                    ),
+                });
+            }
+            "Command to run in a container"
+        }
+        _ => return None,
+    };
+    Some((heading, lines))
+}
 fn required_approval_text(
     p: &ApprovalViewRecord,
 ) -> Option<devworks_core::protocol::provider::ArtifactRef> {
@@ -1396,6 +1480,12 @@ fn approval_detail(ui: &mut Ui, d: &mut DecisionsUi, actions: &mut Vec<Action>, 
             ui.add(egui::Label::new(line).wrap().selectable(true));
         }
     }
+    if let Some((heading, lines)) = container_operation_review(p) {
+        ui.label(RichText::new(heading).strong());
+        for line in lines {
+            ui.add(egui::Label::new(line).wrap().selectable(true));
+        }
+    }
     if let Some(content) = &p.reviewed_content {
         json_view(ui, "Reviewed binding and evidence", content);
     }
@@ -1586,6 +1676,88 @@ mod artifact_review_tests {
         );
         p.operation_kind.0 = "git.commit".into();
         assert!(container_create_review(&p).is_none());
+    }
+    #[test]
+    fn container_build_pull_start_and_exec_reviews_list_their_key_inputs() {
+        let review = |operation: &str, reviewed: serde_json::Value| {
+            let p: ApprovalViewRecord = serde_json::from_value(json!({"id":"review","revision":"1","contentDigest":"b".repeat(64),"state":"Pending","operationKind":operation,"targetId":"project-a","targetRevision":"1","summary":"Review container","payload":{"kind":"SavedOperation","schemaRevision":"1","input":{}},"reviewedContent":reviewed})).unwrap();
+            container_operation_review(&p)
+        };
+        let container = json!({"containerId":"c-1","revision":"1","engine":"docker","image":"alpine:3.20","phase":"Running",
+            "owner":{"actor":"agent-a","ownerKind":"Agent","sessionId":"s-a","projectId":"project-a","rootId":null,"assignmentId":null}});
+        assert_eq!(
+            review(
+                "containers.build",
+                json!({"operation":"containers.build","tag":"app:1",
+                "context":{"source":{"rootId":"repo","relative":"ctx"},"hostPath":"/work/repo/ctx"},
+                "definition":{"sha256":"c".repeat(64),"byteLength":"32","text":"FROM alpine:3.20\nRUN make"}})
+            ),
+            Some((
+                "Image to build",
+                vec![
+                    "Tag: app:1".into(),
+                    "Context /work/repo/ctx (repo / ctx)".into(),
+                    format!("Dockerfile 32 bytes, sha256 {}", "c".repeat(64)),
+                    "  FROM alpine:3.20".into(),
+                    "  RUN make".into(),
+                ]
+            ))
+        );
+        assert_eq!(
+            review(
+                "containers.pull",
+                json!({"operation":"containers.pull","image":"ghcr.io/acme/tool:1","registry":"ghcr.io","credentialRef":"cred-1"})
+            ),
+            Some((
+                "Image to pull",
+                vec![
+                    "Image: ghcr.io/acme/tool:1".to_owned(),
+                    "Registry: ghcr.io".into(),
+                    "Registry credential cred-1".into(),
+                ]
+            ))
+        );
+        assert_eq!(
+            review(
+                "containers.start",
+                json!({"operation":"containers.start","container":container})
+            ),
+            Some((
+                "Container to start",
+                vec![
+                    "Container c-1 from image alpine:3.20, Running".to_owned(),
+                    "Owner agent-a (Agent), session s-a".into(),
+                ]
+            ))
+        );
+        assert_eq!(
+            review(
+                "containers.exec",
+                json!({"operation":"containers.exec","container":container,
+                "command":["sh","-c","make test"],"workingDirectory":"container default",
+                "environment":[{"name":"API_TOKEN","value":"[REDACTED]"},{"name":"KEY","credentialRef":"cred-1"}]})
+            ),
+            Some((
+                "Command to run in a container",
+                vec![
+                    "Container c-1 from image alpine:3.20, Running".to_owned(),
+                    "Owner agent-a (Agent), session s-a".into(),
+                    "Command: sh -c make test".into(),
+                    "Working directory: container default".into(),
+                    "Environment API_TOKEN=[REDACTED]".into(),
+                    "Environment KEY from credential cred-1".into(),
+                ]
+            ))
+        );
+        // Another operation, or a review held in evidence, gets no readable lines.
+        assert!(
+            review(
+                "containers.create",
+                json!({"operation":"containers.create"})
+            )
+            .is_none()
+        );
+        assert!(review("containers.pull", json!({"operation":"containers.build"})).is_none());
     }
     #[test]
     fn only_exact_owner_package_sources_are_optional_binary_attachments() {

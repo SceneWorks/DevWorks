@@ -1,5 +1,6 @@
 //! Scoped row materialization for the ownership classifier, never deletion authority.
 use super::super::conn::db;
+use super::references::ColumnReference;
 use devworks_core::fingerprint::sha256_hex;
 use devworks_core::ports::storage::{ProjectPurgeCandidate, ProjectPurgeCandidates, StorageError};
 use devworks_core::protocol::{ProjectId, data::DataScope};
@@ -242,6 +243,14 @@ pub(in crate::storage::sqlite) fn snapshot(
     conn: &Connection,
     project: &ProjectId,
 ) -> Result<Option<ProjectPurgeCandidates>, StorageError> {
+    Ok(scoped(conn, project)?.map(|(candidates, _)| candidates))
+}
+
+/// The candidate snapshot together with the columns each of its references runs through.
+pub(in crate::storage::sqlite) fn scoped(
+    conn: &Connection,
+    project: &ProjectId,
+) -> Result<Option<(ProjectPurgeCandidates, Vec<ColumnReference>)>, StorageError> {
     super::schema::verify(conn)?;
     if !db(conn.query_row(
         "SELECT EXISTS(SELECT 1 FROM projects WHERE id=?1)",
@@ -293,13 +302,22 @@ pub(in crate::storage::sqlite) fn snapshot(
         .map_err(|_| invalid("purge candidate digest"))?
         .as_bytes(),
     );
-    Ok(Some(ProjectPurgeCandidates {
-        project_id: project.clone(),
-        policy_digest,
-        digest,
-        rows,
+    let mut edges = references
+        .iter()
+        .map(|reference| reference.edge.clone())
+        .collect::<Vec<_>>();
+    edges.sort();
+    edges.dedup();
+    Ok(Some((
+        ProjectPurgeCandidates {
+            project_id: project.clone(),
+            policy_digest,
+            digest,
+            rows,
+            references: edges,
+        },
         references,
-    }))
+    )))
 }
 
 #[cfg(test)]
