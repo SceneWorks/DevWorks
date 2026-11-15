@@ -124,6 +124,15 @@ fn check_draft(
     d: &PlanDraft,
     documents: Option<&dyn StagedPlans>,
 ) -> R<()> {
+    // A plan draft is shown exactly wherever it is read and reviewed (`features.get`, the plan
+    // approval and its audit). Text the shared redaction would change (a password in a URL, a
+    // `password: …` line, a token) cannot be shown both safely and in full, so the draft is
+    // refused at save rather than stored where every reader sees it.
+    let shown = serde_json::to_value(d)
+        .map_err(|e| crate::ports::storage::StorageError::InvalidRecord(e.to_string()))?;
+    if crate::authority::redact::Redactor::new().redact_json(&shown) != shown {
+        return Err(invalid("feature_plan_unreviewable", feature.map(|f| &f.id)));
+    }
     check_artifact(tx, ctx, project, &d.content)?;
     if let Some(reader) = documents {
         reviewable_document(tx, reader, feature, &d.content)?;

@@ -255,7 +255,12 @@ fn a_stuck_request_cannot_keep_the_client_from_closing() {
     let release = Arc::new((std::sync::Mutex::new(false), std::sync::Condvar::new()));
     let mut client = Client::new(Arc::new(Stuck(release.clone())));
     client.set_join_bound(Duration::from_millis(200));
-    client.query(Slot::SessionsList, "stuck", "sessions.list", b"{}".to_vec());
+    client.query(
+        Slot::Chat(devworks_desktop::chat::ChatSlot::SessionsList),
+        "stuck",
+        "sessions.list",
+        b"{}".to_vec(),
+    );
     let started = Instant::now();
     drop(client);
     assert!(
