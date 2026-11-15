@@ -22,12 +22,9 @@ use devworks_core::{
         conventions::{ConventionService, importing::ImportService, indexing::IndexService, model},
     },
 };
-use devworks_engine::dispatch;
+use devworks_engine::conventions_import as actual_consumer;
 use serde_json::json;
 use std::sync::Arc;
-// Compile the actual production consumer while composition is integrated by its runtime owner.
-#[path = "../src/conventions_import.rs"]
-mod actual_consumer;
 struct Fx {
     h: Harness,
     store: Arc<dyn ApplicationStore>,

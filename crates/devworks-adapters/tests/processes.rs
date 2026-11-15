@@ -59,6 +59,10 @@ use devworks_core::settings::catalog::{AgentRole, descriptor};
 use devworks_core::settings::model;
 use serde_json::{Value, json};
 use std::path::PathBuf;
+
+/// The image the native container engine tests pull and run: Alpine 3.24, pinned by its
+/// multi-platform index digest. No tag: Podman refuses a reference with both a tag and a digest.
+const QUALIFIED_IMAGE: &str = "docker.io/library/alpine@sha256:f59abe656b692d901e184be3445e084786602108599d2a51d229c0f5a48c71bf";
 use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
@@ -635,7 +639,7 @@ fn the_forced_stop_reaps_every_descendant() {
     #[cfg(windows)]
     {
         let mut tree = NativeProcessHost.spawn(&sleeping_tree(30)).unwrap();
-        std::thread::sleep(Duration::from_millis(300));
+        // The tree sleeps 30 s: its job is not empty until it is killed.
         assert!(!tree.poll().unwrap().empty);
         tree.kill().unwrap();
         until_empty(&mut *tree, Duration::from_secs(5)).expect("job emptied");
@@ -663,7 +667,7 @@ fn an_orphaned_tree_is_verified_by_birth_and_terminated() {
     let identity = tree.identity().clone();
     // A crash: the owner disappears without stopping the tree.
     std::mem::forget(tree);
-    std::thread::sleep(Duration::from_millis(100));
+    // Nothing stops a forgotten tree; it sleeps 30 s.
     assert_eq!(NativeProcessHost.probe(&identity), Probe::Alive);
     // A reused pid (different birth) is never treated as the recorded process.
     let mut other = identity.clone();
@@ -957,13 +961,23 @@ fn native_docker_probe_uses_registered_executable_and_owned_processes() {
 }
 
 #[test]
-#[ignore = "requires a separately supplied Docker engine with local alpine:latest image"]
+#[ignore = "requires a separately supplied Docker engine; pulls QUALIFIED_IMAGE"]
 fn native_docker_owned_lifecycle_uses_the_exact_planned_container() {
     let _serial = serial();
     let fx = Fx::new();
     let path = std::env::var_os("DEVWORKS_TEST_DOCKER_PATH")
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from("/usr/local/bin/docker"));
+    // Pulled first: the create below is bounded at 10 s, which a pull may take on its own.
+    let pulled = std::process::Command::new(&path)
+        .args(["pull", QUALIFIED_IMAGE])
+        .output()
+        .unwrap();
+    assert!(
+        pulled.status.success(),
+        "{}",
+        String::from_utf8_lossy(&pulled.stderr)
+    );
     let bindings = ToolBindings::new(
         [RegisteredExecutable {
             id: id("docker"),
@@ -1016,7 +1030,7 @@ fn native_docker_owned_lifecycle_uses_the_exact_planned_container() {
     let create_args = backend
         .create(&CreatePlan {
             name: &name,
-            image: "alpine:latest",
+            image: QUALIFIED_IMAGE,
             labels: &labels,
             mounts: &[],
             ports: &[],
@@ -1060,7 +1074,7 @@ fn native_docker_owned_lifecycle_uses_the_exact_planned_container() {
 }
 
 #[test]
-#[ignore = "requires a separately supplied Docker engine with local alpine:latest image"]
+#[ignore = "requires a separately supplied Docker engine; pulls QUALIFIED_IMAGE"]
 fn native_docker_build_uses_artifact_bytes_on_stdin_and_registered_context() {
     let _serial = serial();
     let fx = Fx::new();
@@ -1125,7 +1139,7 @@ fn native_docker_build_uses_artifact_bytes_on_stdin_and_registered_context() {
         None,
     )
     .unwrap();
-    spec.stdin = Some(b"FROM alpine:latest\nCMD [\"true\"]\n".to_vec());
+    spec.stdin = Some(format!("FROM {QUALIFIED_IMAGE}\nCMD [\"true\"]\n").into_bytes());
     let result = runner
         .run(
             &fx.agent("agent-a", "project-a", "s-a"),
@@ -2662,7 +2676,7 @@ fn native_container_effects_commit_owned_create_start_and_stop(engine: &str, exe
         &context,
         "containers.pull",
         "native-effect-pull",
-        json!({"engineId":engine,"image":"docker.io/library/alpine:latest"}),
+        json!({"engineId":engine,"image":QUALIFIED_IMAGE}),
         Some(1),
     );
     let pull_id = match recorded(pull).0 {
@@ -2689,7 +2703,7 @@ fn native_container_effects_commit_owned_create_start_and_stop(engine: &str, exe
                 source: json!({"kind":"NativeQualification"}),
                 actor_audience: false,
             },
-            b"FROM docker.io/library/alpine:latest\nRUN echo qualified > /qualified\n",
+            format!("FROM {QUALIFIED_IMAGE}\nRUN echo qualified > /qualified\n").as_bytes(),
             |_, _| Ok(()),
         )
         .unwrap();
@@ -2708,10 +2722,7 @@ fn native_container_effects_commit_owned_create_start_and_stop(engine: &str, exe
         }
     }
     let _image_cleanup = ImageCleanup(executable.clone(), scoped_tag(&tag));
-    let _pull_cleanup = ImageCleanup(
-        executable.clone(),
-        scoped_tag("docker.io/library/alpine:latest"),
-    );
+    let _pull_cleanup = ImageCleanup(executable.clone(), scoped_tag(QUALIFIED_IMAGE));
     let build = fx.command_keyed(
         &context,
         "containers.build",
@@ -2804,7 +2815,7 @@ fn native_container_effects_commit_owned_create_start_and_stop(engine: &str, exe
             "-d",
             "--name",
             &external,
-            "docker.io/library/alpine:latest",
+            QUALIFIED_IMAGE,
             "sleep",
             "60",
         ])
@@ -2882,7 +2893,7 @@ fn native_container_effects_commit_owned_create_start_and_stop(engine: &str, exe
         &context,
         "containers.create",
         "native-effect-descendant-mount",
-        json!({"spec":{"engineId":engine,"projectId":"project-a","image":"docker.io/library/alpine:latest",
+        json!({"spec":{"engineId":engine,"projectId":"project-a","image":QUALIFIED_IMAGE,
             "command":[],"mounts":[{"source":{"rootId":"container-build-repo","relative":"container-build-context/mutable-child"},
                 "destination":"/child","readOnly":true}],"ports":[],"environment":[],"resourceIds":[]}}),
         Some(1),
@@ -3173,7 +3184,7 @@ fn native_container_effects_commit_owned_create_start_and_stop(engine: &str, exe
         &context,
         "containers.create",
         "native-effect-refused-create",
-        json!({"spec":{"engineId":engine,"projectId":"project-a","image":"docker.io/library/alpine:latest",
+        json!({"spec":{"engineId":engine,"projectId":"project-a","image":QUALIFIED_IMAGE,
             "command":[],"mounts":[],"ports":[],
             "environment":[{"name":"TOKEN","credentialRef":"missing"}],
             "resourceIds":["refused-slot"]}}),
@@ -4266,13 +4277,14 @@ fn required_no_child_processes_blocks_helpers_before_their_marker_and_keeps_the_
             executable.to_string_lossy().into_owned(),
             "--exact".into(),
             "no_child_policy_root_fixture".into(),
+            "--ignored".into(),
             "--nocapture".into(),
             "--test-threads=1".into(),
         ])
         .unwrap()
     } else {
         shell(&format!(
-            "printf root > '{root}'; '{}' --exact no_child_policy_marker_fixture --nocapture; printf finished",
+            "printf root > '{root}'; '{}' --exact no_child_policy_marker_fixture --ignored --nocapture; printf finished",
             executable.display()
         ))
     };
@@ -4460,24 +4472,28 @@ fn no_child_processes_keeps_native_git_add_commit_working_and_blocks_a_new_hook_
     assert!(std::path::Path::new(&marker).exists());
 }
 
+/// A child process of `required_no_child_processes_blocks_helpers_before_their_marker_and_keeps_the_parent_usable`.
 #[test]
+#[ignore = "child process of the no-child-processes policy test, which runs it"]
 fn no_child_policy_marker_fixture() {
-    if let Some(marker) = std::env::var_os("DEVWORKS_NO_CHILD_POLICY_MARKER") {
-        std::fs::write(marker, "the external child actually executed").unwrap();
-    }
+    let marker = std::env::var_os("DEVWORKS_NO_CHILD_POLICY_MARKER")
+        .expect("DEVWORKS_NO_CHILD_POLICY_MARKER is set by the policy test");
+    std::fs::write(marker, "the external child actually executed").unwrap();
 }
 
+/// The Windows root process of the no-child-processes policy test.
 #[cfg(windows)]
 #[test]
+#[ignore = "child process of the no-child-processes policy test, which runs it"]
 fn no_child_policy_root_fixture() {
-    let Some(root) = std::env::var_os("DEVWORKS_NO_CHILD_POLICY_ROOT") else {
-        return;
-    };
+    let root = std::env::var_os("DEVWORKS_NO_CHILD_POLICY_ROOT")
+        .expect("DEVWORKS_NO_CHILD_POLICY_ROOT is set by the policy test");
     std::fs::write(root, "the constrained native root actually executed").unwrap();
     let child = std::process::Command::new(std::env::current_exe().unwrap())
         .args([
             "--exact",
             "no_child_policy_marker_fixture",
+            "--ignored",
             "--nocapture",
             "--test-threads=1",
         ])

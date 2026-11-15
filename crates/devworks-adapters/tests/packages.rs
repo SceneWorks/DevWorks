@@ -605,7 +605,7 @@ fn package_downloads_never_connect_to_a_private_first_hop() {
             100,
         )
         .unwrap_err();
-    std::thread::sleep(Duration::from_millis(100));
+    // `fetch` returned: a connection it made would already wait in the listener's backlog.
     assert!(
         listener.accept().is_err(),
         "connected to a loopback index: {e}"

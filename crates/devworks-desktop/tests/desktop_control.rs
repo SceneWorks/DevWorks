@@ -226,15 +226,18 @@ fn control_requires_human_ok_and_live_fenced_consent() {
     ))
     .expect("staged exact proposal");
     assert!(platform.input.lock().unwrap().is_empty());
-    dops::decided(backend.human_decision(&dops::command(
-        &*backend,
-        "approvals.record_human_decision",
-        json!({
-            "proposalId":proposal.id,"expectedRevision":proposal.revision,
-            "contentDigest":proposal.content_digest,"decision":"Approve",
-            "rationale":"OK: test desktop takeover"
-        }),
-    )))
+    dops::decided(backend.human_decision(
+        &dops::command(
+            &*backend,
+            "approvals.record_human_decision",
+            json!({
+                "proposalId":proposal.id,"expectedRevision":proposal.revision,
+                "contentDigest":proposal.content_digest,"decision":"Approve",
+                "rationale":"OK: test desktop takeover"
+            }),
+        ),
+        backend.control_epoch(),
+    ))
     .expect("trusted Human OK");
 
     let deadline = Instant::now() + Duration::from_secs(15);
@@ -278,15 +281,18 @@ fn control_requires_human_ok_and_live_fenced_consent() {
     ))
     .expect("second proposal");
     assert!(
-        dops::decided(backend.human_decision(&dops::command(
-            &*backend,
-            "approvals.record_human_decision",
-            json!({
-                "proposalId":second.id,"expectedRevision":second.revision,
-                "contentDigest":second.content_digest,"decision":"Approve",
-                "rationale":"Synthetic event must not grant trusted approval"
-            }),
-        )))
+        dops::decided(backend.human_decision(
+            &dops::command(
+                &*backend,
+                "approvals.record_human_decision",
+                json!({
+                    "proposalId":second.id,"expectedRevision":second.revision,
+                    "contentDigest":second.content_digest,"decision":"Approve",
+                    "rationale":"Synthetic event must not grant trusted approval"
+                }),
+            ),
+            backend.control_epoch()
+        ))
         .is_err(),
         "automation must not mint a trusted Human decision"
     );
@@ -470,4 +476,212 @@ fn control_requires_human_ok_and_live_fenced_consent() {
         .is_err()
     );
     assert_eq!(*platform.captures.lock().unwrap(), 1);
+}
+
+/// Grants desktop control through the reviewed takeover; the held record and its lease fence.
+fn hold_control(
+    backend: &Arc<dyn Backend>,
+    engine: &devworks_desktop::host::Engine,
+) -> (DesktopRecord, i64) {
+    let before = inspect(&**backend);
+    let request = json!({"desktopId":before.desktop_id,"expectedRevision":before.revision,
+        "reason":"Test the local UI", "leaseMs":"30000"});
+    let decoded = devworks_core::services::approvals::requests::decode(
+        "desktop.request_control",
+        1,
+        &request,
+        true,
+    )
+    .expect("selected saved operation");
+    let proposal = dops::decided(backend.command(
+        "approvals.propose",
+        &dops::command(
+            &**backend,
+            "approvals.propose",
+            json!({
+                "scope":{"kind":"Workspace"},"operationKind":"desktop.request_control",
+                "target":{"id":before.desktop_id,"revision":before.revision},
+                "contentDigest":decoded.fingerprint.as_str(),"summary":"Request desktop control",
+                "payload":{"kind":"SavedOperation","schemaRevision":"1","input":request}
+            }),
+        ),
+    ))
+    .expect("staged exact proposal");
+    dops::decided(backend.human_decision(
+        &dops::command(
+            &**backend,
+            "approvals.record_human_decision",
+            json!({
+                "proposalId":proposal.id,"expectedRevision":proposal.revision,
+                "contentDigest":proposal.content_digest,"decision":"Approve",
+                "rationale":"OK: test desktop takeover"
+            }),
+        ),
+        backend.control_epoch(),
+    ))
+    .expect("trusted Human OK");
+    let deadline = Instant::now() + Duration::from_secs(15);
+    let held = loop {
+        let record = inspect(&**backend);
+        if matches!(record.state, ItemState::Enabled) && record.lease_id.is_some() {
+            break record;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "approved desktop control did not resume"
+        );
+        std::thread::sleep(Duration::from_millis(25));
+    };
+    let lease_id = held.lease_id.clone().unwrap();
+    let fence = read_snapshot(
+        &**engine.host().runtime().store(),
+        &ReadOptions::default(),
+        |snapshot| snapshot.resources().lease(&lease_id),
+    )
+    .expect("lease read")
+    .expect("lease row")
+    .fence;
+    (held, fence)
+}
+
+fn release_control(backend: &Arc<dyn Backend>, held: &DesktopRecord, fence: i64) {
+    let frame = ops::command_frame(
+        &**backend,
+        "desktop.release_control",
+        json!({"desktopId":held.desktop_id,"leaseId":held.lease_id,
+            "expectedFence":fence.to_string()}),
+    );
+    let released = decision(
+        backend
+            .command("desktop.release_control", &frame)
+            .expect("release reply"),
+    );
+    assert!(matches!(
+        released,
+        DomainDecision::Applied {
+            result: OperationResult::DesktopReleaseControl { .. }
+        }
+    ));
+}
+
+// A desktop-control holder can queue native accessibility actions on the confirmation and
+// release control before the worker runs them. The confirmation is judged by the control state
+// when the click was received, so the deletion is refused; a click received with nobody holding
+// control (and none granted since) still deletes.
+#[cfg(unix)]
+#[test]
+fn a_deletion_clicked_while_control_was_held_is_refused_even_after_release() {
+    let _case = native_runtime_case();
+    let root = Root::new("control-input-provenance");
+    let platform = Arc::new(ScriptedDesktop::default());
+    let mut configuration = config(&root.0);
+    configuration.desktop_platform = Some(platform.clone());
+    let engine = devworks_desktop::host::Engine::start(configuration).expect("runtime boot");
+    let backend = engine.backend();
+    let checkout = root.dir("checkout");
+    std::fs::create_dir_all(checkout.join(".git/objects")).unwrap();
+    std::fs::write(checkout.join("src.txt"), b"source").unwrap();
+    let repository = devworks_core::ports::storage::StoredRepository {
+        id: devworks_core::protocol::Id::new("repo-a").unwrap(),
+        location: checkout.display().to_string(),
+        name: "engine".into(),
+        remote_url: None,
+        primary: true,
+        lifecycle: "Active".into(),
+        languages: vec![],
+        revision: 1,
+        registered_at_ms: 1,
+    };
+    devworks_core::ports::storage::run_write(
+        &**engine.host().runtime().store(),
+        devworks_core::ports::storage::WriteOptions::default(),
+        move |tx| tx.projects().insert_repository(&repository),
+    )
+    .unwrap();
+    let id = devworks_core::protocol::Id::new("repo-a").unwrap();
+    let reviewed = backend.repository_deletion_preview(&id).expect("preview");
+
+    // The click is received while an agent holds control; control is released before the
+    // worker runs the deletion.
+    let (held, fence) = hold_control(&backend, &engine);
+    let received = backend.control_epoch();
+    assert!(received.held());
+    release_control(&backend, &held, fence);
+    assert!(!backend.control_epoch().held());
+    let refused = backend.delete_repository(&reviewed, received);
+    assert!(refused.is_err(), "{refused:?}");
+    assert!(checkout.join("src.txt").exists(), "nothing was deleted");
+
+    // A human-only approval received under the same control is refused the same way.
+    let record = inspect(&*backend);
+    let request = json!({"desktopId":record.desktop_id,"expectedRevision":record.revision,
+        "reason":"Another takeover", "leaseMs":"30000"});
+    let decoded = devworks_core::services::approvals::requests::decode(
+        "desktop.request_control",
+        1,
+        &request,
+        true,
+    )
+    .expect("selected saved operation");
+    let pending = dops::decided(backend.command(
+        "approvals.propose",
+        &dops::command(
+            &*backend,
+            "approvals.propose",
+            json!({
+                "scope":{"kind":"Workspace"},"operationKind":"desktop.request_control",
+                "target":{"id":record.desktop_id,"revision":record.revision},
+                "contentDigest":decoded.fingerprint.as_str(),"summary":"Another takeover",
+                "payload":{"kind":"SavedOperation","schemaRevision":"1","input":request}
+            }),
+        ),
+    ))
+    .expect("staged proposal");
+    let reject = |received| {
+        backend.human_decision(
+            &dops::command(
+                &*backend,
+                "approvals.record_human_decision",
+                json!({
+                    "proposalId":pending.id,"expectedRevision":pending.revision,
+                    "contentDigest":pending.content_digest,"decision":"Reject",
+                    "rationale":"Not now"
+                }),
+            ),
+            received,
+        )
+    };
+    assert!(
+        dops::decided(reject(received)).is_err(),
+        "a decision received under control is not a trusted Human decision"
+    );
+
+    // Received now, with nobody holding control and none granted since: the person's click.
+    let quiet = backend.control_epoch();
+    let deleted = backend.delete_repository(&reviewed, quiet);
+    assert!(deleted.is_ok(), "{deleted:?}");
+    assert!(!checkout.exists(), "the confirmed folder is deleted");
+    assert!(dops::decided(reject(backend.control_epoch())).is_ok());
+}
+
+#[test]
+fn a_control_grant_between_receipt_and_action_refuses_the_confirmation() {
+    use devworks_core::services::desktop::ControlEpoch;
+    let _case = native_runtime_case();
+    let root = Root::new("control-input-grant");
+    let platform = Arc::new(ScriptedDesktop::default());
+    let mut configuration = config(&root.0);
+    configuration.desktop_platform = Some(platform.clone());
+    let engine = devworks_desktop::host::Engine::start(configuration).expect("runtime boot");
+    let backend = engine.backend();
+    let received = backend.control_epoch();
+    assert!(!received.held());
+    let runtime = engine.host().runtime();
+    assert!(runtime.control_quiet_since(received));
+    // Control granted and released after the click was received: not provably the person's.
+    let (held, fence) = hold_control(&backend, &engine);
+    release_control(&backend, &held, fence);
+    assert!(!runtime.control_quiet_since(received));
+    assert!(runtime.control_quiet_since(backend.control_epoch()));
+    assert!(!runtime.control_quiet_since(ControlEpoch::UNKNOWN));
 }

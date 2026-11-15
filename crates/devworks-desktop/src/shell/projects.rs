@@ -352,8 +352,10 @@ impl ProjectsCtl<'_, '_> {
                         reviewed.repository_id.as_str().to_owned(),
                     );
                     if let Some(c) = &mut self.cx.client {
+                        // Captured as the click is received, before the worker runs it.
+                        let received = c.control_epoch();
                         c.task(slot.into(), "Deleting the repository folder", move |b| {
-                            b.delete_repository(&reviewed)
+                            b.delete_repository(&reviewed, received)
                                 .map(crate::backend::TaskOutput::RepositoryDeleted)
                         });
                     }
