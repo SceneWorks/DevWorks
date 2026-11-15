@@ -162,10 +162,29 @@ fn rev(c: &wire::Revision) -> Result<i64, StorageError> {
         .map_err(|_| invalid("revision"))
 }
 
-/// Commits one package event handler invocation atomically (see the module documentation).
+/// Which contribution of which exact version committed an event's intents: what their execution
+/// resolves its grants and principal from (`crate::package_host::intents`).
+#[derive(Clone, Debug)]
+pub struct IntentOrigin {
+    pub contribution_id: String,
+    pub manifest_digest: String,
+}
+
+/// Commits one package event handler invocation atomically (see the module documentation). Its
+/// intents carry no [`IntentOrigin`], so none of them can execute.
 pub fn commit_event(
     tx: &mut dyn WriteTransaction,
     inv: &PackageInvocation,
+    commit: &EventCommit,
+) -> Result<CommitOutcome, StorageError> {
+    commit_event_from(tx, inv, None, commit)
+}
+
+/// [`commit_event`], recording `origin` with every intent.
+pub fn commit_event_from(
+    tx: &mut dyn WriteTransaction,
+    inv: &PackageInvocation,
+    origin: Option<&IntentOrigin>,
     commit: &EventCommit,
 ) -> Result<CommitOutcome, StorageError> {
     // Structural checks shared with the wire protocol (bounds, unique keys, relative targets).
@@ -282,6 +301,8 @@ pub fn commit_event(
                 "eventId": event_id.0.as_str(),
                 "actionKey": intent.action_key.as_str(),
                 "call": call,
+                "contributionId": origin.map(|o| o.contribution_id.as_str()),
+                "manifestDigest": origin.map(|o| o.manifest_digest.as_str()),
             }),
         })?;
         // One event per intent: a delivery is unique per (consumer, event).
