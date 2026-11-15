@@ -72,6 +72,7 @@ use crate::protocol::{
     Protocol, RetryAdvice, Revision, RevisionDimension, RootId,
 };
 use crate::services::cursor::{self, CursorBinding};
+use crate::services::knowledge::rules_for;
 use serde_json::json;
 use std::sync::Arc;
 use transcript::{AppendPath, BatchOutcome, BatchRefusal, SESSION_AGGREGATE, SessionBatch};
@@ -214,6 +215,16 @@ pub(crate) fn content(s: &str) -> BoundedText<0, 65536> {
 /// Tokens of `bytes` by the conservative attributed estimate (4 bytes per token, rounded up).
 pub fn token_estimate(bytes: i64) -> i64 {
     (bytes.max(0) + 3) / 4
+}
+
+/// Whether two repository-relative paths are the same or one lies beneath the other, compared
+/// by whole segments (`/` and `\` both separate, as in [`RelativePath`]).
+///
+/// [`RelativePath`]: crate::protocol::support::RelativePath
+fn related_paths(a: &str, b: &str) -> bool {
+    a.split(['/', '\\'])
+        .zip(b.split(['/', '\\']))
+        .all(|(x, y)| x == y)
 }
 
 /// A request naming `project` must match the invocation's project, when it has one.
@@ -998,8 +1009,8 @@ impl SessionService {
 
     /// The bounded briefing of the session's next request (CONTEXT-01/02): its work item, the
     /// current epoch's immutable snapshot, the latest checkpoint (handover state), calls still
-    /// waiting for a response, operations its responses wait on, then the sources recorded for
-    /// the epoch in recording order — at most [`BRIEFING_LIMIT`]. When recorded sources remain,
+    /// waiting for a response, operations its responses wait on, the rules of the paths it names,
+    /// then the sources recorded for the epoch in recording order — at most [`BRIEFING_LIMIT`]. When recorded sources remain,
     /// the page continues through `sessions.context_sources` with the returned cursor.
     ///
     /// Schema revision 2 (the retained `get_briefing` arguments):
@@ -1007,10 +1018,13 @@ impl SessionService {
     ///   must be visible to the invocation and belong to the session's project (any visible
     ///   project for a workspace session); otherwise it is `NotFound`, like any other work item
     ///   outside the scope. Naming the session's own work item adds nothing.
-    /// - `paths` (1-128 distinct repository-relative paths) scope the path knowledge of the
-    ///   briefing. The sources a briefing composes today (work items, epoch snapshot, checkpoint,
-    ///   open calls and operations, the host's recorded sources) are not path-scoped and no
-    ///   path-scoped knowledge is stored yet, so paths are validated and select nothing more.
+    /// - `paths` (1-128 distinct repository-relative paths) add the path knowledge of the
+    ///   briefing: each effective rule (lesson) of the session's project and of the workspace
+    ///   whose applicability names a path related to one of them (`rule`), right after the
+    ///   operations, newest first. Two paths are related when they are the same or one lies
+    ///   beneath the other, compared by whole segments with `/` and `\` both separating (no
+    ///   globs: a stored path is literal). A rule naming no path is not path knowledge and is
+    ///   never added; without `paths` no rule is added. A rule's estimate covers its text.
     /// - `budgetTokens` caps the briefing's estimated size: the sum of its sources'
     ///   `tokenEstimate`s (the attributed estimate of the material each source names: 4 bytes
     ///   per token, rounded up, over the artifact length or work title; 0 for the references to
@@ -1128,6 +1142,28 @@ impl SessionService {
                 artifact: None,
                 token_estimate: counter(0),
             });
+        }
+        if let Some(paths) = &input.paths {
+            for rule in rules_for(snapshot, session.project_id.as_ref(), None)? {
+                let scoped = rule.lesson.as_ref().is_some_and(|l| {
+                    l.applicability
+                        .paths
+                        .0
+                        .iter()
+                        .any(|scope| paths.0.iter().any(|p| related_paths(&scope.0, &p.0)))
+                });
+                if !scoped {
+                    continue;
+                }
+                let text = rule.value.as_ref().map_or(0, |v| v.0.len());
+                items.push(ContextSource {
+                    id: rule.id,
+                    kind: label("rule", "rule"),
+                    source_revision: rule.revision,
+                    artifact: None,
+                    token_estimate: counter(token_estimate(text as i64)),
+                });
+            }
         }
         items.truncate(BRIEFING_LIMIT);
         // The budget keeps the longest prefix whose estimated size fits (revision 2).

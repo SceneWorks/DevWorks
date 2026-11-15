@@ -106,7 +106,7 @@ Revision 2 adds:
   Tool arguments and results never leave their restricted artifacts. A call without a response is not yet an invocation.
 - **Briefing inputs.** `sessions.briefing` takes three new inputs:
   - `item`: a visible work item of the session's project, added as a `focus:` source.
-  - `paths`: 1–128 distinct relative paths (`PathSet`, with `uniqueItems` in its schema). They scope path knowledge. No briefing source is path-scoped yet, and no path-scoped knowledge is stored, so they select nothing more today.
+  - `paths`: 1–128 distinct relative paths (`PathSet`, with `uniqueItems` in its schema). They scope path knowledge: the briefing adds, as `rule` sources after the operations, the effective rules of the session's project and the workspace whose applicability names a related path (the same path, or one beneath the other, by whole segments; no globs). Rules that name no path are not added, and a briefing without paths adds no rules.
   - `budgetTokens` (1–1,000,000): the briefing is the longest prefix of its order whose summed `tokenEstimate`s fit. The estimate is 4 bytes per token, rounded up, over the material a source names. Left-out recorded sources continue through `sessions.context_sources`. No inference is involved.
 
   `RelativePath` treats both `/` and `\` as segment separators. It refuses:
