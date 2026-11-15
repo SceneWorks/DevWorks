@@ -63,6 +63,7 @@
 //! service's trust model).
 pub mod broker;
 pub mod discovery;
+pub(crate) mod recovery;
 pub mod session;
 
 pub use discovery::{IndexPorts, RuntimePorts};
@@ -73,8 +74,8 @@ use devworks_core::context::{HostIngress, InvocationContext, PrincipalKind};
 use devworks_core::ports::packages::{Inspection, PackageActivity, QuiescenceGuard};
 use devworks_core::ports::process::ProcessSpec;
 use devworks_core::ports::storage::{
-    ApplicationStore, ReadOptions, StorageError, StoredPackage, WriteOptions, WriteTransaction,
-    read_snapshot, run_write, write_job,
+    ApplicationStore, ReadOptions, StorageError, StoredPackage, StoredPackageVersion, WriteOptions,
+    WriteTransaction, read_snapshot, run_write, write_job,
 };
 use devworks_core::ports::{IdKind, IdSource};
 use devworks_core::protocol::records::{PackageAvailability, Severity};
@@ -174,6 +175,11 @@ struct Instance {
     key: Key,
     registry_revision: i64,
     inspection: Inspection,
+    /// The stored version when `inspection` is an older compact one: grants recover its tool
+    /// descriptors from the bundle it retains ([`PackageHost::grant_inspection`]).
+    compact: Option<StoredPackageVersion>,
+    /// The inspection recovered from `compact`'s verified bundle (`None`: refused), once.
+    recovered: OnceLock<Option<Inspection>>,
     session: Mutex<Option<Arc<Session>>>,
     process: Mutex<Option<OwnedProcess>>,
     status: Mutex<InstanceStatus>,
@@ -625,6 +631,53 @@ impl PackageHost {
         self.epoch.load(Ordering::SeqCst)
     }
 
+    /// The inspection an invocation of `contribution` resolves its grants from: the stored one,
+    /// unless it is an older compact one without that contribution's descriptor. Then the full
+    /// inspection is recovered once per instance from the bundle the version retains, after the
+    /// bundle's digest is re-verified; a refused recovery keeps the compact one (no command is
+    /// granted without a verified descriptor).
+    fn grant_inspection<'a>(&self, inst: &'a Instance, contribution: &str) -> &'a Inspection {
+        let (Some(version), Some(ports)) = (&inst.compact, self.broker.get()) else {
+            return &inst.inspection;
+        };
+        if inst
+            .inspection
+            .contributions
+            .iter()
+            .any(|c| c.id == contribution && c.descriptor.is_some())
+        {
+            return &inst.inspection;
+        }
+        inst.recovered
+            .get_or_init(|| {
+                let ctx = self.host_ctx();
+                match recovery::recover(
+                    &*self.store,
+                    &ports.artifacts,
+                    &self.service,
+                    &ctx,
+                    version,
+                ) {
+                    Ok(i) => Some(i),
+                    Err(refused) => {
+                        self.service.record_log(
+                            &inst.package_id,
+                            Severity::Warning,
+                            "PackageDescriptorRecoveryRefused",
+                            &format!(
+                                "The retained bundle of this older install could not be verified \
+                                 ({refused:?}); its tools run no commands until it is reinstalled"
+                            ),
+                            None,
+                        );
+                        None
+                    }
+                }
+            })
+            .as_ref()
+            .unwrap_or(&inst.inspection)
+    }
+
     fn host_ctx(&self) -> InvocationContext {
         let info = self.store.info();
         HostIngress::new(&*self.store).context(
@@ -839,7 +892,11 @@ impl PackageHost {
                                 generation: p.state_generation,
                                 config_revision: p.config_revision,
                             },
-                            (i, committed_configuration(p)),
+                            (
+                                recovery::compact(&i).then(|| v.clone()),
+                                i,
+                                committed_configuration(p),
+                            ),
                         ),
                     );
                 }
@@ -877,7 +934,7 @@ impl PackageHost {
                         _ => {}
                     }
                 }
-                if let Some((k, (i, configuration))) = want
+                if let Some((k, (compact, i, configuration))) = want
                     && !has_current
                 {
                     let attempts = {
@@ -895,6 +952,8 @@ impl PackageHost {
                             key: k.clone(),
                             registry_revision: registry,
                             inspection: i.clone(),
+                            compact: compact.clone(),
+                            recovered: OnceLock::new(),
                             session: Mutex::new(None),
                             process: Mutex::new(None),
                             status: Mutex::new(InstanceStatus::Starting),
@@ -1795,7 +1854,7 @@ impl PackageHost {
                 kind,
                 access: inst.inspection.access.iter().cloned().collect(),
                 grants: broker::Grants::resolve(
-                    &inst.inspection,
+                    self.grant_inspection(&inst, &req.contribution_id),
                     &req.contribution_id,
                     req.principal.clone(),
                     &req.allowed_operations,
