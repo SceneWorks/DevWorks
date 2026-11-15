@@ -208,7 +208,7 @@ fn a_granted_package_calls_its_endpoint_through_a_named_connection_without_seein
     a.ready(&name);
     let input = a.save(&a.user, br#"{"item":"widget"}"#);
     let script = json!({"dumpEnv": true, "calls": [
-        {"actionKey": "post", "call": http("main", "api", "Post", "/items?page=1", Some(json!("$input")))},
+        {"actionKey": "post", "call": http("main", "api", "Post", "/items%20all?page=1", Some(json!("$input")))},
         // The manifest grants no network access to this endpoint.
         {"actionKey": "ungranted", "call": http("other", "other", "Get", "/items", None)},
         // A granted endpoint whose connection resolves to a refused (metadata) address.
@@ -220,6 +220,13 @@ fn a_granted_package_calls_its_endpoint_through_a_named_connection_without_seein
         {"actionKey": "backslash", "call": http("main", "api", "Get", "/..%5Cadmin", None)},
         {"actionKey": "nested", "call": http("main", "api", "Get", "/%252e%252e/admin", None)},
         {"actionKey": "nested-slash", "call": http("main", "api", "Get", "/..%252Fadmin", None)},
+        // Control characters the URL parser drops, which would join a split encoding.
+        {"actionKey": "tab", "call": http("main", "api", "Get", "/..%2\tfadmin", None)},
+        {"actionKey": "newline", "call": http("main", "api", "Get", "/..%2\nfadmin", None)},
+        {"actionKey": "tab-early", "call": http("main", "api", "Get", "/..%\t2fadmin", None)},
+        // Encodings of other characters that decode, round by round, to a separator or dot.
+        {"actionKey": "encoded-f", "call": http("main", "api", "Get", "/..%252%66admin", None)},
+        {"actionKey": "encoded-e", "call": http("main", "api", "Get", "/%2%65%2e/admin", None)},
         // No connection of this name serves the endpoint.
         {"actionKey": "unknown", "call": http("missing", "api", "Get", "/items", None)},
     ]});
@@ -235,6 +242,12 @@ fn a_granted_package_calls_its_endpoint_through_a_named_connection_without_seein
             "call:backslash:PermissionDenied",
             "call:nested:PermissionDenied",
             "call:nested-slash:PermissionDenied",
+            "call:tab:PermissionDenied",
+            // The wire protocol already refuses a line break in a relative path.
+            "call:newline:ProtocolViolation",
+            "call:tab-early:PermissionDenied",
+            "call:encoded-f:PermissionDenied",
+            "call:encoded-e:PermissionDenied",
             "call:unknown:PermissionDenied",
         ]
     );
@@ -246,7 +259,7 @@ fn a_granted_package_calls_its_endpoint_through_a_named_connection_without_seein
     assert_eq!(sent.method, "POST");
     assert_eq!(sent.addr, "93.184.216.34:443".parse().unwrap());
     assert_eq!(sent.host, "api.example.test");
-    assert_eq!(sent.target, "/v1/items?page=1");
+    assert_eq!(sent.target, "/v1/items%20all?page=1");
     assert!(
         sent.headers
             .iter()
@@ -313,7 +326,7 @@ fn a_granted_package_calls_its_endpoint_through_a_named_connection_without_seein
     assert_eq!(call.payload["connection"], "main");
     assert_eq!(call.payload["endpointId"], "api");
     assert_eq!(call.payload["method"], "POST");
-    assert_eq!(call.payload["path"], "/v1/items");
+    assert_eq!(call.payload["path"], "/v1/items%20all");
     assert!(
         call.payload["invocationOperationId"]
             .as_str()

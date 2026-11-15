@@ -104,34 +104,67 @@ fn connections(read: &dyn ConfigurationRead) -> Result<Vec<Connection>, StorageE
         .collect())
 }
 
-/// Whether a call path (before its query) carries an encoded `/`, `\` or `.`, at any depth of
-/// percent-encoding (`%2f`, `%252f`, ...). URL parsing keeps them encoded, so the prefix check
-/// would pass, while a server that decodes and normalises the path could route `..%2f` out of
-/// the connection's base path with its credential.
-fn encoded_separator(relative: &str) -> bool {
-    let mut path = relative
-        .split('?')
-        .next()
-        .unwrap_or_default()
-        .to_ascii_lowercase();
-    // Each round removes one level of encoding of `%` itself; a path still encoded after this
-    // many levels is refused too.
+/// Decodes every `%HH` sequence of `path` once (any other `%` stays as it is).
+fn percent_decode(path: &[u8]) -> Vec<u8> {
+    let hex = |b: u8| (b as char).to_digit(16).map(|d| d as u8);
+    let mut out = Vec::with_capacity(path.len());
+    let mut i = 0;
+    while i < path.len() {
+        if path[i] == b'%'
+            && i + 2 < path.len()
+            && let (Some(h), Some(l)) = (hex(path[i + 1]), hex(path[i + 2]))
+        {
+            out.push(h * 16 + l);
+            i += 3;
+        } else {
+            out.push(path[i]);
+            i += 1;
+        }
+    }
+    out
+}
+
+/// Whether a call path (before its query) could leave the connection's base path once a server
+/// decodes it. The path is percent-decoded until nothing changes (at most 8 rounds; one still
+/// changing after them, or one that decodes to invalid UTF-8, is refused), and the result may
+/// hold no `\`, no `.` or `..` segment, no control character and no `/` that was not literally
+/// in the path. URL parsing keeps such encodings, so the prefix check alone would pass while a
+/// server that decodes and normalises the path routes `..%2f` out with the credential.
+fn escapes(path: &str) -> bool {
+    let raw = path.split('?').next().unwrap_or_default();
+    let mut current = raw.as_bytes().to_vec();
+    let mut stable = false;
     for _ in 0..8 {
-        if ["%2f", "%5c", "%2e"].iter().any(|e| path.contains(e)) {
+        let next = percent_decode(&current);
+        if std::str::from_utf8(&next).is_err() {
             return true;
         }
-        if !path.contains("%25") {
-            return false;
+        if next == current {
+            stable = true;
+            break;
         }
-        path = path.replace("%25", "%");
+        current = next;
     }
-    true
+    if !stable {
+        return true;
+    }
+    let Ok(decoded) = String::from_utf8(current) else {
+        return true;
+    };
+    decoded.contains('\\')
+        || decoded.chars().any(char::is_control)
+        || decoded
+            .split('/')
+            .any(|segment| segment == "." || segment == "..")
+        || decoded.matches('/').count() != raw.matches('/').count()
 }
 
 /// `relative` under `base`, or `None` when it would leave the base's origin or path (or could,
-/// once a server decodes it: see [`encoded_separator`]).
+/// once a server decodes it: see [`escapes`]).
 fn target(base: &egress::Url, relative: &str) -> Option<egress::Url> {
-    if encoded_separator(relative) {
+    // The URL parser drops tabs and line breaks, which would join an encoding split by them
+    // (`%2\tf`) after the check: no control character is accepted at all.
+    if relative.bytes().any(|b| b < 0x20 || b == 0x7f) || escapes(relative) {
         return None;
     }
     let url = egress::parse(&format!(
@@ -139,6 +172,10 @@ fn target(base: &egress::Url, relative: &str) -> Option<egress::Url> {
         base.as_str().trim_end_matches('/')
     ))
     .ok()?;
+    // Checked again on the path as parsed: whatever normalisation produced must be clean too.
+    if escapes(url.path()) {
+        return None;
+    }
     let root = base.path().trim_end_matches('/');
     let under = url.path() == root || url.path().starts_with(&format!("{root}/"));
     (url.origin() == base.origin() && under).then_some(url)
