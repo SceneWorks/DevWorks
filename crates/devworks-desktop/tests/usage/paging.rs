@@ -5,7 +5,7 @@ fn native_price_more_gesture_survives_same_frame_catalog_hint_without_replacing_
     let _case = native_runtime_case();
     let root = Root::new("usage-price-more-hint");
     let engine = start(&root);
-    startup::settled(&engine);
+    startup::settled(&engine, &root);
     let b = engine.backend();
     let model = "hint-paged-model";
     ops::configured(b.command("router.configure",&ops::router_configure(&*b,json!({"kind":"Model","model":{"id":model,"displayName":"Hint paged model","endpointProfile":"CompatibleChat","upstreamModelId":"fixture/hint-paged","enabled":true,"tierMemberships":[],"efforts":[],"imageInput":false,"tools":false,"revision":"1"}})))).unwrap();

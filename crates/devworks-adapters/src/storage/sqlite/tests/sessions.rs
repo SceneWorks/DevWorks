@@ -3721,6 +3721,64 @@ fn a_briefing_naming_paths_serves_the_rules_scoped_to_them() {
     assert_eq!(capped, [id("root-a"), file.clone()]);
 }
 
+#[test]
+fn a_briefing_serves_path_rules_only_of_the_sessions_repositories() {
+    let fx = Fx::new();
+    // The work session captures its root's repository (repo-a); the project session has none.
+    fx.store
+        .with_writer_connection(|c| {
+            super::super::conn::db(
+                c.execute_batch("INSERT INTO work_repositories VALUES('root-a','repo-a');"),
+            )
+        })
+        .unwrap();
+    fx.seed_session("session-a", "agent-a", Some("root-a"));
+    fx.seed_rootless("session-p", "agent-a", Some("project-a"));
+    let user = fx.user();
+    let rule = |text: &str, repositories: Value| -> Id {
+        let frame = json!({"mode": "Command", "protocol": "1.0-draft.1", "schemaRevision": 2,
+            "requestKey": fx.key(), "body": {"kind": "knowledge.record",
+            "scope": {"kind": "Project", "projectId": "project-a"},
+            "batch": {"entities": [{"clientId": "s", "label": text, "entityType": "topic",
+                "aliases": []}], "evidence": [],
+                "claims": [{"kind": "Lesson", "subjectId": "s", "predicate": "states",
+                    "value": text, "confidence": 0.7, "evidenceIds": [], "tags": [],
+                    "lesson": {"source": "Prompt", "applicability": {"activities": [],
+                        "paths": ["src/a.rs"], "tools": [], "repositoryIds": repositories}}}]}}});
+        match applied(fx.raw_command(&user, "knowledge.record", frame)) {
+            OperationResult::KnowledgeRecord { value } => value.claim_ids.0[0].clone(),
+            other => panic!("{other:?}"),
+        }
+    };
+    let here = rule("in repository a", json!(["repo-a"]));
+    let elsewhere = rule("in repository x", json!(["repo-x"]));
+    let either = rule("in a or x", json!(["repo-a", "repo-x"]));
+    let any = rule("in any repository", json!([]));
+    let served = |session: &str| -> Vec<Id> {
+        let body = json!({"sessionId": session, "expectedContextEpoch": "0",
+            "paths": ["src/a.rs"]});
+        match result(fx.at(&user, "sessions.briefing", body, Some(2))) {
+            OperationResult::SessionsBriefing { value } => {
+                value.items.0.into_iter().map(|s| s.id).collect()
+            }
+            other => panic!("{other:?}"),
+        }
+    };
+    // A rule restricted to other repositories is omitted; one naming the session's repository,
+    // or no repository, is served.
+    let work = served("session-a");
+    for r in [&here, &either, &any] {
+        assert!(work.contains(r), "{work:?}");
+    }
+    assert!(!work.contains(&elsewhere), "{work:?}");
+    // With no repository known, only the rules no repository restricts are served.
+    let project = served("session-p");
+    assert!(project.contains(&any), "{project:?}");
+    for r in [&here, &either, &elsewhere] {
+        assert!(!project.contains(r), "{project:?}");
+    }
+}
+
 // ---------------------------------------------------------------------------------------------
 // Review regressions: rootless tool invocations, indexed feeds, workspace project targets
 

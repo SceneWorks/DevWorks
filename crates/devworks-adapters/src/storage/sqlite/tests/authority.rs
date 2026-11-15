@@ -1629,6 +1629,7 @@ fn a_blocked_destructive_step_is_recorded_with_rationale_and_attribution() {
             targets: vec!["../repo".into()],
             working_directory: Some(scratch.path("repo")),
             scope: IntendedScope::Ordinary,
+            literal: false,
         },
     );
     assert_eq!(
@@ -1734,6 +1735,7 @@ fn primary_repository_deletion_is_only_the_users_dedicated_confirmation() {
             targets: vec![repo.clone()],
             working_directory: None,
             scope: IntendedScope::Ordinary,
+            literal: false,
         },
     );
     assert!(matches!(
@@ -1788,6 +1790,7 @@ fn primary_repository_deletion_is_only_the_users_dedicated_confirmation() {
         targets: vec![repo.clone()],
         working_directory: None,
         scope: IntendedScope::PrimaryRepositoryDeletion(permit),
+        literal: false,
     };
     let decision = destructive::preflight(&fs, &registry, &plan);
     assert_eq!(decision.verdict, PreflightVerdict::Allowed);
@@ -3163,6 +3166,7 @@ fn a_permit_minted_on_another_store_is_refused_against_the_real_roots() {
         targets: vec![repo.clone()],
         working_directory: None,
         scope: IntendedScope::PrimaryRepositoryDeletion(permit),
+        literal: false,
     };
     assert_eq!(
         destructive::preflight(&fs, &roots(&fx), &plan).verdict,

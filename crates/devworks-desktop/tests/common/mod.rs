@@ -670,6 +670,40 @@ impl Backend for LoseAcks {
 }
 
 /// Steps (with a short pause, failure-only bounded) until `done` holds.
+/// Waits until the real Help catalog answers `screen` with `topic` available. A settled
+/// `Unavailable` reply is not a published catalog, and the initial publication is a count of
+/// durable writes, so like [`step_until_progressing`] this fails only once `root`'s
+/// [`Root::write_progress`] stops advancing for [`SETTLE_BOUND`].
+pub fn wait_for_screen_help(engine: &Engine, root: &Root, screen: &str, topic: &str) {
+    use devworks_core::protocol::records::HelpAvailability;
+    let backend = engine.backend();
+    let mut seen = root.write_progress();
+    let mut deadline = std::time::Instant::now() + SETTLE_BOUND;
+    loop {
+        let frame = devworks_desktop::help_ops::context(backend.as_ref(), screen, None);
+        let page =
+            devworks_desktop::help_ops::topics(backend.query("help.topic_for_screen", &frame))
+                .expect("actual native Help response");
+        if matches!(page.availability, HelpAvailability::Available)
+            && page.items.0.iter().any(|t| t.id.as_str() == topic)
+        {
+            return;
+        }
+        let now = root.write_progress();
+        if now != seen {
+            seen = now;
+            deadline = std::time::Instant::now() + SETTLE_BOUND;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "Help for {screen} never published (no progress for 30 s): availability={:?}; snapshot={:?}",
+            page.availability,
+            page.snapshot
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
 pub fn step_until(h: &mut Harness<'_, Shell>, what: &str, done: impl Fn(&Shell) -> bool) {
     step_until_progressing(h, what, || 0, done);
 }
