@@ -4633,3 +4633,6 @@ mod compact_inspection;
 
 #[path = "packages/broker_limits.rs"]
 mod broker_limits;
+
+#[path = "packages/event_intents.rs"]
+mod event_intents;

@@ -282,11 +282,15 @@ fn cancelling_an_accepted_help_job_cancels_only_its_delivery_and_prevents_catalo
         2,
     ));
     app.tick(&rt, &scheduler);
-    rt.block_on(within("Help generation reached file publication", async {
-        while !gate.entered.load(Ordering::SeqCst) {
-            tokio::task::yield_now().await;
-        }
-    }));
+    rt.block_on(durable(
+        "Help generation reached file publication",
+        || app.ids.issued(),
+        async {
+            while !gate.entered.load(Ordering::SeqCst) {
+                tokio::task::yield_now().await;
+            }
+        },
+    ));
     let HeldPublication {
         child: held_child,
         generation: held_generation,

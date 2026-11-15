@@ -605,6 +605,11 @@ async fn build(composition: Composition) -> Result<Engine, BootError> {
             store.clone(),
             package_tools.clone(),
         ));
+        // Committed event intents run on the same host once it exists.
+        consumers.push(crate::package_host::intents::consumer(
+            store.clone(),
+            package_tools.clone(),
+        ));
     }
     let process_tools = config.process_tools.as_ref().map(|composition| {
         Arc::new(

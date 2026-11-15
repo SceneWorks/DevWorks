@@ -231,14 +231,21 @@ pub(super) fn call(
 }
 
 /// An application call that passed its grant: who it runs as and the selected binding.
-struct Admitted<'a> {
-    principal: &'a InvocationContext,
+pub(super) struct Admitted<'a> {
+    pub(super) principal: &'a InvocationContext,
+    pub(super) descriptor: &'static OperationDescriptor,
+    pub(super) mode: Mode,
+    pub(super) revision: SchemaRevision,
+}
+
+/// The binding an application call selects, when the approved manifest grants it.
+struct Selected {
     descriptor: &'static OperationDescriptor,
     mode: Mode,
     revision: SchemaRevision,
 }
 
-fn admit<'a>(
+pub(super) fn admit<'a>(
     grants: &'a Grants,
     operation: &str,
     input_schema: &wire::SchemaRef,
@@ -248,6 +255,24 @@ fn admit<'a>(
             "this invocation has no invoking principal to run application operations as",
         ));
     };
+    let Selected {
+        descriptor,
+        mode,
+        revision,
+    } = select(grants, operation, input_schema)?;
+    Ok(Admitted {
+        principal,
+        descriptor,
+        mode,
+        revision,
+    })
+}
+
+fn select(
+    grants: &Grants,
+    operation: &str,
+    input_schema: &wire::SchemaRef,
+) -> Result<Selected, RpcError> {
     if grants
         .operations
         .as_ref()
@@ -300,12 +325,69 @@ fn admit<'a>(
             "the approved manifest declares this contribution read-only",
         ));
     }
-    Ok(Admitted {
-        principal,
+    Ok(Selected {
         descriptor,
         mode: binding.mode,
         revision,
     })
+}
+
+impl Grants {
+    /// Whether the approved manifest lets this contribution commit `call` as an effect intent of
+    /// `broker.commit_event` (who it runs as is resolved when it executes, see
+    /// [`super::intents`]). An application call's arguments must be an artifact of the invocation
+    /// (`in_scope`), and an intent never runs a human-only operation. HTTP, inference and
+    /// artifact writes are refused as the live broker refuses them; an artifact read is not an
+    /// effect and is accepted.
+    pub(super) fn permits_intent(
+        &self,
+        call: &BrokerCall,
+        in_scope: impl Fn(&wire::ArtifactRef) -> bool,
+    ) -> Result<(), RpcError> {
+        match call {
+            BrokerCall::Application {
+                operation,
+                input_schema,
+                arguments,
+            } => {
+                let selected = select(self, operation.as_str(), input_schema)?;
+                if selected.descriptor.human_only {
+                    return Err(denied("a package intent never runs a human-only operation"));
+                }
+                if !in_scope(arguments) {
+                    return Err(denied(
+                        "the arguments are not an artifact of this invocation",
+                    ));
+                }
+                Ok(())
+            }
+            BrokerCall::Http { endpoint_id, .. } => {
+                if !self.network.contains(endpoint_id.as_str()) {
+                    return Err(denied(
+                        "the approved manifest grants no network access to this endpoint",
+                    ));
+                }
+                Err(rpc_error(
+                    RpcErrorClass::Unavailable,
+                    "brokered HTTP calls are not yet active",
+                ))
+            }
+            BrokerCall::Inference { .. } => {
+                if !self.inference {
+                    return Err(denied("the approved manifest grants no inference access"));
+                }
+                Err(rpc_error(
+                    RpcErrorClass::Unavailable,
+                    "brokered inference is not yet active",
+                ))
+            }
+            BrokerCall::ArtifactRead { .. } => Ok(()),
+            BrokerCall::ArtifactWrite { .. } => Err(rpc_error(
+                RpcErrorClass::Unavailable,
+                "brokered artifact writes are not yet active",
+            )),
+        }
+    }
 }
 
 /// The package's own actor (attribution of the calls it makes).
@@ -320,7 +402,7 @@ pub(super) fn package_actor(package: &str) -> ActorId {
 }
 
 /// How a brokered call ended in the journal.
-enum Ended {
+pub(super) enum Ended {
     Answered(OperationState, Vec<u8>),
     /// The package's error (a class and a fixed message), the journal state and the host-only
     /// detail recorded in the journal.
@@ -388,8 +470,70 @@ fn application(
         admitted.descriptor.name,
         &digest,
     )?;
-    let ended = match admitted.mode {
-        Mode::Query => match gateway.query(principal, admitted.descriptor.name, &frame) {
+    // A command's final decision is made under the invocation's revocation lock (as a state
+    // compare-and-set is): a cancelled or expired invocation never applies one afterwards. Its
+    // preparation (a retained receive's wait) runs outside the lock and stops when the
+    // invocation is revoked, so the revocation and `host.cancel` are never held behind it.
+    let ended = decide(
+        &*gateway,
+        &admitted,
+        &frame,
+        slot.cancellation.clone(),
+        &|decide| {
+            let _guard = slot.state.lock().unwrap_or_else(|p| p.into_inner());
+            if slot.revoked.load(std::sync::atomic::Ordering::SeqCst) {
+                return None;
+            }
+            Some(decide())
+        },
+    );
+    match ended {
+        Ended::Failed(error, state, detail) => {
+            let _ = run_write(&*host.store, WriteOptions::default(), {
+                let operation = operation.clone();
+                move |tx| settle(tx, &operation, state, json!({"failed": detail}))
+            });
+            Err(error)
+        }
+        Ended::Answered(state, reply) => {
+            let produced = publish(
+                host,
+                &ports.artifacts,
+                principal,
+                &operation,
+                Some(state),
+                &reply,
+            )
+            .map_err(|e| {
+                host_failure(
+                    host,
+                    &ctx.package_id,
+                    RpcErrorClass::OutcomeUnknown,
+                    "the call's reply could not be published",
+                    &e,
+                )
+            })?;
+            let produced: wire::ArtifactRef = serde_json::to_value(&produced)
+                .and_then(serde_json::from_value)
+                .map_err(|_| rpc_error(RpcErrorClass::OutcomeUnknown, "invalid result artifact"))?;
+            ctx.admit_artifact(&produced);
+            Ok(RpcResult::BrokerCompleted { artifact: produced })
+        }
+    }
+}
+
+/// Runs an admitted application call through the gateway as its principal. A command's final
+/// decision runs inside `fence` (`None`: refused, nothing was decided).
+pub(super) fn decide(
+    gateway: &dyn GatewayCalls,
+    admitted: &Admitted<'_>,
+    frame: &[u8],
+    cancellation: Cancellation,
+    fence: Fence<'_>,
+) -> Ended {
+    let (principal, name) = (admitted.principal, admitted.descriptor.name);
+    match admitted.mode {
+        Mode::Query => match gateway.query(principal, name, frame) {
             Ok(reply) => {
                 let state = match &reply {
                     DomainQueryReply::Result { .. } => OperationState::ObservedComplete,
@@ -403,104 +547,46 @@ fn application(
                 e.to_string(),
             ),
         },
-        // A command's final decision is made under the invocation's revocation lock (as a state
-        // compare-and-set is): a cancelled or expired invocation never applies one afterwards.
-        // Its preparation (a retained receive's wait) runs outside the lock and stops when the
-        // invocation is revoked, so the revocation and `host.cancel` are never held behind it.
-        Mode::Command => {
-            match fenced_command(&*gateway, slot, principal, admitted.descriptor.name, &frame) {
-                None => Ended::Failed(
-                    denied("the invocation is no longer live"),
-                    OperationState::Failed,
-                    "the invocation was revoked before the command's decision".into(),
+        Mode::Command => match gateway.command(principal, name, frame, cancellation, fence) {
+            None => Ended::Failed(
+                denied("the invocation is no longer live"),
+                OperationState::Failed,
+                "the invocation was revoked before the command's decision".into(),
+            ),
+            Some(Ok(reply @ CommandReply::Recorded { .. })) => Ended::Answered(
+                OperationState::ObservedComplete,
+                serde_json::to_vec(&reply).unwrap_or_default(),
+            ),
+            Some(Ok(reply @ CommandReply::Rejected { .. })) => Ended::Answered(
+                OperationState::Failed,
+                serde_json::to_vec(&reply).unwrap_or_default(),
+            ),
+            Some(Ok(other)) => Ended::Failed(
+                rpc_error(
+                    RpcErrorClass::OutcomeUnknown,
+                    "the command's status is unknown",
                 ),
-                Some(outcome) => match outcome {
-                    Ok(reply @ CommandReply::Recorded { .. }) => Ended::Answered(
-                        OperationState::ObservedComplete,
-                        serde_json::to_vec(&reply).unwrap_or_default(),
-                    ),
-                    Ok(reply @ CommandReply::Rejected { .. }) => Ended::Answered(
-                        OperationState::Failed,
-                        serde_json::to_vec(&reply).unwrap_or_default(),
-                    ),
-                    Ok(other) => Ended::Failed(
-                        rpc_error(
-                            RpcErrorClass::OutcomeUnknown,
-                            "the command's status is unknown",
-                        ),
-                        OperationState::OutcomeUnknown,
-                        format!("{other:?}"),
-                    ),
-                    // Nothing was admitted or recorded for these.
-                    Err(
-                        e @ (GatewayFailure::NoUseCase(_) | GatewayFailure::Unaddressable { .. }),
-                    ) => Ended::Failed(
-                        rpc_error(RpcErrorClass::Unavailable, "the command was not admitted"),
-                        OperationState::Failed,
-                        e.to_string(),
-                    ),
-                    Err(e) => Ended::Failed(
-                        rpc_error(
-                            RpcErrorClass::OutcomeUnknown,
-                            "the command failed before its receipt",
-                        ),
-                        OperationState::OutcomeUnknown,
-                        e.to_string(),
-                    ),
-                },
-            }
-        }
-    };
-    match ended {
-        Ended::Failed(error, state, detail) => {
-            let _ = run_write(&*host.store, WriteOptions::default(), {
-                let operation = operation.clone();
-                move |tx| settle(tx, &operation, state, json!({"failed": detail}))
-            });
-            Err(error)
-        }
-        Ended::Answered(state, reply) => {
-            let produced = publish(host, &ports.artifacts, principal, &operation, state, &reply)
-                .map_err(|e| {
-                    host_failure(
-                        host,
-                        &ctx.package_id,
-                        RpcErrorClass::OutcomeUnknown,
-                        "the call's reply could not be published",
-                        &e,
-                    )
-                })?;
-            let produced: wire::ArtifactRef = serde_json::to_value(&produced)
-                .and_then(serde_json::from_value)
-                .map_err(|_| rpc_error(RpcErrorClass::OutcomeUnknown, "invalid result artifact"))?;
-            ctx.admit_artifact(&produced);
-            Ok(RpcResult::BrokerCompleted { artifact: produced })
-        }
-    }
-}
-
-/// Runs a command whose final decision holds the invocation's revocation lock; `None` when the
-/// invocation was revoked before that decision (nothing was decided).
-fn fenced_command(
-    gateway: &dyn GatewayCalls,
-    slot: &Slot,
-    principal: &InvocationContext,
-    operation: &str,
-    frame: &[u8],
-) -> Option<CommandOutcome> {
-    gateway.command(
-        principal,
-        operation,
-        frame,
-        slot.cancellation.clone(),
-        &|decide| {
-            let _guard = slot.state.lock().unwrap_or_else(|p| p.into_inner());
-            if slot.revoked.load(std::sync::atomic::Ordering::SeqCst) {
-                return None;
-            }
-            Some(decide())
+                OperationState::OutcomeUnknown,
+                format!("{other:?}"),
+            ),
+            // Nothing was admitted or recorded for these.
+            Some(Err(
+                e @ (GatewayFailure::NoUseCase(_) | GatewayFailure::Unaddressable { .. }),
+            )) => Ended::Failed(
+                rpc_error(RpcErrorClass::Unavailable, "the command was not admitted"),
+                OperationState::Failed,
+                e.to_string(),
+            ),
+            Some(Err(e)) => Ended::Failed(
+                rpc_error(
+                    RpcErrorClass::OutcomeUnknown,
+                    "the command failed before its receipt",
+                ),
+                OperationState::OutcomeUnknown,
+                e.to_string(),
+            ),
         },
-    )
+    }
 }
 
 /// Journals an admitted call before it runs: its operation (`Dispatching`) and a history event
@@ -627,14 +713,15 @@ fn settle(
     Ok(())
 }
 
-/// Publishes a call's typed reply as an artifact owned by the invoking principal and settles its
-/// journal in the same transaction.
-fn publish(
+/// Publishes a call's typed reply as an artifact owned by the invoking principal and, with a
+/// `state`, settles its journal in the same transaction (a dispatched intent's journal is settled
+/// by the dispatcher instead).
+pub(super) fn publish(
     host: &PackageHost,
     artifacts: &Arc<ArtifactService>,
     principal: &InvocationContext,
     operation: &OperationId,
-    state: OperationState,
+    state: Option<OperationState>,
     reply: &[u8],
 ) -> Result<HostArtifact, StorageError> {
     let staged = artifacts
@@ -667,7 +754,9 @@ fn publish(
             },
         )?;
         let produced = version_ref(&version);
-        settle(tx, &operation, state, json!({"result": produced}))?;
+        if let Some(state) = state {
+            settle(tx, &operation, state, json!({"result": produced}))?;
+        }
         Ok(produced)
     });
     artifacts.settle_host_bytes(&*host.store, &staged, committed.is_ok());
