@@ -941,9 +941,30 @@ fn save_plan_now(
         })
         .expect("the feature row")
         .click();
-    h.run_steps(3);
-    h.get_by_role_and_label(Role::Button, "Edit plan").click();
-    h.run_steps(3);
+    // The control is disabled while the selected feature's read is in flight, which under load
+    // outlasts a fixed frame count; uploads of earlier saves may stay in flight meanwhile.
+    let deadline = std::time::Instant::now() + SETTLE_BOUND;
+    while h
+        .query_by_role_and_label(Role::Button, "Edit plan")
+        .is_none_or(|b| b.accesskit_node().is_disabled())
+    {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the Edit plan control never became available"
+        );
+        h.step();
+    }
+    // An accessibility action, not a pointer click: the detail's layout may still move as
+    // its read lands, and a click at last frame's position would miss the control.
+    h.get_by_role_and_label(Role::Button, "Edit plan")
+        .click_accesskit();
+    // Another feature's editor may still be open while its save uploads.
+    step_until(h, "the plan editor opens", |s| {
+        s.work
+            .plan
+            .as_ref()
+            .is_some_and(|p| p.snapshot.title.0 == title)
+    });
     {
         let form = h
             .state_mut()
@@ -1350,6 +1371,14 @@ fn a_plan_stays_savable_after_a_covering_card_leaves_its_feature() {
     // the departed card leaves the requirement's coverage.
     h.state_mut().work.plan = None;
     settle(&mut h);
+    // The editor opens on the record the screen shows: wait until the runtime hint of both
+    // commands has refreshed it, or the save is (correctly) refused as stale.
+    let current = get(feature.id.as_str()).revision;
+    step_until(&mut h, "the feature's current revision is shown", |s| {
+        s.work
+            .freshest(feature.id.as_str())
+            .is_some_and(|f| f.revision == current)
+    });
     save_plan_now(&mut h, "Checkout", "pay by card");
     settle(&mut h);
     assert!(

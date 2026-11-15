@@ -655,17 +655,21 @@ fn unchanged_regeneration_preserves_topic_references_and_exact_receipt_replay() 
     else {
         panic!("{original:?}")
     };
-    rt.block_on(within("unchanged Help regeneration", async {
-        loop {
-            app.runtime.dispatcher().run_until_idle().await.unwrap();
-            let record = read(&*app.store, |s| s.operations().operation(operation_id)).unwrap();
-            if is_terminal(record.state) {
-                assert_eq!(record.state, OperationState::ObservedComplete, "{record:?}");
-                break;
+    rt.block_on(durable(
+        "unchanged Help regeneration",
+        || app.ids.issued(),
+        async {
+            loop {
+                app.runtime.dispatcher().run_until_idle().await.unwrap();
+                let record = read(&*app.store, |s| s.operations().operation(operation_id)).unwrap();
+                if is_terminal(record.state) {
+                    assert_eq!(record.state, OperationState::ObservedComplete, "{record:?}");
+                    break;
+                }
+                tokio::task::yield_now().await;
             }
-            tokio::task::yield_now().await;
-        }
-    }));
+        },
+    ));
     let head = app.head();
     assert_eq!(head.revision, old.revision);
     assert_eq!(head.generation_id, old.generation_id);
@@ -762,21 +766,26 @@ fn missing_or_corrupt_generated_source_can_be_rebuilt_without_losing_other_help(
         else {
             panic!("{reply:?}");
         };
-        rt.block_on(within("repair generated Help source", async {
-            loop {
-                app.runtime.dispatcher().run_until_idle().await.unwrap();
-                let op = read(&*app.store, |s| s.operations().operation(&operation_id)).unwrap();
-                if is_terminal(op.state) {
-                    assert_eq!(
-                        op.state,
-                        OperationState::ObservedComplete,
-                        "missing={missing}: {op:?}"
-                    );
-                    break;
+        rt.block_on(durable(
+            "repair generated Help source",
+            || app.ids.issued(),
+            async {
+                loop {
+                    app.runtime.dispatcher().run_until_idle().await.unwrap();
+                    let op =
+                        read(&*app.store, |s| s.operations().operation(&operation_id)).unwrap();
+                    if is_terminal(op.state) {
+                        assert_eq!(
+                            op.state,
+                            OperationState::ObservedComplete,
+                            "missing={missing}: {op:?}"
+                        );
+                        break;
+                    }
+                    tokio::task::yield_now().await;
                 }
-                tokio::task::yield_now().await;
-            }
-        }));
+            },
+        ));
         let head = app.head();
         let repaired = read(&*app.store, |s| {
             s.help()

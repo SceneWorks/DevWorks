@@ -268,9 +268,14 @@ pub struct DurableWork<F: FnMut() -> u64> {
     progress: F,
     seen: u64,
     progressed: std::time::Instant,
+    stall: std::time::Duration,
 }
 impl<F: FnMut() -> u64> DurableWork<F> {
-    pub fn start(what: &'static str, mut progress: F) -> Self {
+    pub fn start(what: &'static str, progress: F) -> Self {
+        Self::start_with(what, HANG_BUDGET, progress)
+    }
+    /// [`Self::start`] failing after `stall` without progress instead of 30 s.
+    pub fn start_with(what: &'static str, stall: std::time::Duration, mut progress: F) -> Self {
         DURABLE_WORK.with(|cell| {
             let (finished, running) = cell.get();
             assert!(running.is_none(), "{what}: durable-work phases do not nest");
@@ -281,6 +286,7 @@ impl<F: FnMut() -> u64> DurableWork<F> {
             seen: progress(),
             progress,
             progressed: std::time::Instant::now(),
+            stall,
         }
     }
     /// Call on every poll of the wait.
@@ -289,10 +295,10 @@ impl<F: FnMut() -> u64> DurableWork<F> {
         if now != self.seen {
             self.seen = now;
             self.progressed = std::time::Instant::now();
-        } else if self.progressed.elapsed() >= HANG_BUDGET {
+        } else if self.progressed.elapsed() >= self.stall {
             panic!(
-                "{}: no progress for 30 s; the awaited startup work stalled",
-                self.what
+                "{}: no progress for {:?}; the awaited startup work stalled",
+                self.what, self.stall
             );
         }
     }
@@ -306,6 +312,36 @@ impl<F: FnMut() -> u64> Drop for DurableWork<F> {
                 None,
             ));
         });
+    }
+}
+
+/// Awaits `body`, a wait on durable startup or generation work (such as native Help
+/// generation), as one [`DurableWork`] phase: it fails once `progress` (for example
+/// [`TestIds::issued`]) stops advancing for 30 s, however long a progressing run takes. The
+/// body is polled throughout and checked every 250 ms, so a body that never returns still fails.
+pub async fn durable<P: FnMut() -> u64, F: std::future::Future>(
+    what: &'static str,
+    progress: P,
+    body: F,
+) -> F::Output {
+    durable_for(what, HANG_BUDGET, progress, body).await
+}
+/// [`durable`] failing after `stall` without progress instead of 30 s.
+pub async fn durable_for<P: FnMut() -> u64, F: std::future::Future>(
+    what: &'static str,
+    stall: std::time::Duration,
+    progress: P,
+    body: F,
+) -> F::Output {
+    let mut phase = DurableWork::start_with(what, stall, progress);
+    let mut body = std::pin::pin!(body);
+    loop {
+        if let Ok(output) =
+            tokio::time::timeout(std::time::Duration::from_millis(250), body.as_mut()).await
+        {
+            return output;
+        }
+        phase.check();
     }
 }
 
