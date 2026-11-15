@@ -358,7 +358,7 @@ pub(super) fn call(
         },
         &mut |_, _| {},
     );
-    let response = match sent {
+    let mut response = match sent {
         Ok(r) => r,
         Err(f) => return Err(failed_send(&f, &operation, &finish)),
     };
@@ -369,28 +369,31 @@ pub(super) fn call(
         .filter(|(k, _)| !k.eq_ignore_ascii_case("set-cookie"))
         .cloned()
         .collect();
+    // Enough past the kept bound that any credential starting inside it is read whole, so it is
+    // scrubbed before the answer is cut.
+    let credential: &[u8] = secret.as_ref().map_or(&[], |(_, v)| v.expose().as_bytes());
+    let limit = MAX_BODY + credential.len() + 1;
     let mut answer = Vec::new();
-    let read = response
-        .body
-        .take(MAX_BODY as u64 + 1)
-        .read_to_end(&mut answer);
-    if let Err(e) = read {
-        let f = NetFault::AfterSend {
-            reason: e.to_string(),
-            timed_out: e.kind() == std::io::ErrorKind::TimedOut,
-        };
+    if let Err(f) = read_body(&mut *response.body, limit, deadline, slot, &mut answer) {
         return Err(failed_send(&f, &operation, &finish));
     }
-    let truncated = answer.len() > MAX_BODY;
-    answer.truncate(MAX_BODY);
     let received = answer.len();
-    if let Some((_, value)) = &secret {
-        scrub(&mut answer, value.expose().as_bytes());
-        for (_, v) in &mut kept {
-            let mut bytes = std::mem::take(v).into_bytes();
-            scrub(&mut bytes, value.expose().as_bytes());
-            *v = String::from_utf8_lossy(&bytes).into_owned();
+    scrub(&mut answer, credential);
+    let truncated = answer.len() > MAX_BODY || received == limit;
+    if truncated {
+        answer.truncate(MAX_BODY);
+        // A credential the cut (or the read bound) split leaves only its first bytes: drop them.
+        let split = (1..credential.len().min(answer.len() + 1))
+            .rev()
+            .find(|n| answer.ends_with(&credential[..*n]));
+        if let Some(n) = split {
+            answer.truncate(answer.len() - n);
         }
+    }
+    for (_, v) in &mut kept {
+        let mut bytes = std::mem::take(v).into_bytes();
+        scrub(&mut bytes, credential);
+        *v = String::from_utf8_lossy(&bytes).into_owned();
     }
     let envelope = json!({"status": status,
         "headers": kept.iter().map(|(k, v)| json!([k, v])).collect::<Vec<_>>(),
@@ -400,15 +403,21 @@ pub(super) fn call(
         .principal()
         .cloned()
         .unwrap_or_else(|| host.host_ctx());
+    // The answer and the call's outcome commit together: a retry finds the recorded answer.
     let produced = broker::publish(
         host,
         &ports.artifacts,
         &owner,
         &operation,
-        None,
+        Some((
+            OperationState::ObservedComplete,
+            json!({"status": status, "requestBytes": content.len(),
+                "responseBytes": received, "truncated": truncated}),
+        )),
         envelope.to_string().as_bytes(),
     )
     .map_err(|e| {
+        // Nothing of it committed (a commit that did leaves the outcome as it is).
         finish(
             OperationState::OutcomeUnknown,
             json!({"status": status, "failed": "the answer was not published"}),
@@ -421,16 +430,53 @@ pub(super) fn call(
             &e,
         )
     })?;
-    finish(
-        OperationState::ObservedComplete,
-        json!({"result": produced, "status": status, "requestBytes": content.len(),
-            "responseBytes": received, "truncated": truncated}),
-    );
     let produced: wire::ArtifactRef = serde_json::to_value(&produced)
         .and_then(serde_json::from_value)
         .map_err(|_| rpc_error(RpcErrorClass::OutcomeUnknown, "invalid result artifact"))?;
     ctx.admit_artifact(&produced);
     Ok(RpcResult::BrokerCompleted { artifact: produced })
+}
+
+/// Bytes read from an answer per wait.
+const CHUNK: usize = 16 * 1024;
+
+/// Reads at most `limit` bytes of an answer, between bounded waits that stop at the deadline or
+/// once the invocation is cancelled (the transport then answers `Interrupted`, which is never
+/// retried).
+fn read_body(
+    body: &mut dyn Read,
+    limit: usize,
+    deadline: Instant,
+    slot: &Slot,
+    out: &mut Vec<u8>,
+) -> Result<(), NetFault> {
+    let mut chunk = vec![0u8; CHUNK];
+    while out.len() < limit {
+        if slot.cancellation.is_cancelled() {
+            return Err(NetFault::Cancelled { sent: true });
+        }
+        if Instant::now() >= deadline {
+            return Err(NetFault::AfterSend {
+                reason: "the time limit passed".into(),
+                timed_out: true,
+            });
+        }
+        let want = CHUNK.min(limit - out.len());
+        match body.read(&mut chunk[..want]) {
+            Ok(0) => return Ok(()),
+            Ok(n) => out.extend_from_slice(&chunk[..n]),
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {
+                return Err(NetFault::Cancelled { sent: true });
+            }
+            Err(e) => {
+                return Err(NetFault::AfterSend {
+                    reason: e.to_string(),
+                    timed_out: e.kind() == std::io::ErrorKind::TimedOut,
+                });
+            }
+        }
+    }
+    Ok(())
 }
 
 fn outcome_unknown(operation: &OperationId) -> RpcError {

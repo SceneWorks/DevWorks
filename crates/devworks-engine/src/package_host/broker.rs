@@ -502,7 +502,7 @@ fn application(
                 &ports.artifacts,
                 principal,
                 &operation,
-                Some(state),
+                Some((state, json!({}))),
                 &reply,
             )
             .map_err(|e| {
@@ -732,14 +732,15 @@ pub(super) fn settle(
 }
 
 /// Publishes a call's typed reply as an artifact owned by the invoking principal and, with a
-/// `state`, settles its journal in the same transaction (a dispatched intent's journal is settled
-/// by the dispatcher instead).
+/// `settled` state and observation, settles its journal in the same transaction, recording the
+/// artifact as the observation's `result` (a dispatched intent's journal is settled by the
+/// dispatcher instead).
 pub(super) fn publish(
     host: &PackageHost,
     artifacts: &Arc<ArtifactService>,
     principal: &InvocationContext,
     operation: &OperationId,
-    state: Option<OperationState>,
+    settled: Option<(OperationState, Value)>,
     reply: &[u8],
 ) -> Result<HostArtifact, StorageError> {
     let staged = artifacts
@@ -772,8 +773,12 @@ pub(super) fn publish(
             },
         )?;
         let produced = version_ref(&version);
-        if let Some(state) = state {
-            settle(tx, &operation, state, json!({"result": produced}))?;
+        if let Some((state, observation)) = &settled {
+            let mut observation = observation.clone();
+            if let Some(fields) = observation.as_object_mut() {
+                fields.insert("result".into(), json!(produced));
+            }
+            settle(tx, &operation, *state, observation)?;
         }
         Ok(produced)
     });
