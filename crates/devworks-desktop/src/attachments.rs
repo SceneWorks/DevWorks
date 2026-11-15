@@ -376,7 +376,9 @@ mod tests {
             | TaskOutput::TextPreview(_)
             | TaskOutput::Convention(_)
             | TaskOutput::Instruction(_)
-            | TaskOutput::McpContent(_) => {
+            | TaskOutput::McpContent(_)
+            | TaskOutput::RepositoryDeletionPreview(_)
+            | TaskOutput::RepositoryDeleted(_) => {
                 panic!("expected a preview")
             }
         }

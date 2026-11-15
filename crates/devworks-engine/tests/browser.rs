@@ -5755,3 +5755,493 @@ fn browser_source_case(native: bool, missing_load: bool) {
     );
     fx.close(&scoped, &session);
 }
+
+// ---------------------------------------------------------------------------------------------
+// Real Chrome: the egress proxy and the launch flags that keep traffic in it (DW-284)
+
+/// One `(host, port)` the proxy asked the policy about, with the policy's answer.
+type Asked = (String, u16, Result<Vec<std::net::IpAddr>, String>);
+
+/// What the session's egress proxy was asked and where it connected.
+#[derive(Default)]
+struct EgressLog {
+    asked: Mutex<Vec<Asked>>,
+    /// Each connection the proxy opened: the admitted address and the proxy's own end of it.
+    dialed: Mutex<Vec<(std::net::SocketAddr, std::net::SocketAddr)>>,
+}
+
+struct LoggedPolicy {
+    inner: Arc<dyn devworks_core::ports::browser::ConnectPolicy>,
+    log: Arc<EgressLog>,
+}
+impl devworks_core::ports::browser::ConnectPolicy for LoggedPolicy {
+    fn addresses(&self, host: &str, port: u16) -> Result<Vec<std::net::IpAddr>, String> {
+        let answer = self.inner.addresses(host, port);
+        self.log
+            .asked
+            .lock()
+            .unwrap()
+            .push((host.to_owned(), port, answer.clone()));
+        answer
+    }
+}
+
+/// The native platform with the real egress proxy, whose policy answers and connections are
+/// recorded.
+struct LoggedPlatform {
+    inner: NativeBrowserPlatform,
+    log: Arc<EgressLog>,
+}
+impl BrowserPlatform for LoggedPlatform {
+    fn target(&self) -> String {
+        self.inner.target()
+    }
+    fn assets(&self) -> Vec<BrowserAsset> {
+        self.inner.assets()
+    }
+    fn create_profile(&self, session: &Id) -> Result<Profile, BrowserFault> {
+        self.inner.create_profile(session)
+    }
+    fn remove_profile(&self, session: &Id) -> Result<(), BrowserFault> {
+        self.inner.remove_profile(session)
+    }
+    fn profiles(&self) -> Result<Vec<Id>, BrowserFault> {
+        self.inner.profiles()
+    }
+    fn command(&self, asset: &BrowserAsset, profile: &Profile, args: &[String]) -> ProcessSpec {
+        self.inner.command(asset, profile, args)
+    }
+    fn connect(
+        &self,
+        profile: &Profile,
+        control: Option<ControlChannel>,
+    ) -> Result<Box<dyn CdpTransport>, BrowserFault> {
+        self.inner.connect(profile, control)
+    }
+    fn stage_file(
+        &self,
+        profile: &Profile,
+        batch: &str,
+        name: &str,
+        source: &mut dyn std::io::Read,
+        max_bytes: u64,
+    ) -> Result<PathBuf, BrowserFault> {
+        self.inner
+            .stage_file(profile, batch, name, source, max_bytes)
+    }
+    fn remove_staged(&self, profile: &Profile, batch: &str) -> Result<(), BrowserFault> {
+        self.inner.remove_staged(profile, batch)
+    }
+    fn read_staged(
+        &self,
+        profile: &Profile,
+        path: &Path,
+        max_bytes: u64,
+    ) -> Result<Vec<u8>, BrowserFault> {
+        self.inner.read_staged(profile, path, max_bytes)
+    }
+    fn start_egress_proxy(
+        &self,
+        policy: Arc<dyn devworks_core::ports::browser::ConnectPolicy>,
+    ) -> Result<Box<dyn devworks_core::ports::browser::RunningProxy>, BrowserFault> {
+        let log = self.log.clone();
+        // Only loopback is dialed: the fixture resolver answers a public address for every
+        // other name (the browser's own background requests), and the test stays off the
+        // network.
+        let dial: devworks_adapters::browser::egress_proxy::Dial = Arc::new(move |to, bound| {
+            if !to.ip().is_loopback() {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::ConnectionRefused,
+                    "the test dials loopback only",
+                ));
+            }
+            let s = std::net::TcpStream::connect_timeout(&to, bound)?;
+            log.dialed.lock().unwrap().push((to, s.local_addr()?));
+            Ok(s)
+        });
+        let policy = Arc::new(LoggedPolicy {
+            inner: policy,
+            log: self.log.clone(),
+        });
+        Ok(Box::new(
+            devworks_adapters::browser::egress_proxy::EgressProxy::start_with(policy, dial)?,
+        ))
+    }
+}
+
+/// One request a local TCP server received: the peer address and the request head and body.
+#[derive(Clone, Debug)]
+struct Received {
+    peer: std::net::SocketAddr,
+    request: String,
+}
+
+/// A loopback TCP server: every connection is recorded, and `reply` answers its request.
+fn recording_server(
+    reply: impl Fn(&str) -> Option<Vec<u8>> + Send + Sync + 'static,
+) -> (u16, Arc<Mutex<Vec<Received>>>) {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let log = seen.clone();
+    let reply = Arc::new(reply);
+    std::thread::spawn(move || {
+        for s in listener.incoming().flatten() {
+            let (log, reply) = (log.clone(), reply.clone());
+            std::thread::spawn(move || {
+                use std::io::{Read, Write};
+                let mut s = s;
+                let Ok(peer) = s.peer_addr() else { return };
+                let _ = s.set_read_timeout(Some(Duration::from_secs(10)));
+                let mut buf = Vec::new();
+                let mut chunk = [0u8; 4096];
+                // The head, then as much body as Content-Length announces.
+                loop {
+                    if let Some(end) = buf.windows(4).position(|w| w == b"\r\n\r\n") {
+                        let head = String::from_utf8_lossy(&buf[..end]).to_ascii_lowercase();
+                        let want = head
+                            .lines()
+                            .find_map(|l| l.strip_prefix("content-length:"))
+                            .and_then(|v| v.trim().parse::<usize>().ok())
+                            .unwrap_or(0);
+                        if buf.len() >= end + 4 + want {
+                            break;
+                        }
+                    }
+                    match s.read(&mut chunk) {
+                        Ok(0) | Err(_) => break,
+                        Ok(n) => buf.extend_from_slice(&chunk[..n]),
+                    }
+                }
+                let request = String::from_utf8_lossy(&buf).into_owned();
+                log.lock().unwrap().push(Received {
+                    peer,
+                    request: request.clone(),
+                });
+                if let Some(answer) = reply(&request) {
+                    let _ = s.write_all(&answer);
+                }
+            });
+        }
+    });
+    (port, seen)
+}
+
+/// A UDP listener on every interface: the source of each datagram that arrives.
+fn udp_listener() -> (u16, Arc<Mutex<Vec<std::net::SocketAddr>>>) {
+    let socket = std::net::UdpSocket::bind("0.0.0.0:0").unwrap();
+    let port = socket.local_addr().unwrap().port();
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let log = seen.clone();
+    std::thread::spawn(move || {
+        let mut buf = [0u8; 2048];
+        while let Ok((_, from)) = socket.recv_from(&mut buf) {
+            log.lock().unwrap().push(from);
+        }
+    });
+    (port, seen)
+}
+
+/// This host's address on its default route, when it has one (no packet is sent).
+fn host_address() -> Option<std::net::IpAddr> {
+    let s = std::net::UdpSocket::bind("0.0.0.0:0").ok()?;
+    s.connect("192.0.2.1:9").ok()?;
+    Some(s.local_addr().ok()?.ip()).filter(|ip| !ip.is_unspecified() && !ip.is_loopback())
+}
+
+fn html(body: &str) -> Vec<u8> {
+    format!("HTTP/1.1 200 OK\r\ncontent-type: text/html\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}", body.len()).into_bytes()
+}
+
+/// The probe page: it tries each probe in `probes` and posts what it saw to `/report`.
+fn probe_page(probes: &Value) -> String {
+    format!(
+        r#"<!doctype html><title>Egress probe</title><script>
+const probes = {probes};
+const bound = (p, ms) => Promise.race([p, new Promise(r => setTimeout(() => r('timeout'), ms))]);
+const ws = url => bound(new Promise(r => {{
+  try {{ const s = new WebSocket(url); s.onopen = () => {{ r('open'); s.close(); }}; s.onclose = e => r('closed ' + e.code); }}
+  catch (e) {{ r('threw ' + e); }}
+}}), 5000);
+const http = url => bound(fetch(url, {{mode: 'no-cors', cache: 'no-store'}}).then(r => 'status ' + r.status + ' ' + r.type, e => 'failed ' + e), 5000);
+const rtc = async url => {{
+  const pc = new RTCPeerConnection({{iceServers: [{{urls: url}}]}});
+  const candidates = [];
+  pc.onicecandidate = e => {{ if (e.candidate) candidates.push(e.candidate.candidate); }};
+  pc.createDataChannel('probe');
+  await pc.setLocalDescription(await pc.createOffer());
+  await bound(new Promise(r => {{ pc.onicegatheringstatechange = () => {{ if (pc.iceGatheringState === 'complete') r(); }}; }}), 8000);
+  const state = pc.iceGatheringState;
+  pc.close();
+  return {{state, candidates}};
+}};
+const quic = url => bound((async () => {{
+  try {{ const t = new WebTransport(url); await t.ready; return 'ready'; }} catch (e) {{ return 'failed ' + e; }}
+}})(), 5000);
+(async () => {{
+  for (const [name, kind, url] of probes) {{
+    let seen;
+    try {{ seen = await bound(({{ws, http, rtc, quic}})[kind](url), 10000); }} catch (e) {{ seen = 'threw ' + e; }}
+    await fetch('/report', {{method: 'POST', body: JSON.stringify([name, seen])}});
+  }}
+}})();
+</script>"#
+    )
+}
+
+/// Waits for the probe page to report each of its `probes` on `seen`: each result by name.
+/// `pass` runs on each wait (the owned browser's supervision pass continues the page's
+/// intercepted requests).
+fn report(seen: &Mutex<Vec<Received>>, probes: usize, bound: Duration, pass: &dyn Fn()) -> Value {
+    let deadline = Instant::now() + bound;
+    loop {
+        pass();
+        let reports: serde_json::Map<String, Value> = seen
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|r| r.request.starts_with("POST /report"))
+            .map(|r| {
+                let body = &r.request[r.request.find("\r\n\r\n").unwrap() + 4..];
+                serde_json::from_str::<(String, Value)>(body).unwrap()
+            })
+            .collect();
+        if reports.len() >= probes {
+            return Value::Object(reports);
+        }
+        if Instant::now() >= deadline {
+            let requests: Vec<_> = seen
+                .lock()
+                .unwrap()
+                .iter()
+                .map(|r| r.request.lines().next().unwrap_or("").to_owned())
+                .collect();
+            panic!("the probe page reported only {reports:?}; its server saw {requests:?}");
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
+/// The UDP probes of a page: WebRTC STUN and a WebTransport (HTTP/3 over QUIC) attempt to the
+/// local listeners on loopback and on the host's own address.
+fn udp_probes(stun: u16, quic: u16) -> Vec<Value> {
+    let mut hosts = vec!["127.0.0.1".to_owned()];
+    if let Some(ip) = host_address() {
+        hosts.push(ip.to_string());
+    }
+    hosts
+        .iter()
+        .flat_map(|h| {
+            [
+                json!([format!("quic {h}"), "quic", format!("https://{h}:{quic}/")]),
+                json!([format!("stun {h}"), "rtc", format!("stun:{h}:{stun}")]),
+            ]
+        })
+        .collect()
+}
+
+/// Launches an installed Chrome through the owned browser and observes its connections with
+/// local servers (DW-284): a loopback page is reached only through the egress proxy, a
+/// WebSocket is tunnelled through it, a refused address (a WebSocket to a metadata literal, a
+/// WebSocket and an http request to a name that resolves to a private address) is refused there
+/// and never connected, and no WebRTC STUN or QUIC datagram leaves the browser. A control run
+/// of the same browser without the owned browser's flags and profile shows the UDP probes do
+/// see direct UDP.
+///
+/// Ignored unless asked for (`--ignored`): it needs an installed Chromium-family browser
+/// (`DEVWORKS_BROWSER=<path>`, or one discovery finds) and fails without one. CI runs it in the
+/// Ubuntu engine job, whose runner ships Google Chrome.
+#[test]
+#[ignore = "needs an installed Chrome; run with --ignored"]
+fn real_chrome_keeps_every_connection_in_the_egress_proxy() {
+    let _serial = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
+    let h = Harness::new();
+    let configured = std::env::var_os("DEVWORKS_BROWSER").map(PathBuf::from);
+    let log = Arc::new(EgressLog::default());
+    let native = LoggedPlatform {
+        inner: NativeBrowserPlatform::new(&h.root, configured),
+        log: log.clone(),
+    };
+    let asset = native
+        .assets()
+        .into_iter()
+        .find(|a| a.qualification == Qualification::Present)
+        .expect("an installed Chromium-family browser (set DEVWORKS_BROWSER)");
+    eprintln!("browser: {:?}", asset.program);
+
+    // Control: the same browser launched directly, without the owned browser's flags.
+    let (stun, stun_seen) = udp_listener();
+    let (quic, quic_seen) = udp_listener();
+    let probes = json!(udp_probes(stun, quic));
+    let page = probe_page(&probes);
+    let (control_port, control) = recording_server(move |r| {
+        r.starts_with("GET / ")
+            .then(|| html(&page))
+            .or(Some(html("")))
+    });
+    let control_dir = h.root.join("control-profile");
+    std::fs::create_dir_all(&control_dir).unwrap();
+    let mut child = std::process::Command::new(asset.program.as_ref().unwrap())
+        .args([
+            "--headless=new",
+            &format!("--user-data-dir={}", control_dir.display()),
+            "--no-first-run",
+            "--no-default-browser-check",
+            "--disable-background-networking",
+            &format!("http://127.0.0.1:{control_port}/"),
+        ])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .unwrap();
+    let control_report = report(
+        &control,
+        probes.as_array().unwrap().len(),
+        Duration::from_secs(60),
+        &|| {},
+    );
+    let _ = child.kill();
+    let _ = child.wait();
+    eprintln!("control report: {control_report}");
+    let control_stun = stun_seen.lock().unwrap().clone();
+    let control_quic = quic_seen.lock().unwrap().clone();
+    eprintln!("control UDP: stun {control_stun:?}, quic {control_quic:?}");
+
+    // Without that, nothing arriving below would show nothing.
+    assert!(
+        !control_stun.is_empty(),
+        "the control browser sent no STUN: the probe cannot see direct WebRTC UDP"
+    );
+    assert!(
+        !control_quic.is_empty(),
+        "the control browser sent no QUIC: the probe cannot see direct QUIC"
+    );
+
+    // The owned browser.
+    let fake = Arc::new(FakePlatform::new(&h.root));
+    let fx = Fx::boot_with(h, fake, Arc::new(native), BrowserConfig::default());
+    let user = fx.user.clone();
+    let (stun, stun_seen) = udp_listener();
+    let (quic, quic_seen) = udp_listener();
+    // An admitted WebSocket server. The fixture resolver answers `lan.test` with a private
+    // address, which the policy refuses while private networks are off (the default).
+    let (ws_port, ws_seen) = recording_server(|_| None);
+    let mut probes = vec![
+        json!([
+            "ws loopback",
+            "ws",
+            format!("ws://127.0.0.1:{ws_port}/socket")
+        ]),
+        json!(["ws metadata", "ws", "ws://169.254.169.254/socket"]),
+        json!(["ws lan", "ws", "ws://lan.test:8081/socket"]),
+        json!(["http lan", "http", "http://lan.test:8082/x"]),
+    ];
+    probes.extend(udp_probes(stun, quic));
+    let page = probe_page(&json!(probes));
+    let (page_port, page_seen) = recording_server(move |r| {
+        r.starts_with("GET / ")
+            .then(|| html(&page))
+            .or(Some(html("")))
+    });
+    let op = fx.accepted(
+        &user,
+        "browser.sessions",
+        json!({"action": {"kind": "Create", "scope": workspace(), "browserAssetId": asset.id}}),
+    );
+    let session = match fx.succeeded(&user, &op) {
+        OperationResult::BrowserSessions { value } => value.items.0[0].id.clone(),
+        other => panic!("{other:?}"),
+    };
+    let target = fx.session(&session).targets[0].clone();
+    fx.snapshot(fx.navigate(
+        &user,
+        &session,
+        Some(&target),
+        &format!("http://127.0.0.1:{page_port}/"),
+    ));
+    // Supervision passes continue the page's intercepted requests (its reports).
+    let seen = report(&page_seen, probes.len(), Duration::from_secs(90), &|| {
+        fx.svc().tick()
+    });
+    eprintln!("owned report: {seen}");
+    let asked = log.asked.lock().unwrap().clone();
+    let dialed = log.dialed.lock().unwrap().clone();
+    eprintln!("proxy asked: {asked:?}");
+    eprintln!("proxy dialed: {dialed:?}");
+    let proxied: HashSet<std::net::SocketAddr> = dialed.iter().map(|(_, own)| *own).collect();
+    let answer = |host: &str, port: u16| {
+        asked
+            .iter()
+            .filter(|(h, p, _)| h == host && *p == port)
+            .map(|(_, _, a)| a.clone())
+            .collect::<Vec<_>>()
+    };
+
+    // The loopback page is reached through the proxy, never directly: every connection its
+    // server accepted is one the proxy opened.
+    let page_peers: Vec<_> = page_seen.lock().unwrap().iter().map(|r| r.peer).collect();
+    assert!(page_peers.len() > probes.len(), "{page_peers:?}");
+    for peer in &page_peers {
+        assert!(
+            proxied.contains(peer),
+            "{peer} reached the page server without the proxy"
+        );
+    }
+    // A WebSocket is tunnelled: its upgrade reaches the server intact through a connection the
+    // proxy opened (a forwarded plain request would have lost `Upgrade`, a hop-by-hop header).
+    let ws = ws_seen.lock().unwrap().clone();
+    assert_eq!(ws.len(), 1, "{ws:?}");
+    assert!(
+        proxied.contains(&ws[0].peer),
+        "the WebSocket bypassed the proxy"
+    );
+    assert!(
+        ws[0].request.starts_with("GET /socket HTTP/1.1\r\n"),
+        "{ws:?}"
+    );
+    assert!(
+        ws[0].request.contains("\r\nUpgrade: websocket\r\n"),
+        "{ws:?}"
+    );
+    assert_eq!(
+        answer("127.0.0.1", ws_port),
+        vec![Ok(vec!["127.0.0.1".parse().unwrap()])]
+    );
+    // A refused address is refused by the proxy, and nothing connects to it.
+    assert_eq!(
+        answer("169.254.169.254", 80),
+        vec![Err("169.254.169.254 is a Metadata address".to_owned())]
+    );
+    assert_eq!(seen["ws metadata"], "closed 1006");
+    for port in [8081, 8082] {
+        assert_eq!(
+            answer("lan.test", port),
+            vec![Err("192.168.1.20 is a Private address".to_owned())]
+        );
+    }
+    assert_eq!(seen["ws lan"], "closed 1006");
+    assert!(
+        dialed.iter().all(|(to, _)| to.ip().is_loopback()),
+        "{dialed:?}"
+    );
+    // No UDP leaves the browser: no STUN, no QUIC, and WebRTC gathers no candidate.
+    assert!(
+        stun_seen.lock().unwrap().is_empty(),
+        "WebRTC sent STUN outside the proxy: {:?}",
+        stun_seen.lock().unwrap()
+    );
+    assert!(
+        quic_seen.lock().unwrap().is_empty(),
+        "QUIC left the browser: {:?}",
+        quic_seen.lock().unwrap()
+    );
+    for (name, result) in seen.as_object().unwrap() {
+        if name.starts_with("stun") {
+            assert_eq!(result["candidates"], json!([]), "{name}: {result}");
+        }
+        if name.starts_with("quic") {
+            assert_ne!(result, "ready", "{name}");
+        }
+    }
+    fx.close(&user, &session);
+}

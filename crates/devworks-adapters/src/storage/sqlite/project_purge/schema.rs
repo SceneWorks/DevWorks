@@ -42,8 +42,10 @@ type Definitions = Vec<(String, String, String, Option<String>)>;
 /// rows with it, and adds no table or ownership edge. Migration 58 adds graph_view_links and
 /// graph_view_link_sets (schema58 extension): derived rows of an overlay index view, preserved
 /// with every other repository index row; they hold no project rows and add no ownership edge.
+/// Migration 59 adds the partial index graph_edges_target_qualified on graph_edges; it adds no
+/// table, column or ownership edge, and graph_edges keeps its purge policy.
 pub(super) const REVIEWED_SCHEMA_SHA256: &str =
-    "d0bb7807b72cdb7a49529ef4813bb573feb067aaf50254f74ee43b11d106a7b6";
+    "982baa65f579fcb6f6f8a53e5383f08daa8a20e27fc05a9baa1e167396524ea0";
 
 fn definitions(conn: &Connection) -> Result<Definitions, StorageError> {
     let mut statement = db(conn.prepare(

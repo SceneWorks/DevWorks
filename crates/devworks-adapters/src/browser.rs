@@ -10,7 +10,8 @@
 //! qualification: the browser service qualifies an asset by a successful launch handshake.
 //!
 //! **Session roots** are `<data root>/browser/sessions/<session id>/` (mode 0700 on Unix), each
-//! with an empty `profile/` user-data directory and the session's staged upload batches. A root
+//! with a new `profile/` user-data directory (holding only [`PREFERENCES`]) and the session's
+//! staged upload batches. A root
 //! is created with create-new semantics (an existing entry is refused, never reused) and
 //! removed without following links (`std::fs::remove_dir_all` removes a link, never its target).
 //! Staged files are written with create-new and no-follow semantics into a fresh batch
@@ -41,6 +42,9 @@ use std::time::{Duration, Instant};
 
 /// Largest DevTools message accepted (full-page screenshots arrive as one message).
 pub const MESSAGE_LIMIT: usize = 64 * 1024 * 1024;
+
+/// The preferences every session profile starts with (`Default/Preferences`).
+pub const PREFERENCES: &[u8] = br#"{"webrtc":{"ip_handling_policy":"disable_non_proxied_udp"}}"#;
 
 /// Where one asset is looked for.
 #[derive(Clone, Debug)]
@@ -323,6 +327,14 @@ impl BrowserPlatform for NativeBrowserPlatform {
         // create_dir fails on an existing entry (a link included): never reused or followed.
         create_private_dir(&p.root)?;
         create_private_dir(&p.user_data)?;
+        // WebRTC may send UDP only through a proxy, which the egress proxy never carries, so
+        // WebRTC sends no UDP. Chrome 157 ignores `--force-webrtc-ip-handling-policy` (DW-284):
+        // only the profile preference stops its direct STUN and host-candidate UDP.
+        let default = p.user_data.join("Default");
+        create_private_dir(&default)?;
+        create_new(&default.join("Preferences"))?
+            .write_all(PREFERENCES)
+            .map_err(io)?;
         Ok(p)
     }
 

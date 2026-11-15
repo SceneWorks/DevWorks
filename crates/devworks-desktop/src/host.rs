@@ -255,6 +255,8 @@ pub struct Host {
     sources: Arc<HostArtifactSources>,
     purge_client: Arc<crate::project_purge::NativePurgeClient>,
     data_root: PathBuf,
+    /// The folders a repository folder deletion never removes (application data, skills).
+    deletion_folders: devworks_core::authority::deletion::HostFolders,
     ids: Arc<HostIds>,
     waker: Arc<Mutex<Option<Waker>>>,
     /// The same authority the runtime admits with (stream handles are re-authorized by it).
@@ -448,6 +450,13 @@ async fn compose(
                 .is_some_and(|p| p.allow_private)
             }),
         )
+    };
+    // Brokered package HTTP calls use the same resolver, pinned-address transport and egress
+    // policy, and resolve connection credentials through the same secret store.
+    let package_network = devworks_engine::package_host::http::NetworkPorts {
+        resolver: web_ports.resolver.clone(),
+        transport: web_ports.transport.clone(),
+        secrets: web_ports.secrets.clone(),
     };
     let web = Arc::new(WebService::new(
         store.clone(),
@@ -671,6 +680,9 @@ async fn compose(
     };
     // Recovery and every required consumer start here, before any request below is admitted.
     let runtime = Arc::new(boot(composition).await.map_err(StartError::Boot)?);
+    if let Some(host) = runtime.packages() {
+        host.attach_network(package_network);
+    }
     // A previous boot cannot still be producing a paste. Live draft files require the
     // client keeper snapshot; this owner only reconciles incomplete reserved writes.
     if let Err(error) = ManagedFileCustody::new(store.clone()).recover_client_staging(
@@ -725,6 +737,13 @@ async fn compose(
         sources,
         purge_client,
         data_root: config.data_root.clone(),
+        deletion_folders: {
+            let roots = protected_roots(config);
+            devworks_core::authority::deletion::HostFolders {
+                app_data_root: roots.app_data_root,
+                skill_roots: roots.skill_roots,
+            }
+        },
         ids,
         waker: Arc::new(Mutex::new(None)),
         authority,
@@ -1081,6 +1100,42 @@ impl Backend for DesktopBackend {
         self.host
             .runtime
             .confirm_project_purge(&self.host.ctx, frame)
+    }
+    fn repository_deletion_supported(&self) -> bool {
+        use devworks_core::authority::destructive::FilesystemResolver;
+        NativeFilesystem::new().destructive_steps_supported()
+    }
+    fn repository_deletion_preview(
+        &self,
+        repository: &Id,
+    ) -> Result<devworks_core::authority::deletion::DeletionPreview, String> {
+        devworks_core::authority::deletion::preview(
+            &**self.host.runtime.store(),
+            &NativeFilesystem::new(),
+            &self.host.deletion_folders,
+            repository,
+        )
+        .map_err(|r| crate::repository_deletion::refusal_text(&r))
+    }
+    fn delete_repository(
+        &self,
+        reviewed: &devworks_core::authority::deletion::DeletionPreview,
+    ) -> Result<devworks_core::authority::destructive::RemovalOutcome, String> {
+        // Desktop automation can generate the confirming click: the dedicated confirmation stays
+        // closed while it may be active, so an agent never confirms through the UI.
+        if self.host.runtime.desktop_automation_may_be_active() {
+            return Err(crate::repository_deletion::refusal_text(
+                &devworks_core::authority::deletion::DeletionRefusal::HumanOnly,
+            ));
+        }
+        devworks_core::authority::deletion::delete(
+            &**self.host.runtime.store(),
+            &NativeFilesystem::new(),
+            &self.host.deletion_folders,
+            &self.host.ctx,
+            reviewed,
+        )
+        .map_err(|r| crate::repository_deletion::refusal_text(&r))
     }
     fn text_preview(
         &self,

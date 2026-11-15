@@ -594,6 +594,7 @@ impl ContainerService {
         operation: &OperationRecord,
         context: &crate::context::InvocationContext,
         input: &crate::operations::containers::BuildInput,
+        approved_context: Option<&str>,
     ) -> EffectOutcome {
         let backend = match self.selected_backend(&input.engine_id, Some(&input.project_id)) {
             Ok(backend) => backend,
@@ -626,6 +627,16 @@ impl ContainerService {
             Some(path) if path.is_dir() => path,
             _ => return EffectOutcome::Failed("registered container build context changed".into()),
         };
+        // An approved build runs only on the exact context the person approved, checked
+        // immediately before the engine reads it.
+        if let Some(approved) = approved_context
+            && super::build_context::digest(&context_path)
+                .map_or(true, |current| current.sha256 != approved)
+        {
+            return EffectOutcome::Failed(
+                "container build context changed since it was approved".into(),
+            );
+        }
         let image_tag = scoped_image_tag(Some(&input.project_id), &input.tag.0);
         let args = match backend.build("-", &image_tag, &context_path.to_string_lossy()) {
             Ok(args) => args,
@@ -1167,7 +1178,12 @@ impl ContainerService {
             Err(outcome) => return outcome,
         };
         let outcome = match &intent.command {
-            ContainerCommand::Build(input) => self.execute_build(operation, &context, input),
+            ContainerCommand::Build(input) => self.execute_build(
+                operation,
+                &context,
+                input,
+                intent.approved_context_digest.as_deref(),
+            ),
             ContainerCommand::Pull(input) => self.execute_pull(operation, &context, input),
             ContainerCommand::Create(input) => {
                 self.execute_create(operation, &intent, &context, input)

@@ -2,7 +2,8 @@
 
 ## Pull requests
 
-- A PR may carry several CodeGraph items when they are related (one cause, or failures in the same CI run); keep unrelated items in separate PRs. Do not merge another item's branch into an item branch; if work depends on an unmerged PR, wait for it to merge or put both items on a feature integration branch.
+- Group related CodeGraph items into one PR instead of opening a PR per item. Items are related when a reviewer would read them together: the same subsystem or files, the same kind of change (for example several flaky-test fixes, or several hardening fixes in one service), or follow-ups to the same feature. Keep unrelated items in separate PRs, and name every item the PR carries in its body. Every grouped item still needs its own tests and acceptance report.
+- Do not merge one open PR's branch into another; if work depends on an unmerged PR, add it to that PR's branch while it is open, wait for it to merge, or put both on a feature integration branch.
 - Keep each PR at or under 5000 hand-written changed lines. The `PR size` workflow enforces this (`tools/pr-size/check.py`); files marked `linguist-generated` in `.gitattributes` are not counted.
 - Merge each slice as soon as its CI passes. Land incomplete capabilities unwired (not reachable from the UI or agent tools) rather than holding a long-lived draft PR.
 - Automated review runs for at most 3 rounds. After the third round, file each remaining finding as a CodeGraph bug, link it in the thread reply, and merge on passing CI.

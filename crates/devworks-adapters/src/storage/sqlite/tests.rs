@@ -1681,6 +1681,56 @@ fn queued_jobs_are_finished_when_the_owner_stops() {
     );
 }
 
+/// A write job can hold the last store handle, so the store is dropped on its own write owner.
+/// The owner cannot join itself (on Windows the wait never returns and the data root stays
+/// locked). It commits the job, records the clean stop and closes, and only then frees the root.
+#[test]
+fn a_store_dropped_by_its_own_write_job_commits_stops_cleanly_and_frees_the_data_root() {
+    let h = Harness::new();
+    let s: Arc<dyn ApplicationStore> = Arc::new(h.store());
+    let before = sequence(&*s);
+    let (dropped, last) = mpsc::channel::<()>();
+    let held = s.clone();
+    let (tx, rx) = mpsc::channel();
+    s.submit_write(
+        WriteOptions::default(),
+        write_job(
+            move |tx| {
+                let committed = append(tx, "Last", json!({}))?;
+                // Once the caller has let go, this job holds the last handle.
+                last.recv().unwrap();
+                drop(held);
+                Ok(committed)
+            },
+            move |r| {
+                let _ = tx.send(r);
+            },
+        ),
+    )
+    .unwrap();
+    drop(s);
+    dropped.send(()).unwrap();
+    let outcome = rx
+        .recv_timeout(Duration::from_secs(30))
+        .expect("the job holding the last handle was never finished");
+    assert!(matches!(outcome, Ok(n) if n > before), "{outcome:?}");
+    let deadline = std::time::Instant::now() + Duration::from_secs(30);
+    let reopened = loop {
+        match SqliteStore::open(h.config()) {
+            Ok(store) => break store,
+            Err(StorageError::StorageUnavailable {
+                cause: Unavailable::DataRootInUse,
+                ..
+            }) if std::time::Instant::now() < deadline => {
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            Err(e) => panic!("the data root was not released: {e:?}"),
+        }
+    };
+    assert_eq!(reopened.previous_shutdown(), Some("Clean"));
+    assert_eq!(sequence(&reopened), before + 1);
+}
+
 #[test]
 fn a_cancelled_read_stops_waiting_promptly() {
     let h = Harness::tuned(|c| {

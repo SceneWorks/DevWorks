@@ -3254,6 +3254,14 @@ impl GitRead for Unsupported {
     fn git_worktree(&self, _: &Id) -> Result<Option<StoredGitWorktree>, StorageError> {
         Ok(None)
     }
+    fn git_repository_worktrees(
+        &self,
+        _: &Id,
+        _: Option<&Id>,
+        _: u16,
+    ) -> Result<Vec<StoredGitWorktree>, StorageError> {
+        Ok(vec![])
+    }
     fn git_worktrees(
         &self,
         _: &Id,
@@ -3926,6 +3934,15 @@ impl GraphRead for Unsupported {
         &self,
         _: &GraphScope,
         _: &GraphIncidentFilter,
+        _: Option<&GraphPosition>,
+        _: u16,
+    ) -> Result<Option<GraphPage<GraphEdge>>, StorageError> {
+        nope()
+    }
+    fn graph_candidate_edges(
+        &self,
+        _: &GraphScope,
+        _: &GraphCandidateFilter,
         _: Option<&GraphPosition>,
         _: u16,
     ) -> Result<Option<GraphPage<GraphEdge>>, StorageError> {

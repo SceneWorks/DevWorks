@@ -95,7 +95,8 @@ impl SavedOperationOwners for NativeOwnerPreviews {
             "jobs.create" | "jobs.edit" | "jobs.enable" | "jobs.run_now" => self.jobs.is_some(),
             "desktop.request_control" => self.desktop.is_some(),
             "skills.rollback" | "roles.rollback" => self.instructions.is_some(),
-            "containers.create" => self.containers.is_some(),
+            "containers.build" | "containers.pull" | "containers.create" | "containers.start"
+            | "containers.exec" => self.containers.is_some(),
             _ => false,
         }
     }

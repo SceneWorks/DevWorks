@@ -273,6 +273,10 @@ fn locate(path: PathBuf, meta: Option<&Metadata>, follow_meta: bool) -> Located 
 }
 
 impl FilesystemResolver for NativeFilesystem {
+    /// Identity-preserving destructive steps are qualified on Unix only (see `windows.rs`).
+    fn destructive_steps_supported(&self) -> bool {
+        cfg!(unix)
+    }
     fn resolve(
         &self,
         path: &str,

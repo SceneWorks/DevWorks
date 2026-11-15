@@ -3,12 +3,60 @@
 use super::super::conn::db;
 use super::candidates::{key_value, primary_keys, quote};
 use devworks_core::ports::storage::{
-    ProjectPurgeReference, ProjectPurgeReferenceKind, StorageError,
+    ProjectPurgeReference, ProjectPurgeReferenceKind, ProjectRecordKind, StorageError,
 };
 use devworks_core::protocol::ProjectId;
 use rusqlite::Connection;
 use serde_json::{Map, Value};
 use std::collections::BTreeMap;
+
+/// A scoped reference with the SQLite columns it runs through. The columns stay in this
+/// adapter; the core purge port carries only the edge. It serializes exactly as the edge with
+/// its columns did, so candidate and assessment digests are unchanged.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(in crate::storage::sqlite) struct ColumnReference {
+    pub edge: ProjectPurgeReference,
+    pub from_columns: Vec<String>,
+    pub to_columns: Vec<String>,
+}
+impl ColumnReference {
+    #[allow(clippy::type_complexity)]
+    fn order(
+        &self,
+    ) -> (
+        &ProjectPurgeReferenceKind,
+        &ProjectRecordKind,
+        &str,
+        &[String],
+        &ProjectRecordKind,
+        &str,
+        &[String],
+    ) {
+        (
+            &self.edge.kind,
+            &self.edge.from_table,
+            &self.edge.from_key_digest,
+            &self.from_columns,
+            &self.edge.to_table,
+            &self.edge.to_key_digest,
+            &self.to_columns,
+        )
+    }
+}
+impl serde::Serialize for ColumnReference {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeStruct;
+        let mut s = serializer.serialize_struct("ProjectPurgeReference", 7)?;
+        s.serialize_field("kind", &self.edge.kind)?;
+        s.serialize_field("from_table", &self.edge.from_table)?;
+        s.serialize_field("from_key_digest", &self.edge.from_key_digest)?;
+        s.serialize_field("from_columns", &self.from_columns)?;
+        s.serialize_field("to_table", &self.edge.to_table)?;
+        s.serialize_field("to_key_digest", &self.edge.to_key_digest)?;
+        s.serialize_field("to_columns", &self.to_columns)?;
+        s.end()
+    }
+}
 
 pub(super) const ARTIFACT_SUBJECT_TARGETS: &[(&str, &str)] = &[
     ("root", "work_items"),
@@ -88,7 +136,7 @@ fn collect(
     conn: &Connection,
     selection: &Selection<'_>,
     spec: ReferenceSpec,
-    result: &mut Vec<ProjectPurgeReference>,
+    result: &mut Vec<ColumnReference>,
 ) -> Result<(), StorageError> {
     let Some(predicate) = selection.predicates.get(&spec.target) else {
         return Ok(());
@@ -118,13 +166,15 @@ fn collect(
     let mut statement = db(conn.prepare(&sql))?;
     let mut rows = db(statement.query([selection.project.0.as_str(), selection.scope_digest]))?;
     while let Some(row) = db(rows.next())? {
-        result.push(ProjectPurgeReference {
-            kind: spec.kind,
-            from_table: super::record_kind(&spec.from_table)?,
-            from_key_digest: key_hash(row, 0, source_projection.len())?,
+        result.push(ColumnReference {
+            edge: ProjectPurgeReference {
+                kind: spec.kind,
+                from_table: super::record_kind(&spec.from_table)?,
+                from_key_digest: key_hash(row, 0, source_projection.len())?,
+                to_table: super::record_kind(&spec.target)?,
+                to_key_digest: key_hash(row, source_projection.len(), target_projection.len())?,
+            },
             from_columns: spec.from_columns.clone(),
-            to_table: super::record_kind(&spec.target)?,
-            to_key_digest: key_hash(row, source_projection.len(), target_projection.len())?,
             to_columns: spec.to_columns.clone(),
         });
     }
@@ -133,7 +183,7 @@ fn collect(
 fn typed_references(
     conn: &Connection,
     selection: &Selection<'_>,
-    result: &mut Vec<ProjectPurgeReference>,
+    result: &mut Vec<ColumnReference>,
 ) -> Result<(), StorageError> {
     validate_processing_intents(conn)?;
     // These are the six closed SubjectKey variants used by native artifact links.
@@ -232,7 +282,7 @@ pub(super) fn snapshot(
     scope_digest: &str,
     anchors: &str,
     predicates: &Map<String, Value>,
-) -> Result<Vec<ProjectPurgeReference>, StorageError> {
+) -> Result<Vec<ColumnReference>, StorageError> {
     let mut tables =
         db(conn.prepare("SELECT name FROM main.sqlite_schema WHERE type='table' ORDER BY name"))?;
     let tables = db(tables.query_map([], |row| row.get::<_, String>(0)))?
@@ -308,7 +358,7 @@ pub(super) fn snapshot(
         }
     }
     typed_references(conn, &selection, &mut result)?;
-    result.sort();
+    result.sort_by(|a, b| a.order().cmp(&b.order()));
     result.dedup();
     Ok(result)
 }

@@ -49,7 +49,13 @@ pub(super) fn detail(
     if reader.position.edge_property.is_some() || reader.position.offset > 0 {
         reader.next = None;
     }
-    let edges = reader.raw_edges()?;
+    let edges = match indexed_incident(reader, &target)? {
+        Some(linked) => dataset::Edges {
+            linked,
+            unmapped: Vec::new(),
+        },
+        None => reader.raw_edges()?,
+    };
     let unmapped = super::unmapped::count(
         reader,
         &edges.unmapped,
@@ -123,6 +129,36 @@ pub(super) fn detail(
     })
 }
 
+/// The edges at `node` through the endpoint indexes, where they answer exactly as the scan (see
+/// [`super::incident::around`]), with the scan's visit reservation and gap. Without an overlay
+/// view in scope there is no unmapped inbound count to read every unresolved edge for.
+fn indexed_incident(
+    reader: &mut Reader<'_>,
+    node: &GraphNode,
+) -> Result<Option<Vec<scan::Edge>>, Failure> {
+    if super::incident::overlay(reader) {
+        return Ok(None);
+    }
+    let identity = dataset::identity(node);
+    let (read, selected) = (reader.read, reader.selected);
+    let (found, partial) = reader.budget.reserve_visits(|budget| {
+        super::incident::around(
+            read,
+            &selected.pin.scope,
+            &selected.layers,
+            &identity,
+            &Direction::Both,
+            &[],
+            budget,
+        )
+    });
+    let found = found?;
+    if found.is_some() && partial && !reader.gaps.contains(&"graph_visited_limit") {
+        reader.gaps.push("graph_visited_limit");
+    }
+    Ok(found)
+}
+
 pub(super) fn by_file(
     reader: &mut Reader<'_>,
     selection: &CodeFileSelection,
@@ -193,6 +229,9 @@ pub(super) struct Walk<'a> {
     pub kinds: &'a [&'a str],
     pub direction: Direction,
     pub depth: u16,
+    /// The caller reads the walk's complete edge set (unmapped inbound counts, cross-repository
+    /// links), which only the scan has.
+    pub complete: bool,
 }
 struct Step {
     identity: GraphNodeIdentity,
@@ -201,6 +240,15 @@ struct Step {
     edge: scan::Edge,
 }
 fn walk(reader: &mut Reader<'_>, config: Walk<'_>) -> Result<(Vec<Step>, dataset::Edges), Failure> {
+    if !config.complete
+        && let Some(steps) = indexed_walk(reader, &config)?
+    {
+        let edges = dataset::Edges {
+            linked: Vec::new(),
+            unmapped: Vec::new(),
+        };
+        return Ok((steps, edges));
+    }
     let edges = reader.filtered_edges(config.kinds)?;
     let mut queue = VecDeque::new();
     let mut visited = BTreeSet::new();
@@ -213,50 +261,126 @@ fn walk(reader: &mut Reader<'_>, config: Walk<'_>) -> Result<(Vec<Step>, dataset
         if depth >= config.depth {
             continue;
         }
-        for edge in &edges.linked {
-            if !reader.budget.visit() {
-                break;
-            }
-            if !config.kinds.is_empty() && !config.kinds.contains(&edge.raw.edge.kind.as_str()) {
-                continue;
-            }
-            let mut targets = Vec::new();
-            if !matches!(config.direction, Direction::Reverse) && edge.source == current {
-                targets.push(&edge.target);
-            }
-            if !matches!(config.direction, Direction::Forward) && edge.target == current {
-                targets.push(&edge.source);
-            }
-            for target in targets {
-                let next = depth + 1;
-                let key = (
-                    dataset::key(target),
-                    next,
-                    dataset::key(&current),
-                    edge.raw.edge.edge_id.clone(),
-                );
-                if !reader
-                    .budget
-                    .retain(std::mem::size_of::<Step>() + edge.raw.edge.payload.to_string().len())
-                {
-                    break;
-                }
-                steps.push(Step {
-                    identity: target.clone(),
-                    depth: next,
-                    parent: current.clone(),
-                    edge: edge.clone(),
-                });
-                if visited.insert((key.0, next)) {
-                    queue.push_back((target.clone(), next));
-                }
-            }
-        }
+        expand(
+            reader,
+            &config,
+            (&current, depth),
+            &edges.linked,
+            &mut steps,
+            &mut visited,
+            &mut queue,
+        );
         if reader.budget.exhausted.is_some() {
             break;
         }
     }
     Ok((steps, edges))
+}
+/// The walk over each reached node's own edges, read through the endpoint indexes; `None` when
+/// a node needs the scan (see [`super::incident::around`]). The same steps as the scan's walk:
+/// each node's edges are a subset of the scan's in the scan's order, and the scan's walk skips
+/// every other edge.
+fn indexed_walk(reader: &mut Reader<'_>, config: &Walk<'_>) -> Result<Option<Vec<Step>>, Failure> {
+    let (read, selected) = (reader.read, reader.selected);
+    let mut around = BTreeMap::<Key, Vec<scan::Edge>>::new();
+    let mut queue = VecDeque::new();
+    let mut visited = BTreeSet::new();
+    let mut steps = Vec::new();
+    for start in config.starts {
+        queue.push_back((dataset::identity(start), 0));
+        visited.insert((dataset::node_key(start), 0));
+    }
+    while let Some((current, depth)) = queue.pop_front() {
+        if depth >= config.depth {
+            continue;
+        }
+        let key = dataset::key(&current);
+        if !around.contains_key(&key) {
+            // As the scan's materialization: half the remaining visits, and a partial read is a
+            // gap, not the end of the walk.
+            let (edges, partial) = reader.budget.reserve_visits(|budget| {
+                super::incident::around(
+                    read,
+                    &selected.pin.scope,
+                    &selected.layers,
+                    &current,
+                    &config.direction,
+                    config.kinds,
+                    budget,
+                )
+            });
+            let Some(edges) = edges? else {
+                return Ok(None);
+            };
+            if partial && !reader.gaps.contains(&"graph_visited_limit") {
+                reader.gaps.push("graph_visited_limit");
+            }
+            around.insert(key.clone(), edges);
+        }
+        expand(
+            reader,
+            config,
+            (&current, depth),
+            &around[&key],
+            &mut steps,
+            &mut visited,
+            &mut queue,
+        );
+        if reader.budget.exhausted.is_some() {
+            break;
+        }
+    }
+    Ok(Some(steps))
+}
+/// One breadth-first step: the steps from `current` (at `depth`) along `edges`.
+fn expand(
+    reader: &mut Reader<'_>,
+    config: &Walk<'_>,
+    (current, depth): (&GraphNodeIdentity, u16),
+    edges: &[scan::Edge],
+    steps: &mut Vec<Step>,
+    visited: &mut BTreeSet<(Key, u16)>,
+    queue: &mut VecDeque<(GraphNodeIdentity, u16)>,
+) {
+    for edge in edges {
+        if !reader.budget.visit() {
+            break;
+        }
+        if !config.kinds.is_empty() && !config.kinds.contains(&edge.raw.edge.kind.as_str()) {
+            continue;
+        }
+        let mut targets = Vec::new();
+        if !matches!(config.direction, Direction::Reverse) && edge.source == *current {
+            targets.push(&edge.target);
+        }
+        if !matches!(config.direction, Direction::Forward) && edge.target == *current {
+            targets.push(&edge.source);
+        }
+        for target in targets {
+            let next = depth + 1;
+            let key = (
+                dataset::key(target),
+                next,
+                dataset::key(current),
+                edge.raw.edge.edge_id.clone(),
+            );
+            if !reader
+                .budget
+                .retain(std::mem::size_of::<Step>() + edge.raw.edge.payload.to_string().len())
+            {
+                break;
+            }
+            steps.push(Step {
+                identity: target.clone(),
+                depth: next,
+                parent: current.clone(),
+                edge: edge.clone(),
+            });
+            if visited.insert((key.0, next)) {
+                queue.push_back((target.clone(), next));
+            }
+        }
+    }
 }
 fn entries(reader: &mut Reader<'_>, steps: &[Step]) -> Result<Vec<CodeTraversalEntry>, Failure> {
     let mut rows = Vec::new();
@@ -298,6 +422,7 @@ pub(super) fn traverse(
         }
     }
     let kinds: Vec<_> = kinds.iter().map(|k| k.as_str()).collect();
+    let complete = super::incident::overlay(reader);
     let (steps, all) = walk(
         reader,
         Walk {
@@ -305,6 +430,7 @@ pub(super) fn traverse(
             kinds: &kinds,
             direction,
             depth,
+            complete,
         },
     )?;
     let identities: Vec<_> = seeds
@@ -399,6 +525,7 @@ pub(super) fn calls(
         CodeTraceDirection::Outbound => Direction::Forward,
         CodeTraceDirection::Both => Direction::Both,
     };
+    let complete = super::incident::overlay(reader);
     let (steps, all) = walk(
         reader,
         Walk {
@@ -406,6 +533,7 @@ pub(super) fn calls(
             kinds: &["CALLS", "HTTP_CALLS"],
             direction,
             depth: selection.depth.get() as u16,
+            complete,
         },
     )?;
     let identities: Vec<_> = starts
@@ -457,6 +585,7 @@ pub(super) fn shortest(
             kinds: &[],
             direction: Direction::Forward,
             depth,
+            complete: false,
         },
     )?;
     let Some(target) = target else {
@@ -583,8 +712,18 @@ pub(super) fn lineage(
             kinds,
             direction: Direction::Reverse,
             depth: 4,
+            complete: false,
         },
     )?;
+    // Cross-repository links are every such edge of the start's repository, which only the
+    // scan reads; a scope of one repository has none.
+    let repositories: BTreeSet<_> = reader
+        .scope()
+        .views
+        .iter()
+        .map(|view| view.repository_id.as_str())
+        .collect();
+    let complete = super::incident::overlay(reader) || repositories.len() > 1;
     let (outbound, all) = walk(
         reader,
         Walk {
@@ -592,6 +731,7 @@ pub(super) fn lineage(
             kinds,
             direction: Direction::Forward,
             depth: 4,
+            complete,
         },
     )?;
     let identities: Vec<_> = starts

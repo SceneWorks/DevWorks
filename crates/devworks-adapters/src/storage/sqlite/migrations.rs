@@ -674,6 +674,15 @@ pub const MIGRATIONS: &[Migration] = &[
         expected_sha256: "603129a67f6c0c58f0bf383eff2065d44e5b2598c8077d30d599b6b8f66f0efc",
         rebuilds_tables: false,
     },
+    // One partial index only: prior builds read and write the store unchanged.
+    Migration {
+        version: 59,
+        minimum_reader: 57,
+        minimum_writer: 58,
+        sql: include_str!("migrations/0059_graph_edges_target_qualified.sql"),
+        expected_sha256: "78a4b778482cc81cf7e48ec8daf29cce7c97af15b9d40f6ba88622b3bc244024",
+        rebuilds_tables: false,
+    },
 ];
 /// Recorded checksum of migration 17; a test fails if the shipped text changes.
 pub const MIGRATION_0017_SHA256: &str =

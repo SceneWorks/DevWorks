@@ -449,6 +449,30 @@ impl Backend for Gated {
         }
         out
     }
+    fn repository_deletion_supported(&self) -> bool {
+        self.inner.repository_deletion_supported()
+    }
+    fn repository_deletion_preview(
+        &self,
+        repository: &devworks_core::protocol::Id,
+    ) -> Result<devworks_core::authority::deletion::DeletionPreview, String> {
+        self.inner.repository_deletion_preview(repository)
+    }
+    /// Gated as the `delete_repository` operation (its reply held with [`Gate::holding_replies`]).
+    fn delete_repository(
+        &self,
+        reviewed: &devworks_core::authority::deletion::DeletionPreview,
+    ) -> Result<devworks_core::authority::destructive::RemovalOutcome, String> {
+        let operation = "delete_repository";
+        if !self.gate.after {
+            self.gate.wait(operation, b"{}");
+        }
+        let out = self.inner.delete_repository(reviewed);
+        if self.gate.after {
+            self.gate.wait(operation, b"{}");
+        }
+        out
+    }
     fn refresh_packages(&self) -> Result<(), String> {
         self.inner.refresh_packages()
     }

@@ -483,10 +483,12 @@ fn native_direct_id_traversal_retains_useful_relationships_when_edge_scan_is_par
     // wall-clock time into the partial coverage that only the visit budget should cause.
     wait_within(&executor, &store, &run, std::time::Duration::from_secs(300));
     let selected = scope(&*store, &repository);
-    // maxVisited is the bound under test. deadlineMs is the protocol maximum so it is never
-    // the bound reached, and every page asserts that it was not.
+    // maxVisited is the bound under test: below the 3,000 callers of one leaf, which the
+    // endpoint indexes read and resolve, as well as below the 21,000 edges of a full scan.
+    // deadlineMs is the protocol maximum so it is never the bound reached, and every page
+    // asserts that it was not.
     let limits =
-        |max_results: u32| json!({"maxResults":max_results,"maxVisited":20000,"deadlineMs":300000});
+        |max_results: u32| json!({"maxResults":max_results,"maxVisited":4000,"deadlineMs":300000});
     let query = |operation: &str, frame: &Value| {
         let reply = app
             .query(&ctx, operation, frame.to_string().as_bytes())
@@ -542,7 +544,7 @@ fn native_direct_id_traversal_retains_useful_relationships_when_edge_scan_is_par
     let result = query(
         "code.traverse",
         &json!({"protocol":"1.0-draft.1","schemaRevision":3,"queryId":"review-native","scope":{"kind":"Workspace"},"current":true,
-            "query":{"kind":"Traverse","startIds":[edge.edge.source_node_id],"direction":"Forward","edgeKinds":["CALLS"],"maxDepth":1},
+            "query":{"kind":"Traverse","startIds":[edge.edge.target_node_id],"direction":"Reverse","edgeKinds":["CALLS"],"maxDepth":1},
             "limits":limits(100)}),
     );
     assert!(matches!(

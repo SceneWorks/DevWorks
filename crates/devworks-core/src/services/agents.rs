@@ -464,10 +464,22 @@ fn link_unlinked_redirect_attachments(
 pub struct AgentService {
     ids: Arc<dyn IdSource>,
     runs: Arc<ControlService>,
+    /// Waits an `agents.receive` with `waitSeconds` took before deciding (each pause counts).
+    receive_waits: std::sync::atomic::AtomicU64,
 }
 impl AgentService {
     pub fn new(ids: Arc<dyn IdSource>, runs: Arc<ControlService>) -> Self {
-        Self { ids, runs }
+        Self {
+            ids,
+            runs,
+            receive_waits: std::sync::atomic::AtomicU64::new(0),
+        }
+    }
+
+    /// How many times a waiting `agents.receive` paused for a message so far. A replay answers
+    /// from its recorded receipt without pausing.
+    pub fn receive_waits(&self) -> u64 {
+        self.receive_waits.load(std::sync::atomic::Ordering::SeqCst)
     }
 
     /// Materializes the root's one coordinator only after the host owns a running activation.
@@ -2221,6 +2233,8 @@ impl CommandHandler for AgentService {
             if available || Instant::now() >= deadline {
                 return Ok(None);
             }
+            self.receive_waits
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             std::thread::sleep(std::cmp::min(
                 Duration::from_millis(500),
                 deadline.saturating_duration_since(Instant::now()),

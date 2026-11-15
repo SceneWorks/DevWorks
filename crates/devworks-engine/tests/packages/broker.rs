@@ -64,7 +64,11 @@ pub(super) fn run_calls(
     (h.progress().0, outcome)
 }
 
-fn read_artifact(a: &App, ctx: &InvocationContext, artifact: &wire::ArtifactRef) -> Value {
+pub(super) fn read_artifact(
+    a: &App,
+    ctx: &InvocationContext,
+    artifact: &wire::ArtifactRef,
+) -> Value {
     let reference = serde_json::from_value(serde_json::to_value(artifact).unwrap()).unwrap();
     let (bytes, _) = a
         .app()

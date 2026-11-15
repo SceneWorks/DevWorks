@@ -131,6 +131,15 @@ fn session_roots_are_created_new_and_removed_without_following_links() {
     let profile = p.create_profile(&s).unwrap();
     assert!(profile.user_data.is_dir());
     assert!(profile.user_data.starts_with(&profile.root));
+    // The profile starts with WebRTC UDP limited to a proxy (none carries it).
+    let prefs: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(profile.user_data.join("Default").join("Preferences")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        prefs["webrtc"]["ip_handling_policy"],
+        "disable_non_proxied_udp"
+    );
     assert!(
         matches!(p.create_profile(&s), Err(BrowserFault::Refused(_))),
         "never reused"

@@ -1008,6 +1008,28 @@ fn self_editor(
                 )
             })
         }
+        // Shown only: a connection's credential needs the secret intake, which this list does not
+        // offer yet. Connections are changed through the settings operations.
+        ValueKind::PackageConnections => {
+            let connections = shown.as_array().cloned().unwrap_or_default();
+            if connections.is_empty() {
+                ui.label("No connections.");
+            }
+            for c in connections {
+                ui.label(format!(
+                    "{}: {} (endpoint {}, {})",
+                    c["name"].as_str().unwrap_or(""),
+                    c["baseUrl"].as_str().unwrap_or(""),
+                    c["endpointId"].as_str().unwrap_or(""),
+                    if c.get("credential").is_some() {
+                        "credential in the secret store"
+                    } else {
+                        "no credential"
+                    }
+                ));
+            }
+            None
+        }
         // Secret input uses the dedicated transient native-intake editor in item_ui.
         ValueKind::SecretRef => None,
     }

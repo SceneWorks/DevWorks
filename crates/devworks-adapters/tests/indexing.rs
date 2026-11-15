@@ -914,6 +914,7 @@ fn baseline_indexes_the_exact_commit_with_spans_relationships_coverage_and_texts
             );
         }
     }
+    assert!(assert_walk_parity(&fx, std::slice::from_ref(&view)).0 > 0);
 }
 
 #[test]
@@ -1557,6 +1558,10 @@ fn registrations_and_package_identities_link_across_files_and_follow_group_chang
         .unwrap();
     assert_eq!(dep2.0.target_node_id, def2.node_id);
     assert!(dep2.1);
+    // The package definition and its reference are read by the scan; every other node by the
+    // endpoint indexes.
+    let (compared, scanned) = assert_walk_parity(&fx, std::slice::from_ref(&view2));
+    assert!(compared > 0 && scanned > 0, "{compared} {scanned}");
 }
 
 #[test]
@@ -2572,6 +2577,7 @@ fn swift_extensions_module_scopes_and_call_families_link_by_the_retained_rules()
     assert_eq!(cpp_c.payload["targetUnit"], json!("native/lib.cpp"));
     let py = call("src/ffi.rs", "py_fn");
     assert_eq!(py.payload["candidates"], json!(0), "{py:?}");
+    assert!(assert_walk_parity(&fx, std::slice::from_ref(&view)).0 > 0);
 }
 
 #[test]
@@ -3191,9 +3197,13 @@ fn inherited_call_bindings_follow_the_composed_overlay_candidate_set() {
         json!("Unresolved")
     );
     std::fs::remove_file(dir.join("b.rs")).unwrap();
-    let rebound = call(&refresh());
+    let worktree = refresh();
+    let rebound = call(&worktree);
     assert!(rebound.1);
     assert_eq!(rebound.0.payload["targetUnit"], json!("c.rs"));
+    for view in [&baseline, &branch_view, &worktree] {
+        assert!(assert_walk_parity(&fx, std::slice::from_ref(view)).0 > 0);
+    }
 }
 
 #[test]
@@ -3364,6 +3374,58 @@ fn graph_scope(view: &views::ViewLayers) -> GraphScope {
     }
 }
 
+/// For every node of `views` together, at either end, the resolved edges the graph's node detail
+/// and walks read through the endpoint indexes are the scan's, in the scan's order. Returns how
+/// many node ends were compared and how many the graph reads scan for instead (package nodes and
+/// references).
+fn assert_walk_parity(fx: &Fx, views: &[views::ViewLayers]) -> (usize, usize) {
+    use devworks_core::protocol::data::Direction;
+    use devworks_core::services::graph::{indexed_incident, scanned_incident};
+    let scope = GraphScope {
+        views: views.iter().flat_map(|v| graph_scope(v).views).collect(),
+    };
+    let mut nodes = Vec::new();
+    for view in views {
+        let v = view.clone();
+        let units = fx.read(move |s| views::visible_units(s.indexing(), &v, 10_000));
+        for unit in units {
+            for n in fx.nodes(view, &unit) {
+                nodes.push(GraphNodeIdentity {
+                    repository_id: view.view.repository_id.clone(),
+                    unit_key: unit.clone(),
+                    node_id: n.node_id,
+                });
+            }
+        }
+    }
+    let (mut compared, mut scanned) = (0, 0);
+    for node in nodes {
+        for direction in [Direction::Forward, Direction::Reverse] {
+            let (s, l, n, d) = (
+                scope.clone(),
+                views.to_vec(),
+                node.clone(),
+                direction.clone(),
+            );
+            let (indexed, expected) = fx.read(move |r| {
+                let failed = |f| StorageError::InvalidRecord(format!("{f:?}"));
+                Ok((
+                    indexed_incident(r, &s, &l, &n, &d).map_err(failed)?,
+                    scanned_incident(r, &s, &l, &n, &d).map_err(failed)?,
+                ))
+            });
+            match indexed {
+                Some(found) => {
+                    assert_eq!(found, expected, "{direction:?} edges of {node:?}");
+                    compared += 1;
+                }
+                None => scanned += 1,
+            }
+        }
+    }
+    (compared, scanned)
+}
+
 /// The composed edges incident to `node` through the stored endpoint indexes, read two per page
 /// so the continuation is exercised; `None` while the view has no stored links.
 fn incident_edges(
@@ -3516,6 +3578,7 @@ fn indexed_incident_edge_reads_match_the_composed_scan_and_follow_a_rebound_targ
     let into_b = incident_edges(&fx, &baseline, GraphEdgeEnd::Target, &b_ping).unwrap();
     assert_eq!(callers(&into_b), ["a.rs", "a.rs"], "{into_b:?}");
     assert!(assert_incident_parity(&fx, &baseline) > 0);
+    assert!(assert_walk_parity(&fx, std::slice::from_ref(&baseline)).0 > 0);
 
     // The worktree deletes b.rs and defines ping in c.rs: a.rs's inherited calls rebind there.
     write(&dir, "c.rs", "fn ping() {}\n");
@@ -3573,6 +3636,11 @@ fn indexed_incident_edge_reads_match_the_composed_scan_and_follow_a_rebound_targ
     )
     .unwrap();
     assert!(incident_edges(&fx, &view, GraphEdgeEnd::Target, &c_ping).is_none());
+    assert_eq!(
+        assert_walk_parity(&fx, std::slice::from_ref(&view)).0,
+        0,
+        "an unlinked overlay view is read by the scan"
+    );
     let hk = fx.worker.housekeeping(false, &|| false).unwrap();
     assert_eq!(hk.linked_views, 1);
     assert_eq!(
@@ -3580,6 +3648,7 @@ fn indexed_incident_edge_reads_match_the_composed_scan_and_follow_a_rebound_targ
         into_c
     );
     assert!(assert_incident_parity(&fx, &view) > 0);
+    assert!(assert_walk_parity(&fx, std::slice::from_ref(&view)).0 > 0);
 }
 
 /// Measures what storing an overlay view's links adds to its publication: the link pass over a

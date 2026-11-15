@@ -34,6 +34,12 @@ macro_rules! reads { ($t:ty) => { impl GitRead for $t {
   rows.map(|r| decode(r.map_err(db)?)).collect()
  }
  fn git_worktree(&self, id: &Id) -> Result<Option<StoredGitWorktree>, StorageError> { one(self.conn, id) }
+ fn git_repository_worktrees(&self, repository: &Id, after: Option<&Id>, limit: u16) -> Result<Vec<StoredGitWorktree>, StorageError> {
+  if limit == 0 || limit > MAX_PAGE { return Err(StorageError::InvalidRecord("invalid Git page limit".into())); }
+  let mut q=self.conn.prepare("SELECT payload FROM git_owned_worktrees WHERE repository_id=?1 AND (?2 IS NULL OR id>?2) ORDER BY id LIMIT ?3").map_err(db)?;
+  let rows=q.query_map(params![repository.as_str(),after.map(Id::as_str),i64::from(limit)], |r| r.get::<_,String>(0)).map_err(db)?;
+  rows.map(|r| decode(r.map_err(db)?)).collect()
+ }
  fn git_worktrees(&self, work: &Id, after: Option<&Id>, limit: u16) -> Result<Vec<StoredGitWorktree>, StorageError> {
   if limit == 0 || limit > MAX_PAGE { return Err(StorageError::InvalidRecord("invalid Git page limit".into())); }
   let mut q=self.conn.prepare("SELECT payload FROM git_owned_worktrees WHERE work_id=?1 AND (?2 IS NULL OR id>?2) ORDER BY id LIMIT ?3").map_err(db)?;
