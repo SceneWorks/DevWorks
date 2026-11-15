@@ -61,9 +61,11 @@
 //!
 //! The helper is a separate process for failure containment, not an OS sandbox (see the package
 //! service's trust model).
+pub mod artifact_io;
 pub mod broker;
 pub mod discovery;
 pub mod http;
+pub mod inference;
 pub mod intents;
 pub(crate) mod recovery;
 pub mod session;
@@ -264,6 +266,8 @@ struct SlotContext {
     operation_id: String,
     /// Artifact versions of this invocation: its input and the broker's results for it.
     artifacts: Mutex<BTreeSet<(String, String, String)>>,
+    /// Pending artifact writes, by the package's write ID ([`artifact_io`]).
+    writes: Mutex<std::collections::BTreeMap<String, Vec<u8>>>,
 }
 impl SlotContext {
     fn in_scope(&self, artifact: &wire::ArtifactRef) -> bool {
@@ -511,6 +515,8 @@ pub struct PackageHost {
     broker: OnceLock<broker::BrokerPorts>,
     /// What brokered HTTP calls need (attached by the host's composer).
     network: OnceLock<http::NetworkPorts>,
+    /// What brokered inference needs (attached by the runtime when providers are composed).
+    inference: OnceLock<inference::InferencePorts>,
 }
 
 struct Gate {
@@ -597,6 +603,7 @@ impl PackageHost {
             me: Mutex::new(std::sync::Weak::new()),
             broker: OnceLock::new(),
             network: OnceLock::new(),
+            inference: OnceLock::new(),
         });
         *host.me.lock().unwrap_or_else(|p| p.into_inner()) = Arc::downgrade(&host);
         host
@@ -619,6 +626,11 @@ impl PackageHost {
     /// Without them a granted HTTP call is answered `Unavailable`.
     pub fn attach_network(&self, ports: http::NetworkPorts) {
         let _ = self.network.set(ports);
+    }
+    /// Attaches what brokered inference uses (once; later calls change nothing). Without it a
+    /// granted inference call is answered `Unavailable`.
+    pub fn attach_inference(&self, ports: inference::InferencePorts) {
+        let _ = self.inference.set(ports);
     }
     /// How many restart budgets the host tracks (one per desired instance key at most).
     pub fn tracked_budgets(&self) -> usize {
@@ -1876,6 +1888,7 @@ impl PackageHost {
                 ),
                 operation_id: req.operation_id.as_str().to_owned(),
                 artifacts: Mutex::new(BTreeSet::from([broker::artifact_key(&req.input)])),
+                writes: Mutex::default(),
             }),
         });
         let (req_package, req_contribution) = (req.package_id.clone(), req.contribution_id.clone());

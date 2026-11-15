@@ -759,7 +759,8 @@ impl NativeProviders {
         })?
         .ok_or(StorageError::ScopeDenied)?;
         let payload = &operation.payload;
-        if operation.capability != "mcp.tool"
+        // An MCP server's sampling or a package's brokered inference, during that tool call.
+        if !matches!(operation.capability.as_str(), "mcp.tool" | "package.invoke")
             || operation.state != devworks_core::protocol::OperationState::Dispatching
             || payload.get("principal") != Some(&serde_json::json!(context.principal()))
             || payload.get("sessionId") != Some(&serde_json::json!(session_id))

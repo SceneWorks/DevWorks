@@ -4645,3 +4645,6 @@ mod http_connections;
 
 #[path = "packages/event_http_intents.rs"]
 mod event_http_intents;
+
+#[path = "packages/artifact_io.rs"]
+mod artifact_io;

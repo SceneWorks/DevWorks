@@ -210,20 +210,19 @@ pub(super) fn call(
             if !grants.inference {
                 return Err(denied("the approved manifest grants no inference access"));
             }
-            Err(rpc_error(
-                RpcErrorClass::Unavailable,
-                "brokered inference is not yet active",
-            ))
+            super::inference::call(host, ctx, slot, params)
         }
-        BrokerCall::ArtifactRead { artifact } => {
-            if !ctx.in_scope(artifact) {
-                return Err(denied("the artifact is not an artifact of this invocation"));
-            }
-            Err(rpc_error(
-                RpcErrorClass::Unavailable,
-                "brokered artifact reads are not yet active",
-            ))
+        BrokerCall::ArtifactRead { artifact, offset } => {
+            super::artifact_io::read(host, ctx, artifact, offset.as_ref())
         }
+        BrokerCall::ArtifactAppend { write_id, data } => {
+            super::artifact_io::append(ctx, write_id.as_str(), data)
+        }
+        BrokerCall::ArtifactPublish {
+            write_id,
+            media_type,
+            sha256,
+        } => super::artifact_io::publish(host, ctx, write_id.as_str(), media_type, sha256),
         BrokerCall::ArtifactWrite { .. } => Err(rpc_error(
             RpcErrorClass::Unavailable,
             "brokered artifact writes are not yet active",
@@ -390,6 +389,13 @@ impl Grants {
                 RpcErrorClass::Unavailable,
                 "brokered artifact writes are not yet active",
             )),
+            // An invocation's writes are its own, not intents of a commit.
+            BrokerCall::ArtifactAppend { .. } | BrokerCall::ArtifactPublish { .. } => {
+                Err(rpc_error(
+                    RpcErrorClass::Unavailable,
+                    "artifact writes are not event intents",
+                ))
+            }
         }
     }
 }

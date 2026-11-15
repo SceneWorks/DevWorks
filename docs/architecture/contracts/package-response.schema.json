@@ -345,6 +345,59 @@
         },
         {
           "additionalProperties": false,
+          "description": "One chunk of an artifact read: base64url bytes from `offset`; `eof` when it ends there.",
+          "properties": {
+            "artifact": {
+              "$ref": "#/$defs/ArtifactRef"
+            },
+            "data": {
+              "maxLength": 349528,
+              "type": "string"
+            },
+            "eof": {
+              "type": "boolean"
+            },
+            "kind": {
+              "const": "ArtifactChunk",
+              "type": "string"
+            },
+            "offset": {
+              "$ref": "#/$defs/Counter"
+            }
+          },
+          "required": [
+            "kind",
+            "artifact",
+            "offset",
+            "data",
+            "eof"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A chunk was added to pending write `writeId`, which now holds `byteLength` bytes.",
+          "properties": {
+            "byteLength": {
+              "$ref": "#/$defs/Counter"
+            },
+            "kind": {
+              "const": "ArtifactAppended",
+              "type": "string"
+            },
+            "writeId": {
+              "$ref": "#/$defs/Id"
+            }
+          },
+          "required": [
+            "kind",
+            "writeId",
+            "byteLength"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
           "properties": {
             "artifact": {
               "anyOf": [
