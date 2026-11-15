@@ -37,6 +37,8 @@ After a restart DevWorks reconciles processes from the earlier run. It kills a r
 
 The program must be registered like any other executable. An unsupported manifest is refused.
 
+Unless the request sets `allowScripts`, the Python installs run no code from the repository. pip runs in Python's isolated mode (`-I`), so a `pip` module in the checkout is not imported. uv uses the registered `python3` and syncs an environment in the DevWorks data folder instead of the checkout's `.venv`.
+
 ## Request a system install
 
 `process.request_system_install` does not install anything. It stages a proposal that names a package specification artifact, its digest and a reason, and it appears in [Approvals](help:approvals). Your approval records consent only. You install the package yourself. A digest that does not match the artifact is refused.

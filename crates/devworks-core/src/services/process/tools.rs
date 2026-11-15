@@ -83,6 +83,9 @@ pub struct ToolBindings {
     path_executables: Option<(Arc<PathExecutables>, Option<&'static [&'static str]>)>,
     roots: HashMap<String, RegisteredWorkingRoot>,
     credentials: HashMap<String, RegisteredCredential>,
+    /// A host-owned directory, outside every repository, that holds the environment of each
+    /// script-free uv install. Without one, a script-free uv install is refused.
+    install_environments: Option<PathBuf>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -309,6 +312,13 @@ impl ToolBindings {
         Ok(bindings)
     }
 
+    /// Lets script-free uv installs keep their environments under `directory`, which the host
+    /// owns and no repository contains.
+    pub fn with_install_environments(mut self, directory: PathBuf) -> Self {
+        self.install_environments = Some(directory);
+        self
+    }
+
     pub fn with_credentials(
         mut self,
         credentials: impl IntoIterator<Item = RegisteredCredential>,
@@ -511,6 +521,15 @@ struct InstallCommand {
     env: Vec<(String, String)>,
 }
 
+/// The interpreter and environment the host chooses for a script-free uv install.
+#[derive(Debug)]
+struct HostPython {
+    /// A canonical interpreter resolved through the executable allowlist.
+    interpreter: String,
+    /// The project environment, in a directory the host owns outside the repository.
+    environment: PathBuf,
+}
+
 /// The package-manager command for the bound manifest `name` (with contents `manifest`) in
 /// `root`. Unless `allow_scripts`, it runs no package lifecycle scripts:
 ///
@@ -524,8 +543,13 @@ struct InstallCommand {
 ///   also covers Cargo configuration and toolchain files).
 /// - uv: `--no-build` (no source distribution is built, so no build backend runs) and
 ///   `--no-install-workspace` (the project and its workspace members are not built either).
+///   uv runs the interpreter of the environment it syncs, and an interpreter that
+///   `.python-version` names, before those flags apply; so `host_python` names the interpreter
+///   (`--python`) and the environment (`UV_PROJECT_ENVIRONMENT`), and without it the install
+///   is refused.
 /// - pip: `--only-binary :all:`, and only for a requirements file in which nothing could
-///   re-enable a source build (see [`binary_only_requirements`]).
+///   re-enable a source build (see [`binary_only_requirements`]). Python runs isolated (`-I`),
+///   so a `pip` module in the repository (the working directory) is not imported.
 /// - Composer: `--no-scripts` and `--no-plugins` (plugins run code on install).
 /// - Go: `go mod download` runs no package code either way.
 /// - Bundler has no switch that stops the Gemfile (Ruby) or native gem extensions from
@@ -535,6 +559,7 @@ fn install_command(
     root: &Path,
     manifest: &[u8],
     allow_scripts: bool,
+    host_python: Option<&HostPython>,
 ) -> Result<InstallCommand, BindingRefusal> {
     let path = |relative: &str| root.join(relative).to_string_lossy().into_owned();
     let root_text = root.to_string_lossy().into_owned();
@@ -617,17 +642,28 @@ fn install_command(
                 args.push("--frozen".into());
             }
             no_scripts(&mut args, &["--no-build", "--no-install-workspace"]);
+            let mut env = vec![pair("UV_CACHE_DIR", path(".devworks-cache/uv"))];
+            if !allow_scripts {
+                let host = host_python.ok_or(BindingRefusal::ScriptsRequired)?;
+                args.extend(["--python".into(), host.interpreter.clone()]);
+                env.push(pair(
+                    "UV_PROJECT_ENVIRONMENT",
+                    host.environment.to_string_lossy().into_owned(),
+                ));
+            }
             InstallCommand {
                 program: "uv",
                 args,
-                env: vec![pair("UV_CACHE_DIR", path(".devworks-cache/uv"))],
+                env,
             }
         }
         "requirements.txt" => {
             if !allow_scripts && !binary_only_requirements(manifest) {
                 return Err(BindingRefusal::ScriptsRequired);
             }
-            let mut args = strings(&["-m", "pip", "install"]);
+            // Isolated mode keeps the working directory (the repository), PYTHON* variables
+            // and the user site off sys.path, so `-m pip` imports the interpreter's own pip.
+            let mut args = strings(&["-I", "-m", "pip", "install"]);
             no_scripts(&mut args, &["--only-binary", ":all:"]);
             args.extend([
                 "--target".into(),
@@ -1921,7 +1957,20 @@ impl ProcessToolService {
         if !allow_scripts && install_runs_repository_code(&name, &root) {
             return Err(BindingRefusal::ScriptsRequired);
         }
-        let command = install_command(&name, &root, &bytes, allow_scripts)?;
+        // A script-free uv install runs the host's interpreter and keeps its environment in a
+        // host directory, one per checkout, so no interpreter in the repository runs.
+        let host_python = match (name.as_str(), &self.bindings.install_environments) {
+            ("pyproject.toml" | "uv.lock", Some(directory)) if !allow_scripts => {
+                let (interpreter, _) = self.bindings.resolve_launch("python3")?;
+                let checkout = sha256_hex(root.to_string_lossy().as_bytes());
+                Some(HostPython {
+                    interpreter,
+                    environment: directory.join("uv").join(checkout),
+                })
+            }
+            _ => None,
+        };
+        let command = install_command(&name, &root, &bytes, allow_scripts, host_python.as_ref())?;
         let (executable, arg0) = self.bindings.resolve_launch(command.program)?;
         let mut env = vec![
             (
@@ -3643,6 +3692,10 @@ mod tests {
         let at = |relative: &str| root.join(relative).to_string_lossy().into_owned();
         let names = |args: &[&str]| args.iter().map(|arg| (*arg).to_owned()).collect::<Vec<_>>();
         let requirements = b"requests==2.32.3 --hash=sha256:abc\n".as_slice();
+        let host = HostPython {
+            interpreter: "/host/python3".into(),
+            environment: "/host/environments/uv/repo".into(),
+        };
         // (manifest, without scripts, with scripts, extra environment without scripts)
         type Case<'a> = (&'a str, Vec<String>, Vec<String>, Vec<(&'a str, &'a str)>);
         let cases: Vec<Case> = vec![
@@ -3703,9 +3756,11 @@ mod tests {
                     "/repo",
                     "--no-build",
                     "--no-install-workspace",
+                    "--python",
+                    "/host/python3",
                 ]),
                 names(&["sync", "--project", "/repo"]),
-                vec![],
+                vec![("UV_PROJECT_ENVIRONMENT", "/host/environments/uv/repo")],
             ),
             (
                 "uv.lock",
@@ -3716,13 +3771,16 @@ mod tests {
                     "--frozen",
                     "--no-build",
                     "--no-install-workspace",
+                    "--python",
+                    "/host/python3",
                 ]),
                 names(&["sync", "--project", "/repo", "--frozen"]),
-                vec![],
+                vec![("UV_PROJECT_ENVIRONMENT", "/host/environments/uv/repo")],
             ),
             (
                 "requirements.txt",
                 names(&[
+                    "-I",
                     "-m",
                     "pip",
                     "install",
@@ -3734,6 +3792,7 @@ mod tests {
                     &at("requirements.txt"),
                 ]),
                 names(&[
+                    "-I",
                     "-m",
                     "pip",
                     "install",
@@ -3764,8 +3823,8 @@ mod tests {
             ),
         ];
         for (name, without, with, extra) in cases {
-            let off = install_command(name, root, requirements, false).expect(name);
-            let on = install_command(name, root, requirements, true).expect(name);
+            let off = install_command(name, root, requirements, false, Some(&host)).expect(name);
+            let on = install_command(name, root, requirements, true, None).expect(name);
             assert_eq!(off.program, on.program, "{name}");
             assert_eq!(off.args, without, "{name} without scripts");
             assert_eq!(on.args, with, "{name} with scripts");
@@ -3777,29 +3836,39 @@ mod tests {
                 );
             }
             assert!(
-                !on.env.iter().any(|(key, _)| key == "YARN_ENABLE_SCRIPTS"),
+                !on.env
+                    .iter()
+                    .any(|(key, _)| key == "YARN_ENABLE_SCRIPTS" || key == "UV_PROJECT_ENVIRONMENT"),
+                "{name}"
+            );
+        }
+        // Without a host interpreter and environment, a script-free uv install is refused.
+        for name in ["pyproject.toml", "uv.lock"] {
+            assert_eq!(
+                install_command(name, root, b"", false, None),
+                Err(BindingRefusal::ScriptsRequired),
                 "{name}"
             );
         }
         // Bundler has no switch that keeps the Gemfile and native extensions from running.
         assert_eq!(
-            install_command("Gemfile.lock", root, b"", false),
+            install_command("Gemfile.lock", root, b"", false, None),
             Err(BindingRefusal::ScriptsRequired)
         );
-        let bundle = install_command("Gemfile.lock", root, b"", true).expect("bundler");
+        let bundle = install_command("Gemfile.lock", root, b"", true, None).expect("bundler");
         assert_eq!(
             bundle.args,
             names(&["install", "--gemfile", &at("Gemfile")])
         );
         // A requirements file that could build from source needs allowScripts.
         assert_eq!(
-            install_command("requirements.txt", root, b"-e .\n", false),
+            install_command("requirements.txt", root, b"-e .\n", false, None),
             Err(BindingRefusal::ScriptsRequired)
         );
-        assert!(install_command("requirements.txt", root, b"-e .\n", true).is_ok());
+        assert!(install_command("requirements.txt", root, b"-e .\n", true, None).is_ok());
         // A Yarn 2+ lockfile selects Yarn 2+'s own switch; it has no `--ignore-scripts`.
         let berry = b"__metadata:\n  version: 8\n".as_slice();
-        let off = install_command("yarn.lock", root, berry, false).expect("yarn 2+");
+        let off = install_command("yarn.lock", root, berry, false, None).expect("yarn 2+");
         assert_eq!(
             off.args,
             names(&["install", "--immutable", "--mode=skip-build"])
@@ -3808,7 +3877,7 @@ mod tests {
             off.env
                 .contains(&("YARN_ENABLE_SCRIPTS".into(), "false".into()))
         );
-        let on = install_command("yarn.lock", root, berry, true).expect("yarn 2+");
+        let on = install_command("yarn.lock", root, berry, true, None).expect("yarn 2+");
         assert_eq!(on.args, names(&["install", "--immutable"]));
         assert!(on.env.is_empty());
     }
