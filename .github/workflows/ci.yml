@@ -219,6 +219,16 @@ jobs:
       - name: Run complete engine partition
         shell: bash
         run: bash tools/ci/native-tests.sh engine
+      # A real Chrome keeps every connection in the owned browser's egress proxy (DW-284). The
+      # test is ignored elsewhere; this runner ships Google Chrome, so a missing one fails here.
+      - name: Real Chrome egress
+        if: ${{ !cancelled() }}
+        timeout-minutes: 10
+        shell: bash
+        run: |
+          browser="$(command -v google-chrome || command -v google-chrome-stable)" || { echo "::error::Google Chrome is not installed on this runner"; exit 1; }
+          "$browser" --version
+          DEVWORKS_BROWSER="$browser" cargo test -p devworks-engine --test browser --locked real_chrome_keeps_every_connection_in_the_egress_proxy -- --ignored --exact --nocapture
 
   ubuntu_complete:
     name: test (ubuntu-latest)
