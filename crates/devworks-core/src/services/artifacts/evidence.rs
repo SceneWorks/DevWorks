@@ -248,14 +248,7 @@ impl ArtifactService {
                 .filter(|v| v.live() && v.artifact_id == a.id)
                 .map(|v| (a, v)))
         })
-        .map_err(|_| {
-            Refusal::new(
-                DomainErrorCode::StorageUnavailable,
-                "artifact_version",
-                None,
-            )
-            .retry(crate::protocol::RetryAdvice::SameCommand)
-        })?;
+        .map_err(|e| Refusal::of_storage(&e, "artifact_version"))?;
         let Some((artifact, version)) = found else {
             return Err(not_found());
         };

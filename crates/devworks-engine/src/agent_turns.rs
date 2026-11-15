@@ -889,7 +889,7 @@ fn measure(
     let (context_bytes, _) = runtime
         .artifacts()
         .read_exact(runtime.store().as_ref(), ctx, head, 32 * 1024 * 1024)
-        .map_err(|_| StorageError::ScopeDenied)?;
+        .map_err(artifact_read_fault)?;
     let context: ProviderContext = serde_json::from_slice(&context_bytes)
         .map_err(|error| StorageError::InvalidRecord(format!("agent context: {error}")))?;
     let blocks = || context.messages.iter().flat_map(|message| &message.content);

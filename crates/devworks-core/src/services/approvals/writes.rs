@@ -522,12 +522,11 @@ fn find_finding(v: &Value, id: &Id) -> Option<Value> {
 fn settings_failure(f: crate::settings::service::Failure) -> Failure {
     match f {
         crate::settings::service::Failure::Storage(e) => Failure::Storage(e),
+        // The approval names its own blockers; the settings write's holds are not carried.
         crate::settings::service::Failure::Refused(r) => {
-            Failure::Refused(crate::services::sessions::Refusal {
-                code: r.code,
-                retry: r.retry,
-                target_kind: r.target_kind,
-                target_id: r.target_id,
+            Failure::Refused(crate::services::failure::Refusal {
+                blockers: Vec::new(),
+                ..r
             })
         }
     }

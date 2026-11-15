@@ -392,15 +392,7 @@ impl WebService {
                     &redactor,
                 ));
             }
-            Err(_) => {
-                return Err(fault(
-                    DomainErrorCode::StorageUnavailable,
-                    RetryAdvice::SameCommand,
-                    "web_store",
-                    correlation,
-                    None,
-                ));
-            }
+            Err(e) => return Err(super::storage_fault(&e, correlation)),
         }
         Ok(Page {
             items: BoundedList(items),

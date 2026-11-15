@@ -1791,7 +1791,7 @@ pub(crate) fn dispatch_one(
             })?;
         let raw = artifacts
             .read_exact(store, ctx, &call.arguments, 8 * 1024 * 1024)
-            .map_err(|_| StorageError::ScopeDenied)?
+            .map_err(artifact_read_fault)?
             .0;
         let arguments = devworks_core::framing::parse(&raw)
             .map_err(|_| invalid("recorded MCP tool arguments are invalid"))?;
@@ -1837,7 +1837,7 @@ pub(crate) fn dispatch_one(
                 // permanent Failed response just because the local artifact read is unavailable.
                 let bytes = artifacts
                     .read_exact(store, ctx, &call.arguments, 8 * 1024 * 1024)
-                    .map_err(|_| StorageError::ScopeDenied)?
+                    .map_err(artifact_read_fault)?
                     .0;
                 match devworks_core::framing::parse(&bytes) {
                     Ok(args) => frame(session_id, key, descriptor, mode, revision, args)

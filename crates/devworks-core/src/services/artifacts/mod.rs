@@ -206,63 +206,11 @@ pub const RECEIPT_RETAINED: &str = "artifact_receipt_retained";
 // ---------------------------------------------------------------------------------------------
 // Refusals
 
-/// A typed refusal: a durable `Refused` decision for commands, a fault for queries.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Refusal {
-    pub code: DomainErrorCode,
-    pub retry: RetryAdvice,
-    pub target_kind: &'static str,
-    pub target_id: Option<Id>,
-}
-impl Refusal {
-    pub fn new(code: DomainErrorCode, target_kind: &'static str, target_id: Option<Id>) -> Self {
-        Self {
-            code,
-            retry: RetryAdvice::Never,
-            target_kind,
-            target_id,
-        }
-    }
-    fn retry(mut self, retry: RetryAdvice) -> Self {
-        self.retry = retry;
-        self
-    }
-    pub fn fault(self, correlation_id: CorrelationId) -> DomainFault {
-        DomainFault {
-            code: self.code,
-            retry: self.retry,
-            correlation_id,
-            target_id: self.target_id,
-            target_kind: Some(BoundedText(self.target_kind.to_owned())),
-            revision_dimension: None,
-            expected_revision: None,
-            current_revision: None,
-            blocker_ids: BoundedList(Vec::new()),
-            diagnostic_id: None,
-        }
-    }
-}
+pub use crate::services::failure::{Failure, Refusal};
 fn not_found(kind: &'static str, id: &Id) -> Refusal {
     Refusal::new(DomainErrorCode::NotFound, kind, Some(id.clone()))
 }
 
-/// A use-case failure: a typed refusal or a storage error (a revision conflict becomes the
-/// gateway's durable `RevisionConflict`; anything else rolls the command back).
-#[derive(Debug)]
-pub enum Failure {
-    Refused(Refusal),
-    Storage(StorageError),
-}
-impl From<StorageError> for Failure {
-    fn from(e: StorageError) -> Self {
-        Self::Storage(e)
-    }
-}
-impl From<Refusal> for Failure {
-    fn from(r: Refusal) -> Self {
-        Self::Refused(r)
-    }
-}
 fn file_failure(f: FileFault) -> StorageError {
     match f {
         FileFault::DiskFull => {
@@ -2409,25 +2357,7 @@ impl ArtifactService {
     }
 
     fn query_failure(&self, f: Failure) -> DomainFault {
-        match f {
-            Failure::Refused(r) => r.fault(self.correlation()),
-            Failure::Storage(e) => {
-                let (code, retry) = match e {
-                    StorageError::CursorExpired => (
-                        DomainErrorCode::CursorExpired,
-                        RetryAdvice::RefreshAndNewRequest,
-                    ),
-                    StorageError::Cancelled => (DomainErrorCode::Cancelled, RetryAdvice::Never),
-                    _ => (
-                        DomainErrorCode::StorageUnavailable,
-                        RetryAdvice::SameCommand,
-                    ),
-                };
-                Refusal::new(code, "artifact", None)
-                    .retry(retry)
-                    .fault(self.correlation())
-            }
-        }
+        f.query_fault("artifact", self.correlation())
     }
 }
 
