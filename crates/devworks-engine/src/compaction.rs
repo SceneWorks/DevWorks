@@ -122,7 +122,7 @@ pub(crate) fn publish_compacted(
 ) -> Result<ArtifactRef, StorageError> {
     let previous_epoch = binding.context_epoch.get();
     let (next, omitted) = omitted_native(&source.context, binding)?;
-    let outstanding = outstanding_calls(store, ctx, session_id)?;
+    let outstanding = outstanding_calls(store, ctx, session_id, &source.context)?;
     let compacted = compacted_context(
         &source.context,
         next.context_epoch.get(),
@@ -180,15 +180,28 @@ pub(crate) fn omitted_native(
     Ok((next, omitted))
 }
 
-/// Calls whose tool result can still receive an update: the linked operation can still change,
-/// or it reached a terminal state whose update the transcript does not hold yet (an operation
-/// can finish while the summary request runs). A compacted context keeps the call and its
-/// result, so that update is appended to them.
+/// Calls of `context` whose tool result can still receive an update: the linked operation can
+/// still change, or it reached a terminal state whose update the transcript does not hold yet
+/// (an operation can finish while the summary request runs). A compacted context keeps the
+/// call and its result, so that update is appended to them. Calls an earlier compaction already
+/// summarized are not in `context` and are not checked.
 fn outstanding_calls(
     store: &dyn ApplicationStore,
     ctx: &InvocationContext,
     session_id: &Id,
+    context: &ProviderContext,
 ) -> Result<BTreeSet<String>, StorageError> {
+    let present: BTreeSet<&str> = context
+        .messages
+        .iter()
+        .flat_map(|message| &message.content)
+        .filter_map(|block| match block {
+            ContentBlock::ToolCall { call_id, .. } | ContentBlock::ToolResult { call_id, .. } => {
+                Some(call_id.as_str())
+            }
+            _ => None,
+        })
+        .collect();
     let linked = crate::tool_turn::linked_operations(store, ctx, session_id)?;
     read_snapshot(store, &ReadOptions::default(), |read| {
         let mut outstanding = BTreeSet::new();
@@ -197,6 +210,9 @@ fn outstanding_calls(
             let Some(operation_id) = &call.operation_id else {
                 continue;
             };
+            if !present.contains(call.native_call_id.as_str()) {
+                continue;
+            }
             let operation = read
                 .operations()
                 .operation(operation_id)?
@@ -207,18 +223,17 @@ fn outstanding_calls(
                     | OperationState::Failed
                     | OperationState::CancelledBeforeDispatch
             ) {
-                terminal.push((call, operation.revision));
+                terminal.push((
+                    call,
+                    (operation_id.0.as_str().to_owned(), operation.revision),
+                ));
             } else {
                 outstanding.insert(call.native_call_id.clone());
             }
         }
         let published = published_updates(read, session_id, &terminal)?;
-        for (call, revision) in terminal {
-            let operation_id = call
-                .operation_id
-                .as_ref()
-                .ok_or(StorageError::ScopeDenied)?;
-            if !published.contains(&(operation_id.0.as_str().to_owned(), revision)) {
+        for (call, update) in terminal {
+            if !published.contains(&update) {
                 outstanding.insert(call.native_call_id.clone());
             }
         }
@@ -226,13 +241,16 @@ fn outstanding_calls(
     })
 }
 
-/// The operation updates (operation and revision) the transcript holds after the first response
-/// of `calls`, read with the same bound as recording an update.
+/// Which of the updates `calls` wait for (operation and revision) the transcript holds after
+/// their first response. The scan stops once it has found them all, or after the bound that
+/// recording an update uses: an update it did not reach counts as unpublished, which keeps its
+/// call, rather than failing the compaction.
 fn published_updates(
     read: &dyn ReadSnapshot,
     session_id: &Id,
-    calls: &[(&StoredToolCall, i64)],
+    calls: &[(&StoredToolCall, (String, i64))],
 ) -> Result<BTreeSet<(String, i64)>, StorageError> {
+    let wanted: BTreeSet<&(String, i64)> = calls.iter().map(|(_, update)| update).collect();
     let mut published = BTreeSet::new();
     let Some(first) = calls
         .iter()
@@ -247,12 +265,7 @@ fn published_updates(
         .ok_or(StorageError::ScopeDenied)?
         .last_durable_sequence();
     let mut position = first;
-    while position < last {
-        if position - first >= 10_000 {
-            return Err(StorageError::InvalidRecord(
-                "operation update transcript exceeds scan bound".into(),
-            ));
-        }
+    while position < last && position - first < 10_000 && published.len() < wanted.len() {
         let page = read.sessions().entries(session_id, position, 500)?;
         if page.is_empty() {
             return Err(StorageError::InvalidRecord(
@@ -276,7 +289,10 @@ fn published_updates(
             } = serde_json::from_value(entry.body)
                 .map_err(|error| StorageError::InvalidRecord(error.to_string()))?
             {
-                published.insert((operation_id.0.as_str().to_owned(), revision.get()));
+                let update = (operation_id.0.as_str().to_owned(), revision.get());
+                if wanted.contains(&update) {
+                    published.insert(update);
+                }
             }
         }
     }

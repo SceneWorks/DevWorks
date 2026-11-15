@@ -785,3 +785,161 @@ fn a_call_whose_operation_turns_terminal_during_the_summary_request_keeps_its_fi
         shut_down(app).await;
     });
 }
+
+/// Appends `count` one-character user messages to the agent's session and folds them into its
+/// context head, at most 100 per context revision.
+fn append_messages(
+    fx: &Fx,
+    app: &devworks_engine::Runtime,
+    context: &InvocationContext,
+    count: usize,
+) {
+    use devworks_core::services::sessions::{
+        transcript::{BatchOutcome, SessionBatch, SessionWriter},
+        turn,
+    };
+    let session_id = context.session_id().unwrap().clone();
+    for start in (0..count).step_by(100) {
+        let n = (count - start).min(100);
+        let (append_context, append_session) = (context.clone(), session_id.clone());
+        fx.tx(move |_, tx| {
+            let session = tx.sessions().session(&append_session)?.unwrap();
+            let bodies = (0..n)
+                .map(|_| TranscriptBody::UserMessage {
+                    content: vec![devworks_core::protocol::provider::UserContent::Text {
+                        text: ".".into(),
+                    }],
+                })
+                .collect();
+            let batch = turn::batch_of(
+                &append_session,
+                tx.new_id(devworks_core::ports::IdKind::TranscriptBatch),
+                session.context_epoch,
+                session.next_sequence,
+                bodies,
+                || tx.new_id(devworks_core::ports::IdKind::TranscriptEntry),
+            );
+            assert!(matches!(
+                SessionWriter::append_in(tx, &append_context, &SessionBatch::entries(batch))?,
+                BatchOutcome::Accepted(_)
+            ));
+            Ok(())
+        });
+        let (head, _, _) = app
+            .recover_native_context_head(context, &session_id)
+            .unwrap()
+            .unwrap();
+        app.refresh_native_tool_context(context, &session_id, &head)
+            .unwrap();
+    }
+}
+
+/// After `count` more user messages: a window at which the next request is 60% full, and one
+/// turn, which compacts. Returns the epoch it published.
+async fn compact_after_messages(
+    fx: &Fx,
+    app: &Arc<devworks_engine::Runtime>,
+    context: &InvocationContext,
+    primary: &devworks_core::protocol::records::AgentRecord,
+    count: usize,
+) -> i64 {
+    let session_id = context.session_id().unwrap();
+    append_messages(fx, app, context, count);
+    let (head, binding, _) = app
+        .recover_native_context_head(context, session_id)
+        .unwrap()
+        .unwrap();
+    let tokens = devworks_engine::agent_turns::context_tokens(app, context, &head, 0).unwrap();
+    set_context_window(fx, tokens * 100 / 60);
+    let end = run_turn(app, context, primary).await;
+    assert!(
+        matches!(
+            end,
+            LaunchEnd::Finished {
+                outcome: ActivationOutcome::Completed,
+                ..
+            }
+        ),
+        "{end:?}"
+    );
+    let next = binding.context_epoch.get() + 1;
+    let epoch = read(&*fx.store, |s| s.sessions().epoch(session_id, next)).unwrap();
+    assert_eq!(epoch.reason, "Compaction");
+    next
+}
+
+#[test]
+fn a_call_summarized_long_ago_does_not_stop_compaction() {
+    let _native_case = native_runtime_case();
+    let fx = Fx::new();
+    in_runtime(async || {
+        let wire = Arc::new(SettlingWire {
+            store: fx.store.clone(),
+            arguments: Mutex::new("{}".into()),
+            operation: Mutex::new(None),
+            bodies: Mutex::new(Vec::new()),
+        });
+        let (app, context, primary, arguments) =
+            super::approval_wait::takeover_with(&fx, wire.clone()).await;
+        *wire.arguments.lock().unwrap() = arguments.to_string();
+        let session_id = context.session_id().unwrap().clone();
+        set_context_window(&fx, 10_000_000);
+        set_threshold(&fx, 50);
+        completed_turn(&app, &context, &primary).await;
+        // The call's operation settles and its final update is published at once.
+        let (_, operation) = super::approval_wait::answered(&fx, &context, "call-held-0");
+        let settled = operation.clone();
+        write(fx.store.as_ref(), move |tx| {
+            let current = tx.operations().operation(&settled)?.unwrap();
+            tx.operations().transition(
+                &settled,
+                current.revision,
+                None,
+                devworks_core::protocol::OperationState::CancelledBeforeDispatch,
+                None,
+            )?;
+            Ok(())
+        })
+        .unwrap();
+        assert!(
+            app.record_tool_operation_update(&context, &session_id, &operation)
+                .unwrap()
+                .is_some()
+        );
+        let (head, _, _) = app
+            .recover_native_context_head(&context, &session_id)
+            .unwrap()
+            .unwrap();
+        app.refresh_native_tool_context(&context, &session_id, &head)
+            .unwrap();
+
+        // The first compaction summarizes the settled call with the rest.
+        assert_eq!(
+            compact_after_messages(&fx, &app, &context, &primary, 4_000).await,
+            1
+        );
+        let first = wire.bodies.lock().unwrap()[3].clone();
+        assert!(first.contains(SUMMARY) && !first.contains("call-held-0"));
+        // A context holds at most 4,096 messages, so more entries than one update scan reads
+        // follow the call's response across further compactions.
+        assert_eq!(
+            compact_after_messages(&fx, &app, &context, &primary, 4_000).await,
+            2
+        );
+        assert_eq!(
+            compact_after_messages(&fx, &app, &context, &primary, 2_100).await,
+            3
+        );
+        let last = read(&*fx.store, |s| s.sessions().session(&session_id))
+            .unwrap()
+            .last_durable_sequence();
+        let response = read(&*fx.store, |s| {
+            s.sessions().linked_operations(&session_id, 500)
+        })[0]
+            .response_sequence
+            .unwrap();
+        assert!(last - response > 10_000, "{response} to {last}");
+        assert_eq!(wire.bodies.lock().unwrap().len(), 8);
+        shut_down(app).await;
+    });
+}
