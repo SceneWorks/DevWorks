@@ -151,7 +151,8 @@ pub(super) struct Reader<'a> {
     pub limit: usize,
     pub next: Option<Position>,
     pub gaps: Vec<&'static str>,
-    modules: Option<Modules>,
+    /// Project owners by the repository and unit they were read for.
+    modules: std::collections::BTreeMap<(String, String), Modules>,
     encoded_bytes: usize,
     indexing: Option<&'a crate::services::indexing::IndexEnv>,
     cursors: Option<&'a super::cursor::Cursors>,
@@ -173,7 +174,7 @@ impl<'a> Reader<'a> {
             limit,
             next: None,
             gaps: Vec::new(),
-            modules: None,
+            modules: Default::default(),
             encoded_bytes: 0,
             indexing: None,
             cursors: None,
@@ -346,14 +347,17 @@ impl<'a> Reader<'a> {
     }
 
     pub fn internal_module(&mut self, raw: &GraphNode) -> Result<Option<String>, Failure> {
-        if self.modules.is_none() {
-            self.modules = Some(Modules::load(
-                self.read,
-                &self.selected.pin.scope,
-                &mut self.budget,
-            )?);
+        let key = (
+            raw.repository_id.as_str().to_owned(),
+            raw.node.unit_key.clone(),
+        );
+        if Modules::needed(raw) && !self.modules.contains_key(&key) {
+            let modules =
+                Modules::chain(self.read, &self.selected.pin.scope, raw, &mut self.budget)?;
+            self.modules.insert(key.clone(), modules);
         }
-        let (owner, ambiguous) = self.modules.as_ref().expect("loaded modules").owner(raw);
+        let none = Modules::default();
+        let (owner, ambiguous) = self.modules.get(&key).unwrap_or(&none).owner(raw);
         if ambiguous && !self.gaps.contains(&"ambiguous_internal_module") {
             self.gaps.push("ambiguous_internal_module");
         }

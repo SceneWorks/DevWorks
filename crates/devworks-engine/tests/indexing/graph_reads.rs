@@ -1358,6 +1358,9 @@ fn foreign_walk_parity(store: &Arc<dyn ApplicationStore>, repositories: &[String
                 })
                 .collect(),
         };
+        let (checked, differences) =
+            devworks_core::services::graph::node_lookup_parity(s, &scope).map_err(failed)?;
+        assert!(checked > 0 && differences.is_empty(), "{differences:#?}");
         let mut compared = 0;
         for view in &layers {
             for unit in views::visible_units(s.indexing(), view, 10_000)? {
@@ -1717,10 +1720,10 @@ fn native_tied_spans_select_methods_and_complete_overlay_coverage_matches_its_ma
     assert!(failures.is_empty(), "{}", failures.join("; "));
 }
 
-/// Indexes one repository, `src/lib.rs` (`target`, its caller and theirs) beside ten unrelated
+/// Indexes one repository, `src/lib.rs` (`target`, its caller and theirs) beside `files` unrelated
 /// files of 30 functions that each call `calls` others of their file, and returns the store work
 /// of one node detail and of each neighbour walk from `target`, and the edges the index stores.
-fn neighbour_work(calls: usize) -> (Vec<(&'static str, StoreWork)>, usize) {
+fn neighbour_work(files: usize, calls: usize) -> (Vec<(&'static str, StoreWork)>, usize) {
     let h = Harness::new();
     let executor = runtime();
     let counted = h.open_counted();
@@ -1733,7 +1736,7 @@ fn neighbour_work(calls: usize) -> (Vec<(&'static str, StoreWork)>, usize) {
         "pub fn target() {}\npub fn caller(){target();}\npub fn outer(){caller();}\n",
     )
     .unwrap();
-    for i in 0..10 {
+    for i in 0..files {
         let body: String = (0..30)
             .map(|j| {
                 let called: String = (1..=calls)
@@ -1874,11 +1877,26 @@ fn neighbour_work(calls: usize) -> (Vec<(&'static str, StoreWork)>, usize) {
 #[test]
 fn node_detail_and_neighbour_walks_read_only_the_edges_of_the_nodes_they_reach() {
     let _case = native_runtime_case();
-    let (small, small_edges) = neighbour_work(1);
-    let (large, large_edges) = neighbour_work(29);
+    let (small, small_edges) = neighbour_work(10, 1);
+    let (large, large_edges) = neighbour_work(10, 29);
     eprintln!("stored edges {small_edges} -> {large_edges}");
     assert!(
         large_edges >= 10 * small_edges,
+        "{small_edges} -> {large_edges} stored edges"
+    );
+    for ((operation, small), (_, large)) in small.iter().zip(&large) {
+        assert_no_growth(operation, *small, *large);
+    }
+}
+
+#[test]
+fn node_detail_and_neighbour_walks_do_not_grow_with_unrelated_files() {
+    let _case = native_runtime_case();
+    let (small, small_edges) = neighbour_work(10, 1);
+    let (large, large_edges) = neighbour_work(100, 1);
+    eprintln!("stored edges {small_edges} -> {large_edges}");
+    assert!(
+        large_edges >= 9 * small_edges,
         "{small_edges} -> {large_edges} stored edges"
     );
     for ((operation, small), (_, large)) in small.iter().zip(&large) {

@@ -915,6 +915,7 @@ fn baseline_indexes_the_exact_commit_with_spans_relationships_coverage_and_texts
         }
     }
     assert!(assert_walk_parity(&fx, std::slice::from_ref(&view)).0 > 0);
+    assert!(assert_node_parity(&fx, std::slice::from_ref(&view)) > 0);
 }
 
 #[test]
@@ -1562,6 +1563,7 @@ fn registrations_and_package_identities_link_across_files_and_follow_group_chang
     // endpoint indexes.
     let (compared, scanned) = assert_walk_parity(&fx, std::slice::from_ref(&view2));
     assert!(compared > 0 && scanned > 0, "{compared} {scanned}");
+    assert!(assert_node_parity(&fx, std::slice::from_ref(&view2)) > 0);
 }
 
 #[test]
@@ -2578,6 +2580,7 @@ fn swift_extensions_module_scopes_and_call_families_link_by_the_retained_rules()
     let py = call("src/ffi.rs", "py_fn");
     assert_eq!(py.payload["candidates"], json!(0), "{py:?}");
     assert!(assert_walk_parity(&fx, std::slice::from_ref(&view)).0 > 0);
+    assert!(assert_node_parity(&fx, std::slice::from_ref(&view)) > 0);
 }
 
 #[test]
@@ -3203,6 +3206,7 @@ fn inherited_call_bindings_follow_the_composed_overlay_candidate_set() {
     assert_eq!(rebound.0.payload["targetUnit"], json!("c.rs"));
     for view in [&baseline, &branch_view, &worktree] {
         assert!(assert_walk_parity(&fx, std::slice::from_ref(view)).0 > 0);
+        assert!(assert_node_parity(&fx, std::slice::from_ref(view)) > 0);
     }
 }
 
@@ -3372,6 +3376,21 @@ fn graph_scope(view: &views::ViewLayers) -> GraphScope {
             view_digest: view.view.view_digest.clone(),
         }],
     }
+}
+
+/// For every node of `views` together, the indexed node lookups (by ID, with or without its
+/// unit, and by kind) return what the unit-ranking scan returns, and its project owner read from
+/// its directory chain is the one every project of the scope gives. Returns the nodes checked.
+fn assert_node_parity(fx: &Fx, views: &[views::ViewLayers]) -> usize {
+    let scope = GraphScope {
+        views: views.iter().flat_map(|v| graph_scope(v).views).collect(),
+    };
+    let (checked, differences) = fx.read(move |r| {
+        devworks_core::services::graph::node_lookup_parity(r, &scope)
+            .map_err(|f| StorageError::InvalidRecord(format!("{f:?}")))
+    });
+    assert!(differences.is_empty(), "{differences:#?}");
+    checked
 }
 
 /// For every node of `views` together, at either end, the resolved edges the graph's node detail
@@ -3648,6 +3667,65 @@ fn indexed_incident_edge_reads_match_the_composed_scan_and_follow_a_rebound_targ
         into_c
     );
     assert!(assert_incident_parity(&fx, &view) > 0);
+    assert!(assert_walk_parity(&fx, std::slice::from_ref(&view)).0 > 0);
+    // The worktree deleted b.rs: its baseline nodes are masked in the overlay.
+    assert!(assert_node_parity(&fx, std::slice::from_ref(&view)) > 0);
+    assert!(assert_node_parity(&fx, std::slice::from_ref(&baseline)) > 0);
+}
+
+#[test]
+fn node_lookups_and_project_owners_match_the_unit_ranking_for_nested_projects() {
+    let _s = serial();
+    let fx = Fx::new(|_| {});
+    let src = Temp::new("dotnet-owners");
+    let dir = src.join("repo");
+    let project = |name: &str| {
+        format!(
+            "<Project Sdk=\"Microsoft.NET.Sdk\"><PropertyGroup><TargetFramework>net8.0</TargetFramework><AssemblyName>{name}</AssemblyName></PropertyGroup></Project>"
+        )
+    };
+    let (root, app, deep, other) = (
+        project("Root"),
+        project("App"),
+        project("Deep"),
+        project("Other"),
+    );
+    repo(
+        &dir,
+        &[
+            ("Root.csproj", root.as_str()),
+            ("Top.cs", "class Top { void A() {} }"),
+            ("App/App.csproj", app.as_str()),
+            ("App/Program.cs", "class Program { void Main() {} }"),
+            ("App/Nested/Deep.csproj", deep.as_str()),
+            ("App/Nested/Inner.cs", "class Inner { void B() {} }"),
+            ("App/Nested/More/Leaf.cs", "class Leaf { void C() {} }"),
+            ("Apps/Other.csproj", other.as_str()),
+            ("Apps/Side.cs", "class Side { void D() {} }"),
+            ("tools/run.py", "def run():\n    pass\n"),
+        ],
+    );
+    fx.base_directory(&src.0);
+    fx.scan();
+    let r = fx.repository_at(&dir);
+    run_of(decision(fx.index(&r, false, "1")));
+    fx.drain();
+    let view = fx.published(&r);
+    let projects = [
+        "Root.csproj",
+        "App/App.csproj",
+        "App/Nested/Deep.csproj",
+        "Apps/Other.csproj",
+    ]
+    .into_iter()
+    .filter(|unit| {
+        fx.nodes(&view, unit)
+            .iter()
+            .any(|n| n.kind == "DotnetProject")
+    })
+    .count();
+    assert_eq!(projects, 4, "every project file is a project node");
+    assert!(assert_node_parity(&fx, std::slice::from_ref(&view)) > 0);
     assert!(assert_walk_parity(&fx, std::slice::from_ref(&view)).0 > 0);
 }
 

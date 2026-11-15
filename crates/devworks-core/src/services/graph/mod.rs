@@ -12,6 +12,8 @@ pub(crate) mod lease;
 mod linking;
 mod model;
 mod modules;
+#[doc(hidden)]
+pub use modules::node_lookup_parity;
 mod properties;
 mod read;
 mod scan;

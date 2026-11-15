@@ -72,6 +72,15 @@ fn scope_json(conn: &Connection, scope: &GraphScope) -> Result<String, StorageEr
 // Highest-layer whole-unit masking precedes ALL row filters and adjacency. Deleted units do
 // not expose lower rows. Repository identities remain part of every partition and endpoint.
 const COMPOSED: &str = "WITH selected AS (SELECT json_extract(j.value,'$.repository_id') repo,v.id view_id,v.baseline_id,v.branch_id,v.worktree_id FROM json_each(?1,'$.views') j JOIN index_views v ON v.id=json_extract(j.value,'$.view_id')), layers AS (SELECT repo,view_id,baseline_id generation_id,2 priority FROM selected UNION ALL SELECT repo,view_id,branch_id,1 FROM selected WHERE branch_id IS NOT NULL UNION ALL SELECT repo,view_id,worktree_id,0 FROM selected WHERE worktree_id IS NOT NULL), ranked AS (SELECT l.repo,l.view_id,u.*,row_number() OVER(PARTITION BY l.repo,u.unit_key ORDER BY l.priority) rn FROM layers l JOIN source_units u ON u.generation_id=l.generation_id), visible AS (SELECT * FROM ranked WHERE rn=1 AND action='Replace') ";
+/// The layers of the selected views (?1 scope), highest (lowest priority number) first.
+const SELECTED: &str = "WITH selected AS (SELECT json_extract(j.value,'$.repository_id') repo,v.id view_id,v.baseline_id,v.branch_id,v.worktree_id FROM json_each(?1,'$.views') j JOIN index_views v ON v.id=json_extract(j.value,'$.view_id')), layers AS (SELECT repo,view_id,baseline_id generation_id,2 priority FROM selected UNION ALL SELECT repo,view_id,branch_id,1 FROM selected WHERE branch_id IS NOT NULL UNION ALL SELECT repo,view_id,worktree_id,0 FROM selected WHERE worktree_id IS NOT NULL) ";
+/// Whole-unit masking of [`COMPOSED`] checked for one candidate `c` of a layer (its `repo`,
+/// `view_id`, `priority`, `generation_id` and `unit_key`) joined to its own unit row `u`: the
+/// candidate's layer replaces the unit and no higher layer of its view mentions it.
+const VISIBLE_CANDIDATE: &str = "u.action='Replace' AND NOT EXISTS(SELECT 1 FROM layers h JOIN source_units hu ON hu.generation_id=h.generation_id AND hu.unit_key=c.unit_key WHERE h.view_id=c.view_id AND h.priority<c.priority)";
+/// The keyset continuation after ?3 in node order.
+const NODE_AFTER: &str = "(json_extract(?3,'$.repository_id') IS NULL OR (c.repo,c.unit_key,c.node_id)>(json_extract(?3,'$.repository_id'),json_extract(?3,'$.unit_key'),json_extract(?3,'$.item_id')))";
+
 fn page<T>(mut items: Vec<T>, limit: u16) -> GraphPage<T> {
     let has_more = items.len() > usize::from(limit);
     items.truncate(usize::from(limit));
@@ -131,26 +140,13 @@ fn nodes(
     }
     let scope = scope_json(conn, scope)?;
     let (limit, after) = bounded(limit, after)?;
-    // Unit selection commutes with the per-(repository,unit) layer ranking. Apply it
-    // before the window, keeping every selected layer of that unit so Delete/Replace
-    // masking is unchanged. An exact node predicate must remain indexable: an optional
-    // OR otherwise scans every node in every visible unit for each endpoint lookup.
-    let composed = if filter.unit_key.is_some() {
-        COMPOSED.replace(
-            "u.generation_id=l.generation_id)",
-            "u.generation_id=l.generation_id WHERE u.unit_key=json_extract(?2,'$.unit'))",
-        )
-    } else {
-        COMPOSED.to_owned()
-    };
-    let node_predicate = if filter.node_id.is_some() {
-        "n.node_id=json_extract(?2,'$.node')"
-    } else {
-        "1"
-    };
+    // The node ID's rows in each layer (`graph_nodes_by_id`), each kept when its unit is visible
+    // there: no unit row of the scope is ranked. The unit and every other filter apply below.
+    let visible = node_id_visible();
+    let node_predicate = "n.node_id=json_extract(?2,'$.node')";
     let filter=json!({"pattern":filter.pattern,"name":filter.name.as_ref().map(|n| json!({"query":n.name,"contains":n.contains})),"kinds":filter.kinds,"unit":filter.unit_key,"node":filter.node_id,"excludeUntrusted":filter.exclude_untrusted}).to_string();
     let sql = node_query(
-        &composed,
+        &visible,
         node_predicate,
         "(json_extract(?3,'$.repository_id') IS NULL OR (v.repo,n.unit_key,n.node_id)>(json_extract(?3,'$.repository_id'),json_extract(?3,'$.unit_key'),json_extract(?3,'$.item_id')))",
         "v.repo,n.unit_key,n.node_id",
@@ -167,6 +163,52 @@ fn nodes(
         (limit - 1) as u16,
     ))
 }
+/// The visible units (`visible` of [`COMPOSED`], for [`node_query`]) holding a node of ID
+/// `$.node` of ?2.
+fn node_id_visible() -> String {
+    format!(
+        "{SELECTED}, cand AS (SELECT DISTINCT l.repo,l.view_id,l.priority,n.generation_id,n.unit_key FROM layers l CROSS JOIN graph_nodes n INDEXED BY graph_nodes_by_id WHERE n.generation_id=l.generation_id AND n.node_id=json_extract(?2,'$.node')), visible AS (SELECT c.repo,c.view_id,c.generation_id,u.content_digest,c.unit_key FROM cand c JOIN source_units u ON u.generation_id=c.generation_id AND u.unit_key=c.unit_key WHERE {VISIBLE_CANDIDATE}) "
+    )
+}
+/// Visible nodes found by one index probe (?2 its value, ?3 after, ?4 limit), in node order.
+fn probed_nodes_sql(index: &str, probe: &str, from: &str) -> String {
+    format!(
+        "{SELECTED}, cand AS (SELECT l.repo,l.view_id,l.priority,n.generation_id,n.unit_key,n.node_id,n.kind,n.name,n.payload_json FROM {from}layers l CROSS JOIN graph_nodes n INDEXED BY {index} WHERE n.generation_id=l.generation_id AND {probe}) SELECT c.repo,c.view_id,c.generation_id,u.content_digest,c.unit_key,c.node_id,c.kind,c.name,c.payload_json FROM cand c JOIN source_units u ON u.generation_id=c.generation_id AND u.unit_key=c.unit_key WHERE {VISIBLE_CANDIDATE} AND {NODE_AFTER} ORDER BY c.repo,c.unit_key,c.node_id LIMIT ?4"
+    )
+}
+fn kind_nodes_sql() -> String {
+    probed_nodes_sql("graph_node_name", "n.kind=?2", "")
+}
+fn project_nodes_sql() -> String {
+    probed_nodes_sql(
+        "graph_nodes_project_directory",
+        "n.kind='DotnetProject' AND rtrim(n.unit_key,replace(n.unit_key,'/',''))=d.value",
+        "json_each(?2) d CROSS JOIN ",
+    )
+}
+fn probed_nodes(
+    conn: &Connection,
+    scope: &GraphScope,
+    sql: &str,
+    probe: &str,
+    after: Option<&GraphPosition>,
+    limit: u16,
+) -> Result<GraphPage<GraphNode>, StorageError> {
+    let scope = scope_json(conn, scope)?;
+    let (count, after) = bounded(limit, after)?;
+    let mut statement = db(conn.prepare_cached(sql))?;
+    let rows = db(
+        db(statement.query_map(params![scope, probe, after, count], node_row))?
+            .collect::<rusqlite::Result<Vec<_>>>(),
+    )?;
+    Ok(page(
+        rows.into_iter()
+            .map(node_from)
+            .collect::<Result<Vec<_>, _>>()?,
+        limit,
+    ))
+}
+
 /// Broad keyset pages walk visible units in order, then use each unit's node primary key.
 /// No page sorts/materializes the payloads of every node in the repository. Exact-ID
 /// lookups retain the sargable composed lookup above (including ambiguity checks).
@@ -465,6 +507,12 @@ macro_rules! graph_reads {($t:ty)=>{impl GraphRead for $t {
         scope_json(self.conn,scope)?;
         if scoped.views.is_empty(){return Err(StorageError::ScopeDenied);}
         Ok(nodes(self.conn,&scoped,&GraphNodeFilter{unit_key:Some(key.unit_key.clone()),node_id:Some(key.node_id.clone()),..Default::default()},None,1)?.items.pop())
+    }
+    fn graph_nodes_of_kind(&self,scope:&GraphScope,kind:&str,after:Option<&GraphPosition>,limit:u16)->Result<GraphPage<GraphNode>,StorageError>{probed_nodes(self.conn,scope,&kind_nodes_sql(),kind,after,limit)}
+    fn graph_project_nodes(&self,scope:&GraphScope,directories:&[String],after:Option<&GraphPosition>,limit:u16)->Result<GraphPage<GraphNode>,StorageError>{
+        if directories.len()>usize::from(GRAPH_MAX_PAGE){return Err(invalid("a project node read names at most 500 directories"));}
+        let directories=serde_json::to_string(directories).map_err(|_|invalid("invalid graph directories"))?;
+        probed_nodes(self.conn,scope,&project_nodes_sql(),&directories,after,limit)
     }
     fn graph_edges(&self,scope:&GraphScope,filter:&GraphEdgeFilter,after:Option<&GraphPosition>,limit:u16)->Result<GraphPage<GraphEdge>,StorageError>{edges(self.conn,scope,filter,after,limit)}
     fn graph_counts(&self,scope:&GraphScope)->Result<GraphCounts,StorageError>{
@@ -886,6 +934,57 @@ fn validate_unavailable(
 mod tests {
     use super::super::migrations::MIGRATIONS;
     use super::*;
+
+    #[test]
+    fn node_lookups_search_node_indexes_and_rank_no_unit_table() {
+        let conn = Connection::open_in_memory().unwrap();
+        super::super::project_purge::guard::register(&conn, false).unwrap();
+        super::register_name_match(&conn).unwrap();
+        for migration in MIGRATIONS {
+            conn.execute_batch(migration.sql).unwrap();
+        }
+        let by_id = node_query(
+            &node_id_visible(),
+            "n.node_id=json_extract(?2,'$.node')",
+            "1",
+            "v.repo,n.unit_key,n.node_id",
+        );
+        for (name, sql, index) in [
+            (
+                "node id",
+                by_id,
+                "graph_nodes_by_id (generation_id=? AND node_id=?)",
+            ),
+            (
+                "kind",
+                kind_nodes_sql(),
+                "graph_node_name (generation_id=? AND kind=?)",
+            ),
+            (
+                "project",
+                project_nodes_sql(),
+                "graph_nodes_project_directory (generation_id=? AND <expr>=?)",
+            ),
+        ] {
+            let mut statement = conn.prepare(&format!("EXPLAIN QUERY PLAN {sql}")).unwrap();
+            let plan: Vec<String> = statement
+                .query_map(params!["{}", "{}", "null", 1], |r| r.get::<_, String>(3))
+                .unwrap()
+                .map(Result::unwrap)
+                .collect();
+            let text = plan.join("\n");
+            assert!(text.contains(&format!("INDEX {index}")), "{name}:\n{text}");
+            for line in &plan {
+                // Only the request's own JSON lists and the selected views are scanned.
+                for table in ["graph_nodes", "source_units", "index_views", "graph_trust"] {
+                    assert!(
+                        !(line.starts_with("SCAN") && line.contains(table)),
+                        "{name} scans {table}:\n{text}"
+                    );
+                }
+            }
+        }
+    }
 
     #[test]
     fn incident_edge_reads_search_endpoint_indexes_and_scan_no_edge_or_unit_table() {
