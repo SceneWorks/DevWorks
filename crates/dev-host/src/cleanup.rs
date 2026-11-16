@@ -19,6 +19,13 @@
 //! files (the `windows` submodule). macOS and Windows see only the processes the current user
 //! may inspect (run as the runner's user, or as root or an elevated administrator to see
 //! everyone). If the scan fails, cleanup removes nothing.
+//!
+//! On Windows, run cleanup elevated. An unelevated process cannot open elevated ones, and
+//! GitHub runner jobs on a Windows host usually run elevated, so an unelevated cleanup can
+//! delete a folder such a job is using. Cleanup still runs unelevated (dry runs, hosts without
+//! elevated jobs) but prints a warning note. Schedule it with highest privileges, for example
+//! `schtasks /Create /TN dev-host-cleanup /SC DAILY /ST 03:00 /RL HIGHEST /TR "powershell
+//! -NoProfile -File C:\path\to\cleanup.ps1"`, where the wrapper script runs `dev-host cleanup`.
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -132,8 +139,30 @@ impl Liveness for ProcessLiveness {
 #[cfg(windows)]
 mod windows;
 
+/// Warning for an unelevated Windows cleanup, which cannot see elevated processes.
+#[cfg(any(windows, test))]
+const NOT_ELEVATED: &str = "Windows: cleanup is not elevated, so it cannot see elevated processes (GitHub runner jobs usually are); a folder such a job uses may be deleted. Run cleanup elevated (scheduled task with highest privileges).";
+
+/// Warning when the elevation check itself failed.
+#[cfg(any(windows, test))]
+const ELEVATION_UNKNOWN: &str = "Windows: could not tell whether cleanup is elevated, so it may not see elevated processes (GitHub runner jobs usually are); a folder such a job uses may be deleted. Run cleanup elevated (scheduled task with highest privileges).";
+
+/// The warning for a Windows elevation check result; none when elevated.
+#[cfg(any(windows, test))]
+fn elevation_limitation(elevated: Result<bool, String>) -> Option<&'static str> {
+    match elevated {
+        Ok(true) => None,
+        Ok(false) => Some(NOT_ELEVATED),
+        Err(_) => Some(ELEVATION_UNKNOWN),
+    }
+}
+
 #[cfg(windows)]
 impl Liveness for ProcessLiveness {
+    fn limitation(&self) -> Option<&'static str> {
+        elevation_limitation(windows::is_elevated())
+    }
+
     fn open_paths(&self) -> Result<Vec<PathBuf>, String> {
         // A name query that never returns would hang cleanup; give up instead, which removes
         // nothing. A stuck scan thread ends with the process.
@@ -847,6 +876,15 @@ mod tests {
     use crate::slots::{CARGO_LOCK, CargoLockProbe};
     use crate::testutil::Scratch;
     use std::fs::{File, OpenOptions};
+
+    #[test]
+    fn elevation_warning_is_chosen_by_token_state() {
+        assert_eq!(elevation_limitation(Ok(true)), None);
+        let off = elevation_limitation(Ok(false)).unwrap();
+        assert!(off.contains("not elevated") && off.contains("highest privileges"));
+        let unknown = elevation_limitation(Err("denied".into())).unwrap();
+        assert!(unknown.contains("could not tell"));
+    }
 
     struct NoProcesses;
     impl Liveness for NoProcesses {

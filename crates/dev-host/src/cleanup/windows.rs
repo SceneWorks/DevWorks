@@ -10,7 +10,7 @@
 //!   `GetMappedFileNameW`), so an executable, a DLL or a mapped data file needs no open handle.
 //!
 //! Processes this user cannot open (other users' processes, elevated ones when this process
-//! is not elevated) are skipped. All of the crate's `unsafe` for the scan lives here.
+//! is not elevated) are skipped; [`is_elevated`] tells the caller which case applies. All of the crate's `unsafe` for the scan lives here.
 
 use std::collections::{BTreeMap, HashSet};
 use std::ffi::{OsString, c_void};
@@ -25,6 +25,9 @@ use windows_sys::Wdk::System::SystemInformation::{
 use windows_sys::Win32::Foundation::{
     DUPLICATE_SAME_ACCESS, DuplicateHandle, HANDLE, HMODULE, STATUS_INFO_LENGTH_MISMATCH,
 };
+use windows_sys::Win32::Security::{
+    GetTokenInformation, TOKEN_ELEVATION, TOKEN_QUERY, TokenElevation,
+};
 use windows_sys::Win32::Storage::FileSystem::{
     FILE_NAME_NORMALIZED, FILE_TYPE_DISK, GetFileType, GetFinalPathNameByHandleW, QueryDosDeviceW,
     VOLUME_NAME_DOS,
@@ -34,7 +37,7 @@ use windows_sys::Win32::System::ProcessStatus::{
     EnumProcessModulesEx, GetMappedFileNameW, GetModuleFileNameExW, LIST_MODULES_ALL,
 };
 use windows_sys::Win32::System::Threading::{
-    GetCurrentProcess, OpenProcess, PROCESS_DUP_HANDLE, PROCESS_NAME_WIN32,
+    GetCurrentProcess, OpenProcess, OpenProcessToken, PROCESS_DUP_HANDLE, PROCESS_NAME_WIN32,
     PROCESS_QUERY_INFORMATION, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_VM_READ,
     QueryFullProcessImageNameW,
 };
@@ -60,6 +63,39 @@ struct HandleEntry {
     object_type_index: u16,
     handle_attributes: u32,
     reserved: u32,
+}
+
+/// Whether this process runs with an elevated (administrator) token.
+pub(super) fn is_elevated() -> Result<bool, String> {
+    let mut token: HANDLE = std::ptr::null_mut();
+    // SAFETY: `token` is a valid out pointer; on success it is a handle this function owns.
+    if unsafe { OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token) } == 0 {
+        return Err(format!(
+            "OpenProcessToken failed: {}",
+            std::io::Error::last_os_error()
+        ));
+    }
+    // SAFETY: `token` is a valid handle from the call above; `OwnedHandle` closes it once.
+    let token = unsafe { OwnedHandle::from_raw_handle(token) };
+    let mut elevation = TOKEN_ELEVATION { TokenIsElevated: 0 };
+    let mut returned = 0u32;
+    // SAFETY: the buffer is a `TOKEN_ELEVATION` and its exact size is passed.
+    let ok = unsafe {
+        GetTokenInformation(
+            token.as_raw_handle(),
+            TokenElevation,
+            (&mut elevation as *mut TOKEN_ELEVATION).cast(),
+            std::mem::size_of::<TOKEN_ELEVATION>() as u32,
+            &mut returned,
+        )
+    };
+    if ok == 0 {
+        return Err(format!(
+            "GetTokenInformation failed: {}",
+            std::io::Error::last_os_error()
+        ));
+    }
+    Ok(elevation.TokenIsElevated != 0)
 }
 
 /// Every path a live process this user may open has open, mapped or running, each resolved
@@ -341,4 +377,12 @@ fn dos_devices() -> Vec<(String, String)> {
             (!first.is_empty()).then(|| (drive, String::from_utf16_lossy(first)))
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn elevation_query_succeeds() {
+        super::is_elevated().expect("the token elevation query works");
+    }
 }

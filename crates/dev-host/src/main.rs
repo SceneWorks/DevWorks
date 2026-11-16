@@ -34,8 +34,12 @@ usage:
       build/ or t/ is over budget, delete their least recently used idle entries (warm
       slots last). Never touches campaigns/*/*/evidence, weights/ or locks/, and never
       deletes an entry whose cargo lock is held or that a live process has open or as its
-      working folder (macOS: lsof, Linux: /proc; Windows has no process scan and relies on
-      Windows refusing to delete open files). Prints what it removed and the size of each
+      working folder (macOS: lsof, Linux: /proc, Windows: handle table and modules). On
+      Windows run cleanup elevated: an unelevated cleanup cannot see elevated processes
+      (GitHub runner jobs usually are) and prints a warning; schedule it with highest
+      privileges (schtasks /Create ... /RL HIGHEST /TR 'powershell -NoProfile -File
+      C:\\path\\cleanup.ps1', a wrapper script that runs dev-host cleanup). Prints what
+      it removed and the size of each
       top-level folder. Settings in <root>/dev-host.conf (key = value):
         age_days (default 7), build_budget_gb, t_budget_gb, cache_budget_gb,
         campaigns_work_budget_gb, docker_budget_gb (GB = 10^9 bytes; unset = no budget)
