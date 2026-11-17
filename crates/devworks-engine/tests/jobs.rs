@@ -312,6 +312,7 @@ fn boot_over(
         power: Arc::new(NoPower),
         diagnostics: DiagnosticComposition::default(),
         use_cases,
+        test_overrides: Default::default(),
         consumers: Vec::new(),
         indexing: None,
         config,

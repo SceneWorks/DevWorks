@@ -217,6 +217,8 @@ pub struct CoreServices {
     pub mcp: Option<Arc<McpClientService>>,
     /// Port combinations that cannot be built; [`crate::boot`] refuses the composition.
     pub(crate) refusals: Vec<String>,
+    /// The package index ports, built from the web tools' ports.
+    pub(crate) package_index: Option<Arc<crate::package_host::IndexPorts>>,
 }
 
 /// The ports [`CoreServices::build`] reads.
@@ -369,6 +371,12 @@ impl CoreServices {
                 ports.clone(),
             ))
         });
+        let package_index = packages.and_then(|p| p.index.as_ref()).and_then(|factory| {
+            factory(web_ports.as_ref())
+                .map_err(|reason| refusals.push(reason))
+                .ok()
+                .map(Arc::new)
+        });
         let packages = packages.map(|p| {
             let log = match &p.service.log_ids {
                 Some(log_ids) => Arc::new(DiagnosticService::new(
@@ -415,6 +423,7 @@ impl CoreServices {
             history,
             mcp,
             refusals,
+            package_index,
         }
     }
 
@@ -422,6 +431,7 @@ impl CoreServices {
     /// directly (for example to seed a store) before or beside [`crate::boot`]. It is this same
     /// [`CoreServices::build`]; only the artifact ports are given, the others are defaults. The
     /// booted runtime builds and owns its own set, readable from the [`crate::Runtime`].
+    #[cfg(feature = "test-support")]
     pub fn for_fixture(
         store: &Arc<dyn ApplicationStore>,
         clock: &Arc<dyn Clock>,
@@ -479,10 +489,10 @@ impl CoreServices {
     }
 }
 
-/// The first family the engine owns that `use_cases` registers whole, if any. One scripted
-/// operation of a family is not the family: [`CoreServices::build`] registers its own handlers
-/// first and the composition's operations over them.
-pub(crate) fn owned_family(use_cases: &UseCases) -> Option<&'static str> {
+/// The first operation `use_cases` registers that belongs to a family the engine owns, as its
+/// family and name. [`CoreServices::build`] registers every owned family itself; the only way a
+/// composition scripts one of its operations is [`crate::TestOverrides`].
+pub(crate) fn owned_operation(use_cases: &UseCases) -> Option<(&'static str, &'static str)> {
     use devworks_core::services::{
         AGENT_OPERATIONS, artifacts, diagnostics, history, knowledge, mcp, packages, resources,
         router, runs, sessions, web,
@@ -503,10 +513,10 @@ pub(crate) fn owned_family(use_cases: &UseCases) -> Option<&'static str> {
         ("connections", &router::connections::OPERATIONS),
         ("mcp", &mcp::OPERATIONS),
     ];
-    families.into_iter().find_map(|(name, operations)| {
-        operations
+    use_cases.operations().find_map(|op| {
+        families
             .iter()
-            .all(|op| use_cases.has_command(op) || use_cases.has_query(op))
-            .then_some(name)
+            .find(|(_, operations)| operations.contains(&op))
+            .map(|(family, _)| (*family, op))
     })
 }

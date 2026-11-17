@@ -130,6 +130,7 @@ fn composition(h: &Harness, store: Arc<dyn ApplicationStore>, git_program: &str)
         power: Arc::new(NoPower),
         diagnostics: DiagnosticComposition::default(),
         use_cases: UseCases::new(),
+        test_overrides: Default::default(),
         consumers: Vec::new(),
         indexing: Some(IndexComposition {
             parser: Arc::new(TreeSitterParser::new()),

@@ -755,6 +755,7 @@ fn tool_runtime_composition(f: &Fx) -> devworks_engine::Composition {
         browser: None,
         packages: None,
         use_cases: UseCases::new(),
+        test_overrides: Default::default(),
         consumers: vec![],
         indexing: None,
         config,

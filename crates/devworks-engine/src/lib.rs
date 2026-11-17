@@ -257,7 +257,7 @@ pub use runs::{
 };
 pub use runtime::{
     BootError, BootReport, CollectionPass, Composition, IndexComposition, PackageComposition,
-    RunComposition, Runtime, RuntimeConfig, ShutdownStage, boot,
+    RunComposition, Runtime, RuntimeConfig, ShutdownStage, TestOverrides, boot,
 };
 
 pub mod containers;

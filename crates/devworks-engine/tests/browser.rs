@@ -1517,6 +1517,7 @@ fn composition(
             resolver: Arc::new(FixtureResolver),
         }),
         use_cases: UseCases::new().with_queue(),
+        test_overrides: Default::default(),
         consumers: Vec::new(),
         config,
     }

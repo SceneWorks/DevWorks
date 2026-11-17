@@ -658,13 +658,16 @@ impl App {
                 }),
                 index: Some({
                     let transport = self.transport.clone();
-                    Arc::new(move |_| IndexPorts {
-                        transport: transport.clone(),
-                        verifier: Arc::new(BundleIndexVerifier),
+                    Arc::new(move |_| {
+                        Ok(IndexPorts {
+                            transport: transport.clone(),
+                            verifier: Arc::new(BundleIndexVerifier),
+                        })
                     })
                 }),
             }),
             use_cases: UseCases::new(),
+            test_overrides: Default::default(),
             consumers: Vec::new(),
             config: config_rt,
         }
@@ -1055,6 +1058,28 @@ fn a_person_installs_a_signed_pack_whose_helper_handshakes_and_serves_invocation
         DomainErrorCode::Conflict
     );
     assert_eq!(a.registry(), r);
+}
+
+/// A package index that cannot be built from the composed ports (here: it needs web tools that
+/// are not composed) refuses the composition; it must not panic inside the service build.
+#[test]
+fn a_package_index_without_its_web_tools_is_a_composition_error() {
+    let _s = serial();
+    let a = App::unbooted(Harness::new(), None, None);
+    let mut composition = a.composition();
+    composition.packages.as_mut().unwrap().index = Some(Arc::new(|web| {
+        assert!(web.is_none(), "no web tools are composed");
+        Err("the package index needs the web tools' ports".to_owned())
+    }));
+    match a.rt.block_on(boot(composition)) {
+        Err(devworks_engine::BootError::Composition(e)) => assert!(
+            e.to_string()
+                .contains("the package index needs the web tools"),
+            "{e}"
+        ),
+        Err(other) => panic!("{other:?}"),
+        Ok(_) => panic!("boot succeeded without the package index ports"),
+    }
 }
 
 #[test]

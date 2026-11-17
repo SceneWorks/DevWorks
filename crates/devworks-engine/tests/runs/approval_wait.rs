@@ -354,9 +354,9 @@ fn a_held_tool_call_is_submitted_once_and_again_only_after_a_state_change() {
                     1,
                 )),
                 |composed| {
-                    composed
-                        .use_cases
-                        .register(HELD, None, Some(Arc::new(NeedsCapacity)));
+                    let mut scripted = UseCases::new();
+                    scripted.register(HELD, None, Some(Arc::new(NeedsCapacity)));
+                    composed.test_overrides = devworks_engine::TestOverrides::new(scripted);
                 },
             )
             .await;
@@ -854,9 +854,9 @@ fn an_approval_required_query_is_answered_at_once_as_not_run() {
             }),
             wire.clone(),
             |composed| {
-                composed
-                    .use_cases
-                    .register("sessions.get", Some(handler), None);
+                let mut scripted = UseCases::new();
+                scripted.register("sessions.get", Some(handler), None);
+                composed.test_overrides = devworks_engine::TestOverrides::new(scripted);
             },
         )
         .await;

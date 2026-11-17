@@ -69,6 +69,7 @@ fn boot_help_with_metadata(
         power: Arc::new(NoPower),
         diagnostics: DiagnosticComposition::default(),
         use_cases: UseCases::new().with_queue(),
+        test_overrides: Default::default(),
         consumers: vec![],
         indexing: None,
         config,

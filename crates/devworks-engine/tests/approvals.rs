@@ -97,6 +97,7 @@ fn composition(h: &Harness, store: Arc<dyn ApplicationStore>) -> Composition {
         git: None,
         packages: None,
         use_cases,
+        test_overrides: Default::default(),
         consumers: vec![],
         indexing: None,
         config,

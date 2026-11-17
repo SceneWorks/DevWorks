@@ -181,6 +181,7 @@ impl Fx {
             git: None,
             packages: None,
             use_cases: UseCases::new(),
+            test_overrides: Default::default(),
             consumers: vec![],
             indexing: None,
             config,

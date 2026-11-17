@@ -105,6 +105,7 @@ fn compose(h: &Harness, consumers: Vec<Consumer>) -> (Composition, Parts) {
             browser: None,
             packages: None,
             use_cases: UseCases::new().with_queue(),
+            test_overrides: Default::default(),
             consumers,
             indexing: None,
             config,
@@ -1332,6 +1333,28 @@ fn a_failed_early_step_is_recorded(step: &str, break_step: impl FnOnce(&mut Comp
     assert_eq!(stage, "composition");
 }
 
+/// One scripted operation of an engine-owned family in a production composition would replace the
+/// engine's handler: refused as a composition error at stage `composition`. An operation of no
+/// owned family stays registrable.
+#[test]
+fn registering_one_operation_of_an_owned_family_is_a_composition_error() {
+    struct Scripted;
+    impl devworks_core::ports::CommandHandler for Scripted {
+        fn decide(
+            &self,
+            _: &devworks_core::context::InvocationContext,
+            _: &devworks_core::gateway::AdmittedCommand,
+            _: &mut dyn devworks_core::ports::storage::WriteTransaction,
+        ) -> Result<devworks_core::ports::Decided, devworks_core::ports::HandlerFailure> {
+            unreachable!("boot is refused")
+        }
+    }
+    a_failed_early_step_is_recorded("sessions.append_message belongs to the sessions", |c| {
+        c.use_cases
+            .register("sessions.append_message", None, Some(Arc::new(Scripted)));
+    });
+}
+
 /// The engine builds and registers the core services' families; a composition that registers
 /// one itself is refused as a composition error, recorded as a failed boot at stage
 /// `composition`.
@@ -1426,13 +1449,10 @@ fn registering_a_family_the_engine_builds_is_a_composition_error() {
         }),
     ];
     for (family, register) in cases {
-        a_failed_early_step_is_recorded(
-            &format!("the {family} use cases are built and registered by the engine"),
-            |c| {
-                let owned = std::mem::replace(&mut c.use_cases, UseCases::new());
-                c.use_cases = register(c, owned);
-            },
-        );
+        a_failed_early_step_is_recorded(&format!("belongs to the {family} use cases"), |c| {
+            let owned = std::mem::replace(&mut c.use_cases, UseCases::new());
+            c.use_cases = register(c, owned);
+        });
     }
 }
 

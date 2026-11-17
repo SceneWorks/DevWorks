@@ -396,9 +396,11 @@ async fn compose(
     let package_index: IndexPortsFactory = {
         let store = store.clone();
         Arc::new(move |web| {
-            let web = web.expect("the package index is composed with the web tools");
+            let web = web.ok_or_else(|| {
+                "the package index needs the web tools' ports (a web composition)".to_owned()
+            })?;
             let store = store.clone();
-            IndexPorts {
+            Ok(IndexPorts {
                 transport: Arc::new(NativeIndexTransport::new(
                     web.resolver.clone(),
                     web.transport.clone(),
@@ -412,7 +414,7 @@ async fn compose(
                     }),
                 )),
                 verifier: Arc::new(BundleIndexVerifier),
-            }
+            })
         })
     };
     let purge_client = Arc::new(
@@ -615,6 +617,7 @@ async fn compose(
             index: Some(package_index),
         }),
         use_cases,
+        test_overrides: Default::default(),
         // Repository discovery and structural indexing (DW-23): Tree-sitter grammars, native
         // no-follow source reads and Git through the process owner. Semantic packs register
         // with the indexing environment when installed (DW-24..27).

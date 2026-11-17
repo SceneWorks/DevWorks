@@ -240,6 +240,7 @@ fn composition(
         browser: None,
         packages: None,
         use_cases: UseCases::new().with_queue(),
+        test_overrides: Default::default(),
         consumers: Vec::new(),
         indexing: None,
         config,

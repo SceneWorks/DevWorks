@@ -9,7 +9,7 @@ use crate::browser::{BrowserComposition, Supervision as BrowserSupervision};
 pub use crate::core_services::RunComposition;
 use crate::core_services::{
     ApplicationComposition, ArtifactComposition, CorePorts, CoreServices, DiagnosticComposition,
-    KnowledgeComposition, PackageServicePorts, WebPortsFactory, owned_family,
+    KnowledgeComposition, PackageServicePorts, WebPortsFactory, owned_operation,
 };
 use crate::diagnostics::{self as diag, Monitor};
 use crate::dispatch::{self, Consumer, Dispatcher, DispatcherConfig, RecoveryReport};
@@ -106,8 +106,12 @@ pub struct PackageComposition {
 }
 
 /// Builds the package index ports from the web tools' network ports.
+/// A factory that needs the web tools refuses the composition (`Err` carries the reason) when
+/// they are not composed.
 pub type IndexPortsFactory = Arc<
-    dyn Fn(Option<&devworks_core::services::web::WebPorts>) -> crate::package_host::IndexPorts
+    dyn Fn(
+            Option<&devworks_core::services::web::WebPorts>,
+        ) -> Result<crate::package_host::IndexPorts, String>
         + Send
         + Sync,
 >;
@@ -180,13 +184,28 @@ pub struct Composition {
     /// the package host after process recovery and stops its helpers cooperatively at shutdown.
     /// `None`: no package host (packages are not offered).
     pub packages: Option<PackageComposition>,
-    /// The other use cases (queue, sessions, history, settings, ...).
+    /// The use cases of no engine-owned family (the queue, ...). One operation of an owned
+    /// family is a composition error; a test scripts one through [`Self::test_overrides`].
     pub use_cases: UseCases,
+    /// Scripted operations that replace the engine's own handlers. Only tests can fill it: the
+    /// constructor exists under the `test-support` feature, which only dev-dependencies enable.
+    pub test_overrides: TestOverrides,
     /// Consumers besides the required ones [`boot`] registers itself (package handlers, ...).
     pub consumers: Vec<Consumer>,
     /// Repository indexing (none: the `indexing.*` operations have no use case).
     pub indexing: Option<IndexComposition>,
     pub config: RuntimeConfig,
+}
+
+/// Operations a test scripts over the engine's own handlers. Production code can only name the
+/// empty value, so a production composition cannot replace an engine-owned operation.
+#[derive(Default)]
+pub struct TestOverrides(UseCases);
+#[cfg(feature = "test-support")]
+impl TestOverrides {
+    pub fn new(use_cases: UseCases) -> Self {
+        Self(use_cases)
+    }
 }
 
 /// Builds project purge file access over the engine's read fence.
@@ -574,6 +593,7 @@ async fn build(composition: Composition, core: CoreServices) -> Result<Engine, B
         git,
         packages,
         use_cases,
+        test_overrides,
         mut consumers,
         indexing,
         config,
@@ -592,9 +612,12 @@ async fn build(composition: Composition, core: CoreServices) -> Result<Engine, B
     consumers.push(crate::knowledge::source_deletion_consumer(
         knowledge.clone(),
     ));
-    // The engine's handlers first, then the composition's operations over them (a composition
-    // scripting one operation of an engine-owned family keeps its handler).
-    let use_cases = core.register(UseCases::new()).overlay(use_cases);
+    // The engine's handlers first, then the composition's operations (none of an owned family:
+    // boot refused those) and a test's scripted operations over them.
+    let use_cases = core
+        .register(UseCases::new())
+        .overlay(use_cases)
+        .overlay(test_overrides.0);
     let purge_files = config.purge.as_ref().map(|p| (p.files)(artifacts.clone()));
     let usage = crate::usage::UsageRuntime::with_process_host(
         store.clone(),
@@ -1225,7 +1248,12 @@ async fn build(composition: Composition, core: CoreServices) -> Result<Engine, B
             p.launch,
             p.config,
             p.runtimes,
-            p.index.map(|index| index(core.web_ports.as_ref())),
+            core.package_index
+                .as_ref()
+                .map(|i| crate::package_host::IndexPorts {
+                    transport: i.transport.clone(),
+                    verifier: i.verifier.clone(),
+                }),
         );
         host.service().set_activity(host.clone());
         let _ = package_tools.set(Arc::downgrade(&host));
@@ -1349,11 +1377,11 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
             reason.clone(),
         ))));
     }
-    if let Some(family) = owned_family(&composition.use_cases) {
+    if let Some((family, operation)) = owned_operation(&composition.use_cases) {
         return Err(failed(BootError::Composition(StorageError::InvalidRecord(
             format!(
-                "the {family} use cases are built and registered by the engine; \
-                 a composition must not register them"
+                "{operation} belongs to the {family} use cases, which the engine builds and \
+                 registers; a composition must not register any of their operations"
             ),
         ))));
     }

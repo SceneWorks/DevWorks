@@ -189,6 +189,7 @@ fn boot_paid(rt: &tokio::runtime::Runtime, h: &Harness, wire: Arc<Wire>) -> Help
         power: Arc::new(NoPower),
         diagnostics: DiagnosticComposition::default(),
         use_cases: UseCases::new().with_queue(),
+        test_overrides: Default::default(),
         consumers: vec![],
         indexing: None,
         config,

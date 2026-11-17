@@ -502,6 +502,10 @@ impl UseCases {
         self.mcp_service = other.mcp_service.or(self.mcp_service);
         self
     }
+    /// The name of every registered operation.
+    pub fn operations(&self) -> impl Iterator<Item = &'static str> + '_ {
+        self.queries.keys().chain(self.commands.keys()).copied()
+    }
     pub fn has_query(&self, operation: &str) -> bool {
         self.queries.contains_key(operation)
     }
