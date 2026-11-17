@@ -3,6 +3,7 @@
 //! text, and a `ui-state.json` holding unconfirmed commands.
 mod common;
 use common::*;
+use devworks_desktop::addons_ops::AddonsSlot;
 use devworks_desktop::artifacts_screen::{ArtifactsSlot, BrowserSlot, ResourcesSlot};
 use devworks_desktop::backend::{CommandDispatch, Slot};
 use devworks_desktop::chat::ChatSlot;
@@ -14,9 +15,12 @@ use devworks_desktop::help_ops::HelpSlot;
 use devworks_desktop::indexing_ops::IndexingSlot;
 use devworks_desktop::instructions_ops::InstructionsSlot;
 use devworks_desktop::jobs_ops::JobsSlot;
+use devworks_desktop::knowledge_ops::KnowledgeSlot;
 use devworks_desktop::memory::Memory;
 use devworks_desktop::projects_ops::ProjectsSlot;
+use devworks_desktop::purge_ops::PurgeSlot;
 use devworks_desktop::screen::ScreenId;
+use devworks_desktop::settings_ops::SettingsSlot;
 use devworks_desktop::usage_ops::UsageSlot;
 use devworks_desktop::watch_ops::WatchSlot;
 use devworks_desktop::work_ops::WorkSlot;
@@ -29,10 +33,10 @@ const UI_STATE: &str = include_str!("fixtures/ui-state-main.json");
 /// One value of every variant, in the order of the fixtures.
 fn samples() -> Vec<Slot> {
     vec![
-        Slot::PurgePrepare,
-        Slot::PurgePage,
-        Slot::PurgeConfirm,
-        Slot::PurgeStatus,
+        Slot::Purge(PurgeSlot::PurgePrepare),
+        Slot::Purge(PurgeSlot::PurgePage),
+        Slot::Purge(PurgeSlot::PurgeConfirm),
+        Slot::Purge(PurgeSlot::PurgeStatus),
         Slot::Databases(DatabasesSlot::DatabaseList(7, true)),
         Slot::Databases(DatabasesSlot::DatabaseObjects(7, true)),
         Slot::Databases(DatabasesSlot::DatabaseRelations(7, true)),
@@ -66,13 +70,13 @@ fn samples() -> Vec<Slot> {
         Slot::Decisions(DecisionsSlot::NotificationSettings),
         Slot::Decisions(DecisionsSlot::NotificationSettingsSave),
         Slot::Decisions(DecisionsSlot::OsNotificationPermission),
-        Slot::SettingsRead,
-        Slot::ContainerCapabilities,
-        Slot::SettingsValidate,
-        Slot::SettingsHealth,
-        Slot::SettingsSave,
-        Slot::SettingsSecret("s".into()),
-        Slot::SettingsExplain("s".into()),
+        Slot::Settings(SettingsSlot::SettingsRead),
+        Slot::Settings(SettingsSlot::ContainerCapabilities),
+        Slot::Settings(SettingsSlot::SettingsValidate),
+        Slot::Settings(SettingsSlot::SettingsHealth),
+        Slot::Settings(SettingsSlot::SettingsSave),
+        Slot::Settings(SettingsSlot::SettingsSecret("s".into())),
+        Slot::Settings(SettingsSlot::SettingsExplain("s".into())),
         Slot::Chat(ChatSlot::SessionsList),
         Slot::Chat(ChatSlot::SessionStart),
         Slot::Chat(ChatSlot::Transcript("s".into())),
@@ -86,38 +90,42 @@ fn samples() -> Vec<Slot> {
         Slot::Browser(BrowserSlot::BrowserSessions),
         Slot::Browser(BrowserSlot::ProjectBrowserSessions("s".into())),
         Slot::Browser(BrowserSlot::BrowserClose("s".into())),
-        Slot::AddonsList,
-        Slot::AddonsLogs("s".into()),
-        Slot::AddonsCommand,
-        Slot::AddonsSave {
+        Slot::AddOns(AddonsSlot::AddonsList),
+        Slot::AddOns(AddonsSlot::AddonsLogs("s".into())),
+        Slot::AddOns(AddonsSlot::AddonsCommand),
+        Slot::AddOns(AddonsSlot::AddonsSave {
             update: Some("o".into()),
             registry: -2,
             download: Some("/tmp/x".into()),
-        },
-        Slot::AddonsSave {
+        }),
+        Slot::AddOns(AddonsSlot::AddonsSave {
             update: None,
             registry: 4,
             download: None,
-        },
-        Slot::AddonsDiscovery,
+        }),
+        Slot::AddOns(AddonsSlot::AddonsDiscovery),
         Slot::Chat(ChatSlot::RouterCatalog(7)),
         Slot::Chat(ChatSlot::RouteSession("s".into())),
         Slot::Chat(ChatSlot::RouteStatus("s".into())),
         Slot::Chat(ChatSlot::RoutePin("s".into())),
         Slot::Chat(ChatSlot::RouteFirst("s".into())),
-        Slot::WebFetch,
-        Slot::WebSearch,
-        Slot::WebActivity,
-        Slot::McpServers("s".into(), Some("o".into())),
-        Slot::McpOperation("s".into()),
-        Slot::McpCapabilities("s".into(), "s".into(), Some("o".into())),
-        Slot::McpContent("s".into(), "s".into()),
-        Slot::McpCommand,
-        Slot::McpRelease,
-        Slot::ProjectsList,
+        Slot::Settings(SettingsSlot::WebFetch),
+        Slot::Settings(SettingsSlot::WebSearch),
+        Slot::Settings(SettingsSlot::WebActivity),
+        Slot::Settings(SettingsSlot::McpServers("s".into(), Some("o".into()))),
+        Slot::Settings(SettingsSlot::McpOperation("s".into())),
+        Slot::Settings(SettingsSlot::McpCapabilities(
+            "s".into(),
+            "s".into(),
+            Some("o".into()),
+        )),
+        Slot::Settings(SettingsSlot::McpContent("s".into(), "s".into())),
+        Slot::Settings(SettingsSlot::McpCommand),
+        Slot::Settings(SettingsSlot::McpRelease),
+        Slot::Projects(ProjectsSlot::ProjectsList),
         Slot::Projects(ProjectsSlot::DeletedProjects),
-        Slot::RepositoriesList,
-        Slot::ProjectRepositories("s".into()),
+        Slot::Projects(ProjectsSlot::RepositoriesList),
+        Slot::Projects(ProjectsSlot::ProjectRepositories("s".into())),
         Slot::Projects(ProjectsSlot::ProjectCreate),
         Slot::Projects(ProjectsSlot::ProjectCommand("s".into())),
         Slot::Projects(ProjectsSlot::ProjectSettings("s".into())),
@@ -149,14 +157,14 @@ fn samples() -> Vec<Slot> {
         Slot::Conventions(ConventionsSlot::ConventionPrepare("s".into(), "s".into())),
         Slot::Conventions(ConventionsSlot::ConventionArtifact("s".into(), "s".into())),
         Slot::Conventions(ConventionsSlot::ConventionTransfer("s".into(), "s".into())),
-        Slot::KnowledgeList(7),
-        Slot::KnowledgeRead("s".into()),
-        Slot::KnowledgeDiagnostics,
-        Slot::KnowledgePreview("s".into()),
-        Slot::KnowledgeImportSave,
-        Slot::KnowledgeImportPreview,
-        Slot::KnowledgeImport,
-        Slot::KnowledgeWrite,
+        Slot::Knowledge(KnowledgeSlot::KnowledgeList(7)),
+        Slot::Knowledge(KnowledgeSlot::KnowledgeRead("s".into())),
+        Slot::Knowledge(KnowledgeSlot::KnowledgeDiagnostics),
+        Slot::Knowledge(KnowledgeSlot::KnowledgePreview("s".into())),
+        Slot::Knowledge(KnowledgeSlot::KnowledgeImportSave),
+        Slot::Knowledge(KnowledgeSlot::KnowledgeImportPreview),
+        Slot::Knowledge(KnowledgeSlot::KnowledgeImport),
+        Slot::Knowledge(KnowledgeSlot::KnowledgeWrite),
         Slot::Jobs(JobsSlot::JobsList),
         Slot::Jobs(JobsSlot::JobsMore(7)),
         Slot::Jobs(JobsSlot::JobsRefresh(7)),
@@ -201,10 +209,10 @@ fn samples() -> Vec<Slot> {
         Slot::Work(WorkSlot::WorkRun("s".into())),
         Slot::Work(WorkSlot::ArchiveCount("s".into(), true)),
         Slot::Work(WorkSlot::WorkOpen("s".into(), true)),
-        Slot::Connections(7),
-        Slot::ConnectionCatalog(7),
-        Slot::EmbeddingSpaces(7),
-        Slot::Configure(7),
+        Slot::Settings(SettingsSlot::Connections(7)),
+        Slot::Settings(SettingsSlot::ConnectionCatalog(7)),
+        Slot::Settings(SettingsSlot::EmbeddingSpaces(7)),
+        Slot::Settings(SettingsSlot::Configure(7)),
         Slot::Instructions(InstructionsSlot::InstructionSkills(7)),
         Slot::Instructions(InstructionsSlot::InstructionRole("s".into())),
         Slot::Instructions(InstructionsSlot::InstructionHistory(7)),
@@ -253,6 +261,10 @@ fn screen_variants() -> Vec<(ScreenId, Vec<String>)> {
         (ScreenId::Jobs, variant_names::<JobsSlot>()),
         (ScreenId::Decisions, variant_names::<DecisionsSlot>()),
         (ScreenId::Work, variant_names::<WorkSlot>()),
+        (ScreenId::Settings, variant_names::<SettingsSlot>()),
+        (ScreenId::AddOns, variant_names::<AddonsSlot>()),
+        (ScreenId::Knowledge, variant_names::<KnowledgeSlot>()),
+        (ScreenId::Purge, variant_names::<PurgeSlot>()),
     ]
 }
 
@@ -268,7 +280,6 @@ fn tag(json: &serde_json::Value) -> String {
 /// The Debug text of the slot a screen formats in its reply messages.
 fn reported(slot: &Slot) -> String {
     match slot.screen() {
-        ScreenId::Legacy => format!("{slot:?}"),
         ScreenId::Help => format!("{:?}", HelpSlot::try_from(slot.clone()).unwrap()),
         ScreenId::Usage => format!("{:?}", UsageSlot::try_from(slot.clone()).unwrap()),
         ScreenId::Graph => format!("{:?}", GraphSlot::try_from(slot.clone()).unwrap()),
@@ -291,6 +302,11 @@ fn reported(slot: &Slot) -> String {
             format!("{:?}", DecisionsSlot::try_from(slot.clone()).unwrap())
         }
         ScreenId::Work => format!("{:?}", WorkSlot::try_from(slot.clone()).unwrap()),
+        ScreenId::Settings => format!("{:?}", SettingsSlot::try_from(slot.clone()).unwrap()),
+        ScreenId::AddOns => format!("{:?}", AddonsSlot::try_from(slot.clone()).unwrap()),
+        ScreenId::Knowledge => format!("{:?}", KnowledgeSlot::try_from(slot.clone()).unwrap()),
+        ScreenId::Purge => format!("{:?}", PurgeSlot::try_from(slot.clone()).unwrap()),
+        ScreenId::Placeholder => unreachable!("no slot belongs to the placeholder screens"),
     }
 }
 
@@ -327,7 +343,10 @@ fn slot_variant_names_are_unique_across_screens() {
     for line in SLOTS.lines() {
         let json: serde_json::Value = serde_json::from_str(line).unwrap();
         let slot: Slot = serde_json::from_value(json.clone()).unwrap();
-        let owner = seen.get(&tag(&json)).copied().unwrap_or(ScreenId::Legacy);
+        let owner = seen
+            .get(&tag(&json))
+            .copied()
+            .expect("every name has a screen");
         assert_eq!(slot.screen(), owner, "{line}");
     }
 }
@@ -345,12 +364,12 @@ fn ui_state_saved_by_main_restores_its_pending_commands() {
     );
     let expected = vec![
         Slot::Help(HelpSlot::HelpGenerate),
-        Slot::SettingsSave,
-        Slot::AddonsSave {
+        Slot::Settings(SettingsSlot::SettingsSave),
+        Slot::AddOns(AddonsSlot::AddonsSave {
             update: None,
             registry: 4,
             download: None,
-        },
+        }),
         Slot::Decisions(DecisionsSlot::ApprovalDecision("approval-1".into())),
     ];
     let saved: Vec<Slot> = memory

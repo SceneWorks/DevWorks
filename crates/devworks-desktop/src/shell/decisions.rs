@@ -44,6 +44,18 @@ impl Screen for DecisionsUi {
         }
         .approvals_screen(ui);
     }
+    fn purge_live(&self, out: &mut crate::project_purge::Live) {
+        if let Some(devworks_core::protocol::data::DataScope::Project { project_id }) =
+            self.selected.as_ref().and_then(|r| r.scope.as_ref())
+        {
+            out.projects
+                .entry(project_id.0.as_str().into())
+                .or_insert_with(|| json!({}))["decision"] = json!(self.rationale);
+        }
+    }
+    fn remove_purged(&mut self, scope: &devworks_core::ports::storage::ProjectPurgeClientScope) {
+        self.purge_owned(scope);
+    }
     fn context(&self, _route: Route, _mem: &RouteMemory) -> ScreenContext {
         ScreenContext {
             tab: self.tab,

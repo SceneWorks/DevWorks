@@ -164,6 +164,9 @@ impl Screen for Chat {
         self.restoring = None;
     }
     fn purge_live(&self, _out: &mut Live) {}
+    fn unconfirmed_count(&self) -> usize {
+        Chat::unconfirmed_count(self)
+    }
     fn remove_purged(&mut self, scope: &ProjectPurgeClientScope) {
         let session = |id: &str| scope.session_ids.iter().any(|x| x.as_str() == id);
         self.text_preview = None;

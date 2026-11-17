@@ -20,7 +20,8 @@ const UNKNOWN: &str = "The outcome is not confirmed yet. Use Confirm outcomes; t
 
 controller!(InstructionsCtl, instructions: InstructionsPanel);
 
-/// Settings draws the panel among its items and hands its actions to [`InstructionsPanel::act`].
+/// Settings draws the panel among its items by calling [`Screen::ui`] with its own context; the
+/// panel runs its own actions.
 impl Screen for InstructionsPanel {
     type Slot = InstructionsSlot;
     const ID: ScreenId = ScreenId::Instructions;
@@ -36,7 +37,6 @@ impl Screen for InstructionsPanel {
             cx.unhandled(&slot, reply);
         }
     }
-    /// The panel on its own.
     fn ui(&mut self, cx: &mut Cx, _route: Route, ui: &mut Ui) {
         let mut actions = Vec::new();
         InstructionsPanel::ui(self, ui, cx.online().is_ok(), &mut actions);
