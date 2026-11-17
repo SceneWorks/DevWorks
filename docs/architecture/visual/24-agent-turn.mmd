@@ -1,0 +1,39 @@
+---
+title: A delegated agent turn and a retained message (implemented)
+---
+sequenceDiagram
+  autonumber
+  participant RS as RunSupervisor
+  participant L as AgentLauncher
+  participant AS as AgentService
+  participant X as NativeAgentTurnExecutor
+  participant Store as WriteTransaction
+  participant GW as Gateway (agents.* commands)
+  participant Child as Child turn (AgentLauncher.launch_child)
+  RS->>L: launch(root activation)
+  L->>AS: materialize_primary (coordinator identity, session, assignment)
+  L->>X: run(context, coordinator, stop)
+  X->>Store: ControlService.begin_turn
+  loop run_native_loop until no more tool calls
+    X->>X: route context head, plan generation, provider request
+    X->>GW: tool call agents.delegate (at most MAX_DELEGATE_CALLS_PER_TURN)
+    GW->>AS: delegate(root, expected control revision, brief)
+    AS->>Store: child agent, session, assignment and context (one write)
+    X->>GW: tool call agents.post or agents.messages
+    GW->>Store: message plus recipient delivery plus project event (one write)
+  end
+  X->>Store: ControlService.end_turn
+  Note over L,Child: supervise_children polls every 500 ms, launches ready children up to max_subagents
+  L->>Child: launch_child(assignment, activation, epoch)
+  Child->>AS: activate_child
+  Child->>X: run(child context)
+  alt child finished
+    Child->>AS: complete_child
+  else it still has descendants
+    Child->>AS: wait_for_descendants (assignment Waiting)
+  end
+  L->>AS: complete_primary only after every child is done
+  Note over GW,Store: a recipient reads with agents.receive
+  GW->>Store: deliver_inbox pass (commits delivery)
+  Note right of GW: a wait repeats the pass, holding no write unit between polls
+  GW->>Store: agents.ack Answered or Declined resolves the item

@@ -1,0 +1,47 @@
+---
+title: Route selection, pin, attempt admission and cooldown (implemented)
+---
+sequenceDiagram
+  autonumber
+  participant Caller as Session or host pipeline
+  participant R as InferenceRouter
+  participant CD as ConnectionDirectory (ConnectionService)
+  participant Store as WriteTransaction (router, usage, history)
+  participant P as NativeProviders (source and sink)
+  participant H as StreamingHttp
+  Caller->>R: router.route(session, intent Tier or Model, effort, capabilities)
+  R->>R: Need.parse (unknown label refused)
+  R->>CD: connections(RouterRead)
+  R->>Store: session pin, cooldowns, tier members, catalog rows
+  alt pin still eligible for intent, effort and need
+    R-->>Caller: Kept (or rewritten with new capability labels or connection)
+  else pool assessed by select.assess
+    R->>R: eligible = no Block (Disabled, NoConnection, NotAllowed, Cooling ...)
+    alt none eligible
+      R-->>Caller: refusal with block codes (Unavailable, earliest cooldown)
+    else Tier intent
+      R->>Store: tier_cursor then advance (round robin among eligible)
+      R->>Store: write RoutePinned (compare and set, reason Initial, Failover ...)
+    else Model intent
+      R->>Store: write pin for the first eligible
+    end
+  end
+  Caller->>R: admit_request(RequestAdmission) records intent in the operation journal
+  Caller->>R: admit_attempt(AttemptSelection)
+  R->>R: attempt_route_current rechecks pool, capability and connection
+  alt route changed since selection
+    R-->>Caller: Admission SourceChanged (a retry may select another eligible route)
+  else still current
+    R->>Store: Admitted attempt (mark_attempt_dispatched rechecks again)
+  end
+  Caller->>P: drive(source, sink)
+  P->>CD: access(connection) only at dispatch
+  P->>H: open(request, StreamLimits, Cancellation)
+  H-->>P: response head and stream
+  alt HTTP 403, or 401 on a non-OAuth credential
+    P->>Store: record_inference_rejection (connection needs sign-in)
+  end
+  alt HTTP 429 or exhausted limit with a reset time
+    P->>Store: record_cooldown(model, until, RateLimited)
+    Note over R,Store: the next route() and admit_attempt skip the cooling model
+  end

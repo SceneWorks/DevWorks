@@ -1,0 +1,37 @@
+---
+title: Package version phases and helper instance states (implemented)
+---
+stateDiagram-v2
+  direction LR
+  state "Package version (VersionPhase)" as Version {
+    [*] --> Staged : install or update verified and published, approvals or waits recorded
+    Staged --> Installed : approval recorded, no waits left, activated at the next quiescent boundary
+    Staged --> Staged : retry_pending, wait is Quiescence or Compatibility only
+    Staged --> Rejected : person rejects it in decide_proposal
+    Staged --> Removed : newer proposal or uninstall retires the candidate
+    Installed --> Installed : rollback target or reinstall, no new approval needed
+    Installed --> Removed : uninstall then collect_files after helper retirement
+    Rejected --> [*] : install or propose of the same digest is refused with Conflict
+    Removed --> Staged : same contents proposed or installed again, unapproved, files republished
+    Removed --> Installed : proposed again but approved earlier
+  }
+  state "Helper instance (InstanceStatus)" as Instance {
+    [*] --> Starting : reconcile finds enabled, installed, available package
+    Starting --> Ready : host.initialize then host.activate handshake echoes digest and revisions
+    Starting --> HelperFailed : handshake or launch failure, restart with backoff
+    Ready --> Retiring : registry changed (new digest, generation or configuration)
+    Ready --> HelperFailed : helper exits, in-flight invocations end OutcomeUnknown
+    HelperFailed --> Starting : restart up to restart_limit
+    Retiring --> Stopped : in-flight invocations finished or cancelled
+    Ready --> Stopped : disable, uninstall or shutdown cancels invocations then stops the tree
+    HelperFailed --> Stopped : limit reached, failure recorded, guarded automatic rollback if nothing ran
+  }
+  note right of Version
+    Waits that block Staged: ExactVersionApproval, TrustApproval, AccessApproval,
+    Compatibility, Quiescence. A person's own install or update approves the exact digest.
+    Agent-authored or proposed contents always need a person.
+  end note
+  note right of Instance
+    invoke is admitted only on a Ready instance of the active version with no barrier up.
+    The helper is a separate process, not an OS sandbox.
+  end note

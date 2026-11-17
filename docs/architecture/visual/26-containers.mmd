@@ -1,0 +1,134 @@
+---
+title: Containers - selected backend, owned agent work and shutdown (implemented)
+---
+classDiagram
+  direction LR
+  class ContainerService {
+    store: Arc dyn ApplicationStore
+    runner: Arc ContainerRunner
+    bindings: ToolBindings
+    artifacts / secrets / resources: Option Arc
+    registry_auth / workload_environment: Option Arc
+    lifecycle_gates per container, image_gate
+    containers.capabilities .inspect .logs (QueryHandler)
+    containers.build .pull .create .start .exec .stop (CommandHandler)
+    +execute_effect(op, authority) EffectOutcome
+    +observe_effect(op, authority) EffectOutcome
+    +approval_preview() +validate_approval_preview()
+    +shutdown_agent_work(bound) ShutdownReport
+    +reconcile_revoked_agent_work(bound) ShutdownReport
+    +stop_agent_work_for_root(root, bound) ShutdownReport
+  }
+  class ContainerCommand {
+    <<enum>>
+    Build Pull Create Start Exec Stop
+  }
+  class ContainerIntent {
+    frozen actor, session, project, root, assignment
+    restore_epoch, policy_revision, fingerprint
+    source_binding, container_id
+    approved_context_digest
+    +context(store, operation) Option InvocationContext
+  }
+  class Backend {
+    <<enum>>
+    Docker Podman Apple
+    +parse() +executable() +supported_host()
+    +build .pull .create .start .exec .inspect .logs .stop
+    inert argv plans, no shell
+  }
+  class selection {
+    <<fn>>
+    selected(read, project) Backend
+    require_selected(read, project, engine)
+    setting containers.preferredRuntime
+  }
+  class probe {
+    <<fn>>
+    probe(runner, bindings, ctx, backend, host) Probe
+    HostPlatform os, arch, macos_major
+  }
+  class ContainerRunner {
+    processes: Arc ProcessSupervisor
+    +run(ctx, operation, spec, timeout, max_output, secrets) CliResult
+    +run_window()
+  }
+  class execution {
+    <<fn>>
+    bound_spec(bindings, backend, args, cwd) ProcessSpec
+    with_environment()
+  }
+  class inspection {
+    <<fn>>
+    parse(backend, bytes) Inspected
+    verified_lifecycle_target() native id
+  }
+  class build_context {
+    <<fn>>
+    digest(root) ContextDigest sha256
+  }
+  class ToolBindings {
+    registered exact executables
+  }
+  class ProcessSupervisor { shared owned-process supervisor }
+  class RegistryAuth { <<trait>> }
+  class WorkloadEnvironment { <<trait>> }
+  class NativeRegistryAuth {
+    <<adapter>>
+    private one-pull auth files under container-auth
+    private workload env file
+  }
+  class ResourceService {
+    reserve_container() release_container_leases()
+    hostport and named resource leases
+  }
+  class ContainerPhase {
+    <<enum>>
+    Creating Created Starting Running
+    Stopping Stopped Failed Uncertain
+  }
+  class StoredContainer {
+    ownership ledger row
+    engine, image, actor, owner_kind, project, root
+    create_operation_id, last_operation_id, resource_lease_ids
+  }
+  class ContainerComposition {
+    <<engine config>>
+    bindings, filesystem, protected_roots
+    secrets, registry_auth, workload_environment, host
+  }
+  class EffectConsumers {
+    <<engine consumers>>
+    container_effects max 2, 4 attempts
+    container_stops max 2
+  }
+  class ReconcileLoop {
+    <<engine worker>>
+    reconcile_revoked_agent_work every 1 s
+  }
+  class OwnerPreview {
+    <<approvals>>
+    containers.build .pull .create .start .exec
+  }
+  ContainerService *-- ContainerRunner
+  ContainerService *-- ToolBindings
+  ContainerService ..> ContainerCommand : decide builds
+  ContainerService ..> ContainerIntent : frozen in operation payload
+  ContainerService ..> Backend : plans argv
+  ContainerService ..> selection : the one selected backend
+  ContainerService ..> probe : capabilities
+  ContainerService ..> execution : binds plan to executable
+  ContainerService ..> inspection : label and id fence
+  ContainerService ..> build_context : approved build digest
+  ContainerService o-- ResourceService
+  ContainerService o-- RegistryAuth
+  ContainerService o-- WorkloadEnvironment
+  ContainerService ..> StoredContainer : ledger via ApplicationStore
+  StoredContainer *-- ContainerPhase
+  ContainerRunner o-- ProcessSupervisor
+  NativeRegistryAuth ..|> RegistryAuth
+  NativeRegistryAuth ..|> WorkloadEnvironment
+  ContainerComposition ..> ContainerService : runtime boot builds
+  EffectConsumers o-- ContainerService
+  ReconcileLoop o-- ContainerService
+  OwnerPreview o-- ContainerService

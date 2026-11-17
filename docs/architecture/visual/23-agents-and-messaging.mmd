@@ -1,0 +1,84 @@
+---
+title: Coordinator delegation, agent turns and retained messaging (implemented)
+---
+classDiagram
+  direction LR
+  class AgentService {
+    ids / runs: Arc ControlService
+    agents.inspect .delegate .messages .checkpoint .acknowledge
+    agents.post .receive .ack .history .events .inbox
+    +materialize_primary(tx, host, activation, epoch)
+    +activate_child / complete_child / complete_primary
+    +wait_for_descendants
+    +delegate(tx, ctx, DelegateInput) AgentRecord
+  }
+  class ControlService {
+    <<runs>>
+    begin_turn / end_turn
+    root controls and activations
+  }
+  class Retained {
+    <<module services agents retained>>
+    post_message(PostSpec) PostedMessage
+    deliver_inbox(recipient, after, limit)
+    acknowledge(AckSelection, Resolution)
+    handover_item / handover_direct
+    history / events
+    post_host_notice
+  }
+  class Recipient {
+    Session(Id)
+    Human
+  }
+  class MessageKind {
+    Info Question Request Blocker Announcement
+  }
+  class AgentLauncher {
+    store / ids / agents / executor
+    +launch(Launch) LaunchFuture
+    +launch_child(assignment, activation, epoch, stop)
+  }
+  class AgentTurnExecutor {
+    <<trait>>
+    run(context, coordinator, stop) LaunchFuture
+  }
+  class NativeAgentTurnExecutor {
+    runtime: Weak Runtime
+    drive_agent_turn then run_native_loop
+  }
+  class ActivationLauncher { <<trait>> }
+  class RunSupervisor {
+    <<engine runs>>
+    +install_launcher
+  }
+  class ProviderSink {
+    refuses more than MAX_DELEGATE_CALLS_PER_TURN
+    agents.delegate calls
+  }
+  class ToolTurn {
+    <<module tool_turn>>
+    host-framed tool calls to gateway commands
+    held approval and blocked outcomes
+  }
+  class RetainedInboxDriver {
+    receive(context, project, InboxSelection)
+    one committed pass per poll, at most 55 s
+  }
+  class StoredAssignment { <<storage record>> }
+  class StoredAgentMessage { <<storage record>> }
+  AgentService o-- ControlService
+  AgentService ..> Retained : post and handover in the same write
+  Retained ..> Recipient
+  Retained ..> MessageKind
+  Retained ..> StoredAgentMessage
+  AgentService ..> StoredAssignment : delegate creates child session and assignment
+  AgentLauncher ..|> ActivationLauncher
+  AgentLauncher o-- AgentService
+  AgentLauncher o-- AgentTurnExecutor
+  NativeAgentTurnExecutor ..|> AgentTurnExecutor
+  NativeAgentTurnExecutor ..> ToolTurn : tool calls
+  NativeAgentTurnExecutor ..> ControlService : begin_turn, end_turn
+  RunSupervisor o-- ActivationLauncher : installed after boot
+  ToolTurn ..> AgentService : agents.* through Gateway
+  ProviderSink ..> ToolTurn
+  RetainedInboxDriver ..> Retained : deliver_inbox

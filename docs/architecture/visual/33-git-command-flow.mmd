@@ -1,0 +1,54 @@
+---
+title: A mutating Git command from admission to observed completion (implemented, push shown)
+---
+sequenceDiagram
+  autonumber
+  participant Caller as Caller (UI, tool, run)
+  participant GW as Gateway (AdmittedCommand)
+  participant GS as GitService (CommandHandler)
+  participant AP as Approvals (owner_preview)
+  participant Store as ApplicationStore
+  participant Q as Dispatcher (git_effects Consumer)
+  participant Fx as Effects then GitService.execute
+  participant PT as PushTransport
+  participant Files as GitTransportFiles
+  participant Git as git process (HelperRunner)
+  Caller->>GW: git.push { worktreeId, remoteId, targetRef, expectedHead, mode }
+  GW->>GS: prepare (outside any store snapshot)
+  GS->>Git: read-only observation of source and registered destination
+  GS->>PT: push_transport reads git config, refuses executable helpers
+  PT->>Files: create(isolated config) returns private directory
+  PT-->>GS: digest of program, config and environment
+  GW->>GS: decide inside one write transaction
+  opt a reviewed operation exists
+    GS->>AP: approved_binding then recheck_control
+    AP-->>GS: reviewed facts, SourceChanged if any differ
+  end
+  alt non-human caller, no review, local-server remote
+    GS-->>Caller: refused ApprovalRequired (git_local_server_review)
+  else force push to a protected branch or no expected remote
+    GS-->>Caller: refused PermissionDenied (protected_branch)
+  else binding matches
+    GS->>Store: record_intent(Job) + reserve worktree pending_operation_id
+    GS->>Store: append event + enqueue git_effects entry (partition = worktree)
+    GS-->>Caller: Accepted { operationId }
+  end
+  Q->>Fx: execute(OperationRecord) via spawn_blocking
+  Fx->>Fx: verify_target (physical repository and worktree identity)
+  Fx->>PT: push_transport again, digest must equal the decided digest
+  Fx->>Git: remote symbolic ref, default branch, remote head (lease check)
+  alt remote lease stale or local source changed
+    Fx-->>Q: Unknown or Failed, reservation kept or settled by settle_denial
+  else checks pass
+    Fx->>Git: push --porcelain --force-with-lease=target:observed (isolated GIT_DIR, no system or global config)
+    Fx->>Git: re-read remote head, never repeat the write
+    alt remote head equals expected head
+      Fx->>Store: finish_git: update worktree, clear pending, event, links (one unit of work)
+      Fx-->>Q: Completed(result GitPush)
+    else not observed
+      Fx-->>Q: Unknown (observe later, never replayed)
+    end
+  end
+  PT->>Files: drop context removes the private directory
+  Note over Q,Fx: after a crash, observe reads the worktree checkpoint, returns the stored result or Unknown
+  Note over Fx: reconcile_cancelled runs every second and releases only CancelledBeforeDispatch reservations

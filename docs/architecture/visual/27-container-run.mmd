@@ -1,0 +1,52 @@
+---
+title: Container operation - intent, approval, effect, run and shutdown (implemented)
+---
+sequenceDiagram
+  autonumber
+  participant Agent as Agent or person
+  participant GW as Gateway
+  participant AP as Approvals (OwnerPreview)
+  participant CS as ContainerService
+  participant Q as Store and queue
+  participant D as Dispatcher (container_effects, container_stops)
+  participant CR as ContainerRunner
+  participant PS as ProcessSupervisor
+  participant CLI as docker, podman or container CLI
+  Agent->>GW: containers.build, pull, create, start, exec or stop
+  opt build, pull, create, start, exec
+    GW->>AP: approval_preview(request)
+    AP->>CS: approval_preview (host paths, ports, Dockerfile digest, context digest)
+    Note over AP: a person approves the exact request digest
+  end
+  GW->>CS: decide in the receipt transaction
+  CS->>Q: recheck_reviewed binding, requested_backend must equal the selected backend
+  alt create
+    CS->>Q: reserve resource leases (CapacityWait rolls back), insert StoredContainer as Creating
+  else start or stop
+    CS->>Q: check expected_revision and phase, move to Starting or Stopping
+  end
+  CS->>Q: ContainerIntent frozen as the operation payload, enqueue (Stop goes to container_stops)
+  Q-->>Agent: receipt, Accepted with operation id
+  Note over CS,CLI: no engine command ran before the receipt committed
+  D->>CS: execute_effect(operation, authority)
+  CS->>CS: command_context rebuilds the context and authorizes with current authority
+  CS->>CS: take image_gate (build, pull, create) and the per-container lifecycle gate
+  CS->>CS: authorize again after the wait
+  CS->>CR: run(bound_spec argv, timeout, output cap, redactions)
+  CR->>PS: owned process launch
+  PS->>CLI: engine command
+  CLI-->>CS: exit code and bounded output
+  alt exit verified
+    CS->>Q: settle_phase Created, Running or Stopped (leases released on Stopped or Failed)
+    CS-->>D: Completed
+  else create refused
+    CS->>Q: settle_phase Creating to Failed, release reservations
+    CS-->>D: Failed
+  else outcome not known
+    CS-->>D: Unknown
+    D->>CS: observe_effect inspects labels and immutable id, never repeats the command
+  end
+  Note over CS,CLI: shutdown path
+  CS->>Q: AgentWorkMayRun rows, one at a time under the lifecycle gate
+  CS->>CLI: inspect, check ownership labels, stop only the verified native id
+  CLI-->>CS: Stopped confirmed, else the row stays Uncertain

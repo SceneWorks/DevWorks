@@ -27,19 +27,36 @@ No inheritance is drawn because the code has none; supertraits appear only where
 | [14 Process cancellation](14-process-cancellation.svg) ([source](14-process-cancellation.mmd)) | sequence | Cooperative stop, grace, forced kill within one bound, `Reaped`/`Uncertain`, record-write failure, and the lease reconciliation that grants the next waiter. | `crates/devworks-core/src/services/process.rs`, `crates/devworks-engine/src/resources.rs` |
 | [15 Shell request and close](15-shell-request-and-close.svg) ([source](15-shell-request-and-close.mmd)) | sequence | A UI action through `Client` workers to `Runtime::command`, slot-superseded replies, runtime hints re-querying visible data incrementally, and the close path to `Runtime::shutdown` and release of the data root. | `crates/devworks-desktop/src/{shell.rs,backend.rs,host.rs}` |
 | [16 Shell close states](16-shell-close-states.svg) ([source](16-shell-close-states.mmd)) | state | `shell::Lifecycle`: `Open → Quiescing → Persisting → ShuttingDown → Exiting → Closed`, the offline path, and the Quiescing seam (`HostControl::begin_quiesce`/`quiesced`) where run controls (DW-9) will pause active work roots. | `crates/devworks-desktop/src/shell.rs` |
+| 17 Watchers (source: [17-watchers.mmd](17-watchers.mmd)) | class | `WatchService` (`watch.*`), the engine supervisor and the desktop watcher views. | `crates/devworks-core/src/services/watch/`, `crates/devworks-engine/src/watch.rs`, `crates/devworks-desktop/src/{watch_ops.rs,watchers_screen.rs}`, `crates/devworks-core/src/ports/storage/watchers.rs` |
+| 18 Watcher lifecycle (source: [18-watcher-lifecycle.mmd](18-watcher-lifecycle.mmd)) | state | `WatcherPhase` and `WatchEventState` transitions. | `crates/devworks-core/src/services/watch/mod.rs`, `crates/devworks-core/src/ports/storage/watchers.rs` |
+| 19 Schema metadata (source: [19-schema-metadata.mmd](19-schema-metadata.mmd)) | class | `SchemaService` (`schemas.*`): sources, capture, retained views and queries. | `crates/devworks-core/src/services/schemas/`, `crates/devworks-engine/src/schemas.rs` |
+| 20 Indexing and graph (source: [20-indexing-and-graph.mmd](20-indexing-and-graph.mmd)) | class | Indexing runs and graph queries: services, ports and adapters. | `crates/devworks-core/src/services/{indexing,graph}/`, `crates/devworks-adapters/src/index/`, `crates/devworks-engine/src/indexing.rs` |
+| 21 Model routing and connections (source: [21-model-routing-and-connections.mmd](21-model-routing-and-connections.mmd)) | class | Router, provider connections, embedding spaces and native streaming. | `crates/devworks-core/src/services/router/`, `crates/devworks-engine/src/providers/` |
+| 22 Route selection (source: [22-route-selection.mmd](22-route-selection.mmd)) | sequence | Selection, pin, attempt admission and cooldown. | `crates/devworks-core/src/services/router/` |
+| 23 Agents and messaging (source: [23-agents-and-messaging.mmd](23-agents-and-messaging.mmd)) | class | Coordinator delegation, agent turns and retained messaging (`agents.*`). | `crates/devworks-core/src/services/agents.rs`, `crates/devworks-engine/src/{agent_inbox,agent_supervisor,agent_turns,tool_turn}.rs` |
+| 24 Agent turn (source: [24-agent-turn.mmd](24-agent-turn.mmd)) | sequence | A delegated turn and a retained message. | `crates/devworks-engine/src/agent_turns.rs` |
+| 25 Approvals (source: [25-approvals.mmd](25-approvals.mmd)) | class | Proposals, held tool calls, decisions and replay. | `crates/devworks-core/src/services/approvals/`, `crates/devworks-engine/src/approvals.rs` |
+| 26 Containers (source: [26-containers.mmd](26-containers.mmd)) | class | Selected backend, owned agent work and shutdown. | `crates/devworks-core/src/services/containers/`, `crates/devworks-engine/src/containers.rs` |
+| 27 Container run (source: [27-container-run.mmd](27-container-run.mmd)) | sequence | Intent, approval, effect, run and shutdown. | `crates/devworks-core/src/services/containers/` |
+| 28 Desktop control (source: [28-desktop-control.mmd](28-desktop-control.mmd)) | class | Consent, lease, serial input and the native adapters. | `crates/devworks-core/src/services/desktop/`, `crates/devworks-adapters/src/desktop*.rs` |
+| 29 Outgoing MCP client (source: [29-mcp-client.mmd](29-mcp-client.mmd)) | class | Configuration, connections, catalog and sampling. | `crates/devworks-core/src/services/mcp.rs`, `crates/devworks-adapters/src/mcp.rs`, `crates/devworks-engine/src/{mcp,mcp_sampling}.rs` |
+| 30 MCP session (source: [30-mcp-session.mmd](30-mcp-session.mmd)) | sequence | Connect, discover, tool call and sampling. | `crates/devworks-core/src/services/mcp.rs` |
+| 31 Process tools (source: [31-process-tools.mmd](31-process-tools.mmd)) | class | Registered executables, journaled execute, cancel and installs. | `crates/devworks-core/src/services/process/tools.rs`, `crates/devworks-engine/src/process_tools.rs` |
+| 32 Git task operations (source: [32-git-task-operations.mmd](32-git-task-operations.mmd)) | class | Git operations, approval and transport isolation. | `crates/devworks-core/src/services/git/`, `crates/devworks-adapters/src/git_transport.rs`, `crates/devworks-engine/src/git.rs` |
+| 33 Git command flow (source: [33-git-command-flow.mmd](33-git-command-flow.mmd)) | sequence | A mutating command (`git.push`) from admission to observed completion. | `crates/devworks-core/src/services/git/` |
+| 34 Packages (source: [34-packages.mmd](34-packages.mmd)) | class | Executable packages, ports, adapters and the package host. | `crates/devworks-core/src/services/packages/`, `crates/devworks-adapters/src/packages.rs`, `crates/devworks-engine/src/{package.rs,package_host/}`, `crates/devworks-core/src/ports/storage/packages.rs` |
+| 35 Package lifecycle (source: [35-package-lifecycle.mmd](35-package-lifecycle.mmd)) | state | `VersionPhase` and helper `InstanceStatus`. | `crates/devworks-core/src/services/packages/mod.rs`, `crates/devworks-core/src/ports/storage/packages.rs`, `crates/devworks-engine/src/package_host/mod.rs` |
 
-The diagrams above cover the gateway, storage, runtime, process, lease and shell code. Several
-subsystems that VIS-02 names have since been built and registered, and no implemented diagram
-shows them yet: model routing and connections, coordinator delegation and agent messaging
-(`agents.*`), approvals, indexing and graph queries, Git task operations, the executable package
-lifecycle, containers, desktop control, outgoing MCP, watchers and schema metadata. Each is
-backed by a registered handler in `crates/devworks-core/src/services/`. Until its diagram is
-drawn here, read the service module and the proposed workflow in the
-[architecture baseline](../architecture-diagrams/manifest.json), and treat the code as
-authoritative. Operations with no registered handler (Git cleanup and integration, the incoming
-MCP server, document import and search, GitHub, reviews, releases and the other families named in
-the repository [README](../../../README.md)) have no code to diagram. Diagrams 04 and 05 still
-show the registered services and the `<<planned: ...>>` seams as they stood when drawn, so some of
+Diagrams 17 to 35 were added as source only: no Mermaid CLI was available when they were drawn,
+so their `.svg` files are not committed yet. Render them with the command below; the manifest lists
+the `.svg` names they will produce.
+
+Registered but not drawn: the operations with a handler in `crates/devworks-core/src/services/` that
+these diagrams do not cover (for example browser, jobs, runs, knowledge, conventions, evals, help and
+notifications); read the service module for those. Operations with no registered handler (Git cleanup and
+integration, the incoming MCP server, document import and search, GitHub, reviews, releases and the other
+families named in the repository [README](../../../README.md)) have no code to diagram. Diagrams 04 and 05
+still show the registered services and the `<<planned: ...>>` seams as they stood when drawn, so some of
 those seams have since been built.
 
 ## Editing and rendering
