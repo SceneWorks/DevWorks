@@ -569,16 +569,14 @@ fn native_source_verification_obeys_cancel_deadline_and_work_bounds_without_pois
         cancel: cancellation.clone(),
         checks: std::sync::atomic::AtomicUsize::new(0),
     });
-    let artifacts = Arc::new(ArtifactService::new(
+    let mut composed = composition(&h, store.clone(), "git");
+    composed.artifacts = ArtifactComposition::new(
         files.clone(),
         Arc::new(HostArtifactSources::new(h.clock(), h.ids.clone())),
         Arc::new(NativeFilesystem::new()),
-        h.clock(),
-        h.ids.clone(),
-    ));
-    let mut composed = composition(&h, store.clone(), "git");
-    composed.artifacts = artifacts.clone();
+    );
     let app = executor.block_on(boot(composed)).unwrap();
+    let artifacts = app.artifacts().clone();
     let ctx = principal(&*store, "user", PrincipalKind::Human);
     base_directory(&store, &ctx, &src);
     let repository = discovered(&app, &ctx).remove(0);
@@ -1816,7 +1814,7 @@ fn neighbour_work(files: usize, calls: usize) -> (Vec<(&'static str, StoreWork)>
             store.clone(),
             h.clock(),
             h.ids.clone(),
-            composition(&h, store.clone(), "git").artifacts,
+            app.artifacts().clone(),
         ),
     ));
     let gateway = devworks_core::gateway::Gateway {

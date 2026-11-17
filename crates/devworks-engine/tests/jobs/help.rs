@@ -1,6 +1,9 @@
 //! Native Help scheduling over real SQLite/runtime/gateway, with no inference or network.
 use super::*;
 use devworks_core::services::jobs::runner::{NativeJobDispatch, NoInferencePipeline};
+use devworks_engine::{
+    ArtifactComposition, DiagnosticComposition, KnowledgeComposition, RunComposition,
+};
 use std::sync::Mutex;
 
 struct HelpApp {
@@ -41,13 +44,11 @@ fn boot_help_with_metadata(
     config.housekeeping_interval = Duration::from_secs(3600);
     config.shutdown_grace = Duration::from_millis(50);
     config.shutdown_bound = Duration::from_secs(5);
-    let artifacts = Arc::new(ArtifactService::new(
+    let artifacts = ArtifactComposition::new(
         files,
         Arc::new(HostArtifactSources::new(h.clock(), h.ids.clone())),
         Arc::new(NativeFilesystem::new()),
-        h.clock(),
-        h.ids.clone(),
-    ));
+    );
     let composition = Composition {
         git: None,
         browser: None,
@@ -60,18 +61,12 @@ fn boot_help_with_metadata(
             clock: h.clock(),
         }),
         artifacts,
-        resources: Arc::new(ResourceService::new(h.ids.clone(), h.clock())),
         process_host: Arc::new(FakeHost::default()),
-        runs: RunComposition::new(Arc::new(ControlService::new(h.ids.clone()))),
+        runs: RunComposition::default(),
+        knowledge: KnowledgeComposition::default(),
+        web: None,
         power: Arc::new(NoPower),
-        diagnostics: Arc::new(
-            devworks_core::services::diagnostics::DiagnosticService::new(
-                store.clone(),
-                h.ids.clone(),
-                h.clock(),
-                None,
-            ),
-        ),
+        diagnostics: DiagnosticComposition::default(),
         use_cases: UseCases::new().with_queue(),
         consumers: vec![],
         indexing: None,

@@ -41,6 +41,9 @@ use devworks_core::{
     },
 };
 use devworks_engine::{
+    ArtifactComposition, DiagnosticComposition, KnowledgeComposition, RunComposition,
+};
+use devworks_engine::{
     providers::{
         driver::{EmbeddingRegistration, InstructionTargets, NativeProviders, ProviderComposition},
         schemas::RegisteredSchemas,
@@ -211,6 +214,7 @@ impl HttpStream for Stream {
 struct Fx {
     h: Harness,
     store: Arc<dyn ApplicationStore>,
+    artifact_ports: ArtifactComposition,
     artifacts: Arc<ArtifactService>,
     connections: Arc<ConnectionService>,
     usage: Arc<UsageRuntime>,
@@ -243,16 +247,15 @@ impl Fx {
         let store = h.open();
         let context =
             principal(store.as_ref(), "host", PrincipalKind::Host).with_session(id("session"));
-        let artifacts = Arc::new(ArtifactService::new(
+        let artifact_ports = ArtifactComposition::new(
             Arc::new(NativeArtifactFiles::new(
                 h.root.clone(),
                 h.root.with_extension("cache"),
             )),
             Arc::new(HostArtifactSources::new(h.clock(), h.ids.clone())),
             Arc::new(NativeFilesystem::new()),
-            h.clock(),
-            h.ids.clone(),
-        ));
+        );
+        let artifacts = h.artifact_service(&store, &artifact_ports);
         let oauth = matches!(
             profile,
             "CodexSubscriptionResponses" | "ClaudeSubscriptionMessages"
@@ -435,6 +438,7 @@ impl Fx {
         Self {
             h,
             store,
+            artifact_ports,
             artifacts,
             connections,
             usage,
@@ -751,22 +755,13 @@ fn tool_runtime_composition(f: &Fx) -> devworks_engine::Composition {
         clock: f.h.clock(),
         ids: f.h.ids.clone(),
         authority: Arc::new(Authority),
-        artifacts: f.artifacts.clone(),
-        resources: Arc::new(devworks_core::services::resources::ResourceService::new(
-            f.h.ids.clone(),
-            f.h.clock(),
-        )),
+        artifacts: f.artifact_ports.clone(),
         process_host: Arc::new(devworks_adapters::process::NativeProcessHost),
-        runs: devworks_engine::RunComposition::new(Arc::new(ControlService::new(f.h.ids.clone()))),
+        runs: RunComposition::default(),
+        knowledge: KnowledgeComposition::default(),
+        web: None,
         power: Arc::new(devworks_adapters::power::NativePower),
-        diagnostics: Arc::new(
-            devworks_core::services::diagnostics::DiagnosticService::new(
-                f.store.clone(),
-                f.h.ids.clone(),
-                f.h.clock(),
-                None,
-            ),
-        ),
+        diagnostics: DiagnosticComposition::default(),
         git: None,
         browser: None,
         packages: None,

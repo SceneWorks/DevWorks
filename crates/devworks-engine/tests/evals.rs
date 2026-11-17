@@ -10,13 +10,12 @@ use devworks_adapters::process::NativeProcessHost;
 use devworks_core::ports::storage::*;
 use devworks_core::protocol::records::EvalSuiteSnapshot;
 use devworks_core::protocol::{ActorId, AssignmentId, ProjectId, RootId};
-use devworks_core::services::artifacts::ArtifactService;
-use devworks_core::services::diagnostics::DiagnosticService;
-use devworks_core::services::resources::ResourceService;
-use devworks_core::services::runs::ControlService;
 use devworks_core::services::{UseCases, evals::EvalService};
 use devworks_engine::evals::EvalSupervisor;
-use devworks_engine::{Composition, RunComposition, RuntimeConfig, boot};
+use devworks_engine::{
+    ArtifactComposition, Composition, DiagnosticComposition, KnowledgeComposition, RunComposition,
+    RuntimeConfig, boot,
+};
 use serde_json::json;
 use std::sync::Arc;
 use std::time::Duration;
@@ -43,26 +42,20 @@ fn composition(
         clock: h.clock(),
         ids: h.ids.clone(),
         authority: Arc::new(Authority),
-        artifacts: Arc::new(ArtifactService::new(
+        artifacts: ArtifactComposition::new(
             Arc::new(NativeArtifactFiles::new(
                 h.root.clone(),
                 h.root.with_extension("cache"),
             )),
             Arc::new(HostArtifactSources::new(h.clock(), h.ids.clone())),
             Arc::new(NativeFilesystem::new()),
-            h.clock(),
-            h.ids.clone(),
-        )),
-        resources: Arc::new(ResourceService::new(h.ids.clone(), h.clock())),
+        ),
         process_host: Arc::new(NativeProcessHost),
-        runs: RunComposition::new(Arc::new(ControlService::new(h.ids.clone()))),
+        runs: RunComposition::default(),
+        knowledge: KnowledgeComposition::default(),
+        web: None,
         power: Arc::new(NativePower),
-        diagnostics: Arc::new(DiagnosticService::new(
-            store.clone(),
-            h.ids.clone(),
-            h.clock(),
-            None,
-        )),
+        diagnostics: DiagnosticComposition::default(),
         browser: None,
         git: None,
         packages: None,

@@ -21,7 +21,7 @@ use std::sync::{Mutex, OnceLock};
 
 /// The tool the scripted provider calls in the held-call test. Its handler refuses every new
 /// request until capacity frees up, so the call is held.
-const HELD: &str = "agents.ack";
+const HELD: &str = "router.pin";
 
 struct NeedsCapacity;
 impl devworks_core::ports::CommandHandler for NeedsCapacity {
@@ -206,7 +206,6 @@ pub(super) async fn runtime_with(
         ),
     );
     composed.use_cases = UseCases::new()
-        .with_runs(fx.service.clone())
         .with_connections(connections.clone())
         .with_router(Arc::new(
             devworks_core::services::router::InferenceRouter::new(
@@ -358,7 +357,11 @@ fn a_held_tool_call_is_submitted_once_and_again_only_after_a_state_change() {
                     submissions: submissions.clone(),
                     real: None,
                 }),
-                Arc::new(HeldWire::new("agents_ack_command", "{}", 1)),
+                Arc::new(HeldWire::new(
+                    "router_pin_command",
+                    r#"{"sessionId":"session-a","expectedPinRevision":"1","intent":{"kind":"OpenRouterAuto"},"effort":"Default"}"#,
+                    1,
+                )),
                 |composed| {
                     composed
                         .use_cases
@@ -369,7 +372,7 @@ fn a_held_tool_call_is_submitted_once_and_again_only_after_a_state_change() {
             let (context, primary) = pinned_agent_session(&fx);
             let offered = offered(&app, &context);
             assert!(
-                offered.iter().any(|name| name == "agents_ack_command"),
+                offered.iter().any(|name| name == "router_pin_command"),
                 "{offered:?}"
             );
 

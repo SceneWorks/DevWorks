@@ -25,13 +25,14 @@ use devworks_core::protocol::records::{DiagnosticEntry, Severity};
 use devworks_core::protocol::results::{DomainDecision, DomainQueryReply, OperationResult};
 use devworks_core::protocol::{ActorId, CommandReply, ProjectId, Rejection};
 use devworks_core::services::UseCases;
-use devworks_core::services::artifacts::ArtifactService;
 use devworks_core::services::artifacts::replies::REPLY_CONSUMER;
 use devworks_core::services::diagnostics::{DiagnosticService, ExportFailure, LogEntry, LogQuery};
-use devworks_core::services::resources::ResourceService;
 use devworks_core::settings::catalog::{LOG_MAX_RECORDS_KEY, LOG_RETENTION_DAYS_KEY, descriptor};
 use devworks_core::settings::model;
 use devworks_engine::runtime::PurgeComposition;
+use devworks_engine::{
+    ArtifactComposition, DiagnosticComposition, KnowledgeComposition, RunComposition,
+};
 use devworks_engine::{BootError, Composition, Consumer, Outcome, Runtime, RuntimeConfig, boot};
 use serde_json::{Value, json};
 use std::sync::Arc;
@@ -48,7 +49,6 @@ const SECRET: &str = "s3cr3t-value-registered-by-a-provider";
 struct Parts {
     sqlite: Arc<SqliteStore>,
     sources: Arc<HostArtifactSources>,
-    diagnostics: Arc<DiagnosticService>,
     exports: Arc<DiagnosticExports>,
 }
 
@@ -70,26 +70,16 @@ fn compose(h: &Harness, consumers: Vec<Consumer>) -> (Composition, Parts) {
     let sqlite = Arc::new(h.open_sqlite());
     let store: Arc<dyn ApplicationStore> = sqlite.clone();
     let sources = Arc::new(HostArtifactSources::new(h.clock(), h.ids.clone()));
-    let artifacts = Arc::new(ArtifactService::new(
+    let artifacts = ArtifactComposition::new(
         Arc::new(NativeArtifactFiles::new(
             h.root.clone(),
             h.root.with_extension("cache"),
         )),
         sources.clone(),
         Arc::new(NativeFilesystem::new()),
-        h.clock(),
-        h.ids.clone(),
-    ));
-    let diagnostics = Arc::new(DiagnosticService::new(
-        store.clone(),
-        h.ids.clone(),
-        h.clock(),
-        Some(sqlite.clone() as Arc<dyn StorageHealthProbe>),
-    ));
-    diagnostics.register_secret(SECRET);
+    );
     let exports =
         Arc::new(DiagnosticExports::new(exports_dir(h), sources.clone()).with_store(store.clone()));
-    diagnostics.set_export_staging(exports.clone());
     let mut config = RuntimeConfig::new(id("dispatcher-1"));
     config.collect_interval = Duration::from_secs(3600);
     config.diagnostics_interval = Duration::from_secs(3600);
@@ -100,13 +90,16 @@ fn compose(h: &Harness, consumers: Vec<Consumer>) -> (Composition, Parts) {
             ids: h.ids.clone(),
             authority: Arc::new(Authority),
             artifacts,
-            resources: Arc::new(ResourceService::new(h.ids.clone(), h.clock())),
             process_host: Arc::new(NativeProcessHost),
-            runs: devworks_engine::RunComposition::new(Arc::new(
-                devworks_core::services::runs::ControlService::new(h.ids.clone()),
-            )),
+            runs: RunComposition::default(),
+            knowledge: KnowledgeComposition::default(),
+            web: None,
             power: Arc::new(NativePower),
-            diagnostics: diagnostics.clone(),
+            diagnostics: DiagnosticComposition {
+                storage: Some(sqlite.clone() as Arc<dyn StorageHealthProbe>),
+                export_staging: Some(exports.clone()),
+                secrets: vec![SECRET.to_owned()],
+            },
             git: None,
             browser: None,
             packages: None,
@@ -118,7 +111,6 @@ fn compose(h: &Harness, consumers: Vec<Consumer>) -> (Composition, Parts) {
         Parts {
             sqlite,
             sources,
-            diagnostics,
             exports,
         },
     )
@@ -266,7 +258,7 @@ fn boot_feeds_health_and_records_recovery_and_failures() {
         read(&*parts.sqlite, |s| s.queue().status("indexer")).failed == 1
     }));
     // Monitor probes ran at boot (or run now); either way the checks are measured.
-    parts.diagnostics.refresh_monitor();
+    app.diagnostics().refresh_monitor();
     let all = checks(&app, &user);
     assert_eq!(health(check(&all, "boot.recovery")), "Healthy");
     assert_eq!(health(check(&all, "queue.dispatcher")), "Healthy");
@@ -297,10 +289,11 @@ fn boot_feeds_health_and_records_recovery_and_failures() {
         readiness.message.0
     );
     rt.block_on(app.shutdown());
+    let retained = app.diagnostics().clone();
     drop(app);
     // An independently retained diagnostics view observes the end of the dispatcher;
     // it cannot keep the dispatcher and all of its consumer services alive.
-    let released = parts.diagnostics.health_entries(&user).unwrap();
+    let released = retained.health_entries(&user).unwrap();
     assert_eq!(health(check(&released, "queue.dispatcher")), "Unavailable");
 }
 
@@ -319,8 +312,7 @@ fn records_raise_the_live_hint_and_an_export_is_a_redacted_artifact() {
         None,
     );
     // Host work with a secret in its message and output.
-    parts
-        .diagnostics
+    app.diagnostics()
         .log(LogEntry {
             output: Some(format!(
                 "connecting with key {SECRET}\nAuthorization: Bearer abc.def.ghi"
@@ -437,9 +429,9 @@ fn the_retention_settings_bound_the_log() {
     // The boot monitor prunes once before sleeping; finish that pass before
     // seeding records whose removals this test attributes to its explicit calls.
     rt.block_on(until("initial diagnostics monitor pass", || {
-        parts.diagnostics.monitor().write_probe.is_some()
+        app.diagnostics().monitor().write_probe.is_some()
     }));
-    let svc = parts.diagnostics.clone();
+    let svc = app.diagnostics().clone();
     write(&**app.store(), move |tx| {
         for i in 0..1_005 {
             svc.log_in(
@@ -451,13 +443,13 @@ fn the_retention_settings_bound_the_log() {
         Ok(())
     })
     .unwrap();
-    let pruned = parts.diagnostics.prune().unwrap();
+    let pruned = app.diagnostics().prune().unwrap();
     assert!(pruned.over_cap >= 5, "{pruned:?}");
     let records = read(&*parts.sqlite, |s| s.diagnostics().diagnostic_stats()).records;
     assert_eq!(records, 1_000);
     // A day later everything recorded before then has expired.
     h.advance(2 * 86_400_000);
-    let pruned = parts.diagnostics.prune().unwrap();
+    let pruned = app.diagnostics().prune().unwrap();
     assert!(pruned.expired >= 999, "{pruned:?}");
     let left = read(&*parts.sqlite, |s| s.diagnostics().diagnostic_stats()).records;
     assert_eq!(left, 1, "only this pass's own record remains");
@@ -509,8 +501,7 @@ fn an_export_retry_replays_through_the_gateway_and_other_use_of_its_key_conflict
     );
     assert!(!replayed);
     // More happened since; a retry with the same key replays the recorded save.
-    parts
-        .diagnostics
+    app.diagnostics()
         .log(LogEntry::new("client", "later", Severity::Info, "later"))
         .unwrap();
     let (again, replayed) = saved_artifact(
@@ -656,7 +647,7 @@ fn overlapping_exports_of_one_request_key_have_one_claimant_and_one_command() {
         entered: std::sync::Mutex::new(0),
         changed: std::sync::Condvar::new(),
     });
-    parts.diagnostics.set_export_staging(gate.clone());
+    app.diagnostics().set_export_staging(gate.clone());
     let user = principal(&**app.store(), "user-a", PrincipalKind::Human).with_lineage(
         Some(ProjectId(id("project-a"))),
         None,
@@ -770,7 +761,7 @@ fn a_retryable_save_rejection_keeps_the_staged_file_for_the_retry() {
     let rt = runtime();
     drop(h.open());
     seed_root(&h, "root-a");
-    let (composition, parts) = compose(&h, Vec::new());
+    let (composition, _parts) = compose(&h, Vec::new());
     let app = rt.block_on(boot(composition)).expect("boot");
     let user = principal(&**app.store(), "user-a", PrincipalKind::Human).with_lineage(
         Some(ProjectId(id("project-a"))),
@@ -778,8 +769,8 @@ fn a_retryable_save_rejection_keeps_the_staged_file_for_the_retry() {
         None,
     );
     // The save is refused transiently (the store was busy) and records no receipt.
-    let outcome = parts
-        .diagnostics
+    let outcome = app
+        .diagnostics()
         .export(&user, &LogQuery::default(), "transient", |_| {
             rejected(Rejection::StorageUnavailable, RetryAdvice::SameCommand)
         })
@@ -799,8 +790,8 @@ fn a_retryable_save_rejection_keeps_the_staged_file_for_the_retry() {
     assert_eq!(saved.media_type, "application/json");
     assert!(staged_files(&h).is_empty(), "{:?}", staged_files(&h));
     // A rejection the same command cannot overcome releases the file at once.
-    let outcome = parts
-        .diagnostics
+    let outcome = app
+        .diagnostics()
         .export(&user, &LogQuery::default(), "final", |_| {
             rejected(Rejection::PermissionDenied, RetryAdvice::Never)
         })
@@ -808,8 +799,8 @@ fn a_retryable_save_rejection_keeps_the_staged_file_for_the_retry() {
     assert!(matches!(outcome, Ok(CommandReply::Rejected { .. })));
     assert!(staged_files(&h).is_empty(), "{:?}", staged_files(&h));
     // An unknown outcome keeps it too (until the sweep, once its ticket expired).
-    let outcome = parts
-        .diagnostics
+    let outcome = app
+        .diagnostics()
         .export(&user, &LogQuery::default(), "unknown", |_| {
             Err(devworks_core::gateway::GatewayFailure::NoUseCase(
                 "artifacts.save".into(),
@@ -1217,8 +1208,9 @@ fn a_failed_late_step_leaves_nothing_running(table: &str, purge: bool) {
     let (mut composition, parts) = compose(&h, vec![consumer("indexer", recorder.clone())]);
     if purge {
         let owners = Arc::new(NoPurgeOwners);
+        let files = owners.clone();
         composition.config.purge = Some(PurgeComposition {
-            files: owners.clone(),
+            files: Arc::new(move |_| files.clone()),
             client: owners,
         });
     }
@@ -1376,14 +1368,69 @@ fn a_failed_early_step_is_recorded(step: &str, break_step: impl FnOnce(&mut Comp
     rt.block_on(async { tokio::time::sleep(Duration::from_millis(50)).await });
     drop(h.open());
     let db = rusqlite::Connection::open(h.root.join("workspace.sqlite")).unwrap();
-    let output: String = db
+    let (output, stage): (String, String) = db
         .query_row(
-            "SELECT output FROM diagnostic_records WHERE component='boot' AND code='failed'",
+            "SELECT output, stage FROM diagnostic_records WHERE component='boot' AND code='failed'",
             [],
-            |r| r.get(0),
+            |r| Ok((r.get(0)?, r.get(1)?)),
         )
         .expect("the failed boot is recorded");
     assert!(output.contains(step), "{output}");
+    assert_eq!(stage, "composition");
+}
+
+/// The engine builds and registers the core services' families; a composition that registers
+/// one itself is refused as a composition error, recorded as a failed boot at stage
+/// `composition`.
+#[test]
+fn registering_a_family_the_engine_builds_is_a_composition_error() {
+    use devworks_core::services::{agents::AgentService, resources::ResourceService};
+    type Register = fn(&Composition, UseCases) -> UseCases;
+    let cases: [(&str, Register); 5] = [
+        ("artifacts", |c, u| {
+            let services = devworks_engine::CoreServices::for_fixture(
+                &c.store,
+                &c.clock,
+                &c.ids,
+                &c.artifacts,
+            );
+            u.with_artifacts(services.artifacts)
+        }),
+        ("resources", |c, u| {
+            u.with_resources(Arc::new(ResourceService::new(
+                c.ids.clone(),
+                c.clock.clone(),
+            )))
+        }),
+        ("runs", |c, u| {
+            u.with_runs(Arc::new(
+                devworks_core::services::runs::ControlService::new(c.ids.clone()),
+            ))
+        }),
+        ("agents", |c, u| {
+            let control = Arc::new(devworks_core::services::runs::ControlService::new(
+                c.ids.clone(),
+            ));
+            u.with_agents(Arc::new(AgentService::new(c.ids.clone(), control)))
+        }),
+        ("diagnostics", |c, u| {
+            u.with_diagnostics(Arc::new(DiagnosticService::new(
+                c.store.clone(),
+                c.ids.clone(),
+                c.clock.clone(),
+                None,
+            )))
+        }),
+    ];
+    for (family, register) in cases {
+        a_failed_early_step_is_recorded(
+            &format!("the {family} use cases are built and registered by the engine"),
+            |c| {
+                let owned = std::mem::replace(&mut c.use_cases, UseCases::new());
+                c.use_cases = register(c, owned);
+            },
+        );
+    }
 }
 
 #[test]
@@ -1425,7 +1472,13 @@ fn an_mcp_remote_that_is_already_installed_stops_boot_with_a_failed_boot_diagnos
                 c.store.clone(),
                 Arc::new(UnusedRemote),
                 validator.clone(),
-                c.artifacts.clone(),
+                devworks_engine::CoreServices::for_fixture(
+                    &c.store,
+                    &c.clock,
+                    &c.ids,
+                    &c.artifacts,
+                )
+                .artifacts,
             )
             .unwrap();
         c.use_cases = std::mem::replace(&mut c.use_cases, UseCases::new()).with_mcp(service);

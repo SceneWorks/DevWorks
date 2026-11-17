@@ -39,13 +39,15 @@ use devworks_core::protocol::{
     ActorId, CommandReply, DomainErrorCode, Id, OperationId, OperationState, ProjectId, RetryAdvice,
 };
 use devworks_core::services::UseCases;
-use devworks_core::services::artifacts::ArtifactService;
 use devworks_core::services::artifacts::evidence::Evidence;
 use devworks_core::services::browser::cdp::encode_base64;
 use devworks_core::services::browser::live::MAX_FRAMES;
 use devworks_core::services::browser::{BrowserConfig, BrowserService, EFFECT_CONSUMER};
 use devworks_core::settings::catalog::AgentRole;
 use devworks_engine::browser::BrowserComposition;
+use devworks_engine::{
+    ArtifactComposition, DiagnosticComposition, KnowledgeComposition, RunComposition,
+};
 use devworks_engine::{Composition, Runtime, RuntimeConfig, ShutdownStage, boot};
 use serde_json::{Value, json};
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -1472,16 +1474,14 @@ fn composition(
     browser: BrowserConfig,
     unverified_stop: Arc<std::sync::atomic::AtomicBool>,
 ) -> Composition {
-    let artifacts = Arc::new(ArtifactService::new(
+    let artifacts = ArtifactComposition::new(
         Arc::new(NativeArtifactFiles::new(
             h.root.clone(),
             h.root.with_extension("cache"),
         )),
         Arc::new(HostArtifactSources::new(h.clock(), h.ids.clone())),
         Arc::new(NativeFilesystem::new()),
-        h.clock(),
-        h.ids.clone(),
-    ));
+    );
     let mut config = RuntimeConfig::new(id("dispatcher-1"));
     config.collect_interval = Duration::from_secs(3600);
     config.shutdown_grace = Duration::from_millis(200);
@@ -1499,25 +1499,14 @@ fn composition(
             clock: h.clock(),
         }),
         artifacts,
-        resources: Arc::new(devworks_core::services::resources::ResourceService::new(
-            h.ids.clone(),
-            h.clock(),
-        )),
         process_host: Arc::new(StopHookHost {
             unverified: unverified_stop,
         }),
-        runs: devworks_engine::RunComposition::new(Arc::new(
-            devworks_core::services::runs::ControlService::new(h.ids.clone()),
-        )),
+        runs: RunComposition::default(),
+        knowledge: KnowledgeComposition::default(),
+        web: None,
         power: Arc::new(NoPower),
-        diagnostics: Arc::new(
-            devworks_core::services::diagnostics::DiagnosticService::new(
-                store.clone(),
-                h.ids.clone(),
-                h.clock(),
-                None,
-            ),
-        ),
+        diagnostics: DiagnosticComposition::default(),
         git: None,
         browser: Some(BrowserComposition {
             platform,

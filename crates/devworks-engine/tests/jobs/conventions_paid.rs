@@ -12,6 +12,9 @@ use devworks_core::{
         connections::{ConnectionService, auth::Credential},
     },
 };
+use devworks_engine::{
+    ArtifactComposition, DiagnosticComposition, KnowledgeComposition, RunComposition,
+};
 use std::io::{Cursor, Read};
 struct EntropyFixture;
 impl Entropy for EntropyFixture {
@@ -165,16 +168,14 @@ fn boot_paid(rt: &tokio::runtime::Runtime, h: &Harness, wire: Arc<Wire>) -> Help
     config.shutdown_grace = Duration::from_millis(50);
     config.shutdown_bound = Duration::from_secs(5);
     config.providers = Some(devworks_engine::providers::driver::ProviderComposition::new(wire));
-    let artifacts = Arc::new(ArtifactService::new(
+    let artifacts = ArtifactComposition::new(
         Arc::new(NativeArtifactFiles::new(
             h.root.clone(),
             h.root.with_extension("cache"),
         )),
         Arc::new(HostArtifactSources::new(h.clock(), h.ids.clone())),
         Arc::new(NativeFilesystem::new()),
-        h.clock(),
-        h.ids.clone(),
-    ));
+    );
     let composition = Composition {
         git: None,
         browser: None,
@@ -187,18 +188,12 @@ fn boot_paid(rt: &tokio::runtime::Runtime, h: &Harness, wire: Arc<Wire>) -> Help
             clock: h.clock(),
         }),
         artifacts,
-        resources: Arc::new(ResourceService::new(h.ids.clone(), h.clock())),
         process_host: Arc::new(FakeHost::default()),
-        runs: RunComposition::new(Arc::new(ControlService::new(h.ids.clone()))),
+        runs: RunComposition::default(),
+        knowledge: KnowledgeComposition::default(),
+        web: None,
         power: Arc::new(NoPower),
-        diagnostics: Arc::new(
-            devworks_core::services::diagnostics::DiagnosticService::new(
-                store.clone(),
-                h.ids.clone(),
-                h.clock(),
-                None,
-            ),
-        ),
+        diagnostics: DiagnosticComposition::default(),
         use_cases: UseCases::new()
             .with_queue()
             .with_connections(connections)

@@ -116,7 +116,6 @@ async fn runtime_on(
         ),
     );
     composed.use_cases = UseCases::new()
-        .with_runs(fx.service.clone())
         .with_connections(connections.clone())
         .with_router(Arc::new(
             devworks_core::services::router::InferenceRouter::new(

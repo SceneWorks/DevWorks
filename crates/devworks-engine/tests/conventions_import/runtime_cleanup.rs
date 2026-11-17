@@ -1,17 +1,21 @@
 use super::*;
 use devworks_adapters::{power::NativePower, process::NativeProcessHost};
 use devworks_core::ports::files::ArtifactFiles;
-use devworks_core::services::{
-    diagnostics::DiagnosticService, resources::ResourceService, runs::ControlService,
-};
+use devworks_engine::{ArtifactComposition, DiagnosticComposition, KnowledgeComposition};
 use devworks_engine::{Composition, RunComposition, Runtime, RuntimeConfig, boot};
 use std::time::Duration;
 
 fn composition(
     h: &Harness,
     store: Arc<dyn ApplicationStore>,
-    artifacts: Arc<ArtifactService>,
+    files: Arc<dyn ArtifactFiles>,
 ) -> Composition {
+    // The fixture's own artifact service reads and writes the same files.
+    let artifacts = ArtifactComposition::new(
+        files,
+        Arc::new(HostArtifactSources::new(h.clock(), h.ids.clone())),
+        Arc::new(NativeFilesystem::new()),
+    );
     let mut config = RuntimeConfig::new(id("import-cleanup-runtime"));
     // Reclamation must be triggered by import maintenance, not a frequent test collector.
     config.collect_interval = Duration::from_secs(3600);
@@ -22,16 +26,12 @@ fn composition(
         ids: h.ids.clone(),
         authority: Arc::new(Authority),
         artifacts,
-        resources: Arc::new(ResourceService::new(h.ids.clone(), h.clock())),
         process_host: Arc::new(NativeProcessHost),
-        runs: RunComposition::new(Arc::new(ControlService::new(h.ids.clone()))),
+        runs: RunComposition::default(),
+        knowledge: KnowledgeComposition::default(),
+        web: None,
         power: Arc::new(NativePower),
-        diagnostics: Arc::new(DiagnosticService::new(
-            store,
-            h.ids.clone(),
-            h.clock(),
-            None,
-        )),
+        diagnostics: DiagnosticComposition::default(),
         git: None,
         browser: None,
         packages: None,
@@ -141,7 +141,7 @@ fn runtime_failed_trailing_manifest_cleans_on_reopen_without_manual_recovery_and
     let good_input = f.source(&serde_json::to_vec(&manifest(1)).unwrap());
     let rt = runtime();
     let (failed, published, private_blob) = rt.block_on(async {
-        let engine = boot(composition(&f.h, f.store.clone(), f.artifacts.clone()))
+        let engine = boot(composition(&f.h, f.store.clone(), f.files.clone()))
             .await
             .unwrap();
         let failed = admit(&engine, &f.ctx, &input, "runtime-failed-import");
@@ -179,6 +179,7 @@ fn runtime_failed_trailing_manifest_cleans_on_reopen_without_manual_recovery_and
         h,
         store,
         artifacts,
+        files,
         service,
         catalog,
         ctx,
@@ -196,9 +197,7 @@ fn runtime_failed_trailing_manifest_cleans_on_reopen_without_manual_recovery_and
     .unwrap();
     let content: ArtifactRef = serde_json::from_value(owner.content_ref.clone().unwrap()).unwrap();
     runtime().block_on(async {
-        let engine = boot(composition(&h, store.clone(), artifacts.clone()))
-            .await
-            .unwrap();
+        let engine = boot(composition(&h, store.clone(), files)).await.unwrap();
         until(
             "boot maintenance removes every failed private capture",
             || captures(&*store, &failed).is_empty(),
@@ -275,7 +274,7 @@ fn runtime_cancel_after_staging_releases_private_blobs_automatically_without_rew
     let f = Fx::with_files(h, files.clone());
     let input = f.source(&serde_json::to_vec(&manifest(3)).unwrap());
     runtime().block_on(async {
-        let engine = boot(composition(&f.h, f.store.clone(), f.artifacts.clone())).await.unwrap();
+        let engine = boot(composition(&f.h, f.store.clone(), f.files.clone())).await.unwrap();
         let op = admit(&engine, &f.ctx, &input, "runtime-cancel-staged");
         tokio::task::spawn_blocking(move || waiting.recv_timeout(Duration::from_secs(30))).await.unwrap().unwrap();
         let draft = read(&*f.store, |r| r.conventions().convention_import(&op)).unwrap();
