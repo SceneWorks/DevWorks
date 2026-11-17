@@ -1,0 +1,111 @@
+---
+title: Model routing, provider connections and native streaming (implemented)
+---
+classDiagram
+  direction LR
+  class InferenceRouter {
+    ids / clock
+    connections: Arc dyn ConnectionDirectory
+    router.catalog .route .pin .availability .request_status
+    +route_auxiliary(snapshot, AuxiliaryRequest) AuxiliaryRoute or RouteBlocked
+    +admit_request(tx, RequestAdmission)
+    +admit_attempt(tx, control, ctx, AttemptRequest) Admission
+    +mark_attempt_dispatched(tx, control, id)
+    +record_cooldown(tx, model, until_ms, reason)
+  }
+  class Select {
+    <<module select>>
+    Need.parse(effort, labels)
+    assess() Assessed
+    Block: NoConnection NotAllowed CredentialsRequired Cooling ...
+    unavailable() / block_codes()
+  }
+  class Latest {
+    <<module latest>>
+    families and scoped_targets
+  }
+  class AttemptSelection {
+    Conversation / Embedding / Decision
+    NativeGeneration wraps a route
+  }
+  class ConnectionDirectory {
+    <<trait>>
+    connections(RouterRead) Vec ConnectionStatus
+  }
+  class ConnectionStatus {
+    state: ConnectionState
+    allowed / excluded globs
+    +permits(upstream)
+  }
+  class NoConnections { <<fn>> }
+  class ConnectionService {
+    router.connections and router.configure Connection action
+    live: sign-in flows, staged keys, refreshing
+    +access(connection) Access
+    +refresh(connection) Access
+    +stage_api_key / submit_authorization_code
+    +reconcile / tick (hourly discovery)
+  }
+  class Profile {
+    8 PROFILES: CodexSubscriptionResponses ClaudeSubscriptionMessages
+    AnthropicMessages OpenRouterChat OpenAiResponses
+    CompatibleChat Embedding SystemOne
+  }
+  class Access {
+    connection_id / endpoint / credential_revision
+    credential: AccessCredential
+  }
+  class EmbeddingSpaceService {
+    router.configure embedding actions and router.embedding_spaces
+    +resolve_selected / +prepare_probe
+    +install_selection_indexer
+  }
+  class SecretStore { <<trait>> }
+  class HttpTransport { <<trait>> }
+  class StreamingHttp {
+    <<trait>>
+    open(HttpRequest, StreamLimits, Cancellation) HttpStream
+  }
+  class HttpStream { <<trait>> }
+  class NativeStreamingHttp { <<adapter>> }
+  class ProviderComposition {
+    http: Arc dyn StreamingHttp
+  }
+  class NativeProviders {
+    store / artifacts / usage: UsageRuntime
+    +embedding_selection / +text_preview
+  }
+  class NativeProviderSource {
+    decodes frames, one attempt
+    credentials read only at dispatch
+  }
+  class ProviderSink {
+    transcript events, artifacts
+    records 401 403 rejection and 429 cooldown
+  }
+  class LiveTurns { text previews per session }
+  class UsageRuntime { <<engine>> }
+  InferenceRouter o-- ConnectionDirectory
+  InferenceRouter ..> Select : assesses pool
+  InferenceRouter ..> Latest
+  InferenceRouter ..> AttemptSelection : admit_attempt rechecks
+  ConnectionService ..|> ConnectionDirectory
+  NoConnections ..|> ConnectionDirectory
+  ConnectionDirectory ..> ConnectionStatus
+  ConnectionService o-- SecretStore
+  ConnectionService o-- HttpTransport
+  ConnectionService ..> Profile
+  ConnectionService ..> Access
+  ConnectionService o-- EmbeddingSpaceService : OnceLock
+  NativeStreamingHttp ..|> StreamingHttp
+  StreamingHttp ..> HttpStream
+  ProviderComposition o-- StreamingHttp
+  NativeProviders *-- ProviderComposition
+  NativeProviders o-- ConnectionService
+  NativeProviders o-- UsageRuntime
+  NativeProviders *-- LiveTurns
+  NativeProviders ..> NativeProviderSource : builds per attempt
+  NativeProviders ..> ProviderSink : builds per attempt
+  NativeProviderSource o-- ConnectionService : access at dispatch
+  NativeProviderSource o-- StreamingHttp
+  UsageRuntime o-- InferenceRouter : Option

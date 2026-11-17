@@ -1,0 +1,87 @@
+---
+title: Approvals - proposals, held tool calls, decisions and replay (implemented)
+---
+classDiagram
+  direction LR
+  class ApprovalService {
+    ids / clock / roles: Arc dyn PrincipalRoles
+    control: Arc ControlService
+    catalog / owners
+    approvals.list .inspect .propose
+    approvals.record_human_decision .review_queue
+    +stage_held(store, ctx, operation, input, digest) HeldApproval
+    +create_resume / prepare_resume / settle_resume
+    +publish_pending_notifications
+  }
+  class ApprovalCatalog {
+    operations that are candidates and registered
+    +qualified(UseCases)
+    +contains(op)
+  }
+  class SavedOperationOwners {
+    <<trait>>
+    supports(op)
+    prepare(ctx, request, env) OwnerPreview
+    validate(tx, ctx, request, preview)
+    decide_source(tx, human, request, preview, approve)
+  }
+  class NoOwners { <<default>> }
+  class NativeOwnerPreviews {
+    git / packages / jobs / desktop
+    instructions / containers / control / evidence
+  }
+  class OwnerPreview {
+    scope / target_id / target_revision
+    summary / reviewed / binding
+  }
+  class Requests {
+    <<module requests>>
+    candidate(op) / decode / frame
+    closed saved-command surface
+  }
+  class HeldApproval {
+    <<module held>>
+    approval id and operation id
+    settle(Admitted Refused Unknown Rejected)
+  }
+  class ResumeDispatcher {
+    <<engine>>
+    one worker, one gateway call at a time
+    +tick() ResumePass
+    after each readmission calls settled
+  }
+  class ResumeAdmission {
+    <<trait>>
+    readmit(original context, operation, frame, options)
+  }
+  class ToolTurn {
+    <<module tool_turn>>
+    held_approval on ApprovalRequired refusal
+    publish_held_update(approval)
+  }
+  class ReviewQueue {
+    <<module review_queue>>
+    informational Knowledge review
+    Challenge and ProposedRule candidates
+  }
+  class ReviewEvidence {
+    <<module review_evidence>>
+    sealed private review snapshots
+  }
+  class ApprovalSource {
+    Settings / FeaturePlan / Generic
+  }
+  ApprovalService o-- ApprovalCatalog
+  ApprovalService o-- SavedOperationOwners
+  NoOwners ..|> SavedOperationOwners
+  NativeOwnerPreviews ..|> SavedOperationOwners
+  SavedOperationOwners ..> OwnerPreview
+  ApprovalService ..> Requests : decodes saved input
+  ApprovalService ..> HeldApproval
+  ApprovalService ..> ReviewQueue
+  NativeOwnerPreviews ..> ReviewEvidence
+  ApprovalService ..> ApprovalSource : list and inspect
+  ResumeDispatcher o-- ApprovalService
+  ResumeDispatcher o-- ResumeAdmission
+  ToolTurn ..> ApprovalService : stage_held
+  ToolTurn ..> HeldApproval

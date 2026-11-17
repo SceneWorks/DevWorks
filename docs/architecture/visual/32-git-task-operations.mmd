@@ -1,0 +1,119 @@
+---
+title: Git task operations, approval and transport isolation (implemented)
+---
+classDiagram
+  direction LR
+  class UseCases { <<registry>> }
+  class GitService {
+    store: Arc dyn ApplicationStore
+    helpers: Arc dyn HelperRunner
+    artifacts: Arc ArtifactService
+    config: GitConfig
+    stopping: AtomicBool
+    git.inspect .diff (QueryHandler)
+    git.worktree .commit .push .pull_request (CommandHandler)
+    +qualify() bool
+    +execute(OperationRecord) EffectOutcome
+    +observe(OperationRecord) EffectOutcome
+    +reconcile_cancelled() usize
+    +approval_preview() / validate_approval_preview()
+  }
+  class GitConfig {
+    transport: Option Arc dyn GitTransportFiles
+    program: git
+    deadline: 30 s
+    roots: Vec RegisteredGitRoot
+    github: Option Arc GitHubClient
+    filesystem: Option Arc dyn FilesystemResolver
+  }
+  class RegisteredGitRoot { id, path }
+  class Job {
+    <<journaled payload>>
+    actor, session, project, root, assignment
+    restore_epoch, repository and work revisions
+    fences, tree: StoredGitWorktree
+    action: Action
+    reviewed_binding: Option Value
+  }
+  class Action {
+    <<enum>>
+    Create
+    Inspect
+    Commit
+    Push
+    PullRequest
+  }
+  class EffectOutcome {
+    <<enum>>
+    Completed
+    Failed
+    Unknown
+  }
+  class SourceBinding {
+    +of(ctx) +prepare(ctx, store)
+    +validate_in(tx) +context(store)
+  }
+  class bind_worktree { <<fn>> }
+  class PushTransport {
+    context: Box dyn GitTransportContext
+    environment: filtered, no GIT_ variables
+    digest: sha256 of program, config, environment
+    +isolate(ProcessSpec) ProcessSpec
+  }
+  class GitHubClient {
+    http + secrets: github.credential
+    +default_branch() +find() +create() +update()
+  }
+  class HelperRunner { <<trait>> }
+  class SupervisedHelpers { <<engine wiring>> }
+  class GitTransportFiles {
+    <<trait>>
+    +trusted_origin(origin, repositories) bool
+    +create(configuration) Box GitTransportContext
+  }
+  class GitTransportContext {
+    <<trait>>
+    +directory() Path
+  }
+  class NativeGitTransportFiles { <<adapter>> }
+  class Context {
+    <<adapter>>
+    private directory 0700 / Windows ACL
+    config 0600, Drop removes the tree
+  }
+  class GitComposition { <<engine>> config: GitConfig }
+  class Effects { <<engine>> spawn_blocking execute / observe }
+  class Consumer {
+    <<engine>>
+    name: git_effects
+    retry 500 ms to 30 s, 4 attempts
+  }
+  class NativeOwnerPreviews { <<approvals>> supports worktree commit push }
+  class GitIntegrateCleanup {
+    <<planned: no handler>>
+    git.integrate, git.cleanup
+  }
+  UseCases o-- GitService : with_git registers six operations
+  GitService *-- GitConfig
+  GitConfig *-- RegisteredGitRoot
+  GitConfig o-- GitTransportFiles
+  GitConfig o-- GitHubClient
+  GitService o-- HelperRunner
+  GitService ..> Job : journals as operation payload
+  Job *-- Action
+  GitService ..> EffectOutcome
+  bind_worktree ..> SourceBinding : context.rs, used by desktop and browser services
+  GitService ..> PushTransport : push only
+  PushTransport o-- GitTransportContext
+  PushTransport ..|> HelperRunner
+  PushTransport ..> GitTransportFiles : create, trusted_origin
+  SupervisedHelpers ..|> HelperRunner
+  NativeGitTransportFiles ..|> GitTransportFiles
+  Context ..|> GitTransportContext
+  NativeGitTransportFiles ..> Context : creates
+  GitComposition *-- GitConfig
+  Consumer *-- Effects
+  Effects o-- GitService
+  NativeOwnerPreviews o-- GitService : approval_preview
+  GitService ..> GitHubClient : pull_request only
+  UseCases ..> GitIntegrateCleanup : not registered

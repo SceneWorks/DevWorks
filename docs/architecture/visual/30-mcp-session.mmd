@@ -1,0 +1,53 @@
+---
+title: Outgoing MCP session - connect, discover, tool call and sampling (implemented)
+---
+sequenceDiagram
+  autonumber
+  participant P as Person or agent
+  participant S as McpClientService
+  participant Q as Store and queue
+  participant D as Dispatcher (mcp_effects)
+  participant R as NativeMcpClients (McpRemote)
+  participant X as MCP server (stdio process or HTTP)
+  participant E as EngineSampler and McpSampling
+  P->>S: mcp.connect then mcp.discover (command)
+  S->>Q: check scope and expected revision, record operation intent, enqueue
+  D->>S: execute(op)
+  S->>R: connect(context, endpoint)
+  R->>X: initialize (stdio via ProcessSupervisor, or HTTP with a bearer from the secret store)
+  S->>R: discover(server_id)
+  R->>X: list tools, resources and prompts with one shared byte budget
+  X-->>R: bounded catalog
+  S->>Q: publish_remote_catalog, advances catalog revision (selection is not widened)
+  P->>S: mcp.select_tools and mcp.classify_tool, including the sampling entry
+  Note over P,S: remote descriptions and hints are untrusted data
+  Note over S,X: tool call from an agent turn
+  P->>S: ToolTurn calls queue_selected_tool with the selected alias and arguments
+  S->>Q: operation mcp.tool with authority fences, enqueue
+  D->>S: execute_tool(op)
+  S->>Q: recheck session open, fences hold, server and catalog revision unchanged, tool still selected
+  S->>R: call_tool_with_origin(origin, wire_name, arguments)
+  R->>X: tools/call
+  opt the server requests sampling during the call
+    X->>R: sampling createMessage
+    R->>R: accept only if sampling was advertised and a call is in flight
+    R->>E: sample(origin, SamplingCall)
+    E->>S: authorize_sampling(origin, ordinal)
+    S->>Q: re-authorize against the journal and server selection, record McpSamplingAccepted or Refused
+    E->>E: router picks the model, text-only inference, result stored as an artifact
+    E-->>R: SampledText or SamplingRefusal
+    R-->>X: sampling result or error
+  end
+  X-->>R: tool result
+  alt result returned
+    S-->>D: Completed
+  else deadline, protocol error, too large or input required
+    S-->>D: Unknown, the tool may have run
+  else server error or call not sent
+    S-->>D: Failed
+  end
+  opt reconnect after Unreachable
+    S->>R: connect again, recheck authority, only then call
+  end
+  P->>S: mcp.disable or mcp.remove
+  S->>R: disconnect (stops the app-owned process tree)

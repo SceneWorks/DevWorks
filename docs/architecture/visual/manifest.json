@@ -94,5 +94,157 @@
     "source": "16-shell-close-states.mmd",
     "rendered": "16-shell-close-states.svg",
     "status": "Implemented code"
+  },
+  {
+    "id": "17-watchers",
+    "title": "Watchers - service, supervisor and desktop views (implemented)",
+    "kind": "classDiagram",
+    "source": "17-watchers.mmd",
+    "rendered": "17-watchers.svg",
+    "status": "Implemented code; source only, rendered SVG not yet generated"
+  },
+  {
+    "id": "18-watcher-lifecycle",
+    "title": "Watcher and watcher event lifecycle (implemented)",
+    "kind": "stateDiagram-v2",
+    "source": "18-watcher-lifecycle.mmd",
+    "rendered": "18-watcher-lifecycle.svg",
+    "status": "Implemented code; source only, rendered SVG not yet generated"
+  },
+  {
+    "id": "19-schema-metadata",
+    "title": "Schema metadata - sources, capture, retained views and queries (implemented)",
+    "kind": "classDiagram",
+    "source": "19-schema-metadata.mmd",
+    "rendered": "19-schema-metadata.svg",
+    "status": "Implemented code; source only, rendered SVG not yet generated"
+  },
+  {
+    "id": "20-indexing-and-graph",
+    "title": "Indexing runs and graph queries - services, ports and adapters (implemented)",
+    "kind": "classDiagram",
+    "source": "20-indexing-and-graph.mmd",
+    "rendered": "20-indexing-and-graph.svg",
+    "status": "Implemented code; source only, rendered SVG not yet generated"
+  },
+  {
+    "id": "21-model-routing-and-connections",
+    "title": "Model routing, provider connections and native streaming (implemented)",
+    "kind": "classDiagram",
+    "source": "21-model-routing-and-connections.mmd",
+    "rendered": "21-model-routing-and-connections.svg",
+    "status": "Implemented code; source only, rendered SVG not yet generated"
+  },
+  {
+    "id": "22-route-selection",
+    "title": "Route selection, pin, attempt admission and cooldown (implemented)",
+    "kind": "sequenceDiagram",
+    "source": "22-route-selection.mmd",
+    "rendered": "22-route-selection.svg",
+    "status": "Implemented code; source only, rendered SVG not yet generated"
+  },
+  {
+    "id": "23-agents-and-messaging",
+    "title": "Coordinator delegation, agent turns and retained messaging (implemented)",
+    "kind": "classDiagram",
+    "source": "23-agents-and-messaging.mmd",
+    "rendered": "23-agents-and-messaging.svg",
+    "status": "Implemented code; source only, rendered SVG not yet generated"
+  },
+  {
+    "id": "24-agent-turn",
+    "title": "A delegated agent turn and a retained message (implemented)",
+    "kind": "sequenceDiagram",
+    "source": "24-agent-turn.mmd",
+    "rendered": "24-agent-turn.svg",
+    "status": "Implemented code; source only, rendered SVG not yet generated"
+  },
+  {
+    "id": "25-approvals",
+    "title": "Approvals - proposals, held tool calls, decisions and replay (implemented)",
+    "kind": "classDiagram",
+    "source": "25-approvals.mmd",
+    "rendered": "25-approvals.svg",
+    "status": "Implemented code; source only, rendered SVG not yet generated"
+  },
+  {
+    "id": "26-containers",
+    "title": "Containers - selected backend, owned agent work and shutdown (implemented)",
+    "kind": "classDiagram",
+    "source": "26-containers.mmd",
+    "rendered": "26-containers.svg",
+    "status": "Implemented code; source only, rendered SVG not yet generated"
+  },
+  {
+    "id": "27-container-run",
+    "title": "Container operation - intent, approval, effect, run and shutdown (implemented)",
+    "kind": "sequenceDiagram",
+    "source": "27-container-run.mmd",
+    "rendered": "27-container-run.svg",
+    "status": "Implemented code; source only, rendered SVG not yet generated"
+  },
+  {
+    "id": "28-desktop-control",
+    "title": "Desktop control - consent, lease, serial input and native adapters (implemented)",
+    "kind": "classDiagram",
+    "source": "28-desktop-control.mmd",
+    "rendered": "28-desktop-control.svg",
+    "status": "Implemented code; source only, rendered SVG not yet generated"
+  },
+  {
+    "id": "29-mcp-client",
+    "title": "Outgoing MCP client - configuration, connections, catalog and sampling (implemented)",
+    "kind": "classDiagram",
+    "source": "29-mcp-client.mmd",
+    "rendered": "29-mcp-client.svg",
+    "status": "Implemented code; source only, rendered SVG not yet generated"
+  },
+  {
+    "id": "30-mcp-session",
+    "title": "Outgoing MCP session - connect, discover, tool call and sampling (implemented)",
+    "kind": "sequenceDiagram",
+    "source": "30-mcp-session.mmd",
+    "rendered": "30-mcp-session.svg",
+    "status": "Implemented code; source only, rendered SVG not yet generated"
+  },
+  {
+    "id": "31-process-tools",
+    "title": "Process tools - registered executables, journaled execute, cancel and installs (implemented)",
+    "kind": "classDiagram",
+    "source": "31-process-tools.mmd",
+    "rendered": "31-process-tools.svg",
+    "status": "Implemented code; source only, rendered SVG not yet generated"
+  },
+  {
+    "id": "32-git-task-operations",
+    "title": "Git task operations, approval and transport isolation (implemented)",
+    "kind": "classDiagram",
+    "source": "32-git-task-operations.mmd",
+    "rendered": "32-git-task-operations.svg",
+    "status": "Implemented code; source only, rendered SVG not yet generated"
+  },
+  {
+    "id": "33-git-command-flow",
+    "title": "A mutating Git command from admission to observed completion (implemented, push shown)",
+    "kind": "sequenceDiagram",
+    "source": "33-git-command-flow.mmd",
+    "rendered": "33-git-command-flow.svg",
+    "status": "Implemented code; source only, rendered SVG not yet generated"
+  },
+  {
+    "id": "34-packages",
+    "title": "Executable packages, ports, adapters and the package host (implemented)",
+    "kind": "classDiagram",
+    "source": "34-packages.mmd",
+    "rendered": "34-packages.svg",
+    "status": "Implemented code; source only, rendered SVG not yet generated"
+  },
+  {
+    "id": "35-package-lifecycle",
+    "title": "Package version phases and helper instance states (implemented)",
+    "kind": "stateDiagram-v2",
+    "source": "35-package-lifecycle.mmd",
+    "rendered": "35-package-lifecycle.svg",
+    "status": "Implemented code; source only, rendered SVG not yet generated"
   }
 ]

@@ -1,0 +1,112 @@
+---
+title: Desktop control - consent, lease, serial input and native adapters (implemented)
+---
+classDiagram
+  direction LR
+  class DesktopService {
+    platform: Arc dyn DesktopPlatform
+    resources: Arc ResourceService
+    artifacts: Arc ArtifactService
+    store / clock / ids / authority
+    git_source: Option Arc GitService
+    desktop.inspect .capture (QueryHandler)
+    desktop.request_control .input .release_control (CommandHandler)
+    +approval_preview() +control_epoch() ControlEpoch
+    +automation_may_be_active() bool
+    +execute_input(op) InputEffectOutcome
+    +observe_input(op) InputEffectOutcome
+    +completion() typed input completion
+  }
+  class DesktopPlatform {
+    <<trait>>
+    +capabilities() DesktopCapabilities
+    +capture_png() Vec u8
+    +inject(DesktopInput)
+    +accessibility_snapshot() default Unsupported
+  }
+  class DesktopCapabilities {
+    target, capture, input, accessibility
+    each Available, PermissionRequired or Unsupported
+  }
+  class AccessibilitySnapshot {
+    platform, nodes, truncated
+    +revision() sha256 digest
+  }
+  class DesktopInput {
+    <<enum>>
+    Click Text Key Scroll
+    Target target_id, snapshot_revision, action
+  }
+  class DesktopTargetAction {
+    <<enum>>
+    Invoke SetValue Focus
+  }
+  class InputJob {
+    frozen actor, project, root, fingerprint
+    tested_repository, source_binding
+    InputInput lease_id, expected_fence, consent_id
+  }
+  class ControlEpoch {
+    grants and held
+    +quiet_through(now)
+  }
+  class NativeDesktop {
+    <<adapter>>
+    enigo input, xcap capture
+    capture and input are separate permissions
+  }
+  class AxMacos {
+    <<adapter, macOS>>
+    focused-app AX tree
+    snapshot() inject_target()
+  }
+  class UiaWindows {
+    <<adapter, Windows>>
+    focused window via UI Automation
+    snapshot() inject_target()
+  }
+  class AtspiLinux {
+    <<adapter, Linux>>
+    session AT-SPI bus
+    snapshot() inject_target()
+  }
+  class ResourceService {
+    machine resource desktop
+    acquire_desktop() authorize_dispatch()
+  }
+  class InputEffects {
+    <<engine consumer desktop_input_effects>>
+    max_in_flight 1, max_attempts 1
+    execute and observe
+  }
+  class DesktopComposition {
+    <<engine config>>
+    platform: Arc dyn DesktopPlatform
+  }
+  class OwnerPreview {
+    <<approvals>>
+    desktop.request_control consent
+  }
+  class Runtime {
+    <<engine>>
+    desktop_control_epoch()
+    record_human_decision_received and confirm_project_purge_received
+  }
+  DesktopService o-- DesktopPlatform
+  DesktopService o-- ResourceService
+  DesktopService ..> InputJob : frozen as operation payload
+  DesktopService ..> ControlEpoch : reads the desktop lease state
+  DesktopPlatform ..> DesktopCapabilities
+  DesktopPlatform ..> AccessibilitySnapshot
+  DesktopPlatform ..> DesktopInput
+  DesktopInput *-- DesktopTargetAction
+  NativeDesktop ..|> DesktopPlatform
+  NativeDesktop ..> AxMacos : target_os macos
+  NativeDesktop ..> UiaWindows : target_os windows
+  NativeDesktop ..> AtspiLinux : target_os linux
+  DesktopComposition o-- DesktopPlatform : host default is NativeDesktop
+  InputEffects o-- DesktopService
+  OwnerPreview o-- DesktopService
+  Runtime ..> ControlEpoch : trusted human confirmations need it quiet
+  note for NativeDesktop "macOS and Windows capture with xcap. Linux X11 captures natively. Wayland reports capture and input Unsupported and accessibility still uses AT-SPI. Each OS module is built only on its own target by cfg"
+  note for DesktopService "Not built: a Wayland portal input session. Accessibility snapshots read the focused app or window only"
