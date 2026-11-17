@@ -680,7 +680,7 @@ fn check_evidence(
             != Some(e.connection_revision)
         || attempt.endpoint_profile != "Embedding"
         || attempt.purpose != "Embedding"
-        || attempt.state != "Settled"
+        || attempt.state != devworks_core::ports::storage::AttemptState::Settled
         || !balance.local_quiescent
         || balance.unknown_tail
         || balance.incomplete

@@ -392,9 +392,12 @@ impl NativeProviders {
                         && current.context_epoch == preview.context_epoch
                         && attempt.session_id.as_ref() == Some(session)
                         && if preview.finalized_through.is_some() {
-                            matches!(attempt.state.as_str(), "Dispatched" | "Settled")
+                            matches!(
+                                attempt.state,
+                                AttemptState::Dispatched | AttemptState::Settled
+                            )
                         } else {
-                            attempt.state == "Dispatched"
+                            attempt.state == AttemptState::Dispatched
                         })
                 })
                 .unwrap_or(false);

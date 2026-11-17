@@ -46,6 +46,41 @@ pub struct StoredAgentMessage {
     pub resolved_by_session_id: Option<Id>,
 }
 
+/// Where one recipient's copy of an agent message stands. Stored and reported by name.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DeliveryState {
+    Pending,
+    Delivered,
+    Read,
+    Answered,
+    Declined,
+}
+impl DeliveryState {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Pending => "Pending",
+            Self::Delivered => "Delivered",
+            Self::Read => "Read",
+            Self::Answered => "Answered",
+            Self::Declined => "Declined",
+        }
+    }
+    pub fn parse(value: &str) -> Option<Self> {
+        Some(match value {
+            "Pending" => Self::Pending,
+            "Delivered" => Self::Delivered,
+            "Read" => Self::Read,
+            "Answered" => Self::Answered,
+            "Declined" => Self::Declined,
+            _ => return None,
+        })
+    }
+    /// Answered or Declined: the recipient resolved the message.
+    pub fn is_resolved(self) -> bool {
+        matches!(self, Self::Answered | Self::Declined)
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct StoredAgentDelivery {
     pub sequence: i64,
@@ -53,7 +88,7 @@ pub struct StoredAgentDelivery {
     pub project_id: ProjectId,
     pub recipient_assignment_id: Option<AssignmentId>,
     pub recipient_human: bool,
-    pub state: String,
+    pub state: DeliveryState,
     pub revision: i64,
     pub delivered_at_ms: Option<i64>,
     pub read_at_ms: Option<i64>,

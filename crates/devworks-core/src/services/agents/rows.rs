@@ -3,6 +3,7 @@
 //! `agents.ack`) store the same message, delivery and event rows; each keeps its own cursor and
 //! reply, but neither assembles a row on its own.
 use crate::ports::IdKind;
+use crate::ports::storage::DeliveryState;
 use crate::ports::storage::{
     StorageError, StoredAgentDelivery, StoredAgentMessage, StoredAgentMessageEvent,
     WriteTransaction,
@@ -96,7 +97,7 @@ pub(crate) fn insert_delivery(
         project_id: project.clone(),
         recipient_assignment_id: target.assignment(),
         recipient_human: *target == Target::Human,
-        state: "Pending".into(),
+        state: DeliveryState::Pending,
         revision: 1,
         delivered_at_ms: None,
         read_at_ms: None,
@@ -146,7 +147,7 @@ pub(crate) fn mark_read(
     now: i64,
 ) -> Result<(), StorageError> {
     let expected = delivery.revision;
-    delivery.state = "Read".into();
+    delivery.state = DeliveryState::Read;
     delivery.revision += 1;
     delivery.delivered_at_ms.get_or_insert(now);
     delivery.read_at_ms = Some(now);

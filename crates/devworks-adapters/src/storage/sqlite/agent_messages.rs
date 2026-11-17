@@ -1,9 +1,9 @@
 //! SQLite rows for durable agent messages, recipient deliveries and project stream events.
 use super::conn::db;
-use super::support::{corrupt, id_of, page_limit};
+use super::support::{corrupt, id_of, page_limit, stored_name};
 use devworks_core::ports::storage::{
-    AgentMessageHistoryFilter, StorageError, StoredAgentAssignmentContext, StoredAgentDelivery,
-    StoredAgentMessage, StoredAgentMessageEvent,
+    AgentMessageHistoryFilter, DeliveryState, StorageError, StoredAgentAssignmentContext,
+    StoredAgentDelivery, StoredAgentMessage, StoredAgentMessageEvent,
 };
 use devworks_core::protocol::{ActorId, AssignmentId, Id, ProjectId, RootId};
 use rusqlite::{Connection, OptionalExtension, Row, params};
@@ -125,7 +125,11 @@ fn delivery_row(row: &Row<'_>) -> Result<StoredAgentDelivery, StorageError> {
         project_id: ProjectId(id_of(db(row.get(2))?)?),
         recipient_assignment_id: optional_id(db(row.get(3))?)?.map(AssignmentId),
         recipient_human: db(row.get(4))?,
-        state: db(row.get(5))?,
+        state: stored_name(
+            "agent delivery state",
+            &db(row.get::<_, String>(5))?,
+            DeliveryState::parse,
+        )?,
         revision: db(row.get(6))?,
         delivered_at_ms: db(row.get(7))?,
         read_at_ms: db(row.get(8))?,
@@ -651,7 +655,7 @@ pub(super) fn insert_delivery(
 ) -> Result<(), StorageError> {
     if d.revision != 1
         || d.sequence <= 0
-        || d.state != "Pending"
+        || d.state != DeliveryState::Pending
         || d.delivered_at_ms.is_some()
         || d.read_at_ms.is_some()
         || d.resolved_at_ms.is_some()
@@ -687,7 +691,7 @@ pub(super) fn insert_delivery(
         return Err(StorageError::ScopeDenied);
     }
     advance_head(conn, "delivery", d.sequence)?;
-    db(conn.execute("INSERT INTO agent_message_deliveries(sequence,message_id,project_id,recipient_assignment_id,recipient_human,state,revision,delivered_at,read_at,recipient_session_id,handed_over,resolved_at,handed_to_session_id) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13)",params![d.sequence,d.message_id.as_str(),d.project_id.0.as_str(),d.recipient_assignment_id.as_ref().map(|a|a.0.as_str()),d.recipient_human,d.state,d.revision,d.delivered_at_ms,d.read_at_ms,d.recipient_session_id.as_ref().map(Id::as_str),d.handed_over,d.resolved_at_ms,d.handed_to_session_id.as_ref().map(Id::as_str)]))?;
+    db(conn.execute("INSERT INTO agent_message_deliveries(sequence,message_id,project_id,recipient_assignment_id,recipient_human,state,revision,delivered_at,read_at,recipient_session_id,handed_over,resolved_at,handed_to_session_id) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13)",params![d.sequence,d.message_id.as_str(),d.project_id.0.as_str(),d.recipient_assignment_id.as_ref().map(|a|a.0.as_str()),d.recipient_human,d.state.as_str(),d.revision,d.delivered_at_ms,d.read_at_ms,d.recipient_session_id.as_ref().map(Id::as_str),d.handed_over,d.resolved_at_ms,d.handed_to_session_id.as_ref().map(Id::as_str)]))?;
     Ok(())
 }
 pub(super) fn update_delivery(
@@ -722,16 +726,16 @@ pub(super) fn update_delivery(
         ));
     }
     let legal = matches!(
-        (current.state.as_str(), d.state.as_str()),
-        ("Pending", "Delivered")
-            | ("Pending", "Read")
-            | ("Delivered", "Read")
-            | ("Pending", "Answered")
-            | ("Pending", "Declined")
-            | ("Delivered", "Answered")
-            | ("Delivered", "Declined")
-            | ("Read", "Answered")
-            | ("Read", "Declined")
+        (current.state, d.state),
+        (DeliveryState::Pending, DeliveryState::Delivered)
+            | (DeliveryState::Pending, DeliveryState::Read)
+            | (DeliveryState::Delivered, DeliveryState::Read)
+            | (DeliveryState::Pending, DeliveryState::Answered)
+            | (DeliveryState::Pending, DeliveryState::Declined)
+            | (DeliveryState::Delivered, DeliveryState::Answered)
+            | (DeliveryState::Delivered, DeliveryState::Declined)
+            | (DeliveryState::Read, DeliveryState::Answered)
+            | (DeliveryState::Read, DeliveryState::Declined)
     );
     let handover = d.state == current.state
         && current.handed_to_session_id.is_none()
@@ -748,15 +752,17 @@ pub(super) fn update_delivery(
         return Err(StorageError::ScopeDenied);
     }
     if !(legal || handover)
-        || (d.state != "Pending" && d.delivered_at_ms.is_none())
-        || (matches!(d.state.as_str(), "Read" | "Answered" | "Declined") && d.read_at_ms.is_none())
-        || (matches!(d.state.as_str(), "Answered" | "Declined") != d.resolved_at_ms.is_some())
+        || (d.state != DeliveryState::Pending && d.delivered_at_ms.is_none())
+        || (d.state != DeliveryState::Pending
+            && d.state != DeliveryState::Delivered
+            && d.read_at_ms.is_none())
+        || (d.state.is_resolved() != d.resolved_at_ms.is_some())
     {
         return Err(StorageError::InvalidRecord(
             "illegal agent delivery transition".into(),
         ));
     }
-    db(conn.execute("UPDATE agent_message_deliveries SET state=?2,revision=?3,delivered_at=?4,read_at=?5,resolved_at=?7,handed_over=?8,handed_to_session_id=?9 WHERE sequence=?1 AND revision=?6",params![d.sequence,d.state,d.revision,d.delivered_at_ms,d.read_at_ms,expected,d.resolved_at_ms,d.handed_over,d.handed_to_session_id.as_ref().map(Id::as_str)]))?;
+    db(conn.execute("UPDATE agent_message_deliveries SET state=?2,revision=?3,delivered_at=?4,read_at=?5,resolved_at=?7,handed_over=?8,handed_to_session_id=?9 WHERE sequence=?1 AND revision=?6",params![d.sequence,d.state.as_str(),d.revision,d.delivered_at_ms,d.read_at_ms,expected,d.resolved_at_ms,d.handed_over,d.handed_to_session_id.as_ref().map(Id::as_str)]))?;
     Ok(())
 }
 pub(super) fn insert_event(

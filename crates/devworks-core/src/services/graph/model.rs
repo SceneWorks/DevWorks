@@ -5,26 +5,50 @@ use crate::protocol::data::{
     Citation, CitationSource, GitOid, Locator, ObjectFormat, RepositorySnapshot,
 };
 use crate::protocol::records::{CodeEdge, CodeNode, CodeSourceLocation};
-use crate::protocol::support::{BoundedText, GraphUnitKey};
+use crate::protocol::support::{BoundedList, BoundedText, GraphUnitKey};
 use crate::protocol::{Counter, DomainErrorCode, Id};
 use crate::services::indexing::views::{self, ViewLayers};
 use crate::services::sessions::{Failure, Refusal, rev};
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
 
+pub(super) fn unrepresentable() -> Failure {
+    Refusal::new(
+        DomainErrorCode::ViewUnavailable,
+        "graph_value_unrepresentable",
+        None,
+    )
+    .into()
+}
+
+/// Validates a stored JSON document as the wire type `T`. Use it only where the input really is
+/// a stored document; typed values go through [`text`], [`list`] and [`count`].
 pub(super) fn wire<T: DeserializeOwned>(value: Value) -> Result<T, Failure> {
-    serde_json::from_value(value).map_err(|_| {
-        Refusal::new(
-            DomainErrorCode::ViewUnavailable,
-            "graph_value_unrepresentable",
-            None,
-        )
-        .into()
-    })
+    serde_json::from_value(value).map_err(|_| unrepresentable())
+}
+
+/// A wire scalar (bounded text, identifier, digest, kind name) built from typed text under the
+/// same validation as the wire type's reader, with no JSON document in between.
+pub(super) fn text<T: DeserializeOwned>(value: &str) -> Result<T, Failure> {
+    T::deserialize(serde::de::value::StrDeserializer::<serde::de::value::Error>::new(value))
+        .map_err(|_| unrepresentable())
+}
+
+/// A wire list, refused outside its length contract exactly as the wire reader refuses it.
+pub(super) fn list<T, const MIN: usize, const MAX: usize>(
+    rows: Vec<T>,
+) -> Result<BoundedList<T, MIN, MAX>, Failure> {
+    if rows.len() < MIN || rows.len() > MAX {
+        return Err(unrepresentable());
+    }
+    Ok(BoundedList(rows))
 }
 
 pub(super) fn count(value: u64) -> Result<Counter, Failure> {
-    wire(json!(value.to_string()))
+    i64::try_from(value)
+        .ok()
+        .and_then(|value| Counter::new(value).ok())
+        .ok_or_else(unrepresentable)
 }
 
 fn oid(text: &str) -> Result<GitOid, Failure> {
@@ -127,7 +151,7 @@ pub(super) fn location(
         .unwrap_or(u64::from(lines > 0));
     let end = payload["span"]["endLine"].as_u64().unwrap_or(lines);
     let captured_snapshot = snapshot(view)?;
-    let digest: crate::protocol::provider::Digest = wire(json!(capture.blob_digest))?;
+    let digest: crate::protocol::provider::Digest = text(&capture.blob_digest)?;
     // Legacy keys cannot express real paths containing '/' or '.'. Omit the old citation
     // rather than transliterating an identity. This capture is the real immutable byte block.
     let legacy_citation = match (
@@ -158,7 +182,7 @@ pub(super) fn location(
     };
     Ok(Some(CodeSourceLocation {
         snapshot: captured_snapshot,
-        unit_key: wire(json!(unit.unit_key))?,
+        unit_key: text(&unit.unit_key)?,
         source_digest: digest,
         path: BoundedText(unit.unit_key.clone()),
         start_line: count(start)?,
@@ -220,12 +244,12 @@ pub(super) fn node(
             .cloned()
     };
     let projected = CodeNode {
-        node_id: wire(json!(raw.node.node_id))?,
+        node_id: text(&raw.node.node_id)?,
         repository_id: raw.repository_id.clone(),
         view_id: raw.view_id.clone(),
         unit_key: GraphUnitKey(raw.node.unit_key.clone()),
-        node_kind: wire(json!(raw.node.kind))?,
-        name: wire(json!(raw.node.name))?,
+        node_kind: text(&raw.node.kind)?,
+        name: text(&raw.node.name)?,
         qualified_name: wire(optional("qualifiedName").unwrap_or_else(|| json!("")))?,
         internal_module: optional("internalModule")
             .or_else(|| internal_module.map(|m| json!(m)))
@@ -266,10 +290,10 @@ pub(super) fn node(
         trust_revision: rev(trust.map_or(1, |t| t.revision)),
         content_digest: captured
             .as_ref()
-            .map(|(_, c)| wire(json!(c.blob_digest)))
+            .map(|(_, c)| text(&c.blob_digest))
             .transpose()?,
-        view_digest: wire(json!(view.view.view_digest))?,
-        content_identity: wire(json!(raw.content_digest))?,
+        view_digest: text(&view.view.view_digest)?,
+        content_identity: text(&raw.content_digest)?,
     };
     Ok((projected, properties.next))
 }
@@ -284,13 +308,13 @@ pub(super) fn edge_page(
     let next = properties.next;
     Ok((
         CodeEdge {
-            edge_id: wire(json!(raw.raw.edge.edge_id))?,
-            source_id: wire(json!(raw.source.node_id))?,
-            target_id: wire(json!(raw.target.node_id))?,
+            edge_id: text(&raw.raw.edge.edge_id)?,
+            source_id: text(&raw.source.node_id)?,
+            target_id: text(&raw.target.node_id)?,
             source_repository_id: raw.source.repository_id.clone(),
             target_repository_id: raw.target.repository_id.clone(),
             producing_unit: Some(GraphUnitKey(raw.raw.edge.unit_key.clone())),
-            edge_kind: wire(json!(raw.raw.edge.kind))?,
+            edge_kind: text(&raw.raw.edge.kind)?,
             resolution: payload
                 .get("resolution")
                 .filter(|v| v.is_string())

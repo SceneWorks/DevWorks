@@ -1123,7 +1123,7 @@ pub fn inbox_assignment(
             recipient_assignment_id: Some(assignment.id.clone()),
             recipient_session_id: None,
             recipient_human: false,
-            state: "Pending".into(),
+            state: crate::ports::storage::DeliveryState::Pending,
             revision: 1,
             delivered_at_ms: None,
             read_at_ms: None,
@@ -1232,6 +1232,16 @@ fn retained_summary(body: &str) -> String {
     }
 }
 
+fn retained_state(state: crate::ports::storage::DeliveryState) -> RetainedDeliveryState {
+    use crate::ports::storage::DeliveryState as S;
+    match state {
+        S::Pending => RetainedDeliveryState::Pending,
+        S::Delivered => RetainedDeliveryState::Delivered,
+        S::Read => RetainedDeliveryState::Read,
+        S::Answered => RetainedDeliveryState::Answered,
+        S::Declined => RetainedDeliveryState::Declined,
+    }
+}
 fn retained_line(
     message: RetainedMessage,
     delivery: Option<RetainedDeliveryState>,
@@ -1356,17 +1366,7 @@ fn retained_events(
         } else {
             None
         };
-        let delivery_state = delivery
-            .as_ref()
-            .map(|row| match row.state.as_str() {
-                "Pending" => Ok(RetainedDeliveryState::Pending),
-                "Delivered" => Ok(RetainedDeliveryState::Delivered),
-                "Read" => Ok(RetainedDeliveryState::Read),
-                "Answered" => Ok(RetainedDeliveryState::Answered),
-                "Declined" => Ok(RetainedDeliveryState::Declined),
-                _ => Err(corrupt("retained delivery state")),
-            })
-            .transpose()?;
+        let delivery_state = delivery.as_ref().map(|row| retained_state(row.state));
         let line = message.map(|m| {
             retained_line(
                 m,
@@ -1567,14 +1567,7 @@ fn receive_retained(
     let mut items = Vec::with_capacity(page.items.len());
     for (delivery, row) in page.items {
         let mut message = retained_message(tx.actors(), row)?;
-        message.delivery = Some(match delivery.state.as_str() {
-            "Pending" => RetainedDeliveryState::Pending,
-            "Delivered" => RetainedDeliveryState::Delivered,
-            "Read" => RetainedDeliveryState::Read,
-            "Answered" => RetainedDeliveryState::Answered,
-            "Declined" => RetainedDeliveryState::Declined,
-            _ => return Err(corrupt("inbox delivery state").into()),
-        });
+        message.delivery = Some(retained_state(delivery.state));
         message.handed_over = delivery.handed_over.then_some(true);
         items.push(message);
     }
@@ -1622,14 +1615,7 @@ fn ack_retained(
     let mut lines = Vec::new();
     for (delivery, row) in acked.changed.into_iter().take(50) {
         let message = retained_message(tx.actors(), row)?;
-        let delivery_state = match delivery.state.as_str() {
-            "Pending" => RetainedDeliveryState::Pending,
-            "Delivered" => RetainedDeliveryState::Delivered,
-            "Read" => RetainedDeliveryState::Read,
-            "Answered" => RetainedDeliveryState::Answered,
-            "Declined" => RetainedDeliveryState::Declined,
-            _ => return Err(corrupt("inbox delivery state").into()),
-        };
+        let delivery_state = retained_state(delivery.state);
         lines.push(retained_line(
             message,
             Some(delivery_state),

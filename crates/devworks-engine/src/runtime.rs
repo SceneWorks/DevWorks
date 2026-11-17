@@ -74,6 +74,17 @@ const RECORDS_DIAGNOSTIC: &str = "workspace.record_diagnostic";
 const ARCHIVES_PROJECT: &str = "projects.archive";
 /// The operation whose commit cancels an index run (the run it names is signalled at once).
 const CANCELS_INDEX_RUN: &str = "indexing.cancel";
+/// Registry families whose commits wake a background worker. Each must name a registered
+/// family (`commit_wake_families_are_registered` checks it).
+const ROUTER_FAMILY: &str = "router";
+const RUNS_FAMILY: &str = "runs";
+const JOBS_FAMILY: &str = "jobs";
+const INDEXING_FAMILY: &str = "indexing";
+/// The family the operation registry records for `operation`; an operation the registry does
+/// not know belongs to none.
+fn family_of(operation: &str) -> Option<&'static str> {
+    devworks_core::registry::find(operation).map(|descriptor| descriptor.family)
+}
 /// The query answered after a discovery scan.
 const DISCOVERS_REPOSITORIES: &str = "indexing.discover";
 
@@ -3998,10 +4009,11 @@ impl Admitter {
         if changed {
             self.changes.send_modify(|n| *n = n.wrapping_add(1));
         }
+        let family = family_of(operation);
         if committed {
             self.dispatcher.wakeup().wake();
             self.usage.notify();
-            if operation.starts_with("router.")
+            if family == Some(ROUTER_FAMILY)
                 && let Some(worker) = &self.prices
             {
                 worker.notify();
@@ -4012,14 +4024,14 @@ impl Admitter {
             if wake_resumes && let Some(resumes) = self.resumes.get().and_then(Weak::upgrade) {
                 resumes.notify();
             }
-            if operation == "sessions.end" || operation.starts_with("runs.") {
+            if operation == "sessions.end" || family == Some(RUNS_FAMILY) {
                 self.evals.notify();
             }
-            if operation.starts_with("runs.") {
+            if family == Some(RUNS_FAMILY) {
                 // A stop to execute, a stop to signal or a new activation to claim.
                 self.runs.notify();
             }
-            if (operation.starts_with("jobs.") || operation == ARCHIVES_PROJECT)
+            if (family == Some(JOBS_FAMILY) || operation == ARCHIVES_PROJECT)
                 && let Some(s) = self.scheduler.get().and_then(Weak::upgrade)
             {
                 // A run to start, a cancellation to execute or a changed next occurrence.
@@ -4048,7 +4060,7 @@ impl Admitter {
         }
         if committed
             && let Some(ix) = &self.indexing
-            && (operation.starts_with("indexing.") || operation == "repositories.remove_index")
+            && (family == Some(INDEXING_FAMILY) || operation == "repositories.remove_index")
         {
             if operation == CANCELS_INDEX_RUN
                 && let Some(run) = cancelled_run(raw)
@@ -4194,6 +4206,30 @@ fn skill_adoption_payload(
         "transitions": transitions,
         "conflicts": after.map(|s| s.conflicts.clone()).unwrap_or_default(),
     })
+}
+
+#[cfg(test)]
+mod commit_wake_tests {
+    use super::{INDEXING_FAMILY, JOBS_FAMILY, ROUTER_FAMILY, RUNS_FAMILY, family_of};
+    use devworks_core::registry;
+
+    #[test]
+    fn commit_wake_families_are_registered() {
+        for family in [ROUTER_FAMILY, RUNS_FAMILY, JOBS_FAMILY, INDEXING_FAMILY] {
+            assert!(registry::families().contains(&family), "{family}");
+        }
+    }
+
+    /// The family check replaced a name-prefix check, so every operation's name must start with
+    /// its family; otherwise the two would select different operations.
+    #[test]
+    fn every_operation_name_starts_with_its_family() {
+        for descriptor in registry::all() {
+            let prefix = descriptor.name.split('.').next();
+            assert_eq!(prefix, Some(descriptor.family), "{}", descriptor.name);
+            assert_eq!(family_of(descriptor.name), Some(descriptor.family));
+        }
+    }
 }
 
 #[cfg(test)]

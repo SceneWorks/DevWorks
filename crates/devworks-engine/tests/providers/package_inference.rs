@@ -142,7 +142,10 @@ fn package_inference_runs_in_the_invoking_agents_session_as_other_usage() {
         assert_eq!(route_purpose, "Enrichment");
         assert_eq!(attempt.session_id, Some(id("agent-session")));
         assert_eq!(attempt.actor_id, ActorId(id("sampling-agent")));
-        assert_eq!(attempt.state, "Settled");
+        assert_eq!(
+            attempt.state,
+            devworks_core::ports::storage::AttemptState::Settled
+        );
         assert!(attempt.request_id.as_str().starts_with("pkgi-"));
 
         // A retried call under the same action key returns the recorded answer, never sending

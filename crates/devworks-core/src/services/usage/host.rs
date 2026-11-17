@@ -568,13 +568,16 @@ pub fn apply_recovery(
             result.unclosed.push(current.attempt_id.clone());
             continue;
         }
-        if current.state == "Admitted" {
+        if current.state == AttemptState::Admitted {
             accounting::cancel_admitted(
                 tx,
                 &current.attempt_id,
                 "the admitted host process is verified gone before dispatch",
             )?;
-        } else if matches!(current.state.as_str(), "Dispatched" | "UnknownTail") {
+        } else if matches!(
+            current.state,
+            AttemptState::Dispatched | AttemptState::UnknownTail
+        ) {
             accounting::settle(
                 tx,
                 control,

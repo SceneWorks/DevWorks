@@ -35,7 +35,7 @@ pub(crate) fn observe(
         .inference_attempt(&attempt.attempt_id)?
         .ok_or(StorageError::ScopeDenied)?;
     let bound = accounting::snapshot(&current)?;
-    if current.state != "Dispatched"
+    if current.state != AttemptState::Dispatched
         || current.pricing_snapshot != attempt.pricing_snapshot
         || Some(&bound.admitted_boot_id) != tx.store().boot_id.as_ref()
     {
@@ -95,7 +95,7 @@ pub(crate) fn observe(
         || crate::services::router::connections::profiles::profile(&current.endpoint_profile)
             .is_some_and(|p| p.subscription);
     let paid = !subscription
-        && balance.classification == "ReportedCharge"
+        && balance.classification == CostClassification::ReportedCharge
         && summary
             .reported_cost
             .as_ref()
@@ -106,7 +106,7 @@ pub(crate) fn observe(
     {
         balance.priced_micro_usd = None;
         balance.monetary_complete = false;
-        balance.classification = "Untracked".into();
+        balance.classification = CostClassification::Untracked;
         balance.reserved_micro_usd = bound.reservation_micro_usd;
         summary.unknown_components = summary.pricing_dimension_mismatches.clone();
     }

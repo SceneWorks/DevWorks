@@ -15,6 +15,55 @@ pub enum CostClassification {
     Untracked,
 }
 
+impl CostClassification {
+    pub const ALL: [Self; 6] = [
+        Self::ReportedCharge,
+        Self::ConfiguredEstimate,
+        Self::OfficialEstimate,
+        Self::SubscriptionApiEquivalent,
+        Self::LocalFree,
+        Self::Untracked,
+    ];
+    /// The stored and wire name.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::ReportedCharge => "ReportedCharge",
+            Self::ConfiguredEstimate => "ConfiguredEstimate",
+            Self::OfficialEstimate => "OfficialEstimate",
+            Self::SubscriptionApiEquivalent => "SubscriptionApiEquivalent",
+            Self::LocalFree => "LocalFree",
+            Self::Untracked => "Untracked",
+        }
+    }
+    pub fn parse(value: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|c| c.as_str() == value)
+    }
+    /// The report `priceKind` and `priceOrigin` wire names. This is the one mapping every usage
+    /// report uses; an attempt with no balance yet has no classification and reports
+    /// [`UNKNOWN_PRICE`] instead.
+    pub fn price(self) -> (&'static str, &'static str) {
+        match self {
+            Self::ReportedCharge => ("Reported", "ProviderReported"),
+            Self::ConfiguredEstimate => ("Estimated", "UserConfigured"),
+            Self::OfficialEstimate | Self::SubscriptionApiEquivalent => {
+                ("Estimated", "OfficialSnapshot")
+            }
+            Self::LocalFree => ("Free", "LocalFree"),
+            Self::Untracked => ("Untracked", "Untracked"),
+        }
+    }
+    /// Estimates priced from a tariff rather than reported by the provider.
+    pub fn is_estimate(self) -> bool {
+        matches!(
+            self,
+            Self::OfficialEstimate | Self::ConfiguredEstimate | Self::SubscriptionApiEquivalent
+        )
+    }
+}
+
+/// `priceKind` and `priceOrigin` for an attempt that has no balance, so no classification.
+pub const UNKNOWN_PRICE: (&str, &str) = ("Unknown", "Untracked");
+
 /// The route/profile binding resolved by the host before attempt admission.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PriceQuery {
@@ -174,5 +223,48 @@ mod quote_compatibility {
         let quote: PriceQuote = serde_json::from_value(old.clone()).unwrap();
         assert!(quote.publication_provider.is_none());
         assert_eq!(serde_json::to_value(quote).unwrap(), old);
+    }
+}
+
+#[cfg(test)]
+mod classification_mapping {
+    use super::{CostClassification as C, UNKNOWN_PRICE};
+
+    /// Both usage reports (attempt rows and historical observations) use this one mapping.
+    #[test]
+    fn each_classification_has_one_stored_name_and_one_price_pair() {
+        let table = [
+            (
+                C::ReportedCharge,
+                "ReportedCharge",
+                ("Reported", "ProviderReported"),
+            ),
+            (
+                C::ConfiguredEstimate,
+                "ConfiguredEstimate",
+                ("Estimated", "UserConfigured"),
+            ),
+            (
+                C::OfficialEstimate,
+                "OfficialEstimate",
+                ("Estimated", "OfficialSnapshot"),
+            ),
+            (
+                C::SubscriptionApiEquivalent,
+                "SubscriptionApiEquivalent",
+                ("Estimated", "OfficialSnapshot"),
+            ),
+            (C::LocalFree, "LocalFree", ("Free", "LocalFree")),
+            (C::Untracked, "Untracked", ("Untracked", "Untracked")),
+        ];
+        assert_eq!(table.len(), C::ALL.len());
+        for (class, name, price) in table {
+            assert_eq!(class.as_str(), name);
+            assert_eq!(C::parse(name), Some(class));
+            assert_eq!(class.price(), price);
+        }
+        assert_eq!(C::parse("Unknown"), None);
+        // Only an attempt that has no balance is reported as Unknown.
+        assert_eq!(UNKNOWN_PRICE, ("Unknown", "Untracked"));
     }
 }

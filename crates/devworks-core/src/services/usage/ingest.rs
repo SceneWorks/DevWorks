@@ -2,6 +2,7 @@
 //! silently promoted to attempts or added to canonical incurred spending.
 use super::money::{CostAccumulator, Rounding};
 use crate::ports::storage::*;
+use crate::ports::usage::CostClassification;
 use crate::protocol::records::UsageItem;
 use crate::protocol::{Id, RootId};
 use serde_json::json;
@@ -14,16 +15,15 @@ fn raw_amount(amount: Option<&str>) -> Option<i64> {
     exact.amount_usd(amount?).ok()?;
     exact.micro_usd(Rounding::Nearest).ok()
 }
-fn class(kind: &str, origin: &str) -> String {
+fn class(kind: &str, origin: &str) -> CostClassification {
     match (kind, origin) {
-        ("Reported", _) => "ReportedCharge",
-        ("Estimated", "SubscriptionApiEquivalent") => "SubscriptionApiEquivalent",
-        ("Estimated", "UserConfigured") => "ConfiguredEstimate",
-        ("Estimated", _) => "OfficialEstimate",
-        ("Free", _) => "LocalFree",
-        _ => "Untracked",
+        ("Reported", _) => CostClassification::ReportedCharge,
+        ("Estimated", "SubscriptionApiEquivalent") => CostClassification::SubscriptionApiEquivalent,
+        ("Estimated", "UserConfigured") => CostClassification::ConfiguredEstimate,
+        ("Estimated", _) => CostClassification::OfficialEstimate,
+        ("Free", _) => CostClassification::LocalFree,
+        _ => CostClassification::Untracked,
     }
-    .into()
 }
 fn recorded_feature(
     tx: &mut dyn WriteTransaction,
@@ -95,7 +95,7 @@ pub fn tool_invocation(
         project_id:source.project_id.clone(),feature_id,work_id:source.root_id.as_ref().map(|r|r.0.clone()),
         session_id:Some(source.session_id.clone()),job_run_id:None,
         payload:json!({"version":1,"capabilityId":source.capability_id,"outcome":source.outcome,"errorCode":source.error_code,"actorId":source.actor,"calledAtMs":source.called_at_ms,"respondedAtMs":source.responded_at_ms}),
-        recorded_at_ms:source.responded_at_ms,priced_micro_usd:None,classification:"Untracked".into(),monetary_complete:false,incomplete:false,unknown_tail:false,committed_sequence:None,
+        recorded_at_ms:source.responded_at_ms,priced_micro_usd:None,classification:CostClassification::Untracked,monetary_complete:false,incomplete:false,unknown_tail:false,committed_sequence:None,
     })
 }
 pub fn job_usage(
@@ -127,7 +127,7 @@ pub fn router_request(
         source_kind:"RouterRequest".into(),source_id:source.request_id.as_str().into(),attempt_id:None,request_id:Some(source.request_id.clone()),
         project_id:source.project_id.clone(),feature_id:None,work_id:operation.root_id.as_ref().map(|r|r.0.clone()),session_id:source.session_id.clone(),job_run_id:None,
         payload:json!({"version":1,"purpose":source.purpose,"modelId":source.model_id,"connectionId":source.connection_id,"operationId":source.operation_id,"actorId":operation.payload.get("actorId"),"reportCategory":operation.payload.get("reportCategory")}),
-        recorded_at_ms:source.created_at_ms,priced_micro_usd:None,classification:"Untracked".into(),monetary_complete:false,incomplete:false,unknown_tail:false,committed_sequence:None,
+        recorded_at_ms:source.created_at_ms,priced_micro_usd:None,classification:CostClassification::Untracked,monetary_complete:false,incomplete:false,unknown_tail:false,committed_sequence:None,
     })
 }
 
