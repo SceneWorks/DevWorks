@@ -79,10 +79,13 @@ use crate::ports::storage::{
     run_write,
 };
 use crate::ports::{
-    Clock, CommandHandler, Decided, HandlerFailure, IdKind, IdSource, Preparation, Prepared,
-    QueryAnswer, QueryHandler,
+    Authorization, Clock, CommandHandler, Decided, HandlerFailure, IdKind, IdSource, Preparation,
+    Prepared, QueryAnswer, QueryHandler,
 };
 use crate::protocol::data::DataScope;
+
+/// The invocation and authorization a query's preparation publishes under.
+type Caller<'a> = (&'a InvocationContext, &'a Authorization);
 use crate::protocol::provider::ArtifactRef;
 use crate::protocol::records::{
     BrowserInput, BrowserLocation, BrowserNode, BrowserObservation, BrowserSession,
@@ -1200,7 +1203,7 @@ impl BrowserService {
                 let batch = buffer.take();
                 let (doc, truncated) = batch.document(id, channel.as_str(), dropped);
                 if self
-                    .publish_observation(&s, channel, &doc, truncated, None)
+                    .publish_observation(None, &s, channel, &doc, truncated, None)
                     .is_err()
                 {
                     break;
@@ -1615,9 +1618,41 @@ impl BrowserService {
         }
     }
 
+    /// Publishes evidence under the invocation's authorization when the caller holds one (a
+    /// query's preparation) and under the producer's binding when it does not (the supervisor's
+    /// and a journaled action's own publications).
+    fn publish_evidence<T, F>(
+        &self,
+        caller: Option<Caller<'_>>,
+        evidence: Evidence,
+        bytes: &[u8],
+        then: F,
+    ) -> Result<(ArtifactRef, T), EvidenceFailure>
+    where
+        T: Send + 'static,
+        F: FnOnce(&mut dyn WriteTransaction, &ArtifactRef) -> Result<T, StorageError>
+            + Send
+            + 'static,
+    {
+        match caller {
+            Some((ctx, authorization)) => self.artifacts.publish_evidence_as(
+                &*self.store,
+                ctx,
+                authorization,
+                evidence,
+                bytes,
+                then,
+            ),
+            None => self
+                .artifacts
+                .publish_evidence(&*self.store, evidence, bytes, then),
+        }
+    }
+
     /// Publishes one observation document and its index row together.
     fn publish_observation(
         &self,
+        caller: Option<Caller<'_>>,
         s: &StoredBrowserSession,
         channel: BrowserChannel,
         bytes: &[u8],
@@ -1638,47 +1673,46 @@ impl BrowserService {
         let id = s.id.clone();
         let operation = operation.cloned();
         let tested_repository = s.tested_repository.clone();
-        self.artifacts
-            .publish_evidence(&*self.store, evidence, bytes, move |tx, r| {
-                let Some(current) = tx.browser().browser_session(&id)? else {
-                    return Err(StorageError::NotFound {
-                        kind: "browser_session",
-                        id: id.as_str().to_owned(),
-                    });
-                };
-                let sequence = tx.browser().next_observation_sequence(&id)?;
-                let recorded_at_ms = tx.now_ms();
-                tx.browser()
-                    .insert_browser_observation(&StoredBrowserObservation {
-                        session_id: id.clone(),
-                        sequence,
-                        channel,
-                        artifact_id: r.artifact_id.clone(),
-                        version_id: r.version_id.clone(),
-                        truncated,
-                        recorded_at_ms,
-                        tested_repository: tested_repository.clone(),
-                    })?;
-                let host = tx.store().host_actor.clone();
-                let aggregate = match &operation {
-                    Some(o) => (ACTION_AGGREGATE, o.0.as_str().to_owned(), 2),
-                    None => (SESSION_AGGREGATE, id.as_str().to_owned(), current.revision),
-                };
-                record_event(
-                    tx,
-                    &host,
-                    &current,
-                    operation.as_ref(),
-                    (aggregate.0, &aggregate.1, aggregate.2),
-                    "BrowserObservationPublished",
-                    json!({
-                        "browserSessionId": id.as_str(), "sequence": sequence,
-                        "channel": channel.as_str(), "artifactId": r.artifact_id.as_str(),
-                        "versionId": r.version_id.as_str(), "truncated": truncated,
-                    }),
-                )?;
-                Ok(sequence)
-            })
+        self.publish_evidence(caller, evidence, bytes, move |tx, r| {
+            let Some(current) = tx.browser().browser_session(&id)? else {
+                return Err(StorageError::NotFound {
+                    kind: "browser_session",
+                    id: id.as_str().to_owned(),
+                });
+            };
+            let sequence = tx.browser().next_observation_sequence(&id)?;
+            let recorded_at_ms = tx.now_ms();
+            tx.browser()
+                .insert_browser_observation(&StoredBrowserObservation {
+                    session_id: id.clone(),
+                    sequence,
+                    channel,
+                    artifact_id: r.artifact_id.clone(),
+                    version_id: r.version_id.clone(),
+                    truncated,
+                    recorded_at_ms,
+                    tested_repository: tested_repository.clone(),
+                })?;
+            let host = tx.store().host_actor.clone();
+            let aggregate = match &operation {
+                Some(o) => (ACTION_AGGREGATE, o.0.as_str().to_owned(), 2),
+                None => (SESSION_AGGREGATE, id.as_str().to_owned(), current.revision),
+            };
+            record_event(
+                tx,
+                &host,
+                &current,
+                operation.as_ref(),
+                (aggregate.0, &aggregate.1, aggregate.2),
+                "BrowserObservationPublished",
+                json!({
+                    "browserSessionId": id.as_str(), "sequence": sequence,
+                    "channel": channel.as_str(), "artifactId": r.artifact_id.as_str(),
+                    "versionId": r.version_id.as_str(), "truncated": truncated,
+                }),
+            )?;
+            Ok(sequence)
+        })
     }
 
     fn navigate(
@@ -1753,6 +1787,7 @@ impl BrowserService {
         let target = live.targets[i].wire(&live.session, &main);
         let snapshot = self
             .snapshot_of(
+                None,
                 live,
                 &target,
                 bounds,
@@ -1874,7 +1909,7 @@ impl BrowserService {
             .filter(|v| !v.is_null())
             .cloned();
         let (evidence, sequence) = self
-            .publish_observation(&s, BrowserChannel::Action, &doc, false, Some(&op.id))
+            .publish_observation(None, &s, BrowserChannel::Action, &doc, false, Some(&op.id))
             .map_err(|e| ActionError::After(cdp::CdpError::Protocol(format!("{e:?}"))))?;
         let value = BrowserObservation {
             session_id: live.session.clone(),
@@ -1898,6 +1933,7 @@ impl BrowserService {
 
     fn snapshot_of(
         &self,
+        caller: Option<Caller<'_>>,
         live: &mut Live,
         target: &BrowserTarget,
         bounds: &Bounds,
@@ -1927,8 +1963,7 @@ impl BrowserService {
             }),
         );
         let (accessibility, ()) = self
-            .artifacts
-            .publish_evidence(&*self.store, evidence, &bytes, |_, _| Ok(()))
+            .publish_evidence(caller, evidence, &bytes, |_, _| Ok(()))
             .map_err(|e| ActionError::Before(cdp::CdpError::Protocol(format!("{e:?}"))))?;
         let url = BoundedText(if url.is_empty() {
             "about:blank".into()
@@ -2930,6 +2965,7 @@ impl BrowserService {
     /// it reads and writes the store itself.
     fn inspect(
         &self,
+        caller: Option<Caller<'_>>,
         s: &StoredBrowserSession,
         target: &BrowserTarget,
     ) -> Result<OperationResult, Failure> {
@@ -2940,8 +2976,15 @@ impl BrowserService {
         }
         let bounds = self.config.bounds();
         let value = self.with_live(&s.id, |live| {
-            self.snapshot_of(live, target, &bounds, None, s.tested_repository.clone())
-                .map_err(|e| action_failure(e, target))
+            self.snapshot_of(
+                caller,
+                live,
+                target,
+                &bounds,
+                None,
+                s.tested_repository.clone(),
+            )
+            .map_err(|e| action_failure(e, target))
         })?;
         Ok(OperationResult::BrowserInspect { value })
     }
@@ -2950,6 +2993,7 @@ impl BrowserService {
     /// [`QueryHandler::prepare`], like [`Self::inspect`].
     fn screenshot(
         &self,
+        caller: Option<Caller<'_>>,
         s: &StoredBrowserSession,
         target: &BrowserTarget,
         full_page: bool,
@@ -2979,8 +3023,7 @@ impl BrowserService {
             }),
         );
         let (value, ()) = self
-            .artifacts
-            .publish_evidence(&*self.store, evidence, &bytes, |_, _| Ok(()))
+            .publish_evidence(caller, evidence, &bytes, |_, _| Ok(()))
             .map_err(evidence_failure)?;
         Ok(OperationResult::BrowserScreenshot { value })
     }
@@ -3035,6 +3078,7 @@ impl BrowserService {
     /// observation. Runs in [`QueryHandler::prepare`], outside the gateway's read snapshot.
     fn publish_pending(
         &self,
+        caller: Option<Caller<'_>>,
         s: &StoredBrowserSession,
         channel: BrowserChannel,
     ) -> Result<(), Failure> {
@@ -3062,7 +3106,7 @@ impl BrowserService {
             };
             if let Some((batch, cdp)) = pending {
                 let (doc, truncated) = batch.document(id, channel.as_str(), cdp > 0);
-                let published = self.publish_observation(s, channel, &doc, truncated, None);
+                let published = self.publish_observation(caller, s, channel, &doc, truncated, None);
                 match published {
                     Ok(_) => {}
                     Err(e) => {
@@ -3266,18 +3310,19 @@ impl QueryHandler for BrowserService {
                 self.tested_source(ctx, &|| env.stopped(self.clock.now_ms().get()))?;
             Ok(session)
         };
+        let caller = Some((ctx, query.authorization()));
         let observed = match input {
             ops::Input::Inspect(i) => session(&i.target.session_id)
-                .and_then(|s| self.inspect(&s, &i.target))
+                .and_then(|s| self.inspect(caller, &s, &i.target))
                 .map(Observed::Result),
             ops::Input::Screenshot(i) => session(&i.target.session_id)
-                .and_then(|s| self.screenshot(&s, &i.target, i.full_page))
+                .and_then(|s| self.screenshot(caller, &s, &i.target, i.full_page))
                 .map(Observed::Result),
             ops::Input::Console(i) => session(&i.session_id)
-                .and_then(|s| self.publish_pending(&s, BrowserChannel::Console))
+                .and_then(|s| self.publish_pending(caller, &s, BrowserChannel::Console))
                 .map(|()| Observed::Published),
             ops::Input::Network(i) => session(&i.session_id)
-                .and_then(|s| self.publish_pending(&s, BrowserChannel::Network))
+                .and_then(|s| self.publish_pending(caller, &s, BrowserChannel::Network))
                 .map(|()| Observed::Published),
             _ => return Ok(None),
         };

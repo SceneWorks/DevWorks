@@ -21,12 +21,12 @@ use super::{
     version_ref, visible,
 };
 use crate::context::InvocationContext;
-use crate::ports::IdKind;
 use crate::ports::storage::{
     ApplicationStore, ArtifactLink, ArtifactRetention, ArtifactScope, ArtifactState, LinkPurpose,
     NewEvent, ReadOptions, StorageError, StoredArtifact, StoredVersion, SubjectKey,
     WriteTransaction, read_snapshot,
 };
+use crate::ports::{Authorization, IdKind};
 use crate::protocol::provider::ArtifactRef;
 use crate::protocol::{ActorId, AssignmentId, DomainErrorCode, EventId, Id, RootId};
 use serde_json::{Value, json};
@@ -83,7 +83,9 @@ pub struct ExactRead {
 impl ArtifactService {
     /// Publishes `bytes` as a new evidence artifact and runs `then` in the same write that
     /// records it (with the new version's reference), so the caller's index rows commit with
-    /// the evidence or not at all.
+    /// the evidence or not at all. For a caller with no invocation: the write re-checks that the
+    /// producer's binding is the one the publication started with and still active. A caller
+    /// holding an invocation uses [`Self::publish_evidence_as`].
     pub fn publish_evidence<T, F>(
         &self,
         store: &dyn ApplicationStore,
@@ -97,9 +99,47 @@ impl ArtifactService {
             + Send
             + 'static,
     {
+        let gate = Gate::Producer(evidence.producer.clone());
+        self.publish_gated(store, gate, evidence, bytes, then)
+    }
+
+    /// [`Self::publish_evidence`] for a caller holding the invocation's authorization: the write
+    /// re-checks the whole authorization (store and restore epoch, every fence and grant).
+    pub fn publish_evidence_as<T, F>(
+        &self,
+        store: &dyn ApplicationStore,
+        ctx: &InvocationContext,
+        authorization: &Authorization,
+        evidence: Evidence,
+        bytes: &[u8],
+        then: F,
+    ) -> Result<(ArtifactRef, T), EvidenceFailure>
+    where
+        T: Send + 'static,
+        F: FnOnce(&mut dyn WriteTransaction, &ArtifactRef) -> Result<T, StorageError>
+            + Send
+            + 'static,
+    {
+        let gate = Gate::Authorization(ctx.clone(), authorization.clone());
+        self.publish_gated(store, gate, evidence, bytes, then)
+    }
+
+    fn publish_gated<T, F>(
+        &self,
+        store: &dyn ApplicationStore,
+        gate: Gate,
+        evidence: Evidence,
+        bytes: &[u8],
+        then: F,
+    ) -> Result<(ArtifactRef, T), EvidenceFailure>
+    where
+        T: Send + 'static,
+        F: FnOnce(&mut dyn WriteTransaction, &ArtifactRef) -> Result<T, StorageError>
+            + Send
+            + 'static,
+    {
         let scope = evidence.scope.clone();
         let source = evidence.source.clone();
-        let gate = Gate::Producer(evidence.producer.clone());
         Ok(self.publish_bytes(
             store,
             scope,

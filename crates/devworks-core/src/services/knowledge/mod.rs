@@ -1363,17 +1363,17 @@ pub(crate) fn supersession_chain(
         } else {
             superseded_by.clone()
         };
+        let mut walked: std::collections::HashSet<Id> = std::collections::HashSet::new();
         while let Some(id) = next.take() {
-            if &id == start || chain.contains(&id) {
+            if &id == start || chain.contains(&id) || !walked.insert(id.clone()) {
                 break;
             }
-            let Some(found) = k
-                .knowledge_claim(&id)?
-                .filter(|c| c.lifecycle != "Deleted" && scoped.sees(&c.scope))
-            else {
+            let Some(found) = k.knowledge_claim(&id)?.filter(|c| scoped.sees(&c.scope)) else {
                 break;
             };
-            if chain.len() >= MAX_SUPERSESSION {
+            // A deleted claim is not listed, but the chain goes on through it.
+            let listed = found.lifecycle != "Deleted";
+            if listed && chain.len() >= MAX_SUPERSESSION {
                 cut = true;
                 break;
             }
@@ -1382,7 +1382,9 @@ pub(crate) fn supersession_chain(
             } else {
                 found.body.superseded_by.clone()
             };
-            chain.push(id);
+            if listed {
+                chain.push(id);
+            }
         }
     }
     Ok(cut)
@@ -1391,52 +1393,81 @@ pub(crate) fn supersession_chain(
 /// A conflict and the claims it names besides the claim it was built for.
 pub(crate) type ValueConflict = Option<(KnowledgeConflict, Vec<StoredClaim>)>;
 
-/// The open conflict between an active `claim` and the active claims about the same subject and
-/// predicate that state it differently (at most 127 of them) and that `admit` accepts, with those
-/// claims, and whether the read was cut.
+/// What one build of conflicts has already looked up: the stored claims about each subject and
+/// predicate, and whether each was admitted, so a group of claims costs one lookup and one
+/// admission per claim however many of its claims are asked about.
+#[derive(Default)]
+pub(crate) struct ConflictLookups {
+    about: std::collections::HashMap<(Id, String), (Vec<StoredClaim>, bool)>,
+    admitted: std::collections::HashMap<Id, bool>,
+}
+
+/// The open conflict a group of claims makes: the active claims about one subject and predicate
+/// (the claim asked about, and at most 127 others that `admit` accepts) when any of the others
+/// states it differently. Every claim of the group asks for the same conflict, so a group yields
+/// one conflict (named for its lowest claim ID). Returns the conflict with the other claims and
+/// whether the read was cut.
 pub(crate) fn value_conflict(
     k: &dyn KnowledgeRead,
     scoped: &Scoped,
     claim: &StoredClaim,
+    lookups: &mut ConflictLookups,
     admit: &mut dyn FnMut(&StoredClaim) -> Result<bool, StorageError>,
 ) -> Result<(ValueConflict, bool), StorageError> {
-    let others =
-        k.knowledge_claims_about(&scoped.keys(), &claim.subject_id, &claim.predicate, 129)?;
-    let cut = others.len() > 128;
-    let mut different: Vec<StoredClaim> = Vec::new();
-    for o in others.into_iter().take(128) {
-        if o.id != claim.id
-            && (o.body.value != claim.body.value
+    let key = (claim.subject_id.clone(), claim.predicate.clone());
+    if !lookups.about.contains_key(&key) {
+        let found =
+            k.knowledge_claims_about(&scoped.keys(), &claim.subject_id, &claim.predicate, 129)?;
+        let cut = found.len() > 128;
+        lookups
+            .about
+            .insert(key.clone(), (found.into_iter().take(128).collect(), cut));
+    }
+    let (others, cut) = &lookups.about[&key];
+    let cut = *cut;
+    let mut group: Vec<StoredClaim> = Vec::new();
+    let mut differs = false;
+    for o in others.iter().filter(|o| o.id != claim.id) {
+        let accepted = match lookups.admitted.get(&o.id) {
+            Some(known) => *known,
+            None => {
+                let decided = admit(o)?;
+                lookups.admitted.insert(o.id.clone(), decided);
+                decided
+            }
+        };
+        if accepted {
+            differs |= o.body.value != claim.body.value
                 || o.body.value_json != claim.body.value_json
-                || o.object_id != claim.object_id)
-            && admit(&o)?
-        {
-            different.push(o);
+                || o.object_id != claim.object_id;
+            group.push(o.clone());
         }
     }
-    if different.is_empty() {
+    if !differs {
         return Ok((None, cut));
     }
-    let mut ids = vec![claim.id.clone()];
-    ids.extend(different.iter().take(127).map(|o| o.id.clone()));
+    group.truncate(127);
+    let mut ids: Vec<Id> = std::iter::once(claim.id.clone())
+        .chain(group.iter().map(|o| o.id.clone()))
+        .collect();
+    ids.sort_by(|a, b| a.as_str().cmp(b.as_str()));
     let conflict = KnowledgeConflict {
         id: Id::new(
-            format!("conflict-{}", claim.id.as_str())
+            format!("conflict-{}", ids[0].as_str())
                 .chars()
                 .take(128)
                 .collect::<String>(),
         )
         .map_err(|_| StorageError::InvalidRecord("conflict id".into()))?,
-        claim_ids: BoundedList(ids),
         state: label("Open", "Open"),
         explanation: content(&format!(
             "{} active claims about the same subject state {} differently.",
-            different.len() + 1,
+            ids.len(),
             claim.predicate
         )),
+        claim_ids: BoundedList(ids),
     };
-    let named = different.into_iter().take(127).collect();
-    Ok((Some((conflict, named)), cut))
+    Ok((Some((conflict, group)), cut))
 }
 
 /// The open conflict a recorded `contradicts` relation of `claim` makes, with the other claim. It
@@ -1508,7 +1539,13 @@ pub(crate) fn bundle_of(
     let mut conflicts = Vec::new();
     let mut truncated = false;
     if claim.lifecycle == "Active" && !historical {
-        let (found, cut) = value_conflict(k, scoped, claim, &mut |_| Ok(true))?;
+        let (found, cut) = value_conflict(
+            k,
+            scoped,
+            claim,
+            &mut ConflictLookups::default(),
+            &mut |_| Ok(true),
+        )?;
         truncated |= cut;
         if let Some((conflict, different)) = found {
             conflicts.push(conflict);

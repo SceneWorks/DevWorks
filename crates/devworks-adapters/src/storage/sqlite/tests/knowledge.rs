@@ -6199,6 +6199,79 @@ fn seeded_traversals_continue_past_their_edge_bound_and_long_chains_report_trunc
 }
 
 #[test]
+fn a_supersession_chain_goes_on_through_a_deleted_link() {
+    let fx = Fx::new();
+    let user = fx.user();
+    let a = fx.claim_id(&user, proj("project-a"), "Same", draft("Fact", "state a"));
+    let subject = fx.claim(&user, proj("project-a"), &a).subject_id;
+    let next = |value: &str, from: &Id| {
+        receipt(fx.record(&user, proj("project-a"), json!({"entities": [], "evidence": [],
+            "claims": [with(draft("Fact", value), json!({"subjectId": subject, "supersedes": from}))]})))
+            .claim_ids
+            .0[0]
+            .clone()
+    };
+    let b = next("state b", &a);
+    let c = next("state c", &b);
+    let rev = fx.revision(&b);
+    summary(fx.cmd(
+        &user,
+        "knowledge.delete_selected",
+        json!({"scope": proj("project-a"),
+        "claims": [{"id": b, "revision": rev.to_string()}]}),
+    ));
+    let read = fx.read_claim(&user, proj("project-a"), &c);
+    assert_eq!(read.supersession_ids.0, vec![a.clone()]);
+    let sub = bundle_of_reply(fx.q(
+        &user,
+        "knowledge.subgraph",
+        json!({"scope": proj("project-a"),
+        "query": graph_query(json!({"claimIds": [c], "maxDepth": 0}))}),
+    ));
+    assert_eq!(sub.supersession_ids.0, vec![a]);
+}
+
+#[test]
+fn a_group_of_claims_that_state_one_predicate_differently_makes_one_conflict() {
+    let fx = Fx::new();
+    let user = fx.user();
+    let a = fx.claim_id(&user, proj("project-a"), "Same", draft("Fact", "agreed"));
+    let subject = fx.claim(&user, proj("project-a"), &a).subject_id;
+    let add = |value: &str| {
+        receipt(fx.record(
+            &user,
+            proj("project-a"),
+            json!({"entities": [], "evidence": [],
+            "claims": [with(draft("Fact", value), json!({"subjectId": subject}))]}),
+        ))
+        .claim_ids
+        .0[0]
+            .clone()
+    };
+    let b = add("agreed");
+    let c = add("different");
+    let sub = bundle_of_reply(fx.q(
+        &user,
+        "knowledge.subgraph",
+        json!({"scope": proj("project-a"),
+        "query": graph_query(json!({"claimIds": [a, b, c], "maxDepth": 0}))}),
+    ));
+    assert_eq!(sub.conflicts.0.len(), 1, "{:?}", sub.conflicts);
+    let mut members = sub.conflicts.0[0].claim_ids.0.clone();
+    members.sort_by(|x, y| x.as_str().cmp(y.as_str()));
+    let mut expected = vec![a.clone(), b.clone(), c.clone()];
+    expected.sort_by(|x, y| x.as_str().cmp(y.as_str()));
+    assert_eq!(members, expected);
+    // A read of any claim of the group reports that same conflict.
+    for id in [&a, &b, &c] {
+        let read = fx.read_claim(&user, proj("project-a"), id);
+        assert_eq!(read.conflicts.0.len(), 1);
+        assert_eq!(read.conflicts.0[0].id, sub.conflicts.0[0].id);
+        assert_eq!(read.conflicts.0[0].claim_ids.0, members);
+    }
+}
+
+#[test]
 fn a_claim_read_and_a_subgraph_of_that_claim_report_the_same_conflicts_and_chain() {
     let fx = Fx::new();
     let user = fx.user();

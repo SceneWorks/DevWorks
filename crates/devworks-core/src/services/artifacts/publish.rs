@@ -31,10 +31,13 @@ pub(super) enum Gate {
     /// The invocation's authorization: store and restore epoch, every authority fence and every
     /// grant it relied on.
     Authorization(InvocationContext, Authorization),
-    /// A producer named without an invocation: a bound principal that has been revoked since the
-    /// content was produced publishes nothing. Principals without a binding (humans, the host)
-    /// hold no revocable authority.
+    /// A producer named without an invocation: a principal revoked, re-bound or newly bound
+    /// since the publication started publishes nothing. Principals without a binding (humans,
+    /// the host) hold no revocable authority, and gaining one is a change too.
     Producer(ActorId),
+    /// [`Gate::Producer`] with the binding revision captured when the publication started
+    /// (`None`: no binding then). Built by [`ArtifactService::publish_bytes`].
+    PinnedProducer(ActorId, Option<i64>),
 }
 
 impl Gate {
@@ -47,6 +50,11 @@ impl Gate {
                 .authority()
                 .principal(actor)?
                 .is_none_or(|binding| binding.active)),
+            Self::PinnedProducer(actor, revision) => {
+                let binding = tx.authority().principal(actor)?;
+                Ok(binding.as_ref().map(|b| b.revision) == *revision
+                    && binding.is_none_or(|b| b.active))
+            }
         }
     }
 }
@@ -88,7 +96,11 @@ impl ArtifactService {
         let digest = sha256_hex(bytes);
         let n = bytes.len() as i64;
         let (checked, d) = (scope.clone(), digest.clone());
-        let (max, quota, used, reuse) = env.read(move |s| {
+        let producer = match &gate {
+            Gate::Producer(actor) | Gate::PinnedProducer(actor, _) => Some(actor.clone()),
+            Gate::Authorization(..) => None,
+        };
+        let (max, quota, used, reuse, bound) = env.read(move |s| {
             let max = setting_i64(s.configuration(), None, ARTIFACT_MAX_FILE_KEY);
             let quota = setting_i64(s.configuration(), checked.project(), ARTIFACT_QUOTA_KEY);
             let reuse = s
@@ -96,8 +108,16 @@ impl ArtifactService {
                 .blob(&d)?
                 .filter(|b| matches!(b.state, BlobState::Present | BlobState::UnlinkPending))
                 .map(|b| b.generation);
-            Ok((max, quota, usage(s.artifacts(), &checked)?, reuse))
+            let bound = match &producer {
+                Some(actor) => Some(s.authority().principal(actor)?.map(|b| b.revision)),
+                None => None,
+            };
+            Ok((max, quota, usage(s.artifacts(), &checked)?, reuse, bound))
         })?;
+        let gate = match (gate, bound) {
+            (Gate::Producer(actor), Some(revision)) => Gate::PinnedProducer(actor, revision),
+            (gate, _) => gate,
+        };
         let (max, quota) = (max?, quota?);
         if n > max {
             return Err(Refusal::new(

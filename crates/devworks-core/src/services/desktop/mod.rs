@@ -1208,49 +1208,56 @@ impl QueryHandler for DesktopService {
         let capture_agent = ctx.principal_kind() == PrincipalKind::Agent;
         let (reference, ()) = self
             .artifacts
-            .publish_evidence(&*self.store, evidence, &png, move |tx, _ref| {
-                if binding
-                    .as_ref()
-                    .map(|binding| binding.validate_in(tx))
-                    .transpose()?
-                    .is_some_and(|valid| !valid)
-                {
-                    return Err(StorageError::ScopeDenied);
-                }
-                let key = canonical_key(
-                    ResourceScopeKind::Machine,
-                    None,
-                    crate::services::resources::DESKTOP,
-                );
-                let resource = tx
-                    .resources()
-                    .resource_by_key(&key)?
-                    .filter(|resource| resource.id == target)
-                    .ok_or_else(|| StorageError::NotFound {
-                        kind: "desktop",
-                        id: target.as_str().into(),
-                    })?;
-                let holder = tx
-                    .resources()
-                    .holders(&resource.id, 0, 1)?
-                    .into_iter()
-                    .next();
-                let current = rev(desktop_revision(&resource, holder.as_ref())?);
-                if current != expected {
-                    return Err(StorageError::conflict(
-                        RevisionDimension::Control,
-                        "desktop",
-                        target.clone(),
-                        expected.clone(),
-                        current,
-                    ));
-                }
-                if capture_agent {
-                    Self::validate_capture_consent(tx, &capture_ctx, &target)
-                        .map_err(|_| StorageError::ScopeDenied)?;
-                }
-                Ok(())
-            })
+            .publish_evidence_as(
+                &*self.store,
+                ctx,
+                query.authorization(),
+                evidence,
+                &png,
+                move |tx, _ref| {
+                    if binding
+                        .as_ref()
+                        .map(|binding| binding.validate_in(tx))
+                        .transpose()?
+                        .is_some_and(|valid| !valid)
+                    {
+                        return Err(StorageError::ScopeDenied);
+                    }
+                    let key = canonical_key(
+                        ResourceScopeKind::Machine,
+                        None,
+                        crate::services::resources::DESKTOP,
+                    );
+                    let resource = tx
+                        .resources()
+                        .resource_by_key(&key)?
+                        .filter(|resource| resource.id == target)
+                        .ok_or_else(|| StorageError::NotFound {
+                            kind: "desktop",
+                            id: target.as_str().into(),
+                        })?;
+                    let holder = tx
+                        .resources()
+                        .holders(&resource.id, 0, 1)?
+                        .into_iter()
+                        .next();
+                    let current = rev(desktop_revision(&resource, holder.as_ref())?);
+                    if current != expected {
+                        return Err(StorageError::conflict(
+                            RevisionDimension::Control,
+                            "desktop",
+                            target.clone(),
+                            expected.clone(),
+                            current,
+                        ));
+                    }
+                    if capture_agent {
+                        Self::validate_capture_consent(tx, &capture_ctx, &target)
+                            .map_err(|_| StorageError::ScopeDenied)?;
+                    }
+                    Ok(())
+                },
+            )
             .map_err(|e| match e {
                 EvidenceFailure::Refused(refusal) => refusal.fault(self.correlation()),
                 EvidenceFailure::Storage(error) => {

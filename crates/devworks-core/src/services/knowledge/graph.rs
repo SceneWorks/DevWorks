@@ -522,8 +522,9 @@ fn conflicts(
     let mut cut = false;
     let mut keys: HashSet<Vec<String>> = HashSet::new();
     let mut recorded = HashSet::new();
+    let mut lookups = super::ConflictLookups::default();
     for (claim, _, _) in claims.iter().filter(|(c, _, _)| c.lifecycle == "Active") {
-        let (found, more) = super::value_conflict(c.k, c.scoped, claim, admit)?;
+        let (found, more) = super::value_conflict(c.k, c.scoped, claim, &mut lookups, admit)?;
         cut |= more;
         if let Some((conflict, _)) = found {
             let mut key: Vec<String> = conflict
