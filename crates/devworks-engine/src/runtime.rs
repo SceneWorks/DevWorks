@@ -2107,7 +2107,18 @@ impl Runtime {
         if ctx.session_id() != Some(session_id) {
             return Err(StorageError::ScopeDenied);
         }
-        let current = self.effective_skills()?;
+        // The session's own project decides which project skills it is offered.
+        let project = devworks_core::ports::storage::read_snapshot(
+            self.store.as_ref(),
+            &devworks_core::ports::storage::ReadOptions::default(),
+            |read| {
+                Ok(read
+                    .sessions()
+                    .session(session_id)?
+                    .and_then(|s| s.project_id))
+            },
+        )?;
+        let current = self.effective_skills_in(project.as_ref())?;
         if adopted.is_some_and(|a| a.digest == current.digest) {
             return Ok((current, false));
         }
@@ -2118,6 +2129,28 @@ impl Runtime {
             current.stamp().as_ref(),
         )?;
         Ok((current, true))
+    }
+    /// The project whose skills an invocation is offered: its own, else its session's.
+    fn skill_project(
+        &self,
+        ctx: &InvocationContext,
+    ) -> Result<Option<devworks_core::protocol::ProjectId>, StorageError> {
+        if let Some(project) = ctx.project_id() {
+            return Ok(Some(project.clone()));
+        }
+        let Some(session_id) = ctx.session_id() else {
+            return Ok(None);
+        };
+        devworks_core::ports::storage::read_snapshot(
+            self.store.as_ref(),
+            &devworks_core::ports::storage::ReadOptions::default(),
+            |read| {
+                Ok(read
+                    .sessions()
+                    .session(session_id)?
+                    .and_then(|s| s.project_id))
+            },
+        )
     }
     /// Appends the `SkillRevisionsAdopted` session event of a skill-set change.
     fn record_skill_adoption(
@@ -2169,6 +2202,14 @@ impl Runtime {
     pub fn effective_skills(
         &self,
     ) -> Result<devworks_core::services::instructions::EffectiveSkills, StorageError> {
+        self.effective_skills_in(None)
+    }
+    /// The skill set an agent working in `project` adopts: the workspace's skills plus that
+    /// project's own. No other project's skill is ever offered.
+    pub fn effective_skills_in(
+        &self,
+        project: Option<&devworks_core::protocol::ProjectId>,
+    ) -> Result<devworks_core::services::instructions::EffectiveSkills, StorageError> {
         let service = self.instructions.as_ref().ok_or_else(|| {
             StorageError::unavailable(Unavailable::UnsupportedRuntime, "skills are not composed")
         })?;
@@ -2176,7 +2217,12 @@ impl Runtime {
         devworks_core::ports::storage::read_snapshot(
             self.store.as_ref(),
             &devworks_core::ports::storage::ReadOptions::default(),
-            |read| devworks_core::services::instructions::effective_skills(read.instructions()),
+            |read| {
+                devworks_core::services::instructions::effective_skills_in(
+                    read.instructions(),
+                    project,
+                )
+            },
         )
     }
     pub fn providers(&self) -> Option<&Arc<crate::providers::driver::NativeProviders>> {
@@ -2816,7 +2862,7 @@ impl Runtime {
         }
         let base = match crate::instruction_guard::InstructionGuard::new(self.store.clone(), None)
             .with_skills(self.instructions.clone())
-            .current_skills()?
+            .current_skills(self.skill_project(ctx)?.as_ref())?
         {
             Some(stamp) => devworks_core::providers::instructions::bind_skills(base, stamp)
                 .map_err(|e| StorageError::InvalidRecord(format!("skill binding: {e:?}")))?,

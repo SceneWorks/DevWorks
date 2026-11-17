@@ -34,6 +34,20 @@
 //! resources (documents, scripts, assets) resolve relative to their owning skill directory;
 //! scripts gain no authority from being part of a skill.
 //!
+//! # Project skills
+//!
+//! A skill can be scoped to one project (`scope: Project`). It is a harness skill whose files
+//! live in that project's own store, `<data-root>/project-skills/<project-id>`, never in a
+//! repository (whose content anyone with write access controls) and never in the workspace skill
+//! folder. Agent commands are refused writes there like in the other skill folders. The same
+//! rules apply as for workspace harness skills: a person's save is effective at once, an agent's
+//! draft needs the exact human approval, and a folder first seen or changed on disk is a pending
+//! revision until a person confirms it with `skills.rollback`. Only agents working in the project
+//! are offered it ([`effective_skills_in`]); it is not found for any other project, and it
+//! overrides a workspace skill of the same name for its project. `skills.set_enabled` works on
+//! it unchanged. The project's rows go with the project's purge, and sync removes the folder of
+//! a deleted project.
+//!
 //! Role revisions keep the `roles.<role>.instructions` setting as their single effective source:
 //! activation writes the setting in the same unit of work, and a setting saved elsewhere is
 //! observed as a new approved revision.
@@ -44,7 +58,9 @@ mod queries;
 pub mod scan;
 mod sync;
 
-pub use adoption::{EffectiveSkill, EffectiveSkills, SkillConflict, effective_skills};
+pub use adoption::{
+    EffectiveSkill, EffectiveSkills, SkillConflict, effective_skills, effective_skills_in,
+};
 pub use sync::SyncReport;
 
 use crate::context::{InvocationContext, PrincipalKind};
@@ -158,6 +174,25 @@ impl InstructionService {
             roles,
             clock,
             sync_lock: Mutex::new(()),
+        }
+    }
+    /// The skill files of a scope: the workspace folder, or a project's own store (`None`
+    /// when the host keeps no project skills).
+    pub(crate) fn skill_files(&self, scope: &ConfigScope) -> Option<Arc<dyn SkillFiles>> {
+        match scope {
+            ConfigScope::Workspace => Some(self.files.clone()),
+            ConfigScope::Project(p) => self.files.project(p.0.as_str()),
+        }
+    }
+    /// The folder a scope's skills are written to (and observed in).
+    pub(crate) fn skill_root(&self, scope: &ConfigScope) -> Option<PathBuf> {
+        let files = self.skill_files(scope)?;
+        match scope {
+            ConfigScope::Workspace => files
+                .root()
+                .ok()
+                .or_else(|| Some(self.roots.harness.clone())),
+            ConfigScope::Project(_) => files.root().ok(),
         }
     }
     fn correlation(&self) -> CorrelationId {

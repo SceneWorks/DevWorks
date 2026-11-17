@@ -9,12 +9,12 @@ use crate::ports::storage::{
     ConfigScope, InstructionFilter, InstructionKind, InstructionOrigin, InstructionRead,
     ReadSnapshot, StorageError, StoredInstructionItem,
 };
-use crate::protocol::Id;
 use crate::protocol::records::{
     InstructionRecord, PageRequest, SkillResource, SkillResourcePage, SkillResourcePageResult,
 };
 use crate::protocol::results::OperationResult;
 use crate::protocol::support::Page;
+use crate::protocol::{Id, ProjectId};
 use crate::services::cursor::{self, CursorBinding};
 use crate::services::sessions::Failure;
 use std::collections::BTreeMap;
@@ -44,17 +44,21 @@ impl Standing {
     }
 }
 
-/// Every skill item with its standing.
-pub(crate) fn skill_items(
+/// Every skill item an agent working in `project` can use (the workspace's and that project's)
+/// with its standing. Another project's skills are never read.
+pub(crate) fn skill_items_in(
     read: &dyn InstructionRead,
+    project: Option<&ProjectId>,
 ) -> Result<Vec<(StoredInstructionItem, Standing)>, StorageError> {
+    let mut scopes = vec![ConfigScope::Workspace];
+    scopes.extend(project.map(|p| ConfigScope::Project(p.clone())));
     let mut all = Vec::new();
     let mut after: Option<Id> = None;
     loop {
         let page = read.instruction_items(
             &InstructionFilter {
                 kind: Some(InstructionKind::Skill),
-                scopes: vec![ConfigScope::Workspace],
+                scopes: scopes.clone(),
                 name: None,
             },
             after.as_ref(),
@@ -68,7 +72,13 @@ pub(crate) fn skill_items(
         }
     }
     let usable = |i: &StoredInstructionItem| i.present && i.enabled && i.active_revision.is_some();
-    let rank = |i: &StoredInstructionItem| u8::from(i.origin != InstructionOrigin::Harness);
+    // A project's skill overrides a workspace skill of the same name, which overrides a shared
+    // one, so the most specific skill is the one in effect.
+    let rank = |i: &StoredInstructionItem| match (&i.scope, &i.origin) {
+        (ConfigScope::Project(_), _) => 0,
+        (_, InstructionOrigin::Harness) => 1,
+        _ => 2,
+    };
     // Per folded name: the best rank and every usable item holding it.
     let mut best: BTreeMap<String, (u8, Vec<Id>)> = BTreeMap::new();
     for item in all.iter().filter(|i| usable(i)) {
@@ -112,8 +122,9 @@ impl InstructionService {
         let instructions = read.instructions();
         match input {
             skill_ops::Input::Discover(i) => {
-                // Skills are workspace resources visible from every project scope.
-                config_scope(ctx, &i.scope)?;
+                // Workspace skills are visible from every project; a project's own skills are
+                // listed with them when its scope is named (and only within that project).
+                let scope = config_scope(ctx, &i.scope)?;
                 let roots: Vec<&str> = i.root_ids.0.iter().map(Id::as_str).collect();
                 if roots
                     .iter()
@@ -123,7 +134,7 @@ impl InstructionService {
                 }
                 let mut records = Vec::new();
                 let mut fence = 0i64;
-                for (item, standing) in skill_items(instructions)? {
+                for (item, standing) in skill_items_in(instructions, scope.project_id())? {
                     let root = if item.origin == InstructionOrigin::Shared {
                         SHARED_ROOT_ID
                     } else {
@@ -269,7 +280,7 @@ impl InstructionService {
             None => visible_current(read, ctx, &item)?,
         };
         let effective = if kind == InstructionKind::Skill {
-            skill_items(read)?
+            skill_items_in(read, item.scope.project_id().or(ctx.project_id()))?
                 .into_iter()
                 .find(|(i, _)| i.id == item.id)
                 .map(|(_, standing)| standing)
@@ -404,7 +415,7 @@ mod tests {
             item("s-beta", "beta", InstructionOrigin::Shared),
             item("h-beta", "Beta", InstructionOrigin::Harness),
         ]);
-        let standing: BTreeMap<String, Standing> = skill_items(&read)
+        let standing: BTreeMap<String, Standing> = skill_items_in(&read, None)
             .unwrap()
             .into_iter()
             .map(|(i, s)| (i.id.as_str().to_owned(), s))

@@ -156,12 +156,14 @@ impl InstructionService {
                 (InstructionOrigin::Harness, harness),
             ] {
                 let Some(root) = root else { continue };
-                if let Err(e) = self.sync_root(origin, &root, &mut report) {
+                if let Err(e) = self.sync_root(origin, &ConfigScope::Workspace, &root, &mut report)
+                {
                     report
                         .failures
                         .push(format!("{} skills: {e}", origin.as_str().to_lowercase()));
                 }
             }
+            self.sync_projects(&mut report);
         }
         if kind != Some(InstructionKind::Skill)
             && let Err(e) = self.sync_roles(&mut report)
@@ -192,16 +194,87 @@ impl InstructionService {
         })
     }
 
+    /// Observes each project's skill store (`<data-root>/project-skills/<project-id>`). A
+    /// project is observed when it has skills recorded or a folder on disk; the folder of a
+    /// deleted project (one the store no longer has, or marks deleted, as a purge leaves it)
+    /// is removed, since the store records everything it holds.
+    fn sync_projects(&self, report: &mut SyncReport) {
+        let folders = match self.files.project_folders() {
+            Ok(folders) => folders,
+            Err(e) => {
+                report.failures.push(format!("project skills: {e}"));
+                return;
+            }
+        };
+        let recorded = match self.items(&InstructionFilter {
+            kind: Some(InstructionKind::Skill),
+            scopes: Vec::new(),
+            name: None,
+        }) {
+            Ok(items) => items,
+            Err(e) => {
+                report.failures.push(format!("project skills: {e}"));
+                return;
+            }
+        };
+        let mut projects: std::collections::BTreeSet<String> = recorded
+            .iter()
+            .filter_map(|i| i.scope.project_id().map(|p| p.0.as_str().to_owned()))
+            .collect();
+        projects.extend(folders.iter().cloned());
+        for id in projects {
+            let Ok(project) = Id::new(id.clone()).map(crate::protocol::ProjectId) else {
+                continue;
+            };
+            let known = read_snapshot(&*self.store, &ReadOptions::default(), |read| {
+                Ok(read
+                    .projects()
+                    .project(&project)?
+                    .is_some_and(|p| p.lifecycle != "Deleted"))
+            });
+            match known {
+                Ok(true) => {}
+                // The project is gone: its folder holds only what the store recorded (or an edit nobody
+                // confirmed), so it goes with the project.
+                Ok(false) => {
+                    if folders.contains(&id)
+                        && let Err(e) = self.files.remove_project(&id)
+                    {
+                        report.failures.push(format!("project {id} skills: {e}"));
+                    }
+                    continue;
+                }
+                Err(e) => {
+                    report.failures.push(format!("project {id} skills: {e}"));
+                    continue;
+                }
+            }
+            let scope = ConfigScope::Project(project);
+            let Some(root) = self.skill_root(&scope) else {
+                continue;
+            };
+            if let Err(e) = self.sync_root(InstructionOrigin::Harness, &scope, &root, report) {
+                report.failures.push(format!("project {id} skills: {e}"));
+            }
+        }
+    }
+
     fn sync_root(
         &self,
         origin: InstructionOrigin,
+        scope: &ConfigScope,
         root: &Path,
         report: &mut SyncReport,
     ) -> Result<(), StorageError> {
+        // Named in reports: the origin, and the project for a project's store.
+        let label = match scope {
+            ConfigScope::Workspace => origin.as_str().to_lowercase(),
+            ConfigScope::Project(p) => format!("project {}", p.0.as_str()),
+        };
         let existing: BTreeMap<String, StoredInstructionItem> = self
             .items(&InstructionFilter {
                 kind: Some(InstructionKind::Skill),
-                scopes: vec![ConfigScope::Workspace],
+                scopes: vec![scope.clone()],
                 name: None,
             })?
             .into_iter()
@@ -223,10 +296,9 @@ impl InstructionService {
             // The directory exists but could not be captured now: keep its last observed state
             // rather than treating it as deleted.
             seen.insert(s.name.clone());
-            report.skipped.push((
-                s.name,
-                format!("{}: {}", origin.as_str().to_lowercase(), s.reason),
-            ));
+            report
+                .skipped
+                .push((s.name, format!("{label}: {}", s.reason)));
         }
         for skill in skills {
             seen.insert(skill.name.clone());
@@ -250,14 +322,12 @@ impl InstructionService {
             }
             let path = canonical.as_ref().expect("scanned root");
             let name = skill.name.clone();
-            match self.observe_skill(origin, path, item, skill) {
+            match self.observe_skill(origin, scope, path, item, skill) {
                 Ok(()) => report.observed += 1,
                 // Named by origin like a scan failure: a capture that could not be recorded
                 // (an artifact write failed) leaves the directory changed but unrecorded, so a
                 // replacement of that root is refused until it is captured.
-                Err(e) => report
-                    .failures
-                    .push(format!("{}: {name}: {e}", origin.as_str().to_lowercase())),
+                Err(e) => report.failures.push(format!("{label}: {name}: {e}")),
             }
         }
         for item in existing.values() {
@@ -268,7 +338,7 @@ impl InstructionService {
         if origin == InstructionOrigin::Harness {
             for item in self.items(&InstructionFilter {
                 kind: Some(InstructionKind::Skill),
-                scopes: vec![ConfigScope::Workspace],
+                scopes: vec![scope.clone()],
                 name: None,
             })? {
                 if item.origin != InstructionOrigin::Harness {
@@ -290,7 +360,7 @@ impl InstructionService {
                         )
                     {
                         report.failures.push(format!(
-                            "harness: {}: the directory holds files that were not captured",
+                            "{label}: {}: the directory holds files that were not captured",
                             item.name
                         ));
                         continue;
@@ -346,6 +416,7 @@ impl InstructionService {
     fn observe_skill(
         &self,
         origin: InstructionOrigin,
+        scope: &ConfigScope,
         root: &Path,
         item: Option<&StoredInstructionItem>,
         skill: ScannedSkill,
@@ -359,6 +430,7 @@ impl InstructionService {
         let artifacts = self.artifacts.clone();
         let base = item.cloned();
         let root_path = root.to_string_lossy().into_owned();
+        let scope = scope.clone();
         let staged = Arc::new(staged);
         let staged_in = staged.clone();
         let result = run_write(&*self.store, WriteOptions::default(), move |tx| {
@@ -380,7 +452,7 @@ impl InstructionService {
                         id: tx.new_id(IdKind::Operation),
                         kind: InstructionKind::Skill,
                         name: name.clone(),
-                        scope: ConfigScope::Workspace,
+                        scope: scope.clone(),
                         origin,
                         root_path: Some(root_path.clone()),
                         source_path: Some(source_path.clone()),
@@ -665,7 +737,13 @@ impl InstructionService {
                 return Ok(wrote);
             }
             let files = self.revision_files(&revision)?;
-            self.files.materialize(&item.name, &files).map_err(|e| {
+            let store = self.skill_files(&item.scope).ok_or_else(|| {
+                StorageError::unavailable(
+                    crate::ports::storage::Unavailable::Io,
+                    "the host keeps no project skills",
+                )
+            })?;
+            store.materialize(&item.name, &files).map_err(|e| {
                 StorageError::unavailable(crate::ports::storage::Unavailable::Io, e.to_string())
             })?;
             wrote = true;

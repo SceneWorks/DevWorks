@@ -1,7 +1,9 @@
-//! The harness-owned skill directory (`<data-root>/skills`). Only approved harness revisions are
+//! The harness-owned skill directory (`<data-root>/skills`) and, per project, the project skill
+//! store (`<data-root>/project-skills/<project-id>`). Only approved harness revisions are
 //! written here; shared skill roots are read through [`super::indexing::SourceTree`] and never
 //! written.
 use std::path::PathBuf;
+use std::sync::Arc;
 
 /// One file of a materialized skill, relative to its skill directory.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -45,4 +47,20 @@ pub trait SkillFiles: Send + Sync {
         name: &str,
         paths: &[String],
     ) -> Result<Option<String>, SkillFileFault>;
+
+    /// The managed skill store of one project (`<data-root>/project-skills/<project-id>`),
+    /// separate from the workspace root so a project's skills are never listed with, or
+    /// mistaken for, workspace skills. `None` when the host keeps no project skills.
+    fn project(&self, _project: &str) -> Option<Arc<dyn SkillFiles>> {
+        None
+    }
+    /// Projects that have a folder in the project skill store (present on disk, whether or
+    /// not the store still knows the project).
+    fn project_folders(&self) -> Result<Vec<String>, SkillFileFault> {
+        Ok(Vec::new())
+    }
+    /// Removes a project's whole folder from the project skill store (project purge).
+    fn remove_project(&self, _project: &str) -> Result<(), SkillFileFault> {
+        Ok(())
+    }
 }

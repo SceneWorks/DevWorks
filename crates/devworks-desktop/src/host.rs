@@ -193,7 +193,11 @@ impl DesktopConfig {
 /// Container backends select only their own CLI among the configured executables.
 const CONTAINER_EXECUTABLES: &[&str] = &["docker", "podman", "container"];
 
-/// What every command launch is checked against: the application data folder and both skill
+/// Folder under the data root holding one skill store per project. It sits beside, not inside,
+/// `skills`, so a project's folder is never read as a workspace skill.
+const PROJECT_SKILLS: &str = "project-skills";
+
+/// What every command launch is checked against: the application data folder and the skill
 /// folders, so an agent's command can never write a skill change that sync would observe.
 pub(crate) fn protected_roots(config: &DesktopConfig) -> ProtectedRoots {
     ProtectedRoots::new(
@@ -202,9 +206,13 @@ pub(crate) fn protected_roots(config: &DesktopConfig) -> ProtectedRoots {
         Some(config.data_root.display().to_string()),
     )
     .with_skill_roots(
-        std::iter::once(config.data_root.join("skills"))
-            .chain(config.shared_skills.clone())
-            .map(|p| p.display().to_string()),
+        [
+            config.data_root.join("skills"),
+            config.data_root.join(PROJECT_SKILLS),
+        ]
+        .into_iter()
+        .chain(config.shared_skills.clone())
+        .map(|p| p.display().to_string()),
     )
 }
 
@@ -490,9 +498,10 @@ async fn compose(
     runtime_config.shutdown_bound = config.shutdown_bound;
     runtime_config.instructions = Some(devworks_engine::runtime::InstructionComposition {
         source: Arc::new(NativeSourceTree::new()),
-        files: Arc::new(devworks_adapters::fs::skills::NativeSkillFiles::new(
-            config.data_root.join("skills"),
-        )),
+        files: Arc::new(
+            devworks_adapters::fs::skills::NativeSkillFiles::new(config.data_root.join("skills"))
+                .with_projects(config.data_root.join(PROJECT_SKILLS)),
+        ),
         roots: devworks_core::services::instructions::SkillRoots {
             shared: config.shared_skills.clone(),
             harness: config.data_root.join("skills"),

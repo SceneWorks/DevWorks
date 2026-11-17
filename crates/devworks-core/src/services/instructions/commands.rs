@@ -563,17 +563,16 @@ impl InstructionService {
         now: i64,
     ) -> Result<Target, Failure> {
         let confined = input.confined.as_ref();
-        // File-backed skill roots are workspace resources.
-        if *scope != ConfigScope::Workspace {
-            return Err(invalid("skill_scope"));
-        }
+        // A skill lives in the workspace skill folder or, for one project, in that project's
+        // own skill store under the data folder (never in a repository, whose content anyone
+        // with write access to it controls).
         if !valid_name(name) {
             return Err(invalid("skill_name"));
         }
         // An existing skill of that name the caller cannot see (another project's confined
         // draft) is a conflict that names nothing.
         let harness = |tx: &mut dyn WriteTransaction| {
-            harness_named(tx, name)
+            harness_named(tx, scope, name)
                 .map(|found| found.map(|i| item_visible(ctx, &i).then_some(i.id)))
         };
         match input.instruction_id {
@@ -590,6 +589,14 @@ impl InstructionService {
                 if source.name != name {
                     return Err(invalid("skill_name"));
                 }
+                // An item is edited in its own scope; only a shared skill (a workspace item)
+                // may also be improved for a single project.
+                if source.scope != *scope
+                    && !(source.origin == InstructionOrigin::Shared
+                        && matches!(scope, ConfigScope::Project(_)))
+                {
+                    return Err(invalid("skill_scope"));
+                }
                 let base = visible_current(tx.instructions(), ctx, &source).ok();
                 if source.origin == InstructionOrigin::Shared {
                     // An improvement to a shared skill becomes a same-name harness override; the
@@ -605,7 +612,7 @@ impl InstructionService {
                         ));
                     }
                     Ok(Target {
-                        item: self.new_harness_item(tx, name, now, confined)?,
+                        item: self.new_harness_item(tx, scope, name, now, confined)?,
                         base,
                         overrides,
                         created: true,
@@ -631,7 +638,7 @@ impl InstructionService {
                     ));
                 }
                 Ok(Target {
-                    item: self.new_harness_item(tx, name, now, confined)?,
+                    item: self.new_harness_item(tx, scope, name, now, confined)?,
                     base: None,
                     overrides: None,
                     created: true,
@@ -643,20 +650,20 @@ impl InstructionService {
     fn new_harness_item(
         &self,
         tx: &mut dyn WriteTransaction,
+        scope: &ConfigScope,
         name: &str,
         now: i64,
         confined: Option<&crate::protocol::ProjectId>,
     ) -> Result<StoredInstructionItem, Failure> {
-        self.check_directory(name, None)?;
+        self.check_directory(scope, name, None)?;
         let root = self
-            .files
-            .root()
-            .unwrap_or_else(|_| self.roots.harness.clone());
+            .skill_root(scope)
+            .ok_or_else(|| invalid("skill_scope"))?;
         let item = StoredInstructionItem {
             id: tx.new_id(IdKind::Operation),
             kind: InstructionKind::Skill,
             name: name.to_owned(),
-            scope: ConfigScope::Workspace,
+            scope: scope.clone(),
             origin: InstructionOrigin::Harness,
             root_path: Some(root.to_string_lossy().into_owned()),
             source_path: Some(root.join(name).to_string_lossy().into_owned()),
@@ -967,13 +974,13 @@ impl InstructionService {
     /// below the bound discovery reads, or every later save would be refused.
     fn check_directory(
         &self,
+        scope: &ConfigScope,
         name: &str,
         item: Option<&StoredInstructionItem>,
     ) -> Result<(), Failure> {
         let root = self
-            .files
-            .root()
-            .unwrap_or_else(|_| self.roots.harness.clone());
+            .skill_root(scope)
+            .ok_or_else(|| invalid("skill_scope"))?;
         let id = item.map(|i| &i.id);
         match self.source.canonical_dir(&root.join(name)) {
             Ok(_) if item.is_some_and(|i| i.present) => return Ok(()),
@@ -999,7 +1006,7 @@ impl InstructionService {
         if item.kind != InstructionKind::Skill || item.origin != InstructionOrigin::Harness {
             return Ok(());
         }
-        self.check_directory(&item.name, Some(item))?;
+        self.check_directory(&item.scope, &item.name, Some(item))?;
         let mut paths = vec![scan::SKILL_FILE.to_owned()];
         for resource in resources.as_array().into_iter().flatten() {
             paths.push(
@@ -1009,7 +1016,10 @@ impl InstructionService {
                     .to_owned(),
             );
         }
-        match self.files.uncaptured_collision(&item.name, &paths) {
+        let Some(files) = self.skill_files(&item.scope) else {
+            return Err(invalid("skill_scope"));
+        };
+        match files.uncaptured_collision(&item.name, &paths) {
             Ok(None) => Ok(()),
             Ok(Some(_)) => Err(refusal(
                 DomainErrorCode::Conflict,
@@ -1066,14 +1076,15 @@ impl InstructionService {
         let now = tx.now_ms();
         // The rollback's expected revision belongs to the shared item, so it cannot guard an
         // existing override: that override is restored through its own identity and revision.
-        if let Some(existing) = harness_named(tx, &shared.name)? {
+        if let Some(existing) = harness_named(tx, &ConfigScope::Workspace, &shared.name)? {
             return Err(refusal(
                 DomainErrorCode::Conflict,
                 "skill_override",
                 Some(&existing.id),
             ));
         }
-        let mut item = self.new_harness_item(tx, &shared.name, now, None)?;
+        let mut item =
+            self.new_harness_item(tx, &ConfigScope::Workspace, &shared.name, now, None)?;
         let revision = StoredInstructionRevision {
             instruction_id: item.id.clone(),
             revision: item.latest_revision + 1,
@@ -1198,6 +1209,7 @@ fn role_target(
 /// never resolve onto (and overwrite) another skill's files.
 fn harness_named(
     tx: &mut dyn WriteTransaction,
+    scope: &ConfigScope,
     name: &str,
 ) -> Result<Option<StoredInstructionItem>, StorageError> {
     let folded = name.to_lowercase();
@@ -1206,7 +1218,7 @@ fn harness_named(
         let page = tx.instructions().instruction_items(
             &InstructionFilter {
                 kind: Some(InstructionKind::Skill),
-                scopes: vec![ConfigScope::Workspace],
+                scopes: vec![scope.clone()],
                 name: None,
             },
             after.as_ref(),
