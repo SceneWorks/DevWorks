@@ -308,7 +308,7 @@ pub(crate) fn publish(
     let omitted_for_write = omitted.clone();
     let source_for_write = source.clone();
     let binding_for_write = binding.clone();
-    let committed = run_write(store, WriteOptions::default(), move |tx| {
+    let committed = run_write(store, WriteOptions::observed(), move |tx| {
         let session = tx
             .sessions()
             .session(&session_for_write)?

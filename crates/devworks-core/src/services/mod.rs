@@ -545,7 +545,7 @@ impl UseCases {
         operation: &str,
         raw: &[u8],
     ) -> CommandOutcome {
-        self.command_with(gateway, ctx, operation, raw, WriteOptions::default())
+        self.command_with(gateway, ctx, operation, raw, WriteOptions::command())
     }
 
     pub fn command_with(

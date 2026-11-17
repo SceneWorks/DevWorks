@@ -3,6 +3,7 @@
 use crate::runs::{ActivationLauncher, Launch, LaunchEnd, LaunchFuture};
 use crate::store;
 use devworks_core::context::{HostIngress, InvocationContext, PrincipalKind};
+use devworks_core::ports::storage::WriteOptions;
 use devworks_core::ports::storage::{
     ActivationOutcome, ApplicationStore, AssignmentPurpose, AssignmentState, StorageError,
     StoredSession, Unavailable,
@@ -122,7 +123,7 @@ impl AgentLauncher {
                 let host = host.clone();
                 let assignment_id = assignment_id.clone();
                 let activation_id = activation_id.clone();
-                store::write(&store, move |tx| {
+                store::write(&store, WriteOptions::host_state(), move |tx| {
                     let child = match agents
                         .activate_child(tx, &host, &assignment_id, &activation_id, epoch)
                         .map_err(failure)?
@@ -192,7 +193,7 @@ impl AgentLauncher {
                     let assignment_for_write = assignment_id.clone();
                     let activation_for_write = activation_id.clone();
                     let root_for_write = child_root.clone();
-                    let complete = store::write(&store, move |tx| {
+                    let complete = store::write(&store, WriteOptions::host_state(), move |tx| {
                         let Some(current) = tx.runs().assignment(&assignment_for_write)? else {
                             return Ok(Some(false));
                         };
@@ -337,12 +338,13 @@ async fn supervise_children(
                 let host = AgentLauncher::host_context(&*launcher.store, &*launcher.ids);
                 let id = child.id.clone();
                 let activation = activation_id.clone();
-                if let Err(error) = store::write(&launcher.store, move |tx| {
-                    agents
-                        .complete_child(tx, &host, &id, &activation, epoch)
-                        .map_err(failure)
-                })
-                .await
+                if let Err(error) =
+                    store::write(&launcher.store, WriteOptions::host_state(), move |tx| {
+                        agents
+                            .complete_child(tx, &host, &id, &activation, epoch)
+                            .map_err(failure)
+                    })
+                    .await
                 {
                     fatal = Some(failed(error));
                     let _ = stop_all.send(true);
@@ -450,7 +452,7 @@ impl ActivationLauncher for AgentLauncher {
                 let agents = agents.clone();
                 let host = host.clone();
                 let activation_id = activation_id.clone();
-                store::write(&store, move |tx| {
+                store::write(&store, WriteOptions::host_state(), move |tx| {
                     let coordinator = agents
                         .materialize_primary(tx, &host, &activation_id, epoch)
                         .map_err(failure)?;
@@ -541,7 +543,7 @@ impl ActivationLauncher for AgentLauncher {
                 let assignment_id = coordinator.assignment_id;
                 let complete = {
                     let agents = agents.clone();
-                    store::write(&store, move |tx| {
+                    store::write(&store, WriteOptions::host_state(), move |tx| {
                         agents
                             .complete_primary(tx, &host, &assignment_id, &activation_id, epoch)
                             .map_err(failure)

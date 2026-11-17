@@ -158,7 +158,7 @@ pub(super) fn run_case(writer_race: bool) {
         loop {
             // Use Help's real durable cancellation signal. This fixture does not need a
             // completed catalog, and maintenance retains this source-change attempt.
-            let cancelled_failure = run_write(store.as_ref(), WriteOptions::default(), |tx| {
+            let cancelled_failure = run_write(store.as_ref(), WriteOptions::fixture(), |tx| {
                 let page = tx.queue().deliveries(
                     &DeliveryFilter {
                         consumer: Some("help_docs".into()),
@@ -244,7 +244,7 @@ pub(super) fn run_case(writer_race: bool) {
                 .to_secret(),
             )
             .unwrap();
-        run_write(store.as_ref(), WriteOptions::default(), |tx| {
+        run_write(store.as_ref(), WriteOptions::fixture(), |tx| {
             let restore_epoch = tx.store().restore_epoch;
             tx.router().put_connection(
                 &StoredConnection {
@@ -295,7 +295,7 @@ pub(super) fn run_case(writer_race: bool) {
             )
         })
         .unwrap();
-        run_write(store.as_ref(), WriteOptions::default(), |tx| {
+        run_write(store.as_ref(), WriteOptions::fixture(), |tx| {
             let actor = tx.store().host_actor.clone();
             tx.sessions().insert_session(&StoredSession {
                 id: id("shutdown-session"),
@@ -417,7 +417,7 @@ pub(super) fn run_case(writer_race: bool) {
             .unwrap();
         let pending = staged.clone();
         let service = artifacts.clone();
-        let version = run_write(store.as_ref(), WriteOptions::default(), move |tx| {
+        let version = run_write(store.as_ref(), WriteOptions::fixture(), move |tx| {
             service.commit_host_bytes(
                 tx,
                 &pending,

@@ -257,7 +257,7 @@ fn conventions32_migration_snapshot_cas_scoped_paging_and_reopen() {
     let old = SqliteStore::open_with(h.config(), &through(31)).unwrap();
     drop(old);
     let store = SqliteStore::open(h.config()).unwrap();
-    let (scope, first) = run_write(&store, WriteOptions::default(), |tx| {
+    let (scope, first) = run_write(&store, WriteOptions::fixture(), |tx| {
         let a = project(tx, "project-a")?;
         let b = project(tx, "project-b")?;
         tx.conventions()
@@ -278,13 +278,13 @@ fn conventions32_migration_snapshot_cas_scoped_paging_and_reopen() {
     );
     let revision = next(&first);
     let copy = revision.clone();
-    run_write(&store, WriteOptions::default(), move |tx| {
+    run_write(&store, WriteOptions::fixture(), move |tx| {
         tx.conventions().revise_convention(&copy, 1)
     })
     .unwrap();
     let bad = next(&revision);
     assert!(
-        run_write(&store, WriteOptions::default(), move |tx| tx
+        run_write(&store, WriteOptions::fixture(), move |tx| tx
             .conventions()
             .revise_convention(&bad, 1))
         .is_err()
@@ -348,7 +348,7 @@ fn conventions32_migration_snapshot_cas_scoped_paging_and_reopen() {
 fn convention_resource_history_is_immutable_and_move_never_leaks_old_scope() {
     let h = Harness::new();
     let store = h.store();
-    let (a, b, owner, resource) = run_write(&store, WriteOptions::default(), |tx| {
+    let (a, b, owner, resource) = run_write(&store, WriteOptions::fixture(), |tx| {
         let a = project(tx, "a")?;
         let b = project(tx, "b")?;
         let content = artifact(tx, "body-a", &a, "private a body")?;
@@ -373,7 +373,7 @@ fn convention_resource_history_is_immutable_and_move_never_leaks_old_scope() {
     .unwrap();
     let copy = resource.clone();
     assert!(
-        run_write(&store, WriteOptions::default(), move |tx| {
+        run_write(&store, WriteOptions::fixture(), move |tx| {
             let mut r = copy;
             r.id = id("late-attachment");
             tx.conventions().add_convention_resource(&r, 1)
@@ -381,7 +381,7 @@ fn convention_resource_history_is_immutable_and_move_never_leaks_old_scope() {
         .is_err(),
         "a later transaction cannot append associations into immutable owner revision1"
     );
-    let (moved, updated) = run_write(&store, WriteOptions::default(), {
+    let (moved, updated) = run_write(&store, WriteOptions::fixture(), {
         let owner = owner.clone();
         let resource = resource.clone();
         let b = b.clone();
@@ -464,7 +464,7 @@ fn convention_hierarchy_slug_and_cas_races_refuse_atomically() {
         parent_id: Some(first.id.clone()),
         ..record("child", KnowledgeScope::Workspace, None)
     };
-    run_write(&*store, WriteOptions::default(), {
+    run_write(&*store, WriteOptions::fixture(), {
         let first = first.clone();
         let child = child.clone();
         move |tx| {
@@ -476,7 +476,7 @@ fn convention_hierarchy_slug_and_cas_races_refuse_atomically() {
     let mut cycle = next(&first);
     cycle.parent_id = Some(child.id);
     assert!(
-        run_write(&*store, WriteOptions::default(), move |tx| tx
+        run_write(&*store, WriteOptions::fixture(), move |tx| tx
             .conventions()
             .revise_convention(&cycle, 1))
         .is_err()
@@ -487,7 +487,7 @@ fn convention_hierarchy_slug_and_cas_races_refuse_atomically() {
         ..record("other", KnowledgeScope::Workspace, None)
     };
     assert!(
-        run_write(&*store, WriteOptions::default(), move |tx| tx
+        run_write(&*store, WriteOptions::fixture(), move |tx| tx
             .conventions()
             .create_convention(&collision))
         .is_err()
@@ -501,7 +501,7 @@ fn convention_hierarchy_slug_and_cas_races_refuse_atomically() {
             row.title = format!("winner-{n}");
             std::thread::spawn(move || {
                 barrier.wait();
-                run_write(&*store, WriteOptions::default(), move |tx| {
+                run_write(&*store, WriteOptions::fixture(), move |tx| {
                     tx.conventions().revise_convention(&row, 1)
                 })
                 .is_ok()
@@ -534,7 +534,7 @@ mod retrieval;
 fn source_metadata_limits_nul_and_organization_fuzzy_filters_precede_sql_paging() {
     let h = Harness::new();
     let store = h.store();
-    run_write(&store, WriteOptions::default(), |tx| {
+    run_write(&store, WriteOptions::fixture(), |tx| {
         for (key, title, sort) in [("x", "B", 0), ("y", "Z", -1), ("z", "A", 0)] {
             let mut row = record(key, KnowledgeScope::Workspace, None);
             row.title = title.into();
@@ -599,7 +599,7 @@ fn source_metadata_limits_nul_and_organization_fuzzy_filters_precede_sql_paging(
 fn revision_editor_changes_without_rewriting_original_provenance() {
     let h = Harness::new();
     let store = h.store();
-    run_write(&store, WriteOptions::default(), |tx| {
+    run_write(&store, WriteOptions::fixture(), |tx| {
         let alice = ActorId(id("alice"));
         let bob = ActorId(id("bob"));
         tx.actors().register(
@@ -646,7 +646,7 @@ mod imports;
 fn convention_max_sort_order_is_nullable_current_scoped_parent_filtered_and_includes_retired() {
     let h = Harness::new();
     let store = h.store();
-    run_write(&store, WriteOptions::default(), |tx| {
+    run_write(&store, WriteOptions::fixture(), |tx| {
         let workspace = KnowledgeScope::Workspace;
         assert_eq!(
             tx.conventions()
@@ -729,7 +729,7 @@ fn convention_max_sort_order_is_nullable_current_scoped_parent_filtered_and_incl
 fn explicit_empty_and_whitespace_slugs_remain_literal_scoped_identifiers() {
     let h = Harness::new();
     let store = h.store();
-    run_write(&store, WriteOptions::default(), |tx| {
+    run_write(&store, WriteOptions::fixture(), |tx| {
         for (key, slug) in [
             ("empty-slug", ""),
             ("space-slug", "   "),

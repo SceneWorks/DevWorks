@@ -4166,7 +4166,7 @@ fn invocation_deadline_and_handle_do_not_wait_for_a_busy_history_writer() {
     let held = gate.clone();
     a.store
         .submit_write(
-            WriteOptions::default(),
+            WriteOptions::fixture(),
             write_job(
                 move |_| {
                     held.pass(IdKind::Event);
@@ -4433,7 +4433,7 @@ fn queued_package_state_writes_are_refused_after_completion_or_cancellation() {
         let held = gate.clone();
         a.store
             .submit_write(
-                WriteOptions::default(),
+                WriteOptions::fixture(),
                 write_job(
                     move |_| {
                         held.pass(IdKind::Event);

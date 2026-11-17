@@ -1538,7 +1538,7 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
             .map_err(failed)?;
     }
     // Earlier submissions remain uncertain even if this boot has no native adapter.
-    crate::store::write(&store, |tx| {
+    crate::store::write(&store, WriteOptions::recovery(), |tx| {
         tx.decisions().recover_os_notification_deliveries()
     })
     .await
@@ -1855,7 +1855,7 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
                                     &context,
                                     "help.generate_capability_docs",
                                     &frame,
-                                    WriteOptions::default(),
+                                    WriteOptions::command(),
                                 );
                             }
                         })
@@ -2571,7 +2571,7 @@ impl Runtime {
     }
 
     pub fn command(&self, ctx: &InvocationContext, operation: &str, raw: &[u8]) -> CommandOutcome {
-        self.command_with(ctx, operation, raw, WriteOptions::default())
+        self.command_with(ctx, operation, raw, WriteOptions::command())
     }
 
     /// Dedicated trusted native-human interaction. The ordinary command/tool path cannot
@@ -3384,14 +3384,14 @@ impl crate::package_host::broker::GatewayCalls for Admitter {
     ) -> Option<CommandOutcome> {
         let options = WriteOptions {
             cancellation: Some(cancellation),
-            ..WriteOptions::default()
+            ..WriteOptions::command()
         };
         self.fenced_command(ctx, operation, raw, options, true, fence)
     }
 }
 impl NativeJobDispatch for Admitter {
     fn command(&self, ctx: &InvocationContext, operation: &str, raw: &[u8]) -> CommandOutcome {
-        self.command_with(ctx, operation, raw, WriteOptions::default())
+        self.command_with(ctx, operation, raw, WriteOptions::command())
     }
 }
 

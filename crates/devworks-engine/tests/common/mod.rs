@@ -372,7 +372,7 @@ pub fn write<T: Send + 'static>(
     s: &dyn ApplicationStore,
     f: impl FnOnce(&mut dyn WriteTransaction) -> Result<T, StorageError> + Send + 'static,
 ) -> Result<T, StorageError> {
-    run_write(s, WriteOptions::default(), f)
+    run_write(s, WriteOptions::fixture(), f)
 }
 pub fn read<T>(
     s: &dyn ApplicationStore,

@@ -111,7 +111,7 @@ impl Fx {
         let user = engine.host().user().clone();
         run_write(
             &**engine.host().runtime().store(),
-            WriteOptions::default(),
+            WriteOptions::fixture(),
             move |tx| {
                 devworks_core::settings::service::apply_human_assignments(
                     tx,
@@ -621,7 +621,7 @@ fn native_recorded_module_pages_are_retained_without_inventing_source_or_program
     let engine = start(&root);
     // A sealed SQLite index payload represents a previously recorded analysis. This tests
     // the actual read projection and native reader, without pretending to run its producer.
-    run_write(&**engine.host().runtime().store(),WriteOptions::default(),|tx|{
+    run_write(&**engine.host().runtime().store(),WriteOptions::fixture(),|tx|{
         let id=|s:&str|devworks_core::protocol::Id::try_from(s.to_owned()).unwrap();
         let repository=id("recorded-repository");let generation=id("recorded-generation");let view=id("recorded-view");
         tx.projects().insert_repository(&StoredRepository{id:repository.clone(),location:"/captured/recorded".into(),name:"Recorded".into(),remote_url:None,primary:true,lifecycle:"Active".into(),languages:vec!["csharp".into()],revision:1,registered_at_ms:1})?;

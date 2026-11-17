@@ -18,7 +18,7 @@ fn purge_planning_schema_leases_require_closed_body_and_matching_storage_columns
     let s = h.store();
     let project = ProjectId(id("purge-schema-project"));
     let p = project.clone();
-    run_write(&s, WriteOptions::default(), move |tx| {
+    run_write(&s, WriteOptions::fixture(), move |tx| {
         tx.projects().insert_project(&StoredProject {
             id: p,
             name: "private schema project".into(),
@@ -86,7 +86,7 @@ fn purge_planning_schema_leases_require_closed_body_and_matching_storage_columns
     other.id = id("workspace-schema-lease");
     other.scope_digest = sha256_hex(b"workspace");
     let saved = pin.clone();
-    run_write(&s, WriteOptions::default(), move |tx| {
+    run_write(&s, WriteOptions::fixture(), move |tx| {
         tx.schemas().create_schema_pin(&saved)?;
         tx.schemas().create_schema_pin(&other)
     })
@@ -150,7 +150,7 @@ fn purge_planning_schema_leases_require_closed_body_and_matching_storage_columns
 fn source_visibility_precedes_keyset_limit_and_revision_cas_preserves_identity() {
     let h = Harness::new();
     let s = h.store();
-    run_write(&s, WriteOptions::default(), |tx| {
+    run_write(&s, WriteOptions::fixture(), |tx| {
         for name in ["a-private", "b-shared", "c-private", "d-shared"] {
             tx.schemas()
                 .create_schema_source(&source(name, name.ends_with("shared")))?;
@@ -199,12 +199,12 @@ fn source_visibility_precedes_keyset_limit_and_revision_cas_preserves_identity()
     changed.connection.config.as_mut().unwrap().project_access =
         Some(serde_json::from_value(json!([])).unwrap());
     let saved = changed.clone();
-    run_write(&s, WriteOptions::default(), move |tx| {
+    run_write(&s, WriteOptions::fixture(), move |tx| {
         tx.schemas().revise_schema_source(&saved, 1)
     })
     .unwrap();
     assert!(matches!(
-        run_write(&s, WriteOptions::default(), move |tx| tx
+        run_write(&s, WriteOptions::fixture(), move |tx| tx
             .schemas()
             .revise_schema_source(&changed, 1)),
         Err(StorageError::RevisionConflict(_))
@@ -231,7 +231,7 @@ fn hidden_staging_seals_atomically_and_exact_publication_survives_index_removal(
     let op = OperationId(id("schema-operation"));
     let source_id = id("schema-source");
     let op_for_create = op.clone();
-    run_write(&s, WriteOptions::default(), move |tx| {
+    run_write(&s, WriteOptions::fixture(), move |tx| {
         tx.schemas()
             .create_schema_source(&source("schema-source", false))?;
         tx.operations().record_intent(NewOperation {
@@ -261,7 +261,7 @@ fn hidden_staging_seals_atomically_and_exact_publication_survives_index_removal(
     .unwrap();
     let object:SchemaObject=serde_json::from_value(json!({"id":"object-table","viewId":"schema-view","kind":"Table","qualifiedName":"fixture.public.parent","coverage":{"state":"Complete","gaps":[],"moreGaps":false},"metadata":{"name":"parent","catalog":"fixture","schema":"public","columnNames":[],"referencedColumns":[],"parameters":[],"definitionSql":"CREATE TABLE parent(id INT)"}})).unwrap();
     let v = view.clone();
-    run_write(&s, WriteOptions::default(), move |tx| {
+    run_write(&s, WriteOptions::fixture(), move |tx| {
         tx.schemas().append_schema_rows(&v, &[object], &[])
     })
     .unwrap();
@@ -291,7 +291,7 @@ fn hidden_staging_seals_atomically_and_exact_publication_survives_index_removal(
     };
     let v = view.clone();
     let saved = witness.clone();
-    run_write(&s, WriteOptions::default(), move |tx| {
+    run_write(&s, WriteOptions::fixture(), move |tx| {
         tx.schemas().seal_schema_view(&v)?;
         tx.schemas().record_schema_publication(&saved)
     })
@@ -309,12 +309,12 @@ fn hidden_staging_seals_atomically_and_exact_publication_survives_index_removal(
     );
     let v = view.clone();
     assert!(
-        run_write(&s, WriteOptions::default(), move |tx| tx
+        run_write(&s, WriteOptions::fixture(), move |tx| tx
             .schemas()
             .append_schema_rows(&v, &[], &[]))
         .is_err()
     );
-    run_write(&s, WriteOptions::default(), move |tx| {
+    run_write(&s, WriteOptions::fixture(), move |tx| {
         tx.schemas().remove_schema_views(&source_id)
     })
     .unwrap();
@@ -427,7 +427,7 @@ fn schema_command(
     }
 }
 fn schema_seed_humans(h: &Harness, s: &super::SqliteStore) {
-    run_write(s, WriteOptions::default(), |tx| {
+    run_write(s, WriteOptions::fixture(), |tx| {
         for who in ["schema-owner", "schema-other"] {
             tx.actors().register(
                 &ActorId(id(who)),
@@ -524,7 +524,7 @@ fn native_gateway_shared_pages_redact_other_projects_and_expire_after_access_cha
     let h = Harness::new();
     let s = h.store();
     schema_seed_humans(&h, &s);
-    run_write(&s, WriteOptions::default(), |tx| {
+    run_write(&s, WriteOptions::fixture(), |tx| {
         for name in ["a-private", "b-shared", "c-private", "d-shared"] {
             let mut row = source(name, name.ends_with("shared"));
             if name.ends_with("shared") {
@@ -565,7 +565,7 @@ fn native_gateway_shared_pages_redact_other_projects_and_expire_after_access_cha
     assert!(
         matches!(second, DomainQueryReply::Result { result: OperationResult::SchemasConnections { value }, .. } if !value.has_more && value.items.0[0].id == id("d-shared"))
     );
-    run_write(&s, WriteOptions::default(), |tx| {
+    run_write(&s, WriteOptions::fixture(), |tx| {
         let mut row = tx.schemas().schema_source(&id("d-shared"))?.unwrap();
         row.connection.revision = Revision::new(2).unwrap();
         row.configuration_revision += 1;
@@ -819,7 +819,7 @@ fn dispatch_metadata(
     operation: OperationId,
     unknown: bool,
 ) -> OperationRecord {
-    run_write(s, WriteOptions::default(), move |tx| {
+    run_write(s, WriteOptions::fixture(), move |tx| {
         let original = tx.operations().operation(&operation)?.unwrap();
         let a = tx.operations().begin_attempt(
             &operation,
@@ -891,7 +891,7 @@ fn native_metadata_worker_recovers_staging_publishes_no_rows_and_observes_after_
     let operation = dispatch_metadata(&s, operation_id.clone(), true);
     let old = operation_id.clone();
     let connection = source.id.clone();
-    run_write(&*s, WriteOptions::default(), move |tx| {
+    run_write(&*s, WriteOptions::fixture(), move |tx| {
         tx.schemas().create_schema_view(&StoredSchemaView {
             id: id("abandoned-stage"),
             connection_id: connection,
@@ -1387,7 +1387,7 @@ fn native_schema_pins_keep_captured_views_but_never_extend_expiry_or_access() {
     let retired = first.schema_views[0].snapshot_id.clone();
     let retiring = retired.clone();
     let expired_at = first.expires_at_ms.get();
-    run_write(&*s, WriteOptions::default(), move |tx| {
+    run_write(&*s, WriteOptions::fixture(), move |tx| {
         tx.schemas().expire_schema_pins(expired_at, 500)?;
         assert!(tx.schemas().prune_schema_views(500)? <= 500);
         Ok(())
@@ -1431,7 +1431,7 @@ fn native_schema_pins_keep_captured_views_but_never_extend_expiry_or_access() {
         matches!(query("schema-owner", "schemas.objects", json!({"scope":{"kind":"Workspace"},"views":{"kind":"Exact","viewIds":[retired]},"connectionId":created.id,"kinds":[],"page":{"limit":10}})), DomainQueryReply::Rejected { fault, .. } if fault.code == devworks_core::protocol::DomainErrorCode::ViewUnavailable)
     );
     assert!(
-        run_write(&*s, WriteOptions::default(), move |tx| tx
+        run_write(&*s, WriteOptions::fixture(), move |tx| tx
             .schemas()
             .seal_schema_view(&retiring))
         .is_err(),
@@ -1558,7 +1558,7 @@ fn shared_schema_ca_custody_preserves_agent_and_never_grants_original_artifact_a
     let reference = schema_certificate_artifact(&s, &artifacts, &pem);
     let owner = schema_context(&s, "schema-owner");
     let by = owner.clone();
-    run_write(&*s, WriteOptions::default(), move |tx| {
+    run_write(&*s, WriteOptions::fixture(), move |tx| {
         tx.actors().register(
             &ActorId(id("certificate-agent")),
             PrincipalKind::Agent,
@@ -1637,7 +1637,7 @@ fn shared_schema_ca_custody_preserves_agent_and_never_grants_original_artifact_a
     // Delete the original artifact, not the connection-owned public copy. A replay must not
     // reopen the original input, and the shared agent still gains no artifact permission.
     let original = reference.artifact_id.clone();
-    run_write(&*s, WriteOptions::default(), move |tx| {
+    run_write(&*s, WriteOptions::fixture(), move |tx| {
         let mut a = tx.artifacts().artifact(&original)?.unwrap();
         a.state = ArtifactState::Deleted;
         a.revision += 1;
@@ -1753,7 +1753,7 @@ fn schema_certificate_artifact(
             .unwrap(),
     );
     let (files, copy) = (artifacts.clone(), staged.clone());
-    let version = run_write(&**store, WriteOptions::default(), move |tx| {
+    let version = run_write(&**store, WriteOptions::fixture(), move |tx| {
         files.commit_host_bytes_in_scope(
             tx,
             &copy,
@@ -1892,7 +1892,7 @@ impl ApplicationStore for RevokeCertificateBeforeWrite {
     ) -> Result<(), StorageError> {
         if self.armed.swap(false, std::sync::atomic::Ordering::SeqCst) {
             let artifact = self.artifact.clone();
-            run_write(&*self.inner, WriteOptions::default(), move |tx| {
+            run_write(&*self.inner, WriteOptions::fixture(), move |tx| {
                 let mut a = tx.artifacts().artifact(&artifact)?.unwrap();
                 a.state = ArtifactState::Deleted;
                 a.revision += 1;
@@ -2316,7 +2316,7 @@ fn purge_planning_shared_source_access_keeps_independent_configuration_and_opera
     let s = h.store();
     let project = devworks_core::protocol::ProjectId(id("metadata-project"));
     let p = project.clone();
-    run_write(&s, WriteOptions::default(), move |tx| {
+    run_write(&s, WriteOptions::fixture(), move |tx| {
         tx.projects().insert_project(&StoredProject {
             id: p,
             name: "private source project".into(),
@@ -2338,7 +2338,7 @@ fn purge_planning_shared_source_access_keeps_independent_configuration_and_opera
     shared.connection.config.as_mut().unwrap().project_access=Some(serde_json::from_value(json!([{"projectId":"metadata-project","metadataEnabled":true,"dataReadEnabled":false,"dataWriteEnabled":false},{"projectId":"other-project","metadataEnabled":true,"dataReadEnabled":false,"dataWriteEnabled":false}])).unwrap());
     shared.connection.active_operation_id = Some(id("source-purge-operation"));
     let saved = shared.clone();
-    run_write(&s, WriteOptions::default(), move |tx| {
+    run_write(&s, WriteOptions::fixture(), move |tx| {
         tx.operations().record_intent(NewOperation {
             id: OperationId(id("source-purge-operation")),
             root_id: Some(devworks_core::protocol::RootId(id("source-purge-work"))),

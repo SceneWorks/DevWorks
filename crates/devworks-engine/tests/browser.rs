@@ -4518,7 +4518,7 @@ fn concurrent_evidence_publications_cannot_exceed_the_storage_limit() {
     let (started, blocking) = std::sync::mpsc::channel::<()>();
     let st = store.clone();
     let blocker = std::thread::spawn(move || {
-        run_write(&*st, WriteOptions::default(), move |_| {
+        run_write(&*st, WriteOptions::fixture(), move |_| {
             started.send(()).unwrap();
             held.recv().unwrap();
             Ok(())
@@ -5516,7 +5516,7 @@ fn source_fixture(
         last_result: None,
     };
     let path = primary.to_str().unwrap().to_owned();
-    run_write(store, WriteOptions::default(), move |tx| {
+    run_write(store, WriteOptions::fixture(), move |tx| {
         tx.projects().insert_repository(&StoredRepository {
             id: id("tested-repository"),
             location: path.clone(),
@@ -5736,7 +5736,7 @@ fn browser_source_case(native: bool, missing_load: bool) {
     );
     let store = fx.app().store();
     let host = store.info().host_actor;
-    run_write(&**store, WriteOptions::default(), move |tx| {
+    run_write(&**store, WriteOptions::fixture(), move |tx| {
         let mut row = tx.git().git_worktree(&id("tested-tree"))?.unwrap();
         let revision = row.revision;
         row.revision += 1;

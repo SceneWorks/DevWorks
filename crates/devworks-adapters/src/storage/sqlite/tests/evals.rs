@@ -10,7 +10,7 @@ fn id(value: &str) -> Id {
 }
 fn seed(store: &SqliteStore) {
     let actor = store.info().host_actor;
-    run_write(store, WriteOptions::default(), move |tx| {
+    run_write(store, WriteOptions::fixture(), move |tx| {
         tx.projects().insert_project(&StoredProject {
             id: ProjectId(id("project-a")),
             name: "Project".into(),
@@ -63,7 +63,7 @@ fn report(name: &str) -> StoredEvalRun {
     }
 }
 fn insert(store: &SqliteStore, run: StoredEvalRun) -> Result<(), StorageError> {
-    run_write(store, WriteOptions::default(), move |tx| {
+    run_write(store, WriteOptions::fixture(), move |tx| {
         tx.evals().insert_eval_run(&run)
     })
 }

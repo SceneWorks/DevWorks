@@ -353,7 +353,7 @@ impl IndexService {
                 WriteOptions {
                     cancellation: Some(cancel.clone()),
                     deadline_ms: deadline,
-                    ..Default::default()
+                    ..WriteOptions::host_state()
                 },
                 move |tx| check(tx, &op, &source),
             )?;
@@ -410,7 +410,7 @@ impl IndexService {
                 next.clone(),
                 self.native_available(),
             );
-            let committed=self.write_options(WriteOptions{cancellation:Some(cancel.clone()),deadline_ms:deadline,..Default::default()},move|tx|{
+            let committed=self.write_options(WriteOptions{cancellation:Some(cancel.clone()),deadline_ms:deadline,..WriteOptions::host_state()},move|tx|{
     let mut saved=saved;
     let context=check(tx,&op,&source)?;
     for scope in scopes {

@@ -18,7 +18,7 @@
 //!   ```
 //!   use devworks_core::ports::storage::*;
 //!   fn owned(store: &dyn ApplicationStore) -> Result<i64, StorageError> {
-//!       run_write(store, WriteOptions::default(), |tx| tx.history().page(&EventFilter::All, 0, 1).map(|p| p.watermark))
+//!       run_write(store, WriteOptions::host_state(), |tx| tx.history().page(&EventFilter::All, 0, 1).map(|p| p.watermark))
 //!   }
 //!   ```
 //!
@@ -28,9 +28,16 @@
 //!   use devworks_core::ports::storage::*;
 //!   fn escape(store: &dyn ApplicationStore) {
 //!       // A repository handle cannot be returned out of its transaction.
-//!       let _ = run_write(store, WriteOptions::default(), |tx| Ok(tx.history()));
+//!       let _ = run_write(store, WriteOptions::host_state(), |tx| Ok(tx.history()));
 //!   }
 //!   ```
+//! * **Every write names its class.** [`WriteOptions`] has no `Default`: each `run_write` or
+//!   `submit_write` site builds its options with a [`WriteClass`] constructor
+//!   (`WriteOptions::recovery()`, `::housekeeping()`, ...), so the allowed kinds of write outside
+//!   a gateway command are listed on [`WriteClass`] and greppable at every call. Authority
+//!   records are separate: [`WriteTransaction::authority`] and [`WriteTransaction::grants`] only
+//!   read, and their writes need the [`AuthorityCapability`] that only `crate::authority` can
+//!   build, whatever the class.
 //! * **No callbacks with effects inside a write.** Jobs must not await, call the network, run
 //!   inference, invoke package/UI callbacks or traverse unboundedly; preparation and observation
 //!   happen before or after the job (ARCH-03).
@@ -286,14 +293,102 @@ pub enum WritePriority {
     Bulk,
 }
 
-#[derive(Clone, Debug, Default)]
+/// Why a write runs outside a use case's receipt. Every [`WriteOptions`] names exactly one class,
+/// so each `run_write` and `submit_write` site states its class at the call (search for
+/// `WriteOptions::` plus the constructor name). The store applies no different rules per class:
+/// the class is a contract for reviewers and a hook for tests, and it never grants authority.
+///
+/// A class never excuses a write that changes authority records. Binding or revoking a
+/// principal, or issuing, revoking or spending a host grant, needs the authority capability
+/// ([`WriteTransaction::authority_writes`]) whichever class the write has, and the matching
+/// history records (principal, grant, repository deletion) can only be appended through
+/// [`WriteTransaction::authority_history`]: `history().append` refuses them in every class. So
+/// the code outside `crate::authority` can neither change nor record authority.
+///
+/// Choosing a class. When two fit, the purpose decides. A write whose purpose is to repair or
+/// expire stale state is [`Self::Recovery`] (after a restart or a lost owner) or
+/// [`Self::Housekeeping`] (age or retention sweeps), whatever repository it touches.
+/// [`Self::HostState`] is only for the live control ticks of a resource that is healthy.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum WriteClass {
+    /// A user or host command executed by the gateway, which records its receipt and history in
+    /// the same transaction. Constructor: [`WriteOptions::command`].
+    Command,
+    /// A write by the authority seams or the gateway's own bookkeeping of a refusal (denial
+    /// history, the dedicated repository-deletion confirmation). Constructor:
+    /// [`WriteOptions::authority`].
+    Authority,
+    /// A record of something the host observed or produced outside any command: diagnostics,
+    /// transcript and context publication, observed artifacts, usage, notifications, watcher and
+    /// package observations. Constructor: [`WriteOptions::observed`].
+    HostObserved,
+    /// A host-owned resource moving through its own lifecycle under its own fences and
+    /// idempotency (queue claims and delivery, leases, staging, reservations, phase changes of
+    /// watchers, packages, connections and indexes, run and job control ticks). Constructor:
+    /// [`WriteOptions::host_state`].
+    HostState,
+    /// Recording the outcome of an external effect (process, container, git, MCP, tool call,
+    /// approval resume) that already happened or was refused. Constructor:
+    /// [`WriteOptions::settlement`].
+    EffectSettlement,
+    /// Boot or restart reconciliation of state a previous process left uncertain. Constructor:
+    /// [`WriteOptions::recovery`].
+    Recovery,
+    /// Pruning, garbage collection and retention sweeps of derived or expired records.
+    /// Constructor: [`WriteOptions::housekeeping`].
+    Housekeeping,
+    /// Seeding or inspecting a store in tests and in the contract suite. Production code does not
+    /// use it. Constructor: [`WriteOptions::fixture`].
+    Fixture,
+}
+
+#[derive(Clone, Debug)]
 pub struct WriteOptions {
+    /// Required: there is no default. Struct-update syntax copies it from a class constructor
+    /// (`..WriteOptions::recovery()`).
+    pub class: WriteClass,
     pub priority: WritePriority,
     pub cancellation: Option<Cancellation>,
     /// UTC milliseconds by the store clock. It bounds admission and commit only: past it, an
     /// undispatched job is not started and an admitted job is rolled back instead of committed.
     /// It does not bound how long the caller waits for the reply, and it never revokes a commit.
     pub deadline_ms: Option<i64>,
+}
+impl WriteOptions {
+    /// Options of `class` with the default priority, no cancellation and no deadline. There is
+    /// no `Default`: a write must name its class.
+    pub fn new(class: WriteClass) -> Self {
+        Self {
+            class,
+            priority: WritePriority::default(),
+            cancellation: None,
+            deadline_ms: None,
+        }
+    }
+    pub fn command() -> Self {
+        Self::new(WriteClass::Command)
+    }
+    pub fn authority() -> Self {
+        Self::new(WriteClass::Authority)
+    }
+    pub fn observed() -> Self {
+        Self::new(WriteClass::HostObserved)
+    }
+    pub fn host_state() -> Self {
+        Self::new(WriteClass::HostState)
+    }
+    pub fn settlement() -> Self {
+        Self::new(WriteClass::EffectSettlement)
+    }
+    pub fn recovery() -> Self {
+        Self::new(WriteClass::Recovery)
+    }
+    pub fn housekeeping() -> Self {
+        Self::new(WriteClass::Housekeeping)
+    }
+    pub fn fixture() -> Self {
+        Self::new(WriteClass::Fixture)
+    }
 }
 #[derive(Clone, Debug, Default)]
 pub struct ReadOptions {
@@ -474,43 +569,41 @@ pub trait WriteTransaction {
     fn history(&mut self) -> &mut dyn HistoryLog;
     fn operations(&mut self) -> &mut dyn OperationJournal;
     fn queue(&mut self) -> &mut dyn DurableQueue;
-    fn grants(&mut self) -> &mut dyn GrantLedger;
+    /// Resume grants, read-only; their writes need [`Self::grant_writes`].
+    fn grants(&mut self) -> &mut dyn GrantRead;
     fn packages(&mut self) -> &mut dyn PackageHandlerLedger;
     fn configuration(&mut self) -> &mut dyn ConfigurationRepository;
-    /// The authority ledger. Inside a use case (the gateway's handler view) only its reads are
-    /// served; its writes are refused there and happen through [`Self::authority_writes`].
-    fn authority(&mut self) -> &mut dyn AuthorityLedger;
-    /// Authority-ledger writes for the `crate::authority` seams, which alone can present the
-    /// capability, on behalf of `actor`. On the store's own transaction (host code holding the
-    /// store) this is the ledger. The gateway's handler view allows it only for the principal of
-    /// a user- or host-ingress command, so a use case running for an agent, package, MCP client
-    /// or schedule can never write authority, whatever context it constructs or wraps.
+    /// Authority records, read-only. Writes are not reachable from here: a transaction cannot
+    /// bind or revoke a principal, or issue, revoke or spend a host grant, without the
+    /// [`AuthorityCapability`] that [`Self::authority_writes`] requires.
+    fn authority(&mut self) -> &mut dyn AuthorityRead;
+    /// The authority ledger with its writes, for the `crate::authority` seams, which alone can
+    /// present the capability, on behalf of `actor`. On the store's own transaction (host code
+    /// holding the store) this is the ledger. The gateway's handler view allows it only for the
+    /// principal of a user- or host-ingress command, so a use case running for an agent, package,
+    /// MCP client or schedule can never write authority, whatever context it constructs or wraps.
     fn authority_writes(
         &mut self,
         _: &AuthorityCapability,
         _actor: &ActorId,
-    ) -> Result<&mut dyn AuthorityLedger, StorageError> {
-        Ok(self.authority())
-    }
+    ) -> Result<&mut dyn AuthorityLedger, StorageError>;
     /// Resume-grant ledger writes for the `crate::authority` seams, under the same rule as
-    /// [`Self::authority_writes`]; the handler view of [`Self::grants`] refuses writes.
+    /// [`Self::authority_writes`]; [`Self::grants`] is read-only.
     fn grant_writes(
         &mut self,
         _: &AuthorityCapability,
         _actor: &ActorId,
-    ) -> Result<&mut dyn GrantLedger, StorageError> {
-        Ok(self.grants())
-    }
+    ) -> Result<&mut dyn GrantLedger, StorageError>;
     /// History appends of the `crate::authority` seams (principal, grant and repository-deletion
-    /// records), under the same rule as [`Self::authority_writes`]. The gateway's handler view of
-    /// [`Self::history`] refuses those records, so a use case cannot forge them.
+    /// records), under the same rule as [`Self::authority_writes`]. This is the only history log
+    /// that takes them: [`Self::history`] refuses authority-history records (see
+    /// [`crate::authority::is_authority_history`]) on every implementation, so neither a raw
+    /// write nor a use case can forge them. Implementations have no default for this method.
     fn authority_history(
         &mut self,
         _: &AuthorityCapability,
         _actor: &ActorId,
-    ) -> Result<&mut dyn HistoryLog, StorageError> {
-        Ok(self.history())
-    }
+    ) -> Result<&mut dyn HistoryLog, StorageError>;
     /// The artifact repository. Inside a use case (the gateway's handler view) backup pins,
     /// physical-removal claims and receipt reply records are refused.
     fn artifacts(&mut self) -> &mut dyn ArtifactRepository;

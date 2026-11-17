@@ -316,7 +316,7 @@ impl WatchService {
             return Ok(false);
         };
         match (self.control.clone(), session.root_id) {
-            (Some(control), Some(root)) => run_write(&*self.store, WriteOptions::default(), {
+            (Some(control), Some(root)) => run_write(&*self.store, WriteOptions::host_state(), {
                 move |tx| control.root_permits_dispatch(tx, &root)
             }),
             _ => Ok(true),
@@ -371,7 +371,7 @@ impl WatchService {
                     Some(Probe::Gone) => {
                         let id = watcher.id.clone();
                         let run = run.clone();
-                        run_write(&*self.store, WriteOptions::default(), move |tx| {
+                        run_write(&*self.store, WriteOptions::recovery(), move |tx| {
                             lost_in(tx, &id, &run)
                         })?;
                         Ok(None)
@@ -415,7 +415,7 @@ impl WatchService {
         let id = watcher.id.clone();
         let host = host.clone().with_session(watcher.session_id.clone());
         let control = self.control.clone();
-        let committed = run_write(&*self.store, WriteOptions::default(), move |tx| {
+        let committed = run_write(&*self.store, WriteOptions::observed(), move |tx| {
             let Some(watcher) = tx.watchers().watcher(&id)? else {
                 return Ok(false);
             };
@@ -546,7 +546,7 @@ impl WatchService {
                 let id = watcher.id.clone();
                 changed += usize::from(run_write(
                     &*self.store,
-                    WriteOptions::default(),
+                    WriteOptions::settlement(),
                     move |tx| interrupt_in(tx, &id),
                 )?);
             }
@@ -572,7 +572,7 @@ impl WatchService {
             .insert(watcher.id.clone(), now);
         if owner_ended.is_some() {
             let id = watcher.id.clone();
-            let step = run_write(&*self.store, WriteOptions::default(), move |tx| {
+            let step = run_write(&*self.store, WriteOptions::host_state(), move |tx| {
                 end_with_owner_in(tx, &id)
             })?;
             if let Step::Expired(Some(run)) = &step {
@@ -626,7 +626,7 @@ impl WatchService {
             .as_ref()
             .is_some_and(|op| self.processes.is_monitoring(op));
         let processes = self.processes.clone();
-        let step = run_write(&*self.store, WriteOptions::default(), move |tx| {
+        let step = run_write(&*self.store, WriteOptions::host_state(), move |tx| {
             step_in(tx, &id, monitoring, &processes, update)
         })?;
         if let Step::Expired(Some(run)) = &step {
@@ -683,7 +683,7 @@ impl WatchService {
         // A held owner's events wait without staging a notice on every pass; the write below
         // checks again, against a pause that lands meanwhile.
         if let (Some(control), Some(root)) = (self.control.clone(), session.root_id.clone()) {
-            let permitted = run_write(&*self.store, WriteOptions::default(), move |tx| {
+            let permitted = run_write(&*self.store, WriteOptions::observed(), move |tx| {
                 control.root_permits_dispatch(tx, &root)
             })?;
             if !permitted {
@@ -711,7 +711,7 @@ impl WatchService {
         let host = host.clone().with_session(event.session_id.clone());
         let control = self.control.clone();
         let diagnostics = self.diagnostics.clone();
-        let committed = run_write(&*self.store, WriteOptions::default(), move |tx| {
+        let committed = run_write(&*self.store, WriteOptions::observed(), move |tx| {
             let Some(event) = tx.watchers().watch_event(&event_id)? else {
                 return Ok(false);
             };

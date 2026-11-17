@@ -79,7 +79,7 @@ impl TurnEngine {
             ctx,
             operation,
             raw,
-            devworks_core::ports::storage::WriteOptions::default(),
+            devworks_core::ports::storage::WriteOptions::command(),
         )
     }
 

@@ -641,7 +641,7 @@ impl GitService {
             .ok_or_else(|| denied("invalid principal kind"))?;
         let j = job.clone();
         let c = ctx.clone();
-        let repository = run_write(&*self.store, WriteOptions::default(), move |tx| {
+        let repository = run_write(&*self.store, WriteOptions::host_state(), move |tx| {
             let tree = tx
                 .git()
                 .git_worktree(&j.tree.id)?
@@ -798,7 +798,7 @@ impl GitService {
         let op = operation.clone();
         let checkpoint = json!({"result":result});
         let durable = checkpoint.clone();
-        let outcome = run_write(&*self.store, WriteOptions::default(), move |tx| {
+        let outcome = run_write(&*self.store, WriteOptions::settlement(), move |tx| {
             let current = tx
                 .git()
                 .git_worktree(&j.tree.id)?
@@ -917,7 +917,7 @@ impl GitService {
         reason: &str,
     ) -> Result<(), StorageError> {
         let (job, operation, reason) = (job.clone(), operation.clone(), reason.to_owned());
-        run_write(&*self.store, WriteOptions::default(), move |tx| {
+        run_write(&*self.store, WriteOptions::settlement(), move |tx| {
             let Some(mut tree) = tx.git().git_worktree(&job.tree.id)? else {
                 return Ok(());
             };

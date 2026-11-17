@@ -153,7 +153,7 @@ impl Fx {
         &self,
         f: impl FnOnce(&mut dyn WriteTransaction) -> Result<T, StorageError> + Send + 'static,
     ) -> T {
-        run_write(&*self.store, WriteOptions::default(), f).expect("write")
+        run_write(&*self.store, WriteOptions::fixture(), f).expect("write")
     }
     fn read<T>(&self, f: impl FnOnce(&dyn ReadSnapshot) -> Result<T, StorageError>) -> T {
         read_snapshot(&*self.store, &ReadOptions::default(), f).expect("read")
@@ -1473,7 +1473,7 @@ fn adopting_a_replacement_whose_assessment_cannot_take_a_carried_finding_is_refu
     let ctx = c.fx.user();
     let decided: Result<(), StorageError> = run_write(
         &*c.fx.store,
-        WriteOptions::default(),
+        WriteOptions::fixture(),
         move |tx| match decide_plan_approval(tx, &ctx, &proposal.id, 1, true) {
             Err(devworks_core::services::sessions::Failure::Refused(r)) => {
                 Err(StorageError::InvalidRecord(r.target_kind.to_string()))
@@ -2187,7 +2187,7 @@ fn migration_16_is_additive_and_closes_older_writers_out() {
         ..w.clone()
     };
     assert!(
-        run_write(&*s, WriteOptions::default(), move |tx| tx
+        run_write(&*s, WriteOptions::fixture(), move |tx| tx
             .work()
             .update_work(&bad, 3))
         .is_err()
@@ -2197,7 +2197,7 @@ fn migration_16_is_additive_and_closes_older_writers_out() {
         ..w.clone()
     };
     assert!(matches!(
-        run_write(&*s, WriteOptions::default(), move |tx| tx
+        run_write(&*s, WriteOptions::fixture(), move |tx| tx
             .work()
             .update_work(&stale, 2)),
         Err(StorageError::RevisionConflict(_))

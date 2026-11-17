@@ -657,7 +657,7 @@ impl ArtifactService {
             stream.grant.clone(),
             target.path().to_string_lossy().into_owned(),
         );
-        run_write(store, WriteOptions::default(), move |tx| {
+        run_write(store, WriteOptions::settlement(), move |tx| {
             if let Some(a) = tx.artifacts().artifact(&grant.artifact_id)? {
                 event(
                     tx,
@@ -718,7 +718,7 @@ impl ArtifactService {
             after = page.last().map(|b| b.digest.clone());
             let (readers, me) = (self.readers.clone(), owner.to_owned());
             let (claimed, deferred_pinned, deferred_reading) =
-                run_write(store, WriteOptions::default(), move |tx| {
+                run_write(store, WriteOptions::housekeeping(), move |tx| {
                     let (mut claimed, mut pinned, mut reading) =
                         (Vec::new(), Vec::new(), Vec::new());
                     for b in page {
@@ -800,7 +800,7 @@ impl ArtifactService {
         }
         let host = store.info().host_actor;
         let me = owner.to_owned();
-        run_write(store, WriteOptions::default(), move |tx| {
+        run_write(store, WriteOptions::housekeeping(), move |tx| {
             let (mut done, mut failed) = (Vec::new(), Vec::new());
             for (digest, generation, error) in outcomes {
                 if !tx
@@ -864,7 +864,7 @@ impl ArtifactService {
                 .lock()
                 .unwrap_or_else(|p| p.into_inner())
                 .clone();
-            let adopted = run_write(store, WriteOptions::default(), move |tx| {
+            let adopted = run_write(store, WriteOptions::recovery(), move |tx| {
                 let mut adopted = Vec::new();
                 for b in page {
                     if busy.contains(&(b.digest.clone(), b.generation.clone())) {
@@ -940,7 +940,7 @@ impl ArtifactService {
             }) {
                 // A failed operation's own generation is removed by the sweep below: from the
                 // moment it is resolved nothing can bind it.
-                let resolved = run_write(store, WriteOptions::default(), move |tx| {
+                let resolved = run_write(store, WriteOptions::recovery(), move |tx| {
                     resolve_stale(tx, op)
                 })?;
                 match resolved {

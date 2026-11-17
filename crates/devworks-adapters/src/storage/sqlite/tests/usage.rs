@@ -12,7 +12,7 @@ fn id(s: &str) -> Id {
 fn seeded(h: &Harness) -> SqliteStore {
     let s = h.store();
     let actor = s.info().host_actor;
-    run_write(&s, WriteOptions::default(), move |tx| {
+    run_write(&s, WriteOptions::fixture(), move |tx| {
         tx.projects().insert_project(&StoredProject {
             id: ProjectId(id("project")),
             name: "Project".into(),
@@ -223,7 +223,7 @@ fn usage28_migration_is_checksummed_old_writers_refused_and_new_records_reopen()
     assert!(m.rebuilds_tables);
     let h = Harness::new();
     let old = SqliteStore::open_with(h.config(), &through(27)).unwrap();
-    run_write(&old, WriteOptions::default(), |tx| {
+    run_write(&old, WriteOptions::fixture(), |tx| {
         tx.operations().record_intent(NewOperation {
             id: OperationId(id("legacy-operation")),
             root_id: None,
@@ -269,7 +269,7 @@ fn usage28_migration_is_checksummed_old_writers_refused_and_new_records_reopen()
     .unwrap();
     let a = attempt(&s, "a");
     let expected = a.clone();
-    run_write(&s, WriteOptions::default(), move |tx| {
+    run_write(&s, WriteOptions::fixture(), move |tx| {
         tx.usage().insert_inference_attempt(&a)?;
         tx.usage()
             .put_attempt_balance(&balance("a", Some(0), Some(100), "OfficialEstimate"), None)
@@ -293,7 +293,7 @@ fn usage28_balances_replace_estimate_without_double_counting_and_legacy_facts_st
     let h = Harness::new();
     let s = seeded(&h);
     let a = attempt(&s, "a");
-    run_write(&s, WriteOptions::default(), move |tx| {
+    run_write(&s, WriteOptions::fixture(), move |tx| {
         tx.usage().insert_inference_attempt(&a)?;
         tx.usage()
             .put_attempt_balance(&balance("a", Some(60), Some(40), "OfficialEstimate"), None)?;
@@ -317,7 +317,7 @@ fn usage28_balances_replace_estimate_without_double_counting_and_legacy_facts_st
         ),
         (1, 60, 40, 1, 900)
     );
-    run_write(&s, WriteOptions::default(), |tx| {
+    run_write(&s, WriteOptions::fixture(), |tx| {
         let mut b = balance("a", Some(75), Some(0), "ReportedCharge");
         b.revision = 2;
         tx.usage().put_attempt_balance(&b, Some(1))?;
@@ -343,7 +343,7 @@ fn usage28_observations_are_immutable_idempotent_bounded_and_attempt_binding_can
     let h = Harness::new();
     let s = seeded(&h);
     let a = attempt(&s, "a");
-    run_write(&s, WriteOptions::default(), move |tx| {
+    run_write(&s, WriteOptions::fixture(), move |tx| {
         tx.usage().insert_inference_attempt(&a)?;
         for n in 1..=3 {
             let o = StoredUsageObservation {
@@ -408,7 +408,7 @@ fn usage28_observations_are_immutable_idempotent_bounded_and_attempt_binding_can
 fn usage28_price_publication_override_history_and_connection_revision_fences_are_atomic() {
     let h = Harness::new();
     let s = seeded(&h);
-    run_write(&s, WriteOptions::default(), |tx| {
+    run_write(&s, WriteOptions::fixture(), |tx| {
         assert_eq!(tx.usage().price_revision()?, 1);
         assert_eq!(tx.usage().price_override_revision(&id("sol"))?, 1);
         tx.usage().put_price_status(&pending(), None)?;
@@ -441,14 +441,14 @@ fn usage28_price_publication_override_history_and_connection_revision_fences_are
     .unwrap();
     let a = attempt(&s, "stale-override");
     assert!(
-        run_write(&s, WriteOptions::default(), move |tx| tx
+        run_write(&s, WriteOptions::fixture(), move |tx| tx
             .usage()
             .insert_inference_attempt(&a))
         .is_err()
     );
     let mut a = attempt(&s, "stale-connection");
     a.pricing_snapshot["quote"]["override_revision"] = json!(3);
-    run_write(&s, WriteOptions::default(), |tx| {
+    run_write(&s, WriteOptions::fixture(), |tx| {
         let mut c = tx.router().connection(&id("connection"))?.unwrap();
         c.local_free = true;
         tx.router().put_connection(&c, Some(1))?;
@@ -456,7 +456,7 @@ fn usage28_price_publication_override_history_and_connection_revision_fences_are
     })
     .unwrap();
     assert!(
-        run_write(&s, WriteOptions::default(), move |tx| tx
+        run_write(&s, WriteOptions::fixture(), move |tx| tx
             .usage()
             .insert_inference_attempt(&a))
         .is_err()
@@ -464,7 +464,7 @@ fn usage28_price_publication_override_history_and_connection_revision_fences_are
     let mut a = attempt(&s, "free");
     a.pricing_snapshot["quote"] =
         json!({"classification":"LocalFree","connection_revision":2,"override_revision":3});
-    run_write(&s, WriteOptions::default(), move |tx| {
+    run_write(&s, WriteOptions::fixture(), move |tx| {
         tx.usage().insert_inference_attempt(&a)?;
         tx.usage()
             .put_attempt_balance(&balance("free", Some(0), Some(0), "LocalFree"), None)
@@ -483,7 +483,7 @@ fn usage28_price_publication_override_history_and_connection_revision_fences_are
 fn usage28_concurrent_budget_cas_has_one_winner_and_only_features_own_caps() {
     let h = Harness::new();
     let s = Arc::new(seeded(&h));
-    run_write(s.as_ref(), WriteOptions::default(), |tx| {
+    run_write(s.as_ref(), WriteOptions::fixture(), |tx| {
         let row = StoredFeatureBudget {
             feature_id: id("feature"),
             revision: 1,
@@ -504,7 +504,7 @@ fn usage28_concurrent_budget_cas_has_one_winner_and_only_features_own_caps() {
             let b = barrier.clone();
             std::thread::spawn(move || {
                 b.wait();
-                run_write(s.as_ref(), WriteOptions::default(), move |tx| {
+                run_write(s.as_ref(), WriteOptions::fixture(), move |tx| {
                     tx.usage().put_feature_budget(
                         &StoredFeatureBudget {
                             feature_id: id("feature"),
@@ -532,7 +532,7 @@ fn usage28_concurrent_budget_cas_has_one_winner_and_only_features_own_caps() {
 fn usage28_bootstrap_checkpoint_restart_and_origin_paging_preserve_unknown_identity() {
     let h = Harness::new();
     let s = seeded(&h);
-    run_write(&s, WriteOptions::default(), |tx| {
+    run_write(&s, WriteOptions::fixture(), |tx| {
         for name in ["a", "b", "c"] {
             tx.usage()
                 .insert_usage_origin(&origin(name, "SessionUsage", None))?;
@@ -577,7 +577,7 @@ fn usage28_pending_partial_and_tail_coverage_are_distinct_and_integer_totals_ref
     let a = attempt(&s, "pending");
     let mut b = attempt(&s, "partial");
     b.request_id = id("request-partial");
-    run_write(&s, WriteOptions::default(), move |tx| {
+    run_write(&s, WriteOptions::fixture(), move |tx| {
         tx.usage().insert_inference_attempt(&a)?;
         tx.usage().insert_inference_attempt(&b)?;
         let mut partial = balance("partial", Some(5), Some(10), "OfficialEstimate");
@@ -598,7 +598,7 @@ fn usage28_pending_partial_and_tail_coverage_are_distinct_and_integer_totals_ref
         ),
         (2, 5, 0, 2, 1, 1)
     );
-    run_write(&s, WriteOptions::default(), |tx| {
+    run_write(&s, WriteOptions::fixture(), |tx| {
         tx.usage().put_attempt_balance(
             &balance("pending", Some(i64::MAX), None, "ReportedCharge"),
             None,
@@ -617,7 +617,7 @@ fn usage28_origin_binding_is_cross_project_guarded_and_exact_replay_preserves_pr
     let s = seeded(&h);
     let a = attempt(&s, "a");
     let b = attempt(&s, "b");
-    run_write(&s, WriteOptions::default(), move |tx| {
+    run_write(&s, WriteOptions::fixture(), move |tx| {
         tx.usage().insert_inference_attempt(&a)?;
         let original = origin("legacy", "SessionUsage", Some(5));
         tx.usage().insert_usage_origin(&original)?;
@@ -653,7 +653,7 @@ fn usage28_independent_provider_publications_ignore_unrelated_global_drift_and_s
  {
     let h = Harness::new();
     let s = seeded(&h);
-    run_write(&s, WriteOptions::default(), |tx| {
+    run_write(&s, WriteOptions::fixture(), |tx| {
         tx.usage().put_price_status(&pending(), None)?;
         let mut other = pending();
         other.provider = "Anthropic".into();
@@ -694,7 +694,7 @@ fn usage28_concurrent_price_refresh_generation_has_one_winner() {
             let b = b.clone();
             std::thread::spawn(move || {
                 b.wait();
-                run_write(s.as_ref(), WriteOptions::default(), |tx| {
+                run_write(s.as_ref(), WriteOptions::fixture(), |tx| {
                     tx.usage().advance_price_revision(1)
                 })
             })
@@ -715,7 +715,7 @@ fn usage28_global_session_bootstrap_reads_project_and_workspace_facts_even_after
     let h = Harness::new();
     let s = seeded(&h);
     let actor = s.info().host_actor;
-    run_write(&s, WriteOptions::default(), move |tx| {
+    run_write(&s, WriteOptions::fixture(), move |tx| {
         for (name, project) in [
             ("project-session", Some(ProjectId(id("project")))),
             ("workspace-session", None),
@@ -843,14 +843,14 @@ fn usage28_canonical_identity_requires_actual_matching_journal_and_request_witho
             }
         }
         assert!(
-            run_write(&s, WriteOptions::default(), move |tx| tx
+            run_write(&s, WriteOptions::fixture(), move |tx| tx
                 .usage()
                 .insert_inference_attempt(&invalid))
             .is_err()
         );
     }
     assert_eq!(totals(&s).attempts, 0);
-    run_write(&s, WriteOptions::default(), move |tx| {
+    run_write(&s, WriteOptions::fixture(), move |tx| {
         tx.usage().insert_inference_attempt(&a)
     })
     .unwrap();
@@ -875,7 +875,7 @@ fn usage28_canonical_identity_requires_actual_matching_journal_and_request_witho
 fn usage28_job_usage_pages_by_run_and_sequence_without_current_scope_inference() {
     let h = Harness::new();
     let s = seeded(&h);
-    run_write(&s, WriteOptions::default(), |tx| {
+    run_write(&s, WriteOptions::fixture(), |tx| {
         for (name, project) in [("job-a", Some(ProjectId(id("project")))), ("job-b", None)] {
             let job = StoredJob {
                 id: id(name),
@@ -986,7 +986,7 @@ fn usage28_job_usage_pages_by_run_and_sequence_without_current_scope_inference()
     // A job which dispatches actual feature work is secondary provenance, not a second expense.
     let mut owned = attempt(&s, "feature-job");
     owned.job_run_id = Some(id("run-job-b"));
-    run_write(&s, WriteOptions::default(), move |tx| {
+    run_write(&s, WriteOptions::fixture(), move |tx| {
         tx.usage().insert_inference_attempt(&owned)?;
         tx.usage().put_attempt_balance(
             &balance("feature-job", Some(25), None, "ReportedCharge"),
@@ -1013,7 +1013,7 @@ fn usage28_job_usage_pages_by_run_and_sequence_without_current_scope_inference()
     )
     .unwrap();
     assert!(
-        run_write(&s, WriteOptions::default(), move |tx| tx
+        run_write(&s, WriteOptions::fixture(), move |tx| tx
             .usage()
             .insert_inference_attempt(&mismatch))
         .is_err()
@@ -1040,7 +1040,7 @@ fn usage28_host_decision_purposes_are_closed_and_preserve_router_identity() {
         raw.execute("UPDATE router_requests SET purpose='ArbitraryTool'", [])
             .is_err()
     );
-    run_write(&s, WriteOptions::default(), move |tx| {
+    run_write(&s, WriteOptions::fixture(), move |tx| {
         let mut a = a;
         a.purpose = "Decision".into();
         let mut b = b;
@@ -1051,7 +1051,7 @@ fn usage28_host_decision_purposes_are_closed_and_preserve_router_identity() {
     })
     .unwrap();
     assert_eq!(totals(&s).attempts, 2);
-    run_write(&s, WriteOptions::default(), |tx| {
+    run_write(&s, WriteOptions::fixture(), |tx| {
         let operation = OperationId(id("host-purpose-operation"));
         tx.operations().record_intent(NewOperation {
             id: operation.clone(),
@@ -1082,7 +1082,7 @@ fn usage28_price_history_is_bounded_and_refresh_operation_survives_publication_f
 {
     let h = Harness::new();
     let s = seeded(&h);
-    run_write(&s, WriteOptions::default(), |tx| {
+    run_write(&s, WriteOptions::fixture(), |tx| {
         let operation = OperationId(id("refresh-operation"));
         tx.operations().record_intent(NewOperation {
             id: operation.clone(),
@@ -1152,7 +1152,7 @@ fn managed_source(s: &SqliteStore, name: &str, worker: bool) -> StoredInferenceA
     let actor = s.info().host_actor;
     let boot = s.info().boot_id.unwrap();
     let owned_name = name.to_owned();
-    run_write(s, WriteOptions::default(), move |tx| {
+    run_write(s, WriteOptions::fixture(), move |tx| {
         let name = owned_name.as_str();
         if tx.runs().activation(&id("execution"))?.is_none() {
             tx.runs().insert_activation(&StoredActivation {
@@ -1237,7 +1237,7 @@ fn usage28_captured_coordinator_custody_survives_execution_stop_and_restart_with
     let h = Harness::new();
     let s = seeded(&h);
     let manual = attempt(&s, "manual");
-    run_write(&s, WriteOptions::default(), move |tx| {
+    run_write(&s, WriteOptions::fixture(), move |tx| {
         tx.usage().insert_inference_attempt(&manual)?;
         tx.usage()
             .put_attempt_balance(&balance("manual", None, None, "Untracked"), None)
@@ -1250,7 +1250,7 @@ fn usage28_captured_coordinator_custody_survives_execution_stop_and_restart_with
         .unwrap()
     );
     let a = managed_source(&s, "coordinator", false);
-    run_write(&s, WriteOptions::default(), move |tx| {
+    run_write(&s, WriteOptions::fixture(), move |tx| {
         tx.usage().insert_inference_attempt(&a)?;
         let mut b = balance("coordinator", Some(3), Some(100), "OfficialEstimate");
         b.unknown_tail = true;
@@ -1278,7 +1278,7 @@ fn usage28_captured_coordinator_custody_survives_execution_stop_and_restart_with
             .inference_quiescent(&RootId(id("feature"))))
         .unwrap()
     );
-    run_write(&s, WriteOptions::default(), |tx| {
+    run_write(&s, WriteOptions::fixture(), |tx| {
         let mut b = tx.usage().attempt_balance(&id("coordinator"))?.unwrap();
         b.revision = 2;
         b.local_quiescent = true;
@@ -1318,7 +1318,7 @@ fn usage28_superseded_assignment_handoff_waits_for_canonical_transport_even_with
             .assignment_handoff_quiescent(&AssignmentId(id("worker"))))
         .unwrap()
     );
-    run_write(&s, WriteOptions::default(), move |tx| {
+    run_write(&s, WriteOptions::fixture(), move |tx| {
         tx.usage().insert_inference_attempt(&a)
     })
     .unwrap();
@@ -1329,7 +1329,7 @@ fn usage28_superseded_assignment_handoff_waits_for_canonical_transport_even_with
             .assignment_handoff_quiescent(&AssignmentId(id("worker"))))
         .unwrap()
     );
-    run_write(&s, WriteOptions::default(), |tx| {
+    run_write(&s, WriteOptions::fixture(), |tx| {
         let mut b = balance("worker", None, None, "Untracked");
         b.local_quiescent = true;
         b.unknown_tail = true;
@@ -1363,13 +1363,13 @@ fn usage28_execution_owner_pair_is_validated_and_immutable() {
             _ => bad.session_id = None,
         };
         assert!(
-            run_write(&s, WriteOptions::default(), move |tx| tx
+            run_write(&s, WriteOptions::fixture(), move |tx| tx
                 .usage()
                 .insert_inference_attempt(&bad))
             .is_err()
         );
     }
-    run_write(&s, WriteOptions::default(), move |tx| {
+    run_write(&s, WriteOptions::fixture(), move |tx| {
         tx.usage().insert_inference_attempt(&valid)?;
         let mut bad = valid;
         bad.revision = 2;
@@ -1385,7 +1385,7 @@ fn usage28_execution_owner_pair_is_validated_and_immutable() {
 fn usage28_override_history_retains_set_a_set_b_clear_and_pages_across_models_after_restart() {
     let h = Harness::new();
     let s = seeded(&h);
-    run_write(&s, WriteOptions::default(), |tx| {
+    run_write(&s, WriteOptions::fixture(), |tx| {
         let actor = tx.store().host_actor.clone();
         let mut a = StoredPriceOverride {
             model_id: id("sol"),
@@ -1494,7 +1494,7 @@ fn usage28_provider_model_identity_uses_retained_text_contract_without_byte_or_n
     a.pricing_snapshot["quoted_provider_model_id"] = json!(ascii.clone());
     let quoted = a.pricing_snapshot.clone();
     let mut original = a.clone();
-    run_write(&s, WriteOptions::default(), move |tx| {
+    run_write(&s, WriteOptions::fixture(), move |tx| {
         tx.usage().insert_inference_attempt(&a)
     })
     .unwrap();
@@ -1502,13 +1502,13 @@ fn usage28_provider_model_identity_uses_retained_text_contract_without_byte_or_n
     original.state = "Dispatched".into();
     original.provider_model_id = Some(unicode.clone());
     let observed = original.clone();
-    run_write(&s, WriteOptions::default(), move |tx| {
+    run_write(&s, WriteOptions::fixture(), move |tx| {
         tx.usage().update_inference_attempt(&observed, 1)
     })
     .unwrap();
     let mut ascii_only = attempt(&s, "ascii-identity");
     ascii_only.provider_model_id = Some(ascii.clone());
-    run_write(&s, WriteOptions::default(), move |tx| {
+    run_write(&s, WriteOptions::fixture(), move |tx| {
         tx.usage().insert_inference_attempt(&ascii_only)
     })
     .unwrap();
@@ -1518,7 +1518,7 @@ fn usage28_provider_model_identity_uses_retained_text_contract_without_byte_or_n
         update.revision = 3;
         update.provider_model_id = Some(invalid.clone());
         assert!(
-            run_write(&s, WriteOptions::default(), move |tx| tx
+            run_write(&s, WriteOptions::fixture(), move |tx| tx
                 .usage()
                 .update_inference_attempt(&update, 2))
             .is_err()
@@ -1526,7 +1526,7 @@ fn usage28_provider_model_identity_uses_retained_text_contract_without_byte_or_n
         let mut insert = invalid_admission.clone();
         insert.provider_model_id = Some(invalid.clone());
         assert!(
-            run_write(&s, WriteOptions::default(), move |tx| tx
+            run_write(&s, WriteOptions::fixture(), move |tx| tx
                 .usage()
                 .insert_inference_attempt(&insert))
             .is_err()
@@ -1534,7 +1534,7 @@ fn usage28_provider_model_identity_uses_retained_text_contract_without_byte_or_n
         let mut insert = invalid_admission.clone();
         insert.pricing_snapshot["quoted_provider_model_id"] = json!(invalid);
         assert!(
-            run_write(&s, WriteOptions::default(), move |tx| tx
+            run_write(&s, WriteOptions::fixture(), move |tx| tx
                 .usage()
                 .insert_inference_attempt(&insert))
             .is_err()
@@ -1543,7 +1543,7 @@ fn usage28_provider_model_identity_uses_retained_text_contract_without_byte_or_n
     let mut a = attempt(&s, "quoted-unicode");
     a.provider_model_id = Some(unicode.clone());
     a.pricing_snapshot["quoted_provider_model_id"] = json!(unicode.clone());
-    run_write(&s, WriteOptions::default(), move |tx| {
+    run_write(&s, WriteOptions::fixture(), move |tx| {
         tx.usage().insert_inference_attempt(&a)
     })
     .unwrap();
@@ -1585,7 +1585,7 @@ fn usage28_quoted_tariff_upstream_identity_preserves_full_text_contract() {
     let s = seeded(&h);
     let unicode = format!("{}\n", "界".repeat(4095));
     let expected = unicode.clone();
-    run_write(&s, WriteOptions::default(), move |tx| {
+    run_write(&s, WriteOptions::fixture(), move |tx| {
         let mut row = StoredPriceOverride {
             model_id: id("sol"),
             revision: 2,

@@ -60,7 +60,7 @@ fn registry_records_are_compare_and_set_and_versions_keep_their_identity() {
     let h = Harness::new();
     let s = h.store();
     let d = "a".repeat(64);
-    run_write(&s, WriteOptions::default(), {
+    run_write(&s, WriteOptions::fixture(), {
         let d = d.clone();
         move |tx| {
             assert_eq!(tx.packages().registry_revision()?, 1);
@@ -130,7 +130,7 @@ fn proposals_record_one_decision_and_generations_fence_and_retain_state() {
     let h = Harness::new();
     let s = h.store();
     let d = "a".repeat(64);
-    run_write(&s, WriteOptions::default(), {
+    run_write(&s, WriteOptions::fixture(), {
         let d = d.clone();
         move |tx| {
             tx.packages().insert_package(&package("demo"))?;
@@ -232,7 +232,7 @@ fn migration_20_adds_the_package_registry_to_a_version_19_store() {
     let h = Harness::new();
     drop(SqliteStore::open_with(h.config(), &through(19)).unwrap());
     let s = h.store();
-    let head = run_write(&s, WriteOptions::default(), |tx| {
+    let head = run_write(&s, WriteOptions::fixture(), |tx| {
         tx.packages().registry_revision()
     })
     .unwrap();
@@ -243,7 +243,7 @@ fn migration_20_adds_the_package_registry_to_a_version_19_store() {
 fn a_packages_version_list_always_includes_its_newest_version() {
     let h = Harness::new();
     let s = h.store();
-    run_write(&s, WriteOptions::default(), |tx| {
+    run_write(&s, WriteOptions::fixture(), |tx| {
         tx.packages().insert_package(&package("many"))?;
         for n in 0..520i64 {
             let mut v = version("many", &format!("{n:064x}"));
@@ -254,7 +254,7 @@ fn a_packages_version_list_always_includes_its_newest_version() {
         Ok(())
     })
     .unwrap();
-    let all = run_write(&s, WriteOptions::default(), |tx| {
+    let all = run_write(&s, WriteOptions::fixture(), |tx| {
         tx.packages().package_versions("many")
     })
     .unwrap();

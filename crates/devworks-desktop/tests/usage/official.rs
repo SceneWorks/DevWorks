@@ -83,7 +83,7 @@ fn official_tariff_edit(profile: &str, endpoint: &str, upstream: &str) {
     unrelated.amount_usd = "999".into();
     tariffs.push(unrelated);
     let store = engine.host().runtime().store();
-    run_write(&**store, WriteOptions::default(), move |tx| {
+    run_write(&**store, WriteOptions::fixture(), move |tx| {
         for (number, id) in [(1, "official-old"), (2, "official-selected")] {
             let previous = tx.usage().price_status("openai")?;
             let status = StoredPriceStatus {

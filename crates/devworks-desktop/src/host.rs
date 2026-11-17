@@ -657,7 +657,7 @@ async fn compose(
     let (registered, name) = (user.clone(), config.user_name.clone());
     let st = store.clone();
     tokio::task::spawn_blocking(move || {
-        run_write(&*st, WriteOptions::default(), move |tx| {
+        run_write(&*st, WriteOptions::recovery(), move |tx| {
             tx.actors()
                 .register(&registered, PrincipalKind::Human, &name)?;
             tx.decisions().bind_notification_user(&registered)

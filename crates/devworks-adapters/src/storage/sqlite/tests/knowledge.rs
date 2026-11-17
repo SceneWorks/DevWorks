@@ -202,7 +202,7 @@ impl Fx {
         &self,
         f: impl FnOnce(&mut dyn WriteTransaction) -> Result<T, StorageError> + Send + 'static,
     ) -> T {
-        run_write(&*self.store, WriteOptions::default(), f).expect("write")
+        run_write(&*self.store, WriteOptions::fixture(), f).expect("write")
     }
     fn read<T>(&self, f: impl FnOnce(&dyn ReadSnapshot) -> Result<T, StorageError>) -> T {
         read_snapshot(&*self.store, &ReadOptions::default(), f).expect("read")
@@ -1233,7 +1233,7 @@ fn lesson_views_addresses_and_delivery_are_inspectable() {
         let (k, rule) = (fx.knowledge.clone(), rule.clone());
         move |tx| k.record_delivery(tx, &id("s1"), &[(rule, rev)])
     });
-    let unknown = run_write(&*fx.store, WriteOptions::default(), {
+    let unknown = run_write(&*fx.store, WriteOptions::fixture(), {
         let (k, rule) = (fx.knowledge.clone(), rule.clone());
         move |tx| k.record_delivery(tx, &id("no-session"), &[(rule, 1)])
     });
@@ -1257,7 +1257,7 @@ fn lesson_views_addresses_and_delivery_are_inspectable() {
             checkpoint_sequence: 0,
         })
     });
-    let leaked = run_write(&*fx.store, WriteOptions::default(), {
+    let leaked = run_write(&*fx.store, WriteOptions::fixture(), {
         let (k, rule) = (fx.knowledge.clone(), rule.clone());
         move |tx| k.record_delivery(tx, &id("s2"), &[(rule, rev)])
     });

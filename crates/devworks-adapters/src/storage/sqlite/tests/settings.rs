@@ -217,7 +217,7 @@ impl Fixture {
         &self,
         f: impl FnOnce(&mut dyn WriteTransaction) -> Result<T, StorageError> + Send + 'static,
     ) -> T {
-        run_write(&self.store, WriteOptions::default(), f).expect("write")
+        run_write(&self.store, WriteOptions::fixture(), f).expect("write")
     }
     fn read<T>(&self, f: impl FnOnce(&dyn ConfigurationRead) -> Result<T, StorageError>) -> T {
         read_snapshot(&self.store, &ReadOptions::default(), |s| {
@@ -228,7 +228,7 @@ impl Fixture {
 }
 
 fn write_actors(store: &SqliteStore) {
-    run_write(store, WriteOptions::default(), |tx| {
+    run_write(store, WriteOptions::fixture(), |tx| {
         for (a, k) in [
             ("user-a", PrincipalKind::Human),
             ("user-b", PrincipalKind::Human),

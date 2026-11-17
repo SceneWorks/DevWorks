@@ -768,7 +768,7 @@ pub(crate) fn prune_ref_overlays(
         if pruned >= usize::from(batch) || stop() {
             break;
         }
-        let removed = run_write(&*env.store, WriteOptions::default(), move |tx| {
+        let removed = run_write(&*env.store, WriteOptions::housekeeping(), move |tx| {
             let Some(cur) = tx.indexing().overlay(&o.id)? else {
                 return Ok(false);
             };
@@ -883,7 +883,7 @@ pub(crate) fn observe_all(
         }
         let ttl = env.settings.overlay_ttl_ms;
         let max = env.settings.max_attempts;
-        let did = run_write(&*env.store, WriteOptions::default(), move |tx| {
+        let did = run_write(&*env.store, WriteOptions::observed(), move |tx| {
             let Some(cur) = tx.indexing().overlay(&o.id)? else {
                 return Ok((false, false));
             };

@@ -91,7 +91,7 @@ fn actual_engine_and_tokio_drop_finish_while_owned_start_or_close_is_stalled() {
         let engine = Engine::start(config).unwrap();
         let app = engine.host.runtime.clone();
         let store = app.store().clone();
-        run_write(store.as_ref(), WriteOptions::default(), |tx| {
+        run_write(store.as_ref(), WriteOptions::fixture(), |tx| {
             tx.router().put_connection(
                 &StoredConnection {
                     id: id("usage-connection"),

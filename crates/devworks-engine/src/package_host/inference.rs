@@ -363,7 +363,7 @@ pub(super) fn call(
         .cloned()
         .map_or(ArtifactScope::Workspace, ArtifactScope::Project);
     let (operation, live) = (ctx.operation_id.clone(), slot.clone());
-    let committed = run_write(&*host.store, WriteOptions::default(), move |tx| {
+    let committed = run_write(&*host.store, WriteOptions::observed(), move |tx| {
         // Serialized with revocation: a cancelled or expired invocation publishes nothing.
         let _guard = live.state.lock().unwrap_or_else(|p| p.into_inner());
         if live.revoked.load(std::sync::atomic::Ordering::SeqCst) {

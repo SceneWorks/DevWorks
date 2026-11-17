@@ -26,6 +26,8 @@ tokio = { version = "=1.54.1", default-features = false, features = ["sync", "ti
 devworks-engine = { path = ".", features = ["test-support"] }
 # test-support: seed each test's data root with a store migrated once per test binary.
 devworks-adapters = { path = "../devworks-adapters", features = ["test-support"] }
+# contract-suite: fixtures seed authority records through `authority::fixture_writes`.
+devworks-core = { path = "../devworks-core", features = ["contract-suite"] }
 # Signs the fixture package bundles the package tests install.
 ed25519-dalek = "=2.2.0"
 # Seeds rows the engine has no port for yet (projects and work items owning root-scoped work).

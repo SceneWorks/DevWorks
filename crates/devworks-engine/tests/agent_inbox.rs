@@ -753,7 +753,7 @@ fn selected_receive_cancellation_keeps_the_request_key_retryable() {
                     raw_ref,
                     WriteOptions {
                         cancellation: Some(stop),
-                        ..WriteOptions::default()
+                        ..WriteOptions::fixture()
                     },
                 )
                 .unwrap()
@@ -781,7 +781,7 @@ fn selected_receive_cancellation_keeps_the_request_key_retryable() {
                 &raw,
                 WriteOptions {
                     deadline_ms: Some(harness.now() - 1),
-                    ..WriteOptions::default()
+                    ..WriteOptions::fixture()
                 },
             )
             .unwrap(),

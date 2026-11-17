@@ -766,7 +766,7 @@ impl BrowserService {
         let change = Arc::new(change);
         for _ in 0..4 {
             let (id, change) = (id.clone(), change.clone());
-            let r = run_write(&*self.store, WriteOptions::default(), move |tx| {
+            let r = run_write(&*self.store, WriteOptions::host_state(), move |tx| {
                 let Some(current) = tx.browser().browser_session(&id)? else {
                     return Ok(None);
                 };
@@ -2239,7 +2239,7 @@ impl BrowserService {
             return Err(ResolveRefusal::HumanOnly);
         }
         let (op_id, c) = (operation.clone(), ctx.clone());
-        run_write(&*self.store, WriteOptions::default(), move |tx| {
+        run_write(&*self.store, WriteOptions::settlement(), move |tx| {
             let Some(op) = tx.operations().operation(&op_id)? else {
                 return Ok(Err(ResolveRefusal::NotFound));
             };

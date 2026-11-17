@@ -324,7 +324,7 @@ fn seed_notification(
     };
     run_write(
         &**engine.host().runtime().store(),
-        WriteOptions::default(),
+        WriteOptions::fixture(),
         move |tx| tx.decisions().put_notification(&n, None),
     )
     .unwrap();

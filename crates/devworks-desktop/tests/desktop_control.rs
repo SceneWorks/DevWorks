@@ -44,7 +44,7 @@ fn opted_in_agent_capture_still_requires_current_consent() {
     let schema = devworks_core::settings::catalog::descriptor("tools.overrides")
         .unwrap()
         .schema_ref();
-    run_write(&*store, WriteOptions::default(), move |tx| {
+    run_write(&*store, WriteOptions::fixture(), move |tx| {
         tx.actors()
             .register(&worker_for_write, PrincipalKind::Agent, "capture worker")?;
         bind_principal(
@@ -594,7 +594,7 @@ fn a_deletion_clicked_while_control_was_held_is_refused_even_after_release() {
     };
     devworks_core::ports::storage::run_write(
         &**engine.host().runtime().store(),
-        devworks_core::ports::storage::WriteOptions::default(),
+        devworks_core::ports::storage::WriteOptions::fixture(),
         move |tx| tx.projects().insert_repository(&repository),
     )
     .unwrap();

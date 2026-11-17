@@ -224,7 +224,7 @@ impl PackageService {
     pub fn observe_now(&self, cause: &str) -> Result<usize, StorageError> {
         let svc = self.clone_ports();
         let cause = cause.to_owned();
-        run_write(&*self.store, WriteOptions::default(), move |tx| {
+        run_write(&*self.store, WriteOptions::observed(), move |tx| {
             svc.observe(tx, &cause)
         })
     }
@@ -246,7 +246,7 @@ impl PackageService {
     ) -> Result<(), StorageError> {
         let svc = self.clone_ports();
         let source = source.clone();
-        run_write(&*self.store, WriteOptions::default(), move |tx| {
+        run_write(&*self.store, WriteOptions::observed(), move |tx| {
             // The fetch may have outlived a source edit. Only the effective configuration
             // at this write can retain sources or accept the result.
             let keys: Vec<String> = index_sources(tx.configuration())?
@@ -310,7 +310,7 @@ impl PackageService {
 
     /// Forgets every recorded source that is no longer configured.
     pub fn retain_configured_indexes(&self) -> Result<(), StorageError> {
-        run_write(&*self.store, WriteOptions::default(), move |tx| {
+        run_write(&*self.store, WriteOptions::housekeeping(), move |tx| {
             let keys: Vec<String> = index_sources(tx.configuration())?
                 .iter()
                 .map(source_key)

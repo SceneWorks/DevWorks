@@ -854,7 +854,9 @@ fn convention_only_owner_status_needs_no_history_and_revoke_blocks_the_actual_wo
     );
     let actor = f.ctx.principal().clone();
     write(f.store.as_ref(), move |tx| {
-        tx.authority().revoke_principal(&actor, 1).map(|_| ())
+        devworks_core::authority::fixture_writes(tx)?
+            .revoke_principal(&actor, 1)
+            .map(|_| ())
     })
     .unwrap();
     let record = f.dispatch(&op);

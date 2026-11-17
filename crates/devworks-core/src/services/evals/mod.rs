@@ -93,7 +93,7 @@ impl EvalService {
         if stopped() {
             return Err(invalid("automatic grading stopped"));
         }
-        run_write(store, WriteOptions::default(), move |tx| {
+        run_write(store, WriteOptions::observed(), move |tx| {
             persist(tx, &report, true)
         })
     }

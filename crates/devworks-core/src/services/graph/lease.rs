@@ -112,7 +112,7 @@ pub(super) fn select(
         WriteOptions {
             deadline_ms: options.deadline_ms,
             cancellation: options.cancellation.clone(),
-            ..Default::default()
+            ..WriteOptions::host_state()
         },
         move |tx| {
             if !crate::authority::authorization_holds_in(tx, &context, &authority)? {

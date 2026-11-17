@@ -38,7 +38,7 @@ impl RefreshWriteFence {
         if self.stopping.load(std::sync::atomic::Ordering::SeqCst) {
             return Err(StorageError::Cancelled);
         }
-        let result = run_write(store, WriteOptions::default(), work);
+        let result = run_write(store, WriteOptions::observed(), work);
         drop(admitted);
         result
     }

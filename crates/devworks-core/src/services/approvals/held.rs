@@ -106,7 +106,7 @@ impl ApprovalService {
         let operation = operation.to_owned();
         let digest = digest.to_owned();
         let service = self.clone();
-        run_write(store, WriteOptions::default(), move |tx| {
+        run_write(store, WriteOptions::host_state(), move |tx| {
             let mut stage = || -> Result<HeldApproval, Failure> {
                 for n in 0..MAX_REQUESTS {
                     let id = approval_for(&ctx, &operation, &digest, n);
