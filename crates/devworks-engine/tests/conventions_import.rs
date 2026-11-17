@@ -235,7 +235,7 @@ fn durable_import_publishes_verified_exact_sources_and_fresh_resources_atomicall
     assert!(
         matches!(
             again,
-            devworks_core::services::conventions::importing::ImportOutcome::Completed(_)
+            devworks_core::services::effect::EffectOutcome::Completed(_)
         ),
         "{again:?}"
     );

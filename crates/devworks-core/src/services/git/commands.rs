@@ -13,6 +13,7 @@ use crate::protocol::data::GitCommand;
 use crate::protocol::records::GitActionKind;
 use crate::protocol::results::DomainDecision;
 use crate::protocol::{ActorId, AssignmentId, EventId, OperationId, ProjectId, RootId};
+use crate::services::effect::{EffectOutcome, JournaledEffect};
 use crate::services::sessions::{counter, decided};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -26,12 +27,6 @@ pub const EFFECT_CONSUMER: &str = "git_effects";
 pub struct RegisteredGitRoot {
     pub id: Id,
     pub path: PathBuf,
-}
-#[derive(Debug, PartialEq)]
-pub enum EffectOutcome {
-    Completed(Value),
-    Failed(String),
-    Unknown(String),
 }
 #[derive(Clone, Serialize, Deserialize)]
 struct Job {
@@ -1445,5 +1440,14 @@ impl CommandHandler for GitService {
             Ok(d) => Ok(d),
             Err(f) => decided(tx, Err(f)),
         }
+    }
+}
+
+impl JournaledEffect for GitService {
+    fn execute(&self, operation: &OperationRecord) -> EffectOutcome {
+        GitService::execute(self, operation)
+    }
+    fn observe(&self, operation: &OperationRecord) -> EffectOutcome {
+        GitService::observe(self, operation)
     }
 }

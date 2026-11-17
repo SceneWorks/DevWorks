@@ -21,7 +21,7 @@ use crate::services::artifacts::{ArtifactService, AuthorizedScope};
 use crate::services::indexing::git::{Git, GitFault};
 use crate::services::indexing::helper::{HelperFault, HelperRunner};
 use crate::services::sessions::{Failure, Refusal, query_fault, rev};
-pub use commands::{EFFECT_CONSUMER, EffectOutcome, RegisteredGitRoot};
+pub use commands::{EFFECT_CONSUMER, RegisteredGitRoot};
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;

@@ -10,16 +10,10 @@ use crate::protocol::records::{HelpProvenance, OperationRef};
 use crate::protocol::results::OperationResult;
 use crate::protocol::support::BoundedText;
 use crate::protocol::{EventId, Id, OperationId, OperationState};
+use crate::services::effect::{EffectOutcome, JournaledEffect};
 use crate::services::sessions::rev;
 use serde_json::{Value, json};
 use sha2::{Digest as _, Sha256};
-
-#[derive(Clone, Debug, PartialEq)]
-pub enum GenerationOutcome {
-    Completed(Value),
-    Failed(String),
-    Unknown(String),
-}
 
 fn invalid(message: &str) -> StorageError {
     StorageError::InvalidRecord(message.into())
@@ -708,40 +702,49 @@ impl HelpService {
 
     /// Recovery first consumes an exact durable publication observation. Otherwise the same
     /// immutable draft can be resumed, under fresh source/authority/cancellation checks.
-    pub fn execute(&self, operation: &OperationRecord) -> GenerationOutcome {
+    pub fn execute(&self, operation: &OperationRecord) -> EffectOutcome {
         let job = match self.job(operation) {
             Ok(job) => job,
-            Err(_) => return GenerationOutcome::Failed("Invalid Help generation journal.".into()),
+            Err(_) => return EffectOutcome::Failed("Invalid Help generation journal.".into()),
         };
         let current = match read_snapshot(&*self.store, &ReadOptions::default(), |read| {
             read.operations().operation(&operation.id)
         }) {
             Ok(Some(current)) => current,
             Ok(None) => {
-                return GenerationOutcome::Unknown(
+                return EffectOutcome::Unknown(
                     "The original Help journal is unavailable; no new publication was attempted."
                         .into(),
                 );
             }
             Err(_) => {
-                return GenerationOutcome::Unknown(
+                return EffectOutcome::Unknown(
                     "The Help journal could not be read; no new publication was attempted.".into(),
                 );
             }
         };
         if let Some(result) = recorded_completion(&current) {
-            return GenerationOutcome::Completed(result);
+            return EffectOutcome::Completed(result);
         }
         match self.build(operation,&job) {
-            Ok(result)=>GenerationOutcome::Completed(result),
-            Err(StorageError::Cancelled) if self.is_stopped()=>GenerationOutcome::Unknown("Help generation stopped before publication; its immutable draft is recoverable.".into()),
-            Err(StorageError::Cancelled)=>GenerationOutcome::Failed("Help generation was cancelled before catalog publication.".into()),
-            Err(StorageError::CommitUnknown | StorageError::Busy | StorageError::StorageUnavailable { .. }) => GenerationOutcome::Unknown("Help publication needs durable journal reconciliation; the original draft and operation are retained.".into()),
-            Err(StorageError::LeaseLost {..})=>GenerationOutcome::Unknown("Help generation owner changed; no catalog was published.".into()),
-            Err(_)=>GenerationOutcome::Failed("Help generation source, authority or local publication became unavailable; no partial catalog was published.".into()),
+            Ok(result)=>EffectOutcome::Completed(result),
+            Err(StorageError::Cancelled) if self.is_stopped()=>EffectOutcome::Unknown("Help generation stopped before publication; its immutable draft is recoverable.".into()),
+            Err(StorageError::Cancelled)=>EffectOutcome::Failed("Help generation was cancelled before catalog publication.".into()),
+            Err(StorageError::CommitUnknown | StorageError::Busy | StorageError::StorageUnavailable { .. }) => EffectOutcome::Unknown("Help publication needs durable journal reconciliation; the original draft and operation are retained.".into()),
+            Err(StorageError::LeaseLost {..})=>EffectOutcome::Unknown("Help generation owner changed; no catalog was published.".into()),
+            Err(_)=>EffectOutcome::Failed("Help generation source, authority or local publication became unavailable; no partial catalog was published.".into()),
         }
     }
-    pub fn observe(&self, operation: &OperationRecord) -> GenerationOutcome {
+    pub fn observe(&self, operation: &OperationRecord) -> EffectOutcome {
         self.execute(operation)
+    }
+}
+
+impl JournaledEffect for HelpService {
+    fn execute(&self, operation: &OperationRecord) -> EffectOutcome {
+        HelpService::execute(self, operation)
+    }
+    fn observe(&self, operation: &OperationRecord) -> EffectOutcome {
+        HelpService::observe(self, operation)
     }
 }

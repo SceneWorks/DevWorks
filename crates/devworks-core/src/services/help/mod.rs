@@ -20,7 +20,6 @@ use std::sync::{
 };
 
 pub const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
-pub use generation::GenerationOutcome;
 pub const EFFECT_CONSUMER: &str = "help_docs";
 const JOB_KIND: &str = "HelpGenerationV1";
 pub const OPERATIONS: [&str; 5] = [
