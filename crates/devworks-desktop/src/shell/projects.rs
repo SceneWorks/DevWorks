@@ -877,7 +877,7 @@ impl ProjectsCtl<'_, '_> {
         // The selected project's scheduled jobs (their run status), once per selection.
         if let Some(p) = selection
             && !self.job_status.contains_key(&p)
-            && !self.pending(&Slot::ProjectJobs(p.clone()))
+            && !self.pending(&crate::jobs_ops::JobsSlot::ProjectJobs(p.clone()))
             && online.is_ok()
         {
             self.effects.push(Effect::LoadProjectJobs(p));

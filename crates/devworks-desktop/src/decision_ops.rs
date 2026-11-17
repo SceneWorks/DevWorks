@@ -1,5 +1,5 @@
 //! Native decision/notification frames. Records and eligibility come from the shared services.
-use crate::backend::Backend;
+use crate::backend::{Backend, screen_slot};
 use crate::ops::{self, Failure};
 use devworks_core::gateway::{CommandOutcome, QueryOutcome};
 use devworks_core::protocol::records::{
@@ -7,6 +7,26 @@ use devworks_core::protocol::records::{
 };
 use devworks_core::protocol::results::OperationResult;
 use serde_json::{Value, json};
+
+/// The requests the approvals and notification views wait for. The names are persisted (see
+/// [`crate::backend::Slot`]).
+#[derive(Clone, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+pub enum DecisionsSlot {
+    ApprovalsList,
+    ApprovalInspect(String),
+    ApprovalRefresh(String),
+    ApprovalContent(String),
+    ApprovalDecision(String),
+    ReviewQueue,
+    NotificationsList,
+    CompletionList,
+    NotificationRead(String),
+    NotificationChange(String),
+    NotificationSettings,
+    NotificationSettingsSave,
+    OsNotificationPermission,
+}
+screen_slot!(DecisionsSlot, Decisions);
 
 pub fn query(b: &dyn Backend, op: &str, body: Value) -> Vec<u8> {
     ops::at_revision(ops::query_frame(b, op, body), 3)
