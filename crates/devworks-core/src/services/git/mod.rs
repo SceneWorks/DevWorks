@@ -322,49 +322,56 @@ impl GitService {
         let deadline = env.deadline_ms;
         let (artifact, ()) = self
             .artifacts
-            .publish_evidence(&*self.store, evidence, bytes, move |tx, _| {
-                if cancellation.as_ref().is_some_and(|c| c.is_cancelled())
-                    || deadline.is_some_and(|d| tx.now_ms() >= d)
-                {
-                    return Err(crate::ports::storage::StorageError::Cancelled);
-                }
-                if !crate::authority::authorization_holds_in(tx, &context, &auth)? {
-                    return Err(crate::ports::storage::StorageError::ScopeDenied);
-                }
-                if let Some(project) = context.project_id()
-                    && !tx
-                        .projects()
-                        .repository_projects(&old.repository.id)?
-                        .contains(project)
-                {
-                    return Err(crate::ports::storage::StorageError::ScopeDenied);
-                }
-                let repo = tx.projects().repository(&old.repository.id)?;
-                if repo.as_ref().map(|r| r.revision) != Some(old.repository.revision) {
-                    return Err(crate::ports::storage::StorageError::ScopeDenied);
-                }
-                if let Some(tree) = &old.worktree {
-                    if tx.git().git_worktree(&tree.id)?.as_ref() != Some(tree) {
+            .publish_evidence_as(
+                &*self.store,
+                ctx,
+                query.authorization(),
+                evidence,
+                bytes,
+                move |tx, _| {
+                    if cancellation.as_ref().is_some_and(|c| c.is_cancelled())
+                        || deadline.is_some_and(|d| tx.now_ms() >= d)
+                    {
+                        return Err(crate::ports::storage::StorageError::Cancelled);
+                    }
+                    if !crate::authority::authorization_holds_in(tx, &context, &auth)? {
                         return Err(crate::ports::storage::StorageError::ScopeDenied);
                     }
-                    let work = tx
-                        .work()
-                        .work(&tree.work_id)?
-                        .ok_or(crate::ports::storage::StorageError::ScopeDenied)?;
-                    if !tx
-                        .work()
-                        .work_repositories(&work.id)?
-                        .contains(&old.repository.id)
-                        || !tx
+                    if let Some(project) = context.project_id()
+                        && !tx
                             .projects()
                             .repository_projects(&old.repository.id)?
-                            .contains(&work.project_id)
+                            .contains(project)
                     {
                         return Err(crate::ports::storage::StorageError::ScopeDenied);
                     }
-                }
-                Ok(())
-            })
+                    let repo = tx.projects().repository(&old.repository.id)?;
+                    if repo.as_ref().map(|r| r.revision) != Some(old.repository.revision) {
+                        return Err(crate::ports::storage::StorageError::ScopeDenied);
+                    }
+                    if let Some(tree) = &old.worktree {
+                        if tx.git().git_worktree(&tree.id)?.as_ref() != Some(tree) {
+                            return Err(crate::ports::storage::StorageError::ScopeDenied);
+                        }
+                        let work = tx
+                            .work()
+                            .work(&tree.work_id)?
+                            .ok_or(crate::ports::storage::StorageError::ScopeDenied)?;
+                        if !tx
+                            .work()
+                            .work_repositories(&work.id)?
+                            .contains(&old.repository.id)
+                            || !tx
+                                .projects()
+                                .repository_projects(&old.repository.id)?
+                                .contains(&work.project_id)
+                        {
+                            return Err(crate::ports::storage::StorageError::ScopeDenied);
+                        }
+                    }
+                    Ok(())
+                },
+            )
             .map_err(|e| match e {
                 EvidenceFailure::Refused(r) => {
                     Refusal::new(r.code, r.target_kind, r.target_id).into()

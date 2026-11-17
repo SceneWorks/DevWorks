@@ -7,7 +7,6 @@ use common::*;
 use devworks_core::authority::HostAuthority;
 use devworks_core::context::{HostIngress, InvocationContext, PrincipalKind};
 use devworks_core::gateway::Gateway;
-use devworks_core::ports::retrieval::NoVectorIndex;
 use devworks_core::ports::storage::*;
 use devworks_core::protocol::results::{
     DomainCommandReply, DomainDecision, DomainQueryReply, OperationResult,
@@ -137,12 +136,7 @@ fn session(store: &dyn ApplicationStore, name: &str) -> Id {
 #[test]
 fn a_knowledge_read_costs_the_same_behind_tenfold_history() {
     let h = Harness::new();
-    let knowledge = Arc::new(KnowledgeService::new(
-        h.ids.clone(),
-        h.clock(),
-        None,
-        Arc::new(NoVectorIndex),
-    ));
+    let knowledge = Arc::new(KnowledgeService::new(h.ids.clone(), h.clock(), None));
     let app = App::boot(&h, |cases| cases.with_knowledge(knowledge));
     let lesson = json!({"kind": "Lesson", "subjectId": "s", "predicate": "lesson",
         "value": "Run cargo fmt before committing", "confidence": 0.8, "evidenceIds": [],

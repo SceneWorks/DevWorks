@@ -34,7 +34,6 @@ use devworks_core::gateway::{CommandOutcome, QueryOutcome};
 use devworks_core::ports::diagnostics::StorageHealthProbe;
 use devworks_core::ports::http::HttpTransport;
 use devworks_core::ports::packages::{HostPlatform, RuntimeCache};
-use devworks_core::ports::retrieval::NoVectorIndex;
 use devworks_core::ports::router::ConnectionDirectory;
 use devworks_core::ports::secrets::{Secret, SecretResolver, SecretStore, SwitchableSecrets};
 use devworks_core::ports::storage::{
@@ -362,13 +361,8 @@ async fn compose(
     // never reported as run); imports read their saved artifact version. A large delete by
     // source continues through its durable consumer, registered with the dispatcher below.
     let knowledge = Arc::new(
-        KnowledgeService::new(
-            id_source.clone(),
-            clock.clone(),
-            Some(artifact_files),
-            Arc::new(NoVectorIndex),
-        )
-        .with_summaries(store.clone(), artifacts.clone()),
+        KnowledgeService::new(id_source.clone(), clock.clone(), Some(artifact_files))
+            .with_summaries(store.clone(), artifacts.clone()),
     );
     let run_control = Arc::new(ControlService::new(id_source.clone()));
     let agents = Arc::new(AgentService::new(id_source.clone(), run_control.clone()));

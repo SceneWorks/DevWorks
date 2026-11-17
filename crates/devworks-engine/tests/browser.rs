@@ -4723,6 +4723,348 @@ fn a_queued_action_of_a_revoked_owner_is_never_performed() {
 }
 
 #[test]
+fn evidence_of_a_principal_revoked_before_the_write_publishes_nothing() {
+    use devworks_core::services::artifacts::evidence::EvidenceFailure;
+    let _serial = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
+    let fx = Fx::new();
+    fx.opt_in_agent_browser_tools();
+    let user = fx.user.clone();
+    let agent = fx.agent("agent-e", AgentRole::Worker, None);
+    let evidence = |title: &str| Evidence {
+        scope: ArtifactScope::Workspace,
+        producer: agent.principal().clone(),
+        principal_kind: "Agent".into(),
+        agent_session: None,
+        root: None,
+        assignment: None,
+        title: title.into(),
+        media_type: "text/plain".into(),
+        tags: vec![],
+        source: json!({"kind": "BrowserScreenshot"}),
+    };
+    // While the agent is bound, its evidence publishes.
+    let (before, ()) = fx
+        .app()
+        .artifacts()
+        .publish_evidence(
+            &**fx.app().store(),
+            evidence("before"),
+            b"before",
+            |_, _| Ok(()),
+        )
+        .unwrap();
+    assert_eq!(before.byte_length.get(), 6);
+    // The person revokes the agent after its content was produced and before the write runs.
+    let u = user.clone();
+    write(&**fx.app().store(), move |tx| {
+        let actor = ActorId(id("agent-e"));
+        let revision = tx.authority().principal(&actor)?.unwrap().revision;
+        devworks_core::authority::service::revoke_principal(tx, &u, &actor, revision)
+            .map(|_| ())
+            .map_err(|e| StorageError::InvalidRecord(format!("{e:?}")))
+    })
+    .unwrap();
+    let ran = Arc::new(Mutex::new(false));
+    let flag = ran.clone();
+    let result = fx.app().artifacts().publish_evidence(
+        &**fx.app().store(),
+        evidence("after"),
+        b"after revocation",
+        move |_, _| {
+            *flag.lock().unwrap() = true;
+            Ok(())
+        },
+    );
+    match result {
+        Err(EvidenceFailure::Refused(r)) => {
+            assert_eq!(r.target_kind, "authority_changed");
+            assert_eq!(r.code, DomainErrorCode::PermissionDenied);
+        }
+        other => panic!("{:?}", other.map(|_| ())),
+    }
+    assert!(
+        !*ran.lock().unwrap(),
+        "the caller's records were not written"
+    );
+    let usage = read_snapshot(&**fx.app().store(), &ReadOptions::default(), |s| {
+        s.artifacts().workspace_usage()
+    })
+    .unwrap();
+    assert_eq!(
+        usage, 6,
+        "only the evidence published before the revocation is stored"
+    );
+}
+
+/// An artifact file store that runs `hook` once, right after the content is flushed: after the
+/// publication's pre-checks and before its recording write.
+struct HookedFiles {
+    inner: NativeArtifactFiles,
+    hook: Mutex<Option<Box<dyn FnOnce() + Send>>>,
+}
+impl devworks_core::ports::files::ArtifactFiles for HookedFiles {
+    fn publish(
+        &self,
+        staging_name: &str,
+        source: &mut dyn std::io::Read,
+        expected_digest: &str,
+        expected_bytes: u64,
+        reuse: Option<&str>,
+        generation: &str,
+    ) -> Result<devworks_core::ports::files::PublishedBlob, devworks_core::ports::files::FileFault>
+    {
+        let published = self.inner.publish(
+            staging_name,
+            source,
+            expected_digest,
+            expected_bytes,
+            reuse,
+            generation,
+        );
+        if let Some(hook) = self.hook.lock().unwrap().take() {
+            hook();
+        }
+        published
+    }
+    fn managed_path(
+        &self,
+        digest: &str,
+        generation: &str,
+    ) -> Result<String, devworks_core::ports::files::FileFault> {
+        self.inner.managed_path(digest, generation)
+    }
+    fn present(
+        &self,
+        digest: &str,
+        generation: &str,
+        byte_count: u64,
+    ) -> Result<bool, devworks_core::ports::files::FileFault> {
+        self.inner.present(digest, generation, byte_count)
+    }
+    fn inspect(
+        &self,
+        digest: &str,
+        generation: &str,
+    ) -> Result<Option<u64>, devworks_core::ports::files::FileFault> {
+        self.inner.inspect(digest, generation)
+    }
+    fn read_range(
+        &self,
+        digest: &str,
+        generation: &str,
+        byte_count: u64,
+        offset: u64,
+        max: usize,
+    ) -> Result<Vec<u8>, devworks_core::ports::files::FileFault> {
+        self.inner
+            .read_range(digest, generation, byte_count, offset, max)
+    }
+    fn open(
+        &self,
+        digest: &str,
+        generation: &str,
+        byte_count: u64,
+    ) -> Result<Box<dyn std::io::Read + Send>, devworks_core::ports::files::FileFault> {
+        self.inner.open(digest, generation, byte_count)
+    }
+    fn unlink(
+        &self,
+        digest: &str,
+        generation: &str,
+    ) -> Result<(), devworks_core::ports::files::FileFault> {
+        self.inner.unlink(digest, generation)
+    }
+    fn quarantine(
+        &self,
+        digest: &str,
+        generation: &str,
+    ) -> Result<(), devworks_core::ports::files::FileFault> {
+        self.inner.quarantine(digest, generation)
+    }
+    fn staged(&self) -> Result<Vec<String>, devworks_core::ports::files::FileFault> {
+        self.inner.staged()
+    }
+    fn remove_staged(&self, name: &str) -> Result<(), devworks_core::ports::files::FileFault> {
+        self.inner.remove_staged(name)
+    }
+    fn stored_files(
+        &self,
+    ) -> Result<Vec<(String, String)>, devworks_core::ports::files::FileFault> {
+        self.inner.stored_files()
+    }
+    fn write_derived(
+        &self,
+        key: &str,
+        bytes: &[u8],
+    ) -> Result<(), devworks_core::ports::files::FileFault> {
+        self.inner.write_derived(key, bytes)
+    }
+    fn read_derived(
+        &self,
+        key: &str,
+        max: usize,
+    ) -> Result<Option<Vec<u8>>, devworks_core::ports::files::FileFault> {
+        self.inner.read_derived(key, max)
+    }
+    fn collect_derived(&self) -> Result<u64, devworks_core::ports::files::FileFault> {
+        self.inner.collect_derived()
+    }
+    fn export(
+        &self,
+        digest: &str,
+        generation: &str,
+        byte_count: u64,
+        destination: &Path,
+        overwrite: bool,
+    ) -> Result<(), devworks_core::ports::files::FileFault> {
+        self.inner
+            .export(digest, generation, byte_count, destination, overwrite)
+    }
+}
+
+/// How a mid-write authority change reaches the publication in flight.
+enum Change {
+    Revoke,
+    Rebind,
+}
+
+/// Publishes evidence of the agent `name` through a service whose file store changes the agent's
+/// authority after the content is flushed (past the publication's pre-checks, before its
+/// write), with the gate `as_invocation` selects. Returns the failure's refusal and whether the
+/// caller's records ran, after checking that nothing was stored.
+fn publish_while_authority_changes(
+    fx: &Fx,
+    name: &str,
+    change: Change,
+    as_invocation: bool,
+) -> (devworks_core::services::artifacts::Refusal, bool) {
+    use devworks_core::services::artifacts::evidence::EvidenceFailure;
+    let agent = fx.agent(name, AgentRole::Worker, None);
+    let store = fx.app().store().clone();
+    let (u, actor) = (fx.user.clone(), ActorId(id(name)));
+    let hook_store = store.clone();
+    let hook: Box<dyn FnOnce() + Send> = Box::new(move || {
+        write(&*hook_store, move |tx| {
+            let revision = tx.authority().principal(&actor)?.unwrap().revision;
+            match change {
+                Change::Revoke => {
+                    devworks_core::authority::service::revoke_principal(tx, &u, &actor, revision)
+                }
+                Change::Rebind => bind_principal(
+                    tx,
+                    &u,
+                    NewPrincipalBinding {
+                        actor: actor.clone(),
+                        kind: PrincipalKind::Agent,
+                        role: Some(AgentRole::Worker),
+                        project_id: None,
+                        tool_families: Some(vec!["browser".into()]),
+                        bound_by: ActorId(id("user-a")),
+                    },
+                    Some(revision),
+                ),
+            }
+            .map(|_| ())
+            .map_err(|e| StorageError::InvalidRecord(format!("{e:?}")))
+        })
+        .unwrap();
+    });
+    let h = fx.h();
+    let service = ArtifactService::new(
+        Arc::new(HookedFiles {
+            inner: NativeArtifactFiles::new(h.root.clone(), h.root.with_extension("cache")),
+            hook: Mutex::new(Some(hook)),
+        }),
+        Arc::new(HostArtifactSources::new(h.clock(), h.ids.clone())),
+        Arc::new(NativeFilesystem::new()),
+        h.clock(),
+        h.ids.clone(),
+    );
+    let evidence = Evidence {
+        scope: ArtifactScope::Workspace,
+        producer: agent.principal().clone(),
+        principal_kind: "Agent".into(),
+        agent_session: None,
+        root: None,
+        assignment: None,
+        title: "mid-write".into(),
+        media_type: "text/plain".into(),
+        tags: vec![],
+        source: json!({"kind": "BrowserScreenshot"}),
+    };
+    let ran = Arc::new(Mutex::new(false));
+    let flag = ran.clone();
+    let then = move |_: &mut dyn WriteTransaction, _: &ArtifactRef| {
+        *flag.lock().unwrap() = true;
+        Ok(())
+    };
+    let result = if as_invocation {
+        let revision = read_snapshot(&*store, &ReadOptions::default(), |s| {
+            Ok(s.authority()
+                .principal(agent.principal())?
+                .unwrap()
+                .revision)
+        })
+        .unwrap();
+        let authorization = Authorization::direct().fenced_by(vec![
+            devworks_core::ports::AuthorityFence::Principal {
+                actor: agent.principal().clone(),
+                revision,
+            },
+        ]);
+        service.publish_evidence_as(
+            &*store,
+            &agent,
+            &authorization,
+            evidence,
+            b"mid-write",
+            then,
+        )
+    } else {
+        service.publish_evidence(&*store, evidence, b"mid-write", then)
+    };
+    let refusal = match result {
+        Err(EvidenceFailure::Refused(r)) => r,
+        other => panic!("{:?}", other.map(|_| ())),
+    };
+    let usage = read_snapshot(&*store, &ReadOptions::default(), |s| {
+        s.artifacts().workspace_usage()
+    })
+    .unwrap();
+    assert_eq!(usage, 0, "nothing was published");
+    let ran = *ran.lock().unwrap();
+    (refusal, ran)
+}
+
+#[test]
+fn evidence_of_a_principal_revoked_after_the_content_is_flushed_publishes_nothing() {
+    let _serial = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
+    let fx = Fx::new();
+    fx.opt_in_agent_browser_tools();
+    for (name, as_invocation) in [("agent-m1", false), ("agent-m2", true)] {
+        let (refusal, ran) =
+            publish_while_authority_changes(&fx, name, Change::Revoke, as_invocation);
+        assert_eq!(refusal.target_kind, "authority_changed");
+        assert_eq!(refusal.code, DomainErrorCode::PermissionDenied);
+        assert!(!ran, "the caller's records were not written");
+    }
+}
+
+#[test]
+fn evidence_of_a_principal_re_bound_after_the_content_is_flushed_publishes_nothing() {
+    let _serial = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
+    let fx = Fx::new();
+    fx.opt_in_agent_browser_tools();
+    // The binding stays active but is a different revision: both gates refuse.
+    for (name, as_invocation) in [("agent-r1", false), ("agent-r2", true)] {
+        let (refusal, ran) =
+            publish_while_authority_changes(&fx, name, Change::Rebind, as_invocation);
+        assert_eq!(refusal.target_kind, "authority_changed");
+        assert!(!ran);
+    }
+}
+
+#[test]
 fn recovery_finds_a_tree_launched_before_its_session_recorded_it() {
     let _serial = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
     let fx = Fx::new();

@@ -1,7 +1,7 @@
 //! Host-observed content published as ordinary artifacts (the fetched pages of `web.fetch`).
 //!
-//! The bytes follow the artifact store's own publication protocol: the scope's file limit and
-//! storage limit are checked first, a staging operation is journaled and the bytes are flushed to
+//! The bytes follow the artifact store's own publication protocol (see `publish.rs`): the scope's
+//! file limit and storage limit are checked first, a staging operation is journaled and the bytes are flushed to
 //! their content-addressed generation, then **one** write records the blob, the artifact, its
 //! immutable version, origin links, tags, history and the caller's own records (`then`), and
 //! completes the staging operation. A refusal or failure of that write resolves the staging
@@ -15,22 +15,20 @@
 //! (`PermissionDenied`, [`AUTHORITY_CHANGED`]). The scope is resolved from current authority
 //! there too. Everything it records sits behind one savepoint, rolled back before a typed
 //! refusal (the file or storage limit) is returned, so a refusal commits nothing.
+use super::publish::Gate;
 use super::{
-    ArtifactService, Failure, Refusal, StagedFile, check_quota, complete_operation, event,
-    named_scope, new_version, not_found, origin_links, put_staged_blob, quota_refusal, setting_i64,
-    usage, version_ref,
+    ArtifactService, Failure, Refusal, StagedFile, complete_operation, event, named_scope,
+    new_version, not_found, origin_links, put_staged_blob, setting_i64, version_ref,
 };
 use crate::context::InvocationContext;
-use crate::fingerprint::sha256_hex;
-use crate::ports::files::SourceOrigin;
 use crate::ports::storage::{
-    ApplicationStore, ArtifactRetention, ArtifactScope, ArtifactState, BlobState, StorageError,
-    StoredArtifact, SubjectKey, WriteOptions, WriteTransaction, run_write,
+    ApplicationStore, ArtifactRetention, ArtifactScope, ArtifactState, StorageError,
+    StoredArtifact, SubjectKey, WriteTransaction,
 };
-use crate::ports::{Authorization, IdKind, Preparation};
+use crate::ports::{Authorization, IdKind};
 use crate::protocol::provider::ArtifactRef;
 use crate::protocol::{DomainErrorCode, Id, ProjectId};
-use crate::settings::catalog::{ARTIFACT_MAX_FILE_KEY, ARTIFACT_QUOTA_KEY};
+use crate::settings::catalog::ARTIFACT_MAX_FILE_KEY;
 use serde_json::{Value, json};
 
 /// One observed publication.
@@ -72,12 +70,6 @@ impl From<Failure> for ObservedFailure {
 /// its content was being produced (nothing was recorded).
 pub const AUTHORITY_CHANGED: &str = "authority_changed";
 
-/// What the recording write established, or why it did not.
-enum Recorded<T> {
-    Done(ArtifactRef, T),
-    Refused(Refusal),
-}
-
 impl ArtifactService {
     /// Publishes `bytes` as a new explicitly retained artifact of the scope the invocation names
     /// and runs `then` in the same write that records it, with the new version's reference, so
@@ -97,124 +89,22 @@ impl ArtifactService {
             + Send
             + 'static,
     {
-        let env = Preparation::new(store, None, None);
-        let digest = sha256_hex(bytes);
-        let n = bytes.len() as i64;
-        let (project, d) = (observed.project.clone(), digest.clone());
-        let (max, quota, used, reuse) = env.read(move |s| {
-            let scope = project.map_or(ArtifactScope::Workspace, ArtifactScope::Project);
-            let max = setting_i64(s.configuration(), None, ARTIFACT_MAX_FILE_KEY);
-            let quota = setting_i64(s.configuration(), scope.project(), ARTIFACT_QUOTA_KEY);
-            let reuse = s
-                .artifacts()
-                .blob(&d)?
-                .filter(|b| matches!(b.state, BlobState::Present | BlobState::UnlinkPending))
-                .map(|b| b.generation);
-            Ok((max, quota, usage(s.artifacts(), &scope)?, reuse))
-        })?;
-        let (max, quota) = (max?, quota?);
-        if n > max {
-            return Err(ObservedFailure::Refused(Refusal::new(
-                DomainErrorCode::InvalidArgument,
-                "artifact_file_limit",
-                None,
-            )));
-        }
         let scope = observed
             .project
             .clone()
             .map_or(ArtifactScope::Workspace, ArtifactScope::Project);
-        if quota > 0 && reuse.is_none() && used.saturating_add(n) > quota {
-            return Err(ObservedFailure::Refused(quota_refusal(&scope)));
-        }
-        let payload = json!({
-            "digest": digest, "byteCount": n,
-            "projectId": scope.project().map(|p| p.0.as_str()),
-            "source": observed.source,
-        });
-        let mut reader = bytes;
-        let (staging, published) =
-            self.journal_and_publish(&env, &mut reader, &digest, n, reuse.as_deref(), payload)?;
-        let published = match published {
-            Ok(p) => p,
-            Err(fault) => {
-                self.abandon_or_defer(&env, &staging, json!({"failed": format!("{fault:?}")}));
-                return Err(ObservedFailure::Storage(super::file_failure(fault)));
-            }
-        };
-        let staged = StagedFile {
-            operation_id: staging.operation_id.clone(),
-            digest,
-            byte_count: n,
-            generation: published.generation,
-            reused: published.reused,
-            relative_path: published.relative_path,
-            origin: SourceOrigin::default(),
-            source: observed.source.clone(),
-            fence: staging.fence.clone(),
-        };
-        let files = self.files.clone();
-        let (owned_ctx, owned, authorization) =
-            (ctx.clone(), staged.clone(), authorization.clone());
-        let outcome = run_write(store, WriteOptions::default(), move |tx| {
-            // Everything the recording writes sits behind one savepoint: a typed refusal found
-            // part-way (the storage limit is only known once the bytes are counted) rolls it back
-            // before the refusal is returned, so nothing of a refused publication commits.
-            let savepoint = tx.savepoint()?;
-            // The invocation's authority is re-checked here, at the write's linearization point:
-            // a principal revoked or re-bound, or a policy narrowed, while the content was being
-            // fetched publishes nothing.
-            let recorded =
-                if crate::authority::authorization_holds_in(tx, &owned_ctx, &authorization)? {
-                    record_observed(tx, &*files, &owned_ctx, &observed, &owned)
-                } else {
-                    Err(
-                        Refusal::new(DomainErrorCode::PermissionDenied, AUTHORITY_CHANGED, None)
-                            .into(),
-                    )
-                };
-            match recorded {
-                Ok(reference) => {
-                    let value = then(tx, &reference)?;
-                    tx.release(savepoint)?;
-                    Ok(Recorded::Done(reference, value))
-                }
-                Err(Failure::Refused(r)) => {
-                    tx.rollback_to(savepoint)?;
-                    Ok(Recorded::Refused(r))
-                }
-                Err(Failure::Storage(e)) => Err(e),
-            }
-        });
-        match outcome {
-            Ok(Recorded::Done(reference, value)) => {
-                // A concurrent save kept its own generation: ours is an orphan of a now resolved
-                // operation that nothing can bind any more.
-                if !staged.reused {
-                    let own = staged.operation_id.0.as_str().to_owned();
-                    let d = staged.digest.clone();
-                    let bound = env.read(move |s| {
-                        Ok(s.artifacts().blob(&d)?.is_some_and(|b| b.generation == own))
-                    });
-                    if matches!(bound, Ok(false)) {
-                        let _ = self
-                            .files
-                            .unlink(&staged.digest, staged.operation_id.0.as_str());
-                    }
-                }
-                Ok((reference, value))
-            }
-            Ok(Recorded::Refused(r)) => {
-                self.abandon_or_defer(&env, &staging, json!({"refused": r.target_kind}));
-                Err(ObservedFailure::Refused(r))
-            }
-            Err(e) => {
-                // An unknown commit outcome is resolved the same way: the resolution re-reads the
-                // durable record under the fence and completes the operation if it committed.
-                self.abandon_or_defer(&env, &staging, json!({"abandoned": format!("{e:?}")}));
-                Err(ObservedFailure::Storage(e))
-            }
-        }
+        let source = observed.source.clone();
+        let (owned_ctx, gate_ctx) = (ctx.clone(), ctx.clone());
+        let gate = Gate::Authorization(gate_ctx, authorization.clone());
+        Ok(self.publish_bytes(
+            store,
+            scope,
+            &source,
+            gate,
+            bytes,
+            move |tx, files, staged| record_observed(tx, files, &owned_ctx, &observed, staged),
+            then,
+        )?)
     }
 
     /// Publish actor-scoped output while preserving ordinary explicit artifact retention.
@@ -324,7 +214,6 @@ fn record_observed(
     for link in origin_links(ctx, &version.id) {
         tx.artifacts().add_link(&link)?;
     }
-    check_quota(tx, &artifact.scope)?;
     complete_operation(
         tx,
         &staged.operation_id,
