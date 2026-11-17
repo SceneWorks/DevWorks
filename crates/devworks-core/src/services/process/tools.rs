@@ -942,21 +942,24 @@ fn install_runs_repository_code(name: &str, root: &Path) -> bool {
         return true;
     }
     match name {
-        "yarn.lock" => [root.to_path_buf(), root.join(".devworks-home")]
-            .iter()
-            .any(|directory| {
-                present(directory.join(".yarnrc"))
-                    || match std::fs::symlink_metadata(directory.join(".yarnrc.yml")) {
-                        Ok(metadata) => {
-                            // A link, or a file too large to check, cannot be ruled out.
-                            !metadata.file_type().is_file()
-                                || metadata.len() > 1024 * 1024
-                                || std::fs::read(directory.join(".yarnrc.yml"))
-                                    .map_or(true, |bytes| !inert_yarn_config(&bytes))
-                        }
-                        Err(error) => error.kind() != std::io::ErrorKind::NotFound,
-                    }
-            }),
+        "yarn.lock" => {
+            yarn_ancestor_rc_present(root)
+                || [root.to_path_buf(), root.join(".devworks-home")]
+                    .iter()
+                    .any(|directory| {
+                        present(directory.join(".yarnrc"))
+                            || match std::fs::symlink_metadata(directory.join(".yarnrc.yml")) {
+                                Ok(metadata) => {
+                                    // A link, or a file too large to check, cannot be ruled out.
+                                    !metadata.file_type().is_file()
+                                        || metadata.len() > 1024 * 1024
+                                        || std::fs::read(directory.join(".yarnrc.yml"))
+                                            .map_or(true, |bytes| !inert_yarn_config(&bytes))
+                                }
+                                Err(error) => error.kind() != std::io::ErrorKind::NotFound,
+                            }
+                    })
+        }
         "Cargo.toml" | "Cargo.lock" => {
             let repository_config =
                 ["config", "config.toml"].iter().any(|file| {
@@ -982,6 +985,33 @@ fn install_runs_repository_code(name: &str, root: &Path) -> bool {
         }
         _ => false,
     }
+}
+
+/// Whether a directory above the checkout holds a Yarn rc file. Yarn reads `.yarnrc.yml` from
+/// every ancestor of the working directory and has no environment variable or flag that stops
+/// that lookup (`YARN_RC_FILENAME` renames the file for the checkout too), so the check is
+/// here. A directory holding the `.dev-host-root` marker, and every directory below it, is a
+/// DevWorks-owned host folder and is skipped. A folder that cannot be inspected counts as one
+/// with a file.
+fn yarn_ancestor_rc_present(root: &Path) -> bool {
+    let ancestors: Vec<&Path> = root.ancestors().skip(1).collect();
+    // Find the nearest owned folder; it and everything below it is exempt.
+    let exempt = ancestors
+        .iter()
+        .position(|directory| directory.join(".dev-host-root").exists());
+    for (index, directory) in ancestors.iter().enumerate() {
+        if exempt.is_some_and(|marked| index <= marked) {
+            continue;
+        }
+        for file in [".yarnrc.yml", ".yarnrc"] {
+            match std::fs::symlink_metadata(directory.join(file)) {
+                Ok(_) => return true,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(_) => return true,
+            }
+        }
+    }
+    false
 }
 
 /// Whether a repository's `.yarnrc.yml` holds only settings that name no program Yarn would
@@ -1033,7 +1063,8 @@ fn inert_yarn_config(bytes: &[u8]) -> bool {
             return None;
         }
         match events.next()? {
-            Event::Scalar(value, _, anchor, tag) if plain(anchor, tag) => {
+            // Yarn expands `${VAR}` from the environment, which would leak host paths.
+            Event::Scalar(value, _, anchor, tag) if plain(anchor, tag) && !value.contains("${") => {
                 Some(Node::Scalar(value.clone()))
             }
             Event::SequenceStart(anchor, tag) if plain(anchor, tag) => {
@@ -1063,6 +1094,13 @@ fn inert_yarn_config(bytes: &[u8]) -> bool {
     let Ok(text) = std::str::from_utf8(bytes) else {
         return false;
     };
+    // Yarn's parser switches to its legacy lockfile reader when a leading comment says
+    // `yarn lockfile v1`, while the YAML reader here sees only comments.
+    let lowered = text.to_ascii_lowercase();
+    let words: Vec<&str> = lowered.split_whitespace().collect();
+    if words.windows(2).any(|pair| pair == ["lockfile", "v1"]) {
+        return false;
+    }
     let mut receiver = Events::default();
     if Parser::new_from_str(text)
         .load(&mut receiver, true)
@@ -1121,7 +1159,6 @@ fn inert_yarn_config(bytes: &[u8]) -> bool {
         "httpProxy",
         "httpsProxy",
         "defaultSemverRangePrefix",
-        "defaultProtocol",
         "nmMode",
         "nmHoistingLimits",
         "nmSelfReferences",
@@ -1132,6 +1169,9 @@ fn inert_yarn_config(bytes: &[u8]) -> bool {
     ];
     entries.iter().all(|(key, value)| match key.as_str() {
         key if SCALARS.contains(&key) => scalar(value),
+        // Yarn prepends this to every bare range, so any other protocol (`exec:`, `file:`)
+        // would make ordinary dependencies resolve to repository files.
+        "defaultProtocol" => matches!(value, Node::Scalar(protocol) if protocol == "npm:"),
         "nodeLinker" => {
             matches!(value, Node::Scalar(linker) if matches!(linker.as_str(), "node-modules" | "pnpm" | "pnp"))
         }
@@ -4608,6 +4648,7 @@ mod tests {
             "npmScopes:\n  acme:\n    npmRegistryServer: https://npm.example.invalid\n    \
              npmAlwaysAuth: true\n    npmAuthToken: t\n",
             "---\nnodeLinker: pnp\nhttpTimeout: 60000\n",
+            "defaultProtocol: \"npm:\"\n",
         ];
         for text in inert {
             std::fs::write(root.join(".yarnrc.yml"), text).expect("rc");
@@ -4641,6 +4682,12 @@ mod tests {
             "- nodeLinker\n",
             "just a string\n",
             "nodeLinker: [unterminated\n",
+            "defaultProtocol: \"exec:\"\n",
+            "defaultProtocol: \"file:\"\n",
+            "# yarn lockfile v1\nnodeLinker: pnp\n",
+            "# Yarn   Lockfile \t V1\r\nnodeLinker: pnp\r\n",
+            "npmRegistryServer: \"https://r.example.invalid/${HOME}\"\n",
+            "cacheFolder: \"${TMPDIR}/c\"\n",
         ];
         for text in refused {
             std::fs::write(root.join(".yarnrc.yml"), text).expect("rc");
@@ -4659,6 +4706,33 @@ mod tests {
             assert!(install_runs_repository_code("yarn.lock", &root));
         }
         std::fs::remove_dir_all(root).expect("remove test root");
+    }
+
+    /// DW-362: Yarn reads `.yarnrc.yml` and `.yarnrc` from every ancestor of the checkout, so one
+    /// there refuses a script-free install unless it is in a DevWorks-owned host folder.
+    #[test]
+    fn a_yarn_rc_file_above_the_checkout_needs_scripts() {
+        let top = std::env::temp_dir().join(format!("devworks-yarn-up-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&top);
+        let root = top.join("a/b/checkout");
+        std::fs::create_dir_all(&root).expect("root");
+        // The temporary folder itself may have an rc file above it; the test only asserts
+        // relative to files it creates.
+        let base = install_runs_repository_code("yarn.lock", &root);
+        for (file, text) in [(".yarnrc.yml", "nodeLinker: pnp\n"), (".yarnrc", "x\n")] {
+            let rc = top.join("a").join(file);
+            std::fs::write(&rc, text).expect("rc");
+            assert!(install_runs_repository_code("yarn.lock", &root), "{file}");
+            std::fs::remove_file(&rc).expect("remove");
+        }
+        assert_eq!(install_runs_repository_code("yarn.lock", &root), base);
+        // A host folder marked `.dev-host-root`, and anything below it, is exempt.
+        std::fs::write(top.join("a/b/.dev-host-root"), "").expect("marker");
+        std::fs::write(top.join("a/b/.yarnrc.yml"), "yarnPath: x\n").expect("rc");
+        assert_eq!(install_runs_repository_code("yarn.lock", &root), base);
+        std::fs::write(top.join("a/.yarnrc.yml"), "nodeLinker: pnp\n").expect("rc");
+        assert!(install_runs_repository_code("yarn.lock", &root));
+        std::fs::remove_dir_all(top).expect("remove");
     }
 
     /// DW-362: a script-free Yarn install overrides, by environment (which the install clears
