@@ -549,6 +549,10 @@ impl ApplicationStore for SqliteStore {
         self.info.clone()
     }
 
+    fn commit_signal(&self) -> Option<devworks_core::ports::storage::CommitSignal> {
+        self.writer.as_ref().map(WriterHandle::signal)
+    }
+
     fn submit_write(
         &self,
         options: WriteOptions,

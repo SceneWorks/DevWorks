@@ -15,6 +15,7 @@ pub mod cursor;
 pub mod desktop;
 pub mod diagnostics;
 pub mod effect;
+pub(crate) mod effect_job;
 pub mod evals;
 pub mod failure;
 pub mod git;
@@ -43,6 +44,7 @@ pub mod usage;
 pub mod watch;
 pub mod web;
 pub mod work;
+pub mod write_fence;
 
 use crate::context::InvocationContext;
 use crate::gateway::{CommandOutcome, Gateway, GatewayFailure, PreparedReceive, QueryOutcome};

@@ -3,7 +3,6 @@ use crate::dispatch::Consumer;
 use crate::effect_consumer::{PanicReasons, STANDARD_RETRY, effect_consumer};
 use devworks_core::services::git::{EFFECT_CONSUMER, GitConfig, GitService};
 use std::sync::Arc;
-use std::time::Duration;
 
 #[derive(Clone)]
 pub struct GitComposition {
@@ -23,12 +22,24 @@ pub fn consumer(service: Arc<GitService>) -> Consumer {
 }
 /// Cancel-before-dispatch is already proved by the shared journal; release those local
 /// reservations without repeating a Git command or deleting anything from the filesystem.
-pub(crate) async fn run(service: Arc<GitService>, mut stopped: crate::workers::Stopped) {
-    while !service.is_stopped() && !stopped.is_set() {
-        let current = service.clone();
-        let _ = tokio::task::spawn_blocking(move || current.reconcile_cancelled()).await;
-        // Waits out the interval, or ends at once when the runtime stops (a stop sent while a
-        // pass is running ends the wait as soon as it begins).
-        stopped.wait(Duration::from_secs(1)).await;
-    }
+pub(crate) async fn run(
+    service: Arc<GitService>,
+    stopped: crate::workers::Stopped,
+    commits: crate::workers::Commits,
+) {
+    let live = service.clone();
+    commits
+        .run(
+            stopped,
+            move || !live.is_stopped(),
+            move || {
+                let current = service.clone();
+                async move {
+                    let _ =
+                        tokio::task::spawn_blocking(move || current.reconcile_cancelled()).await;
+                    false
+                }
+            },
+        )
+        .await;
 }

@@ -1,8 +1,8 @@
 //! Required-input OS delivery over the canonical persistent inbox. OS outcomes never read,
 //! acknowledge, decide, grant or resume work. The durable ledger is keyed by user and item,
 //! not read/ack revision; recovered or unconfirmed submissions are never blindly repeated.
-use crate::dispatch::{Either, first};
 use crate::store;
+use crate::workers::Ticker;
 use devworks_core::ports::os_notifications::{
     OsDeliveryOutcome, OsNotification, OsNotificationPermission, OsNotificationPort,
 };
@@ -16,9 +16,9 @@ use devworks_core::protocol::EventId;
 use devworks_core::services::notifications::{os_eligible, os_eligible_tx};
 use serde_json::json;
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
-use std::sync::{Arc, Mutex, RwLock};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
-use tokio::sync::{Notify, watch};
+use tokio::sync::watch;
 const PAGE: u16 = 64;
 const PERMISSION_INTERVAL: Duration = Duration::from_secs(30);
 const DEFERRED: &str = "DeferredBeforeSubmission:";
@@ -40,13 +40,11 @@ pub struct OsNotificationSupervisor {
     port: Arc<dyn OsNotificationPort>,
     /// 0 unknown, 1 focused, 2 positively unfocused. Unknown fails closed.
     focus: Arc<AtomicU8>,
-    stopping: Arc<AtomicBool>,
-    fence: Arc<RwLock<bool>>,
+    ticker: Ticker,
     recovered: AtomicBool,
     retry: AtomicBool,
     permission: Mutex<PermissionState>,
     ticking: tokio::sync::Mutex<()>,
-    wake: Notify,
     status: watch::Sender<Option<NotificationPass>>,
 }
 impl OsNotificationSupervisor {
@@ -63,8 +61,7 @@ impl OsNotificationSupervisor {
             clock,
             port,
             focus: Arc::new(AtomicU8::new(0)),
-            stopping: Arc::new(AtomicBool::new(false)),
-            fence: Arc::new(RwLock::new(false)),
+            ticker: Ticker::new(),
             recovered: AtomicBool::new(false),
             retry: AtomicBool::new(false),
             permission: Mutex::new(PermissionState {
@@ -74,12 +71,11 @@ impl OsNotificationSupervisor {
                 checked_at: None,
             }),
             ticking: tokio::sync::Mutex::new(()),
-            wake: Notify::new(),
             status,
         })
     }
     pub fn notify(&self) {
-        self.wake.notify_one();
+        self.ticker.notify();
     }
     pub fn set_focus(&self, focused: Option<bool>) {
         let state = match focused {
@@ -102,20 +98,15 @@ impl OsNotificationSupervisor {
         self.status.subscribe()
     }
     pub fn stop(&self) {
-        self.stopping.store(true, Ordering::SeqCst);
-        self.notify();
+        self.ticker.stop();
     }
     pub async fn drain(&self) {
         self.stop();
-        let fence = self.fence.clone();
-        let _ = tokio::task::spawn_blocking(move || {
-            *fence.write().unwrap_or_else(|p| p.into_inner()) = true;
-        })
-        .await;
+        self.ticker.drain().await;
     }
     pub fn close(&self) {
         self.stop();
-        *self.fence.write().unwrap_or_else(|p| p.into_inner()) = true;
+        self.ticker.close();
     }
     fn cache_permission(&self, value: OsNotificationPermission, explicit: bool) {
         let mut cache = self.permission.lock().unwrap_or_else(|p| p.into_inner());
@@ -133,8 +124,8 @@ impl OsNotificationSupervisor {
     }
     async fn query_permission(&self, request: bool) -> OsNotificationPermission {
         let port = self.port.clone();
-        let fence = self.fence.clone();
-        let stopping = self.stopping.clone();
+        let fence = self.ticker.fence();
+        let stopping = self.ticker.flag();
         let value = tokio::task::spawn_blocking(move || {
             let closed = fence.read().unwrap_or_else(|p| p.into_inner());
             if *closed || stopping.load(Ordering::SeqCst) {
@@ -165,33 +156,24 @@ impl OsNotificationSupervisor {
         value
     }
     pub async fn run(self: Arc<Self>, every: Duration) {
-        while !self.stopping.load(Ordering::SeqCst) {
-            let result = self.tick().await;
-            self.status.send_replace(Some(NotificationPass {
-                at_ms: self.clock.now_ms().get(),
-                result,
-            }));
-            if self.stopping.load(Ordering::SeqCst) {
-                break;
-            }
-            match first(
-                self.wake.notified(),
-                tokio::time::sleep(every.max(Duration::from_millis(1))),
-            )
-            .await
-            {
-                Either::Left(()) | Either::Right(()) => {}
-            }
-        }
+        self.ticker
+            .run(every, || async {
+                let result = self.tick().await;
+                self.status.send_replace(Some(NotificationPass {
+                    at_ms: self.clock.now_ms().get(),
+                    result,
+                }));
+            })
+            .await;
     }
     /// One bounded-page, full keyset sweep. Tests drive this exact production policy directly.
     pub async fn tick(&self) -> Result<usize, StorageError> {
         let _one = self.ticking.lock().await;
-        if self.stopping.load(Ordering::SeqCst) {
+        if self.ticker.is_stopped() {
             return Ok(0);
         }
         if !self.recovered.load(Ordering::SeqCst) {
-            let stopping = self.stopping.clone();
+            let stopping = self.ticker.flag();
             store::write(&self.store, move |tx| {
                 if stopping.load(Ordering::SeqCst) {
                     return Ok(0);
@@ -218,7 +200,7 @@ impl OsNotificationSupervisor {
         let mut submitted = 0;
         let mut failure = None;
         loop {
-            if self.stopping.load(Ordering::SeqCst)
+            if self.ticker.is_stopped()
                 || self.focus.load(Ordering::SeqCst) != 2
                 || !self.permission().can_submit()
             {
@@ -276,7 +258,7 @@ impl OsNotificationSupervisor {
                         }
                     }
                 }
-                if self.stopping.load(Ordering::SeqCst)
+                if self.ticker.is_stopped()
                     || self.focus.load(Ordering::SeqCst) != 2
                     || !self.permission().can_submit()
                 {
@@ -300,7 +282,7 @@ impl OsNotificationSupervisor {
         let user = row.user_id.clone();
         let id = row.id.clone();
         let focus = self.focus.clone();
-        let stopping = self.stopping.clone();
+        let stopping = self.ticker.flag();
         let claimed = store::write(&self.store, move |tx| {
             if stopping.load(Ordering::SeqCst) || focus.load(Ordering::SeqCst) != 2 {
                 return Ok(None);
@@ -333,8 +315,8 @@ impl OsNotificationSupervisor {
         let store = self.store.clone();
         let port = self.port.clone();
         let focus = self.focus.clone();
-        let stopping = self.stopping.clone();
-        let fence = self.fence.clone();
+        let stopping = self.ticker.flag();
+        let fence = self.ticker.fence();
         let ids = self.ids.clone();
         tokio::task::spawn_blocking(move || {
             // Keep this one admitted external attempt owned through its durable outcome. Drain

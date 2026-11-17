@@ -9,8 +9,9 @@
 //! * [`Monitor`] runs the retention pass, the monitor probes (store inspection, integrity check,
 //!   write-owner probe) and the sweep of stale export staging files at boot and then every
 //!   `RuntimeConfig::diagnostics_interval`.
-use crate::dispatch::{self, Dispatcher};
+use crate::dispatch::Dispatcher;
 use crate::runtime::{BootError, BootReport, CollectionPass};
+use crate::workers::Ticker;
 use devworks_core::ports::diagnostics::Metric;
 use devworks_core::ports::files::FileFault;
 use devworks_core::ports::storage::StorageError;
@@ -23,9 +24,8 @@ use devworks_core::services::diagnostics::{
 };
 use devworks_core::services::power::KeepAwakeStatus;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
-use tokio::sync::{Notify, watch};
+use tokio::sync::watch;
 
 fn count(name: &str, n: usize) -> MetricReading {
     MetricReading::new(name, Some("count"), Metric::Available(n as u64))
@@ -424,35 +424,34 @@ pub fn sources(
 /// The periodic retention and monitor task.
 #[derive(Default)]
 pub struct Monitor {
-    stopping: AtomicBool,
-    wake: Notify,
+    ticker: Ticker,
 }
 impl Monitor {
     /// One pass at once, then every `interval`, until stopped. Once stopped, a pass in progress
     /// starts no further step (retention, each probe, sweep), so none writes after it was
     /// signalled and shutdown joins it as soon as the step under way returns.
     pub async fn run(self: Arc<Self>, service: Arc<DiagnosticService>, interval: Duration) {
-        while !self.stopping.load(Ordering::SeqCst) {
-            let (svc, me) = (service.clone(), self.clone());
-            let _ = tokio::task::spawn_blocking(move || {
-                let stopped = || me.stopping.load(Ordering::SeqCst);
-                if !stopped() {
-                    let _ = svc.prune();
-                }
-                if !stopped() {
-                    svc.refresh_monitor_unless(&stopped);
-                }
-                if !stopped() {
-                    svc.sweep_exports();
-                }
+        self.ticker
+            .run(interval, || async {
+                let (svc, me) = (service.clone(), self.clone());
+                let _ = tokio::task::spawn_blocking(move || {
+                    let stopped = || me.ticker.is_stopped();
+                    if !stopped() {
+                        let _ = svc.prune();
+                    }
+                    if !stopped() {
+                        svc.refresh_monitor_unless(&stopped);
+                    }
+                    if !stopped() {
+                        svc.sweep_exports();
+                    }
+                })
+                .await;
             })
             .await;
-            let _ = dispatch::first(self.wake.notified(), tokio::time::sleep(interval)).await;
-        }
     }
     pub fn stop(&self) {
-        self.stopping.store(true, Ordering::SeqCst);
-        self.wake.notify_one();
+        self.ticker.stop();
     }
 }
 

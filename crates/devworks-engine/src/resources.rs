@@ -11,16 +11,15 @@
 //! * [`Housekeeper::shutdown`] cancels every owned tree within one bound and records the
 //!   `Shutdown` reconciliation.
 use crate::store;
+use crate::workers::Ticker;
 use devworks_core::ports::Clock;
 use devworks_core::ports::storage::{ApplicationStore, StorageError, StoredResource};
 use devworks_core::services::process::{ProcessSupervisor, RecoveryReport, ShutdownReport};
 use devworks_core::services::resources::{
     MachineResource, ReconcileCause, ReconcileReport, ResourceService, register_machine,
 };
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
-use tokio::sync::Notify;
 use tokio::time::Instant;
 
 /// What boot housekeeping found.
@@ -38,8 +37,7 @@ pub struct Housekeeper {
     /// A wall-clock advance exceeding the monotonic advance by more than this is a sleep/wake.
     pub wake_jump_ms: i64,
     last: Mutex<Option<(Instant, i64)>>,
-    stopping: AtomicBool,
-    wake: Notify,
+    ticker: Ticker,
 }
 
 impl Housekeeper {
@@ -56,8 +54,7 @@ impl Housekeeper {
             supervisor,
             wake_jump_ms: 10_000,
             last: Mutex::new(None),
-            stopping: AtomicBool::new(false),
-            wake: Notify::new(),
+            ticker: Ticker::new(),
         }
     }
 
@@ -109,18 +106,15 @@ impl Housekeeper {
     /// Ticks every `every` until [`Self::stop`], which ends the wait at once. Transient storage
     /// failures are retried on the next tick.
     pub async fn run(&self, every: Duration) {
-        while !self.stopping.load(Ordering::SeqCst) {
-            let _ = self.tick().await;
-            if self.stopping.load(Ordering::SeqCst) {
-                break;
-            }
-            let _ = crate::dispatch::first(self.wake.notified(), tokio::time::sleep(every)).await;
-        }
+        self.ticker
+            .run(every, || async {
+                let _ = self.tick().await;
+            })
+            .await;
     }
 
     pub fn stop(&self) {
-        self.stopping.store(true, Ordering::SeqCst);
-        self.wake.notify_one();
+        self.ticker.stop();
     }
 
     /// Cancels every owned tree within one bound and records the shutdown reconciliation. Trees

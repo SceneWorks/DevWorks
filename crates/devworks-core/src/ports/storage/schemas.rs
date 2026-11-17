@@ -108,6 +108,10 @@ pub trait SchemaRead {
         &self,
         operation: &OperationId,
     ) -> Result<Option<StoredSchemaPublication>, StorageError>;
+    /// The earliest expiry time (epoch ms) among live read pins, so retention can wake then.
+    fn next_schema_pin_expiry(&self) -> Result<Option<i64>, StorageError> {
+        Ok(None)
+    }
 }
 pub trait SchemaRepository: SchemaRead {
     fn set_schema_certificate(

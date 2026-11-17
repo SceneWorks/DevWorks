@@ -2505,6 +2505,162 @@ fn purge_effect_leases_survive_restart_reject_stale_owners_and_retain_only_clien
     );
 }
 
+/// A client that reports `InUse` until the host acknowledges it, as the desktop client does while
+/// the UI still holds the project's editors; the acknowledgement itself commits nothing.
+struct AckClient(std::sync::atomic::AtomicBool);
+impl devworks_core::ports::project_purge::ProjectPurgeClient for AckClient {
+    fn inspect(
+        &self,
+        _: &ProjectPurgeClientScope,
+    ) -> Result<
+        devworks_core::ports::project_purge::PurgeClientSnapshot,
+        devworks_core::ports::project_purge::PurgeFileFault,
+    > {
+        Err(devworks_core::ports::project_purge::PurgeFileFault::Unsupported)
+    }
+    fn remove_reviewed(
+        &self,
+        _: &ProjectPurgeClientScope,
+        _: &str,
+    ) -> Result<(), devworks_core::ports::project_purge::PurgeFileFault> {
+        if self.0.load(Ordering::SeqCst) {
+            Ok(())
+        } else {
+            Err(devworks_core::ports::project_purge::PurgeFileFault::InUse)
+        }
+    }
+}
+
+#[test]
+fn a_purge_step_asks_for_a_retry_while_the_client_is_unacknowledged_then_completes() {
+    use devworks_core::ports::project_purge::PurgeEffectIntent;
+    use devworks_core::services::projects::purge::{PURGE_RETRY_WINDOW, PurgeWorker};
+    let h = Harness::new();
+    let store = Arc::new(h.store());
+    let mut prepared = purge_storage_fixture(&store);
+    let scope = ProjectPurgeClientScope {
+        project_id: project("purge-a"),
+        session_ids: vec![],
+        conversation_ids: vec![],
+        work_ids: vec![],
+        operation_ids: vec![],
+        deleted_artifact_ids: vec![],
+        record_ids: Default::default(),
+    };
+    let owner_digest = devworks_core::fingerprint::sha256_hex(&serde_json::to_vec(&scope).unwrap());
+    let intent = PurgeEffectIntent::Client {
+        scope,
+        digest: "a".repeat(64),
+    };
+    prepared.entries.push(serde_json::from_value(json!({"id":devworks_core::ports::project_purge::reviewed_effect_entry(&intent),"kind":"RecordClass","recordClass":"client_state","disposition":"Remove","recordCount":"0","byteCount":"0","reason":"OwnedClientState"})).unwrap());
+    prepared.manifest.digest = project_purge_digest(&prepared).try_into().unwrap();
+    let copy = prepared.clone();
+    run_write(&*store, WriteOptions::default(), move |tx| {
+        tx.projects().insert_purge_manifest(&copy)
+    })
+    .unwrap();
+    let body = serde_json::to_string(&intent).unwrap();
+    let effect = devworks_core::fingerprint::sha256_hex(body.as_bytes());
+    prepared.manifest.phase = devworks_core::protocol::records::PurgePhase::RemovingBytes;
+    let operation = devworks_core::protocol::OperationId(id("purge-operation"));
+    let op = operation.clone();
+    run_write(&*store, WriteOptions::default(), move |tx| {
+        tx.operations()
+            .record_intent(NewOperation {
+                id: op,
+                root_id: None,
+                assignment_id: None,
+                capability: "projects.purge".into(),
+                schema_version: 1,
+                args_digest: "a".repeat(64),
+                payload: json!({"manifestId":"purge-manifest"}),
+            })
+            .map(|_| ())
+    })
+    .unwrap();
+    prepared.manifest.operation_id = Some(operation);
+    prepared.manifest.pending_effects = Counter::new(1).unwrap();
+    h.raw()
+        .execute(
+            "UPDATE project_purge_manifests SET phase='RemovingBytes',operation_id='purge-operation',body_json=?1",
+            [serde_json::to_string(&prepared.manifest).unwrap()],
+        )
+        .unwrap();
+    h.raw().execute("INSERT INTO project_purge_effects(manifest_id,id,kind,owner_digest,body_json,byte_count,state) VALUES('purge-manifest',?1,'Client',?2,?3,0,'Pending')",rusqlite::params![effect,owner_digest,body]).unwrap();
+    let client = Arc::new(AckClient(Default::default()));
+    let owners = Arc::new(PurgeOwners(std::sync::Mutex::new(("a".repeat(64), false))));
+    let worker = PurgeWorker::new(store.clone(), h.ids.clone(), owners, client.clone());
+    // Unacknowledged: the effect is claimed, fails InUse and is held; the pass asks for a retry
+    // when the storage retry window ends.
+    let first = worker.step_pass(&mut || false).unwrap();
+    assert_eq!(
+        (first.settled, first.retry_after),
+        (1, Some(PURGE_RETRY_WINDOW))
+    );
+    // Within the window the effect is not claimable, and the pass still asks to come back.
+    let again = worker.step_pass(&mut || false).unwrap();
+    assert_eq!(
+        (again.settled, again.retry_after),
+        (0, Some(PURGE_RETRY_WINDOW))
+    );
+    // The acknowledgement commits nothing; the retry at the window's end completes the purge.
+    client.0.store(true, Ordering::SeqCst);
+    h.clock.0.fetch_add(1000, Ordering::SeqCst);
+    let done = worker.step_pass(&mut || false).unwrap();
+    assert_eq!((done.settled, done.retry_after), (1, None));
+    let complete = read_snapshot(&*store, &ReadOptions::default(), |s| {
+        s.projects()
+            .purge_manifest(&project("purge-a"), &id("purge-manifest"))
+    })
+    .unwrap()
+    .unwrap();
+    assert!(matches!(
+        complete.manifest.phase,
+        devworks_core::protocol::records::PurgePhase::Complete
+    ));
+}
+
+#[test]
+fn the_commit_signal_counts_commits_that_change_rows_and_ignores_empty_writes() {
+    let h = Harness::new();
+    let store = h.store();
+    let signal = store
+        .commit_signal()
+        .expect("the SQLite store publishes one");
+    let heard = Arc::new(AtomicU64::new(0));
+    let sink = heard.clone();
+    signal.subscribe(move |generation| sink.store(generation, Ordering::SeqCst));
+    let before = signal.generation();
+    run_write(&store, WriteOptions::default(), |_tx| Ok(())).unwrap();
+    assert_eq!(
+        signal.generation(),
+        before,
+        "an empty unit of work is not a commit"
+    );
+    run_write(&store, WriteOptions::default(), |tx| {
+        tx.actors()
+            .register(&actor("signal-human"), PrincipalKind::Human, "Human")
+    })
+    .unwrap();
+    assert_eq!(signal.generation(), before + 1);
+    assert_eq!(
+        heard.load(Ordering::SeqCst),
+        before + 1,
+        "listeners hear the new generation"
+    );
+    let failed: Result<(), StorageError> = run_write(&store, WriteOptions::default(), |tx| {
+        tx.actors()
+            .register(&actor("signal-rolled-back"), PrincipalKind::Human, "Human")?;
+        Err(StorageError::Cancelled)
+    });
+    assert!(failed.is_err());
+    assert_eq!(
+        signal.generation(),
+        before + 1,
+        "a rolled-back unit is not a commit"
+    );
+}
+
 #[test]
 fn purge_manifest_storage_survives_restart_and_requires_its_exact_project() {
     let h = Harness::new();

@@ -4,7 +4,7 @@ use super::*;
 use devworks_core::providers::decode::DecodedFrame;
 use devworks_core::services::usage::{
     accounting::{Admission, AttemptEnd},
-    host::{AccountingWriteFence, AttemptHost, OwnedInferenceSink, recovery_candidates},
+    host::{AttemptHost, OwnedInferenceSink, WriteFence, recovery_candidates},
 };
 
 /// A Host attempt request with its own logical request; `n` keeps admissions distinct.
@@ -122,7 +122,7 @@ impl OwnedInferenceSink for DiscardingSink {
         &mut self,
         _: &StoredInferenceAttempt,
         _: DecodedFrame,
-        _: &AccountingWriteFence,
+        _: &WriteFence,
     ) -> Result<(), StorageError> {
         Ok(())
     }
@@ -130,7 +130,7 @@ impl OwnedInferenceSink for DiscardingSink {
         &mut self,
         _: &StoredInferenceAttempt,
         _: AttemptEnd,
-        _: &AccountingWriteFence,
+        _: &WriteFence,
     ) -> Result<(), StorageError> {
         Ok(())
     }

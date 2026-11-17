@@ -1,5 +1,6 @@
 //! Host-owned inference accounting, bounded historical indexing and local cancellation.
 //! This driver executes injected metadata sources, never synthesizes provider inference.
+use crate::workers::Ticker;
 use crate::{dispatch::first, store};
 use devworks_core::ports::process::ProcessHost;
 use devworks_core::ports::storage::*;
@@ -9,8 +10,7 @@ use devworks_core::services::{
     runs::ControlService,
     usage::{
         host::{
-            self, AccountingWriteFence, AttemptHost, DriveOutcome, OwnedInferenceSink,
-            OwnedInferenceSource,
+            self, AttemptHost, DriveOutcome, OwnedInferenceSink, OwnedInferenceSource, WriteFence,
         },
         ingest,
     },
@@ -19,7 +19,7 @@ use std::{
     collections::{HashMap, HashSet},
     sync::{
         Arc, Mutex,
-        atomic::{AtomicBool, AtomicUsize, Ordering},
+        atomic::{AtomicUsize, Ordering},
     },
     time::Duration,
 };
@@ -62,11 +62,10 @@ pub struct UsageRuntime {
     host: Option<Arc<AttemptHost>>,
     active: Mutex<HashMap<Id, Cancellation>>,
     uncertain: Mutex<HashSet<Id>>,
-    fence: Arc<AccountingWriteFence>,
+    fence: Arc<WriteFence>,
     process_host: Option<Arc<dyn ProcessHost>>,
-    stopping: AtomicBool,
+    ticker: Ticker,
     preparing: AtomicUsize,
-    wake: Notify,
     changed: Notify,
     recovery: Mutex<Recovery>,
     ticking: tokio::sync::Mutex<()>,
@@ -95,7 +94,7 @@ impl UsageRuntime {
         process_host: Option<Arc<dyn ProcessHost>>,
     ) -> Arc<Self> {
         let (status, _) = watch::channel(None);
-        let fence = Arc::new(AccountingWriteFence::default());
+        let fence = Arc::new(WriteFence::default());
         Arc::new(Self {
             host: router.map(|router| {
                 let mut host = AttemptHost::new(store.clone(), control.clone(), router)
@@ -111,9 +110,8 @@ impl UsageRuntime {
             store,
             control,
             active: Mutex::new(HashMap::new()),
-            stopping: AtomicBool::new(false),
+            ticker: Ticker::new(),
             preparing: AtomicUsize::new(0),
-            wake: Notify::new(),
             changed: Notify::new(),
             recovery: Mutex::new(Recovery {
                 after: None,
@@ -124,14 +122,14 @@ impl UsageRuntime {
             status,
         })
     }
-    pub(crate) fn accounting_fence(&self) -> Arc<AccountingWriteFence> {
+    pub(crate) fn accounting_fence(&self) -> Arc<WriteFence> {
         self.fence.clone()
     }
     pub fn watch(&self) -> watch::Receiver<Option<Result<UsagePass, StorageError>>> {
         self.status.subscribe()
     }
     pub fn notify(&self) {
-        self.wake.notify_one();
+        self.ticker.notify();
     }
     /// The future may be dropped by its caller: ownership stays inside the blocking driver
     /// and the runtime registry until the source has actually closed or visibly failed.
@@ -149,7 +147,7 @@ impl UsageRuntime {
         let cancellation = Cancellation::new();
         {
             let mut active = self.active.lock().unwrap_or_else(|p| p.into_inner());
-            if self.stopping.load(Ordering::SeqCst) {
+            if self.ticker.is_stopped() {
                 return Err(StorageError::Cancelled);
             }
             match active.entry(attempt_id.clone()) {
@@ -266,7 +264,7 @@ impl UsageRuntime {
         })?;
         {
             let _active = self.active.lock().unwrap_or_else(|p| p.into_inner());
-            if self.stopping.load(Ordering::SeqCst) {
+            if self.ticker.is_stopped() {
                 return Err(StorageError::Cancelled);
             }
             self.preparing.fetch_add(1, Ordering::SeqCst);
@@ -300,7 +298,7 @@ impl UsageRuntime {
                     if let devworks_core::services::router::accounting::AttemptSelection::Embedding {connection_revision,..}=&mut request.selection { *connection_revision=refreshed.connection_revision; }
                 }
             }
-            if runtime.stopping.load(Ordering::SeqCst) || cancellation.as_ref().is_some_and(Cancellation::is_cancelled) { return Err(StorageError::Cancelled); }
+            if runtime.ticker.is_stopped() || cancellation.as_ref().is_some_and(Cancellation::is_cancelled) { return Err(StorageError::Cancelled); }
             let admission = host.admit_fenced(context, logical, category, request, source_fences)?;
             let attempt = match admission {
                 devworks_core::services::usage::accounting::Admission::Admitted {
@@ -316,7 +314,7 @@ impl UsageRuntime {
                         return Ok(DriveOutcome::AlreadyDispatched);
                     }
                     std::collections::hash_map::Entry::Vacant(entry) => {
-                        if runtime.stopping.load(Ordering::SeqCst) {
+                        if runtime.ticker.is_stopped() {
                             cancellation.cancel();
                         }
                         entry.insert(cancellation.clone());
@@ -434,11 +432,10 @@ impl UsageRuntime {
     }
     pub fn stop(&self) {
         let active = self.active.lock().unwrap_or_else(|p| p.into_inner());
-        self.stopping.store(true, Ordering::SeqCst);
+        self.ticker.stop();
         for cancellation in active.values() {
             cancellation.cancel();
         }
-        self.notify();
     }
     pub async fn drain(&self) {
         self.stop();
@@ -459,7 +456,7 @@ impl UsageRuntime {
     }
     pub async fn tick(&self) -> Result<UsagePass, StorageError> {
         let _single = self.ticking.lock().await;
-        if self.stopping.load(Ordering::SeqCst) {
+        if self.ticker.is_stopped() {
             return Err(StorageError::Cancelled);
         }
         let active = self
@@ -563,19 +560,19 @@ impl UsageRuntime {
         })
     }
     pub async fn run(self: Arc<Self>, interval: Duration) {
-        while !self.stopping.load(Ordering::SeqCst) {
+        while !self.ticker.is_stopped() {
             let result = self.tick().await;
             let more = result
                 .as_ref()
                 .is_ok_and(|p| !p.indexing_complete || p.recovery_more);
             self.status.send_replace(Some(result));
-            if self.stopping.load(Ordering::SeqCst) {
+            if self.ticker.is_stopped() {
                 break;
             }
             if more {
                 tokio::task::yield_now().await;
             } else {
-                let _ = first(self.wake.notified(), tokio::time::sleep(interval)).await;
+                self.ticker.wait(interval).await;
             }
         }
     }

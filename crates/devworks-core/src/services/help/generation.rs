@@ -138,6 +138,23 @@ impl HelpService {
             .map_err(|_| invalid("invalid Help generation journal"))
     }
 
+    /// One write whose first step re-checks that the generation job is still current: the
+    /// guarded write every Help generation phase publishes through.
+    fn guarded_write<T: Send + 'static>(
+        &self,
+        operation: &OperationRecord,
+        job: &GenerationJob,
+        work: impl FnOnce(&mut dyn WriteTransaction, &HelpService) -> Result<T, StorageError>
+        + Send
+        + 'static,
+    ) -> Result<T, StorageError> {
+        let (service, operation, job) = (self.clone(), operation.clone(), job.clone());
+        run_write(&*self.store, WriteOptions::default(), move |tx| {
+            service.current(tx, &operation, &job)?;
+            work(tx, &service)
+        })
+    }
+
     fn current(
         &self,
         tx: &mut dyn WriteTransaction,
@@ -251,12 +268,9 @@ impl HelpService {
         if control.stopped() {
             return control.finish(Err(StorageError::Cancelled));
         }
-        let service = self.clone();
-        let op = operation.clone();
         let source = job.clone();
         let metadata = document.topic.clone();
-        let existing = run_write(&*self.store, WriteOptions::default(), move |tx| {
-            service.current(tx, &op, &source)?;
+        let existing = self.guarded_write(operation, job, move |tx, _| {
             let existing = tx
                 .help()
                 .staged_help_topic(&source.generation, &metadata.id)?;
@@ -338,12 +352,10 @@ impl HelpService {
             None
         };
         drop(body); // No full source, even an inline host document, enters the writer mailbox.
-        let service = self.clone();
         let op = operation.clone();
         let source = job.clone();
         let artifact = staged.clone();
-        let result = run_write(&*self.store, WriteOptions::default(), move |tx| {
-            service.current(tx, &op, &source)?;
+        let result = self.guarded_write(operation, job, move |tx, service| {
             if let Some(existing) = tx
                 .help()
                 .staged_help_topic(&source.generation, &document.topic.id)?
@@ -661,11 +673,9 @@ impl HelpService {
             .iter()
             .map(|byte| format!("{byte:02x}"))
             .collect::<String>();
-        let service = self.clone();
-        let operation = operation.clone();
-        let job = job.clone();
-        run_write(&*self.store, WriteOptions::default(), move |tx| {
-            service.current(tx, &operation, &job)?;
+        let (held_operation, held_job) = (operation.clone(), job.clone());
+        self.guarded_write(operation, job, move |tx, _| {
+            let (operation, job) = (held_operation, held_job);
             let old = tx.help().help_head()?;
             let candidate = StoredHelpHead {
                 revision: job.expected_help_revision + 1,
