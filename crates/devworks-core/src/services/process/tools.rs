@@ -990,19 +990,11 @@ fn install_runs_repository_code(name: &str, root: &Path) -> bool {
 /// Whether a directory above the checkout holds a Yarn rc file. Yarn reads `.yarnrc.yml` from
 /// every ancestor of the working directory and has no environment variable or flag that stops
 /// that lookup (`YARN_RC_FILENAME` renames the file for the checkout too), so the check is
-/// here. A directory holding the `.dev-host-root` marker, and every directory below it, is a
-/// DevWorks-owned host folder and is skipped. A folder that cannot be inspected counts as one
-/// with a file.
+/// here. A folder that cannot be inspected counts as one with a file.
 fn yarn_ancestor_rc_present(root: &Path) -> bool {
-    let ancestors: Vec<&Path> = root.ancestors().skip(1).collect();
-    // Find the nearest owned folder; it and everything below it is exempt.
-    let exempt = ancestors
-        .iter()
-        .position(|directory| directory.join(".dev-host-root").exists());
-    for (index, directory) in ancestors.iter().enumerate() {
-        if exempt.is_some_and(|marked| index <= marked) {
-            continue;
-        }
+    // Every ancestor counts: Yarn reads them all, and which of them a repository can write is
+    // not known here. A person's own rc file above the checkout only costs the script-free path.
+    for directory in root.ancestors().skip(1) {
         for file in [".yarnrc.yml", ".yarnrc"] {
             match std::fs::symlink_metadata(directory.join(file)) {
                 Ok(_) => return true,
@@ -4726,12 +4718,6 @@ mod tests {
             std::fs::remove_file(&rc).expect("remove");
         }
         assert_eq!(install_runs_repository_code("yarn.lock", &root), base);
-        // A host folder marked `.dev-host-root`, and anything below it, is exempt.
-        std::fs::write(top.join("a/b/.dev-host-root"), "").expect("marker");
-        std::fs::write(top.join("a/b/.yarnrc.yml"), "yarnPath: x\n").expect("rc");
-        assert_eq!(install_runs_repository_code("yarn.lock", &root), base);
-        std::fs::write(top.join("a/.yarnrc.yml"), "nodeLinker: pnp\n").expect("rc");
-        assert!(install_runs_repository_code("yarn.lock", &root));
         std::fs::remove_dir_all(top).expect("remove");
     }
 
