@@ -34,14 +34,18 @@ fn app() -> App {
     settled(&app);
     app
 }
+
 /// The near-limit guide stages one bundle-sized file (hundreds of MB copied and hashed in a
 /// single step that issues no identifier), which takes over 30 s when many test processes share
 /// the machine. A Help generation that issues no identifier for this long has stalled.
 const HELP_STALL: std::time::Duration = std::time::Duration::from_secs(120);
+/// A ceiling on the whole wait, so background work that keeps issuing identifiers cannot keep
+/// a publication that never completes waiting forever.
+const HELP_CEILING: std::time::Duration = std::time::Duration::from_secs(600);
 fn settled(app: &App) {
     let _diagnostics = crate::common::help_startup_diagnostics(&*app.store, app.app().dispatcher());
     let ids = app.h.ids.clone();
-    app.rt.block_on(common::durable_for(
+    let wait = common::durable_for(
         "real Help publication",
         HELP_STALL,
         move || ids.issued(),
@@ -69,8 +73,12 @@ fn settled(app: &App) {
                 tokio::task::yield_now().await;
             }
         },
-    ));
+    );
+    app.rt
+        .block_on(async { tokio::time::timeout(HELP_CEILING, wait).await })
+        .expect("real Help publication: still not published after 10 minutes of progress");
 }
+
 fn regenerate(app: &App) {
     let args = read(
         &*app.store,
