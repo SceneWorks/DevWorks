@@ -239,14 +239,14 @@ pub struct Shell {
     control: Option<Box<dyn HostControl>>,
 }
 
+/// The run status a context lends while Jobs, which holds it, is the screen called.
+static NO_JOB_STATUS: BTreeMap<String, String> = BTreeMap::new();
+
 /// The migrated screens: `screens!(Id => field, ...)` binds each [`ScreenId`] to the `Shell`
 /// field holding that screen. Indexing (`projects.indexing`) is bound in the macro itself: every
 /// other screen's context reads it. So is Chat: every other screen's context reads its router
 /// catalog, and its own context lends it the watcher lists its sidebar shows. And so is Jobs:
 /// every other screen's context reads its projects' run status.
-/// The run status a context lends while Jobs, which holds it, is the screen called.
-static NO_JOB_STATUS: BTreeMap<String, String> = BTreeMap::new();
-
 macro_rules! screens {
     ($($id:ident => $($field:ident).+),* $(,)?) => {
         impl Shell {
