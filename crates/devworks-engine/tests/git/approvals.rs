@@ -280,14 +280,14 @@ pub(super) fn assert_reviewed_commit(
         assert!(
             matches!(
                 result,
-                devworks_core::services::git::EffectOutcome::Unknown(_)
+                devworks_core::services::effect::EffectOutcome::Unknown(_)
             ),
             "{case:?}: {result:?}"
         );
         let head = git(path, &["rev-parse", "HEAD"]);
         assert!(matches!(
             service.observe(&record),
-            devworks_core::services::git::EffectOutcome::Unknown(_)
+            devworks_core::services::effect::EffectOutcome::Unknown(_)
         ));
         assert_eq!(
             git(path, &["rev-parse", "HEAD"]),
@@ -328,7 +328,7 @@ pub(super) fn assert_reviewed_commit(
         assert!(
             matches!(
                 result,
-                devworks_core::services::git::EffectOutcome::Failed(_)
+                devworks_core::services::effect::EffectOutcome::Failed(_)
             ),
             "{result:?}"
         );
@@ -337,7 +337,7 @@ pub(super) fn assert_reviewed_commit(
         assert!(
             matches!(
                 result,
-                devworks_core::services::git::EffectOutcome::Completed(_)
+                devworks_core::services::effect::EffectOutcome::Completed(_)
             ),
             "{case:?}: {result:?}"
         );

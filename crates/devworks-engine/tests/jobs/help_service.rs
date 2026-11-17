@@ -1002,7 +1002,7 @@ fn lost_catalog_publication_ack_recovers_from_one_exact_durable_observation() {
     assert!(
         matches!(
             service.observe(&operation),
-            devworks_core::services::help::GenerationOutcome::Unknown(_)
+            devworks_core::services::effect::EffectOutcome::Unknown(_)
         ),
         "an unreadable journal cannot be replaced by a new build"
     );

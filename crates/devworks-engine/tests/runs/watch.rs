@@ -2501,7 +2501,7 @@ fn a_process_effect_with_an_unrecognised_principal_kind_is_refused() {
         record.payload["watch"] = Value::Null;
         let service = app.process_tools().expect("process tools composed");
         match service.execute(&record) {
-            devworks_core::services::process::tools::EffectOutcome::Failed(reason) => {
+            devworks_core::services::effect::EffectOutcome::Failed(reason) => {
                 assert!(reason.contains("principal kind"), "{reason}");
             }
             other => panic!("{other:?}"),

@@ -33,6 +33,7 @@ use crate::registry::Mode;
 use crate::services::approvals::OwnerPreview;
 use crate::services::artifacts::ArtifactService;
 use crate::services::artifacts::evidence::{Evidence, EvidenceFailure};
+use crate::services::effect::{EffectOutcome, JournaledEffect};
 use crate::services::git::context::SourceBinding;
 use crate::services::sessions::{Failure, Refusal, counter, decided, query_fault, rev};
 use serde::{Deserialize, Serialize};
@@ -165,12 +166,6 @@ impl InputJob {
         }
         Some(ctx)
     }
-}
-
-pub enum InputEffectOutcome {
-    Completed(Value),
-    Failed(String),
-    Unknown(String),
 }
 
 pub struct DesktopService {
@@ -946,37 +941,37 @@ impl DesktopService {
     }
 
     /// An uncertain attempt is never replayed: a click or key may already have reached the OS.
-    pub fn observe_input(&self, operation: &OperationRecord) -> InputEffectOutcome {
+    pub fn observe_input(&self, operation: &OperationRecord) -> EffectOutcome {
         if operation.capability != "desktop.input" {
-            return InputEffectOutcome::Failed("unsupported desktop effect".into());
+            return EffectOutcome::Failed("unsupported desktop effect".into());
         }
-        InputEffectOutcome::Unknown("desktop input outcome needs observation".into())
+        EffectOutcome::Unknown("desktop input outcome needs observation".into())
     }
 
-    pub fn execute_input(&self, operation: &OperationRecord) -> InputEffectOutcome {
+    pub fn execute_input(&self, operation: &OperationRecord) -> EffectOutcome {
         if operation.capability != "desktop.input" || operation.schema_version != 1 {
-            return InputEffectOutcome::Failed("unsupported desktop effect".into());
+            return EffectOutcome::Failed("unsupported desktop effect".into());
         }
         let Ok(job) = serde_json::from_value::<InputJob>(operation.payload.clone()) else {
-            return InputEffectOutcome::Failed("invalid desktop intent".into());
+            return EffectOutcome::Failed("invalid desktop intent".into());
         };
         let Some(ctx) = job.context(&*self.store, &operation.id) else {
-            return InputEffectOutcome::Failed(
+            return EffectOutcome::Failed(
                 "desktop intent principal, source binding or restore epoch invalid".into(),
             );
         };
         let tested_repository = match self.tested_source(&ctx, &|| false) {
             Ok(source) => source,
-            Err(_) => return InputEffectOutcome::Failed("desktop tested source changed".into()),
+            Err(_) => return EffectOutcome::Failed("desktop tested source changed".into()),
         };
         let Some(descriptor) = crate::registry::find("desktop.input") else {
-            return InputEffectOutcome::Failed("desktop descriptor unavailable".into());
+            return EffectOutcome::Failed("desktop descriptor unavailable".into());
         };
         let Some(binding) = descriptor.binding(Mode::Command) else {
-            return InputEffectOutcome::Failed("desktop command binding unavailable".into());
+            return EffectOutcome::Failed("desktop command binding unavailable".into());
         };
         let Some(fingerprint) = Fingerprint::from_hex(&job.fingerprint) else {
-            return InputEffectOutcome::Failed("invalid desktop fingerprint".into());
+            return EffectOutcome::Failed("invalid desktop fingerprint".into());
         };
         let input = OperationInput::Desktop(ops::Input::Input(job.input.clone()));
         if self
@@ -994,7 +989,7 @@ impl DesktopService {
             )
             .is_err()
         {
-            return InputEffectOutcome::Failed("current desktop authority denied dispatch".into());
+            return EffectOutcome::Failed("current desktop authority denied dispatch".into());
         }
         let resources = self.resources.clone();
         let context = ctx.clone();
@@ -1017,7 +1012,7 @@ impl DesktopService {
             Ok(ticket)
         });
         let Ok(ticket) = ticket else {
-            return InputEffectOutcome::Failed("desktop lease or consent no longer valid".into());
+            return EffectOutcome::Failed("desktop lease or consent no longer valid".into());
         };
         let result = self.platform.inject(&job.input.action);
         drop(ticket);
@@ -1027,25 +1022,25 @@ impl DesktopService {
                     self.record(snapshot.resources()).map(|(_, record)| record)
                 });
                 match record {
-                    Ok(record) => InputEffectOutcome::Completed(
+                    Ok(record) => EffectOutcome::Completed(
                         json!({"result":OperationResult::DesktopInput { value: record },"actionApplied":true,"testedRepository":tested_repository}),
                     ),
-                    Err(_) => InputEffectOutcome::Unknown(
+                    Err(_) => EffectOutcome::Unknown(
                         "desktop input applied but completion record unavailable".into(),
                     ),
                 }
             }
             Err(crate::ports::desktop::DesktopFault::PermissionRequired) => {
-                InputEffectOutcome::Failed("desktop input permission required".into())
+                EffectOutcome::Failed("desktop input permission required".into())
             }
             Err(crate::ports::desktop::DesktopFault::Unsupported) => {
-                InputEffectOutcome::Failed("desktop input unsupported".into())
+                EffectOutcome::Failed("desktop input unsupported".into())
             }
             Err(crate::ports::desktop::DesktopFault::StaleTarget) => {
-                InputEffectOutcome::Failed("desktop accessibility target changed".into())
+                EffectOutcome::Failed("desktop accessibility target changed".into())
             }
             Err(crate::ports::desktop::DesktopFault::NativeFailure) => {
-                InputEffectOutcome::Unknown("desktop input native outcome unknown".into())
+                EffectOutcome::Unknown("desktop input native outcome unknown".into())
             }
         }
     }
@@ -1392,5 +1387,14 @@ impl CommandHandler for DesktopService {
             .into()),
         };
         decided(tx, decision)
+    }
+}
+
+impl JournaledEffect for DesktopService {
+    fn execute(&self, operation: &OperationRecord) -> EffectOutcome {
+        self.execute_input(operation)
+    }
+    fn observe(&self, operation: &OperationRecord) -> EffectOutcome {
+        self.observe_input(operation)
     }
 }

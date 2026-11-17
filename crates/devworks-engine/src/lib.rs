@@ -214,6 +214,7 @@ pub mod conventions;
 pub mod desktop;
 pub mod diagnostics;
 pub mod dispatch;
+pub mod effect_consumer;
 pub mod evals;
 pub mod git;
 pub mod help;

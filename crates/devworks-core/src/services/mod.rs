@@ -14,6 +14,7 @@ pub mod conventions;
 pub mod cursor;
 pub mod desktop;
 pub mod diagnostics;
+pub mod effect;
 pub mod evals;
 pub mod failure;
 pub mod git;

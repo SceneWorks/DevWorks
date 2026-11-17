@@ -282,7 +282,7 @@ pub(super) fn assert_reviewed_create(
         );
         assert!(matches!(
             service.observe(&record),
-            devworks_core::services::git::EffectOutcome::Unknown(_)
+            devworks_core::services::effect::EffectOutcome::Unknown(_)
         ));
         assert!(
             !Path::new(&tree.path).join("a.txt").exists(),
@@ -305,13 +305,13 @@ pub(super) fn assert_reviewed_create(
     if matches!(case, CreateCase::ChangedHookNames) {
         assert!(!matches!(
             outcome,
-            devworks_core::services::git::EffectOutcome::Completed(_)
+            devworks_core::services::effect::EffectOutcome::Completed(_)
         ));
     } else {
         assert!(
             matches!(
                 outcome,
-                devworks_core::services::git::EffectOutcome::Completed(_)
+                devworks_core::services::effect::EffectOutcome::Completed(_)
             ),
             "{outcome:?}"
         );

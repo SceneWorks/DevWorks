@@ -34,7 +34,6 @@ use devworks_core::protocol::{
 use devworks_core::services::UseCases;
 use devworks_core::services::artifacts::ArtifactService;
 use devworks_core::services::artifacts::observed::Observed;
-use devworks_core::services::containers::EffectOutcome as ContainerEffectOutcome;
 use devworks_core::services::containers::registry_auth::WorkloadEnvironment;
 use devworks_core::services::containers::runner::ContainerRunner;
 use devworks_core::services::containers::service::ContainerService;
@@ -44,6 +43,7 @@ use devworks_core::services::containers::{
     inspection::{parse as parse_container_inspect, verified_lifecycle_target},
     probe::{self as container_probe, Availability as ContainerAvailability, HostPlatform},
 };
+use devworks_core::services::effect::EffectOutcome as ContainerEffectOutcome;
 #[cfg(unix)]
 use devworks_core::services::process::tools::RegisteredCredential;
 use devworks_core::services::process::tools::{RegisteredExecutable, ToolBindings};
@@ -2491,7 +2491,9 @@ esac
         .unwrap();
     match service.execute_effect(&operation, &fx.authority()) {
         ContainerEffectOutcome::Completed(_) => {}
-        ContainerEffectOutcome::Failed(reason) | ContainerEffectOutcome::Unknown(reason) => {
+        ContainerEffectOutcome::Failed(reason)
+        | ContainerEffectOutcome::NotApplied(reason)
+        | ContainerEffectOutcome::Unknown(reason) => {
             panic!("credentialed pull failed: {reason}")
         }
     }
@@ -2742,7 +2744,9 @@ fn native_container_effects_commit_owned_create_start_and_stop(engine: &str, exe
     let build_outcome = service.execute_effect(&build_op, &fx.authority());
     match build_outcome {
         ContainerEffectOutcome::Completed(_) => {}
-        ContainerEffectOutcome::Failed(reason) | ContainerEffectOutcome::Unknown(reason) => {
+        ContainerEffectOutcome::Failed(reason)
+        | ContainerEffectOutcome::NotApplied(reason)
+        | ContainerEffectOutcome::Unknown(reason) => {
             panic!("build outcome: {reason}")
         }
     }

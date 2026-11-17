@@ -100,6 +100,7 @@ use crate::services::artifacts::ArtifactService;
 use crate::services::artifacts::evidence::{Evidence, EvidenceFailure, safe_name};
 use crate::services::cursor::{self, CursorBinding};
 use crate::services::diagnostics::HealthCheck;
+use crate::services::effect::{EffectOutcome, JournaledEffect};
 use crate::services::process::{
     LaunchPolicy, LaunchRefusal, LaunchRequest, OwnedProcess, ProcessSupervisor, StopOutcome,
 };
@@ -183,20 +184,6 @@ impl BrowserConfig {
             settle: self.settle,
         }
     }
-}
-
-/// Observed outcome of one journaled browser effect (the engine maps it onto its effect
-/// result).
-#[derive(Clone, Debug, PartialEq)]
-pub enum EffectOutcome {
-    /// The effect happened; the value carries the typed result (`{"result": OperationResult}`).
-    Completed(Value),
-    /// Deterministic failure; nothing (or nothing more) to retry. The text is a JSON fault.
-    Failed(String),
-    /// Evidence that nothing happened; safe to retry.
-    NotApplied(String),
-    /// The effect may or may not have happened.
-    Unknown(String),
 }
 
 /// Launch flags of every owned browser (headless, empty profile, the private DevTools pipe and
@@ -3586,5 +3573,23 @@ impl CommandHandler for BrowserService {
             Ok(d) => Ok(d),
             Err(f) => decided(tx, Err(f)),
         }
+    }
+}
+
+impl JournaledEffect for BrowserService {
+    fn execute(&self, operation: &OperationRecord) -> EffectOutcome {
+        BrowserService::execute(self, operation)
+    }
+    fn observe(&self, operation: &OperationRecord) -> EffectOutcome {
+        BrowserService::observe(self, operation)
+    }
+    /// An action ordered behind another waits (bounded by the order bound) until that one
+    /// settled; Create and Close are never ordered.
+    fn wait_bound(&self, operation: &OperationRecord) -> Option<std::time::Duration> {
+        operation.payload.get("after")?;
+        Some(self.order_bound())
+    }
+    fn must_wait(&self, operation: &OperationRecord) -> bool {
+        self.predecessor_pending(operation)
     }
 }

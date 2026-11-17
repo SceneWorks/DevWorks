@@ -12,7 +12,6 @@ use crate::{
 pub use commands::{EFFECT_CONSUMER, PreparedImport};
 pub use maintenance::ImportCleanup;
 use std::sync::Arc;
-pub use worker::ImportOutcome;
 pub struct ImportService {
     store: Arc<dyn ApplicationStore>,
     artifacts: Arc<ArtifactService>,

@@ -2,7 +2,7 @@
 use super::*;
 use devworks_core::{
     protocol::{ProjectId, RootId},
-    services::conventions::importing::ImportOutcome,
+    services::effect::EffectOutcome,
 };
 #[test]
 fn temporary_control_wait_is_unknown_without_retry_exhaustion_then_same_import_completes() {
@@ -39,7 +39,7 @@ fn temporary_control_wait_is_unknown_without_retry_exhaustion_then_same_import_c
     .unwrap();
     for _ in 0..8 {
         assert!(
-            matches!(f.service.execute(&operation), ImportOutcome::Unknown(_)),
+            matches!(f.service.execute(&operation), EffectOutcome::Unknown(_)),
             "a temporary hold must not consume finite NotApplied retry attempts"
         );
     }
@@ -96,11 +96,11 @@ fn temporary_control_wait_is_unknown_without_retry_exhaustion_then_same_import_c
     .unwrap();
     assert!(matches!(
         f.service.observe(&unknown),
-        ImportOutcome::Completed(_)
+        EffectOutcome::Completed(_)
     ));
     assert!(matches!(
         f.service.observe(&unknown),
-        ImportOutcome::Completed(_)
+        EffectOutcome::Completed(_)
     ));
     let result = read(&*f.store, |r| r.conventions().convention_import(&op)).unwrap();
     assert_eq!(result.phase, "Published");
