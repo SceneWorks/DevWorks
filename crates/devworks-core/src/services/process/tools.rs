@@ -5332,10 +5332,12 @@ mod tests {
         let (root, home) = (Path::new("/repo"), Path::new("/host/home"));
         let berry = b"__metadata:\n  version: 8\n".as_slice();
         let off = install_command("yarn.lock", root, home, berry, false, None).expect("yarn");
+        // Paths are built with the platform's separator, as the install builds them.
+        let global = home.join(".yarn/berry").to_string_lossy().into_owned();
         for (key, value) in [
             ("YARN_ENABLE_SCRIPTS", "false"),
             ("YARN_IGNORE_PATH", "true"),
-            ("YARN_GLOBAL_FOLDER", "/host/home/.yarn/berry"),
+            ("YARN_GLOBAL_FOLDER", global.as_str()),
         ] {
             assert!(
                 off.env.contains(&(key.to_owned(), value.to_owned())),
@@ -5344,7 +5346,8 @@ mod tests {
             );
         }
         let cache = install_home_environment(home);
-        assert!(cache.contains(&("YARN_CACHE_FOLDER".into(), "/host/home/.cache/yarn".into())));
+        let cache_folder = home.join(".cache/yarn").to_string_lossy().into_owned();
+        assert!(cache.contains(&("YARN_CACHE_FOLDER".into(), cache_folder)));
     }
 
     /// DW-319: a Cargo configuration of only inert settings installs without scripts; one
