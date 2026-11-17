@@ -115,7 +115,7 @@ pub static SCREENS: [Screen; 21] = [
         summary_strip: &[],
         pending: None,
         link: None,
-        owner: ScreenId::Legacy,
+        owner: ScreenId::Decisions,
     },
     Screen {
         route: Route::Portfolio,
@@ -274,7 +274,7 @@ pub static SCREENS: [Screen; 21] = [
         summary_strip: &[],
         pending: None,
         link: None,
-        owner: ScreenId::Legacy,
+        owner: ScreenId::Jobs,
     },
     Screen {
         route: Route::Watchers,

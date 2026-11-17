@@ -222,7 +222,7 @@ impl NativePreparation {
                     .owner
                     .artifacts
                     .read_exact(store, ctx, context, 8 * 1024 * 1024)
-                    .map_err(|_| StorageError::ScopeDenied)?;
+                    .map_err(crate::turn_error::artifact_read_fault)?;
                 let material = serde_json::from_slice::<
                     devworks_core::providers::context::ProviderContext,
                 >(&bytes)
@@ -342,7 +342,7 @@ impl NativeProviders {
         let bytes = self
             .artifacts
             .read_exact(self.store.as_ref(), ctx, context, 8 * 1024 * 1024)
-            .map_err(|_| StorageError::ScopeDenied)?
+            .map_err(crate::turn_error::artifact_read_fault)?
             .0;
         let material: devworks_core::providers::context::ProviderContext =
             serde_json::from_slice(&bytes).map_err(|_| invalid("provider instruction context"))?;
@@ -759,7 +759,8 @@ impl NativeProviders {
         })?
         .ok_or(StorageError::ScopeDenied)?;
         let payload = &operation.payload;
-        if operation.capability != "mcp.tool"
+        // An MCP server's sampling or a package's brokered inference, during that tool call.
+        if !matches!(operation.capability.as_str(), "mcp.tool" | "package.invoke")
             || operation.state != devworks_core::protocol::OperationState::Dispatching
             || payload.get("principal") != Some(&serde_json::json!(context.principal()))
             || payload.get("sessionId") != Some(&serde_json::json!(session_id))

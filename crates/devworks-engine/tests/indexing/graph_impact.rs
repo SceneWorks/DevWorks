@@ -875,3 +875,73 @@ fn native_impact_totals_are_not_capped_by_the_five_hundred_row_wire_page() {
     executor.block_on(app.shutdown());
     let _ = std::fs::remove_dir_all(src);
 }
+
+/// Whether file impact on `src/lib.rs` of `repository` answers within `max_visited` without
+/// running out of its visit or memory budget, and how many symbols it affects.
+fn file_impact_fits(
+    app: &Runtime,
+    ctx: &InvocationContext,
+    repository: &str,
+    max_visited: u32,
+) -> (bool, i64) {
+    let page = graph_page(
+        app,
+        ctx,
+        "code.file_impact",
+        file_query(repository, "src/lib.rs"),
+        Some(json!({"kind":"Published","repositoryIds":[repository]})),
+        (500, max_visited),
+        None,
+    );
+    let gaps = serde_json::to_value(&page).unwrap()["scopeCoverage"]["coverage"]["gaps"].clone();
+    let limited = gaps
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|g| g == "graph_visited_limit" || g == "graph_memory_limit");
+    (!limited, impact(&page).summary.total_affected.get())
+}
+
+/// File impact on a file a crate owns is answered by the scan alone, which alone derives its
+/// dependent crates: the visit budget the request fits on main is enough, because no indexed walk
+/// spends part of it first.
+#[test]
+fn native_file_impact_in_a_crate_spends_its_budget_only_on_the_scan() {
+    let _case = native_runtime_case();
+    let h = Harness::new();
+    let executor = runtime();
+    let store = h.open();
+    let src = sources();
+    let mut lib = String::from("pub fn target() {}\n");
+    for i in 0..40 {
+        lib.push_str(&format!("pub fn caller_{i}() {{ target(); }}\n"));
+    }
+    write_repo(
+        &src.join("crate"),
+        &[
+            (
+                "Cargo.toml",
+                "[package]\nname = \"impact-crate\"\nversion = \"0.1.0\"\n",
+            ),
+            ("src/lib.rs", lib.as_str()),
+        ],
+    );
+    let app = executor
+        .block_on(boot(composition(&h, store.clone(), "git")))
+        .unwrap();
+    let ctx = principal(&*store, "user", PrincipalKind::Human);
+    base_directory(&store, &ctx, &src);
+    let repository = discovered(&app, &ctx).remove(0);
+    indexed(&executor, &app, &store, &ctx, &repository, "impact-crate");
+    let (fits, affected) = file_impact_fits(&app, &ctx, &repository, 100_000);
+    assert!(fits);
+    // 594 visits is the smallest budget this request fits on main, which scans directly. An
+    // indexed walk tried first and then discarded made it need 1,524.
+    assert_eq!(
+        file_impact_fits(&app, &ctx, &repository, 594),
+        (true, affected),
+        "the request fits the budget it fits on main"
+    );
+    executor.block_on(app.shutdown());
+    let _ = std::fs::remove_dir_all(src);
+}

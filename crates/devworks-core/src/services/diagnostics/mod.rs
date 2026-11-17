@@ -1535,12 +1535,6 @@ impl RunLog<'_> {
 fn fault_of(code: DomainErrorCode, retry: RetryAdvice, correlation: &CorrelationId) -> DomainFault {
     super::fault(code, retry, correlation)
 }
-fn retry_of(e: &StorageError) -> RetryAdvice {
-    match e {
-        StorageError::InvalidRecord(_) | StorageError::IncompatibleSchema(_) => RetryAdvice::Never,
-        _ => RetryAdvice::SameCommand,
-    }
-}
 
 /// A log position: the last sequence read and the retention boundary when it was issued.
 fn log_position(at: &str) -> Result<(i64, i64), StorageError> {
@@ -1587,18 +1581,14 @@ impl QueryHandler for DiagnosticService {
     ) -> Result<QueryAnswer, DomainFault> {
         let correlation = CorrelationId(ctx.invocation_id().clone());
         let fault = |code, retry| fault_of(code, retry, &correlation);
-        let storage = |e: StorageError| fault(DomainErrorCode::StorageUnavailable, retry_of(&e));
+        let storage = |e: StorageError| {
+            let (code, retry) = crate::services::failure::storage_fault(&e);
+            fault(code, retry)
+        };
         let audience = audience(snapshot.authority(), ctx)
             .map_err(storage)?
             .ok_or_else(|| fault(DomainErrorCode::PermissionDenied, RetryAdvice::Never))?;
         let stamp = snapshot.stamp();
-        let paging = |e: StorageError| match e {
-            StorageError::CursorExpired => fault(
-                DomainErrorCode::CursorExpired,
-                RetryAdvice::RefreshAndNewRequest,
-            ),
-            e => storage(e),
-        };
         let result = match query.input() {
             OperationInput::Workspace(Input::Logs(i)) => {
                 let q = LogQuery::of(i);
@@ -1613,7 +1603,7 @@ impl QueryHandler for DiagnosticService {
                 let cursor = binding
                     .resume(&i.page)
                     .and_then(|at| at.as_deref().map(log_position).transpose())
-                    .map_err(paging)?;
+                    .map_err(storage)?;
                 if retention_gap(
                     filter.descending,
                     filter.after_sequence,
@@ -1642,7 +1632,7 @@ impl QueryHandler for DiagnosticService {
                     },
                     |r| format!("{}.{}", r.sequence, stats.pruned_through),
                 )
-                .map_err(paging)?;
+                .map_err(storage)?;
                 let next_cursor = rows.next_cursor;
                 let rows = rows.items;
                 let items = rows
@@ -1683,7 +1673,7 @@ impl QueryHandler for DiagnosticService {
                     1,
                 );
                 let page =
-                    cursor::slice(&binding, checks.iter().collect(), &i.page).map_err(paging)?;
+                    cursor::slice(&binding, checks.iter().collect(), &i.page).map_err(storage)?;
                 let next_cursor = page.next_cursor;
                 let items = page
                     .items

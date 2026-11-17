@@ -29,8 +29,8 @@ use super::{PackageHost, SlotContext};
 use devworks_core::fingerprint::{canonical_digest, sha256_hex};
 use devworks_core::ports::secrets::{SecretRef, SecretResolver};
 use devworks_core::ports::storage::{
-    ConfigScope, ConfigurationRead, OperationRecord, ReadOptions, StorageError, WriteOptions,
-    read_snapshot, run_write,
+    Cancellation, ConfigScope, ConfigurationRead, OperationRecord, ReadOptions, StorageError,
+    WriteOptions, read_snapshot, run_write,
 };
 use devworks_core::ports::web::{HopTransport, NetFault, Resolver};
 use devworks_core::protocol::provider::ArtifactRef as HostArtifact;
@@ -226,50 +226,75 @@ fn recorded(op: &OperationRecord) -> Option<Value> {
         })
 }
 
-/// Answers one `broker.call` of kind `Http` whose endpoint the approved manifest grants.
-pub(super) fn call(
+/// A brokered HTTP request resolved against its connection, before anything is sent.
+pub(super) struct Request {
+    connection: Connection,
+    url: egress::Url,
+    method: &'static str,
+    relative_path: String,
+    content: Vec<u8>,
+    media_type: Option<String>,
+    timeout: Duration,
+    allow_private: bool,
+}
+impl Request {
+    /// The digest of what the request means (its connection, method, path and body).
+    fn digest(&self) -> Result<String, RpcError> {
+        canonical_digest(&json!({"connection": self.connection.name,
+            "endpointId": self.connection.endpoint_id, "method": self.method,
+            "relativePath": self.relative_path, "body": sha256_hex(&self.content)}))
+        .map_err(|_| rpc_error(RpcErrorClass::ProtocolViolation, "invalid call"))
+    }
+    /// What the journal records of it: never the query (it may carry what the package put
+    /// there) or the body.
+    pub(super) fn detail(&self) -> Value {
+        json!({"connection": self.connection.name, "endpointId": self.connection.endpoint_id,
+            "method": self.method, "path": self.url.path()})
+    }
+}
+
+/// Resolves an HTTP call against its named connection (the endpoint grant is checked by the
+/// caller). Its body must satisfy `in_scope` and is read as the host.
+pub(super) fn prepare(
     host: &PackageHost,
-    ctx: &SlotContext,
-    slot: &Arc<Slot>,
-    params: &BrokerInvoke,
-) -> Result<RpcResult, RpcError> {
+    package: &str,
+    call: &BrokerCall,
+    in_scope: &dyn Fn(&wire::ArtifactRef) -> bool,
+) -> Result<Request, RpcError> {
     let BrokerCall::Http {
         connection_handle,
         endpoint_id,
         http_method,
         relative_path,
         body,
-    } = &params.call
+    } = call
     else {
         return Err(rpc_error(
             RpcErrorClass::ProtocolViolation,
             "not an HTTP call",
         ));
     };
-    let (Some(network), Some(ports)) = (host.network.get(), host.broker.get()) else {
+    let (Some(_), Some(ports)) = (host.network.get(), host.broker.get()) else {
         return Err(rpc_error(
             RpcErrorClass::Unavailable,
             "brokered HTTP calls are not composed in this host",
         ));
     };
-    let read = read_snapshot(&*host.store, &ReadOptions::default(), |s| {
+    let (all, policy) = read_snapshot(&*host.store, &ReadOptions::default(), |s| {
         Ok((
             connections(s.configuration())?,
             read_policy(s.configuration())?,
         ))
-    });
-    let (all, policy) = match read {
-        Ok(r) => r,
-        Err(e) => {
-            return Err(broker::host_failure(
-                host,
-                &ctx.package_id,
-                RpcErrorClass::Unavailable,
-                "the host connections could not be read",
-                &e,
-            ));
-        }
-    };
+    })
+    .map_err(|e| {
+        broker::host_failure(
+            host,
+            package,
+            RpcErrorClass::Unavailable,
+            "the host connections could not be read",
+            &e,
+        )
+    })?;
     let Some(connection) = all
         .into_iter()
         .find(|c| c.name == connection_handle.as_str() && c.endpoint_id == endpoint_id.as_str())
@@ -281,12 +306,10 @@ pub(super) fn call(
     let Some(url) = target(&connection.base, relative_path) else {
         return Err(denied("the path leaves the connection's base URL"));
     };
-    let method = method_name(http_method);
-    // The request body: an artifact of this invocation, read as the host.
     let (content, media_type) = match body {
         None => (Vec::new(), None),
         Some(artifact) => {
-            if !ctx.in_scope(artifact) {
+            if !in_scope(artifact) {
                 return Err(denied("the body is not an artifact of this invocation"));
             }
             let reference: HostArtifact = serde_json::to_value(artifact)
@@ -302,13 +325,184 @@ pub(super) fn call(
             (bytes, Some(artifact.media_type.as_str().to_owned()))
         }
     };
+    Ok(Request {
+        connection,
+        url,
+        method: method_name(http_method),
+        relative_path: relative_path.clone(),
+        content,
+        media_type,
+        timeout: Duration::from_millis(policy.timeout_ms),
+        allow_private: policy.allow_private,
+    })
+}
+
+/// Why a request produced no answer.
+pub(super) enum Failure {
+    /// A name or address of the connection is refused by the egress policy.
+    Refused(Value, String),
+    /// Nothing was sent (resolution, credential or connection failed).
+    NotSent(Value, String),
+    /// Request bytes may have reached the server; what it did is unknown.
+    Sent(Value),
+}
+
+/// A request's answer: the envelope the package receives and what the journal records.
+pub(super) struct Answer {
+    pub(super) envelope: Vec<u8>,
+    pub(super) observation: Value,
+}
+
+/// Sends `request` through the egress rules of `web.fetch` and reads its answer (module
+/// documentation). `cancel` stops the bounded body reads.
+pub(super) fn exchange(
+    network: &NetworkPorts,
+    request: &Request,
+    cancel: &Cancellation,
+) -> Result<Answer, Failure> {
+    let deadline = Instant::now() + request.timeout;
+    let url = &request.url;
+    let port = egress::port(url);
+    let cancels = vec![cancel.clone()];
+    let addrs = match egress::admit_destination(
+        &*network.resolver,
+        url,
+        port,
+        request.allow_private,
+        deadline,
+        &cancels,
+    ) {
+        egress::Admission::Allowed { addrs, .. } => addrs,
+        egress::Admission::Blocked { class, listed } => {
+            return Err(Failure::Refused(
+                json!({"refused": class.as_str(), "addresses": listed.iter().map(|(a, c)| json!({"address": a, "class": c})).collect::<Vec<_>>()}),
+                format!("the connection's address is refused ({})", class.as_str()),
+            ));
+        }
+        egress::Admission::NoAddresses => {
+            return Err(Failure::NotSent(
+                json!({"failed": "no addresses"}),
+                "the connection's host has no address".into(),
+            ));
+        }
+        egress::Admission::Unresolved(f) => {
+            return Err(Failure::NotSent(
+                json!({"failed": f.reason()}),
+                "the connection's host could not be resolved".into(),
+            ));
+        }
+    };
+    let secret = match &request.connection.credential {
+        None => None,
+        Some((reference, header)) => match network.secrets.resolve(reference) {
+            Ok(secret) => Some((header.clone(), secret)),
+            Err(why) => {
+                return Err(Failure::NotSent(
+                    json!({"failed": format!("credential {why:?}")}),
+                    "the connection's credential is unavailable".into(),
+                ));
+            }
+        },
+    };
+    let mut headers: Vec<(&str, &str)> = Vec::new();
+    if let Some((header, value)) = &secret {
+        headers.push((header.as_str(), value.expose()));
+    }
+    if let Some(media_type) = &request.media_type {
+        headers.push(("Content-Type", media_type.as_str()));
+    }
+    let sent = egress::send(
+        &*network.transport,
+        url,
+        port,
+        &addrs,
+        &egress::Outgoing {
+            method: request.method,
+            body: &request.content,
+            deadline,
+            cancel: cancels,
+            user_agent: USER_AGENT,
+            accept: "*/*",
+            headers: &headers,
+        },
+        &mut |_, _| {},
+    );
+    let mut response = match sent {
+        Ok(r) => r,
+        Err(f) => return Err(net_failure(&f)),
+    };
+    let status = response.status;
+    let mut kept: Vec<(String, String)> = response
+        .headers
+        .iter()
+        .filter(|(k, _)| !k.eq_ignore_ascii_case("set-cookie"))
+        .cloned()
+        .collect();
+    // Enough past the kept bound that any credential starting inside it is read whole, so it is
+    // scrubbed before the answer is cut.
+    let credential: &[u8] = secret.as_ref().map_or(&[], |(_, v)| v.expose().as_bytes());
+    let limit = MAX_BODY + credential.len() + 1;
+    let mut answer = Vec::new();
+    if let Err(f) = read_body(&mut *response.body, limit, deadline, cancel, &mut answer) {
+        return Err(net_failure(&f));
+    }
+    let received = answer.len();
+    scrub(&mut answer, credential);
+    let truncated = answer.len() > MAX_BODY || received == limit;
+    if truncated {
+        answer.truncate(MAX_BODY);
+        // A credential the cut (or the read bound) split leaves only its first bytes: drop them.
+        let split = (1..credential.len().min(answer.len() + 1))
+            .rev()
+            .find(|n| answer.ends_with(&credential[..*n]));
+        if let Some(n) = split {
+            answer.truncate(answer.len() - n);
+        }
+    }
+    for (_, v) in &mut kept {
+        let mut bytes = std::mem::take(v).into_bytes();
+        scrub(&mut bytes, credential);
+        *v = String::from_utf8_lossy(&bytes).into_owned();
+    }
+    let envelope = json!({"status": status,
+        "headers": kept.iter().map(|(k, v)| json!([k, v])).collect::<Vec<_>>(),
+        "bodyBase64Url": devworks_core::ports::http::base64url(&answer), "truncated": truncated});
+    Ok(Answer {
+        envelope: envelope.to_string().into_bytes(),
+        observation: json!({"status": status, "requestBytes": request.content.len(),
+            "responseBytes": received, "truncated": truncated}),
+    })
+}
+
+fn net_failure(f: &NetFault) -> Failure {
+    if f.dispatched() {
+        Failure::Sent(json!({"failed": f.reason(), "sent": true}))
+    } else {
+        Failure::NotSent(
+            json!({"failed": f.reason(), "sent": false}),
+            "the request could not be sent".into(),
+        )
+    }
+}
+
+/// Answers one `broker.call` of kind `Http` whose endpoint the approved manifest grants.
+pub(super) fn call(
+    host: &PackageHost,
+    ctx: &SlotContext,
+    slot: &Arc<Slot>,
+    params: &BrokerInvoke,
+) -> Result<RpcResult, RpcError> {
+    let request = prepare(host, &ctx.package_id, &params.call, &|a| ctx.in_scope(a))?;
+    let (Some(network), Some(ports)) = (host.network.get(), host.broker.get()) else {
+        return Err(rpc_error(
+            RpcErrorClass::Unavailable,
+            "brokered HTTP calls are not composed in this host",
+        ));
+    };
     let action = params.action_key.as_str();
     let identity = sha256_hex(format!("{}\0{action}", ctx.operation_id).as_bytes());
     let operation = OperationId(Id::new(format!("pkgcall-{identity}")).expect("bounded id"));
-    let digest = canonical_digest(&json!({"connection": connection.name,
-        "endpointId": connection.endpoint_id, "method": method, "relativePath": relative_path,
-        "body": sha256_hex(&content)}))
-    .map_err(|_| rpc_error(RpcErrorClass::ProtocolViolation, "invalid call"))?;
+    let digest = request.digest()?;
     let journaled = broker::journal(
         host,
         ctx,
@@ -317,11 +511,9 @@ pub(super) fn call(
             operation: &operation,
             capability: HTTP_CAPABILITY,
             action,
-            name: &connection.endpoint_id,
+            name: &request.connection.endpoint_id,
             digest: &digest,
-            // The path without its query: a query may carry what the package put there.
-            detail: json!({"connection": connection.name, "endpointId": connection.endpoint_id,
-                "method": method, "path": url.path()}),
+            detail: request.detail(),
         },
     )?;
     if let Some(earlier) = journaled {
@@ -347,122 +539,21 @@ pub(super) fn call(
             broker::settle(tx, &operation, state, observation)
         });
     };
-    let deadline = Instant::now() + Duration::from_millis(policy.timeout_ms);
-    let cancel = vec![slot.cancellation.clone()];
-    let port = egress::port(&url);
-    let addrs = match egress::admit_destination(
-        &*network.resolver,
-        &url,
-        port,
-        policy.allow_private,
-        deadline,
-        &cancel,
-    ) {
-        egress::Admission::Allowed { addrs, .. } => addrs,
-        egress::Admission::Blocked { class, listed } => {
-            finish(
-                OperationState::Failed,
-                json!({"refused": class.as_str(), "addresses": listed.iter().map(|(a, c)| json!({"address": a, "class": c})).collect::<Vec<_>>()}),
-            );
-            return Err(denied(&format!(
-                "the connection's address is refused ({})",
-                class.as_str()
-            )));
+    let answer = match exchange(network, &request, &slot.cancellation) {
+        Ok(answer) => answer,
+        Err(Failure::Refused(observation, why)) => {
+            finish(OperationState::Failed, observation);
+            return Err(denied(&why));
         }
-        egress::Admission::NoAddresses => {
-            finish(OperationState::Failed, json!({"failed": "no addresses"}));
-            return Err(rpc_error(
-                RpcErrorClass::Unavailable,
-                "the connection's host has no address",
-            ));
+        Err(Failure::NotSent(observation, why)) => {
+            finish(OperationState::Failed, observation);
+            return Err(rpc_error(RpcErrorClass::Unavailable, &why));
         }
-        egress::Admission::Unresolved(f) => {
-            finish(OperationState::Failed, json!({"failed": f.reason()}));
-            return Err(rpc_error(
-                RpcErrorClass::Unavailable,
-                "the connection's host could not be resolved",
-            ));
+        Err(Failure::Sent(observation)) => {
+            finish(OperationState::OutcomeUnknown, observation);
+            return Err(outcome_unknown(&operation));
         }
     };
-    let secret = match &connection.credential {
-        None => None,
-        Some((reference, header)) => match network.secrets.resolve(reference) {
-            Ok(secret) => Some((header.clone(), secret)),
-            Err(why) => {
-                finish(
-                    OperationState::Failed,
-                    json!({"failed": format!("credential {why:?}")}),
-                );
-                return Err(rpc_error(
-                    RpcErrorClass::Unavailable,
-                    "the connection's credential is unavailable",
-                ));
-            }
-        },
-    };
-    let mut headers: Vec<(&str, &str)> = Vec::new();
-    if let Some((header, value)) = &secret {
-        headers.push((header.as_str(), value.expose()));
-    }
-    if let Some(media_type) = &media_type {
-        headers.push(("Content-Type", media_type.as_str()));
-    }
-    let sent = egress::send(
-        &*network.transport,
-        &url,
-        port,
-        &addrs,
-        &egress::Outgoing {
-            method,
-            body: &content,
-            deadline,
-            cancel,
-            user_agent: USER_AGENT,
-            accept: "*/*",
-            headers: &headers,
-        },
-        &mut |_, _| {},
-    );
-    let mut response = match sent {
-        Ok(r) => r,
-        Err(f) => return Err(failed_send(&f, &operation, &finish)),
-    };
-    let status = response.status;
-    let mut kept: Vec<(String, String)> = response
-        .headers
-        .iter()
-        .filter(|(k, _)| !k.eq_ignore_ascii_case("set-cookie"))
-        .cloned()
-        .collect();
-    // Enough past the kept bound that any credential starting inside it is read whole, so it is
-    // scrubbed before the answer is cut.
-    let credential: &[u8] = secret.as_ref().map_or(&[], |(_, v)| v.expose().as_bytes());
-    let limit = MAX_BODY + credential.len() + 1;
-    let mut answer = Vec::new();
-    if let Err(f) = read_body(&mut *response.body, limit, deadline, slot, &mut answer) {
-        return Err(failed_send(&f, &operation, &finish));
-    }
-    let received = answer.len();
-    scrub(&mut answer, credential);
-    let truncated = answer.len() > MAX_BODY || received == limit;
-    if truncated {
-        answer.truncate(MAX_BODY);
-        // A credential the cut (or the read bound) split leaves only its first bytes: drop them.
-        let split = (1..credential.len().min(answer.len() + 1))
-            .rev()
-            .find(|n| answer.ends_with(&credential[..*n]));
-        if let Some(n) = split {
-            answer.truncate(answer.len() - n);
-        }
-    }
-    for (_, v) in &mut kept {
-        let mut bytes = std::mem::take(v).into_bytes();
-        scrub(&mut bytes, credential);
-        *v = String::from_utf8_lossy(&bytes).into_owned();
-    }
-    let envelope = json!({"status": status,
-        "headers": kept.iter().map(|(k, v)| json!([k, v])).collect::<Vec<_>>(),
-        "bodyBase64Url": devworks_core::ports::http::base64url(&answer), "truncated": truncated});
     let owner = ctx
         .grants
         .principal()
@@ -474,18 +565,14 @@ pub(super) fn call(
         &ports.artifacts,
         &owner,
         &operation,
-        Some((
-            OperationState::ObservedComplete,
-            json!({"status": status, "requestBytes": content.len(),
-                "responseBytes": received, "truncated": truncated}),
-        )),
-        envelope.to_string().as_bytes(),
+        broker::Journaling::Settle(OperationState::ObservedComplete, answer.observation),
+        &answer.envelope,
     )
     .map_err(|e| {
         // Nothing of it committed (a commit that did leaves the outcome as it is).
         finish(
             OperationState::OutcomeUnknown,
-            json!({"status": status, "failed": "the answer was not published"}),
+            json!({"failed": "the answer was not published"}),
         );
         broker::host_failure(
             host,
@@ -506,18 +593,17 @@ pub(super) fn call(
 const CHUNK: usize = 16 * 1024;
 
 /// Reads at most `limit` bytes of an answer, between bounded waits that stop at the deadline or
-/// once the invocation is cancelled (the transport then answers `Interrupted`, which is never
-/// retried).
+/// once `cancel` is set (the transport then answers `Interrupted`, which is never retried).
 fn read_body(
     body: &mut dyn Read,
     limit: usize,
     deadline: Instant,
-    slot: &Slot,
+    cancel: &Cancellation,
     out: &mut Vec<u8>,
 ) -> Result<(), NetFault> {
     let mut chunk = vec![0u8; CHUNK];
     while out.len() < limit {
-        if slot.cancellation.is_cancelled() {
+        if cancel.is_cancelled() {
             return Err(NetFault::Cancelled { sent: true });
         }
         if Instant::now() >= deadline {
@@ -553,25 +639,4 @@ fn outcome_unknown(operation: &OperationId) -> RpcError {
         .ok()
         .map(wire::OperationId);
     e
-}
-
-/// The package's error for a request that produced no complete answer, recording it.
-fn failed_send(
-    f: &NetFault,
-    operation: &OperationId,
-    finish: &dyn Fn(OperationState, Value),
-) -> RpcError {
-    if f.dispatched() {
-        finish(
-            OperationState::OutcomeUnknown,
-            json!({"failed": f.reason(), "sent": true}),
-        );
-        outcome_unknown(operation)
-    } else {
-        finish(
-            OperationState::Failed,
-            json!({"failed": f.reason(), "sent": false}),
-        );
-        rpc_error(RpcErrorClass::Unavailable, "the request could not be sent")
-    }
 }

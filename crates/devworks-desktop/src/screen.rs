@@ -39,6 +39,10 @@ pub enum ScreenId {
     Watchers,
     /// Home and the coordinator sidebar: one conversation.
     Chat,
+    /// Scheduled jobs.
+    Jobs,
+    /// Approvals, the notification center and completion cards.
+    Decisions,
     /// Overview, Features and Issues.
     Work,
 }
@@ -60,6 +64,8 @@ impl ScreenId {
             Self::Indexing => "indexing",
             Self::Watchers => "watchers",
             Self::Chat => "chat",
+            Self::Jobs => "jobs",
+            Self::Decisions => "decisions",
             Self::Work => "work",
         }
     }
@@ -100,6 +106,14 @@ pub enum Effect {
     OpenEmbeddingSetup,
     /// Opens Settings on the Instructions category.
     OpenInstructions,
+    /// Opens Settings on Provider connections.
+    OpenConnections,
+    /// Opens Help on the topics of a screen or settings category (its ID).
+    OpenHelp(String),
+    /// Inspects an approval (its ID), after any navigation asked for before it.
+    InspectApproval(String),
+    /// Selects a Knowledge entry, after any navigation asked for before it.
+    SelectKnowledge(devworks_core::protocol::Id),
     /// An artifact was stored or deleted: the Artifacts screen re-reads its list.
     ArtifactsChanged,
     /// Work for the watcher lists (a watcher section drawn by another screen).
@@ -140,6 +154,8 @@ pub struct Cx<'a> {
     pub(crate) ctx: Option<eframe::egui::Context>,
     /// The watcher lists, for a screen that shows a watcher section (Chat's sidebar).
     pub(crate) watchers: Option<&'a crate::watchers_screen::WatchersScreen>,
+    /// The completion cards the shell shows, for the screen that keeps them current.
+    pub(crate) completions: Option<&'a mut crate::notifications::Completions>,
     pub(crate) effects: Vec<Effect>,
 }
 impl Cx<'_> {

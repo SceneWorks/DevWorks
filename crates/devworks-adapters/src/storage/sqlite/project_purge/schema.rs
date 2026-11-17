@@ -43,9 +43,14 @@ type Definitions = Vec<(String, String, String, Option<String>)>;
 /// graph_view_link_sets (schema58 extension): derived rows of an overlay index view, preserved
 /// with every other repository index row; they hold no project rows and add no ownership edge.
 /// Migration 59 adds the partial index graph_edges_target_qualified on graph_edges; it adds no
-/// table, column or ownership edge, and graph_edges keeps its purge policy.
+/// table, column or ownership edge, and graph_edges keeps its purge policy. Migration 60 adds the
+/// graph_nodes_by_id index and the partial graph_nodes_project_directory index on graph_nodes; it
+/// adds no table, column or ownership edge, and graph_nodes keeps its purge policy. Migration 61
+/// adds graph_view_unresolved (schema61 extension), a derived count per one-layer index view,
+/// preserved with every other repository index row, and the partial graph_edges_named_repository
+/// index; they hold no project rows and add no ownership edge.
 pub(super) const REVIEWED_SCHEMA_SHA256: &str =
-    "982baa65f579fcb6f6f8a53e5383f08daa8a20e27fc05a9baa1e167396524ea0";
+    "75bc0903e2fb0eaa1f9db0a22b9ee0549f2240795a649ba8378a3838a7d09478";
 
 fn definitions(conn: &Connection) -> Result<Definitions, StorageError> {
     let mut statement = db(conn.prepare(

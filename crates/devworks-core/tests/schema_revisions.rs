@@ -604,6 +604,29 @@ fn without_exceptions(mut doc: Value) -> Value {
                                 Some("artifacts.tag" | "evals.grade" | "evals.results")
                             )
                         });
+                        // Package broker artifact bytes (DW-312): chunked appends and publishes,
+                        // their answers, and the optional read offset.
+                        alts.retain(|a| {
+                            !matches!(
+                                a.pointer("/properties/kind/const").and_then(Value::as_str),
+                                Some(
+                                    "ArtifactAppend"
+                                        | "ArtifactPublish"
+                                        | "ArtifactChunk"
+                                        | "ArtifactAppended"
+                                )
+                            )
+                        });
+                        for alt in alts.iter_mut() {
+                            if alt
+                                .pointer("/properties/kind/const")
+                                .and_then(Value::as_str)
+                                == Some("ArtifactRead")
+                                && let Some(Value::Object(props)) = alt.get_mut("properties")
+                            {
+                                props.remove("offset");
+                            }
+                        }
                     }
                 }
                 if m.get("pattern") == Some(&json!(RELATIVE_PATH)) {
@@ -707,7 +730,7 @@ fn revision_1_documents_are_byte_identical_to_the_recorded_ones_but_the_document
         exceptions.push(*file);
     }
     // The documents carrying the new operation, a relative path, the activation's
-    // configuration or the MCP server scope and last failure.
+    // configuration, the MCP server scope and last failure, or package artifact chunks.
     assert_eq!(
         exceptions,
         [
@@ -717,6 +740,8 @@ fn revision_1_documents_are_byte_identical_to_the_recorded_ones_but_the_document
             "operation-completion.schema.json",
             "operation-result.schema.json",
             "package-host-request.schema.json",
+            "package-request.schema.json",
+            "package-response.schema.json",
         ]
     );
 }

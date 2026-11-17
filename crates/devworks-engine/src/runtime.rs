@@ -1190,6 +1190,14 @@ async fn build(composition: Composition) -> Result<Engine, BootError> {
             gateway: Arc::downgrade(&gateway),
             artifacts: artifacts.clone(),
         });
+        // Brokered inference runs as routed text inference of the invoking agent's session.
+        if let (Some(provider), Some(router)) = (&providers, use_cases.inference_router()) {
+            host.attach_inference(crate::package_host::inference::InferencePorts {
+                providers: Arc::downgrade(provider),
+                router,
+                runtime: tokio::runtime::Handle::current(),
+            });
+        }
         package_guard.0 = Some(host);
     }
     Ok(Engine {

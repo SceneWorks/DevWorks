@@ -1,0 +1,14 @@
+{
+  "schema": 61,
+  "policy": "dw283-graph-view-unresolved-v1",
+  "additionalTables": [
+    {
+      "table": "graph_view_unresolved",
+      "class": "global_repository_index",
+      "disposition": "preserve_independent",
+      "purpose": "A one-layer index view's count of edges that do not resolve inside it is derived from that view's own layer and follows the view, which a project purge preserves like every other repository index row; it holds no project rows."
+    }
+  ],
+  "readerFloor": 57,
+  "writerFloor": 61
+}

@@ -30,8 +30,8 @@
 //! compare-and-set under the finished invocation's token and writes the answer's class to
 //! `devworks-fixture-<package>-late-state` in the temporary directory), `crash` (exits 5
 //! mid-invocation) and `call` (makes each `broker.call` of `calls` in
-//! `devworks-fixture-<package>-call.json` in the temporary directory, `"$input"` naming its input
-//! and `"$last"` the previous result, reports `call:<actionKey>:<class>` as progress (followed by
+//! `devworks-fixture-<package>-call.json` in the temporary directory, `"$input"` naming its input,
+//! `"$last"` the previous result and `"$lastData"` the data of the last chunk read, reports `call:<actionKey>:<class>` as progress (followed by
 //! `:<error message>` when the step sets `reportMessage`; with `dumpEnv` it first writes its
 //! environment to `devworks-fixture-<package>-env` in the temporary directory) and completes
 //! with the results, plus a forged artifact when `forge` and its input when `returnInput`).
@@ -320,8 +320,12 @@ fn invoke(st: Arc<State>, id: Value, inv: Value, cancel: mpsc::Receiver<()>, pac
                 let _ = std::fs::write(dump, env);
             }
             let mut produced = Vec::new();
+            let mut last_data = Value::Null;
             let calls = script["calls"].as_array().cloned().unwrap_or_default();
             for (n, step) in calls.iter().enumerate() {
+                if let Some(ms) = step["sleepMs"].as_u64() {
+                    std::thread::sleep(std::time::Duration::from_millis(ms));
+                }
                 let mut call = step["call"].clone();
                 // `"$input"` names this invocation's input; `"$last"` the previous result.
                 for (k, v) in call.as_object().cloned().unwrap_or_default() {
@@ -329,6 +333,8 @@ fn invoke(st: Arc<State>, id: Value, inv: Value, cancel: mpsc::Receiver<()>, pac
                         call[&k] = inv["input"].clone();
                     } else if v == json!("$last") {
                         call[&k] = produced.last().cloned().unwrap_or(Value::Null);
+                    } else if v == json!("$lastData") {
+                        call[&k] = last_data.clone();
                     }
                 }
                 let params = json!({"processSessionId": inv["processSessionId"],
@@ -342,7 +348,9 @@ fn invoke(st: Arc<State>, id: Value, inv: Value, cancel: mpsc::Receiver<()>, pac
                     text.push_str(r["error"]["message"].as_str().unwrap_or(""));
                 }
                 st.progress(&inv, n as u64 + 1, &text);
-                if let Some(a) = r["result"].get("artifact") {
+                if let Some(d) = r["result"].get("data") {
+                    last_data = d.clone();
+                } else if let Some(a) = r["result"].get("artifact") {
                     produced.push(a.clone());
                 }
             }

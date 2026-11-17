@@ -1,5 +1,12 @@
 //! Shared query context and bounded wire-page assembly for every graph operator.
-use super::{budget::Budget, dataset, lease::Selected, model, modules::Modules, properties};
+use super::{
+    budget::Budget,
+    dataset,
+    lease::Selected,
+    model,
+    modules::{Modules, Owners},
+    properties,
+};
 use crate::context::InvocationContext;
 use crate::ports::storage::*;
 use crate::protocol::data::DataScope;
@@ -151,7 +158,7 @@ pub(super) struct Reader<'a> {
     pub limit: usize,
     pub next: Option<Position>,
     pub gaps: Vec<&'static str>,
-    modules: Option<Modules>,
+    owners: Owners,
     encoded_bytes: usize,
     indexing: Option<&'a crate::services::indexing::IndexEnv>,
     cursors: Option<&'a super::cursor::Cursors>,
@@ -173,7 +180,7 @@ impl<'a> Reader<'a> {
             limit,
             next: None,
             gaps: Vec::new(),
-            modules: None,
+            owners: Owners::default(),
             encoded_bytes: 0,
             indexing: None,
             cursors: None,
@@ -346,18 +353,17 @@ impl<'a> Reader<'a> {
     }
 
     pub fn internal_module(&mut self, raw: &GraphNode) -> Result<Option<String>, Failure> {
-        if self.modules.is_none() {
-            self.modules = Some(Modules::load(
-                self.read,
-                &self.selected.pin.scope,
-                &mut self.budget,
-            )?);
-        }
-        let (owner, ambiguous) = self.modules.as_ref().expect("loaded modules").owner(raw);
+        let (read, selected) = (self.read, self.selected);
+        let Some((owner, ambiguous)) = self.owners.owner(raw, &mut self.budget, |budget| {
+            Modules::chain(read, &selected.pin.scope, raw, budget)
+        })?
+        else {
+            return Ok(None);
+        };
         if ambiguous && !self.gaps.contains(&"ambiguous_internal_module") {
             self.gaps.push("ambiguous_internal_module");
         }
-        Ok(owner.map(str::to_owned))
+        Ok(owner)
     }
 
     pub fn module_matches(&mut self, raw: &GraphNode, requested: &str) -> Result<bool, Failure> {

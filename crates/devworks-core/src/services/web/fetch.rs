@@ -319,14 +319,15 @@ impl WebService {
                 ));
             }
             Err(ObservedFailure::Storage(e)) => {
+                let (code, retry) = crate::services::failure::storage_fault(&e);
                 let stop = Stop::new(
-                    DomainErrorCode::StorageUnavailable,
+                    code,
                     "web_store",
                     DiagnosticErrorClass::Dependency,
                     format!("Fetched {final_shown} but its content could not be stored: {e:?}"),
                 )
                 .sent(true)
-                .retry(RetryAdvice::SameCommand);
+                .retry(retry);
                 return Err(self.refuse(
                     ctx,
                     project,

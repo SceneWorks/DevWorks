@@ -315,11 +315,11 @@
     },
     {
       "file": "package-request.schema.json",
-      "sha256": "44dcdc0367afa44757108bf0bb43dd39f9a1011739ed16150fce6e5669422ceb"
+      "sha256": "eef8c90d57e943f3788964b79fad2f66b518745837ec8b887a877efc0ff180b6"
     },
     {
       "file": "package-response.schema.json",
-      "sha256": "303c7c0031c60eb1bf77be6d2aadbcfc1d09bfd51163e29c7b4646cc8555f517"
+      "sha256": "33fc659c9a533870d92d3b73ceb1fce235d73a2098a90aba5a88c2dc308e957c"
     },
     {
       "file": "provider-codec-event.schema.json",

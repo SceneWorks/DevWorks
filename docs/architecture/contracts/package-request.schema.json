@@ -127,6 +127,16 @@
             "kind": {
               "const": "ArtifactRead",
               "type": "string"
+            },
+            "offset": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Counter"
+                },
+                {
+                  "type": "null"
+                }
+              ]
             }
           },
           "required": [
@@ -149,6 +159,57 @@
           "required": [
             "kind",
             "proposal"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Appends `data` (base64url, at most [`ARTIFACT_CHUNK_BYTES`] decoded) to the invocation's\npending write `writeId`, which the first append opens.",
+          "properties": {
+            "data": {
+              "maxLength": 349528,
+              "type": "string"
+            },
+            "kind": {
+              "const": "ArtifactAppend",
+              "type": "string"
+            },
+            "writeId": {
+              "$ref": "#/$defs/Id"
+            }
+          },
+          "required": [
+            "kind",
+            "writeId",
+            "data"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Publishes the pending write `writeId` as a new artifact of the invocation when its bytes\nhash to `sha256`, answered with `BrokerCompleted`.",
+          "properties": {
+            "kind": {
+              "const": "ArtifactPublish",
+              "type": "string"
+            },
+            "mediaType": {
+              "maxLength": 128,
+              "minLength": 1,
+              "type": "string"
+            },
+            "sha256": {
+              "$ref": "#/$defs/Digest"
+            },
+            "writeId": {
+              "$ref": "#/$defs/Id"
+            }
+          },
+          "required": [
+            "kind",
+            "writeId",
+            "mediaType",
+            "sha256"
           ],
           "type": "object"
         }

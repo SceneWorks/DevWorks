@@ -111,6 +111,38 @@ pub trait GraphRead {
         scope: &GraphScope,
         identity: &GraphNodeIdentity,
     ) -> Result<Option<GraphNode>, StorageError>;
+    /// The visible nodes of `kind` in `scope`, ordered and paged as [`GraphRead::graph_nodes`],
+    /// read through the kind index: the work follows the nodes of that kind, not every unit.
+    fn graph_nodes_of_kind(
+        &self,
+        scope: &GraphScope,
+        kind: &str,
+        after: Option<&GraphPosition>,
+        limit: u16,
+    ) -> Result<GraphPage<GraphNode>, StorageError>;
+    /// How many edges of a one-layer view name no source or target repository and do not resolve
+    /// inside that view by the graph reader's endpoint rules, recorded when the view was stored.
+    /// `None` for an overlay view.
+    fn graph_view_unresolved(&self, view: &Id) -> Result<Option<u64>, StorageError>;
+    /// The visible edges of `scope` whose payload names a source or target repository, ordered and
+    /// paged as [`GraphRead::graph_edges`], read through their own index. `None` when an overlay
+    /// view is in scope.
+    fn graph_repository_edges(
+        &self,
+        scope: &GraphScope,
+        after: Option<&GraphPosition>,
+        limit: u16,
+    ) -> Result<Option<GraphPage<GraphEdge>>, StorageError>;
+    /// The visible `DotnetProject` nodes of `scope` whose unit lies directly in one of
+    /// `directories`, each a unit's path through its last `/` ("" for a unit without one), ordered
+    /// and paged as [`GraphRead::graph_nodes`]. At most [`GRAPH_MAX_PAGE`] directories.
+    fn graph_project_nodes(
+        &self,
+        scope: &GraphScope,
+        directories: &[String],
+        after: Option<&GraphPosition>,
+        limit: u16,
+    ) -> Result<GraphPage<GraphNode>, StorageError>;
     /// Empty filters page every visible raw edge, including unresolved ones. Core linking may
     /// rebind inherited edges against this same composition before reporting/expanding them.
     fn graph_edges(

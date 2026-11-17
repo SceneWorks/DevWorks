@@ -15,10 +15,17 @@
 //! `dev-host env` can't hand one out mid-delete.
 //!
 //! Live-process detection: Linux reads `/proc`; macOS and other Unix run `lsof` once per
-//! cleanup and see only the processes the current user may inspect (run as the runner's user,
-//! or as root to see everyone). Windows has no such scan here: it relies on Windows refusing to
-//! delete a file another process has open without delete sharing, or a process's working
-//! folder, so a delete there can stop part way and is reported as an error.
+//! cleanup; Windows reads the system handle table and each process's image, modules and mapped
+//! files (the `windows` submodule). macOS and Windows see only the processes the current user
+//! may inspect (run as the runner's user, or as root or an elevated administrator to see
+//! everyone). If the scan fails, cleanup removes nothing.
+//!
+//! On Windows, run cleanup elevated. An unelevated process cannot open elevated ones, and
+//! GitHub runner jobs on a Windows host usually run elevated, so an unelevated cleanup can
+//! delete a folder such a job is using. Cleanup still runs unelevated (dry runs, hosts without
+//! elevated jobs) but prints a warning note. Schedule it with highest privileges, for example
+//! `schtasks /Create /TN dev-host-cleanup /SC DAILY /ST 03:00 /RL HIGHEST /TR "powershell
+//! -NoProfile -File C:\path\to\cleanup.ps1"`, where the wrapper script runs `dev-host cleanup`.
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -130,18 +137,90 @@ impl Liveness for ProcessLiveness {
 }
 
 #[cfg(windows)]
+mod windows;
+
+/// Warning for an unelevated Windows cleanup, which cannot see elevated processes.
+#[cfg(any(windows, test))]
+const NOT_ELEVATED: &str = "Windows: cleanup is not elevated, so it cannot see elevated processes (GitHub runner jobs usually are); a folder such a job uses may be deleted. Run cleanup elevated (scheduled task with highest privileges).";
+
+/// Warning when the elevation check itself failed.
+#[cfg(any(windows, test))]
+const ELEVATION_UNKNOWN: &str = "Windows: could not tell whether cleanup is elevated, so it may not see elevated processes (GitHub runner jobs usually are); a folder such a job uses may be deleted. Run cleanup elevated (scheduled task with highest privileges).";
+
+/// The warning for a Windows elevation check result; none when elevated.
+#[cfg(any(windows, test))]
+fn elevation_limitation(elevated: Result<bool, String>) -> Option<&'static str> {
+    match elevated {
+        Ok(true) => None,
+        Ok(false) => Some(NOT_ELEVATED),
+        Err(_) => Some(ELEVATION_UNKNOWN),
+    }
+}
+
+#[cfg(windows)]
 impl Liveness for ProcessLiveness {
-    fn open_paths(&self) -> Result<Vec<PathBuf>, String> {
-        Ok(Vec::new())
+    fn limitation(&self) -> Option<&'static str> {
+        elevation_limitation(windows::is_elevated())
     }
 
-    fn limitation(&self) -> Option<&'static str> {
-        Some(
-            "Windows: no live-process scan; open files and working folders are protected only \
-             by Windows refusing to delete them, so an in-use folder can be partly deleted \
-             (reported as an error). Held cargo locks are still checked.",
-        )
+    fn open_paths(&self) -> Result<Vec<PathBuf>, String> {
+        // A name query that never returns would hang cleanup; give up instead, which removes
+        // nothing. A stuck scan thread ends with the process.
+        const LIMIT: Duration = Duration::from_secs(120);
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = tx.send(windows::open_paths());
+        });
+        rx.recv_timeout(LIMIT).unwrap_or_else(|_| {
+            Err(format!(
+                "the process scan did not finish within {} s",
+                LIMIT.as_secs()
+            ))
+        })
     }
+}
+
+/// `path` in the form [`held_by_process`] compares. Windows names one file several ways:
+/// `\\?\C:\a` (what `canonicalize` and `GetFinalPathNameByHandleW` return) and `C:\a` (what
+/// the loader reports), `\\?\UNC\srv\share` and `\\srv\share`, in any letter case. Elsewhere
+/// paths are compared as they are.
+fn comparable(path: &Path) -> PathBuf {
+    if cfg!(windows) {
+        PathBuf::from(windows_comparable(&path.to_string_lossy()))
+    } else {
+        path.to_path_buf()
+    }
+}
+
+/// A Windows path without its `\\?\` prefix, with `\` separators, in lower case.
+fn windows_comparable(path: &str) -> String {
+    let path = path.replace('/', "\\");
+    let path = if let Some(rest) = path.strip_prefix(r"\\?\UNC\") {
+        format!(r"\\{rest}")
+    } else if let Some(rest) = path.strip_prefix(r"\\?\") {
+        rest.to_owned()
+    } else {
+        path
+    };
+    path.to_lowercase()
+}
+
+/// The drive-letter (or UNC) form of an NT device path such as `\Device\HarddiskVolume3\a`,
+/// given `(drive, device)` pairs such as `("C:", "\Device\HarddiskVolume3")`.
+#[cfg(any(windows, test))]
+fn dos_path(device_path: &str, drives: &[(String, String)]) -> Option<String> {
+    fn strip<'a>(s: &'a str, prefix: &str) -> Option<&'a str> {
+        let head = s.get(..prefix.len())?;
+        head.eq_ignore_ascii_case(prefix)
+            .then(|| &s[prefix.len()..])
+    }
+    if let Some(rest) = strip(device_path, r"\Device\Mup\") {
+        return Some(format!(r"\\{rest}"));
+    }
+    drives.iter().find_map(|(drive, device)| {
+        let rest = strip(device_path, device)?;
+        rest.starts_with('\\').then(|| format!("{drive}{rest}"))
+    })
 }
 
 /// Which part of the root an entry belongs to.
@@ -375,8 +454,25 @@ fn remove_path(path: &Path) -> std::io::Result<()> {
     }
 }
 
+/// Whether a path in `open` (already passed through [`comparable`]) is `path` or inside it.
 fn held_by_process(path: &Path, open: &[PathBuf]) -> bool {
-    open.iter().any(|p| p.starts_with(path))
+    let path = comparable(path);
+    open.iter().any(|p| p.starts_with(&path))
+}
+
+/// The live processes' paths, in [`comparable`] form, or the error that stops cleanup.
+fn live_paths(live: &dyn Liveness) -> Result<Vec<PathBuf>, String> {
+    let mut open: Vec<PathBuf> = live
+        .open_paths()
+        .map_err(|e| {
+            format!("cannot tell which folders live processes use ({e}); nothing was removed")
+        })?
+        .iter()
+        .map(|p| comparable(p))
+        .collect();
+    open.sort();
+    open.dedup();
+    Ok(open)
 }
 
 struct Run<'a> {
@@ -511,9 +607,7 @@ pub fn run(
     let root = root
         .canonicalize()
         .map_err(|e| format!("cannot resolve {}: {e}", root.display()))?;
-    let open = live.open_paths().map_err(|e| {
-        format!("cannot tell which folders live processes use ({e}); nothing was removed")
-    })?;
+    let open = live_paths(live)?;
     let mut run = Run {
         budgets,
         confine: Some(root.clone()),
@@ -756,9 +850,7 @@ pub fn migrate(
             ));
         }
     }
-    let open = live.open_paths().map_err(|e| {
-        format!("cannot tell which folders live processes use ({e}); nothing was removed")
-    })?;
+    let open = live_paths(live)?;
     let mut run = Run {
         budgets: &Budgets::default(),
         confine: None,
@@ -784,6 +876,15 @@ mod tests {
     use crate::slots::{CARGO_LOCK, CargoLockProbe};
     use crate::testutil::Scratch;
     use std::fs::{File, OpenOptions};
+
+    #[test]
+    fn elevation_warning_is_chosen_by_token_state() {
+        assert_eq!(elevation_limitation(Ok(true)), None);
+        let off = elevation_limitation(Ok(false)).unwrap();
+        assert!(off.contains("not elevated") && off.contains("highest privileges"));
+        let unknown = elevation_limitation(Err("denied".into())).unwrap();
+        assert!(unknown.contains("could not tell"));
+    }
 
     struct NoProcesses;
     impl Liveness for NoProcesses {
@@ -969,6 +1070,13 @@ mod tests {
             .current_dir(root.join("t/cwdhere1"))
             .spawn()
             .unwrap();
+        // A Windows child opens its working folder while it starts, after `spawn` returns.
+        let started = poll(Duration::from_secs(10), || {
+            held_by_process(
+                &root.join("t/cwdhere1"),
+                &live_paths(&ProcessLiveness).unwrap(),
+            )
+        });
         let report = run(
             &root,
             &budgets(|_| {}),
@@ -979,13 +1087,198 @@ mod tests {
         );
         let _ = child.kill();
         let _ = child.wait();
+        assert!(started, "the child's working folder was never listed");
         let report = report.unwrap();
         assert!(!root.join("t/idle0001").exists(), "{}", report.render());
-        // Windows has no process scan; the protection there is Windows refusing the delete.
-        if cfg!(unix) {
-            assert!(root.join("t/openfile/f").exists(), "{}", report.render());
-            assert!(root.join("t/cwdhere1").exists(), "{}", report.render());
+        assert!(root.join("t/openfile/f").exists(), "{}", report.render());
+        assert!(root.join("t/cwdhere1").exists(), "{}", report.render());
+    }
+
+    /// Whether `check` holds within `limit`, tried every 50 ms.
+    fn poll(limit: Duration, mut check: impl FnMut() -> bool) -> bool {
+        let deadline = std::time::Instant::now() + limit;
+        loop {
+            if check() {
+                return true;
+            }
+            if std::time::Instant::now() >= deadline {
+                return false;
+            }
+            std::thread::sleep(Duration::from_millis(50));
         }
+    }
+
+    #[test]
+    fn windows_paths_compare_without_prefix_or_case() {
+        assert_eq!(
+            windows_comparable(r"\\?\C:\Data\Root\t\A"),
+            r"c:\data\root\t\a"
+        );
+        assert_eq!(windows_comparable(r"C:/Data/Root"), r"c:\data\root");
+        assert_eq!(windows_comparable(r"\\?\UNC\Srv\Share\x"), r"\\srv\share\x");
+        assert_eq!(windows_comparable(r"\\srv\share\x"), r"\\srv\share\x");
+    }
+
+    #[test]
+    fn mapped_device_paths_become_drive_letter_paths() {
+        let drives = vec![
+            ("C:".to_owned(), r"\Device\HarddiskVolume3".to_owned()),
+            ("D:".to_owned(), r"\Device\HarddiskVolume30".to_owned()),
+        ];
+        let dos = |p: &str| dos_path(p, &drives);
+        assert_eq!(
+            dos(r"\Device\HarddiskVolume3\Root\t\x.bin").as_deref(),
+            Some(r"C:\Root\t\x.bin")
+        );
+        assert_eq!(dos(r"\device\harddiskvolume30\a").as_deref(), Some(r"D:\a"));
+        assert_eq!(
+            dos(r"\Device\Mup\srv\share\f").as_deref(),
+            Some(r"\\srv\share\f")
+        );
+        assert_eq!(dos(r"\Device\HarddiskVolume9\a"), None);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_spellings_of_one_folder_match() {
+        let open: Vec<PathBuf> = [r"C:\Data\Root\t\abc\f", r"\\?\UNC\srv\share\t\x\g"]
+            .iter()
+            .map(|p| comparable(Path::new(p)))
+            .collect();
+        assert!(held_by_process(Path::new(r"\\?\c:\data\ROOT\t\abc"), &open));
+        assert!(held_by_process(Path::new(r"\\SRV\Share\t\x"), &open));
+        assert!(!held_by_process(Path::new(r"\\?\C:\Data\Root\t\ab"), &open));
+    }
+
+    /// Run as a child by the Windows scan tests: holds `DEV_HOST_TEST_HOLD` open for 2 minutes.
+    #[test]
+    #[ignore = "a helper process for the Windows scan tests"]
+    fn liveness_holder() {
+        let Some(path) = std::env::var_os("DEV_HOST_TEST_HOLD") else {
+            return;
+        };
+        let _held = File::open(path).unwrap();
+        std::thread::sleep(Duration::from_secs(120));
+    }
+
+    /// Starts a copy of this test program, placed in `exe_dir`, working in `cwd`, holding
+    /// `hold` open (the `liveness_holder` helper).
+    #[cfg(windows)]
+    fn spawn_holder(exe_dir: &Path, cwd: &Path, hold: &Path) -> std::process::Child {
+        use std::process::{Command, Stdio};
+        let exe = exe_dir.join("holder.exe");
+        std::fs::copy(std::env::current_exe().unwrap(), &exe).unwrap();
+        set_mtime(&exe, days_ago(8));
+        Command::new(&exe)
+            .args(["--ignored", "--exact", "cleanup::tests::liveness_holder"])
+            .env("DEV_HOST_TEST_HOLD", hold)
+            .current_dir(cwd)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap()
+    }
+
+    /// Which of `dirs` the real scan says a live process uses.
+    #[cfg(windows)]
+    fn held(dirs: &[PathBuf]) -> Vec<bool> {
+        let open = live_paths(&ProcessLiveness).unwrap();
+        dirs.iter().map(|d| held_by_process(d, &open)).collect()
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_scan_sees_an_open_file_a_working_folder_and_a_running_program() {
+        let scratch = Scratch::new("cleanup-win-scan");
+        let dirs: Vec<PathBuf> = ["held", "cwd", "exe"]
+            .iter()
+            .map(|d| scratch.path().join(d))
+            .collect();
+        for d in &dirs {
+            std::fs::create_dir_all(d).unwrap();
+        }
+        let hold = dirs[0].join("f");
+        std::fs::write(&hold, "x").unwrap();
+        assert_eq!(held(&dirs), [false; 3], "nothing runs there yet");
+        let mut child = spawn_holder(&dirs[2], &dirs[1], &hold);
+        let seen = poll(Duration::from_secs(30), || held(&dirs) == [true; 3]);
+        let last = held(&dirs);
+        let _ = child.kill();
+        let _ = child.wait();
+        assert!(
+            seen,
+            "held file, working folder, program folder listed: {last:?}"
+        );
+        let released = poll(Duration::from_secs(10), || held(&dirs) == [false; 3]);
+        assert!(
+            released,
+            "still listed after the child exited: {:?}",
+            held(&dirs)
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_cleanup_keeps_entries_a_live_process_uses_until_it_exits() {
+        let scratch = Scratch::new("cleanup-win-run");
+        let root = root(&scratch);
+        let hold = root.join("t/held0001/f");
+        write_aged(&hold, 10, days_ago(8));
+        write_aged(&root.join("t/cwd00001/f"), 10, days_ago(8));
+        write_aged(&root.join("t/idle0001/f"), 10, days_ago(8));
+        std::fs::create_dir_all(root.join("t/exe00001")).unwrap();
+        let mut child = spawn_holder(&root.join("t/exe00001"), &root.join("t/cwd00001"), &hold);
+        let used: Vec<PathBuf> = ["held0001", "cwd00001", "exe00001"]
+            .iter()
+            .map(|d| root.join("t").join(d))
+            .collect();
+        let started = poll(Duration::from_secs(30), || held(&used) == [true; 3]);
+        let cleanup = || {
+            run(
+                &root,
+                &budgets(|_| {}),
+                false,
+                SystemTime::now(),
+                &ProcessLiveness,
+                &CargoLockProbe,
+            )
+            .unwrap()
+        };
+        let report = cleanup();
+        let _ = child.kill();
+        let _ = child.wait();
+        assert!(
+            started,
+            "the child's folders were never listed: {:?}",
+            held(&used)
+        );
+        let text = report.render();
+        assert!(!root.join("t/idle0001").exists(), "{text}");
+        for dir in &used {
+            assert!(dir.exists(), "{} was removed: {text}", dir.display());
+        }
+        assert_eq!(
+            report
+                .skipped
+                .iter()
+                .filter(|s| s.why == "in use by a live process")
+                .count(),
+            3,
+            "{text}"
+        );
+        assert!(report.errors.is_empty(), "{text}");
+
+        assert!(
+            poll(Duration::from_secs(10), || held(&used) == [false; 3]),
+            "still listed after the child exited"
+        );
+        let report = cleanup();
+        let text = report.render();
+        for dir in &used {
+            assert!(!dir.exists(), "{} was kept: {text}", dir.display());
+        }
+        assert!(report.errors.is_empty(), "{text}");
     }
 
     #[cfg(target_os = "linux")]

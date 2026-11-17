@@ -61,16 +61,6 @@ fn corrupt(what: &str) -> StorageError {
     StorageError::unavailable(Unavailable::Corrupt, format!("stored {what}"))
 }
 
-/// The retained-message helpers report their own rules as scope and record errors. Their
-/// malformed stored rows are `Unavailable::Corrupt`, so these two kinds are always a rule.
-fn retained_rule(kind: &'static str) -> impl FnOnce(StorageError) -> Failure {
-    move |error| match error {
-        StorageError::ScopeDenied => denied(kind).into(),
-        StorageError::InvalidRecord(_) => invalid(kind).into(),
-        other => other.into(),
-    }
-}
-
 /// The wire failure of a use-case outcome. A shared helper of another service that denies scope
 /// or finds no row keeps its permission or not-found code, and an inbox cursor from another
 /// caller restarts. Every other storage error, a corrupt row included, stays a storage fault.
@@ -1344,8 +1334,7 @@ fn retained_history(
             before: input.before.as_ref().map(Counter::get),
             limit,
         },
-    )
-    .map_err(retained_rule("agent_message"))?;
+    )?;
     let scope = snapshot
         .projects()
         .project(&input.project_id)?
@@ -1382,8 +1371,7 @@ fn retained_events(
         &input.project_id,
         input.after.as_ref().map(Counter::get),
         limit,
-    )
-    .map_err(retained_rule("agent_message"))?;
+    )?;
     let mut items = Vec::with_capacity(page.items.len());
     for event in page.items {
         let row = snapshot.runs().agent_message(&event.message_id)?;
@@ -1528,8 +1516,7 @@ fn post_retained(
             resolves,
             idempotency_key: input.idempotency_key.as_ref().map(|value| value.0.clone()),
         },
-    )
-    .map_err(retained_rule("agent_message"))?;
+    )?;
     Ok(RetainedPostResult {
         created: posted.created,
         message: retained_message(tx.actors(), posted.message)?,
@@ -1563,7 +1550,7 @@ fn receive_after(
     input: &ops::ReceiveInput,
     project: &ProjectId,
     recipient: &retained::Recipient,
-) -> Result<i64, StorageError> {
+) -> Result<i64, Failure> {
     input.cursor.as_ref().map_or(Ok(0), |cursor| {
         retained::parse_inbox_cursor(&retained::inbox_binding(ctx, project, recipient), &cursor.0)
     })
@@ -1623,12 +1610,7 @@ fn receive_retained(
         after,
         input.include_read.unwrap_or(false),
         limit,
-    )
-    .map_err(|error| match error {
-        // A cursor ahead of the inbox head cannot be one this inbox issued.
-        StorageError::CursorExpired => invalid("cursor").into(),
-        other => retained_rule("agent_inbox")(other),
-    })?;
+    )?;
     let changed = !page.items.is_empty();
     let mut items = Vec::with_capacity(page.items.len());
     for (delivery, row) in page.items {
@@ -1683,12 +1665,7 @@ fn ack_retained(
         RetainedMessageResolution::Answered => retained::Resolution::Answered,
         RetainedMessageResolution::Declined => retained::Resolution::Declined,
     });
-    let acked = retained::acknowledge(tx, ctx, &project, &recipient, selection, resolution)
-        .map_err(|error| match error {
-            // An `up_to` ahead of the inbox head cannot be a cursor this inbox issued.
-            StorageError::CursorExpired => invalid("up_to").into(),
-            other => retained_rule("agent_inbox")(other),
-        })?;
+    let acked = retained::acknowledge(tx, ctx, &project, &recipient, selection, resolution)?;
     let count = acked.changed.len();
     let mut lines = Vec::new();
     for (delivery, row) in acked.changed.into_iter().take(50) {
@@ -2195,7 +2172,8 @@ impl CommandHandler for AgentService {
                 {
                     return Err(StorageError::ScopeDenied);
                 }
-                let after = receive_after(ctx, input, &project, &recipient)?;
+                let after = receive_after(ctx, input, &project, &recipient)
+                    .map_err(Failure::into_storage)?;
                 if after > snapshot.runs().agent_delivery_head()? {
                     return Err(StorageError::CursorExpired);
                 }
@@ -2249,14 +2227,11 @@ impl CommandHandler for AgentService {
         tx: &mut dyn WriteTransaction,
     ) -> Result<Decided, HandlerFailure> {
         let result = match command.input() {
-            OperationInput::Agents(ops::Input::Delegate(input)) => {
-                let result = self
-                    .delegate(tx, ctx, input)
-                    .map(|value| DomainDecision::Applied {
-                        result: OperationResult::AgentsDelegate { value },
-                    });
-                return decided(tx, result);
-            }
+            OperationInput::Agents(ops::Input::Delegate(input)) => self
+                .delegate(tx, ctx, input)
+                .map(|value| DomainDecision::Applied {
+                    result: OperationResult::AgentsDelegate { value },
+                }),
             OperationInput::Agents(ops::Input::Messages(input)) => post_assignment(tx, ctx, input)
                 .map(|value| DomainDecision::Applied {
                     result: OperationResult::AgentsMessages { value },

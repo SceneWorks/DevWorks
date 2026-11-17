@@ -283,19 +283,6 @@ pub enum Slot {
     PurgePage,
     PurgeConfirm,
     PurgeStatus,
-    ApprovalsList,
-    ApprovalInspect(String),
-    ApprovalRefresh(String),
-    ApprovalContent(String),
-    ApprovalDecision(String),
-    ReviewQueue,
-    NotificationsList,
-    CompletionList,
-    NotificationRead(String),
-    NotificationChange(String),
-    NotificationSettings,
-    NotificationSettingsSave,
-    OsNotificationPermission,
     SettingsRead,
     ContainerCapabilities,
     SettingsValidate,
@@ -355,25 +342,6 @@ pub enum Slot {
     KnowledgeImport,
     /// A Knowledge write (record, revise, tag, lifecycle change, deletion).
     KnowledgeWrite,
-    /// The jobs of the selected scope, and a further page of them.
-    JobsList,
-    /// A further page of the shown jobs list (that list's generation).
-    JobsMore(u64),
-    /// A further page re-read by a refresh of the shown jobs list (the refresh's generation).
-    JobsRefresh(u64),
-    /// The jobs of one project, for its run status on All projects.
-    ProjectJobs(String),
-    /// One job's inspection (its first run-history page) and an older history page (job ID).
-    JobInspect(String),
-    JobHistory(String),
-    /// The job's active run, inspected by its ID (job ID): the latest occurrence may be a
-    /// skipped one while the active run continues.
-    JobActiveRun(String),
-    /// A scoped prompt page of one form generation (None is workspace).
-    JobPrompts(u64, Option<String>),
-    JobCreate,
-    /// A command of one job or its run (one at a time per job).
-    JobCommand(String),
     /// A page of `router.connections` for Settings → Provider connections (load generation).
     Connections(u64),
     /// A page of the full catalog (disabled models included) for the connections panel.
@@ -411,6 +379,10 @@ pub enum Slot {
     #[serde(untagged)]
     Chat(crate::chat::ChatSlot),
     #[serde(untagged)]
+    Jobs(crate::jobs_ops::JobsSlot),
+    #[serde(untagged)]
+    Decisions(crate::decision_ops::DecisionsSlot),
+    #[serde(untagged)]
     Work(crate::work_ops::WorkSlot),
 }
 impl Slot {
@@ -431,6 +403,8 @@ impl Slot {
             Self::Indexing(_) => ScreenId::Indexing,
             Self::Watch(_) => ScreenId::Watchers,
             Self::Chat(_) => ScreenId::Chat,
+            Self::Jobs(_) => ScreenId::Jobs,
+            Self::Decisions(_) => ScreenId::Decisions,
             Self::Work(_) => ScreenId::Work,
             _ => ScreenId::Legacy,
         }
@@ -1080,7 +1054,7 @@ impl Client {
     /// Explicit native permission interaction, off the GUI frame loop.
     pub fn request_notification_permission(&mut self) -> bool {
         self.submit(
-            Slot::OsNotificationPermission,
+            crate::decision_ops::DecisionsSlot::OsNotificationPermission.into(),
             "Requesting native notification permission",
             Box::new(|b| Reply::OsNotificationPermission(b.request_os_notification_permission())),
             None,
@@ -1511,7 +1485,7 @@ mod human_dispatch_tests {
     #[test]
     fn restart_keeps_the_explicit_dispatch_and_never_upgrades_old_generic_frames() {
         let legacy = Unresolved::restored(
-            Slot::ApprovalDecision("p".into()),
+            crate::decision_ops::DecisionsSlot::ApprovalDecision("p".into()).into(),
             "old".into(),
             "approvals.record_human_decision",
             b"original".to_vec(),
@@ -1519,7 +1493,7 @@ mod human_dispatch_tests {
         .unwrap();
         assert_eq!(legacy.dispatch, CommandDispatch::Generic);
         let native = Unresolved::restored_dispatch(
-            Slot::ApprovalDecision("p".into()),
+            crate::decision_ops::DecisionsSlot::ApprovalDecision("p".into()).into(),
             "native".into(),
             "approvals.record_human_decision",
             b"original".to_vec(),

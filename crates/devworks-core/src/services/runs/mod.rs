@@ -1424,12 +1424,7 @@ fn refuse_holds(
     holds: &[&StoredBlocker],
 ) -> Fail {
     Fail::Refused(
-        Refusal {
-            code,
-            retry,
-            target_kind: kind,
-            target_id: Some(root.0.clone()),
-        },
+        Refusal::new(code, kind, Some(root.0.clone())).retry(retry),
         holds.iter().map(|b| b.id.clone()).collect(),
     )
 }

@@ -219,7 +219,10 @@ impl QueryHandler for QueueService {
                 RetryAdvice::Never,
             ));
         };
-        let storage = |e: StorageError| fault(DomainErrorCode::StorageUnavailable, retry_of(&e));
+        let storage = |e: StorageError| {
+            let (code, retry) = crate::services::failure::storage_fault(&e);
+            fault(code, retry)
+        };
         let op_state = |op: &OperationId| {
             snapshot
                 .operations()
@@ -245,13 +248,7 @@ impl QueryHandler for QueueService {
                     },
                     key_position,
                 )
-                .map_err(|e| match e {
-                    StorageError::CursorExpired => fault(
-                        DomainErrorCode::CursorExpired,
-                        RetryAdvice::RefreshAndNewRequest,
-                    ),
-                    e => storage(e),
-                })?;
+                .map_err(storage)?;
                 let value = paged
                     .try_into_page(|e| {
                         let op = operation_state(op_state, &e)?;
@@ -296,13 +293,6 @@ impl QueryHandler for QueueService {
             ),
             result,
         })
-    }
-}
-
-fn retry_of(e: &StorageError) -> RetryAdvice {
-    match e {
-        StorageError::InvalidRecord(_) | StorageError::IncompatibleSchema(_) => RetryAdvice::Never,
-        _ => RetryAdvice::SameCommand,
     }
 }
 

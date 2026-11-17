@@ -1070,10 +1070,9 @@ fn settings_failure(f: crate::settings::service::Failure) -> Failure {
                 r.target_kind
             };
             Refusal {
-                code: r.code,
-                retry: r.retry,
                 target_kind: kind,
-                target_id: r.target_id,
+                blockers: Vec::new(),
+                ..r
             }
             .into()
         }

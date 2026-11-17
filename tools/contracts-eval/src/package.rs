@@ -496,13 +496,37 @@ pub enum BrokerCall {
         input_schema: SchemaRef,
         request: ArtifactRef,
     },
+    // Reads up to `ARTIFACT_CHUNK_BYTES` of an artifact of the invocation from `offset`
+    // (absent: 0), answered with `ArtifactChunk`. (Not a doc comment: the recorded revision-1
+    // schema of this variant has no description.)
     ArtifactRead {
         artifact: ArtifactRef,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        offset: Option<Counter>,
     },
     ArtifactWrite {
         proposal: ArtifactRef,
     },
+    /// Appends `data` (base64url, at most [`ARTIFACT_CHUNK_BYTES`] decoded) to the invocation's
+    /// pending write `writeId`, which the first append opens.
+    ArtifactAppend {
+        write_id: Id,
+        #[schemars(length(max = 349528))]
+        data: String,
+    },
+    /// Publishes the pending write `writeId` as a new artifact of the invocation when its bytes
+    /// hash to `sha256`, answered with `BrokerCompleted`.
+    ArtifactPublish {
+        write_id: Id,
+        #[schemars(length(min = 1, max = 128))]
+        media_type: String,
+        sha256: Digest,
+    },
 }
+/// Largest decoded chunk one `ArtifactRead` answers or one `ArtifactAppend` carries.
+pub const ARTIFACT_CHUNK_BYTES: usize = 256 * 1024;
+/// Longest base64url text of one chunk.
+pub const ARTIFACT_CHUNK_TEXT: usize = 349_528;
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 pub enum HttpMethod {
     Get,
@@ -569,6 +593,19 @@ impl BrokerCall {
                 || relative_path.split('/').any(|x| x == ".." || x == ".") {
                 return Err("nonrelative broker HTTP target");
             }
+        }
+        match self {
+            Self::ArtifactAppend { data, .. } if data.len() > ARTIFACT_CHUNK_TEXT => {
+                return Err("artifact chunk too large");
+            }
+            Self::ArtifactPublish { media_type, .. }
+                if media_type.is_empty()
+                    || media_type.len() > 128
+                    || media_type.chars().any(char::is_control) =>
+            {
+                return Err("invalid artifact media type");
+            }
+            _ => {}
         }
         Ok(())
     }
@@ -777,6 +814,19 @@ pub enum RpcResult {
     ShutdownAcknowledged,
     BrokerCompleted {
         artifact: ArtifactRef,
+    },
+    /// One chunk of an artifact read: base64url bytes from `offset`; `eof` when it ends there.
+    ArtifactChunk {
+        artifact: ArtifactRef,
+        offset: Counter,
+        #[schemars(length(max = 349528))]
+        data: String,
+        eof: bool,
+    },
+    /// A chunk was added to pending write `writeId`, which now holds `byteLength` bytes.
+    ArtifactAppended {
+        write_id: Id,
+        byte_length: Counter,
     },
     StateSnapshot {
         state_generation: Revision,

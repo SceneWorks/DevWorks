@@ -50,8 +50,8 @@ use crate::protocol::records::{
 use crate::protocol::results::{DomainDecision, OperationResult};
 use crate::protocol::support::{BoundedList, BoundedText, DynamicJson, Page};
 use crate::protocol::{
-    CorrelationId, DomainErrorCode, DomainFault, EventId, HoldId, Id, ProjectId, RetryAdvice,
-    Revision, RevisionDimension,
+    CorrelationId, DomainErrorCode, DomainFault, EventId, Id, ProjectId, RetryAdvice, Revision,
+    RevisionDimension,
 };
 use serde_json::{Value, json};
 use std::sync::Arc;
@@ -107,59 +107,7 @@ pub trait PathProbe: Send + Sync {
     fn probe(&self, path: &str) -> PathHealth;
 }
 
-/// A typed refusal the settings use cases return. Becomes a durable `Refused` decision (or a
-/// query fault) with a correlation ID allocated by the caller.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Refusal {
-    pub code: DomainErrorCode,
-    pub retry: RetryAdvice,
-    pub target_kind: &'static str,
-    pub target_id: Option<Id>,
-    pub blockers: Vec<HoldId>,
-}
-impl Refusal {
-    pub fn new(code: DomainErrorCode, target_kind: &'static str, target_id: Option<Id>) -> Self {
-        Self {
-            code,
-            retry: RetryAdvice::Never,
-            target_kind,
-            target_id,
-            blockers: Vec::new(),
-        }
-    }
-    pub fn fault(self, correlation_id: CorrelationId) -> DomainFault {
-        DomainFault {
-            code: self.code,
-            retry: self.retry,
-            correlation_id,
-            target_id: self.target_id,
-            target_kind: Some(BoundedText(self.target_kind.to_owned())),
-            revision_dimension: None,
-            expected_revision: None,
-            current_revision: None,
-            blocker_ids: BoundedList(self.blockers),
-            diagnostic_id: None,
-        }
-    }
-}
-
-#[derive(Clone, Debug)]
-pub enum Failure {
-    Refused(Refusal),
-    /// A storage failure. `RevisionConflict` is the stale-revision outcome (`Configuration`
-    /// dimension); the gateway records it as a durable refusal after undoing partial writes.
-    Storage(StorageError),
-}
-impl From<StorageError> for Failure {
-    fn from(e: StorageError) -> Self {
-        Self::Storage(e)
-    }
-}
-impl From<Refusal> for Failure {
-    fn from(r: Refusal) -> Self {
-        Self::Refused(r)
-    }
-}
+pub use crate::services::failure::{Failure, Refusal};
 
 fn denied(kind: &'static str) -> Failure {
     Refusal::new(DomainErrorCode::PermissionDenied, kind, None).into()
@@ -1124,21 +1072,10 @@ impl SettingsService {
     }
 
     fn read_failure(&self, f: Failure) -> DomainFault {
-        match f {
-            Failure::Refused(r) => self.fault(r),
-            Failure::Storage(e) => {
-                let code = match e {
-                    StorageError::CursorExpired => DomainErrorCode::CursorExpired,
-                    StorageError::Cancelled => DomainErrorCode::Cancelled,
-                    _ => DomainErrorCode::StorageUnavailable,
-                };
-                let mut r = Refusal::new(code, "configuration", None);
-                if code == DomainErrorCode::StorageUnavailable {
-                    r.retry = RetryAdvice::SameCommand;
-                }
-                self.fault(r)
-            }
-        }
+        f.query_fault(
+            "configuration",
+            CorrelationId(self.ids.next_id(IdKind::Correlation)),
+        )
     }
 
     fn read_effective(
