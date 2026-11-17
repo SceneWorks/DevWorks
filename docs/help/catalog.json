@@ -586,7 +586,8 @@
       "skills.draft",
       "skills.propose",
       "skills.history",
-      "skills.rollback"
+      "skills.rollback",
+      "skills.set_enabled"
     ]
   },
   {

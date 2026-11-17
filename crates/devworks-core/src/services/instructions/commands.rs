@@ -1,4 +1,4 @@
-//! `*.draft`, `*.propose` and `*.rollback` (activation).
+//! `*.draft`, `*.propose`, `*.rollback` (activation) and `skills.set_enabled`.
 use super::approval::{self, binding_matches};
 use super::scan::{self, valid_name};
 use super::sync::{RecordedRevision, StagedCapture, new_role_item, record_capture};
@@ -319,6 +319,13 @@ impl InstructionService {
                 };
                 self.activate(ctx, command, tx, kind, a)
             }
+            OperationInput::Skills(skill_ops::Input::SetEnabled(i)) => self.set_enabled(
+                ctx,
+                tx,
+                &i.instruction_id,
+                i.expected_revision.get(),
+                i.enabled,
+            ),
             OperationInput::Roles(role_ops::Input::Rollback(i)) => {
                 let a = Activation {
                     id: &i.instruction_id,
@@ -330,6 +337,49 @@ impl InstructionService {
             }
             _ => Err(invalid("instruction_operation")),
         }
+    }
+
+    /// A person turns a skill off or on. Only the item's flag changes: its revisions, history
+    /// and files stay, and the skill is offered to agents again when it is turned back on.
+    fn set_enabled(
+        &self,
+        ctx: &InvocationContext,
+        tx: &mut dyn WriteTransaction,
+        id: &Id,
+        expected: i64,
+        enabled: bool,
+    ) -> Result<DomainDecision, Failure> {
+        require_human(tx, ctx)?;
+        let kind = InstructionKind::Skill;
+        let mut item = visible_item(tx.instructions(), ctx, id, kind)?;
+        let current = visible_latest(tx.instructions(), ctx, &item)?;
+        if current != expected {
+            return Err(stale(&item, expected, current));
+        }
+        let revision = visible_current(tx.instructions(), ctx, &item)?;
+        if item.enabled == enabled {
+            return Ok(DomainDecision::NoChange {
+                result: result(kind, Op::SetEnabled, record(&item, &revision, None)?),
+            });
+        }
+        item.enabled = enabled;
+        item.version += 1;
+        item.updated_at_ms = tx.now_ms();
+        tx.instructions().update_instruction_item(&item)?;
+        event(
+            tx,
+            ctx.principal(),
+            &item,
+            if enabled {
+                "InstructionEnabled"
+            } else {
+                "InstructionDisabled"
+            },
+            json!({"provenance": provenance(ctx)}),
+        )?;
+        Ok(DomainDecision::Applied {
+            result: result(kind, Op::SetEnabled, record(&item, &revision, None)?),
+        })
     }
 
     fn draft(
@@ -1234,11 +1284,14 @@ pub(crate) fn proposal_record(
 enum Op {
     Draft,
     Rollback,
+    SetEnabled,
 }
 fn result(kind: InstructionKind, op: Op, value: InstructionRecord) -> OperationResult {
     match (kind, op) {
         (InstructionKind::Skill, Op::Draft) => OperationResult::SkillsDraft { value },
         (InstructionKind::Skill, Op::Rollback) => OperationResult::SkillsRollback { value },
+        (InstructionKind::Skill, Op::SetEnabled) => OperationResult::SkillsSetEnabled { value },
+        (InstructionKind::Role, Op::SetEnabled) => unreachable!("roles have no enable switch"),
         (InstructionKind::Role, Op::Draft) => OperationResult::RolesDraft { value },
         (InstructionKind::Role, Op::Rollback) => OperationResult::RolesRollback { value },
     }

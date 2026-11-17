@@ -1356,6 +1356,7 @@ mod tests {
             "skills.draft",
             "roles.rollback",
             "skills.rollback",
+            "skills.set_enabled",
             "agents.post",
             "agents.ack",
             "schemas.configure",

@@ -144,6 +144,46 @@ fn roles_are_drafted_and_reset_and_harness_skills_are_created() {
         root.0.join("skills").join("release-notes").is_dir(),
         "the harness skill directory is written under the data root"
     );
+
+    // Disable and re-enable it (skills.set_enabled): it leaves agents' effective skills
+    // while its history stays, and returns when enabled again.
+    let effective = || -> Vec<String> {
+        engine
+            .host()
+            .runtime()
+            .effective_skills()
+            .unwrap()
+            .skills
+            .iter()
+            .map(|s| s.name.clone())
+            .collect()
+    };
+    click(&mut h, Role::Button, "release-notes");
+    wait(&mut h, "skill history", |s| history_latest(s).is_some());
+    assert!(effective().contains(&"release-notes".to_owned()));
+    click(&mut h, Role::Button, "Disable skill");
+    wait(&mut h, "skill disabled", |s| {
+        idle(s)
+            && matches!(&s.settings.instructions.selected, Some(sel)
+                if iop::record_status(&sel.record).disabled)
+    });
+    settle(&mut h);
+    assert!(!effective().contains(&"release-notes".to_owned()));
+    assert!(
+        h.query_by_role_and_label(Role::Button, "Enable skill")
+            .is_some()
+    );
+    assert!(
+        matches!(&h.state().settings.instructions.detail.history, Some(Ok(hist)) if !hist.is_empty())
+    );
+    click(&mut h, Role::Button, "Enable skill");
+    wait(&mut h, "skill enabled", |s| {
+        idle(s)
+            && matches!(&s.settings.instructions.selected, Some(sel)
+                if !iop::record_status(&sel.record).disabled)
+    });
+    settle(&mut h);
+    assert!(effective().contains(&"release-notes".to_owned()));
 }
 
 #[test]

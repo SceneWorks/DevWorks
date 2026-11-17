@@ -34,6 +34,12 @@ pub enum InstructionAction {
         expected: i64,
         target: i64,
     },
+    /// Turn a skill off or on; `expected` is its latest revision.
+    SetEnabled {
+        id: String,
+        expected: i64,
+        enabled: bool,
+    },
     OpenApprovals,
 }
 
@@ -88,6 +94,8 @@ pub struct Pending {
     /// The draft (target, name) and its text, or `None` for a restore.
     pub draft: Option<(Option<(String, i64)>, String)>,
     pub stage: Stage,
+    /// `Some(enabled)` for a skill switched off or on.
+    pub toggle: Option<bool>,
     /// The staged text file, owned until its `artifacts.save` has a definite outcome.
     pub staged: Option<PathBuf>,
 }
@@ -451,6 +459,34 @@ impl InstructionsPanel {
             );
         }
         let latest = self.detail.latest();
+        if sel.kind == Kind::Skill {
+            let label = if status.disabled {
+                "Enable skill"
+            } else {
+                "Disable skill"
+            };
+            ui.horizontal_wrapped(|ui| {
+                if ui
+                    .add_enabled(!busy && latest.is_some(), egui::Button::new(label))
+                    .clicked()
+                    && let Some(expected) = latest
+                {
+                    actions.push(InstructionAction::SetEnabled {
+                        id: sel.id.clone(),
+                        expected,
+                        enabled: status.disabled,
+                    });
+                }
+                widgets::caption(
+                    ui,
+                    if status.disabled {
+                        "Disabled: agents are not offered this skill. Its history is kept."
+                    } else {
+                        "Disabling keeps the skill and its history but stops offering it to agents."
+                    },
+                );
+            });
+        }
 
         // History
         ui.add_space(4.0);

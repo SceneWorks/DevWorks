@@ -73,8 +73,8 @@ use serde_json::Value;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
-/// The twelve operations this owner is registered for.
-pub const OPERATIONS: [&str; 12] = [
+/// The thirteen operations this owner is registered for.
+pub const OPERATIONS: [&str; 13] = [
     "skills.discover",
     "skills.read",
     "skills.resources",
@@ -82,6 +82,7 @@ pub const OPERATIONS: [&str; 12] = [
     "skills.propose",
     "skills.history",
     "skills.rollback",
+    "skills.set_enabled",
     "roles.read",
     "roles.draft",
     "roles.propose",

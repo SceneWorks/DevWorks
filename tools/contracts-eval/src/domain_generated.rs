@@ -22548,6 +22548,13 @@ pub enum DomainCommand {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         proposal_id: Option<Id>,
     },
+    #[schemars(extend("x-since" = 8))]
+    #[serde(rename = "skills.set_enabled")]
+    SkillsSetEnabled {
+        instruction_id: Id,
+        expected_revision: Revision,
+        enabled: bool,
+    },
     #[serde(rename = "roles.draft")]
     RolesDraft {
         scope: DataScope,
@@ -23423,6 +23430,7 @@ impl DomainCommand {
             Self::SkillsDraft { .. } => "skills.draft",
             Self::SkillsPropose { .. } => "skills.propose",
             Self::SkillsRollback { .. } => "skills.rollback",
+            Self::SkillsSetEnabled { .. } => "skills.set_enabled",
             Self::RolesDraft { .. } => "roles.draft",
             Self::RolesPropose { .. } => "roles.propose",
             Self::RolesRollback { .. } => "roles.rollback",
@@ -24588,6 +24596,15 @@ impl Check for DomainCommand {
                 expected_revision.check()?;
                 target_revision.check()?;
                 proposal_id.check()?;
+            }
+            Self::SkillsSetEnabled {
+                instruction_id,
+                expected_revision,
+                enabled,
+            } => {
+                instruction_id.check()?;
+                expected_revision.check()?;
+                enabled.check()?;
             }
             Self::RolesDraft {
                 scope,
@@ -25898,6 +25915,9 @@ impl Revisioned for DomainCommand {
             Self::AgentsAck { .. } if revision < 7 => {
                 Err("operation predates its introduction".into())
             }
+            Self::SkillsSetEnabled { .. } if revision < 8 => {
+                Err("operation predates its introduction".into())
+            }
             Self::McpDisable { .. } if revision < 8 => {
                 Err("operation predates its introduction".into())
             }
@@ -26296,6 +26316,9 @@ pub enum OperationResult {
     SkillsHistory { value: Page<InstructionRecord> },
     #[serde(rename = "skills.rollback")]
     SkillsRollback { value: InstructionRecord },
+    #[schemars(extend("x-since" = 8))]
+    #[serde(rename = "skills.set_enabled")]
+    SkillsSetEnabled { value: InstructionRecord },
     #[serde(rename = "roles.read")]
     RolesRead { value: InstructionRecord },
     #[serde(rename = "roles.draft")]
@@ -26918,6 +26941,7 @@ impl OperationResult {
             Self::SkillsPropose { .. } => "skills.propose",
             Self::SkillsHistory { .. } => "skills.history",
             Self::SkillsRollback { .. } => "skills.rollback",
+            Self::SkillsSetEnabled { .. } => "skills.set_enabled",
             Self::RolesRead { .. } => "roles.read",
             Self::RolesDraft { .. } => "roles.draft",
             Self::RolesPropose { .. } => "roles.propose",
@@ -27303,6 +27327,7 @@ impl Check for OperationResult {
             Self::SkillsPropose { value } => value.check()?,
             Self::SkillsHistory { value } => value.check()?,
             Self::SkillsRollback { value } => value.check()?,
+            Self::SkillsSetEnabled { value } => value.check()?,
             Self::RolesRead { value } => value.check()?,
             Self::RolesDraft { value } => value.check()?,
             Self::RolesPropose { value } => value.check()?,
@@ -27725,6 +27750,9 @@ impl Revisioned for OperationResult {
                 Err("operation result predates its introduction".into())
             }
             Self::AgentsEvents { .. } if revision < 7 => {
+                Err("operation result predates its introduction".into())
+            }
+            Self::SkillsSetEnabled { .. } if revision < 8 => {
                 Err("operation result predates its introduction".into())
             }
             Self::McpDisable { .. } if revision < 8 => {

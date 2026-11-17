@@ -305,6 +305,9 @@ pub fn rollback_body(id: &str, expected: i64, target: i64) -> Value {
     json!({"instructionId": id, "expectedRevision": expected.to_string(),
         "targetRevision": target.to_string()})
 }
+pub fn set_enabled_body(id: &str, expected: i64, enabled: bool) -> Value {
+    json!({"instructionId": id, "expectedRevision": expected.to_string(), "enabled": enabled})
+}
 pub fn query(b: &dyn Backend, operation: &str, body: Value) -> Vec<u8> {
     ops::query_frame(b, operation, body)
 }
@@ -315,6 +318,10 @@ pub fn resources_query(b: &dyn Backend, body: Value) -> Vec<u8> {
 }
 pub fn command(b: &dyn Backend, operation: &str, body: Value) -> Vec<u8> {
     ops::command_frame(b, operation, body)
+}
+/// The `skills.set_enabled` frame, which begins at schema revision 8.
+pub fn set_enabled_command(b: &dyn Backend, body: Value) -> Vec<u8> {
+    ops::at_revision(ops::command_frame(b, "skills.set_enabled", body), 8)
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -367,6 +374,7 @@ pub fn changed(outcome: CommandOutcome) -> Result<InstructionRecord, Failure> {
     match ops::command_result(outcome)? {
         OperationResult::SkillsDraft { value }
         | OperationResult::SkillsRollback { value }
+        | OperationResult::SkillsSetEnabled { value }
         | OperationResult::RolesDraft { value }
         | OperationResult::RolesRollback { value } => Ok(value),
         other => Err(ops::unexpected("Instruction change", &other)),

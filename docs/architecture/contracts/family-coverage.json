@@ -1,10 +1,10 @@
 {
   "status": "All retained operation inputs and result tags have concrete candidates; not a public API freeze or production runtime coverage",
   "date": "2026-11-13",
-  "catalogSha256": "a953a79fb5cff16c03f553f48bdf82edc46b4fcccb61f7f0d7e34e31b0251073",
+  "catalogSha256": "453bd674c62c47113329f55ff3b8938ad050e4cbd0130e838a49ce7b218bd286",
   "familyCount": 50,
-  "operationCount": 377,
-  "concreteInputCandidates": 377,
+  "operationCount": 378,
+  "concreteInputCandidates": 378,
   "domainInputsPending": 0,
   "families": [
     {
@@ -11018,6 +11018,53 @@
           "authority": "Scoped",
           "effect": "Local",
           "semanticRules": "New attributed revision restores approved content; do not rewrite history or activate beyond current authority.",
+          "familyRules": "Shared files discovered in place, local overrides staged for exact approval and safe adoption. Package assets resolve from owning root.",
+          "admission": "Validate protocol, strict fields and selected operation/mode first; derive host principal, current scope/role/grants, then apply command receipt and dispatch policy. Payload IDs are references, not authority.",
+          "errorSchema": "DomainFault in domain-query-reply or domain-command-reply; shared pre-admission rejections and legacy specialized control replies remain available",
+          "recovery": "Read uses snapshot/cursor revalidation; local mutations replay receipt. Journaled/external/inference commands reconcile uncertain outcomes before retry. A retry hint never clears Pause/Continue/approval/budget holds.",
+          "status": "Concrete input/result candidate; actual service/authority behavior not implemented"
+        },
+        {
+          "introducedRevision": 8,
+          "operation": "skills.set_enabled",
+          "inputSchema": "domain-request.schema.json",
+          "variant": "skills.set_enabled",
+          "selectionConstraint": {
+            "pointer": "/body/kind",
+            "equals": "skills.set_enabled"
+          },
+          "requestModes": [
+            "Command"
+          ],
+          "modePolicies": [
+            {
+              "mode": "Command",
+              "authority": "Scoped",
+              "effect": "Local"
+            }
+          ],
+          "resultSchema": "operation-result.schema.json",
+          "resultSelectionConstraint": {
+            "pointer": "/kind",
+            "equals": "skills.set_enabled"
+          },
+          "resultValueType": "InstructionRecord",
+          "queryReplySchema": null,
+          "commandReplySchema": "domain-command-reply.schema.json",
+          "completionSchema": "operation-completion.schema.json",
+          "schemaRevisions": [
+            {
+              "revision": 8,
+              "inputSchema": "domain-request.r8.schema.json",
+              "resultSchema": "operation-result.r8.schema.json",
+              "queryReplySchema": null,
+              "commandReplySchema": "domain-command-reply.r8.schema.json",
+              "completionSchema": "operation-completion.r8.schema.json"
+            }
+          ],
+          "authority": "Scoped",
+          "effect": "Local",
+          "semanticRules": "Human only. Disables or re-enables a skill without deleting it; a disabled skill is not offered to agents and keeps its revisions and history. Refused when the latest revision is not expected_revision.",
           "familyRules": "Shared files discovered in place, local overrides staged for exact approval and safe adoption. Package assets resolve from owning root.",
           "admission": "Validate protocol, strict fields and selected operation/mode first; derive host principal, current scope/role/grants, then apply command receipt and dispatch policy. Payload IDs are references, not authority.",
           "errorSchema": "DomainFault in domain-query-reply or domain-command-reply; shared pre-admission rejections and legacy specialized control replies remain available",

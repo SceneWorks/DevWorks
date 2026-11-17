@@ -450,6 +450,9 @@ pub enum OperationResult {
     SkillsHistory { value: Page<InstructionRecord> },
     #[serde(rename = "skills.rollback")]
     SkillsRollback { value: InstructionRecord },
+    #[schemars(extend("x-since" = 8))]
+    #[serde(rename = "skills.set_enabled")]
+    SkillsSetEnabled { value: InstructionRecord },
     #[serde(rename = "roles.read")]
     RolesRead { value: InstructionRecord },
     #[serde(rename = "roles.draft")]
@@ -1011,6 +1014,7 @@ impl OperationResult {
             Self::SkillsPropose { .. } => "skills.propose",
             Self::SkillsHistory { .. } => "skills.history",
             Self::SkillsRollback { .. } => "skills.rollback",
+            Self::SkillsSetEnabled { .. } => "skills.set_enabled",
             Self::RolesRead { .. } => "roles.read",
             Self::RolesDraft { .. } => "roles.draft",
             Self::RolesPropose { .. } => "roles.propose",
@@ -1396,6 +1400,7 @@ impl Check for OperationResult {
             Self::SkillsPropose { value } => value.check()?,
             Self::SkillsHistory { value } => value.check()?,
             Self::SkillsRollback { value } => value.check()?,
+            Self::SkillsSetEnabled { value } => value.check()?,
             Self::RolesRead { value } => value.check()?,
             Self::RolesDraft { value } => value.check()?,
             Self::RolesPropose { value } => value.check()?,
@@ -1781,6 +1786,9 @@ impl Revisioned for OperationResult {
                 Err("operation result predates its introduction".into())
             }
             Self::SchemasCodeReferences { .. } if revision < 8 => {
+                Err("operation result predates its introduction".into())
+            }
+            Self::SkillsSetEnabled { .. } if revision < 8 => {
                 Err("operation result predates its introduction".into())
             }
             Self::ApprovalsReviewQueue { .. } if revision < 3 => {

@@ -36,7 +36,7 @@ const OLD_APPROVAL_REQUIRED: [&str; 5] = [
     "skills.rollback",
     "roles.rollback",
 ];
-const OLD_HUMAN_ONLY: [&str; 7] = [
+const OLD_HUMAN_ONLY: [&str; 8] = [
     "agents.history",
     "agents.events",
     "mcp.configure",
@@ -44,6 +44,7 @@ const OLD_HUMAN_ONLY: [&str; 7] = [
     "mcp.classify_tool",
     "mcp.disable",
     "mcp.remove",
+    "skills.set_enabled",
 ];
 /// Refused to an agent with a root (`registered_tool_visibility`).
 const OLD_ROOT_DENIED: [&str; 7] = [

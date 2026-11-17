@@ -382,7 +382,8 @@
         "draft",
         "propose",
         "history",
-        "rollback"
+        "rollback",
+        "set_enabled"
       ],
       "effectAndAuthority": "Harness precedence; agent changes need exact-version human approval",
       "status": "Proposed; exact command/tool schemas require review"
