@@ -17,6 +17,7 @@ use devworks_desktop::projects_ops::ProjectsSlot;
 use devworks_desktop::screen::ScreenId;
 use devworks_desktop::usage_ops::UsageSlot;
 use devworks_desktop::watch_ops::WatchSlot;
+use devworks_desktop::work_ops::WorkSlot;
 use serde::de::DeserializeOwned;
 
 const SLOTS: &str = include_str!("fixtures/slots-main.jsonl");
@@ -164,36 +165,40 @@ fn samples() -> Vec<Slot> {
         Slot::JobPrompts(7, Some("o".into())),
         Slot::JobCreate,
         Slot::JobCommand("s".into()),
-        Slot::WorkFeatures("s".into()),
-        Slot::WorkWorkflow("s".into(), 7),
-        Slot::WorkWorkflowCommand("s".into()),
-        Slot::AllocationQueue("s".into(), Some("o".into()), Some(3)),
-        Slot::AllocationClaim("s".into(), Some("o".into())),
-        Slot::AllocationInspect("s".into()),
-        Slot::AllocationRelease("s".into()),
-        Slot::WorkCards("s".into()),
-        Slot::WorkActivity("s".into(), Some("o".into()), 7),
-        Slot::WorkMessagesHistory("s".into()),
-        Slot::WorkMessagesInbox("s".into()),
-        Slot::WorkMessagesEvents("s".into()),
-        Slot::WorkMessagePost("s".into()),
-        Slot::WorkMessageAck("s".into(), "s".into()),
-        Slot::WorkDetail("s".into()),
-        Slot::WorkGit("s".into()),
-        Slot::WorkGitInspect("s".into(), "s".into()),
+        Slot::Work(WorkSlot::WorkFeatures("s".into())),
+        Slot::Work(WorkSlot::WorkWorkflow("s".into(), 7)),
+        Slot::Work(WorkSlot::WorkWorkflowCommand("s".into())),
+        Slot::Work(WorkSlot::AllocationQueue(
+            "s".into(),
+            Some("o".into()),
+            Some(3),
+        )),
+        Slot::Work(WorkSlot::AllocationClaim("s".into(), Some("o".into()))),
+        Slot::Work(WorkSlot::AllocationInspect("s".into())),
+        Slot::Work(WorkSlot::AllocationRelease("s".into())),
+        Slot::Work(WorkSlot::WorkCards("s".into())),
+        Slot::Work(WorkSlot::WorkActivity("s".into(), Some("o".into()), 7)),
+        Slot::Work(WorkSlot::WorkMessagesHistory("s".into())),
+        Slot::Work(WorkSlot::WorkMessagesInbox("s".into())),
+        Slot::Work(WorkSlot::WorkMessagesEvents("s".into())),
+        Slot::Work(WorkSlot::WorkMessagePost("s".into())),
+        Slot::Work(WorkSlot::WorkMessageAck("s".into(), "s".into())),
+        Slot::Work(WorkSlot::WorkDetail("s".into())),
+        Slot::Work(WorkSlot::WorkGit("s".into())),
+        Slot::Work(WorkSlot::WorkGitInspect("s".into(), "s".into())),
         Slot::Projects(ProjectsSlot::GitInspect("s".into())),
         Slot::Projects(ProjectsSlot::GitDiff("s".into())),
         Slot::Projects(ProjectsSlot::GitDiffContent("s".into())),
-        Slot::WorkCommand("s".into()),
-        Slot::WorkCreate("s".into()),
-        Slot::WorkOrder("s".into()),
-        Slot::WorkPlanText("s".into()),
-        Slot::WorkPlanDrop("s".into()),
-        Slot::WorkPlan("s".into()),
-        Slot::WorkInspect("s".into()),
-        Slot::WorkRun("s".into()),
-        Slot::ArchiveCount("s".into(), true),
-        Slot::WorkOpen("s".into(), true),
+        Slot::Work(WorkSlot::WorkCommand("s".into())),
+        Slot::Work(WorkSlot::WorkCreate("s".into())),
+        Slot::Work(WorkSlot::WorkOrder("s".into())),
+        Slot::Work(WorkSlot::WorkPlanText("s".into())),
+        Slot::Work(WorkSlot::WorkPlanDrop("s".into())),
+        Slot::Work(WorkSlot::WorkPlan("s".into())),
+        Slot::Work(WorkSlot::WorkInspect("s".into())),
+        Slot::Work(WorkSlot::WorkRun("s".into())),
+        Slot::Work(WorkSlot::ArchiveCount("s".into(), true)),
+        Slot::Work(WorkSlot::WorkOpen("s".into(), true)),
         Slot::Connections(7),
         Slot::ConnectionCatalog(7),
         Slot::EmbeddingSpaces(7),
@@ -243,6 +248,7 @@ fn screen_variants() -> Vec<(ScreenId, Vec<String>)> {
         (ScreenId::Indexing, variant_names::<IndexingSlot>()),
         (ScreenId::Watchers, variant_names::<WatchSlot>()),
         (ScreenId::Chat, variant_names::<ChatSlot>()),
+        (ScreenId::Work, variant_names::<WorkSlot>()),
     ]
 }
 
@@ -276,6 +282,7 @@ fn reported(slot: &Slot) -> String {
         ScreenId::Indexing => format!("{:?}", IndexingSlot::try_from(slot.clone()).unwrap()),
         ScreenId::Watchers => format!("{:?}", WatchSlot::try_from(slot.clone()).unwrap()),
         ScreenId::Chat => format!("{:?}", ChatSlot::try_from(slot.clone()).unwrap()),
+        ScreenId::Work => format!("{:?}", WorkSlot::try_from(slot.clone()).unwrap()),
     }
 }
 
