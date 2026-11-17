@@ -84,7 +84,9 @@ use crate::ports::{
 };
 use crate::protocol::data::DataScope;
 use crate::protocol::provider::ArtifactRef;
-use crate::protocol::records::{InstructionRecord, RegisteredPath};
+use crate::protocol::records::{
+    ApprovalState, InstructionRecord, InstructionState, RegisteredPath,
+};
 use crate::protocol::support::{BoundedList, RelativePath};
 use crate::protocol::{CorrelationId, DomainErrorCode, DomainFault, Id, ProjectId};
 use crate::services::artifacts::ArtifactService;
@@ -486,7 +488,59 @@ pub(crate) fn record(
         source_path,
         approved: revision.state == InstructionRevisionState::Approved,
         applicability: BoundedList(labels.iter().map(|l| label(l, "label")).collect()),
+        author: Some(revision.author.clone()),
+        session_id: session_of(&revision.origin),
+        rationale: revision.origin["rationale"]
+            .as_str()
+            .and_then(|r| serde_json::from_value(Value::String(r.to_owned())).ok()),
+        state: Some(match revision.state {
+            InstructionRevisionState::Draft => InstructionState::Draft,
+            InstructionRevisionState::Proposed => InstructionState::Proposed,
+            InstructionRevisionState::Approved => InstructionState::Approved,
+            InstructionRevisionState::Rejected => InstructionState::Rejected,
+        }),
+        // Set by `with_approval_outcome` where the staged approval is read.
+        approval_outcome: None,
     })
+}
+
+/// The session that made a revision, from its recorded provenance.
+fn session_of(origin: &Value) -> Option<Id> {
+    origin["provenance"]["sessionId"]
+        .as_str()
+        .or_else(|| origin["sessionId"].as_str())
+        .and_then(|s| Id::new(s).ok())
+}
+
+/// `record` plus the outcome of the approval staged for the revision. An agent's draft has one
+/// once proposed (`Pending`, then `Approved` or `Rejected`, or `Superseded`/`Expired` as the
+/// approval itself ended); a person's direct save and a skill folder change a person confirmed
+/// had none, so the outcome is absent for them and for a draft not yet proposed.
+pub(crate) fn record_with_approval(
+    decisions: &dyn crate::ports::storage::DecisionRead,
+    item: &StoredInstructionItem,
+    revision: &StoredInstructionRevision,
+    standing: Option<queries::Standing>,
+) -> Result<InstructionRecord, Failure> {
+    let mut record = record(item, revision, standing)?;
+    if let Some(id) = &revision.approval_id {
+        record.approval_outcome = Some(match decisions.approval(id)?.map(|a| a.state) {
+            Some(state) => match state.as_str() {
+                "Approved" => ApprovalState::Approved,
+                "Rejected" => ApprovalState::Rejected,
+                "Superseded" => ApprovalState::Superseded,
+                "Expired" => ApprovalState::Expired,
+                _ => ApprovalState::Pending,
+            },
+            // The approval row is gone: what the revision's own state recorded stands.
+            None => match revision.state {
+                InstructionRevisionState::Approved => ApprovalState::Approved,
+                InstructionRevisionState::Rejected => ApprovalState::Rejected,
+                _ => ApprovalState::Pending,
+            },
+        });
+    }
+    Ok(record)
 }
 
 /// The revision a read without an explicit revision shows: the active one, else the latest.

@@ -34,6 +34,15 @@
         "Expired"
       ]
     },
+    "InstructionState": {
+      "kind": "enum",
+      "values": [
+        "Draft",
+        "Proposed",
+        "Approved",
+        "Rejected"
+      ]
+    },
     "ReviewState": {
       "kind": "enum",
       "values": [
@@ -1344,7 +1353,19 @@
         "content": "ArtifactRef",
         "source_path": "?RegisteredPath",
         "approved": "bool",
-        "applicability": "Items<Label>"
+        "applicability": "Items<Label>",
+        "author": "?ActorId",
+        "session_id": "?Id",
+        "rationale": "?Content",
+        "state": "?InstructionState",
+        "approval_outcome": "?ApprovalState"
+      },
+      "since": {
+        "author": 8,
+        "session_id": 8,
+        "rationale": 8,
+        "state": 8,
+        "approval_outcome": 8
       }
     },
     "ProposalRecord": {
@@ -8985,12 +9006,16 @@
         "instruction_id": "?Id",
         "expected_revision": "?Revision",
         "name": "Label",
-        "content": "ArtifactRef"
+        "content": "ArtifactRef",
+        "rationale": "?Content"
       },
       "result": "InstructionRecord",
       "effect": "Local",
       "authority": "Scoped",
-      "rules": "Stage local override or new candidate; shared original untouched and no activation by writing."
+      "rules": "Stage local override or new candidate; shared original untouched and no activation by writing.",
+      "since": {
+        "rationale": 8
+      }
     },
     "skills.propose": {
       "operation": "skills.propose",
@@ -9065,12 +9090,16 @@
         "instruction_id": "?Id",
         "expected_revision": "?Revision",
         "name": "Label",
-        "content": "ArtifactRef"
+        "content": "ArtifactRef",
+        "rationale": "?Content"
       },
       "result": "InstructionRecord",
       "effect": "Local",
       "authority": "Scoped",
-      "rules": "Stage local override or new candidate; shared original untouched and no activation by writing."
+      "rules": "Stage local override or new candidate; shared original untouched and no activation by writing.",
+      "since": {
+        "rationale": 8
+      }
     },
     "roles.propose": {
       "operation": "roles.propose",
@@ -11665,6 +11694,46 @@
       8
     ],
     "skills.set_enabled": [
+      8
+    ],
+    "dreaming.instructions": [
+      1,
+      8
+    ],
+    "skills.discover": [
+      1,
+      8
+    ],
+    "skills.read": [
+      1,
+      8
+    ],
+    "skills.draft": [
+      1,
+      8
+    ],
+    "skills.history": [
+      1,
+      8
+    ],
+    "skills.rollback": [
+      1,
+      8
+    ],
+    "roles.read": [
+      1,
+      8
+    ],
+    "roles.draft": [
+      1,
+      8
+    ],
+    "roles.history": [
+      1,
+      8
+    ],
+    "roles.rollback": [
+      1,
       8
     ],
     "mcp.disable": [

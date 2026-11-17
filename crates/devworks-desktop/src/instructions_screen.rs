@@ -600,6 +600,15 @@ impl InstructionsPanel {
                         if s.active {
                             chip(ui, "active", Tone::Accent);
                         }
+                        if let Some(outcome) = iop::approval_outcome(record) {
+                            chip(ui, outcome, Tone::Neutral);
+                        }
+                        if let Some(who) = iop::made_by(record) {
+                            widgets::caption(ui, who);
+                        }
+                        if let Some(why) = &record.rationale {
+                            widgets::caption(ui, format!("Why: {}", why.0));
+                        }
                         if self.detail.shown == Some(revision) {
                             widgets::caption(ui, "shown");
                         } else if widgets::secondary_button(

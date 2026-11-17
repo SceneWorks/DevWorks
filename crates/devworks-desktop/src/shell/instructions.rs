@@ -243,7 +243,7 @@ impl InstructionsCtl<'_, '_> {
             InstructionsSlot::InstructionHistory(generation),
             "Reading instruction history",
             op,
-            move |b| iop::query(b, op, iop::history_body(&id, cursor.as_deref())),
+            move |b| iop::history_query(b, op, iop::history_body(&id, cursor.as_deref())),
         ) {
             self.panel().detail.history = Some(Err("Not requested: DevWorks is offline.".into()));
         }

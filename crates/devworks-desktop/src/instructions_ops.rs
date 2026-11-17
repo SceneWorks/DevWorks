@@ -35,7 +35,7 @@ use devworks_core::{
         DomainErrorCode,
         data::DataScope,
         provider::ArtifactRef,
-        records::{InstructionRecord, SkillResource, SkillResourcePageResult},
+        records::{ApprovalState, InstructionRecord, SkillResource, SkillResourcePageResult},
         results::OperationResult,
     },
     services::instructions::{HARNESS_ROOT_ID, MAX_TEXT_BYTES, SHARED_ROOT_ID, role_item_id},
@@ -335,6 +335,35 @@ pub fn set_enabled_body(id: &str, expected: i64, enabled: bool) -> Value {
 pub fn query(b: &dyn Backend, operation: &str, body: Value) -> Vec<u8> {
     ops::query_frame(b, operation, body)
 }
+/// A history frame at schema revision 8, whose records say who made each revision, in which
+/// session, why, and the outcome of its approval.
+pub fn history_query(b: &dyn Backend, operation: &str, body: Value) -> Vec<u8> {
+    ops::at_revision(ops::query_frame(b, operation, body), 8)
+}
+/// Who made a revision and in which session, as a history row shows it (`None` when the
+/// reply carries no author, as at an earlier revision).
+pub fn made_by(record: &InstructionRecord) -> Option<String> {
+    let author = &record.author.as_ref()?.0;
+    Some(match &record.session_id {
+        Some(session) => format!(
+            "Made by {} in session {}",
+            author.as_str(),
+            session.as_str()
+        ),
+        None => format!("Made by {}", author.as_str()),
+    })
+}
+/// The outcome of the approval staged for a revision; `None` when none was (a person's own
+/// save, a confirmed disk change, or a draft not yet proposed).
+pub fn approval_outcome(record: &InstructionRecord) -> Option<&'static str> {
+    Some(match record.approval_outcome.as_ref()? {
+        ApprovalState::Pending => "approval pending",
+        ApprovalState::Approved => "approval approved",
+        ApprovalState::Rejected => "approval rejected",
+        ApprovalState::Superseded => "approval superseded",
+        ApprovalState::Expired => "approval expired",
+    })
+}
 /// The `skills.resources` frame at schema revision 3, whose items carry each resource's
 /// skill-relative path beside its artifact.
 pub fn resources_query(b: &dyn Backend, body: Value) -> Vec<u8> {
@@ -483,6 +512,22 @@ mod tests {
             "approved": approved, "applicability": labels,
         }))
         .expect("record")
+    }
+
+    #[test]
+    fn a_history_row_says_who_made_it_and_how_its_approval_ended() {
+        let mut row = serde_json::to_value(rec(2, false, &["state:proposed"])).unwrap();
+        assert_eq!(made_by(&rec(2, false, &[])), None);
+        row["author"] = json!("agent-a");
+        row["sessionId"] = json!("session-a");
+        row["approvalOutcome"] = json!("Pending");
+        let row: InstructionRecord = serde_json::from_value(row).unwrap();
+        assert_eq!(
+            made_by(&row).unwrap(),
+            "Made by agent-a in session session-a"
+        );
+        assert_eq!(approval_outcome(&row), Some("approval pending"));
+        assert_eq!(approval_outcome(&rec(1, true, &[])), None);
     }
 
     #[test]

@@ -4888,6 +4888,10 @@
             "name": {
               "$ref": "#/$defs/Text1To256"
             },
+            "rationale": {
+              "$ref": "#/$defs/Text0To65536",
+              "x-since": 8
+            },
             "scope": {
               "$ref": "#/$defs/DataScope"
             }
@@ -5018,6 +5022,10 @@
             },
             "name": {
               "$ref": "#/$defs/Text1To256"
+            },
+            "rationale": {
+              "$ref": "#/$defs/Text0To65536",
+              "x-since": 8
             },
             "scope": {
               "$ref": "#/$defs/DataScope"

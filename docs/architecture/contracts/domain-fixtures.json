@@ -14208,5 +14208,138 @@
     "raw": "{\"kind\":\"settings.explain_source\",\"value\":{\"items\":[{\"key\":\"fixture\",\"value\":{\"schema\":{\"schemaId\":\"fixture/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"value\":{\"input\":\"fixture\"}},\"sourceScope\":{\"kind\":\"Project\",\"projectId\":\"project-a\"},\"revision\":\"1\",\"sourceRepositoryId\":\"repo-a\"}],\"hasMore\":false}}",
     "typedValid": false,
     "schemaValid": false
+  },
+  {
+    "id": "r8-input-skills.draft-rationale",
+    "entry": "domain-request.r8",
+    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"skills.draft\",\"scope\":{\"kind\":\"Workspace\"},\"name\":\"fixture\",\"content\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"8\",\"mediaType\":\"text/plain\"},\"rationale\":\"Fix the checklist order\"},\"schemaRevision\":8}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "reject-r1-input-skills.draft-rationale",
+    "entry": "domain-request",
+    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"skills.draft\",\"scope\":{\"kind\":\"Workspace\"},\"name\":\"fixture\",\"content\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"8\",\"mediaType\":\"text/plain\"},\"rationale\":\"Fix the checklist order\"}}",
+    "typedValid": false,
+    "schemaValid": false
+  },
+  {
+    "id": "r8-input-skills.draft",
+    "entry": "domain-request.r8",
+    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"skills.draft\",\"scope\":{\"kind\":\"Workspace\"},\"name\":\"fixture\",\"content\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"8\",\"mediaType\":\"text/plain\"}},\"schemaRevision\":8}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "r8-input-roles.draft-rationale",
+    "entry": "domain-request.r8",
+    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"roles.draft\",\"scope\":{\"kind\":\"Workspace\"},\"name\":\"fixture\",\"content\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"8\",\"mediaType\":\"text/plain\"},\"rationale\":\"Fix the checklist order\"},\"schemaRevision\":8}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "reject-r1-input-roles.draft-rationale",
+    "entry": "domain-request",
+    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"roles.draft\",\"scope\":{\"kind\":\"Workspace\"},\"name\":\"fixture\",\"content\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"8\",\"mediaType\":\"text/plain\"},\"rationale\":\"Fix the checklist order\"}}",
+    "typedValid": false,
+    "schemaValid": false
+  },
+  {
+    "id": "r8-input-roles.draft",
+    "entry": "domain-request.r8",
+    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"roles.draft\",\"scope\":{\"kind\":\"Workspace\"},\"name\":\"fixture\",\"content\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"8\",\"mediaType\":\"text/plain\"}},\"schemaRevision\":8}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "r8-input-dreaming.instructions-query",
+    "entry": "domain-request.r8",
+    "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"dreaming.instructions\",\"scope\":{\"kind\":\"Workspace\"}},\"schemaRevision\":8}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "r8-input-dreaming.instructions-command",
+    "entry": "domain-request.r8",
+    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"dreaming.instructions\",\"scope\":{\"kind\":\"Workspace\"},\"expectedRevision\":\"1\",\"content\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"8\",\"mediaType\":\"text/plain\"}},\"schemaRevision\":8}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "r8-input-skills.discover",
+    "entry": "domain-request.r8",
+    "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"skills.discover\",\"scope\":{\"kind\":\"Workspace\"},\"rootIds\":[],\"page\":{\"limit\":20}},\"schemaRevision\":8}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "r8-input-skills.read",
+    "entry": "domain-request.r8",
+    "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"skills.read\",\"instructionId\":\"id-a\"},\"schemaRevision\":8}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "r8-input-skills.history",
+    "entry": "domain-request.r8",
+    "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"skills.history\",\"instructionId\":\"id-a\",\"page\":{\"limit\":20}},\"schemaRevision\":8}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "r8-input-skills.rollback",
+    "entry": "domain-request.r8",
+    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"skills.rollback\",\"instructionId\":\"id-a\",\"expectedRevision\":\"1\",\"targetRevision\":\"1\"},\"schemaRevision\":8}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "r8-input-roles.read",
+    "entry": "domain-request.r8",
+    "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"roles.read\",\"instructionId\":\"id-a\"},\"schemaRevision\":8}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "r8-input-roles.history",
+    "entry": "domain-request.r8",
+    "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"roles.history\",\"instructionId\":\"id-a\",\"page\":{\"limit\":20}},\"schemaRevision\":8}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "r8-input-roles.rollback",
+    "entry": "domain-request.r8",
+    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"roles.rollback\",\"instructionId\":\"id-a\",\"expectedRevision\":\"1\",\"targetRevision\":\"1\"},\"schemaRevision\":8}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "r8-result-skills.history-provenance",
+    "entry": "operation-result.r8",
+    "raw": "{\"kind\":\"skills.history\",\"value\":{\"items\":[{\"id\":\"id-a\",\"revision\":\"1\",\"name\":\"fixture\",\"scope\":{\"kind\":\"Workspace\"},\"content\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"8\",\"mediaType\":\"text/plain\"},\"approved\":false,\"applicability\":[],\"author\":\"agent-a\",\"sessionId\":\"session-a\",\"rationale\":\"Fix the checklist order\",\"state\":\"Proposed\",\"approvalOutcome\":\"Pending\"}],\"hasMore\":false}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "reject-r1-result-skills.history-provenance",
+    "entry": "operation-result",
+    "raw": "{\"kind\":\"skills.history\",\"value\":{\"items\":[{\"id\":\"id-a\",\"revision\":\"1\",\"name\":\"fixture\",\"scope\":{\"kind\":\"Workspace\"},\"content\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"8\",\"mediaType\":\"text/plain\"},\"approved\":false,\"applicability\":[],\"author\":\"agent-a\",\"sessionId\":\"session-a\",\"rationale\":\"Fix the checklist order\",\"state\":\"Proposed\",\"approvalOutcome\":\"Pending\"}],\"hasMore\":false}}",
+    "typedValid": false,
+    "schemaValid": false
+  },
+  {
+    "id": "r8-result-roles.history-provenance",
+    "entry": "operation-result.r8",
+    "raw": "{\"kind\":\"roles.history\",\"value\":{\"items\":[{\"id\":\"id-a\",\"revision\":\"1\",\"name\":\"fixture\",\"scope\":{\"kind\":\"Workspace\"},\"content\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"8\",\"mediaType\":\"text/plain\"},\"approved\":false,\"applicability\":[],\"author\":\"agent-a\",\"sessionId\":\"session-a\",\"rationale\":\"Fix the checklist order\",\"state\":\"Proposed\",\"approvalOutcome\":\"Pending\"}],\"hasMore\":false}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "reject-r1-result-roles.history-provenance",
+    "entry": "operation-result",
+    "raw": "{\"kind\":\"roles.history\",\"value\":{\"items\":[{\"id\":\"id-a\",\"revision\":\"1\",\"name\":\"fixture\",\"scope\":{\"kind\":\"Workspace\"},\"content\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"8\",\"mediaType\":\"text/plain\"},\"approved\":false,\"applicability\":[],\"author\":\"agent-a\",\"sessionId\":\"session-a\",\"rationale\":\"Fix the checklist order\",\"state\":\"Proposed\",\"approvalOutcome\":\"Pending\"}],\"hasMore\":false}}",
+    "typedValid": false,
+    "schemaValid": false
   }
 ]

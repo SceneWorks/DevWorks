@@ -438,7 +438,10 @@ def type_since(name, seen=None):
         return set()
     seen.add(name)
     if d['kind'] == 'versioned':
-        return {d['revision']} | type_since(d['legacy'], seen) | type_since(d['current'], seen)
+        # The legacy alternative answers only below the boundary, so a member of it introduced
+        # at or after the boundary is never reachable and does not need the operation to register it.
+        legacy = {r for r in type_since(d['legacy'], seen) if r <= d['revision']}
+        return {d['revision']} | legacy | type_since(d['current'], seen)
     out = set(d.get('since', {}).values()) | set(d.get('introducedVariants', {}).values())
     for since in d.get('variantSince', {}).values():
         out |= set(since.values())

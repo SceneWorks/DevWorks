@@ -4,9 +4,9 @@ use super::scan::{self, valid_name};
 use super::sync::{RecordedRevision, StagedCapture, new_role_item, record_capture};
 use super::{
     InstructionService, config_scope, denied, draft_confinement, event, event_in, invalid,
-    item_visible, kind_of, not_found_failure, provenance, record, refusal, require_author,
-    require_human, stale, target_kind, visible_current, visible_item, visible_latest,
-    visible_revision,
+    item_visible, kind_of, not_found_failure, provenance, record, record_with_approval, refusal,
+    require_author, require_human, stale, target_kind, visible_current, visible_item,
+    visible_latest, visible_revision,
 };
 use crate::context::{InvocationContext, PrincipalKind};
 use crate::fingerprint::sha256_hex;
@@ -280,6 +280,7 @@ impl InstructionService {
                     instruction_id: i.instruction_id.as_ref(),
                     expected: i.expected_revision.as_ref(),
                     name: &i.name,
+                    rationale: i.rationale.as_ref(),
                     confined: None,
                 };
                 self.draft(ctx, command, tx, kind, draft)
@@ -290,6 +291,7 @@ impl InstructionService {
                     instruction_id: i.instruction_id.as_ref(),
                     expected: i.expected_revision.as_ref(),
                     name: &i.name,
+                    rationale: i.rationale.as_ref(),
                     confined: None,
                 };
                 self.draft(ctx, command, tx, kind, draft)
@@ -393,6 +395,14 @@ impl InstructionService {
         mut input: Draft<'_>,
     ) -> Result<DomainDecision, Failure> {
         require_author(tx, ctx, &*self.roles)?;
+        // The rationale is shown in history and in the approval, so text the redactor would
+        // change is refused rather than stored.
+        if let Some(why) = input.rationale {
+            let why = why.0.trim();
+            if crate::authority::redact::Redactor::new().redact_text(why) != why {
+                return Err(invalid("instruction_rationale_unreviewable"));
+            }
+        }
         let prepared = command
             .prepared::<PreparedDraft>()
             .ok_or_else(|| invalid("instruction_content"))?;
@@ -496,6 +506,7 @@ impl InstructionService {
                 origin: json!({
                     "kind": if human { "HumanSaved" } else { "AgentDraft" },
                     "provenance": provenance(ctx),
+                    "rationale": input.rationale.map(|r| r.0.trim()).filter(|r| !r.is_empty()),
                     "baseRevision": base.as_ref().map(|b| b.revision),
                     "overrides": overrides.as_ref().map(|(id, r)| json!({"instructionId": id, "revision": r})),
                     "upload": prepared.upload,
@@ -903,7 +914,11 @@ impl InstructionService {
         if item.active_revision == Some(target.revision) {
             self.check_materializable(&item, &target.resources)?;
             return Ok(DomainDecision::NoChange {
-                result: result(kind, Op::Rollback, record(&item, &target, None)?),
+                result: result(
+                    kind,
+                    Op::Rollback,
+                    record_with_approval(tx.decisions(), &item, &target, None)?,
+                ),
             });
         }
         let previous = item.active_revision;
@@ -969,7 +984,11 @@ impl InstructionService {
             }),
         )?;
         Ok(DomainDecision::Applied {
-            result: result(kind, Op::Rollback, record(&item, &target, None)?),
+            result: result(
+                kind,
+                Op::Rollback,
+                record_with_approval(tx.decisions(), &item, &target, None)?,
+            ),
         })
     }
 }
@@ -1149,6 +1168,8 @@ struct Draft<'a> {
     instruction_id: Option<&'a Id>,
     expected: Option<&'a Revision>,
     name: &'a Label,
+    /// Why the draft is made, kept on the revision.
+    rationale: Option<&'a crate::protocol::support::Content>,
     /// The project the draft (and any item it creates) is confined to.
     confined: Option<crate::protocol::ProjectId>,
 }

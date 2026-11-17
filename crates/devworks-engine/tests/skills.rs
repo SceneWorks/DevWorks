@@ -1166,6 +1166,126 @@ fn a_proposal_with_a_review_over_the_inline_limit_is_readable_and_decidable() {
     });
 }
 
+#[test]
+fn skill_history_shows_why_who_which_session_state_and_approval_outcome() {
+    let fx = Fx::new();
+    runtime().block_on(async {
+        let (user, _, _) = fx.principals();
+        let app = boot(fx.composition()).await.unwrap();
+        let agent = with_session_in(
+            &fx,
+            project_agent(&fx, &user, "agent-a", "project-a"),
+            "session-a",
+            "project-a",
+        );
+        let in_a = ArtifactScope::Project(ProjectId(id("project-a")));
+        let draft_at = |who: &InvocationContext, item: Option<(&Value, &str)>, text: &str, why: Option<&str>| {
+            let mut body = json!({"scope":{"kind":"Workspace"},"name":"deploy","content":fx.upload_in(who, text, in_a.clone())});
+            if let Some((id, expected)) = item {
+                body["instructionId"] = id.clone();
+                body["expectedRevision"] = json!(expected);
+            }
+            if let Some(why) = why {
+                body["rationale"] = json!(why);
+            }
+            applied(fx.command_at(&app, who, "skills.draft", 8, body))
+        };
+        let decide = |proposal: &Value, verdict: &str| {
+            let frame = serde_json::to_vec(&json!({"mode":"Command","protocol":"1.0-draft.1","schemaRevision":3,
+                "requestKey":fx.h.ids.next_id(IdKind::Link),"body":{"kind":"approvals.record_human_decision",
+                "proposalId":proposal["id"],"expectedRevision":proposal["revision"],"contentDigest":proposal["contentDigest"],
+                "decision":verdict,"rationale":"Reviewed"}})).unwrap();
+            applied(app.record_human_decision(&user, &frame).unwrap());
+        };
+        let history = |revision: u32| -> Vec<Value> {
+            let id = fx.query(&app, &user, "skills.discover", json!({"scope":{"kind":"Workspace"},"rootIds":[],"page":{"limit":10}})).unwrap()["items"][0]["id"].clone();
+            fx.query_at(&app, &user, "skills.history", revision, json!({"instructionId":id,"page":{"limit":10}})).unwrap()["items"].as_array().unwrap().clone()
+        };
+        // A person's save has no approval; a draft without a rationale still validates.
+        let saved = draft_at(&user, None, "Deploy v1.", Some("First version"));
+        assert_eq!(saved["revision"], "1");
+        let plain = draft_at(&user, Some((&saved["id"], "1")), "Deploy v1, plain.", None);
+        assert_eq!(plain["revision"], "2");
+        // An agent's draft says why, who made it and in which session.
+        let drafted = draft_at(&agent, Some((&saved["id"], "2")), "Deploy v2.", Some("  Add the rollback step  "));
+        let rows = history(8);
+        assert_eq!(rows.iter().map(|r| r["revision"].as_str().unwrap()).collect::<Vec<_>>(), ["3", "2", "1"]);
+        assert_eq!(
+            (&rows[0]["rationale"], &rows[0]["author"], &rows[0]["sessionId"], &rows[0]["state"]),
+            (&json!("Add the rollback step"), &json!("agent-a"), &json!("session-a"), &json!("Draft")),
+            "{}", rows[0]
+        );
+        assert!(rows[0].get("approvalOutcome").is_none(), "not proposed yet: {}", rows[0]);
+        assert_eq!((&rows[1]["author"], &rows[1]["state"], rows[1].get("rationale")), (&json!("user"), &json!("Approved"), None));
+        assert_eq!((&rows[2]["rationale"], &rows[2]["state"]), (&json!("First version"), &json!("Approved")));
+        assert!(rows[1].get("approvalOutcome").is_none() && rows[2].get("approvalOutcome").is_none(), "a person's save has no approval");
+        // Proposed, then approved, then activated.
+        let proposal = applied(fx.command(&app, &agent, "skills.propose", json!({"instructionId":drafted["id"],"expectedRevision":"3","contentDigest":digest_of(&drafted)})));
+        let top = |rows: Vec<Value>| (rows[0]["state"].clone(), rows[0]["approvalOutcome"].clone());
+        assert_eq!(top(history(8)), (json!("Proposed"), json!("Pending")));
+        decide(&proposal, "Approve");
+        assert_eq!(top(history(8)), (json!("Proposed"), json!("Approved")), "approved, not yet activated");
+        app.approval_resumes().tick().await.unwrap();
+        assert_eq!(top(history(8)), (json!("Approved"), json!("Approved")));
+        // A rejected proposal.
+        let worse = draft_at(&agent, Some((&saved["id"], "3")), "Deploy v3.", Some("Skip the checks"));
+        let rejected = applied(fx.command(&app, &agent, "skills.propose", json!({"instructionId":worse["id"],"expectedRevision":"4","contentDigest":digest_of(&worse)})));
+        decide(&rejected, "Reject");
+        app.approval_resumes().tick().await.unwrap();
+        let rows = history(8);
+        assert_eq!(top(rows.clone()), (json!("Rejected"), json!("Rejected")));
+        assert_eq!(rows[0]["rationale"], "Skip the checks");
+        // Revision 1 callers never see the new members.
+        let old = history(1);
+        for row in &old {
+            for member in ["author", "sessionId", "rationale", "state", "approvalOutcome"] {
+                assert!(row.get(member).is_none(), "{member}: {row}");
+            }
+        }
+        app.shutdown().await;
+    });
+}
+
+#[test]
+fn skill_draft_rationale_is_redacted_checked_and_replies_show_the_approval_outcome() {
+    let fx = Fx::new();
+    runtime().block_on(async {
+        let (user, _, _) = fx.principals();
+        let app = boot(fx.composition()).await.unwrap();
+        let agent = with_session_in(
+            &fx,
+            project_agent(&fx, &user, "agent-a", "project-a"),
+            "session-a",
+            "project-a",
+        );
+        let in_a = ArtifactScope::Project(ProjectId(id("project-a")));
+        let body = |text: &str, why: &str| json!({"scope":{"kind":"Workspace"},"name":"deploy","rationale":why,"content":fx.upload_in(&agent, text, in_a.clone())});
+        // A secret-shaped rationale is refused; an ordinary one is accepted.
+        assert_eq!(
+            refused(fx.command_at(&app, &agent, "skills.draft", 8, body("Deploy v1.", "use key ghp_0123456789abcdefABCDEF"))),
+            "InvalidArgument"
+        );
+        let drafted = applied(fx.command_at(&app, &agent, "skills.draft", 8, body("Deploy v1.", "Add the deploy steps")));
+        // An r1 caller's `rationale` is rejected by strict input validation, not dropped.
+        let strict = fx.command_at(&app, &agent, "skills.draft", 1, body("Deploy v1b.", "Add the deploy steps"));
+        assert!(matches!(strict, CommandReply::Rejected { .. }) || refused(strict) == "InvalidArgument");
+        // Approve and activate, then roll back to the same and to an older revision.
+        let proposal = applied(fx.command(&app, &agent, "skills.propose", json!({"instructionId":drafted["id"],"expectedRevision":"1","contentDigest":digest_of(&drafted)})));
+        let frame = serde_json::to_vec(&json!({"mode":"Command","protocol":"1.0-draft.1","schemaRevision":3,
+            "requestKey":fx.h.ids.next_id(IdKind::Link),"body":{"kind":"approvals.record_human_decision",
+            "proposalId":proposal["id"],"expectedRevision":proposal["revision"],"contentDigest":proposal["contentDigest"],
+            "decision":"Approve","rationale":"Reviewed"}})).unwrap();
+        applied(app.record_human_decision(&user, &frame).unwrap());
+        app.approval_resumes().tick().await.unwrap();
+        let same = applied(fx.command_at(&app, &user, "skills.rollback", 8, json!({"instructionId":drafted["id"],"expectedRevision":"1","targetRevision":"1"})));
+        assert_eq!(same["approvalOutcome"], "Approved", "{same}");
+        let second = applied(fx.command_at(&app, &user, "skills.draft", 8, json!({"scope":{"kind":"Workspace"},"instructionId":drafted["id"],"expectedRevision":"1","name":"deploy","content":fx.upload(&user, "Deploy v2.")})));
+        let back = applied(fx.command_at(&app, &user, "skills.rollback", 8, json!({"instructionId":drafted["id"],"expectedRevision":second["revision"],"targetRevision":"1"})));
+        assert_eq!((&back["revision"], &back["approvalOutcome"]), (&json!("1"), &json!("Approved")), "{back}");
+        app.shutdown().await;
+    });
+}
+
 fn project_agent(
     fx: &Fx,
     user: &InvocationContext,

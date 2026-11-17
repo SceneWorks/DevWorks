@@ -1319,5 +1319,24 @@ repository_entry={**sample('SettingEntry'),'sourceScope':{'kind':'Project','proj
 for name in ['settings.read_effective','settings.save_revision','settings.explain_source']:
  case('r8-result-'+name+'-repository','operation-result.r8',{'kind':name,'value':{'items':[repository_entry],'hasMore':False}})
  case('reject-r1-result-'+name+'-repository','operation-result',{'kind':name,'value':{'items':[repository_entry],'hasMore':False}},False,False)
+# Schema revision 8 (skill history): a draft states why (`rationale`), and the revision records the
+# draft returns carry who made them, in which session, their state and their approval outcome.
+# Earlier revisions never see any of these members.
+def draft_rationale(name,revision=8):
+ obj=request(name,'Command')
+ obj['body']['rationale']='Fix the checklist order'
+ if revision is not None:obj['schemaRevision']=revision
+ return obj
+for name in ['skills.draft','roles.draft']:
+ case('r8-input-'+name+'-rationale','domain-request.r8',draft_rationale(name))
+ case('reject-r1-input-'+name+'-rationale','domain-request',draft_rationale(name,None),False,False)
+ case('r8-input-'+name,'domain-request.r8',{**request(name,'Command'),'schemaRevision':8})
+for name in ['dreaming.instructions','skills.discover','skills.read','skills.history','skills.rollback','roles.read','roles.history','roles.rollback']:
+ for mode in (['Query','Command'] if OPS[name]['mode']=='Hybrid' else [OPS[name]['mode']]):
+  case('r8-input-'+name+('-'+mode.lower() if OPS[name]['mode']=='Hybrid' else ''),'domain-request.r8',{**request(name,mode),'schemaRevision':8})
+instruction_history={**sample('InstructionRecord'),'author':'agent-a','sessionId':'session-a','rationale':'Fix the checklist order','state':'Proposed','approvalOutcome':'Pending'}
+for name in ['skills.history','roles.history']:
+ case('r8-result-'+name+'-provenance','operation-result.r8',{'kind':name,'value':{'items':[instruction_history],'hasMore':False}})
+ case('reject-r1-result-'+name+'-provenance','operation-result',{'kind':name,'value':{'items':[instruction_history],'hasMore':False}},False,False)
 (D/'domain-fixtures.json').write_text(json.dumps(CASES,indent=2)+'\n')
 print(json.dumps({'fixtures':len(CASES),'positive':sum(c['typedValid'] for c in CASES),'negative':sum(not c['typedValid'] for c in CASES),'inputOperationModes':sum(2 if d['mode']=='Hybrid' else 1 for d in OPS.values()),'resultOperations':len(OPS)+len(LEGACY_RESULTS)}))
