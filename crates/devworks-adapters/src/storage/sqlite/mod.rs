@@ -626,7 +626,7 @@ impl ApplicationStore for SqliteStore {
             db(conn.execute_batch("BEGIN DEFERRED"))?;
             // The first read establishes the snapshot; every statement shares this snapshot
             // and the same VM progress bound. The lease unregisters before rollback/check-in.
-            let stamp = repos::stamp(conn)?;
+            let stamp = repos::stamp(conn, self.clock.now_ms().get(), self.info.boot_id.clone())?;
             let snapshot = repos::Snapshot {
                 conn,
                 stamp,

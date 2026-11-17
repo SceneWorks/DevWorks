@@ -1,6 +1,8 @@
 //! Agent coordination domain rules shared by the native UI and tool gateway.
 //! A message is stored with its recipient delivery and project event in one write unit.
+mod active;
 pub mod retained;
+mod rows;
 use crate::context::{InvocationContext, PrincipalKind};
 use crate::gateway::{AdmittedCommand, AdmittedQuery};
 use crate::operations::OperationInput;
@@ -8,7 +10,7 @@ use crate::operations::agents as ops;
 use crate::ports::storage::{
     ActivationPhase, ActorRead, AssignmentState, BlockerFilter, NewPrincipalBinding, ReadSnapshot,
     RunRead, StorageError, StoredAgentAssignmentContext, StoredAgentDelivery, StoredAgentMessage,
-    StoredAgentMessageEvent, StoredAssignment, StoredSession, Unavailable, WriteTransaction,
+    StoredAssignment, StoredSession, Unavailable, Wake, WriteTransaction,
 };
 use crate::ports::{
     CommandHandler, Decided, HandlerFailure, IdKind, IdSource, Preparation, QueryAnswer,
@@ -106,42 +108,7 @@ fn source_assignment(
     if ctx.principal_kind() != PrincipalKind::Agent {
         return Ok(None);
     }
-    let id = ctx.assignment_id().ok_or_else(|| denied("assignment"))?;
-    let assignment = tx
-        .runs()
-        .assignment(id)?
-        .ok_or_else(|| denied("assignment"))?;
-    let session = tx
-        .sessions()
-        .session(&assignment.session_id)?
-        .ok_or_else(|| denied("session"))?;
-    if assignment.root_id != *root
-        || assignment.state != AssignmentState::Active
-        || ctx.session_id() != Some(&assignment.session_id)
-        || session.agent_id != *ctx.principal()
-        || session.closed()
-    {
-        return Err(denied("assignment").into());
-    }
-    let execution = assignment
-        .execution_id
-        .as_ref()
-        .ok_or_else(|| denied("activation"))?;
-    let activation = tx
-        .runs()
-        .activation(execution)?
-        .ok_or_else(|| denied("activation"))?;
-    if activation.root_id != *root
-        || ctx.activation() != Some((execution, activation.owner_epoch))
-        || activation.phase != ActivationPhase::Running
-        || tx.store().boot_id.as_ref() != Some(&activation.boot_id)
-        || !activation
-            .lease_until_ms
-            .is_some_and(|until| until > tx.now_ms())
-    {
-        return Err(denied("activation").into());
-    }
-    Ok(Some(id.clone()))
+    active::caller_assignment(&mut active::TxFacts::new(tx), ctx, root).map(Some)
 }
 
 fn sender_can_read_attachment(
@@ -239,35 +206,7 @@ fn query_source_assignment(
     ctx: &InvocationContext,
     root: &crate::protocol::RootId,
 ) -> Result<AssignmentId, Failure> {
-    let id = ctx.assignment_id().ok_or_else(|| denied("assignment"))?;
-    let assignment = snapshot
-        .runs()
-        .assignment(id)?
-        .ok_or_else(|| denied("assignment"))?;
-    let session = snapshot
-        .sessions()
-        .session(&assignment.session_id)?
-        .ok_or_else(|| denied("session"))?;
-    let execution = assignment
-        .execution_id
-        .as_ref()
-        .ok_or_else(|| denied("activation"))?;
-    let activation = snapshot
-        .runs()
-        .activation(execution)?
-        .ok_or_else(|| denied("activation"))?;
-    if assignment.root_id != *root
-        || assignment.state != AssignmentState::Active
-        || ctx.session_id() != Some(&assignment.session_id)
-        || session.agent_id != *ctx.principal()
-        || session.closed()
-        || activation.root_id != *root
-        || activation.phase != ActivationPhase::Running
-        || ctx.activation() != Some((execution, activation.owner_epoch))
-    {
-        return Err(denied("assignment").into());
-    }
-    Ok(id.clone())
+    active::caller_assignment(&mut active::SnapshotFacts::new(snapshot), ctx, root)
 }
 
 fn class_name(class: &MessageClass) -> &'static str {
@@ -450,12 +389,17 @@ fn link_unlinked_redirect_attachments(
     Ok(())
 }
 
+/// How long a waiting receive parks before it looks again without a signal.
+const UNSIGNALLED_RECHECK: Duration = Duration::from_secs(5);
+
 /// One service for the agent-family gateway; composition registers only qualified operations.
 pub struct AgentService {
     ids: Arc<dyn IdSource>,
     runs: Arc<ControlService>,
     /// Waits an `agents.receive` with `waitSeconds` took before deciding (each pause counts).
     receive_waits: std::sync::atomic::AtomicU64,
+    /// Signalled after a command commits; a waiting `agents.receive` parks on it.
+    delivery_wake: Arc<Wake>,
 }
 impl AgentService {
     pub fn new(ids: Arc<dyn IdSource>, runs: Arc<ControlService>) -> Self {
@@ -463,7 +407,14 @@ impl AgentService {
             ids,
             runs,
             receive_waits: std::sync::atomic::AtomicU64::new(0),
+            delivery_wake: Wake::new(),
         }
+    }
+
+    /// The signal a command's commit raises for waiting receives. A writer outside the gateway
+    /// that delivers a message (a host notice) raises it after its own commit.
+    pub fn delivery_wake(&self) -> &Arc<Wake> {
+        &self.delivery_wake
     }
 
     /// How many times a waiting `agents.receive` paused for a message so far. A replay answers
@@ -1095,93 +1046,94 @@ impl AgentService {
         retained::handover_item(tx, &assignment.id)?;
         Ok(agent_record(tx.runs(), &assignment)?)
     }
+}
 
-    fn inbox(
-        &self,
-        snapshot: &dyn ReadSnapshot,
-        ctx: &InvocationContext,
-        input: &ops::InboxInput,
-    ) -> Result<(Page<AgentMessage>, i64), Failure> {
-        let assignment = snapshot
-            .runs()
-            .assignment(&input.assignment_id)?
-            .ok_or_else(|| missing("assignment", &input.assignment_id.0))?;
-        let root = snapshot
-            .sessions()
-            .work_root(&assignment.root_id)?
-            .ok_or_else(|| missing("root", &assignment.root_id.0))?;
-        if ctx.project_id().is_some_and(|p| p != &root.project_id)
-            || ctx.root_id().is_some_and(|r| r != &assignment.root_id)
-            || ctx.principal_kind() == PrincipalKind::Agent
-                && (ctx.assignment_id() != Some(&assignment.id)
-                    || ctx.session_id() != Some(&assignment.session_id))
-        {
-            return Err(denied("assignment").into());
-        }
-        if ctx.principal_kind() == PrincipalKind::Agent {
-            query_source_assignment(snapshot, ctx, &assignment.root_id)?;
-        }
-        let project = snapshot
-            .projects()
-            .project(&root.project_id)?
-            .ok_or_else(|| denied("project"))?;
-        let direction = match input.direction {
-            MessageDirection::Inbound => "Inbound",
-            MessageDirection::Outbound => "Outbound",
-            MessageDirection::Both => "Both",
-        };
-        let binding = CursorBinding::new(
-            ctx,
-            "agents.inbox",
-            &[
-                assignment.id.0.as_str(),
-                direction,
-                if input.unacknowledged_only {
-                    "unread"
-                } else {
-                    "all"
-                },
-            ],
-            project.scope_revision,
-        );
-        let rows = cursor::page(
-            &binding,
-            &input.page,
-            |before, n| {
-                let before = before
-                    .map(|s| crate::protocol::Id::new(s).map_err(|_| StorageError::CursorExpired))
-                    .transpose()?;
-                snapshot.runs().agent_assignment_thread(
-                    &root.project_id,
-                    &assignment.id,
-                    direction,
-                    input.unacknowledged_only,
-                    before.as_ref(),
-                    n,
-                )
-            },
-            |(m, _)| m.id.as_str().to_owned(),
-        )?;
-        let page = rows.try_into_page(|(m, d)| {
-            let delivery = d.unwrap_or(StoredAgentDelivery {
-                sequence: 0,
-                message_id: m.id.clone(),
-                project_id: m.project_id.clone(),
-                recipient_assignment_id: Some(assignment.id.clone()),
-                recipient_session_id: None,
-                recipient_human: false,
-                state: "Pending".into(),
-                revision: 1,
-                delivered_at_ms: None,
-                read_at_ms: None,
-                resolved_at_ms: None,
-                handed_over: false,
-                handed_to_session_id: None,
-            });
-            wire(&m, &delivery)
-        })?;
-        Ok((page, project.scope_revision))
+/// The revision-one assignment inbox read: one page of the assignment's thread. An agent caller
+/// is proved against the same active-assignment rule the commands enforce.
+pub fn inbox_assignment(
+    snapshot: &dyn ReadSnapshot,
+    ctx: &InvocationContext,
+    input: &ops::InboxInput,
+) -> Result<(Page<AgentMessage>, i64), Failure> {
+    let assignment = snapshot
+        .runs()
+        .assignment(&input.assignment_id)?
+        .ok_or_else(|| missing("assignment", &input.assignment_id.0))?;
+    let root = snapshot
+        .sessions()
+        .work_root(&assignment.root_id)?
+        .ok_or_else(|| missing("root", &assignment.root_id.0))?;
+    if ctx.project_id().is_some_and(|p| p != &root.project_id)
+        || ctx.root_id().is_some_and(|r| r != &assignment.root_id)
+        || ctx.principal_kind() == PrincipalKind::Agent
+            && (ctx.assignment_id() != Some(&assignment.id)
+                || ctx.session_id() != Some(&assignment.session_id))
+    {
+        return Err(denied("assignment").into());
     }
+    if ctx.principal_kind() == PrincipalKind::Agent {
+        query_source_assignment(snapshot, ctx, &assignment.root_id)?;
+    }
+    let project = snapshot
+        .projects()
+        .project(&root.project_id)?
+        .ok_or_else(|| denied("project"))?;
+    let direction = match input.direction {
+        MessageDirection::Inbound => "Inbound",
+        MessageDirection::Outbound => "Outbound",
+        MessageDirection::Both => "Both",
+    };
+    let binding = CursorBinding::new(
+        ctx,
+        "agents.inbox",
+        &[
+            assignment.id.0.as_str(),
+            direction,
+            if input.unacknowledged_only {
+                "unread"
+            } else {
+                "all"
+            },
+        ],
+        project.scope_revision,
+    );
+    let rows = cursor::page(
+        &binding,
+        &input.page,
+        |before, n| {
+            let before = before
+                .map(|s| crate::protocol::Id::new(s).map_err(|_| StorageError::CursorExpired))
+                .transpose()?;
+            snapshot.runs().agent_assignment_thread(
+                &root.project_id,
+                &assignment.id,
+                direction,
+                input.unacknowledged_only,
+                before.as_ref(),
+                n,
+            )
+        },
+        |(m, _)| m.id.as_str().to_owned(),
+    )?;
+    let page = rows.try_into_page(|(m, d)| {
+        let delivery = d.unwrap_or(StoredAgentDelivery {
+            sequence: 0,
+            message_id: m.id.clone(),
+            project_id: m.project_id.clone(),
+            recipient_assignment_id: Some(assignment.id.clone()),
+            recipient_session_id: None,
+            recipient_human: false,
+            state: "Pending".into(),
+            revision: 1,
+            delivered_at_ms: None,
+            read_at_ms: None,
+            resolved_at_ms: None,
+            handed_over: false,
+            handed_to_session_id: None,
+        });
+        wire(&m, &delivery)
+    })?;
+    Ok((page, project.scope_revision))
 }
 
 fn retained_actor(
@@ -1745,64 +1697,37 @@ pub fn post_assignment(
             Some(recipient.root_id.clone()),
         )?;
     }
-    let now = tx.now_ms();
     let message = StoredAgentMessage {
-        id: tx.new_id(IdKind::Event),
-        project_id: project.clone(),
         root_id: Some(recipient.root_id.clone()),
-        channel: "Assignment".into(),
         from_assignment_id: sender,
         to_assignment_id: Some(recipient.id.clone()),
-        message_class: class_name(&input.message_class).into(),
-        body: input.content.0.clone(),
         attachments: serde_json::to_value(&input.attachments.0)
             .map_err(|_| StorageError::InvalidRecord("attachments".into()))?,
-        in_reply_to_id: None,
         state: matches!(input.message_class, MessageClass::Question).then(|| "Open".into()),
-        blocking: false,
-        idempotency_key: None,
-        revision: 1,
-        created_at_ms: now,
-        resolved_at_ms: None,
-        from_actor_id: ctx.principal().clone(),
-        target_item_id: None,
-        target_feature_id: None,
-        resource_name: None,
-        target_session_id: None,
-        to_human: false,
         sender_session_id: ctx.session_id().cloned(),
-        resolved_by_actor_id: None,
-        resolved_by_session_id: None,
-    };
-    let delivery = StoredAgentDelivery {
-        sequence: tx.runs().agent_delivery_head()? + 1,
-        message_id: message.id.clone(),
-        project_id: project.clone(),
-        recipient_assignment_id: Some(recipient.id.clone()),
-        recipient_session_id: None,
-        recipient_human: false,
-        state: "Pending".into(),
-        revision: 1,
-        delivered_at_ms: None,
-        read_at_ms: None,
-        resolved_at_ms: None,
-        handed_over: false,
-        handed_to_session_id: None,
-    };
-    let event = StoredAgentMessageEvent {
-        sequence: tx.runs().agent_event_head()? + 1,
-        project_id: project,
-        message_id: message.id.clone(),
-        kind: "Posted".into(),
-        actor_id: ctx.principal().clone(),
-        recipient_assignment_id: Some(recipient.id),
-        recipient_session_id: None,
-        recipient_human: false,
-        created_at_ms: now,
+        ..rows::message(
+            tx,
+            rows::NewMessage {
+                project: &project,
+                channel: "Assignment",
+                class: class_name(&input.message_class),
+                body: &input.content.0,
+                from_actor: ctx.principal(),
+            },
+        )
     };
     tx.runs().insert_agent_message(&message)?;
-    tx.runs().insert_agent_delivery(&delivery)?;
-    tx.runs().insert_agent_message_event(&event)?;
+    let target = rows::Target::Assignment(recipient.id);
+    let delivery = rows::insert_delivery(tx, &project, &message.id, &target, false)?;
+    rows::append_event(
+        tx,
+        &project,
+        &message.id,
+        "Posted",
+        ctx.principal(),
+        &target,
+        message.created_at_ms,
+    )?;
     Ok(wire(&message, &delivery)?)
 }
 
@@ -1850,27 +1775,20 @@ pub fn acknowledge_assignment(
         )
         .into());
     }
-    if matches!(delivery.state.as_str(), "Read" | "Answered" | "Declined") {
+    if rows::is_read(&delivery) {
         return Ok(wire(&message, &delivery)?);
     }
-    delivery.state = "Read".into();
-    delivery.revision += 1;
-    delivery.delivered_at_ms.get_or_insert(tx.now_ms());
-    delivery.read_at_ms = Some(tx.now_ms());
-    tx.runs()
-        .update_agent_delivery(&delivery, input.expected_revision.get())?;
-    let event = StoredAgentMessageEvent {
-        sequence: tx.runs().agent_event_head()? + 1,
-        project_id: project,
-        message_id: message.id.clone(),
-        kind: "Read".into(),
-        actor_id: ctx.principal().clone(),
-        recipient_assignment_id: Some(assignment.id),
-        recipient_session_id: None,
-        recipient_human: false,
-        created_at_ms: tx.now_ms(),
-    };
-    tx.runs().insert_agent_message_event(&event)?;
+    let now = tx.now_ms();
+    rows::mark_read(tx, &mut delivery, now)?;
+    rows::append_event(
+        tx,
+        &project,
+        &message.id,
+        "Read",
+        ctx.principal(),
+        &rows::Target::Assignment(assignment.id),
+        now,
+    )?;
     Ok(wire(&message, &delivery)?)
 }
 
@@ -2068,9 +1986,10 @@ impl QueryHandler for AgentService {
         snapshot: &dyn ReadSnapshot,
     ) -> Result<QueryAnswer, DomainFault> {
         let outcome = match query.input() {
-            OperationInput::Agents(ops::Input::Inbox(input)) => self
-                .inbox(snapshot, ctx, input)
-                .map(|(value, scope)| (OperationResult::AgentsInbox { value }, scope)),
+            OperationInput::Agents(ops::Input::Inbox(input)) => {
+                inbox_assignment(snapshot, ctx, input)
+                    .map(|(value, scope)| (OperationResult::AgentsInbox { value }, scope))
+            }
             OperationInput::Agents(ops::Input::Inspect(input)) => self
                 .inspect(snapshot, ctx, input)
                 .map(|(value, scope)| (OperationResult::AgentsInspect { value }, scope)),
@@ -2124,7 +2043,13 @@ impl CommandHandler for AgentService {
             return Ok(None);
         }
         let deadline = Instant::now() + Duration::from_secs(wait);
+        // Register for cancellation first, then read the signal count, then check: a delivery or
+        // a cancellation after the count is read ends the park below at once.
+        if let Some(token) = env.cancellation {
+            token.wake_on_cancel(&self.delivery_wake);
+        }
         loop {
+            let seen = self.delivery_wake.generation();
             if env.cancellation.is_some_and(|token| token.is_cancelled()) {
                 return Err(StorageError::Cancelled);
             }
@@ -2213,10 +2138,16 @@ impl CommandHandler for AgentService {
             }
             self.receive_waits
                 .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-            std::thread::sleep(std::cmp::min(
-                Duration::from_millis(500),
-                deadline.saturating_duration_since(Instant::now()),
-            ));
+            // Park until a commit signals, the caller cancels or the wait's cap passes. The
+            // recheck interval only covers a delivery written outside the gateway (a budget
+            // notice); a gateway command wakes the wait directly.
+            self.delivery_wake.wait_after(
+                seen,
+                std::cmp::min(
+                    UNSIGNALLED_RECHECK,
+                    deadline.saturating_duration_since(Instant::now()),
+                ),
+            );
         }
     }
 

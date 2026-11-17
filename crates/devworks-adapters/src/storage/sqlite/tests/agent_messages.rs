@@ -1187,6 +1187,47 @@ fn message_delivery_replays_after_reopen_and_rejects_cross_project_links() {
     .unwrap();
     assert_eq!(posted.to_assignment_id, assignment("recipient"));
     assert!(!posted.acknowledged);
+    // The assignment inbox read applies the same active-assignment rule as the commands: a
+    // caller whose activation lease has lapsed is refused, and is served again once it renews.
+    let inbox_input = ops::InboxInput {
+        assignment_id: assignment("sender"),
+        page: devworks_core::protocol::records::PageRequest {
+            limit: devworks_core::protocol::support::Limit::new(10).unwrap(),
+            cursor: None,
+        },
+        unacknowledged_only: false,
+        direction: devworks_core::protocol::records::MessageDirection::Outbound,
+    };
+    let read_inbox = || {
+        read_snapshot(&s, &ReadOptions::default(), |snap| {
+            Ok(devworks_core::services::agents::inbox_assignment(
+                snap,
+                &context("sender", "session-a", "root-a"),
+                &inbox_input,
+            ))
+        })
+        .unwrap()
+    };
+    let set_lease = |until: i64, expected: i64| {
+        run_write(&s, WriteOptions::default(), move |tx| {
+            let mut activation = tx.runs().activation(&id("sender-execution"))?.unwrap();
+            activation.lease_until_ms = Some(until);
+            activation.revision += 1;
+            tx.runs().update_activation(&activation, expected)
+        })
+        .unwrap();
+    };
+    assert_eq!(read_inbox().unwrap().0.items.0.len(), 1);
+    set_lease(0, 1);
+    assert!(matches!(
+        read_inbox(),
+        Err(Failure::Refused(Refusal {
+            code: DomainErrorCode::PermissionDenied,
+            ..
+        }))
+    ));
+    set_lease(i64::MAX, 2);
+    assert_eq!(read_inbox().unwrap().0.items.0.len(), 1);
     read_snapshot(&s, &ReadOptions::default(), |snap| {
         let inbox = snap.runs().agent_inbox(
             &project("project-a"),

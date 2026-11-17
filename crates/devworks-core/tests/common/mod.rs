@@ -254,6 +254,8 @@ impl ApplicationStore for MemoryStore {
                 store_id: self.info.store_id.clone(),
                 restore_epoch: self.info.restore_epoch,
                 committed_sequence: state.events.len() as i64,
+                now_ms: FixedClock.now_ms().get(),
+                boot_id: self.info.boot_id.clone(),
             },
             state,
             unsupported: Unsupported,

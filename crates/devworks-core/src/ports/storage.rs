@@ -66,9 +66,9 @@ use crate::protocol::{
 use crate::registry::SchemaRevision;
 use serde_json::Value;
 use std::fmt;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
+use std::sync::{Arc, Condvar, Mutex, Weak};
 
 mod agents;
 mod artifacts;
@@ -262,18 +262,78 @@ fn redacted(text: &str) -> String {
 // ---------------------------------------------------------------------------------------------
 // Admission options and the transaction owner
 
-/// Cooperative cancellation shared between a caller and the write/read owner.
+/// Cooperative cancellation shared between a caller and the write/read owner. A waiter that parks
+/// on a [`Wake`] registers it, so cancelling ends the wait at once instead of at the next poll.
 #[derive(Clone, Debug, Default)]
-pub struct Cancellation(Arc<AtomicBool>);
+pub struct Cancellation(Arc<CancelState>);
+#[derive(Debug, Default)]
+struct CancelState {
+    flag: AtomicBool,
+    wakes: Mutex<Vec<Weak<Wake>>>,
+}
 impl Cancellation {
     pub fn new() -> Self {
         Self::default()
     }
     pub fn cancel(&self) {
-        self.0.store(true, Ordering::SeqCst);
+        self.0.flag.store(true, Ordering::SeqCst);
+        let wakes: Vec<_> = {
+            let mut wakes = self.0.wakes.lock().unwrap_or_else(|p| p.into_inner());
+            wakes.retain(|wake| wake.strong_count() > 0);
+            wakes.iter().filter_map(Weak::upgrade).collect()
+        };
+        for wake in wakes {
+            wake.notify();
+        }
     }
     pub fn is_cancelled(&self) -> bool {
-        self.0.load(Ordering::SeqCst)
+        self.0.flag.load(Ordering::SeqCst)
+    }
+    /// Notifies `wake` when this token is cancelled. Registering after the cancellation has
+    /// already happened leaves the caller to see [`Self::is_cancelled`] on its next check, so a
+    /// waiter registers first and checks the flag second.
+    pub fn wake_on_cancel(&self, wake: &Arc<Wake>) {
+        let mut wakes = self.0.wakes.lock().unwrap_or_else(|p| p.into_inner());
+        wakes.retain(|other| other.strong_count() > 0);
+        if !wakes
+            .iter()
+            .any(|other| std::ptr::eq(other.as_ptr(), Arc::as_ptr(wake)))
+        {
+            wakes.push(Arc::downgrade(wake));
+        }
+    }
+}
+
+/// A signal that something a waiter is waiting for may have changed. A waiter reads
+/// [`Wake::generation`] before it checks its condition and then calls [`Wake::wait_after`] with
+/// that value, so a signal sent between the check and the wait is never lost. The waiter parks on
+/// a condition variable: it holds no connection and burns no CPU, and a signal or a cancellation
+/// ends the wait at once.
+#[derive(Debug, Default)]
+pub struct Wake {
+    generation: Mutex<u64>,
+    changed: Condvar,
+}
+impl Wake {
+    pub fn new() -> Arc<Self> {
+        Arc::new(Self::default())
+    }
+    /// Signals every waiter.
+    pub fn notify(&self) {
+        *self.generation.lock().unwrap_or_else(|p| p.into_inner()) += 1;
+        self.changed.notify_all();
+    }
+    /// The number of signals so far.
+    pub fn generation(&self) -> u64 {
+        *self.generation.lock().unwrap_or_else(|p| p.into_inner())
+    }
+    /// Parks until a signal arrives after `seen` or `timeout` passes, whichever is first.
+    pub fn wait_after(&self, seen: u64, timeout: std::time::Duration) {
+        let guard = self.generation.lock().unwrap_or_else(|p| p.into_inner());
+        let _ = self
+            .changed
+            .wait_timeout_while(guard, timeout, |now| *now == seen)
+            .unwrap_or_else(|p| p.into_inner());
     }
 }
 
@@ -545,6 +605,10 @@ pub struct SnapshotStamp {
     pub restore_epoch: i64,
     /// Highest committed event sequence visible in this snapshot (0 for an empty history).
     pub committed_sequence: i64,
+    /// The store clock (UTC ms) when the snapshot was taken; a lease is unexpired against it.
+    pub now_ms: i64,
+    /// This process's boot epoch; absent in read-only mode.
+    pub boot_id: Option<Id>,
 }
 impl SnapshotStamp {
     /// The wire freshness stamp for this snapshot under host-resolved policy/scope revisions.

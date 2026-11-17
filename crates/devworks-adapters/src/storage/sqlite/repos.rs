@@ -135,7 +135,11 @@ pub(crate) fn committed_sequence(conn: &Connection) -> Result<i64, StorageError>
     db(stmt(conn, "SELECT coalesce(max(seq),0) FROM events")?.query_row([], |r| r.get(0)))
 }
 
-pub(crate) fn stamp(conn: &Connection) -> Result<SnapshotStamp, StorageError> {
+pub(crate) fn stamp(
+    conn: &Connection,
+    now_ms: i64,
+    boot_id: Option<Id>,
+) -> Result<SnapshotStamp, StorageError> {
     let (store_id, restore_epoch): (String, i64) = db(stmt(
         conn,
         "SELECT store_id,restore_epoch FROM store_meta WHERE singleton=1",
@@ -145,6 +149,8 @@ pub(crate) fn stamp(conn: &Connection) -> Result<SnapshotStamp, StorageError> {
         store_id: StoreId(id_of(store_id)?),
         restore_epoch,
         committed_sequence: committed_sequence(conn)?,
+        now_ms,
+        boot_id,
     })
 }
 

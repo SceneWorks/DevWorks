@@ -970,3 +970,120 @@ async fn delivered_message_replays_until_read_acknowledgment() {
             .is_empty()
     );
 }
+
+/// Sixteen receives park on the delivery signal with the 55 second cap. One post wakes them all
+/// well before the old half-second polling would have mattered, and a cancellation wakes a parked
+/// receive at once; none of them waits out its cap.
+#[test]
+fn parked_receives_wake_on_a_delivery_and_on_cancellation() {
+    let harness = Harness::new();
+    let store = harness.open();
+    seed_root(&harness, "root-a");
+    let user = principal(store.as_ref(), "wake-user", PrincipalKind::Human);
+    let runs = Arc::new(ControlService::with_scope(
+        harness.ids.clone(),
+        Arc::new(ScriptedScope::new()),
+    ));
+    let agents = Arc::new(AgentService::new(harness.ids.clone(), runs));
+    let cases = UseCases::new().with_agents(agents.clone());
+    let authority = HostAuthority {
+        store: store.as_ref(),
+        clock: harness.clock.as_ref(),
+        protected_branches: &[],
+    };
+    let gateway = Gateway {
+        authority: &authority,
+        store: store.as_ref(),
+        ids: harness.ids.as_ref(),
+    };
+    let frame = |key: &str, body: serde_json::Value| {
+        serde_json::to_vec(&json!({
+            "protocol":"1.0-draft.1", "mode":"Command", "schemaRevision":7,
+            "requestKey":key, "body":body
+        }))
+        .unwrap()
+    };
+    const WAITERS: usize = 16;
+    let receive = json!({"kind":"agents.receive","projectId":"project-a","waitSeconds":55});
+    let cancellation = Cancellation::new();
+    let started = std::time::Instant::now();
+    std::thread::scope(|scope| {
+        let waiting: Vec<_> = (0..WAITERS)
+            .map(|n| {
+                let raw = frame(&format!("wake-receive-{n}"), receive.clone());
+                let (cases, gateway, user) = (&cases, &gateway, &user);
+                scope.spawn(move || {
+                    cases
+                        .command_with(
+                            gateway,
+                            user,
+                            "agents.receive",
+                            &raw,
+                            WriteOptions::default(),
+                        )
+                        .unwrap()
+                })
+            })
+            .collect();
+        let cancelled = {
+            let raw = frame("wake-cancelled", receive.clone());
+            let (cases, gateway, user) = (&cases, &gateway, &user);
+            let stop = cancellation.clone();
+            scope.spawn(move || {
+                cases
+                    .command_with(
+                        gateway,
+                        user,
+                        "agents.receive",
+                        &raw,
+                        WriteOptions {
+                            cancellation: Some(stop),
+                            ..WriteOptions::default()
+                        },
+                    )
+                    .unwrap()
+            })
+        };
+        // Every receive reaches its first park: the pause counter moves once per park.
+        while agents.receive_waits() < (WAITERS + 1) as u64 {
+            assert!(
+                started.elapsed() < Duration::from_secs(10),
+                "receives never parked"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        cancellation.cancel();
+        assert!(matches!(
+            cancelled.join().unwrap(),
+            CommandReply::Rejected { .. }
+        ));
+        assert!(
+            started.elapsed() < Duration::from_secs(10),
+            "a cancel waited out the cap"
+        );
+        let post = frame(
+            "wake-post",
+            json!({"kind":"agents.post","projectId":"project-a","body":"Wake up","toHuman":true}),
+        );
+        assert!(matches!(
+            cases
+                .command(&gateway, &user, "agents.post", &post)
+                .unwrap(),
+            CommandReply::Recorded { .. }
+        ));
+        for receive in waiting {
+            assert!(matches!(
+                receive.join().unwrap(),
+                CommandReply::Recorded { receipt, .. }
+                if matches!(&receipt.decision, DomainDecision::Applied {
+                    result: OperationResult::AgentsReceive { value }
+                } if value.items.0.len() == 1 && value.items.0[0].body.0 == "Wake up")
+            ));
+        }
+    });
+    assert!(
+        started.elapsed() < Duration::from_secs(10),
+        "a delivery woke the parked receives: {:?}",
+        started.elapsed()
+    );
+}

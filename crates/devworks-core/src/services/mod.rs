@@ -48,8 +48,9 @@ use crate::context::InvocationContext;
 use crate::gateway::{CommandOutcome, Gateway, GatewayFailure, PreparedReceive, QueryOutcome};
 use crate::ports::storage::{ReadOptions, WriteOptions};
 use crate::ports::{CommandHandler, QueryHandler};
+use crate::protocol::results::DomainDecision;
 use crate::protocol::support::BoundedList;
-use crate::protocol::{CorrelationId, DomainErrorCode, DomainFault, RetryAdvice};
+use crate::protocol::{CommandReply, CorrelationId, DomainErrorCode, DomainFault, RetryAdvice};
 use crate::registry::{self, Mode};
 use crate::settings;
 use std::collections::BTreeMap;
@@ -84,6 +85,8 @@ pub struct UseCases {
     inference_router: Option<Arc<router::InferenceRouter>>,
     connection_service: Option<Arc<router::connections::ConnectionService>>,
     mcp_service: Option<Arc<mcp::McpClientService>>,
+    /// Signalled when a command commits, so a waiting `agents.receive` looks again at once.
+    delivery_wake: Option<Arc<crate::ports::storage::Wake>>,
 }
 
 impl UseCases {
@@ -222,6 +225,7 @@ impl UseCases {
 
     /// One agent-coordination owner for the selected UI and tool operations.
     pub fn with_agents(mut self, service: Arc<agents::AgentService>) -> Self {
+        self.delivery_wake = Some(service.delivery_wake().clone());
         for op in [
             "agents.inspect",
             "agents.delegate",
@@ -541,8 +545,28 @@ impl UseCases {
         options: WriteOptions,
     ) -> CommandOutcome {
         match self.commands.get(operation) {
-            Some(handler) => gateway.command_with(ctx, operation, raw, handler.clone(), options),
+            Some(handler) => {
+                let outcome = gateway.command_with(ctx, operation, raw, handler.clone(), options);
+                self.signal_commit(&outcome);
+                outcome
+            }
             None => Err(GatewayFailure::NoUseCase(operation.to_owned())),
+        }
+    }
+
+    /// A new receipt may have delivered a message; a replay or a refusal committed nothing new.
+    fn signal_commit(&self, outcome: &CommandOutcome) {
+        if let (
+            Some(wake),
+            Ok(CommandReply::Recorded {
+                receipt,
+                replayed: false,
+                ..
+            }),
+        ) = (&self.delivery_wake, outcome)
+            && !matches!(receipt.decision, DomainDecision::Refused { .. })
+        {
+            wake.notify();
         }
     }
 

@@ -8,6 +8,7 @@ use crate::ports::storage::{
 use crate::protocol::{
     AssignmentId, DomainErrorCode, Id, ProjectId, RetryAdvice, Revision, RevisionDimension, RootId,
 };
+use crate::services::agents::rows;
 use crate::services::cursor::CursorBinding;
 use crate::services::failure::{Failure, Refusal};
 use std::collections::HashSet;
@@ -537,35 +538,17 @@ pub fn handover_item(
                 continue;
             }
             let now = tx.now_ms();
-            let delivery = StoredAgentDelivery {
-                sequence: tx.runs().agent_delivery_head()? + 1,
-                message_id: message.id.clone(),
-                project_id: work.project_id.clone(),
-                recipient_assignment_id: None,
-                recipient_human: false,
-                state: "Pending".into(),
-                revision: 1,
-                delivered_at_ms: None,
-                read_at_ms: None,
-                recipient_session_id: Some(session_id.clone()),
-                handed_over: true,
-                handed_to_session_id: None,
-                resolved_at_ms: None,
-            };
-            tx.runs().insert_agent_delivery(&delivery)?;
-            let event_sequence = tx.runs().agent_event_head()? + 1;
-            tx.runs()
-                .insert_agent_message_event(&StoredAgentMessageEvent {
-                    sequence: event_sequence,
-                    project_id: work.project_id.clone(),
-                    message_id: message.id,
-                    kind: "HandedOver".into(),
-                    actor_id: session.agent_id.clone(),
-                    recipient_assignment_id: None,
-                    recipient_session_id: Some(session_id.clone()),
-                    recipient_human: false,
-                    created_at_ms: now,
-                })?;
+            let target = rows::Target::Session(session_id.clone());
+            rows::insert_delivery(tx, &work.project_id, &message.id, &target, true)?;
+            rows::append_event(
+                tx,
+                &work.project_id,
+                &message.id,
+                "HandedOver",
+                &session.agent_id,
+                &target,
+                now,
+            )?;
             handed_over += 1;
         }
         if page_len < 500 {
@@ -689,35 +672,17 @@ pub fn handover_direct(tx: &mut dyn WriteTransaction, session_id: &Id) -> Result
             source.revision += 1;
             source.handed_to_session_id = Some(session_id.clone());
             tx.runs().update_agent_delivery(&source, expected)?;
-            let delivery_sequence = tx.runs().agent_delivery_head()? + 1;
-            tx.runs().insert_agent_delivery(&StoredAgentDelivery {
-                sequence: delivery_sequence,
-                message_id: message.id.clone(),
-                project_id: project.clone(),
-                recipient_assignment_id: None,
-                recipient_human: false,
-                state: "Pending".into(),
-                revision: 1,
-                delivered_at_ms: None,
-                read_at_ms: None,
-                recipient_session_id: Some(session_id.clone()),
-                handed_over: true,
-                handed_to_session_id: None,
-                resolved_at_ms: None,
-            })?;
-            let event_sequence = tx.runs().agent_event_head()? + 1;
-            tx.runs()
-                .insert_agent_message_event(&StoredAgentMessageEvent {
-                    sequence: event_sequence,
-                    project_id: project.clone(),
-                    message_id: message.id,
-                    kind: "HandedOver".into(),
-                    actor_id: session.agent_id.clone(),
-                    recipient_assignment_id: None,
-                    recipient_session_id: Some(session_id.clone()),
-                    recipient_human: false,
-                    created_at_ms: now,
-                })?;
+            let target = rows::Target::Session(session_id.clone());
+            rows::insert_delivery(tx, &project, &message.id, &target, true)?;
+            rows::append_event(
+                tx,
+                &project,
+                &message.id,
+                "HandedOver",
+                &session.agent_id,
+                &target,
+                now,
+            )?;
             inherited += 1;
         }
         if page_len < 500 {
@@ -788,29 +753,17 @@ pub fn acknowledge(
     let mut item_versions = Vec::new();
     for id in ids {
         let (mut delivery, message) = delivery_for(tx, project, recipient, &id)?;
-        if !matches!(delivery.state.as_str(), "Read" | "Answered" | "Declined") {
-            let expected = delivery.revision;
-            delivery.state = "Read".into();
-            delivery.revision += 1;
-            delivery.delivered_at_ms.get_or_insert(now);
-            delivery.read_at_ms = Some(now);
-            tx.runs().update_agent_delivery(&delivery, expected)?;
-            let event_sequence = tx.runs().agent_event_head()? + 1;
-            tx.runs()
-                .insert_agent_message_event(&StoredAgentMessageEvent {
-                    sequence: event_sequence,
-                    project_id: project.clone(),
-                    message_id: id,
-                    kind: "Read".into(),
-                    actor_id: ctx.principal().clone(),
-                    recipient_assignment_id: None,
-                    recipient_session_id: match recipient {
-                        Recipient::Session(id) => Some(id.clone()),
-                        Recipient::Human => None,
-                    },
-                    recipient_human: matches!(recipient, Recipient::Human),
-                    created_at_ms: now,
-                })?;
+        if !rows::is_read(&delivery) {
+            rows::mark_read(tx, &mut delivery, now)?;
+            rows::append_event(
+                tx,
+                project,
+                &id,
+                "Read",
+                ctx.principal(),
+                &rows::Target::from(recipient),
+                now,
+            )?;
             changed.push((delivery, message.clone()));
         }
         if let Some(resolution) = resolution {
@@ -892,21 +845,14 @@ pub(super) fn resolve_message(
     delivery.read_at_ms.get_or_insert(now);
     delivery.resolved_at_ms = Some(now);
     tx.runs().update_agent_delivery(&delivery, expected)?;
-    let event_sequence = tx.runs().agent_event_head()? + 1;
-    tx.runs()
-        .insert_agent_message_event(&StoredAgentMessageEvent {
-            sequence: event_sequence,
-            project_id: project.clone(),
-            message_id: message.id.clone(),
-            kind: resolution.state().into(),
-            actor_id: ctx.principal().clone(),
-            recipient_assignment_id: None,
-            recipient_session_id: match recipient {
-                Recipient::Session(id) => Some(id.clone()),
-                Recipient::Human => None,
-            },
-            recipient_human: matches!(recipient, Recipient::Human),
-            created_at_ms: now,
-        })?;
+    rows::append_event(
+        tx,
+        project,
+        &message.id,
+        resolution.state(),
+        ctx.principal(),
+        &rows::Target::from(recipient),
+        now,
+    )?;
     Ok(Some((delivery, resolved)))
 }
