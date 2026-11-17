@@ -925,6 +925,9 @@ fn binary_only_requirements(manifest: &[u8]) -> bool {
 ///   any configuration in the old in-repository `CARGO_HOME`; and a toolchain file naming a
 ///   toolchain by path (a TOML key spelled with an escape needs `\`, so a file with `path`, `/`
 ///   or `\` counts).
+/// - npm, pnpm and Yarn: a dependency source that runs repository code or reads outside the
+///   checkout (`exec:`, git, `file:`/`link:`/`portal:` leaving the checkout) in any
+///   `package.json` or the lockfile (see [`node_dependency_source_unchecked`]).
 /// - npm, pnpm and Yarn: a `package.json` `packageManager` that is not a plain
 ///   `name@version`, since Corepack (behind a manager shim) downloads and runs the release a
 ///   URL there names; and a `package.json` that does not parse, whose field cannot be checked.
@@ -938,7 +941,7 @@ fn install_runs_repository_code(name: &str, root: &Path) -> bool {
         name,
         "package-lock.json" | "package.json" | "pnpm-lock.yaml" | "yarn.lock"
     );
-    if node && corepack_release_unchecked(root) {
+    if node && (corepack_release_unchecked(root) || node_dependency_source_unchecked(name, root)) {
         return true;
     }
     match name {
@@ -1436,6 +1439,606 @@ fn corepack_release_unchecked(root: &Path) -> bool {
         }),
         Some(_) => true,
     }
+}
+
+/// Whether a Node project's dependencies come from a source that runs repository code or reads
+/// outside the checkout, so a script-free install is refused. It looks at every `package.json`
+/// in the checkout (any one could be a workspace; `node_modules` and `.git` are skipped, and a
+/// tree of more than 50,000 entries, a symlinked folder or file that cannot be read or parsed
+/// is refused, so it fails closed) and at the lockfile `name`, which is repository-controlled
+/// and can name a source the manifests do not.
+///
+/// Decided per source (see [`unsafe_dependency_source`]):
+/// - `exec:` (Yarn 2+) runs a repository file to build the package, whatever
+///   `YARN_ENABLE_SCRIPTS` says: refused.
+/// - Git sources (`git:`, `git+…`, `github:`, `gitlab:`, `bitbucket:`, `gist:`, `ssh:`,
+///   `git@host:…`, a URL ending in `.git`, a URL on a git host, `owner/repo`): refused. Yarn
+///   packs a git dependency through a nested install that runs its `prepack` and `prepare`
+///   scripts, and npm runs `prepare` for one; neither is known to honour the script-free
+///   switch for that nested step, so it is not relied on.
+/// - `file:`, `link:` and `portal:` (and a bare `./`, `../`, `/` or `~/` path) are refused when
+///   the path is absolute, starts with `~`, names a drive, or leaves the checkout; one inside
+///   the checkout installs, since copying or linking a folder runs nothing with scripts off.
+/// - `patch:` applies a patch file with Yarn's own patcher and runs no code, so it is allowed;
+///   the source it patches is checked like any other (`patch:x@exec:…` is refused).
+/// - `npm:` aliases and registry ranges, `workspace:`, `catalog:` and `http(s)` tarballs install.
+/// - Protocols that plugins add are refused already, since plugins are.
+///
+/// Manifest fields read: `dependencies`, `devDependencies`, `optionalDependencies`,
+/// `peerDependencies`, `resolutions`, `overrides`, `pnpm.overrides`, `pnpm.packageExtensions`,
+/// `pnpm.patchedDependencies` (patch paths must stay in the checkout), `workspaces.catalog(s)`
+/// and the `workspaces` globs (which must stay in the checkout). Also read: `npm-shrinkwrap.json`
+/// beside `package-lock.json`, and `pnpm-workspace.yaml` (`packages`, `overrides`, `catalog(s)`,
+/// `packageExtensions`, `patchedDependencies`; anchors, aliases and tags are refused).
+///
+/// `package-lock.json` and `npm-shrinkwrap.json` are parsed as JSON and every string is checked,
+/// as are `resolved` paths and `packages` locations. `yarn.lock` and `pnpm-lock.yaml` are read
+/// by line, failing closed: any backslash other than in `\"` is refused (it could hide a
+/// source behind `\u0065xec` or a line continuation), each line is cut into tokens at
+/// whitespace, quotes, commas and brackets, each token is percent-decoded (Yarn encodes the
+/// source of a `patch:`), and the token and the text after each `@` in it are checked, as is
+/// the path after a `directory` or `resolved` key. A relative `link:`, `file:` or `portal:`
+/// path is resolved against its pnpm importer or Berry workspace (the `importers` key, the
+/// `@workspace:` path of the block or of a `::locator=`); where neither is named it counts from
+/// the checkout root, so any `..` is refused. A token that is only `exec:` (a dependency named
+/// `exec`) is not a source.
+fn node_dependency_source_unchecked(name: &str, root: &Path) -> bool {
+    if !matches!(
+        name,
+        "package-lock.json" | "package.json" | "pnpm-lock.yaml" | "yarn.lock"
+    ) {
+        return false;
+    }
+    // npm prefers `npm-shrinkwrap.json` to `package-lock.json`; pnpm reads its workspace file.
+    let scanned: &[&str] = match name {
+        "package-lock.json" => &["package-lock.json", "npm-shrinkwrap.json"],
+        "pnpm-lock.yaml" => &["pnpm-lock.yaml", "pnpm-workspace.yaml"],
+        "yarn.lock" => &["yarn.lock"],
+        _ => &[],
+    };
+    for file in scanned {
+        match std::fs::metadata(root.join(file)) {
+            Ok(metadata) if metadata.len() <= 128 * 1024 * 1024 => {
+                let Ok(bytes) = std::fs::read(root.join(file)) else {
+                    return true;
+                };
+                let Ok(text) = String::from_utf8(bytes) else {
+                    return true;
+                };
+                let unsafe_file = match *file {
+                    "pnpm-workspace.yaml" => pnpm_workspace_unsafe(&text),
+                    _ => lockfile_unsafe(file, &text),
+                };
+                if unsafe_file {
+                    return true;
+                }
+            }
+            // The caller read the lockfile; a missing one has nothing to scan.
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            _ => return true,
+        }
+    }
+    let mut pending = vec![(root.to_path_buf(), 0usize)];
+    let mut seen = 0usize;
+    while let Some((directory, depth)) = pending.pop() {
+        let Ok(entries) = std::fs::read_dir(&directory) else {
+            return true;
+        };
+        for entry in entries {
+            seen += 1;
+            let Ok(entry) = entry else { return true };
+            if seen > 50_000 {
+                return true;
+            }
+            let Ok(kind) = entry.file_type() else {
+                return true;
+            };
+            let file_name = entry.file_name();
+            if kind.is_symlink() {
+                // A link to a folder may be a workspace outside the checkout.
+                if std::fs::metadata(entry.path()).map_or(true, |m| m.is_dir())
+                    || file_name == "package.json"
+                {
+                    return true;
+                }
+            } else if kind.is_dir() {
+                if file_name != "node_modules" && file_name != ".git" {
+                    pending.push((entry.path(), depth + 1));
+                }
+            } else if file_name == "package.json" {
+                let path = entry.path();
+                match std::fs::metadata(&path) {
+                    Ok(metadata) if metadata.len() <= 4 * 1024 * 1024 => {}
+                    _ => return true,
+                }
+                match std::fs::read(&path) {
+                    Ok(bytes) if package_json_unsafe(&bytes, depth) => return true,
+                    Ok(_) => {}
+                    Err(_) => return true,
+                }
+            }
+        }
+    }
+    false
+}
+
+/// Whether the dependency fields of a `package.json` (at `depth` folders below the checkout)
+/// name a source [`unsafe_dependency_source`] refuses, a patch file or workspace glob outside the
+/// checkout, or the file does not parse.
+fn package_json_unsafe(bytes: &[u8], depth: usize) -> bool {
+    fn any_string(value: &Value, test: &dyn Fn(&str) -> bool) -> bool {
+        match value {
+            Value::String(text) => test(text),
+            Value::Array(items) => items.iter().any(|item| any_string(item, test)),
+            Value::Object(map) => map.values().any(|item| any_string(item, test)),
+            _ => false,
+        }
+    }
+    let Ok(Value::Object(package)) = serde_json::from_slice::<Value>(bytes) else {
+        return true;
+    };
+    let test = |text: &str| unsafe_dependency_source(text, depth, true);
+    let pnpm = package.get("pnpm");
+    let fields = [
+        package.get("dependencies"),
+        package.get("devDependencies"),
+        package.get("optionalDependencies"),
+        package.get("peerDependencies"),
+        package.get("resolutions"),
+        package.get("overrides"),
+        pnpm.and_then(|pnpm| pnpm.get("overrides")),
+        pnpm.and_then(|pnpm| pnpm.get("packageExtensions")),
+        package.get("workspaces").and_then(|w| w.get("catalog")),
+        package.get("workspaces").and_then(|w| w.get("catalogs")),
+    ];
+    if fields
+        .into_iter()
+        .flatten()
+        .any(|field| any_string(field, &test))
+    {
+        return true;
+    }
+    // Patch files are paths relative to the `package.json`. (`bundleDependencies` holds names.)
+    if let Some(patches) = pnpm.and_then(|pnpm| pnpm.get("patchedDependencies"))
+        && any_string(patches, &|path| path_leaves_checkout(path, depth))
+    {
+        return true;
+    }
+    let globs = match package.get("workspaces") {
+        Some(Value::Object(map)) => map.get("packages"),
+        other => other,
+    };
+    globs.is_some_and(|globs| any_string(globs, &|glob| glob_leaves_checkout(glob, depth)))
+}
+
+/// Whether a workspace glob can match outside the checkout: absolute, a drive or home folder,
+/// or `..` segments that climb past it (or follow a wildcard, which could match nothing).
+fn glob_leaves_checkout(glob: &str, depth: usize) -> bool {
+    let glob = glob.trim().trim_start_matches('!');
+    if glob.starts_with(['/', '\\', '~']) || glob.contains(['\\', ':']) {
+        return true;
+    }
+    let (mut depth, mut wild) = (depth, false);
+    for segment in glob.split('/') {
+        match segment {
+            "" | "." => {}
+            ".." => match depth.checked_sub(1) {
+                Some(rest) if !wild => depth = rest,
+                _ => return true,
+            },
+            _ => {
+                wild |= segment.contains(['*', '?', '[', '{', '(']);
+                depth += 1;
+            }
+        }
+    }
+    false
+}
+
+/// How many folders below the checkout the workspace in a Berry locator or descriptor
+/// (`name@workspace:path`, possibly percent-encoded) is; `None` when it names none, and
+/// `Some(None)` when its path leaves the checkout.
+fn workspace_depth(text: &str) -> Option<Option<usize>> {
+    let mut best: Option<Option<usize>> = None;
+    for (index, _) in text.match_indices("@workspace:") {
+        let path = &text[index + "@workspace:".len()..];
+        let path = path
+            .split(['"', '\'', ',', ':', '#', ' '])
+            .next()
+            .unwrap_or("");
+        let depth = if path_leaves_checkout(path, 0) {
+            None
+        } else {
+            Some(
+                path.split('/')
+                    .filter(|s| !matches!(*s, "" | "."))
+                    .fold(0, |d: usize, s| {
+                        if s == ".." {
+                            d.saturating_sub(1)
+                        } else {
+                            d + 1
+                        }
+                    }),
+            )
+        };
+        best = match (best, depth) {
+            (None, found) => Some(found),
+            (Some(None), _) | (_, None) => Some(None),
+            (Some(Some(a)), Some(b)) => Some(Some(a.min(b))),
+        };
+    }
+    best
+}
+
+/// Whether a lockfile names a source [`unsafe_dependency_source`] refuses (see
+/// [`node_dependency_source_unchecked`] for how it is read). `name` picks the reader: npm's JSON
+/// lockfiles are parsed and every string checked; the Yarn and pnpm YAML-like text is read by
+/// line, and any backslash other than in `\"` is refused, since a quoted string could hide a
+/// source behind `\u0065xec` or a `\`-newline continuation.
+fn lockfile_unsafe(name: &str, text: &str) -> bool {
+    if matches!(name, "package-lock.json" | "npm-shrinkwrap.json") {
+        return match serde_json::from_str::<Value>(text) {
+            Ok(value) => npm_lockfile_value_unsafe(&value, None),
+            Err(_) => true,
+        };
+    }
+    let bytes = text.as_bytes();
+    if bytes
+        .iter()
+        .enumerate()
+        .any(|(index, byte)| *byte == b'\\' && bytes.get(index + 1) != Some(&b'"'))
+    {
+        return true;
+    }
+    // The folder depth of the importer (pnpm) or workspace (Berry) block a line is in; paths
+    // there are relative to it.
+    let (mut base, mut in_importers, mut importer_indent) = (0usize, false, None::<usize>);
+    for line in text.lines() {
+        let trimmed = line.trim();
+        let indent = line.len() - line.trim_start().len();
+        if trimmed.is_empty() || trimmed.starts_with('#') {
+            continue;
+        }
+        if indent == 0 {
+            base = 0;
+            in_importers = name == "pnpm-lock.yaml" && trimmed == "importers:";
+            importer_indent = None;
+            if name == "yarn.lock" {
+                match workspace_depth(&percent_decoded(trimmed)) {
+                    Some(None) => return true,
+                    Some(Some(depth)) => base = depth,
+                    None => {}
+                }
+            }
+        } else if in_importers && *importer_indent.get_or_insert(indent) == indent {
+            let key = trimmed.trim_matches(['\'', '"', ':']);
+            if !trimmed.ends_with(':') || path_leaves_checkout(key, 0) {
+                return true;
+            }
+            base = key
+                .split('/')
+                .filter(|segment| !matches!(*segment, "" | "."))
+                .count();
+        }
+        let depth = match workspace_depth(&percent_decoded(line)) {
+            Some(None) => return true,
+            Some(Some(depth)) if line.contains("::locator=") => depth,
+            _ => base,
+        };
+        if lockfile_line_unsafe(line, depth) {
+            return true;
+        }
+    }
+    false
+}
+
+/// Whether one lockfile line (or JSON string) names a source [`unsafe_dependency_source`]
+/// refuses, or a bare path after a `directory` or `resolved` key that leaves the checkout.
+fn lockfile_line_unsafe(line: &str, depth: usize) -> bool {
+    // A pnpm `resolution: {type: git, …}` carries the kind as a word, not a prefix.
+    let squeezed: String = line.chars().filter(|c| !c.is_whitespace()).collect();
+    if squeezed.contains("type:git") || squeezed.contains("\"type\":\"git\"") {
+        return true;
+    }
+    let mut path_next = false;
+    for token in line
+        .split(|c: char| {
+            c.is_whitespace() || matches!(c, '"' | '\'' | ',' | '{' | '}' | '[' | ']' | '(' | ')')
+        })
+        .filter(|token| !token.is_empty())
+    {
+        // A trailing `:` ends a YAML key (`x@file:vendor/x:`), not the path.
+        if unsafe_dependency_source(token.trim_end_matches(':'), depth, false) {
+            return true;
+        }
+        if path_next && token != ":" {
+            path_next = false;
+            if bare_path_unsafe(token, depth) {
+                return true;
+            }
+        }
+        path_next = path_next || matches!(token.trim_end_matches(':'), "directory" | "resolved");
+    }
+    false
+}
+
+/// Whether `value` is a path with no protocol that leaves the checkout.
+fn bare_path_unsafe(value: &str, depth: usize) -> bool {
+    let scheme = value.split_once(':').is_some_and(|(scheme, _)| {
+        scheme.len() > 1
+            && scheme
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.'))
+    });
+    !scheme && path_leaves_checkout(value, depth)
+}
+
+/// Whether a parsed npm lockfile (`package-lock.json`, `npm-shrinkwrap.json`) holds a source
+/// [`unsafe_dependency_source`] refuses in any string or key, a `resolved` path (a linked
+/// package) that leaves the checkout, or a `packages` location outside it.
+fn npm_lockfile_value_unsafe(value: &Value, key: Option<&str>) -> bool {
+    match value {
+        Value::String(text) => {
+            lockfile_line_unsafe(text, 0) || (key == Some("resolved") && bare_path_unsafe(text, 0))
+        }
+        Value::Array(items) => items
+            .iter()
+            .any(|item| npm_lockfile_value_unsafe(item, None)),
+        Value::Object(map) => {
+            if map.get("type").and_then(Value::as_str) == Some("git") {
+                return true;
+            }
+            if key == Some("packages")
+                && map
+                    .keys()
+                    .any(|location| !location.is_empty() && path_leaves_checkout(location, 0))
+            {
+                return true;
+            }
+            map.iter().any(|(name, item)| {
+                lockfile_line_unsafe(name, 0) || npm_lockfile_value_unsafe(item, Some(name))
+            })
+        }
+        _ => false,
+    }
+}
+
+/// Whether a `pnpm-workspace.yaml` lists workspace globs that leave the checkout, or settings
+/// (`overrides`, `catalog`, `catalogs`, `packageExtensions`, `patchedDependencies`) naming a
+/// refused source, or is not plain YAML (anchors, aliases, tags, merge keys and anything that
+/// does not parse are refused).
+fn pnpm_workspace_unsafe(text: &str) -> bool {
+    use yaml_rust2::{
+        parser::{Event, MarkedEventReceiver, Parser},
+        scanner::Marker,
+    };
+    #[derive(Default)]
+    struct Events(Vec<Event>);
+    impl MarkedEventReceiver for Events {
+        fn on_event(&mut self, event: Event, _mark: Marker) {
+            self.0.push(event);
+        }
+    }
+    enum Node {
+        Scalar(String),
+        Seq(Vec<Node>),
+        Map(Vec<(String, Node)>),
+    }
+    fn node(events: &mut std::slice::Iter<Event>, depth: usize) -> Option<Node> {
+        if depth > 16 {
+            return None;
+        }
+        match events.next()? {
+            Event::Scalar(value, _, 0, None) => Some(Node::Scalar(value.clone())),
+            Event::SequenceStart(0, None) => {
+                let mut items = Vec::new();
+                while !matches!(events.as_slice().first()?, Event::SequenceEnd) {
+                    items.push(node(events, depth + 1)?);
+                }
+                events.next();
+                Some(Node::Seq(items))
+            }
+            Event::MappingStart(0, None) => {
+                let mut entries = Vec::new();
+                while !matches!(events.as_slice().first()?, Event::MappingEnd) {
+                    let Node::Scalar(key) = node(events, depth + 1)? else {
+                        return None;
+                    };
+                    if key == "<<" {
+                        return None;
+                    }
+                    entries.push((key, node(events, depth + 1)?));
+                }
+                events.next();
+                Some(Node::Map(entries))
+            }
+            _ => None,
+        }
+    }
+    fn any_scalar(node: &Node, test: &dyn Fn(&str) -> bool) -> bool {
+        match node {
+            Node::Scalar(text) => test(text),
+            Node::Seq(items) => items.iter().any(|item| any_scalar(item, test)),
+            Node::Map(entries) => entries.iter().any(|(_, item)| any_scalar(item, test)),
+        }
+    }
+    let mut receiver = Events::default();
+    if Parser::new_from_str(text)
+        .load(&mut receiver, true)
+        .is_err()
+    {
+        return true;
+    }
+    let mut events = receiver.0.iter();
+    let mut roots = Vec::new();
+    while let Some(event) = events.next() {
+        match event {
+            Event::StreamStart | Event::StreamEnd => {}
+            Event::DocumentStart => {
+                let Some(root) = node(&mut events, 0) else {
+                    return true;
+                };
+                if !matches!(events.next(), Some(Event::DocumentEnd)) {
+                    return true;
+                }
+                roots.push(root);
+            }
+            _ => return true,
+        }
+    }
+    let Some(root) = roots.first().filter(|_| roots.len() == 1) else {
+        return !roots.is_empty();
+    };
+    let Node::Map(entries) = root else {
+        return true;
+    };
+    entries.iter().any(|(key, value)| match key.as_str() {
+        "packages" => any_scalar(value, &|glob| glob_leaves_checkout(glob, 0)),
+        "overrides" | "catalog" | "catalogs" | "packageExtensions" => {
+            any_scalar(value, &|spec| unsafe_dependency_source(spec, 0, true))
+        }
+        "patchedDependencies" => any_scalar(value, &|path| path_leaves_checkout(path, 0)),
+        _ => false,
+    })
+}
+
+/// Whether the dependency specifier `spec` names a source that runs repository code or reads
+/// outside the checkout (see [`node_dependency_source_unchecked`] for each decision). `depth` is
+/// how many folders below the checkout the file holding it is. `manifest` is true for a
+/// `package.json` value, where a bare path and `owner/repo` are also sources; in a lockfile they
+/// are names and paths of other things. The specifier and the text after each `@` in it are
+/// checked, so `npm:x@exec:./g.js` and `patch:x@exec%3A./g.js#./p.patch` are caught.
+fn unsafe_dependency_source(spec: &str, depth: usize, manifest: bool) -> bool {
+    let decoded = percent_decoded(spec.trim());
+    let spec = decoded.as_str();
+    let prefixed = |text: &str, prefix: &str| {
+        text.len() > prefix.len()
+            && text.as_bytes()[..prefix.len()].eq_ignore_ascii_case(prefix.as_bytes())
+    };
+    let mut starts = vec![0];
+    starts.extend(spec.match_indices('@').map(|(index, _)| index + 1));
+    let source = |text: &str| {
+        // `exec:` runs a file, git sources run `prepare`-style scripts.
+        if [
+            "exec:",
+            "git:",
+            "git+",
+            "github:",
+            "gitlab:",
+            "bitbucket:",
+            "gist:",
+            "git@",
+            "ssh:",
+        ]
+        .iter()
+        .any(|prefix| prefixed(text, prefix))
+        {
+            return true;
+        }
+        for scheme in ["https://", "http://"] {
+            if prefixed(text, scheme) {
+                let address = &text[scheme.len()..];
+                let host = address.split(['/', '#', '?']).next().unwrap_or("");
+                let path = address.split(['#', '?']).next().unwrap_or("");
+                return path.ends_with(".git")
+                    || [
+                        "github.com",
+                        "codeload.github.com",
+                        "gist.github.com",
+                        "api.github.com",
+                        "gitlab.com",
+                        "bitbucket.org",
+                    ]
+                    .iter()
+                    .any(|git_host| host.eq_ignore_ascii_case(git_host));
+            }
+        }
+        // A Windows drive path, bare, in a lockfile or a manifest.
+        if drive_path(text) {
+            return true;
+        }
+        ["file:", "link:", "portal:"]
+            .iter()
+            .find(|prefix| prefixed(text, prefix))
+            .is_some_and(|prefix| path_leaves_checkout(&text[prefix.len()..], depth))
+    };
+    if starts.iter().any(|start| source(&spec[*start..])) {
+        return true;
+    }
+    if !manifest {
+        return false;
+    }
+    // A bare path; `~1.2.3` is a version range, `~/x` a home folder.
+    if ["./", "../", ".\\", "..\\", "/", "~/", "\\"]
+        .iter()
+        .any(|prefix| spec.starts_with(prefix))
+        || matches!(spec, "." | ".." | "~")
+        || drive_path(spec)
+    {
+        return path_leaves_checkout(spec, depth);
+    }
+    // npm reads `owner/repo` as a GitHub repository.
+    let repository = spec.split('#').next().unwrap_or("");
+    !repository.contains(':') && !repository.starts_with('@') && repository.contains('/')
+}
+
+/// Whether `text` starts with a Windows drive and a separator (`C:\`, `C:/`).
+fn drive_path(text: &str) -> bool {
+    let bytes = text.as_bytes();
+    bytes.len() >= 3
+        && bytes[0].is_ascii_alphabetic()
+        && bytes[1] == b':'
+        && matches!(bytes[2], b'/' | b'\\')
+}
+
+/// Whether a dependency path (without its protocol) is absolute, names a drive or home folder,
+/// or leaves the checkout, counting from `depth` folders below it. Anything after `#` or `::`
+/// is a selector, not part of the path.
+fn path_leaves_checkout(path: &str, depth: usize) -> bool {
+    let path = path.split('#').next().unwrap_or("");
+    let path = path.split("::").next().unwrap_or("");
+    if path.is_empty() {
+        return false;
+    }
+    if path.starts_with(['/', '\\', '~']) || path.contains([':', '\\']) {
+        return true;
+    }
+    let mut depth = depth;
+    for segment in path.split('/') {
+        match segment {
+            "" | "." => {}
+            ".." => match depth.checked_sub(1) {
+                Some(rest) => depth = rest,
+                None => return true,
+            },
+            _ => depth += 1,
+        }
+    }
+    false
+}
+
+/// `text` with `%XX` escapes decoded (invalid escapes stay as written).
+fn percent_decoded(text: &str) -> String {
+    if !text.contains('%') {
+        return text.to_owned();
+    }
+    let bytes = text.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        let hex = |byte: u8| (byte as char).to_digit(16);
+        if bytes[index] == b'%'
+            && index + 2 < bytes.len()
+            && let (Some(high), Some(low)) = (hex(bytes[index + 1]), hex(bytes[index + 2]))
+        {
+            out.push((high * 16 + low) as u8);
+            index += 3;
+        } else {
+            out.push(bytes[index]);
+            index += 1;
+        }
+    }
+    String::from_utf8_lossy(&out).into_owned()
 }
 
 /// Whether every token of a requirements-file line's options is one of `allowed`, each taking
@@ -4849,6 +5452,438 @@ mod tests {
         assert!(install_runs_repository_code("Cargo.lock", &root));
         std::fs::write(root.join(".cargo/config"), [0xff, 0xfe]).expect("config");
         assert!(install_runs_repository_code("Cargo.lock", &root));
+        std::fs::remove_dir_all(root).expect("remove test root");
+    }
+
+    /// DW-386: a script-free Node install must not run repository code or read outside the
+    /// checkout: `exec:` and git dependencies and out-of-checkout `file:`/`link:`/`portal:`
+    /// paths, in any `package.json` or the lockfile, need `allowScripts`; registry dependencies,
+    /// `patch:`, and paths inside the checkout do not.
+    #[test]
+    fn a_dependency_that_runs_repository_code_needs_install_scripts() {
+        let root =
+            std::env::temp_dir().join(format!("devworks-tool-source-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("packages/a")).expect("test root");
+        let managers = [
+            "package-lock.json",
+            "package.json",
+            "pnpm-lock.yaml",
+            "yarn.lock",
+        ];
+        let write = |file: &str, text: &str| std::fs::write(root.join(file), text).expect(file);
+        let safe_lock = "__metadata:\n  version: 8\n\n\"exec@npm:^0.2.0\":\n  version: 0.2.0\n  \
+             resolution: \"exec@npm:0.2.0\"\n  dependencies:\n    exec: ^1\n    \"@babel/core\": \"npm:^7\"\n\
+             \"lodash@patch:lodash@npm%3A4.17.21#./p.patch::version=4.17.21&hash=1&locator=app%40workspace%3A.\":\n  \
+             resolution: \"lodash@patch:lodash@npm%3A4.17.21#./p.patch::version=4.17.21&locator=app%40workspace%3A.\"\n  \
+             resolved \"https://registry.yarnpkg.com/@babel/core/-/core-7.0.0.tgz#abc\"\n  \
+             resolved \"https://npm.pkg.github.com/x/-/x-1.0.0.tgz\"\n  \
+             \"link:./local\"\n  \"file:packages/a\"\n";
+        write(
+            "package.json",
+            r#"{"name":"x","dependencies":{"lodash":"^4.17.21","a":"npm:b@^1","w":"workspace:*",
+               "p":"patch:lodash@npm:4.17.21#./p.patch","l":"link:./local","f":"file:../root-sibling-ok-no"},
+               "devDependencies":{"t":"https://example.invalid/t.tgz","s":"~1.2.3"}}"#,
+        );
+        // `file:../…` from the checkout root leaves it.
+        assert!(install_runs_repository_code("package.json", &root));
+        write(
+            "package.json",
+            r#"{"name":"x","dependencies":{"lodash":"^4.17.21","a":"npm:b@^1","w":"workspace:*",
+               "p":"patch:lodash@npm:4.17.21#./p.patch","l":"link:./local","f":"file:packages/a",
+               "e":"exec"},"devDependencies":{"t":"https://example.invalid/t.tgz","s":"~1.2.3",
+               "dir":"./vendor/x","pr":"portal:./vendor/y"},"resolutions":{"lodash":"4.17.21"}}"#,
+        );
+        write(
+            "packages/a/package.json",
+            r#"{"dependencies":{"up":"link:../b"}}"#,
+        );
+        for name in managers {
+            match name {
+                "package.json" => {}
+                "package-lock.json" => write(
+                    name,
+                    r#"{"lockfileVersion":3,"packages":{"":{},"node_modules/x":{"resolved":"https://registry.npmjs.org/x/-/x-1.tgz"},"node_modules/l":{"resolved":"local","link":true},"local":{}}}"#,
+                ),
+                _ => write(name, safe_lock),
+            }
+            assert!(!install_runs_repository_code(name, &root), "{name}");
+        }
+        let unsafe_specs = [
+            "exec:./gen.js",
+            "EXEC:./gen.js",
+            "npm:foo@exec:./gen.js",
+            "git+https://example.invalid/r.git",
+            "git://example.invalid/r",
+            "git@github.com:o/r.git",
+            "github:o/r",
+            "gitlab:o/r",
+            "bitbucket:o/r",
+            "o/r",
+            "o/r#semver:^1",
+            "https://example.invalid/r.git#abc",
+            "https://github.com/o/r/archive/main.tar.gz",
+            "file:/etc",
+            "file:../outside",
+            "link:~/x",
+            "portal:../../x",
+            "portal:C:/x",
+            "../outside",
+            "/abs",
+            "~/home",
+            "file:./a/../../out",
+        ];
+        for spec in unsafe_specs {
+            for (field, wrapped) in [
+                (
+                    "dependencies",
+                    format!(r#"{{"dependencies":{{"x":"{spec}"}}}}"#),
+                ),
+                (
+                    "devDependencies",
+                    format!(r#"{{"devDependencies":{{"x":"{spec}"}}}}"#),
+                ),
+                (
+                    "optionalDependencies",
+                    format!(r#"{{"optionalDependencies":{{"x":"{spec}"}}}}"#),
+                ),
+                (
+                    "peerDependencies",
+                    format!(r#"{{"peerDependencies":{{"x":"{spec}"}}}}"#),
+                ),
+                (
+                    "resolutions",
+                    format!(r#"{{"resolutions":{{"x@npm:1":"{spec}"}}}}"#),
+                ),
+                (
+                    "overrides",
+                    format!(r#"{{"overrides":{{"x":{{"y":"{spec}"}}}}}}"#),
+                ),
+                (
+                    "pnpm",
+                    format!(r#"{{"pnpm":{{"overrides":{{"x":"{spec}"}}}}}}"#),
+                ),
+            ] {
+                write("package.json", &wrapped);
+                for name in managers {
+                    if name != "package.json" {
+                        let _ = std::fs::remove_file(root.join(name));
+                    }
+                    assert!(install_runs_repository_code(name, &root), "{field}: {spec}");
+                }
+            }
+            // A workspace package.json is checked too.
+            write("package.json", r#"{"name":"x"}"#);
+            write(
+                "packages/a/package.json",
+                &format!(r#"{{"dependencies":{{"x":"{spec}"}}}}"#),
+            );
+            // From `packages/a` (two folders down), up to two `..` stay inside the checkout.
+            let inside = matches!(
+                spec,
+                "file:../outside" | "portal:../../x" | "../outside" | "file:./a/../../out"
+            );
+            assert_eq!(
+                install_runs_repository_code("yarn.lock", &root),
+                !inside,
+                "workspace: {spec}"
+            );
+            write("packages/a/package.json", r#"{"name":"a"}"#);
+        }
+        // Lockfiles: a Berry resolution, an exec: descriptor, a Yarn 1 git line, a pnpm git
+        // resolution, an npm git `resolved`.
+        for (name, text) in [
+            (
+                "yarn.lock",
+                "\"x@exec:./gen.js\":\n  resolution: \"x@exec:./gen.js::locator=a%40workspace%3A.\"\n",
+            ),
+            (
+                "yarn.lock",
+                "\"x@patch:x@exec%3A./gen.js#./p.patch\":\n  version: 1\n",
+            ),
+            ("yarn.lock", "  dependencies:\n    x: exec:./gen.js\n"),
+            (
+                "yarn.lock",
+                "  resolution: \"x@https://github.com/o/r.git#commit=abc\"\n",
+            ),
+            (
+                "yarn.lock",
+                "x@o/r:\n  resolved \"git+ssh://git@github.com/o/r.git#abc\"\n",
+            ),
+            (
+                "yarn.lock",
+                "  resolution: \"x@portal:../x::locator=a%40workspace%3A.\"\n",
+            ),
+            (
+                "pnpm-lock.yaml",
+                "packages:\n  x@1.0.0:\n    resolution: {commit: abc, repo: https://example.invalid/r, type: git}\n",
+            ),
+            ("pnpm-lock.yaml", "    x:\n      version: link:../x\n"),
+            (
+                "package-lock.json",
+                "{\"packages\":{\"node_modules/x\":{\"resolved\":\"git+ssh://git@github.com/o/r.git#abc\"}}}",
+            ),
+            (
+                "package-lock.json",
+                "{\"packages\":{\"node_modules/x\":{\"resolved\":\"git+https://example.invalid/r\"}}}",
+            ),
+        ] {
+            for other in managers {
+                let _ = std::fs::remove_file(root.join(other));
+            }
+            write("package.json", r#"{"name":"x"}"#);
+            write(name, text);
+            assert!(install_runs_repository_code(name, &root), "{name}: {text}");
+        }
+        // An unparseable workspace package.json cannot be ruled out.
+        for name in managers {
+            let _ = std::fs::remove_file(root.join(name));
+        }
+        write("package.json", r#"{"name":"x"}"#);
+        write("packages/a/package.json", "{");
+        assert!(install_runs_repository_code("package.json", &root));
+        std::fs::remove_dir_all(root).expect("remove test root");
+    }
+
+    /// DW-386 review: escapes, bare paths, workspace globs, patches and sibling links.
+    #[test]
+    fn lockfile_escapes_bare_paths_and_globs_are_checked() {
+        let root =
+            std::env::temp_dir().join(format!("devworks-tool-lockfiles-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).expect("test root");
+        let managers = [
+            "package-lock.json",
+            "npm-shrinkwrap.json",
+            "pnpm-lock.yaml",
+            "pnpm-workspace.yaml",
+            "yarn.lock",
+            "package.json",
+        ];
+        let reset = |files: &[(&str, &str)]| {
+            for name in managers {
+                let _ = std::fs::remove_file(root.join(name));
+            }
+            std::fs::write(root.join("package.json"), r#"{"name":"x"}"#).expect("package");
+            for (name, text) in files {
+                std::fs::write(root.join(name), text).expect(name);
+            }
+        };
+        let refused = |manager: &str, files: &[(&str, &str)]| {
+            reset(files);
+            assert!(install_runs_repository_code(manager, &root), "{files:?}");
+        };
+        let allowed = |manager: &str, files: &[(&str, &str)]| {
+            reset(files);
+            assert!(!install_runs_repository_code(manager, &root), "{files:?}");
+        };
+        // Escapes that hide a source.
+        refused(
+            "yarn.lock",
+            &[("yarn.lock", "\"x@\\u0065xec:./g.js\":\n  version: 1\n")],
+        );
+        refused(
+            "yarn.lock",
+            &[("yarn.lock", "x:\n  resolution: \"x@exec\\u003a./g.js\"\n")],
+        );
+        refused(
+            "yarn.lock",
+            &[("yarn.lock", "x:\n  resolution: \"x@ex\\\nec:./g.js\"\n")],
+        );
+        refused(
+            "pnpm-lock.yaml",
+            &[("pnpm-lock.yaml", "a: \"\\x65xec:./g.js\"\n")],
+        );
+        refused(
+            "pnpm-lock.yaml",
+            &[("pnpm-lock.yaml", "a: \"ex\\\n  ec:./g.js\"\n")],
+        );
+        for name in ["package-lock.json", "npm-shrinkwrap.json"] {
+            refused(
+                "package-lock.json",
+                &[(
+                    name,
+                    r#"{"packages":{"node_modules/x":{"resolved":"\u0065xec:./g.js"}}}"#,
+                )],
+            );
+            refused(
+                "package-lock.json",
+                &[(
+                    name,
+                    r#"{"packages":{"node_modules/x":{"resolved":"exec\u003a./g.js"}}}"#,
+                )],
+            );
+            refused(
+                "package-lock.json",
+                &[(
+                    name,
+                    r#"{"packages":{"node_modules/x":{"resolved":"git+ssh://git@github.com/o/r.git"}}}"#,
+                )],
+            );
+            refused("package-lock.json", &[(name, "{")]);
+            // A linked package and a package location outside the checkout.
+            refused(
+                "package-lock.json",
+                &[(
+                    name,
+                    r#"{"packages":{"node_modules/x":{"resolved":"../outside","link":true}}}"#,
+                )],
+            );
+            refused(
+                "package-lock.json",
+                &[(name, r#"{"packages":{"../outside":{}}}"#)],
+            );
+            refused(
+                "package-lock.json",
+                &[(
+                    name,
+                    r#"{"packages":{"node_modules/x":{"resolved":"C:\\x","link":true}}}"#,
+                )],
+            );
+        }
+        allowed(
+            "package-lock.json",
+            &[(
+                "npm-shrinkwrap.json",
+                r#"{"packages":{"node_modules/x":{"resolved":"pkgs/x","link":true},"pkgs/x":{}}}"#,
+            )],
+        );
+        // Bare paths in pnpm lockfiles, and a drive path.
+        refused(
+            "pnpm-lock.yaml",
+            &[(
+                "pnpm-lock.yaml",
+                "packages:\n  x@file:../x:\n    resolution: {directory: ../x, type: directory}\n",
+            )],
+        );
+        refused(
+            "pnpm-lock.yaml",
+            &[(
+                "pnpm-lock.yaml",
+                "packages:\n  x:\n    resolution:\n      directory: /abs\n",
+            )],
+        );
+        refused(
+            "pnpm-lock.yaml",
+            &[(
+                "pnpm-lock.yaml",
+                "packages:\n  x:\n    resolution: {directory: 'C:/x'}\n",
+            )],
+        );
+        allowed(
+            "pnpm-lock.yaml",
+            &[(
+                "pnpm-lock.yaml",
+                "packages:\n  x@file:vendor/x:\n    resolution: {directory: vendor/x, type: directory}\n",
+            )],
+        );
+        // Sibling links resolve against the importer (pnpm) or workspace (Berry).
+        let importers = |link: &str| {
+            format!(
+                "importers:\n  .:\n    dependencies:\n      r:\n        version: link:./r\n  packages/a:\n    dependencies:\n      b:\n        specifier: workspace:*\n        version: {link}\n"
+            )
+        };
+        allowed(
+            "pnpm-lock.yaml",
+            &[("pnpm-lock.yaml", &importers("link:../b"))],
+        );
+        refused(
+            "pnpm-lock.yaml",
+            &[("pnpm-lock.yaml", &importers("link:../../../b"))],
+        );
+        refused(
+            "pnpm-lock.yaml",
+            &[(
+                "pnpm-lock.yaml",
+                "importers:\n  ../x:\n    dependencies: {}\n",
+            )],
+        );
+        // The root importer cannot climb.
+        refused(
+            "pnpm-lock.yaml",
+            &[(
+                "pnpm-lock.yaml",
+                "importers:\n  .:\n    dependencies:\n      b:\n        version: link:../b\n",
+            )],
+        );
+        allowed(
+            "yarn.lock",
+            &[(
+                "yarn.lock",
+                "\"b@portal:../b::locator=a%40workspace%3Apackages/a\":\n  resolution: \"b@portal:../b::locator=a%40workspace%3Apackages/a\"\n\n\"a@workspace:packages/a\":\n  dependencies:\n    b: portal:../b\n",
+            )],
+        );
+        refused(
+            "yarn.lock",
+            &[(
+                "yarn.lock",
+                "\"b@portal:../../../b::locator=a%40workspace%3Apackages/a\":\n  version: 0.0.0\n",
+            )],
+        );
+        refused(
+            "yarn.lock",
+            &[("yarn.lock", "\"b@portal:../b\":\n  version: 0.0.0\n")],
+        );
+        // pnpm-workspace.yaml.
+        allowed(
+            "pnpm-lock.yaml",
+            &[(
+                "pnpm-workspace.yaml",
+                "packages:\n  - packages/*\n  - '!**/test/**'\ncatalog:\n  a: ^1\noverrides:\n  b: npm:c@^1\n",
+            )],
+        );
+        for text in [
+            "packages:\n  - ../other/*\n",
+            "packages:\n  - /abs/*\n",
+            "packages:\n  - packages/*/../../..\n",
+            "overrides:\n  a: exec:./g.js\n",
+            "catalog:\n  a: github:o/r\n",
+            "catalogs:\n  x:\n    a: link:../x\n",
+            "overrides: &o\n  a: ^1\n",
+            "overrides:\n  a: !!str exec:./g.js\n",
+            "catalog:\n  a: *x\n",
+            "packages: [",
+        ] {
+            refused("pnpm-lock.yaml", &[("pnpm-workspace.yaml", text)]);
+        }
+        // package.json: pnpm patches and extensions, workspace globs, Windows paths.
+        allowed(
+            "package.json",
+            &[(
+                "package.json",
+                r#"{"workspaces":["packages/*"],"pnpm":{"patchedDependencies":{"x@1":"patches/x.patch"}}}"#,
+            )],
+        );
+        allowed(
+            "package.json",
+            &[(
+                "package.json",
+                r#"{"workspaces":{"packages":["apps/*"]},"bundleDependencies":["../not-a-path"]}"#,
+            )],
+        );
+        for text in [
+            r#"{"pnpm":{"patchedDependencies":{"x@1":"../outside.patch"}}}"#,
+            r#"{"pnpm":{"patchedDependencies":{"x@1":"/abs.patch"}}}"#,
+            r#"{"pnpm":{"packageExtensions":{"x":{"dependencies":{"y":"exec:./g.js"}}}}}"#,
+            r#"{"workspaces":["../*"]}"#,
+            r#"{"workspaces":{"packages":["/abs/*"]}}"#,
+            r#"{"workspaces":["packages/*/../../.."]}"#,
+            r#"{"dependencies":{"x":"C:\\x"}}"#,
+            r#"{"dependencies":{"x":"C:/x"}}"#,
+            r#"{"dependencies":{"x":"..\\x"}}"#,
+            r#"{"dependencies":{"x":".\\x"}}"#,
+        ] {
+            refused("package.json", &[("package.json", text)]);
+        }
+        // Windows drive and backslash paths in lockfiles.
+        refused(
+            "yarn.lock",
+            &[("yarn.lock", "x:\n  dependencies:\n    y: file:..\\y\n")],
+        );
+        refused(
+            "yarn.lock",
+            &[("yarn.lock", "x:\n  dependencies:\n    y: C:/y\n")],
+        );
         std::fs::remove_dir_all(root).expect("remove test root");
     }
 
