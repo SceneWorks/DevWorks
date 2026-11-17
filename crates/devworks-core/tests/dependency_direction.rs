@@ -396,11 +396,14 @@ const ALLOWED: &[(&str, [usize; 4], &str)] = &[
     ),
     (
         "services/process/tools.rs",
-        [7, 3, 3, 0],
+        [16, 3, 3, 0],
         "toolchain detection reads the project's manifests and the host PATH, RUSTUP_HOME and \
          HOME to build a tool's environment, and creates the scratch directory it runs in; \
-         each read is bounded and none writes outside that directory; plus monotonic \
-         deadlines of a tool run",
+         the script-free install safety checks read repository manifests and lockfiles \
+         (package.json, .yarnrc.yml, lockfiles) and the ancestor directories' rc files, which \
+         are filesystem reads of the checked-out repository with no port to go through; each \
+         read is bounded and none writes outside that directory; plus monotonic deadlines of \
+         a tool run",
     ),
     (
         "services/process.rs",
