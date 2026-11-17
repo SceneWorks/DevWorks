@@ -24,7 +24,7 @@ use crate::protocol::results::{DomainDecision, OperationResult};
 use crate::protocol::support::{BoundedList, BoundedText, Check, DynamicJson, Limit, Probability};
 use crate::protocol::{CorrelationId, DomainErrorCode, DomainFault, Id};
 use crate::services::cursor::{self, CursorBinding};
-use crate::services::sessions::{
+use crate::services::kernel::{
     Failure, Refusal, counter, decided, query_fault, rev, visible_session,
 };
 use sha2::{Digest as _, Sha256};

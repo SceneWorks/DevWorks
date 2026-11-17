@@ -4,7 +4,7 @@ use super::*;
 use crate::ports::git_transport::GitTransportContext;
 use crate::ports::process::ProcessSpec;
 use crate::protocol::OperationId;
-use crate::services::indexing::helper::HelperLimits;
+use crate::services::git::helper::HelperLimits;
 use std::path::PathBuf;
 
 pub(super) struct PushTransport<'a> {
@@ -189,7 +189,7 @@ impl PushTransport<'_> {
     fn isolate(&self, mut spec: ProcessSpec) -> Result<ProcessSpec, HelperFault> {
         let dir = self.context.directory();
         let value = |path: &Path| {
-            crate::services::indexing::git::path_argument(path)
+            crate::services::git::client::path_argument(path)
                 .map_err(|_| HelperFault::Refused("Git transport path unavailable".into()))
         };
         spec.cwd = Some(dir.to_owned());

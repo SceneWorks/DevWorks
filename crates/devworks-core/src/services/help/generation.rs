@@ -10,7 +10,7 @@ use crate::protocol::records::{HelpProvenance, OperationRef};
 use crate::protocol::results::OperationResult;
 use crate::protocol::support::BoundedText;
 use crate::protocol::{EventId, Id, OperationId, OperationState};
-use crate::services::sessions::rev;
+use crate::services::kernel::rev;
 use serde_json::{Value, json};
 use sha2::{Digest as _, Sha256};
 

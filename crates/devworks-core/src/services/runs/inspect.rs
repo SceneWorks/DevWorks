@@ -11,7 +11,7 @@ use crate::ports::storage::{
     StoredBlocker, StoredInstruction, StoredProcess, StoredRootControl, WorkRoot,
 };
 use crate::protocol::{Id, RootId};
-use crate::services::sessions::Failure;
+use crate::services::kernel::Failure;
 use serde_json::Value;
 
 /// Most activations an inspection lists (newest first).

@@ -389,7 +389,7 @@ pub(crate) fn admit_attempt(
         .router()
         .route_request(&request.request_id)?
         .ok_or_else(|| invalid("logical router request is not admitted"))?;
-    if !crate::services::sessions::project_visible(ctx, route.project_id.as_ref()) {
+    if !crate::services::kernel::project_visible(ctx, route.project_id.as_ref()) {
         return Err(StorageError::ScopeDenied);
     }
     if request.role.trim().is_empty()

@@ -725,13 +725,11 @@ async fn build(composition: Composition, core: CoreServices) -> Result<Engine, B
     };
     let git = git.and_then(|composition| {
         let fs = composition.config.filesystem.clone()?;
-        let helpers = Arc::new(
-            devworks_core::services::indexing::helper::SupervisedHelpers {
-                supervisor: supervisor.clone(),
-                store: store.clone(),
-                fs,
-            },
-        );
+        let helpers = Arc::new(devworks_core::services::git::helper::SupervisedHelpers {
+            supervisor: supervisor.clone(),
+            store: store.clone(),
+            fs,
+        });
         Some(Arc::new(devworks_core::services::git::GitService::new(
             store.clone(),
             helpers,
@@ -977,13 +975,11 @@ async fn build(composition: Composition, core: CoreServices) -> Result<Engine, B
             store: store.clone(),
             parser: ix.parser,
             source: ix.source,
-            helpers: Arc::new(
-                devworks_core::services::indexing::helper::SupervisedHelpers {
-                    supervisor: supervisor.clone(),
-                    store: store.clone(),
-                    fs: ix.fs,
-                },
-            ),
+            helpers: Arc::new(devworks_core::services::git::helper::SupervisedHelpers {
+                supervisor: supervisor.clone(),
+                store: store.clone(),
+                fs: ix.fs,
+            }),
             clock: clock.clone(),
             ids: ids.clone(),
             artifacts: Some(artifacts.clone()),

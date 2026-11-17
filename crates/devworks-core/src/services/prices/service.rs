@@ -11,7 +11,7 @@ use crate::ports::{
 use crate::protocol::records::{PriceOverrideChange, PriceOverrideOutcome, PriceOverrideResult};
 use crate::protocol::results::{DomainDecision, OperationResult};
 use crate::protocol::{DomainErrorCode, DomainFault, EventId};
-use crate::services::sessions::{Failure, Refusal, counter, decided, not_found, query_fault, rev};
+use crate::services::kernel::{Failure, Refusal, counter, decided, not_found, query_fault, rev};
 use serde_json::json;
 use std::sync::Arc;
 

@@ -3,7 +3,7 @@ use crate::fingerprint::sha256_hex;
 use crate::protocol::provider::Digest;
 use crate::protocol::records::HelpCapabilityMetadata;
 use crate::protocol::support::BoundedText;
-use crate::services::sessions::rev;
+use crate::services::kernel::rev;
 
 impl HelpService {
     pub(super) fn capability_metadata(&self, operation: &str) -> Vec<HelpCapabilityMetadata> {

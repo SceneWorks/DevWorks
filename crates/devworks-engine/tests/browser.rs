@@ -5464,7 +5464,7 @@ fn source_fixture(
     let primary = primary.canonicalize().unwrap();
     let owned = owned.canonicalize().unwrap();
     let tree = owned.join("tree");
-    let tree_argument = devworks_core::services::indexing::git::path_argument(&tree).unwrap();
+    let tree_argument = devworks_core::services::git::client::path_argument(&tree).unwrap();
     source_git(&primary, &["init", "-b", "main"]);
     std::fs::write(primary.join("source.txt"), "initial\n").unwrap();
     source_git(&primary, &["add", "source.txt"]);

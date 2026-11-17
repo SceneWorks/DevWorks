@@ -86,7 +86,7 @@ impl CommandHandler for DocsHandler {
             },
             Docs::Refused => Decided {
                 decision: DomainDecision::Refused {
-                    fault: devworks_core::services::sessions::Refusal::new(
+                    fault: devworks_core::services::kernel::Refusal::new(
                         DomainErrorCode::Conflict,
                         "help_revision",
                         None,

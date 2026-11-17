@@ -1,7 +1,7 @@
 //! Package links derived only from definitions in the complete selected composition.
 //! Structural manifests do not authorize cross-repository symbol-name guessing.
 use super::{budget::Budget, dataset, scan::Edge};
-use crate::{ports::storage::*, services::sessions::Failure};
+use crate::{ports::storage::*, services::kernel::Failure};
 use serde_json::{Value, json};
 use std::collections::BTreeSet;
 

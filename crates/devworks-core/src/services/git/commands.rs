@@ -13,7 +13,7 @@ use crate::protocol::data::GitCommand;
 use crate::protocol::records::GitActionKind;
 use crate::protocol::results::DomainDecision;
 use crate::protocol::{ActorId, AssignmentId, EventId, OperationId, ProjectId, RootId};
-use crate::services::sessions::{counter, decided};
+use crate::services::kernel::{counter, decided};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::io::Read;
@@ -188,7 +188,7 @@ impl GitService {
         {
             return Err(refuse(DomainErrorCode::PermissionDenied, "git_root", id));
         }
-        crate::services::indexing::git::path_argument(&root.path)
+        crate::services::git::client::path_argument(&root.path)
             .map_err(|_| refuse(DomainErrorCode::UnsupportedTarget, "git_root", id))?;
         Ok(root.path.clone())
     }
@@ -715,7 +715,7 @@ impl GitService {
         &self,
         job: &Job,
         operation: &OperationId,
-        observation: crate::services::indexing::git::RevisionObservation,
+        observation: crate::services::git::client::RevisionObservation,
     ) -> EffectOutcome {
         if observation.branch.as_deref() != Some(&job.tree.branch) {
             return EffectOutcome::Unknown("owned branch changed".into());
@@ -742,7 +742,7 @@ impl GitService {
             return denied("invalid principal kind");
         };
         let stop = || false;
-        let helpers = crate::services::indexing::helper::RecordedHelpers {
+        let helpers = crate::services::git::helper::RecordedHelpers {
             inner: &*self.helpers,
             operation,
         };
@@ -988,7 +988,7 @@ impl GitService {
             Err(e) => return e,
         };
         let stop = || self.git_stopped(&job);
-        let helpers = crate::services::indexing::helper::RecordedHelpers {
+        let helpers = crate::services::git::helper::RecordedHelpers {
             inner: &*self.helpers,
             operation: &operation.id,
         };
@@ -1024,7 +1024,7 @@ impl GitService {
                 if self.root_path(&job.tree.registered_root_id).is_err() {
                     return denied("registered root changed");
                 }
-                let destination = match crate::services::indexing::git::path_argument(path) {
+                let destination = match crate::services::git::client::path_argument(path) {
                     Ok(value) => value,
                     Err(_) => {
                         return failed(
@@ -1237,7 +1237,7 @@ impl GitService {
             return denied("invalid principal kind");
         };
         let stop = || false; // observation is permitted while the originating work is paused
-        let helpers = crate::services::indexing::helper::RecordedHelpers {
+        let helpers = crate::services::git::helper::RecordedHelpers {
             inner: &*self.helpers,
             operation: &operation.id,
         };

@@ -1027,7 +1027,7 @@ pub struct IndexCommandRequest {
 /// Whether `s` names a branch, tag or full commit: a full lowercase object ID, or a ref name
 /// under `git check-ref-format` rules (no revision syntax, no option spelling).
 pub fn overlay_ref_ok(s: &str) -> bool {
-    let oid = crate::services::indexing::git::oid_ok(s);
+    let oid = crate::fingerprint::is_lower_hex(s, 40) || crate::fingerprint::is_sha256_hex(s);
     oid || (!s.is_empty()
         && s.len() <= 256
         && !s.starts_with(['-', '/'])

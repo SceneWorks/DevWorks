@@ -52,7 +52,7 @@ pub fn ownership(
     if ctx.session_id().is_some()
         && session.as_ref().is_none_or(|s| {
             s.closed()
-                || !crate::services::sessions::project_visible(ctx, s.project_id.as_ref())
+                || !crate::services::kernel::project_visible(ctx, s.project_id.as_ref())
                 || (!matches!(
                     ctx.principal_kind(),
                     PrincipalKind::Human | PrincipalKind::Host

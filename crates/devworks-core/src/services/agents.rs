@@ -29,9 +29,9 @@ use crate::protocol::{
     OperationState, ProjectId, Revision, RevisionDimension,
 };
 use crate::services::cursor::{self, CursorBinding};
+use crate::services::kernel::{Failure, Refusal, decided, query_fault, rev};
 use crate::services::runs::substrate::{Fenced, NewRunAssignment};
 use crate::services::runs::{self, ControlService};
-use crate::services::sessions::{Failure, Refusal, decided, query_fault, rev};
 use crate::settings::catalog::AgentRole;
 use std::sync::Arc;
 use std::time::{Duration, Instant};

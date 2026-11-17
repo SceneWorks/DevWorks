@@ -11,7 +11,7 @@ fn null_config() -> &'static str {
 }
 fn shell_word(path: &Path) -> String {
     let path =
-        devworks_core::services::indexing::git::path_argument(path).expect("fixture helper path");
+        devworks_core::services::git::client::path_argument(path).expect("fixture helper path");
     format!("'{}'", path.replace('\'', "'\\''"))
 }
 fn config_value(value: &str) -> String {
@@ -269,7 +269,7 @@ impl State {
         &self,
         verb: &str,
         flags: &str,
-        result: &Result<Vec<u8>, devworks_core::services::indexing::helper::HelperFault>,
+        result: &Result<Vec<u8>, devworks_core::services::git::helper::HelperFault>,
     ) {
         if self.https.is_some()
             && matches!(verb, "ls-remote" | "push")

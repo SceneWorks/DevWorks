@@ -35,13 +35,14 @@ use crate::services::artifacts::host::HostArtifactPublication;
 use crate::services::artifacts::{ArtifactService, version_ref};
 use crate::services::cursor::{self, CursorBinding};
 use crate::services::diagnostics::{DiagnosticService, LogEntry};
+use crate::services::kernel::{Refusal, counter, decided, query_fault, rev};
 use crate::services::process::STOPPED_ON_REQUEST;
 use crate::services::process::tools::{
     BindingRefusal, ExecuteOrigin, MatchCounter, ProcessToolService, binding_refusal,
 };
 use crate::services::runs::ControlService;
 use crate::services::sessions::transcript::{BatchOutcome, SessionBatch, SessionWriter};
-use crate::services::sessions::{Refusal, counter, decided, query_fault, rev, turn};
+use crate::services::sessions::turn;
 use crate::settings::catalog::{WATCH_BACKUP_ENABLED_KEY, WATCH_BACKUP_INTERVAL_KEY};
 use crate::settings::catalog::{WATCH_MAX_LIFETIME_KEY, descriptor};
 use crate::settings::model::{chain, current_chain};

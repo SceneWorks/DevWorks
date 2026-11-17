@@ -4,7 +4,7 @@ use crate::services::graph::{
     model,
     read::{Metadata, Reader},
 };
-use crate::services::sessions::Failure;
+use crate::services::kernel::Failure;
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
 

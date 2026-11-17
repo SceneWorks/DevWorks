@@ -148,7 +148,7 @@ use crate::protocol::{
 use crate::services::artifacts::ArtifactService;
 use crate::services::artifacts::lifecycle::ExactReadRefusal;
 use crate::services::diagnostics::{DiagnosticService, LogEntry};
-use crate::services::sessions::{Failure, Refusal, decided, query_fault, rev};
+use crate::services::kernel::{Failure, Refusal, decided, query_fault, rev};
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, Mutex, RwLock};

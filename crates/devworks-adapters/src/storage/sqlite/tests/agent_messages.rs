@@ -8,7 +8,7 @@ use devworks_core::protocol::DomainErrorCode;
 use devworks_core::protocol::records::MessageClass;
 use devworks_core::protocol::support::{BoundedList, BoundedText};
 use devworks_core::protocol::{ActorId, AssignmentId, Counter, Id, ProjectId, Revision, RootId};
-use devworks_core::services::sessions::{Failure, Refusal};
+use devworks_core::services::kernel::{Failure, Refusal};
 use serde_json::json;
 use std::sync::Arc;
 

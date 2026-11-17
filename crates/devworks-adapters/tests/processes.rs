@@ -1348,7 +1348,7 @@ fn agent_container_create_approval_preview_lists_mounts_ports_and_image() {
     use devworks_core::services::approvals::SavedOperationOwners;
     use devworks_core::services::approvals::owner_preview::NativeOwnerPreviews;
     use devworks_core::services::approvals::requests;
-    use devworks_core::services::sessions::Failure;
+    use devworks_core::services::kernel::Failure;
     let _serial = serial();
     let fx = Fx::new();
     let runner = Arc::new(ContainerRunner::new(

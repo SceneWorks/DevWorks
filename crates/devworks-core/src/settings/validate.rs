@@ -275,7 +275,7 @@ fn connection_issue(item: &Value, names: &mut std::collections::HashSet<String>)
     }
     let base = o.get("baseUrl").and_then(Value::as_str).unwrap_or("");
     let parsed = (base.len() <= 2048)
-        .then(|| crate::services::web::egress::parse(base).ok())
+        .then(|| crate::kernel::egress::parse(base).ok())
         .flatten();
     match parsed {
         Some(u) if u.scheme() == "https" && u.query().is_none() && !base.contains('#') => {}

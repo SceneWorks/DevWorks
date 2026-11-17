@@ -32,8 +32,8 @@ use devworks_core::protocol::{
 };
 use devworks_core::services::UseCases;
 use devworks_core::services::artifacts::ArtifactService;
+use devworks_core::services::git::helper::SupervisedHelpers;
 use devworks_core::services::indexing::discover::{self, worktree_id};
-use devworks_core::services::indexing::helper::SupervisedHelpers;
 use devworks_core::services::indexing::paths::location_identity;
 use devworks_core::services::indexing::worker::IndexWorker;
 use devworks_core::services::indexing::{IndexCoordinator, IndexEnv, IndexSettings, views};

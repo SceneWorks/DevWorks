@@ -1103,7 +1103,7 @@ fn pending_plans_keep_the_active_plan_until_a_human_approves_the_exact_draft() {
     let pid = proposal.id.clone();
     let refused_unseen = fx.write(move |tx| {
         Ok(match decide_plan_approval(tx, &ctx, &pid, 1, true) {
-            Err(devworks_core::services::sessions::Failure::Refused(r)) => r.target_kind,
+            Err(devworks_core::services::kernel::Failure::Refused(r)) => r.target_kind,
             other => panic!("{:?}", other.map(|w| w.revision)),
         })
     });
@@ -1475,7 +1475,7 @@ fn adopting_a_replacement_whose_assessment_cannot_take_a_carried_finding_is_refu
         &*c.fx.store,
         WriteOptions::fixture(),
         move |tx| match decide_plan_approval(tx, &ctx, &proposal.id, 1, true) {
-            Err(devworks_core::services::sessions::Failure::Refused(r)) => {
+            Err(devworks_core::services::kernel::Failure::Refused(r)) => {
                 Err(StorageError::InvalidRecord(r.target_kind.to_string()))
             }
             other => panic!("{:?}", other.map(|w| w.revision)),

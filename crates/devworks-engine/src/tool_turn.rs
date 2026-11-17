@@ -2548,10 +2548,10 @@ fn held_approval(
             },
             None,
         )),
-        Err(devworks_core::services::sessions::Failure::Refused(_)) => {
+        Err(devworks_core::services::kernel::Failure::Refused(_)) => {
             Ok(failed("domain_ApprovalRequired"))
         }
-        Err(devworks_core::services::sessions::Failure::Storage(error)) => Err(error),
+        Err(devworks_core::services::kernel::Failure::Storage(error)) => Err(error),
     }
 }
 
@@ -2705,7 +2705,7 @@ mod tests {
     #[test]
     fn unknown_command_effect_keeps_operation_identity() {
         let operation_id = OperationId(Id::new("operation").unwrap());
-        let fault = devworks_core::services::sessions::Refusal::new(
+        let fault = devworks_core::services::kernel::Refusal::new(
             DomainErrorCode::OutcomeUnknown,
             "operation",
             Some(operation_id.0.clone()),
@@ -2734,7 +2734,7 @@ mod tests {
     #[test]
     fn blocked_command_keeps_actual_hold_identity() {
         let hold = HoldId(Id::new("blocked-hold").unwrap());
-        let mut fault = devworks_core::services::sessions::Refusal::new(
+        let mut fault = devworks_core::services::kernel::Refusal::new(
             DomainErrorCode::DependencyBlocked,
             "root",
             None,
@@ -2763,7 +2763,7 @@ mod tests {
 
     #[test]
     fn approval_fault_cannot_be_recorded_as_failed_without_approval_identity() {
-        let fault = devworks_core::services::sessions::Refusal::new(
+        let fault = devworks_core::services::kernel::Refusal::new(
             DomainErrorCode::ApprovalRequired,
             "operation",
             None,
@@ -2789,7 +2789,7 @@ mod tests {
 
     #[test]
     fn retryable_recorded_command_does_not_become_final_failed() {
-        let fault = devworks_core::services::sessions::Refusal::new(
+        let fault = devworks_core::services::kernel::Refusal::new(
             DomainErrorCode::StorageUnavailable,
             "operation",
             None,

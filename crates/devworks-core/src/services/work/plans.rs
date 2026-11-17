@@ -26,7 +26,7 @@ use crate::protocol::records::{
 use crate::protocol::results::{DomainDecision, OperationResult};
 use crate::protocol::support::{BoundedList, Check, Label, Page, Revisioned};
 use crate::protocol::{DomainErrorCode, Id, ProjectId, RevisionDimension, RootId};
-use crate::services::sessions::{content, label, rev};
+use crate::services::kernel::{content, label, rev};
 use serde_json::json;
 use std::collections::BTreeMap;
 
@@ -294,8 +294,8 @@ fn save_pending(
     let superseded = supersede_pending(tx, &f.id)?;
     Ok((after, superseded))
 }
-fn invalid_record(m: &str) -> super::super::sessions::Failure {
-    super::super::sessions::Failure::Storage(crate::ports::storage::StorageError::InvalidRecord(
+fn invalid_record(m: &str) -> super::super::kernel::Failure {
+    super::super::kernel::Failure::Storage(crate::ports::storage::StorageError::InvalidRecord(
         m.to_owned(),
     ))
 }

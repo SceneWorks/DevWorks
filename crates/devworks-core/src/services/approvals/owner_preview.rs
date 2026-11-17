@@ -7,7 +7,7 @@ use crate::ports::storage::WriteTransaction;
 use crate::protocol::DomainErrorCode;
 use crate::services::approvals::{OwnerPreview, SavedOperationOwners};
 use crate::services::desktop::DesktopService;
-use crate::services::sessions::{Failure, Refusal};
+use crate::services::kernel::{Failure, Refusal};
 use crate::services::{git::GitService, jobs::JobService, packages::PackageService};
 use std::sync::Arc;
 

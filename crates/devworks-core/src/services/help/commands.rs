@@ -6,7 +6,7 @@ use crate::ports::storage::*;
 use crate::ports::{AuthorityFence, CommandHandler, Decided, HandlerFailure, IdKind};
 use crate::protocol::results::DomainDecision;
 use crate::protocol::{ActorId, DomainErrorCode, EventId, Id, OperationId, StoreId};
-use crate::services::sessions::{Failure, Refusal, decided};
+use crate::services::kernel::{Failure, Refusal, decided};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
@@ -42,7 +42,7 @@ impl HelpService {
                 "help_catalog",
                 Id::new("help").expect("owned ID"),
                 input.expected_help_revision.clone(),
-                crate::services::sessions::rev(head.revision),
+                crate::services::kernel::rev(head.revision),
             )
             .into());
         }
@@ -52,7 +52,7 @@ impl HelpService {
                 "capability_registry",
                 Id::new("registry").expect("owned ID"),
                 input.registry_revision.clone(),
-                crate::services::sessions::rev(registry),
+                crate::services::kernel::rev(registry),
             )
             .into());
         }

@@ -100,11 +100,11 @@ use crate::services::artifacts::ArtifactService;
 use crate::services::artifacts::evidence::{Evidence, EvidenceFailure, safe_name};
 use crate::services::cursor::{self, CursorBinding};
 use crate::services::diagnostics::HealthCheck;
+use crate::services::kernel::{
+    Failure, Refusal, counter, decided, project_visible, query_fault, require_project, rev,
+};
 use crate::services::process::{
     LaunchPolicy, LaunchRefusal, LaunchRequest, OwnedProcess, ProcessSupervisor, StopOutcome,
-};
-use crate::services::sessions::{
-    Failure, Refusal, counter, decided, project_visible, query_fault, require_project, rev,
 };
 use live::{ActionError, Bounds, Live, post_dispatch};
 use serde_json::{Value, json};

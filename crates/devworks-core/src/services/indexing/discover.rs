@@ -14,7 +14,6 @@
 //! credentials), `HEAD` commit and branch, object format and worktrees; an identity change
 //! advances the source revision. Registration never adds project membership: that is the
 //! user's `projects.membership` decision.
-use super::git::Git;
 use super::paths::{location_identity, native_location};
 use super::{IndexEnv, section_config};
 use crate::context::InvocationContext;
@@ -24,6 +23,7 @@ use crate::ports::indexing::{EntryKind, GitMarker};
 use crate::ports::storage::*;
 use crate::protocol::records::Severity;
 use crate::protocol::{Id, ProjectId};
+use crate::services::git::client::Git;
 use crate::services::indexing::config::EffectiveConfig;
 use crate::services::projects::carries_credentials;
 use crate::settings::catalog::descriptor;

@@ -24,7 +24,7 @@ use crate::protocol::records::{InstructionRecord, ProposalRecord};
 use crate::protocol::results::{DomainCommandReply, DomainDecision, OperationResult};
 use crate::protocol::support::Label;
 use crate::protocol::{DomainErrorCode, Id, Revision};
-use crate::services::sessions::{Failure, Refusal};
+use crate::services::kernel::{Failure, Refusal};
 use crate::settings::catalog::AgentRole;
 use serde_json::{Value, json};
 use std::sync::Arc;

@@ -34,7 +34,7 @@ use crate::services::approvals::OwnerPreview;
 use crate::services::artifacts::ArtifactService;
 use crate::services::artifacts::evidence::{Evidence, EvidenceFailure};
 use crate::services::git::context::SourceBinding;
-use crate::services::sessions::{Failure, Refusal, counter, decided, query_fault, rev};
+use crate::services::kernel::{Failure, Refusal, counter, decided, query_fault, rev};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::sync::Arc;
