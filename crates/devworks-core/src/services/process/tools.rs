@@ -925,6 +925,9 @@ fn binary_only_requirements(manifest: &[u8]) -> bool {
 ///   any configuration in the old in-repository `CARGO_HOME`; and a toolchain file naming a
 ///   toolchain by path (a TOML key spelled with an escape needs `\`, so a file with `path`, `/`
 ///   or `\` counts).
+/// - npm, pnpm and Yarn: a dependency source that runs repository code or reads outside the
+///   checkout (`exec:`, git, `file:`/`link:`/`portal:` leaving the checkout) in any
+///   `package.json` or the lockfile (see [`node_dependency_source_unchecked`]).
 /// - npm, pnpm and Yarn: a `package.json` `packageManager` that is not a plain
 ///   `name@version`, since Corepack (behind a manager shim) downloads and runs the release a
 ///   URL there names; and a `package.json` that does not parse, whose field cannot be checked.
@@ -938,7 +941,7 @@ fn install_runs_repository_code(name: &str, root: &Path) -> bool {
         name,
         "package-lock.json" | "package.json" | "pnpm-lock.yaml" | "yarn.lock"
     );
-    if node && corepack_release_unchecked(root) {
+    if node && (corepack_release_unchecked(root) || node_dependency_source_unchecked(name, root)) {
         return true;
     }
     match name {
@@ -1436,6 +1439,277 @@ fn corepack_release_unchecked(root: &Path) -> bool {
         }),
         Some(_) => true,
     }
+}
+
+/// Whether a Node project's dependencies come from a source that runs repository code or reads
+/// outside the checkout, so a script-free install is refused. It looks at every `package.json`
+/// in the checkout (any one could be a workspace; `node_modules` and `.git` are skipped, and a
+/// tree of more than 50,000 entries, a symlinked folder or file that cannot be read or parsed
+/// is refused, so it fails closed) and at the lockfile `name`, which is repository-controlled
+/// and can name a source the manifests do not.
+///
+/// Decided per source (see [`unsafe_dependency_source`]):
+/// - `exec:` (Yarn 2+) runs a repository file to build the package, whatever
+///   `YARN_ENABLE_SCRIPTS` says: refused.
+/// - Git sources (`git:`, `git+…`, `github:`, `gitlab:`, `bitbucket:`, `gist:`, `ssh:`,
+///   `git@host:…`, a URL ending in `.git`, a URL on a git host, `owner/repo`): refused. Yarn
+///   packs a git dependency through a nested install that runs its `prepack` and `prepare`
+///   scripts, and npm runs `prepare` for one; neither is known to honour the script-free
+///   switch for that nested step, so it is not relied on.
+/// - `file:`, `link:` and `portal:` (and a bare `./`, `../`, `/` or `~/` path) are refused when
+///   the path is absolute, starts with `~`, names a drive, or leaves the checkout; one inside
+///   the checkout installs, since copying or linking a folder runs nothing with scripts off.
+/// - `patch:` applies a patch file with Yarn's own patcher and runs no code, so it is allowed;
+///   the source it patches is checked like any other (`patch:x@exec:…` is refused).
+/// - `npm:` aliases and registry ranges, `workspace:`, `catalog:` and `http(s)` tarballs install.
+/// - Protocols that plugins add are refused already, since plugins are.
+///
+/// Manifest fields read: `dependencies`, `devDependencies`, `optionalDependencies`,
+/// `peerDependencies`, `resolutions`, `overrides`, `pnpm.overrides` and `workspaces.catalog(s)`.
+/// A lockfile is not parsed as YAML or JSON: each line is cut into tokens at whitespace, quotes,
+/// commas and brackets, each token is percent-decoded (Yarn encodes the source of a `patch:`),
+/// and the token and the text after each `@` in it are checked. That also covers a Yarn 1
+/// `resolved` line, a Berry `resolution:` line and a pnpm or npm `resolved` entry, and may
+/// refuse more than needed (any `..` path in a lockfile, since the workspace it is relative to
+/// is not worked out). A token that is only `exec:` (a dependency named `exec`) is not a source.
+fn node_dependency_source_unchecked(name: &str, root: &Path) -> bool {
+    if !matches!(
+        name,
+        "package-lock.json" | "package.json" | "pnpm-lock.yaml" | "yarn.lock"
+    ) {
+        return false;
+    }
+    if name != "package.json" {
+        match std::fs::metadata(root.join(name)) {
+            Ok(metadata) if metadata.len() <= 128 * 1024 * 1024 => {
+                let Ok(bytes) = std::fs::read(root.join(name)) else {
+                    return true;
+                };
+                if lockfile_unsafe(&String::from_utf8_lossy(&bytes)) {
+                    return true;
+                }
+            }
+            // The caller read the lockfile; a missing one has nothing to scan.
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            _ => return true,
+        }
+    }
+    let mut pending = vec![(root.to_path_buf(), 0usize)];
+    let mut seen = 0usize;
+    while let Some((directory, depth)) = pending.pop() {
+        let Ok(entries) = std::fs::read_dir(&directory) else {
+            return true;
+        };
+        for entry in entries {
+            seen += 1;
+            let Ok(entry) = entry else { return true };
+            if seen > 50_000 {
+                return true;
+            }
+            let Ok(kind) = entry.file_type() else {
+                return true;
+            };
+            let file_name = entry.file_name();
+            if kind.is_symlink() {
+                // A link to a folder may be a workspace outside the checkout.
+                if std::fs::metadata(entry.path()).map_or(true, |m| m.is_dir())
+                    || file_name == "package.json"
+                {
+                    return true;
+                }
+            } else if kind.is_dir() {
+                if file_name != "node_modules" && file_name != ".git" {
+                    pending.push((entry.path(), depth + 1));
+                }
+            } else if file_name == "package.json" {
+                let path = entry.path();
+                match std::fs::metadata(&path) {
+                    Ok(metadata) if metadata.len() <= 4 * 1024 * 1024 => {}
+                    _ => return true,
+                }
+                match std::fs::read(&path) {
+                    Ok(bytes) if package_json_unsafe(&bytes, depth) => return true,
+                    Ok(_) => {}
+                    Err(_) => return true,
+                }
+            }
+        }
+    }
+    false
+}
+
+/// Whether the dependency fields of a `package.json` (at `depth` folders below the checkout)
+/// name a source [`unsafe_dependency_source`] refuses, or the file does not parse.
+fn package_json_unsafe(bytes: &[u8], depth: usize) -> bool {
+    fn any_string(value: &Value, test: &dyn Fn(&str) -> bool) -> bool {
+        match value {
+            Value::String(text) => test(text),
+            Value::Array(items) => items.iter().any(|item| any_string(item, test)),
+            Value::Object(map) => map.values().any(|item| any_string(item, test)),
+            _ => false,
+        }
+    }
+    let Ok(Value::Object(package)) = serde_json::from_slice::<Value>(bytes) else {
+        return true;
+    };
+    let test = |text: &str| unsafe_dependency_source(text, depth, true);
+    let fields = [
+        package.get("dependencies"),
+        package.get("devDependencies"),
+        package.get("optionalDependencies"),
+        package.get("peerDependencies"),
+        package.get("resolutions"),
+        package.get("overrides"),
+        package.get("pnpm").and_then(|pnpm| pnpm.get("overrides")),
+        package.get("workspaces").and_then(|w| w.get("catalog")),
+        package.get("workspaces").and_then(|w| w.get("catalogs")),
+    ];
+    fields
+        .into_iter()
+        .flatten()
+        .any(|field| any_string(field, &test))
+}
+
+/// Whether a lockfile line names a source [`unsafe_dependency_source`] refuses (see
+/// [`node_dependency_source_unchecked`] for how it is read).
+fn lockfile_unsafe(text: &str) -> bool {
+    text.lines().any(|line| {
+        // A pnpm `resolution: {type: git, …}` carries the kind as a word, not a prefix.
+        let squeezed: String = line.chars().filter(|c| !c.is_whitespace()).collect();
+        if squeezed.contains("type:git") || squeezed.contains("\"type\":\"git\"") {
+            return true;
+        }
+        line.split(|c: char| {
+            c.is_whitespace() || matches!(c, '"' | '\'' | ',' | '{' | '}' | '[' | ']' | '(' | ')')
+        })
+        .filter(|token| !token.is_empty())
+        .any(|token| unsafe_dependency_source(token, 0, false))
+    })
+}
+
+/// Whether the dependency specifier `spec` names a source that runs repository code or reads
+/// outside the checkout (see [`node_dependency_source_unchecked`] for each decision). `depth` is
+/// how many folders below the checkout the file holding it is. `manifest` is true for a
+/// `package.json` value, where a bare path and `owner/repo` are also sources; in a lockfile they
+/// are names and paths of other things. The specifier and the text after each `@` in it are
+/// checked, so `npm:x@exec:./g.js` and `patch:x@exec%3A./g.js#./p.patch` are caught.
+fn unsafe_dependency_source(spec: &str, depth: usize, manifest: bool) -> bool {
+    let decoded = percent_decoded(spec.trim());
+    let spec = decoded.as_str();
+    let prefixed = |text: &str, prefix: &str| {
+        text.len() > prefix.len()
+            && text.as_bytes()[..prefix.len()].eq_ignore_ascii_case(prefix.as_bytes())
+    };
+    let mut starts = vec![0];
+    starts.extend(spec.match_indices('@').map(|(index, _)| index + 1));
+    let source = |text: &str| {
+        // `exec:` runs a file, git sources run `prepare`-style scripts.
+        if [
+            "exec:",
+            "git:",
+            "git+",
+            "github:",
+            "gitlab:",
+            "bitbucket:",
+            "gist:",
+            "git@",
+            "ssh:",
+        ]
+        .iter()
+        .any(|prefix| prefixed(text, prefix))
+        {
+            return true;
+        }
+        for scheme in ["https://", "http://"] {
+            if prefixed(text, scheme) {
+                let address = &text[scheme.len()..];
+                let host = address.split(['/', '#', '?']).next().unwrap_or("");
+                let path = address.split(['#', '?']).next().unwrap_or("");
+                return path.ends_with(".git")
+                    || [
+                        "github.com",
+                        "codeload.github.com",
+                        "gist.github.com",
+                        "api.github.com",
+                        "gitlab.com",
+                        "bitbucket.org",
+                    ]
+                    .iter()
+                    .any(|git_host| host.eq_ignore_ascii_case(git_host));
+            }
+        }
+        ["file:", "link:", "portal:"]
+            .iter()
+            .find(|prefix| prefixed(text, prefix))
+            .is_some_and(|prefix| path_leaves_checkout(&text[prefix.len()..], depth))
+    };
+    if starts.iter().any(|start| source(&spec[*start..])) {
+        return true;
+    }
+    if !manifest {
+        return false;
+    }
+    // A bare path; `~1.2.3` is a version range, `~/x` a home folder.
+    if ["./", "../", "/", "~/", "\\"]
+        .iter()
+        .any(|prefix| spec.starts_with(prefix))
+        || matches!(spec, "." | ".." | "~")
+    {
+        return path_leaves_checkout(spec, depth);
+    }
+    // npm reads `owner/repo` as a GitHub repository.
+    let repository = spec.split('#').next().unwrap_or("");
+    !repository.contains(':') && !repository.starts_with('@') && repository.contains('/')
+}
+
+/// Whether a dependency path (without its protocol) is absolute, names a drive or home folder,
+/// or leaves the checkout, counting from `depth` folders below it. Anything after `#` or `::`
+/// is a selector, not part of the path.
+fn path_leaves_checkout(path: &str, depth: usize) -> bool {
+    let path = path.split('#').next().unwrap_or("");
+    let path = path.split("::").next().unwrap_or("");
+    if path.is_empty() {
+        return false;
+    }
+    if path.starts_with(['/', '\\', '~']) || path.contains([':', '\\']) {
+        return true;
+    }
+    let mut depth = depth;
+    for segment in path.split('/') {
+        match segment {
+            "" | "." => {}
+            ".." => match depth.checked_sub(1) {
+                Some(rest) => depth = rest,
+                None => return true,
+            },
+            _ => depth += 1,
+        }
+    }
+    false
+}
+
+/// `text` with `%XX` escapes decoded (invalid escapes stay as written).
+fn percent_decoded(text: &str) -> String {
+    if !text.contains('%') {
+        return text.to_owned();
+    }
+    let bytes = text.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        let hex = |byte: u8| (byte as char).to_digit(16);
+        if bytes[index] == b'%'
+            && index + 2 < bytes.len()
+            && let (Some(high), Some(low)) = (hex(bytes[index + 1]), hex(bytes[index + 2]))
+        {
+            out.push((high * 16 + low) as u8);
+            index += 3;
+        } else {
+            out.push(bytes[index]);
+            index += 1;
+        }
+    }
+    String::from_utf8_lossy(&out).into_owned()
 }
 
 /// Whether every token of a requirements-file line's options is one of `allowed`, each taking
@@ -4849,6 +5123,191 @@ mod tests {
         assert!(install_runs_repository_code("Cargo.lock", &root));
         std::fs::write(root.join(".cargo/config"), [0xff, 0xfe]).expect("config");
         assert!(install_runs_repository_code("Cargo.lock", &root));
+        std::fs::remove_dir_all(root).expect("remove test root");
+    }
+
+    /// DW-386: a script-free Node install must not run repository code or read outside the
+    /// checkout: `exec:` and git dependencies and out-of-checkout `file:`/`link:`/`portal:`
+    /// paths, in any `package.json` or the lockfile, need `allowScripts`; registry dependencies,
+    /// `patch:`, and paths inside the checkout do not.
+    #[test]
+    fn a_dependency_that_runs_repository_code_needs_install_scripts() {
+        let root =
+            std::env::temp_dir().join(format!("devworks-tool-source-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("packages/a")).expect("test root");
+        let managers = [
+            "package-lock.json",
+            "package.json",
+            "pnpm-lock.yaml",
+            "yarn.lock",
+        ];
+        let write = |file: &str, text: &str| std::fs::write(root.join(file), text).expect(file);
+        let safe_lock = "__metadata:\n  version: 8\n\n\"exec@npm:^0.2.0\":\n  version: 0.2.0\n  \
+             resolution: \"exec@npm:0.2.0\"\n  dependencies:\n    exec: ^1\n    \"@babel/core\": \"npm:^7\"\n\
+             \"lodash@patch:lodash@npm%3A4.17.21#./p.patch::version=4.17.21&hash=1&locator=app%40workspace%3A.\":\n  \
+             resolution: \"lodash@patch:lodash@npm%3A4.17.21#./p.patch::version=4.17.21&locator=app%40workspace%3A.\"\n  \
+             resolved \"https://registry.yarnpkg.com/@babel/core/-/core-7.0.0.tgz#abc\"\n  \
+             resolved \"https://npm.pkg.github.com/x/-/x-1.0.0.tgz\"\n  \
+             \"link:./local\"\n  \"file:packages/a\"\n";
+        write(
+            "package.json",
+            r#"{"name":"x","dependencies":{"lodash":"^4.17.21","a":"npm:b@^1","w":"workspace:*",
+               "p":"patch:lodash@npm:4.17.21#./p.patch","l":"link:./local","f":"file:../root-sibling-ok-no"},
+               "devDependencies":{"t":"https://example.invalid/t.tgz","s":"~1.2.3"}}"#,
+        );
+        // `file:../…` from the checkout root leaves it.
+        assert!(install_runs_repository_code("package.json", &root));
+        write(
+            "package.json",
+            r#"{"name":"x","dependencies":{"lodash":"^4.17.21","a":"npm:b@^1","w":"workspace:*",
+               "p":"patch:lodash@npm:4.17.21#./p.patch","l":"link:./local","f":"file:packages/a",
+               "e":"exec"},"devDependencies":{"t":"https://example.invalid/t.tgz","s":"~1.2.3",
+               "dir":"./vendor/x","pr":"portal:./vendor/y"},"resolutions":{"lodash":"4.17.21"}}"#,
+        );
+        write(
+            "packages/a/package.json",
+            r#"{"dependencies":{"up":"link:../b"}}"#,
+        );
+        for name in managers {
+            if name != "package.json" {
+                write(name, safe_lock);
+            }
+            assert!(!install_runs_repository_code(name, &root), "{name}");
+        }
+        let unsafe_specs = [
+            "exec:./gen.js",
+            "EXEC:./gen.js",
+            "npm:foo@exec:./gen.js",
+            "git+https://example.invalid/r.git",
+            "git://example.invalid/r",
+            "git@github.com:o/r.git",
+            "github:o/r",
+            "gitlab:o/r",
+            "bitbucket:o/r",
+            "o/r",
+            "o/r#semver:^1",
+            "https://example.invalid/r.git#abc",
+            "https://github.com/o/r/archive/main.tar.gz",
+            "file:/etc",
+            "file:../outside",
+            "link:~/x",
+            "portal:../../x",
+            "portal:C:/x",
+            "../outside",
+            "/abs",
+            "~/home",
+            "file:./a/../../out",
+        ];
+        for spec in unsafe_specs {
+            for (field, wrapped) in [
+                (
+                    "dependencies",
+                    format!(r#"{{"dependencies":{{"x":"{spec}"}}}}"#),
+                ),
+                (
+                    "devDependencies",
+                    format!(r#"{{"devDependencies":{{"x":"{spec}"}}}}"#),
+                ),
+                (
+                    "optionalDependencies",
+                    format!(r#"{{"optionalDependencies":{{"x":"{spec}"}}}}"#),
+                ),
+                (
+                    "peerDependencies",
+                    format!(r#"{{"peerDependencies":{{"x":"{spec}"}}}}"#),
+                ),
+                (
+                    "resolutions",
+                    format!(r#"{{"resolutions":{{"x@npm:1":"{spec}"}}}}"#),
+                ),
+                (
+                    "overrides",
+                    format!(r#"{{"overrides":{{"x":{{"y":"{spec}"}}}}}}"#),
+                ),
+                (
+                    "pnpm",
+                    format!(r#"{{"pnpm":{{"overrides":{{"x":"{spec}"}}}}}}"#),
+                ),
+            ] {
+                write("package.json", &wrapped);
+                for name in managers {
+                    if name != "package.json" {
+                        let _ = std::fs::remove_file(root.join(name));
+                    }
+                    assert!(install_runs_repository_code(name, &root), "{field}: {spec}");
+                }
+            }
+            // A workspace package.json is checked too.
+            write("package.json", r#"{"name":"x"}"#);
+            write(
+                "packages/a/package.json",
+                &format!(r#"{{"dependencies":{{"x":"{spec}"}}}}"#),
+            );
+            // From `packages/a` (two folders down), up to two `..` stay inside the checkout.
+            let inside = matches!(
+                spec,
+                "file:../outside" | "portal:../../x" | "../outside" | "file:./a/../../out"
+            );
+            assert_eq!(
+                install_runs_repository_code("yarn.lock", &root),
+                !inside,
+                "workspace: {spec}"
+            );
+            write("packages/a/package.json", r#"{"name":"a"}"#);
+        }
+        // Lockfiles: a Berry resolution, an exec: descriptor, a Yarn 1 git line, a pnpm git
+        // resolution, an npm git `resolved`.
+        for (name, text) in [
+            (
+                "yarn.lock",
+                "\"x@exec:./gen.js\":\n  resolution: \"x@exec:./gen.js::locator=a%40workspace%3A.\"\n",
+            ),
+            (
+                "yarn.lock",
+                "\"x@patch:x@exec%3A./gen.js#./p.patch\":\n  version: 1\n",
+            ),
+            ("yarn.lock", "  dependencies:\n    x: exec:./gen.js\n"),
+            (
+                "yarn.lock",
+                "  resolution: \"x@https://github.com/o/r.git#commit=abc\"\n",
+            ),
+            (
+                "yarn.lock",
+                "x@o/r:\n  resolved \"git+ssh://git@github.com/o/r.git#abc\"\n",
+            ),
+            (
+                "yarn.lock",
+                "  resolution: \"x@portal:../x::locator=a%40workspace%3A.\"\n",
+            ),
+            (
+                "pnpm-lock.yaml",
+                "packages:\n  x@1.0.0:\n    resolution: {commit: abc, repo: https://example.invalid/r, type: git}\n",
+            ),
+            ("pnpm-lock.yaml", "    x:\n      version: link:../x\n"),
+            (
+                "package-lock.json",
+                "{\"packages\":{\"node_modules/x\":{\"resolved\":\"git+ssh://git@github.com/o/r.git#abc\"}}}",
+            ),
+            (
+                "package-lock.json",
+                "{\"packages\":{\"node_modules/x\":{\"resolved\":\"git+https://example.invalid/r\"}}}",
+            ),
+        ] {
+            for other in managers {
+                let _ = std::fs::remove_file(root.join(other));
+            }
+            write("package.json", r#"{"name":"x"}"#);
+            write(name, text);
+            assert!(install_runs_repository_code(name, &root), "{name}: {text}");
+        }
+        // An unparseable workspace package.json cannot be ruled out.
+        for name in managers {
+            let _ = std::fs::remove_file(root.join(name));
+        }
+        write("package.json", r#"{"name":"x"}"#);
+        write("packages/a/package.json", "{");
+        assert!(install_runs_repository_code("package.json", &root));
         std::fs::remove_dir_all(root).expect("remove test root");
     }
 
