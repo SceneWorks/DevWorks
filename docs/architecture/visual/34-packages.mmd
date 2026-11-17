@@ -16,17 +16,39 @@ classDiagram
     +record_running() +collect_files()
     +decide_proposal() +sync_pending_reviews()
   }
-  class policy { <<module>> availability, auto_update, activation_regresses }
-  class index { <<module>> signed publisher offers, record_index, observe }
-  class view { <<module>> PackageRecord, catalog, logs, changes }
+  class policy {
+    <<module>>
+    availability
+    auto_update
+    activation_regresses
+  }
+  class index {
+    <<module>>
+    signed publisher offers
+    record_index
+    observe
+  }
+  class view {
+    <<module>>
+    PackageRecord
+    catalog
+    logs
+    changes
+  }
   class approval {
     <<module>>
     approval_preview
     validate_approval_preview
     decide_approval_source
   }
-  class review_evidence { <<module>> immutable evidence with JSON pointer bindings }
-  class PackageInspector { <<trait>> inspect(bundle) }
+  class review_evidence {
+    <<module>>
+    immutable evidence with JSON pointer bindings
+  }
+  class PackageInspector {
+    <<trait>>
+    inspect(bundle)
+  }
   class PackageFiles {
     <<trait>>
     publish, verify, open_verified
@@ -36,14 +58,37 @@ classDiagram
   class SchemaValidator { <<trait>> }
   class IndexTransport { <<trait>> }
   class IndexVerifier { <<trait>> }
-  class PackageActivity { <<trait>> quiesce(package, wait) and fence }
-  class BundleInspector { <<adapter>> DWPKG container, manifest, Ed25519 }
-  class NativePackageFiles { <<adapter>> content-addressed install directories }
+  class PackageActivity {
+    <<trait>>
+    quiesce(package
+    wait) and fence
+  }
+  class BundleInspector {
+    <<adapter>>
+    DWPKG container
+    manifest
+    Ed25519
+  }
+  class NativePackageFiles {
+    <<adapter>>
+    content-addressed install directories
+  }
   class JsonSchemaValidator { <<adapter>> }
-  class NativeIndexTransport { <<adapter>> https or local directory }
+  class NativeIndexTransport {
+    <<adapter>>
+    https or local directory
+  }
   class BundleIndexVerifier { <<adapter>> }
-  class RuntimeCache { <<core port impl>> filled by discovery probes }
-  class PackageComposition { <<engine>> service, runtimes, index }
+  class RuntimeCache {
+    <<core port impl>>
+    filled by discovery probes
+  }
+  class PackageComposition {
+    <<engine>>
+    service
+    runtimes
+    index
+  }
   class PackageHost {
     <<engine>>
     instances keyed by digest, generation, config revision
@@ -52,12 +97,33 @@ classDiagram
     +invoke(InvokeRequest) InvocationHandle
     +shutdown(bound)
   }
-  class Session { <<engine>> one framed protocol session per helper }
-  class HostBroker { <<engine>> state, call, commit_event, artifact reads }
-  class Grants { <<engine>> resolved at admission }
-  class commit_event { <<fn>> state CAS + intents + receipt + checkpoint in one write }
-  class http { <<module>> brokered HTTP through named connections }
-  class inference { <<module>> brokered text inference through the router }
+  class Session {
+    <<engine>>
+    one framed protocol session per helper
+  }
+  class HostBroker {
+    <<engine>>
+    state
+    call
+    commit_event
+    artifact reads
+  }
+  class Grants {
+    <<engine>>
+    resolved at admission
+  }
+  class commit_event {
+    <<fn>>
+    state CAS + intents + receipt + checkpoint in one write
+  }
+  class http {
+    <<module>>
+    brokered HTTP through named connections
+  }
+  class inference {
+    <<module>>
+    brokered text inference through the router
+  }
   class ProcessSupervisor { <<engine>> }
   class PackageToolsConsumer {
     <<engine>>
