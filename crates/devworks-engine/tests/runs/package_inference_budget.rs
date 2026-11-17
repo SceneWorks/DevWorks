@@ -327,8 +327,12 @@ fn feature_budget_refuses_a_persons_package_inference_before_transport() {
             Some(RootId(id("root-f"))),
             None,
         );
-        let grant = person_grant(&*f.store, &person, &OperationId(id("person-invocation")))
-            .expect("the person's grant for the feature's work item");
+        let grant = person_grant(
+            &*f.store,
+            &person,
+            &OperationId(person.invocation_id().clone()),
+        )
+        .expect("the person's grant for the feature's work item");
         let run = |action: &'static str| {
             let (store, artifacts, driver, router, grant) = (
                 f.store.clone(),
@@ -390,8 +394,15 @@ fn feature_budget_refuses_a_persons_package_inference_before_transport() {
                 && refusal.contains("BudgetContinue"),
             "{refusal}"
         );
-        assert!(run("third").await.is_err());
+        // Refused at admission: no provider request after the cap, from the planned call or a
+        // retry through the whole path.
         assert_eq!(http.0.load(Ordering::SeqCst), 1);
+        assert!(run("third").await.is_err());
+        assert_eq!(
+            http.0.load(Ordering::SeqCst),
+            1,
+            "a reached cap sends no provider request"
+        );
         assert_eq!(attempts(&f).len(), 1);
         usage.stop();
         usage.drain().await;

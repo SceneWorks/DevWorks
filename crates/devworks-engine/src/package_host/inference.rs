@@ -37,8 +37,8 @@ use devworks_core::context::{HostIngress, InvocationContext, PrincipalKind};
 use devworks_core::fingerprint::{canonical_digest, sha256_hex};
 use devworks_core::ports::mcp::{SamplingCall, SamplingMessage};
 use devworks_core::ports::storage::{
-    ApplicationStore, ArtifactScope, ReadOptions, StorageError, StoredSession, WriteOptions,
-    read_snapshot, run_write,
+    ACTIVE, ApplicationStore, ArtifactScope, HOST_SESSION_PREFIX, ReadOptions, StorageError,
+    StoredSession, WriteOptions, read_snapshot, run_write,
 };
 use devworks_core::ports::{AuthorityFence, Authorization, IdKind};
 use devworks_core::protocol::provider::{ArtifactRef as HostArtifact, ToolCallKey};
@@ -265,7 +265,7 @@ pub fn person_session_id(
         )
         .as_bytes(),
     );
-    Id::new(format!("pkgs-{digest}")).expect("bounded digest ID")
+    Id::new(format!("{HOST_SESSION_PREFIX}{digest}")).expect("bounded digest ID")
 }
 
 /// Whether `session` is `person`'s open package inference session.
@@ -282,23 +282,56 @@ pub fn is_person_session(session: &StoredSession, person: &ActorId) -> bool {
 }
 
 /// The grant of an invocation `person` started (`context` is the invocation's own context):
-/// the person's package inference session for the context's scope, opened on first use, under
-/// the person's current standing.
+/// the person's package inference session for the context's scope, opened on first use.
+///
+/// The person's standing is checked here, on every call, before the session is opened or used:
+/// the context must be the invocation's own, the person must still be a registered human, and an
+/// active project and a work item of that project must still be there.
 pub fn person_grant(
     store: &dyn ApplicationStore,
     context: &InvocationContext,
     invocation: &OperationId,
 ) -> Result<SamplingGrant, &'static str> {
+    open_grant(store, context, invocation, None)
+}
+
+/// [`person_grant`], and for an event handler the exact version `(package, digest)` the person
+/// approved must still be approved by that person, checked in the same unit of work.
+fn open_grant(
+    store: &dyn ApplicationStore,
+    context: &InvocationContext,
+    invocation: &OperationId,
+    approval: Option<(&str, &str)>,
+) -> Result<SamplingGrant, &'static str> {
     let person = context.principal().clone();
     if context.principal_kind() != PrincipalKind::Human {
         return Err("only a person or an event handler's approving person can run inference");
+    }
+    if context.invocation_id() != &invocation.0 {
+        return Err("the context is not the invocation's own");
     }
     let (project, root) = (context.project_id().cloned(), context.root_id().cloned());
     let session_id = person_session_id(&person, project.as_ref(), root.as_ref());
     let (opened_for, opened_project, opened_root) = (person.clone(), project.clone(), root.clone());
     let opened = session_id.clone();
+    let approval = approval.map(|(package, digest)| (package.to_owned(), digest.to_owned()));
     run_write(store, WriteOptions::default(), move |tx| {
         if tx.actors().actor_kind(&opened_for)? != Some(PrincipalKind::Human) {
+            return Err(StorageError::ScopeDenied);
+        }
+        if let Some((package, digest)) = &approval {
+            // The same check the event handler's committed intents run under.
+            match super::intents::approval_of(tx.packages(), package, digest)? {
+                Ok((approver, _)) if approver == opened_for => {}
+                _ => return Err(StorageError::ScopeDenied),
+            }
+        }
+        if let Some(project) = &opened_project
+            && !tx
+                .projects()
+                .project(project)?
+                .is_some_and(|p| p.lifecycle == ACTIVE)
+        {
             return Err(StorageError::ScopeDenied);
         }
         if let Some(root) = &opened_root
@@ -353,7 +386,8 @@ pub fn person_grant(
 }
 
 /// The grant of an event handler's invocation of `package` at manifest `digest`: the person who
-/// approved that exact version, in the workspace. A version no person approved has none.
+/// approved that exact version, in the workspace. A version no person approved has none, and
+/// neither has one whose approver is no longer a registered human or whose package was disabled.
 pub fn event_grant(
     store: &dyn ApplicationStore,
     package: &str,
@@ -383,7 +417,7 @@ pub fn event_grant(
         epoch,
         policy,
     );
-    person_grant(store, &context, invocation)
+    open_grant(store, &context, invocation, Some((package, digest)))
 }
 
 /// Runs `request` for the package call `action_key` of the invocation whose tool call is

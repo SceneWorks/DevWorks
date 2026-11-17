@@ -236,6 +236,19 @@ fn route_high_tier_to_the_fixture_model(f: &Fx) {
     .unwrap();
 }
 
+/// The registered person `name`'s own context for the invocation `invocation`.
+fn invocation_of(f: &Fx, name: &str, invocation: &str) -> InvocationContext {
+    let info = f.store.info();
+    devworks_core::context::HostIngress::new(f.store.as_ref()).context(
+        ActorId(id(name)),
+        PrincipalKind::Human,
+        id(invocation),
+        id("package-inference"),
+        Counter::new(info.restore_epoch).unwrap(),
+        Revision::new(1).unwrap(),
+    )
+}
+
 async fn answer(f: &Fx, grant: &SamplingGrant, action: &'static str, text: &str) -> Option<Value> {
     let router = Arc::new(InferenceRouter::new(
         f.h.ids.clone(),
@@ -288,7 +301,7 @@ fn a_person_started_invocation_infers_as_that_person_in_their_package_session() 
         let f = Fx::new("CompatibleChat", Script::sse(WIRE), false);
         route_high_tier_to_the_fixture_model(&f);
         let person = principal(f.store.as_ref(), "package-person", PrincipalKind::Human);
-        let invocation = OperationId(id("person-invocation"));
+        let invocation = OperationId(person.invocation_id().clone());
         let grant = person_grant(f.store.as_ref(), &person, &invocation).expect("a person's grant");
 
         let reply = answer(&f, &grant, "summarize", "Summarize the change")
@@ -313,9 +326,10 @@ fn a_person_started_invocation_infers_as_that_person_in_their_package_session() 
         let replay = answer(&f, &grant, "summarize", "Summarize the change").await;
         assert_eq!(replay.unwrap()["text"], "Sampled answer");
         assert_eq!(requests(&f), 1);
+        let second = invocation_of(&f, "package-person", "second-invocation");
         let other = person_grant(
             f.store.as_ref(),
-            &person,
+            &second,
             &OperationId(id("second-invocation")),
         )
         .unwrap();
@@ -337,12 +351,13 @@ fn an_agent_cannot_use_the_person_path_and_a_person_cannot_borrow_an_agent_sessi
         let f = Fx::new("CompatibleChat", Script::sse(WIRE), false);
         route_high_tier_to_the_fixture_model(&f);
         let agent = principal(f.store.as_ref(), "package-agent", PrincipalKind::Agent);
-        let invocation = OperationId(id("agent-invocation"));
+        let invocation = OperationId(agent.invocation_id().clone());
         assert!(person_grant(f.store.as_ref(), &agent, &invocation).is_err());
 
         // A person's grant naming the agent's session is refused before any provider request.
         let (_, _) = super::mcp_sampling::agent_session(&f);
         let person = principal(f.store.as_ref(), "package-person", PrincipalKind::Human);
+        let invocation = OperationId(person.invocation_id().clone());
         let mut grant = person_grant(f.store.as_ref(), &person, &invocation).unwrap();
         grant.context = grant.context.with_session(id("agent-session"));
         assert!(answer(&f, &grant, "borrow", "x").await.is_none());
@@ -463,5 +478,110 @@ fn an_event_handler_of_a_version_no_person_approved_is_refused_without_a_request
             .is_err()
         );
         assert_eq!(requests(&f), 0);
+    });
+}
+
+fn project(f: &Fx, name: &str, lifecycle: &str, revision: i64) {
+    use devworks_core::ports::storage::StoredProject;
+    let (name, lifecycle) = (name.to_owned(), lifecycle.to_owned());
+    write(f.store.as_ref(), move |tx| {
+        let stored = StoredProject {
+            id: devworks_core::protocol::ProjectId(id(&name)),
+            name: name.clone(),
+            description: String::new(),
+            lifecycle: lifecycle.clone(),
+            revision,
+            scope_revision: 1,
+            created_at_ms: T0,
+            updated_at_ms: T0,
+            archived_at_ms: None,
+            deleted_at_ms: None,
+            archive_epoch: 0,
+            archive_stop_pending: false,
+        };
+        if revision == 1 {
+            tx.projects().insert_project(&stored)
+        } else {
+            tx.projects().update_project(&stored, revision - 1)
+        }
+    })
+    .unwrap();
+}
+
+#[test]
+fn a_person_who_lost_the_project_is_refused_without_a_provider_request() {
+    runtime().block_on(async {
+        let f = Fx::new("CompatibleChat", Script::sse(WIRE), false);
+        route_high_tier_to_the_fixture_model(&f);
+        let person = principal(f.store.as_ref(), "package-person", PrincipalKind::Human);
+        let invocation = OperationId(person.invocation_id().clone());
+        let scoped = person.with_lineage(
+            Some(devworks_core::protocol::ProjectId(id("project-p"))),
+            None,
+            None,
+        );
+
+        // No such project: nothing opens, nothing is sent.
+        assert!(person_grant(f.store.as_ref(), &scoped, &invocation).is_err());
+        project(&f, "project-p", "Active", 1);
+        let grant =
+            person_grant(f.store.as_ref(), &scoped, &invocation).expect("an active project");
+        assert!(answer(&f, &grant, "first", "Summarize").await.is_some());
+        assert_eq!(requests(&f), 1);
+
+        // The project is archived: the next call is refused before any provider request.
+        project(&f, "project-p", "Archived", 2);
+        assert!(person_grant(f.store.as_ref(), &scoped, &invocation).is_err());
+        assert_eq!(requests(&f), 1);
+    });
+}
+
+#[test]
+fn a_context_that_is_not_the_invocations_own_cannot_spend_a_persons_budget() {
+    let f = Fx::new("CompatibleChat", Script::sse(WIRE), false);
+    let person = principal(f.store.as_ref(), "package-person", PrincipalKind::Human);
+    assert!(
+        person_grant(
+            f.store.as_ref(),
+            &person,
+            &OperationId(id("another-invocation"))
+        )
+        .is_err()
+    );
+    assert_eq!(requests(&f), 0);
+}
+
+#[test]
+fn an_event_handler_whose_approval_was_revoked_is_refused_without_a_request() {
+    runtime().block_on(async {
+        let f = Fx::new("CompatibleChat", Script::sse(WIRE), false);
+        route_high_tier_to_the_fixture_model(&f);
+        principal(f.store.as_ref(), "approving-person", PrincipalKind::Human);
+        let digest = "a".repeat(64);
+        install(
+            &f,
+            "summarizer",
+            &digest,
+            Some(json!({"by": "approving-person", "kind": "Person", "atMs": T0})),
+        );
+        let invocation = OperationId(id("event-invocation"));
+        let grant = event_grant(f.store.as_ref(), "summarizer", &digest, &invocation).unwrap();
+        assert!(answer(&f, &grant, "first", "Summarize").await.is_some());
+        assert_eq!(requests(&f), 1);
+
+        // The approval is withdrawn: the next call is refused before any provider request.
+        let withdrawn = digest.clone();
+        write(f.store.as_ref(), move |tx| {
+            tx.packages().update_version(
+                "summarizer",
+                &withdrawn,
+                devworks_core::ports::storage::VersionPhase::Installed,
+                &[],
+                None,
+            )
+        })
+        .unwrap();
+        assert!(event_grant(f.store.as_ref(), "summarizer", &digest, &invocation).is_err());
+        assert_eq!(requests(&f), 1);
     });
 }

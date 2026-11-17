@@ -636,6 +636,35 @@ fn sessions_start_and_end_through_the_gateway_with_receipts() {
 }
 
 #[test]
+fn host_owned_package_sessions_are_not_listed_for_users() {
+    let fx = Fx::new();
+    let user = fx.user();
+    let own = fx.work_session();
+    // A person's package inference session, as the package host opens it.
+    fx.seed_session(
+        &format!("{HOST_SESSION_PREFIX}{}", "0".repeat(64)),
+        "user-a",
+        None,
+    );
+    let listed = |scope: serde_json::Value| match result(fx.query(
+        &user,
+        "sessions.list",
+        json!({"scope": scope, "page": {"limit": 50}}),
+    )) {
+        OperationResult::SessionsList { value } => value.items.0,
+        other => panic!("{other:?}"),
+    };
+    let rows = listed(json!({"kind": "Project", "projectId": "project-a"}));
+    assert_eq!(
+        rows.iter().map(|s| s.id.clone()).collect::<Vec<_>>(),
+        vec![own.id]
+    );
+    // The host's own readers see no host session in a listing either.
+    let all = fx.read(|r| r.sessions().sessions(&SessionScope::All, None, None, 50));
+    assert_eq!(all.len(), 1);
+}
+
+#[test]
 fn append_message_saves_one_user_message_with_resolved_attachments() {
     let fx = Fx::new();
     let user = fx.user();

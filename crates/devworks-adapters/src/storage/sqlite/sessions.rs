@@ -209,7 +209,9 @@ fn sessions(
                 OR (?5=3 AND s.project_id=?1 AND s.root_id=?7) OR (?5=4 AND s.id=?8))
          AND (?6=0 OR (?6=1 AND s.closed_at IS NOT NULL) OR (?6=2 AND s.closed_at IS NULL))
          AND (?2 IS NULL OR s.created_at<?2 OR (s.created_at=?2 AND s.id<?3))
-         ORDER BY s.created_at DESC,s.id DESC LIMIT ?4"
+         AND substr(s.id,1,{prefix_len})<>'{HOST_SESSION_PREFIX}'
+         ORDER BY s.created_at DESC,s.id DESC LIMIT ?4",
+        prefix_len = HOST_SESSION_PREFIX.len()
     )))?;
     let rows = db(stmt.query_map(
         params![
