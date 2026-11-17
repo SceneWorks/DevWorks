@@ -1773,6 +1773,22 @@ fn bare_path_unsafe(value: &str, depth: usize) -> bool {
     !scheme && path_leaves_checkout(value, depth)
 }
 
+/// npm lockfile entry fields that describe a package but never choose where it comes from:
+/// a `funding` URL on GitHub, say, is not a git dependency. Every other field is checked.
+const NPM_LOCKFILE_METADATA: &[&str] = &[
+    "funding",
+    "license",
+    "engines",
+    "bin",
+    "os",
+    "cpu",
+    "libc",
+    "integrity",
+    "deprecated",
+    "hasInstallScript",
+    "peerDependenciesMeta",
+];
+
 /// Whether a parsed npm lockfile (`package-lock.json`, `npm-shrinkwrap.json`) holds a source
 /// [`unsafe_dependency_source`] refuses in any string or key, a `resolved` path (a linked
 /// package) that leaves the checkout, or a `packages` location outside it.
@@ -1795,9 +1811,11 @@ fn npm_lockfile_value_unsafe(value: &Value, key: Option<&str>) -> bool {
             {
                 return true;
             }
-            map.iter().any(|(name, item)| {
-                lockfile_line_unsafe(name, 0) || npm_lockfile_value_unsafe(item, Some(name))
-            })
+            map.iter()
+                .filter(|(name, _)| !NPM_LOCKFILE_METADATA.contains(&name.as_str()))
+                .any(|(name, item)| {
+                    lockfile_line_unsafe(name, 0) || npm_lockfile_value_unsafe(item, Some(name))
+                })
         }
         _ => false,
     }
@@ -5724,6 +5742,21 @@ mod tests {
                 )],
             );
             refused("package-lock.json", &[(name, "{")]);
+            // Funding metadata naming GitHub is not a source; a git resolution beside it is.
+            allowed(
+                "package-lock.json",
+                &[(
+                    name,
+                    r#"{"packages":{"node_modules/x":{"resolved":"https://registry.npmjs.org/x/-/x-1.0.0.tgz","funding":{"url":"https://github.com/sponsors/o"},"license":"MIT"}}}"#,
+                )],
+            );
+            refused(
+                "package-lock.json",
+                &[(
+                    name,
+                    r#"{"packages":{"node_modules/x":{"funding":{"url":"https://github.com/sponsors/o"},"dependencies":{"y":"github:o/y"}}}}"#,
+                )],
+            );
             // A linked package and a package location outside the checkout.
             refused(
                 "package-lock.json",
