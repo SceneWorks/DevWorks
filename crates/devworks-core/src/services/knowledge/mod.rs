@@ -93,7 +93,7 @@ use crate::protocol::support::{
 use crate::protocol::{CorrelationId, DomainErrorCode, DomainFault, Id, OperationState, ProjectId};
 use crate::registry::SchemaRevision;
 use crate::services::cursor::{self, CursorBinding};
-use crate::services::sessions::{
+use crate::services::kernel::{
     Failure, Refusal, content, counter, decided, label, not_found, query_fault, require_project,
     rev,
 };

@@ -82,13 +82,13 @@ use super::{
 };
 use crate::context::ReceiptIdentity;
 use crate::fingerprint::sha256_hex;
+pub use crate::kernel::reply_intent::{REPLY_AGGREGATE, REPLY_CONSUMER, record_intent};
 use crate::ports::Preparation;
 use crate::ports::files::{ArtifactFiles, FileFault, SourceOrigin};
 use crate::ports::storage::{
     ApplicationStore, ArtifactRetention, ArtifactScope, ArtifactState, BlobState, LedgerEntry,
-    NewEvent, NewQueueEntry, QueueEntry, QueueFence, QueueState, ReadSnapshot, ReceiptReply,
-    Settlement, StorageError, StoredArtifact, StoredVersion, WriteOptions, WriteTransaction,
-    run_write,
+    NewEvent, QueueEntry, QueueFence, QueueState, ReadSnapshot, ReceiptReply, Settlement,
+    StorageError, StoredArtifact, StoredVersion, WriteOptions, WriteTransaction, run_write,
 };
 use crate::ports::{IdKind, StoredReceipt};
 use crate::protocol::provider::{ArtifactRef, Digest, QualifiedId, SchemaRef};
@@ -105,47 +105,10 @@ use serde_json::{Value, json};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
-/// Durable delivery consumer of receipt reply publication.
-pub const REPLY_CONSUMER: &str = "receipt_replies";
 /// Media type of every reply artifact.
 pub const REPLY_MEDIA_TYPE: &str = "application/json";
 /// Namespace of reply schema IDs (`devworks.reply/<operation>`).
 pub const REPLY_SCHEMA_NAMESPACE: &str = "devworks.reply";
-/// History aggregate of a receipt's reply publication (`aggregate_id` = command ID).
-pub const REPLY_AGGREGATE: &str = "receipt_reply";
-
-/// Records the publication intent of a receipt inside the command's unit of work: one unordered
-/// delivery for the receipt's `CommandDecided` event. Called only by the gateway, right after it
-/// recorded the receipt.
-pub(crate) fn record_intent(
-    tx: &mut dyn WriteTransaction,
-    identity: &ReceiptIdentity,
-    command: &CommandId,
-    event: &EventId,
-) -> Result<(), StorageError> {
-    let id = tx.new_id(IdKind::QueueEntry);
-    let ready_at_ms = tx.now_ms();
-    tx.queue().enqueue(NewQueueEntry {
-        id,
-        consumer: REPLY_CONSUMER.into(),
-        event_id: event.clone(),
-        // Not root-scoped: a reply is bookkeeping of a decision already made, so its delivery is
-        // never held for root eligibility, and it carries no operation (nothing external runs).
-        root_id: None,
-        operation_id: None,
-        partition: None,
-        priority: 0,
-        ready_at_ms,
-        payload: json!({
-            "actorId": identity.actor_id().0.as_str(),
-            "scopeKey": identity.scope_key().as_str(),
-            "requestKey": identity.request_key().0.as_str(),
-            "commandId": command.0.as_str(),
-        }),
-    })?;
-    Ok(())
-}
-
 /// Whether `event` is the receipt's own `CommandDecided` decision the intent names.
 fn names_decision(event: &crate::ports::storage::EventRecord, intent: &Intent) -> bool {
     event.kind == "CommandDecided"

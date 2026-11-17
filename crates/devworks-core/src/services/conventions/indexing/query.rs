@@ -19,7 +19,7 @@ use crate::{
     services::{
         conventions::{access, model},
         cursor::CursorBinding,
-        sessions::{Failure, counter, rev},
+        kernel::{Failure, counter, rev},
     },
 };
 use serde::{Deserialize, Serialize};

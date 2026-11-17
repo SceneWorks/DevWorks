@@ -11,7 +11,7 @@ use crate::{
     },
     services::{
         graph::lease,
-        sessions::{Failure, rev},
+        kernel::{Failure, rev},
     },
 };
 use serde_json::json;

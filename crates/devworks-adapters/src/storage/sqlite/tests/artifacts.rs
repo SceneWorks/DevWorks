@@ -1159,8 +1159,8 @@ fn assigned_worker_reads_only_own_or_explicitly_referenced_artifacts() {
                 },
             ))
         }),
-        Ok(Err(devworks_core::services::sessions::Failure::Refused(
-            devworks_core::services::sessions::Refusal {
+        Ok(Err(devworks_core::services::kernel::Failure::Refused(
+            devworks_core::services::kernel::Refusal {
                 code: DomainErrorCode::PermissionDenied,
                 ..
             }

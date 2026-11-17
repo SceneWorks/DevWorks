@@ -20,8 +20,8 @@ impl GitService {
         }
         // A reservation or prunable registration may not exist on disk yet.
         matches!(
-            (crate::services::indexing::git::path_argument(left),
-             crate::services::indexing::git::path_argument(right)),
+            (crate::services::git::client::path_argument(left),
+             crate::services::git::client::path_argument(right)),
             (Ok(a), Ok(b)) if Path::new(&a) == Path::new(&b)
         )
     }

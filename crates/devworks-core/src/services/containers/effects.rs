@@ -24,7 +24,7 @@ use crate::protocol::results::OperationResult;
 use crate::protocol::support::BoundedText;
 use crate::registry::Mode;
 use crate::services::artifacts::observed::Observed;
-use crate::services::sessions::rev;
+use crate::services::kernel::rev;
 use base64::Engine as _;
 use serde_json::{Value, json};
 use std::collections::BTreeSet;

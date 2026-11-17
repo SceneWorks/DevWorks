@@ -12,7 +12,7 @@ use crate::{
         QueryHandler, storage::*,
     },
     protocol::{CorrelationId, DomainErrorCode, DomainFault, records::*, results::OperationResult},
-    services::sessions::{Failure, Refusal, decided, query_fault, rev},
+    services::kernel::{Failure, Refusal, decided, query_fault, rev},
 };
 struct PreparedRefusal(Refusal);
 fn unsupported() -> Failure {
@@ -69,7 +69,7 @@ impl ConventionService {
                                 &scoped.readable,
                             )?
                             .ok_or_else(|| {
-                                crate::services::sessions::not_found("convention_resource", id)
+                                crate::services::kernel::not_found("convention_resource", id)
                             })?,
                     )
                 } else {

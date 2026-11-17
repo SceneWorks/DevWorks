@@ -33,6 +33,7 @@ use crate::admission::{self, AdmissionError, CallerKey, Refusal, Selection};
 use crate::authority::AuthorityCapability;
 use crate::context::{InvocationContext, PrincipalKind, ReceiptIdentity};
 use crate::fingerprint::{self, Fingerprint};
+use crate::kernel::failure::storage_fault;
 use crate::operations::OperationInput;
 use crate::ports::storage::{
     ActorRegistry, ArtifactRepository, AuthorityGrant, AuthorityLedger, AuthorityRead,
@@ -56,7 +57,6 @@ use crate::protocol::{
     EventId, Id, Protocol, QueryId, Receipt, Rejection, RequestKey, RetryAdvice, Revision,
 };
 use crate::registry::{EffectClass, Mode, ModeBinding, OperationDescriptor, SchemaRevision};
-use crate::services::failure::storage_fault;
 use serde_json::json;
 use std::cell::RefCell;
 use std::fmt;
@@ -1081,7 +1081,7 @@ fn unit_of_work(
         },
     )?;
     // The receipt's durable typed reply is published after commit; its intent commits here.
-    crate::services::artifacts::replies::record_intent(
+    crate::kernel::reply_intent::record_intent(
         tx,
         &command.identity,
         &receipt.command_id,
@@ -1180,7 +1180,7 @@ fn decision_scope(
 /// publication (written by the reply publisher on its own transaction).
 fn gateway_owned(event: &NewEvent) -> bool {
     use crate::authority::service::DENIAL_AGGREGATE;
-    use crate::services::artifacts::replies::REPLY_AGGREGATE;
+    use crate::kernel::reply_intent::REPLY_AGGREGATE;
     crate::authority::is_authority_history(event)
         || matches!(
             event.aggregate_kind.as_str(),
@@ -1602,7 +1602,7 @@ impl QueueRead for HandlerTx<'_> {
 }
 impl DurableQueue for HandlerTx<'_> {
     fn enqueue(&mut self, entry: NewQueueEntry) -> Result<QueueEntry, StorageError> {
-        if entry.consumer == crate::services::artifacts::replies::REPLY_CONSUMER {
+        if entry.consumer == crate::kernel::reply_intent::REPLY_CONSUMER {
             return Err(StorageError::InvalidRecord(
                 "receipt reply intents are recorded only by the gateway".into(),
             ));

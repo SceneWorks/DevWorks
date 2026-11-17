@@ -13,7 +13,7 @@ use crate::{
         approvals,
         artifacts::ArtifactService,
         conventions::control,
-        sessions::{Failure, Refusal},
+        kernel::{Failure, Refusal},
     },
 };
 use serde::{Deserialize, Serialize};

@@ -1,7 +1,6 @@
 //! Exact input resolution through existing artifact ownership; no I/O inside a write transaction.
 use super::{PreparedTool, ProviderError};
 use crate::protocol::provider::{ArtifactRef, NativeBinding, SchemaRef, ToolSchema};
-use crate::services::artifacts::ArtifactService;
 use crate::{context::InvocationContext, ports::storage::ApplicationStore};
 use serde_json::Value;
 
@@ -38,19 +37,29 @@ pub trait Materials {
         Err(ProviderError::MaterialUnavailable)
     }
 }
+/// Exact, bounded artifact reads with the artifact's creation provenance. The artifact service
+/// implements it; the provider code depends only on this trait.
+pub trait ExactArtifacts: Send + Sync {
+    fn read_exact_artifact(
+        &self,
+        store: &dyn ApplicationStore,
+        context: &InvocationContext,
+        reference: &ArtifactRef,
+        max_bytes: u64,
+    ) -> Result<(Vec<u8>, Value), ProviderError>;
+}
 /// Scope-bound adapter to the real ArtifactService. This object never grants artifact access.
 pub struct OwnedMaterials<'a> {
     pub store: &'a dyn ApplicationStore,
-    pub artifacts: &'a ArtifactService,
+    pub artifacts: &'a dyn ExactArtifacts,
     pub context: &'a InvocationContext,
     pub schemas: &'a dyn SchemaDocuments,
 }
 impl Materials for OwnedMaterials<'_> {
     fn artifact(&self, reference: &ArtifactRef, max_bytes: u64) -> Result<Vec<u8>, ProviderError> {
         self.artifacts
-            .read_exact(self.store, self.context, reference, max_bytes)
+            .read_exact_artifact(self.store, self.context, reference, max_bytes)
             .map(|v| v.0)
-            .map_err(|_| ProviderError::MaterialUnavailable)
     }
     fn native(
         &self,
@@ -58,10 +67,9 @@ impl Materials for OwnedMaterials<'_> {
         binding: &NativeBinding,
         max_bytes: u64,
     ) -> Result<Vec<u8>, ProviderError> {
-        let (bytes, provenance) = self
-            .artifacts
-            .read_exact(self.store, self.context, reference, max_bytes)
-            .map_err(|_| ProviderError::MaterialUnavailable)?;
+        let (bytes, provenance) =
+            self.artifacts
+                .read_exact_artifact(self.store, self.context, reference, max_bytes)?;
         let host = self.store.info().host_actor.0.as_str().to_owned();
         let original: NativeBinding =
             serde_json::from_value(provenance["derived"]["nativeBinding"].clone())

@@ -17,7 +17,7 @@ use crate::protocol::results::{DomainDecision, OperationResult};
 use crate::protocol::support::{BoundedList, BoundedText, Page};
 use crate::protocol::{Counter, EventId, Id, ProjectId, RevisionDimension};
 use crate::services::cursor::{self, CursorBinding};
-use crate::services::sessions::{not_found, rev};
+use crate::services::kernel::{not_found, rev};
 use serde_json::{Value, json};
 use std::collections::BTreeSet;
 

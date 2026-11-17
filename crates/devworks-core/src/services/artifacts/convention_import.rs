@@ -8,7 +8,7 @@ use crate::{
     protocol::provider::ArtifactRef,
     services::{
         conventions::importing::parser::{Entry, ReadSeek},
-        sessions::Failure,
+        kernel::Failure,
     },
 };
 use serde_json::json;

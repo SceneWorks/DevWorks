@@ -9,7 +9,7 @@ use crate::context::InvocationContext;
 use crate::ports::Preparation;
 use crate::ports::storage::*;
 use crate::protocol::{Id, OperationId, OperationState};
-use crate::services::sessions::Failure;
+use crate::services::kernel::Failure;
 use serde_json::{Value, json};
 use std::sync::Arc;
 

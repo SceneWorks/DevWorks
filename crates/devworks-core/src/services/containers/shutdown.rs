@@ -11,7 +11,7 @@ use crate::ports::storage::{
     StoredContainer, WriteOptions, read_snapshot, run_write,
 };
 use crate::protocol::{EventId, Id, OperationState, RootId};
-use crate::services::sessions::{counter, rev};
+use crate::services::kernel::{counter, rev};
 use serde_json::json;
 use std::time::{Duration, Instant};
 

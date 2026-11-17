@@ -1,6 +1,6 @@
 //! Historical endpoint evidence is metadata, never a reason to expand a hidden/off-scope node.
 use super::{dataset, impact, read::Reader, scan, scope};
-use crate::{ports::storage::*, protocol::records::CodeNodeSelection, services::sessions::Failure};
+use crate::{ports::storage::*, protocol::records::CodeNodeSelection, services::kernel::Failure};
 use std::collections::{BTreeMap, BTreeSet};
 pub(super) fn count(
     reader: &mut Reader<'_>,

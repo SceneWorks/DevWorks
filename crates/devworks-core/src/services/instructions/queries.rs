@@ -16,7 +16,7 @@ use crate::protocol::records::{
 use crate::protocol::results::OperationResult;
 use crate::protocol::support::Page;
 use crate::services::cursor::{self, CursorBinding};
-use crate::services::sessions::Failure;
+use crate::services::kernel::Failure;
 use std::collections::BTreeMap;
 
 /// How a skill item stands among the items sharing its (case-insensitive) name.

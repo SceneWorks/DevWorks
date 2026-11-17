@@ -110,10 +110,11 @@ use crate::registry::SchemaRevision;
 use crate::services::artifacts::Viewer;
 use crate::services::artifacts::replies::{ObservationGap, recorded_observation};
 use crate::services::cursor::{self, CursorBinding};
-use crate::services::sessions::{
+use crate::services::kernel::{
     Failure, Refusal, content, counter, label, not_found, project_visible, query_fault, rev,
-    transcript::reference_resolves, visible_root,
+    visible_root,
 };
+use crate::services::sessions::transcript::reference_resolves;
 use serde::Deserialize;
 use serde_json::{Value, json};
 use std::sync::Arc;

@@ -2,7 +2,7 @@
 use super::{budget::Budget, scan};
 use crate::ports::storage::*;
 use crate::services::indexing::views::ViewLayers;
-use crate::services::sessions::Failure;
+use crate::services::kernel::Failure;
 
 pub(super) type Key = (String, String, String);
 

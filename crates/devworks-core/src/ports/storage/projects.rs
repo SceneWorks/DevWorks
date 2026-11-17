@@ -487,7 +487,7 @@ pub trait ProjectRead {
 pub trait ProjectRepository: ProjectRead {
     fn apply_project_purge(
         &mut self,
-        _permit: &crate::services::projects::purge::PurgePermit,
+        _permit: &crate::ports::project_purge::PurgePermit,
     ) -> Result<crate::protocol::records::ProjectPurgeManifest, StorageError> {
         Err(StorageError::ScopeDenied)
     }

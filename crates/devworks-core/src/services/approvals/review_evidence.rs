@@ -4,7 +4,7 @@ use super::{OwnerPreview, owner_preview::artifact_binding};
 use crate::ports::storage::{ArtifactRead, ConfigScope, StorageError};
 use crate::protocol::provider::ArtifactRef;
 use crate::protocol::{DomainErrorCode, Id};
-use crate::services::sessions::{Failure, Refusal};
+use crate::services::kernel::{Failure, Refusal};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 

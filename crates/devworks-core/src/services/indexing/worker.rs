@@ -27,7 +27,6 @@
 //! owner, so cancellation kills its tree; parsing polls the stop signal and has a per-file
 //! budget.
 use super::config::{EXTRACTOR_VERSION, EffectiveConfig, dependency_directory};
-use super::git::{Change, Git, GitFault, TreeEntry};
 use super::linking::{CallTarget, SwiftImport, SwiftModule, SwiftScopes, call_target_allowed};
 use super::paths::{edge_id, fold, node_id, parent, symbol_id};
 use super::{IndexEnv, RUN_AGGREGATE, digest, effective_config, history};
@@ -40,6 +39,7 @@ use crate::ports::indexing::{
 use crate::ports::storage::*;
 use crate::protocol::Id;
 use crate::protocol::records::{DiagnosticErrorClass, DiagnosticOutcome, Severity};
+use crate::services::git::client::{Change, Git, GitFault, TreeEntry};
 use serde_json::{Map, Value, json};
 use std::cell::Cell;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
@@ -1734,7 +1734,7 @@ impl Exec<'_> {
         let mut renamed: BTreeMap<String, String> = BTreeMap::new();
         if let Some(p) = &parent
             && p.source_digest != head
-            && super::git::oid_ok(&p.source_digest)
+            && crate::services::git::client::oid_ok(&p.source_digest)
         {
             match git.diff(&dir, &p.source_digest, &head) {
                 Ok((changes, _)) => {

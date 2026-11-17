@@ -12,8 +12,8 @@ use crate::{
         results::{DomainDecision, OperationResult},
     },
     services::{
+        kernel::{Failure, Refusal, decided, not_found, rev},
         knowledge,
-        sessions::{Failure, Refusal, decided, not_found, rev},
     },
 };
 use serde_json::json;

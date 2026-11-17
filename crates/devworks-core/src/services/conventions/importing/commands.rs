@@ -10,7 +10,7 @@ use crate::{
     services::{
         approvals,
         conventions::{access, model},
-        sessions::{Failure, Refusal},
+        kernel::{Failure, Refusal},
     },
 };
 use serde::{Deserialize, Serialize};

@@ -8,7 +8,7 @@ use crate::protocol::records::{CodeEdge, CodeNode, CodeSourceLocation};
 use crate::protocol::support::{BoundedText, GraphUnitKey};
 use crate::protocol::{Counter, DomainErrorCode, Id};
 use crate::services::indexing::views::{self, ViewLayers};
-use crate::services::sessions::{Failure, Refusal, rev};
+use crate::services::kernel::{Failure, Refusal, rev};
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
 

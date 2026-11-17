@@ -16,7 +16,7 @@ use devworks_core::ports::{AuthorityDenial, AuthorityPort, AuthorityRequest, Aut
 use devworks_core::protocol::CorrelationId;
 use devworks_core::protocol::provider::TranscriptBody;
 use devworks_core::protocol::records::{AgentRecord, DesktopInput, RouteIntent};
-use devworks_core::services::sessions::Refusal;
+use devworks_core::services::kernel::Refusal;
 use std::sync::{Mutex, OnceLock};
 
 /// The tool the scripted provider calls in the held-call test. Its handler refuses every new

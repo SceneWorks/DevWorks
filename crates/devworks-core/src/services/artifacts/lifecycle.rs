@@ -1417,3 +1417,16 @@ pub(crate) fn exact_reference_readable_in(
             && v.media_type == reference.media_type
     }))
 }
+
+impl crate::providers::materialize::ExactArtifacts for ArtifactService {
+    fn read_exact_artifact(
+        &self,
+        store: &dyn ApplicationStore,
+        context: &InvocationContext,
+        reference: &ArtifactRef,
+        max_bytes: u64,
+    ) -> Result<(Vec<u8>, Value), crate::providers::ProviderError> {
+        self.read_exact(store, context, reference, max_bytes)
+            .map_err(|_| crate::providers::ProviderError::MaterialUnavailable)
+    }
+}

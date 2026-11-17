@@ -7,7 +7,7 @@ use crate::ports::IdKind;
 use crate::ports::storage::*;
 use crate::ports::usage::*;
 use crate::protocol::{DomainErrorCode, EventId, Id, OperationId};
-use crate::services::sessions::{Failure, Refusal};
+use crate::services::kernel::{Failure, Refusal};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -66,8 +66,8 @@ pub(crate) fn conflict(kind: &'static str, id: &Id, expected: i64, current: i64)
         crate::protocol::RevisionDimension::Configuration,
         kind,
         id.clone(),
-        crate::services::sessions::rev(expected),
-        crate::services::sessions::rev(current),
+        crate::services::kernel::rev(expected),
+        crate::services::kernel::rev(current),
     )
     .into()
 }

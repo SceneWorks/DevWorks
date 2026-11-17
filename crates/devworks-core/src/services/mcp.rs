@@ -29,7 +29,7 @@ use crate::protocol::{
 };
 use crate::services::artifacts::ArtifactService;
 use crate::services::cursor::CursorBinding;
-use crate::services::sessions::{Failure, Refusal, decided, query_fault, rev};
+use crate::services::kernel::{Failure, Refusal, decided, query_fault, rev};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
@@ -2942,7 +2942,7 @@ impl CommandHandler for McpClientService {
             }
             _ => decided(
                 tx,
-                Err(crate::services::sessions::Refusal::new(
+                Err(crate::services::kernel::Refusal::new(
                     DomainErrorCode::UnsupportedCapability,
                     "operation",
                     None,
