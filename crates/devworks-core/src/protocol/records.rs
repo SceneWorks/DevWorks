@@ -9563,6 +9563,29 @@ impl Check for PackageOffer {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PackageInvocation {
+    pub operation_id: OperationId,
+    pub state: OperationState,
+    pub artifacts: Items<ArtifactRef>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub failure: Option<Content>,
+}
+impl Check for PackageInvocation {
+    fn check(&self) -> Result<(), String> {
+        self.operation_id.check()?;
+        self.state.check()?;
+        self.artifacts.check()?;
+        self.failure.check()?;
+        crate::protocol::rules::record(
+            "PackageInvocation",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 pub enum IndexFreshnessState {
     Current,
     Stale,

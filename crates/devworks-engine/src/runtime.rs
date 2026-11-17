@@ -611,6 +611,17 @@ async fn build(composition: Composition) -> Result<Engine, BootError> {
             store.clone(),
             package_tools.clone(),
         ));
+        // Package events: the announcement is fanned out to the handlers that declare it, and
+        // each delivery runs its handler as the person who approved that version.
+        if let Some(p) = &packages {
+            p.service
+                .add_availability_consumer(crate::package_host::events::ROUTER);
+        }
+        consumers.push(crate::package_host::events::router());
+        consumers.push(crate::package_host::events::consumer(
+            store.clone(),
+            package_tools.clone(),
+        ));
     }
     let process_tools = config.process_tools.as_ref().map(|composition| {
         Arc::new(

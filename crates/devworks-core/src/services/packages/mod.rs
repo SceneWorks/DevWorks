@@ -156,6 +156,7 @@ use std::time::Duration;
 
 pub mod approval;
 pub mod index;
+pub mod invoke;
 pub mod policy;
 mod review_evidence;
 pub mod view;
@@ -163,7 +164,7 @@ pub mod view;
 pub use crate::ports::packages::VerifiedPackageFile as VerifiedHelp;
 
 /// The operations [`PackageService`] is registered for.
-pub const OPERATIONS: [&str; 10] = [
+pub const OPERATIONS: [&str; 12] = [
     "addons.catalog",
     "addons.install",
     "addons.configure",
@@ -174,6 +175,8 @@ pub const OPERATIONS: [&str; 10] = [
     "addons.logs",
     "addons.rollback",
     "addons.uninstall",
+    "addons.invoke",
+    "addons.invocation",
 ];
 /// History aggregate of package lifecycle events.
 pub const AGGREGATE: &str = "package";
@@ -420,6 +423,14 @@ impl PackageService {
     /// Registers the consumers that receive availability announcements (composition root).
     pub fn set_availability_consumers(&self, consumers: Vec<String>) {
         *self.consumers.write().unwrap_or_else(|p| p.into_inner()) = consumers;
+    }
+    /// Registers one more consumer of availability announcements (composition root); a consumer
+    /// already registered stays registered once.
+    pub fn add_availability_consumer(&self, consumer: &str) {
+        let mut all = self.consumers.write().unwrap_or_else(|p| p.into_inner());
+        if !all.iter().any(|c| c == consumer) {
+            all.push(consumer.to_owned());
+        }
     }
     pub(crate) fn consumers(&self) -> Vec<String> {
         self.consumers
@@ -2558,6 +2569,9 @@ impl QueryHandler for PackageService {
                 view::catalog(snapshot, ctx, i, &self.platform, &*self.runtimes)
             }
             OperationInput::Addons(ops::Input::Logs(i)) => view::logs(snapshot, ctx, i),
+            OperationInput::Addons(ops::Input::Invocation(i)) => {
+                Self::invocation_view(snapshot, ctx, i)
+            }
             _ => {
                 Err(Refusal::new(DomainErrorCode::UnsupportedCapability, "operation", None).into())
             }
@@ -2761,6 +2775,7 @@ impl CommandHandler for PackageService {
                     self.configure(tx, ctx, i, refusal)
                 }
                 OperationInput::Addons(ops::Input::Propose(i)) => self.propose(tx, ctx, i, bundle),
+                OperationInput::Addons(ops::Input::Invoke(i)) => self.invoke(tx, ctx, i),
                 input => match lifecycle(input) {
                     Some((
                         _,

@@ -91,6 +91,7 @@ class SchemaRevisionRules(unittest.TestCase):
             'agents.history', 'agents.events', 'skills.resources', *MCP,
             'watch.create', 'watch.list', 'watch.inspect', 'watch.cancel', 'containers.create',
             'process.install_project_dependencies', 'skills.set_enabled',
+            'addons.invoke', 'addons.invocation',
             'settings.read_effective', 'settings.validate', 'settings.save_revision',
             'settings.explain_source'})
         for name in MCP:

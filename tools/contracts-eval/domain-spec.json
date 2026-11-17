@@ -3415,6 +3415,15 @@
         "newer": "bool"
       }
     },
+    "PackageInvocation": {
+      "kind": "record",
+      "fields": {
+        "operation_id": "OperationId",
+        "state": "OperationState",
+        "artifacts": "Items<ArtifactRef>",
+        "failure": "?Content"
+      }
+    },
     "IndexFreshnessState": {
       "kind": "enum",
       "values": [
@@ -10566,6 +10575,33 @@
       "authority": "Scoped",
       "rules": ""
     },
+    "addons.invoke": {
+      "operation": "addons.invoke",
+      "mode": "Command",
+      "fields": {
+        "package_id": "Id",
+        "contribution_id": "Label",
+        "input": "ArtifactRef",
+        "expected_digest": "?Digest"
+      },
+      "result": "PackageInvocation",
+      "effect": "Journaled",
+      "authority": "Scoped",
+      "rules": "Human only. Starts one invocation of an installed, enabled package's tool contribution as the calling person: the package's brokered application and inference calls run as that person under their current authority, narrowed by the version's approved manifest grants. Records one durable package.invoke operation and returns it with its state; the invocation runs once, a result that cannot be established is held for reconciliation and never re-run. expected_digest, when given, must be the active manifest digest. Refused for an agent, for a contribution that is not a tool of the active version, and for a package that is not ready.",
+      "introducedRevision": 8
+    },
+    "addons.invocation": {
+      "operation": "addons.invocation",
+      "mode": "Query",
+      "fields": {
+        "operation_id": "OperationId"
+      },
+      "result": "PackageInvocation",
+      "effect": "Local",
+      "authority": "Scoped",
+      "rules": "Human only. The state of one invocation the calling person started with addons.invoke and, once it completed, the artifacts of the invocation its package returned or, when it failed, the reason. Another person's or an agent's invocation is not found.",
+      "introducedRevision": 8
+    },
     "help.search": {
       "operation": "help.search",
       "mode": "Query",
@@ -11622,6 +11658,12 @@
       1,
       2,
       3
+    ],
+    "addons.invoke": [
+      8
+    ],
+    "addons.invocation": [
+      8
     ],
     "router.availability": [
       1,
@@ -12766,6 +12808,8 @@
     "addons.logs": {"assignmentScope": "project", "nativeExecution": false, "approvalRequired": false, "humanOnly": false},
     "addons.rollback": {"assignmentScope": "project", "nativeExecution": true, "approvalRequired": false, "humanOnly": false},
     "addons.uninstall": {"assignmentScope": "project", "nativeExecution": false, "approvalRequired": false, "humanOnly": false},
+    "addons.invoke": {"assignmentScope": "project", "nativeExecution": true, "approvalRequired": false, "humanOnly": true},
+    "addons.invocation": {"assignmentScope": "project", "nativeExecution": false, "approvalRequired": false, "humanOnly": true},
     "help.search": {"assignmentScope": "project", "nativeExecution": false, "approvalRequired": false, "humanOnly": false},
     "help.read": {"assignmentScope": "project", "nativeExecution": false, "approvalRequired": false, "humanOnly": false},
     "help.topic_for_screen": {"assignmentScope": "project", "nativeExecution": false, "approvalRequired": false, "humanOnly": false},

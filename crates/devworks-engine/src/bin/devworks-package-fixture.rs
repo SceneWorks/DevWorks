@@ -25,6 +25,8 @@
 //! `state` (broker.state read then compare-and-set, results as progress), `event` (tries
 //! broker.state compare-and-set and an HTTP broker.call, then broker.commit_event with the
 //! commit read from `devworks-fixture-<package>-commit.json` in the temporary directory),
+//! `react` (an event handler: reads its event, asks for the inference
+//! `devworks-fixture-<package>-react.json` names, commits the event and reports each step),
 //! `config` (reports the configuration `host.activate` delivered as progress `config:<json>`,
 //! or `config:none`), `late-state` (reads its state, answers the invocation, then tries a
 //! compare-and-set under the finished invocation's token and writes the answer's class to
@@ -298,6 +300,88 @@ fn invoke(st: Arc<State>, id: Value, inv: Value, cancel: mpsc::Receiver<()>, pac
                     (again["result"]["processingReceipt"] == r["result"]["processingReceipt"])
                 ),
             );
+            finished(
+                &st,
+                &id,
+                &inv,
+                json!({"kind": "Completed", "artifacts": []}),
+            );
+        }
+        "react" => {
+            // An event handler fired by a host event: reads its event, asks for inference with
+            // the request `devworks-fixture-<package>-react.json` names (`request`: the request
+            // JSON, `inputSchema`: its schema reference), then commits the event.
+            let ids = json!({"processSessionId": inv["processSessionId"], "invocationId": inv["invocationId"],
+                "invocationToken": inv["invocationToken"]});
+            let script: Value = std::fs::read(
+                std::env::temp_dir().join(format!("devworks-fixture-{package}-react.json")),
+            )
+            .ok()
+            .and_then(|b| serde_json::from_slice(&b).ok())
+            .unwrap_or(json!({}));
+            let broker_call = |key: &str, call: Value| {
+                let mut params = ids.clone();
+                params["actionKey"] = json!(key);
+                params["call"] = call;
+                st.call("broker.call", params)
+            };
+            let mut read = ids.clone();
+            read["actionKey"] = json!("state-read");
+            read["stateGeneration"] = inv["stateGeneration"].clone();
+            read["action"] = json!({"kind": "Read"});
+            let snap = st.call("broker.state", read);
+            let chunk = broker_call(
+                "read-event",
+                json!({"kind": "ArtifactRead", "artifact": inv["input"]}),
+            );
+            let event: Value = chunk["result"]["data"]
+                .as_str()
+                .and_then(devworks_core::ports::http::base64url_decode)
+                .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+                .unwrap_or(json!({}));
+            st.progress(&inv, 1, &format!("event:{}", class(&chunk)));
+            if script["request"].is_object() {
+                let bytes = script["request"].to_string().into_bytes();
+                let appended = broker_call(
+                    "append",
+                    json!({"kind": "ArtifactAppend", "writeId": "request",
+                        "data": devworks_core::ports::http::base64url(&bytes)}),
+                );
+                let published = broker_call(
+                    "publish",
+                    json!({"kind": "ArtifactPublish", "writeId": "request",
+                        "mediaType": "application/json",
+                        "sha256": devworks_core::fingerprint::sha256_hex(&bytes)}),
+                );
+                st.progress(
+                    &inv,
+                    2,
+                    &format!("request:{}:{}", class(&appended), class(&published)),
+                );
+                let answer = broker_call(
+                    "infer",
+                    json!({"kind": "Inference", "inputSchema": script["inputSchema"],
+                        "request": published["result"]["artifact"]}),
+                );
+                st.progress(
+                    &inv,
+                    3,
+                    &format!(
+                        "infer:{}:{}",
+                        class(&answer),
+                        answer["error"]["message"].as_str().unwrap_or("")
+                    ),
+                );
+            }
+            let mut commit = ids.clone();
+            commit["subscriptionId"] = event["subscriptionId"].clone();
+            commit["eventId"] = event["eventId"].clone();
+            commit["expectedCheckpoint"] = event["expectedCheckpoint"].clone();
+            commit["stateGeneration"] = inv["stateGeneration"].clone();
+            commit["expectedStateRevision"] = snap["result"]["revision"].clone();
+            commit["intents"] = json!([]);
+            let committed = st.call("broker.commit_event", commit);
+            st.progress(&inv, 4, &format!("commit:{}", class(&committed)));
             finished(
                 &st,
                 &id,

@@ -9,7 +9,7 @@ use devworks_core::registry::{self, AssignmentScope, Mode, OperationDescriptor};
 use serde_json::Value;
 use std::collections::BTreeSet;
 
-const OLD_NATIVE_EXECUTION: [&str; 18] = [
+const OLD_NATIVE_EXECUTION: [&str; 19] = [
     "git.worktree",
     "git.commit",
     "git.push",
@@ -28,6 +28,7 @@ const OLD_NATIVE_EXECUTION: [&str; 18] = [
     "addons.enable",
     "addons.rollback",
     "addons.configure",
+    "addons.invoke",
 ];
 const OLD_APPROVAL_REQUIRED: [&str; 5] = [
     "projects.archive",
@@ -36,7 +37,7 @@ const OLD_APPROVAL_REQUIRED: [&str; 5] = [
     "skills.rollback",
     "roles.rollback",
 ];
-const OLD_HUMAN_ONLY: [&str; 8] = [
+const OLD_HUMAN_ONLY: [&str; 10] = [
     "agents.history",
     "agents.events",
     "mcp.configure",
@@ -45,6 +46,8 @@ const OLD_HUMAN_ONLY: [&str; 8] = [
     "mcp.disable",
     "mcp.remove",
     "skills.set_enabled",
+    "addons.invoke",
+    "addons.invocation",
 ];
 /// Refused to an agent with a root (`registered_tool_visibility`).
 const OLD_ROOT_DENIED: [&str; 7] = [

@@ -705,6 +705,12 @@ pub enum OperationResult {
     AddonsRollback { value: PackageRecord },
     #[serde(rename = "addons.uninstall")]
     AddonsUninstall { value: PackageRecord },
+    #[schemars(extend("x-since" = 8))]
+    #[serde(rename = "addons.invoke")]
+    AddonsInvoke { value: PackageInvocation },
+    #[schemars(extend("x-since" = 8))]
+    #[serde(rename = "addons.invocation")]
+    AddonsInvocation { value: PackageInvocation },
     #[serde(rename = "help.search")]
     HelpSearch { value: HelpTopicPageResult },
     #[serde(rename = "help.read")]
@@ -1140,6 +1146,8 @@ impl OperationResult {
             Self::AddonsLogs { .. } => "addons.logs",
             Self::AddonsRollback { .. } => "addons.rollback",
             Self::AddonsUninstall { .. } => "addons.uninstall",
+            Self::AddonsInvoke { .. } => "addons.invoke",
+            Self::AddonsInvocation { .. } => "addons.invocation",
             Self::HelpSearch { .. } => "help.search",
             Self::HelpRead { .. } => "help.read",
             Self::HelpTopicForScreen { .. } => "help.topic_for_screen",
@@ -1524,6 +1532,8 @@ impl Check for OperationResult {
             Self::AddonsLogs { value } => value.check()?,
             Self::AddonsRollback { value } => value.check()?,
             Self::AddonsUninstall { value } => value.check()?,
+            Self::AddonsInvoke { value } => value.check()?,
+            Self::AddonsInvocation { value } => value.check()?,
             Self::HelpSearch { value } => value.check()?,
             Self::HelpRead { value } => value.check()?,
             Self::HelpTopicForScreen { value } => value.check()?,
@@ -1810,6 +1820,12 @@ impl Revisioned for OperationResult {
                 Err("operation result predates its introduction".into())
             }
             Self::McpClassifyTool { .. } if revision < 8 => {
+                Err("operation result predates its introduction".into())
+            }
+            Self::AddonsInvoke { .. } if revision < 8 => {
+                Err("operation result predates its introduction".into())
+            }
+            Self::AddonsInvocation { .. } if revision < 8 => {
                 Err("operation result predates its introduction".into())
             }
             Self::WatchCreate { .. } if revision < 8 => {

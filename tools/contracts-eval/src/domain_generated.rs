@@ -9562,6 +9562,29 @@ impl Check for PackageOffer {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PackageInvocation {
+    pub operation_id: OperationId,
+    pub state: OperationState,
+    pub artifacts: Items<ArtifactRef>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub failure: Option<Content>,
+}
+impl Check for PackageInvocation {
+    fn check(&self) -> Result<(), String> {
+        self.operation_id.check()?;
+        self.state.check()?;
+        self.artifacts.check()?;
+        self.failure.check()?;
+        super::domain_rules::record(
+            "PackageInvocation",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 pub enum IndexFreshnessState {
     Current,
     Stale,
@@ -19425,6 +19448,9 @@ pub enum DomainQuery {
         after_sequence: Counter,
         page: PageRequest,
     },
+    #[schemars(extend("x-since" = 8))]
+    #[serde(rename = "addons.invocation")]
+    AddonsInvocation { operation_id: OperationId },
     #[serde(rename = "help.search")]
     HelpSearch { query: Text, page: PageRequest },
     #[serde(rename = "help.read")]
@@ -19844,6 +19870,7 @@ impl DomainQuery {
             Self::McpCapabilities { .. } => "mcp.capabilities",
             Self::AddonsCatalog { .. } => "addons.catalog",
             Self::AddonsLogs { .. } => "addons.logs",
+            Self::AddonsInvocation { .. } => "addons.invocation",
             Self::HelpSearch { .. } => "help.search",
             Self::HelpRead { .. } => "help.read",
             Self::HelpTopicForScreen { .. } => "help.topic_for_screen",
@@ -20898,6 +20925,9 @@ impl Check for DomainQuery {
                 after_sequence.check()?;
                 page.check()?;
             }
+            Self::AddonsInvocation { operation_id } => {
+                operation_id.check()?;
+            }
             Self::HelpSearch { query, page } => {
                 query.check()?;
                 page.check()?;
@@ -21519,6 +21549,9 @@ impl Revisioned for DomainQuery {
                 Err("operation predates its introduction".into())
             }
             Self::AgentsEvents { .. } if revision < 7 => {
+                Err("operation predates its introduction".into())
+            }
+            Self::AddonsInvocation { .. } if revision < 8 => {
                 Err("operation predates its introduction".into())
             }
             Self::NextWorkInspectQueue { .. } if revision < 3 => {
@@ -23078,6 +23111,15 @@ pub enum DomainCommand {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         expected_revision: Option<Revision>,
     },
+    #[schemars(extend("x-since" = 8))]
+    #[serde(rename = "addons.invoke")]
+    AddonsInvoke {
+        package_id: Id,
+        contribution_id: Label,
+        input: ArtifactRef,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        expected_digest: Option<Digest>,
+    },
     #[serde(rename = "help.generate_capability_docs")]
     HelpGenerateCapabilityDocs {
         registry_revision: Revision,
@@ -23564,6 +23606,7 @@ impl DomainCommand {
             Self::McpSelectTools { .. } => "mcp.select_tools",
             Self::AddonsConfigure { .. } => "addons.configure",
             Self::AddonsPropose { .. } => "addons.propose",
+            Self::AddonsInvoke { .. } => "addons.invoke",
             Self::HelpGenerateCapabilityDocs { .. } => "help.generate_capability_docs",
             Self::WorkspaceRecordDiagnostic { .. } => "workspace.record_diagnostic",
             Self::WorkspaceBackup { .. } => "workspace.backup",
@@ -25240,6 +25283,17 @@ impl Check for DomainCommand {
                 base_package_id.check()?;
                 expected_revision.check()?;
             }
+            Self::AddonsInvoke {
+                package_id,
+                contribution_id,
+                input,
+                expected_digest,
+            } => {
+                package_id.check()?;
+                contribution_id.check()?;
+                input.check()?;
+                expected_digest.check()?;
+            }
             Self::HelpGenerateCapabilityDocs {
                 registry_revision,
                 expected_help_revision,
@@ -26009,6 +26063,9 @@ impl Revisioned for DomainCommand {
             Self::McpClassifyTool { .. } if revision < 8 => {
                 Err("operation predates its introduction".into())
             }
+            Self::AddonsInvoke { .. } if revision < 8 => {
+                Err("operation predates its introduction".into())
+            }
             Self::NotificationsMarkRead { .. } if revision < 3 => {
                 Err("operation predates its introduction".into())
             }
@@ -26620,6 +26677,12 @@ pub enum OperationResult {
     AddonsPropose { value: ProposalRecord },
     #[serde(rename = "addons.logs")]
     AddonsLogs { value: Page<Diagnostic> },
+    #[schemars(extend("x-since" = 8))]
+    #[serde(rename = "addons.invoke")]
+    AddonsInvoke { value: PackageInvocation },
+    #[schemars(extend("x-since" = 8))]
+    #[serde(rename = "addons.invocation")]
+    AddonsInvocation { value: PackageInvocation },
     #[serde(rename = "help.search")]
     HelpSearch { value: HelpTopicPageResult },
     #[serde(rename = "help.read")]
@@ -27134,6 +27197,8 @@ impl OperationResult {
             Self::AddonsConfigure { .. } => "addons.configure",
             Self::AddonsPropose { .. } => "addons.propose",
             Self::AddonsLogs { .. } => "addons.logs",
+            Self::AddonsInvoke { .. } => "addons.invoke",
+            Self::AddonsInvocation { .. } => "addons.invocation",
             Self::HelpSearch { .. } => "help.search",
             Self::HelpRead { .. } => "help.read",
             Self::HelpTopicForScreen { .. } => "help.topic_for_screen",
@@ -27518,6 +27583,8 @@ impl Check for OperationResult {
             Self::AddonsConfigure { value } => value.check()?,
             Self::AddonsPropose { value } => value.check()?,
             Self::AddonsLogs { value } => value.check()?,
+            Self::AddonsInvoke { value } => value.check()?,
+            Self::AddonsInvocation { value } => value.check()?,
             Self::HelpSearch { value } => value.check()?,
             Self::HelpRead { value } => value.check()?,
             Self::HelpTopicForScreen { value } => value.check()?,
@@ -27847,6 +27914,12 @@ impl Revisioned for OperationResult {
                 Err("operation result predates its introduction".into())
             }
             Self::McpClassifyTool { .. } if revision < 8 => {
+                Err("operation result predates its introduction".into())
+            }
+            Self::AddonsInvoke { .. } if revision < 8 => {
+                Err("operation result predates its introduction".into())
+            }
+            Self::AddonsInvocation { .. } if revision < 8 => {
                 Err("operation result predates its introduction".into())
             }
             Self::NextWorkInspectQueue { .. } if revision < 3 => {

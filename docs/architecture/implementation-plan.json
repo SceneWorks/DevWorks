@@ -11,25 +11,25 @@
   ],
   "sourceSha256": {
     "implementation-slices.json": "8b3d18d5b86fa2904b3ddb55ac117cfdcc93973ee2bc96bde9e32d982b14a8a4",
-    "devworks-capability-catalog.json": "453bd674c62c47113329f55ff3b8938ad050e4cbd0130e838a49ce7b218bd286",
+    "devworks-capability-catalog.json": "190bcb28c0f8f226fd0088cdc52a88e2087d69c58757faf8d0674efcc1e17ec0",
     "devworks-requirements-traceability.json": "24555c0cb565ec79ffec089f598fbdf9e1b3eeb291f2222a58c458dd1cc8a4d6",
     "codegraph-capability-inventory.json": "54da948de48de4a7d00353ae14d7464feac80cca9bdab6d2a6bb2679caae2c09",
     "capability-validation-contracts.json": "9722c1fe17c9aaed5c65fc43f1f4f412cca2813276e5108c7daf15585ae2ed81",
     "validation-workloads.json": "62c76bba3f262331403a5a38fa3d1aa1c7dc649737e36369ca4736780cfc3dcf",
-    "contracts/family-coverage.json": "b5e12a3dc31e4c8f4091a6aed55c7b15ea63eda009c42d10fe6617eb10fa9697",
+    "contracts/family-coverage.json": "93b70c250c1f5fae3efa36d6357086ab6f895a2ee385eb5b7fa4444e72e0964f",
     "mcp-publication-candidates.json": "64a782ea1c6dc3ef8d40d799d000f143e60b8f06ff86c34b97c10c33ee598b2d",
     "codegraph-work-map.json": "93c551768cd75091f954a0db1757b585b3b6fbaf21b6f6fb8dbab7527c127e25"
   },
   "counts": {
     "slices": 80,
     "operationFamilies": 50,
-    "operations": 378,
+    "operations": 380,
     "requirements": 390,
     "requirementsByStatus": {
       "Confirmed": 243,
       "Proposed": 147
     },
-    "inputSchemaCandidates": 378,
+    "inputSchemaCandidates": 380,
     "inputSchemasPending": 0,
     "sourceEntries": 558,
     "retainedSourceEntries": 494,
@@ -3631,7 +3631,9 @@
         "addons.propose",
         "addons.logs",
         "addons.rollback",
-        "addons.uninstall"
+        "addons.uninstall",
+        "addons.invoke",
+        "addons.invocation"
       ],
       "primaryRequirements": [
         "ADDON-01",
@@ -17475,6 +17477,34 @@
       "resultValueType": "PackageRecord",
       "requestModes": [
         "Command"
+      ],
+      "acceptanceStatus": "Planned; no production operation acceptance claimed"
+    },
+    {
+      "operation": "addons.invoke",
+      "family": "addons",
+      "serviceOwner": "PackageHost",
+      "primarySlice": "packages",
+      "inputSchema": "domain-request.schema.json",
+      "schemaStatus": "Concrete input/result candidate; actual service/authority behavior not implemented",
+      "resultSchema": "operation-result.schema.json",
+      "resultValueType": "PackageInvocation",
+      "requestModes": [
+        "Command"
+      ],
+      "acceptanceStatus": "Planned; no production operation acceptance claimed"
+    },
+    {
+      "operation": "addons.invocation",
+      "family": "addons",
+      "serviceOwner": "PackageHost",
+      "primarySlice": "packages",
+      "inputSchema": "domain-request.schema.json",
+      "schemaStatus": "Concrete input/result candidate; actual service/authority behavior not implemented",
+      "resultSchema": "operation-result.schema.json",
+      "resultValueType": "PackageInvocation",
+      "requestModes": [
+        "Query"
       ],
       "acceptanceStatus": "Planned; no production operation acceptance claimed"
     },
