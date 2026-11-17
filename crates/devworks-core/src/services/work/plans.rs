@@ -77,6 +77,40 @@ fn slot(tx: &mut dyn WriteTransaction, feature: &Id) -> R<StoredFeaturePlan> {
     Ok(s)
 }
 
+/// The plan document a draft names is shown exactly, page by page, in the plan approval's detail.
+/// Text the shared redaction would change (a `password: …` line, a password in a URL, a token)
+/// cannot be shown both safely and in full, so the draft is refused at save rather than stored
+/// where the approval shows it. The document is read once, bounded by
+/// [`MAX_PLAN_DOCUMENT`](super::MAX_PLAN_DOCUMENT), by the digest its reference pins: a version
+/// never changes, so this check holds for every later read of that draft.
+fn reviewable_document(
+    tx: &mut dyn WriteTransaction,
+    reader: &dyn StagedPlans,
+    feature: Option<&StoredWork>,
+    a: &ArtifactRef,
+) -> R<()> {
+    let unreviewable = || invalid("feature_plan_unreviewable", feature.map(|f| &f.id));
+    let Some(v) = tx.artifacts().version(&a.version_id)? else {
+        return Err(not_found("artifact", &a.artifact_id).into());
+    };
+    if v.byte_count < 0 || v.byte_count as usize > super::MAX_PLAN_DOCUMENT {
+        return Err(unreviewable());
+    }
+    let bytes = reader
+        .read_plan(
+            &v.blob_digest,
+            &v.blob_generation,
+            v.byte_count as u64,
+            super::MAX_PLAN_DOCUMENT,
+        )
+        .map_err(|_| not_found("artifact_file", &a.artifact_id))?;
+    let text = String::from_utf8_lossy(&bytes);
+    if crate::authority::redact::Redactor::new().redact_text(&text) != text {
+        return Err(unreviewable());
+    }
+    Ok(())
+}
+
 /// Validates a plan draft for `feature` of `project`: its content and drop decisions resolve,
 /// its repositories are project members, its requirement IDs are unique and its criterion and
 /// test IDs are unique across both lists, the
@@ -88,6 +122,7 @@ fn check_draft(
     project: &ProjectId,
     feature: Option<&StoredWork>,
     d: &PlanDraft,
+    documents: Option<&dyn StagedPlans>,
 ) -> R<()> {
     // A plan draft is shown exactly wherever it is read and reviewed (`features.get`, the plan
     // approval and its audit). Text the shared redaction would change (a password in a URL, a
@@ -99,6 +134,9 @@ fn check_draft(
         return Err(invalid("feature_plan_unreviewable", feature.map(|f| &f.id)));
     }
     check_artifact(tx, ctx, project, &d.content)?;
+    if let Some(reader) = documents {
+        reviewable_document(tx, reader, feature, &d.content)?;
+    }
     member_repositories(tx, project, &d.repository_ids.0)?;
     let req_ids: Vec<Id> = d.requirements.0.iter().map(|r| r.id.clone()).collect();
     id_set(&req_ids, "requirements")?;
@@ -347,7 +385,7 @@ impl WorkService {
             None => workflow::default_status(tx, project)?,
         };
         if let Some(d) = plan {
-            check_draft(tx, ctx, project, None, d)?;
+            check_draft(tx, ctx, project, None, d, self.documents.as_deref())?;
         }
         let now = tx.now_ms();
         let mut brief = WorkBrief {
@@ -631,7 +669,14 @@ impl WorkService {
                 check_revision(&f, expected.get())?;
                 open_feature(tx, &f)?;
                 let draft = keep_plan_state(tx, &f.id, &fd.plan)?;
-                check_draft(tx, ctx, project, Some(&f), &draft)?;
+                check_draft(
+                    tx,
+                    ctx,
+                    project,
+                    Some(&f),
+                    &draft,
+                    self.documents.as_deref(),
+                )?;
                 // Saving a draft never touches the active plan or its approval.
                 let (_, superseded) = save_pending(tx, &f, &draft, fd.budget.as_ref(), false)?;
                 let mut next = f.clone();
@@ -1016,7 +1061,14 @@ impl WorkService {
         check_revision(&f, i.expected_revision.get())?;
         open_project(tx, ctx, &f.project_id)?;
         let draft = keep_plan_state(tx, &f.id, &i.plan)?;
-        check_draft(tx, ctx, &f.project_id, Some(&f), &draft)?;
+        check_draft(
+            tx,
+            ctx,
+            &f.project_id,
+            Some(&f),
+            &draft,
+            self.documents.as_deref(),
+        )?;
         let before = slot(tx, &f.id)?;
         let (after_slot, superseded) = save_pending(
             tx,
