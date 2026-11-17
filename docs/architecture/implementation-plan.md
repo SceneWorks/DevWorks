@@ -4,7 +4,7 @@ Status: architecture baseline 1.1. This is the complete ownership and dependency
 
 ## Success and remaining commitments
 
-The register assigns all 390 requirements, 377 operations across 50 families, 494 retained source entries, 33 acceptance groups and 12 workloads. The 64 excluded source entries retain their reasons and an exclusion audit. There are 80 local slices and no unowned operations, requirements or retained entries.
+The register assigns all 390 requirements, 378 operations across 50 families, 494 retained source entries, 33 acceptance groups and 12 workloads. The 64 excluded source entries retain their reasons and an exclusion audit. There are 80 local slices and no unowned operations, requirements or retained entries.
 
 All 351 operation inputs now have candidate schema bindings, with typed qualified result tags and fault/receipt/completion contracts; no catalog input remains unbound. Actual adoption of those contracts, host authority/SDK/provider behavior, confinement, full native UI integration and all six OS/CPU builds remain implementation acceptance below. The four original architecture feasibility questions are resolved in the final review. AD76–78 adds incoming MCP support in DW-063/064; actual protocol/authentication and two-client acceptance remain explicit. A material failure returns to architecture review with alternatives, without dropping scope or expanding authority.
 
@@ -661,7 +661,7 @@ Discover shared skills in place, resolve assets from owning roots, maintain appr
 
 Implement the recorded strict input/result/error schemas and selected-operation/mode binding, current authority, durable receipt/effect/cancellation/recovery behavior, and meaningful native success/fault cases. Expose the same domain service to native UI and applicable agent tools; no parallel business implementation. Preserve source arguments/results/quirks traced here. Do not advertise unqualified targets or infer product acceptance from fixture tests.
 
-**Operations:** `skills.discover`, `skills.read`, `skills.resources`, `skills.draft`, `skills.propose`, `skills.history`, `skills.rollback`, `roles.read`, `roles.draft`, `roles.propose`, `roles.history`, `roles.rollback`
+**Operations:** `skills.discover`, `skills.read`, `skills.resources`, `skills.draft`, `skills.propose`, `skills.history`, `skills.rollback`, `skills.set_enabled`, `roles.read`, `roles.draft`, `roles.propose`, `roles.history`, `roles.rollback`
 
 **Primary requirement cases:** AT-SKILL-01, AT-SKILL-02, AT-SKILL-03, AT-SKILL-04, AT-SKILL-05, AT-SKILL-06, AT-SKILL-07, AT-SKILL-08, AT-SKILL-09
 

@@ -165,6 +165,26 @@ impl Revisioned for RollbackInput {
     fn retain_revision(&mut self, _: u32) {}
 }
 
+/// `skills.set_enabled` Command input.
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SetEnabledInput {
+    pub instruction_id: Id,
+    pub expected_revision: Revision,
+    pub enabled: bool,
+}
+impl Check for SetEnabledInput {
+    fn check(&self) -> Result<(), String> {
+        self.instruction_id.check()?;
+        self.expected_revision.check()?;
+        self.enabled.check()?;
+        Ok(())
+    }
+}
+impl Revisioned for SetEnabledInput {
+    fn retain_revision(&mut self, _: u32) {}
+}
+
 /// An admitted input of the `skills` family, built only for the selected operation and mode.
 #[derive(Clone, Debug)]
 pub enum Input {
@@ -182,6 +202,8 @@ pub enum Input {
     History(HistoryInput),
     /// `skills.rollback` (Command).
     Rollback(RollbackInput),
+    /// `skills.set_enabled` (Command).
+    SetEnabled(SetEnabledInput),
 }
 impl Input {
     pub fn operation(&self) -> &'static str {
@@ -193,6 +215,7 @@ impl Input {
             Self::Propose(_) => "skills.propose",
             Self::History(_) => "skills.history",
             Self::Rollback(_) => "skills.rollback",
+            Self::SetEnabled(_) => "skills.set_enabled",
         }
     }
     pub fn mode(&self) -> Mode {
@@ -204,6 +227,7 @@ impl Input {
             Self::Propose(_) => Mode::Command,
             Self::History(_) => Mode::Query,
             Self::Rollback(_) => Mode::Command,
+            Self::SetEnabled(_) => Mode::Command,
         }
     }
 }

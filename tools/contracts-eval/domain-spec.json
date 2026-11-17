@@ -9027,6 +9027,20 @@
       "authority": "Scoped",
       "rules": "New attributed revision restores approved content; do not rewrite history or activate beyond current authority."
     },
+    "skills.set_enabled": {
+      "operation": "skills.set_enabled",
+      "mode": "Command",
+      "fields": {
+        "instruction_id": "Id",
+        "expected_revision": "Revision",
+        "enabled": "bool"
+      },
+      "result": "InstructionRecord",
+      "effect": "Local",
+      "authority": "Scoped",
+      "rules": "Human only. Disables or re-enables a skill without deleting it; a disabled skill is not offered to agents and keeps its revisions and history. Refused when the latest revision is not expected_revision.",
+      "introducedRevision": 8
+    },
     "roles.read": {
       "operation": "roles.read",
       "mode": "Query",
@@ -11614,6 +11628,9 @@
       1,
       8
     ],
+    "skills.set_enabled": [
+      8
+    ],
     "mcp.disable": [
       8
     ],
@@ -12589,6 +12606,7 @@
     "skills.propose": {"assignmentScope": "project", "nativeExecution": false, "approvalRequired": false, "humanOnly": false},
     "skills.history": {"assignmentScope": "project", "nativeExecution": false, "approvalRequired": false, "humanOnly": false},
     "skills.rollback": {"assignmentScope": "project", "nativeExecution": false, "approvalRequired": true, "humanOnly": false},
+    "skills.set_enabled": {"assignmentScope": "project", "nativeExecution": false, "approvalRequired": false, "humanOnly": true},
     "roles.read": {"assignmentScope": "project", "nativeExecution": false, "approvalRequired": false, "humanOnly": false},
     "roles.draft": {"assignmentScope": "administration", "nativeExecution": false, "approvalRequired": false, "humanOnly": false},
     "roles.propose": {"assignmentScope": "administration", "nativeExecution": false, "approvalRequired": false, "humanOnly": false},

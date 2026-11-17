@@ -80,6 +80,11 @@ impl InstructionsCtl<'_, '_> {
                 expected,
                 target,
             } => self.restore_instruction(kind, id, expected, target),
+            InstructionAction::SetEnabled {
+                id,
+                expected,
+                enabled,
+            } => self.set_skill_enabled(id, expected, enabled),
             InstructionAction::OpenApprovals => self.navigate(Route::Approvals),
         }
     }
@@ -312,6 +317,7 @@ impl InstructionsCtl<'_, '_> {
                 kind,
                 draft: Some((target, name)),
                 stage: Stage::Preparing,
+                toggle: None,
                 staged: None,
             });
             p.message = None;
@@ -339,11 +345,43 @@ impl InstructionsCtl<'_, '_> {
                 kind,
                 draft: None,
                 stage: Stage::Saving,
+                toggle: None,
                 staged: None,
             });
             p.message = None;
         } else {
             p.message = Some((Tone::Attention, "Not restored: DevWorks is offline.".into()));
+        }
+    }
+
+    fn set_skill_enabled(&mut self, id: String, expected: i64, enabled: bool) {
+        if self.panel().pending.is_some() {
+            return;
+        }
+        let token = self.panel().next_token();
+        let submitted = self.command(
+            InstructionsSlot::InstructionCommand(token),
+            if enabled {
+                "Enabling a skill"
+            } else {
+                "Disabling a skill"
+            },
+            "skills.set_enabled",
+            move |b| iop::set_enabled_command(b, iop::set_enabled_body(&id, expected, enabled)),
+        );
+        let p = self.panel();
+        if submitted {
+            p.pending = Some(Pending {
+                token,
+                kind: Kind::Skill,
+                draft: None,
+                stage: Stage::Saving,
+                toggle: Some(enabled),
+                staged: None,
+            });
+            p.message = None;
+        } else {
+            p.message = Some((Tone::Attention, "Not changed: DevWorks is offline.".into()));
         }
     }
 
@@ -583,6 +621,7 @@ impl InstructionsCtl<'_, '_> {
             (InstructionsSlot::InstructionCommand(token), Reply::Command(outcome)) => {
                 let pending = self.pending_for(token);
                 let known = pending.is_some();
+                let toggle = pending.as_ref().and_then(|p| p.toggle);
                 let restore = pending.as_ref().is_some_and(|p| p.draft.is_none());
                 if is_unknown(&outcome) {
                     if let Some(p) = &mut self.panel().pending
@@ -603,13 +642,21 @@ impl InstructionsCtl<'_, '_> {
                         p.new_skill = None;
                         p.message = Some((
                             Tone::Good,
-                            format!(
-                                "{} revision {} of {}. Running agents adopt it at their next \
-                                 safe step.",
-                                if restore { "Restored" } else { "Saved" },
-                                record.revision.get(),
-                                record.name.0
-                            ),
+                            match toggle {
+                                Some(enabled) => format!(
+                                    "{} {}. Running agents adopt the change at their next safe \
+                                     step.",
+                                    if enabled { "Enabled" } else { "Disabled" },
+                                    record.name.0
+                                ),
+                                None => format!(
+                                    "{} revision {} of {}. Running agents adopt it at their \
+                                     next safe step.",
+                                    if restore { "Restored" } else { "Saved" },
+                                    record.revision.get(),
+                                    record.name.0
+                                ),
+                            },
                         ));
                         let kind = if record.id.as_str().starts_with("role-") {
                             Kind::Role

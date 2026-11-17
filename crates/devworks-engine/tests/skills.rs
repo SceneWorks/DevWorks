@@ -266,11 +266,21 @@ impl Fx {
         app: &Runtime,
         ctx: &InvocationContext,
         op: &str,
+        body: Value,
+    ) -> DomainCommandReply {
+        self.command_at(app, ctx, op, 1, body)
+    }
+    fn command_at(
+        &self,
+        app: &Runtime,
+        ctx: &InvocationContext,
+        op: &str,
+        revision: u32,
         mut body: Value,
     ) -> DomainCommandReply {
         body["kind"] = json!(op);
         let frame = serde_json::to_vec(
-            &json!({"mode":"Command","protocol":"1.0-draft.1","schemaRevision":1,
+            &json!({"mode":"Command","protocol":"1.0-draft.1","schemaRevision":revision,
             "requestKey":self.h.ids.next_id(IdKind::Link),"body":body}),
         )
         .unwrap();
@@ -731,6 +741,83 @@ fn shared_skills_are_discovered_in_place_and_harness_skills_take_precedence() {
             "InvalidArgument"
         );
         app.shutdown().await;
+    });
+}
+
+#[test]
+fn a_person_disables_and_re_enables_a_skill_without_losing_it() {
+    let fx = Fx::new();
+    write_skill(&fx.shared, "alpha", &[("SKILL.md", "shared alpha")]);
+    write_skill(&fx.shared, "beta", &[("SKILL.md", "shared beta")]);
+    runtime().block_on(async {
+        let (user, agent, _reviewer) = fx.principals();
+        let app = boot(fx.composition()).await.unwrap();
+        confirm_observed(&fx, &app, &user);
+        let names = |app: &Runtime| -> Vec<String> {
+            app.effective_skills()
+                .unwrap()
+                .skills
+                .iter()
+                .map(|s| s.name.clone())
+                .collect()
+        };
+        assert_eq!(names(&app), ["alpha", "beta"]);
+        let before = app.effective_skills().unwrap().digest;
+        let page = discover(&fx, &app, &user);
+        let alpha = find(&page, "alpha", "shared").clone();
+        let toggle = |ctx: &InvocationContext, enabled: bool, expected: &Value| {
+            fx.command_at(
+                &app,
+                ctx,
+                "skills.set_enabled",
+                8,
+                json!({"instructionId":alpha["id"],"expectedRevision":expected,"enabled":enabled}),
+            )
+        };
+        // An agent is refused, and nothing changes.
+        assert_eq!(
+            refused(toggle(&agent, false, &alpha["revision"])),
+            "PermissionDenied"
+        );
+        assert_eq!(names(&app), ["alpha", "beta"]);
+        // A stale revision is refused.
+        assert_eq!(
+            refused(toggle(&user, false, &json!("99"))),
+            "RevisionConflict"
+        );
+        // A person disables it: it leaves the agents' effective skills but stays listed, with
+        // its history.
+        let disabled = applied(toggle(&user, false, &alpha["revision"]));
+        assert!(labels(&disabled).contains(&"disabled".into()), "{disabled}");
+        assert_eq!(names(&app), ["beta"]);
+        assert_ne!(app.effective_skills().unwrap().digest, before);
+        let page = discover(&fx, &app, &agent);
+        let listed = find(&page, "alpha", "shared");
+        assert!(labels(listed).contains(&"disabled".into()));
+        assert!(labels(listed).contains(&"inactive".into()));
+        let history = fx
+            .query(
+                &app,
+                &agent,
+                "skills.history",
+                json!({"instructionId":alpha["id"],"page":{"limit":10}}),
+            )
+            .unwrap();
+        assert_eq!(history["items"].as_array().unwrap().len(), 1);
+        // Disabling again changes nothing.
+        let again = applied(toggle(&user, false, &alpha["revision"]));
+        assert!(labels(&again).contains(&"disabled".into()));
+        // Re-enabling restores it, at the same revision.
+        let enabled = applied(toggle(&user, true, &alpha["revision"]));
+        assert!(!labels(&enabled).contains(&"disabled".into()), "{enabled}");
+        assert_eq!(names(&app), ["alpha", "beta"]);
+        assert_eq!(app.effective_skills().unwrap().digest, before);
+        let page = discover(&fx, &app, &agent);
+        assert!(labels(find(&page, "alpha", "shared")).contains(&"effective".into()));
+        // The flag survives a sync of the unchanged folders.
+        toggle(&user, false, &alpha["revision"]);
+        app.instructions().unwrap().sync().unwrap();
+        assert_eq!(names(&app), ["beta"]);
     });
 }
 
