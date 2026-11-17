@@ -8365,6 +8365,10 @@
         "id": {
           "$ref": "#/$defs/Id"
         },
+        "lessonIds": {
+          "$ref": "#/$defs/List_Id_0_128",
+          "x-since": 8
+        },
         "name": {
           "$ref": "#/$defs/Text1To256"
         },
@@ -9728,6 +9732,10 @@
         "ruleState": {
           "$ref": "#/$defs/RuleState"
         },
+        "skills": {
+          "$ref": "#/$defs/List_LessonSkillLink_0_128",
+          "x-since": 8
+        },
         "source": {
           "$ref": "#/$defs/LessonSource"
         },
@@ -9751,6 +9759,26 @@
         "challenges",
         "addressedBy",
         "deliveredSessions"
+      ],
+      "type": "object"
+    },
+    "LessonSkillLink": {
+      "additionalProperties": false,
+      "properties": {
+        "instructionId": {
+          "$ref": "#/$defs/Id"
+        },
+        "name": {
+          "$ref": "#/$defs/Text1To256"
+        },
+        "revision": {
+          "$ref": "#/$defs/Revision"
+        }
+      },
+      "required": [
+        "instructionId",
+        "name",
+        "revision"
       ],
       "type": "object"
     },
@@ -10526,6 +10554,14 @@
         "$ref": "#/$defs/LessonChallenge"
       },
       "maxItems": 500,
+      "minItems": 0,
+      "type": "array"
+    },
+    "List_LessonSkillLink_0_128": {
+      "items": {
+        "$ref": "#/$defs/LessonSkillLink"
+      },
+      "maxItems": 128,
       "minItems": 0,
       "type": "array"
     },

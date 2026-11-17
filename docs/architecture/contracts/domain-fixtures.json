@@ -14341,5 +14341,173 @@
     "raw": "{\"kind\":\"roles.history\",\"value\":{\"items\":[{\"id\":\"id-a\",\"revision\":\"1\",\"name\":\"fixture\",\"scope\":{\"kind\":\"Workspace\"},\"content\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"8\",\"mediaType\":\"text/plain\"},\"approved\":false,\"applicability\":[],\"author\":\"agent-a\",\"sessionId\":\"session-a\",\"rationale\":\"Fix the checklist order\",\"state\":\"Proposed\",\"approvalOutcome\":\"Pending\"}],\"hasMore\":false}}",
     "typedValid": false,
     "schemaValid": false
+  },
+  {
+    "id": "r8-input-skills.draft-lessons",
+    "entry": "domain-request.r8",
+    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"skills.draft\",\"scope\":{\"kind\":\"Workspace\"},\"name\":\"fixture\",\"content\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"8\",\"mediaType\":\"text/plain\"},\"lessonIds\":[\"claim-a\",\"claim-b\"]},\"schemaRevision\":8}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "reject-r1-input-skills.draft-lessons",
+    "entry": "domain-request",
+    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"skills.draft\",\"scope\":{\"kind\":\"Workspace\"},\"name\":\"fixture\",\"content\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"8\",\"mediaType\":\"text/plain\"},\"lessonIds\":[\"claim-a\",\"claim-b\"]}}",
+    "typedValid": false,
+    "schemaValid": false
+  },
+  {
+    "id": "reject-r8-input-skills.draft-lesson-id",
+    "entry": "domain-request.r8",
+    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"skills.draft\",\"scope\":{\"kind\":\"Workspace\"},\"name\":\"fixture\",\"content\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"8\",\"mediaType\":\"text/plain\"},\"lessonIds\":[\"\"]},\"schemaRevision\":8}",
+    "typedValid": false,
+    "schemaValid": false
+  },
+  {
+    "id": "r8-input-roles.draft-lessons",
+    "entry": "domain-request.r8",
+    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"roles.draft\",\"scope\":{\"kind\":\"Workspace\"},\"name\":\"fixture\",\"content\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"8\",\"mediaType\":\"text/plain\"},\"lessonIds\":[\"claim-a\",\"claim-b\"]},\"schemaRevision\":8}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "reject-r1-input-roles.draft-lessons",
+    "entry": "domain-request",
+    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"roles.draft\",\"scope\":{\"kind\":\"Workspace\"},\"name\":\"fixture\",\"content\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"8\",\"mediaType\":\"text/plain\"},\"lessonIds\":[\"claim-a\",\"claim-b\"]}}",
+    "typedValid": false,
+    "schemaValid": false
+  },
+  {
+    "id": "reject-r8-input-roles.draft-lesson-id",
+    "entry": "domain-request.r8",
+    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"roles.draft\",\"scope\":{\"kind\":\"Workspace\"},\"name\":\"fixture\",\"content\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"8\",\"mediaType\":\"text/plain\"},\"lessonIds\":[\"\"]},\"schemaRevision\":8}",
+    "typedValid": false,
+    "schemaValid": false
+  },
+  {
+    "id": "r8-input-approvals.review_queue",
+    "entry": "domain-request.r8",
+    "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"approvals.review_queue\",\"page\":{\"limit\":20}},\"schemaRevision\":8}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "r8-input-knowledge.search",
+    "entry": "domain-request.r8",
+    "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"knowledge.search\",\"scope\":{\"kind\":\"Workspace\"},\"text\":\"fixture\",\"tags\":[],\"kinds\":[],\"page\":{\"limit\":20},\"entityLimit\":20,\"claimLimit\":20},\"schemaRevision\":8}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "r8-input-knowledge.read",
+    "entry": "domain-request.r8",
+    "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"knowledge.read\",\"scope\":{\"kind\":\"Workspace\"},\"claimId\":\"id-a\"},\"schemaRevision\":8}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "r8-input-knowledge.subgraph",
+    "entry": "domain-request.r8",
+    "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"knowledge.subgraph\",\"scope\":{\"kind\":\"Workspace\"},\"query\":{\"entityIds\":[],\"claimIds\":[],\"predicates\":[],\"tags\":[],\"states\":[],\"maxDepth\":2,\"page\":{\"limit\":20},\"entityLimit\":20,\"claimLimit\":20,\"evidenceLimit\":20,\"neighborLimit\":20,\"includeSuperseded\":false,\"includeConflicts\":false,\"includeSupersessionChain\":false,\"includeEvidence\":false}},\"schemaRevision\":8}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "r8-input-knowledge.entity_bundle",
+    "entry": "domain-request.r8",
+    "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"knowledge.entity_bundle\",\"scope\":{\"kind\":\"Workspace\"},\"query\":{\"entityIds\":[\"entity-a\"],\"claimIds\":[],\"predicates\":[],\"tags\":[],\"states\":[],\"maxDepth\":2,\"page\":{\"limit\":20},\"entityLimit\":20,\"claimLimit\":20,\"evidenceLimit\":20,\"neighborLimit\":20,\"includeSuperseded\":false,\"includeConflicts\":false,\"includeSupersessionChain\":false,\"includeEvidence\":false}},\"schemaRevision\":8}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "r8-input-knowledge.entity_graph",
+    "entry": "domain-request.r8",
+    "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"knowledge.entity_graph\",\"scope\":{\"kind\":\"Workspace\"},\"query\":{\"entityIds\":[\"entity-a\"],\"claimIds\":[],\"predicates\":[],\"tags\":[],\"states\":[],\"maxDepth\":2,\"page\":{\"limit\":20},\"entityLimit\":20,\"claimLimit\":20,\"evidenceLimit\":20,\"neighborLimit\":20,\"includeSuperseded\":false,\"includeConflicts\":false,\"includeSupersessionChain\":false,\"includeEvidence\":false}},\"schemaRevision\":8}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "r8-input-knowledge.claim_bundle",
+    "entry": "domain-request.r8",
+    "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"knowledge.claim_bundle\",\"scope\":{\"kind\":\"Workspace\"},\"query\":{\"entityIds\":[],\"claimIds\":[\"claim-a\"],\"predicates\":[],\"tags\":[],\"states\":[],\"maxDepth\":2,\"page\":{\"limit\":20},\"entityLimit\":20,\"claimLimit\":20,\"evidenceLimit\":20,\"neighborLimit\":20,\"includeSuperseded\":false,\"includeConflicts\":false,\"includeSupersessionChain\":false,\"includeEvidence\":false}},\"schemaRevision\":8}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "r8-input-knowledge.expand_frontier",
+    "entry": "domain-request.r8",
+    "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"knowledge.expand_frontier\",\"scope\":{\"kind\":\"Workspace\"},\"query\":{\"entityIds\":[\"entity-a\"],\"claimIds\":[],\"predicates\":[],\"tags\":[],\"states\":[],\"maxDepth\":2,\"page\":{\"limit\":20},\"entityLimit\":20,\"claimLimit\":20,\"evidenceLimit\":20,\"neighborLimit\":20,\"includeSuperseded\":false,\"includeConflicts\":false,\"includeSupersessionChain\":false,\"includeEvidence\":false}},\"schemaRevision\":8}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "r8-input-knowledge.query",
+    "entry": "domain-request.r8",
+    "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"knowledge.query\",\"scope\":{\"kind\":\"Workspace\"},\"query\":{\"entityIds\":[],\"claimIds\":[],\"predicates\":[],\"tags\":[],\"states\":[],\"maxDepth\":2,\"page\":{\"limit\":20},\"entityLimit\":20,\"claimLimit\":20,\"evidenceLimit\":20,\"neighborLimit\":20,\"includeSuperseded\":false,\"includeConflicts\":false,\"includeSupersessionChain\":false,\"includeEvidence\":false}},\"schemaRevision\":8}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "r8-input-knowledge.tagged_lessons",
+    "entry": "domain-request.r8",
+    "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"knowledge.tagged_lessons\",\"scope\":{\"kind\":\"Workspace\"},\"tags\":[\"fixture\"],\"page\":{\"limit\":20}},\"schemaRevision\":8}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "r8-result-skills.history-lessons",
+    "entry": "operation-result.r8",
+    "raw": "{\"kind\":\"skills.history\",\"value\":{\"items\":[{\"id\":\"id-a\",\"revision\":\"1\",\"name\":\"fixture\",\"scope\":{\"kind\":\"Workspace\"},\"content\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"8\",\"mediaType\":\"text/plain\"},\"approved\":false,\"applicability\":[],\"lessonIds\":[\"claim-a\",\"claim-b\"]}],\"hasMore\":false}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "reject-r1-result-skills.history-lessons",
+    "entry": "operation-result",
+    "raw": "{\"kind\":\"skills.history\",\"value\":{\"items\":[{\"id\":\"id-a\",\"revision\":\"1\",\"name\":\"fixture\",\"scope\":{\"kind\":\"Workspace\"},\"content\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"8\",\"mediaType\":\"text/plain\"},\"approved\":false,\"applicability\":[],\"lessonIds\":[\"claim-a\",\"claim-b\"]}],\"hasMore\":false}}",
+    "typedValid": false,
+    "schemaValid": false
+  },
+  {
+    "id": "r8-result-roles.history-lessons",
+    "entry": "operation-result.r8",
+    "raw": "{\"kind\":\"roles.history\",\"value\":{\"items\":[{\"id\":\"id-a\",\"revision\":\"1\",\"name\":\"fixture\",\"scope\":{\"kind\":\"Workspace\"},\"content\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"8\",\"mediaType\":\"text/plain\"},\"approved\":false,\"applicability\":[],\"lessonIds\":[\"claim-a\",\"claim-b\"]}],\"hasMore\":false}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "reject-r1-result-roles.history-lessons",
+    "entry": "operation-result",
+    "raw": "{\"kind\":\"roles.history\",\"value\":{\"items\":[{\"id\":\"id-a\",\"revision\":\"1\",\"name\":\"fixture\",\"scope\":{\"kind\":\"Workspace\"},\"content\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"8\",\"mediaType\":\"text/plain\"},\"approved\":false,\"applicability\":[],\"lessonIds\":[\"claim-a\",\"claim-b\"]}],\"hasMore\":false}}",
+    "typedValid": false,
+    "schemaValid": false
+  },
+  {
+    "id": "r8-result-knowledge.search-skills",
+    "entry": "operation-result.r8",
+    "raw": "{\"kind\":\"knowledge.search\",\"value\":{\"items\":[{\"id\":\"id-a\",\"revision\":\"1\",\"kind\":\"Lesson\",\"subjectId\":\"id-a\",\"predicate\":\"fixture\",\"confidence\":0.5,\"state\":\"Active\",\"evidenceIds\":[],\"tags\":[],\"scope\":{\"kind\":\"Workspace\"},\"value\":\"A retained fact\",\"entryKind\":\"Lesson\",\"lifecycle\":\"Active\",\"origin\":\"User\",\"autonomous\":false,\"authorId\":\"actor-a\",\"createdAtMs\":\"1\",\"updatedAtMs\":\"2\",\"stale\":false,\"lesson\":{\"ruleState\":\"Effective\",\"effect\":\"UserInstruction\",\"effectiveAtMs\":\"5\",\"source\":\"RelayedReview\",\"sourceRef\":\"review-1\",\"quotedWords\":\"Always run fmt\",\"applicability\":{\"activities\":[\"implementing\"],\"paths\":[\"src/lib.rs\"],\"tools\":[],\"repositoryIds\":[]},\"recurrence\":\"1\",\"recurrenceThreshold\":\"3\",\"challenges\":[{\"id\":\"challenge-a\",\"state\":\"Open\",\"reason\":\"Breaks CI\",\"evidenceIds\":[],\"authorId\":\"actor-a\",\"openedAtMs\":\"6\"}],\"addressedBy\":[{\"kind\":\"Test\",\"name\":\"fmt_check\"}],\"deliveredSessions\":\"2\",\"lastDeliveredAtMs\":\"7\",\"skills\":[{\"instructionId\":\"skill-a\",\"name\":\"deploy\",\"revision\":\"2\"}]}}],\"hasMore\":false}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "reject-r2-result-knowledge.search-skills",
+    "entry": "operation-result.r2",
+    "raw": "{\"kind\":\"knowledge.search\",\"value\":{\"items\":[{\"id\":\"id-a\",\"revision\":\"1\",\"kind\":\"Lesson\",\"subjectId\":\"id-a\",\"predicate\":\"fixture\",\"confidence\":0.5,\"state\":\"Active\",\"evidenceIds\":[],\"tags\":[],\"scope\":{\"kind\":\"Workspace\"},\"value\":\"A retained fact\",\"entryKind\":\"Lesson\",\"lifecycle\":\"Active\",\"origin\":\"User\",\"autonomous\":false,\"authorId\":\"actor-a\",\"createdAtMs\":\"1\",\"updatedAtMs\":\"2\",\"stale\":false,\"lesson\":{\"ruleState\":\"Effective\",\"effect\":\"UserInstruction\",\"effectiveAtMs\":\"5\",\"source\":\"RelayedReview\",\"sourceRef\":\"review-1\",\"quotedWords\":\"Always run fmt\",\"applicability\":{\"activities\":[\"implementing\"],\"paths\":[\"src/lib.rs\"],\"tools\":[],\"repositoryIds\":[]},\"recurrence\":\"1\",\"recurrenceThreshold\":\"3\",\"challenges\":[{\"id\":\"challenge-a\",\"state\":\"Open\",\"reason\":\"Breaks CI\",\"evidenceIds\":[],\"authorId\":\"actor-a\",\"openedAtMs\":\"6\"}],\"addressedBy\":[{\"kind\":\"Test\",\"name\":\"fmt_check\"}],\"deliveredSessions\":\"2\",\"lastDeliveredAtMs\":\"7\",\"skills\":[{\"instructionId\":\"skill-a\",\"name\":\"deploy\",\"revision\":\"2\"}]}}],\"hasMore\":false}}",
+    "typedValid": false,
+    "schemaValid": false
+  },
+  {
+    "id": "r8-result-knowledge.tagged_lessons-skills",
+    "entry": "operation-result.r8",
+    "raw": "{\"kind\":\"knowledge.tagged_lessons\",\"value\":{\"items\":[{\"id\":\"id-a\",\"revision\":\"1\",\"kind\":\"Lesson\",\"subjectId\":\"id-a\",\"predicate\":\"fixture\",\"confidence\":0.5,\"state\":\"Active\",\"evidenceIds\":[],\"tags\":[],\"scope\":{\"kind\":\"Workspace\"},\"value\":\"A retained fact\",\"entryKind\":\"Lesson\",\"lifecycle\":\"Active\",\"origin\":\"User\",\"autonomous\":false,\"authorId\":\"actor-a\",\"createdAtMs\":\"1\",\"updatedAtMs\":\"2\",\"stale\":false,\"lesson\":{\"ruleState\":\"Effective\",\"effect\":\"UserInstruction\",\"effectiveAtMs\":\"5\",\"source\":\"RelayedReview\",\"sourceRef\":\"review-1\",\"quotedWords\":\"Always run fmt\",\"applicability\":{\"activities\":[\"implementing\"],\"paths\":[\"src/lib.rs\"],\"tools\":[],\"repositoryIds\":[]},\"recurrence\":\"1\",\"recurrenceThreshold\":\"3\",\"challenges\":[{\"id\":\"challenge-a\",\"state\":\"Open\",\"reason\":\"Breaks CI\",\"evidenceIds\":[],\"authorId\":\"actor-a\",\"openedAtMs\":\"6\"}],\"addressedBy\":[{\"kind\":\"Test\",\"name\":\"fmt_check\"}],\"deliveredSessions\":\"2\",\"lastDeliveredAtMs\":\"7\",\"skills\":[{\"instructionId\":\"skill-a\",\"name\":\"deploy\",\"revision\":\"2\"}]}}],\"hasMore\":false}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "reject-r2-result-knowledge.tagged_lessons-skills",
+    "entry": "operation-result.r2",
+    "raw": "{\"kind\":\"knowledge.tagged_lessons\",\"value\":{\"items\":[{\"id\":\"id-a\",\"revision\":\"1\",\"kind\":\"Lesson\",\"subjectId\":\"id-a\",\"predicate\":\"fixture\",\"confidence\":0.5,\"state\":\"Active\",\"evidenceIds\":[],\"tags\":[],\"scope\":{\"kind\":\"Workspace\"},\"value\":\"A retained fact\",\"entryKind\":\"Lesson\",\"lifecycle\":\"Active\",\"origin\":\"User\",\"autonomous\":false,\"authorId\":\"actor-a\",\"createdAtMs\":\"1\",\"updatedAtMs\":\"2\",\"stale\":false,\"lesson\":{\"ruleState\":\"Effective\",\"effect\":\"UserInstruction\",\"effectiveAtMs\":\"5\",\"source\":\"RelayedReview\",\"sourceRef\":\"review-1\",\"quotedWords\":\"Always run fmt\",\"applicability\":{\"activities\":[\"implementing\"],\"paths\":[\"src/lib.rs\"],\"tools\":[],\"repositoryIds\":[]},\"recurrence\":\"1\",\"recurrenceThreshold\":\"3\",\"challenges\":[{\"id\":\"challenge-a\",\"state\":\"Open\",\"reason\":\"Breaks CI\",\"evidenceIds\":[],\"authorId\":\"actor-a\",\"openedAtMs\":\"6\"}],\"addressedBy\":[{\"kind\":\"Test\",\"name\":\"fmt_check\"}],\"deliveredSessions\":\"2\",\"lastDeliveredAtMs\":\"7\",\"skills\":[{\"instructionId\":\"skill-a\",\"name\":\"deploy\",\"revision\":\"2\"}]}}],\"hasMore\":false}}",
+    "typedValid": false,
+    "schemaValid": false
   }
 ]

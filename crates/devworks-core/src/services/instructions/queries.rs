@@ -2,7 +2,7 @@
 use super::{
     HARNESS_ROOT_ID, InstructionService, SHARED_ROOT_ID, config_scope, invalid, item_visible,
     record, record_with_approval, revision_visible, visible_current, visible_item,
-    visible_revision,
+    visible_revision, with_lessons,
 };
 use crate::context::InvocationContext;
 use crate::operations::{roles as role_ops, skills as skill_ops};
@@ -290,8 +290,9 @@ impl InstructionService {
         } else {
             None
         };
+        let record = record_with_approval(snapshot.decisions(), &item, &r, effective)?;
         Ok((
-            record_with_approval(snapshot.decisions(), &item, &r, effective)?,
+            with_lessons(snapshot, ctx, record, &item.id, r.revision)?,
             item.version,
         ))
     }
@@ -326,7 +327,10 @@ impl InstructionService {
             |r| r.revision.to_string(),
         )?;
         Ok((
-            rows.try_into_page(|r| record_with_approval(snapshot.decisions(), &item, &r, None))?,
+            rows.try_into_page(|r| {
+                let record = record_with_approval(snapshot.decisions(), &item, &r, None)?;
+                with_lessons(snapshot, ctx, record, &item.id, r.revision)
+            })?,
             item.version,
         ))
     }
@@ -390,6 +394,16 @@ mod tests {
             _: &Id,
         ) -> Result<Option<StoredInstructionRevision>, StorageError> {
             Ok(None)
+        }
+        fn instruction_revision_lessons(&self, _: &Id, _: i64) -> Result<Vec<Id>, StorageError> {
+            Ok(Vec::new())
+        }
+        fn lesson_instruction_revisions(
+            &self,
+            _: &Id,
+            _: u16,
+        ) -> Result<Vec<(Id, i64)>, StorageError> {
+            Ok(Vec::new())
         }
     }
     fn item(id: &str, name: &str, origin: InstructionOrigin) -> StoredInstructionItem {

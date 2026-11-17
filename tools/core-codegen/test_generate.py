@@ -119,8 +119,9 @@ class SchemaRevisionRules(unittest.TestCase):
         self.assertEqual(carried['router.pin'], {3})
         self.assertEqual(carried['router.connections'], {2, 3})
         self.assertEqual(carried['router.configure'], {2, 3})
-        # Knowledge projections expose independent challenges at revision 3; full source labels are additive.
-        self.assertEqual(carried['knowledge.subgraph'], {2, 3})
+        # Knowledge projections expose independent challenges at revision 3 and the skills that name a
+        # lesson at revision 8; full source labels are additive.
+        self.assertEqual(carried['knowledge.subgraph'], {2, 3, 8})
         self.assertEqual(carried['knowledge.tag'], {2})
         self.assertEqual(carried['dreaming.revert'], {2})
         self.assertEqual(carried['knowledge.delete_by_source'], {3})
@@ -161,8 +162,9 @@ class SchemaRevisionRules(unittest.TestCase):
         self.assertEqual(generate.TYPES['ApprovalContent']['variants']['SavedOperation']['input'], 'SavedCommandInput')
         self.assertIn('SavedCommandInput', generate.SUPPORT)
         byname = {o['operation']: o for _, o in generate.operations()}
-        for name in ['approvals.review_queue', 'notifications.mark_read']:
-            self.assertEqual([r['revision'] for r in byname[name]['schemaRevisions']], [3])
+        # The review queue shows lessons, which list the skills that name them at revision 8.
+        self.assertEqual([r['revision'] for r in byname['approvals.review_queue']['schemaRevisions']], [3, 8])
+        self.assertEqual([r['revision'] for r in byname['notifications.mark_read']['schemaRevisions']], [3])
         self.assertEqual(byname['approvals.review_queue']['resultValueType'], 'KnowledgeReviewPage')
         self.assertEqual([r['revision'] for r in byname['notifications.settings']['schemaRevisions']], [1])
 

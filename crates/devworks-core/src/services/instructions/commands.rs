@@ -281,6 +281,7 @@ impl InstructionService {
                     expected: i.expected_revision.as_ref(),
                     name: &i.name,
                     rationale: i.rationale.as_ref(),
+                    lessons: i.lesson_ids.as_ref(),
                     confined: None,
                 };
                 self.draft(ctx, command, tx, kind, draft)
@@ -292,6 +293,7 @@ impl InstructionService {
                     expected: i.expected_revision.as_ref(),
                     name: &i.name,
                     rationale: i.rationale.as_ref(),
+                    lessons: i.lesson_ids.as_ref(),
                     confined: None,
                 };
                 self.draft(ctx, command, tx, kind, draft)
@@ -403,6 +405,7 @@ impl InstructionService {
                 return Err(invalid("instruction_rationale_unreviewable"));
             }
         }
+        let lessons = draft_lessons(tx, ctx, input.lessons)?;
         let prepared = command
             .prepared::<PreparedDraft>()
             .ok_or_else(|| invalid("instruction_content"))?;
@@ -524,6 +527,13 @@ impl InstructionService {
                 confined: confined.clone(),
             },
         )?;
+        // Revisions never change, so the links are recorded with the revision they describe (a
+        // person's save that changes nothing makes no revision and records none).
+        tx.instructions().link_instruction_revision_lessons(
+            &item.id,
+            revision.revision,
+            &lessons,
+        )?;
         let previous = item.active_revision;
         item.latest_revision = revision.revision;
         if human {
@@ -561,8 +571,12 @@ impl InstructionService {
                 "overrides": overrides.as_ref().map(|(id, r)| json!({"instructionId": id, "revision": r})),
             }),
         )?;
+        let mut reply = record(&item, &revision, None)?;
+        if !lessons.is_empty() {
+            reply.lesson_ids = Some(crate::protocol::support::BoundedList(lessons));
+        }
         Ok(DomainDecision::Applied {
-            result: result(kind, Op::Draft, record(&item, &revision, None)?),
+            result: result(kind, Op::Draft, reply),
         })
     }
 
@@ -1163,6 +1177,37 @@ impl InstructionService {
     }
 }
 
+/// The lessons a draft names, each a Knowledge lesson that exists and that the drafting principal
+/// may see (the same project and workspace rules as reading Knowledge), sorted and without
+/// repeats. An unknown lesson and one the principal may not see are refused the same way, so the
+/// refusal names nothing the caller cannot read.
+fn draft_lessons(
+    tx: &mut dyn WriteTransaction,
+    ctx: &InvocationContext,
+    named: Option<&crate::protocol::support::Items<Id>>,
+) -> Result<Vec<Id>, Failure> {
+    let Some(named) = named else {
+        return Ok(Vec::new());
+    };
+    let reach = crate::services::knowledge::reach(tx.authority(), ctx)?;
+    let mut lessons: Vec<Id> = Vec::new();
+    for id in &named.0 {
+        if lessons.contains(id) {
+            continue;
+        }
+        let seen = tx
+            .knowledge()
+            .knowledge_claim(id)?
+            .is_some_and(|claim| crate::services::knowledge::lesson_visible(ctx, &reach, &claim));
+        if !seen {
+            return Err(crate::services::sessions::not_found("lesson", id).into());
+        }
+        lessons.push(id.clone());
+    }
+    lessons.sort_by(|a, b| a.as_str().cmp(b.as_str()));
+    Ok(lessons)
+}
+
 struct Draft<'a> {
     scope: &'a DataScope,
     instruction_id: Option<&'a Id>,
@@ -1170,6 +1215,8 @@ struct Draft<'a> {
     name: &'a Label,
     /// Why the draft is made, kept on the revision.
     rationale: Option<&'a crate::protocol::support::Content>,
+    /// The lessons the draft came from, recorded as links to the revision.
+    lessons: Option<&'a crate::protocol::support::Items<Id>>,
     /// The project the draft (and any item it creates) is confined to.
     confined: Option<crate::protocol::ProjectId>,
 }

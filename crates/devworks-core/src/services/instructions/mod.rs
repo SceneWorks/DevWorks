@@ -501,7 +501,44 @@ pub(crate) fn record(
         }),
         // Set by `with_approval_outcome` where the staged approval is read.
         approval_outcome: None,
+        // Set by `with_lessons` where the revision's links are read.
+        lesson_ids: None,
     })
+}
+
+/// `record` plus the lessons the revision came from that the invocation may see (the record's
+/// `lessonIds`, absent when there are none). A lesson of another project, or one that was
+/// deleted, is left out, so a workspace revision never shows a project's lessons elsewhere.
+pub(crate) fn with_lessons(
+    snapshot: &dyn ReadSnapshot,
+    ctx: &InvocationContext,
+    mut record: InstructionRecord,
+    id: &Id,
+    revision: i64,
+) -> Result<InstructionRecord, Failure> {
+    let linked = snapshot
+        .instructions()
+        .instruction_revision_lessons(id, revision)?;
+    if linked.is_empty() {
+        return Ok(record);
+    }
+    let Some(reach) = crate::authority::reach::reach(snapshot.authority(), ctx)? else {
+        return Ok(record);
+    };
+    let mut seen = Vec::new();
+    for lesson in linked {
+        if snapshot
+            .knowledge()
+            .knowledge_claim(&lesson)?
+            .is_some_and(|c| crate::services::knowledge::lesson_visible(ctx, &reach, &c))
+        {
+            seen.push(lesson);
+        }
+    }
+    if !seen.is_empty() {
+        record.lesson_ids = Some(BoundedList(seen));
+    }
+    Ok(record)
 }
 
 /// The session that made a revision, from its recorded provenance.

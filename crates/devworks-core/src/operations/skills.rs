@@ -96,6 +96,13 @@ pub struct DraftInput {
     )]
     #[schemars(with = "Content", extend("x-since" = 8))]
     pub rationale: Option<Content>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Items<Id>", extend("x-since" = 8))]
+    pub lesson_ids: Option<Items<Id>>,
 }
 impl Check for DraftInput {
     fn check(&self) -> Result<(), String> {
@@ -105,6 +112,7 @@ impl Check for DraftInput {
         self.name.check()?;
         self.content.check()?;
         self.rationale.check()?;
+        self.lesson_ids.check()?;
         Ok(())
     }
 }
@@ -112,6 +120,9 @@ impl Revisioned for DraftInput {
     fn retain_revision(&mut self, revision: u32) {
         if revision < 8 {
             self.rationale = None;
+        }
+        if revision < 8 {
+            self.lesson_ids = None;
         }
     }
 }

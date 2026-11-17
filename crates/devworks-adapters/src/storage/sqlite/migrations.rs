@@ -702,6 +702,16 @@ pub const MIGRATIONS: &[Migration] = &[
         expected_sha256: "910fd21382ea8c47bd6daf7b0afad5ad9d4b0991bd51612abfa44186ce86d002",
         rebuilds_tables: false,
     },
+    // One new table and its index: a prior reader never reads it. A prior writer writes revisions
+    // without links (harmless), and a prior build's project purge refuses the unreviewed schema.
+    Migration {
+        version: 62,
+        minimum_reader: 57,
+        minimum_writer: 61,
+        sql: include_str!("migrations/0062_instruction_revision_lessons.sql"),
+        expected_sha256: "4348986bcf858ecf1989b6554f3ba3c31bf40cf754363a4a8e35758aa6c848e6",
+        rebuilds_tables: false,
+    },
 ];
 /// Recorded checksum of migration 17; a test fails if the shipped text changes.
 pub const MIGRATION_0017_SHA256: &str =

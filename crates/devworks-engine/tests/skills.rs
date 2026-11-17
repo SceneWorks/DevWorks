@@ -14,6 +14,7 @@ use devworks_adapters::process::NativeProcessHost;
 use devworks_core::authority::HostAuthority;
 use devworks_core::authority::service::bind_principal;
 use devworks_core::context::{InvocationContext, PrincipalKind};
+use devworks_core::ports::retrieval::NoVectorIndex;
 use devworks_core::ports::skill_files::{SkillFile, SkillFileFault, SkillFiles};
 use devworks_core::ports::storage::*;
 use devworks_core::ports::{
@@ -23,6 +24,7 @@ use devworks_core::protocol::results::{DomainCommandReply, DomainDecision, Domai
 use devworks_core::protocol::{CommandReply, ProjectId};
 use devworks_core::services::artifacts::ArtifactService;
 use devworks_core::services::instructions::SkillRoots;
+use devworks_core::services::knowledge::KnowledgeService;
 use devworks_core::services::{
     UseCases, diagnostics::DiagnosticService, resources::ResourceService, runs::ControlService,
     sessions::SessionService,
@@ -187,10 +189,17 @@ impl Fx {
             browser: None,
             git: None,
             packages: None,
-            use_cases: UseCases::new().with_sessions(Arc::new(SessionService::new(
-                h.ids.clone(),
-                self.store.clone(),
-            ))),
+            use_cases: UseCases::new()
+                .with_sessions(Arc::new(SessionService::new(
+                    h.ids.clone(),
+                    self.store.clone(),
+                )))
+                .with_knowledge(Arc::new(KnowledgeService::new(
+                    h.ids.clone(),
+                    h.clock(),
+                    None,
+                    Arc::new(NoVectorIndex),
+                ))),
             consumers: vec![],
             indexing: None,
             config,
@@ -1284,6 +1293,108 @@ fn skill_draft_rationale_is_redacted_checked_and_replies_show_the_approval_outco
         assert_eq!((&back["revision"], &back["approvalOutcome"]), (&json!("1"), &json!("Approved")), "{back}");
         app.shutdown().await;
     });
+}
+
+/// A lesson the person records in `scope`; returns its claim id.
+fn record_lesson(
+    fx: &Fx,
+    app: &Runtime,
+    user: &InvocationContext,
+    scope: Value,
+    text: &str,
+) -> Value {
+    let receipt = applied(fx.command_at(app, user, "knowledge.record", 2, json!({"scope":scope,"batch":{
+        "entities":[{"clientId":"s","label":text,"entityType":"topic","aliases":[]}],"evidence":[],
+        "claims":[{"kind":"Lesson","subjectId":"s","predicate":"lesson","value":text,"confidence":0.8,
+            "evidenceIds":[],"tags":["deploy"],"lesson":{"source":"Prompt","applicability":{"activities":[],
+            "paths":[],"tools":[],"repositoryIds":[]}}}]}})));
+    receipt["claimIds"][0].clone()
+}
+
+#[test]
+fn a_skill_revision_records_the_lessons_it_came_from_and_both_sides_show_the_link() {
+    let fx = Fx::new();
+    runtime().block_on(async {
+        let (user, _, _) = fx.principals();
+        let app = boot(fx.composition()).await.unwrap();
+        let a = with_session_in(&fx, project_agent(&fx, &user, "agent-a", "project-a"), "session-a", "project-a");
+        let b = project_agent(&fx, &user, "agent-b", "project-b");
+        let in_a = ArtifactScope::Project(ProjectId(id("project-a")));
+        let general = record_lesson(&fx, &app, &user, json!({"kind":"Workspace"}), "Run the checks before deploying");
+        let of_a = record_lesson(&fx, &app, &user, in_a_scope("project-a"), "Project A deploys on Fridays");
+        let of_b = record_lesson(&fx, &app, &user, in_a_scope("project-b"), "Project B never deploys");
+        let draft = |who: &InvocationContext, item: Option<(&Value, &str)>, text: &str, lessons: Value| {
+            let mut body = json!({"scope":{"kind":"Workspace"},"name":"deploy","content":fx.upload_in(who, text, in_a.clone()),"lessonIds":lessons});
+            if let Some((id, expected)) = item {
+                body["instructionId"] = id.clone();
+                body["expectedRevision"] = json!(expected);
+            }
+            fx.command_at(&app, who, "skills.draft", 8, body)
+        };
+        // Lessons the drafter cannot see are refused like lessons that do not exist, and a
+        // refused draft stores nothing.
+        assert_eq!(refused(draft(&a, None, "Deploy v1.", json!([general, of_b]))), "NotFound", "another project's lesson");
+        assert_eq!(refused(draft(&a, None, "Deploy v1.", json!(["no-such-lesson"]))), "NotFound", "an unknown lesson");
+        let entity = applied(fx.command_at(&app, &user, "knowledge.record", 2, json!({"scope":{"kind":"Workspace"},"batch":{
+            "entities":[{"clientId":"s","label":"Not a lesson","entityType":"topic","aliases":[]}],"evidence":[],
+            "claims":[{"kind":"Fact","subjectId":"s","predicate":"states","value":"Deploys are on Fridays","confidence":0.8,"evidenceIds":[],"tags":[]}]}})));
+        assert_eq!(refused(draft(&a, None, "Deploy v1.", json!([entity["claimIds"][0]]))), "NotFound", "a claim that is not a lesson");
+        assert!(discover(&fx, &app, &user)["items"].as_array().unwrap().iter().all(|r| r["name"] != "deploy"));
+        // The draft stores the links, sorted and without repeats, and replies with them.
+        let first = applied(draft(&a, None, "Deploy v1.", json!([of_a, general, general])));
+        let mut expected = vec![general.clone(), of_a.clone()];
+        expected.sort_by(|x, y| x.as_str().cmp(&y.as_str()));
+        assert_eq!(first["lessonIds"], json!(expected), "{first}");
+        let item = first["id"].clone();
+        let stored = read(&*fx.store, |s| s.instructions().instruction_revision_lessons(&id(item.as_str().unwrap()), 1));
+        assert_eq!(stored.iter().map(|l| json!(l.as_str())).collect::<Vec<_>>(), expected);
+        // A later revision names its own lessons; one that names none records none.
+        let second = applied(draft(&a, Some((&item, "1")), "Deploy v2.", json!([of_a])));
+        let third = applied(fx.command_at(&app, &a, "skills.draft", 8, json!({"scope":{"kind":"Workspace"},"instructionId":item,"expectedRevision":"2","name":"deploy","content":fx.upload_in(&a, "Deploy v3.", in_a.clone())})));
+        assert_eq!((second["lessonIds"].clone(), third.get("lessonIds")), (json!([of_a]), None), "{second} {third}");
+        // History at revision 8 returns the lessons of each revision; revision 1 callers never see them.
+        let history = |who: &InvocationContext, revision: u32| -> Vec<Value> {
+            fx.query_at(&app, who, "skills.history", revision, json!({"instructionId":item,"page":{"limit":10}})).unwrap()["items"].as_array().unwrap().clone()
+        };
+        let rows = history(&a, 8);
+        assert_eq!(rows.iter().map(|r| r["revision"].as_str().unwrap()).collect::<Vec<_>>(), ["3", "2", "1"]);
+        assert_eq!((rows[0].get("lessonIds"), &rows[1]["lessonIds"], &rows[2]["lessonIds"]), (None, &json!([of_a]), &json!(expected)), "{rows:?}");
+        assert!(history(&a, 1).iter().all(|r| r.get("lessonIds").is_none()));
+        let read_at = fx.query_at(&app, &a, "skills.read", 8, json!({"instructionId":item,"revision":"1"})).unwrap();
+        assert_eq!(read_at["lessonIds"], json!(expected));
+        // The lesson lists the skill revisions that name it, in a read and in the lessons list.
+        let lesson_of = |who: &InvocationContext, scope: Value, claim: &Value, revision: u32| -> Value {
+            fx.query_at(&app, who, "knowledge.read", revision, json!({"scope":scope,"claimId":claim})).unwrap()["claims"][0]["lesson"].clone()
+        };
+        let skills = |lesson: &Value| -> Vec<(String, String)> {
+            lesson["skills"].as_array().map(|s| s.iter().map(|l| (l["name"].as_str().unwrap().to_owned(), l["revision"].as_str().unwrap().to_owned())).collect()).unwrap_or_default()
+        };
+        let shown = lesson_of(&a, in_a_scope("project-a"), &of_a, 8);
+        assert_eq!(skills(&shown), [("deploy".into(), "1".into()), ("deploy".into(), "2".into())], "{shown}");
+        assert_eq!(skills(&lesson_of(&a, json!({"kind":"Workspace"}), &general, 8)), [("deploy".into(), "1".into())]);
+        let listed = fx.query_at(&app, &a, "knowledge.tagged_lessons", 8, json!({"scope":in_a_scope("project-a"),"tags":["deploy"],"page":{"limit":10}})).unwrap();
+        let listed_skills: Vec<usize> = listed["items"].as_array().unwrap().iter().map(|c| skills(&c["lesson"]).len()).collect();
+        assert_eq!(listed_skills.iter().sum::<usize>(), 3, "{listed}");
+        assert_eq!(skills(&lesson_of(&a, in_a_scope("project-a"), &of_a, 2)), []);
+        assert!(lesson_of(&a, in_a_scope("project-a"), &of_a, 2).get("skills").is_none());
+        // Another project sees neither the confined drafts nor the lessons of project A.
+        assert_eq!(skills(&lesson_of(&b, json!({"kind":"Workspace"}), &general, 8)), []);
+        // A person's save is a workspace revision everyone can read. It names both lessons, and
+        // each viewer is shown the skill in the lessons they may read and the lessons they may see.
+        let fourth = applied(fx.command_at(&app, &user, "skills.draft", 8, json!({"scope":{"kind":"Workspace"},"instructionId":item,"expectedRevision":"3","name":"deploy","content":fx.upload(&user, "Deploy v4."),"lessonIds":[of_a,general]})));
+        assert_eq!(fourth["lessonIds"], json!(expected), "{fourth}");
+        assert_eq!(skills(&lesson_of(&b, json!({"kind":"Workspace"}), &general, 8)), [("deploy".into(), "4".into())]);
+        assert_eq!(skills(&lesson_of(&user, in_a_scope("project-a"), &of_a, 8)), [("deploy".into(), "1".into()), ("deploy".into(), "2".into()), ("deploy".into(), "4".into())]);
+        let seen_by_b = history(&b, 8);
+        assert_eq!(seen_by_b.len(), 1, "{seen_by_b:?}");
+        assert_eq!(seen_by_b[0]["lessonIds"], json!([general]), "a lesson of project A is not shown to project B");
+        assert_eq!(history(&user, 8)[0]["lessonIds"], json!(expected));
+        app.shutdown().await;
+    });
+}
+
+fn in_a_scope(project: &str) -> Value {
+    json!({"kind":"Project","projectId":project})
 }
 
 fn project_agent(

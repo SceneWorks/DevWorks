@@ -4885,6 +4885,10 @@
               "const": "skills.draft",
               "type": "string"
             },
+            "lessonIds": {
+              "$ref": "#/$defs/List_Id_0_128",
+              "x-since": 8
+            },
             "name": {
               "$ref": "#/$defs/Text1To256"
             },
@@ -5019,6 +5023,10 @@
             "kind": {
               "const": "roles.draft",
               "type": "string"
+            },
+            "lessonIds": {
+              "$ref": "#/$defs/List_Id_0_128",
+              "x-since": 8
             },
             "name": {
               "$ref": "#/$defs/Text1To256"

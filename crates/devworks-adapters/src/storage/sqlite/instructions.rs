@@ -241,6 +241,32 @@ fn by_approval(
     .transpose()
 }
 
+fn revision_lessons(conn: &Connection, key: &Id, number: i64) -> Result<Vec<Id>, StorageError> {
+    let mut statement = db(conn.prepare(
+        "SELECT lesson_id FROM instruction_revision_lessons WHERE instruction_id=?1 AND revision=?2 ORDER BY lesson_id",
+    ))?;
+    db(statement.query_map(params![key.as_str(), number], |r| r.get::<_, String>(0)))?
+        .map(|r| db(r).and_then(id))
+        .collect()
+}
+fn lesson_revisions(
+    conn: &Connection,
+    lesson: &Id,
+    limit: u16,
+) -> Result<Vec<(Id, i64)>, StorageError> {
+    page(limit)?;
+    let mut statement = db(conn.prepare(
+        "SELECT instruction_id,revision FROM instruction_revision_lessons WHERE lesson_id=?1 ORDER BY instruction_id,revision LIMIT ?2",
+    ))?;
+    db(
+        statement.query_map(params![lesson.as_str(), i64::from(limit)], |r| {
+            Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?))
+        }),
+    )?
+    .map(|r| db(r).and_then(|(key, number)| Ok((id(key)?, number))))
+    .collect()
+}
+
 macro_rules! instruction_reads {
     ($ty:ty) => {
         impl InstructionRead for $ty {
@@ -278,6 +304,20 @@ macro_rules! instruction_reads {
                 approval: &Id,
             ) -> Result<Option<StoredInstructionRevision>, StorageError> {
                 by_approval(self.conn, approval)
+            }
+            fn instruction_revision_lessons(
+                &self,
+                key: &Id,
+                number: i64,
+            ) -> Result<Vec<Id>, StorageError> {
+                revision_lessons(self.conn, key, number)
+            }
+            fn lesson_instruction_revisions(
+                &self,
+                lesson: &Id,
+                limit: u16,
+            ) -> Result<Vec<(Id, i64)>, StorageError> {
+                lesson_revisions(self.conn, lesson, limit)
             }
         }
     };
@@ -490,6 +530,20 @@ impl InstructionRepository for Unit<'_> {
                 Revision::new(number.max(1)).expect("positive"),
                 Revision::new(number.max(1)).expect("positive"),
             ));
+        }
+        Ok(())
+    }
+    fn link_instruction_revision_lessons(
+        &mut self,
+        key: &Id,
+        number: i64,
+        lessons: &[Id],
+    ) -> Result<(), StorageError> {
+        for lesson in lessons {
+            db(self.conn.execute(
+                "INSERT INTO instruction_revision_lessons(instruction_id,revision,lesson_id) VALUES(?1,?2,?3)",
+                params![key.as_str(), number, lesson.as_str()],
+            ))?;
         }
         Ok(())
     }
