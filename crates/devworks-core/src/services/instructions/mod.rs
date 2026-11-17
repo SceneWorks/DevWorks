@@ -226,7 +226,9 @@ pub(crate) fn config_scope(
 pub(crate) fn visible(ctx: &InvocationContext, scope: &ConfigScope) -> bool {
     match scope {
         ConfigScope::Workspace => true,
-        ConfigScope::Project(p) => crate::services::sessions::project_visible(ctx, Some(p)),
+        ConfigScope::Project(p) | ConfigScope::Repository { project: p, .. } => {
+            crate::services::sessions::project_visible(ctx, Some(p))
+        }
     }
 }
 /// The item if it exists, is of `kind` and is visible to the invocation (else `NotFound`).
@@ -333,7 +335,7 @@ pub fn role_item_id(role: AgentRole, scope: &ConfigScope) -> Id {
     let key = role.as_str();
     let id = match scope {
         ConfigScope::Workspace => format!("role-{key}"),
-        ConfigScope::Project(p) => format!(
+        ConfigScope::Project(p) | ConfigScope::Repository { project: p, .. } => format!(
             "role-{key}-{}",
             &crate::fingerprint::sha256_hex(p.0.as_str().as_bytes())[..24]
         ),

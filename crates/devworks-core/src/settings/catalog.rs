@@ -16,7 +16,7 @@ use serde_json::{Value, json};
 /// Revision of every value schema in this catalog build.
 pub const SCHEMA_REVISION: i64 = 1;
 /// Revision of the catalog (keys, defaults, Help IDs) recorded with every saved revision.
-pub const CATALOG_REVISION: i64 = 10;
+pub const CATALOG_REVISION: i64 = 11;
 
 /// Settings categories, in navigation order. Labels follow the approved UI reference.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -84,11 +84,13 @@ impl Category {
     }
 }
 
-/// Scope kinds a setting may be configured at. Inheritance runs Workspace → Project.
+/// Scope kinds a setting may be configured at. Inheritance runs Workspace → Project →
+/// Repository.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum ScopeKind {
     Workspace,
     Project,
+    Repository,
 }
 
 /// When a saved change takes effect for already-running work (SET-04).
@@ -352,6 +354,13 @@ impl SettingDescriptor {
 
 const WORKSPACE: &[ScopeKind] = &[ScopeKind::Workspace];
 const INHERITED: &[ScopeKind] = &[ScopeKind::Workspace, ScopeKind::Project];
+/// Delivery settings also apply per repository. `delivery.mandatoryReview` is not one of them:
+/// it is a harness protection that no scope can set, so a repository cannot weaken it.
+const DELIVERY: &[ScopeKind] = &[
+    ScopeKind::Workspace,
+    ScopeKind::Project,
+    ScopeKind::Repository,
+];
 
 macro_rules! setting {
     ($key:expr, $label:expr, $desc:expr, $cat:ident, $scopes:expr, $kind:expr, $default:expr, $adopt:ident) => {
@@ -710,7 +719,7 @@ fn build() -> Vec<SettingDescriptor> {
             "Auto-Merge",
             "Not yet active: DevWorks does not merge pull requests yet, so this switch changes nothing. Once merging is built, work is committed, pushed, review feedback addressed and the pull request merged when all required checks pass.",
             Delivery,
-            INHERITED,
+            DELIVERY,
             ValueKind::Bool,
             true,
             NextAdmission
@@ -731,7 +740,7 @@ fn build() -> Vec<SettingDescriptor> {
             "Review fix cycles",
             "Not yet active: the review/fix cycle is not built yet, so this value changes nothing. Once it is, this is the maximum number of review/fix cycles before asking for help. Engineering default.",
             Delivery,
-            INHERITED,
+            DELIVERY,
             ValueKind::Integer { min: 1, max: 20 },
             3,
             NextAdmission
@@ -777,7 +786,7 @@ fn build() -> Vec<SettingDescriptor> {
             "Automated review wait (seconds)",
             "Not yet active: the review gate is not built yet, so this value changes nothing. Once it is, this is the finite wait for a registered review source before the gate escalates. Engineering default.",
             Delivery,
-            INHERITED,
+            DELIVERY,
             POSITIVE,
             900,
             NextAdmission

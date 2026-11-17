@@ -65,6 +65,7 @@ pub mod project_purge;
 pub mod projects_ops;
 pub mod projects_screen;
 pub mod repository_deletion;
+pub mod repository_delivery;
 pub mod route;
 pub mod routing;
 pub mod screen;

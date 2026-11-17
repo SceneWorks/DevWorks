@@ -67,7 +67,8 @@ def setting_rows():
             raise ValueError(f'unknown setting macro shape: {args[0]}')
         key = json.loads(args[0]) if args[0].startswith('"') else constants[args[0]]
         label, description = json.loads(args[1]), json.loads(args[2])
-        scope = {'WORKSPACE': 'Workspace only', 'INHERITED': 'Workspace → Project'}[args[4]]
+        scope = {'WORKSPACE': 'Workspace only', 'INHERITED': 'Workspace → Project',
+                 'DELIVERY': 'Workspace → Project → Repository'}[args[4]]
         default = re.sub(r'\s+', ' ', args[6])
         rows.append((key, label, description, args[3], scope, default, args[7], args[8] if len(args) == 9 else 'Configurable'))
     for variant, default in re.findall(r'role\(AgentRole::(\w+), \|\| \{\s*json!\(\s*("(?:[^"\\]|\\.)*")\s*\)\s*\}\)', source):
@@ -80,7 +81,7 @@ def setting_rows():
 
 def settings_reference():
     lines = ['# Complete settings reference', '',
-             'This local reference is maintained against the app’s actual settings catalog. Workspace-only keys cannot be overridden by a project. Inherited keys resolve Workspace → Project; clearing a project override restores inheritance. Defaults are defaults, not evidence that a runtime is installed.', '',
+             'This local reference is maintained against the app’s actual settings catalog. Workspace-only keys cannot be overridden by a project. Inherited keys resolve Workspace → Project; clearing a project override restores inheritance. Delivery keys also resolve through a repository of the project (Workspace → Project → Repository), and a repository’s value applies to delivery in that repository only; the mandatory review is a harness protection that no scope, a repository included, can change. Defaults are defaults, not evidence that a runtime is installed.', '',
              'Adoption: Immediate applies on save; NextSafeStep waits for the next safe context boundary; NextAdmission affects later admitted work; NewClonesOnly affects new repository clones. HarnessEnforced values are visible policies, not editable relaxations. Agent proposals and current authority still apply.', '',
              'Use [Settings](help:settings) for safe edits and [Recovery](help:recovery) for conflicts or uncertain saves. Values rendered as Rust expressions retain their exact catalog default; byte limits use bytes.', '']
     for key, label, description, category, scope, default, adoption, policy in setting_rows():

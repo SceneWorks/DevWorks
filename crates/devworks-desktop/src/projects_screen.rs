@@ -155,6 +155,8 @@ pub struct ProjectsScreen {
     pub deletion_supported: Option<bool>,
     pub message: Option<(Tone, String)>,
     pub base: BTreeMap<String, BaseDirectory>,
+    /// Each repository's delivery settings in the project it is viewed in.
+    pub delivery: crate::repository_delivery::DeliveryByRepository,
     pub texts: BTreeMap<(String, bool), TextState>,
     pub git: BTreeMap<String, GitView>,
 }
@@ -183,6 +185,9 @@ pub(crate) enum Action {
     ChooseBase(String),
     SaveBase(String),
     InheritBase(String),
+    /// Read, and save, one repository's delivery settings (project ID, repository ID).
+    LoadDelivery(String, String),
+    SaveDelivery(String, String),
     LoadTexts(String),
     InspectGit(String),
     DiffGit(String),
@@ -595,6 +600,16 @@ impl ProjectsScreen {
                                         repository_detail(
                                             ui, projects, r, &v.names, enabled, actions,
                                         );
+                                        if let Some(p) = project {
+                                            crate::repository_delivery::section(
+                                                ui,
+                                                &mut projects.delivery,
+                                                p.id.0.as_str(),
+                                                r.id.as_str(),
+                                                enabled,
+                                                actions,
+                                            );
+                                        }
                                         let Some(indexing) = v.indexing else {
                                             return;
                                         };

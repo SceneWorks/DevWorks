@@ -6139,6 +6139,10 @@
               "const": "settings.save_revision",
               "type": "string"
             },
+            "repositoryId": {
+              "$ref": "#/$defs/Id",
+              "x-since": 8
+            },
             "scope": {
               "$ref": "#/$defs/DataScope"
             }
@@ -10585,6 +10589,10 @@
             "page": {
               "$ref": "#/$defs/PageRequest"
             },
+            "repositoryId": {
+              "$ref": "#/$defs/Id",
+              "x-since": 8
+            },
             "scope": {
               "$ref": "#/$defs/DataScope"
             }
@@ -10610,6 +10618,10 @@
               "const": "settings.validate",
               "type": "string"
             },
+            "repositoryId": {
+              "$ref": "#/$defs/Id",
+              "x-since": 8
+            },
             "scope": {
               "$ref": "#/$defs/DataScope"
             }
@@ -10631,6 +10643,10 @@
             "kind": {
               "const": "settings.explain_source",
               "type": "string"
+            },
+            "repositoryId": {
+              "$ref": "#/$defs/Id",
+              "x-since": 8
             },
             "scope": {
               "$ref": "#/$defs/DataScope"

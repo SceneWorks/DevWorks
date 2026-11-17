@@ -1301,5 +1301,23 @@ for name,t in [('mcp.discover','Page<McpCapability>'),('mcp.capabilities','Page<
  case('r8-result-'+name,'operation-result.r8',{'kind':name,'value':sample(t)})
 case('reject-r1-result-mcp-server-configuration','operation-result',{'kind':'mcp.configure','value':mcp_server_r8},False,False)
 case('reject-r8-result-mcp-server-secret-value','operation-result.r8',{'kind':'mcp.connect','value':{**mcp_server_r8,'configuration':{**mcp_http,'token':'synthetic-not-a-token'}}},False,False)
+
+# Schema revision 8 (repository settings): settings.* inputs may name one repository of the
+# addressed project (`repositoryId`, with a Project scope), and an entry from a repository's own
+# layer names it (`sourceRepositoryId`). Earlier revisions never see either member.
+def repository_settings(name,mode,revision=8):
+ obj=request(name,mode)
+ obj['body']['scope']={'kind':'Project','projectId':'project-a'}
+ obj['body']['repositoryId']='repo-a'
+ if revision is not None:obj['schemaRevision']=revision
+ return obj
+for name,mode in [('settings.read_effective','Query'),('settings.validate','Query'),('settings.save_revision','Command'),('settings.explain_source','Query')]:
+ case('r8-input-'+name+'-repository','domain-request.r8',repository_settings(name,mode))
+ case('reject-r1-input-'+name+'-repository','domain-request',repository_settings(name,mode,None),False,False)
+ case('r8-input-'+name,'domain-request.r8',{**request(name,mode),'schemaRevision':8})
+repository_entry={**sample('SettingEntry'),'sourceScope':{'kind':'Project','projectId':'project-a'},'sourceRepositoryId':'repo-a'}
+for name in ['settings.read_effective','settings.save_revision','settings.explain_source']:
+ case('r8-result-'+name+'-repository','operation-result.r8',{'kind':name,'value':{'items':[repository_entry],'hasMore':False}})
+ case('reject-r1-result-'+name+'-repository','operation-result',{'kind':name,'value':{'items':[repository_entry],'hasMore':False}},False,False)
 (D/'domain-fixtures.json').write_text(json.dumps(CASES,indent=2)+'\n')
 print(json.dumps({'fixtures':len(CASES),'positive':sum(c['typedValid'] for c in CASES),'negative':sum(not c['typedValid'] for c in CASES),'inputOperationModes':sum(2 if d['mode']=='Hybrid' else 1 for d in OPS.values()),'resultOperations':len(OPS)+len(LEGACY_RESULTS)}))

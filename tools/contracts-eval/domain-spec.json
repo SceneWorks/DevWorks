@@ -1984,7 +1984,11 @@
         "key": "Label",
         "value": "SchemaValue",
         "source_scope": "DataScope",
-        "revision": "Revision"
+        "revision": "Revision",
+        "source_repository_id": "?Id"
+      },
+      "since": {
+        "source_repository_id": 8
       }
     },
     "ValidationIssue": {
@@ -10063,51 +10067,67 @@
       "mode": "Query",
       "fields": {
         "scope": "DataScope",
+        "repository_id": "?Id",
         "keys": "Items<Label>",
         "page": "PageRequest"
       },
       "result": "Page<SettingEntry>",
       "effect": "Local",
       "authority": "Scoped",
-      "rules": ""
+      "rules": "",
+      "since": {
+        "repository_id": 8
+      }
     },
     "settings.validate": {
       "operation": "settings.validate",
       "mode": "Query",
       "fields": {
         "scope": "DataScope",
+        "repository_id": "?Id",
         "expected_revision": "Revision",
         "entries": "NonEmpty<SettingAssignment>"
       },
       "result": "ValidationReport",
       "effect": "Local",
       "authority": "Scoped",
-      "rules": ""
+      "rules": "",
+      "since": {
+        "repository_id": 8
+      }
     },
     "settings.save_revision": {
       "operation": "settings.save_revision",
       "mode": "Command",
       "fields": {
         "scope": "DataScope",
+        "repository_id": "?Id",
         "expected_revision": "Revision",
         "entries": "NonEmpty<SettingAssignment>"
       },
       "result": "Page<SettingEntry>",
       "effect": "Local",
       "authority": "Configuration",
-      "rules": "Versioned known keys with exact descriptor schemas; caller cannot self-set source_scope/revision as authority. Secret references only, no plaintext credentials. github.issueTriageIntervalSeconds is an app-only positive integer (default1800) with no per-project override; reviews.automationWaitSeconds is a positive finite inherited interval (technical default900). Validate descriptor types and re-evaluate persisted pacing from last actual admission without catch-up credits."
+      "rules": "Versioned known keys with exact descriptor schemas; caller cannot self-set source_scope/revision as authority. Secret references only, no plaintext credentials. github.issueTriageIntervalSeconds is an app-only positive integer (default1800) with no per-project override; reviews.automationWaitSeconds is a positive finite inherited interval (technical default900). Schema revision 8 adds repository_id: with scope Project, it addresses that project's repository scope (inheritance Workspace, Project, Repository) and the repository must belong to the project; Workspace scope refuses it. delivery.mandatoryReview stays a workspace-only harness protection and cannot be set or weakened at any scope. Validate descriptor types and re-evaluate persisted pacing from last actual admission without catch-up credits.",
+      "since": {
+        "repository_id": 8
+      }
     },
     "settings.explain_source": {
       "operation": "settings.explain_source",
       "mode": "Query",
       "fields": {
         "scope": "DataScope",
+        "repository_id": "?Id",
         "key": "Label"
       },
       "result": "Page<SettingEntry>",
       "effect": "Local",
       "authority": "Scoped",
-      "rules": ""
+      "rules": "",
+      "since": {
+        "repository_id": 8
+      }
     },
     "router.catalog": {
       "operation": "router.catalog",
@@ -11625,6 +11645,22 @@
       8
     ],
     "mcp.connect": [
+      1,
+      8
+    ],
+    "settings.read_effective": [
+      1,
+      8
+    ],
+    "settings.validate": [
+      1,
+      8
+    ],
+    "settings.save_revision": [
+      1,
+      8
+    ],
+    "settings.explain_source": [
       1,
       8
     ],

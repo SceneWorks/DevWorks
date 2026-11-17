@@ -5337,6 +5337,13 @@ pub struct SettingEntry {
     pub value: SchemaValue,
     pub source_scope: DataScope,
     pub revision: Revision,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Id", extend("x-since" = 8))]
+    pub source_repository_id: Option<Id>,
 }
 impl Check for SettingEntry {
     fn check(&self) -> Result<(), String> {
@@ -5344,11 +5351,20 @@ impl Check for SettingEntry {
         self.value.check()?;
         self.source_scope.check()?;
         self.revision.check()?;
+        self.source_repository_id.check()?;
         crate::protocol::rules::record(
             "SettingEntry",
             &serde_json::to_value(self).map_err(|e| e.to_string())?,
         )?;
         Ok(())
+    }
+}
+
+impl Revisioned for SettingEntry {
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 8 {
+            self.source_repository_id = None;
+        }
     }
 }
 

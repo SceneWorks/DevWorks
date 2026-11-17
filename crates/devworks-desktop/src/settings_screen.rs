@@ -1049,6 +1049,7 @@ fn source_label(s: &Source) -> String {
     match s {
         Source::Workspace { revision } => format!("Workspace (revision {revision})"),
         Source::Project { revision } => format!("Project (revision {revision})"),
+        Source::Repository { revision } => format!("Repository (revision {revision})"),
         other => other.label().to_owned(),
     }
 }

@@ -91,7 +91,9 @@ impl ApprovalService {
             "schemaRevision": schema_revision.to_string(), "input": input});
         let scope = match &preview.scope {
             ConfigScope::Workspace => json!({"kind": "Workspace"}),
-            ConfigScope::Project(p) => json!({"kind": "Project", "projectId": p}),
+            ConfigScope::Project(p) | ConfigScope::Repository { project: p, .. } => {
+                json!({"kind": "Project", "projectId": p})
+            }
         };
         let proposal: crate::operations::approvals::ProposeInput = serde_json::from_value(json!({
             "scope": scope,

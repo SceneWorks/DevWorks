@@ -14,6 +14,10 @@ pub enum ProjectsSlot {
     ProjectSettings(String),
     ProjectSettingsHealth(String),
     ProjectSettingsSave(String),
+    /// A repository's delivery settings in one project (project ID, repository ID): the read,
+    /// and the save.
+    RepositoryDelivery(String, String),
+    RepositoryDeliverySave(String, String),
     /// A repository's README (`true`) or summary text.
     RepositoryText(String, bool),
     /// The artifact content of a repository's README (`true`) or summary.
