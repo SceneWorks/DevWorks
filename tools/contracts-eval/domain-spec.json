@@ -1358,14 +1358,16 @@
         "session_id": "?Id",
         "rationale": "?Content",
         "state": "?InstructionState",
-        "approval_outcome": "?ApprovalState"
+        "approval_outcome": "?ApprovalState",
+        "lesson_ids": "?Items<Id>"
       },
       "since": {
         "author": 8,
         "session_id": 8,
         "rationale": 8,
         "state": 8,
-        "approval_outcome": 8
+        "approval_outcome": 8,
+        "lesson_ids": 8
       }
     },
     "ProposalRecord": {
@@ -3842,7 +3844,19 @@
         "addressed_by": "Items<LessonAddress>",
         "delivered_sessions": "Counter",
         "last_delivered_at_ms": "?Counter",
-        "reason": "?Content"
+        "reason": "?Content",
+        "skills": "?Items<LessonSkillLink>"
+      },
+      "since": {
+        "skills": 8
+      }
+    },
+    "LessonSkillLink": {
+      "kind": "record",
+      "fields": {
+        "instruction_id": "Id",
+        "name": "Label",
+        "revision": "Revision"
       }
     },
     "KnowledgeRelation": {
@@ -9007,14 +9021,16 @@
         "expected_revision": "?Revision",
         "name": "Label",
         "content": "ArtifactRef",
-        "rationale": "?Content"
+        "rationale": "?Content",
+        "lesson_ids": "?Items<Id>"
       },
       "result": "InstructionRecord",
       "effect": "Local",
       "authority": "Scoped",
       "rules": "Stage local override or new candidate; shared original untouched and no activation by writing.",
       "since": {
-        "rationale": 8
+        "rationale": 8,
+        "lesson_ids": 8
       }
     },
     "skills.propose": {
@@ -9091,14 +9107,16 @@
         "expected_revision": "?Revision",
         "name": "Label",
         "content": "ArtifactRef",
-        "rationale": "?Content"
+        "rationale": "?Content",
+        "lesson_ids": "?Items<Id>"
       },
       "result": "InstructionRecord",
       "effect": "Local",
       "authority": "Scoped",
       "rules": "Stage local override or new candidate; shared original untouched and no activation by writing.",
       "since": {
-        "rationale": 8
+        "rationale": 8,
+        "lesson_ids": 8
       }
     },
     "roles.propose": {
@@ -11803,12 +11821,14 @@
     "knowledge.search": [
       1,
       2,
-      3
+      3,
+      8
     ],
     "knowledge.read": [
       1,
       2,
-      3
+      3,
+      8
     ],
     "knowledge.record": [
       1,
@@ -11834,32 +11854,38 @@
     "knowledge.subgraph": [
       1,
       2,
-      3
+      3,
+      8
     ],
     "knowledge.entity_bundle": [
       1,
       2,
-      3
+      3,
+      8
     ],
     "knowledge.entity_graph": [
       1,
       2,
-      3
+      3,
+      8
     ],
     "knowledge.claim_bundle": [
       1,
       2,
-      3
+      3,
+      8
     ],
     "knowledge.expand_frontier": [
       1,
       2,
-      3
+      3,
+      8
     ],
     "knowledge.query": [
       1,
       2,
-      3
+      3,
+      8
     ],
     "knowledge.promote": [
       1,
@@ -11868,7 +11894,8 @@
     "knowledge.tagged_lessons": [
       1,
       2,
-      3
+      3,
+      8
     ],
     "knowledge.relate": [
       1,
@@ -12178,7 +12205,8 @@
       3
     ],
     "approvals.review_queue": [
-      3
+      3,
+      8
     ],
     "notifications.mark_read": [
       3

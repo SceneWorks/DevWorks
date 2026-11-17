@@ -1101,6 +1101,14 @@ impl KnowledgeService {
             },
             _ => return Err(invalid("knowledge_operation")),
         };
+        // Every claim a bundle carries shows the skills that name it.
+        let read = match read {
+            Read::Bundle(mut b) => {
+                b.claims.0 = super::with_skills_all(snapshot, ctx, b.claims.0)?;
+                Read::Bundle(b)
+            }
+            summary => summary,
+        };
         Ok((read, revision))
     }
 }

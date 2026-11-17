@@ -609,6 +609,9 @@ impl InstructionsPanel {
                         if let Some(why) = &record.rationale {
                             widgets::caption(ui, format!("Why: {}", why.0));
                         }
+                        if let Some(lessons) = iop::learned_from(record) {
+                            widgets::caption(ui, lessons);
+                        }
                         if self.detail.shown == Some(revision) {
                             widgets::caption(ui, "shown");
                         } else if widgets::secondary_button(

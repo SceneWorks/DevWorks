@@ -882,6 +882,94 @@ fn upgrade_counts_knowledge_tallies_and_moves_each_mcp_catalog_apart() {
     }
 }
 
+/// Migration 62 on a store with skills and lessons already in it: every existing row is kept,
+/// no revision has a link, and a link between an existing revision and lesson is then recorded
+/// and read from both sides. A link to a lesson or revision that does not exist is refused.
+#[test]
+fn upgrade_adds_revision_lesson_links_beside_existing_skills_and_lessons() {
+    let h = Harness::new();
+    drop(SqliteStore::open_with(h.config(), &through(61)).unwrap());
+    let has_table = |name: &str| -> bool {
+        h.raw()
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM sqlite_schema WHERE name=?1)",
+                [name],
+                |r| r.get(0),
+            )
+            .unwrap()
+    };
+    assert!(!has_table("instruction_revision_lessons"));
+    h.raw()
+        .execute_batch(
+            "INSERT INTO actors VALUES('human-a','human','Human');
+             INSERT INTO knowledge_entities(id,scope_key,revision,label,entity_type,aliases_json,canonical_key,author_id,created_at,updated_at)
+               VALUES('entity-a','workspace',1,'Habits','topic','[]','topic|habits','human-a',1,1);
+             INSERT INTO knowledge_claims(id,scope_key,revision,kind,entry_kind,lifecycle,subject_id,predicate,author_id,created_at,updated_at,body_json,rule_state,lesson_source)
+               VALUES('lesson-a','workspace',1,'Lesson','Lesson','Active','entity-a','lesson','human-a',1,1,'{}','Candidate','Prompt');
+             INSERT INTO instructions(id,kind,name,scope_key,project_id,origin,root_path,source_path,latest_revision,active_revision,enabled,present,version,created_at,updated_at,confined_project_id)
+               VALUES('skill-a','Skill','deploy','workspace',NULL,'Harness','/r','/r/skill-a',2,2,1,1,1,0,0,NULL);
+             INSERT INTO instruction_revisions(instruction_id,revision,content_json,content_digest,state,author,origin_json,resources_json,applicability_json,created_at)
+               VALUES('skill-a',1,'{}',replace(hex(zeroblob(32)),'0','a'),'Approved','human-a','{}','[]','[]',0),
+                     ('skill-a',2,'{}',replace(hex(zeroblob(32)),'0','b'),'Approved','human-a','{}','[]','[]',0);",
+        )
+        .unwrap();
+    let s = SqliteStore::open_with(h.config(), MIGRATIONS).unwrap();
+    assert!(has_table("instruction_revision_lessons"));
+    let id = |s: &str| Id::new(s).unwrap();
+    let (skill, lesson) = (id("skill-a"), id("lesson-a"));
+    let existing = read_snapshot(&s, &ReadOptions::default(), |r| {
+        let revisions = r.instructions().instruction_revisions(&skill, None, 10)?;
+        let linked = r.instructions().instruction_revision_lessons(&skill, 2)?;
+        let by_lesson = r
+            .instructions()
+            .lesson_instruction_revisions(&lesson, None, 10)?;
+        Ok((revisions.len(), linked, by_lesson))
+    })
+    .unwrap();
+    assert_eq!(existing, (2, Vec::new(), Vec::new()));
+    let (link_skill, link_lesson) = (skill.clone(), lesson.clone());
+    write(&s, move |tx| {
+        tx.instructions().link_instruction_revision_lessons(
+            &link_skill,
+            2,
+            std::slice::from_ref(&link_lesson),
+        )?;
+        tx.instructions()
+            .link_instruction_revision_lessons(&link_skill, 1, &[link_lesson])
+    })
+    .unwrap();
+    let (by_revision, by_lesson) = read_snapshot(&s, &ReadOptions::default(), |r| {
+        Ok((
+            r.instructions().instruction_revision_lessons(&skill, 2)?,
+            r.instructions()
+                .lesson_instruction_revisions(&lesson, None, 10)?,
+        ))
+    })
+    .unwrap();
+    assert_eq!(by_revision, vec![lesson.clone()]);
+    assert_eq!(by_lesson, vec![(skill.clone(), 1), (skill.clone(), 2)]);
+    let after_first = read_snapshot(&s, &ReadOptions::default(), |r| {
+        r.instructions()
+            .lesson_instruction_revisions(&lesson, Some((&skill, 1)), 10)
+    })
+    .unwrap();
+    assert_eq!(after_first, vec![(skill.clone(), 2)]);
+    for (item, number, named) in [
+        ("skill-a", 2, "no-such-lesson"),
+        ("skill-a", 3, "lesson-a"),
+        ("no-skill", 1, "lesson-a"),
+    ] {
+        let (item, named) = (id(item), id(named));
+        assert!(
+            write(&s, move |tx| tx
+                .instructions()
+                .link_instruction_revision_lessons(&item, number, &[named]))
+            .is_err(),
+            "{number}"
+        );
+    }
+}
+
 #[test]
 fn upgrade_refuses_to_drop_a_table_that_holds_a_row() {
     let h = Harness::new();

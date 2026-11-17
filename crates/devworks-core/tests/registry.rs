@@ -277,6 +277,7 @@ fn schema_revisions_match_the_register_and_each_revision_has_its_own_schemas() {
             "approvals.inspect",
             "approvals.propose",
             "approvals.record_human_decision",
+            "approvals.review_queue",
             "notifications.list",
             "notifications.read",
             "notifications.acknowledge",

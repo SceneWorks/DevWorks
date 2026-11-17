@@ -3777,6 +3777,17 @@ impl InstructionRead for Unsupported {
     ) -> Result<Option<StoredInstructionRevision>, StorageError> {
         nope()
     }
+    fn instruction_revision_lessons(&self, _: &Id, _: i64) -> Result<Vec<Id>, StorageError> {
+        nope()
+    }
+    fn lesson_instruction_revisions(
+        &self,
+        _: &Id,
+        _: Option<(&Id, i64)>,
+        _: u16,
+    ) -> Result<Vec<(Id, i64)>, StorageError> {
+        nope()
+    }
 }
 impl InstructionRepository for Unsupported {
     fn insert_instruction_item(&mut self, _: &StoredInstructionItem) -> Result<(), StorageError> {
@@ -3807,6 +3818,14 @@ impl InstructionRepository for Unsupported {
         _: &Id,
         _: i64,
         _: &serde_json::Value,
+    ) -> Result<(), StorageError> {
+        nope()
+    }
+    fn link_instruction_revision_lessons(
+        &mut self,
+        _: &Id,
+        _: i64,
+        _: &[Id],
     ) -> Result<(), StorageError> {
         nope()
     }

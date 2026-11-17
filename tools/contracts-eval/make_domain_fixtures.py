@@ -1338,5 +1338,28 @@ instruction_history={**sample('InstructionRecord'),'author':'agent-a','sessionId
 for name in ['skills.history','roles.history']:
  case('r8-result-'+name+'-provenance','operation-result.r8',{'kind':name,'value':{'items':[instruction_history],'hasMore':False}})
  case('reject-r1-result-'+name+'-provenance','operation-result',{'kind':name,'value':{'items':[instruction_history],'hasMore':False}},False,False)
+# Schema revision 8 (skills and lessons): a draft names the lessons it came from (`lessonIds`), a
+# revision's record lists them, and a lesson lists the skill revisions that name it (`skills`).
+# Earlier revisions never see any of these members.
+def draft_lessons(name,revision=8):
+ obj=request(name,'Command')
+ obj['body']['lessonIds']=['claim-a','claim-b']
+ if revision is not None:obj['schemaRevision']=revision
+ return obj
+for name in ['skills.draft','roles.draft']:
+ case('r8-input-'+name+'-lessons','domain-request.r8',draft_lessons(name))
+ case('reject-r1-input-'+name+'-lessons','domain-request',draft_lessons(name,None),False,False)
+ case('reject-r8-input-'+name+'-lesson-id','domain-request.r8',{**draft_lessons(name),'body':{**draft_lessons(name)['body'],'lessonIds':['']}},False,False)
+for name in ['approvals.review_queue','knowledge.search','knowledge.read','knowledge.subgraph','knowledge.entity_bundle','knowledge.entity_graph','knowledge.claim_bundle','knowledge.expand_frontier','knowledge.query','knowledge.tagged_lessons']:
+ for mode in (['Query','Command'] if OPS[name]['mode']=='Hybrid' else [OPS[name]['mode']]):
+  case('r8-input-'+name+('-'+mode.lower() if OPS[name]['mode']=='Hybrid' else ''),'domain-request.r8',{**request(name,mode),'schemaRevision':8})
+instruction_lessons={**sample('InstructionRecord'),'lessonIds':['claim-a','claim-b']}
+for name in ['skills.history','roles.history']:
+ case('r8-result-'+name+'-lessons','operation-result.r8',{'kind':name,'value':{'items':[instruction_lessons],'hasMore':False}})
+ case('reject-r1-result-'+name+'-lessons','operation-result',{'kind':name,'value':{'items':[instruction_lessons],'hasMore':False}},False,False)
+claim_skills={**claim_r2,'lesson':{**lesson_record,'skills':[{'instructionId':'skill-a','name':'deploy','revision':'2'}]}}
+for name in ['knowledge.search','knowledge.tagged_lessons']:
+ case('r8-result-'+name+'-skills','operation-result.r8',{'kind':name,'value':{'items':[claim_skills],'hasMore':False}})
+ case('reject-r2-result-'+name+'-skills','operation-result.r2',{'kind':name,'value':{'items':[claim_skills],'hasMore':False}},False,False)
 (D/'domain-fixtures.json').write_text(json.dumps(CASES,indent=2)+'\n')
 print(json.dumps({'fixtures':len(CASES),'positive':sum(c['typedValid'] for c in CASES),'negative':sum(not c['typedValid'] for c in CASES),'inputOperationModes':sum(2 if d['mode']=='Hybrid' else 1 for d in OPS.values()),'resultOperations':len(OPS)+len(LEGACY_RESULTS)}))

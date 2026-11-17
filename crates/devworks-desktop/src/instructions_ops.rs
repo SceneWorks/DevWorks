@@ -353,6 +353,21 @@ pub fn made_by(record: &InstructionRecord) -> Option<String> {
         None => format!("Made by {}", author.as_str()),
     })
 }
+/// The lessons a revision came from, as a history row shows them (`None` when it names none, or
+/// when the reply carries no lessons, as at an earlier revision).
+pub fn learned_from(record: &InstructionRecord) -> Option<String> {
+    let lessons = &record.lesson_ids.as_ref()?.0;
+    (!lessons.is_empty()).then(|| {
+        format!(
+            "From lessons {}",
+            lessons
+                .iter()
+                .map(|l| l.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
+        )
+    })
+}
 /// The outcome of the approval staged for a revision; `None` when none was (a person's own
 /// save, a confirmed disk change, or a draft not yet proposed).
 pub fn approval_outcome(record: &InstructionRecord) -> Option<&'static str> {
@@ -527,6 +542,11 @@ mod tests {
             "Made by agent-a in session session-a"
         );
         assert_eq!(approval_outcome(&row), Some("approval pending"));
+        assert_eq!(learned_from(&row), None);
+        let mut row = serde_json::to_value(&row).unwrap();
+        row["lessonIds"] = json!(["claim-a", "claim-b"]);
+        let row: InstructionRecord = serde_json::from_value(row).unwrap();
+        assert_eq!(learned_from(&row).unwrap(), "From lessons claim-a, claim-b");
         assert_eq!(approval_outcome(&rec(1, true, &[])), None);
     }
 

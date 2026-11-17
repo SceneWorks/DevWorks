@@ -2923,6 +2923,8 @@ impl Revisioned for KnowledgeClaim {
         }
         if revision < 2 {
             self.lesson = None;
+        } else {
+            self.lesson.retain_revision(revision);
         }
         if revision < 3 {
             self.challenges = None;
@@ -3416,6 +3418,13 @@ pub struct InstructionRecord {
     )]
     #[schemars(with = "ApprovalState", extend("x-since" = 8))]
     pub approval_outcome: Option<ApprovalState>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Items<Id>", extend("x-since" = 8))]
+    pub lesson_ids: Option<Items<Id>>,
 }
 impl Check for InstructionRecord {
     fn check(&self) -> Result<(), String> {
@@ -3432,6 +3441,7 @@ impl Check for InstructionRecord {
         self.rationale.check()?;
         self.state.check()?;
         self.approval_outcome.check()?;
+        self.lesson_ids.check()?;
         crate::protocol::rules::record(
             "InstructionRecord",
             &serde_json::to_value(self).map_err(|e| e.to_string())?,
@@ -3456,6 +3466,9 @@ impl Revisioned for InstructionRecord {
         }
         if revision < 8 {
             self.approval_outcome = None;
+        }
+        if revision < 8 {
+            self.lesson_ids = None;
         }
     }
 }
@@ -10433,6 +10446,13 @@ pub struct LessonRecord {
     pub last_delivered_at_ms: Option<Counter>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reason: Option<Content>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Items<LessonSkillLink>", extend("x-since" = 8))]
+    pub skills: Option<Items<LessonSkillLink>>,
 }
 impl Check for LessonRecord {
     fn check(&self) -> Result<(), String> {
@@ -10450,8 +10470,37 @@ impl Check for LessonRecord {
         self.delivered_sessions.check()?;
         self.last_delivered_at_ms.check()?;
         self.reason.check()?;
+        self.skills.check()?;
         crate::protocol::rules::record(
             "LessonRecord",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+impl Revisioned for LessonRecord {
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 8 {
+            self.skills = None;
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct LessonSkillLink {
+    pub instruction_id: Id,
+    pub name: Label,
+    pub revision: Revision,
+}
+impl Check for LessonSkillLink {
+    fn check(&self) -> Result<(), String> {
+        self.instruction_id.check()?;
+        self.name.check()?;
+        self.revision.check()?;
+        crate::protocol::rules::record(
+            "LessonSkillLink",
             &serde_json::to_value(self).map_err(|e| e.to_string())?,
         )?;
         Ok(())
@@ -16690,6 +16739,7 @@ impl Revisioned for ConventionRecordResult {
                     rationale: None,
                     state: None,
                     approval_outcome: None,
+                    lesson_ids: None,
                 };
                 row.check().ok().map(|()| row)
             };
@@ -16756,6 +16806,7 @@ impl Revisioned for ConventionReadResult {
                     rationale: None,
                     state: None,
                     approval_outcome: None,
+                    lesson_ids: None,
                 };
                 row.check().ok().map(|()| row)
             };
@@ -16826,6 +16877,7 @@ impl Revisioned for ConventionPageResult {
                     rationale: None,
                     state: None,
                     approval_outcome: None,
+                    lesson_ids: None,
                 };
                 row.check().ok().map(|()| row)
             };
@@ -16905,6 +16957,7 @@ impl Revisioned for ConventionResourcePageResult {
                     rationale: None,
                     state: None,
                     approval_outcome: None,
+                    lesson_ids: None,
                 };
                 row.check().ok().map(|()| row)
             };
@@ -16927,6 +16980,7 @@ impl Revisioned for ConventionResourcePageResult {
                     rationale: None,
                     state: None,
                     approval_outcome: None,
+                    lesson_ids: None,
                 };
                 row.check().ok().map(|()| row)
             };
@@ -17017,6 +17071,7 @@ impl Revisioned for ConventionSearchPageResult {
                     rationale: None,
                     state: None,
                     approval_outcome: None,
+                    lesson_ids: None,
                 };
                 row.check().ok().map(|()| row)
             };

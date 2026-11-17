@@ -48,9 +48,14 @@ type Definitions = Vec<(String, String, String, Option<String>)>;
 /// adds no table, column or ownership edge, and graph_nodes keeps its purge policy. Migration 61
 /// adds graph_view_unresolved (schema61 extension), a derived count per one-layer index view,
 /// preserved with every other repository index row, and the partial graph_edges_named_repository
-/// index; they hold no project rows and add no ownership edge.
+/// index; they hold no project rows and add no ownership edge. Migration 62 adds
+/// instruction_revision_lessons (schema62 extension), the links from a skill or role revision to
+/// the lessons it came from. A link follows both of its ends: it is deleted with a project when
+/// the revision is the project's (a project skill, or a draft confined to the project) or the
+/// lesson is (a claim of the project), and it is never a candidate otherwise. It adds one
+/// foreign key to instruction_revisions and one to knowledge_claims, and no other table changes.
 pub(super) const REVIEWED_SCHEMA_SHA256: &str =
-    "75bc0903e2fb0eaa1f9db0a22b9ee0549f2240795a649ba8378a3838a7d09478";
+    "b216587564aa237cdea57695dc17c998b68e766ad79903c4a60956dc58897731";
 
 fn definitions(conn: &Connection) -> Result<Definitions, StorageError> {
     let mut statement = db(conn.prepare(
