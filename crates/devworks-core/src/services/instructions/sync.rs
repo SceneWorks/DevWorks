@@ -273,7 +273,9 @@ impl InstructionService {
         // Named in reports: the origin, and the project for a project's store.
         let label = match scope {
             ConfigScope::Workspace => origin.as_str().to_lowercase(),
-            ConfigScope::Project(p) => format!("project {}", p.0.as_str()),
+            ConfigScope::Project(p) | ConfigScope::Repository { project: p, .. } => {
+                format!("project {}", p.0.as_str())
+            }
         };
         let existing: BTreeMap<String, StoredInstructionItem> = self
             .items(&InstructionFilter {

@@ -188,6 +188,8 @@ impl InstructionService {
         match scope {
             ConfigScope::Workspace => Some(self.files.clone()),
             ConfigScope::Project(p) => self.files.project(p.0.as_str()),
+            // Skills are never repository-scoped.
+            ConfigScope::Repository { .. } => None,
         }
     }
     /// The folder a scope's skills are written to (and observed in).
@@ -198,7 +200,7 @@ impl InstructionService {
                 .root()
                 .ok()
                 .or_else(|| Some(self.roots.harness.clone())),
-            ConfigScope::Project(_) => files.root().ok(),
+            ConfigScope::Project(_) | ConfigScope::Repository { .. } => files.root().ok(),
         }
     }
     fn correlation(&self) -> CorrelationId {
