@@ -717,6 +717,7 @@ fn shutdown_with_hour_long_intervals_finishes_well_under_the_bound() {
     c.config.approval_resume_interval = hour;
     c.config.notification_interval = hour;
     c.config.watch_interval = hour;
+    c.config.polling_interval = hour;
     c.config.shutdown_bound = Duration::from_secs(30);
     let app = rt.block_on(boot(c)).unwrap();
     // Every loop finishes its first pass and enters its wait.
@@ -729,4 +730,51 @@ fn shutdown_with_hour_long_intervals_finishes_well_under_the_bound() {
         took < Duration::from_secs(5),
         "shutdown took {took:?} with a 30 s bound"
     );
+}
+
+/// An idle runtime performs no store pass in its commit-woken polling loops (git cancellation,
+/// help, schema views, convention imports, project purge, container reconciliation): each ran its
+/// boot pass and now waits for a commit signal or the 30 s fallback, so none runs for 10 s.
+#[test]
+fn an_idle_runtime_runs_no_polling_pass_for_ten_seconds() {
+    let h = Harness::new();
+    let rt = runtime();
+    let store = h.open();
+    let c = composition(&h, store, Arc::new(native(&h)), sources(&h));
+    assert!(c.config.polling_interval > Duration::from_secs(10));
+    let app = rt.block_on(boot(c)).unwrap();
+    rt.block_on(settle_boot_publications(&app));
+    rt.block_on(async { tokio::time::sleep(Duration::from_secs(1)).await });
+    let settled = app.polling_passes();
+    assert!(settled > 0, "no polling loop ran its boot pass");
+    rt.block_on(async { tokio::time::sleep(Duration::from_secs(10)).await });
+    assert_eq!(
+        app.polling_passes(),
+        settled,
+        "an idle runtime started a polling pass"
+    );
+    rt.block_on(app.shutdown()).into_result().unwrap();
+}
+
+/// A committed command wakes the polling loops at once, without waiting for the fallback.
+#[test]
+fn a_committed_command_wakes_the_polling_loops_before_the_fallback_interval() {
+    let h = Harness::new();
+    let rt = runtime();
+    let store = h.open();
+    seed_root(&h, "root-a");
+    let user = principal(&*store, "user-a", PrincipalKind::Human);
+    let mut c = composition(&h, store, Arc::new(native(&h)), sources(&h));
+    c.config.polling_interval = Duration::from_secs(3600);
+    let app = rt.block_on(boot(c)).unwrap();
+    rt.block_on(settle_boot_publications(&app));
+    rt.block_on(async { tokio::time::sleep(Duration::from_secs(1)).await });
+    let before = app.polling_passes();
+    applied(start(&app, &user, "wake-1"));
+    rt.block_on(within("a polling pass after the commit", async {
+        while app.polling_passes() == before {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    }));
+    rt.block_on(app.shutdown()).into_result().unwrap();
 }

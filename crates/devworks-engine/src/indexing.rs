@@ -9,6 +9,7 @@
 //! repository together. A stop signal is cooperative within one parse-progress or Git-poll
 //! interval; past the deadline a run that has not finished is abandoned (its lease expires and
 //! the next boot resumes it from its checkpoint).
+use crate::workers::Ticker;
 use devworks_core::ports::storage::StorageError;
 use devworks_core::protocol::Id;
 use devworks_core::services::indexing::IndexEnv;
@@ -17,7 +18,7 @@ use devworks_core::services::indexing::worker::{Housekeeping, IndexWorker};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
-use tokio::sync::{Notify, watch};
+use tokio::sync::watch;
 use tokio::task::JoinHandle;
 
 /// Bounds of index supervision.
@@ -56,9 +57,8 @@ pub struct IndexingStatus {
 pub struct IndexSupervisor {
     worker: Arc<IndexWorker>,
     config: IndexingConfig,
-    wake: Notify,
+    ticker: Ticker,
     discover_now: AtomicBool,
-    stopping: AtomicBool,
     in_flight: AtomicUsize,
     tasks: Mutex<Vec<JoinHandle<()>>>,
     status: watch::Sender<IndexingStatus>,
@@ -71,9 +71,8 @@ impl IndexSupervisor {
         Arc::new(Self {
             worker,
             config,
-            wake: Notify::new(),
+            ticker: Ticker::new(),
             discover_now: AtomicBool::new(discover_at_boot),
-            stopping: AtomicBool::new(false),
             in_flight: AtomicUsize::new(0),
             tasks: Mutex::new(Vec::new()),
             status,
@@ -90,18 +89,18 @@ impl IndexSupervisor {
     }
     /// Wakes supervision (a run was recorded, a lease may have expired).
     pub fn notify(&self) {
-        self.wake.notify_one();
+        self.ticker.notify();
     }
     /// Asks for a discovery scan at the next pass (a section's base directory or exclusions
     /// changed).
     pub fn request_discovery(&self) {
         self.discover_now.store(true, Ordering::SeqCst);
-        self.wake.notify_one();
+        self.ticker.notify();
     }
     /// Signals the in-memory stop of a run whose cancellation committed (bound to that run).
     pub fn cancelled(&self, run: &Id) {
         self.worker.cancel_local(run);
-        self.wake.notify_one();
+        self.ticker.notify();
     }
     pub fn executing(&self) -> usize {
         self.in_flight.load(Ordering::SeqCst)
@@ -124,7 +123,7 @@ impl IndexSupervisor {
     pub async fn run(self: Arc<Self>) {
         let mut last_housekeeping = tokio::time::Instant::now();
         let mut last_discovery = tokio::time::Instant::now();
-        while !self.stopping.load(Ordering::SeqCst) {
+        while !self.ticker.is_stopped() {
             if self.discover_now.swap(false, Ordering::SeqCst)
                 || last_discovery.elapsed() >= self.config.discovery_interval
             {
@@ -137,7 +136,7 @@ impl IndexSupervisor {
                 let w = self.worker.clone();
                 let me = self.clone();
                 let report = tokio::task::spawn_blocking(move || {
-                    let stop = || me.stopping.load(Ordering::SeqCst);
+                    let stop = || me.ticker.is_stopped();
                     w.housekeeping(true, &stop)
                 })
                 .await;
@@ -148,9 +147,7 @@ impl IndexSupervisor {
                 };
                 self.status.send_modify(|s| s.housekeeping = Some(report));
             }
-            let _ =
-                crate::dispatch::first(self.wake.notified(), tokio::time::sleep(self.config.tick))
-                    .await;
+            self.ticker.wait(self.config.tick).await;
         }
     }
 
@@ -162,7 +159,7 @@ impl IndexSupervisor {
         let env = self.worker.env().clone();
         let me = self.clone();
         let report = tokio::task::spawn_blocking(move || {
-            let stop = || me.stopping.load(Ordering::SeqCst);
+            let stop = || me.ticker.is_stopped();
             let ctx = env.host_context(None);
             discover::scan(&env, &ctx, only.as_deref(), &stop)
         })
@@ -179,7 +176,7 @@ impl IndexSupervisor {
 
     async fn claim_pass(self: &Arc<Self>) {
         while self.in_flight.load(Ordering::SeqCst) < self.config.max_runs.max(1)
-            && !self.stopping.load(Ordering::SeqCst)
+            && !self.ticker.is_stopped()
         {
             let w = self.worker.clone();
             let claimed = tokio::task::spawn_blocking(move || w.claim()).await;
@@ -189,7 +186,7 @@ impl IndexSupervisor {
             let task = tokio::task::spawn_blocking(move || {
                 w.execute(run);
                 me.in_flight.fetch_sub(1, Ordering::SeqCst);
-                me.wake.notify_one();
+                me.ticker.notify();
             });
             let mut tasks = self.tasks.lock().unwrap_or_else(|p| p.into_inner());
             tasks.retain(|t| !t.is_finished());
@@ -200,9 +197,8 @@ impl IndexSupervisor {
     /// Stops claiming, ends the supervision loop and signals every executing run, without
     /// waiting for them.
     pub fn signal_stop(&self) {
-        self.stopping.store(true, Ordering::SeqCst);
+        self.ticker.stop();
         self.worker.stop_all();
-        self.wake.notify_one();
     }
 
     /// Stops claiming, signals every executing run and waits for them until `deadline` (the

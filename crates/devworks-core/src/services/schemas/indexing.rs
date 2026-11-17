@@ -13,6 +13,7 @@ use crate::{
         approvals,
         artifacts::ArtifactService,
         conventions::control,
+        effect_job,
         sessions::{Failure, Refusal},
     },
 };
@@ -91,6 +92,20 @@ pub struct SchemaJob {
     pub delivery_id: Id,
     pub control_roots: Vec<(RootId, i64)>,
     pub assignment_generation: Option<i64>,
+}
+impl SchemaJob {
+    fn binding(&self) -> effect_job::JobBinding<'_> {
+        effect_job::JobBinding {
+            store_id: &self.store_id,
+            restore_epoch: self.restore_epoch,
+            fences: &self.fences,
+            actor: &self.actor,
+            actor_kind: &self.actor_kind,
+            source_context: &self.source_context,
+            control_roots: &self.control_roots,
+            assignment_generation: self.assignment_generation,
+        }
+    }
 }
 pub(super) struct Runtime {
     pub store: Arc<dyn ApplicationStore>,
@@ -283,23 +298,14 @@ impl SchemaService {
         + 'static,
     ) -> Result<T, StorageError> {
         let runtime = self.runtime.as_ref().ok_or(StorageError::Cancelled)?;
-        let _phase = runtime.closed.enter()?;
-        let (op, job, closed, token) = (
-            op.clone(),
-            job.clone(),
-            runtime.closed.clone(),
-            cancel.clone(),
-        );
-        run_write(
+        let (op, job) = (op.clone(), job.clone());
+        runtime.closed.write(
             runtime.store.as_ref(),
             WriteOptions {
                 cancellation: Some(cancel.clone()),
                 ..Default::default()
             },
             move |tx| {
-                if closed.is_closed() || token.is_cancelled() {
-                    return Err(StorageError::Cancelled);
-                }
                 let (source, ctx) = current(tx, &op, &job)?;
                 work(tx, source, ctx)
             },
@@ -313,50 +319,48 @@ impl SchemaService {
         reason: MetadataFailure,
     ) -> Result<(), StorageError> {
         let runtime = self.runtime.as_ref().ok_or(StorageError::Cancelled)?;
-        let _phase = runtime.closed.enter()?;
-        let closed = runtime.closed.clone();
         let op = op.clone();
         let job: SchemaJob = serde_json::from_value(op.payload.clone()).map_err(|_| invalid())?;
-        run_write(runtime.store.as_ref(), WriteOptions::default(), move |tx| {
-            if closed.is_closed() {
-                return Err(StorageError::Cancelled);
-            }
-            if tx.store().store_id != job.store_id || tx.store().restore_epoch != job.restore_epoch
-            {
-                return Err(StorageError::ScopeDenied);
-            }
-            if tx.schemas().schema_publication(&op.id)?.is_some() {
-                return Ok(());
-            }
-            let actual = tx.operations().operation(&op.id)?.ok_or_else(invalid)?;
-            if actual.payload != op.payload
-                || actual.latest_attempt().map(|a| a.fence())
-                    != op.latest_attempt().map(|a| a.fence())
-            {
-                return Err(StorageError::LeaseLost {
-                    kind: "schema_metadata",
-                    id: op.id.0.as_str().into(),
-                });
-            }
-            let Some(mut source) = tx.schemas().schema_source(&job.connection_id)? else {
-                return Ok(());
-            };
-            if source.connection.active_operation_id.as_ref() != Some(&op.id.0) {
-                return Ok(());
-            }
-            let expected = source.connection.revision.get();
-            source.connection.revision = source
-                .connection
-                .revision
-                .checked_next()
-                .ok_or_else(invalid)?;
-            source.connection.active_operation_id = None;
-            source.connection.last_error = Some(crate::protocol::support::BoundedText(format!(
-                "Metadata{reason:?}"
-            )));
-            source.updated_at_ms = tx.now_ms();
-            tx.schemas().revise_schema_source(&source, expected)
-        })
+        runtime
+            .closed
+            .write(runtime.store.as_ref(), WriteOptions::default(), move |tx| {
+                if tx.store().store_id != job.store_id
+                    || tx.store().restore_epoch != job.restore_epoch
+                {
+                    return Err(StorageError::ScopeDenied);
+                }
+                if tx.schemas().schema_publication(&op.id)?.is_some() {
+                    return Ok(());
+                }
+                let actual = tx.operations().operation(&op.id)?.ok_or_else(invalid)?;
+                if actual.payload != op.payload
+                    || actual.latest_attempt().map(|a| a.fence())
+                        != op.latest_attempt().map(|a| a.fence())
+                {
+                    return Err(StorageError::LeaseLost {
+                        kind: "schema_metadata",
+                        id: op.id.0.as_str().into(),
+                    });
+                }
+                let Some(mut source) = tx.schemas().schema_source(&job.connection_id)? else {
+                    return Ok(());
+                };
+                if source.connection.active_operation_id.as_ref() != Some(&op.id.0) {
+                    return Ok(());
+                }
+                let expected = source.connection.revision.get();
+                source.connection.revision = source
+                    .connection
+                    .revision
+                    .checked_next()
+                    .ok_or_else(invalid)?;
+                source.connection.active_operation_id = None;
+                source.connection.last_error = Some(crate::protocol::support::BoundedText(
+                    format!("Metadata{reason:?}"),
+                ));
+                source.updated_at_ms = tx.now_ms();
+                tx.schemas().revise_schema_source(&source, expected)
+            })
     }
     /// Observing repeats only metadata reads, never caller SQL or source writes. The immutable
     /// publication witness is checked before current-source eligibility, including after edits.
@@ -576,47 +580,9 @@ fn current(
     op: &OperationRecord,
     job: &SchemaJob,
 ) -> Result<(StoredSchemaSource, InvocationContext), StorageError> {
-    if tx.store().store_id != job.store_id
-        || tx.store().restore_epoch != job.restore_epoch
-        || !crate::authority::fences_hold(tx, &job.fences)?
-    {
-        return Err(StorageError::ScopeDenied);
-    }
-    let kind = tx
-        .actors()
-        .actor_kind(&job.actor)?
-        .ok_or(StorageError::ScopeDenied)?;
-    if kind.as_str() != job.actor_kind {
-        return Err(StorageError::ScopeDenied);
-    }
-    let ctx = approvals::restore_source_context(tx.store(), &job.actor, kind, &job.source_context)?;
-    control::check(
-        tx,
-        &ctx,
-        &op.id,
-        &job.control_roots,
-        job.assignment_generation,
-    )?;
-    let actual = tx.operations().operation(&op.id)?.ok_or_else(invalid)?;
-    if actual.payload != op.payload
-        || actual.latest_attempt().map(|a| a.fence()) != op.latest_attempt().map(|a| a.fence())
-        || !matches!(
-            actual.state,
-            OperationState::Dispatching | OperationState::OutcomeUnknown
-        )
-    {
-        return Err(StorageError::LeaseLost {
-            kind: "schema_metadata",
-            id: op.id.0.as_str().into(),
-        });
-    }
-    let entry = tx.queue().entry(&job.delivery_id)?.ok_or_else(invalid)?;
-    if entry.consumer != EFFECT_CONSUMER || entry.operation_id.as_ref() != Some(&op.id) {
-        return Err(StorageError::ScopeDenied);
-    }
-    if entry.cancel_requested {
-        return Err(StorageError::Cancelled);
-    }
+    let (kind, ctx) = effect_job::restore(tx, &job.binding(), &op.id)?;
+    effect_job::attempt_holds(tx, op, "schema_metadata")?;
+    effect_job::delivery_holds(tx, &job.delivery_id, EFFECT_CONSUMER, &op.id)?;
     let source = tx
         .schemas()
         .schema_source(&job.connection_id)?

@@ -14,6 +14,7 @@
 //!   target periodically.
 use crate::dispatch::Consumer;
 use crate::effect_consumer::{PanicReasons, STANDARD_RETRY, effect_consumer};
+use crate::workers::Ticker;
 use devworks_core::authority::destructive::FilesystemResolver;
 use devworks_core::ports::browser::BrowserPlatform;
 use devworks_core::ports::web::Resolver;
@@ -21,9 +22,7 @@ use devworks_core::services::browser::{BrowserConfig, BrowserService, EFFECT_CON
 #[cfg(doc)]
 use devworks_core::services::effect::JournaledEffect;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
-use tokio::sync::Notify;
 
 /// What the runtime composes the browser service from: the native platform (discovery,
 /// profiles, transport), the filesystem resolver of the launch preflight, the data root the
@@ -58,30 +57,32 @@ pub fn consumer(service: Arc<BrowserService>) -> Consumer {
 /// Stops the supervision loop.
 #[derive(Default)]
 pub struct Supervision {
-    stopping: AtomicBool,
-    wake: Notify,
+    ticker: Ticker,
 }
 impl Supervision {
     pub fn stop(&self) {
-        self.stopping.store(true, Ordering::SeqCst);
-        self.wake.notify_one();
+        self.ticker.stop();
     }
 }
 
 /// Supervision ticks every `every` until stopped; browser assets are re-read every 30 ticks.
 pub async fn run(service: Arc<BrowserService>, control: Arc<Supervision>, every: Duration) {
     let mut n: u64 = 0;
-    while !control.stopping.load(Ordering::SeqCst) {
-        n += 1;
-        let svc = service.clone();
-        let refresh = n.is_multiple_of(30);
-        let _ = tokio::task::spawn_blocking(move || {
-            if refresh {
-                svc.refresh_assets();
+    control
+        .ticker
+        .run(every, || {
+            n += 1;
+            let svc = service.clone();
+            let refresh = n.is_multiple_of(30);
+            async move {
+                let _ = tokio::task::spawn_blocking(move || {
+                    if refresh {
+                        svc.refresh_assets();
+                    }
+                    svc.tick();
+                })
+                .await;
             }
-            svc.tick();
         })
         .await;
-        let _ = crate::dispatch::first(control.wake.notified(), tokio::time::sleep(every)).await;
-    }
 }

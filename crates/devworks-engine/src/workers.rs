@@ -8,9 +8,10 @@
 
 use std::future::Future;
 use std::pin::Pin;
-use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Arc, Mutex, RwLock};
 use std::time::Duration;
-use tokio::sync::watch;
+use tokio::sync::{Notify, watch};
 use tokio::task::JoinHandle;
 use tokio::time::Instant;
 
@@ -135,6 +136,89 @@ impl Workers {
     }
 }
 
+/// The stop flag, wake and interval every engine supervisor repeats, with the write fence its
+/// drain closes: one stop ends the passes, a wake runs the next pass now, and the wait between
+/// passes ends at a wake, a stop or the interval, whichever comes first.
+pub(crate) struct Ticker {
+    stopping: Arc<AtomicBool>,
+    fence: Arc<RwLock<bool>>,
+    wake: Notify,
+}
+
+impl Default for Ticker {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Ticker {
+    pub(crate) fn new() -> Self {
+        Self {
+            stopping: Arc::new(AtomicBool::new(false)),
+            fence: Arc::new(RwLock::new(false)),
+            wake: Notify::new(),
+        }
+    }
+    /// Runs the next pass now (a wake sent during a pass runs another right after it).
+    pub(crate) fn notify(&self) {
+        self.wake.notify_one();
+    }
+    /// Freezes the loop's work and wakes its wait. Never blocks; may be called more than once.
+    pub(crate) fn stop(&self) {
+        self.stopping.store(true, Ordering::SeqCst);
+        self.wake.notify_one();
+    }
+    pub(crate) fn is_stopped(&self) -> bool {
+        self.stopping.load(Ordering::SeqCst)
+    }
+    /// The stop flag, for blocking work that outlives the borrow of the supervisor.
+    pub(crate) fn flag(&self) -> Arc<AtomicBool> {
+        self.stopping.clone()
+    }
+    /// The write fence [`Self::drain`] and [`Self::close`] shut: blocking jobs check it inside
+    /// their write and refuse once it is closed.
+    pub(crate) fn fence(&self) -> Arc<RwLock<bool>> {
+        self.fence.clone()
+    }
+    /// Stops, then waits for admitted blocking writes and closes the fence behind them, so no
+    /// orphaned blocking job can persist after this returns.
+    pub(crate) async fn drain(&self) {
+        self.stop();
+        let fence = self.fence.clone();
+        let _ = tokio::task::spawn_blocking(move || {
+            *fence.write().unwrap_or_else(|p| p.into_inner()) = true;
+        })
+        .await;
+    }
+    /// [`Self::drain`] for a synchronous caller (drop), also fencing jobs that have not begun.
+    pub(crate) fn close(&self) {
+        self.stop();
+        *self.fence.write().unwrap_or_else(|p| p.into_inner()) = true;
+    }
+    /// Waits for a wake, a stop or `interval`.
+    pub(crate) async fn wait(&self, interval: Duration) {
+        let _ = crate::dispatch::first(
+            self.wake.notified(),
+            tokio::time::sleep(interval.max(Duration::from_millis(1))),
+        )
+        .await;
+    }
+    /// Passes until stopped: `pass`, then the wait.
+    pub(crate) async fn run<F, Fut>(&self, interval: Duration, mut pass: F)
+    where
+        F: FnMut() -> Fut,
+        Fut: Future<Output = ()>,
+    {
+        while !self.is_stopped() {
+            pass().await;
+            if self.is_stopped() {
+                break;
+            }
+            self.wait(interval).await;
+        }
+    }
+}
+
 /// The stop signal of a [`Loop`]: checked between passes and awaited with each interval.
 #[derive(Clone)]
 pub(crate) struct Stopped(watch::Receiver<bool>);
@@ -144,10 +228,76 @@ impl Stopped {
     pub(crate) fn is_set(&self) -> bool {
         *self.0.borrow()
     }
+    /// Waits until the loop is asked to stop.
+    pub(crate) async fn until_set(&mut self) {
+        let _ = self.0.wait_for(|stopped| *stopped).await;
+    }
     /// Waits `interval`, or less when the loop is asked to stop (a stop sent before the wait
     /// began ends it at once).
     pub(crate) async fn wait(&mut self, interval: Duration) {
         let _ = tokio::time::timeout(interval, self.0.wait_for(|stopped| *stopped)).await;
+    }
+}
+
+/// What wakes a polling loop between store passes: a post-commit signal, else a fallback
+/// interval that repairs a missed signal and covers work that becomes due by time alone. The
+/// two signals are an admitted command that may have changed domain state and a finished
+/// delivery (see [`crate::Runtime::state_changes`] and [`crate::Dispatcher::subscribe`]).
+#[derive(Clone)]
+pub(crate) struct Commits {
+    admitted: watch::Receiver<u64>,
+    delivered: watch::Receiver<u64>,
+    fallback: Duration,
+    passes: Arc<AtomicU64>,
+}
+
+impl Commits {
+    pub(crate) fn new(
+        admitted: watch::Receiver<u64>,
+        delivered: watch::Receiver<u64>,
+        fallback: Duration,
+        passes: Arc<AtomicU64>,
+    ) -> Self {
+        Self {
+            admitted,
+            delivered,
+            fallback,
+            passes,
+        }
+    }
+    /// Counts one store pass (the idle-runtime test reads the total).
+    pub(crate) fn pass(&self) {
+        self.passes.fetch_add(1, Ordering::SeqCst);
+    }
+    /// Runs `pass` until `live` is false or the loop is stopped:
+    /// a pass that returns true runs again at once (more work is waiting), any other waits for a
+    /// commit signal or the fallback interval. The first pass runs without waiting.
+    pub(crate) async fn run<L, F, Fut>(mut self, mut stopped: Stopped, live: L, mut pass: F)
+    where
+        L: Fn() -> bool,
+        F: FnMut() -> Fut,
+        Fut: Future<Output = bool>,
+    {
+        while live() && !stopped.is_set() {
+            self.pass();
+            if !pass().await {
+                self.wait(&mut stopped).await;
+            }
+        }
+    }
+    /// Waits for a commit seen since the last wait, the fallback interval, or the stop signal.
+    pub(crate) async fn wait(&mut self, stopped: &mut Stopped) {
+        async fn changed(rx: &mut watch::Receiver<u64>) {
+            if rx.changed().await.is_err() {
+                std::future::pending::<()>().await;
+            }
+        }
+        tokio::select! {
+            () = stopped.until_set() => {}
+            () = changed(&mut self.admitted) => {}
+            () = changed(&mut self.delivered) => {}
+            () = tokio::time::sleep(self.fallback) => {}
+        }
     }
 }
 

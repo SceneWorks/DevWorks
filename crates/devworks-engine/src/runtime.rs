@@ -16,7 +16,7 @@ use crate::package_host::{HostConfig, LaunchPorts, PackageHost};
 use crate::replies::reply_consumer;
 use crate::resources::{BootReport as ResourceBootReport, Housekeeper};
 use crate::runs::{ActivationLauncher, RunGate, RunSettings, RunSupervisor};
-use crate::workers::{DrainAt, Loop, StopAt, Workers};
+use crate::workers::{Commits, DrainAt, Loop, StopAt, Ticker, Workers};
 use devworks_core::context::InvocationContext;
 use devworks_core::gateway::{CommandOutcome, Gateway, QueryOutcome};
 use devworks_core::ports::files::FileFault;
@@ -55,10 +55,10 @@ use devworks_core::services::runs::recovery::{BootRecovery, LifecycleHooks, NoLi
 use devworks_core::services::work::WorkService;
 use devworks_core::settings::view::Health;
 use std::collections::BTreeMap;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, Weak};
 use std::time::Duration;
-use tokio::sync::{Notify, watch};
+use tokio::sync::watch;
 
 /// The operation whose applied decision may leave blobs pending physical removal.
 const RELEASES_BLOBS: &str = "artifacts.delete";
@@ -317,6 +317,11 @@ pub struct RuntimeConfig {
     pub notification_interval: Duration,
     /// Time between watcher passes (settle observed outcomes, deliver pending events).
     pub watch_interval: Duration,
+    /// Fallback between store passes of the loops that otherwise wake on a commit signal (git
+    /// cancellation, help, schema views, convention imports, project purge, container
+    /// reconciliation). An idle runtime does one pass per interval, which repairs a missed
+    /// signal and covers work that becomes due by time alone (an expired schema pin).
+    pub polling_interval: Duration,
     /// File-backed skills and role instructions (`skills.*`, `roles.*`). Absent: neither family
     /// is registered.
     pub instructions: Option<InstructionComposition>,
@@ -364,6 +369,7 @@ impl RuntimeConfig {
             providers: None,
             notification_interval: Duration::from_secs(5),
             watch_interval: Duration::from_millis(250),
+            polling_interval: Duration::from_secs(30),
             instructions: None,
         }
     }
@@ -422,14 +428,12 @@ pub struct CollectionPass {
 }
 
 struct Collector {
-    trigger: Notify,
-    stopping: AtomicBool,
+    ticker: Ticker,
     status: watch::Sender<Option<CollectionPass>>,
 }
 impl Collector {
     fn stop(&self) {
-        self.stopping.store(true, Ordering::SeqCst);
-        self.trigger.notify_one();
+        self.ticker.stop();
     }
 }
 
@@ -491,6 +495,8 @@ pub struct Runtime {
     /// iterate it; each loop is awaited only within the shutdown bound (a root stop or a
     /// cancellation one is executing may be blocked on a tree).
     workers: Workers,
+    /// Store passes the commit-woken polling loops have started (diagnostics and tests).
+    polling_passes: Arc<AtomicU64>,
     /// What the usage worker's drain established, for the shutdown report.
     usage_drain: Arc<Mutex<Option<Result<crate::usage::UsageDrain, StorageError>>>>,
 }
@@ -1108,8 +1114,7 @@ async fn build(composition: Composition) -> Result<Engine, BootError> {
     let keep_awake = Arc::new(KeepAwake::new(power));
     let (status, _) = watch::channel(None);
     let collector = Arc::new(Collector {
-        trigger: Notify::new(),
-        stopping: AtomicBool::new(false),
+        ticker: Ticker::new(),
         status,
     });
     let browser_supervision = Arc::new(BrowserSupervision::default());
@@ -1466,6 +1471,20 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
     // Every background loop is registered here, at the point boot starts it; see `workers` for
     // where shutdown stops and drains each one.
     let mut workers = Workers::default();
+    // The polling loops wake on a commit signal, not a timer: each gets its own receiver.
+    let polling_passes = Arc::new(AtomicU64::new(0));
+    let commits = {
+        let (admitted, delivered) = (admitter.changes.subscribe(), dispatcher.subscribe());
+        let (passes, fallback) = (polling_passes.clone(), config.polling_interval);
+        move || {
+            Commits::new(
+                admitted.clone(),
+                delivered.clone(),
+                fallback,
+                passes.clone(),
+            )
+        }
+    };
     let (run, stop, idle) = (dispatcher.clone(), dispatcher.clone(), dispatcher.clone());
     workers.start(
         StopAt::Work,
@@ -1573,13 +1592,25 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
         workers.start(
             StopAt::Work,
             None,
-            Arc::new(Loop::new("project purge", |mut stopped| async move {
-                while !stopped.is_set() {
-                    let (worker, flag) = (worker.clone(), stopped.clone());
-                    let _ = tokio::task::spawn_blocking(move || worker.step(&mut || flag.is_set()))
-                        .await;
-                    stopped.wait(Duration::from_millis(250)).await;
-                }
+            Arc::new(Loop::new("project purge", |stopped| {
+                let flag = stopped.clone();
+                commits().run(
+                    stopped,
+                    || true,
+                    move || {
+                        let (worker, flag) = (worker.clone(), flag.clone());
+                        async move {
+                            // A pass that settled effects looks for more at once.
+                            matches!(
+                                tokio::task::spawn_blocking(move || {
+                                    worker.step(&mut || flag.is_set())
+                                })
+                                .await,
+                                Ok(Ok(settled)) if settled > 0
+                            )
+                        }
+                    },
+                )
             })),
         );
     }
@@ -1612,21 +1643,34 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
         StopAt::Work,
         None,
         Arc::new(
-            Loop::new("convention imports", |mut stopped| async move {
-                let mut after = None;
-                while !imports.is_stopped() && !stopped.is_set() {
-                    let (service, position) = (imports.clone(), after.clone());
-                    if let Ok(Ok(pass)) =
-                        tokio::task::spawn_blocking(move || service.cleanup_terminal_page(position))
+            Loop::new("convention imports", |stopped| {
+                let live = imports.clone();
+                let after = Arc::new(Mutex::new(None));
+                commits().run(
+                    stopped,
+                    move || !live.is_stopped(),
+                    move || {
+                        let (service, after) = (imports.clone(), after.clone());
+                        let collection_wakeup = collection_wakeup.clone();
+                        async move {
+                            let position = after.lock().unwrap_or_else(|p| p.into_inner()).clone();
+                            if let Ok(Ok(pass)) = tokio::task::spawn_blocking(move || {
+                                service.cleanup_terminal_page(position)
+                            })
                             .await
-                    {
-                        after = pass.next;
-                        if pass.released {
-                            collection_wakeup.trigger.notify_one();
+                            {
+                                if pass.released {
+                                    collection_wakeup.ticker.notify();
+                                }
+                                // A full page continues with the next one at once.
+                                let more = pass.next.is_some();
+                                *after.lock().unwrap_or_else(|p| p.into_inner()) = pass.next;
+                                return more;
+                            }
+                            false
                         }
-                    }
-                    stopped.wait(Duration::from_secs(1)).await;
-                }
+                    },
+                )
             })
             .on_stop(move || stop.stop()),
         ),
@@ -1637,8 +1681,10 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
             StopAt::Work,
             None,
             Arc::new(
-                Loop::new("git", |stopped| crate::git::run(service.clone(), stopped))
-                    .on_stop(move || stop.stop()),
+                Loop::new("git", |stopped| {
+                    crate::git::run(service.clone(), stopped, commits())
+                })
+                .on_stop(move || stop.stop()),
             ),
         );
     }
@@ -1736,24 +1782,37 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
             StopAt::Work,
             None,
             Arc::new(
-                Loop::new("help maintenance", |mut stopped| async move {
-                    while !service.is_stopped() && !stopped.is_set() {
-                        let current = service.clone();
-                        let target = command.clone();
-                        let _ = tokio::task::spawn_blocking(move || {
-                            let _ = current.cleanup();
-                            if let Ok(Some((context, frame))) = current.maintenance_request() {
-                                let _ = target.command_with(
-                                    &context,
-                                    "help.generate_capability_docs",
-                                    &frame,
-                                    WriteOptions::default(),
-                                );
+                Loop::new("help maintenance", |stopped| {
+                    let live = service.clone();
+                    commits().run(
+                        stopped,
+                        move || !live.is_stopped(),
+                        move || {
+                            let current = service.clone();
+                            let target = command.clone();
+                            async move {
+                                // A cleanup pass is bounded: one that removed drafts runs again.
+                                matches!(
+                                    tokio::task::spawn_blocking(move || {
+                                        let removed = current.cleanup();
+                                        if let Ok(Some((context, frame))) =
+                                            current.maintenance_request()
+                                        {
+                                            let _ = target.command_with(
+                                                &context,
+                                                "help.generate_capability_docs",
+                                                &frame,
+                                                WriteOptions::default(),
+                                            );
+                                        }
+                                        removed
+                                    })
+                                    .await,
+                                    Ok(Ok(removed)) if removed > 0
+                                )
                             }
-                        })
-                        .await;
-                        stopped.wait(Duration::from_secs(1)).await;
-                    }
+                        },
+                    )
                 })
                 .on_stop(move || stop.stop()),
             ),
@@ -1765,14 +1824,25 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
             StopAt::Work,
             None,
             Arc::new(
-                Loop::new("schema view cleanup", |mut stopped| async move {
-                    while !service.is_stopped() && !stopped.is_set() {
-                        let current = service.clone();
-                        let _ =
-                            tokio::task::spawn_blocking(move || current.cleanup_retained_views())
-                                .await;
-                        stopped.wait(Duration::from_secs(1)).await;
-                    }
+                Loop::new("schema view cleanup", |stopped| {
+                    let live = service.clone();
+                    commits().run(
+                        stopped,
+                        move || !live.is_stopped(),
+                        move || {
+                            let current = service.clone();
+                            async move {
+                                // Each pass is bounded: one that removed rows runs again.
+                                matches!(
+                                    tokio::task::spawn_blocking(move || {
+                                        current.cleanup_retained_views()
+                                    })
+                                    .await,
+                                    Ok(Ok(removed)) if removed > 0
+                                )
+                            }
+                        },
+                    )
                 })
                 .on_stop(move || stop.stop()),
             ),
@@ -1783,19 +1853,22 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
         workers.start(
             StopAt::Work,
             None,
-            Arc::new(Loop::new(
-                "container reconciliation",
-                |mut stopped| async move {
-                    while !stopped.is_set() {
+            Arc::new(Loop::new("container reconciliation", |stopped| {
+                commits().run(
+                    stopped,
+                    || true,
+                    move || {
                         let current = service.clone();
-                        let _ = tokio::task::spawn_blocking(move || {
-                            current.reconcile_revoked_agent_work(Duration::from_secs(30))
-                        })
-                        .await;
-                        stopped.wait(Duration::from_secs(1)).await;
-                    }
-                },
-            )),
+                        async move {
+                            let _ = tokio::task::spawn_blocking(move || {
+                                current.reconcile_revoked_agent_work(Duration::from_secs(30))
+                            })
+                            .await;
+                            false
+                        }
+                    },
+                )
+            })),
         );
     }
     if let Some(worker) = &embedding_probes {
@@ -1912,6 +1985,7 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
         indexing: index_supervisor,
         workers,
         usage_drain,
+        polling_passes,
     })
 }
 
@@ -1938,25 +2012,30 @@ async fn collect(
     interval: Duration,
 ) {
     let mut pass = 0;
-    while !collector.stopping.load(Ordering::SeqCst) {
-        pass += 1;
-        let (svc, st) = (artifacts.clone(), store.clone());
-        let (blobs, derived) =
-            tokio::task::spawn_blocking(move || (svc.collect(&*st), svc.collect_derived()))
-                .await
-                .unwrap_or_else(|_| {
-                    (
-                        Err(panicked("artifact collection")),
-                        Err(FileFault::Io("artifact collection panicked".into())),
-                    )
-                });
-        collector.status.send_replace(Some(CollectionPass {
-            pass,
-            blobs,
-            derived,
-        }));
-        let _ = dispatch::first(collector.trigger.notified(), tokio::time::sleep(interval)).await;
-    }
+    let collector = &*collector;
+    collector
+        .ticker
+        .run(interval, || {
+            pass += 1;
+            let (svc, st, n) = (artifacts.clone(), store.clone(), pass);
+            async move {
+                let (blobs, derived) =
+                    tokio::task::spawn_blocking(move || (svc.collect(&*st), svc.collect_derived()))
+                        .await
+                        .unwrap_or_else(|_| {
+                            (
+                                Err(panicked("artifact collection")),
+                                Err(FileFault::Io("artifact collection panicked".into())),
+                            )
+                        });
+                collector.status.send_replace(Some(CollectionPass {
+                    pass: n,
+                    blobs,
+                    derived,
+                }));
+            }
+        })
+        .await;
 }
 
 /// One independently attempted durable provider call.
@@ -1983,6 +2062,11 @@ pub struct NativeTurnProgress {
 impl Runtime {
     pub fn mcp_service(&self) -> Option<Arc<devworks_core::services::mcp::McpClientService>> {
         self.use_cases.mcp_service()
+    }
+    /// Store passes started by the loops that wake on a commit signal, with their fallback
+    /// interval ([`RuntimeConfig::polling_interval`]); constant while the runtime is idle.
+    pub fn polling_passes(&self) -> u64 {
+        self.polling_passes.load(Ordering::SeqCst)
     }
     /// What boot recovery established.
     pub fn report(&self) -> &BootReport {
@@ -2855,7 +2939,7 @@ impl Runtime {
     /// Requests a collection pass now, for a change made outside the runtime's commands that can
     /// let a blob go (for example a released backup pin).
     pub fn request_collection(&self) {
-        self.collector.trigger.notify_one();
+        self.collector.ticker.notify();
     }
 
     fn gateway(&self) -> Gateway<'_> {
@@ -3616,7 +3700,7 @@ impl Admitter {
             }
         }
         if released && operation == RELEASES_BLOBS {
-            self.collector.trigger.notify_one();
+            self.collector.ticker.notify();
         }
         if committed && operation == RECORDS_DIAGNOSTIC {
             self.diagnostics.committed();

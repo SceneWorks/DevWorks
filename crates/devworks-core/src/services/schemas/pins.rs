@@ -122,21 +122,18 @@ impl SchemaService {
         if query.schema_revision().0 < 5 {
             return Ok(None);
         }
-        let _phase = runtime.closed.enter()?;
-        let (closed, ids, clock, ctx, auth, scope) = (
-            runtime.closed.clone(),
+        let (ids, clock, ctx, auth, scope) = (
             self.ids.clone(),
             self.clock.clone(),
             ctx.clone(),
             query.authorization().clone(),
             scope.clone(),
         );
-        let cancellation = env.cancellation.cloned();
         let deadline = env.deadline_ms;
-        let prepared = run_write(
+        let prepared = runtime.closed.write(
             runtime.store.as_ref(),
             WriteOptions {
-                cancellation: cancellation.clone(),
+                cancellation: env.cancellation.cloned(),
                 deadline_ms: deadline,
                 ..Default::default()
             },
@@ -146,12 +143,7 @@ impl SchemaService {
                 // of their writer or extend their fixed retention interval.
                 let created_at_ms = tx.now_ms();
                 let now = clock.now_ms().get();
-                if closed.is_closed()
-                    || cancellation
-                        .as_ref()
-                        .is_some_and(Cancellation::is_cancelled)
-                    || deadline.is_some_and(|d| now > d)
-                {
+                if deadline.is_some_and(|d| now > d) {
                     return Err(StorageError::Cancelled);
                 }
                 if !crate::authority::authorization_holds_in(tx, &ctx, &auth)? {
@@ -224,15 +216,13 @@ impl SchemaService {
         let Some(runtime) = &self.runtime else {
             return Ok(0);
         };
-        let _phase = runtime.closed.enter()?;
-        let (closed, clock) = (runtime.closed.clone(), self.clock.clone());
-        run_write(runtime.store.as_ref(), WriteOptions::default(), move |tx| {
-            if closed.is_closed() {
-                return Err(StorageError::Cancelled);
-            }
-            let pins = tx.schemas().expire_schema_pins(clock.now_ms().get(), 500)?;
-            let rows = tx.schemas().prune_schema_views(500)?;
-            Ok(pins + rows)
-        })
+        let clock = self.clock.clone();
+        runtime
+            .closed
+            .write(runtime.store.as_ref(), WriteOptions::default(), move |tx| {
+                let pins = tx.schemas().expire_schema_pins(clock.now_ms().get(), 500)?;
+                let rows = tx.schemas().prune_schema_views(500)?;
+                Ok(pins + rows)
+            })
     }
 }

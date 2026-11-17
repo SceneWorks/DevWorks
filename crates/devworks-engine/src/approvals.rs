@@ -1,17 +1,17 @@
 //! Durable approval readmission. The core restores an opaque original invocation from its
 //! immutable reviewed outbox; this driver only submits it to the ordinary gateway and settles
 //! the recorded outcome. Approval never changes an Agent into a Human or clears a run hold.
-use crate::dispatch::first;
 use crate::store;
+use crate::workers::Ticker;
 use devworks_core::context::InvocationContext;
 use devworks_core::gateway::CommandOutcome;
 use devworks_core::ports::storage::{ApplicationStore, Cancellation, StorageError, WriteOptions};
 use devworks_core::protocol::Id;
 use devworks_core::services::approvals::{ApprovalService, ResumePreparation};
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, OnceLock, RwLock};
+use std::sync::atomic::Ordering;
+use std::sync::{Arc, OnceLock};
 use std::time::Duration;
-use tokio::sync::{Notify, watch};
+use tokio::sync::watch;
 
 const PAGE: u16 = 64;
 
@@ -40,10 +40,8 @@ pub struct ResumeDispatcher {
     store: Arc<dyn ApplicationStore>,
     service: Arc<ApprovalService>,
     admission: Arc<dyn ResumeAdmission>,
-    stopping: Arc<AtomicBool>,
+    ticker: Ticker,
     cancellation: Cancellation,
-    fence: Arc<RwLock<bool>>,
-    wake: Notify,
     ticking: tokio::sync::Mutex<()>,
     status: watch::Sender<Option<Result<ResumePass, StorageError>>>,
     settled: OnceLock<Settled>,
@@ -78,10 +76,8 @@ impl ResumeDispatcher {
             store,
             service,
             admission,
-            stopping: Arc::new(AtomicBool::new(false)),
+            ticker: Ticker::new(),
             cancellation: Cancellation::new(),
-            fence: Arc::new(RwLock::new(false)),
-            wake: Notify::new(),
             ticking: tokio::sync::Mutex::new(()),
             status,
             settled,
@@ -92,43 +88,32 @@ impl ResumeDispatcher {
         let _ = self.settled.set(settled);
     }
     pub fn notify(&self) {
-        self.wake.notify_one();
+        self.ticker.notify();
     }
     pub fn watch(&self) -> watch::Receiver<Option<Result<ResumePass, StorageError>>> {
         self.status.subscribe()
     }
     pub fn stop(&self) {
-        self.stopping.store(true, Ordering::SeqCst);
+        self.ticker.stop();
         self.cancellation.cancel();
-        self.notify();
     }
     /// A blocking gateway call cannot be stopped by aborting its Tokio wrapper. Drain the
     /// preparation/admission/settlement fence so none of its writes outlive runtime shutdown.
     pub async fn drain(&self) {
         self.stop();
-        let fence = self.fence.clone();
-        let _ = tokio::task::spawn_blocking(move || {
-            *fence.write().unwrap_or_else(|p| p.into_inner()) = true
-        })
-        .await;
+        self.ticker.drain().await;
     }
     pub(crate) fn close(&self) {
         self.stop();
-        *self.fence.write().unwrap_or_else(|p| p.into_inner()) = true;
+        self.ticker.close();
     }
     pub async fn run(self: Arc<Self>, every: Duration) {
-        while !self.stopping.load(Ordering::SeqCst) {
-            let result = self.tick().await;
-            self.status.send_replace(Some(result));
-            if self.stopping.load(Ordering::SeqCst) {
-                break;
-            }
-            let _ = first(
-                self.wake.notified(),
-                tokio::time::sleep(every.max(Duration::from_millis(1))),
-            )
+        self.ticker
+            .run(every, || async {
+                let result = self.tick().await;
+                self.status.send_replace(Some(result));
+            })
             .await;
-        }
     }
     /// A complete bounded-memory pass. Storage failures are reported after attempting later
     /// rows; retry uses the same durable outbox identity and gateway request key.
@@ -139,14 +124,14 @@ impl ResumeDispatcher {
         // They share this worker's write fence, so shutdown drains these writes as well.
         let mut notification_after = None;
         loop {
-            if self.stopping.load(Ordering::SeqCst) {
+            if self.ticker.is_stopped() {
                 return Ok(report);
             }
             let (store, service, fence, stopping, cursor) = (
                 self.store.clone(),
                 self.service.clone(),
-                self.fence.clone(),
-                self.stopping.clone(),
+                self.ticker.fence(),
+                self.ticker.flag(),
                 notification_after.clone(),
             );
             let next = tokio::task::spawn_blocking(move || {
@@ -172,7 +157,7 @@ impl ResumeDispatcher {
         let mut after = None;
         let mut failure = None;
         loop {
-            if self.stopping.load(Ordering::SeqCst) {
+            if self.ticker.is_stopped() {
                 break;
             }
             let cursor = after.clone();
@@ -184,16 +169,16 @@ impl ResumeDispatcher {
             let more = rows.len() == usize::from(PAGE);
             after = rows.last().map(|r| r.approval_id.clone());
             for row in rows {
-                if self.stopping.load(Ordering::SeqCst) {
+                if self.ticker.is_stopped() {
                     break;
                 }
                 let (store, service, admission, stopping, cancellation, fence, settled) = (
                     self.store.clone(),
                     self.service.clone(),
                     self.admission.clone(),
-                    self.stopping.clone(),
+                    self.ticker.flag(),
                     self.cancellation.clone(),
-                    self.fence.clone(),
+                    self.ticker.fence(),
                     self.settled.get().cloned(),
                 );
                 let result = tokio::task::spawn_blocking(move || {
