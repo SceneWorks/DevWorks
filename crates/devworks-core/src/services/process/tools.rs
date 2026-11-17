@@ -2422,7 +2422,9 @@ impl ProcessToolService {
             && serde_json::from_value::<ExecuteJob>(operation.payload.clone())
                 .is_ok_and(|job| job.watch.is_some());
         if !watched {
-            return self.execute(operation);
+            // Named explicitly: `self` is an `Arc`, and `self.execute` would resolve to the
+            // `JournaledEffect` impl for `Arc<ProcessToolService>`, which calls this method.
+            return ProcessToolService::execute(self, operation);
         }
         let (report, launched) = std::sync::mpsc::channel();
         let report = LaunchReport::new(report);
