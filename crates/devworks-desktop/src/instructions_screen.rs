@@ -21,8 +21,11 @@ pub enum InstructionAction {
     /// Load the text of one revision (from the loaded history) of the selected item.
     View(i64),
     /// A human draft: `target` is `(instructionId, latest revision)`, `None` a new harness skill.
+    /// `project` is the project whose own skill store the skill lives in (`None`: the
+    /// workspace); an existing item is saved in its own scope.
     Save {
         kind: Kind,
+        project: Option<String>,
         target: Option<(String, i64)>,
         name: String,
         text: String,
@@ -93,6 +96,8 @@ pub struct Pending {
     pub kind: Kind,
     /// The draft (target, name) and its text, or `None` for a restore.
     pub draft: Option<(Option<(String, i64)>, String)>,
+    /// The project the draft is scoped to (`None`: the workspace).
+    pub project: Option<String>,
     pub stage: Stage,
     /// `Some(enabled)` for a skill switched off or on.
     pub toggle: Option<bool>,
@@ -123,6 +128,18 @@ pub struct InstructionsPanel {
     pub editor: Option<Editor>,
     /// A new harness skill being written (name, text).
     pub new_skill: Option<(String, String)>,
+    /// The project the new skill is for (`None`: the workspace, every project).
+    pub new_skill_project: Option<String>,
+    /// The projects a skill can be scoped to, as the shell last read them (id, name).
+    pub projects: Vec<(String, String)>,
+    /// Whether the shell has read the project list.
+    pub projects_loaded: bool,
+    /// A load began before the project list was read, so it reloads once the list is known.
+    pub awaiting_projects: bool,
+    /// Projects whose own skills the running discovery has still to read, and the one it is
+    /// reading now.
+    pub discover_queue: Vec<String>,
+    pub discover_project: Option<String>,
     pub pending: Option<Pending>,
     pub message: Option<(Tone, String)>,
     pub sequence: u64,
@@ -179,6 +196,12 @@ impl InstructionsPanel {
     fn busy(&self) -> bool {
         self.pending.is_some()
     }
+    fn project_name(&self, id: &str) -> String {
+        self.projects
+            .iter()
+            .find(|(p, _)| p == id)
+            .map_or_else(|| id.to_owned(), |(_, name)| name.clone())
+    }
 
     pub fn ui(&mut self, ui: &mut Ui, online: bool, actions: &mut Vec<InstructionAction>) {
         egui::Frame::new()
@@ -197,7 +220,9 @@ impl InstructionsPanel {
                 widgets::caption(
                     ui,
                     "Shared skills: ~/.agents/skills (never written here). Harness skills: \
-                     <data folder>/skills.",
+                     <data folder>/skills. Project skills: <data folder>/project-skills/<project>, \
+                     offered only to agents working in that project; a project skill takes \
+                     precedence over a workspace skill of the same name there.",
                 );
                 widgets::caption(
                     ui,
@@ -224,8 +249,9 @@ impl InstructionsPanel {
                     );
                     return;
                 }
-                if !self.requested {
+                if !self.requested || (self.awaiting_projects && self.projects_loaded) {
                     self.requested = true;
+                    self.awaiting_projects = false;
                     actions.push(InstructionAction::Load);
                 }
                 ui.horizontal(|ui| {
@@ -319,6 +345,13 @@ impl InstructionsPanel {
                             pick = Some(record.clone());
                         }
                         status_chips(ui, &s, record.revision.get(), true);
+                        if let Some(project) = iop::record_project(record) {
+                            chip(
+                                ui,
+                                format!("Project: {}", self.project_name(&project)),
+                                Tone::Neutral,
+                            );
+                        }
                         if let Some(loc) = iop::location(record) {
                             widgets::caption(ui, loc);
                         }
@@ -334,6 +367,8 @@ impl InstructionsPanel {
 
     fn new_skill_ui(&mut self, ui: &mut Ui, actions: &mut Vec<InstructionAction>) {
         let busy = self.busy();
+        let projects = &self.projects;
+        let project = &mut self.new_skill_project;
         let Some((name, text)) = &mut self.new_skill else {
             return;
         };
@@ -346,9 +381,36 @@ impl InstructionsPanel {
                 ui.label("New harness skill");
                 widgets::caption(
                     ui,
-                    "The name is the skill's directory under <data folder>/skills (one path \
-                     segment).",
+                    "The name is the skill's directory under <data folder>/skills, or under \
+                     the project's own folder for a project skill (one path segment).",
                 );
+                let chosen = |p: &Option<String>| match p {
+                    None => "Workspace (every project)".to_owned(),
+                    Some(id) => projects
+                        .iter()
+                        .find(|(pid, _)| pid == id)
+                        .map_or_else(|| id.clone(), |(_, n)| format!("Project: {n}")),
+                };
+                let r = egui::ComboBox::from_label("Skill scope")
+                    .selected_text(chosen(project))
+                    .show_ui(ui, |ui| {
+                        ui.selectable_value(project, None, "Workspace (every project)");
+                        for (id, name) in projects.iter() {
+                            ui.selectable_value(
+                                project,
+                                Some(id.clone()),
+                                format!("Project: {name}"),
+                            );
+                        }
+                    });
+                labelled(r.response, egui::Role::ComboBox, "Skill scope");
+                if project.is_some() {
+                    widgets::caption(
+                        ui,
+                        "Only agents working in this project are offered it, and it takes \
+                         precedence there over a workspace skill of the same name.",
+                    );
+                }
                 let r = ui.add(egui::TextEdit::singleline(name).hint_text("skill-name"));
                 labelled(r, egui::Role::TextInput, "New skill name");
                 let r = ui.add(
@@ -373,6 +435,7 @@ impl InstructionsPanel {
                     {
                         actions.push(InstructionAction::Save {
                             kind: Kind::Skill,
+                            project: project.clone(),
                             target: None,
                             name: name.clone(),
                             text: text.clone(),
@@ -385,6 +448,7 @@ impl InstructionsPanel {
             });
         if close {
             self.new_skill = None;
+            self.new_skill_project = None;
         }
     }
 
@@ -672,6 +736,7 @@ impl InstructionsPanel {
                 if ui.add_enabled(enabled, egui::Button::new("Save")).clicked() {
                     actions.push(InstructionAction::Save {
                         kind: sel.kind,
+                        project: iop::record_project(&sel.record),
                         target: Some((sel.id.clone(), base)),
                         name: sel.draft_name.clone(),
                         text: text.clone(),
@@ -695,6 +760,7 @@ impl InstructionsPanel {
             {
                 actions.push(InstructionAction::Save {
                     kind: Kind::Role,
+                    project: None,
                     target: Some((sel.id.clone(), expected)),
                     name: sel.draft_name.clone(),
                     text: default,
@@ -863,5 +929,70 @@ mod tests {
             })
             .collect();
         assert_eq!(saves, [("skill-1".to_owned(), 1)]);
+    }
+
+    fn saves_after_clicking(mut panel: InstructionsPanel, button: &str) -> Vec<Option<String>> {
+        panel.requested = true;
+        panel.skills = Some(Ok(vec![]));
+        let mut harness = egui_kittest::Harness::builder()
+            .with_size(egui::vec2(1200.0, 2400.0))
+            .build_ui_state(
+                |ui, state: &mut (InstructionsPanel, Vec<InstructionAction>)| {
+                    let (panel, actions) = state;
+                    panel.ui(ui, true, actions);
+                },
+                (panel, Vec::new()),
+            );
+        harness.run_steps(2);
+        harness
+            .get_by_role_and_label(egui::accesskit::Role::Button, button)
+            .click();
+        harness.run_steps(2);
+        harness
+            .state()
+            .1
+            .iter()
+            .filter_map(|a| match a {
+                InstructionAction::Save { project, .. } => Some(project.clone()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_new_skill_is_saved_for_the_chosen_project() {
+        let panel = |project: Option<&str>| InstructionsPanel {
+            new_skill: Some(("deploy".into(), "Deploy.".into())),
+            new_skill_project: project.map(str::to_owned),
+            projects: vec![("project-a".into(), "Project A".into())],
+            ..InstructionsPanel::default()
+        };
+        assert_eq!(
+            saves_after_clicking(panel(Some("project-a")), "Create skill"),
+            [Some("project-a".to_owned())]
+        );
+        assert_eq!(saves_after_clicking(panel(None), "Create skill"), [None]);
+    }
+
+    #[test]
+    fn an_existing_project_skill_is_saved_in_its_own_project() {
+        let mut record = rec(1);
+        record.scope = devworks_core::protocol::data::DataScope::Project {
+            project_id: devworks_core::protocol::ProjectId(
+                devworks_core::protocol::Id::new("project-a").unwrap(),
+            ),
+        };
+        let mut panel = InstructionsPanel::default();
+        panel.select(InstructionsPanel::skill_selection(&record));
+        panel.detail.history = Some(Ok(vec![record]));
+        panel.detail.text = Some(Ok("text".into()));
+        panel.editor = Some(Editor {
+            text: "edited".into(),
+            base: 1,
+        });
+        assert_eq!(
+            saves_after_clicking(panel, "Save"),
+            [Some("project-a".to_owned())]
+        );
     }
 }

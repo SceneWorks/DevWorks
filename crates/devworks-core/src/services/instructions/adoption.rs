@@ -2,11 +2,11 @@
 //! revisions and digests. Only active (approved) revisions are ever part of it, so a pending or
 //! rejected proposal can never appear here; a change of the set's digest is the adoption
 //! boundary that a session records (SKILL-03, SKILL-05).
-use super::queries::{Standing, skill_items};
+use super::queries::{Standing, skill_items_in};
 use super::{HARNESS_ROOT_ID, SHARED_ROOT_ID};
 use crate::fingerprint::sha256_hex;
 use crate::ports::storage::{InstructionOrigin, InstructionRead, StorageError};
-use crate::protocol::Id;
+use crate::protocol::{Id, ProjectId};
 use serde::Serialize;
 use serde_json::Value;
 
@@ -85,11 +85,21 @@ impl EffectiveSkills {
     }
 }
 
-/// The current effective skill set, one per name, harness overrides first.
+/// The current effective workspace skill set, one per name, harness overrides first.
 pub fn effective_skills(read: &dyn InstructionRead) -> Result<EffectiveSkills, StorageError> {
+    effective_skills_in(read, None)
+}
+
+/// The skill set an agent working in `project` adopts (`None`: no project): the workspace's
+/// skills plus that project's own, a project's skill overriding a workspace skill of the same
+/// name. Another project's skills are never part of it.
+pub fn effective_skills_in(
+    read: &dyn InstructionRead,
+    project: Option<&ProjectId>,
+) -> Result<EffectiveSkills, StorageError> {
     let mut skills = Vec::new();
     let mut conflicts: Vec<SkillConflict> = Vec::new();
-    for (item, standing) in skill_items(read)? {
+    for (item, standing) in skill_items_in(read, project)? {
         if standing == Standing::Conflict {
             let name = item.name.to_lowercase();
             match conflicts.iter_mut().find(|c| c.name == name) {

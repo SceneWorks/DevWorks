@@ -20,6 +20,7 @@ pub(crate) fn preview(
     target: &StoredInstructionRevision,
     proposal_id: &Id,
     expected: i64,
+    shadows: Option<&str>,
 ) -> OwnerPreview {
     let kind = target_kind(item.kind);
     OwnerPreview {
@@ -31,8 +32,12 @@ pub(crate) fn preview(
         target_id: item.id.clone(),
         target_revision: target.revision,
         summary: format!(
-            "Review {kind} {} revision {} before it can become active",
-            item.name, target.revision
+            "Review {kind} {} revision {} before it can become active{}",
+            item.name,
+            target.revision,
+            shadows.map_or(String::new(), |name| format!(
+                "; in this project it shadows workspace skill {name}"
+            )),
         ),
         reviewed: json!({
             "artifact": target.content,
@@ -46,6 +51,7 @@ pub(crate) fn preview(
             "resources": target.resources,
             "origin": target.origin,
             "author": target.author.0.as_str(),
+            "shadows": shadows.map(|name| format!("workspace skill {name}")),
             "effect": "Activation only: a skill or role instruction grants no tool, permission or scope.",
         }),
         binding: binding(item, target, proposal_id, expected),
@@ -145,11 +151,12 @@ impl InstructionService {
         env: &Preparation<'_>,
     ) -> Result<OwnerPreview, Failure> {
         let r = request(decoded)?;
-        let (item, target, latest) = env.read(|read| {
+        let (item, target, latest, shadows) = env.read(|read| {
             Ok((|| {
                 let (item, target) = current(read.instructions(), ctx, &r)?;
                 let latest = super::visible_latest(read.instructions(), ctx, &item)?;
-                Ok::<_, Failure>((item, target, latest))
+                let shadows = shadowed_workspace_skill(read.instructions(), &item)?;
+                Ok::<_, Failure>((item, target, latest, shadows))
             })())
         })??;
         if !matches!(
@@ -159,7 +166,13 @@ impl InstructionService {
         {
             return Err(changed(&item.id));
         }
-        Ok(preview(&item, &target, r.proposal, r.expected))
+        Ok(preview(
+            &item,
+            &target,
+            r.proposal,
+            r.expected,
+            shadows.as_deref(),
+        ))
     }
     /// The reviewed binding still describes the current item and revision.
     pub fn validate_approval(
@@ -172,7 +185,7 @@ impl InstructionService {
         let r = request(decoded)?;
         let (item, target) = current(tx.instructions(), ctx, &r)?;
         if super::visible_latest(tx.instructions(), ctx, &item)? != r.expected
-            || preview(&item, &target, r.proposal, r.expected).binding != reviewed.binding
+            || preview(&item, &target, r.proposal, r.expected, None).binding != reviewed.binding
         {
             return Err(changed(&item.id));
         }
@@ -240,4 +253,23 @@ impl InstructionService {
         }
         Ok(())
     }
+}
+
+/// The workspace skill a project skill takes over from, if one is in effect under its name.
+pub(crate) fn shadowed_workspace_skill(
+    read: &dyn crate::ports::storage::InstructionRead,
+    item: &StoredInstructionItem,
+) -> Result<Option<String>, crate::ports::storage::StorageError> {
+    use super::queries::{Standing, skill_items_in};
+    if item.kind != InstructionKind::Skill
+        || !matches!(item.scope, crate::ports::storage::ConfigScope::Project(_))
+    {
+        return Ok(None);
+    }
+    Ok(skill_items_in(read, None)?
+        .into_iter()
+        .find(|(i, standing)| {
+            *standing == Standing::Effective && i.name.eq_ignore_ascii_case(&item.name)
+        })
+        .map(|(i, _)| i.name))
 }

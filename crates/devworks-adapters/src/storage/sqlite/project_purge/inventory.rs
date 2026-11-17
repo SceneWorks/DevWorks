@@ -333,6 +333,25 @@ pub(in crate::storage::sqlite) fn read_with_client_keepers(
             },
         )?;
     }
+    // A project with recorded skills has a skill store folder, which holds only what the store
+    // recorded (or an edit nobody has confirmed yet), so all of it goes with the project.
+    let scope_key = format!("project:{}", project.0.as_str());
+    for (_, values) in materialize(
+        conn,
+        &selection,
+        &planning,
+        "instructions",
+        &["id", "kind", "scope_key"],
+    )? {
+        if text(&values[1])? == "Skill" && text(&values[2])? == scope_key {
+            owner(
+                &mut removing,
+                PurgeFileOwner::ProjectSkills {
+                    project_id: project.0.clone(),
+                },
+            )?;
+        }
+    }
     for (_, values) in materialize(
         conn,
         &selection,

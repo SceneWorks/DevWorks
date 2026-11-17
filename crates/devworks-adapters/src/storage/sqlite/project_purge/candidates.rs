@@ -368,6 +368,37 @@ mod tests {
     }
 
     #[test]
+    fn project_skills_are_purged_with_their_project_only() {
+        let h = crate::storage::sqlite::tests::Harness::new();
+        let store = h.store();
+        let c = h.raw();
+        for p in ["purge-a", "purge-b"] {
+            c.execute("INSERT INTO projects(id,title,lifecycle,revision,scope_revision,created_at) VALUES(?1,'Fixture','Deleted',1,1,0)",[p]).unwrap();
+        }
+        // An approved project skill in each project and a workspace skill.
+        for (id, project) in [
+            ("skill-a", Some("purge-a")),
+            ("skill-b", Some("purge-b")),
+            ("skill-ws", None),
+        ] {
+            let scope = project.map_or("workspace".to_owned(), |p| format!("project:{p}"));
+            c.execute("INSERT INTO instructions(id,kind,name,scope_key,project_id,origin,root_path,source_path,latest_revision,active_revision,enabled,present,version,created_at,updated_at,confined_project_id) VALUES(?1,'Skill','deploy',?2,?3,'Harness','/r',?4,1,1,1,1,1,0,0,NULL)",
+                rusqlite::params![id, scope, project, format!("/r/{id}")]).unwrap();
+            c.execute("INSERT INTO instruction_revisions(instruction_id,revision,content_json,content_digest,state,author,origin_json,resources_json,applicability_json,created_at) VALUES(?1,1,'{}',?2,'Approved','user','{}','[]','[]',0)",
+                rusqlite::params![id, "a".repeat(64)]).unwrap();
+        }
+        let p = ProjectId(Id::new("purge-a").unwrap());
+        let selected = read_snapshot(&store, &ReadOptions::default(), |r| {
+            r.projects().purge_candidates(&p)
+        })
+        .unwrap()
+        .unwrap();
+        let count = |table: &str| selected.rows.iter().filter(|r| r.table == table).count();
+        assert_eq!(count("instructions"), 1, "only project A's skill");
+        assert_eq!(count("instruction_revisions"), 1, "and its revision");
+    }
+
+    #[test]
     fn candidate_primary_key_hash_matches_the_native_exact_row_guard() {
         let h = crate::storage::sqlite::tests::Harness::new();
         let store = h.store();

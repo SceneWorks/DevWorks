@@ -84,6 +84,7 @@ struct Fx {
     artifacts: Arc<ArtifactService>,
     shared: PathBuf,
     harness: PathBuf,
+    projects: PathBuf,
 }
 
 fn write_skill(root: &Path, name: &str, files: &[(&str, &str)]) {
@@ -123,8 +124,10 @@ impl Fx {
         let store = h.open();
         let shared = h.root.with_extension("shared-skills");
         let harness = h.root.with_extension("harness-skills");
+        let projects = h.root.with_extension("project-skills");
         let _ = std::fs::remove_dir_all(&shared);
         let _ = std::fs::remove_dir_all(&harness);
+        let _ = std::fs::remove_dir_all(&projects);
         std::fs::create_dir_all(&shared).unwrap();
         let artifacts = Arc::new(ArtifactService::new(
             Arc::new(NativeArtifactFiles::new(
@@ -142,10 +145,13 @@ impl Fx {
             artifacts,
             shared,
             harness,
+            projects,
         }
     }
     fn composition(&self) -> Composition {
-        self.composition_with(Arc::new(NativeSkillFiles::new(&self.harness)))
+        self.composition_with(Arc::new(
+            NativeSkillFiles::new(&self.harness).with_projects(&self.projects),
+        ))
     }
     fn composition_with(&self, files: Arc<dyn SkillFiles>) -> Composition {
         let h = &self.h;
@@ -1295,6 +1301,355 @@ fn a_project_agents_skill_draft_is_confined_to_its_project_until_a_person_approv
         let events = read(&*fx.store, |s| s.history().page(&EventFilter::Aggregate{kind:"instruction".into(),id:item_id.as_str().unwrap().into()},0,500));
         let drafted: Vec<_> = events.events.iter().filter(|e| e.kind == "InstructionDrafted").map(|e| e.project_id.clone()).collect();
         assert_eq!(drafted, [Some(ProjectId(id("project-a"))), Some(ProjectId(id("project-a"))), Some(ProjectId(id("project-b"))), ]);
+        app.shutdown().await;
+    });
+}
+
+fn in_project(project: &str) -> Value {
+    json!({"kind":"Project","projectId":project})
+}
+fn project_names(app: &Runtime, project: &str) -> Vec<String> {
+    app.effective_skills_in(Some(&ProjectId(id(project))))
+        .unwrap()
+        .skills
+        .iter()
+        .map(|s| s.name.clone())
+        .collect()
+}
+fn discover_in(
+    fx: &Fx,
+    app: &Runtime,
+    ctx: &InvocationContext,
+    project: &str,
+) -> Result<Value, Value> {
+    fx.query(
+        app,
+        ctx,
+        "skills.discover",
+        json!({"scope":in_project(project),"rootIds":[],"page":{"limit":100}}),
+    )
+}
+fn error_code(r: Result<Value, Value>) -> String {
+    r.expect_err("refused")["code"].as_str().unwrap().to_owned()
+}
+
+#[test]
+fn a_project_skill_is_offered_only_to_agents_working_in_that_project() {
+    let fx = Fx::new();
+    runtime().block_on(async {
+        let (user, _, _) = fx.principals();
+        let app = boot(fx.composition()).await.unwrap();
+        let a = project_agent(&fx, &user, "agent-a", "project-a");
+        let b = project_agent(&fx, &user, "agent-b", "project-b");
+        let in_a = ArtifactScope::Project(ProjectId(id("project-a")));
+        let listed = |page: &Value| -> Vec<String> {
+            page["items"].as_array().unwrap().iter().map(|r| r["name"].as_str().unwrap().to_owned()).collect()
+        };
+        // A person saves a workspace skill and a skill for project A only.
+        applied(fx.command(&app, &user, "skills.draft", json!({"scope":{"kind":"Workspace"},"name":"common","content":fx.upload(&user, "Everyone's skill.")})));
+        let deploy = applied(fx.command(&app, &user, "skills.draft", json!({"scope":in_project("project-a"),"name":"deploy","content":fx.upload_in(&user, "Project A deploy steps.", in_a.clone())})));
+        assert_eq!(deploy["scope"], in_project("project-a"));
+        assert!(labels(&deploy).contains(&"active".into()) && deploy["approved"] == true, "{deploy}");
+        // It is written to project A's own store, never to the workspace skill folder.
+        assert_eq!(std::fs::read(fx.projects.join("project-a/deploy/SKILL.md")).unwrap(), b"Project A deploy steps.");
+        assert!(!fx.harness.join("deploy").exists());
+        // Project A's agents are offered it with the workspace skills; project B's and the
+        // workspace are not.
+        assert_eq!(project_names(&app, "project-a"), ["common", "deploy"]);
+        assert_eq!(project_names(&app, "project-b"), ["common"]);
+        assert_eq!(app.effective_skills().unwrap().skills.len(), 1);
+        assert_ne!(
+            app.effective_skills_in(Some(&ProjectId(id("project-a")))).unwrap().digest,
+            app.effective_skills_in(Some(&ProjectId(id("project-b")))).unwrap().digest
+        );
+        // Listing: project A's scope shows it to A and the person; nothing shows it to B.
+        assert!(listed(&discover_in(&fx, &app, &a, "project-a").unwrap()).contains(&"deploy".to_owned()));
+        assert!(listed(&discover_in(&fx, &app, &user, "project-a").unwrap()).contains(&"deploy".to_owned()));
+        assert!(!listed(&discover(&fx, &app, &a)).contains(&"deploy".to_owned()));
+        assert!(!listed(&discover(&fx, &app, &b)).contains(&"deploy".to_owned()));
+        assert!(!listed(&discover_in(&fx, &app, &b, "project-b").unwrap()).contains(&"deploy".to_owned()));
+        assert_eq!(error_code(discover_in(&fx, &app, &b, "project-a")), "PermissionDenied");
+        // Project B cannot read it, its history or its resources by identity.
+        let item_id = deploy["id"].clone();
+        assert_eq!(error_code(fx.query(&app, &b, "skills.read", json!({"instructionId":item_id}))), "NotFound");
+        assert_eq!(error_code(fx.query(&app, &b, "skills.history", json!({"instructionId":item_id,"page":{"limit":10}}))), "NotFound");
+        assert_eq!(error_code(fx.query(&app, &b, "skills.resources", json!({"instructionId":item_id,"revision":"1","page":{"limit":10}}))), "NotFound");
+        assert_eq!(fx.query(&app, &a, "skills.read", json!({"instructionId":item_id})).unwrap()["name"], "deploy");
+        // B can neither edit it nor save a skill into project A.
+        let in_b = ArtifactScope::Project(ProjectId(id("project-b")));
+        assert_eq!(
+            refused(fx.command(&app, &b, "skills.draft", json!({"scope":in_project("project-b"),"instructionId":item_id,"expectedRevision":"1","name":"deploy","content":fx.upload_in(&b, "B text", in_b.clone())}))),
+            "NotFound"
+        );
+        assert_eq!(
+            refused(fx.command(&app, &b, "skills.draft", json!({"scope":in_project("project-a"),"name":"other","content":fx.upload_in(&b, "B text", in_b.clone())}))),
+            "PermissionDenied"
+        );
+        // The same name in project B is its own skill, and project A's stays separate.
+        applied(fx.command(&app, &user, "skills.draft", json!({"scope":in_project("project-b"),"name":"deploy","content":fx.upload_in(&user, "Project B deploy steps.", in_b)})));
+        assert_eq!(std::fs::read(fx.projects.join("project-b/deploy/SKILL.md")).unwrap(), b"Project B deploy steps.");
+        let text_of = |project: &str| {
+            let set = app.effective_skills_in(Some(&ProjectId(id(project)))).unwrap();
+            let skill = set.skills.iter().find(|s| s.name == "deploy").unwrap().clone();
+            skill.instruction_id
+        };
+        assert_ne!(text_of("project-a"), text_of("project-b"));
+        // A project's skill takes precedence over a workspace skill of the same name.
+        applied(fx.command(&app, &user, "skills.draft", json!({"scope":{"kind":"Workspace"},"name":"deploy","content":fx.upload(&user, "Workspace deploy.")})));
+        assert_eq!(text_of("project-a").as_str(), item_id.as_str().unwrap());
+        // The person's off switch works on a project skill and changes only that project.
+        let toggle = |ctx: &InvocationContext, enabled: bool| {
+            fx.command_at(&app, ctx, "skills.set_enabled", 8, json!({"instructionId":item_id,"expectedRevision":"1","enabled":enabled}))
+        };
+        assert_eq!(refused(toggle(&a, false)), "PermissionDenied");
+        assert_eq!(refused(toggle(&b, false)), "PermissionDenied");
+        let off = applied(toggle(&user, false));
+        assert!(labels(&off).contains(&"disabled".into()), "{off}");
+        assert_ne!(text_of("project-a").as_str(), item_id.as_str().unwrap(), "the workspace skill shows through");
+        let on = applied(toggle(&user, true));
+        assert!(!labels(&on).contains(&"disabled".into()), "{on}");
+        assert_eq!(text_of("project-a").as_str(), item_id.as_str().unwrap());
+        // A fresh sync records nothing new for what was saved.
+        assert_eq!(app.instructions().unwrap().sync().unwrap().observed, 0);
+        assert_eq!(project_names(&app, "project-b"), ["common", "deploy"]);
+        app.shutdown().await;
+    });
+}
+
+/// A session of `project` for `ctx` to work in, as a host records one.
+fn with_session_in(
+    fx: &Fx,
+    ctx: InvocationContext,
+    name: &str,
+    project: &str,
+) -> InvocationContext {
+    let (sid, actor, p) = (id(name), ctx.principal().clone(), ProjectId(id(project)));
+    let (s, conversation) = (sid.clone(), id(&format!("conversation-{name}")));
+    write(&*fx.store, move |tx| {
+        let now = tx.now_ms();
+        tx.sessions().insert_session(&StoredSession {
+            id: s,
+            conversation_id: conversation,
+            agent_id: actor.clone(),
+            project_id: Some(p),
+            root_id: None,
+            title: "Work".into(),
+            context_epoch: 0,
+            revision: 1,
+            created_by: actor,
+            created_at_ms: now,
+            closed_at_ms: None,
+            closed_by: None,
+            next_sequence: 1,
+            checkpoint_sequence: 0,
+        })
+    })
+    .unwrap();
+    ctx.with_session(sid)
+}
+
+#[test]
+fn an_invocation_with_no_project_reaches_no_projects_skills() {
+    let fx = Fx::new();
+    runtime().block_on(async {
+        let (user, loose, _) = fx.principals();
+        let app = boot(fx.composition()).await.unwrap();
+        let in_a = ArtifactScope::Project(ProjectId(id("project-a")));
+        // Creates the projects (and agents bound to them, not used here).
+        project_agent(&fx, &user, "agent-a", "project-a");
+        project_agent(&fx, &user, "agent-b", "project-b");
+        let deploy = applied(fx.command(&app, &user, "skills.draft", json!({"scope":in_project("project-a"),"name":"deploy","content":fx.upload_in(&user, "Project A deploy steps.", in_a.clone())})));
+        let item = deploy["id"].clone();
+        // An agent with neither a project nor a session project finds, reads and lists nothing.
+        let listed = |page: &Value| -> Vec<String> {
+            page["items"].as_array().unwrap().iter().map(|r| r["name"].as_str().unwrap().to_owned()).collect()
+        };
+        assert!(!listed(&discover(&fx, &app, &loose)).contains(&"deploy".to_owned()));
+        assert_eq!(error_code(discover_in(&fx, &app, &loose, "project-a")), "PermissionDenied");
+        for op in ["skills.read", "skills.history"] {
+            let body = if op == "skills.read" { json!({"instructionId":item}) } else { json!({"instructionId":item,"page":{"limit":10}}) };
+            assert_eq!(error_code(fx.query(&app, &loose, op, body)), "NotFound", "{op}");
+        }
+        assert_eq!(error_code(fx.query(&app, &loose, "skills.resources", json!({"instructionId":item,"revision":"1","page":{"limit":10}}))), "NotFound");
+        // It cannot save into project A's scope, nor edit the skill there.
+        let upload = fx.upload(&loose, "Loose text");
+        assert_eq!(refused(fx.command(&app, &loose, "skills.draft", json!({"scope":in_project("project-a"),"name":"other","content":upload.clone()}))), "PermissionDenied");
+        assert_eq!(refused(fx.command(&app, &loose, "skills.draft", json!({"scope":in_project("project-a"),"instructionId":item,"expectedRevision":"1","name":"deploy","content":upload}))), "PermissionDenied");
+        assert!(!fx.projects.join("project-a/other").exists());
+        // A person keeps access.
+        assert_eq!(fx.query(&app, &user, "skills.read", json!({"instructionId":item})).unwrap()["name"], "deploy");
+        // A session's project stands in for the invocation's own: a context with no project
+        // of its own works in its session's project, and only that one.
+        let in_b_session = with_session_in(&fx, loose.clone(), "session-b", "project-b");
+        assert_eq!(error_code(fx.query(&app, &in_b_session, "skills.read", json!({"instructionId":item}))), "NotFound");
+        assert_eq!(error_code(discover_in(&fx, &app, &in_b_session, "project-a")), "PermissionDenied");
+        assert_eq!(refused(fx.command(&app, &in_b_session, "skills.draft", json!({"scope":in_project("project-a"),"name":"other","content":fx.upload_in(&in_b_session, "B text", ArtifactScope::Project(ProjectId(id("project-b"))))}))), "PermissionDenied");
+        let in_a_session = with_session_in(&fx, loose.clone(), "session-a", "project-a");
+        assert_eq!(fx.query(&app, &in_a_session, "skills.read", json!({"instructionId":item})).unwrap()["name"], "deploy");
+        assert!(listed(&discover_in(&fx, &app, &in_a_session, "project-a").unwrap()).contains(&"deploy".to_owned()));
+        app.shutdown().await;
+    });
+}
+
+#[test]
+fn a_workspace_listing_shows_a_skill_a_projects_skill_shadows_as_overridden() {
+    let fx = Fx::new();
+    runtime().block_on(async {
+        let (user, _, _) = fx.principals();
+        let app = boot(fx.composition()).await.unwrap();
+        let a = project_agent(&fx, &user, "agent-a", "project-a");
+        let in_a = ArtifactScope::Project(ProjectId(id("project-a")));
+        applied(fx.command(&app, &user, "skills.draft", json!({"scope":{"kind":"Workspace"},"name":"deploy","content":fx.upload(&user, "Workspace deploy.")})));
+        let own = applied(fx.command(&app, &user, "skills.draft", json!({"scope":in_project("project-a"),"name":"deploy","content":fx.upload_in(&user, "Project deploy.", in_a)})));
+        // The project's agent sees the workspace skill as shadowed; the person, working in no
+        // project, sees it in effect.
+        let page = discover(&fx, &app, &a);
+        let ws = find(&page, "deploy", "harness");
+        assert!(labels(ws).contains(&"overridden".into()), "{ws}");
+        assert!(page["items"].as_array().unwrap().iter().all(|r| r["id"] != own["id"]), "project skills are listed under their own scope");
+        let read = fx.query(&app, &a, "skills.read", json!({"instructionId":ws["id"]})).unwrap();
+        assert!(labels(&read).contains(&"overridden".into()), "{read}");
+        assert!(labels(find(&discover(&fx, &app, &user), "deploy", "harness")).contains(&"effective".into()));
+        app.shutdown().await;
+    });
+}
+
+#[test]
+fn a_project_agents_project_skill_draft_takes_effect_only_after_a_person_approves_it() {
+    let fx = Fx::new();
+    runtime().block_on(async {
+        let (user, _, _) = fx.principals();
+        let app = boot(fx.composition()).await.unwrap();
+        let a = project_agent(&fx, &user, "agent-a", "project-a");
+        let in_a = ArtifactScope::Project(ProjectId(id("project-a")));
+        let draft = applied(fx.command(&app, &a, "skills.draft", json!({"scope":in_project("project-a"),"name":"release","content":fx.upload_in(&a, "Release steps.", in_a)})));
+        assert!(labels(&draft).contains(&"state:draft".into()), "{draft}");
+        assert_eq!(draft["scope"], in_project("project-a"));
+        assert!(project_names(&app, "project-a").is_empty());
+        assert!(!fx.projects.join("project-a/release").exists());
+        // An agent cannot activate its own draft; its proposal waits for the exact human decision.
+        let direct = fx.command(&app, &a, "skills.rollback", json!({"instructionId":draft["id"],"expectedRevision":"1","targetRevision":"1"}));
+        assert!(!matches!(&direct, CommandReply::Recorded{receipt,..} if matches!(receipt.decision, DomainDecision::Applied{..})), "{direct:?}");
+        let proposal = applied(fx.command(&app, &a, "skills.propose", json!({"instructionId":draft["id"],"expectedRevision":"1","contentDigest":digest_of(&draft)})));
+        assert!(project_names(&app, "project-a").is_empty());
+        let decision = serde_json::to_vec(&json!({"mode":"Command","protocol":"1.0-draft.1","schemaRevision":3,
+            "requestKey":fx.h.ids.next_id(IdKind::Link),"body":{"kind":"approvals.record_human_decision",
+            "proposalId":proposal["id"],"expectedRevision":proposal["revision"],"contentDigest":proposal["contentDigest"],
+            "decision":"Approve","rationale":"Reviewed"}})).unwrap();
+        applied(app.record_human_decision(&user, &decision).unwrap());
+        app.approval_resumes().tick().await.unwrap();
+        assert_eq!(project_names(&app, "project-a"), ["release"]);
+        assert!(project_names(&app, "project-b").is_empty());
+        assert_eq!(std::fs::read(fx.projects.join("project-a/release/SKILL.md")).unwrap(), b"Release steps.");
+        app.shutdown().await;
+    });
+}
+
+#[test]
+fn the_review_of_a_project_skill_says_which_workspace_skill_it_shadows() {
+    let fx = Fx::new();
+    runtime().block_on(async {
+        let (user, _, _) = fx.principals();
+        let app = boot(fx.composition()).await.unwrap();
+        let a = project_agent(&fx, &user, "agent-a", "project-a");
+        let in_a = ArtifactScope::Project(ProjectId(id("project-a")));
+        applied(fx.command(&app, &user, "skills.draft", json!({"scope":{"kind":"Workspace"},"name":"deploy","content":fx.upload(&user, "Workspace deploy.")})));
+        let summary_for = |name: &str| {
+            let draft = applied(fx.command(&app, &a, "skills.draft", json!({"scope":in_project("project-a"),"name":name,"content":fx.upload_in(&a, "Project text.", in_a.clone())})));
+            let proposal = applied(fx.command(&app, &a, "skills.propose", json!({"instructionId":draft["id"],"expectedRevision":"1","contentDigest":digest_of(&draft)})));
+            read(&*fx.store, |s| s.decisions().approval(&id(proposal["id"].as_str().unwrap()))).unwrap().summary
+        };
+        let shadowing = summary_for("deploy");
+        assert!(shadowing.contains("shadows workspace skill deploy"), "{shadowing}");
+        let alone = summary_for("release");
+        assert!(!alone.contains("shadows"), "{alone}");
+        app.shutdown().await;
+    });
+}
+
+#[test]
+fn a_project_skill_changed_on_disk_stays_pending_until_a_person_confirms_it() {
+    let fx = Fx::new();
+    runtime().block_on(async {
+        let (user, _, _) = fx.principals();
+        let app = boot(fx.composition()).await.unwrap();
+        let a = project_agent(&fx, &user, "agent-a", "project-a");
+        let b = project_agent(&fx, &user, "agent-b", "project-b");
+        let sync = || app.instructions().unwrap().sync().unwrap();
+        let skill = || {
+            let page = discover_in(&fx, &app, &user, "project-a").unwrap();
+            find(&page, "gamma", "harness").clone()
+        };
+        // A folder first seen in project A's store is recorded, not in effect, and project B
+        // never lists it.
+        write_skill(&fx.projects.join("project-a"), "gamma", &[("SKILL.md", "Do gamma.")]);
+        assert_eq!(sync().observed, 1);
+        let first = skill();
+        assert_eq!(first["scope"], in_project("project-a"));
+        assert!(labels(&first).contains(&"awaiting-confirmation".into()) && labels(&first).contains(&"state:draft".into()), "{first}");
+        assert!(project_names(&app, "project-a").is_empty());
+        assert_eq!(error_code(fx.query(&app, &b, "skills.read", json!({"instructionId":first["id"]}))), "NotFound");
+        // An agent can neither confirm nor propose it.
+        assert_eq!(
+            refused(fx.command(&app, &a, "skills.propose", json!({"instructionId":first["id"],"expectedRevision":"1","contentDigest":digest_of(&first)}))),
+            "PermissionDenied"
+        );
+        let direct = fx.command(&app, &a, "skills.rollback", json!({"instructionId":first["id"],"expectedRevision":"1","targetRevision":"1"}));
+        assert!(!matches!(&direct, CommandReply::Recorded{receipt,..} if matches!(receipt.decision, DomainDecision::Applied{..})), "{direct:?}");
+        assert!(project_names(&app, "project-a").is_empty());
+        // The person's confirmation puts it in effect for project A only.
+        applied(fx.command(&app, &user, "skills.rollback", json!({"instructionId":first["id"],"expectedRevision":"1","targetRevision":"1"})));
+        assert_eq!(project_names(&app, "project-a"), ["gamma"]);
+        assert!(project_names(&app, "project-b").is_empty());
+        // A later edit on disk leaves revision 1 active until it is confirmed too.
+        std::fs::write(fx.projects.join("project-a/gamma/SKILL.md"), "Do gamma, edited on disk.").unwrap();
+        assert_eq!(sync().observed, 1);
+        let pending = skill();
+        assert_eq!(pending["revision"], "1");
+        assert!(labels(&pending).contains(&"disk-change-pending".into()), "{pending}");
+        let newest_revision = newest(&fx, &app, &user, &pending["id"]);
+        assert_eq!(newest_revision["revision"], "2");
+        assert!(labels(&newest_revision).contains(&"awaiting-confirmation".into()));
+        assert_eq!(project_names(&app, "project-a"), ["gamma"]);
+        let revision_of = || app.effective_skills_in(Some(&ProjectId(id("project-a")))).unwrap().skills[0].revision;
+        assert_eq!(revision_of(), 1);
+        // Repeated syncs record nothing and never replace the pending edit.
+        assert_eq!(sync().observed, 0);
+        assert_eq!(std::fs::read(fx.projects.join("project-a/gamma/SKILL.md")).unwrap(), b"Do gamma, edited on disk.");
+        applied(fx.command(&app, &user, "skills.rollback", json!({"instructionId":first["id"],"expectedRevision":"2","targetRevision":"2"})));
+        assert_eq!(revision_of(), 2);
+        // Restoring the earlier revision rewrites the folder from the recorded files.
+        applied(fx.command(&app, &user, "skills.rollback", json!({"instructionId":first["id"],"expectedRevision":"2","targetRevision":"1"})));
+        assert_eq!(revision_of(), 1);
+        assert_eq!(std::fs::read(fx.projects.join("project-a/gamma/SKILL.md")).unwrap(), b"Do gamma.");
+        // A folder removed on disk is reported missing and leaves the effective set.
+        std::fs::remove_dir_all(fx.projects.join("project-a/gamma")).unwrap();
+        sync();
+        assert!(project_names(&app, "project-a").is_empty());
+        assert!(labels(&skill()).contains(&"missing".into()));
+        // A folder for a project the store does not have was not made by DevWorks: sync neither
+        // records nor deletes it, and says so.
+        write_skill(&fx.projects.join("ghost"), "stray", &[("SKILL.md", "Stray.")]);
+        let report = sync();
+        assert_eq!(report.observed, 0);
+        assert!(report.skipped.iter().any(|(name, _)| name == "ghost"), "{report:?}");
+        assert_eq!(std::fs::read(fx.projects.join("ghost/stray/SKILL.md")).unwrap(), b"Stray.");
+        // A deleted project keeps its rows until a purge, and so keeps its folder: sync leaves
+        // both alone (removing the folder is the purge's job).
+        write_skill(&fx.projects.join("project-a"), "gamma", &[("SKILL.md", "Do gamma.")]);
+        sync();
+        let before = skill();
+        let stored = read(&*fx.store, |s| s.projects().project(&ProjectId(id("project-a")))).unwrap();
+        let mut deleted = stored.clone();
+        deleted.lifecycle = "Deleted".into();
+        deleted.revision += 1;
+        write(&*fx.store, move |tx| tx.projects().update_project(&deleted, stored.revision)).unwrap();
+        write_skill(&fx.projects.join("project-a"), "gamma", &[("SKILL.md", "Edited after delete.")]);
+        let report = sync();
+        assert_eq!(report.observed, 0, "{report:?}");
+        assert_eq!(std::fs::read(fx.projects.join("project-a/gamma/SKILL.md")).unwrap(), b"Edited after delete.");
+        assert_eq!(skill()["id"], before["id"]);
+        assert!(report.skipped.iter().any(|(name, _)| name == "project-a"), "{report:?}");
         app.shutdown().await;
     });
 }

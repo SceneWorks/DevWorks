@@ -3,7 +3,7 @@
 //! command. Commands keep their exact frames; an unknown outcome is settled by Confirm outcomes.
 use crate::{
     attachments,
-    backend::{Reply, TaskOutput, is_unknown},
+    backend::{Reply, Slot, TaskOutput, is_unknown},
     instructions_ops::{self as iop, InstructionsSlot, Kind, TaskResult},
     instructions_screen::{InstructionAction, InstructionsPanel, Pending, Stage},
     memory::RouteMemory,
@@ -12,6 +12,7 @@ use crate::{
     screen::{Cx, Screen, ScreenContext, ScreenId, controller},
     widgets::Tone,
 };
+use devworks_core::protocol::records::LifeState;
 use devworks_core::settings::catalog::AgentRole;
 use eframe::egui::Ui;
 
@@ -70,10 +71,11 @@ impl InstructionsCtl<'_, '_> {
             InstructionAction::View(revision) => self.view_instruction_revision(revision),
             InstructionAction::Save {
                 kind,
+                project,
                 target,
                 name,
                 text,
-            } => self.save_instruction(kind, target, name, text),
+            } => self.save_instruction(kind, project, target, name, text),
             InstructionAction::Restore {
                 kind,
                 id,
@@ -109,6 +111,25 @@ impl InstructionsCtl<'_, '_> {
         if p.skills.as_ref().is_some_and(|s| s.is_err()) {
             p.skills = None;
         }
+        // The workspace's skills are read first, then each active project's own, one after
+        // another. A load before the project list is read reloads once it is.
+        let loaded = self.projects.list.loaded;
+        if !loaded && !self.pending(&Slot::ProjectsList) {
+            self.load_projects();
+        }
+        let projects: Vec<String> = self
+            .projects
+            .list
+            .items
+            .iter()
+            .filter(|p| matches!(p.lifecycle, LifeState::Active))
+            .map(|p| p.id.0.as_str().to_owned())
+            .collect();
+        let p = self.panel();
+        p.awaiting_projects = !loaded;
+        p.discover_queue = projects;
+        p.discover_queue.reverse();
+        p.discover_project = None;
         self.discover_page(generation, None);
         for role in AgentRole::ALL {
             let id = iop::role_id(role);
@@ -143,11 +164,18 @@ impl InstructionsCtl<'_, '_> {
     }
 
     fn discover_page(&mut self, generation: u64, cursor: Option<String>) {
+        let project = self.panel().discover_project.clone();
         if !self.query(
             InstructionsSlot::InstructionSkills(generation),
             "Discovering skills",
             "skills.discover",
-            move |b| iop::query(b, "skills.discover", iop::discover_body(cursor.as_deref())),
+            move |b| {
+                iop::query(
+                    b,
+                    "skills.discover",
+                    iop::discover_body(project.as_deref(), cursor.as_deref()),
+                )
+            },
         ) {
             self.panel().skills = Some(Err("Not requested: DevWorks is offline.".into()));
         }
@@ -293,6 +321,7 @@ impl InstructionsCtl<'_, '_> {
     fn save_instruction(
         &mut self,
         kind: Kind,
+        project: Option<String>,
         target: Option<(String, i64)>,
         name: String,
         text: String,
@@ -316,6 +345,7 @@ impl InstructionsCtl<'_, '_> {
                 token,
                 kind,
                 draft: Some((target, name)),
+                project,
                 stage: Stage::Preparing,
                 toggle: None,
                 staged: None,
@@ -344,6 +374,7 @@ impl InstructionsCtl<'_, '_> {
                 token,
                 kind,
                 draft: None,
+                project: None,
                 stage: Stage::Saving,
                 toggle: None,
                 staged: None,
@@ -375,6 +406,7 @@ impl InstructionsCtl<'_, '_> {
                 token,
                 kind: Kind::Skill,
                 draft: None,
+                project: None,
                 stage: Stage::Saving,
                 toggle: Some(enabled),
                 staged: None,
@@ -410,9 +442,20 @@ impl InstructionsCtl<'_, '_> {
                 match iop::records_page(q) {
                     Ok(page) => {
                         let p = self.panel();
-                        p.skills_gathering.extend(page.items);
+                        // A project's discovery lists the workspace's skills too, already read:
+                        // keep only that project's own.
+                        let reading = p.discover_project.clone();
+                        p.skills_gathering.extend(
+                            page.items
+                                .into_iter()
+                                .filter(|r| reading.is_none() || iop::record_project(r) == reading),
+                        );
                         match page.next {
                             Some(next) => self.discover_page(generation, Some(next)),
+                            None if !p.discover_queue.is_empty() => {
+                                p.discover_project = p.discover_queue.pop();
+                                self.discover_page(generation, None);
+                            }
                             None => {
                                 let mut all = std::mem::take(&mut p.skills_gathering);
                                 all.sort_by(|a, b| {
@@ -596,6 +639,7 @@ impl InstructionsCtl<'_, '_> {
                             return None;
                         };
                         let op = pending.kind.draft_op();
+                        let project = pending.project.clone();
                         let content = record.artifact;
                         if let Some(p) = &mut self.panel().pending {
                             p.stage = Stage::Saving;
@@ -606,7 +650,11 @@ impl InstructionsCtl<'_, '_> {
                             op,
                             move |b| {
                                 let target = target.as_ref().map(|(id, r)| (id.as_str(), *r));
-                                iop::command(b, op, iop::draft_body(target, &name, &content))
+                                iop::command(
+                                    b,
+                                    op,
+                                    iop::draft_body(project.as_deref(), target, &name, &content),
+                                )
                             },
                         ) {
                             self.fail_instruction(token, "Not saved: DevWorks is offline.".into());
@@ -640,6 +688,7 @@ impl InstructionsCtl<'_, '_> {
                         let p = self.panel();
                         p.editor = None;
                         p.new_skill = None;
+                        p.new_skill_project = None;
                         p.message = Some((
                             Tone::Good,
                             match toggle {

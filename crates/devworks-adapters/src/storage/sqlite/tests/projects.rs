@@ -3948,12 +3948,16 @@ fn native_purge_files_cover_all_owned_classes_and_preserve_sources_and_other_gen
         "browser/sessions/other/profile".into(),
         "source/.git/config".into(),
         "source/main.rs".into(),
+        "project-skills/purge-b/deploy/SKILL.md".into(),
+        "skills/deploy/SKILL.md".into(),
     ];
     let owned = [
         blob,
         "staging/purge-op.part".into(),
         format!("quarantine/{digest}.g1.123-1"),
         "browser/sessions/purge-session/nested/profile".into(),
+        "project-skills/purge-a/deploy/SKILL.md".into(),
+        "project-skills/purge-a/deploy/refs/notes.md".into(),
     ];
     for name in owned.iter().chain(kept.iter()) {
         let path = data.join(name);
@@ -3994,6 +3998,9 @@ fn native_purge_files_cover_all_owned_classes_and_preserve_sources_and_other_gen
             },
             O::ClientPaste {
                 file_id: id("purge-paste"),
+            },
+            O::ProjectSkills {
+                project_id: id("purge-a"),
             },
         ],
     };
@@ -4076,6 +4083,10 @@ fn native_purge_files_cover_all_owned_classes_and_preserve_sources_and_other_gen
         assert!(!data.join(path).exists());
     }
     assert!(!data.join("browser/sessions/purge-session").exists());
+    assert!(
+        !data.join("project-skills/purge-a").exists(),
+        "the whole project skill folder is removed"
+    );
     for path in kept {
         assert!(
             data.join(&path).exists(),

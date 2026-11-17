@@ -33,6 +33,7 @@ use devworks_core::{
     gateway::{CommandOutcome, QueryOutcome},
     protocol::{
         DomainErrorCode,
+        data::DataScope,
         provider::ArtifactRef,
         records::{InstructionRecord, SkillResource, SkillResourcePageResult},
         results::OperationResult,
@@ -212,6 +213,12 @@ pub fn confirmable(record: &InstructionRecord) -> bool {
 /// Where a skill's files are, for display (`root` caption + relative directory).
 pub fn location(record: &InstructionRecord) -> Option<String> {
     let path = record.source_path.as_ref()?;
+    if let Some(project) = record_project(record) {
+        return Some(format!(
+            "<data folder>/project-skills/{project}/{}",
+            path.relative.0
+        ));
+    }
     let root = match path.root_id.as_str() {
         SHARED_ROOT_ID => "~/.agents/skills".to_owned(),
         HARNESS_ROOT_ID => "<data folder>/skills".to_owned(),
@@ -268,6 +275,17 @@ pub fn role_title(role: AgentRole) -> &'static str {
 fn workspace() -> Value {
     json!({"kind": "Workspace"})
 }
+/// The scope of a skill: one project's, or the workspace's (`None`).
+fn scope(project: Option<&str>) -> Value {
+    project.map_or_else(workspace, |p| json!({"kind": "Project", "projectId": p}))
+}
+/// The project a record is scoped to (`None`: the workspace).
+pub fn record_project(record: &InstructionRecord) -> Option<String> {
+    match &record.scope {
+        DataScope::Project { project_id } => Some(project_id.0.as_str().to_owned()),
+        _ => None,
+    }
+}
 fn page(cursor: Option<&str>) -> Value {
     let mut p = json!({"limit": PAGE});
     if let Some(c) = cursor {
@@ -275,8 +293,9 @@ fn page(cursor: Option<&str>) -> Value {
     }
     p
 }
-pub fn discover_body(cursor: Option<&str>) -> Value {
-    json!({"scope": workspace(), "rootIds": [], "page": page(cursor)})
+/// A discovery page: the workspace's skills, or (`project`) that project's own with them.
+pub fn discover_body(project: Option<&str>, cursor: Option<&str>) -> Value {
+    json!({"scope": scope(project), "rootIds": [], "page": page(cursor)})
 }
 pub fn read_body(id: &str, revision: Option<i64>) -> Value {
     let mut body = json!({"instructionId": id});
@@ -292,9 +311,14 @@ pub fn resources_body(id: &str, revision: i64, cursor: Option<&str>) -> Value {
     json!({"instructionId": id, "revision": revision.to_string(), "page": page(cursor)})
 }
 /// A human draft. `target` is `(instructionId, latest revision)`; `None` creates a new
-/// harness skill named `name`.
-pub fn draft_body(target: Option<(&str, i64)>, name: &str, content: &ArtifactRef) -> Value {
-    let mut body = json!({"scope": workspace(), "name": name, "content": content});
+/// harness skill named `name`, in `project`'s own store when one is given.
+pub fn draft_body(
+    project: Option<&str>,
+    target: Option<(&str, i64)>,
+    name: &str,
+    content: &ArtifactRef,
+) -> Value {
+    let mut body = json!({"scope": scope(project), "name": name, "content": content});
     if let Some((id, expected)) = target {
         body["instructionId"] = json!(id);
         body["expectedRevision"] = json!(expected.to_string());
@@ -543,17 +567,27 @@ mod tests {
     #[test]
     fn bodies_use_camel_case_and_decimal_revisions() {
         let content: ArtifactRef = rec(1, true, &[]).content;
-        let b = draft_body(Some(("skill-1", 7)), "lint", &content);
+        let b = draft_body(None, Some(("skill-1", 7)), "lint", &content);
         assert_eq!(b["instructionId"], "skill-1");
         assert_eq!(b["expectedRevision"], "7");
         assert_eq!(b["scope"]["kind"], "Workspace");
         assert_eq!(b["content"]["artifactId"], "art-1");
-        let new = draft_body(None, "fresh", &content);
+        let new = draft_body(None, None, "fresh", &content);
+        let scoped = draft_body(Some("project-a"), None, "fresh", &content);
+        assert_eq!(
+            scoped["scope"],
+            json!({"kind": "Project", "projectId": "project-a"})
+        );
         assert!(new.get("instructionId").is_none() && new.get("expectedRevision").is_none());
         let r = rollback_body("role-worker", 4, 1);
         assert_eq!(r["expectedRevision"], "4");
         assert_eq!(r["targetRevision"], "1");
-        let d = discover_body(Some("c1"));
+        let d = discover_body(None, Some("c1"));
+        assert_eq!(d["scope"]["kind"], "Workspace");
+        assert_eq!(
+            discover_body(Some("project-a"), None)["scope"]["projectId"],
+            "project-a"
+        );
         assert_eq!(d["page"]["limit"], json!(PAGE));
         assert!(d["page"]["limit"].is_u64(), "page limit is a JSON integer");
         assert_eq!(d["page"]["cursor"], "c1");

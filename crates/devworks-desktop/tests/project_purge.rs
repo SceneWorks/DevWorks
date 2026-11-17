@@ -192,6 +192,26 @@ fn native_review_purge_preserves_shared_git_and_other_drafts_and_recovers_after_
         ),
     ))
     .unwrap();
+    // Each project's own skill store; the purge removes the purged project's and no other.
+    let skill_file = |project: &devworks_core::protocol::ProjectId| {
+        root.0
+            .join("project-skills")
+            .join(project.0.as_str())
+            .join("deploy/SKILL.md")
+    };
+    for project in [&p.id, &other.id] {
+        let file = skill_file(project);
+        std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+        std::fs::write(file, b"project skill text").unwrap();
+    }
+    // Sync records the folders, as it does at every skill read and save.
+    engine
+        .host()
+        .runtime()
+        .instructions()
+        .unwrap()
+        .sync()
+        .unwrap();
     let save_owned = |bytes: &[u8], title: &str| {
         let path = b.stage_project_text(Some(&p.id), "txt", bytes).unwrap();
         let ticket = b.mint_project_upload(&p.id, &path).unwrap();
@@ -444,6 +464,15 @@ fn native_review_purge_preserves_shared_git_and_other_drafts_and_recovers_after_
             .any(|r| r.id == other.id && r.name.0 == "Independent project")
     );
     assert_no_private_records(&root);
+    assert!(
+        !root.0.join("project-skills").join(p.id.0.as_str()).exists(),
+        "the purged project's skill folder is gone without a skill sync"
+    );
+    assert_eq!(
+        std::fs::read(skill_file(&other.id)).unwrap(),
+        b"project skill text",
+        "another project's skills survive"
+    );
     drop(b);
     drop(engine);
     let engine = start(&root);
