@@ -657,7 +657,7 @@ impl ArtifactService {
             stream.grant.clone(),
             target.path().to_string_lossy().into_owned(),
         );
-        run_write(store, WriteOptions::host_state(), move |tx| {
+        run_write(store, WriteOptions::settlement(), move |tx| {
             if let Some(a) = tx.artifacts().artifact(&grant.artifact_id)? {
                 event(
                     tx,

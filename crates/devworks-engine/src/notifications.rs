@@ -192,7 +192,7 @@ impl OsNotificationSupervisor {
         }
         if !self.recovered.load(Ordering::SeqCst) {
             let stopping = self.stopping.clone();
-            store::write(&self.store, WriteOptions::host_state(), move |tx| {
+            store::write(&self.store, WriteOptions::recovery(), move |tx| {
                 if stopping.load(Ordering::SeqCst) {
                     return Ok(0);
                 }

@@ -214,7 +214,7 @@ impl ResumeDispatcher {
                                 &command.frame,
                                 WriteOptions {
                                     cancellation: Some(cancellation),
-                                    ..WriteOptions::host_state()
+                                    ..WriteOptions::settlement()
                                 },
                             );
                             // Even an unknown outcome is settled under the original binding.

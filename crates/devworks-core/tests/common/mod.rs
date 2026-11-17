@@ -507,6 +507,13 @@ impl WriteTransaction for MemTx<'_> {
     ) -> Result<&mut dyn AuthorityLedger, StorageError> {
         Ok(&mut self.unsupported)
     }
+    fn authority_history(
+        &mut self,
+        _: &devworks_core::authority::AuthorityCapability,
+        _: &ActorId,
+    ) -> Result<&mut dyn HistoryLog, StorageError> {
+        Ok(self)
+    }
     fn artifacts(&mut self) -> &mut dyn ArtifactRepository {
         &mut self.unsupported
     }

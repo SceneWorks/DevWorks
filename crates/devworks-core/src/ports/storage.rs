@@ -300,8 +300,15 @@ pub enum WritePriority {
 ///
 /// A class never excuses a write that changes authority records. Binding or revoking a
 /// principal, or issuing, revoking or spending a host grant, needs the authority capability
-/// ([`WriteTransaction::authority_writes`]) whichever class the write has, so the code outside
-/// `crate::authority` cannot do it at all.
+/// ([`WriteTransaction::authority_writes`]) whichever class the write has, and the matching
+/// history records (principal, grant, repository deletion) can only be appended through
+/// [`WriteTransaction::authority_history`]: `history().append` refuses them in every class. So
+/// the code outside `crate::authority` can neither change nor record authority.
+///
+/// Choosing a class. When two fit, the purpose decides. A write whose purpose is to repair or
+/// expire stale state is [`Self::Recovery`] (after a restart or a lost owner) or
+/// [`Self::Housekeeping`] (age or retention sweeps), whatever repository it touches.
+/// [`Self::HostState`] is only for the live control ticks of a resource that is healthy.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum WriteClass {
     /// A user or host command executed by the gateway, which records its receipt and history in
@@ -588,15 +595,15 @@ pub trait WriteTransaction {
         _actor: &ActorId,
     ) -> Result<&mut dyn GrantLedger, StorageError>;
     /// History appends of the `crate::authority` seams (principal, grant and repository-deletion
-    /// records), under the same rule as [`Self::authority_writes`]. The gateway's handler view of
-    /// [`Self::history`] refuses those records, so a use case cannot forge them.
+    /// records), under the same rule as [`Self::authority_writes`]. This is the only history log
+    /// that takes them: [`Self::history`] refuses authority-history records (see
+    /// [`crate::authority::is_authority_history`]) on every implementation, so neither a raw
+    /// write nor a use case can forge them. Implementations have no default for this method.
     fn authority_history(
         &mut self,
         _: &AuthorityCapability,
         _actor: &ActorId,
-    ) -> Result<&mut dyn HistoryLog, StorageError> {
-        Ok(self.history())
-    }
+    ) -> Result<&mut dyn HistoryLog, StorageError>;
     /// The artifact repository. Inside a use case (the gateway's handler view) backup pins,
     /// physical-removal claims and receipt reply records are refused.
     fn artifacts(&mut self) -> &mut dyn ArtifactRepository;

@@ -1200,6 +1200,8 @@ pub(crate) struct Unit<'c> {
     pub savepoints: u32,
     /// Serial of this unit of work; a savepoint issued by another unit is refused.
     pub serial: u64,
+    /// The capability-gated history view, built on first use.
+    pub authority_log: Option<AuthorityHistory<'c>>,
 }
 read_impls!(Unit<'_>);
 
@@ -1393,6 +1395,14 @@ impl WriteTransaction for Unit<'_> {
         _: &ActorId,
     ) -> Result<&mut dyn AuthorityLedger, StorageError> {
         Ok(self)
+    }
+    fn authority_history(
+        &mut self,
+        _: &devworks_core::authority::AuthorityCapability,
+        _: &ActorId,
+    ) -> Result<&mut dyn HistoryLog, StorageError> {
+        let (conn, now) = (self.conn, self.now);
+        Ok(self.authority_log.insert(AuthorityHistory { conn, now }))
     }
     fn artifacts(&mut self) -> &mut dyn ArtifactRepository {
         self
@@ -1590,67 +1600,95 @@ impl CommandLedger for Unit<'_> {
 
 impl HistoryLog for Unit<'_> {
     fn append(&mut self, e: NewEvent) -> Result<i64, StorageError> {
-        bounded("aggregate kind", &e.aggregate_kind, 128)?;
-        bounded("aggregate id", &e.aggregate_id, 256)?;
-        bounded("event kind", &e.kind, 128)?;
-        object("event payload", &e.payload)?;
-        if e.aggregate_revision <= 0 {
-            return Err(invalid("aggregate revision must be positive"));
+        if devworks_core::authority::is_authority_history(&e) {
+            return Err(devworks_core::authority::authority_history_refused());
         }
-        if actor_kind(self.conn, &e.actor)?.is_none() {
-            return Err(StorageError::NotFound {
-                kind: "actor",
-                id: e.actor.0.as_str().to_owned(),
-            });
-        }
-        require(
-            self.conn,
-            "projects",
-            "project",
-            e.project_id.as_ref().map(|p| p.0.as_str()),
-        )?;
-        require(
-            self.conn,
-            "work_items",
-            "root",
-            e.root_id.as_ref().map(|r| r.0.as_str()),
-        )?;
-        require(
-            self.conn,
-            "operations",
-            "operation",
-            e.operation_id.as_ref().map(|o| o.0.as_str()),
-        )?;
-        if exists(
-            self.conn,
-            "SELECT 1 FROM events WHERE id=?1",
-            e.id.0.as_str(),
-        )? {
-            return Err(StorageError::Duplicate {
-                kind: "event",
-                id: e.id.0.as_str().to_owned(),
-            });
-        }
-        db(stmt(self.conn,
-            "INSERT INTO events(id,actor_id,project_id,root_id,operation_id,aggregate_kind,aggregate_id,aggregate_revision,kind,created_at,payload_json) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)",
-        )?
-        .execute(params![
-            e.id.0.as_str(),
-            e.actor.0.as_str(),
-            e.project_id.as_ref().map(|p| p.0.as_str()),
-            e.root_id.as_ref().map(|r| r.0.as_str()),
-            e.operation_id.as_ref().map(|o| o.0.as_str()),
-            e.aggregate_kind,
-            e.aggregate_id,
-            e.aggregate_revision,
-            e.kind,
-            self.now,
-            // History is persisted and exported: credential-shaped content in free text is
-            // redacted before it is written.
-            text(&devworks_core::authority::redact::Redactor::new().redact_json(&e.payload))
-        ]))?;
-        Ok(self.conn.last_insert_rowid())
+        append_event(self.conn, self.now, e)
     }
+}
+
+/// The history view `authority_history` hands out: the same appends without the refusal of
+/// authority-history records. Only a caller holding the capability gets one.
+pub(crate) struct AuthorityHistory<'c> {
+    conn: &'c Connection,
+    now: i64,
+}
+impl HistoryRead for AuthorityHistory<'_> {
+    fn event(&self, id: &EventId) -> Result<Option<EventRecord>, StorageError> {
+        event(self.conn, id)
+    }
+    fn page(
+        &self,
+        filter: &EventFilter,
+        after: i64,
+        limit: u16,
+    ) -> Result<EventPage, StorageError> {
+        page(self.conn, filter, after, limit)
+    }
+}
+impl HistoryLog for AuthorityHistory<'_> {
+    fn append(&mut self, e: NewEvent) -> Result<i64, StorageError> {
+        append_event(self.conn, self.now, e)
+    }
+}
+
+fn append_event(conn: &Connection, now: i64, e: NewEvent) -> Result<i64, StorageError> {
+    bounded("aggregate kind", &e.aggregate_kind, 128)?;
+    bounded("aggregate id", &e.aggregate_id, 256)?;
+    bounded("event kind", &e.kind, 128)?;
+    object("event payload", &e.payload)?;
+    if e.aggregate_revision <= 0 {
+        return Err(invalid("aggregate revision must be positive"));
+    }
+    if actor_kind(conn, &e.actor)?.is_none() {
+        return Err(StorageError::NotFound {
+            kind: "actor",
+            id: e.actor.0.as_str().to_owned(),
+        });
+    }
+    require(
+        conn,
+        "projects",
+        "project",
+        e.project_id.as_ref().map(|p| p.0.as_str()),
+    )?;
+    require(
+        conn,
+        "work_items",
+        "root",
+        e.root_id.as_ref().map(|r| r.0.as_str()),
+    )?;
+    require(
+        conn,
+        "operations",
+        "operation",
+        e.operation_id.as_ref().map(|o| o.0.as_str()),
+    )?;
+    if exists(conn, "SELECT 1 FROM events WHERE id=?1", e.id.0.as_str())? {
+        return Err(StorageError::Duplicate {
+            kind: "event",
+            id: e.id.0.as_str().to_owned(),
+        });
+    }
+    db(stmt(conn,
+        "INSERT INTO events(id,actor_id,project_id,root_id,operation_id,aggregate_kind,aggregate_id,aggregate_revision,kind,created_at,payload_json) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)",
+    )?
+    .execute(params![
+        e.id.0.as_str(),
+        e.actor.0.as_str(),
+        e.project_id.as_ref().map(|p| p.0.as_str()),
+        e.root_id.as_ref().map(|r| r.0.as_str()),
+        e.operation_id.as_ref().map(|o| o.0.as_str()),
+        e.aggregate_kind,
+        e.aggregate_id,
+        e.aggregate_revision,
+        e.kind,
+        now,
+        // History is persisted and exported: credential-shaped content in free text is
+        // redacted before it is written.
+        text(&devworks_core::authority::redact::Redactor::new().redact_json(&e.payload))
+    ]))?;
+    Ok(conn.last_insert_rowid())
 }
 
 impl OperationJournal for Unit<'_> {

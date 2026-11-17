@@ -333,7 +333,7 @@ impl InstructionService {
             return Ok(());
         }
         next.version += 1;
-        run_write(&*self.store, WriteOptions::host_state(), move |tx| {
+        run_write(&*self.store, WriteOptions::observed(), move |tx| {
             next.updated_at_ms = tx.now_ms();
             match tx.instructions().update_instruction_item(&next) {
                 // A concurrent writer changed the item; the next sync observes it again.
@@ -674,7 +674,7 @@ impl InstructionService {
             next.observed_digest = Some(revision.content_digest);
             next.present = true;
             next.version += 1;
-            let recorded = run_write(&*self.store, WriteOptions::host_state(), move |tx| {
+            let recorded = run_write(&*self.store, WriteOptions::settlement(), move |tx| {
                 let current = tx
                     .instructions()
                     .instruction_item(&next.id)?

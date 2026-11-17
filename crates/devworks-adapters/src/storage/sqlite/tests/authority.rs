@@ -2740,6 +2740,13 @@ impl WriteTransaction for Lying<'_> {
     ) -> Result<&mut dyn GrantLedger, StorageError> {
         self.inner.grant_writes(capability, &actor("user-a"))
     }
+    fn authority_history(
+        &mut self,
+        capability: &devworks_core::authority::AuthorityCapability,
+        _: &ActorId,
+    ) -> Result<&mut dyn HistoryLog, StorageError> {
+        self.inner.authority_history(capability, &actor("user-a"))
+    }
     fn artifacts(&mut self) -> &mut dyn ArtifactRepository {
         self.inner.artifacts()
     }

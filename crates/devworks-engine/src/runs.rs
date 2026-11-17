@@ -369,23 +369,23 @@ impl RunSupervisor {
         };
         if report.woke {
             let (service, owner) = (self.service.clone(), self.owner.clone());
-            report.reasserted = store::write(&self.store, WriteOptions::host_state(), move |tx| {
+            report.reasserted = store::write(&self.store, WriteOptions::recovery(), move |tx| {
                 service.reassert_leases(tx, &owner)
             })
             .await?;
         }
         let service = self.service.clone();
-        report.expired = store::write(&self.store, WriteOptions::host_state(), move |tx| {
+        report.expired = store::write(&self.store, WriteOptions::recovery(), move |tx| {
             service.recover_expired(tx)
         })
         .await?;
         let service = self.service.clone();
-        report.swept = store::write(&self.store, WriteOptions::host_state(), move |tx| {
+        report.swept = store::write(&self.store, WriteOptions::housekeeping(), move |tx| {
             service.sweep_expired_waits(tx)
         })
         .await?;
         let service = self.service.clone();
-        store::write(&self.store, WriteOptions::host_state(), move |tx| {
+        store::write(&self.store, WriteOptions::recovery(), move |tx| {
             devworks_core::services::work::allocation::reconcile(tx, &service)
         })
         .await?;

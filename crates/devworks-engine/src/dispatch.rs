@@ -632,7 +632,7 @@ impl Dispatcher {
                 .map(|(k, v)| (k.clone(), v.clone()))
                 .collect();
             let lease = inner.cfg.lease_ms;
-            report.reasserted = store::write(&inner.store, WriteOptions::host_state(), move |tx| {
+            report.reasserted = store::write(&inner.store, WriteOptions::recovery(), move |tx| {
                 let mut n = 0;
                 for (id, fence) in &mine {
                     match tx.queue().reassert(id, fence, lease) {
@@ -646,7 +646,7 @@ impl Dispatcher {
             .await?;
         }
         let limit = inner.cfg.recovery_batch;
-        report.recovered = store::write(&inner.store, WriteOptions::host_state(), move |tx| {
+        report.recovered = store::write(&inner.store, WriteOptions::recovery(), move |tx| {
             store::recover_expired(tx, limit)
         })
         .await?;

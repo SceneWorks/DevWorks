@@ -998,7 +998,7 @@ impl DiagnosticService {
         });
         let probe = (!stopped()).then(|| {
             let start = std::time::Instant::now();
-            run_write(&*self.store, WriteOptions::host_state(), |tx| {
+            run_write(&*self.store, WriteOptions::observed(), |tx| {
                 tx.committed_sequence()
             })
             .map(|_| start.elapsed().as_millis() as u64)
@@ -1313,7 +1313,7 @@ impl DiagnosticService {
             }
             if self.now().saturating_sub(stored.created_at_ms) > EXPORT_CLAIM_STALE_MS {
                 let (from, takeover) = (stored.claim.clone(), mine.clone());
-                let taken = run_write(&*self.store, WriteOptions::host_state(), move |tx| {
+                let taken = run_write(&*self.store, WriteOptions::recovery(), move |tx| {
                     tx.diagnostics().take_over_export_intent(&takeover, &from)
                 })
                 .map_err(ExportFailure::Storage)?;
@@ -1363,7 +1363,7 @@ impl DiagnosticService {
             "expectedBytes": rendered.bytes.len().to_string()}})
         .to_string();
         let (claimed, command) = (mine.clone(), frame.clone());
-        let recorded = run_write(&*self.store, WriteOptions::host_state(), move |tx| {
+        let recorded = run_write(&*self.store, WriteOptions::settlement(), move |tx| {
             tx.diagnostics().complete_export_intent(&claimed, &command)
         });
         match recorded {

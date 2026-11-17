@@ -282,7 +282,7 @@ impl ConnectionService {
         };
         for owner in owners {
             let owned = owner.clone();
-            let unknown = run_write(self.store.as_ref(), WriteOptions::host_state(), move |tx| {
+            let unknown = run_write(self.store.as_ref(), WriteOptions::settlement(), move |tx| {
                 let Some(op) = tx.operations().operation(&owned.operation)? else {
                     return Ok(false);
                 };

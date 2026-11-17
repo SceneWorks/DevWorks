@@ -91,7 +91,7 @@ impl PurgeWorker {
             };
             let manifest = admitted.manifest_id;
             let id = admitted.id;
-            run_write(&*self.store, WriteOptions::host_state(), move |tx| {
+            run_write(&*self.store, WriteOptions::settlement(), move |tx| {
                 tx.projects()
                     .settle_purge_effect(&manifest, &id, &owner, outcome)
             })?;

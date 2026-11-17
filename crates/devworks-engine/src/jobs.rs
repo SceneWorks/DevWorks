@@ -167,7 +167,7 @@ impl Scheduler {
         .map(|r| r.id)
         .collect();
         let svc = self.service.clone();
-        report.settled = store::write(&self.store, WriteOptions::host_state(), move |tx| {
+        report.settled = store::write(&self.store, WriteOptions::settlement(), move |tx| {
             svc.poll_inner(tx)
         })
         .await?;
@@ -191,7 +191,7 @@ impl Scheduler {
         // A start that committed after its task ended (its acknowledgment lost, or the task
         // gone): queued again, or settled from what is known of its effect.
         let svc = self.service.clone();
-        let unsettled = store::write(&self.store, WriteOptions::host_state(), move |tx| {
+        let unsettled = store::write(&self.store, WriteOptions::recovery(), move |tx| {
             svc.unsettled_starts(tx)
         })
         .await?;
@@ -200,7 +200,7 @@ impl Scheduler {
                 continue;
             }
             let (svc, id) = (self.service.clone(), run.id.clone());
-            if store::write(&self.store, WriteOptions::host_state(), move |tx| {
+            if store::write(&self.store, WriteOptions::recovery(), move |tx| {
                 svc.reclaim(tx, &id)
             })
             .await?
@@ -273,7 +273,7 @@ impl Scheduler {
             }
         }
         let (svc, id, revision) = (self.service.clone(), run.id.clone(), run.revision);
-        let settled = store::write(&self.store, WriteOptions::host_state(), move |tx| {
+        let settled = store::write(&self.store, WriteOptions::settlement(), move |tx| {
             svc.settle_cancel(tx, &id, revision, &verdict)
         })
         .await?;

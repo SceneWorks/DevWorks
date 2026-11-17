@@ -108,6 +108,36 @@ pub fn fixture_grants(
 }
 const CAPABILITY: AuthorityCapability = AuthorityCapability { _sealed: () };
 
+/// Whether `event` is an authority-history record: a principal, grant or repository-deletion
+/// record, by aggregate or by kind. Only [`crate::ports::storage::WriteTransaction::authority_history`]
+/// (which needs the [`AuthorityCapability`]) may append these; the history of a plain
+/// transaction and the gateway's handler view refuse them, so no raw write can forge one.
+pub fn is_authority_history(event: &crate::ports::storage::NewEvent) -> bool {
+    use deletion::DELETION_AGGREGATE;
+    use service::{GRANT_AGGREGATE, PRINCIPAL_AGGREGATE};
+    matches!(
+        event.aggregate_kind.as_str(),
+        PRINCIPAL_AGGREGATE | GRANT_AGGREGATE | DELETION_AGGREGATE
+    ) || matches!(
+        event.kind.as_str(),
+        "PrincipalAuthorityBound"
+            | "PrincipalAuthorityRevoked"
+            | "AuthorityGrantIssued"
+            | "AuthorityGrantRevoked"
+            | "RepositoryDeletionConfirmed"
+            | "RepositoryDeletionAuthorized"
+            | "RepositoryDeletionCompleted"
+            | "RepositoryDeletionPartial"
+    )
+}
+
+/// The refusal a history log returns for an authority-history record it may not take.
+pub fn authority_history_refused() -> crate::ports::storage::StorageError {
+    crate::ports::storage::StorageError::InvalidRecord(
+        "authority history is recorded only through the authority seams".into(),
+    )
+}
+
 /// Spends one use of a host grant on the unwrapped store transaction. This is the gateway's own
 /// consumption step; it presents the capability here so the gateway never holds one.
 pub(crate) fn consume_host_grant(

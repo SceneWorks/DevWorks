@@ -104,7 +104,7 @@ impl Housekeeper {
             ReconcileCause::Sweep
         };
         let (resources, c) = (self.resources.clone(), cause.clone());
-        let report = store::write(&self.store, WriteOptions::host_state(), move |tx| {
+        let report = store::write(&self.store, WriteOptions::recovery(), move |tx| {
             resources.reconcile(tx, c)
         })
         .await?;

@@ -371,7 +371,7 @@ impl WatchService {
                     Some(Probe::Gone) => {
                         let id = watcher.id.clone();
                         let run = run.clone();
-                        run_write(&*self.store, WriteOptions::host_state(), move |tx| {
+                        run_write(&*self.store, WriteOptions::recovery(), move |tx| {
                             lost_in(tx, &id, &run)
                         })?;
                         Ok(None)

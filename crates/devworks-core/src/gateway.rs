@@ -1179,33 +1179,17 @@ fn decision_scope(
 /// records (written through [`WriteTransaction::authority_history`]), and receipt reply
 /// publication (written by the reply publisher on its own transaction).
 fn gateway_owned(event: &NewEvent) -> bool {
-    use crate::authority::deletion::DELETION_AGGREGATE;
-    use crate::authority::service::{DENIAL_AGGREGATE, GRANT_AGGREGATE, PRINCIPAL_AGGREGATE};
+    use crate::authority::service::DENIAL_AGGREGATE;
     use crate::services::artifacts::replies::REPLY_AGGREGATE;
-    matches!(
-        event.aggregate_kind.as_str(),
-        "command"
-            | "command_receipt"
-            | DENIAL_AGGREGATE
-            | PRINCIPAL_AGGREGATE
-            | GRANT_AGGREGATE
-            | DELETION_AGGREGATE
-            | REPLY_AGGREGATE
-    ) || matches!(
-        event.kind.as_str(),
-        "CommandDecided"
-            | "ReceiptIncompatible"
-            | "AuthorityDenied"
-            | "PrincipalAuthorityBound"
-            | "PrincipalAuthorityRevoked"
-            | "AuthorityGrantIssued"
-            | "AuthorityGrantRevoked"
-            | "RepositoryDeletionConfirmed"
-            | "RepositoryDeletionAuthorized"
-            | "RepositoryDeletionCompleted"
-            | "RepositoryDeletionPartial"
-            | "ReceiptReplyPublished"
-    )
+    crate::authority::is_authority_history(event)
+        || matches!(
+            event.aggregate_kind.as_str(),
+            "command" | "command_receipt" | DENIAL_AGGREGATE | REPLY_AGGREGATE
+        )
+        || matches!(
+            event.kind.as_str(),
+            "CommandDecided" | "ReceiptIncompatible" | "AuthorityDenied" | "ReceiptReplyPublished"
+        )
 }
 
 /// The transaction a use case decides against: every repository of the unit of work except the

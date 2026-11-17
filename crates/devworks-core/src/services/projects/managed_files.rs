@@ -102,7 +102,7 @@ impl ManagedFileCustody {
     }
 
     fn finish(&self, project: ProjectId, id: Id) -> Result<(), StorageError> {
-        run_write(self.store.as_ref(), WriteOptions::host_state(), move |tx| {
+        run_write(self.store.as_ref(), WriteOptions::settlement(), move |tx| {
             tx.projects().finish_project_managed_file(&project, &id)
         })
     }
