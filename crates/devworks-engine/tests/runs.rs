@@ -1807,7 +1807,7 @@ fn agent_first_context_publishes_the_assignment_brief_and_recovers_exactly() {
             Ok(())
         });
         let (head, binding) =
-            devworks_engine::agent_turns::publish_first_context(&app, &context, &primary, &route)
+            devworks_engine::agent_turns::publish_first_context(app.turn_engine(), &context, &primary, &route)
                 .unwrap();
         let (bytes, _) = app
             .artifacts()
@@ -1831,7 +1831,7 @@ fn agent_first_context_publishes_the_assignment_brief_and_recovers_exactly() {
                 .map_err(|fence| StorageError::InvalidRecord(format!("turn: {fence:?}")))
         });
         let planned =
-            devworks_engine::agent_turns::plan_generation(&app, &context, &route, &binding, &head)
+            devworks_engine::agent_turns::plan_generation(app.turn_engine(), &context, &route, &binding, &head)
                 .unwrap();
         assert!(matches!(
             planned.category,
@@ -1862,7 +1862,7 @@ fn agent_first_context_publishes_the_assignment_brief_and_recovers_exactly() {
         };
         let original = rebind(Some(AgentRole::CodeReviewer));
         let reviewed =
-            devworks_engine::agent_turns::plan_generation(&app, &context, &route, &binding, &head)
+            devworks_engine::agent_turns::plan_generation(app.turn_engine(), &context, &route, &binding, &head)
                 .unwrap();
         assert!(matches!(
             reviewed.category,
@@ -1969,7 +1969,7 @@ fn agent_first_context_publishes_the_assignment_brief_and_recovers_exactly() {
             .is_none()
         );
         assert!(
-            devworks_engine::agent_turns::publish_first_context(&app, &context, &primary, &route)
+            devworks_engine::agent_turns::publish_first_context(app.turn_engine(), &context, &primary, &route)
                 .is_err()
         );
         let (current_head, current_binding, _) = app
@@ -2061,7 +2061,7 @@ fn agent_first_context_publishes_the_assignment_brief_and_recovers_exactly() {
             );
         let mut moved_agent = primary.clone();
         moved_agent.root_id = rid("root-f");
-        devworks_engine::agent_turns::ensure_membership_context(&app, &moved_context, &moved_agent)
+        devworks_engine::agent_turns::ensure_membership_context(app.turn_engine(), &moved_context, &moved_agent)
             .unwrap();
         let epoch = read(&*fx.store, |snapshot| snapshot.sessions().epoch(&session.id, 2))
             .expect("handoff epoch");
@@ -2082,7 +2082,7 @@ fn agent_first_context_publishes_the_assignment_brief_and_recovers_exactly() {
             moved_prompt.skill_stamp.as_ref().expect("skills rebound").skills[0].name,
             "alpha"
         );
-        devworks_engine::agent_turns::ensure_membership_context(&app, &moved_context, &moved_agent)
+        devworks_engine::agent_turns::ensure_membership_context(app.turn_engine(), &moved_context, &moved_agent)
             .unwrap();
         let (same_head, _, _) = app
             .recover_native_context_head(&moved_context, &session.id)
@@ -2219,7 +2219,7 @@ fn agent_first_context_publishes_the_assignment_brief_and_recovers_exactly() {
         let mut moved_empty_agent = empty_agent.clone();
         moved_empty_agent.root_id = rid("root-h");
         devworks_engine::agent_turns::ensure_membership_context(
-            &app,
+            app.turn_engine(),
             &empty_context,
             &moved_empty_agent,
         )
@@ -2241,7 +2241,7 @@ fn agent_first_context_publishes_the_assignment_brief_and_recovers_exactly() {
             devworks_core::protocol::provider::TranscriptBody::HostNotice { .. }
         ));
         devworks_engine::agent_turns::ensure_membership_context(
-            &app,
+            app.turn_engine(),
             &empty_context,
             &moved_empty_agent,
         )

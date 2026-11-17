@@ -214,9 +214,13 @@ fn a_provider_rejecting_the_credential_holds_the_root_and_notifies_once_per_cred
             tx.router().put_session_pin(&pin, None)?;
             Ok(())
         });
-        let (head, binding) =
-            devworks_engine::agent_turns::publish_first_context(&app, &context, &primary, &route)
-                .unwrap();
+        let (head, binding) = devworks_engine::agent_turns::publish_first_context(
+            app.turn_engine(),
+            &context,
+            &primary,
+            &route,
+        )
+        .unwrap();
         let (turn_session, assignment_id, turn_execution) = (
             session.id.clone(),
             primary.assignment_id.clone(),
@@ -227,9 +231,14 @@ fn a_provider_rejecting_the_credential_holds_the_root_and_notifies_once_per_cred
                 .begin_turn(tx, &turn_session, &assignment_id, &turn_execution, epoch)?
                 .map_err(|fence| StorageError::InvalidRecord(format!("turn: {fence:?}")))
         });
-        let planned =
-            devworks_engine::agent_turns::plan_generation(&app, &context, &route, &binding, &head)
-                .unwrap();
+        let planned = devworks_engine::agent_turns::plan_generation(
+            app.turn_engine(),
+            &context,
+            &route,
+            &binding,
+            &head,
+        )
+        .unwrap();
         let progress = app.produce_and_dispatch_native_turn(planned, None).await;
         assert_eq!(wire_calls.load(Ordering::SeqCst), 1);
         if let Ok(progress) = &progress {

@@ -107,7 +107,13 @@ async fn repeated_root(fx: &Fx) -> Repeated {
     })
     .unwrap();
     let route = devworks_core::services::router::choice_of(&pin).unwrap();
-    devworks_engine::agent_turns::publish_first_context(&app, &context, &agent, &route).unwrap();
+    devworks_engine::agent_turns::publish_first_context(
+        app.turn_engine(),
+        &context,
+        &agent,
+        &route,
+    )
+    .unwrap();
     // Epoch 1 drops the bootstrap output cap, so later conversions keep the bytes unchanged.
     let epoch_one = next_epoch(&app, &context);
 
@@ -188,11 +194,16 @@ fn planned_request(fx: &Fx, app: &devworks_engine::Runtime, context: &Invocation
     let pin = read(&*fx.store, |s| s.router().session_pin(&session)).unwrap();
     let route = devworks_core::services::router::choice_of(&pin).unwrap();
     let (head, binding) = head(app, context);
-    let request =
-        devworks_engine::agent_turns::plan_generation(app, context, &route, &binding, &head)
-            .unwrap()
-            .request
-            .request_id;
+    let request = devworks_engine::agent_turns::plan_generation(
+        app.turn_engine(),
+        context,
+        &route,
+        &binding,
+        &head,
+    )
+    .unwrap()
+    .request
+    .request_id;
     let turn_id = turn.turn_id;
     fx.tx(move |service, tx| {
         service

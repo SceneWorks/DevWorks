@@ -1,14 +1,15 @@
 //! Host-owned framing of provider tool arguments. A provider chooses arguments only; the
 //! selected operation, mode, request identity and contract envelope come from the host.
 use crate::turn_error::artifact_read_fault;
-use crate::{providers::schemas::RegisteredSchemas, runtime::Runtime};
+use crate::{providers::schemas::RegisteredSchemas, turn_engine::TurnEngine};
 use devworks_core::{
     admission::{self, Selection},
     context::{InvocationContext, PrincipalKind},
     fingerprint::sha256_hex,
     ports::{IdKind, storage::*},
     protocol::{
-        AttemptId, CONTRACT, CommandReply, Id, OperationId, OperationState, RetryAdvice, Revision,
+        ActorId, AttemptId, CONTRACT, CommandReply, Id, OperationId, OperationState, RetryAdvice,
+        Revision, StoreId,
         provider::{
             ArtifactRef, CompleteToolCall, NativeBinding, ToolCallKey, ToolOutcome, TranscriptBody,
         },
@@ -73,32 +74,74 @@ impl ContextHeadFence {
     }
 }
 
+/// The records the session gate reads, from a read snapshot or from a write transaction, so
+/// one rule serves both.
+trait SessionGate {
+    fn session(&mut self, id: &Id) -> Result<Option<StoredSession>, StorageError>;
+    fn store_and_epoch(&self) -> (StoreId, i64);
+    fn actor_kind(&mut self, actor: &ActorId) -> Result<Option<PrincipalKind>, StorageError>;
+    fn binding(&mut self, actor: &ActorId) -> Result<Option<PrincipalBinding>, StorageError>;
+}
+
+impl SessionGate for &(dyn ReadSnapshot + '_) {
+    fn session(&mut self, id: &Id) -> Result<Option<StoredSession>, StorageError> {
+        self.sessions().session(id)
+    }
+    fn store_and_epoch(&self) -> (StoreId, i64) {
+        let stamp = self.stamp();
+        (stamp.store_id.clone(), stamp.restore_epoch)
+    }
+    fn actor_kind(&mut self, actor: &ActorId) -> Result<Option<PrincipalKind>, StorageError> {
+        self.actors().actor_kind(actor)
+    }
+    fn binding(&mut self, actor: &ActorId) -> Result<Option<PrincipalBinding>, StorageError> {
+        self.authority().principal(actor)
+    }
+}
+
+impl SessionGate for &mut (dyn WriteTransaction + '_) {
+    fn session(&mut self, id: &Id) -> Result<Option<StoredSession>, StorageError> {
+        self.sessions().session(id)
+    }
+    fn store_and_epoch(&self) -> (StoreId, i64) {
+        let store = self.store();
+        (store.store_id.clone(), store.restore_epoch)
+    }
+    fn actor_kind(&mut self, actor: &ActorId) -> Result<Option<PrincipalKind>, StorageError> {
+        self.actors().actor_kind(actor)
+    }
+    fn binding(&mut self, actor: &ActorId) -> Result<Option<PrincipalBinding>, StorageError> {
+        self.authority().principal(actor)
+    }
+}
+
+/// The one gate for acting on a session. It holds when the session exists and is open, the
+/// invocation is bound to it and its owner, the store and restore epoch match, the principal's
+/// kind is Agent or Host and agrees with the actor registry, and, for an agent, its binding is
+/// present, active and scoped to the session's project. Every refusal is `ScopeDenied`.
 fn authorized_session(
-    read: &dyn ReadSnapshot,
+    mut gate: impl SessionGate,
     ctx: &InvocationContext,
     session_id: &Id,
 ) -> Result<StoredSession, StorageError> {
-    let session = read
-        .sessions()
-        .session(session_id)?
-        .ok_or(StorageError::ScopeDenied)?;
+    let session = gate.session(session_id)?.ok_or(StorageError::ScopeDenied)?;
+    let (store_id, restore_epoch) = gate.store_and_epoch();
     if ctx.session_id() != Some(session_id)
         || session.closed()
         || session.agent_id != *ctx.principal()
-        || read.stamp().store_id != *ctx.store_id()
-        || read.stamp().restore_epoch != ctx.restore_epoch().get()
+        || store_id != *ctx.store_id()
+        || restore_epoch != ctx.restore_epoch().get()
         || !matches!(
             ctx.principal_kind(),
             PrincipalKind::Agent | PrincipalKind::Host
         )
-        || read.actors().actor_kind(ctx.principal())? != Some(ctx.principal_kind())
+        || gate.actor_kind(ctx.principal())? != Some(ctx.principal_kind())
     {
         return Err(StorageError::ScopeDenied);
     }
     if ctx.principal_kind() == PrincipalKind::Agent {
-        let binding = read
-            .authority()
-            .principal(ctx.principal())?
+        let binding = gate
+            .binding(ctx.principal())?
             .ok_or(StorageError::ScopeDenied)?;
         if !binding.active
             || binding
@@ -110,6 +153,49 @@ fn authorized_session(
         }
     }
     Ok(session)
+}
+
+/// Appends the `SkillRevisionsAdopted` event of a skill-set change to a session's history. This
+/// is a host-observed write: the host saw its skill sources change, so no command, operation or
+/// receipt exists and the event goes through the history port like the host's other recorded
+/// observations (package, notification and provider results). Callers authorize the session
+/// first, in the transaction that appends it.
+pub(crate) fn append_skill_adoption(
+    tx: &mut dyn WriteTransaction,
+    actor: &ActorId,
+    session: &StoredSession,
+    payload: Value,
+) -> Result<(), StorageError> {
+    let id = devworks_core::protocol::EventId(tx.new_id(IdKind::Event));
+    tx.history().append(NewEvent {
+        id,
+        actor: actor.clone(),
+        project_id: session.project_id.clone(),
+        root_id: session.root_id.clone(),
+        operation_id: None,
+        aggregate_kind: devworks_core::services::sessions::transcript::SESSION_AGGREGATE.into(),
+        aggregate_id: session.id.as_str().to_owned(),
+        aggregate_revision: session.revision,
+        kind: "SkillRevisionsAdopted".into(),
+        payload,
+    })?;
+    Ok(())
+}
+
+/// Records a skill-set change for a session that has no epoch change to carry it, after the
+/// same session gate every other turn write passes.
+pub(crate) fn record_skill_adoption(
+    store: &dyn ApplicationStore,
+    ctx: &InvocationContext,
+    session_id: &Id,
+    payload: Value,
+) -> Result<(), StorageError> {
+    let ctx = ctx.clone();
+    let session_id = session_id.clone();
+    run_write(store, WriteOptions::default(), move |tx| {
+        let session = authorized_session(&mut *tx, &ctx, &session_id)?;
+        append_skill_adoption(tx, ctx.principal(), &session, payload)
+    })
 }
 
 /// Enumerate unanswered calls only after checking the current session and principal binding.
@@ -1630,7 +1716,7 @@ pub(crate) fn frame_as(
 /// Command retries reuse the host key, so a lost reply cannot repeat the effect.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn dispatch_one(
-    runtime: &Runtime,
+    engine: &TurnEngine,
     store: &dyn ApplicationStore,
     artifacts: &Arc<ArtifactService>,
     schemas: &RegisteredSchemas,
@@ -1641,37 +1727,7 @@ pub(crate) fn dispatch_one(
 ) -> Result<BatchOutcome, StorageError> {
     let (call, started, call_sequence, context_epoch) =
         read_snapshot(store, &ReadOptions::default(), |read| {
-            let session = read
-                .sessions()
-                .session(session_id)?
-                .ok_or(StorageError::ScopeDenied)?;
-            if ctx.session_id() != Some(session_id)
-                || session.closed()
-                || session.agent_id != *ctx.principal()
-                || read.stamp().store_id != *ctx.store_id()
-                || read.stamp().restore_epoch != ctx.restore_epoch().get()
-                || !matches!(
-                    ctx.principal_kind(),
-                    PrincipalKind::Agent | PrincipalKind::Host
-                )
-                || read.actors().actor_kind(ctx.principal())? != Some(ctx.principal_kind())
-            {
-                return Err(StorageError::ScopeDenied);
-            }
-            if ctx.principal_kind() == PrincipalKind::Agent {
-                let binding = read
-                    .authority()
-                    .principal(ctx.principal())?
-                    .ok_or(StorageError::ScopeDenied)?;
-                if !binding.active
-                    || binding
-                        .project_id
-                        .as_ref()
-                        .is_some_and(|p| session.project_id.as_ref() != Some(p))
-                {
-                    return Err(StorageError::ScopeDenied);
-                }
-            }
+            let session = authorized_session(read, ctx, session_id)?;
             let row = read
                 .sessions()
                 .tool_call(session_id, &key.attempt_id.0, &key.native_call_id)?
@@ -1761,7 +1817,7 @@ pub(crate) fn dispatch_one(
                     .map_err(|_| StorageError::ScopeDenied)?;
             Ok((source, targets))
         })?;
-        let providers = runtime.providers().ok_or_else(|| {
+        let providers = engine.providers().ok_or_else(|| {
             StorageError::unavailable(
                 Unavailable::UnsupportedRuntime,
                 "native provider unavailable",
@@ -1799,7 +1855,7 @@ pub(crate) fn dispatch_one(
         if cancellation.is_some_and(Cancellation::is_cancelled) {
             return Err(StorageError::Cancelled);
         }
-        let service = runtime.mcp_service().ok_or_else(|| {
+        let service = engine.mcp_service().ok_or_else(|| {
             StorageError::unavailable(
                 Unavailable::UnsupportedRuntime,
                 "native MCP client unavailable",
@@ -1813,7 +1869,7 @@ pub(crate) fn dispatch_one(
             Err(StorageError::InvalidRecord(_)) => failed("tool_invalid_arguments"),
             Err(error) => return Err(error),
         }
-    } else if runtime.packages().is_some()
+    } else if engine.packages().is_some()
         && crate::package_tools::is_package_tool(store, call.capability_id.as_str())
     {
         // A package tool runs as its own durable operation; the response records it accepted.
@@ -1865,7 +1921,7 @@ pub(crate) fn dispatch_one(
             }
         }
         match result {
-            Ok((descriptor, Mode::Query, raw)) => match runtime.query_with(
+            Ok((descriptor, Mode::Query, raw)) => match engine.query_with(
                 ctx,
                 descriptor.name,
                 &raw,
@@ -1909,7 +1965,7 @@ pub(crate) fn dispatch_one(
                 }
             },
             Ok((descriptor, Mode::Command, raw)) => {
-                match runtime.command(ctx, descriptor.name, &raw) {
+                match engine.command(ctx, descriptor.name, &raw) {
                     Ok(CommandReply::CommandStatusUnknown { .. }) => {
                         // Same host key is retried on recovery until the gateway returns its receipt.
                         return Err(StorageError::unavailable(
@@ -1924,7 +1980,7 @@ pub(crate) fn dispatch_one(
                         ));
                     }
                     Ok(reply @ CommandReply::Recorded { .. }) if approval_refusal(&reply) => {
-                        held_approval(runtime, store, ctx, descriptor, &raw)?
+                        held_approval(engine, store, ctx, descriptor, &raw)?
                     }
                     Ok(reply @ CommandReply::Recorded { .. }) => recorded_command(&reply)?,
                     Ok(CommandReply::Rejected { code, retry, .. }) => {
@@ -2028,37 +2084,7 @@ fn mark_dispatch_started(
         {
             return Err(StorageError::Cancelled);
         }
-        let session = tx
-            .sessions()
-            .session(&session_id)?
-            .ok_or(StorageError::ScopeDenied)?;
-        if session.closed()
-            || ctx.session_id() != Some(&session_id)
-            || session.agent_id != *ctx.principal()
-            || tx.store().store_id != *ctx.store_id()
-            || tx.store().restore_epoch != ctx.restore_epoch().get()
-            || !matches!(
-                ctx.principal_kind(),
-                PrincipalKind::Agent | PrincipalKind::Host
-            )
-            || tx.actors().actor_kind(ctx.principal())? != Some(ctx.principal_kind())
-        {
-            return Err(StorageError::ScopeDenied);
-        }
-        if ctx.principal_kind() == PrincipalKind::Agent {
-            let binding = tx
-                .authority()
-                .principal(ctx.principal())?
-                .ok_or(StorageError::ScopeDenied)?;
-            if !binding.active
-                || binding
-                    .project_id
-                    .as_ref()
-                    .is_some_and(|project| session.project_id.as_ref() != Some(project))
-            {
-                return Err(StorageError::ScopeDenied);
-            }
-        }
+        let session = authorized_session(&mut *tx, &ctx, &session_id)?;
         let row = tx
             .sessions()
             .tool_call(&session_id, &key.attempt_id.0, &key.native_call_id)?
@@ -2103,16 +2129,7 @@ pub(crate) fn cancel_before_dispatch(
     let session_id = session_id.clone();
     let key = key.clone();
     run_write(store, WriteOptions::default(), move |tx| {
-        let session = tx
-            .sessions()
-            .session(&session_id)?
-            .ok_or(StorageError::ScopeDenied)?;
-        if session.closed()
-            || ctx.session_id() != Some(&session_id)
-            || session.agent_id != *ctx.principal()
-        {
-            return Err(StorageError::ScopeDenied);
-        }
+        let session = authorized_session(&mut *tx, &ctx, &session_id)?;
         let batch = turn::batch_of(
             &session_id,
             tx.new_id(IdKind::TranscriptBatch),
@@ -2464,7 +2481,7 @@ fn approval_refusal(reply: &DomainCommandReply) -> bool {
 /// it, so the turn goes on; the decision reaches the agent later as an update of the operation.
 /// A request no approval can carry is answered as failed rather than held.
 fn held_approval(
-    runtime: &Runtime,
+    engine: &TurnEngine,
     store: &dyn ApplicationStore,
     ctx: &InvocationContext,
     descriptor: &'static OperationDescriptor,
@@ -2499,7 +2516,7 @@ fn held_approval(
             frame
         }
     };
-    match runtime.approvals().stage_held(
+    match engine.approvals().stage_held(
         store,
         ctx,
         descriptor.name,
