@@ -75,6 +75,58 @@ struct Origin {
     version: devworks_core::ports::storage::StoredPackageVersion,
 }
 
+/// The person recorded as approving the exact version `digest` of `package`, with that
+/// version, before any check of who that person is now. A package that is not installed and
+/// enabled, a version that is gone, and a version no person approved (activated under publisher
+/// trust or plainly) have none.
+pub(super) fn approval_of(
+    packages: &dyn devworks_core::ports::storage::PackageRegistryRead,
+    package: &str,
+    digest: &str,
+) -> Result<
+    Result<(ActorId, devworks_core::ports::storage::StoredPackageVersion), Refusal>,
+    StorageError,
+> {
+    let record = packages.package(package)?;
+    if !record.is_some_and(|r| r.installed && r.enabled) {
+        return Ok(Err(Refusal::PackageUnavailable));
+    }
+    let Some(version) = packages.package_version(package, digest)? else {
+        return Ok(Err(Refusal::PackageUnavailable));
+    };
+    let approval = version.approval.clone().unwrap_or(Value::Null);
+    let approver = approval["by"]
+        .as_str()
+        .filter(|_| approval["kind"] == "Person")
+        .and_then(|by| Id::new(by).ok())
+        .map(ActorId);
+    Ok(match approver {
+        Some(approver) => Ok((approver, version)),
+        None => Err(Refusal::NoApprover),
+    })
+}
+
+/// The person who approved the exact version `digest` of `package`, with that version: the
+/// principal an event handler's effects run as. [`approval_of`], and the approver must still be
+/// a registered human.
+pub(super) fn approving_person(
+    s: &dyn devworks_core::ports::storage::ReadSnapshot,
+    package: &str,
+    digest: &str,
+) -> Result<
+    Result<(ActorId, devworks_core::ports::storage::StoredPackageVersion), Refusal>,
+    StorageError,
+> {
+    let (approver, version) = match approval_of(s.packages(), package, digest)? {
+        Ok(found) => found,
+        Err(refusal) => return Ok(Err(refusal)),
+    };
+    if s.actors().actor_kind(&approver)? != Some(PrincipalKind::Human) {
+        return Ok(Err(Refusal::NoApprover));
+    }
+    Ok(Ok((approver, version)))
+}
+
 /// Runs one dispatched intent operation (blocking).
 fn execute(
     store: &Arc<dyn ApplicationStore>,
@@ -97,26 +149,8 @@ fn execute(
         return refused(Refusal::NoOrigin, "the intent names no committing version");
     };
     let origin = read_snapshot(&**store, &ReadOptions::default(), |s| {
-        let record = s.packages().package(package)?;
-        if !record.is_some_and(|r| r.installed && r.enabled) {
-            return Ok(Err(Refusal::PackageUnavailable));
-        }
-        let Some(version) = s.packages().package_version(package, digest)? else {
-            return Ok(Err(Refusal::PackageUnavailable));
-        };
-        let approval = version.approval.clone().unwrap_or(Value::Null);
-        let approver = approval["by"]
-            .as_str()
-            .filter(|_| approval["kind"] == "Person")
-            .and_then(|by| Id::new(by).ok())
-            .map(ActorId);
-        let Some(approver) = approver else {
-            return Ok(Err(Refusal::NoApprover));
-        };
-        if s.actors().actor_kind(&approver)? != Some(PrincipalKind::Human) {
-            return Ok(Err(Refusal::NoApprover));
-        }
-        Ok(Ok(Origin { approver, version }))
+        Ok(approving_person(s, package, digest)?
+            .map(|(approver, version)| Origin { approver, version }))
     });
     let origin = match origin {
         Ok(Ok(origin)) => origin,

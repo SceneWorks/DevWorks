@@ -13,6 +13,10 @@ use super::{EventRecord, StorageError};
 use crate::protocol::{ActorId, Id, OperationId, ProjectId, RootId};
 use serde_json::Value;
 
+/// The ID prefix of host-owned sessions (a person's package inference session). They carry no
+/// transcript and belong to no user's session list: session listings omit them.
+pub const HOST_SESSION_PREFIX: &str = "pkgs-";
+
 /// One work item as history and briefings need it (owned by the work item; read-only here).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct WorkRoot {
