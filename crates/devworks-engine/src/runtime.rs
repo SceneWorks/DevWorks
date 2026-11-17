@@ -782,6 +782,7 @@ async fn build(composition: Composition) -> Result<Engine, BootError> {
     let work = Arc::new(
         WorkService::new(ids.clone(), runs.service.clone())
             .with_staged_plans(artifacts.clone())
+            .with_plan_documents(artifacts.clone())
             .with_clock(clock.clone()),
     );
     let mut projects =
