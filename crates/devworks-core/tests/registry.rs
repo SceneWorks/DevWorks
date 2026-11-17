@@ -37,7 +37,7 @@ fn registry_matches_implementation_plan_and_family_register() {
         registry::all().len() as u64,
         register["operationCount"].as_u64().unwrap()
     );
-    assert_eq!(plan["counts"]["operations"].as_u64().unwrap(), 376);
+    assert_eq!(plan["counts"]["operations"].as_u64().unwrap(), 377);
     assert_eq!(
         registry::families().len() as u64,
         register["familyCount"].as_u64().unwrap()
