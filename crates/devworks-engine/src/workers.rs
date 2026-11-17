@@ -239,13 +239,39 @@ impl Stopped {
     }
 }
 
-/// What wakes a polling loop between store passes: a post-commit signal, else a fallback
-/// interval that repairs a missed signal and covers work that becomes due by time alone. The
-/// two signals are an admitted command that may have changed domain state and a finished
-/// delivery (see [`crate::Runtime::state_changes`] and [`crate::Dispatcher::subscribe`]).
+/// What a polling pass wants next.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Next {
+    /// More work is waiting: run again at once.
+    Now,
+    /// Nothing is waiting: sleep until a commit or the fallback interval.
+    Idle,
+    /// Work becomes due by time alone (a retry window, an expiry): wake then at the latest.
+    Within(Duration),
+}
+
+impl From<bool> for Next {
+    fn from(more: bool) -> Self {
+        if more { Self::Now } else { Self::Idle }
+    }
+}
+
+/// The least time between two passes started by commit wakes, so a burst of commits is one pass.
+const MIN_WAKE_GAP: Duration = Duration::from_millis(50);
+/// The most a loop whose own passes keep committing waits between commit-woken passes.
+const MAX_WAKE_GAP: Duration = Duration::from_secs(5);
+
+/// What wakes a polling loop between store passes: any store commit that changed data (the
+/// write owner's [`devworks_core::ports::storage::CommitSignal`], so a command, a supervisor
+/// write and a host-observed write all count), a finished delivery, the earliest deadline the
+/// last pass reported, else a fallback interval that repairs a missed signal.
+///
+/// A loop does not wake itself in a storm: a pass that changed nothing commits nothing, wakes
+/// are at least [`MIN_WAKE_GAP`] apart, and a pass during which commits happened (its own or
+/// others') doubles that gap up to [`MAX_WAKE_GAP`] until a quiet pass resets it.
 #[derive(Clone)]
 pub(crate) struct Commits {
-    admitted: watch::Receiver<u64>,
+    stored: watch::Receiver<u64>,
     delivered: watch::Receiver<u64>,
     fallback: Duration,
     passes: Arc<AtomicU64>,
@@ -253,13 +279,13 @@ pub(crate) struct Commits {
 
 impl Commits {
     pub(crate) fn new(
-        admitted: watch::Receiver<u64>,
+        stored: watch::Receiver<u64>,
         delivered: watch::Receiver<u64>,
         fallback: Duration,
         passes: Arc<AtomicU64>,
     ) -> Self {
         Self {
-            admitted,
+            stored,
             delivered,
             fallback,
             passes,
@@ -269,34 +295,63 @@ impl Commits {
     pub(crate) fn pass(&self) {
         self.passes.fetch_add(1, Ordering::SeqCst);
     }
-    /// Runs `pass` until `live` is false or the loop is stopped:
-    /// a pass that returns true runs again at once (more work is waiting), any other waits for a
-    /// commit signal or the fallback interval. The first pass runs without waiting.
-    pub(crate) async fn run<L, F, Fut>(mut self, mut stopped: Stopped, live: L, mut pass: F)
+    /// Marks every commit so far as seen and returns the commit count.
+    fn observe(&mut self) -> u64 {
+        let _ = *self.delivered.borrow_and_update();
+        *self.stored.borrow_and_update()
+    }
+    /// Runs `pass` until `live` is false or the loop is stopped. The first pass runs without
+    /// waiting; after each pass the loop runs again at once ([`Next::Now`]) or waits.
+    pub(crate) async fn run<L, F, Fut, N>(mut self, mut stopped: Stopped, live: L, mut pass: F)
     where
         L: Fn() -> bool,
         F: FnMut() -> Fut,
-        Fut: Future<Output = bool>,
+        Fut: Future<Output = N>,
+        N: Into<Next>,
     {
+        let mut gap = MIN_WAKE_GAP;
         while live() && !stopped.is_set() {
             self.pass();
-            if !pass().await {
-                self.wait(&mut stopped).await;
+            let started = tokio::time::Instant::now();
+            let before = self.observe();
+            let next = pass().await.into();
+            if next == Next::Now {
+                continue;
+            }
+            // Commits during the pass are newer than what it read: they wake the wait below,
+            // and the longer gap keeps a pass that commits on every run from spinning.
+            let busy = *self.stored.borrow() != before;
+            gap = if busy {
+                (gap * 2).min(MAX_WAKE_GAP)
+            } else {
+                MIN_WAKE_GAP
+            };
+            let due = match next {
+                Next::Within(at) => at.min(self.fallback),
+                _ => self.fallback,
+            };
+            if self.wait(&mut stopped, due).await {
+                // Woken by a commit: coalesce a burst, and keep the gap since the last start.
+                let resume = started + gap;
+                tokio::select! {
+                    () = stopped.until_set() => {}
+                    () = tokio::time::sleep_until(resume) => {}
+                }
             }
         }
     }
-    /// Waits for a commit seen since the last wait, the fallback interval, or the stop signal.
-    pub(crate) async fn wait(&mut self, stopped: &mut Stopped) {
+    /// Waits for a commit, `due` or the stop signal; true when a commit ended it.
+    async fn wait(&mut self, stopped: &mut Stopped, due: Duration) -> bool {
         async fn changed(rx: &mut watch::Receiver<u64>) {
             if rx.changed().await.is_err() {
                 std::future::pending::<()>().await;
             }
         }
         tokio::select! {
-            () = stopped.until_set() => {}
-            () = changed(&mut self.admitted) => {}
-            () = changed(&mut self.delivered) => {}
-            () = tokio::time::sleep(self.fallback) => {}
+            () = stopped.until_set() => false,
+            () = changed(&mut self.stored) => true,
+            () = changed(&mut self.delivered) => true,
+            () = tokio::time::sleep(due) => false,
         }
     }
 }
@@ -494,6 +549,94 @@ mod tests {
                 .join(Instant::now() + Duration::from_millis(100))
                 .await;
             assert_eq!(aborted, ["second", "third"]);
+        });
+    }
+
+    /// Runs a `Commits` loop whose passes are `pass`, with an hour-long fallback, and returns its
+    /// commit sender, pass counter and stop sender.
+    fn spawn_commits<F>(
+        pass: F,
+    ) -> (
+        watch::Sender<u64>,
+        Arc<std::sync::atomic::AtomicUsize>,
+        watch::Sender<bool>,
+        tokio::task::JoinHandle<()>,
+    )
+    where
+        F: Fn(&watch::Sender<u64>, usize) -> Next + Send + Sync + 'static,
+    {
+        let (stored_tx, stored) = watch::channel(0u64);
+        let delivered = watch::channel(0u64).1;
+        let runs = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let (stop, stopped) = watch::channel(false);
+        let commits = Commits::new(
+            stored,
+            delivered,
+            Duration::from_secs(3600),
+            Arc::new(AtomicU64::new(0)),
+        );
+        let (count, sender) = (runs.clone(), stored_tx.clone());
+        let task = tokio::spawn(commits.run(
+            Stopped(stopped),
+            || true,
+            move || {
+                let n = count.fetch_add(1, Ordering::SeqCst) + 1;
+                let next = pass(&sender, n);
+                async move { next }
+            },
+        ));
+        (stored_tx, runs, stop, task)
+    }
+
+    /// A pass that reports a deadline is run again then, not after the hour-long interval.
+    #[test]
+    fn a_pass_deadline_wakes_the_loop_before_the_fallback_interval() {
+        rt().block_on(async {
+            let (_tx, runs, stop, task) =
+                spawn_commits(|_, _| Next::Within(Duration::from_millis(100)));
+            tokio::time::sleep(Duration::from_millis(550)).await;
+            let seen = runs.load(Ordering::SeqCst);
+            assert!(
+                (4..=7).contains(&seen),
+                "{seen} passes in 550 ms at a 100 ms deadline"
+            );
+            stop.send_replace(true);
+            task.await.unwrap();
+        });
+    }
+
+    /// One commit runs exactly one more pass; a burst of commits is coalesced.
+    #[test]
+    fn a_commit_wakes_an_idle_loop_once_and_a_burst_is_one_pass() {
+        rt().block_on(async {
+            let (tx, runs, stop, task) = spawn_commits(|_, _| Next::Idle);
+            tokio::time::sleep(Duration::from_millis(200)).await;
+            assert_eq!(runs.load(Ordering::SeqCst), 1);
+            for _ in 0..20 {
+                tx.send_modify(|n| *n += 1);
+            }
+            tokio::time::sleep(Duration::from_millis(400)).await;
+            assert_eq!(runs.load(Ordering::SeqCst), 2);
+            stop.send_replace(true);
+            task.await.unwrap();
+        });
+    }
+
+    /// A pass that commits on every run does not wake itself in a storm: the gap between its
+    /// commit-woken passes doubles.
+    #[test]
+    fn a_pass_that_always_commits_does_not_spin() {
+        rt().block_on(async {
+            let (_tx, runs, stop, task) = spawn_commits(|tx, _| {
+                tx.send_modify(|n| *n += 1);
+                Next::Idle
+            });
+            tokio::time::sleep(Duration::from_millis(1500)).await;
+            let seen = runs.load(Ordering::SeqCst);
+            // Gaps of 100, 200, 400, 800 ms: boot pass plus about four more.
+            assert!((3..=7).contains(&seen), "{seen} passes in 1.5 s");
+            stop.send_replace(true);
+            task.await.unwrap();
         });
     }
 }

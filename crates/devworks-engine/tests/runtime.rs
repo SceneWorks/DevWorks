@@ -778,3 +778,25 @@ fn a_committed_command_wakes_the_polling_loops_before_the_fallback_interval() {
     }));
     rt.block_on(app.shutdown()).into_result().unwrap();
 }
+
+/// A commit that never passes the command gateway (a supervisor write, a host-observed write, a
+/// retried container stop) wakes the polling loops too.
+#[test]
+fn a_store_commit_outside_the_gateway_wakes_the_polling_loops() {
+    let h = Harness::new();
+    let rt = runtime();
+    let store = h.open();
+    let mut c = composition(&h, store.clone(), Arc::new(native(&h)), sources(&h));
+    c.config.polling_interval = Duration::from_secs(3600);
+    let app = rt.block_on(boot(c)).unwrap();
+    rt.block_on(settle_boot_publications(&app));
+    rt.block_on(async { tokio::time::sleep(Duration::from_secs(1)).await });
+    let before = app.polling_passes();
+    principal(&*store, "direct-writer", PrincipalKind::Host);
+    rt.block_on(within("a polling pass after a direct write", async {
+        while app.polling_passes() == before {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    }));
+    rt.block_on(app.shutdown()).into_result().unwrap();
+}

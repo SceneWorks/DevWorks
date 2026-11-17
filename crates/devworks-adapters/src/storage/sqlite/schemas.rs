@@ -162,6 +162,13 @@ macro_rules! reads {
             ) -> Result<Vec<SchemaRelation>, StorageError> {
                 relations(self.conn, v, ids, after, n)
             }
+            fn next_schema_pin_expiry(&self) -> Result<Option<i64>, StorageError> {
+                db(self
+                    .conn
+                    .query_row("SELECT MIN(expires_at) FROM schema_read_pins", [], |r| {
+                        r.get::<_, Option<i64>>(0)
+                    }))
+            }
             fn schema_publication(
                 &self,
                 op: &OperationId,

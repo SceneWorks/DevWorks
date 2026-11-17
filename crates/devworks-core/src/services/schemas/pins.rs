@@ -16,6 +16,7 @@ use crate::{
 };
 use serde_json::json;
 use std::collections::BTreeMap;
+use std::time::Duration;
 #[derive(Default)]
 pub(super) struct PreparedViews(pub BTreeMap<String, StoredSchemaReadPin>);
 fn unavailable() -> Failure {
@@ -210,19 +211,39 @@ impl SchemaService {
     }
 }
 
+/// What one retention pass removed and when the next live pin expires.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct RetentionPass {
+    pub removed: usize,
+    pub next_expiry: Option<Duration>,
+}
+
 impl SchemaService {
     /// Fixed-size local retention pass; no target connection or authority grant is involved.
     pub fn cleanup_retained_views(&self) -> Result<usize, StorageError> {
+        self.retention_pass().map(|pass| pass.removed)
+    }
+
+    /// [`Self::cleanup_retained_views`], also reporting how long until the next live pin
+    /// expires, so the caller can wake then instead of polling.
+    pub fn retention_pass(&self) -> Result<RetentionPass, StorageError> {
         let Some(runtime) = &self.runtime else {
-            return Ok(0);
+            return Ok(RetentionPass::default());
         };
         let clock = self.clock.clone();
         runtime
             .closed
             .write(runtime.store.as_ref(), WriteOptions::default(), move |tx| {
-                let pins = tx.schemas().expire_schema_pins(clock.now_ms().get(), 500)?;
+                let now = clock.now_ms().get();
+                let pins = tx.schemas().expire_schema_pins(now, 500)?;
                 let rows = tx.schemas().prune_schema_views(500)?;
-                Ok(pins + rows)
+                let next_expiry = tx.schemas().next_schema_pin_expiry()?.map(|at| {
+                    Duration::from_millis(u64::try_from(at.saturating_sub(now)).unwrap_or(0))
+                });
+                Ok(RetentionPass {
+                    removed: pins + rows,
+                    next_expiry,
+                })
             })
     }
 }

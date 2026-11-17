@@ -45,6 +45,10 @@ impl PurgeWorker {
         }
     }
     pub fn step(&self, stopped: &mut dyn FnMut() -> bool) -> Result<usize, StorageError> {
+        self.step_pass(stopped).map(|pass| pass.settled)
+    }
+    /// [`Self::step`], also reporting whether a held or leased effect needs another look.
+    pub fn step_pass(&self, stopped: &mut dyn FnMut() -> bool) -> Result<PurgeStep, StorageError> {
         use crate::ports::storage::{ReadOptions, WriteOptions, read_snapshot, run_write};
         let mut pending = read_snapshot(&*self.store, &ReadOptions::default(), |read| {
             read.projects().purge_pending_effects(32)
@@ -59,6 +63,7 @@ impl PurgeWorker {
             }
         });
         let mut settled = 0;
+        let mut retry_after = None;
         for effect in pending {
             if stopped() {
                 break;
@@ -75,6 +80,8 @@ impl PurgeWorker {
                     .claim_purge_effect(&manifest, &id, &claim, until)
             })?;
             let Some(admitted) = admitted else {
+                // Held with a retry window, or leased by another owner: look again after it.
+                retry_after = Some(PURGE_RETRY_WINDOW);
                 continue;
             };
             let outcome = if stopped() {
@@ -89,6 +96,9 @@ impl PurgeWorker {
                     }
                 }
             };
+            if outcome.is_err() {
+                retry_after = Some(PURGE_RETRY_WINDOW);
+            }
             let manifest = admitted.manifest_id;
             let id = admitted.id;
             run_write(&*self.store, WriteOptions::default(), move |tx| {
@@ -97,8 +107,24 @@ impl PurgeWorker {
             })?;
             settled += 1;
         }
-        Ok(settled)
+        Ok(PurgeStep {
+            settled,
+            retry_after,
+        })
     }
+}
+
+/// How long a failed purge effect stays held before its next attempt (the storage retry window).
+pub const PURGE_RETRY_WINDOW: std::time::Duration = std::time::Duration::from_secs(1);
+
+/// The result of one [`PurgeWorker::step_pass`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PurgeStep {
+    /// Effects this pass claimed and settled.
+    pub settled: usize,
+    /// Set when an effect is held (an owner still in use, such as the client waiting on its UI
+    /// acknowledgement, which commits nothing) or leased: the time to look again.
+    pub retry_after: Option<std::time::Duration>,
 }
 
 /// Its fields and constructor are private to this confirmation owner. A generic authority

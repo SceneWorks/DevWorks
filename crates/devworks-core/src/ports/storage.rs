@@ -66,9 +66,9 @@ use crate::protocol::{
 use crate::registry::SchemaRevision;
 use serde_json::Value;
 use std::fmt;
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc;
+use std::sync::{Arc, Mutex};
 
 mod agents;
 mod artifacts;
@@ -277,6 +277,51 @@ impl Cancellation {
     }
 }
 
+/// A count of store commits that changed data, with listeners that run after each one. The write
+/// owner bumps it once per committed unit of work that modified a row, whoever submitted that
+/// work, so a background loop can wait on it instead of a timer. A unit that changed nothing
+/// (an empty cleanup pass) does not bump it, which keeps a loop's own idle pass from waking it.
+#[derive(Clone, Default)]
+pub struct CommitSignal(Arc<CommitSignalState>);
+type CommitListener = Box<dyn Fn(u64) + Send + Sync>;
+#[derive(Default)]
+struct CommitSignalState {
+    generation: AtomicU64,
+    listeners: Mutex<Vec<CommitListener>>,
+}
+impl CommitSignal {
+    /// Records one data-changing commit and tells every listener the new generation. Runs on the
+    /// write owner after the commit is durable; listeners must not block.
+    pub fn bump(&self) {
+        let generation = self
+            .0
+            .generation
+            .fetch_add(1, Ordering::SeqCst)
+            .wrapping_add(1);
+        for listener in self
+            .0
+            .listeners
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .iter()
+        {
+            listener(generation);
+        }
+    }
+    /// Commits recorded so far.
+    pub fn generation(&self) -> u64 {
+        self.0.generation.load(Ordering::SeqCst)
+    }
+    /// Calls `listener` with the new generation after each later commit.
+    pub fn subscribe(&self, listener: impl Fn(u64) + Send + Sync + 'static) {
+        self.0
+            .listeners
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .push(Box::new(listener));
+    }
+}
+
 /// Writer scheduling class. Authoritative work (controls, receipts, leases, history) takes
 /// precedence; bulk batches keep a reserved progress share so they are never starved.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
@@ -334,6 +379,11 @@ pub trait WriteJob: Send {
 /// The store: one write owner and bounded read snapshots.
 pub trait ApplicationStore: Send + Sync {
     fn info(&self) -> StoreInfo;
+    /// The signal bumped after every commit that changed data, or `None` for a store that does
+    /// not publish one (callers then rely on their own fallback interval).
+    fn commit_signal(&self) -> Option<CommitSignal> {
+        None
+    }
     /// Admits `job` to the bounded mailbox for its priority. `Err` means it was not admitted
     /// (Busy, Cancelled, read-only, stopped) and `finish` will not be called.
     fn submit_write(
