@@ -257,6 +257,7 @@ macro_rules! screens {
                     &self.chat,
                     &self.jobs,
                     &self.decisions,
+                    &self.work,
                 ]
             }
             fn screens_mut(&mut self) -> Vec<&mut dyn DynScreen> {
@@ -266,6 +267,7 @@ macro_rules! screens {
                     &mut self.chat,
                     &mut self.jobs,
                     &mut self.decisions,
+                    &mut self.work,
                 ]
             }
             fn screen(&self, id: ScreenId) -> Option<&dyn DynScreen> {
@@ -275,6 +277,7 @@ macro_rules! screens {
                     ScreenId::Chat => Some(&self.chat),
                     ScreenId::Jobs => Some(&self.jobs),
                     ScreenId::Decisions => Some(&self.decisions),
+                    ScreenId::Work => Some(&self.work),
                     ScreenId::Legacy => None,
                 }
             }
@@ -284,6 +287,35 @@ macro_rules! screens {
                     return None;
                 }
                 let online = self.online();
+                // Work holds the archive counts every other context lends, so its own context
+                // lends none (it reads its own).
+                if id == ScreenId::Work {
+                    let cx = Cx {
+                        client: self.client.as_mut(),
+                        online,
+                        status: &mut self.status,
+                        route: self.route,
+                        routes: &mut self.routes,
+                        scrolls: &mut self.scrolls,
+                        dialogs: &mut *self.dialogs,
+                        selected_project: self.selected_project.clone(),
+                        projects: ProjectLists {
+                            list: &self.projects.list,
+                            repositories: &self.projects.repositories,
+                            members: &self.projects.members,
+                            members_of: self.projects.members_of.as_deref(),
+                            indexing: Some(&self.projects.indexing),
+                        },
+                        catalog: &self.chat.routing.catalog,
+                        job_status: &self.jobs.project_status,
+                        archive_counts: &NO_ARCHIVE_COUNTS,
+                        ctx: self.egui.clone(),
+                        watchers: Some(&self.watchers),
+                        completions: None,
+                        effects: Vec::new(),
+                    };
+                    return Some((&mut self.work, cx));
+                }
                 let mut cx = Cx {
                     client: self.client.as_mut(),
                     online,
@@ -342,12 +374,14 @@ macro_rules! screens {
                         cx.catalog = &self.chat.routing.catalog;
                         Some((&mut self.jobs, cx))
                     }
-                    ScreenId::Legacy => None,
+                    ScreenId::Work | ScreenId::Legacy => None,
                 }
             }
         }
     };
 }
+/// The archive counts the Work screen's own context lends (it reads its own).
+static NO_ARCHIVE_COUNTS: BTreeMap<String, (usize, usize)> = BTreeMap::new();
 screens!(
     Help => help,
     Usage => usage,
@@ -541,7 +575,9 @@ impl Shell {
                 Effect::LoadProjectJobs(p) => {
                     self.with_typed(|j: &mut jobs::JobsUi, cx| j.load_project_jobs(cx, &p))
                 }
-                Effect::CountArchiveWork(p) => self.count_archive_work(&p),
+                Effect::CountArchiveWork(p) => {
+                    self.with_typed(|w: &mut work::WorkUi, cx| w.count_archive_work(cx, &p))
+                }
                 Effect::ForgetArchiveCount(p) => self.work.forget_archive_count(&p),
                 Effect::ReviewPurge(p) => self.start_purge_review(p),
                 Effect::OpenGraph(id, name) => self.open_repository_graph(&id, &name),
@@ -572,6 +608,13 @@ impl Shell {
                     self.knowledge_actions(vec![KnowledgeAction::Select(id)]);
                 }
                 Effect::Watch(actions) => self.watch_act(actions),
+                Effect::OpenGitSession(id) => {
+                    self.with_typed(|c: &mut Chat, cx| {
+                        c.notice = None;
+                        c.open_session(cx, id);
+                    });
+                    self.navigate(Route::Chat);
+                }
             }
         }
     }
@@ -612,11 +655,16 @@ impl Shell {
     pub fn load_sessions(&mut self) {
         self.with_typed(|c: &mut Chat, cx| c.load_sessions(cx));
     }
-    fn load_transcript(&mut self, id: &str) {
-        self.with_typed(|c: &mut Chat, cx| c.load_transcript(cx, id));
-    }
     fn load_router_catalog(&mut self) {
         self.with_typed(|c: &mut Chat, cx| c.load_router_catalog(cx));
+    }
+    /// Reads the selected project's work lists again (the work screens are open).
+    fn load_work(&mut self) {
+        self.with_typed(|w: &mut work::WorkUi, cx| w.load_work(cx));
+    }
+    /// Opens a work item by ID: its project is selected and its screen shown with it selected.
+    fn open_work(&mut self, id: &str) {
+        self.with_typed(|w: &mut work::WorkUi, cx| w.open_work(cx, id));
     }
     fn invalidate_routing(&mut self) {
         self.with_typed(|c: &mut Chat, cx| c.invalidate_routing(cx));
@@ -753,24 +801,12 @@ impl Shell {
                     self.load_knowledge();
                 }
             }
-            Route::Overview | Route::Features | Route::Issues => {
-                self.load_projects();
-                self.load_work();
-            }
             _ => {}
         }
     }
 
     fn pending(&self, slot: &Slot) -> bool {
         self.client.as_ref().is_some_and(|c| c.is_pending(slot))
-    }
-    /// Whether a command of `slot` is running or its outcome is still not confirmed.
-    fn waiting(&self, slot: &Slot) -> bool {
-        self.pending(slot)
-            || self
-                .client
-                .as_ref()
-                .is_some_and(|c| c.unresolved().iter().any(|u| &u.slot == slot))
     }
 
     // -----------------------------------------------------------------------------------------
@@ -1404,9 +1440,6 @@ impl Shell {
             return;
         }
         let Some((slot, reply)) = self.apply_purge(slot, reply) else {
-            return;
-        };
-        let Some((slot, reply)) = self.apply_work(slot, reply) else {
             return;
         };
         match (slot, reply) {
@@ -2263,10 +2296,6 @@ impl Shell {
             {
                 self.load_knowledge();
             }
-            // Changes an agent made reach the work screens (the lists are read in full again).
-            Route::Overview | Route::Features | Route::Issues if !self.work_loading() => {
-                self.load_work();
-            }
             _ => {}
         }
     }
@@ -2936,9 +2965,14 @@ impl Shell {
                 Some((screen.id().key().to_owned(), saved))
             })
             .collect();
-        // The conversation keeps the named fields its state had before it had its own screen.
+        // The conversation and the work screens keep the named fields their state had before
+        // they had their own screens.
         let chat: ChatPendingMemory = screens
             .remove(ScreenId::Chat.key())
+            .and_then(|v| serde_json::from_value(v).ok())
+            .unwrap_or_default();
+        let work: crate::memory::WorkPendingMemory = screens
+            .remove(ScreenId::Work.key())
             .and_then(|v| serde_json::from_value(v).ok())
             .unwrap_or_default();
         PendingMemory {
@@ -2956,12 +2990,7 @@ impl Shell {
                 .knowledge
                 .import_frame(false)
                 .map(|(name, frame)| crate::memory::UnconfirmedImport { name, frame }),
-            plans: self
-                .work
-                .plan_saving
-                .values()
-                .filter_map(|f| serde_json::to_value(f).ok())
-                .collect(),
+            plans: work.plans,
             commands,
             screens,
         }
@@ -2981,6 +3010,14 @@ impl Shell {
             pending
                 .screens
                 .insert(ScreenId::Chat.key().to_owned(), chat);
+        }
+        let work = crate::memory::WorkPendingMemory {
+            plans: std::mem::take(&mut pending.plans),
+        };
+        if let Ok(work) = serde_json::to_value(work) {
+            pending
+                .screens
+                .insert(ScreenId::Work.key().to_owned(), work);
         }
         for (id, saved) in [
             (ScreenId::Conventions, &mut pending.conventions),
@@ -3003,7 +3040,6 @@ impl Shell {
                 screen.restore_pending(saved);
             }
         }
-        let mut confirming: Vec<String> = Vec::new();
         for c in pending.commands {
             let slot = c.slot.clone();
             let Some(u) =
@@ -3017,7 +3053,6 @@ impl Shell {
                 }
             }
             match &slot {
-                Slot::WorkPlan(id) => confirming.push(id.clone()),
                 Slot::AddonsSave { .. } | Slot::AddonsCommand => self.addons.busy = true,
                 Slot::Configure(n) => {
                     let p = &mut self.settings.connections;
@@ -3039,12 +3074,6 @@ impl Shell {
                 client.keep_unresolved(u);
             }
         }
-        let plans = pending
-            .plans
-            .into_iter()
-            .filter_map(|v| serde_json::from_value(v).ok())
-            .collect();
-        self.restore_plan_saves(plans, &confirming);
         let ids: Vec<ScreenId> = self.screens().iter().map(|s| s.id()).collect();
         for id in ids {
             self.with_screen(id, |s, cx| s.restored(cx));
@@ -3604,9 +3633,6 @@ impl Shell {
                 self.routes.entry(Route::Knowledge).or_default().tab = self.knowledge.tab;
                 self.knowledge_actions(actions);
             }
-            Route::Overview => self.overview_screen(ui),
-            Route::Features => self.features_screen(ui),
-            Route::Issues => self.issues_screen(ui),
             _ => self.pending_screen(ui),
         }
     }

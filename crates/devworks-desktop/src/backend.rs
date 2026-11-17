@@ -342,48 +342,6 @@ pub enum Slot {
     KnowledgeImport,
     /// A Knowledge write (record, revise, tag, lifecycle change, deletion).
     KnowledgeWrite,
-    /// Every feature of a project (all pages, read in order).
-    WorkFeatures(String),
-    /// The complete authoritative workflow, fenced by load generation.
-    WorkWorkflow(String, u64),
-    WorkWorkflowCommand(String),
-    /// A queue snapshot; a lease requests a claim after the read completes.
-    AllocationQueue(String, Option<String>, Option<u64>),
-    AllocationClaim(String, Option<String>),
-    AllocationInspect(String),
-    AllocationRelease(String),
-    /// Every card (feature task or standalone issue) of a project.
-    WorkCards(String),
-    /// The project change feed (Activity) of a project.
-    WorkActivity(String, Option<String>, u64),
-    WorkMessagesHistory(String),
-    WorkMessagesInbox(String),
-    WorkMessagesEvents(String),
-    WorkMessagePost(String),
-    WorkMessageAck(String, String),
-    /// One work item's current record (readiness included).
-    WorkDetail(String),
-    WorkGit(String),
-    WorkGitInspect(String, String),
-    /// A change of one work item (one at a time per item).
-    WorkCommand(String),
-    /// A new feature, task or issue in a project.
-    WorkCreate(String),
-    /// A prioritization of one queue (`<project>/<queue>`).
-    WorkOrder(String),
-    /// A plan text stored as an artifact for a feature's pending plan.
-    WorkPlanText(String),
-    /// Project-owned decisions for requirements dropped by a plan save.
-    WorkPlanDrop(String),
-    /// A feature's plan draft save (`features.edit_plan`).
-    WorkPlan(String),
-    /// A root's run controls (inspect) and one Start/Pause/Continue.
-    WorkInspect(String),
-    WorkRun(String),
-    /// The roots and running work of a project an archival would stop (features, issues).
-    ArchiveCount(String, bool),
-    /// Work opened from elsewhere (a completion card): read as a card (`false`) or a feature.
-    WorkOpen(String, bool),
     /// A page of `router.connections` for Settings → Provider connections (load generation).
     Connections(u64),
     /// A page of the full catalog (disabled models included) for the connections panel.
@@ -424,6 +382,8 @@ pub enum Slot {
     Jobs(crate::jobs_ops::JobsSlot),
     #[serde(untagged)]
     Decisions(crate::decision_ops::DecisionsSlot),
+    #[serde(untagged)]
+    Work(crate::work_ops::WorkSlot),
 }
 impl Slot {
     /// The screen whose replies this slot waits for.
@@ -445,6 +405,7 @@ impl Slot {
             Self::Chat(_) => ScreenId::Chat,
             Self::Jobs(_) => ScreenId::Jobs,
             Self::Decisions(_) => ScreenId::Decisions,
+            Self::Work(_) => ScreenId::Work,
             _ => ScreenId::Legacy,
         }
     }

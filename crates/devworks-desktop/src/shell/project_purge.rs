@@ -38,33 +38,6 @@ impl Shell {
                 .entry(project.into())
                 .or_insert_with(|| json!({}))[kind] = value;
         };
-        if let Some(p) = &self.work.of
-            && let Some(f) = &self.work.create
-        {
-            put(
-                p,
-                "createWork",
-                json!({"kind":f.kind,"title":f.title,"description":f.description,"labels":f.labels}),
-            );
-        }
-        if let Some(f) = &self.work.edit {
-            put(
-                f.snapshot.project_id.0.as_str(),
-                "editWork",
-                json!({"snapshot":f.snapshot,"title":f.title,"description":f.description,"labels":f.labels}),
-            );
-        }
-        if let Some(f) = &self.work.plan {
-            put(f.snapshot.project_id.0.as_str(), "plan", json!(f));
-        }
-        for (p, f) in &self.work.allocation_filters {
-            put(p, "allocation", json!(format!("{f:?}")));
-        }
-        for (p, w) in &self.work.workflows {
-            if let Some(d) = &w.draft {
-                put(p, "workflow", json!(format!("{d:?}")));
-            }
-        }
         if let Some(p) = self.knowledge.purge_owner() {
             if let Some(d) = &self.knowledge.draft {
                 put(
@@ -145,14 +118,12 @@ impl Shell {
             self.purge.cleanup_acknowledged = true;
         }
 
-        let work = |id: &str| scope.work_ids.iter().any(|x| x.as_str() == id);
         if let Some(c) = &mut self.client {
             c.invalidate_project_queries(scope);
         }
         if self.selected_project.as_deref() == Some(p) {
             self.selected_project = None;
         }
-        self.work.remove_purged(scope);
         if self.knowledge.purge_owner() == Some(p) {
             self.knowledge = KnowledgeScreen::new();
         }
@@ -184,9 +155,6 @@ impl Shell {
             self.jobs = Default::default();
         }
         self.jobs.form = job_form;
-        if self.work.board.as_deref().is_some_and(work) {
-            self.work.board = None;
-        }
         for screen in self.screens_mut() {
             screen.remove_purged(scope);
         }

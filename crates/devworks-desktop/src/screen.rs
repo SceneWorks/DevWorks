@@ -43,6 +43,8 @@ pub enum ScreenId {
     Jobs,
     /// Approvals, the notification center and completion cards.
     Decisions,
+    /// Overview, Features and Issues.
+    Work,
 }
 impl ScreenId {
     /// The screen's key in persisted pending state (`PendingMemory::screens`).
@@ -64,6 +66,7 @@ impl ScreenId {
             Self::Chat => "chat",
             Self::Jobs => "jobs",
             Self::Decisions => "decisions",
+            Self::Work => "work",
         }
     }
 }
@@ -115,6 +118,9 @@ pub enum Effect {
     ArtifactsChanged,
     /// Work for the watcher lists (a watcher section drawn by another screen).
     Watch(Vec<crate::watchers_screen::WatchAction>),
+    /// Shows a source-control link's conversation (its session ID) on Home, with no earlier
+    /// notice of that conversation.
+    OpenGitSession(String),
 }
 
 /// What the coordinator is told about the visible screen.
