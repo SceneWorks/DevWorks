@@ -115,15 +115,33 @@ impl SessionGate for &mut (dyn WriteTransaction + '_) {
     }
 }
 
+/// Which principals may pass the session gate.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum SessionActors {
+    /// Turn work: only an Agent or Host principal that agrees with the actor registry, and an
+    /// agent also needs an active binding scoped to the session's project.
+    AgentsAndHosts,
+    /// Skill adoption: also a person acting in their own chat session. A Human skips the
+    /// registry and binding checks, which describe agents.
+    AnyOwner,
+}
+
 /// The one gate for acting on a session. It holds when the session exists and is open, the
-/// invocation is bound to it and its owner, the store and restore epoch match, the principal's
-/// kind is Agent or Host and agrees with the actor registry, and, for an agent, its binding is
-/// present, active and scoped to the session's project. Every refusal is `ScopeDenied`.
+/// invocation is bound to it and its owner, and the store and restore epoch match. For
+/// `AgentsAndHosts` the principal's kind must also be Agent or Host and agree with the actor
+/// registry, and an agent's binding must be present, active and scoped to the session's
+/// project. Every refusal is `ScopeDenied`.
 fn authorized_session(
     mut gate: impl SessionGate,
     ctx: &InvocationContext,
     session_id: &Id,
+    actors: SessionActors,
 ) -> Result<StoredSession, StorageError> {
+    let agentic = matches!(
+        ctx.principal_kind(),
+        PrincipalKind::Agent | PrincipalKind::Host
+    );
+    let checks_registry = actors == SessionActors::AgentsAndHosts || agentic;
     let session = gate.session(session_id)?.ok_or(StorageError::ScopeDenied)?;
     let (store_id, restore_epoch) = gate.store_and_epoch();
     if ctx.session_id() != Some(session_id)
@@ -131,11 +149,8 @@ fn authorized_session(
         || session.agent_id != *ctx.principal()
         || store_id != *ctx.store_id()
         || restore_epoch != ctx.restore_epoch().get()
-        || !matches!(
-            ctx.principal_kind(),
-            PrincipalKind::Agent | PrincipalKind::Host
-        )
-        || gate.actor_kind(ctx.principal())? != Some(ctx.principal_kind())
+        || (actors == SessionActors::AgentsAndHosts && !agentic)
+        || (checks_registry && gate.actor_kind(ctx.principal())? != Some(ctx.principal_kind()))
     {
         return Err(StorageError::ScopeDenied);
     }
@@ -193,7 +208,7 @@ pub(crate) fn record_skill_adoption(
     let ctx = ctx.clone();
     let session_id = session_id.clone();
     run_write(store, WriteOptions::default(), move |tx| {
-        let session = authorized_session(&mut *tx, &ctx, &session_id)?;
+        let session = authorized_session(&mut *tx, &ctx, &session_id, SessionActors::AnyOwner)?;
         append_skill_adoption(tx, ctx.principal(), &session, payload)
     })
 }
@@ -206,7 +221,7 @@ pub(crate) fn pending_calls(
     session_id: &Id,
 ) -> Result<Vec<ToolCallKey>, StorageError> {
     read_snapshot(store, &ReadOptions::default(), |read| {
-        authorized_session(read, ctx, session_id)?;
+        authorized_session(read, ctx, session_id, SessionActors::AgentsAndHosts)?;
         let pending = read.sessions().pending_calls(session_id, 500)?;
         if pending.len() == 500 {
             return Err(invalid("pending tool calls exceed dispatch scan bound"));
@@ -366,7 +381,7 @@ pub(crate) fn require_current_head_for_new_request(
     source: &ArtifactRef,
 ) -> Result<ContextHeadFence, StorageError> {
     read_snapshot(store, &ReadOptions::default(), |read| {
-        let session = authorized_session(read, ctx, session_id)?;
+        let session = authorized_session(read, ctx, session_id, SessionActors::AgentsAndHosts)?;
         if read.router().route_request(request_id)?.is_some() {
             return Ok(ContextHeadFence {
                 session_id: session_id.clone(),
@@ -401,7 +416,7 @@ pub(crate) fn native_head_became_stale(
     source: &ArtifactRef,
 ) -> Result<bool, StorageError> {
     read_snapshot(store, &ReadOptions::default(), |read| {
-        let session = authorized_session(read, ctx, session_id)?;
+        let session = authorized_session(read, ctx, session_id, SessionActors::AgentsAndHosts)?;
         let head = read.sessions().provider_context_head(session_id)?;
         Ok(head.as_ref().is_none_or(|head| {
             head.artifact != json!(source)
@@ -420,7 +435,7 @@ pub(crate) fn recover_context_head(
     session_id: &Id,
 ) -> Result<Option<(ArtifactRef, NativeBinding, i64)>, StorageError> {
     let source = read_snapshot(store, &ReadOptions::default(), |read| {
-        let session = authorized_session(read, ctx, session_id)?;
+        let session = authorized_session(read, ctx, session_id, SessionActors::AgentsAndHosts)?;
         let head = read.sessions().provider_context_head(session_id)?;
         if let Some(head) = head
             && head.context_epoch == session.context_epoch
@@ -521,7 +536,7 @@ pub(crate) fn linked_operations(
     session_id: &Id,
 ) -> Result<Vec<StoredToolCall>, StorageError> {
     read_snapshot(store, &ReadOptions::default(), |read| {
-        authorized_session(read, ctx, session_id)?;
+        authorized_session(read, ctx, session_id, SessionActors::AgentsAndHosts)?;
         let linked = read.sessions().linked_operations(session_id, 500)?;
         if linked.len() == 500 {
             return Err(invalid("linked tool operations exceed scan bound"));
@@ -1375,7 +1390,7 @@ pub(crate) fn append_operation_updates(
         .validate()
         .map_err(|error| invalid(format!("{error:?}")))?;
     let (updates, observed) = read_snapshot(store, &ReadOptions::default(), |read| {
-        let session = authorized_session(read, ctx, session_id)?;
+        let session = authorized_session(read, ctx, session_id, SessionActors::AgentsAndHosts)?;
         let version = read
             .artifacts()
             .version(&source.version_id)?
@@ -1727,7 +1742,7 @@ pub(crate) fn dispatch_one(
 ) -> Result<BatchOutcome, StorageError> {
     let (call, started, call_sequence, context_epoch) =
         read_snapshot(store, &ReadOptions::default(), |read| {
-            let session = authorized_session(read, ctx, session_id)?;
+            let session = authorized_session(read, ctx, session_id, SessionActors::AgentsAndHosts)?;
             let row = read
                 .sessions()
                 .tool_call(session_id, &key.attempt_id.0, &key.native_call_id)?
@@ -2084,7 +2099,8 @@ fn mark_dispatch_started(
         {
             return Err(StorageError::Cancelled);
         }
-        let session = authorized_session(&mut *tx, &ctx, &session_id)?;
+        let session =
+            authorized_session(&mut *tx, &ctx, &session_id, SessionActors::AgentsAndHosts)?;
         let row = tx
             .sessions()
             .tool_call(&session_id, &key.attempt_id.0, &key.native_call_id)?
@@ -2129,7 +2145,8 @@ pub(crate) fn cancel_before_dispatch(
     let session_id = session_id.clone();
     let key = key.clone();
     run_write(store, WriteOptions::default(), move |tx| {
-        let session = authorized_session(&mut *tx, &ctx, &session_id)?;
+        let session =
+            authorized_session(&mut *tx, &ctx, &session_id, SessionActors::AgentsAndHosts)?;
         let batch = turn::batch_of(
             &session_id,
             tx.new_id(IdKind::TranscriptBatch),
@@ -2210,7 +2227,7 @@ fn record_observed_operation_update(
     // Apply the same current session gate even when the requested revision was already
     // published and this call will return without appending a batch.
     let observed = read_snapshot(store, &ReadOptions::default(), |read| {
-        authorized_session(read, ctx, session_id)?;
+        authorized_session(read, ctx, session_id, SessionActors::AgentsAndHosts)?;
         let linked = read.sessions().linked_operations(session_id, 500)?;
         if linked.len() == 500 {
             return Err(invalid("linked tool operations exceed scan bound"));

@@ -503,6 +503,9 @@ async fn run_native_loop(
         );
         changes.borrow_and_update();
         let dispatched = tokio::time::Instant::now();
+        // The worker's TurnEngine clone does not own the runtime: the launch that calls
+        // drive_agent_turn holds an upgraded Arc<Runtime> for the whole turn, which keeps the
+        // runtime alive until this blocking task is awaited.
         let worker = engine.clone();
         let stopped = cancellation.clone();
         let handle = tokio::runtime::Handle::current();
@@ -680,6 +683,7 @@ async fn dispatch_pending_off_thread(
     session_id: &Id,
     cancellation: &Cancellation,
 ) -> Result<(), TurnError> {
+    // As above: the caller's upgraded Arc<Runtime> outlives this blocking task.
     let worker = engine.clone();
     let ctx = ctx.clone();
     let session_id = session_id.clone();
