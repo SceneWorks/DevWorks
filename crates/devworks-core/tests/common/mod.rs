@@ -2345,6 +2345,15 @@ impl IndexRead for Unsupported {
     fn nodes_qualified(&self, _: &Id, _: &str, _: u16) -> Result<Vec<StoredNode>, StorageError> {
         nope()
     }
+    fn nodes_qualified_after(
+        &self,
+        _: &Id,
+        _: &str,
+        _: Option<(&str, &str)>,
+        _: u16,
+    ) -> Result<Vec<StoredNode>, StorageError> {
+        nope()
+    }
     fn published(&self, _: &Id) -> Result<Option<StoredPublished>, StorageError> {
         nope()
     }

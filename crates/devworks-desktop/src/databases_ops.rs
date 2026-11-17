@@ -15,6 +15,8 @@ pub enum DatabasesSlot {
     DatabaseObjects(u64, bool),
     /// A relationship page (read sequence, appended).
     DatabaseRelations(u64, bool),
+    /// A page of the code that uses an object (read sequence, appended).
+    DatabaseCodeReferences(u64, bool),
     /// Staging a source's password before its configure command.
     DatabasePrepare,
     /// Preparing a certificate file before its `artifacts.save`.
@@ -27,7 +29,13 @@ pub enum DatabasesSlot {
 screen_slot!(DatabasesSlot, Databases);
 
 pub fn query(b: &dyn Backend, op: &str, body: Value) -> Vec<u8> {
-    ops::at_revision(ops::query_frame(b, op, body), 5)
+    // `schemas.code_references` begins at revision 8; the other source operations stay at 5.
+    let revision = if op == "schemas.code_references" {
+        8
+    } else {
+        5
+    };
+    ops::at_revision(ops::query_frame(b, op, body), revision)
 }
 pub fn command(b: &dyn Backend, op: &str, body: Value) -> Vec<u8> {
     ops::at_revision(ops::command_frame(b, op, body), 5)

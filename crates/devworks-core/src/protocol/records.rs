@@ -2336,6 +2336,73 @@ impl Check for SchemaRelation {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SchemaCodeReference {
+    pub id: Id,
+    pub object_id: Id,
+    pub repository_id: Id,
+    pub graph_view_id: Id,
+    pub unit_key: GraphUnitKey,
+    pub node_id: Id,
+    pub node_name: Content,
+    pub node_kind: Label,
+    pub edge_kind: Label,
+    pub table: Text,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub column: Option<Text>,
+    pub extractor: Label,
+    pub line: Counter,
+    pub snippet: Content,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub statement: Option<Label>,
+}
+impl Check for SchemaCodeReference {
+    fn check(&self) -> Result<(), String> {
+        self.id.check()?;
+        self.object_id.check()?;
+        self.repository_id.check()?;
+        self.graph_view_id.check()?;
+        self.unit_key.check()?;
+        self.node_id.check()?;
+        self.node_name.check()?;
+        self.node_kind.check()?;
+        self.edge_kind.check()?;
+        self.table.check()?;
+        self.column.check()?;
+        self.extractor.check()?;
+        self.line.check()?;
+        self.snippet.check()?;
+        self.statement.check()?;
+        crate::protocol::rules::record(
+            "SchemaCodeReference",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SchemaCodeReferencePage {
+    pub items: Rows<SchemaCodeReference>,
+    pub has_more: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub next_cursor: Option<Cursor>,
+}
+impl Check for SchemaCodeReferencePage {
+    fn check(&self) -> Result<(), String> {
+        self.items.check()?;
+        self.has_more.check()?;
+        self.next_cursor.check()?;
+        crate::protocol::rules::record(
+            "SchemaCodeReferencePage",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "kind", rename_all_fields = "camelCase", deny_unknown_fields)]
 pub enum DbScalar {
     Null {},

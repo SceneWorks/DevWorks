@@ -2331,6 +2331,73 @@ impl Check for SchemaRelation {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SchemaCodeReference {
+    pub id: Id,
+    pub object_id: Id,
+    pub repository_id: Id,
+    pub graph_view_id: Id,
+    pub unit_key: GraphUnitKey,
+    pub node_id: Id,
+    pub node_name: Content,
+    pub node_kind: Label,
+    pub edge_kind: Label,
+    pub table: Text,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub column: Option<Text>,
+    pub extractor: Label,
+    pub line: Counter,
+    pub snippet: Content,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub statement: Option<Label>,
+}
+impl Check for SchemaCodeReference {
+    fn check(&self) -> Result<(), String> {
+        self.id.check()?;
+        self.object_id.check()?;
+        self.repository_id.check()?;
+        self.graph_view_id.check()?;
+        self.unit_key.check()?;
+        self.node_id.check()?;
+        self.node_name.check()?;
+        self.node_kind.check()?;
+        self.edge_kind.check()?;
+        self.table.check()?;
+        self.column.check()?;
+        self.extractor.check()?;
+        self.line.check()?;
+        self.snippet.check()?;
+        self.statement.check()?;
+        super::domain_rules::record(
+            "SchemaCodeReference",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SchemaCodeReferencePage {
+    pub items: Rows<SchemaCodeReference>,
+    pub has_more: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub next_cursor: Option<Cursor>,
+}
+impl Check for SchemaCodeReferencePage {
+    fn check(&self) -> Result<(), String> {
+        self.items.check()?;
+        self.has_more.check()?;
+        self.next_cursor.check()?;
+        super::domain_rules::record(
+            "SchemaCodeReferencePage",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "kind", rename_all_fields = "camelCase", deny_unknown_fields)]
 pub enum DbScalar {
     Null {},
@@ -19604,6 +19671,15 @@ pub enum DomainQuery {
     #[schemars(extend("x-since" = 8))]
     #[serde(rename = "watch.inspect")]
     WatchInspect { watcher_id: Id },
+    #[schemars(extend("x-since" = 8))]
+    #[serde(rename = "schemas.code_references")]
+    SchemasCodeReferences {
+        scope: DataScope,
+        views: ViewSelection,
+        connection_id: Id,
+        object_id: Id,
+        page: PageRequest,
+    },
 }
 impl DomainQuery {
     pub fn operation(&self) -> &'static str {
@@ -19756,6 +19832,7 @@ impl DomainQuery {
             Self::ProjectsPurgeStatus { .. } => "projects.purge_status",
             Self::WatchList { .. } => "watch.list",
             Self::WatchInspect { .. } => "watch.inspect",
+            Self::SchemasCodeReferences { .. } => "schemas.code_references",
         }
     }
 }
@@ -20966,6 +21043,19 @@ impl Check for DomainQuery {
             Self::WatchInspect { watcher_id } => {
                 watcher_id.check()?;
             }
+            Self::SchemasCodeReferences {
+                scope,
+                views,
+                connection_id,
+                object_id,
+                page,
+            } => {
+                scope.check()?;
+                views.check()?;
+                connection_id.check()?;
+                object_id.check()?;
+                page.check()?;
+            }
         }
         super::domain_rules::input(
             self.operation(),
@@ -21382,6 +21472,9 @@ impl Revisioned for DomainQuery {
                 Err("operation predates its introduction".into())
             }
             Self::WatchInspect { .. } if revision < 8 => {
+                Err("operation predates its introduction".into())
+            }
+            Self::SchemasCodeReferences { .. } if revision < 8 => {
                 Err("operation predates its introduction".into())
             }
             Self::RepositoriesNodes { scope, .. } if revision >= 3 && scope.is_none() => {
@@ -26546,6 +26639,9 @@ pub enum OperationResult {
     #[schemars(extend("x-since" = 8))]
     #[serde(rename = "watch.cancel")]
     WatchCancel { value: WatcherRecord },
+    #[schemars(extend("x-since" = 8))]
+    #[serde(rename = "schemas.code_references")]
+    SchemasCodeReferences { value: SchemaCodeReferencePage },
     #[serde(rename = "runs.start")]
     RunsStart { value: RootSnapshot },
     #[serde(rename = "runs.pause")]
@@ -26988,6 +27084,7 @@ impl OperationResult {
             Self::WatchList { .. } => "watch.list",
             Self::WatchInspect { .. } => "watch.inspect",
             Self::WatchCancel { .. } => "watch.cancel",
+            Self::SchemasCodeReferences { .. } => "schemas.code_references",
             Self::RunsStart { .. } => "runs.start",
             Self::RunsPause { .. } => "runs.pause",
             Self::RunsContinue { .. } => "runs.continue",
@@ -27370,6 +27467,7 @@ impl Check for OperationResult {
             Self::WatchList { value } => value.check()?,
             Self::WatchInspect { value } => value.check()?,
             Self::WatchCancel { value } => value.check()?,
+            Self::SchemasCodeReferences { value } => value.check()?,
             Self::RunsStart { value } => value.check()?,
             Self::RunsPause { value } => value.check()?,
             Self::RunsContinue { value } => value.check()?,
@@ -27672,6 +27770,9 @@ impl Revisioned for OperationResult {
                 Err("operation result predates its introduction".into())
             }
             Self::WatchCancel { .. } if revision < 8 => {
+                Err("operation result predates its introduction".into())
+            }
+            Self::SchemasCodeReferences { .. } if revision < 8 => {
                 Err("operation result predates its introduction".into())
             }
             Self::NextWorkClaimProjectQueue { value } => value.check_revision(revision),

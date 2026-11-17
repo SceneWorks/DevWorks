@@ -1,10 +1,10 @@
 {
   "status": "All retained operation inputs and result tags have concrete candidates; not a public API freeze or production runtime coverage",
   "date": "2026-11-13",
-  "catalogSha256": "2391f8849a5385a0a3f995473402068e9e610ff5d4984fe51b4d8b9aefad0f81",
+  "catalogSha256": "a953a79fb5cff16c03f553f48bdf82edc46b4fcccb61f7f0d7e34e31b0251073",
   "familyCount": 50,
-  "operationCount": 376,
-  "concreteInputCandidates": 376,
+  "operationCount": 377,
+  "concreteInputCandidates": 377,
   "domainInputsPending": 0,
   "families": [
     {
@@ -6778,6 +6778,53 @@
           "authority": "Scoped",
           "effect": "Local",
           "semanticRules": " Revision5 publishes source access/profile/freshness and typed metadata details; scope and current authority precede pagination. No source row values are retained.",
+          "familyRules": "Metadata-only structural persistence; native engine profile and credential capabilities explicit. No source row values retained.",
+          "admission": "Validate protocol, strict fields and selected operation/mode first; derive host principal, current scope/role/grants, then apply command receipt and dispatch policy. Payload IDs are references, not authority.",
+          "errorSchema": "DomainFault in domain-query-reply or domain-command-reply; shared pre-admission rejections and legacy specialized control replies remain available",
+          "recovery": "Read uses snapshot/cursor revalidation; local mutations replay receipt. Journaled/external/inference commands reconcile uncertain outcomes before retry. A retry hint never clears Pause/Continue/approval/budget holds.",
+          "status": "Concrete input/result candidate; actual service/authority behavior not implemented"
+        },
+        {
+          "introducedRevision": 8,
+          "operation": "schemas.code_references",
+          "inputSchema": "domain-request.schema.json",
+          "variant": "schemas.code_references",
+          "selectionConstraint": {
+            "pointer": "/body/kind",
+            "equals": "schemas.code_references"
+          },
+          "requestModes": [
+            "Query"
+          ],
+          "modePolicies": [
+            {
+              "mode": "Query",
+              "authority": "ScopedRead",
+              "effect": "ReadOnly or declared external read"
+            }
+          ],
+          "resultSchema": "operation-result.schema.json",
+          "resultSelectionConstraint": {
+            "pointer": "/kind",
+            "equals": "schemas.code_references"
+          },
+          "resultValueType": "SchemaCodeReferencePage",
+          "queryReplySchema": "domain-query-reply.schema.json",
+          "commandReplySchema": null,
+          "completionSchema": null,
+          "schemaRevisions": [
+            {
+              "revision": 8,
+              "inputSchema": "domain-request.r8.schema.json",
+              "resultSchema": "operation-result.r8.schema.json",
+              "queryReplySchema": "domain-query-reply.r8.schema.json",
+              "commandReplySchema": null,
+              "completionSchema": null
+            }
+          ],
+          "authority": "Scoped",
+          "effect": "Local",
+          "semanticRules": " The code that uses one table or column of the selected view: the SQL literals and explicit ORM mappings recorded in the published graph view of each repository the caller may read in scope, with their evidence. A name matches without case, qualified by its schema or not. No source row values are read.",
           "familyRules": "Metadata-only structural persistence; native engine profile and credential capabilities explicit. No source row values retained.",
           "admission": "Validate protocol, strict fields and selected operation/mode first; derive host principal, current scope/role/grants, then apply command receipt and dispatch policy. Payload IDs are references, not authority.",
           "errorSchema": "DomainFault in domain-query-reply or domain-command-reply; shared pre-admission rejections and legacy specialized control replies remain available",

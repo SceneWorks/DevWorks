@@ -4,7 +4,7 @@ Status: architecture baseline 1.1. This is the complete ownership and dependency
 
 ## Success and remaining commitments
 
-The register assigns all 390 requirements, 376 operations across 50 families, 494 retained source entries, 33 acceptance groups and 12 workloads. The 64 excluded source entries retain their reasons and an exclusion audit. There are 80 local slices and no unowned operations, requirements or retained entries.
+The register assigns all 390 requirements, 377 operations across 50 families, 494 retained source entries, 33 acceptance groups and 12 workloads. The 64 excluded source entries retain their reasons and an exclusion audit. There are 80 local slices and no unowned operations, requirements or retained entries.
 
 All 351 operation inputs now have candidate schema bindings, with typed qualified result tags and fault/receipt/completion contracts; no catalog input remains unbound. Actual adoption of those contracts, host authority/SDK/provider behavior, confinement, full native UI integration and all six OS/CPU builds remain implementation acceptance below. The four original architecture feasibility questions are resolved in the final review. AD76–78 adds incoming MCP support in DW-063/064; actual protocol/authentication and two-client acceptance remain explicit. A material failure returns to architecture review with alternatives, without dropping scope or expanding authority.
 
@@ -693,7 +693,7 @@ Native SQLite/MariaDB/MySQL/PostgreSQL/SQL Server metadata profiles declare vers
 
 Implement the recorded strict input/result/error schemas and selected-operation/mode binding, current authority, durable receipt/effect/cancellation/recovery behavior, and meaningful native success/fault cases. Expose the same domain service to native UI and applicable agent tools; no parallel business implementation. Preserve source arguments/results/quirks traced here. Do not advertise unqualified targets or infer product acceptance from fixture tests.
 
-**Operations:** `schemas.connections`, `schemas.objects`, `schemas.relationships`, `schemas.index`, `schemas.refresh`, `schemas.remove_index`, `schemas.configure`
+**Operations:** `schemas.connections`, `schemas.objects`, `schemas.relationships`, `schemas.code_references`, `schemas.index`, `schemas.refresh`, `schemas.remove_index`, `schemas.configure`
 
 **Primary requirement cases:** AT-DB-01, AT-DB-02, AT-DB-03, AT-DB-04, AT-DB-05, AT-DB-06, AT-DB-07, AT-DB-08, AT-DB-09, AT-SCHEMA-01, AT-SCHEMA-02
 
