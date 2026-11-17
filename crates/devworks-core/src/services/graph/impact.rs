@@ -250,7 +250,11 @@ fn build(
     };
     // An overlay view's unmapped inbound count needs every unresolved edge: only the scan reads
     // them. Otherwise the reached nodes' own edges answer, unless a package takes part.
+    // A package start has no indexed answer (its dependencies are derived across the scope), so
+    // the indexed assessment would only spend budget before the scan reruns.
+    let package_start = starts.iter().any(|n| n.node.kind == "Package");
     if !matches!(owner, Owner::Found(_))
+        && !package_start
         && !super::incident::overlay(reader)
         && let Some(result) = assess(reader, starts.clone(), depth, file, selection, &owner, None)?
     {
@@ -451,6 +455,8 @@ fn assess(
             &indexed_starts[..]
         }
     };
+    // The indexed read above may have been cut short after `direct_complete` was first computed.
+    direct_complete &= !reader.gaps.contains(&"graph_visited_limit");
     for edge in start_edges {
         if !reader.budget.visit() {
             direct_complete = false;
