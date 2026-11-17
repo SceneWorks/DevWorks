@@ -6,7 +6,7 @@ use super::{
 };
 use crate::usage::UsageRuntime;
 use devworks_core::{
-    context::InvocationContext,
+    context::{InvocationContext, PrincipalKind},
     fingerprint::sha256_hex,
     ports::{
         provider_http::{StreamLimits, StreamingHttp},
@@ -125,7 +125,9 @@ pub struct NativeInvocation {
 #[derive(Clone)]
 pub struct NestedToolInference {
     pub tool_operation: devworks_core::protocol::OperationId,
-    pub call: ToolCallKey,
+    /// The agent's dispatching tool call; `None` for a package invocation a person or an event
+    /// handler started, which runs in that person's package inference session.
+    pub call: Option<ToolCallKey>,
 }
 pub struct ProviderInvocation {
     pub accounting: DriveOutcome,
@@ -748,12 +750,27 @@ impl NativeProviders {
         Ok(ProviderInvocation { accounting, result })
     }
     /// The nested request's tool call must still be dispatching for this principal and session.
+    /// A person's or event handler's package invocation has no tool call: its session must be
+    /// that person's package inference session.
     fn require_dispatching_call(
         &self,
         context: &InvocationContext,
         session_id: &Id,
         nested: &NestedToolInference,
     ) -> Result<(), StorageError> {
+        let Some(call) = &nested.call else {
+            let session = read_snapshot(self.store.as_ref(), &ReadOptions::default(), |read| {
+                read.sessions().session(session_id)
+            })?
+            .ok_or(StorageError::ScopeDenied)?;
+            return if context.principal_kind() == PrincipalKind::Human
+                && crate::package_host::inference::is_person_session(&session, context.principal())
+            {
+                Ok(())
+            } else {
+                Err(StorageError::ScopeDenied)
+            };
+        };
         let operation = read_snapshot(self.store.as_ref(), &ReadOptions::default(), |read| {
             read.operations().operation(&nested.tool_operation)
         })?
@@ -764,7 +781,7 @@ impl NativeProviders {
             || operation.state != devworks_core::protocol::OperationState::Dispatching
             || payload.get("principal") != Some(&serde_json::json!(context.principal()))
             || payload.get("sessionId") != Some(&serde_json::json!(session_id))
-            || payload.get("call") != Some(&serde_json::json!(nested.call))
+            || payload.get("call") != Some(&serde_json::json!(call))
         {
             return Err(StorageError::ScopeDenied);
         }

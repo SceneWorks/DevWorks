@@ -1,34 +1,50 @@
 //! Brokered inference: a package granted `inference` asks for one text completion with
 //! `broker.call` of kind `Inference`, and gets the answer as an artifact of its invocation.
 //!
-//! * **Who pays.** The request runs as one text-only inference in the invoking agent's session,
-//!   through the same router, pin, budget admission and authority checks as the agent's own turns
-//!   (the routed sampling of [`crate::mcp_sampling`]). It needs the dispatching `package.invoke`
-//!   tool call an agent made: an invocation without one (a person's, an event handler's) has no
-//!   session to route or account against, and is refused.
+//! * **Who pays.** The request runs as one text-only inference through the router, pin, budget
+//!   admission and pricing of the routed sampling of [`crate::mcp_sampling`], as one of three
+//!   principals:
+//!   - an **agent**'s invocation runs in that agent's session, during the dispatching
+//!     `package.invoke` tool call it made ([`grant_for`]);
+//!   - a **person**'s invocation runs as that person ([`person_grant`]);
+//!   - an **event handler**'s invocation runs as the person who approved the exact version that
+//!     is running, the principal its committed intents use ([`event_grant`]). A version no
+//!     person approved (activated under publisher trust, or plainly) is refused.
+//!
+//!   A person has no agent session, and a request needs one to be admitted. The host keeps one
+//!   package inference session per person and scope (workspace, project, or the work item the
+//!   invocation is scoped to): the person conducts it, it has no transcript and no pin, and its
+//!   requests route through the High tier pool that agents start from without a pin. The budget
+//!   is the existing one: feature budgets are the only caps, so an invocation scoped to a work
+//!   item counts against that item's feature and a workspace or project invocation is priced
+//!   and recorded but has no cap to reach.
 //! * **What is recorded.** The attempt's usage and cost are priced and recorded by the usage
-//!   ledger against that session and the invocation's tool call, under the `Other` report
-//!   category, and count against the budget that admits the agent's own inference. A retried
-//!   call under the same action key returns the recorded answer and is never sent again.
+//!   ledger against the session and the invocation (an agent's tool call, or the person's or
+//!   event handler's invocation operation, which also attributes the request), under the
+//!   `Other` report category, and count against the budget that admits that principal's own
+//!   inference. A retried call under the same action key returns the recorded answer and is
+//!   never sent again.
 //! * **The request** is an artifact of the invocation in the host's request schema
 //!   ([`request_schema`]): `{"messages": [{"role": "user"|"assistant", "text"}], "systemPrompt"?,
 //!   "maxTokens"}`. The answer is published as `{"model", "text", "truncated"}`, owned by the
-//!   invoking agent, and becomes one of the invocation's artifacts.
+//!   invoking principal, and becomes one of the invocation's artifacts.
 use super::session::{Slot, rpc_error};
 use super::{PackageHost, SlotContext};
 use crate::mcp_sampling::McpSampling;
 use crate::providers::driver::NativeProviders;
 use devworks_core::authority::authorization_holds;
-use devworks_core::context::{HostIngress, PrincipalKind};
-use devworks_core::fingerprint::canonical_digest;
+use devworks_core::context::{HostIngress, InvocationContext, PrincipalKind};
+use devworks_core::fingerprint::{canonical_digest, sha256_hex};
 use devworks_core::ports::mcp::{SamplingCall, SamplingMessage};
 use devworks_core::ports::storage::{
-    ApplicationStore, ArtifactScope, ReadOptions, WriteOptions, read_snapshot, run_write,
+    ApplicationStore, ArtifactScope, ReadOptions, StorageError, StoredSession, WriteOptions,
+    read_snapshot, run_write,
 };
-use devworks_core::ports::{AuthorityFence, Authorization};
+use devworks_core::ports::{AuthorityFence, Authorization, IdKind};
 use devworks_core::protocol::provider::{ArtifactRef as HostArtifact, ToolCallKey};
 use devworks_core::protocol::{
-    ActorId, AssignmentId, Counter, Id, OperationId, OperationState, ProjectId, Revision, RootId,
+    ActorId, AssignmentId, AttemptId, Counter, Id, OperationId, OperationState, ProjectId,
+    Revision, RootId,
 };
 use devworks_core::services::artifacts::{
     ArtifactService, host::HostArtifactPublication, version_ref,
@@ -234,6 +250,142 @@ pub fn grant_for(
     })
 }
 
+/// The ID of `person`'s package inference session for a scope (module documentation).
+pub fn person_session_id(
+    person: &ActorId,
+    project: Option<&ProjectId>,
+    root: Option<&RootId>,
+) -> Id {
+    let digest = sha256_hex(
+        format!(
+            "{}\0{}\0{}",
+            person.0.as_str(),
+            project.map_or("", |p| p.0.as_str()),
+            root.map_or("", |r| r.0.as_str())
+        )
+        .as_bytes(),
+    );
+    Id::new(format!("pkgs-{digest}")).expect("bounded digest ID")
+}
+
+/// Whether `session` is `person`'s open package inference session.
+pub fn is_person_session(session: &StoredSession, person: &ActorId) -> bool {
+    !session.closed()
+        && session.agent_id == *person
+        && session.created_by == *person
+        && session.id
+            == person_session_id(
+                person,
+                session.project_id.as_ref(),
+                session.root_id.as_ref(),
+            )
+}
+
+/// The grant of an invocation `person` started (`context` is the invocation's own context):
+/// the person's package inference session for the context's scope, opened on first use, under
+/// the person's current standing.
+pub fn person_grant(
+    store: &dyn ApplicationStore,
+    context: &InvocationContext,
+    invocation: &OperationId,
+) -> Result<SamplingGrant, &'static str> {
+    let person = context.principal().clone();
+    if context.principal_kind() != PrincipalKind::Human {
+        return Err("only a person or an event handler's approving person can run inference");
+    }
+    let (project, root) = (context.project_id().cloned(), context.root_id().cloned());
+    let session_id = person_session_id(&person, project.as_ref(), root.as_ref());
+    let (opened_for, opened_project, opened_root) = (person.clone(), project.clone(), root.clone());
+    let opened = session_id.clone();
+    run_write(store, WriteOptions::default(), move |tx| {
+        if tx.actors().actor_kind(&opened_for)? != Some(PrincipalKind::Human) {
+            return Err(StorageError::ScopeDenied);
+        }
+        if let Some(root) = &opened_root
+            && !tx
+                .sessions()
+                .work_root(root)?
+                .is_some_and(|work| Some(&work.project_id) == opened_project.as_ref())
+        {
+            return Err(StorageError::ScopeDenied);
+        }
+        match tx.sessions().session(&opened)? {
+            Some(existing) if is_person_session(&existing, &opened_for) => Ok(()),
+            Some(_) => Err(StorageError::ScopeDenied),
+            None => {
+                let now = tx.now_ms();
+                let conversation_id = tx.new_id(IdKind::Conversation);
+                tx.sessions().insert_session(&StoredSession {
+                    id: opened,
+                    conversation_id,
+                    agent_id: opened_for.clone(),
+                    project_id: opened_project,
+                    root_id: opened_root,
+                    title: "Package inference".into(),
+                    context_epoch: 0,
+                    revision: 1,
+                    created_by: opened_for,
+                    created_at_ms: now,
+                    closed_at_ms: None,
+                    closed_by: None,
+                    next_sequence: 1,
+                    checkpoint_sequence: 0,
+                })
+            }
+        }
+    })
+    .map_err(|_| "the person's package inference session is not available")?;
+    let attempt_id = Id::new("package-invocation").expect("static ID");
+    Ok(SamplingGrant {
+        context: context
+            .clone()
+            .with_lineage(project, root, None)
+            .with_session(session_id),
+        operation_id: invocation.clone(),
+        call: ToolCallKey {
+            attempt_id: AttemptId(attempt_id.clone()),
+            native_call_id: invocation.0.as_str().to_owned(),
+            ordinal: Counter::new(0).expect("zero"),
+        },
+        attempt_id,
+        fences: Vec::new(),
+    })
+}
+
+/// The grant of an event handler's invocation of `package` at manifest `digest`: the person who
+/// approved that exact version, in the workspace. A version no person approved has none.
+pub fn event_grant(
+    store: &dyn ApplicationStore,
+    package: &str,
+    digest: &str,
+    invocation: &OperationId,
+) -> Result<SamplingGrant, &'static str> {
+    let approver = read_snapshot(store, &ReadOptions::default(), |s| {
+        Ok(super::intents::approving_person(s, package, digest)?.map(|(approver, _)| approver))
+    })
+    .map_err(|_| "the approved version cannot be read")?
+    .map_err(|why| match why {
+        super::intents::Refusal::NoApprover => {
+            "no person approved the running version, so its event handlers run no inference"
+        }
+        _ => "the package or its running version is no longer available",
+    })?;
+    let info = store.info();
+    let (Ok(epoch), Ok(policy)) = (Counter::new(info.restore_epoch.max(0)), Revision::new(1))
+    else {
+        return Err("invalid store epoch");
+    };
+    let context = HostIngress::new(store).context(
+        approver,
+        PrincipalKind::Human,
+        invocation.0.clone(),
+        Id::new("package-inference").expect("static ingress"),
+        epoch,
+        policy,
+    );
+    person_grant(store, &context, invocation)
+}
+
 /// Runs `request` for the package call `action_key` of the invocation whose tool call is
 /// `operation`, through the router (module documentation); the answer as `{"model", "text",
 /// "truncated"}`.
@@ -309,10 +461,20 @@ pub(super) fn call(
             "the application stopped",
         ));
     };
-    let grant = grant_for(
-        &*host.store,
-        &OperationId(Id::new(ctx.operation_id.clone()).map_err(|_| denied("invalid invocation"))?),
-    )
+    let operation =
+        OperationId(Id::new(ctx.operation_id.clone()).map_err(|_| denied("invalid invocation"))?);
+    let grant = match (&ctx.kind, ctx.grants.principal()) {
+        (super::InvocationKind::Event(_), _) => event_grant(
+            &*host.store,
+            &ctx.package_id,
+            &ctx.manifest_digest,
+            &operation,
+        ),
+        (_, Some(person)) if person.principal_kind() == PrincipalKind::Human => {
+            person_grant(&*host.store, person, &operation)
+        }
+        _ => grant_for(&*host.store, &operation),
+    }
     .map_err(denied)?;
     let reference: HostArtifact = serde_json::to_value(request)
         .and_then(serde_json::from_value)
@@ -341,7 +503,7 @@ pub(super) fn call(
             Some(slot.cancellation.clone()),
         ))
         .map_err(|why| rpc_error(RpcErrorClass::Unavailable, why))?;
-    // The answer is the invocation's: owned by the invoking agent, in its scope.
+    // The answer is the invocation's: owned by the invoking principal, in its scope.
     let staged = broker
         .artifacts
         .stage_host_bytes(
