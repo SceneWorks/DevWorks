@@ -22,6 +22,7 @@ pub fn kind_of(s: &ConfigScope) -> ScopeKind {
     match s {
         ConfigScope::Workspace => ScopeKind::Workspace,
         ConfigScope::Project(_) => ScopeKind::Project,
+        ConfigScope::Repository { .. } => ScopeKind::Repository,
     }
 }
 
@@ -80,14 +81,20 @@ pub fn layer_at(
         .transpose()
 }
 
-/// Current layers in precedence order: the project (when addressed), then the workspace.
+/// Current layers in precedence order: the repository (when addressed), then its project, then
+/// the workspace.
 pub fn current_chain(
     read: &dyn ConfigurationRead,
     scope: &ConfigScope,
 ) -> Result<Vec<Layer>, StorageError> {
-    let mut layers = Vec::with_capacity(2);
-    if let ConfigScope::Project(_) = scope {
-        layers.push(current_layer(read, scope)?);
+    let mut layers = Vec::with_capacity(3);
+    match scope {
+        ConfigScope::Workspace => {}
+        ConfigScope::Project(_) => layers.push(current_layer(read, scope)?),
+        ConfigScope::Repository { project, .. } => {
+            layers.push(current_layer(read, scope)?);
+            layers.push(current_layer(read, &ConfigScope::Project(project.clone()))?);
+        }
     }
     layers.push(current_layer(read, &ConfigScope::Workspace)?);
     Ok(layers)
@@ -118,6 +125,7 @@ pub fn entry(
         },
         source_scope: DataScope::from(source),
         revision: Revision::new(revision).expect("positive revision"),
+        source_repository_id: source.repository_id().cloned(),
     }
 }
 

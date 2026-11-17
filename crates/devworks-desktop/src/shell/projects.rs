@@ -31,6 +31,14 @@ use std::collections::{BTreeMap, BTreeSet};
 
 controller!(ProjectsCtl, projects: ProjectsScreen);
 
+/// The delivery settings a repository may set for itself and the one it only inherits.
+const DELIVERY_KEYS: [&str; 4] = [
+    "delivery.autoMerge",
+    "delivery.mandatoryReview",
+    "delivery.maxReviewFixCycles",
+    "reviews.automationWaitSeconds",
+];
+
 impl Screen for ProjectsScreen {
     type Slot = ProjectsSlot;
     const ID: ScreenId = ScreenId::Projects;
@@ -83,8 +91,17 @@ impl Screen for ProjectsScreen {
         }
     }
     fn restore_in_flight(&mut self, slot: &ProjectsSlot, _u: &Unresolved) {
-        if let ProjectsSlot::ProjectSettingsSave(p) = slot {
-            self.base.entry(p.clone()).or_default().saving = true;
+        match slot {
+            ProjectsSlot::ProjectSettingsSave(p) => {
+                self.base.entry(p.clone()).or_default().saving = true;
+            }
+            ProjectsSlot::RepositoryDeliverySave(p, r) => {
+                self.delivery
+                    .entry((p.clone(), r.clone()))
+                    .or_default()
+                    .saving = true;
+            }
+            _ => {}
         }
     }
     fn purge_live(&self, out: &mut Live) {
@@ -106,6 +123,12 @@ impl Screen for ProjectsScreen {
         for (p, f) in &self.base {
             put(p, "directory", json!(f.buffer));
         }
+        for ((p, r), f) in &self.delivery {
+            let dirty = f.view.as_ref().map(SettingsView::dirty_keys);
+            if let Some(keys) = dirty.filter(|k| !k.is_empty()) {
+                put(p, &format!("repositoryDelivery:{r}"), json!(keys));
+            }
+        }
     }
     fn remove_purged(&mut self, scope: &ProjectPurgeClientScope) {
         let p = scope.project_id.0.as_str();
@@ -113,6 +136,7 @@ impl Screen for ProjectsScreen {
         self.edit = self.edit.take().filter(|f| f.project != p);
         self.membership = self.membership.take().filter(|f| f.project != p);
         self.base.remove(p);
+        self.delivery.retain(|(project, _), _| project != p);
     }
     fn context(&self, _route: Route, mem: &RouteMemory) -> ScreenContext {
         ScreenContext {
@@ -146,6 +170,20 @@ impl ProjectsCtl<'_, '_> {
             "Reading project settings",
             "settings.read_effective",
             move |b| ops::project_settings_read(b, &p, &[BASE_DIRECTORY, CONTAINER_RUNTIME]),
+        );
+    }
+    fn load_delivery(&mut self, project: &str, repository: &str) {
+        self.projects
+            .delivery
+            .entry((project.to_owned(), repository.to_owned()))
+            .or_default()
+            .loading = true;
+        let (p, r) = (project.to_owned(), repository.to_owned());
+        self.query(
+            ProjectsSlot::RepositoryDelivery(project.to_owned(), repository.to_owned()),
+            "Reading repository delivery settings",
+            "settings.read_effective",
+            move |b| ops::repository_settings_read(b, &p, &r, &DELIVERY_KEYS),
         );
     }
     fn load_git(&mut self, repository: &str) {
@@ -264,6 +302,30 @@ impl ProjectsCtl<'_, '_> {
                     self.navigate(Route::Overview);
                 }
                 Action::LoadBase(p) => self.load_base(&p),
+                Action::LoadDelivery(p, r) => self.load_delivery(&p, &r),
+                Action::SaveDelivery(p, r) => {
+                    let Some(b) = self.backend() else { continue };
+                    let Some(frame) = self
+                        .projects
+                        .delivery
+                        .get(&(p.clone(), r.clone()))
+                        .and_then(|x| x.view.as_ref())
+                        .and_then(|v| ops::settings_submit(&*b, v, false))
+                    else {
+                        continue;
+                    };
+                    if let Some(x) = self.projects.delivery.get_mut(&(p.clone(), r.clone())) {
+                        x.saving = true;
+                    }
+                    if let Some(c) = &mut self.cx.client {
+                        c.command(
+                            ProjectsSlot::RepositoryDeliverySave(p, r).into(),
+                            "Saving repository delivery settings",
+                            "settings.save_revision",
+                            frame,
+                        );
+                    }
+                }
                 Action::ChooseBase(p) => {
                     let start = self
                         .projects
@@ -565,6 +627,59 @@ impl ProjectsCtl<'_, '_> {
                         if matches!(&e, Failure::Refused(f) if f.code == DomainErrorCode::RevisionConflict)
                         {
                             self.load_base(&p);
+                        }
+                    }
+                }
+            }
+            (ProjectsSlot::RepositoryDelivery(p, r), Reply::Query(q)) => {
+                let scope = ConfigScope::Repository {
+                    project: ProjectId(Id::new(p.clone()).expect("listed project id")),
+                    repository: Id::new(r.clone()).expect("listed repository id"),
+                };
+                let b = self.projects.delivery.entry((p, r)).or_default();
+                b.loading = false;
+                let after_save = std::mem::take(&mut b.after_save);
+                match ops::settings_entries(q) {
+                    Ok((revision, entries)) => {
+                        match &mut b.view {
+                            Some(v) if after_save => v.saved(revision, &entries),
+                            Some(v) => v.refresh(revision, &entries),
+                            None => b.view = Some(SettingsView::new(scope, revision, &entries)),
+                        }
+                        if after_save {
+                            b.saving = false;
+                        }
+                        b.error = None;
+                    }
+                    Err(e) => {
+                        b.saving = false;
+                        b.error = Some(e.describe());
+                    }
+                }
+            }
+            (ProjectsSlot::RepositoryDeliverySave(p, r), Reply::Command(c)) => {
+                match ops::settings_saved(c) {
+                    Ok(()) => {
+                        if let Some(b) = self.projects.delivery.get_mut(&(p.clone(), r.clone())) {
+                            b.after_save = true;
+                        }
+                        self.announce("The repository's delivery settings were saved.");
+                        self.load_delivery(&p, &r);
+                    }
+                    Err(Failure::Unknown) => {
+                        self.announce(
+                            "The repository's delivery settings: outcome not confirmed. Use \
+                             Confirm outcomes to check again.",
+                        );
+                    }
+                    Err(e) => {
+                        if let Some(b) = self.projects.delivery.get_mut(&(p.clone(), r.clone())) {
+                            b.saving = false;
+                            b.error = Some(e.describe());
+                        }
+                        if matches!(&e, Failure::Refused(f) if f.code == DomainErrorCode::RevisionConflict)
+                        {
+                            self.load_delivery(&p, &r);
                         }
                     }
                 }

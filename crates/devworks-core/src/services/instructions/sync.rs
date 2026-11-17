@@ -793,7 +793,9 @@ pub(crate) fn publish_instruction_text(
 ) -> Result<Value, StorageError> {
     let scope = match &item.scope {
         ConfigScope::Workspace => crate::ports::storage::ArtifactScope::Workspace,
-        ConfigScope::Project(p) => crate::ports::storage::ArtifactScope::Project(p.clone()),
+        ConfigScope::Project(p) | ConfigScope::Repository { project: p, .. } => {
+            crate::ports::storage::ArtifactScope::Project(p.clone())
+        }
     };
     let owner = tx.store().host_actor.clone();
     let version = artifacts.commit_host_bytes_in_scope(
@@ -821,7 +823,8 @@ pub(crate) fn record_capture(
     recorded: RecordedRevision,
 ) -> Result<StoredInstructionRevision, StorageError> {
     let scope = match (&recorded.confined, &item.scope) {
-        (Some(p), _) | (None, ConfigScope::Project(p)) => {
+        (Some(p), _)
+        | (None, ConfigScope::Project(p) | ConfigScope::Repository { project: p, .. }) => {
             crate::ports::storage::ArtifactScope::Project(p.clone())
         }
         (None, ConfigScope::Workspace) => crate::ports::storage::ArtifactScope::Workspace,

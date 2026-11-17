@@ -24638,6 +24638,10 @@
         "revision": {
           "$ref": "#/$defs/Revision"
         },
+        "sourceRepositoryId": {
+          "$ref": "#/$defs/Id",
+          "x-since": 8
+        },
         "sourceScope": {
           "$ref": "#/$defs/DataScope"
         },

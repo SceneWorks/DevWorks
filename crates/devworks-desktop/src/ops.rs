@@ -368,11 +368,19 @@ pub fn settings_submit(
     view: &SettingsView,
     validate: bool,
 ) -> Option<Vec<u8>> {
-    let body = serde_json::to_value(view.save_input()?).ok()?;
-    Some(if validate {
+    let input = view.save_input()?;
+    let repository = input.repository_id.is_some();
+    let body = serde_json::to_value(input).ok()?;
+    let frame = if validate {
         query_frame(backend, "settings.validate", body)
     } else {
         command_frame(backend, "settings.save_revision", body)
+    };
+    // A repository scope exists from schema revision 8; earlier revisions refuse the member.
+    Some(if repository {
+        at_revision(frame, SETTINGS_REPOSITORY_REVISION)
+    } else {
+        frame
     })
 }
 /// `settings.validate` for explicit values (directory health checks without drafts).
@@ -1059,6 +1067,26 @@ pub fn project_settings_read(backend: &dyn Backend, project: &str, keys: &[&str]
         "settings.read_effective",
         json!({"scope": {"kind": "Project", "projectId": project}, "keys": keys,
             "page": {"limit": 500}}),
+    )
+}
+/// The schema revision that introduced a repository scope for `settings.*` (`repositoryId`).
+pub const SETTINGS_REPOSITORY_REVISION: u64 = 8;
+/// `settings.read_effective` of `keys` at one repository of a project: the repository's own
+/// values over the project's, over the workspace's, each entry naming the layer it came from.
+pub fn repository_settings_read(
+    backend: &dyn Backend,
+    project: &str,
+    repository: &str,
+    keys: &[&str],
+) -> Vec<u8> {
+    at_revision(
+        query_frame(
+            backend,
+            "settings.read_effective",
+            json!({"scope": {"kind": "Project", "projectId": project},
+                "repositoryId": repository, "keys": keys, "page": {"limit": 500}}),
+        ),
+        SETTINGS_REPOSITORY_REVISION,
     )
 }
 /// `settings.validate` of explicit values at a project's scope (directory health).

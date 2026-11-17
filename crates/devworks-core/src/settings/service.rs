@@ -148,10 +148,24 @@ fn require_scope(read: &dyn ConfigurationRead, scope: &ConfigScope) -> Result<()
     }
     Err(Refusal::new(
         DomainErrorCode::NotFound,
-        "project",
+        if scope.repository_id().is_some() {
+            "repository"
+        } else {
+            "project"
+        },
         Some(scope.target_id()),
     )
     .into())
+}
+
+/// The scope an operation addresses, or the refusal for a repository without a project scope.
+fn addressed(
+    scope: &crate::protocol::data::DataScope,
+    repository: Option<&Id>,
+) -> Result<ConfigScope, Failure> {
+    ConfigScope::addressed(scope, repository).map_err(|_| {
+        Refusal::new(DomainErrorCode::InvalidArgument, "repository_scope", None).into()
+    })
 }
 
 /// A host-bound human decision: the invocation is human and the store knows the principal as a
@@ -389,7 +403,7 @@ fn save(
     roles: &dyn PrincipalRoles,
     input: &ops::SaveRevisionInput,
 ) -> Result<DomainDecision, Failure> {
-    let scope = crate::ports::storage::ConfigScope::from(&input.scope);
+    let scope = addressed(&input.scope, input.repository_id.as_ref())?;
     require_scope(&*tx.configuration(), &scope)?;
     let writer = writer(tx, ctx, roles)?;
     let current = current_layer(&*tx.configuration(), &scope)?;
@@ -1102,7 +1116,7 @@ impl SettingsService {
             }
             keys
         };
-        let revisions = current_revisions(read, scope.project_id())?;
+        let revisions = chain_revisions(read, scope)?;
         let binding = cursor_binding(scope, &keys, &revisions);
         let offset = match &input.page.cursor {
             None => 0,
@@ -1124,7 +1138,7 @@ impl SettingsService {
         };
         Ok((
             OperationResult::SettingsReadEffective { value },
-            scope_revision(scope, &revisions),
+            revisions[0],
         ))
     }
 
@@ -1203,24 +1217,27 @@ impl SettingsService {
                 Some(m.scope.target_id()),
             )
         })?;
-        let revisions = current_revisions(read, scope.project_id())?;
         Ok((
             OperationResult::SettingsExplainSource { value: page(items) },
-            scope_revision(scope, &revisions),
+            layers[0].revision,
         ))
     }
 }
 
-fn scope_revision(scope: &ConfigScope, r: &AdoptedRevisions) -> i64 {
-    match scope {
-        ConfigScope::Workspace => r.workspace,
-        ConfigScope::Project(_) => r.project.unwrap_or(model::INITIAL_REVISION),
-    }
+/// The current revision of each layer of the scope's chain, the addressed scope first.
+fn chain_revisions(
+    read: &dyn ConfigurationRead,
+    scope: &ConfigScope,
+) -> Result<Vec<i64>, StorageError> {
+    Ok(current_chain(read, scope)?
+        .iter()
+        .map(|l| l.revision)
+        .collect())
 }
 
 /// Binds a read cursor to the exact scope, key list and chain revisions; any change expires it.
-fn cursor_binding(scope: &ConfigScope, keys: &[&str], r: &AdoptedRevisions) -> String {
-    let doc = json!([scope.key(), keys, r.workspace, r.project]);
+fn cursor_binding(scope: &ConfigScope, keys: &[&str], revisions: &[i64]) -> String {
+    let doc = json!([scope.key(), keys, revisions]);
     sha256_hex(doc.to_string().as_bytes())[..32].to_owned()
 }
 
@@ -1240,9 +1257,9 @@ impl QueryHandler for SettingsService {
         };
         let read = snapshot.configuration();
         let scope = match input {
-            ops::Input::ReadEffective(i) => crate::ports::storage::ConfigScope::from(&i.scope),
-            ops::Input::Validate(i) => crate::ports::storage::ConfigScope::from(&i.scope),
-            ops::Input::ExplainSource(i) => crate::ports::storage::ConfigScope::from(&i.scope),
+            ops::Input::ReadEffective(i) => addressed(&i.scope, i.repository_id.as_ref()),
+            ops::Input::Validate(i) => addressed(&i.scope, i.repository_id.as_ref()),
+            ops::Input::ExplainSource(i) => addressed(&i.scope, i.repository_id.as_ref()),
             ops::Input::SaveRevision(_) => {
                 return Err(self.fault(Refusal::new(
                     DomainErrorCode::UnsupportedCapability,
@@ -1250,6 +1267,10 @@ impl QueryHandler for SettingsService {
                     None,
                 )));
             }
+        };
+        let scope = match scope {
+            Ok(scope) => scope,
+            Err(failure) => return Err(self.read_failure(failure)),
         };
         let answered = if ctx.principal_kind() == PrincipalKind::Agent
             && scope.project_id() != ctx.project_id()
@@ -1308,6 +1329,17 @@ impl CommandHandler for SettingsService {
             operation_id: None,
         })
     }
+}
+
+/// The effective value of `key` for work in `scope` (a repository scope inherits its project,
+/// then the workspace), with the layer it comes from. Delivery uses this with the repository it
+/// delivers in, so a repository's own value applies to that repository only.
+pub fn effective_setting(
+    read: &dyn ConfigurationRead,
+    scope: &ConfigScope,
+    key: &str,
+) -> Result<SettingEntry, Failure> {
+    Ok(effective_entries(read, scope, &[key])?.remove(0))
 }
 
 /// The current inherited allowance for one feature/issue's children. Host schedulers share the

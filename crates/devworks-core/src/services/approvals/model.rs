@@ -155,7 +155,10 @@ fn public(content: &Value) -> Value {
 pub(crate) fn scope_wire(scope: &crate::ports::storage::ConfigScope) -> Value {
     match scope {
         crate::ports::storage::ConfigScope::Workspace => json!({"kind":"Workspace"}),
-        crate::ports::storage::ConfigScope::Project(p) => json!({"kind":"Project","projectId":p}),
+        crate::ports::storage::ConfigScope::Project(p)
+        | crate::ports::storage::ConfigScope::Repository { project: p, .. } => {
+            json!({"kind":"Project","projectId":p})
+        }
     }
 }
 

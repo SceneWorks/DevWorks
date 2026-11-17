@@ -5336,6 +5336,13 @@ pub struct SettingEntry {
     pub value: SchemaValue,
     pub source_scope: DataScope,
     pub revision: Revision,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Id", extend("x-since" = 8))]
+    pub source_repository_id: Option<Id>,
 }
 impl Check for SettingEntry {
     fn check(&self) -> Result<(), String> {
@@ -5343,11 +5350,20 @@ impl Check for SettingEntry {
         self.value.check()?;
         self.source_scope.check()?;
         self.revision.check()?;
+        self.source_repository_id.check()?;
         super::domain_rules::record(
             "SettingEntry",
             &serde_json::to_value(self).map_err(|e| e.to_string())?,
         )?;
         Ok(())
+    }
+}
+
+impl Revisioned for SettingEntry {
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 8 {
+            self.source_repository_id = None;
+        }
     }
 }
 
@@ -19179,17 +19195,41 @@ pub enum DomainQuery {
     #[serde(rename = "settings.read_effective")]
     SettingsReadEffective {
         scope: DataScope,
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "gated_member"
+        )]
+        #[schemars(with = "Id", extend("x-since" = 8))]
+        repository_id: Option<Id>,
         keys: Items<Label>,
         page: PageRequest,
     },
     #[serde(rename = "settings.validate")]
     SettingsValidate {
         scope: DataScope,
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "gated_member"
+        )]
+        #[schemars(with = "Id", extend("x-since" = 8))]
+        repository_id: Option<Id>,
         expected_revision: Revision,
         entries: NonEmpty<SettingAssignment>,
     },
     #[serde(rename = "settings.explain_source")]
-    SettingsExplainSource { scope: DataScope, key: Label },
+    SettingsExplainSource {
+        scope: DataScope,
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "gated_member"
+        )]
+        #[schemars(with = "Id", extend("x-since" = 8))]
+        repository_id: Option<Id>,
+        key: Label,
+    },
     #[serde(rename = "router.catalog")]
     RouterCatalog {
         page: PageRequest,
@@ -20695,22 +20735,35 @@ impl Check for DomainQuery {
                 history.check()?;
                 usage.check()?;
             }
-            Self::SettingsReadEffective { scope, keys, page } => {
+            Self::SettingsReadEffective {
+                scope,
+                repository_id,
+                keys,
+                page,
+            } => {
                 scope.check()?;
+                repository_id.check()?;
                 keys.check()?;
                 page.check()?;
             }
             Self::SettingsValidate {
                 scope,
+                repository_id,
                 expected_revision,
                 entries,
             } => {
                 scope.check()?;
+                repository_id.check()?;
                 expected_revision.check()?;
                 entries.check()?;
             }
-            Self::SettingsExplainSource { scope, key } => {
+            Self::SettingsExplainSource {
+                scope,
+                repository_id,
+                key,
+            } => {
                 scope.check()?;
+                repository_id.check()?;
                 key.check()?;
             }
             Self::RouterCatalog {
@@ -21266,6 +21319,21 @@ impl Revisioned for DomainQuery {
                 }
                 if revision < 2 {
                     *usage = None;
+                }
+            }
+            Self::SettingsReadEffective { repository_id, .. } => {
+                if revision < 8 {
+                    *repository_id = None;
+                }
+            }
+            Self::SettingsValidate { repository_id, .. } => {
+                if revision < 8 {
+                    *repository_id = None;
+                }
+            }
+            Self::SettingsExplainSource { repository_id, .. } => {
+                if revision < 8 {
+                    *repository_id = None;
                 }
             }
             Self::RouterAvailability { session_id, .. } => {
@@ -22858,6 +22926,13 @@ pub enum DomainCommand {
     #[serde(rename = "settings.save_revision")]
     SettingsSaveRevision {
         scope: DataScope,
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "gated_member"
+        )]
+        #[schemars(with = "Id", extend("x-since" = 8))]
+        repository_id: Option<Id>,
         expected_revision: Revision,
         entries: NonEmpty<SettingAssignment>,
     },
@@ -24999,10 +25074,12 @@ impl Check for DomainCommand {
             }
             Self::SettingsSaveRevision {
                 scope,
+                repository_id,
                 expected_revision,
                 entries,
             } => {
                 scope.check()?;
+                repository_id.check()?;
                 expected_revision.check()?;
                 entries.check()?;
             }
@@ -25812,6 +25889,11 @@ impl Revisioned for DomainCommand {
             }
             Self::ContainersCreate { spec, .. } => {
                 spec.retain_revision(revision);
+            }
+            Self::SettingsSaveRevision { repository_id, .. } => {
+                if revision < 8 {
+                    *repository_id = None;
+                }
             }
             Self::RouterPriceOverride { change, .. } => {
                 if revision < 3 {
@@ -27671,6 +27753,9 @@ impl Revisioned for OperationResult {
             Self::JobsRunNow { value } => value.retain_revision(revision),
             Self::JobsInspect { value } => value.retain_revision(revision),
             Self::JobsCancel { value } => value.retain_revision(revision),
+            Self::SettingsReadEffective { value } => value.retain_revision(revision),
+            Self::SettingsSaveRevision { value } => value.retain_revision(revision),
+            Self::SettingsExplainSource { value } => value.retain_revision(revision),
             Self::RouterCatalog { value } => value.retain_revision(revision),
             Self::RouterConnections { value } => value.retain_revision(revision),
             Self::RouterRoute { value } => value.retain_revision(revision),

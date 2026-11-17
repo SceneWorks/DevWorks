@@ -59,6 +59,15 @@ fn scope_exists(conn: &Connection, scope: &ConfigScope) -> Result<bool, StorageE
         ConfigScope::Project(p) => db(conn
             .prepare_cached("SELECT 1 FROM projects WHERE id=?1 AND lifecycle<>'Deleted'")
             .and_then(|mut s| s.exists([p.0.as_str()]))),
+        // The repository must still be linked to its live project.
+        ConfigScope::Repository {
+            project,
+            repository,
+        } => db(conn
+            .prepare_cached(
+                "SELECT 1 FROM project_repositories r JOIN projects p ON p.id=r.project_id WHERE r.project_id=?1 AND r.repository_id=?2 AND p.lifecycle<>'Deleted'",
+            )
+            .and_then(|mut s| s.exists([project.0.as_str(), repository.as_str()]))),
     }
 }
 
