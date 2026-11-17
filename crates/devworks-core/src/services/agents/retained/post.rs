@@ -4,13 +4,12 @@ use super::{
 };
 use crate::context::{InvocationContext, PrincipalKind};
 use crate::fingerprint::sha256_hex;
-use crate::ports::IdKind;
 use crate::ports::storage::{
-    ActivationPhase, AssignmentState, SessionPosition, SessionScope, StorageError,
-    StoredAgentDelivery, StoredAgentMessage, StoredAgentMessageEvent, StoredAssignment,
-    StoredSession, Unavailable, WriteTransaction,
+    AssignmentState, SessionPosition, SessionScope, StorageError, StoredAgentMessage,
+    StoredAssignment, StoredSession, Unavailable, WriteTransaction,
 };
 use crate::protocol::{Id, ProjectId, RootId};
+use crate::services::agents::rows;
 use crate::services::failure::Failure;
 use std::collections::HashSet;
 
@@ -80,6 +79,7 @@ pub(super) fn active_assignment(
     let Some(root) = &session.root_id else {
         return Ok(None);
     };
+    let live = super::super::active::Liveness::of_tx(tx);
     let mut after = None;
     loop {
         let page = tx.runs().assignments(root, true, after.as_ref(), 500)?;
@@ -92,18 +92,7 @@ pub(super) fn active_assignment(
             if assignment.session_id != session.id || assignment.state != AssignmentState::Active {
                 continue;
             }
-            let Some(execution) = &assignment.execution_id else {
-                continue;
-            };
-            let Some(activation) = tx.runs().activation(execution)? else {
-                continue;
-            };
-            if activation.phase == ActivationPhase::Running
-                && tx.store().boot_id.as_ref() == Some(&activation.boot_id)
-                && activation
-                    .lease_until_ms
-                    .is_some_and(|until| until > tx.now_ms())
-            {
+            if super::super::active::live_activation(tx.runs(), &live, &assignment)?.is_some() {
                 return Ok(Some(assignment));
             }
         }
@@ -408,70 +397,50 @@ pub fn post_message(
     } else {
         None
     };
-    let now = tx.now_ms();
     let message = StoredAgentMessage {
-        id: tx.new_id(IdKind::Event),
-        project_id: spec.project.clone(),
         root_id: item.clone(),
-        channel: channel.into(),
         from_assignment_id: ctx.assignment_id().cloned(),
-        to_assignment_id: None,
-        message_class: spec.kind.name().into(),
-        body: body.into(),
-        attachments: serde_json::json!([]),
         in_reply_to_id: spec.in_reply_to.clone(),
         state: matches!(spec.kind, MessageKind::Question | MessageKind::Request)
             .then(|| "Open".into()),
         blocking: spec.blocking,
         idempotency_key: key,
-        revision: 1,
-        created_at_ms: now,
-        resolved_at_ms: None,
-        from_actor_id: ctx.principal().clone(),
         target_item_id: item,
         target_feature_id: feature,
         resource_name: resource,
         target_session_id: to_session,
         to_human,
         sender_session_id: ctx.session_id().cloned(),
-        resolved_by_actor_id: None,
-        resolved_by_session_id: None,
+        ..rows::message(
+            tx,
+            rows::NewMessage {
+                project: &spec.project,
+                channel,
+                class: spec.kind.name(),
+                body,
+                from_actor: ctx.principal(),
+            },
+        )
     };
     tx.runs().insert_agent_message(&message)?;
     for recipient in &routed {
-        let delivery = StoredAgentDelivery {
-            sequence: tx.runs().agent_delivery_head()? + 1,
-            message_id: message.id.clone(),
-            project_id: spec.project.clone(),
-            recipient_assignment_id: None,
-            recipient_human: matches!(recipient, Recipient::Human),
-            state: "Pending".into(),
-            revision: 1,
-            delivered_at_ms: None,
-            read_at_ms: None,
-            recipient_session_id: match recipient {
-                Recipient::Session(id) => Some(id.clone()),
-                Recipient::Human => None,
-            },
-            handed_over: false,
-            handed_to_session_id: None,
-            resolved_at_ms: None,
-        };
-        tx.runs().insert_agent_delivery(&delivery)?;
+        rows::insert_delivery(
+            tx,
+            &spec.project,
+            &message.id,
+            &rows::Target::from(recipient),
+            false,
+        )?;
     }
-    let event_sequence = tx.runs().agent_event_head()? + 1;
-    tx.runs()
-        .insert_agent_message_event(&StoredAgentMessageEvent {
-            sequence: event_sequence,
-            project_id: spec.project.clone(),
-            message_id: message.id.clone(),
-            kind: "Posted".into(),
-            actor_id: ctx.principal().clone(),
-            recipient_assignment_id: None,
-            recipient_session_id: None,
-            recipient_human: false,
-            created_at_ms: now,
-        })?;
+    rows::append_event(
+        tx,
+        &spec.project,
+        &message.id,
+        "Posted",
+        ctx.principal(),
+        &rows::Target::None,
+        message.created_at_ms,
+    )?;
     let mut item_versions = Vec::new();
     if let (Some(item), Some(before)) = (message.target_item_id.as_ref(), was_blocked)
         && let Some(version) = awaiting_human_change(tx, ctx, item, before)?
@@ -536,63 +505,36 @@ pub fn post_host_notice(
         return Ok(None);
     };
     let host = tx.store().host_actor.clone();
-    let now = tx.now_ms();
     let message = StoredAgentMessage {
-        id: tx.new_id(IdKind::Event),
-        project_id: project.clone(),
-        root_id: None,
-        channel: "Session".into(),
-        from_assignment_id: None,
-        to_assignment_id: None,
-        message_class: MessageKind::Info.name().into(),
-        body: body.into(),
-        attachments: serde_json::json!([]),
-        in_reply_to_id: None,
-        state: None,
-        blocking: false,
-        idempotency_key: None,
-        revision: 1,
-        created_at_ms: now,
-        resolved_at_ms: None,
-        from_actor_id: host.clone(),
-        target_item_id: None,
         target_feature_id: feature.cloned(),
-        resource_name: None,
         target_session_id: Some(session_id.clone()),
-        to_human: false,
-        sender_session_id: None,
-        resolved_by_actor_id: None,
-        resolved_by_session_id: None,
+        ..rows::message(
+            tx,
+            rows::NewMessage {
+                project: &project,
+                channel: "Session",
+                class: MessageKind::Info.name(),
+                body,
+                from_actor: &host,
+            },
+        )
     };
     tx.runs().insert_agent_message(&message)?;
-    let sequence = tx.runs().agent_delivery_head()? + 1;
-    tx.runs().insert_agent_delivery(&StoredAgentDelivery {
-        sequence,
-        message_id: message.id.clone(),
-        project_id: project.clone(),
-        recipient_assignment_id: None,
-        recipient_session_id: Some(session_id.clone()),
-        recipient_human: false,
-        state: "Pending".into(),
-        revision: 1,
-        delivered_at_ms: None,
-        read_at_ms: None,
-        resolved_at_ms: None,
-        handed_over: false,
-        handed_to_session_id: None,
-    })?;
-    let sequence = tx.runs().agent_event_head()? + 1;
-    tx.runs()
-        .insert_agent_message_event(&StoredAgentMessageEvent {
-            sequence,
-            project_id: project,
-            message_id: message.id.clone(),
-            kind: "Posted".into(),
-            actor_id: host,
-            recipient_assignment_id: None,
-            recipient_session_id: None,
-            recipient_human: false,
-            created_at_ms: now,
-        })?;
+    rows::insert_delivery(
+        tx,
+        &project,
+        &message.id,
+        &rows::Target::Session(session_id.clone()),
+        false,
+    )?;
+    rows::append_event(
+        tx,
+        &project,
+        &message.id,
+        "Posted",
+        &host,
+        &rows::Target::None,
+        message.created_at_ms,
+    )?;
     Ok(Some(message.id))
 }
