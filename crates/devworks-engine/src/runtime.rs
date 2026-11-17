@@ -2341,7 +2341,7 @@ impl Runtime {
 
     /// Awaits a receive's wait and decides it (see [`Admitter::finish_receive`]).
     pub(crate) async fn finish_receive(&self, wait: Box<ReceiveWait>) -> CommandOutcome {
-        self.admitter.finish_receive(wait).await
+        self.admitter.clone().finish_receive(wait).await
     }
 
     /// Record a final cancellation only if this durable call has no dispatch-start marker.
@@ -3198,9 +3198,11 @@ impl Runtime {
         if operation != "agents.receive" {
             return self.command_with(ctx, operation, raw, options);
         }
-        match self.begin_receive(ctx, raw, options) {
+        let (admitter, call_ctx, bytes) = (self.admitter.clone(), ctx.clone(), raw.to_vec());
+        let started = blocking(move || admitter.begin_receive(&call_ctx, &bytes, options)).await;
+        match started {
             ReceiveStart::Answered(outcome) => outcome,
-            ReceiveStart::Waiting(wait) => self.finish_receive(wait).await,
+            ReceiveStart::Waiting(wait) => self.admitter.clone().finish_receive(wait).await,
         }
     }
 
@@ -3555,6 +3557,14 @@ pub(crate) enum PendingCall {
     Parked(Box<crate::tool_turn::ParkedReceive>),
 }
 
+/// Runs store work on a blocking thread and passes a panic on to the caller.
+async fn blocking<T: Send + 'static>(work: impl FnOnce() -> T + Send + 'static) -> T {
+    match tokio::task::spawn_blocking(work).await {
+        Ok(value) => value,
+        Err(error) => std::panic::resume_unwind(error.into_panic()),
+    }
+}
+
 /// Drives every future to completion on the calling task and returns the outputs in order.
 async fn join_all<'a, T>(
     mut futures: Vec<std::pin::Pin<Box<dyn std::future::Future<Output = T> + Send + 'a>>>,
@@ -3773,7 +3783,7 @@ impl Admitter {
 
     /// Phase two: waits without holding a thread for a signal, a cancellation or the recheck
     /// interval, looks again, and decides once nothing is left to wait for.
-    async fn finish_receive(&self, wait: Box<ReceiveWait>) -> CommandOutcome {
+    async fn finish_receive(self: Arc<Self>, wait: Box<ReceiveWait>) -> CommandOutcome {
         let ReceiveWait {
             ctx,
             raw,
@@ -3785,15 +3795,24 @@ impl Admitter {
                 (ticket.wake.clone(), ticket.generation, ticket.pause());
             // A timeout is the recheck interval or the deadline; either ends in a new look.
             let _ = tokio::time::timeout(pause, wake.changed_after(generation)).await;
-            if let Err(outcome) =
-                self.use_cases
-                    .recheck_receive(&self.gateway(), &ctx, &mut prepared)
-            {
+            // Each look reads the store, so it runs on a blocking thread.
+            let (admitter, look_ctx) = (self.clone(), ctx.clone());
+            let (back, result) = blocking(move || {
+                let result = admitter.use_cases.recheck_receive(
+                    &admitter.gateway(),
+                    &look_ctx,
+                    &mut prepared,
+                );
+                (prepared, result)
+            })
+            .await;
+            if let Err(outcome) = result {
                 return outcome;
             }
+            prepared = back;
         }
         drop(guard);
-        self.decide_receive(&ctx, &raw, Ok(prepared))
+        blocking(move || self.decide_receive(&ctx, &raw, Ok(prepared))).await
     }
 
     /// The short decision of a receive under the admission fence, then its commit wakeups.

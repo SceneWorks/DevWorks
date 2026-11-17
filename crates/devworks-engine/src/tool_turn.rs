@@ -3,6 +3,7 @@
 use crate::runtime::{ReceiveStart, ReceiveWait};
 use crate::turn_error::artifact_read_fault;
 use crate::{providers::schemas::RegisteredSchemas, runtime::Runtime};
+use devworks_core::services::approvals::ApprovalService;
 use devworks_core::{
     admission::{self, Selection},
     context::{InvocationContext, PrincipalKind},
@@ -1645,7 +1646,8 @@ pub(crate) struct ParkedReceive {
     pub(crate) key: ToolCallKey,
 }
 impl ParkedReceive {
-    /// Waits without holding a thread, then records the call's response.
+    /// Waits without holding a thread, then records the call's response. Store reads, the
+    /// decision and the recording run on blocking threads; only the wake is awaited here.
     pub(crate) async fn finish(self, runtime: &Runtime) -> Result<BatchOutcome, StorageError> {
         let Self {
             wait,
@@ -1656,23 +1658,29 @@ impl ParkedReceive {
             key,
         } = self;
         let reply = runtime.finish_receive(wait).await;
-        let (outcome, bytes) = command_response(
-            runtime,
-            runtime.store().as_ref(),
-            &ctx,
-            descriptor,
-            &raw,
-            reply,
-        )?;
-        record_response(
-            runtime.store().as_ref(),
-            runtime.artifacts(),
-            &ctx,
-            &session_id,
-            &key,
-            outcome,
-            bytes,
-        )
+        let (store, artifacts, approvals) = (
+            runtime.store().clone(),
+            runtime.artifacts().clone(),
+            runtime.approvals().clone(),
+        );
+        match tokio::task::spawn_blocking(move || {
+            let (outcome, bytes) =
+                command_response(&approvals, store.as_ref(), &ctx, descriptor, &raw, reply)?;
+            record_response(
+                store.as_ref(),
+                &artifacts,
+                &ctx,
+                &session_id,
+                &key,
+                outcome,
+                bytes,
+            )
+        })
+        .await
+        {
+            Ok(result) => result,
+            Err(error) => std::panic::resume_unwind(error.into_panic()),
+        }
     }
 }
 
@@ -1987,7 +1995,7 @@ pub(crate) fn dispatch_step(
                 } else {
                     runtime.command(ctx, descriptor.name, &raw)
                 };
-                command_response(runtime, store, ctx, descriptor, &raw, reply)?
+                command_response(runtime.approvals(), store, ctx, descriptor, &raw, reply)?
             }
             Err(_) => failed("tool_invalid_arguments"),
         }
@@ -2512,11 +2520,10 @@ fn recorded_command(
     })
 }
 
-/// Whether a domain command refused the call because a person must approve it.
 /// Turns a command's gateway outcome into the response a tool call records. An outcome that
 /// leaves the call unanswered is an error: the same host key is retried on recovery.
 fn command_response(
-    runtime: &Runtime,
+    approvals: &Arc<ApprovalService>,
     store: &dyn ApplicationStore,
     ctx: &InvocationContext,
     descriptor: &'static OperationDescriptor,
@@ -2538,7 +2545,7 @@ fn command_response(
             ));
         }
         Ok(reply @ CommandReply::Recorded { .. }) if approval_refusal(&reply) => {
-            held_approval(runtime, store, ctx, descriptor, raw)?
+            held_approval(approvals, store, ctx, descriptor, raw)?
         }
         Ok(reply @ CommandReply::Recorded { .. }) => recorded_command(&reply)?,
         Ok(CommandReply::Rejected { code, retry, .. }) => {
@@ -2559,6 +2566,7 @@ fn command_response(
     })
 }
 
+/// Whether a domain command refused the call because a person must approve it.
 fn approval_refusal(reply: &DomainCommandReply) -> bool {
     matches!(reply, CommandReply::Recorded { receipt, .. }
         if matches!(&receipt.decision, DomainDecision::Refused { fault }
@@ -2569,7 +2577,7 @@ fn approval_refusal(reply: &DomainCommandReply) -> bool {
 /// it, so the turn goes on; the decision reaches the agent later as an update of the operation.
 /// A request no approval can carry is answered as failed rather than held.
 fn held_approval(
-    runtime: &Runtime,
+    approvals: &Arc<ApprovalService>,
     store: &dyn ApplicationStore,
     ctx: &InvocationContext,
     descriptor: &'static OperationDescriptor,
@@ -2604,7 +2612,7 @@ fn held_approval(
             frame
         }
     };
-    match runtime.approvals().stage_held(
+    match approvals.stage_held(
         store,
         ctx,
         descriptor.name,

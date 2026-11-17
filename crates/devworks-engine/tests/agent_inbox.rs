@@ -132,6 +132,30 @@ fn agent_rules_refuse_with_their_target_and_a_corrupt_message_row_is_a_storage_f
         (DomainErrorCode::InvalidArgument, Some("limit".into()))
     );
     // The retained-message helpers name the rule a request breaks, not one target per use case.
+    // A cursor this inbox did not issue restarts the read; one ahead of the head is invalid.
+    assert_eq!(
+        refusal(command(
+            "agents.ack",
+            "rules-malformed-cursor",
+            json!({"projectId":"project-a","upTo":"Zm9v"}),
+        )),
+        (
+            DomainErrorCode::CursorExpired,
+            Some("agent_inbox_cursor".into())
+        )
+    );
+    let head = common::read(store.as_ref(), |snapshot| {
+        snapshot.runs().agent_delivery_head()
+    });
+    let binding = inbox_binding(&user, &ProjectId(id("project-a")), &Recipient::Human);
+    assert_eq!(
+        refusal(command(
+            "agents.ack",
+            "rules-ahead-cursor",
+            json!({"projectId":"project-a","upTo":inbox_cursor(&binding, head + 1).unwrap()}),
+        )),
+        (DomainErrorCode::InvalidArgument, Some("up_to".into()))
+    );
     assert_eq!(
         refusal(command(
             "agents.post",

@@ -1167,7 +1167,6 @@ fn message_delivery_replays_after_reopen_and_rejects_cross_project_links() {
         })))
     ));
     let sender_context = context("sender", "session-a", "root-a");
-    let recipient_context = context("recipient", "session-child", "root-a");
     let input = ops::MessagesInput {
         recipient_assignment_id: assignment("recipient"),
         message_class: MessageClass::Status,
@@ -1217,7 +1216,7 @@ fn message_delivery_replays_after_reopen_and_rejects_cross_project_links() {
         })
         .unwrap();
     };
-    assert_eq!(read_inbox().unwrap().0.items.0.len(), 1);
+    assert_eq!(read_inbox().unwrap().0.items.0.len(), 2);
     set_lease(0, 1);
     assert!(matches!(
         read_inbox(),
@@ -1227,7 +1226,7 @@ fn message_delivery_replays_after_reopen_and_rejects_cross_project_links() {
         }))
     ));
     set_lease(i64::MAX, 2);
-    assert_eq!(read_inbox().unwrap().0.items.0.len(), 1);
+    assert_eq!(read_inbox().unwrap().0.items.0.len(), 2);
     read_snapshot(&s, &ReadOptions::default(), |snap| {
         let inbox = snap.runs().agent_inbox(
             &project("project-a"),
@@ -1270,11 +1269,63 @@ fn message_delivery_replays_after_reopen_and_rejects_cross_project_links() {
         Ok(())
     })
     .unwrap();
+    // The recipient runs on the root's activation. Acknowledging and checkpointing apply the
+    // same active-assignment rule as posting: a lapsed lease is refused for both.
+    run_write(&s, WriteOptions::default(), move |tx| {
+        let ready = tx.runs().assignment(&assignment("recipient"))?.unwrap();
+        let mut running = ready.clone();
+        running.state = AssignmentState::Active;
+        running.execution_id = Some(id("sender-execution"));
+        running.revision += 1;
+        tx.runs().update_assignment(&running, ready.revision)
+    })
+    .unwrap();
+    let recipient_context =
+        context("recipient", "session-child", "root-a").with_activation(id("sender-execution"), 1);
     let ack = ops::AcknowledgeInput {
         assignment_id: assignment("recipient"),
         message_id: posted.id.clone(),
         expected_revision: Revision::new(1).unwrap(),
     };
+    let checkpoint = ops::CheckpointInput {
+        assignment_id: assignment("recipient"),
+        expected_revision: Revision::new(2).unwrap(),
+        transcript_sequence: Counter::new(1).unwrap(),
+        content: devworks_core::protocol::provider::ArtifactRef {
+            artifact_id: id("artifact-a"),
+            version_id: id("version-a"),
+            sha256: devworks_core::protocol::provider::Digest::try_from("0".repeat(64)).unwrap(),
+            byte_length: Counter::new(1).unwrap(),
+            media_type: "text/plain".into(),
+        },
+    };
+    set_lease(0, 3);
+    let (lapsed_ctx, lapsed_ack, lapsed_checkpoint) =
+        (recipient_context.clone(), ack.clone(), checkpoint.clone());
+    let refused = run_write(&s, WriteOptions::default(), move |tx| {
+        Ok((
+            devworks_core::services::agents::acknowledge_assignment(tx, &lapsed_ctx, &lapsed_ack),
+            devworks_core::services::agents::checkpoint_assignment(
+                tx,
+                &lapsed_ctx,
+                &lapsed_checkpoint,
+            ),
+        ))
+    })
+    .unwrap();
+    for outcome in [refused.0.map(|_| ()), refused.1.map(|_| ())] {
+        assert!(
+            matches!(
+                outcome,
+                Err(Failure::Refused(Refusal {
+                    code: DomainErrorCode::PermissionDenied,
+                    ..
+                }))
+            ),
+            "a lapsed lease is refused"
+        );
+    }
+    set_lease(i64::MAX, 4);
     let acknowledged = run_write(&s, WriteOptions::default(), move |tx| {
         devworks_core::services::agents::acknowledge_assignment(tx, &recipient_context, &ack)
             .map_err(|error| StorageError::InvalidRecord(format!("ack refused: {error:?}")))

@@ -1739,21 +1739,13 @@ pub fn acknowledge_assignment(
     input: &ops::AcknowledgeInput,
 ) -> Result<AgentMessage, Failure> {
     let (assignment, project) = assignment_scope(tx, &input.assignment_id)?;
-    if !assignment.state.is_live()
-        || ctx.principal_kind() != PrincipalKind::Agent
+    if ctx.principal_kind() != PrincipalKind::Agent
         || ctx.assignment_id() != Some(&assignment.id)
-        || ctx.session_id() != Some(&assignment.session_id)
         || ctx.project_id().is_some_and(|p| p != &project)
     {
         return Err(denied("assignment").into());
     }
-    let session = tx
-        .sessions()
-        .session(&assignment.session_id)?
-        .ok_or_else(|| denied("session"))?;
-    if session.closed() || session.agent_id != *ctx.principal() {
-        return Err(denied("session").into());
-    }
+    active::caller_assignment(&mut active::TxFacts::new(tx), ctx, &assignment.root_id)?;
     let message = tx
         .runs()
         .agent_message(&input.message_id)?
@@ -1800,13 +1792,12 @@ pub fn checkpoint_assignment(
     input: &ops::CheckpointInput,
 ) -> Result<CheckpointRecord, Failure> {
     let (mut assignment, project) = assignment_scope(tx, &input.assignment_id)?;
-    if !assignment.state.is_live()
-        || ctx.assignment_id() != Some(&assignment.id)
-        || ctx.session_id() != Some(&assignment.session_id)
+    if ctx.assignment_id() != Some(&assignment.id)
         || ctx.project_id().is_some_and(|p| p != &project)
     {
         return Err(denied("assignment").into());
     }
+    active::caller_assignment(&mut active::TxFacts::new(tx), ctx, &assignment.root_id)?;
     let session = tx
         .sessions()
         .session(&assignment.session_id)?
