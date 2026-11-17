@@ -541,17 +541,19 @@ fn native_notification_preferences_help_keeps_the_unsaved_preference_draft() {
 }
 
 fn wait_generated(
+    root: &Root,
     b: &dyn Backend,
     operation: &str,
 ) -> devworks_core::protocol::records::HelpSnapshot {
-    let deadline = std::time::Instant::now() + SETTLE_BOUND;
-    loop {
+    wait_progressing(root, &format!("Help generation {operation}"), || {
         let page = hops::topics(b.query("help.search", &hops::search(b, "", None))).unwrap();
         if let Some(status) = &page.snapshot.generation_operation
             && status.operation_id.0.as_str() == operation
         {
             match status.state {
-                devworks_core::protocol::OperationState::ObservedComplete => return page.snapshot,
+                devworks_core::protocol::OperationState::ObservedComplete => {
+                    return Ok(page.snapshot);
+                }
                 devworks_core::protocol::OperationState::Failed
                 | devworks_core::protocol::OperationState::CancelledBeforeDispatch
                 | devworks_core::protocol::OperationState::NeedsInput => {
@@ -560,13 +562,8 @@ fn wait_generated(
                 _ => {}
             }
         }
-        assert!(
-            std::time::Instant::now() < deadline,
-            "Help generation {operation} never completed; latest snapshot: {:?}",
-            page.snapshot
-        );
-        std::thread::sleep(std::time::Duration::from_millis(5));
-    }
+        Err(format!("{:?}", page.snapshot))
+    })
 }
 #[test]
 fn native_help_regeneration_reports_actual_completion_and_registration_facts() {
@@ -582,7 +579,7 @@ fn native_help_regeneration_reports_actual_completion_and_registration_facts() {
         .generation_operation
         .clone()
         .expect("actual durable generation reference");
-    let complete = wait_generated(&*b, &id);
+    let complete = wait_generated(&root, &*b, &id);
     press(&mut h, "Refresh Help");
     assert!(!h.state().help.generating);
     assert!(has_text(&h, "Capability documentation status: Complete"));
@@ -810,8 +807,7 @@ fn install_named_guide(
     assert_eq!(installed.digest.as_str(), manifest_digest);
     // Installation changes the registry, not its published documentation. Await the real
     // background owner and its completed source; do not race it with another mutation.
-    let deadline = std::time::Instant::now() + SETTLE_BOUND;
-    loop {
+    wait_progressing(root, "installed guide publication", || {
         let page = hops::topics(b.query(
             "help.package_guides",
             &hops::guides(&*b, package_id, version, None),
@@ -832,14 +828,11 @@ fn install_named_guide(
                 )
             })
         {
-            break;
+            Ok(())
+        } else {
+            Err(format!("{page:?}"))
         }
-        assert!(
-            std::time::Instant::now() < deadline,
-            "installed guide never published: {page:?}"
-        );
-        std::thread::sleep(std::time::Duration::from_millis(5));
-    }
+    });
     manifest_digest
 }
 #[test]
@@ -1003,12 +996,17 @@ fn native_help_rebases_passage_cursor_after_unrelated_catalog_revision_without_c
         "# Other guide\n\nAn unrelated installed source.\n",
         false,
     );
-    step_until(&mut h, "adopted changed Help snapshot", |s| {
-        s.help.snapshot.as_ref().is_some_and(|snapshot| {
-            snapshot.registry_revision != old_snapshot.registry_revision
-                && snapshot.help_revision != old_snapshot.help_revision
-        })
-    });
+    step_until_progressing(
+        &mut h,
+        "adopted changed Help snapshot",
+        || root.write_progress(),
+        |s| {
+            s.help.snapshot.as_ref().is_some_and(|snapshot| {
+                snapshot.registry_revision != old_snapshot.registry_revision
+                    && snapshot.help_revision != old_snapshot.help_revision
+            })
+        },
+    );
     settle(&mut h);
     assert!(
         h.state().help.read_error.is_none(),
@@ -1051,9 +1049,10 @@ fn native_help_rebases_passage_cursor_after_unrelated_catalog_revision_without_c
         "# Other updated guide\n\nAnother unrelated source revision.\n",
         true,
     );
-    step_until(
+    step_until_progressing(
         &mut h,
         "fresh passage supersedes in-flight old cursor",
+        || root.write_progress(),
         |s| {
             s.help
                 .snapshot
