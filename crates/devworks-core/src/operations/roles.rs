@@ -49,6 +49,13 @@ pub struct DraftInput {
     pub expected_revision: Option<Revision>,
     pub name: Label,
     pub content: ArtifactRef,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Content", extend("x-since" = 8))]
+    pub rationale: Option<Content>,
 }
 impl Check for DraftInput {
     fn check(&self) -> Result<(), String> {
@@ -57,11 +64,16 @@ impl Check for DraftInput {
         self.expected_revision.check()?;
         self.name.check()?;
         self.content.check()?;
+        self.rationale.check()?;
         Ok(())
     }
 }
 impl Revisioned for DraftInput {
-    fn retain_revision(&mut self, _: u32) {}
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 8 {
+            self.rationale = None;
+        }
+    }
 }
 
 /// `roles.propose` Command input.

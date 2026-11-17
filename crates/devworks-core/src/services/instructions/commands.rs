@@ -280,6 +280,7 @@ impl InstructionService {
                     instruction_id: i.instruction_id.as_ref(),
                     expected: i.expected_revision.as_ref(),
                     name: &i.name,
+                    rationale: i.rationale.as_ref(),
                     confined: None,
                 };
                 self.draft(ctx, command, tx, kind, draft)
@@ -290,6 +291,7 @@ impl InstructionService {
                     instruction_id: i.instruction_id.as_ref(),
                     expected: i.expected_revision.as_ref(),
                     name: &i.name,
+                    rationale: i.rationale.as_ref(),
                     confined: None,
                 };
                 self.draft(ctx, command, tx, kind, draft)
@@ -496,6 +498,7 @@ impl InstructionService {
                 origin: json!({
                     "kind": if human { "HumanSaved" } else { "AgentDraft" },
                     "provenance": provenance(ctx),
+                    "rationale": input.rationale.map(|r| r.0.trim()).filter(|r| !r.is_empty()),
                     "baseRevision": base.as_ref().map(|b| b.revision),
                     "overrides": overrides.as_ref().map(|(id, r)| json!({"instructionId": id, "revision": r})),
                     "upload": prepared.upload,
@@ -1149,6 +1152,8 @@ struct Draft<'a> {
     instruction_id: Option<&'a Id>,
     expected: Option<&'a Revision>,
     name: &'a Label,
+    /// Why the draft is made, kept on the revision.
+    rationale: Option<&'a crate::protocol::support::Content>,
     /// The project the draft (and any item it creates) is confined to.
     confined: Option<crate::protocol::ProjectId>,
 }

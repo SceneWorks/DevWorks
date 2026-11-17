@@ -63,6 +63,19 @@ impl Check for ApprovalState {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub enum InstructionState {
+    Draft,
+    Proposed,
+    Approved,
+    Rejected,
+}
+impl Check for InstructionState {
+    fn check(&self) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 pub enum ReviewState {
     Pending,
     Running,
@@ -3363,6 +3376,41 @@ pub struct InstructionRecord {
     pub source_path: Option<RegisteredPath>,
     pub approved: bool,
     pub applicability: Items<Label>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "ActorId", extend("x-since" = 8))]
+    pub author: Option<ActorId>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Id", extend("x-since" = 8))]
+    pub session_id: Option<Id>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Content", extend("x-since" = 8))]
+    pub rationale: Option<Content>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "InstructionState", extend("x-since" = 8))]
+    pub state: Option<InstructionState>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "ApprovalState", extend("x-since" = 8))]
+    pub approval_outcome: Option<ApprovalState>,
 }
 impl Check for InstructionRecord {
     fn check(&self) -> Result<(), String> {
@@ -3374,11 +3422,36 @@ impl Check for InstructionRecord {
         self.source_path.check()?;
         self.approved.check()?;
         self.applicability.check()?;
+        self.author.check()?;
+        self.session_id.check()?;
+        self.rationale.check()?;
+        self.state.check()?;
+        self.approval_outcome.check()?;
         super::domain_rules::record(
             "InstructionRecord",
             &serde_json::to_value(self).map_err(|e| e.to_string())?,
         )?;
         Ok(())
+    }
+}
+
+impl Revisioned for InstructionRecord {
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 8 {
+            self.author = None;
+        }
+        if revision < 8 {
+            self.session_id = None;
+        }
+        if revision < 8 {
+            self.rationale = None;
+        }
+        if revision < 8 {
+            self.state = None;
+        }
+        if revision < 8 {
+            self.approval_outcome = None;
+        }
     }
 }
 
@@ -16614,6 +16687,11 @@ impl Revisioned for ConventionRecordResult {
                     source_path: None,
                     approved: topic.legacy_approved,
                     applicability: topic.applicability.clone(),
+                    author: None,
+                    session_id: None,
+                    rationale: None,
+                    state: None,
+                    approval_outcome: None,
                 };
                 row.check().ok().map(|()| row)
             };
@@ -16675,6 +16753,11 @@ impl Revisioned for ConventionReadResult {
                     source_path: None,
                     approved: topic.legacy_approved,
                     applicability: topic.applicability.clone(),
+                    author: None,
+                    session_id: None,
+                    rationale: None,
+                    state: None,
+                    approval_outcome: None,
                 };
                 row.check().ok().map(|()| row)
             };
@@ -16740,6 +16823,11 @@ impl Revisioned for ConventionPageResult {
                     source_path: None,
                     approved: topic.legacy_approved,
                     applicability: topic.applicability.clone(),
+                    author: None,
+                    session_id: None,
+                    rationale: None,
+                    state: None,
+                    approval_outcome: None,
                 };
                 row.check().ok().map(|()| row)
             };
@@ -16814,6 +16902,11 @@ impl Revisioned for ConventionResourcePageResult {
                     source_path: None,
                     approved: topic.legacy_approved,
                     applicability: topic.applicability.clone(),
+                    author: None,
+                    session_id: None,
+                    rationale: None,
+                    state: None,
+                    approval_outcome: None,
                 };
                 row.check().ok().map(|()| row)
             };
@@ -16831,6 +16924,11 @@ impl Revisioned for ConventionResourcePageResult {
                     source_path: None,
                     approved: false,
                     applicability: topic.applicability.clone(),
+                    author: None,
+                    session_id: None,
+                    rationale: None,
+                    state: None,
+                    approval_outcome: None,
                 };
                 row.check().ok().map(|()| row)
             };
@@ -16916,6 +17014,11 @@ impl Revisioned for ConventionSearchPageResult {
                     source_path: None,
                     approved: topic.legacy_approved,
                     applicability: topic.applicability.clone(),
+                    author: None,
+                    session_id: None,
+                    rationale: None,
+                    state: None,
+                    approval_outcome: None,
                 };
                 row.check().ok().map(|()| row)
             };
@@ -22601,6 +22704,13 @@ pub enum DomainCommand {
         expected_revision: Option<Revision>,
         name: Label,
         content: ArtifactRef,
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "gated_member"
+        )]
+        #[schemars(with = "Content", extend("x-since" = 8))]
+        rationale: Option<Content>,
     },
     #[serde(rename = "skills.propose")]
     SkillsPropose {
@@ -22632,6 +22742,13 @@ pub enum DomainCommand {
         expected_revision: Option<Revision>,
         name: Label,
         content: ArtifactRef,
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "gated_member"
+        )]
+        #[schemars(with = "Content", extend("x-since" = 8))]
+        rationale: Option<Content>,
     },
     #[serde(rename = "roles.propose")]
     RolesPropose {
@@ -24645,12 +24762,14 @@ impl Check for DomainCommand {
                 expected_revision,
                 name,
                 content,
+                rationale,
             } => {
                 scope.check()?;
                 instruction_id.check()?;
                 expected_revision.check()?;
                 name.check()?;
                 content.check()?;
+                rationale.check()?;
             }
             Self::SkillsPropose {
                 instruction_id,
@@ -24687,12 +24806,14 @@ impl Check for DomainCommand {
                 expected_revision,
                 name,
                 content,
+                rationale,
             } => {
                 scope.check()?;
                 instruction_id.check()?;
                 expected_revision.check()?;
                 name.check()?;
                 content.check()?;
+                rationale.check()?;
             }
             Self::RolesPropose {
                 instruction_id,
@@ -25852,6 +25973,16 @@ impl Revisioned for DomainCommand {
                 }
                 if revision < 3 {
                     *scope = None;
+                }
+            }
+            Self::SkillsDraft { rationale, .. } => {
+                if revision < 8 {
+                    *rationale = None;
+                }
+            }
+            Self::RolesDraft { rationale, .. } => {
+                if revision < 8 {
+                    *rationale = None;
                 }
             }
             Self::ApprovalsPropose { payload, .. } => {
@@ -27704,6 +27835,7 @@ impl Revisioned for OperationResult {
             Self::KnowledgeImportUserData { value } => value.retain_revision(revision),
             Self::KnowledgePromote { value } => value.retain_revision(revision),
             Self::KnowledgeTaggedLessons { value } => value.retain_revision(revision),
+            Self::DreamingInstructions { value } => value.retain_revision(revision),
             Self::DreamingRevert { value } => value.retain_revision(revision),
             Self::ConventionsList { value } => value.retain_revision(revision),
             Self::ConventionsSearch { value } => value.retain_revision(revision),
@@ -27718,6 +27850,16 @@ impl Revisioned for OperationResult {
             Self::ConventionsDeleteResource { value } => value.retain_revision(revision),
             Self::ConventionsImport { value } => value.retain_revision(revision),
             Self::ConventionsMove { value } => value.retain_revision(revision),
+            Self::SkillsRead { value } => value.retain_revision(revision),
+            Self::SkillsDraft { value } => value.retain_revision(revision),
+            Self::SkillsHistory { value } => value.retain_revision(revision),
+            Self::SkillsRollback { value } => value.retain_revision(revision),
+            Self::SkillsSetEnabled { value } => value.retain_revision(revision),
+            Self::RolesRead { value } => value.retain_revision(revision),
+            Self::RolesDraft { value } => value.retain_revision(revision),
+            Self::RolesHistory { value } => value.retain_revision(revision),
+            Self::RolesRollback { value } => value.retain_revision(revision),
+            Self::SkillsDiscover { value } => value.retain_revision(revision),
             Self::SkillsResources { value } => value.retain_revision(revision),
             Self::ApprovalsList { value } => value.retain_revision(revision),
             Self::ApprovalsInspect { value } => value.retain_revision(revision),

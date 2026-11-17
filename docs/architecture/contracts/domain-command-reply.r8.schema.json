@@ -8348,8 +8348,16 @@
         "applicability": {
           "$ref": "#/$defs/List_Text1To256_0_128"
         },
+        "approvalOutcome": {
+          "$ref": "#/$defs/ApprovalState",
+          "x-since": 8
+        },
         "approved": {
           "type": "boolean"
+        },
+        "author": {
+          "$ref": "#/$defs/Id",
+          "x-since": 8
         },
         "content": {
           "$ref": "#/$defs/ArtifactRef"
@@ -8360,11 +8368,19 @@
         "name": {
           "$ref": "#/$defs/Text1To256"
         },
+        "rationale": {
+          "$ref": "#/$defs/Text0To65536",
+          "x-since": 8
+        },
         "revision": {
           "$ref": "#/$defs/Revision"
         },
         "scope": {
           "$ref": "#/$defs/DataScope"
+        },
+        "sessionId": {
+          "$ref": "#/$defs/Id",
+          "x-since": 8
         },
         "sourcePath": {
           "anyOf": [
@@ -8375,6 +8391,10 @@
               "type": "null"
             }
           ]
+        },
+        "state": {
+          "$ref": "#/$defs/InstructionState",
+          "x-since": 8
         }
       },
       "required": [
@@ -8387,6 +8407,15 @@
         "applicability"
       ],
       "type": "object"
+    },
+    "InstructionState": {
+      "enum": [
+        "Draft",
+        "Proposed",
+        "Approved",
+        "Rejected"
+      ],
+      "type": "string"
     },
     "ItemState": {
       "enum": [

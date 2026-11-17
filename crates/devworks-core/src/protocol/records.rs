@@ -68,6 +68,19 @@ impl Check for ApprovalState {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub enum InstructionState {
+    Draft,
+    Proposed,
+    Approved,
+    Rejected,
+}
+impl Check for InstructionState {
+    fn check(&self) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 pub enum ReviewState {
     Pending,
     Running,
@@ -3368,6 +3381,41 @@ pub struct InstructionRecord {
     pub source_path: Option<RegisteredPath>,
     pub approved: bool,
     pub applicability: Items<Label>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "ActorId", extend("x-since" = 8))]
+    pub author: Option<ActorId>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Id", extend("x-since" = 8))]
+    pub session_id: Option<Id>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Content", extend("x-since" = 8))]
+    pub rationale: Option<Content>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "InstructionState", extend("x-since" = 8))]
+    pub state: Option<InstructionState>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "ApprovalState", extend("x-since" = 8))]
+    pub approval_outcome: Option<ApprovalState>,
 }
 impl Check for InstructionRecord {
     fn check(&self) -> Result<(), String> {
@@ -3379,11 +3427,36 @@ impl Check for InstructionRecord {
         self.source_path.check()?;
         self.approved.check()?;
         self.applicability.check()?;
+        self.author.check()?;
+        self.session_id.check()?;
+        self.rationale.check()?;
+        self.state.check()?;
+        self.approval_outcome.check()?;
         crate::protocol::rules::record(
             "InstructionRecord",
             &serde_json::to_value(self).map_err(|e| e.to_string())?,
         )?;
         Ok(())
+    }
+}
+
+impl Revisioned for InstructionRecord {
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 8 {
+            self.author = None;
+        }
+        if revision < 8 {
+            self.session_id = None;
+        }
+        if revision < 8 {
+            self.rationale = None;
+        }
+        if revision < 8 {
+            self.state = None;
+        }
+        if revision < 8 {
+            self.approval_outcome = None;
+        }
     }
 }
 
@@ -16612,6 +16685,11 @@ impl Revisioned for ConventionRecordResult {
                     source_path: None,
                     approved: topic.legacy_approved,
                     applicability: topic.applicability.clone(),
+                    author: None,
+                    session_id: None,
+                    rationale: None,
+                    state: None,
+                    approval_outcome: None,
                 };
                 row.check().ok().map(|()| row)
             };
@@ -16673,6 +16751,11 @@ impl Revisioned for ConventionReadResult {
                     source_path: None,
                     approved: topic.legacy_approved,
                     applicability: topic.applicability.clone(),
+                    author: None,
+                    session_id: None,
+                    rationale: None,
+                    state: None,
+                    approval_outcome: None,
                 };
                 row.check().ok().map(|()| row)
             };
@@ -16738,6 +16821,11 @@ impl Revisioned for ConventionPageResult {
                     source_path: None,
                     approved: topic.legacy_approved,
                     applicability: topic.applicability.clone(),
+                    author: None,
+                    session_id: None,
+                    rationale: None,
+                    state: None,
+                    approval_outcome: None,
                 };
                 row.check().ok().map(|()| row)
             };
@@ -16812,6 +16900,11 @@ impl Revisioned for ConventionResourcePageResult {
                     source_path: None,
                     approved: topic.legacy_approved,
                     applicability: topic.applicability.clone(),
+                    author: None,
+                    session_id: None,
+                    rationale: None,
+                    state: None,
+                    approval_outcome: None,
                 };
                 row.check().ok().map(|()| row)
             };
@@ -16829,6 +16922,11 @@ impl Revisioned for ConventionResourcePageResult {
                     source_path: None,
                     approved: false,
                     applicability: topic.applicability.clone(),
+                    author: None,
+                    session_id: None,
+                    rationale: None,
+                    state: None,
+                    approval_outcome: None,
                 };
                 row.check().ok().map(|()| row)
             };
@@ -16914,6 +17012,11 @@ impl Revisioned for ConventionSearchPageResult {
                     source_path: None,
                     approved: topic.legacy_approved,
                     applicability: topic.applicability.clone(),
+                    author: None,
+                    session_id: None,
+                    rationale: None,
+                    state: None,
+                    approval_outcome: None,
                 };
                 row.check().ok().map(|()| row)
             };

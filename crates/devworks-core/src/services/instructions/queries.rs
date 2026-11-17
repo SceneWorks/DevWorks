@@ -1,7 +1,8 @@
 //! `skills.discover`, `.read`, `.resources`, `.history` and `roles.read`, `.history`.
 use super::{
     HARNESS_ROOT_ID, InstructionService, SHARED_ROOT_ID, config_scope, invalid, item_visible,
-    record, revision_visible, visible_current, visible_item, visible_revision,
+    record, record_with_approval, revision_visible, visible_current, visible_item,
+    visible_revision,
 };
 use crate::context::InvocationContext;
 use crate::operations::{roles as role_ops, skills as skill_ops};
@@ -181,7 +182,7 @@ impl InstructionService {
             }
             skill_ops::Input::Read(i) => {
                 let (record, revision) = self.read_record(
-                    instructions,
+                    read,
                     ctx,
                     &i.instruction_id,
                     InstructionKind::Skill,
@@ -229,7 +230,7 @@ impl InstructionService {
             }
             skill_ops::Input::History(i) => {
                 let (page, revision) = self.history(
-                    instructions,
+                    read,
                     ctx,
                     &i.instruction_id,
                     InstructionKind::Skill,
@@ -247,11 +248,10 @@ impl InstructionService {
         ctx: &InvocationContext,
         input: &role_ops::Input,
     ) -> Result<(OperationResult, i64), Failure> {
-        let instructions = read.instructions();
         match input {
             role_ops::Input::Read(i) => {
                 let (record, revision) = self.read_record(
-                    instructions,
+                    read,
                     ctx,
                     &i.instruction_id,
                     InstructionKind::Role,
@@ -260,13 +260,8 @@ impl InstructionService {
                 Ok((OperationResult::RolesRead { value: record }, revision))
             }
             role_ops::Input::History(i) => {
-                let (page, revision) = self.history(
-                    instructions,
-                    ctx,
-                    &i.instruction_id,
-                    InstructionKind::Role,
-                    &i.page,
-                )?;
+                let (page, revision) =
+                    self.history(read, ctx, &i.instruction_id, InstructionKind::Role, &i.page)?;
                 Ok((OperationResult::RolesHistory { value: page }, revision))
             }
             _ => Err(invalid("instruction_operation")),
@@ -275,12 +270,13 @@ impl InstructionService {
 
     fn read_record(
         &self,
-        read: &dyn InstructionRead,
+        snapshot: &dyn ReadSnapshot,
         ctx: &InvocationContext,
         id: &Id,
         kind: InstructionKind,
         revision: Option<i64>,
     ) -> Result<(InstructionRecord, i64), Failure> {
+        let read = snapshot.instructions();
         let item = visible_item(read, ctx, id, kind)?;
         let r = match revision {
             Some(n) => visible_revision(read, ctx, &item, n)?,
@@ -294,17 +290,21 @@ impl InstructionService {
         } else {
             None
         };
-        Ok((record(&item, &r, effective)?, item.version))
+        Ok((
+            record_with_approval(snapshot.decisions(), &item, &r, effective)?,
+            item.version,
+        ))
     }
 
     fn history(
         &self,
-        read: &dyn InstructionRead,
+        snapshot: &dyn ReadSnapshot,
         ctx: &InvocationContext,
         id: &Id,
         kind: InstructionKind,
         page: &PageRequest,
     ) -> Result<(Page<InstructionRecord>, i64), Failure> {
+        let read = snapshot.instructions();
         let item = visible_item(read, ctx, id, kind)?;
         let binding = CursorBinding::new(ctx, "instructions.history", &[item.id.as_str()], 1);
         // Another project's confined drafts are skipped; read on until the page fills.
@@ -326,7 +326,7 @@ impl InstructionService {
             |r| r.revision.to_string(),
         )?;
         Ok((
-            rows.try_into_page(|r| record(&item, &r, None))?,
+            rows.try_into_page(|r| record_with_approval(snapshot.decisions(), &item, &r, None))?,
             item.version,
         ))
     }
