@@ -3,34 +3,47 @@
 //! A host composes [`crate::Composition`] from ports (storage, clocks, files, adapters, network
 //! and process facilities) and never from finished services. [`CoreServices::build`] is the only
 //! function that turns those ports into the artifact, resource, run control, diagnostics,
-//! knowledge, agent, web and package services; [`crate::boot`] calls it once and passes the
-//! finished set to everything it wires. A host or a fixture that needs one of those services
-//! reads it from the [`crate::Runtime`] after boot (`artifacts()`, `control()`, `resources()`,
-//! `diagnostics()`, `knowledge()`, `agents()`, `web()`).
+//! knowledge, agent, web, package, settings, provider connection, router, session, history and
+//! MCP client services; [`crate::boot`] calls it once and passes the finished set to everything
+//! it wires. A host or a fixture that needs one of those services reads it from the
+//! [`crate::Runtime`] after boot (`artifacts()`, `control()`, `resources()`, `diagnostics()`,
+//! `knowledge()`, `agents()`, `web()`, `connections()`).
 //!
 //! The engine owns the use-case families of these services. A composition that registers one of
-//! them itself is refused with [`crate::BootError::Composition`] ([`owned_family`]).
+//! them whole is refused with [`crate::BootError::Composition`] ([`owned_family`]); a
+//! composition that scripts a single operation of one keeps its handler over the engine's.
 use crate::runs::ActivationLauncher;
 use devworks_core::authority::reads::VerifiedReader;
 use devworks_core::ports::diagnostics::{ExportStaging, StorageHealthProbe};
 use devworks_core::ports::files::{ArtifactFiles, ArtifactSources};
+use devworks_core::ports::http::{Entropy, HttpTransport};
 use devworks_core::ports::packages::{
     HostPlatform, PackageFiles, PackageInspector, RuntimeProbe, SchemaValidator,
 };
 use devworks_core::ports::retrieval::{NoVectorIndex, VectorIndex};
+use devworks_core::ports::router::ConnectionDirectory;
+use devworks_core::ports::secrets::{SecretResolver, SecretStore};
 use devworks_core::ports::storage::ApplicationStore;
 use devworks_core::ports::{Clock, IdSource};
+use devworks_core::protocol::ActorId;
 use devworks_core::services::UseCases;
 use devworks_core::services::agents::AgentService;
 use devworks_core::services::artifacts::ArtifactService;
 use devworks_core::services::diagnostics::DiagnosticService;
+use devworks_core::services::history::HistoryService;
 use devworks_core::services::knowledge::KnowledgeService;
+use devworks_core::services::mcp::McpClientService;
 use devworks_core::services::packages::PackageService;
 use devworks_core::services::projects::managed_files::ManagedFileCustody;
 use devworks_core::services::resources::ResourceService;
+use devworks_core::services::router::InferenceRouter;
+use devworks_core::services::router::connections::ConnectionService;
+use devworks_core::services::router::connections::profiles::AuthEndpoints;
 use devworks_core::services::runs::scope::ExecutionScope;
 use devworks_core::services::runs::{ControlConfig, ControlService};
+use devworks_core::services::sessions::SessionService;
 use devworks_core::services::web::{WebPorts, WebService};
+use devworks_core::settings::service::{PathProbe, PrincipalRoles, SettingsService};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -132,6 +145,56 @@ pub struct PackageServicePorts {
     pub log_ids: Option<Arc<dyn IdSource>>,
 }
 
+/// Builds the web tools' network ports over the secret resolver of the provider connection
+/// service (so `web.searchCredential` resolves from the same secret store as the provider
+/// credentials). [`CoreServices::build`] calls it once with the connection service it built.
+pub type WebPortsFactory = Arc<dyn Fn(Arc<dyn SecretResolver>) -> WebPorts + Send + Sync>;
+
+/// What the settings service is built over: who holds which role and what the filesystem holds.
+#[derive(Clone)]
+pub struct SettingsPorts {
+    pub roles: Arc<dyn PrincipalRoles>,
+    pub paths: Arc<dyn PathProbe>,
+}
+
+/// What the provider connection service is built over: outbound HTTP, the secret facility, the
+/// random generator and, for a test that points sign-in at a local fake, the OAuth endpoints
+/// (none: the providers').
+#[derive(Clone)]
+pub struct ConnectionPorts {
+    pub http: Arc<dyn HttpTransport>,
+    pub secrets: Arc<dyn SecretStore>,
+    pub entropy: Arc<dyn Entropy>,
+    pub endpoints: Option<AuthEndpoints>,
+}
+
+/// What the router reads connection states from: the directory port (none: the durable rows of
+/// the provider connection service, which must then be composed).
+#[derive(Clone, Default)]
+pub struct RouterPorts {
+    pub directory: Option<Arc<dyn ConnectionDirectory>>,
+}
+
+/// The coordinator that conducts a human's Home session (none: the creator conducts it).
+#[derive(Clone, Default)]
+pub struct SessionPorts {
+    pub coordinator: Option<ActorId>,
+}
+
+/// The services built over the store, the clock and the identifier source alone, plus the ports
+/// of those that need more. A service whose ports are absent is not built and its use case
+/// family is not registered. [`Default`] composes none of them.
+#[derive(Clone, Default)]
+pub struct ApplicationComposition {
+    pub settings: Option<SettingsPorts>,
+    pub connections: Option<ConnectionPorts>,
+    pub router: Option<RouterPorts>,
+    pub sessions: Option<SessionPorts>,
+    pub history: bool,
+    /// The outgoing MCP client configuration service.
+    pub mcp: bool,
+}
+
 /// Every core service of the engine, constructed once by [`CoreServices::build`].
 #[derive(Clone)]
 pub struct CoreServices {
@@ -142,7 +205,18 @@ pub struct CoreServices {
     pub knowledge: Arc<KnowledgeService>,
     pub agents: Arc<AgentService>,
     pub web: Option<Arc<WebService>>,
+    /// The ports the web service was built with (for the package host's brokered HTTP calls and
+    /// the host's index transport).
+    pub web_ports: Option<WebPorts>,
     pub packages: Option<Arc<PackageService>>,
+    pub settings: Option<Arc<SettingsService>>,
+    pub connections: Option<Arc<ConnectionService>>,
+    pub router: Option<Arc<InferenceRouter>>,
+    pub sessions: Option<Arc<SessionService>>,
+    pub history: Option<Arc<HistoryService>>,
+    pub mcp: Option<Arc<McpClientService>>,
+    /// Port combinations that cannot be built; [`crate::boot`] refuses the composition.
+    pub(crate) refusals: Vec<String>,
 }
 
 /// The ports [`CoreServices::build`] reads.
@@ -154,7 +228,8 @@ pub struct CorePorts<'a> {
     pub diagnostics: &'a DiagnosticComposition,
     pub runs: &'a RunComposition,
     pub knowledge: &'a KnowledgeComposition,
-    pub web: Option<&'a WebPorts>,
+    pub application: &'a ApplicationComposition,
+    pub web: Option<&'a WebPortsFactory>,
     pub packages: Option<&'a crate::PackageComposition>,
 }
 
@@ -170,9 +245,62 @@ impl CoreServices {
             diagnostics: d,
             runs: r,
             knowledge: k,
+            application: app,
             web,
             packages,
         } = ports;
+        let mut refusals = Vec::new();
+        let settings = app.settings.as_ref().map(|p| {
+            Arc::new(SettingsService {
+                roles: p.roles.clone(),
+                paths: p.paths.clone(),
+                ids: ids.clone(),
+            })
+        });
+        let connections = app.connections.as_ref().map(|p| {
+            let service = ConnectionService::new(
+                ids.clone(),
+                clock.clone(),
+                store.clone(),
+                p.http.clone(),
+                p.secrets.clone(),
+                p.entropy.clone(),
+            );
+            Arc::new(match &p.endpoints {
+                Some(endpoints) => service.with_endpoints(endpoints.clone()),
+                None => service,
+            })
+        });
+        let router = app.router.as_ref().and_then(|p| {
+            let directory: Option<Arc<dyn ConnectionDirectory>> = match (&p.directory, &connections)
+            {
+                (Some(directory), _) => Some(directory.clone()),
+                (None, Some(connections)) => Some(connections.clone()),
+                (None, None) => None,
+            };
+            if directory.is_none() {
+                refusals.push(
+                    "the router needs a connection directory or the provider connection service"
+                        .to_owned(),
+                );
+            }
+            directory.map(|directory| {
+                Arc::new(InferenceRouter::new(ids.clone(), clock.clone(), directory))
+            })
+        });
+        let sessions = app.sessions.as_ref().map(|p| {
+            let service = SessionService::new(ids.clone(), store.clone());
+            Arc::new(match &p.coordinator {
+                Some(coordinator) => service.with_coordinator(coordinator.clone()),
+                None => service,
+            })
+        });
+        let history = app
+            .history
+            .then(|| Arc::new(HistoryService::new(ids.clone())));
+        let mcp = app
+            .mcp
+            .then(|| Arc::new(McpClientService::new(ids.clone())));
         let mut artifacts = ArtifactService::new(
             a.files.clone(),
             a.sources.clone(),
@@ -221,7 +349,17 @@ impl CoreServices {
         let agents = Arc::new(AgentService::new(ids.clone(), control.clone()));
         // The shared web tools: fetched pages become artifacts and every search and fetch is
         // recorded through the one diagnostics service.
-        let web = web.map(|ports| {
+        let web_ports = web.and_then(|factory| match &connections {
+            Some(connections) => Some(factory(connections.clone())),
+            None => {
+                refusals.push(
+                    "the web tools resolve credentials through the provider connection service"
+                        .to_owned(),
+                );
+                None
+            }
+        });
+        let web = web_ports.as_ref().map(|ports| {
             Arc::new(WebService::new(
                 store.clone(),
                 artifacts.clone(),
@@ -268,7 +406,15 @@ impl CoreServices {
             knowledge,
             agents,
             web,
+            web_ports,
             packages,
+            settings,
+            connections,
+            router,
+            sessions,
+            history,
+            mcp,
+            refusals,
         }
     }
 
@@ -290,6 +436,7 @@ impl CoreServices {
             diagnostics: &DiagnosticComposition::default(),
             runs: &RunComposition::default(),
             knowledge: &KnowledgeComposition::default(),
+            application: &ApplicationComposition::default(),
             web: None,
             packages: None,
         })
@@ -310,16 +457,37 @@ impl CoreServices {
         if let Some(packages) = &self.packages {
             use_cases = use_cases.with_packages(packages.clone());
         }
+        if let Some(settings) = &self.settings {
+            use_cases = use_cases.with_settings(settings.clone());
+        }
+        if let Some(sessions) = &self.sessions {
+            use_cases = use_cases.with_sessions(sessions.clone());
+        }
+        if let Some(history) = &self.history {
+            use_cases = use_cases.with_history(history.clone());
+        }
+        if let Some(router) = &self.router {
+            use_cases = use_cases.with_router(router.clone());
+        }
+        if let Some(connections) = &self.connections {
+            use_cases = use_cases.with_connections(connections.clone());
+        }
+        if let Some(mcp) = &self.mcp {
+            use_cases = use_cases.with_mcp(mcp.clone());
+        }
         use_cases
     }
 }
 
-/// The first family the engine owns that `use_cases` already registers, if any.
+/// The first family the engine owns that `use_cases` registers whole, if any. One scripted
+/// operation of a family is not the family: [`CoreServices::build`] registers its own handlers
+/// first and the composition's operations over them.
 pub(crate) fn owned_family(use_cases: &UseCases) -> Option<&'static str> {
     use devworks_core::services::{
-        AGENT_OPERATIONS, artifacts, diagnostics, knowledge, packages, resources, runs, web,
+        AGENT_OPERATIONS, artifacts, diagnostics, history, knowledge, mcp, packages, resources,
+        router, runs, sessions, web,
     };
-    let families: [(&'static str, &[&str]); 8] = [
+    let families: [(&'static str, &[&str]); 14] = [
         ("artifacts", &artifacts::OPERATIONS),
         ("resources", &resources::OPERATIONS),
         ("runs", &runs::OPERATIONS),
@@ -328,11 +496,17 @@ pub(crate) fn owned_family(use_cases: &UseCases) -> Option<&'static str> {
         ("agents", &AGENT_OPERATIONS),
         ("web", &web::OPERATIONS),
         ("packages", &packages::OPERATIONS),
+        ("settings", &devworks_core::settings::service::OPERATIONS),
+        ("sessions", &sessions::OPERATIONS),
+        ("history", &history::OPERATIONS),
+        ("router", &router::OPERATIONS),
+        ("connections", &router::connections::OPERATIONS),
+        ("mcp", &mcp::OPERATIONS),
     ];
     families.into_iter().find_map(|(name, operations)| {
         operations
             .iter()
-            .any(|op| use_cases.has_command(op) || use_cases.has_query(op))
+            .all(|op| use_cases.has_command(op) || use_cases.has_query(op))
             .then_some(name)
     })
 }

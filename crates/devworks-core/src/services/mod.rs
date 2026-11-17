@@ -492,6 +492,16 @@ impl UseCases {
         self
     }
 
+    /// Registers every operation of `other` over this set, so `other`'s handler replaces the one
+    /// already registered for the same operation. Services `other` carries replace this set's.
+    pub fn overlay(mut self, other: UseCases) -> Self {
+        self.queries.extend(other.queries);
+        self.commands.extend(other.commands);
+        self.inference_router = other.inference_router.or(self.inference_router);
+        self.connection_service = other.connection_service.or(self.connection_service);
+        self.mcp_service = other.mcp_service.or(self.mcp_service);
+        self
+    }
     pub fn has_query(&self, operation: &str) -> bool {
         self.queries.contains_key(operation)
     }

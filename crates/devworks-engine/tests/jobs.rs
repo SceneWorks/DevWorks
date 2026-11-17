@@ -307,6 +307,7 @@ fn boot_over(
             ..RunComposition::default()
         },
         knowledge: KnowledgeComposition::default(),
+        application: Default::default(),
         web: None,
         power: Arc::new(NoPower),
         diagnostics: DiagnosticComposition::default(),

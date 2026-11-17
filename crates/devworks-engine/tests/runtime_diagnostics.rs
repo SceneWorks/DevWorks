@@ -93,6 +93,7 @@ fn compose(h: &Harness, consumers: Vec<Consumer>) -> (Composition, Parts) {
             process_host: Arc::new(NativeProcessHost),
             runs: RunComposition::default(),
             knowledge: KnowledgeComposition::default(),
+            application: Default::default(),
             web: None,
             power: Arc::new(NativePower),
             diagnostics: DiagnosticComposition {
@@ -1303,54 +1304,6 @@ impl devworks_core::ports::secrets::SecretStore for BrokenSecrets {
     }
 }
 
-/// An outgoing MCP remote that is never used; installing it first makes boot's own install fail.
-struct UnusedRemote;
-impl devworks_core::ports::mcp::McpRemote for UnusedRemote {
-    fn connect(
-        &self,
-        _: &InvocationContext,
-        _: &devworks_core::ports::mcp::McpEndpoint,
-    ) -> Result<(), devworks_core::ports::mcp::McpRemoteFault> {
-        unreachable!()
-    }
-    fn discover(
-        &self,
-        _: &devworks_core::protocol::Id,
-    ) -> Result<devworks_core::ports::mcp::RemoteCatalog, devworks_core::ports::mcp::McpRemoteFault>
-    {
-        unreachable!()
-    }
-    fn call_tool(
-        &self,
-        _: &devworks_core::protocol::Id,
-        _: &str,
-        _: Value,
-    ) -> Result<Value, devworks_core::ports::mcp::McpRemoteFault> {
-        unreachable!()
-    }
-    fn read_resource(
-        &self,
-        _: &devworks_core::protocol::Id,
-        _: &str,
-    ) -> Result<Value, devworks_core::ports::mcp::McpRemoteFault> {
-        unreachable!()
-    }
-    fn get_prompt(
-        &self,
-        _: &devworks_core::protocol::Id,
-        _: &str,
-        _: Value,
-    ) -> Result<Value, devworks_core::ports::mcp::McpRemoteFault> {
-        unreachable!()
-    }
-    fn disconnect(
-        &self,
-        _: &devworks_core::protocol::Id,
-    ) -> Result<(), devworks_core::ports::mcp::McpRemoteFault> {
-        unreachable!()
-    }
-}
-
 /// Boots a composition that `break_step` makes fail before the first task starts, then checks
 /// that boot returns the error and the store holds a failed boot diagnostic naming `step`.
 fn a_failed_early_step_is_recorded(step: &str, break_step: impl FnOnce(&mut Composition)) {
@@ -1386,7 +1339,7 @@ fn a_failed_early_step_is_recorded(step: &str, break_step: impl FnOnce(&mut Comp
 fn registering_a_family_the_engine_builds_is_a_composition_error() {
     use devworks_core::services::{agents::AgentService, resources::ResourceService};
     type Register = fn(&Composition, UseCases) -> UseCases;
-    let cases: [(&str, Register); 5] = [
+    let cases: [(&str, Register); 11] = [
         ("artifacts", |c, u| {
             let services = devworks_engine::CoreServices::for_fixture(
                 &c.store,
@@ -1421,6 +1374,56 @@ fn registering_a_family_the_engine_builds_is_a_composition_error() {
                 None,
             )))
         }),
+        ("settings", |c, u| {
+            u.with_settings(Arc::new(
+                devworks_core::settings::service::SettingsService {
+                    roles: Arc::new(devworks_core::authority::HostRoles {
+                        store: c.store.clone(),
+                    }),
+                    paths: Arc::new(devworks_adapters::paths::FsPathProbe),
+                    ids: c.ids.clone(),
+                },
+            ))
+        }),
+        ("sessions", |c, u| {
+            u.with_sessions(Arc::new(
+                devworks_core::services::sessions::SessionService::new(
+                    c.ids.clone(),
+                    c.store.clone(),
+                ),
+            ))
+        }),
+        ("history", |c, u| {
+            u.with_history(Arc::new(
+                devworks_core::services::history::HistoryService::new(c.ids.clone()),
+            ))
+        }),
+        ("router", |c, u| {
+            u.with_router(Arc::new(
+                devworks_core::services::router::InferenceRouter::new(
+                    c.ids.clone(),
+                    c.clock.clone(),
+                    Arc::new(devworks_core::ports::router::NoConnections),
+                ),
+            ))
+        }),
+        ("connections", |c, u| {
+            u.with_connections(Arc::new(
+                devworks_core::services::router::connections::ConnectionService::new(
+                    c.ids.clone(),
+                    c.clock.clone(),
+                    c.store.clone(),
+                    Arc::new(devworks_core::ports::http::NoNetwork),
+                    Arc::new(devworks_core::ports::secrets::SessionSecrets::new()),
+                    Arc::new(devworks_adapters::OsEntropy),
+                ),
+            ))
+        }),
+        ("mcp", |c, u| {
+            u.with_mcp(Arc::new(
+                devworks_core::services::mcp::McpClientService::new(c.ids.clone()),
+            ))
+        }),
     ];
     for (family, register) in cases {
         a_failed_early_step_is_recorded(
@@ -1431,6 +1434,26 @@ fn registering_a_family_the_engine_builds_is_a_composition_error() {
             },
         );
     }
+}
+
+/// A port the engine builds a service over needs another service's ports: refused as a
+/// composition error, recorded as a failed boot at stage `composition`.
+#[test]
+fn ports_that_need_the_connection_service_without_it_are_a_composition_error() {
+    a_failed_early_step_is_recorded("the router needs a connection directory", |c| {
+        c.application.router = Some(Default::default());
+    });
+    a_failed_early_step_is_recorded("the web tools resolve credentials", |c| {
+        c.web = Some(Arc::new(|_| {
+            unreachable!("refused before the ports are built")
+        }));
+    });
+    a_failed_early_step_is_recorded("GitHub calls resolve credentials", |c| {
+        c.git = Some(devworks_engine::git::GitComposition {
+            config: devworks_core::services::git::GitConfig::default(),
+            github_http: Some(Arc::new(devworks_core::ports::http::NoNetwork)),
+        });
+    });
 }
 
 #[test]
@@ -1455,36 +1478,6 @@ fn a_failed_schema_credential_reconciliation_stops_boot_with_a_failed_boot_diagn
         c.config.schemas = Some(devworks_engine::schemas::SchemaComposition {
             reader: Arc::new(devworks_adapters::database::NativeMetadataReader),
             secrets: Arc::new(BrokenSecrets),
-        });
-    });
-}
-
-#[test]
-fn an_mcp_remote_that_is_already_installed_stops_boot_with_a_failed_boot_diagnostic() {
-    a_failed_early_step_is_recorded("outgoing MCP remote already installed", |c| {
-        let service = Arc::new(devworks_core::services::mcp::McpClientService::new(
-            c.ids.clone(),
-        ));
-        let validator: Arc<dyn devworks_core::ports::packages::SchemaValidator> =
-            Arc::new(devworks_adapters::packages::JsonSchemaValidator);
-        service
-            .install_remote(
-                c.store.clone(),
-                Arc::new(UnusedRemote),
-                validator.clone(),
-                devworks_engine::CoreServices::for_fixture(
-                    &c.store,
-                    &c.clock,
-                    &c.ids,
-                    &c.artifacts,
-                )
-                .artifacts,
-            )
-            .unwrap();
-        c.use_cases = std::mem::replace(&mut c.use_cases, UseCases::new()).with_mcp(service);
-        c.config.mcp = Some(devworks_engine::runtime::McpComposition {
-            validator,
-            factory: Arc::new(|_, _| Arc::new(UnusedRemote)),
         });
     });
 }

@@ -21,9 +21,9 @@ use devworks_core::ports::{
 };
 use devworks_core::protocol::results::{DomainCommandReply, DomainDecision, DomainQueryReply};
 use devworks_core::protocol::{CommandReply, ProjectId};
+use devworks_core::services::UseCases;
 use devworks_core::services::artifacts::ArtifactService;
 use devworks_core::services::instructions::SkillRoots;
-use devworks_core::services::{UseCases, sessions::SessionService};
 use devworks_core::settings::catalog::AgentRole;
 use devworks_engine::runtime::InstructionComposition;
 use devworks_engine::{ArtifactComposition, DiagnosticComposition, KnowledgeComposition};
@@ -170,16 +170,17 @@ impl Fx {
             process_host: Arc::new(NativeProcessHost),
             runs: RunComposition::default(),
             knowledge: KnowledgeComposition::default(),
+            application: devworks_engine::ApplicationComposition {
+                sessions: Some(Default::default()),
+                ..Default::default()
+            },
             web: None,
             power: Arc::new(NativePower),
             diagnostics: DiagnosticComposition::default(),
             browser: None,
             git: None,
             packages: None,
-            use_cases: UseCases::new().with_sessions(Arc::new(SessionService::new(
-                h.ids.clone(),
-                self.store.clone(),
-            ))),
+            use_cases: UseCases::new(),
             consumers: vec![],
             indexing: None,
             config,

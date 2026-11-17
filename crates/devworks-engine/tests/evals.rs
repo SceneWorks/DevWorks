@@ -53,15 +53,17 @@ fn composition(
         process_host: Arc::new(NativeProcessHost),
         runs: RunComposition::default(),
         knowledge: KnowledgeComposition::default(),
+        application: devworks_engine::ApplicationComposition {
+            sessions: Some(Default::default()),
+            ..Default::default()
+        },
         web: None,
         power: Arc::new(NativePower),
         diagnostics: DiagnosticComposition::default(),
         browser: None,
         git: None,
         packages: None,
-        use_cases: UseCases::new().with_sessions(Arc::new(
-            devworks_core::services::sessions::SessionService::new(h.ids.clone(), store.clone()),
-        )),
+        use_cases: UseCases::new(),
         consumers: vec![],
         indexing: None,
         config,

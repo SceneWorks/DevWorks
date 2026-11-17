@@ -19,7 +19,7 @@ use devworks_core::ports::{
 use devworks_core::protocol::results::{DomainCommandReply, DomainDecision};
 use devworks_core::protocol::{ActorId, ProjectId, RootId};
 use devworks_core::registry::SchemaRevision;
-use devworks_core::services::{UseCases, sessions::SessionService};
+use devworks_core::services::UseCases;
 use devworks_core::settings::catalog::AgentRole;
 use devworks_engine::{
     ArtifactComposition, Composition, DiagnosticComposition, KnowledgeComposition, RunComposition,
@@ -61,8 +61,7 @@ impl CommandHandler for Maintenance {
 fn composition(h: &Harness, store: Arc<dyn ApplicationStore>) -> Composition {
     let mut config = RuntimeConfig::new(id("approval-dispatcher"));
     config.approval_resume_interval = Duration::from_secs(3600);
-    let mut use_cases =
-        UseCases::new().with_sessions(Arc::new(SessionService::new(h.ids.clone(), store.clone())));
+    let mut use_cases = UseCases::new();
     use_cases.register(
         "help.generate_capability_docs",
         None,
@@ -87,6 +86,10 @@ fn composition(h: &Harness, store: Arc<dyn ApplicationStore>) -> Composition {
         process_host: Arc::new(NativeProcessHost),
         runs: RunComposition::default(),
         knowledge: KnowledgeComposition::default(),
+        application: devworks_engine::ApplicationComposition {
+            sessions: Some(Default::default()),
+            ..Default::default()
+        },
         web: None,
         power: Arc::new(NativePower),
         diagnostics: DiagnosticComposition::default(),

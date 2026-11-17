@@ -632,6 +632,7 @@ impl App {
                 .unwrap_or_else(|| Arc::new(NativeProcessHost)),
             runs: devworks_engine::RunComposition::default(),
             knowledge: KnowledgeComposition::default(),
+            application: Default::default(),
             web: None,
             power: Arc::new(NativePower),
             diagnostics: DiagnosticComposition::default(),
@@ -655,9 +656,12 @@ impl App {
                     cache: self.runtimes.clone(),
                     search_path: Some(p.clone()),
                 }),
-                index: Some(IndexPorts {
-                    transport: self.transport.clone(),
-                    verifier: Arc::new(BundleIndexVerifier),
+                index: Some({
+                    let transport = self.transport.clone();
+                    Arc::new(move |_| IndexPorts {
+                        transport: transport.clone(),
+                        verifier: Arc::new(BundleIndexVerifier),
+                    })
                 }),
             }),
             use_cases: UseCases::new(),

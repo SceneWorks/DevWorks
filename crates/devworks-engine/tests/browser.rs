@@ -1504,6 +1504,7 @@ fn composition(
         }),
         runs: RunComposition::default(),
         knowledge: KnowledgeComposition::default(),
+        application: Default::default(),
         web: None,
         power: Arc::new(NoPower),
         diagnostics: DiagnosticComposition::default(),
@@ -5542,6 +5543,7 @@ fn source_fixture(
             filesystem: Some(Arc::new(fs)),
             ..GitConfig::default()
         },
+        github_http: None,
     }
 }
 #[test]

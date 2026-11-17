@@ -125,6 +125,7 @@ fn composition(h: &Harness, store: Arc<dyn ApplicationStore>, git_program: &str)
         process_host: Arc::new(NativeProcessHost),
         runs: RunComposition::default(),
         knowledge: KnowledgeComposition::default(),
+        application: Default::default(),
         web: None,
         power: Arc::new(NoPower),
         diagnostics: DiagnosticComposition::default(),

@@ -9,7 +9,6 @@ use devworks_core::ports::provider_http::{
     HttpStream, ResponseHead, StreamCloser, StreamLimits, StreamingHttp, TransportError,
 };
 use devworks_core::protocol::records::RouteIntent;
-use devworks_core::services::mcp::McpClientService;
 use devworks_core::settings::model as settings;
 use std::sync::OnceLock;
 
@@ -185,27 +184,17 @@ fn agent_turn(calls: Vec<(&'static str, &'static str)>) -> Turn {
         .unwrap()
         .block_on(async {
             let mut composed = composition(&fx, None, Arc::new(FakePower::default()));
-            let connections = Arc::new(
-                devworks_core::services::router::connections::ConnectionService::new(
-                    fx.h.ids.clone(),
-                    fx.h.clock(),
-                    fx.store.clone(),
-                    Arc::new(devworks_core::ports::http::NoNetwork),
-                    Arc::new(devworks_core::ports::secrets::SessionSecrets::new()),
-                    Arc::new(Entropy),
-                ),
-            );
-            let service = Arc::new(McpClientService::new(fx.h.ids.clone()));
-            composed.use_cases = UseCases::new()
-                .with_connections(connections.clone())
-                .with_router(Arc::new(
-                    devworks_core::services::router::InferenceRouter::new(
-                        fx.h.ids.clone(),
-                        fx.h.clock(),
-                        connections,
-                    ),
-                ))
-                .with_mcp(service.clone());
+            composed.application = devworks_engine::ApplicationComposition {
+                connections: Some(devworks_engine::ConnectionPorts {
+                    http: Arc::new(devworks_core::ports::http::NoNetwork),
+                    secrets: Arc::new(devworks_core::ports::secrets::SessionSecrets::new()),
+                    entropy: Arc::new(Entropy),
+                    endpoints: None,
+                }),
+                router: Some(Default::default()),
+                mcp: true,
+                ..Default::default()
+            };
             let wire = Arc::new(ToolWire {
                 tool: Mutex::default(),
                 calls,
@@ -233,6 +222,7 @@ fn agent_turn(calls: Vec<(&'static str, &'static str)>) -> Turn {
                 }),
             });
             let app = Arc::new(boot(composed).await.unwrap());
+            let service = app.mcp_service().expect("the engine built the MCP service");
 
             // A human configures the server; its catalog is published and the human selects
             // its tool for agents.

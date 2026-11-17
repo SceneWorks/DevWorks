@@ -31,8 +31,6 @@ use devworks_core::protocol::results::{
 use devworks_core::protocol::{Check, CommandReply, ProjectId};
 use devworks_core::services::UseCases;
 use devworks_core::services::artifacts::replies::REPLY_CONSUMER;
-use devworks_core::services::history::HistoryService;
-use devworks_core::services::sessions::SessionService;
 use devworks_engine::{
     ArtifactComposition, DiagnosticComposition, KnowledgeComposition, RunComposition,
 };
@@ -230,16 +228,18 @@ fn composition(
         process_host: Arc::new(NativeProcessHost),
         runs: RunComposition::default(),
         knowledge: KnowledgeComposition::default(),
+        application: devworks_engine::ApplicationComposition {
+            sessions: Some(Default::default()),
+            history: true,
+            ..Default::default()
+        },
         web: None,
         power: Arc::new(NativePower),
         diagnostics: DiagnosticComposition::default(),
         git: None,
         browser: None,
         packages: None,
-        use_cases: UseCases::new()
-            .with_queue()
-            .with_sessions(Arc::new(SessionService::new(h.ids.clone(), store)))
-            .with_history(Arc::new(HistoryService::new(h.ids.clone()))),
+        use_cases: UseCases::new().with_queue(),
         consumers: Vec::new(),
         indexing: None,
         config,

@@ -241,8 +241,9 @@ pub mod watch;
 mod workers;
 
 pub use core_services::{
-    ArtifactComposition, CorePorts, CoreServices, DiagnosticComposition, KnowledgeComposition,
-    PackageServicePorts,
+    ApplicationComposition, ArtifactComposition, ConnectionPorts, CorePorts, CoreServices,
+    DiagnosticComposition, KnowledgeComposition, PackageServicePorts, RouterPorts, SessionPorts,
+    SettingsPorts, WebPortsFactory,
 };
 pub use dispatch::{
     AsyncDelivery, AsyncDeliveryHandler, AsyncFuture, AsyncOutcome, Consumer, Delivery,

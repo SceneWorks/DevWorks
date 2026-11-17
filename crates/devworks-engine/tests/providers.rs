@@ -725,28 +725,6 @@ impl Fx {
 }
 
 fn tool_runtime_composition(f: &Fx) -> devworks_engine::Composition {
-    let connections = Arc::new(ConnectionService::new(
-        f.h.ids.clone(),
-        f.h.clock(),
-        f.store.clone(),
-        Arc::new(NoNetwork),
-        Arc::new(SessionSecrets::new()),
-        Arc::new(EntropyFixture),
-    ));
-    let router = Arc::new(InferenceRouter::new(
-        f.h.ids.clone(),
-        f.h.clock(),
-        connections.clone(),
-    ));
-    let cases = UseCases::new()
-        .with_router(router)
-        .with_connections(connections)
-        .with_sessions(Arc::new(
-            devworks_core::services::sessions::SessionService::new(
-                f.h.ids.clone(),
-                f.store.clone(),
-            ),
-        ));
     let mut config = devworks_engine::RuntimeConfig::new(id("tool-dispatcher"));
     config.providers = Some(ProviderComposition::new(f.http.clone()));
     config.collect_interval = std::time::Duration::from_secs(3600);
@@ -759,13 +737,24 @@ fn tool_runtime_composition(f: &Fx) -> devworks_engine::Composition {
         process_host: Arc::new(devworks_adapters::process::NativeProcessHost),
         runs: RunComposition::default(),
         knowledge: KnowledgeComposition::default(),
+        application: devworks_engine::ApplicationComposition {
+            connections: Some(devworks_engine::ConnectionPorts {
+                http: Arc::new(NoNetwork),
+                secrets: Arc::new(SessionSecrets::new()),
+                entropy: Arc::new(EntropyFixture),
+                endpoints: None,
+            }),
+            router: Some(Default::default()),
+            sessions: Some(Default::default()),
+            ..Default::default()
+        },
         web: None,
         power: Arc::new(devworks_adapters::power::NativePower),
         diagnostics: DiagnosticComposition::default(),
         git: None,
         browser: None,
         packages: None,
-        use_cases: cases,
+        use_cases: UseCases::new(),
         consumers: vec![],
         indexing: None,
         config,

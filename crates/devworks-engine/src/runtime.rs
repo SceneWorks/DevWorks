@@ -8,8 +8,8 @@ use crate::approvals::{ResumeAdmission, ResumeDispatcher};
 use crate::browser::{BrowserComposition, Supervision as BrowserSupervision};
 pub use crate::core_services::RunComposition;
 use crate::core_services::{
-    ArtifactComposition, CorePorts, CoreServices, DiagnosticComposition, KnowledgeComposition,
-    PackageServicePorts, owned_family,
+    ApplicationComposition, ArtifactComposition, CorePorts, CoreServices, DiagnosticComposition,
+    KnowledgeComposition, PackageServicePorts, WebPortsFactory, owned_family,
 };
 use crate::diagnostics::{self as diag, Monitor};
 use crate::dispatch::{self, Consumer, Dispatcher, DispatcherConfig, RecoveryReport};
@@ -99,9 +99,18 @@ pub struct PackageComposition {
     pub config: HostConfig,
     /// Runtime probing (the cache must be the service's runtime probe, `service.runtimes`).
     pub runtimes: Option<crate::package_host::RuntimePorts>,
-    /// Signed publisher index sources (fetch and verification).
-    pub index: Option<crate::package_host::IndexPorts>,
+    /// Signed publisher index sources (fetch and verification), built over the web tools' ports
+    /// (none when no web tools are composed) so the downloads share their resolver, pinned
+    /// transport and egress policy.
+    pub index: Option<IndexPortsFactory>,
 }
+
+/// Builds the package index ports from the web tools' network ports.
+pub type IndexPortsFactory = Arc<
+    dyn Fn(Option<&devworks_core::services::web::WebPorts>) -> crate::package_host::IndexPorts
+        + Send
+        + Sync,
+>;
 
 /// Lifecycle hooks run in order (schedules, then the caller's).
 struct ChainedHooks(Vec<Arc<dyn LifecycleHooks>>);
@@ -122,9 +131,10 @@ impl LifecycleHooks for ChainedHooks {
 
 /// Everything the runtime is composed from. Every part is a core port; the one `store` backs the
 /// gateway, the dispatcher, the reply publisher and artifact recovery and collection. The core
-/// services (artifacts, resources, run control, diagnostics, knowledge, agents, web, packages)
-/// are built from their ports by [`CoreServices::build`] inside [`boot`]; a use case family of
-/// one of them in [`Self::use_cases`] is refused as a composition error.
+/// services (artifacts, resources, run control, diagnostics, knowledge, agents, web, packages,
+/// settings, provider connections, router, sessions, history, MCP client) are built from their
+/// ports by [`CoreServices::build`] inside [`boot`]; a use case family of one of them in
+/// [`Self::use_cases`] is refused as a composition error.
 pub struct Composition {
     pub store: Arc<dyn ApplicationStore>,
     pub clock: Arc<dyn Clock>,
@@ -150,9 +160,14 @@ pub struct Composition {
     /// The ports of the one knowledge service ([`boot`] registers its use cases and its source
     /// deletion consumer).
     pub knowledge: KnowledgeComposition,
-    /// The web tools' network ports. When present, [`boot`] builds the web service over the
-    /// artifact and diagnostics services and registers `web.search` and `web.fetch`.
-    pub web: Option<devworks_core::services::web::WebPorts>,
+    /// The ports of the settings, provider connection, router, session, history and MCP client
+    /// services ([`boot`] builds the ones composed and registers their use cases).
+    pub application: ApplicationComposition,
+    /// The web tools' network ports, built over the provider connection service's secret
+    /// resolver. When present, [`boot`] builds the web service over the artifact and
+    /// diagnostics services and registers `web.search` and `web.fetch`; the package host's
+    /// brokered HTTP calls use the same ports.
+    pub web: Option<WebPortsFactory>,
     /// Owned browser sessions (`browser.*`): when present, [`boot`] builds the one
     /// [`BrowserService`] over the composition's store, artifact service and process owner,
     /// registers its use cases and effect consumer, recovers earlier boots' sessions after the
@@ -436,6 +451,7 @@ pub struct Runtime {
     knowledge: Arc<devworks_core::services::knowledge::KnowledgeService>,
     agents: Arc<devworks_core::services::agents::AgentService>,
     web: Option<Arc<devworks_core::services::web::WebService>>,
+    connections: Option<Arc<devworks_core::services::router::connections::ConnectionService>>,
     use_cases: UseCases,
     dispatcher: Dispatcher,
     collector: Arc<Collector>,
@@ -552,6 +568,7 @@ async fn build(composition: Composition, core: CoreServices) -> Result<Engine, B
         power,
         diagnostics: _,
         knowledge: _,
+        application: _,
         web: _,
         browser,
         git,
@@ -570,11 +587,14 @@ async fn build(composition: Composition, core: CoreServices) -> Result<Engine, B
         agents: _,
         web: _,
         packages: package_service,
+        ..
     } = core.clone();
     consumers.push(crate::knowledge::source_deletion_consumer(
         knowledge.clone(),
     ));
-    let use_cases = core.register(use_cases);
+    // The engine's handlers first, then the composition's operations over them (a composition
+    // scripting one operation of an engine-owned family keeps its handler).
+    let use_cases = core.register(UseCases::new()).overlay(use_cases);
     let purge_files = config.purge.as_ref().map(|p| (p.files)(artifacts.clone()));
     let usage = crate::usage::UsageRuntime::with_process_host(
         store.clone(),
@@ -659,6 +679,29 @@ async fn build(composition: Composition, core: CoreServices) -> Result<Engine, B
             .with_secrets(composition.secrets.clone()),
         )
     });
+    // GitHub calls resolve their credential through the provider connection service built with
+    // the core set.
+    let git = match git {
+        Some(mut composition) => {
+            if let Some(http) = composition.github_http.take() {
+                let Some(connections) = &core.connections else {
+                    return Err(BootError::Composition(StorageError::InvalidRecord(
+                        "GitHub calls resolve credentials through the provider connection \
+                         service"
+                            .to_owned(),
+                    )));
+                };
+                composition.config.github = Some(Arc::new(
+                    devworks_core::services::git::github::GitHubClient {
+                        http,
+                        secrets: connections.clone(),
+                    },
+                ));
+            }
+            Some(composition)
+        }
+        None => None,
+    };
     let git = git.and_then(|composition| {
         let fs = composition.config.filesystem.clone()?;
         let helpers = Arc::new(
@@ -1182,13 +1225,21 @@ async fn build(composition: Composition, core: CoreServices) -> Result<Engine, B
             p.launch,
             p.config,
             p.runtimes,
-            p.index,
+            p.index.map(|index| index(core.web_ports.as_ref())),
         );
         host.service().set_activity(host.clone());
         let _ = package_tools.set(Arc::downgrade(&host));
         // Brokered application calls of packages run through this command path, as the
         // principal that invoked the package.
         let gateway: Arc<dyn crate::package_host::broker::GatewayCalls> = admitter.clone();
+        // Brokered HTTP calls use the web tools' resolver, transport and secret resolver.
+        if let Some(web) = &core.web_ports {
+            host.attach_network(crate::package_host::http::NetworkPorts {
+                resolver: web.resolver.clone(),
+                transport: web.transport.clone(),
+                secrets: web.secrets.clone(),
+            });
+        }
         host.attach_broker(crate::package_host::broker::BrokerPorts {
             gateway: Arc::downgrade(&gateway),
             artifacts: artifacts.clone(),
@@ -1281,6 +1332,7 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
         diagnostics: &composition.diagnostics,
         runs: &composition.runs,
         knowledge: &composition.knowledge,
+        application: &composition.application,
         web: composition.web.as_ref(),
         packages: composition.packages.as_ref(),
     });
@@ -1292,6 +1344,11 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
         diag::record_boot_failure(&diagnostics, &e);
         e
     };
+    if let Some(reason) = core.refusals.first() {
+        return Err(failed(BootError::Composition(StorageError::InvalidRecord(
+            reason.clone(),
+        ))));
+    }
     if let Some(family) = owned_family(&composition.use_cases) {
         return Err(failed(BootError::Composition(StorageError::InvalidRecord(
             format!(
@@ -1343,7 +1400,7 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
         resumes,
         mut package_guard,
     } = build(composition, core).await.map_err(failed)?;
-    let (artifacts, resources, control, diagnostics, knowledge, agents, web) = (
+    let (artifacts, resources, control, diagnostics, knowledge, agents, web, connections) = (
         core.artifacts.clone(),
         core.resources.clone(),
         core.control.clone(),
@@ -1351,6 +1408,7 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
         core.knowledge.clone(),
         core.agents.clone(),
         core.web.clone(),
+        core.connections.clone(),
     );
     if let Some(service) = &schemas {
         // Namespace/reference-only cleanup precedes password intake and command exposure.
@@ -1906,6 +1964,7 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
         knowledge,
         agents,
         web,
+        connections,
         use_cases,
         dispatcher,
         collector,
@@ -2044,6 +2103,13 @@ impl Runtime {
     /// The web tools service (none when no web ports were composed).
     pub fn web(&self) -> Option<&Arc<devworks_core::services::web::WebService>> {
         self.web.as_ref()
+    }
+    /// The provider connection service the engine built and registered (none when no
+    /// connection ports were composed).
+    pub fn connections(
+        &self,
+    ) -> Option<&Arc<devworks_core::services::router::connections::ConnectionService>> {
+        self.connections.as_ref()
     }
     pub fn resources(&self) -> &Arc<ResourceService> {
         &self.resources

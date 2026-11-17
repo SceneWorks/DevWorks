@@ -145,7 +145,8 @@ struct Fx {
     scope: Arc<ScriptedScope>,
     service: Arc<ControlService>,
     use_cases: UseCases,
-    /// [`Self::use_cases`] without the runs and agents families, which a booted runtime builds.
+    /// [`Self::use_cases`] without the runs, agents, sessions and history families, which a booted
+    /// runtime builds.
     engine_use_cases: UseCases,
     user: InvocationContext,
     agent: InvocationContext,
@@ -176,14 +177,14 @@ impl Fx {
                 h.ids.clone(),
                 service.clone(),
             )))
-            .with_sessions(Arc::new(SessionService::new(h.ids.clone(), store.clone())))
-            .with_history(Arc::new(
-                devworks_core::services::history::HistoryService::new(h.ids.clone()),
-            ))
             .with_work(Arc::new(WorkService::new(h.ids.clone(), service.clone())));
         // What a gateway-driven test needs beyond the families the engine builds itself.
         let use_cases = engine_use_cases
             .clone()
+            .with_sessions(Arc::new(SessionService::new(h.ids.clone(), store.clone())))
+            .with_history(Arc::new(
+                devworks_core::services::history::HistoryService::new(h.ids.clone()),
+            ))
             .with_runs(service.clone())
             .with_agents(Arc::new(AgentService::new(h.ids.clone(), service.clone())));
         let user = principal(&*store, "user-a", PrincipalKind::Human);
@@ -1641,25 +1642,16 @@ fn agent_first_context_publishes_the_assignment_brief_and_recovers_exactly() {
     let rt = runtime();
     rt.block_on(async {
         let mut composed = composition(&fx, None, Arc::new(FakePower::default()));
-        let connections = Arc::new(
-            devworks_core::services::router::connections::ConnectionService::new(
-                fx.h.ids.clone(),
-                fx.h.clock(),
-                fx.store.clone(),
-                Arc::new(devworks_core::ports::http::NoNetwork),
-                Arc::new(devworks_core::ports::secrets::SessionSecrets::new()),
-                Arc::new(AgentEntropy),
-            ),
-        );
-        composed.use_cases = UseCases::new()
-            .with_connections(connections.clone())
-            .with_router(Arc::new(
-                devworks_core::services::router::InferenceRouter::new(
-                    fx.h.ids.clone(),
-                    fx.h.clock(),
-                    connections,
-                ),
-            ));
+        composed.application = devworks_engine::ApplicationComposition {
+            connections: Some(devworks_engine::ConnectionPorts {
+                http: Arc::new(devworks_core::ports::http::NoNetwork),
+                secrets: Arc::new(devworks_core::ports::secrets::SessionSecrets::new()),
+                entropy: Arc::new(AgentEntropy),
+                endpoints: None,
+            }),
+            router: Some(Default::default()),
+            ..Default::default()
+        };
         let wire_calls = Arc::new(AtomicUsize::new(0));
         composed.config.providers = Some(
             devworks_engine::providers::driver::ProviderComposition::new(Arc::new(AgentWire(
@@ -6006,6 +5998,7 @@ fn composition_with(
         runs,
         power,
         knowledge: KnowledgeComposition::default(),
+        application: Default::default(),
         web: None,
         diagnostics: DiagnosticComposition::default(),
         git: None,
@@ -6844,6 +6837,11 @@ fn shutdown_does_not_wait_for_a_retained_receive_long_poll() {
         Arc::new(FakeHost::default()),
     );
     composed.use_cases = fx.engine_use_cases.clone();
+    composed.application = devworks_engine::ApplicationComposition {
+        sessions: Some(Default::default()),
+        history: true,
+        ..Default::default()
+    };
     let app = rt
         .block_on(boot(composed))
         .unwrap_or_else(|e| panic!("boot: {e:?}"));

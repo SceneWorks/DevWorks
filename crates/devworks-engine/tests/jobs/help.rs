@@ -64,6 +64,7 @@ fn boot_help_with_metadata(
         process_host: Arc::new(FakeHost::default()),
         runs: RunComposition::default(),
         knowledge: KnowledgeComposition::default(),
+        application: Default::default(),
         web: None,
         power: Arc::new(NoPower),
         diagnostics: DiagnosticComposition::default(),

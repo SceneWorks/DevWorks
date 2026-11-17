@@ -27,7 +27,6 @@ use devworks_core::services::process::{LaunchPolicy, LaunchRequest, StopOutcome}
 use devworks_core::services::resources::{MachineResource, desktop, register_machine};
 use devworks_core::settings::catalog::descriptor;
 use devworks_core::settings::model;
-use devworks_core::settings::service::SettingsService;
 use devworks_core::settings::view::Health;
 use devworks_engine::{
     ArtifactComposition, DiagnosticComposition, KnowledgeComposition, RunComposition,
@@ -163,16 +162,19 @@ fn composition(
         runs: RunComposition::default(),
         power,
         knowledge: KnowledgeComposition::default(),
+        application: devworks_engine::ApplicationComposition {
+            settings: Some(devworks_engine::SettingsPorts {
+                roles: Arc::new(HostRoles { store }),
+                paths: Arc::new(FsPathProbe),
+            }),
+            ..Default::default()
+        },
         web: None,
         diagnostics: DiagnosticComposition::default(),
         git: None,
         browser: None,
         packages: None,
-        use_cases: UseCases::new().with_settings(Arc::new(SettingsService {
-            roles: Arc::new(HostRoles { store }),
-            paths: Arc::new(FsPathProbe),
-            ids: h.ids.clone(),
-        })),
+        use_cases: UseCases::new(),
         consumers: Vec::new(),
         indexing: None,
         config,

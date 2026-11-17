@@ -29,6 +29,7 @@ fn composition(
         process_host: Arc::new(NativeProcessHost),
         runs: RunComposition::default(),
         knowledge: KnowledgeComposition::default(),
+        application: Default::default(),
         web: None,
         power: Arc::new(NativePower),
         diagnostics: DiagnosticComposition::default(),
