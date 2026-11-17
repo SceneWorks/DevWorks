@@ -6,6 +6,11 @@
 //! sequence") for the order and why each step sits where it does.
 use crate::approvals::{ResumeAdmission, ResumeDispatcher};
 use crate::browser::{BrowserComposition, Supervision as BrowserSupervision};
+pub use crate::core_services::RunComposition;
+use crate::core_services::{
+    ApplicationComposition, ArtifactComposition, CorePorts, CoreServices, DiagnosticComposition,
+    KnowledgeComposition, PackageServicePorts, WebPortsFactory, owned_operation,
+};
 use crate::diagnostics::{self as diag, Monitor};
 use crate::dispatch::{self, Consumer, Dispatcher, DispatcherConfig, RecoveryReport};
 use crate::evals::EvalSupervisor;
@@ -15,7 +20,7 @@ use crate::notifications::OsNotificationSupervisor;
 use crate::package_host::{HostConfig, LaunchPorts, PackageHost};
 use crate::replies::reply_consumer;
 use crate::resources::{BootReport as ResourceBootReport, Housekeeper};
-use crate::runs::{ActivationLauncher, RunGate, RunSettings, RunSupervisor};
+use crate::runs::{RunGate, RunSettings, RunSupervisor};
 use crate::workers::{DrainAt, Loop, StopAt, Workers};
 use devworks_core::context::InvocationContext;
 use devworks_core::gateway::{CommandOutcome, Gateway, QueryOutcome};
@@ -40,18 +45,15 @@ use devworks_core::services::browser::{BrowserRecovery, BrowserService};
 use devworks_core::services::desktop::ControlEpoch;
 use devworks_core::services::diagnostics::{DiagnosticService, ExportFailure, LogQuery};
 use devworks_core::services::evals::EvalService;
-use devworks_core::services::jobs::runner::{
-    InferenceJobs, JobLifecycle, NativeJobDispatch, NoInferencePipeline,
-};
+use devworks_core::services::jobs::runner::{JobLifecycle, NativeJobDispatch};
 use devworks_core::services::jobs::{JobConfig, JobService, NativeCatalog};
 use devworks_core::services::notifications::NotificationService;
-use devworks_core::services::packages::PackageService;
 use devworks_core::services::power::{KeepAwake, KeepAwakeStatus};
 use devworks_core::services::process::{ProcessSupervisor, ShutdownReport};
 use devworks_core::services::projects::{ProjectService, RepositoryService};
 use devworks_core::services::resources::{MachineResource, ResourceService, desktop};
 use devworks_core::services::runs::ControlService;
-use devworks_core::services::runs::recovery::{BootRecovery, LifecycleHooks, NoLifecycleHooks};
+use devworks_core::services::runs::recovery::{BootRecovery, LifecycleHooks};
 use devworks_core::services::work::WorkService;
 use devworks_core::settings::view::Health;
 use std::collections::BTreeMap;
@@ -88,41 +90,31 @@ pub struct IndexComposition {
     pub enrichers: Vec<Arc<dyn devworks_core::ports::indexing::SemanticEnricher>>,
 }
 
-/// Run root control as composed: the one control service (its plan/readiness port inside), the
-/// coordinator launcher (none until the agent supervisor exists: accepted activations then stay
-/// pending and are held at the next boot), further lifecycle hooks (keep-working, a later item;
-/// [`boot`] always composes the schedules' own hooks first) and the scheduled-inference dispatch
-/// port (none until the coordinator turn pipeline exists: a scheduled inference run then fails
-/// before dispatch with a visible reason).
-#[derive(Clone)]
-pub struct RunComposition {
-    pub service: Arc<ControlService>,
-    pub launcher: Option<Arc<dyn ActivationLauncher>>,
-    pub hooks: Arc<dyn LifecycleHooks>,
-    pub inference: Arc<dyn InferenceJobs>,
-}
-impl RunComposition {
-    pub fn new(service: Arc<ControlService>) -> Self {
-        Self {
-            service,
-            launcher: None,
-            hooks: Arc::new(NoLifecycleHooks),
-            inference: Arc::new(NoInferencePipeline),
-        }
-    }
-}
-
-/// The package lifecycle as composed: the one package service (registered for the `addons.*`
-/// use cases) and what its host needs to launch helpers.
+/// The package lifecycle as composed: the ports of the one package service (built with the other
+/// core services and registered for the `addons.*` use cases) and what its host needs to launch
+/// helpers.
 pub struct PackageComposition {
-    pub service: Arc<PackageService>,
+    pub service: PackageServicePorts,
     pub launch: LaunchPorts,
     pub config: HostConfig,
-    /// Runtime probing (the cache must be the service's runtime probe).
+    /// Runtime probing (the cache must be the service's runtime probe, `service.runtimes`).
     pub runtimes: Option<crate::package_host::RuntimePorts>,
-    /// Signed publisher index sources (fetch and verification).
-    pub index: Option<crate::package_host::IndexPorts>,
+    /// Signed publisher index sources (fetch and verification), built over the web tools' ports
+    /// (none when no web tools are composed) so the downloads share their resolver, pinned
+    /// transport and egress policy.
+    pub index: Option<IndexPortsFactory>,
 }
+
+/// Builds the package index ports from the web tools' network ports.
+/// A factory that needs the web tools refuses the composition (`Err` carries the reason) when
+/// they are not composed.
+pub type IndexPortsFactory = Arc<
+    dyn Fn(
+            Option<&devworks_core::services::web::WebPorts>,
+        ) -> Result<crate::package_host::IndexPorts, String>
+        + Send
+        + Sync,
+>;
 
 /// Lifecycle hooks run in order (schedules, then the caller's).
 struct ChainedHooks(Vec<Arc<dyn LifecycleHooks>>);
@@ -141,36 +133,45 @@ impl LifecycleHooks for ChainedHooks {
     }
 }
 
-/// Everything the runtime is composed from. Every part is a core port or core service; the one
-/// `store` backs the gateway, the dispatcher, the reply publisher and artifact recovery and
-/// collection, and the use cases the caller registered must be built over that same store.
+/// Everything the runtime is composed from. Every part is a core port; the one `store` backs the
+/// gateway, the dispatcher, the reply publisher and artifact recovery and collection. The core
+/// services (artifacts, resources, run control, diagnostics, knowledge, agents, web, packages,
+/// settings, provider connections, router, sessions, history, MCP client) are built from their
+/// ports by [`CoreServices::build`] inside [`boot`]; a use case family of one of them in
+/// [`Self::use_cases`] is refused as a composition error.
 pub struct Composition {
     pub store: Arc<dyn ApplicationStore>,
     pub clock: Arc<dyn Clock>,
     pub ids: Arc<dyn IdSource>,
     pub authority: Arc<dyn AuthorityPort>,
-    /// The one artifact service: [`boot`] registers the artifact use cases with it (replacing any
-    /// the caller registered), publishes receipt replies through it and collects with it, so its
-    /// readers, stream grants and deferred staging resolutions are shared by all three.
-    pub artifacts: Arc<ArtifactService>,
-    /// The one resource service: [`boot`] registers the `resources.*` use cases with it (replacing
-    /// any the caller registered), so dispatch tickets, owned processes and leases share one
-    /// in-flight registry.
-    pub resources: Arc<ResourceService>,
+    /// The ports of the one artifact service: [`boot`] registers the artifact use cases with it,
+    /// publishes receipt replies through it and collects with it, so its readers, stream grants
+    /// and deferred staging resolutions are shared by all three.
+    pub artifacts: ArtifactComposition,
     /// The native process launcher every owned tree is spawned through.
     pub process_host: Arc<dyn ProcessHost>,
-    /// Run root control: [`boot`] registers the `runs.*` use cases with its service (replacing
-    /// any the caller registered) and gates every consumer's root-scoped deliveries with it. It
-    /// also registers the `projects.*` and repository registration use cases, whose archival
-    /// stops roots through this same service.
+    /// Run root control: [`boot`] builds its service, registers the `runs.*` use cases and gates
+    /// every consumer's root-scoped deliveries with it. It also registers the `projects.*` and
+    /// repository registration use cases, whose archival stops roots through this same service.
     pub runs: RunComposition,
     /// The OS power facility the keep-awake setting is applied with.
     pub power: Arc<dyn PowerPort>,
-    /// The one diagnostics service: [`boot`] registers the `workspace.diagnostics`, `.logs` and
-    /// `.record_diagnostic` use cases with it (replacing any the caller registered), records
-    /// boot recovery through it, feeds it the boot report, collection passes and consumers, and
-    /// runs its retention and monitor passes.
-    pub diagnostics: Arc<DiagnosticService>,
+    /// The ports of the one diagnostics service: [`boot`] registers the `workspace.diagnostics`,
+    /// `.logs` and `.record_diagnostic` use cases with it, records boot recovery through it,
+    /// feeds it the boot report, collection passes and consumers, and runs its retention and
+    /// monitor passes.
+    pub diagnostics: DiagnosticComposition,
+    /// The ports of the one knowledge service ([`boot`] registers its use cases and its source
+    /// deletion consumer).
+    pub knowledge: KnowledgeComposition,
+    /// The ports of the settings, provider connection, router, session, history and MCP client
+    /// services ([`boot`] builds the ones composed and registers their use cases).
+    pub application: ApplicationComposition,
+    /// The web tools' network ports, built over the provider connection service's secret
+    /// resolver. When present, [`boot`] builds the web service over the artifact and
+    /// diagnostics services and registers `web.search` and `web.fetch`; the package host's
+    /// brokered HTTP calls use the same ports.
+    pub web: Option<WebPortsFactory>,
     /// Owned browser sessions (`browser.*`): when present, [`boot`] builds the one
     /// [`BrowserService`] over the composition's store, artifact service and process owner,
     /// registers its use cases and effect consumer, recovers earlier boots' sessions after the
@@ -179,13 +180,16 @@ pub struct Composition {
     pub browser: Option<BrowserComposition>,
     /// Native Git owner; missing executable/filesystem is not advertised.
     pub git: Option<crate::git::GitComposition>,
-    /// The package lifecycle: [`boot`] registers the `addons.*` use cases with its service
-    /// (replacing any the caller registered), starts the package host after process recovery and
-    /// stops its helpers cooperatively at shutdown. `None`: no package host (packages are not
-    /// offered).
+    /// The package lifecycle: [`boot`] registers the `addons.*` use cases with its service, starts
+    /// the package host after process recovery and stops its helpers cooperatively at shutdown.
+    /// `None`: no package host (packages are not offered).
     pub packages: Option<PackageComposition>,
-    /// The other use cases (queue, sessions, history, settings, ...).
+    /// The use cases of no engine-owned family (the queue, ...). One operation of an owned
+    /// family is a composition error; a test scripts one through [`Self::test_overrides`].
     pub use_cases: UseCases,
+    /// Scripted operations that replace the engine's own handlers. Only tests can fill it: the
+    /// constructor exists under the `test-support` feature, which only dev-dependencies enable.
+    pub test_overrides: TestOverrides,
     /// Consumers besides the required ones [`boot`] registers itself (package handlers, ...).
     pub consumers: Vec<Consumer>,
     /// Repository indexing (none: the `indexing.*` operations have no use case).
@@ -193,9 +197,30 @@ pub struct Composition {
     pub config: RuntimeConfig,
 }
 
+/// Operations a test scripts over the engine's own handlers. Production code can only name the
+/// empty value, so a production composition cannot replace an engine-owned operation.
+#[derive(Default)]
+pub struct TestOverrides(UseCases);
+#[cfg(feature = "test-support")]
+impl TestOverrides {
+    pub fn new(use_cases: UseCases) -> Self {
+        Self(use_cases)
+    }
+}
+
+/// Builds project purge file access over the engine's read fence.
+pub type PurgeFilesFactory = Arc<
+    dyn Fn(
+            Arc<dyn devworks_core::ports::project_purge::ProjectPurgeReadFence>,
+        ) -> Arc<dyn devworks_core::ports::project_purge::ProjectPurgeFiles>
+        + Send
+        + Sync,
+>;
 #[derive(Clone)]
 pub struct PurgeComposition {
-    pub files: Arc<dyn devworks_core::ports::project_purge::ProjectPurgeFiles>,
+    /// Builds the purge file access over the artifact service, which fences purge reads
+    /// ([`devworks_core::ports::project_purge::ProjectPurgeReadFence`]).
+    pub files: PurgeFilesFactory,
     pub client: Arc<dyn devworks_core::ports::project_purge::ProjectPurgeClient>,
 }
 #[derive(Clone)]
@@ -441,6 +466,11 @@ pub struct Runtime {
     ids: Arc<dyn IdSource>,
     authority: Arc<dyn AuthorityPort>,
     artifacts: Arc<ArtifactService>,
+    control: Arc<ControlService>,
+    knowledge: Arc<devworks_core::services::knowledge::KnowledgeService>,
+    agents: Arc<devworks_core::services::agents::AgentService>,
+    web: Option<Arc<devworks_core::services::web::WebService>>,
+    connections: Option<Arc<devworks_core::services::router::connections::ConnectionService>>,
     use_cases: UseCases,
     dispatcher: Dispatcher,
     collector: Arc<Collector>,
@@ -502,9 +532,7 @@ struct Engine {
     clock: Arc<dyn Clock>,
     ids: Arc<dyn IdSource>,
     authority: Arc<dyn AuthorityPort>,
-    artifacts: Arc<ArtifactService>,
-    resources: Arc<ResourceService>,
-    diagnostics: Arc<DiagnosticService>,
+    core: CoreServices,
     config: RuntimeConfig,
     use_cases: UseCases,
     usage: Arc<crate::usage::UsageRuntime>,
@@ -543,32 +571,57 @@ struct Engine {
     package_guard: PackageBootGuard,
 }
 
-/// Builds every engine-owned service from the composition. Nothing here recovers, deletes or
-/// starts anything: the only effect is the Git qualification probe, which decides whether the
-/// Git service (and everything composed with it) exists. Errors are recorded by [`boot`].
-async fn build(composition: Composition) -> Result<Engine, BootError> {
+/// Builds every other engine-owned service from the composition over the finished core
+/// services. Nothing here recovers, deletes or starts anything: the only effect is the Git
+/// qualification probe, which decides whether the Git service (and everything composed with it)
+/// exists. Errors are recorded by [`boot`].
+async fn build(composition: Composition, core: CoreServices) -> Result<Engine, BootError> {
     let Composition {
         store,
         clock,
         ids,
         authority,
-        artifacts,
-        resources,
+        artifacts: _,
         process_host,
         runs,
         power,
-        diagnostics,
+        diagnostics: _,
+        knowledge: _,
+        application: _,
+        web: _,
         browser,
         git,
         packages,
         use_cases,
+        test_overrides,
         mut consumers,
         indexing,
         config,
     } = composition;
+    let CoreServices {
+        artifacts,
+        resources,
+        control,
+        diagnostics,
+        knowledge,
+        agents: _,
+        web: _,
+        packages: package_service,
+        ..
+    } = core.clone();
+    consumers.push(crate::knowledge::source_deletion_consumer(
+        knowledge.clone(),
+    ));
+    // The engine's handlers first, then the composition's operations (none of an owned family:
+    // boot refused those) and a test's scripted operations over them.
+    let use_cases = core
+        .register(UseCases::new())
+        .overlay(use_cases)
+        .overlay(test_overrides.0);
+    let purge_files = config.purge.as_ref().map(|p| (p.files)(artifacts.clone()));
     let usage = crate::usage::UsageRuntime::with_process_host(
         store.clone(),
-        runs.service.clone(),
+        control.clone(),
         use_cases.inference_router(),
         process_host.clone(),
     );
@@ -649,6 +702,29 @@ async fn build(composition: Composition) -> Result<Engine, BootError> {
             .with_secrets(composition.secrets.clone()),
         )
     });
+    // GitHub calls resolve their credential through the provider connection service built with
+    // the core set.
+    let git = match git {
+        Some(mut composition) => {
+            if let Some(http) = composition.github_http.take() {
+                let Some(connections) = &core.connections else {
+                    return Err(BootError::Composition(StorageError::InvalidRecord(
+                        "GitHub calls resolve credentials through the provider connection \
+                         service"
+                            .to_owned(),
+                    )));
+                };
+                composition.config.github = Some(Arc::new(
+                    devworks_core::services::git::github::GitHubClient {
+                        http,
+                        secrets: connections.clone(),
+                    },
+                ));
+            }
+            Some(composition)
+        }
+        None => None,
+    };
     let git = git.and_then(|composition| {
         let fs = composition.config.filesystem.clone()?;
         let helpers = Arc::new(
@@ -731,7 +807,7 @@ async fn build(composition: Composition) -> Result<Engine, BootError> {
                     ids.clone(),
                     clock.clone(),
                 )
-                .with_root_control(runs.service.clone())
+                .with_root_control(control.clone())
                 .with_diagnostics(diagnostics.clone()),
             ),
         ))
@@ -763,10 +839,6 @@ async fn build(composition: Composition) -> Result<Engine, BootError> {
         use_cases = use_cases.with_browser(b.clone());
         consumers.push(crate::browser::consumer(b.clone()));
     }
-    let use_cases = match &packages {
-        Some(p) => use_cases.with_packages(p.service.clone()),
-        None => use_cases,
-    };
     let price_service = Arc::new(devworks_core::services::prices::PriceService::new(
         ids.clone(),
         clock.clone(),
@@ -780,18 +852,17 @@ async fn build(composition: Composition) -> Result<Engine, BootError> {
     }
     let use_cases = use_cases.with_prices(price_service.clone());
     let work = Arc::new(
-        WorkService::new(ids.clone(), runs.service.clone())
+        WorkService::new(ids.clone(), control.clone())
             .with_staged_plans(artifacts.clone())
             .with_clock(clock.clone()),
     );
-    let mut projects =
-        ProjectService::new(ids.clone(), runs.service.clone()).with_work(work.clone());
+    let mut projects = ProjectService::new(ids.clone(), control.clone()).with_work(work.clone());
     if let Some(p) = &config.purge {
         projects = projects.with_purge(Arc::new(
             devworks_core::services::projects::purge::PurgeCoordinator::new(
                 store.clone(),
                 ids.clone(),
-                p.files.clone(),
+                purge_files.clone().expect("composed with the purge"),
                 p.client.clone(),
             ),
         ));
@@ -800,20 +871,16 @@ async fn build(composition: Composition) -> Result<Engine, BootError> {
         Arc::new(devworks_core::services::projects::purge::PurgeWorker::new(
             store.clone(),
             ids.clone(),
-            p.files.clone(),
+            purge_files.clone().expect("composed with the purge"),
             p.client.clone(),
         ))
     });
     let eval_service = Arc::new(EvalService::new(ids.clone(), clock.clone()));
     let use_cases = use_cases
         .with_evals(eval_service.clone())
-        .with_artifacts(artifacts.clone())
-        .with_resources(resources.clone())
-        .with_runs(runs.service.clone())
         .with_projects(Arc::new(projects))
         .with_work(work)
-        .with_repositories(Arc::new(RepositoryService::new(ids.clone())))
-        .with_diagnostics(diagnostics.clone());
+        .with_repositories(Arc::new(RepositoryService::new(ids.clone())));
     let conventions = Arc::new(
         devworks_core::services::conventions::ConventionService::new(
             store.clone(),
@@ -849,7 +916,7 @@ async fn build(composition: Composition) -> Result<Engine, BootError> {
             artifacts.clone(),
             ids.clone(),
             clock.clone(),
-            packages.as_ref().map(|package| package.service.clone()),
+            package_service.clone(),
         ))
     });
     let use_cases = if let Some(service) = &help {
@@ -887,7 +954,7 @@ async fn build(composition: Composition) -> Result<Engine, BootError> {
     // run-control gate (and its own port, if it has one).
     for c in &mut consumers {
         c.eligibility = Some(Arc::new(RunGate::new(
-            runs.service.clone(),
+            control.clone(),
             c.eligibility.take(),
         )));
     }
@@ -958,7 +1025,7 @@ async fn build(composition: Composition) -> Result<Engine, BootError> {
     // Native jobs may run only the maintenance commands this composition can execute.
     let jobs = Arc::new(
         JobService::new(NativeCatalog::qualified(&use_cases), config.jobs)
-            .with_approval_control(runs.service.clone()),
+            .with_approval_control(control.clone()),
     );
     let use_cases = use_cases.with_jobs(jobs.clone());
     let instructions = config.instructions.clone().map(|c| {
@@ -990,19 +1057,19 @@ async fn build(composition: Composition) -> Result<Engine, BootError> {
             Arc::new(devworks_core::authority::HostRoles {
                 store: store.clone(),
             }),
-            runs.service.clone(),
+            control.clone(),
         )
         .with_catalog(ApprovalCatalog::qualified(&use_cases))
         .with_owners(Arc::new(
             devworks_core::services::approvals::owner_preview::NativeOwnerPreviews::new(
                 git.clone(),
-                packages.as_ref().map(|p| p.service.clone()),
+                package_service.clone(),
                 Some(jobs.clone()),
             )
             .with_desktop(desktop.clone())
             .with_instructions(instructions.clone())
             .with_containers(containers.clone())
-            .with_control(runs.service.clone())
+            .with_control(control.clone())
             .with_evidence(store.clone(), artifacts.clone()),
         )),
     );
@@ -1030,7 +1097,7 @@ async fn build(composition: Composition) -> Result<Engine, BootError> {
             let schemas = Arc::new(crate::providers::schemas::RegisteredSchemas::new(
                 store.clone(),
                 use_cases.clone(),
-                packages.as_ref().map(|p| p.service.clone()),
+                package_service.clone(),
                 artifacts.clone(),
             ));
             Some(crate::providers::driver::NativeProviders::new(
@@ -1093,7 +1160,7 @@ async fn build(composition: Composition) -> Result<Engine, BootError> {
     let run_supervisor = RunSupervisor::configured(
         store.clone(),
         clock.clone(),
-        runs.service.clone(),
+        control.clone(),
         supervisor.clone(),
         runs.launcher.clone(),
         hooks,
@@ -1173,19 +1240,34 @@ async fn build(composition: Composition) -> Result<Engine, BootError> {
     if let Some(p) = packages {
         let host = PackageHost::new(
             store.clone(),
-            p.service.clone(),
+            package_service
+                .clone()
+                .expect("built with the package composition"),
             supervisor,
             ids.clone(),
             p.launch,
             p.config,
             p.runtimes,
-            p.index,
+            core.package_index
+                .as_ref()
+                .map(|i| crate::package_host::IndexPorts {
+                    transport: i.transport.clone(),
+                    verifier: i.verifier.clone(),
+                }),
         );
-        p.service.set_activity(host.clone());
+        host.service().set_activity(host.clone());
         let _ = package_tools.set(Arc::downgrade(&host));
         // Brokered application calls of packages run through this command path, as the
         // principal that invoked the package.
         let gateway: Arc<dyn crate::package_host::broker::GatewayCalls> = admitter.clone();
+        // Brokered HTTP calls use the web tools' resolver, transport and secret resolver.
+        if let Some(web) = &core.web_ports {
+            host.attach_network(crate::package_host::http::NetworkPorts {
+                resolver: web.resolver.clone(),
+                transport: web.transport.clone(),
+                secrets: web.secrets.clone(),
+            });
+        }
         host.attach_broker(crate::package_host::broker::BrokerPorts {
             gateway: Arc::downgrade(&gateway),
             artifacts: artifacts.clone(),
@@ -1205,9 +1287,7 @@ async fn build(composition: Composition) -> Result<Engine, BootError> {
         clock,
         ids,
         authority,
-        artifacts,
-        resources,
-        diagnostics,
+        core,
         config,
         use_cases,
         usage,
@@ -1271,23 +1351,47 @@ async fn build(composition: Composition) -> Result<Engine, BootError> {
 ///
 /// Must be awaited on a Tokio runtime with timers; the tasks it starts run there.
 pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
+    // The one construction of the core services; everything below receives the finished set.
+    let core = CoreServices::build(CorePorts {
+        store: &composition.store,
+        clock: &composition.clock,
+        ids: &composition.ids,
+        artifacts: &composition.artifacts,
+        diagnostics: &composition.diagnostics,
+        runs: &composition.runs,
+        knowledge: &composition.knowledge,
+        application: &composition.application,
+        web: composition.web.as_ref(),
+        packages: composition.packages.as_ref(),
+    });
     // Every error that stops boot passes through this, so each leaves a failed boot diagnostic.
-    // The diagnostics service is part of the composition, so no step runs without one; a store
+    // The diagnostics service is built with the core set, so no step runs without one; a store
     // that cannot take the record is ignored by `record_boot_failure`.
-    let diagnostics = composition.diagnostics.clone();
+    let diagnostics = core.diagnostics.clone();
     let failed = |e: BootError| {
         diag::record_boot_failure(&diagnostics, &e);
         e
     };
+    if let Some(reason) = core.refusals.first() {
+        return Err(failed(BootError::Composition(StorageError::InvalidRecord(
+            reason.clone(),
+        ))));
+    }
+    if let Some((family, operation)) = owned_operation(&composition.use_cases) {
+        return Err(failed(BootError::Composition(StorageError::InvalidRecord(
+            format!(
+                "{operation} belongs to the {family} use cases, which the engine builds and \
+                 registers; a composition must not register any of their operations"
+            ),
+        ))));
+    }
     // Every engine-owned service exists before the first recovery step below.
     let Engine {
         store,
         clock,
         ids,
         authority,
-        artifacts,
-        resources,
-        diagnostics,
+        core,
         config,
         use_cases,
         usage,
@@ -1323,7 +1427,17 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
         scheduler,
         resumes,
         mut package_guard,
-    } = build(composition).await.map_err(failed)?;
+    } = build(composition, core).await.map_err(failed)?;
+    let (artifacts, resources, control, diagnostics, knowledge, agents, web, connections) = (
+        core.artifacts.clone(),
+        core.resources.clone(),
+        core.control.clone(),
+        core.diagnostics.clone(),
+        core.knowledge.clone(),
+        core.agents.clone(),
+        core.web.clone(),
+        core.connections.clone(),
+    );
     if let Some(service) = &schemas {
         // Namespace/reference-only cleanup precedes password intake and command exposure.
         match service.reconcile_credential_orphans() {
@@ -1874,6 +1988,11 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
         ids,
         authority,
         artifacts,
+        control,
+        knowledge,
+        agents,
+        web,
+        connections,
         use_cases,
         dispatcher,
         collector,
@@ -1997,6 +2116,29 @@ impl Runtime {
         &self.artifacts
     }
     /// The resource service the `resources.*` use cases and dispatch-time checks share.
+    /// The run root control service the engine built and registered for the `runs.*` use cases.
+    pub fn control(&self) -> &Arc<ControlService> {
+        &self.control
+    }
+    /// The knowledge service the engine built and registered.
+    pub fn knowledge(&self) -> &Arc<devworks_core::services::knowledge::KnowledgeService> {
+        &self.knowledge
+    }
+    /// The agent coordination service the engine built and registered.
+    pub fn agents(&self) -> &Arc<devworks_core::services::agents::AgentService> {
+        &self.agents
+    }
+    /// The web tools service (none when no web ports were composed).
+    pub fn web(&self) -> Option<&Arc<devworks_core::services::web::WebService>> {
+        self.web.as_ref()
+    }
+    /// The provider connection service the engine built and registered (none when no
+    /// connection ports were composed).
+    pub fn connections(
+        &self,
+    ) -> Option<&Arc<devworks_core::services::router::connections::ConnectionService>> {
+        self.connections.as_ref()
+    }
     pub fn resources(&self) -> &Arc<ResourceService> {
         &self.resources
     }

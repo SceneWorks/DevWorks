@@ -378,7 +378,12 @@ fn actual_coordinator_and_worker_transports_hold_quiescence_until_owned_close() 
                         Arc::new(Authority),
                         Arc::new(devworks_adapters::process::NativeProcessHost),
                     );
-                    composed.use_cases = UseCases::new().with_router(selected_router.clone());
+                    composed.application = devworks_engine::ApplicationComposition {
+                        router: Some(devworks_engine::RouterPorts {
+                            directory: Some(Arc::new(Directory)),
+                        }),
+                        ..Default::default()
+                    };
                     composed.config.shutdown_bound = Duration::from_millis(100);
                     Some(boot(composed).await.unwrap())
                 } else {

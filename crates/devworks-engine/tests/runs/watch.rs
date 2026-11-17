@@ -71,25 +71,16 @@ fn watch_composition(fx: &Fx, work: &std::path::Path) -> (Composition, Wired) {
         Arc::new(Authority),
         Arc::new(devworks_adapters::process::NativeProcessHost),
     );
-    let connections = Arc::new(
-        devworks_core::services::router::connections::ConnectionService::new(
-            fx.h.ids.clone(),
-            fx.h.clock(),
-            fx.store.clone(),
-            Arc::new(devworks_core::ports::http::NoNetwork),
-            Arc::new(devworks_core::ports::secrets::SessionSecrets::new()),
-            Arc::new(WatchEntropy),
-        ),
-    );
-    composed.use_cases = UseCases::new()
-        .with_connections(connections.clone())
-        .with_router(Arc::new(
-            devworks_core::services::router::InferenceRouter::new(
-                fx.h.ids.clone(),
-                fx.h.clock(),
-                connections,
-            ),
-        ));
+    composed.application = devworks_engine::ApplicationComposition {
+        connections: Some(devworks_engine::ConnectionPorts {
+            http: Arc::new(devworks_core::ports::http::NoNetwork),
+            secrets: Arc::new(devworks_core::ports::secrets::SessionSecrets::new()),
+            entropy: Arc::new(WatchEntropy),
+            endpoints: None,
+        }),
+        router: Some(Default::default()),
+        ..Default::default()
+    };
     let wired = Wired {
         session: Arc::new(Mutex::new(None)),
         bodies: Arc::new(Mutex::new(Vec::new())),

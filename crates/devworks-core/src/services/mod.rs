@@ -85,6 +85,21 @@ pub struct UseCases {
     mcp_service: Option<Arc<mcp::McpClientService>>,
 }
 
+/// The operations of the agents family (`AgentService`).
+pub const AGENT_OPERATIONS: [&str; 11] = [
+    "agents.inspect",
+    "agents.delegate",
+    "agents.messages",
+    "agents.post",
+    "agents.receive",
+    "agents.ack",
+    "agents.history",
+    "agents.events",
+    "agents.inbox",
+    "agents.acknowledge",
+    "agents.checkpoint",
+];
+
 impl UseCases {
     /// Outgoing MCP configuration and selected capabilities share the gateway with UI and tools.
     pub fn with_mcp(mut self, service: Arc<mcp::McpClientService>) -> Self {
@@ -221,19 +236,7 @@ impl UseCases {
 
     /// One agent-coordination owner for the selected UI and tool operations.
     pub fn with_agents(mut self, service: Arc<agents::AgentService>) -> Self {
-        for op in [
-            "agents.inspect",
-            "agents.delegate",
-            "agents.messages",
-            "agents.post",
-            "agents.receive",
-            "agents.ack",
-            "agents.history",
-            "agents.events",
-            "agents.inbox",
-            "agents.acknowledge",
-            "agents.checkpoint",
-        ] {
+        for op in AGENT_OPERATIONS {
             self.register(op, Some(service.clone()), Some(service.clone()));
         }
         self
@@ -489,6 +492,20 @@ impl UseCases {
         self
     }
 
+    /// Registers every operation of `other` over this set, so `other`'s handler replaces the one
+    /// already registered for the same operation. Services `other` carries replace this set's.
+    pub fn overlay(mut self, other: UseCases) -> Self {
+        self.queries.extend(other.queries);
+        self.commands.extend(other.commands);
+        self.inference_router = other.inference_router.or(self.inference_router);
+        self.connection_service = other.connection_service.or(self.connection_service);
+        self.mcp_service = other.mcp_service.or(self.mcp_service);
+        self
+    }
+    /// The name of every registered operation.
+    pub fn operations(&self) -> impl Iterator<Item = &'static str> + '_ {
+        self.queries.keys().chain(self.commands.keys()).copied()
+    }
     pub fn has_query(&self, operation: &str) -> bool {
         self.queries.contains_key(operation)
     }

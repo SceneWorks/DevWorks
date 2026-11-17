@@ -30,7 +30,6 @@ use devworks_core::protocol::{
 };
 use devworks_core::services::UseCases;
 use devworks_core::services::agents::AgentService;
-use devworks_core::services::artifacts::ArtifactService;
 use devworks_core::services::process::{LaunchPolicy, LaunchRequest, ProcessSupervisor};
 use devworks_core::services::projects::ProjectService;
 use devworks_core::services::resources::ResourceService;
@@ -51,6 +50,7 @@ use devworks_engine::{
     ActivationLauncher, Composition, Launch, LaunchEnd, LaunchFuture, RunComposition, RunGate,
     RunSupervisor, RunTick, RuntimeConfig, ShutdownStage, boot,
 };
+use devworks_engine::{ArtifactComposition, DiagnosticComposition, KnowledgeComposition};
 use serde_json::{Value, json};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Barrier, Condvar, Mutex};
@@ -145,6 +145,9 @@ struct Fx {
     scope: Arc<ScriptedScope>,
     service: Arc<ControlService>,
     use_cases: UseCases,
+    /// [`Self::use_cases`] without the runs, agents, sessions and history families, which a booted
+    /// runtime builds.
+    engine_use_cases: UseCases,
     user: InvocationContext,
     agent: InvocationContext,
     sched: InvocationContext,
@@ -168,19 +171,22 @@ impl Fx {
             }),
             service.clone(),
         ));
-        let use_cases = UseCases::new()
-            .with_runs(service.clone())
+        let engine_use_cases = UseCases::new()
             .with_approvals(approvals)
-            .with_agents(Arc::new(AgentService::new(h.ids.clone(), service.clone())))
             .with_projects(Arc::new(ProjectService::new(
                 h.ids.clone(),
                 service.clone(),
             )))
+            .with_work(Arc::new(WorkService::new(h.ids.clone(), service.clone())));
+        // What a gateway-driven test needs beyond the families the engine builds itself.
+        let use_cases = engine_use_cases
+            .clone()
             .with_sessions(Arc::new(SessionService::new(h.ids.clone(), store.clone())))
             .with_history(Arc::new(
                 devworks_core::services::history::HistoryService::new(h.ids.clone()),
             ))
-            .with_work(Arc::new(WorkService::new(h.ids.clone(), service.clone())));
+            .with_runs(service.clone())
+            .with_agents(Arc::new(AgentService::new(h.ids.clone(), service.clone())));
         let user = principal(&*store, "user-a", PrincipalKind::Human);
         let agent = principal(&*store, "agent-a", PrincipalKind::Agent);
         let sched = principal(&*store, "sched-a", PrincipalKind::Schedule);
@@ -211,6 +217,7 @@ impl Fx {
             scope,
             service,
             use_cases,
+            engine_use_cases,
             user,
             agent,
             sched,
@@ -1635,25 +1642,16 @@ fn agent_first_context_publishes_the_assignment_brief_and_recovers_exactly() {
     let rt = runtime();
     rt.block_on(async {
         let mut composed = composition(&fx, None, Arc::new(FakePower::default()));
-        let connections = Arc::new(
-            devworks_core::services::router::connections::ConnectionService::new(
-                fx.h.ids.clone(),
-                fx.h.clock(),
-                fx.store.clone(),
-                Arc::new(devworks_core::ports::http::NoNetwork),
-                Arc::new(devworks_core::ports::secrets::SessionSecrets::new()),
-                Arc::new(AgentEntropy),
-            ),
-        );
-        composed.use_cases = UseCases::new()
-            .with_connections(connections.clone())
-            .with_router(Arc::new(
-                devworks_core::services::router::InferenceRouter::new(
-                    fx.h.ids.clone(),
-                    fx.h.clock(),
-                    connections,
-                ),
-            ));
+        composed.application = devworks_engine::ApplicationComposition {
+            connections: Some(devworks_engine::ConnectionPorts {
+                http: Arc::new(devworks_core::ports::http::NoNetwork),
+                secrets: Arc::new(devworks_core::ports::secrets::SessionSecrets::new()),
+                entropy: Arc::new(AgentEntropy),
+                endpoints: None,
+            }),
+            router: Some(Default::default()),
+            ..Default::default()
+        };
         let wire_calls = Arc::new(AtomicUsize::new(0));
         composed.config.providers = Some(
             devworks_engine::providers::driver::ProviderComposition::new(Arc::new(AgentWire(
@@ -5973,44 +5971,41 @@ fn composition_with(
     host: Arc<dyn ProcessHost>,
 ) -> Composition {
     let h = &fx.h;
-    let artifacts = Arc::new(ArtifactService::new(
+    let artifacts = ArtifactComposition::new(
         Arc::new(NativeArtifactFiles::new(
             h.root.clone(),
             h.root.with_extension("cache"),
         )),
         Arc::new(HostArtifactSources::new(h.clock(), h.ids.clone())),
         Arc::new(NativeFilesystem::new()),
-        h.clock(),
-        h.ids.clone(),
-    ));
+    );
     let mut config = RuntimeConfig::new(id("dispatcher-1"));
     config.collect_interval = Duration::from_secs(3600);
     config.housekeeping_interval = Duration::from_secs(3600);
     config.shutdown_grace = Duration::from_secs(5);
-    let mut runs = RunComposition::new(fx.service.clone());
-    runs.launcher = launcher;
+    let runs = RunComposition {
+        scope: Some(fx.scope.clone()),
+        launcher,
+        ..RunComposition::default()
+    };
     Composition {
         store: fx.store.clone(),
         clock: h.clock(),
         ids: h.ids.clone(),
         authority,
         artifacts,
-        resources: Arc::new(ResourceService::new(h.ids.clone(), h.clock())),
         process_host: host,
         runs,
         power,
-        diagnostics: Arc::new(
-            devworks_core::services::diagnostics::DiagnosticService::new(
-                fx.store.clone(),
-                h.ids.clone(),
-                h.clock(),
-                None,
-            ),
-        ),
+        knowledge: KnowledgeComposition::default(),
+        application: Default::default(),
+        web: None,
+        diagnostics: DiagnosticComposition::default(),
         git: None,
         browser: None,
         packages: None,
         use_cases: UseCases::new(),
+        test_overrides: Default::default(),
         consumers: Vec::new(),
         indexing: None,
         config,
@@ -6842,7 +6837,12 @@ fn shutdown_does_not_wait_for_a_retained_receive_long_poll() {
         Arc::new(ReceiveSignalAuthority(Mutex::new(entered_tx))),
         Arc::new(FakeHost::default()),
     );
-    composed.use_cases = fx.use_cases.clone();
+    composed.use_cases = fx.engine_use_cases.clone();
+    composed.application = devworks_engine::ApplicationComposition {
+        sessions: Some(Default::default()),
+        history: true,
+        ..Default::default()
+    };
     let app = rt
         .block_on(boot(composed))
         .unwrap_or_else(|e| panic!("boot: {e:?}"));
@@ -7530,15 +7530,7 @@ fn blocked_monitor(
         Arc::new(FakeHost::default()),
     );
     composition.config.shutdown_bound = bound;
-    let diagnostics = Arc::new(
-        devworks_core::services::diagnostics::DiagnosticService::new(
-            fx.store.clone(),
-            fx.h.ids.clone(),
-            fx.h.clock(),
-            Some(Arc::new(BlockingProbe(probe.clone()))),
-        ),
-    );
-    composition.diagnostics = diagnostics.clone();
+    composition.diagnostics.storage = Some(Arc::new(BlockingProbe(probe.clone())));
     let rt = runtime();
     let app = rt
         .block_on(boot(composition))
@@ -7552,6 +7544,7 @@ fn blocked_monitor(
             }
         },
     ));
+    let diagnostics = app.diagnostics().clone();
     (rt, app, probe, diagnostics)
 }
 
@@ -7766,16 +7759,14 @@ fn shutdown_abandons_a_blocked_delivery_and_collection_pass_at_its_bound() {
     );
     composition.config.shutdown_bound = Duration::from_millis(200);
     let h = &fx.h;
-    composition.artifacts = Arc::new(ArtifactService::new(
+    composition.artifacts = ArtifactComposition::new(
         Arc::new(BlockingFiles(
             NativeArtifactFiles::new(h.root.clone(), h.root.with_extension("cache")),
             collection.clone(),
         )),
         Arc::new(HostArtifactSources::new(h.clock(), h.ids.clone())),
         Arc::new(NativeFilesystem::new()),
-        h.clock(),
-        h.ids.clone(),
-    ));
+    );
     let mut stuck = consumer("stuck-work", Recorder::ok());
     stuck.async_handler = Some(Arc::new(Stuck(delivery.clone())));
     stuck.stop_grace_ms = 3_600_000;

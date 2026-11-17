@@ -17,6 +17,9 @@ use devworks_core::services::{
     prices::{PriceService, refresh},
 };
 use devworks_engine::prices::PriceSupervisor;
+use devworks_engine::{
+    ArtifactComposition, DiagnosticComposition, KnowledgeComposition, RunComposition,
+};
 use devworks_engine::{Dispatcher, DispatcherConfig};
 use serde_json::{Value, json};
 use std::collections::VecDeque;
@@ -805,10 +808,7 @@ fn composition(
         power::NativePower,
         process::NativeProcessHost,
     };
-    use devworks_core::services::{
-        artifacts::ArtifactService, diagnostics::DiagnosticService, resources::ResourceService,
-        runs::ControlService,
-    };
+
     let mut config = devworks_engine::RuntimeConfig::new(id("native-price-runtime"));
     let mut prices = devworks_engine::prices::PriceComposition::new(source);
     prices.interval = std::time::Duration::from_secs(3600);
@@ -821,30 +821,26 @@ fn composition(
             store: store.clone(),
             clock: h.clock(),
         }),
-        artifacts: Arc::new(ArtifactService::new(
+        artifacts: ArtifactComposition::new(
             Arc::new(NativeArtifactFiles::new(
                 h.root.clone(),
                 h.root.with_extension("cache"),
             )),
             Arc::new(HostArtifactSources::new(h.clock(), h.ids.clone())),
             Arc::new(NativeFilesystem::new()),
-            h.clock(),
-            h.ids.clone(),
-        )),
-        resources: Arc::new(ResourceService::new(h.ids.clone(), h.clock())),
+        ),
         process_host: Arc::new(NativeProcessHost),
-        runs: devworks_engine::RunComposition::new(Arc::new(ControlService::new(h.ids.clone()))),
+        runs: RunComposition::default(),
+        knowledge: KnowledgeComposition::default(),
+        application: Default::default(),
+        web: None,
         power: Arc::new(NativePower),
-        diagnostics: Arc::new(DiagnosticService::new(
-            store,
-            h.ids.clone(),
-            h.clock(),
-            None,
-        )),
+        diagnostics: DiagnosticComposition::default(),
         browser: None,
         git: None,
         packages: None,
         use_cases: UseCases::new(),
+        test_overrides: Default::default(),
         consumers: vec![],
         indexing: None,
         config,
@@ -1514,7 +1510,7 @@ async fn price_shutdown_case(recovering: bool, receipt_race_control: bool) {
     let receipt_gate = Gate::new();
     receipt_gate.release();
     let _release_receipts = Release(receipt_gate.clone());
-    composed.artifacts = Arc::new(devworks_core::services::artifacts::ArtifactService::new(
+    composed.artifacts = ArtifactComposition::new(
         Arc::new(GatedFiles {
             inner: NativeArtifactFiles::new(fx.h.root.clone(), fx.h.root.with_extension("cache")),
             gate: receipt_gate.clone(),
@@ -1525,9 +1521,7 @@ async fn price_shutdown_case(recovering: bool, receipt_race_control: bool) {
             fx.h.ids.clone(),
         )),
         Arc::new(devworks_adapters::fs::NativeFilesystem::new()),
-        fx.h.clock(),
-        fx.h.ids.clone(),
-    ));
+    );
     composed.config.shutdown_bound = std::time::Duration::from_millis(100);
     phase.phase = "boot";
     let app = devworks_engine::boot(composed).await.unwrap();

@@ -21,14 +21,12 @@ use devworks_core::ports::{
 };
 use devworks_core::protocol::results::{DomainCommandReply, DomainDecision, DomainQueryReply};
 use devworks_core::protocol::{CommandReply, ProjectId};
+use devworks_core::services::UseCases;
 use devworks_core::services::artifacts::ArtifactService;
 use devworks_core::services::instructions::SkillRoots;
-use devworks_core::services::{
-    UseCases, diagnostics::DiagnosticService, resources::ResourceService, runs::ControlService,
-    sessions::SessionService,
-};
 use devworks_core::settings::catalog::AgentRole;
 use devworks_engine::runtime::InstructionComposition;
+use devworks_engine::{ArtifactComposition, DiagnosticComposition, KnowledgeComposition};
 use devworks_engine::{Composition, RunComposition, Runtime, RuntimeConfig, boot};
 use serde_json::{Value, json};
 use std::path::{Path, PathBuf};
@@ -81,6 +79,7 @@ impl SkillFiles for FlakyFiles {
 struct Fx {
     h: Harness,
     store: Arc<dyn ApplicationStore>,
+    artifact_ports: ArtifactComposition,
     artifacts: Arc<ArtifactService>,
     shared: PathBuf,
     harness: PathBuf,
@@ -126,19 +125,19 @@ impl Fx {
         let _ = std::fs::remove_dir_all(&shared);
         let _ = std::fs::remove_dir_all(&harness);
         std::fs::create_dir_all(&shared).unwrap();
-        let artifacts = Arc::new(ArtifactService::new(
+        let artifact_ports = ArtifactComposition::new(
             Arc::new(NativeArtifactFiles::new(
                 h.root.clone(),
                 h.root.with_extension("cache"),
             )),
             Arc::new(HostArtifactSources::new(h.clock(), h.ids.clone())),
             Arc::new(NativeFilesystem::new()),
-            h.clock(),
-            h.ids.clone(),
-        ));
+        );
+        let artifacts = h.artifact_service(&store, &artifact_ports);
         Self {
             h,
             store,
+            artifact_ports,
             artifacts,
             shared,
             harness,
@@ -167,24 +166,22 @@ impl Fx {
                 store: self.store.clone(),
                 clock: h.clock(),
             }),
-            artifacts: self.artifacts.clone(),
-            resources: Arc::new(ResourceService::new(h.ids.clone(), h.clock())),
+            artifacts: self.artifact_ports.clone(),
             process_host: Arc::new(NativeProcessHost),
-            runs: RunComposition::new(Arc::new(ControlService::new(h.ids.clone()))),
+            runs: RunComposition::default(),
+            knowledge: KnowledgeComposition::default(),
+            application: devworks_engine::ApplicationComposition {
+                sessions: Some(Default::default()),
+                ..Default::default()
+            },
+            web: None,
             power: Arc::new(NativePower),
-            diagnostics: Arc::new(DiagnosticService::new(
-                self.store.clone(),
-                h.ids.clone(),
-                h.clock(),
-                None,
-            )),
+            diagnostics: DiagnosticComposition::default(),
             browser: None,
             git: None,
             packages: None,
-            use_cases: UseCases::new().with_sessions(Arc::new(SessionService::new(
-                h.ids.clone(),
-                self.store.clone(),
-            ))),
+            use_cases: UseCases::new(),
+            test_overrides: Default::default(),
             consumers: vec![],
             indexing: None,
             config,

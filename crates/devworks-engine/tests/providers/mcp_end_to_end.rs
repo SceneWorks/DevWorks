@@ -7,7 +7,6 @@ use devworks_core::authority::destructive::ProtectedRoots;
 use devworks_core::ports::mcp::{McpEndpoint, RemoteCatalog, RemoteTool};
 use devworks_core::protocol::results::{DomainDecision, OperationResult};
 use devworks_core::protocol::{CommandReply, OperationState};
-use devworks_core::services::mcp::McpClientService;
 use std::sync::OnceLock;
 
 /// Each tool call asks the client for one sample and returns what it received.
@@ -82,10 +81,9 @@ fn a_selected_server_samples_through_the_boot_installed_sampler_during_an_agent_
             );
             let (agent, _) = super::mcp_sampling::agent_session(&f);
             let human = principal(f.store.as_ref(), "mcp-owner", PrincipalKind::Human);
-            let service = Arc::new(McpClientService::new(f.h.ids.clone()));
             let clients: Arc<OnceLock<Arc<NativeMcpClients>>> = Arc::default();
             let mut composition = tool_runtime_composition(&f);
-            composition.use_cases = composition.use_cases.with_mcp(service.clone());
+            composition.application.mcp = true;
             let installed = clients.clone();
             composition.config.mcp = Some(devworks_engine::runtime::McpComposition {
                 validator: Arc::new(devworks_adapters::packages::JsonSchemaValidator),
@@ -105,6 +103,7 @@ fn a_selected_server_samples_through_the_boot_installed_sampler_during_an_agent_
                 }),
             });
             let app = devworks_engine::boot(composition).await.unwrap();
+            let service = app.mcp_service().expect("the engine built the MCP service");
 
             // A human configures the server, its catalog is published, and the human selects
             // both its tool and its sampling capability for agents.

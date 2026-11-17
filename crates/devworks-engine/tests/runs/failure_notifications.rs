@@ -97,25 +97,16 @@ fn a_provider_rejecting_the_credential_holds_the_root_and_notifies_once_per_cred
     let rt = runtime();
     rt.block_on(async {
         let mut composed = composition(&fx, None, Arc::new(FakePower::default()));
-        let connections = Arc::new(
-            devworks_core::services::router::connections::ConnectionService::new(
-                fx.h.ids.clone(),
-                fx.h.clock(),
-                fx.store.clone(),
-                Arc::new(devworks_core::ports::http::NoNetwork),
-                Arc::new(devworks_core::ports::secrets::SessionSecrets::new()),
-                Arc::new(Entropy),
-            ),
-        );
-        composed.use_cases = UseCases::new()
-            .with_connections(connections.clone())
-            .with_router(Arc::new(
-                devworks_core::services::router::InferenceRouter::new(
-                    fx.h.ids.clone(),
-                    fx.h.clock(),
-                    connections,
-                ),
-            ));
+        composed.application = devworks_engine::ApplicationComposition {
+            connections: Some(devworks_engine::ConnectionPorts {
+                http: Arc::new(devworks_core::ports::http::NoNetwork),
+                secrets: Arc::new(devworks_core::ports::secrets::SessionSecrets::new()),
+                entropy: Arc::new(Entropy),
+                endpoints: None,
+            }),
+            router: Some(Default::default()),
+            ..Default::default()
+        };
         let wire_calls = Arc::new(AtomicUsize::new(0));
         composed.config.providers = Some(
             devworks_engine::providers::driver::ProviderComposition::new(Arc::new(RejectingWire(

@@ -211,6 +211,7 @@ pub mod browser;
 mod compaction;
 mod context_epoch;
 pub mod conventions;
+pub mod core_services;
 pub mod desktop;
 pub mod diagnostics;
 pub mod dispatch;
@@ -239,6 +240,11 @@ pub mod usage;
 pub mod watch;
 mod workers;
 
+pub use core_services::{
+    ApplicationComposition, ArtifactComposition, ConnectionPorts, CorePorts, CoreServices,
+    DiagnosticComposition, KnowledgeComposition, PackageServicePorts, RouterPorts, SessionPorts,
+    SettingsPorts, WebPortsFactory,
+};
 pub use dispatch::{
     AsyncDelivery, AsyncDeliveryHandler, AsyncFuture, AsyncOutcome, Consumer, Delivery,
     DeliveryHandler, Dispatcher, DispatcherConfig, EffectExecutor, EffectFuture, EffectResult,
@@ -251,7 +257,7 @@ pub use runs::{
 };
 pub use runtime::{
     BootError, BootReport, CollectionPass, Composition, IndexComposition, PackageComposition,
-    RunComposition, Runtime, RuntimeConfig, ShutdownStage, boot,
+    RunComposition, Runtime, RuntimeConfig, ShutdownStage, TestOverrides, boot,
 };
 
 pub mod containers;

@@ -21,7 +21,7 @@ use std::sync::{Mutex, OnceLock};
 
 /// The tool the scripted provider calls in the held-call test. Its handler refuses every new
 /// request until capacity frees up, so the call is held.
-const HELD: &str = "agents.ack";
+const HELD: &str = "router.pin";
 
 struct NeedsCapacity;
 impl devworks_core::ports::CommandHandler for NeedsCapacity {
@@ -195,26 +195,16 @@ pub(super) async fn runtime_with(
         authority,
         Arc::new(FakeHost::default()),
     );
-    let connections = Arc::new(
-        devworks_core::services::router::connections::ConnectionService::new(
-            fx.h.ids.clone(),
-            fx.h.clock(),
-            fx.store.clone(),
-            Arc::new(devworks_core::ports::http::NoNetwork),
-            Arc::new(devworks_core::ports::secrets::SessionSecrets::new()),
-            Arc::new(Entropy),
-        ),
-    );
-    composed.use_cases = UseCases::new()
-        .with_runs(fx.service.clone())
-        .with_connections(connections.clone())
-        .with_router(Arc::new(
-            devworks_core::services::router::InferenceRouter::new(
-                fx.h.ids.clone(),
-                fx.h.clock(),
-                connections,
-            ),
-        ));
+    composed.application = devworks_engine::ApplicationComposition {
+        connections: Some(devworks_engine::ConnectionPorts {
+            http: Arc::new(devworks_core::ports::http::NoNetwork),
+            secrets: Arc::new(devworks_core::ports::secrets::SessionSecrets::new()),
+            entropy: Arc::new(Entropy),
+            endpoints: None,
+        }),
+        router: Some(Default::default()),
+        ..Default::default()
+    };
     composed.config.providers =
         Some(devworks_engine::providers::driver::ProviderComposition::new(wire));
     adjust(&mut composed);
@@ -358,18 +348,22 @@ fn a_held_tool_call_is_submitted_once_and_again_only_after_a_state_change() {
                     submissions: submissions.clone(),
                     real: None,
                 }),
-                Arc::new(HeldWire::new("agents_ack_command", "{}", 1)),
+                Arc::new(HeldWire::new(
+                    "router_pin_command",
+                    r#"{"sessionId":"session-a","expectedPinRevision":"1","intent":{"kind":"OpenRouterAuto"},"effort":"Default"}"#,
+                    1,
+                )),
                 |composed| {
-                    composed
-                        .use_cases
-                        .register(HELD, None, Some(Arc::new(NeedsCapacity)));
+                    let mut scripted = UseCases::new();
+                    scripted.register(HELD, None, Some(Arc::new(NeedsCapacity)));
+                    composed.test_overrides = devworks_engine::TestOverrides::new(scripted);
                 },
             )
             .await;
             let (context, primary) = pinned_agent_session(&fx);
             let offered = offered(&app, &context);
             assert!(
-                offered.iter().any(|name| name == "agents_ack_command"),
+                offered.iter().any(|name| name == "router_pin_command"),
                 "{offered:?}"
             );
 
@@ -860,9 +854,9 @@ fn an_approval_required_query_is_answered_at_once_as_not_run() {
             }),
             wire.clone(),
             |composed| {
-                composed
-                    .use_cases
-                    .register("sessions.get", Some(handler), None);
+                let mut scripted = UseCases::new();
+                scripted.register("sessions.get", Some(handler), None);
+                composed.test_overrides = devworks_engine::TestOverrides::new(scripted);
             },
         )
         .await;
