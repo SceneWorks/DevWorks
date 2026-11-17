@@ -945,3 +945,229 @@ fn native_file_impact_in_a_crate_spends_its_budget_only_on_the_scan() {
     executor.block_on(app.shutdown());
     let _ = std::fs::remove_dir_all(src);
 }
+
+/// A package start (the package node itself, or its manifest as a file) has no indexed answer, so
+/// the scan alone spends the budget: the request fits the smallest budget it fits on the scan. An
+/// indexed assessment tried first would walk every edge that names a repository, spending visits
+/// the scan then lacks.
+#[test]
+fn native_package_start_impact_spends_its_budget_only_on_the_scan() {
+    let _case = native_runtime_case();
+    use devworks_core::ports::indexing::StructuralParser;
+    let h = Harness::new();
+    let executor = runtime();
+    let store = h.open();
+    let src = sources();
+    let mut other = String::new();
+    for i in 0..60 {
+        other.push_str(&format!("pub fn user_{i}() {{ target(); }}\n"));
+    }
+    let crate_source = "pub fn target() {}\n";
+    write_repo(
+        &src.join("pkg"),
+        &[
+            (
+                "Cargo.toml",
+                "[package]\nname = \"impact-crate\"\nversion = \"0.1.0\"\n",
+            ),
+            ("src/lib.rs", crate_source),
+        ],
+    );
+    write_repo(&src.join("other"), &[("src/lib.rs", other.as_str())]);
+    let parser = Arc::new(ScriptedSemanticCapture {
+        parser: TreeSitterParser::new(),
+        captures: Default::default(),
+    });
+    let mut composition = composition(&h, store.clone(), "git");
+    composition.indexing.as_mut().unwrap().parser = parser.clone();
+    let app = executor.block_on(boot(composition)).unwrap();
+    let ctx = principal(&*store, "user", PrincipalKind::Human);
+    base_directory(&store, &ctx, &src);
+    let repositories = discovered(&app, &ctx);
+    let ids: std::collections::BTreeMap<_, _> = repositories
+        .iter()
+        .map(|id| {
+            let repository = read(&*store, |r| r.projects().repository(&super::id(id))).unwrap();
+            (repository.name, id.clone())
+        })
+        .collect();
+    let extracted = parser
+        .parser
+        .extract(
+            "rust",
+            "src/lib.rs",
+            "pkg",
+            crate_source.as_bytes(),
+            &|| false,
+            1000,
+        )
+        .unwrap();
+    let node = extracted.nodes.iter().find(|n| n.name == "target").unwrap();
+    parser.captures.lock().unwrap().insert(
+        "other".into(),
+        (0..60)
+            .map(|i| ForeignCapture {
+                source: format!("user_{i}"),
+                repository_id: id(&ids["pkg"]),
+                target_kind: node.kind.clone(),
+                target_name: node.name.clone(),
+                target_qualified: node.qualified_name.clone(),
+                edge: "CALLS".into(),
+            })
+            .collect(),
+    );
+    for name in ["pkg", "other"] {
+        indexed(
+            &executor,
+            &app,
+            &store,
+            &ctx,
+            &ids[name],
+            &format!("package-{name}"),
+        );
+    }
+    let package = &ids["pkg"];
+    let node_query = json!({"kind":"NodeImpact","selection":{"target":{"kind":"Name","name":"impact-crate","repositoryId":package},"depth":3}});
+    let manifest = file_query(package, "Cargo.toml");
+    for (operation, query, visits) in [
+        ("code.impact", node_query, 763),
+        ("code.file_impact", manifest, 764),
+    ] {
+        let fits = |visits| {
+            let page = graph_page(
+                &app,
+                &ctx,
+                operation,
+                query.clone(),
+                Some(json!({"kind":"Published","repositoryIds":repositories})),
+                (500, visits),
+                None,
+            );
+            let gaps =
+                serde_json::to_value(&page).unwrap()["scopeCoverage"]["coverage"]["gaps"].clone();
+            !gaps
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|g| g == "graph_visited_limit" || g == "graph_memory_limit")
+        };
+        // The smallest budgets these requests fit when only the scan answers (943 and 944 when
+        // an indexed assessment runs first).
+        assert!(fits(visits), "{operation} fits {visits} visits");
+    }
+    executor.block_on(app.shutdown());
+    let _ = std::fs::remove_dir_all(src);
+}
+
+/// A cut-short read of the start's own edges leaves the direct set incomplete: a repository with a
+/// direct edge must never be reported as a TRANSITIVE link then.
+#[test]
+fn native_partial_direct_read_reports_no_transitive_link_for_a_direct_dependent() {
+    let _case = native_runtime_case();
+    use devworks_core::ports::indexing::StructuralParser;
+    let h = Harness::new();
+    let executor = runtime();
+    let store = h.open();
+    let src = sources();
+    let sources = std::collections::BTreeMap::from([
+        ("origin", "pub fn target() {}\n"),
+        ("consumer", "pub fn caller() { target(); }\n"),
+        ("downstream", "pub fn outer() { caller(); }\n"),
+    ]);
+    for (name, source) in &sources {
+        write_repo(&src.join(name), &[("src/lib.rs", source)]);
+    }
+    let parser = Arc::new(ScriptedSemanticCapture {
+        parser: TreeSitterParser::new(),
+        captures: Default::default(),
+    });
+    let mut composition = composition(&h, store.clone(), "git");
+    composition.indexing.as_mut().unwrap().parser = parser.clone();
+    let app = executor.block_on(boot(composition)).unwrap();
+    let ctx = principal(&*store, "user", PrincipalKind::Human);
+    base_directory(&store, &ctx, &src);
+    let repositories = discovered(&app, &ctx);
+    let ids: std::collections::BTreeMap<_, _> = repositories
+        .iter()
+        .map(|id| {
+            let repository = read(&*store, |r| r.projects().repository(&super::id(id))).unwrap();
+            (repository.name, id.clone())
+        })
+        .collect();
+    let capture = |source: &str, repo: &str, target: &str| {
+        let extracted = parser
+            .parser
+            .extract(
+                "rust",
+                "src/lib.rs",
+                repo,
+                sources[repo].as_bytes(),
+                &|| false,
+                1000,
+            )
+            .unwrap();
+        let node = extracted.nodes.iter().find(|n| n.name == target).unwrap();
+        ForeignCapture {
+            source: source.into(),
+            repository_id: id(&ids[repo]),
+            target_kind: node.kind.clone(),
+            target_name: node.name.clone(),
+            target_qualified: node.qualified_name.clone(),
+            edge: "CALLS".into(),
+        }
+    };
+    {
+        let mut captures = parser.captures.lock().unwrap();
+        captures.insert(
+            "consumer".into(),
+            vec![capture("caller", "origin", "target")],
+        );
+        captures.insert(
+            "downstream".into(),
+            vec![capture("outer", "consumer", "caller")],
+        );
+    }
+    for name in ["origin", "consumer", "downstream"] {
+        indexed(
+            &executor,
+            &app,
+            &store,
+            &ctx,
+            &ids[name],
+            &format!("partial-{name}"),
+        );
+    }
+    let views = json!({"kind":"Published","repositoryIds":repositories});
+    let mut limited = 0;
+    for max_visited in 1..400 {
+        let page = graph_page(
+            &app,
+            &ctx,
+            "code.impact",
+            node_query(&ids["origin"], 3),
+            Some(views.clone()),
+            (500, max_visited),
+            None,
+        );
+        let gaps =
+            serde_json::to_value(&page).unwrap()["scopeCoverage"]["coverage"]["gaps"].clone();
+        limited += gaps
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|g| g == "graph_visited_limit") as u32;
+        let transitive_to_direct = impact(&page).cross_repository.0.iter().any(|e| {
+            e.edge_kind.0 == "TRANSITIVE" && e.target_repository_id.as_str() == ids["consumer"]
+        });
+        assert!(
+            !transitive_to_direct,
+            "budget {max_visited}: the direct dependent is not a transitive link"
+        );
+    }
+    assert!(
+        limited > 0,
+        "the sweep reached budgets that cut reads short"
+    );
+    executor.block_on(app.shutdown());
+    let _ = std::fs::remove_dir_all(src);
+}
