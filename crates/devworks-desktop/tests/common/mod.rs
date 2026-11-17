@@ -764,6 +764,45 @@ pub fn wait_for_screen_help(engine: &Engine, root: &Root, screen: &str, topic: &
     }
 }
 
+/// Longest [`wait_progressing`] tolerates [`Root::write_progress`] standing still.
+pub const STALL_BOUND: Duration = Duration::from_secs(120);
+/// Ceiling on a whole [`wait_progressing`], so unrelated endless progress cannot hang a test.
+pub const PROGRESS_CEILING: Duration = Duration::from_secs(600);
+
+/// Polls `poll` every 5 ms until it returns `Ok`. For a wait on background Help generation,
+/// whose length is a count of durable commits and so grows with machine load. It fails with
+/// the latest `Err` text once `root`'s [`Root::write_progress`] stops advancing for
+/// [`STALL_BOUND`], or after [`PROGRESS_CEILING`] in all.
+pub fn wait_progressing<T>(
+    root: &Root,
+    what: &str,
+    mut poll: impl FnMut() -> Result<T, String>,
+) -> T {
+    let started = std::time::Instant::now();
+    let mut seen = root.write_progress();
+    let mut progressed = started;
+    loop {
+        let waiting = match poll() {
+            Ok(value) => return value,
+            Err(waiting) => waiting,
+        };
+        let now = root.write_progress();
+        if now != seen {
+            seen = now;
+            progressed = std::time::Instant::now();
+        }
+        assert!(
+            progressed.elapsed() < STALL_BOUND,
+            "{what} never completed (no progress for {STALL_BOUND:?}); latest: {waiting}"
+        );
+        assert!(
+            started.elapsed() < PROGRESS_CEILING,
+            "{what} never completed within {PROGRESS_CEILING:?}; latest: {waiting}"
+        );
+        std::thread::sleep(Duration::from_millis(5));
+    }
+}
+
 pub fn step_until(h: &mut Harness<'_, Shell>, what: &str, done: impl Fn(&Shell) -> bool) {
     step_until_progressing(h, what, || 0, done);
 }
