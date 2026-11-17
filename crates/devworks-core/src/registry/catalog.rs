@@ -3505,7 +3505,7 @@ pub(super) static CATALOG: [OperationDescriptor; 377] = [
         result_type: "SchemaCodeReferencePage",
         result_schema: schema_of::<SchemaCodeReferencePage>,
         completion: false,
-        revisions: &[SchemaRevision(5)],
+        revisions: &[SchemaRevision(8)],
         native_execution: false,
         approval_required: false,
         human_only: false,

@@ -2642,6 +2642,7 @@ impl IndexRead for Masked<'_> {
         unit(generation:&Id,unit_key:&str) -> Option<StoredUnit>;
         nodes_named(generation:&Id,name:&str,limit:u16) -> Vec<StoredNode>;
         nodes_qualified(generation:&Id,qualified_name:&str,limit:u16) -> Vec<StoredNode>;
+        nodes_qualified_after(generation:&Id,qualified_name:&str,after:Option<(&str,&str)>,limit:u16) -> Vec<StoredNode>;
         published(repository:&Id) -> Option<StoredPublished>;
         view(view:&Id) -> Option<StoredView>;
         live_pins(view:&Id,now_ms:i64) -> i64;

@@ -102,12 +102,13 @@ fn literals(root: Node<'_>, source: &[u8], uses: &mut Vec<Use>) {
     }
 }
 
-/// Whether a literal splices in values (`${…}`, `#{…}`, `{…}` of an f-string, `$var`).
+/// Whether a literal splices in values (`${…}`, `#{…}`, `{…}` of an f-string, `$var`, and the
+/// `interpolated_expression`/`interpolated_identifier` nodes of Kotlin-style templates).
 fn interpolated(n: Node<'_>) -> bool {
     let mut stack = vec![n];
     while let Some(n) = stack.pop() {
         let kind = n.kind();
-        if kind.contains("interpolation")
+        if kind.contains("interpolat")
             || kind.contains("substitution")
             || kind == "variable_name"
             || kind == "simple_variable"
@@ -155,6 +156,17 @@ fn tokens(sql: &str) -> Vec<Tok> {
         if c.is_whitespace() {
             i += 1;
         } else if c == '-' && chars.get(i + 1) == Some(&'-') {
+            while i < chars.len() && chars[i] != '\n' {
+                i += 1;
+            }
+        } else if c == '/' && chars.get(i + 1) == Some(&'*') {
+            i += 2;
+            while i < chars.len() && !(chars[i] == '*' && chars.get(i + 1) == Some(&'/')) {
+                i += 1;
+            }
+            i += 2;
+        } else if c == '#' && !matches!(chars.get(i + 1), Some('>' | '-')) {
+            // A MySQL comment (not Postgres's `#>`, `#>>` and `#-` operators).
             while i < chars.len() && chars[i] != '\n' {
                 i += 1;
             }
@@ -314,14 +326,27 @@ fn statement(sql: &str) -> Vec<Use> {
     };
     // Common table expressions are not tables.
     let mut ctes = Vec::new();
+    let mut first_cte = None;
     if kind == "with" {
         for (i, t) in toks.iter().enumerate() {
             if let Tok::Word(w) = t
                 && is_kw(toks.get(i + 1), "as")
                 && toks.get(i + 2) == Some(&Tok::Punct('('))
             {
+                first_cte.get_or_insert(i);
                 ctes.push(w.to_lowercase());
             }
+        }
+        // A `WITH` that is SQL defines `name AS (…)` and then runs a statement over it.
+        let runs = first_cte.is_some_and(|f| {
+            toks[f..].iter().any(|t| {
+                ["select", "insert", "update", "delete"]
+                    .iter()
+                    .any(|k| is_kw(Some(t), k))
+            })
+        });
+        if !runs {
+            return Vec::new();
         }
     }
     let mut tables: Vec<(String, Vec<String>)> = Vec::new();
@@ -363,6 +388,36 @@ fn statement(sql: &str) -> Vec<Use> {
             let Some((name, after)) = name_at(&toks, j) else {
                 break;
             };
+            // A table function (`generate_series(1, 3) g`) is not a table: read past it.
+            if from && toks.get(after) == Some(&Tok::Punct('(')) {
+                let mut depth = 0;
+                let mut k = after;
+                while let Some(t) = toks.get(k) {
+                    match t {
+                        Tok::Punct('(') => depth += 1,
+                        Tok::Punct(')') => {
+                            depth -= 1;
+                            if depth == 0 {
+                                k += 1;
+                                break;
+                            }
+                        }
+                        _ => {}
+                    }
+                    k += 1;
+                }
+                if is_kw(toks.get(k), "as") {
+                    k += 1;
+                }
+                if matches!(toks.get(k), Some(Tok::Word(a)) if !stop_word(a)) {
+                    k += 1;
+                }
+                if toks.get(k) == Some(&Tok::Punct(',')) {
+                    j = k + 1;
+                    continue;
+                }
+                break;
+            }
             // A common table expression is read past, not recorded.
             let at = add(&mut tables, &name);
             let mut k = after;
@@ -436,8 +491,13 @@ fn statement(sql: &str) -> Vec<Use> {
                     }
                 }
             } else {
+                // A comma continues the table list, so a name or a subquery must follow it
+                // ("Select items from the list, then …" is prose).
                 valid |= follow.is_none()
-                    || matches!(follow, Some(Tok::Punct(',' | ';' | ')')))
+                    || matches!(follow, Some(Tok::Punct(';' | ')')))
+                    || (follow == Some(&Tok::Punct(','))
+                        && (name_at(&toks, k + 1).is_some()
+                            || toks.get(k + 1) == Some(&Tok::Punct('('))))
                     || matches!(follow, Some(Tok::Word(w)) if stop_word(w));
             }
             if toks.get(k) == Some(&Tok::Punct(',')) && is_kw(here, "from") {
@@ -573,7 +633,7 @@ static TABLES: [TablePattern; 11] = [
         languages: &["python"],
         regex: LazyLock::new(|| {
             re(
-                r#"\bTable\s*\(\s*["'](?P<table>[^"']+)["']\s*,\s*\w*meta\w*(?:[^)]*?\bschema\s*=\s*["'](?P<schema>[^"']+)["'])?"#,
+                r#"\bTable\s*\(\s*["'](?P<table>[^"']+)["']\s*,\s*(?:\w+\.)*\w*meta\w*(?:[^)]*?\bschema\s*=\s*["'](?P<schema>[^"']+)["'])?"#,
             )
         }),
         scope: Scope::Block,
@@ -1053,6 +1113,9 @@ mod tests {
             "SELECT 1",
             "from users",
             "select name from users",
+            "With a mouse, select from the menu",
+            "Select items from the list, then press Enter",
+            "SELECT * FROM generate_series(1, 3) g",
         ] {
             assert_eq!(tables(text), [], "{text}");
         }
@@ -1204,11 +1267,27 @@ mod tests {
     }
 
     #[test]
+    fn comments_are_skipped_and_table_functions_are_not_tables() {
+        assert_eq!(
+            tables("SELECT id /* FROM ghost */ FROM users # FROM other\n WHERE id = ?"),
+            [t("users")]
+        );
+        assert_eq!(
+            tables("SELECT * FROM generate_series(1, 3) g, users u WHERE u.id = g"),
+            [t("users"), c("users", "id")]
+        );
+        assert_eq!(
+            tables("WITH recent AS (SELECT * FROM events) SELECT * FROM recent"),
+            [t("events")]
+        );
+    }
+
+    #[test]
     fn python_ruby_and_php_mappings_name_only_explicit_tables() {
         let py = uses(
             "python",
             "models.py",
-            "class User(Base):\n    __tablename__ = \"users\"\n    name = Column(\"user_name\", String)\n\nroles = Table(\"roles\", metadata, Column(\"role_id\", Integer))\n\nclass Book(models.Model):\n    title = models.CharField(db_column=\"book_title\")\n    class Meta:\n        db_table = \"library_books\"\n\nclass Shelf(models.Model):\n    pass\n\ndef find(cur, t):\n    cur.execute(\"SELECT id FROM users WHERE id = %s\")\n    cur.execute(f\"SELECT id FROM {t}\")\n",
+            "class User(Base):\n    __tablename__ = \"users\"\n    name = Column(\"user_name\", String)\n\nroles = Table(\"roles\", metadata, Column(\"role_id\", Integer))\n\nteams = Table(\"teams\", Base.metadata, Column(\"team_id\", Integer))\nlogs = db.Table(\"audit_logs\", db.metadata, Column(\"log_id\", Integer))\n\nclass Book(models.Model):\n    title = models.CharField(db_column=\"book_title\")\n    class Meta:\n        db_table = \"library_books\"\n\nclass Shelf(models.Model):\n    pass\n\ndef find(cur, t):\n    cur.execute(\"SELECT id FROM users WHERE id = %s\")\n    cur.execute(f\"SELECT id FROM {t}\")\n",
         );
         assert!(
             has(&py, "USES_TABLE", "User", "users", "", "orm:sqlalchemy"),
@@ -1229,6 +1308,9 @@ mod tests {
             py.iter().any(|f| f.2 == "roles" && f.3 == "role_id"),
             "{py:?}"
         );
+        for (table, column) in [("teams", "team_id"), ("audit_logs", "log_id")] {
+            assert!(py.iter().any(|f| f.2 == table && f.3 == column), "{py:?}");
+        }
         assert!(
             has(&py, "USES_TABLE", "Book", "library_books", "", "orm:django"),
             "{py:?}"

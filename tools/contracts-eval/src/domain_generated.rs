@@ -19671,7 +19671,7 @@ pub enum DomainQuery {
     #[schemars(extend("x-since" = 8))]
     #[serde(rename = "watch.inspect")]
     WatchInspect { watcher_id: Id },
-    #[schemars(extend("x-since" = 5))]
+    #[schemars(extend("x-since" = 8))]
     #[serde(rename = "schemas.code_references")]
     SchemasCodeReferences {
         scope: DataScope,
@@ -21474,7 +21474,7 @@ impl Revisioned for DomainQuery {
             Self::WatchInspect { .. } if revision < 8 => {
                 Err("operation predates its introduction".into())
             }
-            Self::SchemasCodeReferences { .. } if revision < 5 => {
+            Self::SchemasCodeReferences { .. } if revision < 8 => {
                 Err("operation predates its introduction".into())
             }
             Self::RepositoriesNodes { scope, .. } if revision >= 3 && scope.is_none() => {
@@ -26639,7 +26639,7 @@ pub enum OperationResult {
     #[schemars(extend("x-since" = 8))]
     #[serde(rename = "watch.cancel")]
     WatchCancel { value: WatcherRecord },
-    #[schemars(extend("x-since" = 5))]
+    #[schemars(extend("x-since" = 8))]
     #[serde(rename = "schemas.code_references")]
     SchemasCodeReferences { value: SchemaCodeReferencePage },
     #[serde(rename = "runs.start")]
@@ -27772,7 +27772,7 @@ impl Revisioned for OperationResult {
             Self::WatchCancel { .. } if revision < 8 => {
                 Err("operation result predates its introduction".into())
             }
-            Self::SchemasCodeReferences { .. } if revision < 5 => {
+            Self::SchemasCodeReferences { .. } if revision < 8 => {
                 Err("operation result predates its introduction".into())
             }
             Self::NextWorkClaimProjectQueue { value } => value.check_revision(revision),

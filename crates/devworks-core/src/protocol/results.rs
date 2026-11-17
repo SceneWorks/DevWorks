@@ -289,7 +289,7 @@ pub enum OperationResult {
     SchemasObjects { value: Page<SchemaObject> },
     #[serde(rename = "schemas.relationships")]
     SchemasRelationships { value: Page<SchemaRelation> },
-    #[schemars(extend("x-since" = 5))]
+    #[schemars(extend("x-since" = 8))]
     #[serde(rename = "schemas.code_references")]
     SchemasCodeReferences { value: SchemaCodeReferencePage },
     #[serde(rename = "schemas.index")]
@@ -1780,7 +1780,7 @@ impl Revisioned for OperationResult {
             Self::AgentsEvents { .. } if revision < 7 => {
                 Err("operation result predates its introduction".into())
             }
-            Self::SchemasCodeReferences { .. } if revision < 5 => {
+            Self::SchemasCodeReferences { .. } if revision < 8 => {
                 Err("operation result predates its introduction".into())
             }
             Self::ApprovalsReviewQueue { .. } if revision < 3 => {

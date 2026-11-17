@@ -31,7 +31,7 @@ fn registry_matches_implementation_plan_and_family_register() {
         .map(|o| (o["operation"].as_str().unwrap(), o))
         .collect();
 
-    assert_eq!(registry::all().len(), 376);
+    assert_eq!(registry::all().len(), 377);
     assert_eq!(registry::all().len(), planned.len());
     assert_eq!(
         registry::all().len() as u64,
@@ -159,7 +159,7 @@ fn every_binding_publishes_strict_input_and_result_schemas() {
             count += 1;
         }
     }
-    assert_eq!(count, 381);
+    assert_eq!(count, 382);
 }
 
 /// Every property name declared anywhere in a schema, sorted (the envelope's own negotiated
@@ -404,7 +404,6 @@ fn schema_revisions_match_the_register_and_each_revision_has_its_own_schemas() {
             "router.route",
             "router.configure",
             "router.connections",
-            "schemas.code_references",
             "schemas.configure",
             "schemas.connections",
             "schemas.index",

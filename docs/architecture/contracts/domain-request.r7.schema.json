@@ -11485,40 +11485,6 @@
           ],
           "type": "object",
           "x-since": 6
-        },
-        {
-          "additionalProperties": false,
-          "properties": {
-            "connectionId": {
-              "$ref": "#/$defs/Id"
-            },
-            "kind": {
-              "const": "schemas.code_references",
-              "type": "string"
-            },
-            "objectId": {
-              "$ref": "#/$defs/Id"
-            },
-            "page": {
-              "$ref": "#/$defs/PageRequest"
-            },
-            "scope": {
-              "$ref": "#/$defs/DataScope"
-            },
-            "views": {
-              "$ref": "#/$defs/ViewSelection"
-            }
-          },
-          "required": [
-            "kind",
-            "scope",
-            "views",
-            "connectionId",
-            "objectId",
-            "page"
-          ],
-          "type": "object",
-          "x-since": 5
         }
       ]
     },

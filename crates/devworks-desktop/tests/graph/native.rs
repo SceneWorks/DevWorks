@@ -809,20 +809,16 @@ fn schema_command(engine: &Engine, op: &str, body: serde_json::Value) -> serde_j
     }
 }
 
-/// Indexing code that queries a table a schema source knows records the link with its evidence,
-/// and both the schema reads and the graph's node detail return it.
-#[test]
-fn indexed_code_that_queries_a_known_table_links_to_it_in_schema_and_graph_reads() {
-    let _native_case = native_runtime_case();
-    let f = Fx::with(
-        "graph-schema-links",
-        &[(
-            "src/orders.py",
-            "class Order(Base):\n    __tablename__ = \"orders\"\n\ndef load(cur, order_id):\n    return cur.execute(\"SELECT o.id, o.total FROM orders o WHERE o.id = ?\", (order_id,))\n\ndef label(text):\n    return \"Select an order from the list\"\n".into(),
-        )],
-    );
-    f.index(false);
-    // The known table: a SQLite source with `orders`, indexed and published.
+/// A SQLite source with `orders(id, total)` and `refunds(id)`, indexed and published: the
+/// connection, the published views selection, and the `orders` table and its `total` column.
+fn shop_source(
+    f: &Fx,
+) -> (
+    String,
+    serde_json::Value,
+    serde_json::Value,
+    serde_json::Value,
+) {
     let path = f.root.file("shop.sqlite", b"");
     rusqlite::Connection::open(&path)
         .unwrap()
@@ -874,6 +870,23 @@ fn indexed_code_that_queries_a_known_table_links_to_it_in_schema_and_graph_reads
     );
     let total = named(&columns, "Column", "total");
 
+    (connection, views, table, total)
+}
+
+/// Indexing code that queries a table a schema source knows records the link with its evidence,
+/// and both the schema reads and the graph's node detail return it.
+#[test]
+fn indexed_code_that_queries_a_known_table_links_to_it_in_schema_and_graph_reads() {
+    let _native_case = native_runtime_case();
+    let f = Fx::with(
+        "graph-schema-links",
+        &[(
+            "src/orders.py",
+            "class Order(Base):\n    __tablename__ = \"orders\"\n\ndef load(cur, order_id):\n    return cur.execute(\"SELECT o.id, o.total FROM orders o WHERE o.id = ?\", (order_id,))\n\ndef label(text):\n    return \"Select an order from the list\"\n".into(),
+        )],
+    );
+    f.index(false);
+    let (connection, views, table, total) = shop_source(&f);
     // The schema read returns each use of the table with its evidence.
     let references = schema_read(
         &f.engine,
@@ -1039,4 +1052,45 @@ fn indexed_code_that_queries_a_known_table_links_to_it_in_schema_and_graph_reads
     });
     assert_eq!(h.state().route(), Route::Repositories);
     assert!(has_text(&h, "Database tables"));
+}
+
+/// A table named in more files than one node page holds keeps every use.
+#[test]
+fn a_table_named_in_more_files_than_one_page_keeps_every_use() {
+    let _native_case = native_runtime_case();
+    const FILES: usize = 503;
+    let files: Vec<(String, String)> = (0..FILES)
+        .map(|n| {
+            (
+                format!("src/q{n:04}.py"),
+                "def load(cur):\n    return cur.execute(\"SELECT id FROM orders WHERE id = ?\")\n"
+                    .to_owned(),
+            )
+        })
+        .collect();
+    let files: Vec<(&str, String)> = files.iter().map(|(p, t)| (p.as_str(), t.clone())).collect();
+    let f = Fx::with("graph-schema-links-many", &files);
+    f.index(false);
+    let (connection, views, table, _) = shop_source(&f);
+    let mut seen = std::collections::BTreeSet::new();
+    let mut cursor = serde_json::Value::Null;
+    loop {
+        let mut page = json!({"limit":100});
+        if !cursor.is_null() {
+            page["cursor"] = cursor.clone();
+        }
+        let read = schema_read(
+            &f.engine,
+            "schemas.code_references",
+            json!({"scope":{"kind":"Workspace"},"views":views,"connectionId":connection,"objectId":table,"page":page}),
+        );
+        for item in read["items"].as_array().unwrap() {
+            seen.insert(item["unitKey"].as_str().unwrap().to_owned());
+        }
+        if read["hasMore"] != true {
+            break;
+        }
+        cursor = read["nextCursor"].clone();
+    }
+    assert_eq!(seen.len(), FILES, "every file's use is returned");
 }

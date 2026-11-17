@@ -95,14 +95,14 @@ class SchemaRevisionRules(unittest.TestCase):
             self.assertEqual(carried[name], {8})
         for name in ('agents.post', 'agents.receive', 'agents.ack', 'agents.history', 'agents.events'):
             self.assertEqual(carried[name], {7})
-        for name in ('watch.create', 'watch.list', 'watch.inspect', 'watch.cancel'):
+        for name in ('watch.create', 'watch.list', 'watch.inspect', 'watch.cancel',
+                     'schemas.code_references'):
             self.assertEqual(carried[name], {8})
         for name in ('projects.prepare_purge', 'projects.purge_manifest', 'projects.purge',
                      'projects.purge_status', 'history.command_receipt'):
             self.assertEqual(carried[name], {6})
         for name in ('schemas.connections', 'schemas.objects', 'schemas.index', 'schemas.refresh',
-                     'schemas.configure', 'database.configure_sensitive_columns',
-                     'schemas.code_references'):
+                     'schemas.configure', 'database.configure_sensitive_columns'):
             self.assertEqual(carried[name], {5})
         self.assertEqual(carried['features.edit'], {2, 3})
         self.assertEqual(carried['resources.renew'], {2})

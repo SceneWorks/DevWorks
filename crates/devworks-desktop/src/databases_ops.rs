@@ -29,7 +29,13 @@ pub enum DatabasesSlot {
 screen_slot!(DatabasesSlot, Databases);
 
 pub fn query(b: &dyn Backend, op: &str, body: Value) -> Vec<u8> {
-    ops::at_revision(ops::query_frame(b, op, body), 5)
+    // `schemas.code_references` begins at revision 8; the other source operations stay at 5.
+    let revision = if op == "schemas.code_references" {
+        8
+    } else {
+        5
+    };
+    ops::at_revision(ops::query_frame(b, op, body), revision)
 }
 pub fn command(b: &dyn Backend, op: &str, body: Value) -> Vec<u8> {
     ops::at_revision(ops::command_frame(b, op, body), 5)

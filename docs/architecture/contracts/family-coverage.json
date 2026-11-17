@@ -6785,7 +6785,7 @@
           "status": "Concrete input/result candidate; actual service/authority behavior not implemented"
         },
         {
-          "introducedRevision": 5,
+          "introducedRevision": 8,
           "operation": "schemas.code_references",
           "inputSchema": "domain-request.schema.json",
           "variant": "schemas.code_references",
@@ -6814,10 +6814,10 @@
           "completionSchema": null,
           "schemaRevisions": [
             {
-              "revision": 5,
-              "inputSchema": "domain-request.r5.schema.json",
-              "resultSchema": "operation-result.r5.schema.json",
-              "queryReplySchema": "domain-query-reply.r5.schema.json",
+              "revision": 8,
+              "inputSchema": "domain-request.r8.schema.json",
+              "resultSchema": "operation-result.r8.schema.json",
+              "queryReplySchema": "domain-query-reply.r8.schema.json",
               "commandReplySchema": null,
               "completionSchema": null
             }

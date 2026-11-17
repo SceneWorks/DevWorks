@@ -100,22 +100,34 @@ fn in_view(
     for table in tables {
         let qualified = format!("db-table:{table}");
         for generation in &layers.layers {
-            for node in read
-                .indexing()
-                .nodes_qualified(generation, &qualified, NODE_PAGE)?
-            {
-                // A unit counts in the layer that decides it: the highest one mentioning it.
-                let visible = views::resolve_unit(read.indexing(), layers, &node.unit_key)?
-                    .is_some_and(|(g, _)| &g == generation);
-                if node.kind != "DatabaseTable" || !visible {
-                    continue;
+            // Each file naming the table has its own node: page through all of them.
+            let mut after: Option<(String, String)> = None;
+            loop {
+                let page = read.indexing().nodes_qualified_after(
+                    generation,
+                    &qualified,
+                    after.as_ref().map(|(u, n)| (u.as_str(), n.as_str())),
+                    NODE_PAGE,
+                )?;
+                let more = page.len() == usize::from(NODE_PAGE);
+                for node in page {
+                    after = Some((node.unit_key.clone(), node.node_id.clone()));
+                    // A unit counts in the layer that decides it: the highest one mentioning it.
+                    let visible = views::resolve_unit(read.indexing(), layers, &node.unit_key)?
+                        .is_some_and(|(g, _)| &g == generation);
+                    if node.kind != "DatabaseTable" || !visible {
+                        continue;
+                    }
+                    let target = GraphNodeIdentity {
+                        repository_id: repository.clone(),
+                        unit_key: node.unit_key.clone(),
+                        node_id: node.node_id.clone(),
+                    };
+                    uses_of(read, &scope, layers, &target, table, column, found)?;
                 }
-                let target = GraphNodeIdentity {
-                    repository_id: repository.clone(),
-                    unit_key: node.unit_key.clone(),
-                    node_id: node.node_id.clone(),
-                };
-                uses_of(read, &scope, layers, &target, table, column, found)?;
+                if !more {
+                    break;
+                }
             }
         }
     }

@@ -11,25 +11,25 @@
   ],
   "sourceSha256": {
     "implementation-slices.json": "8b3d18d5b86fa2904b3ddb55ac117cfdcc93973ee2bc96bde9e32d982b14a8a4",
-    "devworks-capability-catalog.json": "2391f8849a5385a0a3f995473402068e9e610ff5d4984fe51b4d8b9aefad0f81",
+    "devworks-capability-catalog.json": "a953a79fb5cff16c03f553f48bdf82edc46b4fcccb61f7f0d7e34e31b0251073",
     "devworks-requirements-traceability.json": "24555c0cb565ec79ffec089f598fbdf9e1b3eeb291f2222a58c458dd1cc8a4d6",
     "codegraph-capability-inventory.json": "54da948de48de4a7d00353ae14d7464feac80cca9bdab6d2a6bb2679caae2c09",
     "capability-validation-contracts.json": "9722c1fe17c9aaed5c65fc43f1f4f412cca2813276e5108c7daf15585ae2ed81",
     "validation-workloads.json": "62c76bba3f262331403a5a38fa3d1aa1c7dc649737e36369ca4736780cfc3dcf",
-    "contracts/family-coverage.json": "608b011df133168f063eb75cf64299c9193068c76746e05e02af6c5bf52f9165",
+    "contracts/family-coverage.json": "08b3c1f980e122441f6085e94bdd51ad5a0c4d2fc19d82c91a8f0fc38509a41c",
     "mcp-publication-candidates.json": "64a782ea1c6dc3ef8d40d799d000f143e60b8f06ff86c34b97c10c33ee598b2d",
     "codegraph-work-map.json": "93c551768cd75091f954a0db1757b585b3b6fbaf21b6f6fb8dbab7527c127e25"
   },
   "counts": {
     "slices": 80,
     "operationFamilies": 50,
-    "operations": 376,
+    "operations": 377,
     "requirements": 390,
     "requirementsByStatus": {
       "Confirmed": 243,
       "Proposed": 147
     },
-    "inputSchemaCandidates": 376,
+    "inputSchemaCandidates": 377,
     "inputSchemasPending": 0,
     "sourceEntries": 558,
     "retainedSourceEntries": 494,
@@ -3125,6 +3125,7 @@
         "schemas.connections",
         "schemas.objects",
         "schemas.relationships",
+        "schemas.code_references",
         "schemas.index",
         "schemas.refresh",
         "schemas.remove_index",
@@ -14610,6 +14611,20 @@
       "schemaStatus": "Concrete input/result candidate; actual service/authority behavior not implemented",
       "resultSchema": "operation-result.schema.json",
       "resultValueType": "Page<SchemaRelation>",
+      "requestModes": [
+        "Query"
+      ],
+      "acceptanceStatus": "Planned; no production operation acceptance claimed"
+    },
+    {
+      "operation": "schemas.code_references",
+      "family": "schemas",
+      "serviceOwner": "SchemaService",
+      "primarySlice": "schema_sources",
+      "inputSchema": "domain-request.schema.json",
+      "schemaStatus": "Concrete input/result candidate; actual service/authority behavior not implemented",
+      "resultSchema": "operation-result.schema.json",
+      "resultValueType": "SchemaCodeReferencePage",
       "requestModes": [
         "Query"
       ],

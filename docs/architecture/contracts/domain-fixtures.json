@@ -2262,8 +2262,8 @@
   },
   {
     "id": "input-schemas.code_references-Query",
-    "entry": "domain-request.r5",
-    "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"schemas.code_references\",\"scope\":{\"kind\":\"Workspace\"},\"views\":{\"kind\":\"Published\",\"repositoryIds\":[\"repo-a\"]},\"connectionId\":\"id-a\",\"objectId\":\"id-a\",\"page\":{\"limit\":20}},\"schemaRevision\":5}",
+    "entry": "domain-request.r8",
+    "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"schemas.code_references\",\"scope\":{\"kind\":\"Workspace\"},\"views\":{\"kind\":\"Published\",\"repositoryIds\":[\"repo-a\"]},\"connectionId\":\"id-a\",\"objectId\":\"id-a\",\"page\":{\"limit\":20}},\"schemaRevision\":8}",
     "typedValid": true,
     "schemaValid": true
   },
@@ -4495,7 +4495,7 @@
   },
   {
     "id": "result-schemas.code_references",
-    "entry": "operation-result.r5",
+    "entry": "operation-result.r8",
     "raw": "{\"kind\":\"schemas.code_references\",\"value\":{\"items\":[],\"hasMore\":false}}",
     "typedValid": true,
     "schemaValid": true
@@ -13496,15 +13496,22 @@
     "schemaValid": true
   },
   {
-    "id": "dw36-r5-admission-schemas.code_references",
-    "entry": "domain-request.r5",
-    "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"schemas.code_references\",\"scope\":{\"kind\":\"Workspace\"},\"views\":{\"kind\":\"SchemaPublished\",\"connectionIds\":[\"schema-connection\"]},\"connectionId\":\"schema-connection\",\"objectId\":\"id-a\",\"page\":{\"limit\":20}},\"schemaRevision\":5}",
+    "id": "dw297-r8-admission-schemas.code_references",
+    "entry": "domain-request.r8",
+    "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"schemas.code_references\",\"scope\":{\"kind\":\"Workspace\"},\"views\":{\"kind\":\"SchemaPublished\",\"connectionIds\":[\"schema-connection\"]},\"connectionId\":\"schema-connection\",\"objectId\":\"id-a\",\"page\":{\"limit\":20}},\"schemaRevision\":8}",
     "typedValid": true,
     "schemaValid": true
   },
   {
-    "id": "dw36-r5-result-schemas.code_references",
-    "entry": "operation-result.r5",
+    "id": "dw297-before8-schemas.code_references",
+    "entry": "domain-request.r5",
+    "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"schemas.code_references\",\"scope\":{\"kind\":\"Workspace\"},\"views\":{\"kind\":\"SchemaPublished\",\"connectionIds\":[\"schema-connection\"]},\"connectionId\":\"schema-connection\",\"objectId\":\"id-a\",\"page\":{\"limit\":20}},\"schemaRevision\":5}",
+    "typedValid": false,
+    "schemaValid": false
+  },
+  {
+    "id": "dw297-r8-result-schemas.code_references",
+    "entry": "operation-result.r8",
     "raw": "{\"kind\":\"schemas.code_references\",\"value\":{\"items\":[{\"id\":\"code-reference\",\"objectId\":\"schema-object\",\"repositoryId\":\"repo-a\",\"graphViewId\":\"view-a\",\"unitKey\":\"src/orders.py\",\"nodeId\":\"node-a\",\"nodeName\":\"load\",\"nodeKind\":\"Function\",\"edgeKind\":\"USES_COLUMN\",\"table\":\"public.child\",\"extractor\":\"sql-literal\",\"line\":\"12\",\"snippet\":\"SELECT parent_id FROM public.child\",\"column\":\"parent_id\",\"statement\":\"select\"}],\"hasMore\":false}}",
     "typedValid": true,
     "schemaValid": true
