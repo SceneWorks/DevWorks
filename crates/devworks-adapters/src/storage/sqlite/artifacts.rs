@@ -3,20 +3,12 @@
 //! `artifact_blob_pins`.
 use super::conn::db;
 use super::repos::{Snapshot, Unit};
+use super::support::{corrupt, id_of, invalid};
 use devworks_core::ports::storage::*;
 use devworks_core::protocol::{ActorId, Id, OperationId, ProjectId, RootId};
 use rusqlite::{Connection, OptionalExtension, Row, params};
 use serde_json::Value;
 
-fn invalid(m: impl Into<String>) -> StorageError {
-    StorageError::InvalidRecord(m.into())
-}
-fn corrupt(m: impl Into<String>) -> StorageError {
-    StorageError::unavailable(Unavailable::Corrupt, m)
-}
-fn id_of(s: String) -> Result<Id, StorageError> {
-    Id::new(s).map_err(|e| corrupt(format!("stored identifier: {e}")))
-}
 fn json_of(s: &str) -> Result<Value, StorageError> {
     serde_json::from_str(s).map_err(|e| corrupt(format!("stored JSON: {e}")))
 }

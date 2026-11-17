@@ -2,32 +2,13 @@
 //! the protected-root read over the registered `repositories`.
 use super::conn::db;
 use super::repos::{Snapshot, Unit, actor_kind, parse_principal};
+use super::support::{conflict, corrupt, id_of, invalid};
 use devworks_core::ports::GrantUse;
 use devworks_core::ports::storage::*;
-use devworks_core::protocol::{ActorId, Id, ProjectId, Revision, RevisionDimension};
+use devworks_core::protocol::{ActorId, Id, ProjectId, RevisionDimension};
 use devworks_core::settings::catalog::AgentRole;
 use rusqlite::{Connection, OptionalExtension, Row, params};
 use serde_json::Value;
-
-fn invalid(m: impl Into<String>) -> StorageError {
-    StorageError::InvalidRecord(m.into())
-}
-fn corrupt(m: impl Into<String>) -> StorageError {
-    StorageError::unavailable(Unavailable::Corrupt, m)
-}
-fn id_of(s: String) -> Result<Id, StorageError> {
-    Id::new(s).map_err(|e| corrupt(format!("stored identifier: {e}")))
-}
-fn conflict(kind: &'static str, id: &str, expected: i64, current: i64) -> StorageError {
-    let rev = |n: i64| Revision::new(n.max(1)).expect("positive");
-    StorageError::conflict(
-        RevisionDimension::Authority,
-        kind,
-        Id::new(id).unwrap_or_else(|_| Id::new("invalid").expect("static")),
-        rev(expected),
-        rev(current),
-    )
-}
 
 const PRINCIPAL_COLUMNS: &str = "p.actor_id,a.kind,p.role,p.project_id,p.tool_families_json,p.state,p.revision,p.bound_by,p.updated_at";
 type PrincipalRaw = (
@@ -261,6 +242,7 @@ impl AuthorityLedger for Unit<'_> {
             (Some(c), Some(expected)) => {
                 if c.revision != expected {
                     return Err(conflict(
+                        RevisionDimension::Authority,
                         "principal_authority",
                         b.actor.0.as_str(),
                         expected,
@@ -296,6 +278,7 @@ impl AuthorityLedger for Unit<'_> {
         })?;
         if c.revision != expected_revision {
             return Err(conflict(
+                RevisionDimension::Authority,
                 "principal_authority",
                 actor.0.as_str(),
                 expected_revision,
@@ -359,6 +342,7 @@ impl AuthorityLedger for Unit<'_> {
         })?;
         if g.revision != expected_revision {
             return Err(conflict(
+                RevisionDimension::Authority,
                 "authority_grant",
                 id.as_str(),
                 expected_revision,
@@ -389,6 +373,7 @@ impl AuthorityLedger for Unit<'_> {
         }
         if g.revision != use_.expected_revision {
             return Err(conflict(
+                RevisionDimension::Authority,
                 "authority_grant",
                 g.id.as_str(),
                 use_.expected_revision,

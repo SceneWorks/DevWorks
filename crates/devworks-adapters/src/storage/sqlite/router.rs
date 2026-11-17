@@ -3,37 +3,16 @@
 use super::conn::db;
 use super::connections::{connection, decision_model};
 use super::repos::{Snapshot, Unit};
+use super::support::{conflict, corrupt, id_of, invalid, revision};
 use devworks_core::ports::storage::*;
-use devworks_core::protocol::{Id, OperationId, ProjectId, Revision, RevisionDimension};
+use devworks_core::protocol::{Id, OperationId, ProjectId, RevisionDimension};
 use rusqlite::{Connection, OptionalExtension, Row, params};
 
-fn invalid(m: impl Into<String>) -> StorageError {
-    StorageError::InvalidRecord(m.into())
-}
-fn corrupt(m: impl Into<String>) -> StorageError {
-    StorageError::unavailable(Unavailable::Corrupt, m)
-}
-fn id_of(s: String) -> Result<Id, StorageError> {
-    Id::new(s).map_err(|e| corrupt(format!("stored identifier: {e}")))
-}
 fn opt_id(s: Option<String>) -> Result<Option<Id>, StorageError> {
     s.map(id_of).transpose()
 }
 fn strings(json: &str) -> Result<Vec<String>, StorageError> {
     serde_json::from_str(json).map_err(|_| corrupt("stored router list"))
-}
-fn revision(n: i64) -> Result<Revision, StorageError> {
-    Revision::new(n).map_err(|_| corrupt("stored router revision"))
-}
-fn conflict(kind: &'static str, id: &Id, expected: i64, current: i64) -> StorageError {
-    // A cursor at 0 has no positive revision of its own; report it as revision 1.
-    StorageError::conflict(
-        RevisionDimension::Configuration,
-        kind,
-        id.clone(),
-        Revision::new(expected.max(1)).expect("positive"),
-        Revision::new(current.max(1)).expect("positive"),
-    )
 }
 
 const EFFORTS: [&str; 6] = ["Minimal", "Low", "Medium", "High", "XHigh", "Max"];
@@ -433,7 +412,13 @@ impl RouterRepository for Unit<'_> {
                 });
             }
             (Some(e), Some(c)) if e != c.revision => {
-                return Err(conflict("route_model", &m.id, e, c.revision));
+                return Err(conflict(
+                    RevisionDimension::Configuration,
+                    "route_model",
+                    m.id.as_str(),
+                    e,
+                    c.revision,
+                ));
             }
             (Some(e), Some(_)) => e + 1,
         };
@@ -484,7 +469,14 @@ impl RouterRepository for Unit<'_> {
         let current = self.tier_cursor(tier)?;
         if current != expected {
             let id = Id::new(tier).map_err(|e| invalid(e.to_string()))?;
-            return Err(conflict("tier_cursor", &id, expected, current));
+            return Err(conflict(
+                RevisionDimension::Configuration,
+                "tier_cursor",
+                id.as_str(),
+                // A cursor is 0-based and has no revision; report it from 1.
+                expected.max(1),
+                current.max(1),
+            ));
         }
         let next = expected
             .checked_add(1)
@@ -524,7 +516,13 @@ impl RouterRepository for Unit<'_> {
                 });
             }
             (Some(e), Some(c)) if e != c.revision => {
-                return Err(conflict("route_pin", &p.session_id, e, c.revision));
+                return Err(conflict(
+                    RevisionDimension::Configuration,
+                    "route_pin",
+                    p.session_id.as_str(),
+                    e,
+                    c.revision,
+                ));
             }
             (Some(e), Some(_)) => e + 1,
         };

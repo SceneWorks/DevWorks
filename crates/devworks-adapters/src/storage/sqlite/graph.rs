@@ -1,10 +1,11 @@
 //! Bounded reads of immutable, explicitly selected composed graph views.
+use super::support::{conflict, corrupt, id_of, invalid};
 use super::{
     conn::db,
     repos::{Snapshot, Unit},
 };
 use devworks_core::ports::storage::*;
-use devworks_core::protocol::Id;
+use devworks_core::protocol::{Id, RevisionDimension};
 use rusqlite::{Connection, OptionalExtension, Row, params};
 use serde_json::{Value, json};
 use std::collections::BTreeSet;
@@ -36,15 +37,6 @@ pub(super) fn register_name_match(conn: &Connection) -> Result<(), StorageError>
     ))
 }
 
-fn invalid(message: &str) -> StorageError {
-    StorageError::InvalidRecord(message.into())
-}
-fn corrupt(message: &str) -> StorageError {
-    StorageError::unavailable(Unavailable::Corrupt, message)
-}
-fn id(value: String) -> Result<Id, StorageError> {
-    Id::new(value).map_err(|_| corrupt("invalid graph identifier"))
-}
 fn value(value: String) -> Result<Value, StorageError> {
     serde_json::from_str(&value).map_err(|_| corrupt("invalid graph JSON"))
 }
@@ -147,9 +139,9 @@ fn node_from(
     (repo, view, generation, content, n): (String, String, String, String, StoredNodeRaw),
 ) -> Result<GraphNode, StorageError> {
     Ok(GraphNode {
-        repository_id: id(repo)?,
-        view_id: id(view)?,
-        generation_id: id(generation)?,
+        repository_id: id_of(repo)?,
+        view_id: id_of(view)?,
+        generation_id: id_of(generation)?,
         content_digest: content,
         node: StoredNode {
             unit_key: n.0,
@@ -347,9 +339,9 @@ fn edges(
         .into_iter()
         .map(|r| {
             Ok(GraphEdge {
-                repository_id: id(r.0)?,
-                view_id: id(r.1)?,
-                generation_id: id(r.2)?,
+                repository_id: id_of(r.0)?,
+                view_id: id_of(r.1)?,
+                generation_id: id_of(r.2)?,
                 content_digest: r.3,
                 edge: StoredEdge {
                     unit_key: r.4,
@@ -479,9 +471,9 @@ fn probed(
         .into_iter()
         .map(|r| {
             Ok(GraphEdge {
-                repository_id: id(r.0)?,
-                view_id: id(r.1)?,
-                generation_id: id(r.2)?,
+                repository_id: id_of(r.0)?,
+                view_id: id_of(r.1)?,
+                generation_id: id_of(r.2)?,
                 content_digest: r.3,
                 edge: StoredEdge {
                     unit_key: r.4,
@@ -547,7 +539,7 @@ macro_rules! graph_reads {($t:ty)=>{impl GraphRead for $t {
         let scope=scope_json(self.conn,scope)?;let (n,after)=bounded(limit,after)?;
         let sql=format!("{COMPOSED}SELECT repo,view_id,generation_id,unit_key,content_digest,action,payload_json FROM visible WHERE json_extract(?2,'$.repository_id') IS NULL OR (repo,unit_key)>(json_extract(?2,'$.repository_id'),json_extract(?2,'$.unit_key')) ORDER BY repo,unit_key LIMIT ?3");
         let mut statement=db(self.conn.prepare_cached(&sql))?;let rows=db(db(statement.query_map(params![scope,after,n],|r|Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?,r.get::<_,String>(2)?,r.get::<_,String>(3)?,r.get::<_,String>(4)?,r.get::<_,String>(5)?,r.get::<_,String>(6)?))))?.collect::<rusqlite::Result<Vec<_>>>())?;
-        Ok(page(rows.into_iter().map(|r|Ok(GraphUnit{repository_id:id(r.0)?,view_id:id(r.1)?,unit:StoredUnit{generation_id:id(r.2)?,unit_key:r.3,content_digest:r.4,action:r.5,payload:value(r.6)?}})).collect::<Result<Vec<_>,StorageError>>()?,limit))
+        Ok(page(rows.into_iter().map(|r|Ok(GraphUnit{repository_id:id_of(r.0)?,view_id:id_of(r.1)?,unit:StoredUnit{generation_id:id_of(r.2)?,unit_key:r.3,content_digest:r.4,action:r.5,payload:value(r.6)?}})).collect::<Result<Vec<_>,StorageError>>()?,limit))
     }
     fn graph_nodes(&self,scope:&GraphScope,filter:&GraphNodeFilter,after:Option<&GraphPosition>,limit:u16)->Result<GraphPage<GraphNode>,StorageError>{nodes(self.conn,scope,filter,after,limit)}
     fn graph_node(&self,scope:&GraphScope,key:&GraphNodeIdentity)->Result<Option<GraphNode>,StorageError>{
@@ -589,14 +581,14 @@ macro_rules! graph_reads {($t:ty)=>{impl GraphRead for $t {
         let(n,_)=bounded(limit,None)?;
         let mut statement=db(self.conn.prepare_cached("SELECT v.id FROM index_views v WHERE (json_extract(v.coverage_json,'$.overlayId') IS NOT NULL OR json_extract(v.coverage_json,'$.head') IS NOT NULL) AND NOT EXISTS(SELECT 1 FROM published_views p WHERE p.view_id=v.id) AND NOT EXISTS(SELECT 1 FROM index_overlays o WHERE o.view_id=v.id) AND NOT EXISTS(SELECT 1 FROM index_pins p WHERE p.view_id=v.id AND p.lease_until>?1) AND (?2 IS NULL OR v.id>?2) ORDER BY v.id LIMIT ?3"))?;
         let rows=db(db(statement.query_map(params![now,after.map(Id::as_str),n],|r|r.get::<_,String>(0)))?.collect::<rusqlite::Result<Vec<_>>>())?;
-        let views=rows.into_iter().map(|v|IndexRead::view(self,&id(v)?).and_then(|v|v.ok_or_else(||corrupt("retirable graph view vanished")))).collect::<Result<Vec<_>,_>>()?;
+        let views=rows.into_iter().map(|v|IndexRead::view(self,&id_of(v)?).and_then(|v|v.ok_or_else(||corrupt("retirable graph view vanished")))).collect::<Result<Vec<_>,_>>()?;
         Ok(page(views,limit))
     }
     fn graph_expired_pins(&self,now:i64,after:Option<&Id>,limit:u16)->Result<GraphPage<StoredGraphReadPin>,StorageError>{
         let(n,_)=bounded(limit,None)?;
         let mut statement=db(self.conn.prepare_cached("SELECT id FROM graph_read_pins WHERE expires_at<=?1 AND (?2 IS NULL OR id>?2) ORDER BY id LIMIT ?3"))?;
         let ids=db(db(statement.query_map(params![now,after.map(Id::as_str),n],|row|row.get::<_,String>(0)))?.collect::<rusqlite::Result<Vec<_>>>())?;
-        let rows=ids.into_iter().map(|key|pin(self.conn,&id(key)?).and_then(|row|row.ok_or_else(||corrupt("expired graph pin vanished")))).collect::<Result<Vec<_>,_>>()?;
+        let rows=ids.into_iter().map(|key|pin(self.conn,&id_of(key)?).and_then(|row|row.ok_or_else(||corrupt("expired graph pin vanished")))).collect::<Result<Vec<_>,_>>()?;
         Ok(page(rows,limit))
     }
     fn graph_pin(&self,key:&Id)->Result<Option<StoredGraphReadPin>,StorageError>{pin(self.conn,key)}
@@ -607,7 +599,7 @@ macro_rules! graph_reads {($t:ty)=>{impl GraphRead for $t {
         let(n,_)=bounded(limit,None)?;
         let mut statement=db(self.conn.prepare_cached("SELECT v.id FROM index_views v WHERE (v.branch_id IS NOT NULL OR v.worktree_id IS NOT NULL) AND NOT EXISTS(SELECT 1 FROM graph_view_link_sets s WHERE s.view_id=v.id) AND (?1 IS NULL OR v.id>?1) ORDER BY v.id LIMIT ?2"))?;
         let rows=db(db(statement.query_map(params![after.map(Id::as_str),n],|r|r.get::<_,String>(0)))?.collect::<rusqlite::Result<Vec<_>>>())?;
-        let views=rows.into_iter().map(|v|IndexRead::view(self,&id(v)?).and_then(|v|v.ok_or_else(||corrupt("unlinked graph view vanished")))).collect::<Result<Vec<_>,_>>()?;
+        let views=rows.into_iter().map(|v|IndexRead::view(self,&id_of(v)?).and_then(|v|v.ok_or_else(||corrupt("unlinked graph view vanished")))).collect::<Result<Vec<_>,_>>()?;
         Ok(page(views,limit))
     }
 
@@ -636,7 +628,7 @@ fn trust(
             content_digest: content.into(),
             revision,
             trusted,
-            updated_by: devworks_core::protocol::ActorId(id(actor)?),
+            updated_by: devworks_core::protocol::ActorId(id_of(actor)?),
             updated_at_ms: updated,
         })
     })
@@ -664,7 +656,7 @@ pub(super) fn pin(conn: &Connection, key: &Id) -> Result<Option<StoredGraphReadP
         validate_unavailable(&scope,&unavailable).map_err(|_|corrupt("invalid graph unavailable repository scope"))?;
         let count:i64=db(conn.query_row("SELECT count(*) FROM graph_read_pin_views v JOIN index_pins p ON p.id=v.index_pin_id JOIN json_each(?3,'$.views') j ON v.repository_id=json_extract(j.value,'$.repository_id') AND v.view_id=json_extract(j.value,'$.view_id') AND v.view_digest=json_extract(j.value,'$.view_digest') WHERE v.pin_id=?1 AND p.view_id=v.view_id AND p.lease_until=?2",params![key.as_str(),r.10,r.5],|row|row.get(0)))?;
         if count!=scope.views.len() as i64{return Err(corrupt("graph pin lost a child lease"));}
-        Ok(StoredGraphReadPin{id:key.clone(),owner_namespace:r.0,store_id:devworks_core::protocol::StoreId(id(r.1)?),restore_epoch:r.2,scope_digest:r.3,intent_digest:r.4,scope,view_witnesses:serde_json::from_str(&r.6).map_err(|_|corrupt("invalid graph pin witnesses"))?,unavailable_repositories:unavailable,revision:r.8,created_at_ms:r.9,expires_at_ms:r.10})
+        Ok(StoredGraphReadPin{id:key.clone(),owner_namespace:r.0,store_id:devworks_core::protocol::StoreId(id_of(r.1)?),restore_epoch:r.2,scope_digest:r.3,intent_digest:r.4,scope,view_witnesses:serde_json::from_str(&r.6).map_err(|_|corrupt("invalid graph pin witnesses"))?,unavailable_repositories:unavailable,revision:r.8,created_at_ms:r.9,expires_at_ms:r.10})
     }).transpose()
 }
 fn capture(conn: &Connection, key: &Id) -> Result<Option<StoredGraphSourceCapture>, StorageError> {
@@ -672,7 +664,7 @@ fn capture(conn: &Connection, key: &Id) -> Result<Option<StoredGraphSourceCaptur
     raw.map(|r| {
         Ok(StoredGraphSourceCapture {
             id: key.clone(),
-            repository_id: id(r.0)?,
+            repository_id: id_of(r.0)?,
             unit_key: r.1,
             source_digest: r.2,
             blob_digest: r.3,
@@ -682,16 +674,6 @@ fn capture(conn: &Connection, key: &Id) -> Result<Option<StoredGraphSourceCaptur
         })
     })
     .transpose()
-}
-fn conflict(kind: &'static str, key: &Id, expected: i64, current: i64) -> StorageError {
-    use devworks_core::protocol::{Revision, RevisionDimension};
-    StorageError::conflict(
-        RevisionDimension::Source,
-        kind,
-        key.clone(),
-        Revision::new(expected.max(1)).expect("positive"),
-        Revision::new(current.max(1)).expect("positive"),
-    )
 }
 impl GraphRepository for Unit<'_> {
     fn put_graph_trust(
@@ -727,7 +709,13 @@ impl GraphRepository for Unit<'_> {
             .graph_trust(scope, &record.identity, &record.content_digest)?
             .map_or(1, |v| v.revision);
         if prior != expected {
-            return Err(conflict("graph_trust", &record.view_id, expected, prior));
+            return Err(conflict(
+                RevisionDimension::Source,
+                "graph_trust",
+                record.view_id.as_str(),
+                expected,
+                prior,
+            ));
         }
         db(self.conn.execute("INSERT INTO graph_trust(repository_id,unit_key,node_id,view_id,view_digest,content_digest,revision,trusted,updated_by,updated_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10) ON CONFLICT(repository_id,unit_key,node_id,view_digest,content_digest) DO UPDATE SET revision=excluded.revision,trusted=excluded.trusted,updated_by=excluded.updated_by,updated_at=excluded.updated_at",params![record.identity.repository_id.as_str(),record.identity.unit_key,record.identity.node_id,record.view_id.as_str(),record.view_digest,record.content_digest,record.revision,record.trusted,record.updated_by.0.as_str(),record.updated_at_ms]))?;
         db(self.conn.execute(
@@ -835,7 +823,13 @@ impl GraphRepository for Unit<'_> {
             return Err(StorageError::ScopeDenied);
         }
         if record.revision != expected {
-            return Err(conflict("graph_read_pin", key, expected, record.revision));
+            return Err(conflict(
+                RevisionDimension::Source,
+                "graph_read_pin",
+                key.as_str(),
+                expected,
+                record.revision,
+            ));
         }
         if record.expires_at_ms <= self.now
             || record
@@ -873,7 +867,13 @@ impl GraphRepository for Unit<'_> {
             return Err(StorageError::ScopeDenied);
         }
         if record.revision != expected {
-            return Err(conflict("graph_read_pin", key, expected, record.revision));
+            return Err(conflict(
+                RevisionDimension::Source,
+                "graph_read_pin",
+                key.as_str(),
+                expected,
+                record.revision,
+            ));
         }
         db(self
             .conn

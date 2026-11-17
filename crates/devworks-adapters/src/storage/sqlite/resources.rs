@@ -2,30 +2,14 @@
 //! migration 10), `resource_leases` and `owned_processes` (migration 10).
 use super::conn::db;
 use super::repos::{Snapshot, Unit};
+use super::support::{conflict, corrupt, id_of, invalid, page_limit};
 use devworks_core::ports::storage::*;
 use devworks_core::protocol::RevisionDimension;
-use devworks_core::protocol::{
-    ActorId, AssignmentId, Id, OperationId, ProjectId, Revision, RootId,
-};
+use devworks_core::protocol::{ActorId, AssignmentId, Id, OperationId, ProjectId, RootId};
 use rusqlite::{Connection, OptionalExtension, Row, params};
 
-fn invalid(m: impl Into<String>) -> StorageError {
-    StorageError::InvalidRecord(m.into())
-}
-fn corrupt(m: impl Into<String>) -> StorageError {
-    StorageError::unavailable(Unavailable::Corrupt, m)
-}
-fn id_of(s: String) -> Result<Id, StorageError> {
-    Id::new(s).map_err(|e| corrupt(format!("stored identifier: {e}")))
-}
 fn opt_id(s: Option<String>) -> Result<Option<Id>, StorageError> {
     s.map(id_of).transpose()
-}
-fn limit(l: u16) -> Result<i64, StorageError> {
-    if l == 0 || l > MAX_PAGE {
-        return Err(invalid(format!("limit must be 1..={MAX_PAGE}")));
-    }
-    Ok(i64::from(l))
 }
 fn lost(kind: &'static str, id: &Id) -> StorageError {
     StorageError::LeaseLost {
@@ -114,7 +98,7 @@ fn resources(
     after: Option<&str>,
     n: u16,
 ) -> Result<Vec<StoredResource>, StorageError> {
-    let n = limit(n)?;
+    let n = page_limit(n)?;
     let after = after.unwrap_or("");
     let rows = match filter {
         ResourceFilter::All => {
@@ -266,7 +250,7 @@ fn open_leases(
     after: Option<&Id>,
     n: u16,
 ) -> Result<Vec<StoredLease>, StorageError> {
-    let n = limit(n)?;
+    let n = page_limit(n)?;
     let after = after.map_or("", Id::as_str);
     match filter {
         OpenLeaseFilter::All => leases(
@@ -527,7 +511,7 @@ macro_rules! resource_reads {
                 after: i64,
                 n: u16,
             ) -> Result<Vec<StoredLease>, StorageError> {
-                let n = limit(n)?;
+                let n = page_limit(n)?;
                 leases(
                     self.conn,
                     "resource_id=?1 AND state IN ('Held','Releasing','Uncertain') AND fence>?2 ORDER BY fence LIMIT ?3",
@@ -540,7 +524,7 @@ macro_rules! resource_reads {
                 after: Option<QueuePosition>,
                 n: u16,
             ) -> Result<Vec<StoredLease>, StorageError> {
-                let n = limit(n)?;
+                let n = page_limit(n)?;
                 let (p, q) = after.map_or((i64::MAX, 0), |a| (a.priority, a.queue_seq));
                 leases(
                     self.conn,
@@ -565,7 +549,7 @@ macro_rules! resource_reads {
                 after: Option<&Id>,
                 n: u16,
             ) -> Result<Vec<StoredProcess>, StorageError> {
-                let n = limit(n)?;
+                let n = page_limit(n)?;
                 let after = after.map_or("", Id::as_str);
                 match filter {
                     ProcessFilter::Operation(operation) => processes(
@@ -605,7 +589,7 @@ macro_rules! resource_reads {
                 ))?.exists([lease.as_str()]))
             }
             fn containers(&self, filter: &ContainerFilter, after: Option<&Id>, n: u16) -> Result<Vec<StoredContainer>, StorageError> {
-                let n = limit(n)?;
+                let n = page_limit(n)?;
                 let after = after.map_or("", Id::as_str);
                 match filter {
                     ContainerFilter::AgentWorkMayRun => containers(self.conn,
@@ -702,12 +686,12 @@ impl ResourceRepository for Unit<'_> {
             id: id.as_str().to_owned(),
         })?;
         if current.revision != expected {
-            return Err(StorageError::conflict(
+            return Err(conflict(
                 RevisionDimension::Claim,
                 "resource",
-                id.clone(),
-                Revision::new(expected.max(1)).map_err(|_| invalid("revision"))?,
-                Revision::new(current.revision).map_err(|_| corrupt("stored revision"))?,
+                id.as_str(),
+                expected.max(1),
+                current.revision,
             ));
         }
         if !(1..=500).contains(&capacity) || labels.len() > 20 {

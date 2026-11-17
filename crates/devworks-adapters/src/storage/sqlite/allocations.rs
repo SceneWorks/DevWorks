@@ -1,8 +1,9 @@
 //! Durable allocation ownership and record-level fences. Eligibility stays in the work service.
 use super::conn::db;
 use super::repos::Unit;
+use super::support::{conflict, id_of, invalid};
 use devworks_core::ports::storage::*;
-use devworks_core::protocol::{ActorId, Id, ProjectId, Revision, RevisionDimension, RootId};
+use devworks_core::protocol::{ActorId, Id, ProjectId, RevisionDimension, RootId};
 use rusqlite::{Connection, OptionalExtension, Row, params};
 
 const COLUMNS: &str = "id,project_id,root_id,work_id,kind,queue_key,owner_id,session_id,ingress_namespace,invocation_id,state,parent_feature_id,execution_id,fence,expires_at,revision,work_revision,root_control_revision,queue_revision,created_at,feature_task_set_revision";
@@ -24,14 +25,6 @@ fn row(row: &Row<'_>) -> rusqlite::Result<Raw> {
         row.get(20)?,
     ))
 }
-fn invalid(message: &str) -> StorageError {
-    StorageError::InvalidRecord(message.into())
-}
-fn id(value: String) -> Result<Id, StorageError> {
-    Id::new(value).map_err(|_| {
-        StorageError::unavailable(Unavailable::Corrupt, "invalid stored allocation identifier")
-    })
-}
 fn claim(
     (text, num, feature_task_set_revision): Raw,
 ) -> Result<StoredAllocationClaim, StorageError> {
@@ -42,19 +35,19 @@ fn claim(
             .ok_or_else(|| StorageError::unavailable(Unavailable::Corrupt, "NULL allocation field"))
     };
     Ok(StoredAllocationClaim {
-        id: id(need(next())?)?,
-        project_id: ProjectId(id(need(next())?)?),
-        root_id: RootId(id(need(next())?)?),
-        work_id: id(need(next())?)?,
+        id: id_of(need(next())?)?,
+        project_id: ProjectId(id_of(need(next())?)?),
+        root_id: RootId(id_of(need(next())?)?),
+        work_id: id_of(need(next())?)?,
         kind: need(next())?,
         queue_key: need(next())?,
-        owner_id: ActorId(id(need(next())?)?),
-        session_id: next().map(id).transpose()?,
-        ingress_namespace: id(need(next())?)?,
-        invocation_id: id(need(next())?)?,
+        owner_id: ActorId(id_of(need(next())?)?),
+        session_id: next().map(id_of).transpose()?,
+        ingress_namespace: id_of(need(next())?)?,
+        invocation_id: id_of(need(next())?)?,
         state: need(next())?,
-        parent_feature_id: next().map(id).transpose()?,
-        execution_id: next().map(id).transpose()?,
+        parent_feature_id: next().map(id_of).transpose()?,
+        execution_id: next().map(id_of).transpose()?,
         fence: num[0],
         expires_at_ms: num[1],
         revision: num[2],
@@ -165,15 +158,6 @@ fn check(c: &StoredAllocationClaim) -> Result<(), StorageError> {
         return Err(invalid("invalid allocation state, kind or queue"));
     }
     Ok(())
-}
-fn conflict(c: &StoredAllocationClaim, expected: i64) -> Result<StorageError, StorageError> {
-    Ok(StorageError::conflict(
-        RevisionDimension::Claim,
-        "allocation_claim",
-        c.id.clone(),
-        Revision::new(expected).map_err(|_| invalid("expected claim revision is positive"))?,
-        Revision::new(c.revision).map_err(|_| invalid("claim revision is positive"))?,
-    ))
 }
 fn source(unit: &Unit<'_>, c: &StoredAllocationClaim, original: bool) -> Result<(), StorageError> {
     let work = unit
@@ -310,7 +294,13 @@ pub(super) fn update(
         id: c.id.as_str().into(),
     })?;
     if old.revision != expected {
-        return Err(conflict(&old, expected)?);
+        return Err(conflict(
+            RevisionDimension::Claim,
+            "allocation_claim",
+            old.id.as_str(),
+            expected,
+            old.revision,
+        ));
     }
     if c.revision
         != expected
@@ -432,10 +422,10 @@ pub(super) fn replay(
         .optional())?;
     row.map(|(intent_digest, result, claim_id, project)| {
         Ok(StoredAllocationReplay {
-            project_id: ProjectId(id(project)?),
+            project_id: ProjectId(id_of(project)?),
             key: key.into(),
             intent_digest,
-            claim_id: claim_id.map(id).transpose()?,
+            claim_id: claim_id.map(id_of).transpose()?,
             result: serde_json::from_str(&result).map_err(|_| {
                 StorageError::unavailable(Unavailable::Corrupt, "invalid allocation replay result")
             })?,

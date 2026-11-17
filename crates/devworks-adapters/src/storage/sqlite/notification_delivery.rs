@@ -1,17 +1,10 @@
 //! Durable OS-submission fencing. Platform/policy qualification happens in the host worker.
 use super::conn::db;
 use super::repos::Unit;
+use super::support::{conflict, id_of, invalid};
 use devworks_core::ports::storage::*;
-use devworks_core::protocol::{ActorId, Id, Revision, RevisionDimension};
+use devworks_core::protocol::{ActorId, Id, RevisionDimension};
 use rusqlite::{Connection, OptionalExtension, params};
-fn invalid(s: &str) -> StorageError {
-    StorageError::InvalidRecord(s.into())
-}
-fn id(s: String) -> Result<Id, StorageError> {
-    Id::new(s).map_err(|_| {
-        StorageError::unavailable(Unavailable::Corrupt, "invalid OS delivery identifier")
-    })
-}
 pub(super) fn read(
     conn: &Connection,
     user: &ActorId,
@@ -25,7 +18,7 @@ pub(super) fn read(
                 user_id: user.clone(),
                 notification_id: notification.clone(),
                 revision,
-                boot_id: id(boot)?,
+                boot_id: id_of(boot)?,
                 attempt,
                 state,
                 detail,
@@ -35,16 +28,6 @@ pub(super) fn read(
         },
     )
     .transpose()
-}
-fn conflict(notification: &Id, expected: i64, current: i64) -> Result<StorageError, StorageError> {
-    Ok(StorageError::conflict(
-        RevisionDimension::Claim,
-        "os_notification_delivery",
-        notification.clone(),
-        Revision::new(expected)
-            .map_err(|_| invalid("OS delivery expected revision is positive"))?,
-        Revision::new(current).map_err(|_| invalid("OS delivery stored revision is positive"))?,
-    ))
 }
 pub(super) fn claim(
     unit: &mut Unit<'_>,
@@ -87,7 +70,13 @@ pub(super) fn claim(
         }
         (Some(e), Some(old)) => {
             if e != old.revision {
-                return Err(conflict(notification, e, old.revision)?);
+                return Err(conflict(
+                    RevisionDimension::Claim,
+                    "os_notification_delivery",
+                    notification.as_str(),
+                    e,
+                    old.revision,
+                ));
             }
             if !retry || !matches!(old.state.as_str(), "Denied" | "Suppressed" | "Unavailable") {
                 return Err(invalid(
@@ -128,7 +117,13 @@ pub(super) fn settle(
         id: notification.as_str().into(),
     })?;
     if old.revision != fence.revision {
-        return Err(conflict(notification, fence.revision, old.revision)?);
+        return Err(conflict(
+            RevisionDimension::Claim,
+            "os_notification_delivery",
+            notification.as_str(),
+            fence.revision,
+            old.revision,
+        ));
     }
     if old.state != "Claimed"
         || old.boot_id != fence.boot_id

@@ -8,33 +8,13 @@
 //! symmetric whatever the script (SQLite's `lower()`/`LIKE` fold only ASCII).
 use super::conn::db;
 use super::repos::{Snapshot, Unit};
+use super::support::{conflict, corrupt, id_of, invalid, page_limit};
 use devworks_core::ports::storage::*;
-use devworks_core::protocol::{ActorId, Id, ProjectId, Revision, RevisionDimension};
+use devworks_core::protocol::{ActorId, Id, ProjectId, RevisionDimension};
 use rusqlite::types::Value as Sql;
 use rusqlite::{Connection, OptionalExtension, Row, params, params_from_iter};
 use serde_json::Value;
 
-fn invalid(m: impl Into<String>) -> StorageError {
-    StorageError::InvalidRecord(m.into())
-}
-fn corrupt(m: impl Into<String>) -> StorageError {
-    StorageError::unavailable(Unavailable::Corrupt, m)
-}
-fn id_of(s: String) -> Result<Id, StorageError> {
-    Id::new(s).map_err(|e| corrupt(format!("stored identifier: {e}")))
-}
-fn limit(l: u16) -> Result<i64, StorageError> {
-    if l == 0 || l > MAX_PAGE {
-        return Err(invalid(format!("limit must be 1..={MAX_PAGE}")));
-    }
-    Ok(i64::from(l))
-}
-fn revision(n: i64) -> Result<Revision, StorageError> {
-    Revision::new(n).map_err(|_| corrupt("stored revision is not positive"))
-}
-fn expected_rev(n: i64) -> Result<Revision, StorageError> {
-    Revision::new(n).map_err(|_| invalid("expected revision is positive"))
-}
 fn json_of(s: &str) -> Result<Value, StorageError> {
     serde_json::from_str(s).map_err(|e| corrupt(format!("stored JSON: {e}")))
 }
@@ -147,7 +127,7 @@ fn list_works(
     after: Option<&WorkPosition>,
     n: u16,
 ) -> Result<Vec<StoredWork>, StorageError> {
-    let n = limit(n)?;
+    let n = page_limit(n)?;
     if f.status_ids.len() > 128 || f.repository_ids.len() > 128 {
         return Err(invalid("at most 128 statuses and 128 repositories"));
     }
@@ -577,16 +557,6 @@ pub(crate) fn readiness_of(
     .transpose()
 }
 
-fn plan_conflict(id: &Id, expected: i64, current: i64) -> Result<StorageError, StorageError> {
-    Ok(StorageError::conflict(
-        RevisionDimension::Plan,
-        "plan",
-        id.clone(),
-        expected_rev(expected)?,
-        revision(current)?,
-    ))
-}
-
 impl WorkRepository for Unit<'_> {
     fn insert_allocation_replay(
         &mut self,
@@ -617,12 +587,12 @@ impl WorkRepository for Unit<'_> {
                 id: s.id.as_str().into(),
             })?;
         if current.revision != expected {
-            return Err(StorageError::conflict(
+            return Err(conflict(
                 RevisionDimension::Workflow,
                 "workflow_status",
-                s.id.clone(),
-                expected_rev(expected)?,
-                revision(current.revision)?,
+                s.id.as_str(),
+                expected,
+                current.revision,
             ));
         }
         if s.revision
@@ -655,12 +625,12 @@ impl WorkRepository for Unit<'_> {
                 id: id.as_str().into(),
             })?;
         if current.revision != expected {
-            return Err(StorageError::conflict(
+            return Err(conflict(
                 RevisionDimension::Workflow,
                 "workflow_status",
-                id.clone(),
-                expected_rev(expected)?,
-                revision(current.revision)?,
+                id.as_str(),
+                expected,
+                current.revision,
             ));
         }
         let occupied: bool = db(self.conn.query_row(
@@ -720,12 +690,12 @@ impl WorkRepository for Unit<'_> {
             });
         };
         if current.revision != expected {
-            return Err(StorageError::conflict(
+            return Err(conflict(
                 RevisionDimension::Work,
                 "work",
-                w.id.clone(),
-                expected_rev(expected)?,
-                revision(current.revision)?,
+                w.id.as_str(),
+                expected,
+                current.revision,
             ));
         }
         if w.revision != expected + 1
@@ -851,7 +821,15 @@ impl WorkRepository for Unit<'_> {
         let pending = p.pending.as_ref().map(text_of).transpose()?;
         let current = plan_of(self.conn, &p.feature_id)?;
         match (expected, &current) {
-            (None, Some(c)) => return Err(plan_conflict(&p.feature_id, 1, c.revision)?),
+            (None, Some(c)) => {
+                return Err(conflict(
+                    RevisionDimension::Plan,
+                    "plan",
+                    p.feature_id.as_str(),
+                    1,
+                    c.revision,
+                ));
+            }
             (Some(e), None) => {
                 return Err(StorageError::NotFound {
                     kind: "plan",
@@ -859,7 +837,13 @@ impl WorkRepository for Unit<'_> {
                 });
             }
             (Some(e), Some(c)) if c.revision != e => {
-                return Err(plan_conflict(&p.feature_id, e, c.revision)?);
+                return Err(conflict(
+                    RevisionDimension::Plan,
+                    "plan",
+                    p.feature_id.as_str(),
+                    e,
+                    c.revision,
+                ));
             }
             _ => {}
         }
@@ -951,12 +935,12 @@ impl WorkRepository for Unit<'_> {
                 ]))?;
                 Ok(())
             }
-            (Some(e), Some(c)) if c != e => Err(StorageError::conflict(
+            (Some(e), Some(c)) if c != e => Err(conflict(
                 RevisionDimension::Review,
                 "proposal",
-                p.id.clone(),
-                expected_rev(e)?,
-                revision(c)?,
+                p.id.as_str(),
+                e,
+                c,
             )),
             (None, Some(_)) => Err(StorageError::Duplicate {
                 kind: "proposal",
@@ -980,21 +964,21 @@ impl WorkRepository for Unit<'_> {
             (None, None) if r.revision == 1 => {}
             (Some(e), Some(c)) if c == e && r.revision == e + 1 => {}
             (Some(e), Some(c)) if c != e => {
-                return Err(StorageError::conflict(
+                return Err(conflict(
                     RevisionDimension::Plan,
                     "readiness",
-                    r.feature_id.clone(),
-                    expected_rev(e)?,
-                    revision(c)?,
+                    r.feature_id.as_str(),
+                    e,
+                    c,
                 ));
             }
             (None, Some(c)) => {
-                return Err(StorageError::conflict(
+                return Err(conflict(
                     RevisionDimension::Plan,
                     "readiness",
-                    r.feature_id.clone(),
-                    expected_rev(1)?,
-                    revision(c)?,
+                    r.feature_id.as_str(),
+                    1,
+                    c,
                 ));
             }
             _ => return Err(invalid("a readiness change advances its revision by one")),

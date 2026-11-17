@@ -7,29 +7,12 @@
 //! project or repository recorded before migration 14 (or by a fixture) stays readable.
 use super::conn::db;
 use super::repos::{Snapshot, Unit};
+use super::support::{conflict, corrupt, id_of, invalid, page_limit};
 use devworks_core::ports::storage::*;
-use devworks_core::protocol::{Id, ProjectId, Revision, RevisionDimension};
+use devworks_core::protocol::{Id, ProjectId, RevisionDimension};
 use rusqlite::types::Value as Sql;
 use rusqlite::{Connection, OptionalExtension, Row, params, params_from_iter};
 
-fn invalid(m: impl Into<String>) -> StorageError {
-    StorageError::InvalidRecord(m.into())
-}
-fn corrupt(m: impl Into<String>) -> StorageError {
-    StorageError::unavailable(Unavailable::Corrupt, m)
-}
-fn id_of(s: String) -> Result<Id, StorageError> {
-    Id::new(s).map_err(|e| corrupt(format!("stored identifier: {e}")))
-}
-fn limit(l: u16) -> Result<i64, StorageError> {
-    if l == 0 || l > MAX_PAGE {
-        return Err(invalid(format!("limit must be 1..={MAX_PAGE}")));
-    }
-    Ok(i64::from(l))
-}
-fn revision(n: i64) -> Result<Revision, StorageError> {
-    Revision::new(n).map_err(|_| corrupt("stored revision is not positive"))
-}
 fn lifecycle_ok(s: &str) -> bool {
     LIFECYCLES.contains(&s)
 }
@@ -120,7 +103,7 @@ fn list_projects(
     after: Option<&ProjectPosition>,
     n: u16,
 ) -> Result<Vec<StoredProject>, StorageError> {
-    let n = limit(n)?;
+    let n = page_limit(n)?;
     if filter.lifecycles.is_empty() || !filter.lifecycles.iter().all(|l| lifecycle_ok(l)) {
         return Err(invalid("a project listing names known lifecycles"));
     }
@@ -255,7 +238,7 @@ fn list_repositories(
     after: Option<&Id>,
     n: u16,
 ) -> Result<Vec<StoredRepository>, StorageError> {
-    let n = usize::try_from(limit(n)?).unwrap_or(0);
+    let n = usize::try_from(page_limit(n)?).unwrap_or(0);
     if filter.languages.len() > 128 {
         return Err(invalid("at most 128 languages"));
     }
@@ -486,7 +469,7 @@ macro_rules! project_reads {
                 ))
             }
             fn pending_archive_stops(&self, n: u16) -> Result<Vec<ProjectId>, StorageError> {
-                let n = limit(n)?;
+                let n = page_limit(n)?;
                 Ok(ids(
                     self.conn,
                     "SELECT project_id FROM project_details WHERE archive_stop_pending=1 ORDER BY project_id LIMIT ?1",
@@ -638,12 +621,12 @@ impl ProjectRepository for Unit<'_> {
             });
         };
         if current.revision != expected {
-            return Err(StorageError::conflict(
+            return Err(conflict(
                 RevisionDimension::Scope,
                 "project",
-                p.id.0.clone(),
-                Revision::new(expected).map_err(|_| invalid("expected revision is positive"))?,
-                revision(current.revision)?,
+                p.id.0.as_str(),
+                expected,
+                current.revision,
             ));
         }
         if p.revision != expected + 1
@@ -769,12 +752,12 @@ impl ProjectRepository for Unit<'_> {
             });
         };
         if current.revision != expected {
-            return Err(StorageError::conflict(
+            return Err(conflict(
                 RevisionDimension::Registry,
                 "repository",
-                id.clone(),
-                Revision::new(expected).map_err(|_| invalid("expected revision is positive"))?,
-                revision(current.revision)?,
+                id.as_str(),
+                expected,
+                current.revision,
             ));
         }
         let n = db(db(self.conn.prepare_cached(

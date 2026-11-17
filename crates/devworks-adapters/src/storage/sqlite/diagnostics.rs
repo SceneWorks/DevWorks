@@ -2,6 +2,7 @@
 //! probes of [`SqliteStore`] (OPS-01).
 use super::conn::db;
 use super::repos::{Snapshot, Unit};
+use super::support::{corrupt, id_of, invalid};
 use super::{DATABASE_FILE, MIGRATIONS, SqliteStore, migrations};
 use devworks_core::ports::diagnostics::{
     Metric, StorageDatabase, StorageFiles, StorageHealthProbe,
@@ -14,15 +15,6 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
-fn invalid(m: impl Into<String>) -> StorageError {
-    StorageError::InvalidRecord(m.into())
-}
-fn corrupt(m: impl Into<String>) -> StorageError {
-    StorageError::unavailable(Unavailable::Corrupt, m)
-}
-fn id_of(s: String) -> Result<Id, StorageError> {
-    Id::new(s).map_err(|e| corrupt(format!("stored identifier: {e}")))
-}
 fn opt_id(s: Option<String>) -> Result<Option<Id>, StorageError> {
     s.map(id_of).transpose()
 }

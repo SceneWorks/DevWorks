@@ -16,6 +16,7 @@ mod schema;
 #[cfg(test)]
 mod selectors;
 use super::conn::db;
+use crate::storage::sqlite::support::invalid;
 use devworks_core::ports::storage::{
     ProjectManagedFileRecovery, ProjectManagedFileReservation, StorageError, StoreInfo,
     StoredProjectManagedFile, StoredProjectPurge, project_purge_digest,
@@ -36,9 +37,6 @@ pub(super) fn record_kind(
         .ok_or_else(|| invalid("purge record table has no record kind"))
 }
 
-fn invalid(message: &str) -> StorageError {
-    StorageError::InvalidRecord(message.into())
-}
 fn digest(s: &str) -> bool {
     devworks_core::fingerprint::is_sha256_hex(s)
 }

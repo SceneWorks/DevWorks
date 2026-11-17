@@ -1,25 +1,10 @@
 //! Watchers and their delivery events (migration 50).
 use super::conn::db;
 use super::repos::{Snapshot, Unit};
+use super::support::{corrupt, id_of, invalid, page_limit};
 use devworks_core::ports::storage::*;
 use devworks_core::protocol::{ActorId, Id, OperationId, ProjectId};
 use rusqlite::{Connection, Row, params, params_from_iter};
-
-fn invalid(message: &str) -> StorageError {
-    StorageError::InvalidRecord(message.into())
-}
-fn corrupt(message: impl Into<String>) -> StorageError {
-    StorageError::unavailable(Unavailable::Corrupt, message)
-}
-fn id(value: String) -> Result<Id, StorageError> {
-    Id::new(value).map_err(|_| corrupt("invalid watcher identifier"))
-}
-fn page_limit(limit: u16) -> Result<i64, StorageError> {
-    if limit == 0 || limit > MAX_PAGE {
-        return Err(invalid("watcher page limit out of bounds"));
-    }
-    Ok(i64::from(limit))
-}
 
 const WATCHER_COLUMNS: &str = "id,revision,phase,source_kind,project_id,session_id,actor_id,process_operation_id,executable_ref,tail_bytes,outcome_kind,exit_code,signal,outcome_detail,duration_ms,output_tail,output_truncated,stop_requested,created_at,updated_at,settled_at,probe_job_operation_id,probe_interval_ms,probe_exit_code,probe_output_pattern,probe_runs,probe_next_run_at,due_at,expires_at,match_pattern,match_each,match_min_interval_ms,match_scanned,match_pending,match_total,match_last_event_at,file_path";
 
@@ -107,16 +92,16 @@ struct WatcherRow {
 impl WatcherRow {
     fn into_stored(self) -> Result<StoredWatcher, StorageError> {
         Ok(StoredWatcher {
-            id: id(self.id)?,
+            id: id_of(self.id)?,
             revision: self.revision,
             phase: WatcherPhase::parse(&self.phase).ok_or_else(|| corrupt("watcher phase"))?,
             source_kind: self.source_kind,
-            project_id: self.project_id.map(id).transpose()?.map(ProjectId),
-            session_id: id(self.session_id)?,
-            actor: ActorId(id(self.actor_id)?),
+            project_id: self.project_id.map(id_of).transpose()?.map(ProjectId),
+            session_id: id_of(self.session_id)?,
+            actor: ActorId(id_of(self.actor_id)?),
             process_operation_id: self
                 .process_operation_id
-                .map(id)
+                .map(id_of)
                 .transpose()?
                 .map(OperationId),
             executable_ref: self.executable_ref,
@@ -136,7 +121,7 @@ impl WatcherRow {
             settled_at_ms: self.settled_at,
             probe: match (self.probe_job_operation_id, self.probe_interval_ms) {
                 (Some(job), Some(interval_ms)) => Some(StoredProbe {
-                    job_operation_id: OperationId(id(job)?),
+                    job_operation_id: OperationId(id_of(job)?),
                     interval_ms,
                     exit_code: self.probe_exit_code,
                     output_pattern: self.probe_output_pattern,
@@ -216,16 +201,16 @@ fn events_where<P: rusqlite::Params>(
                 match_count,
             )| {
                 Ok(StoredWatchEvent {
-                    id: id(event)?,
-                    watcher_id: id(watcher)?,
-                    session_id: id(session)?,
-                    project_id: project.map(id).transpose()?.map(ProjectId),
+                    id: id_of(event)?,
+                    watcher_id: id_of(watcher)?,
+                    session_id: id_of(session)?,
+                    project_id: project.map(id_of).transpose()?.map(ProjectId),
                     state: WatchEventState::parse(&state)
                         .ok_or_else(|| corrupt("watcher event state"))?,
                     payload: serde_json::from_str(&payload)
                         .map_err(|_| corrupt("invalid watcher event JSON"))?,
                     transcript_sequence: sequence,
-                    carried_turn_id: turn.map(id).transpose()?,
+                    carried_turn_id: turn.map(id_of).transpose()?,
                     created_at_ms: created,
                     delivered_at_ms: delivered,
                     acknowledged_at_ms: acknowledged,

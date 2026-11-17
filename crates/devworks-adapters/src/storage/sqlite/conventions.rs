@@ -3,16 +3,14 @@ mod imports;
 mod index;
 use super::conn::db;
 use super::repos::{Snapshot, Unit};
+use super::support::{atomic, conflict, invalid, page_limit};
 use devworks_core::ports::storage::*;
 use devworks_core::protocol::provider::ArtifactRef;
-use devworks_core::protocol::{ActorId, Check, Id, Revision, RevisionDimension};
+use devworks_core::protocol::{ActorId, Check, Id, RevisionDimension};
 use rusqlite::{Connection, OptionalExtension, Row, params};
 use serde_json::{Value, json};
 use std::collections::HashSet;
 
-fn invalid(s: &str) -> StorageError {
-    StorageError::InvalidRecord(s.into())
-}
 fn conversion(
     index: usize,
     error: impl std::error::Error + Send + Sync + 'static,
@@ -55,13 +53,6 @@ fn record(row: &Row<'_>) -> rusqlite::Result<StoredConvention> {
     })
 }
 const COLUMNS: &str = "v.convention_id,v.scope_key,v.revision,v.slug,v.title,v.parent_id,v.sort_order,v.lifecycle,v.content_ref_json,v.raw_content_ref_json,v.applicability_json,v.provenance_json,v.author_id,v.created_at,v.updated_at,v.legacy_approved";
-fn page(limit: u16) -> Result<i64, StorageError> {
-    if limit == 0 || limit > MAX_PAGE {
-        Err(invalid("convention page limit must be 1..=500"))
-    } else {
-        Ok(i64::from(limit))
-    }
-}
 fn scopes(scopes: &[KnowledgeScope]) -> Result<String, StorageError> {
     if scopes.len() > usize::from(MAX_PAGE) {
         return Err(invalid("too many convention scopes"));
@@ -113,7 +104,7 @@ fn conventions(
     after: Option<&ConventionPosition>,
     limit: u16,
 ) -> Result<Vec<StoredConvention>, StorageError> {
-    let limit = page(limit)?;
+    let limit = page_limit(limit)?;
     let (scope, filter) = filter(q)?;
     let (position, order) = order(&q.order);
     let sql = format!(
@@ -144,7 +135,7 @@ fn versions(
     if after.is_some_and(|r| r < 0) {
         return Err(invalid("negative convention revision cursor"));
     }
-    let limit = page(limit)?;
+    let limit = page_limit(limit)?;
     let allowed = scopes(allowed)?;
     let mut stmt=db(conn.prepare_cached(&format!("SELECT {COLUMNS} FROM convention_heads h JOIN convention_versions c ON c.convention_id=h.id AND c.revision=h.revision JOIN convention_versions v ON v.convention_id=h.id WHERE h.id=?1 AND c.scope_key IN(SELECT value FROM json_each(?2)) AND v.scope_key IN(SELECT value FROM json_each(?2)) AND (?3 IS NULL OR v.revision<?3) ORDER BY v.revision DESC LIMIT ?4")))?;
     db(db(stmt.query_map(params![id.as_str(), allowed, after, limit], record))?.collect())
@@ -179,7 +170,7 @@ fn resources(
         ));
     }
     states(&q.lifecycles)?;
-    let limit = page(limit)?;
+    let limit = page_limit(limit)?;
     let allowed = scopes(&q.scopes)?;
     let mut stmt=db(conn.prepare_cached("SELECT r.resource_id,r.convention_id,r.revision,r.convention_revision,r.name,r.content_ref_json,r.author_id,r.created_at,r.deleted_at,r.lifecycle,r.media_type FROM convention_resource_heads rh JOIN convention_heads h ON h.id=rh.convention_id JOIN convention_versions c ON c.convention_id=h.id AND c.revision=h.revision JOIN convention_versions requested ON requested.convention_id=h.id AND requested.revision=coalesce(?2,h.revision) JOIN convention_resource_versions r ON r.resource_id=rh.id AND r.revision=(SELECT max(p.revision) FROM convention_resource_versions p WHERE p.resource_id=rh.id AND p.convention_revision<=requested.revision) JOIN convention_versions origin ON origin.convention_id=r.convention_id AND origin.revision=r.convention_revision WHERE (?1 IS NULL OR h.id=?1) AND c.scope_key IN(SELECT value FROM json_each(?3)) AND requested.scope_key IN(SELECT value FROM json_each(?3)) AND origin.scope_key IN(SELECT value FROM json_each(?3)) AND (json_array_length(?4)=0 OR r.lifecycle IN(SELECT value FROM json_each(?4))) AND (?5 IS NULL OR rh.id>?5) AND (?7 IS NULL OR rh.id=?7) ORDER BY rh.id LIMIT ?6"))?;
     db(db(stmt.query_map(
@@ -236,31 +227,6 @@ fn states(states: &[String]) -> Result<(), StorageError> {
 }
 fn text(s: &str, min: usize, max: usize) -> bool {
     !s.contains('\0') && (min..=max).contains(&s.chars().count())
-}
-fn conflict(id: &Id, expected: i64, current: i64) -> StorageError {
-    StorageError::conflict(
-        RevisionDimension::Source,
-        "convention",
-        id.clone(),
-        Revision::new(expected.max(1)).expect("positive"),
-        Revision::new(current.max(1)).expect("positive"),
-    )
-}
-fn atomic<T>(
-    conn: &Connection,
-    f: impl FnOnce() -> Result<T, StorageError>,
-) -> Result<T, StorageError> {
-    db(conn.execute_batch("SAVEPOINT convention_mutation"))?;
-    match f() {
-        Ok(v) => {
-            db(conn.execute_batch("RELEASE convention_mutation"))?;
-            Ok(v)
-        }
-        Err(e) => {
-            db(conn.execute_batch("ROLLBACK TO convention_mutation; RELEASE convention_mutation"))?;
-            Err(e)
-        }
-    }
 }
 fn backing(
     conn: &Connection,
@@ -340,7 +306,13 @@ fn validate_resource(
     let owner =
         current(conn, &r.convention_id)?.ok_or_else(|| invalid("resource owner missing"))?;
     if owner.revision != expected {
-        return Err(conflict(&owner.id, expected, owner.revision));
+        return Err(conflict(
+            RevisionDimension::Source,
+            "convention",
+            owner.id.as_str(),
+            expected,
+            owner.revision,
+        ));
     }
     if r.convention_revision != expected
         || (owner.lifecycle == "Deleted" && r.lifecycle != "Deleted")
@@ -465,7 +437,13 @@ impl ConventionRepository for Unit<'_> {
     ) -> Result<(), StorageError> {
         let old = current(self.conn, &r.id)?.ok_or_else(|| invalid("convention missing"))?;
         if old.revision != expected {
-            return Err(conflict(&r.id, expected, old.revision));
+            return Err(conflict(
+                RevisionDimension::Source,
+                "convention",
+                r.id.as_str(),
+                expected,
+                old.revision,
+            ));
         }
         if Some(r.revision) != expected.checked_add(1)
             || r.created_at_ms != old.created_at_ms
@@ -544,7 +522,13 @@ impl ConventionRepository for Unit<'_> {
             return Err(invalid("convention resource missing"));
         };
         if revision != expected_resource {
-            return Err(conflict(&r.id, expected_resource, revision));
+            return Err(conflict(
+                RevisionDimension::Source,
+                "convention",
+                r.id.as_str(),
+                expected_resource,
+                revision,
+            ));
         }
         if owner != r.convention_id.as_str()
             || r.created_at_ms != created

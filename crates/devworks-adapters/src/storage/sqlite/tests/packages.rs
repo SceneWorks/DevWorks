@@ -263,3 +263,42 @@ fn a_packages_version_list_always_includes_its_newest_version() {
     assert_eq!(all.last().unwrap().manifest_digest, format!("{:064x}", 519));
     assert_eq!(all[0].manifest_digest, format!("{:064x}", 8));
 }
+
+fn is_corrupt<T>(result: &Result<T, StorageError>) -> bool {
+    matches!(
+        result,
+        Err(StorageError::StorageUnavailable {
+            cause: Unavailable::Corrupt,
+            ..
+        })
+    )
+}
+
+#[test]
+fn a_stored_revision_of_zero_is_a_corrupt_store_not_a_panic() {
+    let h = Harness::new();
+    let s = h.store();
+    run_write(&s, WriteOptions::default(), |tx| {
+        tx.packages().insert_package(&package("demo"))?;
+        Ok(())
+    })
+    .unwrap();
+    {
+        let raw = h.raw();
+        raw.pragma_update(None, "ignore_check_constraints", true)
+            .unwrap();
+        raw.execute("UPDATE package_registry SET revision=0", [])
+            .unwrap();
+        raw.execute("UPDATE packages SET revision=0", []).unwrap();
+    }
+    let registry = run_write(&s, WriteOptions::default(), |tx| {
+        Ok(tx.packages().advance_registry(1))
+    })
+    .unwrap();
+    assert!(is_corrupt(&registry), "{registry:?}");
+    let package_update = run_write(&s, WriteOptions::default(), |tx| {
+        Ok(tx.packages().update_package(&package("demo"), 1))
+    })
+    .unwrap();
+    assert!(is_corrupt(&package_update), "{package_update:?}");
+}

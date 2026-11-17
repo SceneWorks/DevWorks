@@ -1,28 +1,14 @@
 //! DW-119 metadata only. Provider calls and vector validation happen outside the writer.
 use super::conn::db;
 use super::repos::{Snapshot, Unit};
+use super::support::{conflict, corrupt, invalid};
 use devworks_core::ports::storage::*;
 use devworks_core::protocol::provider::ArtifactRef;
-use devworks_core::protocol::{Id, OperationId, OperationState, Revision, RevisionDimension};
+use devworks_core::protocol::{Id, OperationId, OperationState, RevisionDimension};
 use rusqlite::{Connection, OptionalExtension, params};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 
-fn invalid(message: &str) -> StorageError {
-    StorageError::InvalidRecord(message.into())
-}
-fn corrupt(message: &str) -> StorageError {
-    StorageError::unavailable(Unavailable::Corrupt, message)
-}
-fn conflict(id: &Id, expected: i64, current: i64) -> StorageError {
-    StorageError::conflict(
-        RevisionDimension::Configuration,
-        "embedding_space",
-        id.clone(),
-        Revision::new(expected.max(1)).expect("positive"),
-        Revision::new(current).expect("stored positive"),
-    )
-}
 fn encode(value: &impl Serialize) -> Result<String, StorageError> {
     serde_json::to_string(value).map_err(|_| invalid("embedding metadata serialization"))
 }
@@ -223,7 +209,13 @@ fn checked_qualification(
         id: id.as_str().into(),
     })?;
     if expected != q.revision {
-        return Err(conflict(id, expected, q.revision));
+        return Err(conflict(
+            RevisionDimension::Configuration,
+            "embedding_space",
+            id.as_str(),
+            expected,
+            q.revision,
+        ));
     }
     Ok(q)
 }
@@ -269,7 +261,9 @@ impl EmbeddingRepository for Unit<'_> {
         let source = current_source(self.conn, c)?;
         if source.revision != expected_connection_revision {
             return Err(conflict(
-                &c.connection_id,
+                RevisionDimension::Configuration,
+                "embedding_space",
+                c.connection_id.as_str(),
                 expected_connection_revision,
                 source.revision,
             ));
@@ -568,7 +562,9 @@ impl EmbeddingRepository for Unit<'_> {
         let current = selection(self.conn)?;
         if expected != current.revision {
             return Err(conflict(
-                &Id::new("embedding_selection").expect("static ID"),
+                RevisionDimension::Configuration,
+                "embedding_space",
+                Id::new("embedding_selection").expect("static ID").as_str(),
                 expected,
                 current.revision,
             ));
