@@ -68,6 +68,8 @@ const WATCHDOG: Duration = Duration::from_secs(300);
 /// waits for it). A loaded machine launches each helper slowly (files re-verified, process
 /// spawned, handshake), and a restart budget's failure takes several launches.
 const PATIENCE: Duration = Duration::from_secs(60);
+/// A ceiling on a progress-bounded wait, so unrelated progress cannot keep it waiting forever.
+const WAIT_CEILING: Duration = Duration::from_secs(600);
 /// The handshake bound of a test of the startup timeout, whose helper never answers in time
 /// however loaded the machine is (load only delays an answer). Every other test gets
 /// [`config`]'s bound, which a loaded machine cannot miss.
@@ -1066,6 +1068,33 @@ impl App {
                 read(&*self.store, |s| s.packages().package(package)).and_then(|p| p.failure)
             );
             std::thread::sleep(Duration::from_millis(20));
+        }
+    }
+    /// Waits for the invocation's terminal reply while it keeps making progress: it fails once
+    /// no identifier is issued and no progress text arrives for [`PATIENCE`] (a stalled helper),
+    /// or after [`WAIT_CEILING`] however much unrelated progress continues. A loaded machine
+    /// launches the helper slowly, so no fixed deadline fits.
+    #[track_caller]
+    fn wait_progressing(
+        &self,
+        h: &devworks_engine::package_host::InvocationHandle,
+    ) -> Option<InvokeOutcome> {
+        let ids = self.h.ids.clone();
+        let signal = || {
+            let (texts, dropped) = h.progress();
+            ids.issued() + texts.len() as u64 + dropped as u64
+        };
+        let mut phase = DurableWork::start_with("invocation outcome", PATIENCE, signal);
+        let until = Instant::now() + WAIT_CEILING;
+        loop {
+            if let Some(o) = h.wait(Duration::from_millis(250)) {
+                return Some(o);
+            }
+            phase.check();
+            assert!(
+                Instant::now() < until,
+                "invocation did not finish within {WAIT_CEILING:?}"
+            );
         }
     }
     /// How many of the package's log records have `code` (durable: they stay once recorded).
@@ -2765,7 +2794,7 @@ fn a_quiescent_retry_announces_its_publication_before_admission_reopens() {
     // publication epoch must have advanced before this new-generation admission succeeds.
     assert!(host.publications() > announced);
     assert!(matches!(
-        finished(h.wait(Duration::from_secs(10))),
+        finished(a.wait_progressing(&h)),
         InvocationOutcome::Completed { .. }
     ));
     // It ran against the new generation (its pinned generation is current).
