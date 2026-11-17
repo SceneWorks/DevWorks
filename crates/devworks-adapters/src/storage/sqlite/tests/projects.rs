@@ -1997,6 +1997,19 @@ fn migration_14_is_additive_and_closes_older_writers_out() {
         .is_err()
     );
     let stale = StoredProject { revision: 3, ..p };
+    // A non-positive expected revision is the caller's error, not a conflict.
+    for expected in [0, -1] {
+        let zero = stale.clone();
+        assert!(
+            matches!(
+                run_write(&*s, WriteOptions::default(), move |tx| tx
+                    .projects()
+                    .update_project(&zero, expected)),
+                Err(StorageError::InvalidRecord(_))
+            ),
+            "expected {expected}"
+        );
+    }
     assert!(matches!(
         run_write(&*s, WriteOptions::default(), move |tx| tx
             .projects()

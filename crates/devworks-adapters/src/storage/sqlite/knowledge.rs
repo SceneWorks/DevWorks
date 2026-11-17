@@ -4,21 +4,13 @@
 //! `LIMIT`, so no page is filtered after it was cut and no out-of-scope row is read.
 use super::conn::db;
 use super::repos::{Snapshot, Unit};
+use super::support::{conflict, corrupt, id_of, invalid, page_limit};
 use devworks_core::ports::storage::*;
-use devworks_core::protocol::{ActorId, Id, ProjectId, Revision, RevisionDimension};
+use devworks_core::protocol::{ActorId, Id, ProjectId, RevisionDimension};
 use rusqlite::types::Value as Sql;
 use rusqlite::{Connection, OptionalExtension, Row, params, params_from_iter};
 use serde_json::Value;
 
-fn invalid(m: impl Into<String>) -> StorageError {
-    StorageError::InvalidRecord(m.into())
-}
-fn corrupt(m: impl Into<String>) -> StorageError {
-    StorageError::unavailable(Unavailable::Corrupt, m)
-}
-fn id_of(s: String) -> Result<Id, StorageError> {
-    Id::new(s).map_err(|e| corrupt(format!("stored knowledge identifier: {e}")))
-}
 fn opt_id(s: Option<String>) -> Result<Option<Id>, StorageError> {
     s.map(id_of).transpose()
 }
@@ -31,21 +23,6 @@ fn ids_json(ids: &[Id]) -> String {
 fn ids_of(s: &str) -> Result<Vec<Id>, StorageError> {
     let v: Vec<String> = serde_json::from_str(s).map_err(|_| corrupt("stored id list"))?;
     v.into_iter().map(id_of).collect()
-}
-fn conflict(kind: &'static str, id: &Id, expected: i64, current: i64) -> StorageError {
-    StorageError::conflict(
-        RevisionDimension::Claim,
-        kind,
-        id.clone(),
-        Revision::new(expected.max(1)).expect("positive"),
-        Revision::new(current.max(1)).expect("positive"),
-    )
-}
-fn check_limit(limit: u16) -> Result<i64, StorageError> {
-    if limit == 0 || limit > KNOWLEDGE_PAGE_MAX {
-        return Err(invalid(format!("limit must be 1..={KNOWLEDGE_PAGE_MAX}")));
-    }
-    Ok(i64::from(limit))
 }
 fn scope_of(key: &str, project: Option<String>) -> Result<KnowledgeScope, StorageError> {
     let scope = KnowledgeScope::parse(key).map_err(|_| corrupt("stored knowledge scope"))?;
@@ -414,7 +391,7 @@ fn claims_page(
     after: Option<(i64, &str)>,
     limit: u16,
 ) -> Result<Vec<StoredClaim>, StorageError> {
-    let limit = check_limit(limit)?;
+    let limit = page_limit(limit)?;
     if q.scopes.is_empty() {
         return Err(invalid("a claim query reads at least one scope"));
     }
@@ -882,13 +859,13 @@ macro_rules! knowledge_reads {
     ($t:ty) => {
         impl KnowledgeRead for $t {
             fn knowledge_review_candidates(&self,scopes:&[String],kind:KnowledgeReviewKind,limit:u16)->Result<Vec<StoredClaim>,StorageError>{
-                let limit=check_limit(limit)?;if scopes.is_empty(){return Ok(Vec::new());}for scope in scopes{KnowledgeScope::parse(scope)?;}
+                let limit=page_limit(limit)?;if scopes.is_empty(){return Ok(Vec::new());}for scope in scopes{KnowledgeScope::parse(scope)?;}
                 let mut p=Vec::new();let scopes=placeholders(&mut p,scopes.iter().cloned());
                 let condition=match kind{KnowledgeReviewKind::Challenge=>"EXISTS(SELECT 1 FROM knowledge_challenges h WHERE h.claim_id=c.id AND h.state='Open')",KnowledgeReviewKind::ProposedRule=>"c.kind='Lesson' AND c.rule_state='Proposed'"};
                 p.push(Sql::Integer(limit));let tail=format!("WHERE c.scope_key IN ({scopes}) AND c.lifecycle='Active' AND {condition} ORDER BY c.id LIMIT ?{}",p.len());claims_where(self.conn,&tail,p)
             }
             fn knowledge_review_contradictions(&self,scopes:&[String],limit:u16)->Result<Vec<StoredRelation>,StorageError>{
-                let limit=check_limit(limit)?;if scopes.is_empty(){return Ok(Vec::new());}for scope in scopes{KnowledgeScope::parse(scope)?;}
+                let limit=page_limit(limit)?;if scopes.is_empty(){return Ok(Vec::new());}for scope in scopes{KnowledgeScope::parse(scope)?;}
                 let mut p=Vec::new();let scopes=placeholders(&mut p,scopes.iter().cloned());p.push(Sql::Integer(limit));
                 rows(self.conn,&format!("SELECT {RELATION_COLUMNS} FROM (SELECT r.*,ROW_NUMBER() OVER (PARTITION BY r.scope_key,min(r.subject_id,r.object_id),max(r.subject_id,r.object_id) ORDER BY r.created_at,r.id) AS pair_rank FROM knowledge_relations r JOIN knowledge_claims a ON a.id=r.subject_id JOIN knowledge_claims b ON b.id=r.object_id WHERE r.scope_key IN ({scopes}) AND r.predicate='contradicts' AND r.removed_at IS NULL AND r.subject_id<>r.object_id AND a.lifecycle='Active' AND b.lifecycle='Active' AND a.scope_key=b.scope_key AND r.scope_key=a.scope_key) WHERE pair_rank=1 ORDER BY created_at,id LIMIT ?{}",p.len()),p,relation_row)?.into_iter().map(relation_of).collect()
             }
@@ -931,7 +908,7 @@ macro_rules! knowledge_reads {
                 predicate: &str,
                 limit: u16,
             ) -> Result<Vec<StoredClaim>, StorageError> {
-                let limit = check_limit(limit)?;
+                let limit = page_limit(limit)?;
                 if scopes.is_empty() {
                     return Ok(Vec::new());
                 }
@@ -956,7 +933,7 @@ macro_rules! knowledge_reads {
                 entity: &Id,
                 limit: u16,
             ) -> Result<Vec<StoredClaim>, StorageError> {
-                let limit = check_limit(limit)?;
+                let limit = page_limit(limit)?;
                 claims_where(
                     self.conn,
                     "WHERE (c.subject_id=?1 OR c.object_id=?1) AND c.lifecycle<>'Deleted' \
@@ -970,7 +947,7 @@ macro_rules! knowledge_reads {
                 scopes: &[String],
                 limit: u16,
             ) -> Result<Vec<StoredClaim>, StorageError> {
-                let limit = check_limit(limit)?;
+                let limit = page_limit(limit)?;
                 claims_where(
                     self.conn,
                     "WHERE (c.subject_id=?1 OR c.object_id=?1) AND c.lifecycle<>'Deleted' \
@@ -989,7 +966,7 @@ macro_rules! knowledge_reads {
                 scopes: &[String],
                 limit: u16,
             ) -> Result<Vec<StoredClaim>, StorageError> {
-                let limit = check_limit(limit)?;
+                let limit = page_limit(limit)?;
                 claims_where(
                     self.conn,
                     // An edge's object is a live entity in a readable scope; a claim whose
@@ -1013,7 +990,7 @@ macro_rules! knowledge_reads {
                 after: Option<(i64, &str)>,
                 limit: u16,
             ) -> Result<Vec<StoredEntity>, StorageError> {
-                let limit = check_limit(limit)?;
+                let limit = page_limit(limit)?;
                 let (at, id) = after.map_or((i64::MAX, String::new()), |(t, i)| (t, i.to_owned()));
                 entities_where(
                     self.conn,
@@ -1044,7 +1021,7 @@ macro_rules! knowledge_reads {
                 evidence: &Id,
                 limit: u16,
             ) -> Result<Vec<Id>, StorageError> {
-                let limit = check_limit(limit)?;
+                let limit = page_limit(limit)?;
                 rows(
                     self.conn,
                     "SELECT ce.claim_id FROM knowledge_claim_evidence ce JOIN knowledge_claims c \
@@ -1063,7 +1040,7 @@ macro_rules! knowledge_reads {
                 scopes: &[String],
                 limit: u16,
             ) -> Result<Vec<StoredRelation>, StorageError> {
-                let limit = check_limit(limit)?;
+                let limit = page_limit(limit)?;
                 if scopes.is_empty() {
                     return Ok(Vec::new());
                 }
@@ -1091,7 +1068,7 @@ macro_rules! knowledge_reads {
                 target: &Id,
                 limit: u16,
             ) -> Result<Vec<StoredHistory>, StorageError> {
-                let limit = check_limit(limit)?;
+                let limit = page_limit(limit)?;
                 rows(
                     self.conn,
                     &format!(
@@ -1218,7 +1195,7 @@ macro_rules! knowledge_reads {
                 scope: &KnowledgeScope,
                 limit: u16,
             ) -> Result<Vec<StoredWrite>, StorageError> {
-                let limit = check_limit(limit)?;
+                let limit = page_limit(limit)?;
                 rows(
                     self.conn,
                     &format!(
@@ -1240,7 +1217,7 @@ macro_rules! knowledge_reads {
                 claim: &Id,
                 limit: u16,
             ) -> Result<Vec<StoredLessonEvent>, StorageError> {
-                let limit = check_limit(limit)?;
+                let limit = page_limit(limit)?;
                 rows(
                     self.conn,
                     &format!(
@@ -1259,7 +1236,7 @@ macro_rules! knowledge_reads {
                 source: &Id,
                 limit: u16,
             ) -> Result<Vec<StoredLessonEvent>, StorageError> {
-                let limit = check_limit(limit)?;
+                let limit = page_limit(limit)?;
                 rows(
                     self.conn,
                     &format!(
@@ -1279,7 +1256,7 @@ macro_rules! knowledge_reads {
                 claim: &Id,
                 limit: u16,
             ) -> Result<Vec<StoredChallenge>, StorageError> {
-                let limit = check_limit(limit)?;
+                let limit = page_limit(limit)?;
                 rows(
                     self.conn,
                     &format!(
@@ -1294,7 +1271,7 @@ macro_rules! knowledge_reads {
                 .collect()
             }
             fn knowledge_open_challenge_records(&self,claim:&Id,limit:u16)->Result<Vec<StoredChallenge>,StorageError>{
-                let limit=check_limit(limit)?;
+                let limit=page_limit(limit)?;
                 rows(self.conn,&format!("SELECT {CHALLENGE_COLUMNS} FROM knowledge_challenges WHERE claim_id=?1 AND state='Open' ORDER BY opened_at,id LIMIT ?2"),vec![Sql::Text(claim.as_str().into()),Sql::Integer(limit)],challenge_row)?.into_iter().map(challenge_of).collect()
             }
             fn knowledge_challenge(
@@ -1403,7 +1380,7 @@ macro_rules! knowledge_reads {
                 after: Option<&str>,
                 limit: u16,
             ) -> Result<Vec<StoredClaim>, StorageError> {
-                let limit = check_limit(limit)?;
+                let limit = page_limit(limit)?;
                 claims_where(
                     self.conn,
                     "WHERE c.scope_key=?1 AND c.source=?2 AND c.lifecycle<>'Deleted' AND c.id>?3 \
@@ -1423,7 +1400,7 @@ macro_rules! knowledge_reads {
                 after: Option<&str>,
                 limit: u16,
             ) -> Result<Vec<StoredEntity>, StorageError> {
-                let limit = check_limit(limit)?;
+                let limit = page_limit(limit)?;
                 entities_where(
                     self.conn,
                     "scope_key=?1 AND source=?2 AND deleted_at IS NULL AND id>?3 ORDER BY id \
@@ -1602,7 +1579,9 @@ fn next_revision(
             kind,
             id: id.as_str().to_owned(),
         }),
-        (Some(e), Some(c)) if e != c => Err(conflict(kind, id, e, c)),
+        (Some(e), Some(c)) if e != c => {
+            Err(conflict(RevisionDimension::Claim, kind, id.as_str(), e, c))
+        }
         (Some(e), Some(_)) => e
             .checked_add(1)
             .ok_or_else(|| invalid("knowledge revision overflow")),

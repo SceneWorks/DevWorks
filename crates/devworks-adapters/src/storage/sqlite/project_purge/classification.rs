@@ -92,37 +92,37 @@ fn document_digests() -> BTreeMap<&'static str, String> {
         .collect()
 }
 pub(super) type Key = (devworks_core::ports::storage::ProjectRecordKind, String);
-fn invalid() -> StorageError {
+fn unmapped_policy() -> StorageError {
     StorageError::IncompatibleSchema("unmapped project purge ownership policy".into())
 }
 fn policies(conn: &Connection) -> Result<BTreeMap<String, (String, String)>, StorageError> {
     let mut known = BTreeMap::new();
     for document in POLICY_DOCUMENTS {
-        let value: Value = serde_json::from_str(document.text).map_err(|_| invalid())?;
+        let value: Value = serde_json::from_str(document.text).map_err(|_| unmapped_policy())?;
         let rows = match document.shape {
-            Shape::Baseline => value["policies"].as_array().ok_or_else(invalid)?,
-            Shape::PurgeControl | Shape::Tables => {
-                value["additionalTables"].as_array().ok_or_else(invalid)?
-            }
+            Shape::Baseline => value["policies"].as_array().ok_or_else(unmapped_policy)?,
+            Shape::PurgeControl | Shape::Tables => value["additionalTables"]
+                .as_array()
+                .ok_or_else(unmapped_policy)?,
             Shape::Columns => {
-                value["tables"].as_object().ok_or_else(invalid)?;
+                value["tables"].as_object().ok_or_else(unmapped_policy)?;
                 continue;
             }
         };
         for row in rows {
-            let table = row["table"].as_str().ok_or_else(invalid)?;
+            let table = row["table"].as_str().ok_or_else(unmapped_policy)?;
             let (class, disposition) = match document.shape {
                 Shape::PurgeControl => ("purge_control", "purge_control"),
                 _ => (
-                    row["class"].as_str().ok_or_else(invalid)?,
-                    row["disposition"].as_str().ok_or_else(invalid)?,
+                    row["class"].as_str().ok_or_else(unmapped_policy)?,
+                    row["disposition"].as_str().ok_or_else(unmapped_policy)?,
                 ),
             };
             if known
                 .insert(table.into(), (class.into(), disposition.into()))
                 .is_some()
             {
-                return Err(invalid());
+                return Err(unmapped_policy());
             }
         }
     }
@@ -138,7 +138,7 @@ fn policies(conn: &Connection) -> Result<BTreeMap<String, (String, String)>, Sto
             .keys()
             .any(|name| name != "sqlite_schema" && !actual.contains(name))
     {
-        return Err(invalid());
+        return Err(unmapped_policy());
     }
     Ok(known)
 }
@@ -284,7 +284,7 @@ fn unresolved_keys(
             db(row.get::<_, String>(2))?,
         ];
         let digest =
-            super::guard::key_digest(&serde_json::to_string(&key).map_err(|_| invalid())?)?;
+            super::guard::key_digest(&serde_json::to_string(&key).map_err(|_| unmapped_policy())?)?;
         let table = super::record_kind(table)?;
         output.insert(
             (table, digest.clone()),
@@ -459,7 +459,7 @@ pub(in crate::storage::sqlite) fn planning_with_client_keepers(
     let mut unresolved = BTreeMap::<Key, ProjectPurgeUnresolved>::new();
     for row in &snapshot.rows {
         let key = (row.table, row.key_digest.clone());
-        let (class, disposition) = known.get(row.table.as_str()).ok_or_else(invalid)?;
+        let (class, disposition) = known.get(row.table.as_str()).ok_or_else(unmapped_policy)?;
         match initial(row, class, disposition) {
             Ok((action, reason)) => {
                 rows.insert(
@@ -515,8 +515,9 @@ pub(in crate::storage::sqlite) fn planning_with_client_keepers(
         let id: String = db(row.get(0))?;
         let state: String = db(row.get(1))?;
         if !matches!(state.as_str(), "Stopped" | "Failed") {
-            let digest =
-                super::guard::key_digest(&serde_json::to_string(&[id]).map_err(|_| invalid())?)?;
+            let digest = super::guard::key_digest(
+                &serde_json::to_string(&[id]).map_err(|_| unmapped_policy())?,
+            )?;
             let key = (
                 devworks_core::ports::storage::ProjectRecordKind::OwnedContainers,
                 digest.clone(),
@@ -647,7 +648,7 @@ pub(in crate::storage::sqlite) fn planning_with_client_keepers(
         "format":"dw83-ownership-assessment-v2","project":project,
         "policyDocuments":document_digests(),
         "scrubPolicy":scrub_policy,"clientKeepers":super::client_keepers::digest(keepers),"selection":snapshot.policy_digest,"rows":business_rows,"references":references,"unresolved":unresolved
-    })).map_err(|_|invalid())?.as_bytes());
+    })).map_err(|_|unmapped_policy())?.as_bytes());
     Ok(Some(ProjectPurgePlanning {
         snapshot,
         digest,

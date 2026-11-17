@@ -1379,3 +1379,30 @@ fn price_subject_visibility_uses_identity_not_connection_routability() {
     })
     .unwrap();
 }
+
+#[test]
+fn a_stored_selection_revision_of_zero_is_a_corrupt_store_not_a_panic() {
+    let h = Harness::new();
+    let s = h.store();
+    {
+        let raw = h.raw();
+        raw.pragma_update(None, "ignore_check_constraints", true)
+            .unwrap();
+        raw.execute("UPDATE router_embedding_selection SET revision=0", [])
+            .unwrap();
+    }
+    let result = run_write(&s, WriteOptions::default(), |tx| {
+        Ok(tx.router().select_embedding_candidate(1, None))
+    })
+    .unwrap();
+    assert!(
+        matches!(
+            result,
+            Err(StorageError::StorageUnavailable {
+                cause: Unavailable::Corrupt,
+                ..
+            })
+        ),
+        "{result:?}"
+    );
+}

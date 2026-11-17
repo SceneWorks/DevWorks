@@ -1,24 +1,16 @@
 //! Offline Help: metadata-only pages, bounded Unicode passages and atomic generation publication.
 use super::conn::db;
 use super::repos::{Snapshot, Unit};
+use super::support::{conflict, corrupt, id_of, invalid, page_limit};
 use devworks_core::ports::packages::MAX_BUNDLE_BYTES;
 use devworks_core::ports::storage::*;
 use devworks_core::protocol::provider::ArtifactRef;
 use devworks_core::protocol::records::HelpProvenance;
-use devworks_core::protocol::{Check, Id, OperationId, Revision, RevisionDimension};
+use devworks_core::protocol::{Check, Id, OperationId, RevisionDimension};
 use rusqlite::{Connection, OptionalExtension, Row, params};
 use serde_json::Value;
 use std::collections::HashSet;
 
-fn invalid(message: &str) -> StorageError {
-    StorageError::InvalidRecord(message.into())
-}
-fn corrupt(message: &str) -> StorageError {
-    StorageError::unavailable(Unavailable::Corrupt, message)
-}
-fn id(value: String) -> Result<Id, StorageError> {
-    Id::new(value).map_err(|_| corrupt("invalid Help identifier"))
-}
 fn json(value: &str) -> Result<Value, StorageError> {
     serde_json::from_str(value).map_err(|_| corrupt("invalid Help JSON"))
 }
@@ -28,27 +20,6 @@ fn digest(value: &str) -> bool {
 fn text(value: &str, min: usize, max: usize) -> bool {
     !value.contains('\0') && (min..=max).contains(&value.chars().count())
 }
-fn page(limit: u16) -> Result<(), StorageError> {
-    if limit == 0 || limit > MAX_PAGE {
-        Err(invalid("Help page limit out of bounds"))
-    } else {
-        Ok(())
-    }
-}
-fn conflict(
-    kind: &'static str,
-    expected: i64,
-    current: i64,
-    dimension: RevisionDimension,
-) -> StorageError {
-    StorageError::conflict(
-        dimension,
-        kind,
-        Id::new("help").expect("static"),
-        Revision::new(expected.max(1)).expect("positive"),
-        Revision::new(current.max(1)).expect("positive"),
-    )
-}
 fn head(conn: &Connection) -> Result<StoredHelpHead, StorageError> {
     let row = db(conn.query_row("SELECT revision,app_version,registry_revision,source_digest,generation_id,generation_operation_id,updated_at FROM help_head WHERE singleton=1",[],|r| Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get::<_,Option<String>>(4)?,r.get::<_,Option<String>>(5)?,r.get(6)?))))?;
     Ok(StoredHelpHead {
@@ -56,8 +27,8 @@ fn head(conn: &Connection) -> Result<StoredHelpHead, StorageError> {
         app_version: row.1,
         registry_revision: row.2,
         source_digest: row.3,
-        generation_id: row.4.map(id).transpose()?,
-        generation_operation_id: row.5.map(id).transpose()?.map(OperationId),
+        generation_id: row.4.map(id_of).transpose()?,
+        generation_operation_id: row.5.map(id_of).transpose()?.map(OperationId),
         updated_at_ms: row.6,
     })
 }
@@ -72,10 +43,11 @@ fn check_heads(
     let current = head(conn)?;
     if current.revision != help {
         return Err(conflict(
+            RevisionDimension::Source,
+            "help",
             "help",
             help,
             current.revision,
-            RevisionDimension::Source,
         ));
     }
     let actual: i64 = db(conn.query_row(
@@ -85,10 +57,11 @@ fn check_heads(
     ))?;
     if actual != registry {
         return Err(conflict(
+            RevisionDimension::Registry,
             "package_registry",
+            "help",
             registry,
             actual,
-            RevisionDimension::Registry,
         ));
     }
     Ok(current)
@@ -161,8 +134,8 @@ fn topics<P: rusqlite::Params>(
     rows.into_iter()
         .map(|r| {
             Ok(StoredHelpTopic {
-                generation_id: id(r.generation_id)?,
-                id: id(r.id)?,
+                generation_id: id_of(r.generation_id)?,
+                id: id_of(r.id)?,
                 version: r.version,
                 title: r.title,
                 content_digest: r.content_digest,
@@ -173,7 +146,7 @@ fn topics<P: rusqlite::Params>(
                 screen_ids: serde_json::from_str(&r.screen_ids)
                     .map_err(|_| corrupt("invalid Help screen list"))?,
                 source_kind: r.source_kind,
-                package_id: r.package_id.map(id).transpose()?,
+                package_id: r.package_id.map(id_of).transpose()?,
                 manifest_digest: r.manifest_digest,
                 character_count: r.character_count,
                 topic_revision: r.topic_revision,
@@ -189,7 +162,7 @@ fn staged_topics(
     after: Option<&Id>,
     limit: u16,
 ) -> Result<Vec<StoredHelpTopic>, StorageError> {
-    page(limit)?;
+    page_limit(limit)?;
     topics(
         conn,
         "t.generation_id=?1 AND t.id>?2 ORDER BY t.id LIMIT ?3",
@@ -279,10 +252,10 @@ macro_rules! help_reads {
                     "SELECT operation_id FROM help_generations WHERE id=?1 AND state='Published'",
                     [generation.as_str()], |r| r.get(0)
                 ).optional())?;
-                operation.map(id).transpose().map(|value| value.map(OperationId))
+                operation.map(id_of).transpose().map(|value| value.map(OperationId))
             }
             fn help_drafts(&self, after: Option<&Id>, limit: u16) -> Result<Vec<StoredHelpDraft>, StorageError> {
-                page(limit)?;
+                page_limit(limit)?;
                 let mut stmt = db(self.conn.prepare_cached(
                     "SELECT id,operation_id FROM help_generations WHERE state='Draft' AND id>?1 ORDER BY id LIMIT ?2"
                 ))?;
@@ -291,7 +264,7 @@ macro_rules! help_reads {
                     |r| Ok((r.get::<_,String>(0)?, r.get::<_,String>(1)?))
                 ))?.collect::<rusqlite::Result<Vec<_>>>())?;
                 rows.into_iter().map(|(g,o)| Ok(StoredHelpDraft {
-                    generation_id: id(g)?, operation_id: OperationId(id(o)?)
+                    generation_id: id_of(g)?, operation_id: OperationId(id_of(o)?)
                 })).collect()
             }
             fn help_topic(&self, generation: &Id, id: &Id) -> Result<Option<StoredHelpTopic>, StorageError> {
@@ -299,7 +272,7 @@ macro_rules! help_reads {
                     params![generation.as_str(), id.as_str()])?.into_iter().next())
             }
             fn help_topics(&self, generation: &Id, filter: &HelpFilter, after: Option<&Id>, limit: u16) -> Result<Vec<StoredHelpTopic>, StorageError> {
-                page(limit)?;
+                page_limit(limit)?;
                 if filter.query.as_ref().is_some_and(|q| !text(q,1,4096) || *q != q.to_lowercase())
                     || filter.screen_id.as_ref().is_some_and(|s| !text(s,1,256))
                 {
@@ -638,7 +611,7 @@ impl HelpRepository for Unit<'_> {
         op: &OperationId,
         limit: u16,
     ) -> Result<bool, StorageError> {
-        page(limit)?;
+        page_limit(limit)?;
         let Some((state, owner)) = generation(self.conn, gen_id)? else {
             return Ok(true);
         };

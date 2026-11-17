@@ -260,6 +260,11 @@ fn generations_take_payload_only_while_staging_and_seal_immutably() {
     };
     let v = view.clone();
     write(&s, move |tx| tx.indexing().insert_view(&v)).unwrap();
+    // A stale expectation on a never-published repository is a conflict, not a corrupt store.
+    assert!(matches!(
+        write(&s, |tx| tx.indexing().publish(&id("repo-a"), &id("v-1"), 5)),
+        Err(StorageError::RevisionConflict(_))
+    ));
     assert_eq!(
         write(&s, |tx| tx.indexing().publish(&id("repo-a"), &id("v-1"), 0)).unwrap(),
         1

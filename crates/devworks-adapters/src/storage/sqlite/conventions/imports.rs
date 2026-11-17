@@ -177,7 +177,7 @@ fn captures(
     if after.is_some_and(|n| n < 0) {
         return Err(invalid("negative import ordinal"));
     }
-    let limit = page(limit)?;
+    let limit = page_limit(limit)?;
     let mut stmt=db(conn.prepare_cached("SELECT ordinal,kind,resource_id,resource_key,resource_name,resource_lifecycle,resource_media_type,artifact_json,version_json,staging_operation_id,staging_attempt,staging_generation,managed_path FROM convention_import_artifacts WHERE operation_id=?1 AND ordinal>coalesce(?2,-1) ORDER BY ordinal LIMIT ?3"))?;
     let rows = db(
         db(stmt.query_map(params![op.0.as_str(), after, limit], |r| {
@@ -433,7 +433,7 @@ fn ref_of(row: &StoredConventionImportArtifact) -> Value {
 macro_rules! reads {($ty:ty)=>{impl ConventionImportRead for $ty {
     fn convention_import_storage_usage(&self,op:&OperationId)->Result<ConventionImportStorageUsage,StorageError>{let d=required(self.conn,op)?;db(self.conn.query_row("SELECT coalesce(max(byte_count),0),coalesce((SELECT sum(b.byte_count) FROM blobs b WHERE b.digest IN(SELECT blob_digest FROM convention_import_artifacts WHERE operation_id=?1) AND NOT EXISTS(SELECT 1 FROM artifact_versions v JOIN artifacts a ON a.id=v.artifact_id WHERE v.blob_digest=b.digest AND a.retention='Explicit' AND v.deleted_at IS NULL AND a.current_project_id IS ?2)),0) FROM convention_import_artifacts WHERE operation_id=?1",params![op.0.as_str(),d.scope.project().map(|p|p.0.as_str())],|r|Ok(ConventionImportStorageUsage{max_entry_bytes:r.get(0)?,additional_scope_bytes:r.get(1)?})))}
     fn convention_import(&self,op:&OperationId)->Result<Option<StoredConventionImport>,StorageError>{get(self.conn,op)}
-    fn convention_imports_pending(&self,after:Option<&OperationId>,limit:u16)->Result<Vec<StoredConventionImport>,StorageError>{let limit=page(limit)?;let mut stmt=db(self.conn.prepare_cached(&format!("SELECT {IMPORT_COLUMNS} FROM convention_imports WHERE phase!='Published' AND (phase IN('Queued','Parsing','Ready') OR EXISTS(SELECT 1 FROM convention_import_artifacts a WHERE a.operation_id=convention_imports.operation_id)) AND (?1 IS NULL OR operation_id>?1) ORDER BY operation_id LIMIT ?2")))?;db(db(stmt.query_map(params![after.map(|o|o.0.as_str()),limit],import_record))?.collect())}
+    fn convention_imports_pending(&self,after:Option<&OperationId>,limit:u16)->Result<Vec<StoredConventionImport>,StorageError>{let limit=page_limit(limit)?;let mut stmt=db(self.conn.prepare_cached(&format!("SELECT {IMPORT_COLUMNS} FROM convention_imports WHERE phase!='Published' AND (phase IN('Queued','Parsing','Ready') OR EXISTS(SELECT 1 FROM convention_import_artifacts a WHERE a.operation_id=convention_imports.operation_id)) AND (?1 IS NULL OR operation_id>?1) ORDER BY operation_id LIMIT ?2")))?;db(db(stmt.query_map(params![after.map(|o|o.0.as_str()),limit],import_record))?.collect())}
     fn convention_import_metadata(&self,op:&OperationId)->Result<Option<StoredConvention>,StorageError>{metadata(self.conn,op)}
     fn convention_import_artifacts(&self,op:&OperationId,after:Option<i64>,limit:u16)->Result<Vec<StoredConventionImportArtifact>,StorageError>{captures(self.conn,op,after,limit)}
 }};}
@@ -477,7 +477,9 @@ impl ConventionImportRepository for Unit<'_> {
         let actual = scope_revision(self.conn, &d.scope)?;
         if actual != d.expected_scope_revision {
             return Err(conflict(
-                &d.convention_id,
+                RevisionDimension::Source,
+                "convention",
+                d.convention_id.as_str(),
                 d.expected_scope_revision,
                 actual,
             ));
@@ -562,7 +564,13 @@ impl ConventionImportRepository for Unit<'_> {
             let row =
                 current(self.conn, parent)?.ok_or_else(|| invalid("import parent missing"))?;
             if Some(row.revision) != parent_revision {
-                return Err(conflict(parent, parent_revision.unwrap_or(1), row.revision));
+                return Err(conflict(
+                    RevisionDimension::Source,
+                    "convention",
+                    parent.as_str(),
+                    parent_revision.unwrap_or(1),
+                    row.revision,
+                ));
             }
         }
         let mut body = None;
@@ -608,7 +616,13 @@ impl ConventionImportRepository for Unit<'_> {
     ) -> Result<StoredConventionImport, StorageError> {
         let d = required(self.conn, op)?;
         if d.revision != expected {
-            return Err(conflict(&d.convention_id, expected, d.revision));
+            return Err(conflict(
+                RevisionDimension::Source,
+                "convention",
+                d.convention_id.as_str(),
+                expected,
+                d.revision,
+            ));
         }
         let transition = d.phase == phase
             || match d.phase.as_str() {
@@ -665,7 +679,13 @@ impl ConventionImportRepository for Unit<'_> {
         target_exists(self.conn, &d.scope)?;
         let actual = scope_revision(self.conn, &d.scope)?;
         if actual != expected_scope {
-            return Err(conflict(&d.convention_id, expected_scope, actual));
+            return Err(conflict(
+                RevisionDimension::Source,
+                "convention",
+                d.convention_id.as_str(),
+                expected_scope,
+                actual,
+            ));
         }
         let mut r = metadata(self.conn, op)?.ok_or_else(|| invalid("import metadata missing"))?;
         validate(self.conn, &r)?;
@@ -724,7 +744,7 @@ impl ConventionImportRepository for Unit<'_> {
         op: &OperationId,
         limit: u16,
     ) -> Result<bool, StorageError> {
-        let limit = page(limit)?;
+        let limit = page_limit(limit)?;
         let d = required(self.conn, op)?;
         let state = operation(self.conn, op)?;
         if !matches!(d.phase.as_str(), "Failed" | "Cancelled")

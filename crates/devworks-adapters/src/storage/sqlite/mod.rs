@@ -57,6 +57,7 @@ mod schemas;
 #[cfg(any(test, feature = "test-support"))]
 mod seed;
 mod sessions;
+mod support;
 mod usage;
 mod watchers;
 mod work;

@@ -137,6 +137,7 @@ mod github;
 mod graph;
 mod help;
 mod indexing;
+mod instructions;
 mod jobs;
 mod knowledge;
 mod mcp;

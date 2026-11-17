@@ -1,28 +1,14 @@
 //! DW-119 metadata only. Provider calls and vector validation happen outside the writer.
 use super::conn::db;
 use super::repos::{Snapshot, Unit};
+use super::support::{atomic, conflict, corrupt, invalid, page_limit};
 use devworks_core::ports::storage::*;
 use devworks_core::protocol::provider::ArtifactRef;
-use devworks_core::protocol::{Id, OperationId, OperationState, Revision, RevisionDimension};
+use devworks_core::protocol::{Id, OperationId, OperationState, RevisionDimension};
 use rusqlite::{Connection, OptionalExtension, params};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 
-fn invalid(message: &str) -> StorageError {
-    StorageError::InvalidRecord(message.into())
-}
-fn corrupt(message: &str) -> StorageError {
-    StorageError::unavailable(Unavailable::Corrupt, message)
-}
-fn conflict(id: &Id, expected: i64, current: i64) -> StorageError {
-    StorageError::conflict(
-        RevisionDimension::Configuration,
-        "embedding_space",
-        id.clone(),
-        Revision::new(expected.max(1)).expect("positive"),
-        Revision::new(current).expect("stored positive"),
-    )
-}
 fn encode(value: &impl Serialize) -> Result<String, StorageError> {
     serde_json::to_string(value).map_err(|_| invalid("embedding metadata serialization"))
 }
@@ -102,11 +88,7 @@ fn price_subjects(
     after: Option<&Id>,
     limit: u16,
 ) -> Result<Vec<StoredEmbeddingPriceSubject>, StorageError> {
-    if limit == 0 || limit > MAX_PAGE {
-        return Err(invalid(
-            "embedding price subject page limit must be 1..=MAX_PAGE",
-        ));
-    }
+    page_limit(limit)?;
     let mut stmt = db(conn.prepare_cached(
         &(subject_selection() + " WHERE s.model_id>?1 ORDER BY s.model_id LIMIT ?2"),
     ))?;
@@ -223,7 +205,13 @@ fn checked_qualification(
         id: id.as_str().into(),
     })?;
     if expected != q.revision {
-        return Err(conflict(id, expected, q.revision));
+        return Err(conflict(
+            RevisionDimension::Configuration,
+            "embedding_space",
+            id.as_str(),
+            expected,
+            q.revision,
+        ));
     }
     Ok(q)
 }
@@ -242,7 +230,7 @@ macro_rules! reads { ($t:ty) => { impl EmbeddingRead for $t {
     fn embedding_inventory_revision(&self)->Result<i64,StorageError>{db(self.conn.query_row("SELECT revision FROM router_embedding_inventory WHERE singleton=1",[],|r|r.get(0)))}
     fn embedding_candidate(&self,id:&Id)->Result<Option<StoredEmbeddingCandidate>,StorageError>{candidate(self.conn,id)}
     fn embedding_candidates(&self,after:Option<&Id>,limit:u16)->Result<Vec<StoredEmbeddingCandidate>,StorageError>{
-        if limit==0 || limit>MAX_PAGE{return Err(invalid("embedding page limit must be 1..=MAX_PAGE"));}
+        page_limit(limit)?;
         let mut stmt=db(self.conn.prepare_cached("SELECT body_json FROM router_embedding_candidates WHERE id>?1 ORDER BY id LIMIT ?2"))?;
         let rows=db(db(stmt.query_map(params![after.map_or("",Id::as_str),limit],|r|r.get::<_,String>(0)))?.collect::<rusqlite::Result<Vec<_>>>())?;
         rows.into_iter().map(decode).collect()
@@ -269,7 +257,9 @@ impl EmbeddingRepository for Unit<'_> {
         let source = current_source(self.conn, c)?;
         if source.revision != expected_connection_revision {
             return Err(conflict(
-                &c.connection_id,
+                RevisionDimension::Configuration,
+                "embedding_space",
+                c.connection_id.as_str(),
                 expected_connection_revision,
                 source.revision,
             ));
@@ -309,10 +299,7 @@ impl EmbeddingRepository for Unit<'_> {
         {
             return Err(invalid("embedding price subject identity collision"));
         }
-        // A caller may catch a rejected candidate write and still commit its own unit. The
-        // private map and candidate/qualification therefore share this existing savepoint.
-        let savepoint = WriteTransaction::savepoint(self)?;
-        let outcome = (|| {
+        atomic(self.conn, || {
             db(self.conn.execute("INSERT OR IGNORE INTO router_embedding_price_subjects(model_id,connection_id,upstream_model_id,created_connection_revision,created_at) VALUES(?1,?2,?3,?4,?5)",params![pricing_id.as_str(),c.connection_id.as_str(),c.upstream_model_id,source.revision,c.created_at_ms]))?;
             db(self.conn.execute("INSERT INTO router_embedding_candidates(id,space_id,configuration_digest,pricing_model_id,body_json,created_at) VALUES(?1,?2,?3,?4,?5,?6)",params![c.id.as_str(),c.space_id.as_str(),c.configuration_digest,pricing_id.as_str(),encode(c)?,c.created_at_ms]))?;
             append(
@@ -327,17 +314,7 @@ impl EmbeddingRepository for Unit<'_> {
                     updated_at_ms: self.now,
                 },
             )
-        })();
-        match outcome {
-            Ok(()) => {
-                WriteTransaction::release(self, savepoint)?;
-                Ok(())
-            }
-            Err(error) => {
-                WriteTransaction::rollback_to(self, savepoint)?;
-                Err(error)
-            }
-        }
+        })
     }
 
     fn start_embedding_qualification(
@@ -568,7 +545,9 @@ impl EmbeddingRepository for Unit<'_> {
         let current = selection(self.conn)?;
         if expected != current.revision {
             return Err(conflict(
-                &Id::new("embedding_selection").expect("static ID"),
+                RevisionDimension::Configuration,
+                "embedding_space",
+                Id::new("embedding_selection").expect("static ID").as_str(),
                 expected,
                 current.revision,
             ));

@@ -3,6 +3,7 @@
 //! and the write unit; write operations exist only on [`Unit`], which borrows the writer's open
 //! transaction.
 use super::conn::db;
+use super::support::{conflict, conflict_strict, corrupt, id_of, invalid, page_limit};
 use devworks_core::context::{PrincipalKind, ReceiptIdentity};
 use devworks_core::fingerprint::Fingerprint;
 use devworks_core::ports::storage::*;
@@ -10,7 +11,7 @@ use devworks_core::ports::{GrantUse, IdKind, IdSource, StoredReceipt};
 use devworks_core::protocol::results::DomainDecision;
 use devworks_core::protocol::{
     ActorId, AssignmentId, AttemptId, CONTRACT, CommandId, EventId, ExecutionId, Id, OperationId,
-    OperationState, ProjectId, Receipt, Revision, RevisionDimension, RootId, StoreId,
+    OperationState, ProjectId, Receipt, RevisionDimension, RootId, StoreId,
 };
 use devworks_core::registry::SchemaRevision;
 use rusqlite::{CachedStatement, Connection, OptionalExtension, Row, params};
@@ -19,15 +20,6 @@ use serde_json::{Value, json};
 // ---------------------------------------------------------------------------------------------
 // Value helpers
 
-fn invalid(m: impl Into<String>) -> StorageError {
-    StorageError::InvalidRecord(m.into())
-}
-fn corrupt(m: impl Into<String>) -> StorageError {
-    StorageError::unavailable(Unavailable::Corrupt, m)
-}
-fn id_of(s: String) -> Result<Id, StorageError> {
-    Id::new(s).map_err(|e| corrupt(format!("stored identifier: {e}")))
-}
 fn opt_id(s: Option<String>) -> Result<Option<Id>, StorageError> {
     s.map(id_of).transpose()
 }
@@ -48,15 +40,6 @@ fn object(field: &str, v: &Value) -> Result<(), StorageError> {
         return Err(invalid(format!("{field} must be a JSON object")));
     }
     Ok(())
-}
-fn limit(l: u16) -> Result<i64, StorageError> {
-    if l == 0 || l > MAX_PAGE {
-        return Err(invalid(format!("limit must be 1..={MAX_PAGE}")));
-    }
-    Ok(i64::from(l))
-}
-fn revision(v: i64) -> Result<Revision, StorageError> {
-    Revision::new(v).map_err(|_| corrupt("non-positive stored revision"))
 }
 fn stmt<'c>(conn: &'c Connection, sql: &str) -> Result<CachedStatement<'c>, StorageError> {
     db(conn.prepare_cached(sql))
@@ -364,7 +347,7 @@ fn page(
     after: i64,
     max: u16,
 ) -> Result<EventPage, StorageError> {
-    let n = limit(max)?;
+    let n = page_limit(max)?;
     if after < 0 {
         return Err(invalid("after must be non-negative"));
     }
@@ -531,7 +514,7 @@ fn operation(conn: &Connection, id: &OperationId) -> Result<Option<OperationReco
     raw.map(|r| op_of(conn, r)).transpose()
 }
 fn unresolved(conn: &Connection, max: u16) -> Result<Vec<OperationRecord>, StorageError> {
-    let n = limit(max)?;
+    let n = page_limit(max)?;
     let mut s = stmt(
         conn,
         &format!(
@@ -549,7 +532,7 @@ fn operations_for_capability(
     after: Option<&OperationId>,
     max: u16,
 ) -> Result<Vec<OperationRecord>, StorageError> {
-    let n = limit(max)?;
+    let n = page_limit(max)?;
     bounded("capability", capability, 256)?;
     if states.is_empty() {
         return Ok(Vec::new());
@@ -724,7 +707,7 @@ fn deliveries(
     after: Option<&DeliveryKey>,
     max: u16,
 ) -> Result<DeliveryPage, StorageError> {
-    let n = limit(max)?;
+    let n = page_limit(max)?;
     // One extra row tells whether more follow. Ranks are read in order, each with its own
     // keyset predicate, so the combined order is total and stable across pages.
     let mut entries = Vec::new();
@@ -824,7 +807,7 @@ fn awaiting_eligibility(
     after: Option<&Id>,
     max: u16,
 ) -> Result<Vec<QueueEntry>, StorageError> {
-    let n = limit(max)?;
+    let n = page_limit(max)?;
     let mut s = stmt(
         conn,
         &format!(
@@ -1265,13 +1248,12 @@ impl Unit<'_> {
     }
     fn op_cas(&self, op: &OperationRecord, expected: i64) -> Result<(), StorageError> {
         if op.revision != expected {
-            return Err(StorageError::conflict(
+            return Err(conflict_strict(
                 RevisionDimension::Operation,
                 "operation",
-                op.id.0.clone(),
-                Revision::new(expected)
-                    .map_err(|_| invalid("expected revision must be positive"))?,
-                revision(op.revision)?,
+                op.id.0.as_str(),
+                expected,
+                op.revision,
             ));
         }
         Ok(())
@@ -1797,7 +1779,7 @@ impl OperationJournal for Unit<'_> {
         &mut self,
         max: u16,
     ) -> Result<Vec<(OperationId, OperationState)>, StorageError> {
-        let n = limit(max)?;
+        let n = page_limit(max)?;
         let boot = self.boot()?.clone();
         let ids: Vec<String> = {
             let mut s = stmt(
@@ -2009,7 +1991,7 @@ impl DurableQueue for Unit<'_> {
     }
 
     fn claim_ready(&mut self, req: &ClaimRequest) -> Result<Vec<QueueEntry>, StorageError> {
-        let n = limit(req.limit)?;
+        let n = page_limit(req.limit)?;
         bounded("consumer", &req.consumer, 128)?;
         if req.lease_ms <= 0 {
             return Err(invalid("lease must be positive"));
@@ -2226,7 +2208,7 @@ impl DurableQueue for Unit<'_> {
         mode: ClaimRecovery,
         max: u16,
     ) -> Result<RecoveryOutcome, StorageError> {
-        let n = limit(max)?;
+        let n = page_limit(max)?;
         let stale: Vec<String> = {
             let sql = match mode {
                 ClaimRecovery::Expired => {
@@ -2467,13 +2449,14 @@ impl PackageHandlerLedger for Unit<'_> {
         }
         let current_revision = current.as_ref().map_or(0, |c| c.revision);
         if current_revision != expected_revision {
-            return Err(StorageError::conflict(
+            return Err(conflict(
                 RevisionDimension::Registry,
                 "package_state",
-                Id::new(sha256_id(package_id)).map_err(|_| invalid("package id"))?,
-                Revision::new(expected_revision.max(1))
-                    .map_err(|_| invalid("expected revision"))?,
-                Revision::new(current_revision.max(1)).map_err(|_| invalid("current revision"))?,
+                Id::new(sha256_id(package_id))
+                    .map_err(|_| invalid("package id"))?
+                    .as_str(),
+                expected_revision.max(1),
+                current_revision.max(1),
             ));
         }
         db(stmt(self.conn,
@@ -2577,13 +2560,12 @@ impl GrantLedger for Unit<'_> {
             return Err(StorageError::ScopeDenied);
         }
         if g.revision != use_.expected_revision {
-            return Err(StorageError::conflict(
+            return Err(conflict_strict(
                 RevisionDimension::Authority,
                 "grant",
-                g.id.clone(),
-                Revision::new(use_.expected_revision)
-                    .map_err(|_| invalid("expected revision must be positive"))?,
-                revision(g.revision)?,
+                g.id.as_str(),
+                use_.expected_revision,
+                g.revision,
             ));
         }
         let remaining = g.uses_remaining.map(|u| u - 1);
@@ -2608,13 +2590,12 @@ impl GrantLedger for Unit<'_> {
             id: id.as_str().to_owned(),
         })?;
         if g.revision != expected_revision {
-            return Err(StorageError::conflict(
+            return Err(conflict_strict(
                 RevisionDimension::Authority,
                 "grant",
-                g.id.clone(),
-                Revision::new(expected_revision)
-                    .map_err(|_| invalid("expected revision must be positive"))?,
-                revision(g.revision)?,
+                g.id.as_str(),
+                expected_revision,
+                g.revision,
             ));
         }
         let n = db(stmt(

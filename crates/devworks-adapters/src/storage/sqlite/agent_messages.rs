@@ -1,8 +1,9 @@
 //! SQLite rows for durable agent messages, recipient deliveries and project stream events.
 use super::conn::db;
+use super::support::{corrupt, id_of, page_limit};
 use devworks_core::ports::storage::{
-    AgentMessageHistoryFilter, MAX_PAGE, StorageError, StoredAgentAssignmentContext,
-    StoredAgentDelivery, StoredAgentMessage, StoredAgentMessageEvent,
+    AgentMessageHistoryFilter, StorageError, StoredAgentAssignmentContext, StoredAgentDelivery,
+    StoredAgentMessage, StoredAgentMessageEvent,
 };
 use devworks_core::protocol::{ActorId, AssignmentId, Id, ProjectId, RootId};
 use rusqlite::{Connection, OptionalExtension, Row, params};
@@ -23,9 +24,9 @@ pub(super) fn agent_assignment_context(
     let revisions: String = db(row.get(4))?;
     let tasks: String = db(row.get(6))?;
     Ok(Some(StoredAgentAssignmentContext {
-        assignment_id: AssignmentId(id(db(row.get(0))?)?),
-        project_id: ProjectId(id(db(row.get(1))?)?),
-        role_id: id(db(row.get(2))?)?,
+        assignment_id: AssignmentId(id_of(db(row.get(0))?)?),
+        project_id: ProjectId(id_of(db(row.get(1))?)?),
+        role_id: id_of(db(row.get(2))?)?,
         role_instructions: db(row.get(3))?,
         role_revisions: serde_json::from_str(&revisions).map_err(|_| corrupt("role revisions"))?,
         brief: db(row.get(5))?,
@@ -51,22 +52,8 @@ pub(super) fn insert_agent_assignment_context(
     Ok(())
 }
 
-fn corrupt(what: &str) -> StorageError {
-    StorageError::InvalidRecord(format!("invalid stored agent {what}"))
-}
-fn id(value: String) -> Result<Id, StorageError> {
-    Id::new(value).map_err(|_| corrupt("identifier"))
-}
 fn optional_id(value: Option<String>) -> Result<Option<Id>, StorageError> {
-    value.map(id).transpose()
-}
-fn page(limit: u16) -> Result<i64, StorageError> {
-    if limit == 0 || limit > MAX_PAGE {
-        return Err(StorageError::InvalidRecord(
-            "agent page limit out of range".into(),
-        ));
-    }
-    Ok(i64::from(limit))
+    value.map(id_of).transpose()
 }
 fn assignment_project(
     conn: &Connection,
@@ -104,8 +91,8 @@ fn session_project(conn: &Connection, session: &Id) -> Result<Option<String>, St
 fn message_row(row: &Row<'_>) -> Result<StoredAgentMessage, StorageError> {
     let attachments: String = db(row.get(8))?;
     Ok(StoredAgentMessage {
-        id: id(db(row.get(0))?)?,
-        project_id: ProjectId(id(db(row.get(1))?)?),
+        id: id_of(db(row.get(0))?)?,
+        project_id: ProjectId(id_of(db(row.get(1))?)?),
         root_id: optional_id(db(row.get(2))?)?.map(RootId),
         channel: db(row.get(3))?,
         from_assignment_id: optional_id(db(row.get(4))?)?.map(AssignmentId),
@@ -120,7 +107,7 @@ fn message_row(row: &Row<'_>) -> Result<StoredAgentMessage, StorageError> {
         revision: db(row.get(13))?,
         created_at_ms: db(row.get(14))?,
         resolved_at_ms: db(row.get(15))?,
-        from_actor_id: ActorId(id(db(row.get(16))?)?),
+        from_actor_id: ActorId(id_of(db(row.get(16))?)?),
         target_item_id: optional_id(db(row.get(17))?)?.map(RootId),
         target_feature_id: optional_id(db(row.get(18))?)?.map(RootId),
         resource_name: db(row.get(19))?,
@@ -134,8 +121,8 @@ fn message_row(row: &Row<'_>) -> Result<StoredAgentMessage, StorageError> {
 fn delivery_row(row: &Row<'_>) -> Result<StoredAgentDelivery, StorageError> {
     Ok(StoredAgentDelivery {
         sequence: db(row.get(0))?,
-        message_id: id(db(row.get(1))?)?,
-        project_id: ProjectId(id(db(row.get(2))?)?),
+        message_id: id_of(db(row.get(1))?)?,
+        project_id: ProjectId(id_of(db(row.get(2))?)?),
         recipient_assignment_id: optional_id(db(row.get(3))?)?.map(AssignmentId),
         recipient_human: db(row.get(4))?,
         state: db(row.get(5))?,
@@ -151,10 +138,10 @@ fn delivery_row(row: &Row<'_>) -> Result<StoredAgentDelivery, StorageError> {
 fn event_row(row: &Row<'_>) -> Result<StoredAgentMessageEvent, StorageError> {
     Ok(StoredAgentMessageEvent {
         sequence: db(row.get(0))?,
-        project_id: ProjectId(id(db(row.get(1))?)?),
-        message_id: id(db(row.get(2))?)?,
+        project_id: ProjectId(id_of(db(row.get(1))?)?),
+        message_id: id_of(db(row.get(2))?)?,
         kind: db(row.get(3))?,
-        actor_id: ActorId(id(db(row.get(4))?)?),
+        actor_id: ActorId(id_of(db(row.get(4))?)?),
         recipient_assignment_id: optional_id(db(row.get(5))?)?.map(AssignmentId),
         created_at_ms: db(row.get(6))?,
         recipient_session_id: optional_id(db(row.get(7))?)?,
@@ -208,7 +195,7 @@ pub(super) fn messages(
         None => (i64::MAX, "~"),
     };
     let mut stmt = db(conn.prepare(&format!("SELECT {MESSAGE_COLUMNS} FROM agent_messages WHERE project_id=?1 AND (created_at<?2 OR (created_at=?2 AND id<?3)) ORDER BY created_at DESC,id DESC LIMIT ?4")))?;
-    let mut rows = db(stmt.query(params![project.0.as_str(), time, key, page(limit)?]))?;
+    let mut rows = db(stmt.query(params![project.0.as_str(), time, key, page_limit(limit)?]))?;
     let mut out = Vec::new();
     while let Some(row) = db(rows.next())? {
         out.push(message_row(row)?);
@@ -227,7 +214,7 @@ pub(super) fn unhanded_direct_deliveries(
     let mut stmt = db(conn.prepare(&format!(
         "SELECT {DELIVERY_COLUMNS} FROM agent_message_deliveries WHERE project_id=?1 AND sequence>?2 AND handed_to_session_id IS NULL AND recipient_session_id IS NOT NULL AND EXISTS (SELECT 1 FROM agent_messages m WHERE m.id=message_id AND m.project_id=?1 AND m.target_item_id IS NULL AND m.target_session_id IS NOT NULL) ORDER BY sequence LIMIT ?3"
     )))?;
-    let mut rows = db(stmt.query(params![project.0.as_str(), after, page(limit)?]))?;
+    let mut rows = db(stmt.query(params![project.0.as_str(), after, page_limit(limit)?]))?;
     let mut deliveries = Vec::new();
     while let Some(row) = db(rows.next())? {
         deliveries.push(delivery_row(row)?);
@@ -278,7 +265,7 @@ pub(super) fn message_history(
     ]))?;
     let mut ids = Vec::new();
     while let Some(row) = db(rows.next())? {
-        ids.push((db(row.get::<_, i64>(0))?, id(db(row.get(1))?)?));
+        ids.push((db(row.get::<_, i64>(0))?, id_of(db(row.get(1))?)?));
     }
     drop(rows);
     drop(stmt);
@@ -326,11 +313,11 @@ pub(super) fn assignment_thread(
         unacknowledged_only,
         time,
         key,
-        page(limit)?
+        page_limit(limit)?
     ]))?;
     let mut ids = Vec::new();
     while let Some(row) = db(rows.next())? {
-        ids.push(id(db(row.get(0))?)?);
+        ids.push(id_of(db(row.get(0))?)?);
     }
     drop(rows);
     drop(stmt);
@@ -389,7 +376,7 @@ pub(super) fn inbox(
         recipient.map(|a| a.0.as_str()),
         after,
         include_read,
-        page(limit)?
+        page_limit(limit)?
     ]))?;
     let mut deliveries = Vec::new();
     while let Some(row) = db(rows.next())? {
@@ -425,7 +412,7 @@ pub(super) fn session_inbox(
         session.as_str(),
         after,
         include_read,
-        page(limit)?
+        page_limit(limit)?
     ]))?;
     let mut deliveries = Vec::new();
     while let Some(row) = db(rows.next())? {
@@ -478,7 +465,7 @@ pub(super) fn events(
         return Err(StorageError::InvalidRecord("negative event cursor".into()));
     }
     let mut stmt = db(conn.prepare(&format!("SELECT {EVENT_COLUMNS} FROM agent_message_events WHERE project_id=?1 AND sequence>?2 ORDER BY sequence LIMIT ?3")))?;
-    let mut rows = db(stmt.query(params![project.0.as_str(), after, page(limit)?]))?;
+    let mut rows = db(stmt.query(params![project.0.as_str(), after, page_limit(limit)?]))?;
     let mut out = Vec::new();
     while let Some(row) = db(rows.next())? {
         out.push(event_row(row)?);
