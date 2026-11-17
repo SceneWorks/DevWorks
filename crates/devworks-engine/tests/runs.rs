@@ -6892,6 +6892,119 @@ fn shutdown_does_not_wait_for_a_retained_receive_long_poll() {
     });
 }
 
+/// A waiting receive that is awaited holds no thread: 64 of them wait on a runtime with two
+/// worker threads and two blocking threads, a delivery wakes all of them, and a cancelled one
+/// ends at once.
+#[test]
+fn awaited_receives_hold_no_thread_and_all_wake_on_one_post() {
+    let _native_case = native_runtime_case();
+    const WAITERS: usize = 64;
+    let fx = Fx::new();
+    let agents = Arc::new(AgentService::new(fx.h.ids.clone(), fx.service.clone()));
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .max_blocking_threads(2)
+        .enable_all()
+        .build()
+        .unwrap();
+    let mut composed = composition_with(
+        &fx,
+        None,
+        Arc::new(FakePower::default()),
+        Arc::new(Authority),
+        Arc::new(FakeHost::default()),
+    );
+    composed.use_cases = fx.use_cases.clone().with_agents(agents.clone());
+    let app = Arc::new(
+        rt.block_on(boot(composed))
+            .unwrap_or_else(|e| panic!("boot: {e:?}")),
+    );
+    let frame = |key: &str, body: Value| {
+        serde_json::to_vec(&json!({
+            "protocol": PROTOCOL, "mode":"Command", "schemaRevision":7,
+            "requestKey":key, "body":body
+        }))
+        .unwrap()
+    };
+    let receive = json!({"kind":"agents.receive","projectId":"project-a","waitSeconds":55});
+    let spawn_receive = |key: String, cancellation: Option<Cancellation>| {
+        let (app, user) = (app.clone(), fx.user.clone());
+        let raw = frame(&key, receive.clone());
+        rt.spawn(async move {
+            app.command_awaiting(
+                &user,
+                "agents.receive",
+                &raw,
+                WriteOptions {
+                    cancellation,
+                    ..WriteOptions::default()
+                },
+            )
+            .await
+            .unwrap()
+        })
+    };
+    let started = std::time::Instant::now();
+    let waiting: Vec<_> = (0..WAITERS)
+        .map(|n| spawn_receive(format!("await-receive-{n}"), None))
+        .collect();
+    let cancellation = Cancellation::new();
+    let cancelled = spawn_receive("await-cancelled".into(), Some(cancellation.clone()));
+    rt.block_on(async {
+        // Every receive reaches its first wait: the pause counter moves once per wait.
+        while agents.receive_waits() < (WAITERS + 1) as u64 {
+            assert!(
+                started.elapsed() < Duration::from_secs(20),
+                "receives never waited"
+            );
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        // Both blocking threads are free while 65 receives wait.
+        tokio::time::timeout(Duration::from_secs(5), tokio::task::spawn_blocking(|| ()))
+            .await
+            .expect("a waiting receive held a blocking thread")
+            .unwrap();
+        let stopped = std::time::Instant::now();
+        cancellation.cancel();
+        let reply = tokio::time::timeout(Duration::from_secs(5), cancelled)
+            .await
+            .expect("a cancelled receive kept waiting")
+            .unwrap();
+        assert!(matches!(reply, CommandReply::Rejected { .. }));
+        assert!(stopped.elapsed() < Duration::from_secs(2));
+        let post = frame(
+            "await-post",
+            json!({"kind":"agents.post","projectId":"project-a","body":"Wake up","toHuman":true}),
+        );
+        let poster = (app.clone(), fx.user.clone());
+        let posted = tokio::task::spawn_blocking(move || {
+            poster.0.command(&poster.1, "agents.post", &post).unwrap()
+        })
+        .await
+        .unwrap();
+        assert!(matches!(posted, CommandReply::Recorded { .. }));
+        for receive in waiting {
+            let reply = tokio::time::timeout(Duration::from_secs(10), receive)
+                .await
+                .expect("a post did not wake every receive")
+                .unwrap();
+            assert!(matches!(
+                reply,
+                CommandReply::Recorded { receipt, .. }
+                if matches!(&receipt.decision, DomainDecision::Applied {
+                    result: devworks_core::protocol::results::OperationResult::AgentsReceive { value }
+                } if value.items.0.len() == 1 && value.items.0[0].body.0 == "Wake up")
+            ));
+        }
+    });
+    assert!(
+        started.elapsed() < Duration::from_secs(25),
+        "the waits ran to their cap: {:?}",
+        started.elapsed()
+    );
+    rt.block_on(app.shutdown());
+}
+
 impl devworks_core::ports::AuthorityPort for HeldAuthority {
     fn authorize(
         &self,

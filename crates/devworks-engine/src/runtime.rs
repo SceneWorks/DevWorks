@@ -18,7 +18,7 @@ use crate::resources::{BootReport as ResourceBootReport, Housekeeper};
 use crate::runs::{ActivationLauncher, RunGate, RunSettings, RunSupervisor};
 use crate::workers::{DrainAt, Loop, StopAt, Workers};
 use devworks_core::context::InvocationContext;
-use devworks_core::gateway::{CommandOutcome, Gateway, QueryOutcome};
+use devworks_core::gateway::{CommandOutcome, Gateway, PreparedReceive, QueryOutcome};
 use devworks_core::ports::files::FileFault;
 use devworks_core::ports::os_notifications::{OsNotificationPermission, OsNotificationPort};
 use devworks_core::ports::process::{PowerPort, ProcessHost};
@@ -2243,11 +2243,13 @@ impl Runtime {
                 StorageError::InvalidRecord("tool turn lacks durable start position".into())
             })?;
             if has_tools {
-                tool_dispatches = self.dispatch_pending_tool_calls_cancellable(
+                let pass = self.dispatch_pending_pass(
                     &ctx,
                     &session_id,
                     tool_cancellation.as_ref(),
+                    true,
                 )?;
+                tool_dispatches = self.settle_pending(pass).await;
             }
             let unanswered =
                 !crate::tool_turn::pending_calls(self.store.as_ref(), &ctx, &session_id)?
@@ -2292,23 +2294,29 @@ impl Runtime {
         session_id: &Id,
         call: &devworks_core::protocol::provider::ToolCallKey,
     ) -> Result<devworks_core::services::sessions::transcript::BatchOutcome, StorageError> {
-        self.dispatch_tool_call_cancellable(ctx, session_id, call, None)
+        match self.dispatch_tool_call_step(ctx, session_id, call, None, false)? {
+            crate::tool_turn::DispatchStep::Answered(outcome) => Ok(outcome),
+            crate::tool_turn::DispatchStep::Parked(_) => Err(StorageError::InvalidRecord(
+                "a blocking dispatch cannot park".into(),
+            )),
+        }
     }
 
-    fn dispatch_tool_call_cancellable(
+    fn dispatch_tool_call_step(
         &self,
         ctx: &InvocationContext,
         session_id: &Id,
         call: &devworks_core::protocol::provider::ToolCallKey,
         cancellation: Option<&Cancellation>,
-    ) -> Result<devworks_core::services::sessions::transcript::BatchOutcome, StorageError> {
+        defer_receive: bool,
+    ) -> Result<crate::tool_turn::DispatchStep, StorageError> {
         let providers = self.providers.as_ref().ok_or_else(|| {
             StorageError::unavailable(
                 Unavailable::UnsupportedRuntime,
                 "native provider unavailable",
             )
         })?;
-        crate::tool_turn::dispatch_one(
+        crate::tool_turn::dispatch_step(
             self,
             self.store.as_ref(),
             &self.artifacts,
@@ -2317,7 +2325,23 @@ impl Runtime {
             session_id,
             call,
             cancellation,
+            defer_receive,
         )
+    }
+
+    /// The first, non-blocking look at an `agents.receive` (see [`Admitter::begin_receive`]).
+    pub(crate) fn begin_receive(
+        &self,
+        ctx: &InvocationContext,
+        raw: &[u8],
+        options: WriteOptions,
+    ) -> ReceiveStart {
+        self.admitter.begin_receive(ctx, raw, options)
+    }
+
+    /// Awaits a receive's wait and decides it (see [`Admitter::finish_receive`]).
+    pub(crate) async fn finish_receive(&self, wait: Box<ReceiveWait>) -> CommandOutcome {
+        self.admitter.finish_receive(wait).await
     }
 
     /// Record a final cancellation only if this durable call has no dispatch-start marker.
@@ -2349,6 +2373,26 @@ impl Runtime {
         session_id: &Id,
         cancellation: Option<&Cancellation>,
     ) -> Result<Vec<ToolDispatch>, StorageError> {
+        Ok(self
+            .dispatch_pending_pass(ctx, session_id, cancellation, false)?
+            .into_iter()
+            .filter_map(|pass| match pass {
+                PendingCall::Done(dispatch) => Some(dispatch),
+                PendingCall::Parked(_) => None,
+            })
+            .collect())
+    }
+
+    /// The synchronous part of dispatching a session's pending calls on a bounded worker set.
+    /// With `defer_receive`, an `agents.receive` that has nothing to read yet comes back parked,
+    /// holding no thread; [`Self::settle_pending`] awaits it.
+    pub(crate) fn dispatch_pending_pass(
+        &self,
+        ctx: &InvocationContext,
+        session_id: &Id,
+        cancellation: Option<&Cancellation>,
+        defer_receive: bool,
+    ) -> Result<Vec<PendingCall>, StorageError> {
         let calls = crate::tool_turn::pending_calls(self.store.as_ref(), ctx, session_id)?;
         if calls.is_empty() {
             return Ok(Vec::new());
@@ -2360,7 +2404,7 @@ impl Runtime {
         let results = std::sync::Mutex::new(
             std::iter::repeat_with(|| None)
                 .take(calls.len())
-                .collect::<Vec<Option<ToolDispatch>>>(),
+                .collect::<Vec<Option<PendingCall>>>(),
         );
         std::thread::scope(|scope| {
             for _ in 0..calls.len().min(8) {
@@ -2371,26 +2415,35 @@ impl Runtime {
                     loop {
                         let index = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                         let Some(call) = calls.get(index) else { break };
-                        let outcome = if cancellation.is_some_and(Cancellation::is_cancelled) {
-                            self.cancel_tool_call_before_dispatch(ctx, session_id, call)
+                        let done = |outcome| {
+                            PendingCall::Done(ToolDispatch {
+                                call: call.clone(),
+                                outcome,
+                            })
+                        };
+                        let result = if cancellation.is_some_and(Cancellation::is_cancelled) {
+                            done(self.cancel_tool_call_before_dispatch(ctx, session_id, call))
                         } else {
-                            match self.dispatch_tool_call_cancellable(
+                            match self.dispatch_tool_call_step(
                                 ctx,
                                 session_id,
                                 call,
                                 cancellation,
+                                defer_receive,
                             ) {
-                                Err(StorageError::Cancelled) => {
-                                    self.cancel_tool_call_before_dispatch(ctx, session_id, call)
+                                Ok(crate::tool_turn::DispatchStep::Answered(outcome)) => {
+                                    done(Ok(outcome))
                                 }
-                                other => other,
+                                Ok(crate::tool_turn::DispatchStep::Parked(parked)) => {
+                                    PendingCall::Parked(parked)
+                                }
+                                Err(StorageError::Cancelled) => done(
+                                    self.cancel_tool_call_before_dispatch(ctx, session_id, call),
+                                ),
+                                Err(error) => done(Err(error)),
                             }
                         };
-                        results.lock().unwrap_or_else(|p| p.into_inner())[index] =
-                            Some(ToolDispatch {
-                                call: call.clone(),
-                                outcome,
-                            });
+                        results.lock().unwrap_or_else(|p| p.into_inner())[index] = Some(result);
                     }
                 });
             }
@@ -2401,6 +2454,35 @@ impl Runtime {
             .into_iter()
             .map(|result| result.expect("joined tool worker"))
             .collect())
+    }
+
+    /// The asynchronous part: awaits every parked receive together, without a thread each, and
+    /// returns every call's dispatch in the order the calls were listed.
+    pub(crate) async fn settle_pending(&self, passes: Vec<PendingCall>) -> Vec<ToolDispatch> {
+        let mut waiting: Vec<
+            std::pin::Pin<Box<dyn std::future::Future<Output = ToolDispatch> + Send + '_>>,
+        > = Vec::new();
+        let mut slots = Vec::new();
+        let mut dispatches = Vec::new();
+        for (index, pass) in passes.into_iter().enumerate() {
+            match pass {
+                PendingCall::Done(dispatch) => dispatches.push(Some(dispatch)),
+                PendingCall::Parked(parked) => {
+                    dispatches.push(None);
+                    slots.push(index);
+                    waiting.push(Box::pin(async move {
+                        let call = parked.key.clone();
+                        let outcome = parked.finish(self).await;
+                        ToolDispatch { call, outcome }
+                    }));
+                }
+            }
+        }
+        let mut finished = join_all(waiting).await.into_iter();
+        for index in slots {
+            dispatches[index] = finished.next();
+        }
+        dispatches.into_iter().flatten().collect()
     }
 
     /// Read a closed tool turn in native ordinal order after every emitted call has its one
@@ -3101,6 +3183,27 @@ impl Runtime {
         self.admitter.command_with(ctx, operation, raw, options)
     }
 
+    /// [`Self::command_with`] for a caller that can await. An `agents.receive` with nothing to
+    /// read yet waits as a suspended task: it holds no thread, ends at once on cancellation and
+    /// looks again when a command commits or every five seconds. Any other operation runs as
+    /// [`Self::command_with`] does. Callers that cannot await keep [`Self::command_with`], which
+    /// parks the calling thread for the wait.
+    pub async fn command_awaiting(
+        &self,
+        ctx: &InvocationContext,
+        operation: &str,
+        raw: &[u8],
+        options: WriteOptions,
+    ) -> CommandOutcome {
+        if operation != "agents.receive" {
+            return self.command_with(ctx, operation, raw, options);
+        }
+        match self.begin_receive(ctx, raw, options) {
+            ReceiveStart::Answered(outcome) => outcome,
+            ReceiveStart::Waiting(wait) => self.finish_receive(wait).await,
+        }
+    }
+
     /// The jobs service the `jobs.*` use cases, the scheduler and the lifecycle hooks share.
     pub fn jobs(&self) -> &Arc<JobService> {
         &self.jobs
@@ -3445,6 +3548,54 @@ struct Admitter {
     handle: tokio::runtime::Handle,
 }
 
+/// One pending tool call after the synchronous part of dispatch.
+pub(crate) enum PendingCall {
+    Done(ToolDispatch),
+    /// A waiting `agents.receive`, parked without a thread.
+    Parked(Box<crate::tool_turn::ParkedReceive>),
+}
+
+/// Drives every future to completion on the calling task and returns the outputs in order.
+async fn join_all<'a, T>(
+    mut futures: Vec<std::pin::Pin<Box<dyn std::future::Future<Output = T> + Send + 'a>>>,
+) -> Vec<T> {
+    let mut outputs: Vec<Option<T>> = futures.iter().map(|_| None).collect();
+    std::future::poll_fn(|cx| {
+        let mut pending = false;
+        for (future, output) in futures.iter_mut().zip(outputs.iter_mut()) {
+            if output.is_none() {
+                match future.as_mut().poll(cx) {
+                    std::task::Poll::Ready(value) => *output = Some(value),
+                    std::task::Poll::Pending => pending = true,
+                }
+            }
+        }
+        if pending {
+            std::task::Poll::Pending
+        } else {
+            std::task::Poll::Ready(())
+        }
+    })
+    .await;
+    outputs.into_iter().flatten().collect()
+}
+
+/// Where a receive stands after its first, non-blocking look.
+#[allow(clippy::large_enum_variant)] // the reply is returned at once; boxing it buys nothing
+pub(crate) enum ReceiveStart {
+    Answered(CommandOutcome),
+    Waiting(Box<ReceiveWait>),
+}
+
+/// A receive waiting for a message. It holds no thread; dropping it abandons the wait.
+pub(crate) struct ReceiveWait {
+    ctx: InvocationContext,
+    raw: Vec<u8>,
+    prepared: PreparedReceive,
+    /// Keeps the wait registered for shutdown to cancel.
+    guard: ReceiveWaitGuard,
+}
+
 struct ReceiveWaitGuard {
     id: u64,
     waiters: Arc<Mutex<BTreeMap<u64, Cancellation>>>,
@@ -3567,7 +3718,120 @@ impl Admitter {
                     .command_with(&self.gateway(), ctx, operation, raw, options.clone())
             })?
         };
-        let (committed, released) = match &outcome {
+        self.after_command(operation, raw, &outcome, wake_resumes);
+        Some(outcome)
+    }
+
+    /// Phase one of an `agents.receive` that holds no thread: admits it, looks once and either
+    /// answers or returns the wait for the caller to await ([`Self::finish_receive`]).
+    fn begin_receive(
+        &self,
+        ctx: &InvocationContext,
+        raw: &[u8],
+        mut options: WriteOptions,
+    ) -> ReceiveStart {
+        let token = options
+            .cancellation
+            .get_or_insert_with(Cancellation::new)
+            .clone();
+        let guard = {
+            let open = self.admission.read().unwrap_or_else(|p| p.into_inner());
+            if *open {
+                return ReceiveStart::Answered(closing_reply(
+                    raw,
+                    self.ids.next_id(devworks_core::ports::IdKind::Correlation),
+                ));
+            }
+            let id = self.next_receive_waiter.fetch_add(1, Ordering::Relaxed);
+            self.receive_waiters
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .insert(id, token);
+            ReceiveWaitGuard {
+                id,
+                waiters: self.receive_waiters.clone(),
+            }
+        };
+        match self
+            .use_cases
+            .start_receive(&self.gateway(), ctx, raw, options)
+        {
+            Ok(prepared) if prepared.ticket().is_some() => {
+                ReceiveStart::Waiting(Box::new(ReceiveWait {
+                    ctx: ctx.clone(),
+                    raw: raw.to_vec(),
+                    prepared,
+                    guard,
+                }))
+            }
+            prepared => {
+                drop(guard);
+                ReceiveStart::Answered(self.decide_receive(ctx, raw, prepared))
+            }
+        }
+    }
+
+    /// Phase two: waits without holding a thread for a signal, a cancellation or the recheck
+    /// interval, looks again, and decides once nothing is left to wait for.
+    async fn finish_receive(&self, wait: Box<ReceiveWait>) -> CommandOutcome {
+        let ReceiveWait {
+            ctx,
+            raw,
+            mut prepared,
+            guard,
+        } = *wait;
+        while let Some(ticket) = prepared.ticket() {
+            let (wake, generation, pause) =
+                (ticket.wake.clone(), ticket.generation, ticket.pause());
+            // A timeout is the recheck interval or the deadline; either ends in a new look.
+            let _ = tokio::time::timeout(pause, wake.changed_after(generation)).await;
+            if let Err(outcome) =
+                self.use_cases
+                    .recheck_receive(&self.gateway(), &ctx, &mut prepared)
+            {
+                return outcome;
+            }
+        }
+        drop(guard);
+        self.decide_receive(&ctx, &raw, Ok(prepared))
+    }
+
+    /// The short decision of a receive under the admission fence, then its commit wakeups.
+    fn decide_receive(
+        &self,
+        ctx: &InvocationContext,
+        raw: &[u8],
+        prepared: Result<PreparedReceive, CommandOutcome>,
+    ) -> CommandOutcome {
+        let open = self.admission.read().unwrap_or_else(|p| p.into_inner());
+        let outcome = if *open {
+            closing_reply(
+                raw,
+                self.ids.next_id(devworks_core::ports::IdKind::Correlation),
+            )
+        } else {
+            match prepared {
+                Ok(prepared) => self
+                    .use_cases
+                    .finish_receive(&self.gateway(), ctx, prepared),
+                Err(outcome) => outcome,
+            }
+        };
+        drop(open);
+        self.after_command("agents.receive", raw, &outcome, true);
+        outcome
+    }
+
+    /// What a command's outcome sets in motion once it is known: the state-change count, the
+    /// workers a commit wakes and the follow-up work some operations start.
+    fn after_command(
+        &self,
+        operation: &str,
+        raw: &[u8],
+        outcome: &CommandOutcome,
+        wake_resumes: bool,
+    ) {
+        let (committed, released) = match outcome {
             Ok(CommandReply::Recorded { receipt, .. }) => (
                 true,
                 matches!(receipt.decision, DomainDecision::Applied { .. }),
@@ -3577,7 +3841,7 @@ impl Admitter {
         };
         // A replayed receipt or a refusal records nothing new in domain state, so it cannot
         // unblock a waiter; counting it would wake the caller that submitted it.
-        let changed = match &outcome {
+        let changed = match outcome {
             Ok(CommandReply::Recorded {
                 receipt, replayed, ..
             }) => !replayed && !matches!(receipt.decision, DomainDecision::Refused { .. }),
@@ -3666,7 +3930,6 @@ impl Admitter {
                 |s| ka.refresh(s.configuration()),
             );
         }
-        Some(outcome)
     }
 }
 impl crate::package_host::broker::GatewayCalls for Admitter {

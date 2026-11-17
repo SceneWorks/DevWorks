@@ -583,6 +583,30 @@ impl UseCases {
         }
     }
 
+    /// Phase one of a receive that holds no thread (see [`Gateway::start_receive`]).
+    pub fn start_receive(
+        &self,
+        gateway: &Gateway<'_>,
+        ctx: &InvocationContext,
+        raw: &[u8],
+        options: WriteOptions,
+    ) -> Result<PreparedReceive, CommandOutcome> {
+        match self.commands.get("agents.receive") {
+            Some(handler) => gateway.start_receive(ctx, raw, handler.clone(), options),
+            None => Err(Err(GatewayFailure::NoUseCase("agents.receive".into()))),
+        }
+    }
+
+    /// Looks again at a receive that waited (see [`Gateway::recheck_receive`]).
+    pub fn recheck_receive(
+        &self,
+        gateway: &Gateway<'_>,
+        ctx: &InvocationContext,
+        prepared: &mut PreparedReceive,
+    ) -> Result<(), CommandOutcome> {
+        gateway.recheck_receive(ctx, prepared)
+    }
+
     pub fn finish_receive(
         &self,
         gateway: &Gateway<'_>,

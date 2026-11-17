@@ -2027,12 +2027,32 @@ impl QueryHandler for AgentService {
 }
 
 impl CommandHandler for AgentService {
+    /// A receive that waits blocks this thread until its message arrives, the caller cancels or
+    /// the wait's cap passes. Callers that can await use [`Self::poll_wait`] through
+    /// [`Gateway::start_receive`] instead and hold no thread.
     fn prepare(
         &self,
         ctx: &InvocationContext,
         command: &AdmittedCommand,
         env: &Preparation<'_>,
     ) -> Result<Option<crate::ports::Prepared>, StorageError> {
+        let mut deadline = None;
+        while let Some(ticket) = self.poll_wait(ctx, command, env, deadline)? {
+            deadline = Some(ticket.deadline);
+            // The recheck interval only covers a delivery written outside the gateway (a budget
+            // notice); a gateway command wakes the wait directly.
+            ticket.wake.wait_after(ticket.generation, ticket.pause());
+        }
+        Ok(None)
+    }
+
+    fn poll_wait(
+        &self,
+        ctx: &InvocationContext,
+        command: &AdmittedCommand,
+        env: &Preparation<'_>,
+        deadline: Option<Instant>,
+    ) -> Result<Option<crate::ports::WaitTicket>, StorageError> {
         let OperationInput::Agents(ops::Input::Receive(input)) = command.input() else {
             return Ok(None);
         };
@@ -2042,113 +2062,107 @@ impl CommandHandler for AgentService {
         if wait == 0 {
             return Ok(None);
         }
-        let deadline = Instant::now() + Duration::from_secs(wait);
+        let deadline = deadline.unwrap_or_else(|| Instant::now() + Duration::from_secs(wait));
         // Register for cancellation first, then read the signal count, then check: a delivery or
-        // a cancellation after the count is read ends the park below at once.
+        // a cancellation after the count is read ends the wait at once.
         if let Some(token) = env.cancellation {
             token.wake_on_cancel(&self.delivery_wake);
         }
-        loop {
-            let seen = self.delivery_wake.generation();
-            if env.cancellation.is_some_and(|token| token.is_cancelled()) {
-                return Err(StorageError::Cancelled);
+        let seen = self.delivery_wake.generation();
+        if env.cancellation.is_some_and(|token| token.is_cancelled()) {
+            return Err(StorageError::Cancelled);
+        }
+        let available = env.read(|snapshot| {
+            if snapshot.receipts().lookup(command.identity())?.is_some() {
+                return Ok(true);
             }
-            let available = env.read(|snapshot| {
-                if snapshot.receipts().lookup(command.identity())?.is_some() {
-                    return Ok(true);
-                }
-                if input.session_id.is_some() && input.session_id.as_ref() != ctx.session_id() {
+            if input.session_id.is_some() && input.session_id.as_ref() != ctx.session_id() {
+                return Err(StorageError::ScopeDenied);
+            }
+            if snapshot.actors().actor_kind(ctx.principal())? != Some(ctx.principal_kind()) {
+                return Err(StorageError::ScopeDenied);
+            }
+            let (project, recipient) = if let Some(session_id) = ctx.session_id() {
+                if ctx.principal_kind() != PrincipalKind::Agent {
                     return Err(StorageError::ScopeDenied);
                 }
-                if snapshot.actors().actor_kind(ctx.principal())? != Some(ctx.principal_kind()) {
+                let session = snapshot
+                    .sessions()
+                    .session(session_id)?
+                    .ok_or(StorageError::ScopeDenied)?;
+                if session.closed() || session.agent_id != *ctx.principal() {
                     return Err(StorageError::ScopeDenied);
                 }
-                let (project, recipient) = if let Some(session_id) = ctx.session_id() {
-                    if ctx.principal_kind() != PrincipalKind::Agent {
-                        return Err(StorageError::ScopeDenied);
-                    }
-                    let session = snapshot
-                        .sessions()
-                        .session(session_id)?
-                        .ok_or(StorageError::ScopeDenied)?;
-                    if session.closed() || session.agent_id != *ctx.principal() {
-                        return Err(StorageError::ScopeDenied);
-                    }
-                    let project = session.project_id.ok_or(StorageError::ScopeDenied)?;
-                    if input
-                        .project_id
-                        .as_ref()
-                        .is_some_and(|named| named != &project)
-                    {
-                        return Err(StorageError::ScopeDenied);
-                    }
-                    (project, retained::Recipient::Session(session_id.clone()))
-                } else {
-                    if ctx.principal_kind() != PrincipalKind::Human {
-                        return Err(StorageError::ScopeDenied);
-                    }
-                    let project = input.project_id.clone().ok_or_else(|| {
-                        StorageError::InvalidRecord("human inbox needs project".into())
-                    })?;
-                    (project, retained::Recipient::Human)
-                };
-                if ctx.project_id().is_some_and(|scope| scope != &project)
-                    || snapshot.projects().project(&project)?.is_none()
+                let project = session.project_id.ok_or(StorageError::ScopeDenied)?;
+                if input
+                    .project_id
+                    .as_ref()
+                    .is_some_and(|named| named != &project)
                 {
                     return Err(StorageError::ScopeDenied);
                 }
-                let after = receive_after(ctx, input, &project, &recipient)
-                    .map_err(Failure::into_storage)?;
-                if after > snapshot.runs().agent_delivery_head()? {
-                    return Err(StorageError::CursorExpired);
+                (project, retained::Recipient::Session(session_id.clone()))
+            } else {
+                if ctx.principal_kind() != PrincipalKind::Human {
+                    return Err(StorageError::ScopeDenied);
                 }
-                let rows = match recipient {
-                    retained::Recipient::Session(ref session_id) => {
-                        snapshot.runs().agent_session_inbox(
-                            &project,
-                            session_id,
-                            after,
-                            input.include_read.unwrap_or(false),
-                            limit,
-                        )?
-                    }
-                    retained::Recipient::Human => snapshot.runs().agent_inbox(
+                let project = input.project_id.clone().ok_or_else(|| {
+                    StorageError::InvalidRecord("human inbox needs project".into())
+                })?;
+                (project, retained::Recipient::Human)
+            };
+            if ctx.project_id().is_some_and(|scope| scope != &project)
+                || snapshot.projects().project(&project)?.is_none()
+            {
+                return Err(StorageError::ScopeDenied);
+            }
+            let after =
+                receive_after(ctx, input, &project, &recipient).map_err(Failure::into_storage)?;
+            if after > snapshot.runs().agent_delivery_head()? {
+                return Err(StorageError::CursorExpired);
+            }
+            let rows = match recipient {
+                retained::Recipient::Session(ref session_id) => {
+                    snapshot.runs().agent_session_inbox(
                         &project,
-                        None,
+                        session_id,
                         after,
                         input.include_read.unwrap_or(false),
                         limit,
-                    )?,
-                };
-                Ok(!rows.is_empty())
-            });
-            // A rule this check meets is refused by `decide` with its own target; only a
-            // storage fault ends the wait here.
-            let available = match available {
-                Ok(available) => available,
-                Err(
-                    StorageError::ScopeDenied
-                    | StorageError::InvalidRecord(_)
-                    | StorageError::CursorExpired,
-                ) => return Ok(None),
-                Err(error) => return Err(error),
+                    )?
+                }
+                retained::Recipient::Human => snapshot.runs().agent_inbox(
+                    &project,
+                    None,
+                    after,
+                    input.include_read.unwrap_or(false),
+                    limit,
+                )?,
             };
-            if available || Instant::now() >= deadline {
-                return Ok(None);
-            }
-            self.receive_waits
-                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-            // Park until a commit signals, the caller cancels or the wait's cap passes. The
-            // recheck interval only covers a delivery written outside the gateway (a budget
-            // notice); a gateway command wakes the wait directly.
-            self.delivery_wake.wait_after(
-                seen,
-                std::cmp::min(
-                    UNSIGNALLED_RECHECK,
-                    deadline.saturating_duration_since(Instant::now()),
-                ),
-            );
+            Ok(!rows.is_empty())
+        });
+        // A rule this check meets is refused by `decide` with its own target; only a
+        // storage fault ends the wait here.
+        let available = match available {
+            Ok(available) => available,
+            Err(
+                StorageError::ScopeDenied
+                | StorageError::InvalidRecord(_)
+                | StorageError::CursorExpired,
+            ) => return Ok(None),
+            Err(error) => return Err(error),
+        };
+        if available || Instant::now() >= deadline {
+            return Ok(None);
         }
+        self.receive_waits
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Ok(Some(crate::ports::WaitTicket {
+            wake: self.delivery_wake.clone(),
+            generation: seen,
+            deadline,
+            recheck: UNSIGNALLED_RECHECK,
+        }))
     }
 
     fn decide(

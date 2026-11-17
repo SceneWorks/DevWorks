@@ -1,11 +1,13 @@
 //! Host-owned framing of provider tool arguments. A provider chooses arguments only; the
 //! selected operation, mode, request identity and contract envelope come from the host.
+use crate::runtime::{ReceiveStart, ReceiveWait};
 use crate::turn_error::artifact_read_fault;
 use crate::{providers::schemas::RegisteredSchemas, runtime::Runtime};
 use devworks_core::{
     admission::{self, Selection},
     context::{InvocationContext, PrincipalKind},
     fingerprint::sha256_hex,
+    gateway::CommandOutcome,
     ports::{IdKind, storage::*},
     protocol::{
         AttemptId, CONTRACT, CommandReply, Id, OperationId, OperationState, RetryAdvice, Revision,
@@ -1625,11 +1627,62 @@ pub(crate) fn frame_as(
     Ok(bytes)
 }
 
+/// Where a dispatch stands after its synchronous part.
+pub(crate) enum DispatchStep {
+    Answered(BatchOutcome),
+    /// An `agents.receive` with nothing to read yet: it holds no thread while it waits.
+    Parked(Box<ParkedReceive>),
+}
+
+/// A dispatched `agents.receive` waiting for a message, with what the call needs to record its
+/// response once the wait ends.
+pub(crate) struct ParkedReceive {
+    pub(crate) wait: Box<ReceiveWait>,
+    descriptor: &'static OperationDescriptor,
+    raw: Vec<u8>,
+    ctx: InvocationContext,
+    session_id: Id,
+    pub(crate) key: ToolCallKey,
+}
+impl ParkedReceive {
+    /// Waits without holding a thread, then records the call's response.
+    pub(crate) async fn finish(self, runtime: &Runtime) -> Result<BatchOutcome, StorageError> {
+        let Self {
+            wait,
+            descriptor,
+            raw,
+            ctx,
+            session_id,
+            key,
+        } = self;
+        let reply = runtime.finish_receive(wait).await;
+        let (outcome, bytes) = command_response(
+            runtime,
+            runtime.store().as_ref(),
+            &ctx,
+            descriptor,
+            &raw,
+            reply,
+        )?;
+        record_response(
+            runtime.store().as_ref(),
+            runtime.artifacts(),
+            &ctx,
+            &session_id,
+            &key,
+            outcome,
+            bytes,
+        )
+    }
+}
+
 /// Execute one durable, unanswered provider call through the same gateway used by UI and agent
 /// tools. The call's recorded schema chooses the operation; provider arguments never choose it.
 /// Command retries reuse the host key, so a lost reply cannot repeat the effect.
+/// With `defer_receive`, a waiting `agents.receive` comes back parked instead of blocking the
+/// calling thread.
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn dispatch_one(
+pub(crate) fn dispatch_step(
     runtime: &Runtime,
     store: &dyn ApplicationStore,
     artifacts: &Arc<ArtifactService>,
@@ -1638,7 +1691,8 @@ pub(crate) fn dispatch_one(
     session_id: &Id,
     key: &ToolCallKey,
     cancellation: Option<&Cancellation>,
-) -> Result<BatchOutcome, StorageError> {
+    defer_receive: bool,
+) -> Result<DispatchStep, StorageError> {
     let (call, started, call_sequence, context_epoch) =
         read_snapshot(store, &ReadOptions::default(), |read| {
             let session = read
@@ -1909,44 +1963,49 @@ pub(crate) fn dispatch_one(
                 }
             },
             Ok((descriptor, Mode::Command, raw)) => {
-                match runtime.command(ctx, descriptor.name, &raw) {
-                    Ok(CommandReply::CommandStatusUnknown { .. }) => {
-                        // Same host key is retried on recovery until the gateway returns its receipt.
-                        return Err(StorageError::unavailable(
-                            Unavailable::UnsupportedRuntime,
-                            "tool command status unknown",
-                        ));
-                    }
-                    Ok(CommandReply::ReceiptPurged { .. }) => {
-                        return Err(StorageError::unavailable(
-                            Unavailable::UnsupportedRuntime,
-                            "tool command receipt purged before outcome reconciliation",
-                        ));
-                    }
-                    Ok(reply @ CommandReply::Recorded { .. }) if approval_refusal(&reply) => {
-                        held_approval(runtime, store, ctx, descriptor, &raw)?
-                    }
-                    Ok(reply @ CommandReply::Recorded { .. }) => recorded_command(&reply)?,
-                    Ok(CommandReply::Rejected { code, retry, .. }) => {
-                        if needs_recovery(retry) {
-                            return Err(StorageError::unavailable(
-                                Unavailable::UnsupportedRuntime,
-                                "tool command rejection requires reconciliation",
-                            ));
+                let reply = if defer_receive && descriptor.name == "agents.receive" {
+                    match runtime.begin_receive(
+                        ctx,
+                        &raw,
+                        WriteOptions {
+                            cancellation: cancellation.cloned(),
+                            ..WriteOptions::default()
+                        },
+                    ) {
+                        ReceiveStart::Answered(reply) => reply,
+                        ReceiveStart::Waiting(wait) => {
+                            return Ok(DispatchStep::Parked(Box::new(ParkedReceive {
+                                wait,
+                                descriptor,
+                                raw,
+                                ctx: ctx.clone(),
+                                session_id: session_id.clone(),
+                                key: key.clone(),
+                            })));
                         }
-                        failed(&format!("command_{code:?}"))
                     }
-                    Err(_) => {
-                        return Err(StorageError::unavailable(
-                            Unavailable::UnsupportedRuntime,
-                            "tool command gateway failed before receipt reconciliation",
-                        ));
-                    }
-                }
+                } else {
+                    runtime.command(ctx, descriptor.name, &raw)
+                };
+                command_response(runtime, store, ctx, descriptor, &raw, reply)?
             }
             Err(_) => failed("tool_invalid_arguments"),
         }
     };
+    record_response(store, artifacts, ctx, session_id, key, outcome, bytes)
+        .map(DispatchStep::Answered)
+}
+
+/// Records the one response of a dispatched call (staging its result bytes as an artifact).
+fn record_response(
+    store: &dyn ApplicationStore,
+    artifacts: &Arc<ArtifactService>,
+    ctx: &InvocationContext,
+    session_id: &Id,
+    key: &ToolCallKey,
+    outcome: ToolOutcome,
+    bytes: Option<Vec<u8>>,
+) -> Result<BatchOutcome, StorageError> {
     let staged =
         if let Some(bytes) = &bytes {
             Some(artifacts.stage_host_bytes(store, bytes,
@@ -2454,6 +2513,52 @@ fn recorded_command(
 }
 
 /// Whether a domain command refused the call because a person must approve it.
+/// Turns a command's gateway outcome into the response a tool call records. An outcome that
+/// leaves the call unanswered is an error: the same host key is retried on recovery.
+fn command_response(
+    runtime: &Runtime,
+    store: &dyn ApplicationStore,
+    ctx: &InvocationContext,
+    descriptor: &'static OperationDescriptor,
+    raw: &[u8],
+    reply: CommandOutcome,
+) -> Result<(ToolOutcome, Option<Vec<u8>>), StorageError> {
+    Ok(match reply {
+        Ok(CommandReply::CommandStatusUnknown { .. }) => {
+            // Same host key is retried on recovery until the gateway returns its receipt.
+            return Err(StorageError::unavailable(
+                Unavailable::UnsupportedRuntime,
+                "tool command status unknown",
+            ));
+        }
+        Ok(CommandReply::ReceiptPurged { .. }) => {
+            return Err(StorageError::unavailable(
+                Unavailable::UnsupportedRuntime,
+                "tool command receipt purged before outcome reconciliation",
+            ));
+        }
+        Ok(reply @ CommandReply::Recorded { .. }) if approval_refusal(&reply) => {
+            held_approval(runtime, store, ctx, descriptor, raw)?
+        }
+        Ok(reply @ CommandReply::Recorded { .. }) => recorded_command(&reply)?,
+        Ok(CommandReply::Rejected { code, retry, .. }) => {
+            if needs_recovery(retry) {
+                return Err(StorageError::unavailable(
+                    Unavailable::UnsupportedRuntime,
+                    "tool command rejection requires reconciliation",
+                ));
+            }
+            failed(&format!("command_{code:?}"))
+        }
+        Err(_) => {
+            return Err(StorageError::unavailable(
+                Unavailable::UnsupportedRuntime,
+                "tool command gateway failed before receipt reconciliation",
+            ));
+        }
+    })
+}
+
 fn approval_refusal(reply: &DomainCommandReply) -> bool {
     matches!(reply, CommandReply::Recorded { receipt, .. }
         if matches!(&receipt.decision, DomainDecision::Refused { fault }

@@ -66,9 +66,11 @@ use crate::protocol::{
 use crate::registry::SchemaRevision;
 use serde_json::Value;
 use std::fmt;
+use std::future::Future;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
-use std::sync::{Arc, Condvar, Mutex, Weak};
+use std::sync::{Arc, Mutex, Weak};
+use std::task::{Context, Poll, Waker};
 
 mod agents;
 mod artifacts;
@@ -262,8 +264,8 @@ fn redacted(text: &str) -> String {
 // ---------------------------------------------------------------------------------------------
 // Admission options and the transaction owner
 
-/// Cooperative cancellation shared between a caller and the write/read owner. A waiter that parks
-/// on a [`Wake`] registers it, so cancelling ends the wait at once instead of at the next poll.
+/// Cooperative cancellation shared between a caller and the write/read owner. A waiter on a
+/// [`Wake`] registers it, so cancelling ends the wait at once instead of at the next poll.
 #[derive(Clone, Debug, Default)]
 pub struct Cancellation(Arc<CancelState>);
 #[derive(Debug, Default)]
@@ -305,35 +307,115 @@ impl Cancellation {
 }
 
 /// A signal that something a waiter is waiting for may have changed. A waiter reads
-/// [`Wake::generation`] before it checks its condition and then calls [`Wake::wait_after`] with
-/// that value, so a signal sent between the check and the wait is never lost. The waiter parks on
-/// a condition variable: it holds no connection and burns no CPU, and a signal or a cancellation
-/// ends the wait at once.
+/// [`Wake::generation`] before it checks its condition and then waits for a change after that
+/// value ([`Wake::changed_after`], or [`Wake::wait_after`] for a caller that cannot await), so a
+/// signal sent between the check and the wait is never lost. An awaiting waiter holds no thread:
+/// the signal wakes its task. The signal depends on no async runtime.
 #[derive(Debug, Default)]
 pub struct Wake {
-    generation: Mutex<u64>,
-    changed: Condvar,
+    state: Mutex<WakeState>,
+}
+#[derive(Debug, Default)]
+struct WakeState {
+    generation: u64,
+    next_slot: u64,
+    wakers: Vec<(u64, Waker)>,
 }
 impl Wake {
     pub fn new() -> Arc<Self> {
         Arc::new(Self::default())
     }
+    fn lock(&self) -> std::sync::MutexGuard<'_, WakeState> {
+        self.state.lock().unwrap_or_else(|p| p.into_inner())
+    }
     /// Signals every waiter.
     pub fn notify(&self) {
-        *self.generation.lock().unwrap_or_else(|p| p.into_inner()) += 1;
-        self.changed.notify_all();
+        let wakers = {
+            let mut state = self.lock();
+            state.generation += 1;
+            std::mem::take(&mut state.wakers)
+        };
+        for (_, waker) in wakers {
+            waker.wake();
+        }
     }
     /// The number of signals so far.
     pub fn generation(&self) -> u64 {
-        *self.generation.lock().unwrap_or_else(|p| p.into_inner())
+        self.lock().generation
     }
-    /// Parks until a signal arrives after `seen` or `timeout` passes, whichever is first.
-    pub fn wait_after(&self, seen: u64, timeout: std::time::Duration) {
-        let guard = self.generation.lock().unwrap_or_else(|p| p.into_inner());
-        let _ = self
-            .changed
-            .wait_timeout_while(guard, timeout, |now| *now == seen)
-            .unwrap_or_else(|p| p.into_inner());
+    /// Resolves once a signal arrives after `seen`. Dropping it ends the wait.
+    pub fn changed_after(self: &Arc<Self>, seen: u64) -> Changed {
+        Changed {
+            wake: self.clone(),
+            seen,
+            slot: None,
+        }
+    }
+    /// Parks the calling thread until a signal arrives after `seen` or `timeout` passes,
+    /// whichever is first. For a caller that cannot await; an awaiting caller uses
+    /// [`Wake::changed_after`] and holds no thread.
+    pub fn wait_after(self: &Arc<Self>, seen: u64, timeout: std::time::Duration) {
+        struct Unpark(std::thread::Thread);
+        impl std::task::Wake for Unpark {
+            fn wake(self: Arc<Self>) {
+                self.0.unpark();
+            }
+        }
+        let deadline = std::time::Instant::now() + timeout;
+        let waker = Waker::from(Arc::new(Unpark(std::thread::current())));
+        let mut cx = Context::from_waker(&waker);
+        let mut changed = std::pin::pin!(self.changed_after(seen));
+        loop {
+            if changed.as_mut().poll(&mut cx).is_ready() {
+                return;
+            }
+            let now = std::time::Instant::now();
+            if now >= deadline {
+                return;
+            }
+            std::thread::park_timeout(deadline - now);
+        }
+    }
+}
+
+/// The future of [`Wake::changed_after`].
+#[derive(Debug)]
+pub struct Changed {
+    wake: Arc<Wake>,
+    seen: u64,
+    slot: Option<u64>,
+}
+impl Future for Changed {
+    type Output = ();
+    fn poll(mut self: std::pin::Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<()> {
+        let wake = self.wake.clone();
+        let mut state = wake.lock();
+        if state.generation != self.seen {
+            if let Some(slot) = self.slot.take() {
+                state.wakers.retain(|(id, _)| *id != slot);
+            }
+            return Poll::Ready(());
+        }
+        let slot = match self.slot {
+            Some(slot) => slot,
+            None => {
+                state.next_slot += 1;
+                self.slot = Some(state.next_slot);
+                state.next_slot
+            }
+        };
+        match state.wakers.iter_mut().find(|(id, _)| *id == slot) {
+            Some((_, waker)) => waker.clone_from(cx.waker()),
+            None => state.wakers.push((slot, cx.waker().clone())),
+        }
+        Poll::Pending
+    }
+}
+impl Drop for Changed {
+    fn drop(&mut self) {
+        if let Some(slot) = self.slot {
+            self.wake.lock().wakers.retain(|(id, _)| *id != slot);
+        }
     }
 }
 
@@ -1443,3 +1525,76 @@ pub trait StorageMaintenance {
 
 #[cfg(feature = "contract-suite")]
 pub mod contract;
+
+#[cfg(test)]
+mod wake_tests {
+    use super::*;
+    use std::time::{Duration, Instant};
+
+    fn poll_once(future: &mut Changed) -> Poll<()> {
+        let mut cx = Context::from_waker(Waker::noop());
+        std::pin::Pin::new(future).poll(&mut cx)
+    }
+
+    #[test]
+    fn a_signal_after_the_count_is_read_is_not_lost() {
+        let wake = Wake::new();
+        let seen = wake.generation();
+        wake.notify();
+        assert!(poll_once(&mut wake.changed_after(seen)).is_ready());
+    }
+
+    #[test]
+    fn a_waiting_future_is_woken_once_and_dropping_it_removes_its_waker() {
+        struct Count(std::sync::atomic::AtomicUsize);
+        impl std::task::Wake for Count {
+            fn wake(self: Arc<Self>) {
+                self.0.fetch_add(1, Ordering::SeqCst);
+            }
+        }
+        let wake = Wake::new();
+        let count = Arc::new(Count(Default::default()));
+        let waker = Waker::from(count.clone());
+        let mut cx = Context::from_waker(&waker);
+        let mut changed = wake.changed_after(wake.generation());
+        assert!(std::pin::Pin::new(&mut changed).poll(&mut cx).is_pending());
+        // Polling again replaces its waker rather than adding one.
+        assert!(std::pin::Pin::new(&mut changed).poll(&mut cx).is_pending());
+        wake.notify();
+        assert_eq!(count.0.load(Ordering::SeqCst), 1);
+        assert!(std::pin::Pin::new(&mut changed).poll(&mut cx).is_ready());
+        let mut dropped = wake.changed_after(wake.generation());
+        assert!(poll_once(&mut dropped).is_pending());
+        drop(dropped);
+        assert!(wake.lock().wakers.is_empty());
+    }
+
+    #[test]
+    fn a_blocking_wait_ends_on_a_signal_or_its_timeout() {
+        let wake = Wake::new();
+        let started = Instant::now();
+        wake.wait_after(wake.generation(), Duration::from_millis(50));
+        assert!(started.elapsed() >= Duration::from_millis(50));
+        let seen = wake.generation();
+        let signal = wake.clone();
+        let sender = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(20));
+            signal.notify();
+        });
+        let started = Instant::now();
+        wake.wait_after(seen, Duration::from_secs(30));
+        assert!(started.elapsed() < Duration::from_secs(10));
+        sender.join().unwrap();
+    }
+
+    #[test]
+    fn cancelling_wakes_a_registered_wait() {
+        let wake = Wake::new();
+        let token = Cancellation::new();
+        token.wake_on_cancel(&wake);
+        let seen = wake.generation();
+        token.cancel();
+        assert!(poll_once(&mut wake.changed_after(seen)).is_ready());
+        assert!(token.is_cancelled());
+    }
+}
