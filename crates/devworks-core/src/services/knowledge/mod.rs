@@ -853,8 +853,8 @@ impl KnowledgeService {
             }
             _ => (claim_wire(k, &claim, &th)?, None),
         };
-        let wire = with_skills(snapshot, ctx, wire)?;
-        let bundle = bundle_of(k, &scoped, &claim, wire, &th, at)?;
+        let mut bundle = bundle_of(k, &scoped, &claim, wire, &th, at)?;
+        bundle.claims.0 = with_skills_all(snapshot, ctx, bundle.claims.0)?;
         Ok((
             OperationResult::KnowledgeRead { value: bundle },
             k.knowledge_scope_revision(&scoped.exact)?,
@@ -1325,34 +1325,28 @@ pub(crate) fn with_skills(
     let Some(lesson) = claim.lesson.as_mut() else {
         return Ok(claim);
     };
-    let instructions = snapshot.instructions();
-    let mut links = Vec::new();
-    // Read more than the 128 shown, so links hidden from the viewer cannot hide a visible one.
-    for (id, revision) in instructions.lesson_instruction_revisions(&claim.id, 500)? {
-        if links.len() == 128 {
-            break;
-        }
-        let Some(item) = instructions.instruction_item(&id)? else {
-            continue;
-        };
-        let Some(stored) = instructions.instruction_revision(&id, revision)? else {
-            continue;
-        };
-        if item.kind == crate::ports::storage::InstructionKind::Skill
-            && crate::services::instructions::item_visible(ctx, &item)
-            && crate::services::instructions::revision_visible(ctx, &stored)
-        {
-            links.push(crate::protocol::records::LessonSkillLink {
-                instruction_id: id,
-                name: label(&item.name, "-"),
-                revision: rev(revision),
-            });
-        }
-    }
+    let links = crate::services::instructions::lesson_skill_links(
+        snapshot.instructions(),
+        ctx,
+        &claim.id,
+        crate::services::instructions::LESSON_LINK_PAGE,
+    )?;
     if !links.is_empty() {
         lesson.skills = Some(BoundedList(links));
     }
     Ok(claim)
+}
+
+/// [`with_skills`] over every claim of a result.
+pub(crate) fn with_skills_all(
+    snapshot: &dyn ReadSnapshot,
+    ctx: &InvocationContext,
+    claims: Vec<KnowledgeClaim>,
+) -> Result<Vec<KnowledgeClaim>, StorageError> {
+    claims
+        .into_iter()
+        .map(|c| with_skills(snapshot, ctx, c))
+        .collect()
 }
 
 /// Whether a claim is a lesson the invocation may name or list: it exists (a deleted claim keeps

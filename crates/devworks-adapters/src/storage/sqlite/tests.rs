@@ -920,7 +920,9 @@ fn upgrade_adds_revision_lesson_links_beside_existing_skills_and_lessons() {
     let existing = read_snapshot(&s, &ReadOptions::default(), |r| {
         let revisions = r.instructions().instruction_revisions(&skill, None, 10)?;
         let linked = r.instructions().instruction_revision_lessons(&skill, 2)?;
-        let by_lesson = r.instructions().lesson_instruction_revisions(&lesson, 10)?;
+        let by_lesson = r
+            .instructions()
+            .lesson_instruction_revisions(&lesson, None, 10)?;
         Ok((revisions.len(), linked, by_lesson))
     })
     .unwrap();
@@ -939,12 +941,19 @@ fn upgrade_adds_revision_lesson_links_beside_existing_skills_and_lessons() {
     let (by_revision, by_lesson) = read_snapshot(&s, &ReadOptions::default(), |r| {
         Ok((
             r.instructions().instruction_revision_lessons(&skill, 2)?,
-            r.instructions().lesson_instruction_revisions(&lesson, 10)?,
+            r.instructions()
+                .lesson_instruction_revisions(&lesson, None, 10)?,
         ))
     })
     .unwrap();
     assert_eq!(by_revision, vec![lesson.clone()]);
     assert_eq!(by_lesson, vec![(skill.clone(), 1), (skill.clone(), 2)]);
+    let after_first = read_snapshot(&s, &ReadOptions::default(), |r| {
+        r.instructions()
+            .lesson_instruction_revisions(&lesson, Some((&skill, 1)), 10)
+    })
+    .unwrap();
+    assert_eq!(after_first, vec![(skill.clone(), 2)]);
     for (item, number, named) in [
         ("skill-a", 2, "no-such-lesson"),
         ("skill-a", 3, "lesson-a"),

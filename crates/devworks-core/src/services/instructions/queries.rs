@@ -343,7 +343,7 @@ mod tests {
     use crate::protocol::ActorId;
     use serde_json::json;
 
-    struct Items(Vec<StoredInstructionItem>);
+    struct Items(Vec<StoredInstructionItem>, Vec<(Id, i64)>);
     impl InstructionRead for Items {
         fn instruction_item(&self, id: &Id) -> Result<Option<StoredInstructionItem>, StorageError> {
             Ok(self.0.iter().find(|i| i.id == *id).cloned())
@@ -401,9 +401,16 @@ mod tests {
         fn lesson_instruction_revisions(
             &self,
             _: &Id,
-            _: u16,
+            after: Option<(&Id, i64)>,
+            limit: u16,
         ) -> Result<Vec<(Id, i64)>, StorageError> {
-            Ok(Vec::new())
+            Ok(self
+                .1
+                .iter()
+                .filter(|(i, n)| after.is_none_or(|(a, m)| (i.as_str(), *n) > (a.as_str(), m)))
+                .take(usize::from(limit))
+                .cloned()
+                .collect())
         }
     }
     fn item(id: &str, name: &str, origin: InstructionOrigin) -> StoredInstructionItem {
@@ -430,12 +437,15 @@ mod tests {
 
     #[test]
     fn same_precedence_name_collisions_are_conflicts_and_never_effective() {
-        let read = Items(vec![
-            item("s-alpha", "alpha", InstructionOrigin::Shared),
-            item("s-alpha-upper", "Alpha", InstructionOrigin::Shared),
-            item("s-beta", "beta", InstructionOrigin::Shared),
-            item("h-beta", "Beta", InstructionOrigin::Harness),
-        ]);
+        let read = Items(
+            vec![
+                item("s-alpha", "alpha", InstructionOrigin::Shared),
+                item("s-alpha-upper", "Alpha", InstructionOrigin::Shared),
+                item("s-beta", "beta", InstructionOrigin::Shared),
+                item("h-beta", "Beta", InstructionOrigin::Harness),
+            ],
+            Vec::new(),
+        );
         let standing: BTreeMap<String, Standing> = skill_items_in(&read, None)
             .unwrap()
             .into_iter()
@@ -451,5 +461,46 @@ mod tests {
         assert_eq!(effective.conflicts.len(), 1);
         assert_eq!(effective.conflicts[0].name, "alpha");
         assert_eq!(effective.conflicts[0].instruction_ids.len(), 2);
+    }
+
+    #[test]
+    fn many_hidden_links_do_not_hide_a_visible_skill() {
+        use crate::context::PrincipalKind;
+        use crate::protocol::{Counter, ProjectId, Revision, StoreId};
+        let ctx = InvocationContext::new(
+            ActorId(Id::new("agent").unwrap()),
+            PrincipalKind::Agent,
+            Id::new("invocation").unwrap(),
+            Id::new("namespace").unwrap(),
+            StoreId(Id::new("store").unwrap()),
+            Counter::new(0).unwrap(),
+            Revision::new(1).unwrap(),
+        )
+        .in_project(ProjectId(Id::new("project-a").unwrap()));
+        // Seven hidden skills (another project's) sort ahead of two visible ones, so a page of
+        // three holds no visible link until the third page.
+        let mut items = Vec::new();
+        let mut links = Vec::new();
+        for n in 0..9 {
+            let mut it = item(
+                &format!("s-{n}"),
+                &format!("skill-{n}"),
+                InstructionOrigin::Shared,
+            );
+            if n < 7 {
+                it.scope = ConfigScope::Project(ProjectId(Id::new("project-b").unwrap()));
+            }
+            links.push((it.id.clone(), 1));
+            items.push(it);
+        }
+        let read = Items(items, links);
+        let lesson = Id::new("lesson").unwrap();
+        for page in [3, 4, 500] {
+            let found =
+                crate::services::instructions::lesson_skill_links(&read, &ctx, &lesson, page)
+                    .unwrap();
+            let names: Vec<&str> = found.iter().map(|l| l.name.0.as_str()).collect();
+            assert_eq!(names, ["skill-7", "skill-8"], "page {page}");
+        }
     }
 }

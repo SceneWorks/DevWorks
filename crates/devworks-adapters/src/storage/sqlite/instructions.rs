@@ -252,17 +252,18 @@ fn revision_lessons(conn: &Connection, key: &Id, number: i64) -> Result<Vec<Id>,
 fn lesson_revisions(
     conn: &Connection,
     lesson: &Id,
+    after: Option<(&Id, i64)>,
     limit: u16,
 ) -> Result<Vec<(Id, i64)>, StorageError> {
     page(limit)?;
+    let (after_id, after_revision) = after.map_or(("", -1), |(id, n)| (id.as_str(), n));
     let mut statement = db(conn.prepare(
-        "SELECT instruction_id,revision FROM instruction_revision_lessons WHERE lesson_id=?1 ORDER BY instruction_id,revision LIMIT ?2",
+        "SELECT instruction_id,revision FROM instruction_revision_lessons WHERE lesson_id=?1 AND (instruction_id,revision)>(?2,?3) ORDER BY instruction_id,revision LIMIT ?4",
     ))?;
-    db(
-        statement.query_map(params![lesson.as_str(), i64::from(limit)], |r| {
-            Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?))
-        }),
-    )?
+    db(statement.query_map(
+        params![lesson.as_str(), after_id, after_revision, i64::from(limit)],
+        |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)),
+    ))?
     .map(|r| db(r).and_then(|(key, number)| Ok((id(key)?, number))))
     .collect()
 }
@@ -315,9 +316,10 @@ macro_rules! instruction_reads {
             fn lesson_instruction_revisions(
                 &self,
                 lesson: &Id,
+                after: Option<(&Id, i64)>,
                 limit: u16,
             ) -> Result<Vec<(Id, i64)>, StorageError> {
-                lesson_revisions(self.conn, lesson, limit)
+                lesson_revisions(self.conn, lesson, after, limit)
             }
         }
     };

@@ -454,9 +454,10 @@ fn every_catalog_input_has_a_positive_recorded_fixture_admitted_natively() {
     // attribution) adds one; skills.set_enabled arrives at revision 8; the four settings operations
     // add revision 8 for the repository scope (repositoryId, sourceRepositoryId); the ten
     // skill and role history operations add revision 8 for the draft rationale and the record's
-    // author, session, rationale, state and approval outcome; the nine Knowledge operations that
-    // return lessons and the approval review queue add revision 8 for the skills that name a
-    // lesson.
+    // author, session, rationale, state and approval outcome; ten operations that return lessons
+    // add revision 8 for the skills that name a lesson (knowledge.search, .read, .subgraph,
+    // .entity_bundle, .entity_graph, .claim_bundle, .expand_frontier, .query, .tagged_lessons and
+    // approvals.review_queue).
     assert_eq!(admitted.len(), 658);
 }
 

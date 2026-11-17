@@ -335,6 +335,52 @@ pub(crate) fn item_visible(ctx: &InvocationContext, item: &StoredInstructionItem
 pub(crate) fn revision_visible(ctx: &InvocationContext, r: &StoredInstructionRevision) -> bool {
     confinement_visible(ctx, r.confined_project.as_ref())
 }
+/// The most skills a lesson lists.
+pub(crate) const LESSON_SKILLS_MAX: usize = 128;
+/// Link rows read per page when listing the skills that name a lesson.
+pub(crate) const LESSON_LINK_PAGE: u16 = 500;
+
+/// The skill revisions that name `lesson` and that the invocation may see, in id order, at most
+/// [`LESSON_SKILLS_MAX`]. Links are read `page` rows at a time until that many are visible or the
+/// links run out, so many hidden links cannot hide a visible skill.
+pub(crate) fn lesson_skill_links(
+    read: &dyn crate::ports::storage::InstructionRead,
+    ctx: &InvocationContext,
+    lesson: &Id,
+    page: u16,
+) -> Result<Vec<crate::protocol::records::LessonSkillLink>, StorageError> {
+    let mut links = Vec::new();
+    let mut after: Option<(Id, i64)> = None;
+    loop {
+        let rows =
+            read.lesson_instruction_revisions(lesson, after.as_ref().map(|(i, n)| (i, *n)), page)?;
+        for (id, revision) in &rows {
+            if links.len() == LESSON_SKILLS_MAX {
+                return Ok(links);
+            }
+            let Some(item) = read.instruction_item(id)? else {
+                continue;
+            };
+            let Some(stored) = read.instruction_revision(id, *revision)? else {
+                continue;
+            };
+            if item.kind == InstructionKind::Skill
+                && item_visible(ctx, &item)
+                && revision_visible(ctx, &stored)
+            {
+                links.push(crate::protocol::records::LessonSkillLink {
+                    instruction_id: id.clone(),
+                    name: label(&item.name, "-"),
+                    revision: rev(*revision),
+                });
+            }
+        }
+        match rows.last() {
+            Some((id, n)) if rows.len() == usize::from(page) => after = Some((id.clone(), *n)),
+            _ => return Ok(links),
+        }
+    }
+}
 /// Revision `n` of a visible item if the invocation may see it (else `NotFound`).
 pub(crate) fn visible_revision(
     read: &dyn crate::ports::storage::InstructionRead,

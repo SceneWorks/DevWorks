@@ -3780,7 +3780,12 @@ impl InstructionRead for Unsupported {
     fn instruction_revision_lessons(&self, _: &Id, _: i64) -> Result<Vec<Id>, StorageError> {
         nope()
     }
-    fn lesson_instruction_revisions(&self, _: &Id, _: u16) -> Result<Vec<(Id, i64)>, StorageError> {
+    fn lesson_instruction_revisions(
+        &self,
+        _: &Id,
+        _: Option<(&Id, i64)>,
+        _: u16,
+    ) -> Result<Vec<(Id, i64)>, StorageError> {
         nope()
     }
 }

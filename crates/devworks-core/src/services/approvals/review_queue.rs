@@ -72,7 +72,11 @@ pub(crate) fn query(
     for c in claims.values() {
         let events = s.knowledge().knowledge_lesson_event_count(&c.id)?.max(1);
         let (rank, priority) = priority(c);
-        let wire = knowledge::claim_wire(s.knowledge(), c, &thresholds)?;
+        let wire = knowledge::with_skills(
+            s,
+            ctx,
+            knowledge::claim_wire(s.knowledge(), c, &thresholds)?,
+        )?;
         let open = s.knowledge().knowledge_open_challenges(&c.id)?;
         if open > 0 && challenged_ids.contains(c.id.as_str()) && nc < 500 {
             let challenges = s.knowledge().knowledge_open_challenge_records(&c.id, 3)?;
@@ -135,7 +139,7 @@ pub(crate) fn query(
         };
         let (rank, p) = priority(a);
         let recurrence = a_count.max(b_count);
-        items.push((rank,-recurrence,r.created_at_ms,format!("{}:{}",a.id.as_str(),b.id.as_str()),json!({"kind":"Contradiction","entry":knowledge::claim_wire(s.knowledge(),a,&thresholds)?,"other":knowledge::claim_wire(s.knowledge(),b,&thresholds)?,"priority":p,"recurrence":recurrence.max(0).to_string(),"sinceMs":r.created_at_ms.max(0).to_string(),"challenges":[],"author":a.author,"otherAuthor":b.author,"informational":true})));
+        items.push((rank,-recurrence,r.created_at_ms,format!("{}:{}",a.id.as_str(),b.id.as_str()),json!({"kind":"Contradiction","entry":knowledge::with_skills(s,ctx,knowledge::claim_wire(s.knowledge(),a,&thresholds)?)?,"other":knowledge::with_skills(s,ctx,knowledge::claim_wire(s.knowledge(),b,&thresholds)?)?,"priority":p,"recurrence":recurrence.max(0).to_string(),"sinceMs":r.created_at_ms.max(0).to_string(),"challenges":[],"author":a.author,"otherAuthor":b.author,"informational":true})));
         nr += 1;
     }
     items.sort_by(|a, b| (&a.0, &a.1, &a.2, &a.3).cmp(&(&b.0, &b.1, &b.2, &b.3)));

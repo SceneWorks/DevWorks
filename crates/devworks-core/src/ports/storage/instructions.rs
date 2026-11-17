@@ -188,10 +188,11 @@ pub trait InstructionRead {
     fn instruction_revision_lessons(&self, id: &Id, revision: i64)
     -> Result<Vec<Id>, StorageError>;
     /// The revisions that name a lesson, as `(instruction id, revision)` in that order, at most
-    /// `limit`.
+    /// `limit`, after the pair `after` when given.
     fn lesson_instruction_revisions(
         &self,
         lesson: &Id,
+        after: Option<(&Id, i64)>,
         limit: u16,
     ) -> Result<Vec<(Id, i64)>, StorageError>;
 }

@@ -1375,6 +1375,23 @@ fn a_skill_revision_records_the_lessons_it_came_from_and_both_sides_show_the_lin
         let listed = fx.query_at(&app, &a, "knowledge.tagged_lessons", 8, json!({"scope":in_a_scope("project-a"),"tags":["deploy"],"page":{"limit":10}})).unwrap();
         let listed_skills: Vec<usize> = listed["items"].as_array().unwrap().iter().map(|c| skills(&c["lesson"]).len()).collect();
         assert_eq!(listed_skills.iter().sum::<usize>(), 3, "{listed}");
+        // The bundle reads show the skills too: the primary claim of a claim bundle and the claims
+        // of an entity bundle (a graph path).
+        let query = |claim: Option<&Value>, entity: Option<&Value>| json!({
+            "entityIds": entity.map(|e| vec![e.clone()]).unwrap_or_default(),
+            "claimIds": claim.map(|c| vec![c.clone()]).unwrap_or_default(),
+            "predicates": [], "tags": [], "states": [], "maxDepth": 1, "page": {"limit": 10},
+            "entityLimit": 10, "claimLimit": 10, "evidenceLimit": 10, "neighborLimit": 10,
+            "includeSuperseded": false, "includeConflicts": true,
+            "includeSupersessionChain": false, "includeEvidence": false});
+        let in_project = in_a_scope("project-a");
+        let claim_bundle = fx.query_at(&app, &a, "knowledge.claim_bundle", 8, json!({"scope":in_project,"query":query(Some(&of_a), None)})).unwrap();
+        let primary = claim_bundle["claims"].as_array().unwrap().iter().find(|c| c["id"] == of_a).unwrap();
+        assert_eq!(skills(&primary["lesson"]), [("deploy".into(), "1".into()), ("deploy".into(), "2".into())], "{claim_bundle}");
+        let subject = primary["subjectId"].clone();
+        let entity_bundle = fx.query_at(&app, &a, "knowledge.entity_bundle", 8, json!({"scope":in_project,"query":query(None, Some(&subject))})).unwrap();
+        let in_graph = entity_bundle["claims"].as_array().unwrap().iter().find(|c| c["id"] == of_a).unwrap();
+        assert_eq!(skills(&in_graph["lesson"]).len(), 2, "{entity_bundle}");
         assert_eq!(skills(&lesson_of(&a, in_a_scope("project-a"), &of_a, 2)), []);
         assert!(lesson_of(&a, in_a_scope("project-a"), &of_a, 2).get("skills").is_none());
         // Another project sees neither the confined drafts nor the lessons of project A.
