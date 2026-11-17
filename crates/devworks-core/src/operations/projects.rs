@@ -329,4 +329,21 @@ impl Input {
             Self::PurgeStatus(_) => Mode::Query,
         }
     }
+    /// The `/body` members of this input, without the `kind` discriminator.
+    pub fn body(&self) -> Result<serde_json::Value, serde_json::Error> {
+        match self {
+            Self::List(i) => serde_json::to_value(i),
+            Self::Get(i) => serde_json::to_value(i),
+            Self::Create(i) => serde_json::to_value(i),
+            Self::Edit(i) => serde_json::to_value(i),
+            Self::Membership(i) => serde_json::to_value(i),
+            Self::Archive(i) => serde_json::to_value(i),
+            Self::Restore(i) => serde_json::to_value(i),
+            Self::Delete(i) => serde_json::to_value(i),
+            Self::PreparePurge(i) => serde_json::to_value(i),
+            Self::PurgeManifest(i) => serde_json::to_value(i),
+            Self::Purge(i) => serde_json::to_value(i),
+            Self::PurgeStatus(i) => serde_json::to_value(i),
+        }
+    }
 }

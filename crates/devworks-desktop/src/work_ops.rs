@@ -2,17 +2,21 @@
 //! (DW-12), and the decoding of their replies. Every frame is the same wire envelope an agent
 //! tool submits; nothing here decides anything the work service decides.
 use crate::backend::Backend;
+use crate::frame::{self, Negotiate};
 use crate::ops::{
     Failure, PAGE_LIMIT, PROTOCOL, at_revision, command_frame, command_result, query_frame,
     query_result, unexpected,
 };
 use devworks_core::gateway::{CommandOutcome, QueryOutcome};
+use devworks_core::operations::{OperationInput as In, agents, next_work};
+use devworks_core::protocol::ProjectId;
 use devworks_core::protocol::records::{
     AllocationClaimRecord, AllocationQueueSnapshot, AllocationSelection, MutationSummary,
     ProposalRecord, RetainedAckResult, RetainedEventPage, RetainedHistoryPage, RetainedInboxResult,
     RetainedPostResult, RootSnapshot, StatusRecord, WorkRecord,
 };
 use devworks_core::protocol::results::OperationResult;
+use devworks_core::protocol::support::BoundedList;
 use devworks_core::protocol::{Cause, Event};
 use serde_json::{Value, json};
 
@@ -21,14 +25,19 @@ pub const WORK_REVISION: u64 = 3;
 pub const MESSAGE_REVISION: u64 = 7;
 
 pub fn message_history(backend: &dyn Backend, project: &str, before: Option<i64>) -> Vec<u8> {
-    let mut body = json!({"projectId":project,"limit":"100"});
-    if let Some(before) = before {
-        body["before"] = json!(before.to_string());
-    }
-    at_revision(
-        query_frame(backend, "agents.history", body),
-        MESSAGE_REVISION,
-    )
+    frame::with(backend, Negotiate::Latest, || {
+        Some(In::Agents(agents::Input::History(agents::HistoryInput {
+            project_id: ProjectId(frame::id(project)?),
+            channel: None,
+            item_id: None,
+            feature_id: None,
+            resource_name: None,
+            open_only: None,
+            to_human: None,
+            before: frame::lift(before.map(frame::number))?,
+            limit: Some(frame::number(100)?),
+        })))
+    })
 }
 
 pub fn message_history_page(outcome: QueryOutcome) -> Result<RetainedHistoryPage, Failure> {
@@ -39,14 +48,16 @@ pub fn message_history_page(outcome: QueryOutcome) -> Result<RetainedHistoryPage
 }
 
 pub fn message_inbox(backend: &dyn Backend, project: &str, cursor: Option<&str>) -> Vec<u8> {
-    let mut body = json!({"projectId":project,"limit":"100","waitSeconds":0});
-    if let Some(cursor) = cursor {
-        body["cursor"] = json!(cursor);
-    }
-    at_revision(
-        command_frame(backend, "agents.receive", body),
-        MESSAGE_REVISION,
-    )
+    frame::with(backend, Negotiate::Latest, || {
+        Some(In::Agents(agents::Input::Receive(agents::ReceiveInput {
+            session_id: None,
+            project_id: Some(ProjectId(frame::id(project)?)),
+            cursor: frame::lift(cursor.map(frame::text))?,
+            include_read: None,
+            limit: Some(frame::number(100)?),
+            wait_seconds: Some(0),
+        })))
+    })
 }
 
 pub fn message_inbox_page(outcome: CommandOutcome) -> Result<RetainedInboxResult, Failure> {
@@ -78,11 +89,15 @@ pub fn message_ack(
     message: &str,
     resolution: Option<&str>,
 ) -> Vec<u8> {
-    let mut body = json!({"projectId":project,"messages":[message]});
-    if let Some(resolution) = resolution {
-        body["resolution"] = json!(resolution);
-    }
-    at_revision(command_frame(backend, "agents.ack", body), MESSAGE_REVISION)
+    frame::with(backend, Negotiate::Latest, || {
+        Some(In::Agents(agents::Input::Ack(agents::AckInput {
+            session_id: None,
+            project_id: Some(ProjectId(frame::id(project)?)),
+            messages: Some(BoundedList(vec![frame::id(message)?])),
+            up_to: None,
+            resolution: frame::lift(resolution.map(frame::text))?,
+        })))
+    })
 }
 
 pub fn message_acked(outcome: CommandOutcome) -> Result<RetainedAckResult, Failure> {
@@ -93,14 +108,13 @@ pub fn message_acked(outcome: CommandOutcome) -> Result<RetainedAckResult, Failu
 }
 
 pub fn message_events(backend: &dyn Backend, project: &str, after: Option<i64>) -> Vec<u8> {
-    let mut body = json!({"projectId":project,"limit":"100"});
-    if let Some(after) = after {
-        body["after"] = json!(after.to_string());
-    }
-    at_revision(
-        query_frame(backend, "agents.events", body),
-        MESSAGE_REVISION,
-    )
+    frame::with(backend, Negotiate::Latest, || {
+        Some(In::Agents(agents::Input::Events(agents::EventsInput {
+            project_id: ProjectId(frame::id(project)?),
+            after: frame::lift(after.map(frame::number))?,
+            limit: Some(frame::number(100)?),
+        })))
+    })
 }
 
 pub fn message_events_page(outcome: QueryOutcome) -> Result<RetainedEventPage, Failure> {
@@ -395,11 +409,14 @@ pub fn workflow_changed(outcome: CommandOutcome) -> Result<(), Failure> {
     }
 }
 pub fn allocation_queue(backend: &dyn Backend, project: &str, feature: Option<&str>) -> Vec<u8> {
-    let mut body = json!({"projectId":project});
-    if let Some(feature) = feature {
-        body["featureId"] = json!(feature);
-    }
-    at_revision(query_frame(backend, "next_work.inspect_queue", body), 3)
+    frame::with(backend, Negotiate::Latest, || {
+        Some(In::NextWork(next_work::Input::InspectQueue(
+            next_work::InspectQueueInput {
+                project_id: ProjectId(frame::id(project)?),
+                feature_id: frame::lift(feature.map(frame::id))?,
+            },
+        )))
+    })
 }
 pub fn queue_snapshot(outcome: QueryOutcome) -> Result<AllocationQueueSnapshot, Failure> {
     match query_result(outcome)? {
@@ -411,10 +428,13 @@ pub fn allocation_command(backend: &dyn Backend, operation: &str, body: Value) -
     at_revision(command_frame(backend, operation, body), 3)
 }
 pub fn allocation_inspect(backend: &dyn Backend, claim: &str) -> Vec<u8> {
-    at_revision(
-        query_frame(backend, "next_work.inspect_claim", json!({"claimId":claim})),
-        3,
-    )
+    frame::with(backend, Negotiate::Latest, || {
+        Some(In::NextWork(next_work::Input::InspectClaim(
+            next_work::InspectClaimInput {
+                claim_id: frame::id(claim)?,
+            },
+        )))
+    })
 }
 pub fn allocation_selection(outcome: CommandOutcome) -> Result<AllocationSelection, Failure> {
     match command_result(outcome)? {

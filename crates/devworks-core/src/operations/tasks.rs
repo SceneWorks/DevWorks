@@ -380,4 +380,20 @@ impl Input {
             Self::SetFeature(_) => Mode::Command,
         }
     }
+    /// The `/body` members of this input, without the `kind` discriminator.
+    pub fn body(&self) -> Result<serde_json::Value, serde_json::Error> {
+        match self {
+            Self::List(i) => serde_json::to_value(i),
+            Self::Get(i) => serde_json::to_value(i),
+            Self::Create(i) => serde_json::to_value(i),
+            Self::Edit(i) => serde_json::to_value(i),
+            Self::Prioritize(i) => serde_json::to_value(i),
+            Self::Move(i) => serde_json::to_value(i),
+            Self::Assign(i) => serde_json::to_value(i),
+            Self::DependencyLinks(i) => serde_json::to_value(i),
+            Self::AcceptanceEvidence(i) => serde_json::to_value(i),
+            Self::SyncPlan(i) => serde_json::to_value(i),
+            Self::SetFeature(i) => serde_json::to_value(i),
+        }
+    }
 }

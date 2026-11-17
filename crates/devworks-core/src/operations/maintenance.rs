@@ -150,4 +150,13 @@ impl Input {
             Self::PruneSessions(_) => Mode::Command,
         }
     }
+    /// The `/body` members of this input, without the `kind` discriminator.
+    pub fn body(&self) -> Result<serde_json::Value, serde_json::Error> {
+        match self {
+            Self::PruneDiagnostics(i) => serde_json::to_value(i),
+            Self::PruneIndexRuns(i) => serde_json::to_value(i),
+            Self::PruneMessages(i) => serde_json::to_value(i),
+            Self::PruneSessions(i) => serde_json::to_value(i),
+        }
+    }
 }

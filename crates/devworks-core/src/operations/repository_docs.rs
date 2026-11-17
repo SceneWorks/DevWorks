@@ -59,4 +59,10 @@ impl Input {
             Self::Generate(_) => Mode::Command,
         }
     }
+    /// The `/body` members of this input, without the `kind` discriminator.
+    pub fn body(&self) -> Result<serde_json::Value, serde_json::Error> {
+        match self {
+            Self::Generate(i) => serde_json::to_value(i),
+        }
+    }
 }

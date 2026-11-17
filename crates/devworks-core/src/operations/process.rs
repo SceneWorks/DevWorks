@@ -159,4 +159,14 @@ impl Input {
             Self::RequestSystemInstall(_) => Mode::Command,
         }
     }
+    /// The `/body` members of this input, without the `kind` discriminator.
+    pub fn body(&self) -> Result<serde_json::Value, serde_json::Error> {
+        match self {
+            Self::Execute(i) => serde_json::to_value(i),
+            Self::Output(i) => serde_json::to_value(i),
+            Self::Cancel(i) => serde_json::to_value(i),
+            Self::InstallProjectDependencies(i) => serde_json::to_value(i),
+            Self::RequestSystemInstall(i) => serde_json::to_value(i),
+        }
+    }
 }
