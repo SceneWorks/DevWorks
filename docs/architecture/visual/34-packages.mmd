@@ -60,8 +60,7 @@ classDiagram
   class IndexVerifier { <<trait>> }
   class PackageActivity {
     <<trait>>
-    quiesce(package
-    wait) and fence
+    quiesce(package, wait) and fence
   }
   class BundleInspector {
     <<adapter>>
