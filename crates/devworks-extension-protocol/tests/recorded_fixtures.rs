@@ -106,7 +106,7 @@ fn check(case: &Fixture) -> Option<Result<(), String>> {
 fn package_and_codec_fixtures_match_recorded_outcomes() {
     let cases: Vec<Fixture> =
         serde_json::from_str(&contracts("provider-package-fixtures.json")).unwrap();
-    assert_eq!(cases.len(), 120);
+    assert_eq!(cases.len(), 121);
     let mut checked = BTreeMap::<&str, usize>::new();
     let mut failures = Vec::new();
     for case in &cases {

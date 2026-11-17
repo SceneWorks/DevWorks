@@ -27582,6 +27582,7 @@ impl Revisioned for OperationResult {
             Self::HistoryCommandReceipt { value } => value.retain_revision(revision),
             Self::HistoryEvents { value } => value.retain_revision(revision),
             Self::SessionsAppendMessage { value } => value.retain_revision(revision),
+            Self::SessionsTranscript { value } => value.retain_revision(revision),
             Self::AddonsInstall { value } => value.retain_revision(revision),
             Self::AddonsUpdate { value } => value.retain_revision(revision),
             Self::AddonsEnable { value } => value.retain_revision(revision),

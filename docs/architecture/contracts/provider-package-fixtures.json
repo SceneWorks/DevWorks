@@ -273,6 +273,13 @@
     "schemaValid": false
   },
   {
+    "id": "transcript-query-r8",
+    "entry": "session-query-request",
+    "raw": "{\"protocol\":\"1.0-draft.1\",\"queryId\":\"q-a\",\"sessionId\":\"session-a\",\"limit\":100,\"schemaRevision\":8}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
     "id": "durable-call-and-wait-response",
     "entry": "transcript-batch",
     "raw": "{\"protocol\":\"1.0-draft.1\",\"batchId\":\"batch-a\",\"sessionId\":\"session-a\",\"contextEpoch\":\"0\",\"expectedNextSequence\":\"1\",\"entries\":[{\"entryId\":\"entry-call\",\"sequence\":\"1\",\"body\":{\"kind\":\"ToolCallRecorded\",\"toolCall\":{\"call\":{\"attemptId\":\"attempt-a\",\"nativeCallId\":\"call:a\",\"ordinal\":\"0\"},\"capabilityId\":\"core/read\",\"inputSchema\":{\"schemaId\":\"core/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"arguments\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"2\",\"mediaType\":\"application/json\"},\"nativeItem\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"2\",\"mediaType\":\"application/json\"}}}},{\"entryId\":\"entry-response\",\"sequence\":\"2\",\"body\":{\"kind\":\"ToolResponseRecorded\",\"call\":{\"attemptId\":\"attempt-a\",\"nativeCallId\":\"call:a\",\"ordinal\":\"0\"},\"outcome\":{\"kind\":\"ApprovalRequired\",\"approvalId\":\"approval-a\",\"operationId\":\"op-a\"}}}]}",

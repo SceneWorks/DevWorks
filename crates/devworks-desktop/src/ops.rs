@@ -23,6 +23,9 @@ pub const WORKSPACE_ARTIFACT_REVISION: u64 = 3;
 pub const PAGE_LIMIT: u16 = 200;
 /// Session records carry their start and last-activity times from session schema revision 2.
 pub const SESSION_REVISION: u64 = 2;
+/// Transcripts carry the tool dispatch fence and accepted-operation outcomes from schema
+/// revision 8 (earlier revisions leave the fence out and read acceptance as an unknown outcome).
+pub const TRANSCRIPT_REVISION: u64 = 8;
 
 /// Why a request produced no usable result. Never rendered as success or as zero values.
 #[derive(Clone, Debug)]
@@ -446,7 +449,7 @@ pub fn started(outcome: CommandOutcome) -> Result<SessionRecord, Failure> {
 /// One transcript page after `after` (the projection's tail cursor).
 pub fn transcript(backend: &dyn Backend, session: &str, after: Option<&str>) -> Vec<u8> {
     let mut frame = json!({"protocol": PROTOCOL, "queryId": backend.token("q"),
-        "sessionId": session, "limit": 200});
+        "sessionId": session, "limit": 200, "schemaRevision": TRANSCRIPT_REVISION});
     if let Some(a) = after {
         frame["after"] = json!(a);
     }

@@ -1600,6 +1600,7 @@ impl Revisioned for OperationResult {
             Self::NextWorkReleaseClaim { value } => value.retain_revision(revision),
             Self::SessionsList { value } => value.retain_revision(revision),
             Self::SessionsGet { value } => value.retain_revision(revision),
+            Self::SessionsTranscript { value } => value.retain_revision(revision),
             Self::SessionsAppendMessage { value } => value.retain_revision(revision),
             Self::SessionsStart { value } => value.retain_revision(revision),
             Self::SessionsEnd { value } => value.retain_revision(revision),

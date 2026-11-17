@@ -24996,6 +24996,33 @@
         },
         {
           "additionalProperties": false,
+          "description": "The command receipt is final, while the accepted operation may complete later.\nSchema revision 8; earlier revisions read it as `OutcomeUnknown`.",
+          "properties": {
+            "artifacts": {
+              "items": {
+                "$ref": "#/$defs/ArtifactRef"
+              },
+              "maxItems": 128,
+              "type": "array"
+            },
+            "kind": {
+              "const": "OperationAccepted",
+              "type": "string"
+            },
+            "operationId": {
+              "$ref": "#/$defs/Id"
+            }
+          },
+          "required": [
+            "kind",
+            "operationId",
+            "artifacts"
+          ],
+          "type": "object",
+          "x-since": 8
+        },
+        {
+          "additionalProperties": false,
           "properties": {
             "code": {
               "$ref": "#/$defs/Id"
@@ -25207,6 +25234,25 @@
             "toolCall"
           ],
           "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Durable fence before the gateway sees a call; cancellation cannot claim no dispatch\nafter this marker, even if the process crashes before the gateway returns.\nSchema revision 8; earlier revisions leave it out.",
+          "properties": {
+            "call": {
+              "$ref": "#/$defs/ToolCallKey"
+            },
+            "kind": {
+              "const": "ToolDispatchStarted",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "call"
+          ],
+          "type": "object",
+          "x-since": 8
         },
         {
           "additionalProperties": false,
