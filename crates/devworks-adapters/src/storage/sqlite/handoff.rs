@@ -1,7 +1,7 @@
 //! Narrow membership handoff: a superseded worker changes scope only at a quiescent boundary.
 use super::conn::db;
 use super::repos::Unit;
-use super::support::{atomic, conflict, invalid};
+use super::support::{atomic, conflict_strict, invalid};
 use devworks_core::ports::storage::*;
 use devworks_core::protocol::{AssignmentId, Id, RevisionDimension};
 use rusqlite::{Connection, params};
@@ -45,7 +45,7 @@ pub(super) fn retire(
             id: assignment.0.as_str().into(),
         })?;
     if old.revision != expected {
-        return Err(conflict(
+        return Err(conflict_strict(
             RevisionDimension::Work,
             "assignment",
             assignment.0.as_str(),
@@ -87,7 +87,7 @@ pub(super) fn reparent(
             id: a.id.0.as_str().into(),
         })?;
     if old.revision != expected {
-        return Err(conflict(
+        return Err(conflict_strict(
             RevisionDimension::Work,
             "assignment",
             a.id.0.as_str(),
@@ -177,7 +177,7 @@ pub(super) fn reparent(
             id: a.session_id.as_str().into(),
         })?;
     if session.revision != expected_session {
-        return Err(conflict(
+        return Err(conflict_strict(
             RevisionDimension::Work,
             "session",
             session.id.as_str(),

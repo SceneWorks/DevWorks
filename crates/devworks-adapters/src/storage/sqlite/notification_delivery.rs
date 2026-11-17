@@ -1,7 +1,7 @@
 //! Durable OS-submission fencing. Platform/policy qualification happens in the host worker.
 use super::conn::db;
 use super::repos::Unit;
-use super::support::{conflict, id_of, invalid};
+use super::support::{conflict_strict, id_of, invalid};
 use devworks_core::ports::storage::*;
 use devworks_core::protocol::{ActorId, Id, RevisionDimension};
 use rusqlite::{Connection, OptionalExtension, params};
@@ -70,7 +70,7 @@ pub(super) fn claim(
         }
         (Some(e), Some(old)) => {
             if e != old.revision {
-                return Err(conflict(
+                return Err(conflict_strict(
                     RevisionDimension::Claim,
                     "os_notification_delivery",
                     notification.as_str(),
@@ -117,7 +117,7 @@ pub(super) fn settle(
         id: notification.as_str().into(),
     })?;
     if old.revision != fence.revision {
-        return Err(conflict(
+        return Err(conflict_strict(
             RevisionDimension::Claim,
             "os_notification_delivery",
             notification.as_str(),

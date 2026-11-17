@@ -3,7 +3,7 @@
 use super::conn::db;
 use super::connections::{connection, decision_model};
 use super::repos::{Snapshot, Unit};
-use super::support::{conflict, corrupt, id_of, invalid, revision};
+use super::support::{conflict, corrupt, id_of, invalid, page_limit, revision};
 use devworks_core::ports::storage::*;
 use devworks_core::protocol::{Id, OperationId, ProjectId, RevisionDimension};
 use rusqlite::{Connection, OptionalExtension, Row, params};
@@ -99,9 +99,7 @@ fn models(
     after: Option<(i64, &str)>,
     limit: u16,
 ) -> Result<Vec<StoredRouteModel>, StorageError> {
-    if limit == 0 || limit > 500 {
-        return Err(invalid("limit must be 1..=500"));
-    }
+    page_limit(limit)?;
     let (pos, id) = after.map_or((i64::MIN, ""), |(p, i)| (p, i));
     let mut st = db(conn.prepare_cached(&format!(
         "SELECT {MODEL_COLUMNS} FROM router_models WHERE (position, id) > (?1, ?2) \
@@ -369,7 +367,7 @@ macro_rules! router_reads {
                 cooldowns(self.conn)
             }
             fn route_requests(&self,after:Option<&Id>,limit:u16)->Result<Vec<StoredRouteRequest>,StorageError>{
-                if limit==0||limit>MAX_PAGE{return Err(invalid("route request page limit must be 1..=MAX_PAGE"));}
+                page_limit(limit)?;
                 let mut st=db(self.conn.prepare_cached("SELECT request_id FROM router_requests WHERE request_id>?1 ORDER BY request_id LIMIT ?2"))?;
                 let ids=db(db(st.query_map(params![after.map_or("",Id::as_str),limit],|r|r.get::<_,String>(0)))?.collect::<rusqlite::Result<Vec<_>>>())?;
                 ids.into_iter().map(|s|request(self.conn,&id_of(s)?)?.ok_or_else(||corrupt("route request vanished inside snapshot"))).collect()

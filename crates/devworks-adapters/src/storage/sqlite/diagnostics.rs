@@ -2,7 +2,7 @@
 //! probes of [`SqliteStore`] (OPS-01).
 use super::conn::db;
 use super::repos::{Snapshot, Unit};
-use super::support::{corrupt, id_of, invalid};
+use super::support::{corrupt, id_of, invalid, page_limit};
 use super::{DATABASE_FILE, MIGRATIONS, SqliteStore, migrations};
 use devworks_core::ports::diagnostics::{
     Metric, StorageDatabase, StorageFiles, StorageHealthProbe,
@@ -207,9 +207,7 @@ fn list(
     f: &DiagnosticFilter,
     limit: u16,
 ) -> Result<Vec<StoredDiagnostic>, StorageError> {
-    if limit == 0 || limit > MAX_PAGE {
-        return Err(invalid(format!("limit must be 1..={MAX_PAGE}")));
-    }
+    page_limit(limit)?;
     let (clause, mut p) = predicate(f);
     p.push(Sql::Integer(i64::from(limit)));
     let order = if f.descending { "DESC" } else { "ASC" };

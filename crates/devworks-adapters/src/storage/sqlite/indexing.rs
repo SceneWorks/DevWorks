@@ -1449,7 +1449,7 @@ impl IndexRepository for Unit<'_> {
                 "published_view",
                 repository.as_str(),
                 expected.max(1),
-                current,
+                current.max(1),
             ));
         }
         let next = expected + 1;

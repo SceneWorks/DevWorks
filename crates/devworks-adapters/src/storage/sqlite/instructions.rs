@@ -434,6 +434,9 @@ impl InstructionRepository for Unit<'_> {
         approval_id: Option<&Id>,
         decided_at_ms: Option<i64>,
     ) -> Result<(), StorageError> {
+        if number <= 0 {
+            return Err(invalid("instruction revision number is positive"));
+        }
         let allowed = matches!(
             (from, to),
             (

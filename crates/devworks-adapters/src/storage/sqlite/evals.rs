@@ -1,7 +1,7 @@
 //! Bounded, insert-only eval reports (migration 24).
 use super::conn::db;
 use super::repos::{Snapshot, Unit};
-use super::support::{corrupt, id_of, invalid};
+use super::support::{corrupt, id_of, invalid, page_limit};
 use devworks_core::ports::storage::*;
 use devworks_core::protocol::{Id, ProjectId};
 use rusqlite::{Connection, OptionalExtension, params};
@@ -75,9 +75,7 @@ macro_rules! eval_reads {
                 after: Option<&Id>,
                 limit: u16,
             ) -> Result<Vec<StoredEvalRun>, StorageError> {
-                if limit == 0 || limit > MAX_PAGE {
-                    return Err(invalid("eval page limit out of bounds"));
-                }
+                page_limit(limit)?;
                 runs(
                     self.conn,
                     "session_id=?1 AND id>?2 ORDER BY id LIMIT ?3",

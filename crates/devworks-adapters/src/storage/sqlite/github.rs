@@ -1,6 +1,6 @@
 //! Typed GitHub source facts over the existing integration/intake/cursor tables. No HTTP,
 //! inference, authority minting or duplicate external-effect ledger lives in the repository.
-use super::support::{atomic, conflict, invalid, page_limit};
+use super::support::{atomic, conflict_strict, invalid, page_limit};
 use super::{
     conn::db,
     repos::{Snapshot, Unit},
@@ -54,7 +54,7 @@ fn cas(row: i64, expected: Option<i64>, actual: Option<i64>, id: &str) -> Result
                 kind: "github",
                 id: id.into(),
             },
-            (Some(e), Some(a)) => conflict(RevisionDimension::Scope, "github", id, e, a),
+            (Some(e), Some(a)) => conflict_strict(RevisionDimension::Scope, "github", id, e, a),
             _ => invalid("GitHub revision mismatch"),
         });
     }
@@ -411,7 +411,7 @@ impl GithubRepository for Unit<'_> {
         }
         let current = obligation_revision(self.conn, &r.key)?;
         if current != r.obligation_revision {
-            return Err(conflict(
+            return Err(conflict_strict(
                 RevisionDimension::Scope,
                 "github",
                 &source_id(&r.key)?,
@@ -784,7 +784,7 @@ impl GithubRepository for Unit<'_> {
     ) -> Result<GithubIntakeClock, StorageError> {
         let mut c = clock(self.conn)?;
         if c.revision != expected {
-            return Err(conflict(
+            return Err(conflict_strict(
                 RevisionDimension::Scope,
                 "github",
                 "github-intake-clock",
@@ -858,7 +858,7 @@ impl GithubRepository for Unit<'_> {
             ));
         }
         if r.revision != expected_issue {
-            return Err(conflict(
+            return Err(conflict_strict(
                 RevisionDimension::Scope,
                 "github",
                 &source_id(k)?,
@@ -867,7 +867,7 @@ impl GithubRepository for Unit<'_> {
             ));
         }
         if c.revision != expected_clock {
-            return Err(conflict(
+            return Err(conflict_strict(
                 RevisionDimension::Scope,
                 "github",
                 "github-intake-clock",
@@ -928,7 +928,7 @@ impl GithubRepository for Unit<'_> {
         issue(self.conn, k)?.ok_or_else(|| invalid("GitHub source missing"))?;
         let (p, revision) = work(self.conn, w)?;
         if revision != expected {
-            return Err(conflict(
+            return Err(conflict_strict(
                 RevisionDimension::Scope,
                 "github",
                 w.0.as_str(),

@@ -302,3 +302,19 @@ fn a_stored_revision_of_zero_is_a_corrupt_store_not_a_panic() {
     .unwrap();
     assert!(is_corrupt(&package_update), "{package_update:?}");
 }
+
+#[test]
+fn a_stale_handler_state_expectation_with_no_row_is_a_conflict() {
+    let h = Harness::new();
+    let s = h.store();
+    let result = run_write(&s, WriteOptions::default(), |tx| {
+        Ok(tx
+            .packages()
+            .compare_and_set_state("absent", 1, 3, json!({})))
+    })
+    .unwrap();
+    assert!(
+        matches!(result, Err(StorageError::RevisionConflict(_))),
+        "{result:?}"
+    );
+}

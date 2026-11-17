@@ -3,7 +3,7 @@
 //! and the write unit; write operations exist only on [`Unit`], which borrows the writer's open
 //! transaction.
 use super::conn::db;
-use super::support::{conflict, corrupt, id_of, invalid, page_limit};
+use super::support::{conflict, conflict_strict, corrupt, id_of, invalid, page_limit};
 use devworks_core::context::{PrincipalKind, ReceiptIdentity};
 use devworks_core::fingerprint::Fingerprint;
 use devworks_core::ports::storage::*;
@@ -1248,7 +1248,7 @@ impl Unit<'_> {
     }
     fn op_cas(&self, op: &OperationRecord, expected: i64) -> Result<(), StorageError> {
         if op.revision != expected {
-            return Err(conflict(
+            return Err(conflict_strict(
                 RevisionDimension::Operation,
                 "operation",
                 op.id.0.as_str(),
@@ -2456,7 +2456,7 @@ impl PackageHandlerLedger for Unit<'_> {
                     .map_err(|_| invalid("package id"))?
                     .as_str(),
                 expected_revision.max(1),
-                current_revision,
+                current_revision.max(1),
             ));
         }
         db(stmt(self.conn,
@@ -2560,7 +2560,7 @@ impl GrantLedger for Unit<'_> {
             return Err(StorageError::ScopeDenied);
         }
         if g.revision != use_.expected_revision {
-            return Err(conflict(
+            return Err(conflict_strict(
                 RevisionDimension::Authority,
                 "grant",
                 g.id.as_str(),
@@ -2590,7 +2590,7 @@ impl GrantLedger for Unit<'_> {
             id: id.as_str().to_owned(),
         })?;
         if g.revision != expected_revision {
-            return Err(conflict(
+            return Err(conflict_strict(
                 RevisionDimension::Authority,
                 "grant",
                 g.id.as_str(),

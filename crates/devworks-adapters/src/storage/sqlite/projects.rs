@@ -7,7 +7,7 @@
 //! project or repository recorded before migration 14 (or by a fixture) stays readable.
 use super::conn::db;
 use super::repos::{Snapshot, Unit};
-use super::support::{conflict, corrupt, id_of, invalid, page_limit};
+use super::support::{conflict_strict, corrupt, id_of, invalid, page_limit};
 use devworks_core::ports::storage::*;
 use devworks_core::protocol::{Id, ProjectId, RevisionDimension};
 use rusqlite::types::Value as Sql;
@@ -621,7 +621,7 @@ impl ProjectRepository for Unit<'_> {
             });
         };
         if current.revision != expected {
-            return Err(conflict(
+            return Err(conflict_strict(
                 RevisionDimension::Scope,
                 "project",
                 p.id.0.as_str(),
@@ -752,7 +752,7 @@ impl ProjectRepository for Unit<'_> {
             });
         };
         if current.revision != expected {
-            return Err(conflict(
+            return Err(conflict_strict(
                 RevisionDimension::Registry,
                 "repository",
                 id.as_str(),

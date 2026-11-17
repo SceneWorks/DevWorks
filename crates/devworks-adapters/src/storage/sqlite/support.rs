@@ -19,10 +19,16 @@
 //! effects against its own failure.
 //!
 //! The exception is a caller that catches a repository error and keeps writing in the same job.
-//! A method that writes several rows and can fail after its first write must then undo itself.
-//! Such a method wraps its body in [`atomic`], which is the only savepoint mechanism the
-//! repositories use. A method that validates before it writes, or writes a single statement,
-//! does not wrap. `atomic` nests, so a wrapped method may call another wrapped method.
+//! Then the callee owns the undo: a repository method that writes several rows and can fail
+//! after its first write wraps its body in [`atomic`], so its own partial writes never outlive
+//! its own error. A method that validates before it writes, or writes a single statement, does
+//! not wrap. `atomic` nests, so a wrapped method may call another wrapped method. `atomic` is
+//! the only savepoint the repositories use internally.
+//!
+//! Callers in core (gateway, observed, evidence, transcript and membership code) still open
+//! their own savepoints through the public `WriteTransaction::savepoint`, `release` and
+//! `rollback_to` port methods, to undo a unit of several repository calls. That port API stays,
+//! because those callers' units span more than one method.
 use super::conn::db;
 use devworks_core::ports::storage::{MAX_PAGE, StorageError, Unavailable};
 use devworks_core::protocol::{Id, Revision, RevisionDimension};
@@ -77,6 +83,22 @@ pub(super) fn conflict(
     StorageError::conflict(dimension, kind, target, expected, current)
 }
 
+/// A revision conflict for a caller-supplied `expected` revision that must be positive. A
+/// non-positive `expected` is a caller error (`InvalidRecord`), not a conflict. Use [`conflict`]
+/// where `expected` of zero is legitimate (creating a row) and is shown as 1.
+pub(super) fn conflict_strict(
+    dimension: RevisionDimension,
+    kind: &'static str,
+    id: &str,
+    expected: i64,
+    current: i64,
+) -> StorageError {
+    if expected <= 0 {
+        return invalid("expected revision is positive");
+    }
+    conflict(dimension, kind, id, expected, current)
+}
+
 /// Runs `f` inside a savepoint: its writes stay if it returns `Ok` and are undone if it returns
 /// `Err`. See the module documentation for when a repository method uses this.
 pub(super) fn atomic<T>(
@@ -90,7 +112,8 @@ pub(super) fn atomic<T>(
             Ok(value)
         }
         Err(error) => {
-            db(conn.execute_batch("ROLLBACK TO dw_atomic; RELEASE dw_atomic"))?;
+            // The original error is the one the caller needs; a failed rollback must not mask it.
+            let _ = conn.execute_batch("ROLLBACK TO dw_atomic; RELEASE dw_atomic");
             Err(error)
         }
     }

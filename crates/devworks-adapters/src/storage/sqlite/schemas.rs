@@ -1,5 +1,5 @@
 //! Dedicated metadata repositories. Source rows and native driver types never enter this store.
-use super::support::{conflict, invalid, page_limit};
+use super::support::{conflict_strict, invalid, page_limit};
 use super::{
     conn::db,
     repos::{Snapshot, Unit},
@@ -316,7 +316,7 @@ impl SchemaRepository for Unit<'_> {
         let old = source(self.conn, &row.connection.id)?
             .ok_or_else(|| invalid("schema source missing"))?;
         if old.connection.revision.get() != expected {
-            return Err(conflict(
+            return Err(conflict_strict(
                 devworks_core::protocol::RevisionDimension::Connection,
                 "schema_source",
                 row.connection.id.as_str(),

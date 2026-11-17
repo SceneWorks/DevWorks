@@ -2,7 +2,7 @@
 //! `router_connections` and `router_decision_models`. No secret is ever stored: a connection
 //! names its credential by an opaque handle and a credential revision.
 use super::conn::db;
-use super::support::{conflict, corrupt, id_of, invalid};
+use super::support::{conflict, corrupt, id_of, invalid, page_limit};
 use devworks_core::ports::storage::*;
 use devworks_core::protocol::{Id, OperationId, RevisionDimension};
 use rusqlite::{Connection, OptionalExtension, Row, params};
@@ -215,9 +215,7 @@ pub(super) fn connections(
     after: Option<&str>,
     limit: u16,
 ) -> Result<Vec<StoredConnection>, StorageError> {
-    if limit == 0 || limit > 500 {
-        return Err(invalid("limit must be 1..=500"));
-    }
+    page_limit(limit)?;
     let mut st = db(conn.prepare_cached(&format!(
         "SELECT {CONNECTION_COLUMNS} FROM router_connections WHERE id > ?1 ORDER BY id LIMIT ?2"
     )))?;
@@ -501,9 +499,7 @@ pub(super) fn decision_models(
     after: Option<&str>,
     limit: u16,
 ) -> Result<Vec<StoredDecisionModel>, StorageError> {
-    if limit == 0 || limit > 500 {
-        return Err(invalid("limit must be 1..=500"));
-    }
+    page_limit(limit)?;
     let mut st = db(conn.prepare_cached(&format!(
         "SELECT {DECISION_COLUMNS} FROM router_decision_models WHERE id > ?1 ORDER BY id LIMIT ?2"
     )))?;

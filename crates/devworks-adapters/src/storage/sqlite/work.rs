@@ -8,7 +8,7 @@
 //! symmetric whatever the script (SQLite's `lower()`/`LIKE` fold only ASCII).
 use super::conn::db;
 use super::repos::{Snapshot, Unit};
-use super::support::{conflict, corrupt, id_of, invalid, page_limit};
+use super::support::{conflict_strict, corrupt, id_of, invalid, page_limit};
 use devworks_core::ports::storage::*;
 use devworks_core::protocol::{ActorId, Id, ProjectId, RevisionDimension};
 use rusqlite::types::Value as Sql;
@@ -587,7 +587,7 @@ impl WorkRepository for Unit<'_> {
                 id: s.id.as_str().into(),
             })?;
         if current.revision != expected {
-            return Err(conflict(
+            return Err(conflict_strict(
                 RevisionDimension::Workflow,
                 "workflow_status",
                 s.id.as_str(),
@@ -625,7 +625,7 @@ impl WorkRepository for Unit<'_> {
                 id: id.as_str().into(),
             })?;
         if current.revision != expected {
-            return Err(conflict(
+            return Err(conflict_strict(
                 RevisionDimension::Workflow,
                 "workflow_status",
                 id.as_str(),
@@ -690,7 +690,7 @@ impl WorkRepository for Unit<'_> {
             });
         };
         if current.revision != expected {
-            return Err(conflict(
+            return Err(conflict_strict(
                 RevisionDimension::Work,
                 "work",
                 w.id.as_str(),
@@ -822,7 +822,7 @@ impl WorkRepository for Unit<'_> {
         let current = plan_of(self.conn, &p.feature_id)?;
         match (expected, &current) {
             (None, Some(c)) => {
-                return Err(conflict(
+                return Err(conflict_strict(
                     RevisionDimension::Plan,
                     "plan",
                     p.feature_id.as_str(),
@@ -837,7 +837,7 @@ impl WorkRepository for Unit<'_> {
                 });
             }
             (Some(e), Some(c)) if c.revision != e => {
-                return Err(conflict(
+                return Err(conflict_strict(
                     RevisionDimension::Plan,
                     "plan",
                     p.feature_id.as_str(),
@@ -935,7 +935,7 @@ impl WorkRepository for Unit<'_> {
                 ]))?;
                 Ok(())
             }
-            (Some(e), Some(c)) if c != e => Err(conflict(
+            (Some(e), Some(c)) if c != e => Err(conflict_strict(
                 RevisionDimension::Review,
                 "proposal",
                 p.id.as_str(),
@@ -964,7 +964,7 @@ impl WorkRepository for Unit<'_> {
             (None, None) if r.revision == 1 => {}
             (Some(e), Some(c)) if c == e && r.revision == e + 1 => {}
             (Some(e), Some(c)) if c != e => {
-                return Err(conflict(
+                return Err(conflict_strict(
                     RevisionDimension::Plan,
                     "readiness",
                     r.feature_id.as_str(),
@@ -973,7 +973,7 @@ impl WorkRepository for Unit<'_> {
                 ));
             }
             (None, Some(c)) => {
-                return Err(conflict(
+                return Err(conflict_strict(
                     RevisionDimension::Plan,
                     "readiness",
                     r.feature_id.as_str(),

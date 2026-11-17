@@ -1,7 +1,7 @@
 //! Decision inbox references, immutable human review evidence and the private resume outbox.
 use super::conn::db;
 use super::repos::{Snapshot, Unit, parse_principal, principal_name};
-use super::support::{conflict, corrupt, id_of, invalid, page_limit};
+use super::support::{conflict_strict, corrupt, id_of, invalid, page_limit};
 use devworks_core::context::PrincipalKind;
 use devworks_core::ports::storage::*;
 use devworks_core::protocol::{ActorId, Id, ProjectId, RevisionDimension, RootId};
@@ -426,7 +426,7 @@ impl DecisionRepository for Unit<'_> {
             }
             (Some(e), Some(old)) => {
                 if old.revision != e {
-                    return Err(conflict(
+                    return Err(conflict_strict(
                         RevisionDimension::Review,
                         "approval",
                         a.id.as_str(),
@@ -603,7 +603,7 @@ impl DecisionRepository for Unit<'_> {
             }
             (Some(e), Some(old)) => {
                 if old.revision != e {
-                    return Err(conflict(
+                    return Err(conflict_strict(
                         RevisionDimension::Review,
                         "approval_resume",
                         r.approval_id.as_str(),
@@ -693,7 +693,7 @@ impl DecisionRepository for Unit<'_> {
             }
             (Some(e), Some(old)) => {
                 if old.revision != e {
-                    return Err(conflict(
+                    return Err(conflict_strict(
                         RevisionDimension::Review,
                         "notification",
                         n.id.as_str(),
