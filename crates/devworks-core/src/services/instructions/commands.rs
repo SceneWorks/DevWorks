@@ -4,9 +4,9 @@ use super::scan::{self, valid_name};
 use super::sync::{RecordedRevision, StagedCapture, new_role_item, record_capture};
 use super::{
     InstructionService, config_scope, denied, draft_confinement, event, event_in, invalid,
-    item_visible, kind_of, not_found_failure, provenance, record, refusal, require_author,
-    require_human, stale, target_kind, visible_current, visible_item, visible_latest,
-    visible_revision,
+    item_visible, kind_of, not_found_failure, provenance, record, record_with_approval, refusal,
+    require_author, require_human, stale, target_kind, visible_current, visible_item,
+    visible_latest, visible_revision,
 };
 use crate::context::{InvocationContext, PrincipalKind};
 use crate::fingerprint::sha256_hex;
@@ -395,6 +395,14 @@ impl InstructionService {
         mut input: Draft<'_>,
     ) -> Result<DomainDecision, Failure> {
         require_author(tx, ctx, &*self.roles)?;
+        // The rationale is shown in history and in the approval, so text the redactor would
+        // change is refused rather than stored.
+        if let Some(why) = input.rationale {
+            let why = why.0.trim();
+            if crate::authority::redact::Redactor::new().redact_text(why) != why {
+                return Err(invalid("instruction_rationale_unreviewable"));
+            }
+        }
         let prepared = command
             .prepared::<PreparedDraft>()
             .ok_or_else(|| invalid("instruction_content"))?;
@@ -906,7 +914,11 @@ impl InstructionService {
         if item.active_revision == Some(target.revision) {
             self.check_materializable(&item, &target.resources)?;
             return Ok(DomainDecision::NoChange {
-                result: result(kind, Op::Rollback, record(&item, &target, None)?),
+                result: result(
+                    kind,
+                    Op::Rollback,
+                    record_with_approval(tx.decisions(), &item, &target, None)?,
+                ),
             });
         }
         let previous = item.active_revision;
@@ -972,7 +984,11 @@ impl InstructionService {
             }),
         )?;
         Ok(DomainDecision::Applied {
-            result: result(kind, Op::Rollback, record(&item, &target, None)?),
+            result: result(
+                kind,
+                Op::Rollback,
+                record_with_approval(tx.decisions(), &item, &target, None)?,
+            ),
         })
     }
 }

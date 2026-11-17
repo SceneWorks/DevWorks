@@ -1246,6 +1246,46 @@ fn skill_history_shows_why_who_which_session_state_and_approval_outcome() {
     });
 }
 
+#[test]
+fn skill_draft_rationale_is_redacted_checked_and_replies_show_the_approval_outcome() {
+    let fx = Fx::new();
+    runtime().block_on(async {
+        let (user, _, _) = fx.principals();
+        let app = boot(fx.composition()).await.unwrap();
+        let agent = with_session_in(
+            &fx,
+            project_agent(&fx, &user, "agent-a", "project-a"),
+            "session-a",
+            "project-a",
+        );
+        let in_a = ArtifactScope::Project(ProjectId(id("project-a")));
+        let body = |text: &str, why: &str| json!({"scope":{"kind":"Workspace"},"name":"deploy","rationale":why,"content":fx.upload_in(&agent, text, in_a.clone())});
+        // A secret-shaped rationale is refused; an ordinary one is accepted.
+        assert_eq!(
+            refused(fx.command_at(&app, &agent, "skills.draft", 8, body("Deploy v1.", "use key ghp_0123456789abcdefABCDEF"))),
+            "InvalidArgument"
+        );
+        let drafted = applied(fx.command_at(&app, &agent, "skills.draft", 8, body("Deploy v1.", "Add the deploy steps")));
+        // An r1 caller's `rationale` is rejected by strict input validation, not dropped.
+        let strict = fx.command_at(&app, &agent, "skills.draft", 1, body("Deploy v1b.", "Add the deploy steps"));
+        assert!(matches!(strict, CommandReply::Rejected { .. }) || refused(strict) == "InvalidArgument");
+        // Approve and activate, then roll back to the same and to an older revision.
+        let proposal = applied(fx.command(&app, &agent, "skills.propose", json!({"instructionId":drafted["id"],"expectedRevision":"1","contentDigest":digest_of(&drafted)})));
+        let frame = serde_json::to_vec(&json!({"mode":"Command","protocol":"1.0-draft.1","schemaRevision":3,
+            "requestKey":fx.h.ids.next_id(IdKind::Link),"body":{"kind":"approvals.record_human_decision",
+            "proposalId":proposal["id"],"expectedRevision":proposal["revision"],"contentDigest":proposal["contentDigest"],
+            "decision":"Approve","rationale":"Reviewed"}})).unwrap();
+        applied(app.record_human_decision(&user, &frame).unwrap());
+        app.approval_resumes().tick().await.unwrap();
+        let same = applied(fx.command_at(&app, &user, "skills.rollback", 8, json!({"instructionId":drafted["id"],"expectedRevision":"1","targetRevision":"1"})));
+        assert_eq!(same["approvalOutcome"], "Approved", "{same}");
+        let second = applied(fx.command_at(&app, &user, "skills.draft", 8, json!({"scope":{"kind":"Workspace"},"instructionId":drafted["id"],"expectedRevision":"1","name":"deploy","content":fx.upload(&user, "Deploy v2.")})));
+        let back = applied(fx.command_at(&app, &user, "skills.rollback", 8, json!({"instructionId":drafted["id"],"expectedRevision":second["revision"],"targetRevision":"1"})));
+        assert_eq!((&back["revision"], &back["approvalOutcome"]), (&json!("1"), &json!("Approved")), "{back}");
+        app.shutdown().await;
+    });
+}
+
 fn project_agent(
     fx: &Fx,
     user: &InvocationContext,
