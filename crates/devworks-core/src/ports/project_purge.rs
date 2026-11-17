@@ -180,9 +180,16 @@ pub struct PurgePermit {
     scope: ProjectPurgeClientScope,
     confirmed_by: ActorId,
 }
+/// Implemented only by the sealed confirmation token that `services::projects::purge`
+/// defines with a private field. `PurgePermit::issue` takes one, so no other module can
+/// mint a permit; `tests/dependency_direction.rs` checks the trait and `issue` appear
+/// nowhere else.
+pub(crate) trait PurgeConfirmation {}
 impl PurgePermit {
-    /// Only the purge confirmation owner in `services::projects::purge` calls this.
+    /// Only the purge confirmation owner in `services::projects::purge` can call this: it
+    /// alone can construct a `PurgeConfirmation`.
     pub(crate) fn issue(
+        _confirmation: &impl PurgeConfirmation,
         reviewed: StoredProjectPurge,
         files: PurgeFileSnapshot,
         client: PurgeClientSnapshot,

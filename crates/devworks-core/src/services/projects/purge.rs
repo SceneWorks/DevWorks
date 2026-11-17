@@ -2,8 +2,13 @@
 //! deserialized, and is minted only after the ingress-bound Human decision and fresh owners.
 use super::*;
 pub use crate::ports::project_purge::PurgePermit;
+
+/// The only value that can issue a `PurgePermit`; its field is private to this file.
+struct ConfirmationToken(());
+impl PurgeConfirmation for ConfirmationToken {}
 use crate::ports::project_purge::{
-    ProjectPurgeClient, ProjectPurgeFiles, PurgeClientSnapshot, PurgeFileFault, PurgeFileSnapshot,
+    ProjectPurgeClient, ProjectPurgeFiles, PurgeClientSnapshot, PurgeConfirmation, PurgeFileFault,
+    PurgeFileSnapshot,
 };
 use crate::ports::storage::{
     ProjectPurgeInventory, ProjectPurgeRowAction, ProjectPurgeRowReason, StoredProjectPurge,
@@ -312,6 +317,7 @@ impl PurgeCoordinator {
             return Err(refuse(DomainErrorCode::Conflict, reason, None));
         }
         Ok(PurgePermit::issue(
+            &ConfirmationToken(()),
             stored,
             snapshot.removing,
             snapshot.client,
