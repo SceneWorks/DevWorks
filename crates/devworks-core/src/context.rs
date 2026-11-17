@@ -328,6 +328,13 @@ impl InvocationContext {
         self.activation = None;
         self
     }
+    /// The same invocation working in `project` (its session's project, resolved by a service
+    /// that reads the session); everything else is unchanged.
+    pub(crate) fn in_project(&self, project: ProjectId) -> Self {
+        let mut bound = self.clone();
+        bound.project_id = Some(project);
+        bound
+    }
     /// Binds the exact activation epoch from the trusted launch path after lineage resolution.
     pub fn with_activation(mut self, id: Id, owner_epoch: i64) -> Self {
         self.activation = Some((id, owner_epoch));

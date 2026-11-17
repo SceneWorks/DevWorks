@@ -193,9 +193,7 @@ impl DesktopConfig {
 /// Container backends select only their own CLI among the configured executables.
 const CONTAINER_EXECUTABLES: &[&str] = &["docker", "podman", "container"];
 
-/// Folder under the data root holding one skill store per project. It sits beside, not inside,
-/// `skills`, so a project's folder is never read as a workspace skill.
-const PROJECT_SKILLS: &str = "project-skills";
+use devworks_adapters::fs::skills::PROJECT_SKILLS_DIR as PROJECT_SKILLS;
 
 /// What every command launch is checked against: the application data folder and the skill
 /// folders, so an agent's command can never write a skill change that sync would observe.

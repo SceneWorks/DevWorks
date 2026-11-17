@@ -43,10 +43,16 @@
 //! rules apply as for workspace harness skills: a person's save is effective at once, an agent's
 //! draft needs the exact human approval, and a folder first seen or changed on disk is a pending
 //! revision until a person confirms it with `skills.rollback`. Only agents working in the project
-//! are offered it ([`effective_skills_in`]); it is not found for any other project, and it
-//! overrides a workspace skill of the same name for its project. `skills.set_enabled` works on
-//! it unchanged. The project's rows go with the project's purge, and sync removes the folder of
-//! a deleted project.
+//! (its own invocation project, else its session's) are offered it ([`effective_skills_in`]); an
+//! invocation with no project, other than a person's, reaches no project's skills, and it is not
+//! found from any other project.
+//!
+//! Override rule: for one name, the most specific skill is in effect: a project skill over a
+//! workspace harness skill over a shared skill. Within that project the shadowed skill shows as
+//! overridden, and an agent's proposal of a project skill says which workspace skill it would
+//! shadow. `skills.set_enabled` works on a project skill unchanged. The project's rows and its
+//! skill folder go with the project's purge (a purge owner of its own); sync never deletes a
+//! project's folder and reports folders of unknown or deleted projects instead.
 //!
 //! Role revisions keep the `roles.<role>.instructions` setting as their single effective source:
 //! activation writes the setting in the same unit of work, and a setting saved elsewhere is
@@ -251,6 +257,11 @@ pub(crate) fn config_scope(
     match scope {
         DataScope::Workspace => Ok(ConfigScope::Workspace),
         DataScope::Project { project_id } => {
+            // An invocation with no project (and no session project) reaches no project's
+            // instructions unless a person made it.
+            if ctx.project_id().is_none() && ctx.principal_kind() != PrincipalKind::Human {
+                return Err(denied_project(project_id).into());
+            }
             crate::services::sessions::require_project(ctx, project_id)?;
             Ok(ConfigScope::Project(project_id.clone()))
         }
@@ -261,8 +272,37 @@ pub(crate) fn config_scope(
 pub(crate) fn visible(ctx: &InvocationContext, scope: &ConfigScope) -> bool {
     match scope {
         ConfigScope::Workspace => true,
-        ConfigScope::Project(p) => crate::services::sessions::project_visible(ctx, Some(p)),
+        ConfigScope::Project(p) => match ctx.project_id() {
+            Some(own) => own == p,
+            None => ctx.principal_kind() == PrincipalKind::Human,
+        },
     }
+}
+fn denied_project(project: &ProjectId) -> Refusal {
+    Refusal::new(
+        DomainErrorCode::PermissionDenied,
+        "project",
+        Some(project.0.clone()),
+    )
+}
+/// The invocation with the project it works in: its own, else its session's (`sessions` is the
+/// snapshot to read the session from). A person's invocation, or one with neither, is unchanged.
+pub(crate) fn effective_ctx(
+    ctx: &InvocationContext,
+    sessions: &dyn crate::ports::storage::SessionRead,
+) -> Result<InvocationContext, StorageError> {
+    if ctx.project_id().is_some() || ctx.principal_kind() == PrincipalKind::Human {
+        return Ok(ctx.clone());
+    }
+    let Some(session_id) = ctx.session_id() else {
+        return Ok(ctx.clone());
+    };
+    Ok(
+        match sessions.session(session_id)?.and_then(|s| s.project_id) {
+            Some(project) => ctx.in_project(project),
+            None => ctx.clone(),
+        },
+    )
 }
 /// The item if it exists, is of `kind` and is visible to the invocation (else `NotFound`).
 pub(crate) fn visible_item(
@@ -559,6 +599,8 @@ impl QueryHandler for InstructionService {
         query: &AdmittedQuery,
         read: &dyn ReadSnapshot,
     ) -> Result<QueryAnswer, DomainFault> {
+        let ctx = &effective_ctx(ctx, read.sessions())
+            .map_err(|e| query_fault(e.into(), "instruction", self.correlation()))?;
         let result = match query.input() {
             OperationInput::Skills(input) => self.skill_query(read, ctx, input),
             OperationInput::Roles(input) => self.role_query(read, ctx, input),
@@ -585,6 +627,10 @@ impl CommandHandler for InstructionService {
         // Observe live sources first: a skill directory or role setting changed since the
         // caller read it becomes a newer revision, so a stale expectedRevision is refused as a
         // conflict instead of a save materializing an older snapshot over the change.
+        let ctx =
+            &crate::ports::storage::read_snapshot(&*self.store, &Default::default(), |read| {
+                effective_ctx(ctx, read.sessions())
+            })?;
         if let Some(kind) = kind_of(command.input()) {
             let report = self.sync_kind(Some(kind))?;
             // A save or activation may replace the harness directory of its target: refuse it
@@ -647,6 +693,7 @@ impl CommandHandler for InstructionService {
         if let Some(refusal) = command.prepared::<commands::PreparedRefusal>() {
             return decided(tx, Err(refusal.0.clone().into()));
         }
+        let ctx = &effective_ctx(ctx, tx.sessions()).map_err(HandlerFailure::from)?;
         let outcome = self.decide_command(ctx, command, tx);
         decided(tx, outcome)
     }

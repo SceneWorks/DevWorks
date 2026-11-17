@@ -59,8 +59,4 @@ pub trait SkillFiles: Send + Sync {
     fn project_folders(&self) -> Result<Vec<String>, SkillFileFault> {
         Ok(Vec::new())
     }
-    /// Removes a project's whole folder from the project skill store (project purge).
-    fn remove_project(&self, _project: &str) -> Result<(), SkillFileFault> {
-        Ok(())
-    }
 }

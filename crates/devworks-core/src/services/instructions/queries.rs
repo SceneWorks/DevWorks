@@ -134,7 +134,14 @@ impl InstructionService {
                 }
                 let mut records = Vec::new();
                 let mut fence = 0i64;
-                for (item, standing) in skill_items_in(instructions, scope.project_id())? {
+                // Standing is computed for the project the caller works in even when the
+                // workspace list is asked for, so a workspace skill a project's skill shadows
+                // is shown as overridden.
+                let working = scope.project_id().or(ctx.project_id());
+                for (item, standing) in skill_items_in(instructions, working)? {
+                    if scope == ConfigScope::Workspace && item.scope != ConfigScope::Workspace {
+                        continue;
+                    }
                     let root = if item.origin == InstructionOrigin::Shared {
                         SHARED_ROOT_ID
                     } else {

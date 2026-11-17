@@ -9,14 +9,36 @@ use serde::{Deserialize, Serialize};
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all_fields = "camelCase", deny_unknown_fields)]
 pub enum PurgeFileOwner {
-    Blob { digest: String, generation: String },
-    ArtifactStaging { operation_id: Id },
-    Quarantine { digest: String, generation: String },
-    Preview { version_id: Id },
-    BrowserProfile { session_id: Id },
-    DiagnosticExport { file_id: Id },
-    ClientPaste { file_id: Id },
-    ClientStaging { file_id: Id },
+    Blob {
+        digest: String,
+        generation: String,
+    },
+    ArtifactStaging {
+        operation_id: Id,
+    },
+    Quarantine {
+        digest: String,
+        generation: String,
+    },
+    Preview {
+        version_id: Id,
+    },
+    BrowserProfile {
+        session_id: Id,
+    },
+    /// The project's skill store (`<data-root>/project-skills/<project-id>`), a directory tree.
+    ProjectSkills {
+        project_id: Id,
+    },
+    DiagnosticExport {
+        file_id: Id,
+    },
+    ClientPaste {
+        file_id: Id,
+    },
+    ClientStaging {
+        file_id: Id,
+    },
 }
 
 /// Exact owner set materialized from the same reviewed native project snapshot.

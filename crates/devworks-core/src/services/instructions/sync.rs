@@ -195,9 +195,10 @@ impl InstructionService {
     }
 
     /// Observes each project's skill store (`<data-root>/project-skills/<project-id>`). A
-    /// project is observed when it has skills recorded or a folder on disk; the folder of a
-    /// deleted project (one the store no longer has, or marks deleted, as a purge leaves it)
-    /// is removed, since the store records everything it holds.
+    /// project is observed when it has skills recorded or a folder on disk. Sync never deletes
+    /// a project's folder: a purge removes it with the project's records, and a folder of a
+    /// project the store does not have, or marks deleted, is left alone and reported, since
+    /// DevWorks may not have created it (or the project may still be restored).
     fn sync_projects(&self, report: &mut SyncReport) {
         let folders = match self.files.project_folders() {
             Ok(folders) => folders,
@@ -224,6 +225,9 @@ impl InstructionService {
         projects.extend(folders.iter().cloned());
         for id in projects {
             let Ok(project) = Id::new(id.clone()).map(crate::protocol::ProjectId) else {
+                report
+                    .skipped
+                    .push((id, "project skills: not a project folder".into()));
                 continue;
             };
             let known = read_snapshot(&*self.store, &ReadOptions::default(), |read| {
@@ -234,13 +238,13 @@ impl InstructionService {
             });
             match known {
                 Ok(true) => {}
-                // The project is gone: its folder holds only what the store recorded (or an edit nobody
-                // confirmed), so it goes with the project.
                 Ok(false) => {
-                    if folders.contains(&id)
-                        && let Err(e) = self.files.remove_project(&id)
-                    {
-                        report.failures.push(format!("project {id} skills: {e}"));
+                    if folders.contains(&id) {
+                        report.skipped.push((
+                            id,
+                            "project skills: the project is unknown or deleted, so its folder was left in place"
+                                .into(),
+                        ));
                     }
                     continue;
                 }

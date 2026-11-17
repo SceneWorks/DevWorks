@@ -2107,17 +2107,8 @@ impl Runtime {
         if ctx.session_id() != Some(session_id) {
             return Err(StorageError::ScopeDenied);
         }
-        // The session's own project decides which project skills it is offered.
-        let project = devworks_core::ports::storage::read_snapshot(
-            self.store.as_ref(),
-            &devworks_core::ports::storage::ReadOptions::default(),
-            |read| {
-                Ok(read
-                    .sessions()
-                    .session(session_id)?
-                    .and_then(|s| s.project_id))
-            },
-        )?;
+        // The same project resolution as every other skill path decides what it is offered.
+        let project = self.skill_project(ctx)?;
         let current = self.effective_skills_in(project.as_ref())?;
         if adopted.is_some_and(|a| a.digest == current.digest) {
             return Ok((current, false));

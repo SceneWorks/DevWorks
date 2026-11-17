@@ -177,6 +177,13 @@ impl NativeProjectPurgeFiles {
                     vec!["browser".into(), "sessions".into()],
                 )
             }
+            PurgeFileOwner::ProjectSkills { project_id } => {
+                valid_id(project_id.as_str())?;
+                (
+                    self.data_root.clone(),
+                    vec![super::skills::PROJECT_SKILLS_DIR.into()],
+                )
+            }
             PurgeFileOwner::DiagnosticExport { .. } => (
                 self.data_root.clone(),
                 vec!["diagnostics".into(), "exports".into()],
@@ -203,6 +210,7 @@ impl NativeProjectPurgeFiles {
                 Some(format!("{}.part", operation_id.as_str()))
             }
             PurgeFileOwner::BrowserProfile { session_id } => Some(session_id.as_str().to_owned()),
+            PurgeFileOwner::ProjectSkills { project_id } => Some(project_id.as_str().to_owned()),
             PurgeFileOwner::DiagnosticExport { file_id }
             | PurgeFileOwner::ClientPaste { file_id }
             | PurgeFileOwner::ClientStaging { file_id } => {
@@ -368,6 +376,10 @@ fn owner_relative(owner: &PurgeFileOwner, relative: &str) -> bool {
             relative == session_id.as_str()
                 || relative.starts_with(&format!("{}/", session_id.as_str()))
         }
+        PurgeFileOwner::ProjectSkills { project_id } => {
+            relative == project_id.as_str()
+                || relative.starts_with(&format!("{}/", project_id.as_str()))
+        }
         PurgeFileOwner::Quarantine { digest, generation } => relative
             .strip_prefix(&format!("{digest}.{generation}."))
             .is_some_and(|s| !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit() || b == b'-')),
@@ -529,7 +541,11 @@ impl ProjectPurgeFiles for NativeProjectPurgeFiles {
                     continue;
                 }
                 if witness.directory {
-                    if !matches!(owner, PurgeFileOwner::BrowserProfile { .. }) {
+                    if !matches!(
+                        owner,
+                        PurgeFileOwner::BrowserProfile { .. }
+                            | PurgeFileOwner::ProjectSkills { .. }
+                    ) {
                         return Err(PurgeFileFault::Unattributed);
                     }
                     for child in std::fs::read_dir(joined_relative(&root, &relative)?)

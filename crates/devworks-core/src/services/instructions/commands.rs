@@ -140,13 +140,15 @@ impl InstructionService {
                     return Ok(None);
                 };
                 let token = visible_latest(read.instructions(), ctx, &item)?;
-                Ok(Some((item, revision, token)))
+                let shadows = approval::shadowed_workspace_skill(read.instructions(), &item)?;
+                Ok(Some((item, revision, token, shadows)))
             })())
         })??;
         let mut evidence = None;
-        if let Some((item, revision, token)) = reviewed {
+        if let Some((item, revision, token, shadows)) = reviewed {
             let (_, request) = proposal_request(&item, &revision, &proposal_id, token)?;
-            let preview = approval::preview(&item, &revision, &proposal_id, token);
+            let preview =
+                approval::preview(&item, &revision, &proposal_id, token, shadows.as_deref());
             if crate::services::approvals::review_evidence::needed(&preview) {
                 let document = crate::services::approvals::review_evidence::document(&preview);
                 evidence = Some(
@@ -724,7 +726,14 @@ impl InstructionService {
         };
         let operation = activation_operation(kind);
         let (args, request) = proposal_request(&item, &revision, &proposal_id, expected_token)?;
-        let preview = approval::preview(&item, &revision, &proposal_id, expected_token);
+        let shadows = approval::shadowed_workspace_skill(tx.instructions(), &item)?;
+        let preview = approval::preview(
+            &item,
+            &revision,
+            &proposal_id,
+            expected_token,
+            shadows.as_deref(),
+        );
         // A review over the inline limit is sealed against the evidence published before this
         // unit of work, as the generic proposal path does; without matching evidence the review
         // changed since it was prepared.

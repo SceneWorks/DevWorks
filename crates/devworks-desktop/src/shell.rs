@@ -3537,6 +3537,20 @@ impl Shell {
                 let online = self.online();
                 let mut actions = Vec::new();
                 self.settings.mcp.projects = self.projects.list.items.clone();
+                self.settings.instructions.projects_loaded = self.projects.list.loaded;
+                self.settings.instructions.projects = self
+                    .projects
+                    .list
+                    .items
+                    .iter()
+                    .filter(|p| {
+                        matches!(
+                            p.lifecycle,
+                            devworks_core::protocol::records::LifeState::Active
+                        )
+                    })
+                    .map(|p| (p.id.0.as_str().to_owned(), p.name.0.clone()))
+                    .collect();
                 // Repository indexing sources sit with the repository paths (General).
                 let mut index_actions = Vec::new();
                 let up = online.is_ok();

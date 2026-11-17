@@ -10,6 +10,10 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
+/// Folder under the data root holding one skill store per project. It sits beside, not inside,
+/// the workspace skill folder, so a project's folder is never read as a workspace skill.
+pub const PROJECT_SKILLS_DIR: &str = "project-skills";
+
 pub struct NativeSkillFiles {
     root: PathBuf,
     /// The folder holding one skill store per project; `None` keeps no project skills.
@@ -348,15 +352,6 @@ impl SkillFiles for NativeSkillFiles {
         }
         found.sort();
         Ok(found)
-    }
-    fn remove_project(&self, project: &str) -> Result<(), SkillFileFault> {
-        if !valid_segment(project) || project.starts_with('.') {
-            return Err(SkillFileFault::InvalidName);
-        }
-        let Some(projects) = &self.projects else {
-            return Ok(());
-        };
-        remove_entry(&projects.join(project)).map_err(io_fault)
     }
     fn root(&self) -> Result<PathBuf, SkillFileFault> {
         fs::create_dir_all(&self.root).map_err(io_fault)?;
@@ -798,7 +793,7 @@ mod tests {
     }
 
     #[test]
-    fn project_stores_are_separate_listed_and_removable() {
+    fn project_stores_are_separate_and_listed() {
         let root = temp();
         let files = NativeSkillFiles::new(root.join("skills")).with_projects(root.join("projects"));
         let one = files.project("project-a").expect("project store");
@@ -822,12 +817,5 @@ mod tests {
                 .project("project-a")
                 .is_none()
         );
-        assert!(matches!(
-            files.remove_project(".."),
-            Err(SkillFileFault::InvalidName)
-        ));
-        files.remove_project("project-a").unwrap();
-        assert_eq!(files.project_folders().unwrap(), ["project-b"]);
-        files.remove_project("project-a").unwrap();
     }
 }

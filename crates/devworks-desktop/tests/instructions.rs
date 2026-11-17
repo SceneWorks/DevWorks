@@ -3,6 +3,8 @@
 mod common;
 
 use common::*;
+use devworks_core::ports::storage::{StoredProject, WriteOptions, run_write};
+use devworks_core::protocol::{Id, ProjectId};
 use devworks_desktop::instructions_ops as iop;
 use devworks_desktop::shell::Shell;
 use eframe::egui::{Key, Modifiers, accesskit::Role};
@@ -211,4 +213,95 @@ fn a_skill_lists_its_resource_files_by_path() {
     });
     settle(&mut h);
     assert!(has_text(&h, "references/setup.md · text/markdown"));
+}
+
+#[test]
+fn a_person_creates_and_edits_a_skill_for_one_project() {
+    let _case = native_runtime_case();
+    let root = Root::new("instruction-project-skill");
+    let engine = start(&root);
+    let project = ProjectId(Id::new("skill-project").unwrap());
+    let for_write = project.clone();
+    run_write(
+        &**engine.host().runtime().store(),
+        WriteOptions::default(),
+        move |tx| {
+            tx.projects().insert_project(&StoredProject {
+                id: for_write,
+                name: "Skill project".into(),
+                description: String::new(),
+                lifecycle: "Active".into(),
+                revision: 1,
+                scope_revision: 1,
+                created_at_ms: 1,
+                updated_at_ms: 1,
+                archived_at_ms: None,
+                deleted_at_ms: None,
+                archive_epoch: 0,
+                archive_stop_pending: false,
+            })
+        },
+    )
+    .unwrap();
+    let mut h = harness(shell(&engine, &root, Script::default()), 1440.0, 1400.0);
+    settle(&mut h);
+    click_nav(&mut h, "Settings");
+    click(&mut h, Role::Button, "Role instructions");
+    wait(&mut h, "skills listed and the project known", |s| {
+        s.settings.instructions.skills.is_some() && !s.settings.instructions.projects.is_empty()
+    });
+    // The scope choice offers the project; choosing it saves the skill into its own store.
+    click(&mut h, Role::Button, "New harness skill");
+    assert!(h.query_by_label("Skill scope").is_some());
+    h.state_mut().settings.instructions.new_skill_project = Some("skill-project".into());
+    settle(&mut h);
+    replace_text(&mut h, "New skill name", "deploy");
+    replace_text(&mut h, "New skill text", "Deploy this project.");
+    click(&mut h, Role::Button, "Create skill");
+    let project_skill = |s: &Shell| -> bool {
+        matches!(&s.settings.instructions.skills, Some(Ok(list)) if list.iter().any(|r| {
+            r.name.0 == "deploy" && iop::record_project(r).as_deref() == Some("skill-project")
+        }))
+    };
+    wait(&mut h, "project skill created and listed", |s| {
+        idle(s) && project_skill(s)
+    });
+    settle(&mut h);
+    assert_eq!(
+        std::fs::read(root.0.join("project-skills/skill-project/deploy/SKILL.md")).unwrap(),
+        b"Deploy this project."
+    );
+    assert!(!root.0.join("skills/deploy").exists());
+    let names = |project: Option<&ProjectId>| -> Vec<String> {
+        engine
+            .host()
+            .runtime()
+            .effective_skills_in(project)
+            .unwrap()
+            .skills
+            .iter()
+            .map(|s| s.name.clone())
+            .collect()
+    };
+    assert_eq!(names(Some(&project)), ["deploy"]);
+    assert!(names(None).is_empty(), "the workspace is not offered it");
+    assert!(has_text(&h, "Project: Skill project"));
+    // Editing it again keeps it in the project's store.
+    click(&mut h, Role::Button, "deploy");
+    wait(&mut h, "skill history and text", |s| {
+        history_latest(s).is_some() && matches!(s.settings.instructions.detail.text, Some(Ok(_)))
+    });
+    let before = history_latest(h.state()).unwrap();
+    click(&mut h, Role::Button, "Edit");
+    replace_text(&mut h, "Edit deploy text", "Deploy this project twice.");
+    click(&mut h, Role::Button, "Save");
+    wait(&mut h, "project skill saved again", |s| {
+        idle(s) && history_latest(s).is_some_and(|l| l > before)
+    });
+    settle(&mut h);
+    assert_eq!(
+        std::fs::read(root.0.join("project-skills/skill-project/deploy/SKILL.md")).unwrap(),
+        b"Deploy this project twice."
+    );
+    assert!(!root.0.join("skills/deploy").exists());
 }
