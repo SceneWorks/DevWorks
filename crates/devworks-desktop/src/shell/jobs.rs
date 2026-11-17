@@ -41,6 +41,24 @@ impl Screen for JobsUi {
     fn ui(&mut self, cx: &mut Cx, _route: Route, ui: &mut Ui) {
         JobsCtl { jobs: self, cx }.jobs_screen(ui);
     }
+    fn purge_live(&self, out: &mut crate::project_purge::Live) {
+        if let Some((owner, draft)) = self.purge_draft() {
+            out.projects
+                .entry(owner)
+                .or_insert_with(|| serde_json::json!({}))["job"] = draft;
+        }
+    }
+    fn remove_purged(&mut self, scope: &devworks_core::ports::storage::ProjectPurgeClientScope) {
+        let p = scope.project_id.0.as_str();
+        let job_form = self
+            .form
+            .take()
+            .filter(|f| f.purge_owner(&self.scope) != Some(p));
+        if self.scope.as_deref() == Some(p) {
+            *self = Default::default();
+        }
+        self.form = job_form;
+    }
     fn context(&self, _route: Route, mem: &RouteMemory) -> ScreenContext {
         ScreenContext {
             tab: mem.tab,

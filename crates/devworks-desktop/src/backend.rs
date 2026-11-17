@@ -276,114 +276,33 @@ pub struct SecretStoreStatus {
     pub unavailable: Option<String>,
 }
 
-/// Who is waiting for a reply. Equal slots supersede each other.
+/// Who is waiting for a reply. Equal slots supersede each other. Each variant holds one
+/// screen's slot type and serializes as that value alone, so a persisted slot is the bare
+/// variant name (or `{"Name": value}`) its screen's enum declares; those names stay unique
+/// across every screen's slot type and never change.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[serde(untagged)]
 pub enum Slot {
-    PurgePrepare,
-    PurgePage,
-    PurgeConfirm,
-    PurgeStatus,
-    SettingsRead,
-    ContainerCapabilities,
-    SettingsValidate,
-    SettingsHealth,
-    SettingsSave,
-    /// Transient native credential intake; no raw value is serialized with this slot.
-    SettingsSecret(String),
-    SettingsExplain(String),
-    /// The Add-ons catalog.
-    AddonsList,
-    /// One package's logs.
-    AddonsLogs(String),
-    /// The Add-ons screen's one lifecycle command (or install-from-file task) at a time.
-    AddonsCommand,
-    /// Bundle artifact save before the exact install/update command; retained at close.
-    AddonsSave {
-        update: Option<String>,
-        registry: i64,
-        #[serde(default)]
-        download: Option<PathBuf>,
-    },
-    /// The runtime probe and index refresh behind the Add-ons screen.
-    AddonsDiscovery,
-    /// A page fetch from Settings > Agent tools.
-    WebFetch,
-    /// A search from Settings > Agent tools.
-    WebSearch,
-    /// The recent web activity record.
-    WebActivity,
-    McpServers(String, Option<String>),
-    McpOperation(String),
-    McpCapabilities(String, String, Option<String>),
-    /// A resource or prompt read from Settings (scope key, server ID).
-    McpContent(String, String),
-    McpCommand,
-    /// Deletes MCP secrets a configuration change left unreferenced.
-    McpRelease,
-    /// Active and archived projects.
-    ProjectsList,
-    /// Deleted projects (their tombstones).
-    /// Every registered repository.
-    RepositoriesList,
-    /// The repositories of one project.
-    ProjectRepositories(String),
-    KnowledgeList(u64),
-    /// One Knowledge entry with its evidence and history (claim ID).
-    KnowledgeRead(String),
-    /// Knowledge counts and retrieval mode.
-    KnowledgeDiagnostics,
-    /// The preview of a delete by source (the source).
-    KnowledgePreview(String),
-    /// Storing an import file as the user's artifact.
-    KnowledgeImportSave,
-    /// The exact preview of an import.
-    KnowledgeImportPreview,
-    /// The confirmed import.
-    KnowledgeImport,
-    /// A Knowledge write (record, revise, tag, lifecycle change, deletion).
-    KnowledgeWrite,
-    /// A page of `router.connections` for Settings → Provider connections (load generation).
-    Connections(u64),
-    /// A page of the full catalog (disabled models included) for the connections panel.
-    ConnectionCatalog(u64),
-    /// One bounded persistent embedding-space status page.
-    EmbeddingSpaces(u64),
-    /// One `router.configure` submission from the connections panel (its sequence number).
-    Configure(u64),
-    // Migrated screens' slots, after every tagged variant: each serializes as its inner value
-    // alone, so persisted commands keep the JSON they had in the single enum.
-    #[serde(untagged)]
     Help(crate::help_ops::HelpSlot),
-    #[serde(untagged)]
     Usage(crate::usage_ops::UsageSlot),
-    #[serde(untagged)]
     Graph(crate::graph_ops::GraphSlot),
-    #[serde(untagged)]
     Databases(crate::databases_ops::DatabasesSlot),
-    #[serde(untagged)]
     Instructions(crate::instructions_ops::InstructionsSlot),
-    #[serde(untagged)]
     Conventions(crate::conventions_ops::ConventionsSlot),
-    #[serde(untagged)]
     Artifacts(crate::artifacts_screen::ArtifactsSlot),
-    #[serde(untagged)]
     Resources(crate::artifacts_screen::ResourcesSlot),
-    #[serde(untagged)]
     Browser(crate::artifacts_screen::BrowserSlot),
-    #[serde(untagged)]
     Projects(crate::projects_ops::ProjectsSlot),
-    #[serde(untagged)]
     Indexing(crate::indexing_ops::IndexingSlot),
-    #[serde(untagged)]
     Watch(crate::watch_ops::WatchSlot),
-    #[serde(untagged)]
     Chat(crate::chat::ChatSlot),
-    #[serde(untagged)]
     Jobs(crate::jobs_ops::JobsSlot),
-    #[serde(untagged)]
     Decisions(crate::decision_ops::DecisionsSlot),
-    #[serde(untagged)]
     Work(crate::work_ops::WorkSlot),
+    Settings(crate::settings_ops::SettingsSlot),
+    AddOns(crate::addons_ops::AddonsSlot),
+    Knowledge(crate::knowledge_ops::KnowledgeSlot),
+    Purge(crate::purge_ops::PurgeSlot),
 }
 impl Slot {
     /// The screen whose replies this slot waits for.
@@ -406,7 +325,10 @@ impl Slot {
             Self::Jobs(_) => ScreenId::Jobs,
             Self::Decisions(_) => ScreenId::Decisions,
             Self::Work(_) => ScreenId::Work,
-            _ => ScreenId::Legacy,
+            Self::Settings(_) => ScreenId::Settings,
+            Self::AddOns(_) => ScreenId::AddOns,
+            Self::Knowledge(_) => ScreenId::Knowledge,
+            Self::Purge(_) => ScreenId::Purge,
         }
     }
 }
@@ -1276,7 +1198,12 @@ mod tests {
                 .modes
                 .iter()
                 .any(|m| m.mode == devworks_core::registry::Mode::Command);
-            let restored = Unresolved::restored(Slot::SettingsSave, "l".into(), d.name, Vec::new());
+            let restored = Unresolved::restored(
+                Slot::Settings(crate::settings_ops::SettingsSlot::SettingsSave),
+                "l".into(),
+                d.name,
+                Vec::new(),
+            );
             assert_eq!(
                 restored.is_some(),
                 is_command,
@@ -1298,13 +1225,19 @@ mod tests {
             "schemas.remove_index",
         ] {
             assert!(
-                Unresolved::restored(Slot::SettingsSave, "l".into(), op, Vec::new()).is_some(),
+                Unresolved::restored(
+                    Slot::Settings(crate::settings_ops::SettingsSlot::SettingsSave),
+                    "l".into(),
+                    op,
+                    Vec::new()
+                )
+                .is_some(),
                 "{op}"
             );
         }
         assert!(
             Unresolved::restored(
-                Slot::SettingsSave,
+                Slot::Settings(crate::settings_ops::SettingsSlot::SettingsSave),
                 "l".into(),
                 "no.such_operation",
                 Vec::new()
@@ -1381,7 +1314,11 @@ mod human_dispatch_tests {
         let gate = Arc::new((Mutex::new(false), Condvar::new()));
         let started = Arc::new(AtomicUsize::new(0));
         let mut client = Client::new(Arc::new(NoHuman::default()));
-        for slot in [Slot::AddonsDiscovery, Slot::McpRelease, Slot::McpCommand] {
+        for slot in [
+            Slot::AddOns(crate::addons_ops::AddonsSlot::AddonsDiscovery),
+            Slot::Settings(crate::settings_ops::SettingsSlot::McpRelease),
+            Slot::Settings(crate::settings_ops::SettingsSlot::McpCommand),
+        ] {
             let (gate, started) = (gate.clone(), started.clone());
             assert!(client.network_task(slot, "Slow network call", move |_| {
                 started.fetch_add(1, Ordering::SeqCst);
@@ -1460,7 +1397,7 @@ mod human_dispatch_tests {
         assert_eq!(restored.frame(), b"original exact frame");
         assert!(
             Unresolved::restored_dispatch(
-                Slot::SettingsSave,
+                Slot::Settings(crate::settings_ops::SettingsSlot::SettingsSave),
                 "wrong purpose".into(),
                 "settings.save_revision",
                 vec![],
@@ -1504,7 +1441,7 @@ mod human_dispatch_tests {
         assert_eq!(native.frame(), b"original");
         assert!(
             Unresolved::restored_dispatch(
-                Slot::SettingsSave,
+                Slot::Settings(crate::settings_ops::SettingsSlot::SettingsSave),
                 "invalid".into(),
                 "settings.save_revision",
                 vec![],

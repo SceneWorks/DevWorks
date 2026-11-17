@@ -124,6 +124,12 @@ fn optional(ui: &mut Ui, label: &str, text: Option<&str>) {
 }
 
 impl GraphScreen {
+    /// The navigation's project changed: the open graph belongs to the old one.
+    pub(crate) fn project_changed(&mut self) {
+        self.opened = false;
+        self.sequence = self.sequence.wrapping_add(1);
+        self.loading = false;
+    }
     pub fn view(&self) -> Option<Value> {
         if let Some(pin) = &self.pin {
             return Some(json!({"kind":"Pinned","pinId":pin.pin_id}));

@@ -204,7 +204,7 @@ pub static SCREENS: [Screen; 21] = [
             "DW-15, DW-9",
         ),
         link: Some(("Resource reservations", Route::Resources)),
-        owner: ScreenId::Legacy,
+        owner: ScreenId::Placeholder,
     },
     Screen {
         route: Route::Artifacts,
@@ -232,7 +232,7 @@ pub static SCREENS: [Screen; 21] = [
         summary_strip: &[],
         pending: None,
         link: None,
-        owner: ScreenId::Legacy,
+        owner: ScreenId::Knowledge,
     },
     Screen {
         route: Route::Dreaming,
@@ -246,7 +246,7 @@ pub static SCREENS: [Screen; 21] = [
         summary_strip: &[],
         pending: pending("dreaming runs, proposals and revert", "DW-32"),
         link: None,
-        owner: ScreenId::Legacy,
+        owner: ScreenId::Placeholder,
     },
     Screen {
         route: Route::Databases,
@@ -330,7 +330,7 @@ pub static SCREENS: [Screen; 21] = [
         summary_strip: &[],
         pending: None,
         link: Some(("Add-ons", Route::AddOns)),
-        owner: ScreenId::Legacy,
+        owner: ScreenId::Settings,
     },
     Screen {
         route: Route::Resources,
@@ -387,7 +387,7 @@ pub static SCREENS: [Screen; 21] = [
         summary_strip: &[],
         pending: None,
         link: None,
-        owner: ScreenId::Legacy,
+        owner: ScreenId::AddOns,
     },
 ];
 

@@ -34,6 +34,7 @@
 #![allow(clippy::large_enum_variant, clippy::result_large_err)]
 
 pub mod addons;
+pub mod addons_ops;
 pub mod artifacts_screen;
 pub mod attachments;
 pub mod backend;
@@ -57,20 +58,25 @@ pub mod instructions_ops;
 pub mod instructions_screen;
 pub mod jobs_ops;
 pub mod jobs_screen;
+pub mod knowledge_ops;
 pub mod knowledge_screen;
 pub mod mcp_panel;
 pub mod memory;
 pub mod native_notifications;
 pub mod notifications;
 pub mod ops;
+pub mod placeholder_screen;
 pub mod platform;
 pub mod project_purge;
 pub mod projects_ops;
 pub mod projects_screen;
+pub mod purge_ops;
+pub mod purge_screen;
 pub mod repository_deletion;
 pub mod route;
 pub mod routing;
 pub mod screen;
+pub mod settings_ops;
 pub mod settings_screen;
 pub mod shell;
 pub mod theme;
