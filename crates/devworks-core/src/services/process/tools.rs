@@ -656,10 +656,20 @@ fn install_command(
             InstallCommand {
                 program: "yarn",
                 args,
+                // The environment is cleared, so these are the only `YARN_*` settings, and they
+                // override `.yarnrc.yml`: no scripts, no `yarnPath` release (`ignorePath`), and
+                // the global folder in the host's home like `YARN_CACHE_FOLDER`.
                 env: if allow_scripts {
                     vec![]
                 } else {
-                    vec![pair("YARN_ENABLE_SCRIPTS", "false".into())]
+                    vec![
+                        pair("YARN_ENABLE_SCRIPTS", "false".into()),
+                        pair("YARN_IGNORE_PATH", "true".into()),
+                        pair(
+                            "YARN_GLOBAL_FOLDER",
+                            home.join(".yarn/berry").to_string_lossy().into_owned(),
+                        ),
+                    ]
                 },
             }
         }
@@ -907,9 +917,8 @@ fn binary_only_requirements(manifest: &[u8]) -> bool {
 /// Whether the manager would run a program the repository configures before (or instead of)
 /// the install itself, which no install option stops; such an install needs `allowScripts`.
 ///
-/// - Yarn: any rc file in the repository root or in the install's home (inside the
-///   repository). An rc file can name a Yarn release (`yarnPath`, `yarn-path`) or plugins, and
-///   YAML can spell those keys in ways a text search misses, so any rc file counts.
+/// - Yarn: a Yarn 1 `.yarnrc`, or a `.yarnrc.yml` that [`inert_yarn_config`] does not accept,
+///   in the repository root or in the install's home (inside the repository).
 /// - Cargo: a Cargo configuration in the repository root (`.cargo/config` or
 ///   `.cargo/config.toml`) with any setting outside [`inert_cargo_config`]'s allow-list, which
 ///   could name the compiler, a wrapper or a credential provider that even `cargo fetch` runs;
@@ -935,8 +944,19 @@ fn install_runs_repository_code(name: &str, root: &Path) -> bool {
     match name {
         "yarn.lock" => [root.to_path_buf(), root.join(".devworks-home")]
             .iter()
-            .flat_map(|directory| [directory.join(".yarnrc.yml"), directory.join(".yarnrc")])
-            .any(present),
+            .any(|directory| {
+                present(directory.join(".yarnrc"))
+                    || match std::fs::symlink_metadata(directory.join(".yarnrc.yml")) {
+                        Ok(metadata) => {
+                            // A link, or a file too large to check, cannot be ruled out.
+                            !metadata.file_type().is_file()
+                                || metadata.len() > 1024 * 1024
+                                || std::fs::read(directory.join(".yarnrc.yml"))
+                                    .map_or(true, |bytes| !inert_yarn_config(&bytes))
+                        }
+                        Err(error) => error.kind() != std::io::ErrorKind::NotFound,
+                    }
+            }),
         "Cargo.toml" | "Cargo.lock" => {
             let repository_config =
                 ["config", "config.toml"].iter().any(|file| {
@@ -962,6 +982,173 @@ fn install_runs_repository_code(name: &str, root: &Path) -> bool {
         }
         _ => false,
     }
+}
+
+/// Whether a repository's `.yarnrc.yml` holds only settings that name no program Yarn would
+/// load or run and inject no code or environment. It fails closed: a file that is not UTF-8 or
+/// does not parse, and any key not listed here, counts as naming one.
+///
+/// The file is read as YAML events, not as values, so nothing is resolved before it is
+/// checked: a document with an anchor, an alias, a `<<` merge key, an explicit tag, a duplicate
+/// key, a non-scalar key, a second document or a top level that is not a mapping is refused,
+/// since another YAML reader could resolve it to a different key than this one does.
+///
+/// Allowed (inert): `nodeLinker` (`node-modules`, `pnpm` or `pnp`), `npmRegistryServer` (an
+/// `http(s)` URL), `npmScopes` (per scope: `npmRegistryServer`, `npmPublishRegistry`,
+/// `npmAlwaysAuth`, `npmAuthToken`, `npmAuthIdent`), `enableGlobalCache`, `compressionLevel`,
+/// `enableTelemetry`, `enableMirror`, `enableNetwork`, `enableOfflineMode`,
+/// `enableImmutableInstalls`, `enableColors`, `enableProgressBars`, `enableMessageNames`,
+/// `enableTimers`, `enableHyperlinks`, `enableTransparentWorkspaces`, `httpTimeout`,
+/// `httpRetry`, `networkConcurrency`, `httpProxy`, `httpsProxy`, `defaultSemverRangePrefix`,
+/// `defaultProtocol`, `nmMode`, `nmHoistingLimits`, `nmSelfReferences`, `winLinkType`,
+/// `preferTruncatedLines`, and the folders `cacheFolder` and `globalFolder` (every script-free
+/// install sets `YARN_CACHE_FOLDER` and `YARN_GLOBAL_FOLDER` to folders in the host's home, and
+/// an environment variable overrides the file).
+///
+/// Refused: `yarnPath`, `plugins`, `injectEnvironmentFiles`, `constraintsPath`,
+/// `packageExtensions` (adds dependencies), `enableScripts` and `ignorePath` (the install sets
+/// both), `pnpUnpluggedFolder`, `virtualFolder`, `installStatePath`, `lockfileFilename` and
+/// other paths in the checkout, `enableStrictSsl`, `unsafeHttpWhitelist`, `caFilePath` and
+/// `checksumBehavior` (weaken verification), and everything not listed above.
+fn inert_yarn_config(bytes: &[u8]) -> bool {
+    use yaml_rust2::{
+        parser::{Event, MarkedEventReceiver, Parser, Tag},
+        scanner::Marker,
+    };
+    #[derive(Default)]
+    struct Events(Vec<Event>);
+    impl MarkedEventReceiver for Events {
+        fn on_event(&mut self, event: Event, _mark: Marker) {
+            self.0.push(event);
+        }
+    }
+    enum Node {
+        Scalar(String),
+        Map(Vec<(String, Node)>),
+        Seq,
+    }
+    fn node(events: &mut std::slice::Iter<Event>, depth: usize) -> Option<Node> {
+        let plain = |anchor: &usize, tag: &Option<Tag>| *anchor == 0 && tag.is_none();
+        if depth > 8 {
+            return None;
+        }
+        match events.next()? {
+            Event::Scalar(value, _, anchor, tag) if plain(anchor, tag) => {
+                Some(Node::Scalar(value.clone()))
+            }
+            Event::SequenceStart(anchor, tag) if plain(anchor, tag) => {
+                while !matches!(events.as_slice().first()?, Event::SequenceEnd) {
+                    node(events, depth + 1)?;
+                }
+                events.next();
+                Some(Node::Seq)
+            }
+            Event::MappingStart(anchor, tag) if plain(anchor, tag) => {
+                let mut entries: Vec<(String, Node)> = Vec::new();
+                while !matches!(events.as_slice().first()?, Event::MappingEnd) {
+                    let Node::Scalar(key) = node(events, depth + 1)? else {
+                        return None;
+                    };
+                    if key == "<<" || entries.iter().any(|(seen, _)| *seen == key) {
+                        return None;
+                    }
+                    entries.push((key, node(events, depth + 1)?));
+                }
+                events.next();
+                Some(Node::Map(entries))
+            }
+            _ => None,
+        }
+    }
+    let Ok(text) = std::str::from_utf8(bytes) else {
+        return false;
+    };
+    let mut receiver = Events::default();
+    if Parser::new_from_str(text)
+        .load(&mut receiver, true)
+        .is_err()
+    {
+        return false;
+    }
+    let mut events = receiver.0.iter();
+    let mut documents = 0;
+    let mut root = None;
+    while let Some(event) = events.next() {
+        match event {
+            Event::StreamStart | Event::StreamEnd | Event::DocumentEnd => {}
+            Event::DocumentStart => {
+                documents += 1;
+                if documents > 1 {
+                    return false;
+                }
+                let Some(top) = node(&mut events, 0) else {
+                    return false;
+                };
+                root = Some(top);
+            }
+            _ => return false,
+        }
+    }
+    let entries = match root {
+        None => return true,
+        // An empty file (or only comments) parses as a document with an empty value.
+        Some(Node::Scalar(value)) => return value.is_empty(),
+        Some(Node::Map(entries)) => entries,
+        Some(Node::Seq) => return false,
+    };
+    let scalar = |value: &Node| matches!(value, Node::Scalar(_));
+    let registry = |value: &Node| {
+        matches!(value, Node::Scalar(url)
+            if url.starts_with("https://") || url.starts_with("http://"))
+    };
+    const SCALARS: &[&str] = &[
+        "enableGlobalCache",
+        "compressionLevel",
+        "enableTelemetry",
+        "enableMirror",
+        "enableNetwork",
+        "enableOfflineMode",
+        "enableImmutableInstalls",
+        "enableColors",
+        "enableProgressBars",
+        "enableMessageNames",
+        "enableTimers",
+        "enableHyperlinks",
+        "enableTransparentWorkspaces",
+        "httpTimeout",
+        "httpRetry",
+        "networkConcurrency",
+        "httpProxy",
+        "httpsProxy",
+        "defaultSemverRangePrefix",
+        "defaultProtocol",
+        "nmMode",
+        "nmHoistingLimits",
+        "nmSelfReferences",
+        "winLinkType",
+        "preferTruncatedLines",
+        "cacheFolder",
+        "globalFolder",
+    ];
+    entries.iter().all(|(key, value)| match key.as_str() {
+        key if SCALARS.contains(&key) => scalar(value),
+        "nodeLinker" => {
+            matches!(value, Node::Scalar(linker) if matches!(linker.as_str(), "node-modules" | "pnpm" | "pnp"))
+        }
+        "npmRegistryServer" => registry(value),
+        "npmScopes" => match value {
+            Node::Map(scopes) => scopes.iter().all(|(_, scope)| match scope {
+                Node::Map(settings) => settings.iter().all(|(key, value)| match key.as_str() {
+                    "npmRegistryServer" | "npmPublishRegistry" => registry(value),
+                    "npmAlwaysAuth" | "npmAuthToken" | "npmAuthIdent" => scalar(value),
+                    _ => false,
+                }),
+                _ => false,
+            }),
+            _ => false,
+        },
+        _ => false,
+    })
 }
 
 /// Whether a repository's Cargo configuration file holds only settings that name no program a
@@ -4362,7 +4549,6 @@ mod tests {
         .expect("toolchain");
         assert!(!install_runs_repository_code("Cargo.toml", &root));
         for (name, file, text) in [
-            ("yarn.lock", ".yarnrc.yml", "nodeLinker: node-modules\n"),
             (
                 "yarn.lock",
                 ".yarnrc.yml",
@@ -4403,6 +4589,99 @@ mod tests {
             }
         }
         std::fs::remove_dir_all(root).expect("remove test root");
+    }
+
+    /// DW-362: a Yarn 2+ `.yarnrc.yml` of only inert settings installs without scripts; one
+    /// naming a program, loading code, or using YAML that another reader could resolve to a
+    /// different key (anchors, aliases, merge keys, tags, a second document) does not.
+    #[test]
+    fn only_a_yarn_rc_file_naming_no_program_installs_without_scripts() {
+        let root = std::env::temp_dir().join(format!("devworks-tool-yarn-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).expect("test root");
+        let inert = [
+            "",
+            "# only a comment\n",
+            "nodeLinker: node-modules\nnpmRegistryServer: \"https://registry.example.invalid\"\n",
+            "nodeLinker: pnpm\nenableGlobalCache: false\ncompressionLevel: mixed\n\
+             cacheFolder: ./.yarn/cache\nglobalFolder: ./.yarn/global\nenableTelemetry: false\n",
+            "npmScopes:\n  acme:\n    npmRegistryServer: https://npm.example.invalid\n    \
+             npmAlwaysAuth: true\n    npmAuthToken: t\n",
+            "---\nnodeLinker: pnp\nhttpTimeout: 60000\n",
+        ];
+        for text in inert {
+            std::fs::write(root.join(".yarnrc.yml"), text).expect("rc");
+            assert!(!install_runs_repository_code("yarn.lock", &root), "{text}");
+        }
+        let refused = [
+            "yarnPath: .yarn/releases/yarn-4.cjs\n",
+            "\"yarn\\u0050ath\": ./local.cjs\n",
+            "plugins:\n  - ./plugin.cjs\n",
+            "plugins: []\n",
+            "injectEnvironmentFiles:\n  - .env\n",
+            "constraintsPath: ./c.pro\n",
+            "packageExtensions:\n  a@*:\n    dependencies:\n      b: \"*\"\n",
+            "nodeLinker: custom\n",
+            "nodeLinker: node-modules\nunknownSetting: 1\n",
+            "npmRegistryServer: file:///etc\n",
+            "npmScopes:\n  acme:\n    yarnPath: x\n",
+            "enableStrictSsl: false\n",
+            "installStatePath: ./state\n",
+            // YAML that another reader could resolve differently.
+            "base: &base\n  nodeLinker: node-modules\nother: *base\n",
+            "anchored: &a node-modules\nnodeLinker: *a\n",
+            "defaults: &d\n  nodeLinker: node-modules\n<<: *d\n",
+            "<<: {yarnPath: x}\nnodeLinker: pnp\n",
+            "\"<<\": {nodeLinker: pnp}\n",
+            "nodeLinker: !!str pnp\n",
+            "!!map\nnodeLinker: pnp\n",
+            "nodeLinker: pnp\n---\nyarnPath: x\n",
+            "nodeLinker: pnp\nnodeLinker: pnp\n",
+            "? [a, b]\n: c\n",
+            "- nodeLinker\n",
+            "just a string\n",
+            "nodeLinker: [unterminated\n",
+        ];
+        for text in refused {
+            std::fs::write(root.join(".yarnrc.yml"), text).expect("rc");
+            assert!(install_runs_repository_code("yarn.lock", &root), "{text}");
+        }
+        // Yarn 1's file is still refused, and so is a link in place of the file.
+        std::fs::remove_file(root.join(".yarnrc.yml")).expect("remove");
+        std::fs::write(root.join(".yarnrc"), "--install.frozen-lockfile true\n").expect("rc");
+        assert!(install_runs_repository_code("yarn.lock", &root));
+        std::fs::remove_file(root.join(".yarnrc")).expect("remove");
+        std::fs::write(root.join("target.yml"), "nodeLinker: pnp\n").expect("target");
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(root.join("target.yml"), root.join(".yarnrc.yml"))
+                .expect("link");
+            assert!(install_runs_repository_code("yarn.lock", &root));
+        }
+        std::fs::remove_dir_all(root).expect("remove test root");
+    }
+
+    /// DW-362: a script-free Yarn install overrides, by environment (which the install clears
+    /// first), the settings `.yarnrc.yml` could use to run a release or to write outside the
+    /// host's home.
+    #[test]
+    fn a_script_free_yarn_install_overrides_rc_program_and_folder_settings() {
+        let (root, home) = (Path::new("/repo"), Path::new("/host/home"));
+        let berry = b"__metadata:\n  version: 8\n".as_slice();
+        let off = install_command("yarn.lock", root, home, berry, false, None).expect("yarn");
+        for (key, value) in [
+            ("YARN_ENABLE_SCRIPTS", "false"),
+            ("YARN_IGNORE_PATH", "true"),
+            ("YARN_GLOBAL_FOLDER", "/host/home/.yarn/berry"),
+        ] {
+            assert!(
+                off.env.contains(&(key.to_owned(), value.to_owned())),
+                "{key}: {:?}",
+                off.env
+            );
+        }
+        let cache = install_home_environment(home);
+        assert!(cache.contains(&("YARN_CACHE_FOLDER".into(), "/host/home/.cache/yarn".into())));
     }
 
     /// DW-319: a Cargo configuration of only inert settings installs without scripts; one
