@@ -799,7 +799,7 @@ pub fn wait_progressing<T>(
             started.elapsed() < PROGRESS_CEILING,
             "{what} never completed within {PROGRESS_CEILING:?}; latest: {waiting}"
         );
-        std::thread::sleep(Duration::from_millis(5));
+        std::thread::sleep(Duration::from_millis(50));
     }
 }
 

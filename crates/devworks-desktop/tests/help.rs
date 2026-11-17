@@ -996,12 +996,17 @@ fn native_help_rebases_passage_cursor_after_unrelated_catalog_revision_without_c
         "# Other guide\n\nAn unrelated installed source.\n",
         false,
     );
-    step_until(&mut h, "adopted changed Help snapshot", |s| {
-        s.help.snapshot.as_ref().is_some_and(|snapshot| {
-            snapshot.registry_revision != old_snapshot.registry_revision
-                && snapshot.help_revision != old_snapshot.help_revision
-        })
-    });
+    step_until_progressing(
+        &mut h,
+        "adopted changed Help snapshot",
+        || root.write_progress(),
+        |s| {
+            s.help.snapshot.as_ref().is_some_and(|snapshot| {
+                snapshot.registry_revision != old_snapshot.registry_revision
+                    && snapshot.help_revision != old_snapshot.help_revision
+            })
+        },
+    );
     settle(&mut h);
     assert!(
         h.state().help.read_error.is_none(),
@@ -1044,9 +1049,10 @@ fn native_help_rebases_passage_cursor_after_unrelated_catalog_revision_without_c
         "# Other updated guide\n\nAnother unrelated source revision.\n",
         true,
     );
-    step_until(
+    step_until_progressing(
         &mut h,
         "fresh passage supersedes in-flight old cursor",
+        || root.write_progress(),
         |s| {
             s.help
                 .snapshot
