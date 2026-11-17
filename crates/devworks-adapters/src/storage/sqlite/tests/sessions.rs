@@ -12,7 +12,6 @@ use devworks_core::authority::HostAuthority;
 use devworks_core::authority::service as auth;
 use devworks_core::context::{HostIngress, InvocationContext, PrincipalKind};
 use devworks_core::gateway::Gateway;
-use devworks_core::ports::retrieval::NoVectorIndex;
 use devworks_core::ports::storage::contract::StoreHarness;
 use devworks_core::ports::storage::*;
 use devworks_core::protocol::provider::{
@@ -249,7 +248,6 @@ impl Fx {
                 h.ids.clone(),
                 h.clock.clone(),
                 None,
-                Arc::new(NoVectorIndex),
             )));
         Self { h, store, cases, n }
     }

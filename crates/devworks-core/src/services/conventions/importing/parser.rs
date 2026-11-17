@@ -939,6 +939,101 @@ mod tests {
         }
     }
     #[test]
+    fn portable_manifest_round_trips() {
+        use crate::services::conventions::model::{
+            EditorConvention, EditorResource, EditorText, write_editor_manifest,
+        };
+        let markdown = "# Title\0 λ\r\n\"quoted\" \\";
+        let raw = "raw\u{1}";
+        let blob = [0_u8, 255, 128, 13, 10, 7];
+        let (md, rd, bd) = (
+            crate::fingerprint::sha256_hex(markdown.as_bytes()),
+            crate::fingerprint::sha256_hex(raw.as_bytes()),
+            crate::fingerprint::sha256_hex(&blob),
+        );
+        let (mut m, mut r, mut b) = (
+            io::Cursor::new(markdown.as_bytes()),
+            io::Cursor::new(raw.as_bytes()),
+            io::Cursor::new(blob),
+        );
+        let parents = ["root".to_owned(), "mid".to_owned()];
+        let applicability = ["rust".to_owned(), "web".to_owned()];
+        let mut written = Vec::new();
+        write_editor_manifest(
+            &mut written,
+            EditorConvention {
+                slug: "leaf",
+                title: "Leaf",
+                parent_path: &parents,
+                sort_order: Some(-7),
+                lifecycle: "Retired",
+                applicability: &applicability,
+                markdown: EditorText {
+                    sha256: &md,
+                    byte_length: markdown.len() as u64,
+                    reader: &mut m,
+                },
+                raw_content: Some(EditorText {
+                    sha256: &rd,
+                    byte_length: raw.len() as u64,
+                    reader: &mut r,
+                }),
+            },
+            [EditorResource {
+                key: "key-1",
+                name: "blob.bin",
+                media_type: "application/octet-stream",
+                lifecycle: "Active",
+                source: EditorText {
+                    sha256: &bd,
+                    byte_length: blob.len() as u64,
+                    reader: &mut b,
+                },
+            }],
+        )
+        .unwrap();
+        let mut source = io::Cursor::new(written);
+        let stop = || false;
+        let mut checkpoint = Checkpoint::default();
+        let mut payloads: Vec<(&'static str, Option<String>, Vec<u8>)> = Vec::new();
+        let metadata = loop {
+            let step = Parser::new(&mut source, &checkpoint, 100, &stop)
+                .unwrap()
+                .next(checkpoint.clone())
+                .unwrap();
+            match step {
+                Step::Entry {
+                    entry,
+                    checkpoint: next,
+                } => {
+                    let mut decoded = Vec::new();
+                    PayloadReader::new(&mut source, entry.payload.clone(), &stop)
+                        .unwrap()
+                        .read_to_end(&mut decoded)
+                        .unwrap();
+                    payloads.push((entry.kind, entry.key.clone(), decoded));
+                    checkpoint = next;
+                }
+                Step::Complete {
+                    metadata,
+                    resources,
+                } => {
+                    assert_eq!(resources, 1);
+                    break metadata;
+                }
+            }
+        };
+        assert_eq!(metadata.slug.as_deref(), Some("leaf"));
+        assert_eq!(metadata.title.as_deref(), Some("Leaf"));
+        assert_eq!(metadata.parent_path.as_deref(), Some(&parents[..]));
+        assert_eq!(metadata.sort_order, Some(-7));
+        assert_eq!(metadata.lifecycle.as_deref(), Some("Retired"));
+        assert_eq!(metadata.applicability.as_deref(), Some(&applicability[..]));
+        let bodies: Vec<&[u8]> = payloads.iter().map(|(_, _, b)| b.as_slice()).collect();
+        assert_eq!(bodies, [markdown.as_bytes(), raw.as_bytes(), &blob[..]]);
+        assert_eq!(payloads[2].1.as_deref(), Some("key-1"));
+    }
+    #[test]
     fn rejects_unknown_duplicate_fields_bad_hash_invalid_unicode_and_cancel() {
         let stop = || false;
         let text = serde_json::to_string(&manifest()).unwrap();

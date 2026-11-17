@@ -4723,6 +4723,80 @@ fn a_queued_action_of_a_revoked_owner_is_never_performed() {
 }
 
 #[test]
+fn evidence_of_a_principal_revoked_before_the_write_publishes_nothing() {
+    use devworks_core::services::artifacts::evidence::EvidenceFailure;
+    let _serial = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
+    let fx = Fx::new();
+    fx.opt_in_agent_browser_tools();
+    let user = fx.user.clone();
+    let agent = fx.agent("agent-e", AgentRole::Worker, None);
+    let evidence = |title: &str| Evidence {
+        scope: ArtifactScope::Workspace,
+        producer: agent.principal().clone(),
+        principal_kind: "Agent".into(),
+        agent_session: None,
+        root: None,
+        assignment: None,
+        title: title.into(),
+        media_type: "text/plain".into(),
+        tags: vec![],
+        source: json!({"kind": "BrowserScreenshot"}),
+    };
+    // While the agent is bound, its evidence publishes.
+    let (before, ()) = fx
+        .app()
+        .artifacts()
+        .publish_evidence(
+            &**fx.app().store(),
+            evidence("before"),
+            b"before",
+            |_, _| Ok(()),
+        )
+        .unwrap();
+    assert_eq!(before.byte_length.get(), 6);
+    // The person revokes the agent after its content was produced and before the write runs.
+    let u = user.clone();
+    write(&**fx.app().store(), move |tx| {
+        let actor = ActorId(id("agent-e"));
+        let revision = tx.authority().principal(&actor)?.unwrap().revision;
+        devworks_core::authority::service::revoke_principal(tx, &u, &actor, revision)
+            .map(|_| ())
+            .map_err(|e| StorageError::InvalidRecord(format!("{e:?}")))
+    })
+    .unwrap();
+    let ran = Arc::new(Mutex::new(false));
+    let flag = ran.clone();
+    let result = fx.app().artifacts().publish_evidence(
+        &**fx.app().store(),
+        evidence("after"),
+        b"after revocation",
+        move |_, _| {
+            *flag.lock().unwrap() = true;
+            Ok(())
+        },
+    );
+    match result {
+        Err(EvidenceFailure::Refused(r)) => {
+            assert_eq!(r.target_kind, "authority_changed");
+            assert_eq!(r.code, DomainErrorCode::PermissionDenied);
+        }
+        other => panic!("{:?}", other.map(|_| ())),
+    }
+    assert!(
+        !*ran.lock().unwrap(),
+        "the caller's records were not written"
+    );
+    let usage = read_snapshot(&**fx.app().store(), &ReadOptions::default(), |s| {
+        s.artifacts().workspace_usage()
+    })
+    .unwrap();
+    assert_eq!(
+        usage, 6,
+        "only the evidence published before the revocation is stored"
+    );
+}
+
+#[test]
 fn recovery_finds_a_tree_launched_before_its_session_recorded_it() {
     let _serial = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
     let fx = Fx::new();

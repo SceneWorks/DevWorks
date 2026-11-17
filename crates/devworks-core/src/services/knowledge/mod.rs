@@ -67,7 +67,6 @@ use crate::context::InvocationContext;
 use crate::gateway::{AdmittedCommand, AdmittedQuery};
 use crate::operations::{OperationInput, knowledge as ops};
 use crate::ports::files::ArtifactFiles;
-use crate::ports::retrieval::{RetrievalMode, VectorIndex};
 use crate::ports::storage::{
     ArtifactRead, AuthorityRead, ClaimQuery, ConfigScope, ConfigurationRead, KNOWLEDGE_PAGE_MAX,
     KnowledgeRead, KnowledgeScope, LessonFilter, ReadSnapshot, StorageError, StoredClaim,
@@ -200,7 +199,6 @@ pub struct KnowledgeService {
     clock: Arc<dyn Clock>,
     /// Reads the bytes of an import's immutable artifact version (`None`: imports refused).
     files: Option<Arc<dyn ArtifactFiles>>,
-    vectors: Arc<dyn VectorIndex>,
     /// Publishes rendered summaries as artifacts (`None`: `knowledge.render_summary` is not
     /// offered).
     summaries: Option<(
@@ -659,13 +657,11 @@ impl KnowledgeService {
         ids: Arc<dyn IdSource>,
         clock: Arc<dyn Clock>,
         files: Option<Arc<dyn ArtifactFiles>>,
-        vectors: Arc<dyn VectorIndex>,
     ) -> Self {
         Self {
             ids,
             clock,
             files,
-            vectors,
             summaries: None,
         }
     }
@@ -914,25 +910,16 @@ impl KnowledgeService {
         let k = knowledge_read(snapshot);
         let exact_revision = k.knowledge_scope_revision(&scoped.exact)?;
         let mut items = Vec::new();
-        match self.vectors.mode() {
-            RetrievalMode::LexicalOnly { reason } => items.push(diagnostic(
-                "knowledge-retrieval",
-                Severity::Info,
-                RETRIEVAL_COMPONENT,
-                "LexicalOnly",
-                &format!(
-                    "Retrieval is lexical only ({reason}): no embedding route exists, so vector \
-                     search is not run."
-                ),
-            )),
-            RetrievalMode::Hybrid { embedding_space } => items.push(diagnostic(
-                "knowledge-retrieval",
-                Severity::Info,
-                RETRIEVAL_COMPONENT,
-                "Hybrid",
-                &format!("Lexical and vector retrieval over embedding space {embedding_space}."),
-            )),
-        }
+        // Knowledge retrieval is lexical (SQLite FTS5): no embedding route or vector index
+        // exists, so vector search is never run and this says so.
+        items.push(diagnostic(
+            "knowledge-retrieval",
+            Severity::Info,
+            RETRIEVAL_COMPONENT,
+            "LexicalOnly",
+            "Retrieval is lexical only (NoEmbeddingRoute): no embedding route exists, so vector \
+             search is not run.",
+        ));
         let counts = k.knowledge_counts(&scoped.keys())?;
         for (lifecycle, n) in &counts.claims {
             items.push(diagnostic(
@@ -1351,6 +1338,137 @@ impl KnowledgeService {
     }
 }
 
+/// The most supersession links a bundle lists: the wire list's bound. A chain is walked in both
+/// directions from a claim and each link is a claim the reader can see, so the only reason to stop
+/// early is that the list cannot carry more; a shorter bound would drop links silently and make
+/// two reads of one claim disagree.
+pub(crate) const MAX_SUPERSESSION: usize = 128;
+
+/// Appends to `chain` the claims `start` supersedes and the claims that supersede it, following
+/// `supersedes` and `superseded_by` (the links of the revision being shown) through the stored
+/// claims the reader can see. Claims already in `chain` are skipped. Returns whether a visible
+/// link remained past `MAX_SUPERSESSION`.
+pub(crate) fn supersession_chain(
+    k: &dyn KnowledgeRead,
+    scoped: &Scoped,
+    start: &Id,
+    supersedes: Option<Id>,
+    superseded_by: Option<Id>,
+    chain: &mut Vec<Id>,
+) -> Result<bool, StorageError> {
+    let mut cut = false;
+    for backward in [true, false] {
+        let mut next = if backward {
+            supersedes.clone()
+        } else {
+            superseded_by.clone()
+        };
+        while let Some(id) = next.take() {
+            if &id == start || chain.contains(&id) {
+                break;
+            }
+            let Some(found) = k
+                .knowledge_claim(&id)?
+                .filter(|c| c.lifecycle != "Deleted" && scoped.sees(&c.scope))
+            else {
+                break;
+            };
+            if chain.len() >= MAX_SUPERSESSION {
+                cut = true;
+                break;
+            }
+            next = if backward {
+                found.body.supersedes.clone()
+            } else {
+                found.body.superseded_by.clone()
+            };
+            chain.push(id);
+        }
+    }
+    Ok(cut)
+}
+
+/// A conflict and the claims it names besides the claim it was built for.
+pub(crate) type ValueConflict = Option<(KnowledgeConflict, Vec<StoredClaim>)>;
+
+/// The open conflict between an active `claim` and the active claims about the same subject and
+/// predicate that state it differently (at most 127 of them) and that `admit` accepts, with those
+/// claims, and whether the read was cut.
+pub(crate) fn value_conflict(
+    k: &dyn KnowledgeRead,
+    scoped: &Scoped,
+    claim: &StoredClaim,
+    admit: &mut dyn FnMut(&StoredClaim) -> Result<bool, StorageError>,
+) -> Result<(ValueConflict, bool), StorageError> {
+    let others =
+        k.knowledge_claims_about(&scoped.keys(), &claim.subject_id, &claim.predicate, 129)?;
+    let cut = others.len() > 128;
+    let mut different: Vec<StoredClaim> = Vec::new();
+    for o in others.into_iter().take(128) {
+        if o.id != claim.id
+            && (o.body.value != claim.body.value
+                || o.body.value_json != claim.body.value_json
+                || o.object_id != claim.object_id)
+            && admit(&o)?
+        {
+            different.push(o);
+        }
+    }
+    if different.is_empty() {
+        return Ok((None, cut));
+    }
+    let mut ids = vec![claim.id.clone()];
+    ids.extend(different.iter().take(127).map(|o| o.id.clone()));
+    let conflict = KnowledgeConflict {
+        id: Id::new(
+            format!("conflict-{}", claim.id.as_str())
+                .chars()
+                .take(128)
+                .collect::<String>(),
+        )
+        .map_err(|_| StorageError::InvalidRecord("conflict id".into()))?,
+        claim_ids: BoundedList(ids),
+        state: label("Open", "Open"),
+        explanation: content(&format!(
+            "{} active claims about the same subject state {} differently.",
+            different.len() + 1,
+            claim.predicate
+        )),
+    };
+    let named = different.into_iter().take(127).collect();
+    Ok((Some((conflict, named)), cut))
+}
+
+/// The open conflict a recorded `contradicts` relation of `claim` makes, with the other claim. It
+/// is open only while both claims are active and the other is visible.
+pub(crate) fn contradiction(
+    k: &dyn KnowledgeRead,
+    scoped: &Scoped,
+    claim: &StoredClaim,
+    r: &crate::ports::storage::StoredRelation,
+) -> Result<Option<(KnowledgeConflict, StoredClaim)>, StorageError> {
+    if r.predicate != model::CONTRADICTS || claim.lifecycle != "Active" {
+        return Ok(None);
+    }
+    let other = if r.subject_id == claim.id {
+        &r.object_id
+    } else {
+        &r.subject_id
+    };
+    Ok(match k.knowledge_claim(other)? {
+        Some(o) if scoped.sees(&o.scope) && o.lifecycle == "Active" => Some((
+            KnowledgeConflict {
+                id: r.id.clone(),
+                claim_ids: BoundedList(vec![claim.id.clone(), o.id.clone()]),
+                state: label("Open", "Open"),
+                explanation: content("Recorded as contradicting each other."),
+            },
+            o,
+        )),
+        _ => None,
+    })
+}
+
 /// A claim with its entities, evidence, conflicts, supersession chain, relations and history,
 /// restricted to what the invocation may see.
 pub(crate) fn bundle_of(
@@ -1390,40 +1508,12 @@ pub(crate) fn bundle_of(
     let mut conflicts = Vec::new();
     let mut truncated = false;
     if claim.lifecycle == "Active" && !historical {
-        let others =
-            k.knowledge_claims_about(&scoped.keys(), &claim.subject_id, &claim.predicate, 129)?;
-        truncated |= others.len() > 128;
-        let different: Vec<&StoredClaim> = others
-            .iter()
-            .take(128)
-            .filter(|o| {
-                o.id != claim.id
-                    && (o.body.value != claim.body.value
-                        || o.body.value_json != claim.body.value_json
-                        || o.object_id != claim.object_id)
-            })
-            .collect();
-        if !different.is_empty() {
-            let mut ids = vec![claim.id.clone()];
-            ids.extend(different.iter().take(127).map(|o| o.id.clone()));
-            conflicts.push(KnowledgeConflict {
-                id: Id::new(
-                    format!("conflict-{}", claim.id.as_str())
-                        .chars()
-                        .take(128)
-                        .collect::<String>(),
-                )
-                .map_err(|_| StorageError::InvalidRecord("conflict id".into()))?,
-                claim_ids: BoundedList(ids),
-                state: label("Open", "Open"),
-                explanation: content(&format!(
-                    "{} active claims about the same subject state {} differently.",
-                    different.len() + 1,
-                    claim.predicate
-                )),
-            });
+        let (found, cut) = value_conflict(k, scoped, claim, &mut |_| Ok(true))?;
+        truncated |= cut;
+        if let Some((conflict, different)) = found {
+            conflicts.push(conflict);
             // Every conflicting claim the conflict names is in the bundle (at most 127).
-            for o in different.iter().take(127) {
+            for o in &different {
                 claims.push(claim_wire(k, o, th)?);
             }
         }
@@ -1441,26 +1531,10 @@ pub(crate) fn bundle_of(
         .filter(|r| scoped.sees(&r.scope))
         .collect();
     for r in &visible_relations {
-        if r.predicate == model::CONTRADICTS {
-            let other = if r.subject_id == claim.id {
-                &r.object_id
-            } else {
-                &r.subject_id
-            };
-            if let Some(o) = k.knowledge_claim(other)?
-                && scoped.sees(&o.scope)
-                && o.lifecycle == "Active"
-                && claim.lifecycle == "Active"
-            {
-                conflicts.push(KnowledgeConflict {
-                    id: r.id.clone(),
-                    claim_ids: BoundedList(vec![claim.id.clone(), o.id.clone()]),
-                    state: label("Open", "Open"),
-                    explanation: content("Recorded as contradicting each other."),
-                });
-                if !claims.iter().any(|c| c.id == o.id) {
-                    claims.push(claim_wire(k, &o, th)?);
-                }
+        if let Some((conflict, o)) = contradiction(k, scoped, claim, r)? {
+            conflicts.push(conflict);
+            if !claims.iter().any(|c| c.id == o.id) {
+                claims.push(claim_wire(k, &o, th)?);
             }
         }
     }
@@ -1480,36 +1554,15 @@ pub(crate) fn bundle_of(
         }
     }
     truncated |= evidence.len() > 500;
-    // The supersession chain, both directions, up to the wire list's 128 (flagged past it).
     let mut supersession = Vec::new();
-    let mut back = wire.supersedes.clone();
-    while let Some(id) = back.take() {
-        if supersession.len() >= 128 || supersession.contains(&id) {
-            truncated = true;
-            break;
-        }
-        match k.knowledge_claim(&id)? {
-            Some(c) if scoped.sees(&c.scope) => {
-                back = c.body.supersedes.clone();
-                supersession.push(id);
-            }
-            _ => break,
-        }
-    }
-    let mut forward = wire.superseded_by.clone();
-    while let Some(id) = forward.take() {
-        if supersession.len() >= 128 || supersession.contains(&id) {
-            truncated = true;
-            break;
-        }
-        match k.knowledge_claim(&id)? {
-            Some(c) if scoped.sees(&c.scope) => {
-                forward = c.body.superseded_by.clone();
-                supersession.push(id);
-            }
-            _ => break,
-        }
-    }
+    truncated |= supersession_chain(
+        k,
+        scoped,
+        &claim.id,
+        wire.supersedes.clone(),
+        wire.superseded_by.clone(),
+        &mut supersession,
+    )?;
     let history = k.knowledge_history(&claim.id, KNOWLEDGE_PAGE_MAX)?;
     truncated |= history.len() >= KNOWLEDGE_PAGE_MAX as usize;
     Ok(KnowledgeBundle {
