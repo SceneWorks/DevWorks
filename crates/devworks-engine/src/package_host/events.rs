@@ -20,9 +20,22 @@
 //!   [`InvocationKind::Event`] invocation whose commit (`broker.commit_event`) settles the
 //!   entry together with the handler's state, effect intents and processing receipt.
 //!
+//! # Cascades
+//!
+//! A handler whose effect intent changes a package announces a new event. That announcement
+//! carries the originating package and a cascade depth ([`MAX_CASCADE_DEPTH`]). The router
+//! delivers it as a skip (logged in the package's log) to the originating package's own
+//! handlers, and to every handler once the depth passes the bound.
+//!
+//! # Reruns
+//!
 //! A delivery recovered after a crash runs the handler again only when it has no processing
 //! receipt; one with a receipt is settled without running. The invocation keeps one operation
-//! identity per delivery, so a rerun's brokered calls are the same calls.
+//! identity per delivery, so a rerun's brokered calls are the same calls: its inference carries
+//! the same operation and action key, so a recorded answer is replayed and never charged twice.
+//! The handler's input artifact is one per delivery (see `stage_input`). A rerun's brokered
+//! inference publishes its answer again as an artifact of the approving person; those answers
+//! are ordinary explicitly retained artifacts that artifact collection does not reclaim.
 //!
 //! # Who a handler runs as
 //!
@@ -40,8 +53,8 @@ use crate::package::{PackageInvocation, expected_checkpoint};
 use devworks_core::fingerprint::sha256_hex;
 use devworks_core::ports::IdKind;
 use devworks_core::ports::storage::{
-    ApplicationStore, ArtifactScope, NewEvent, NewQueueEntry, ReadOptions, StorageError,
-    WriteOptions, WriteTransaction, read_snapshot, run_write,
+    ApplicationStore, ArtifactScope, EventFilter, NewEvent, NewQueueEntry, ReadOptions,
+    StorageError, WriteOptions, WriteTransaction, read_snapshot, run_write,
 };
 use devworks_core::protocol::provider::ArtifactRef as HostArtifact;
 use devworks_core::protocol::records::Severity;
@@ -65,6 +78,10 @@ pub const AVAILABILITY_SCHEMA: &str = "devworks/package-availability-changed";
 pub const DEADLINE: Duration = Duration::from_secs(5 * 60);
 /// The history event kind of one handler's delivery.
 const DELIVERED: &str = "PackageEventDelivered";
+/// The deepest cascade of handler-caused events that still reaches handlers: an announcement
+/// caused by an effect intent of a handler that an announcement caused (and so on) is one deeper
+/// than that handler's delivery, and one beyond this depth is not dispatched.
+pub const MAX_CASCADE_DEPTH: u64 = 3;
 
 /// The host event schema `kind` is announced under, when it is a package event.
 fn schema_of(kind: &str) -> Option<&'static str> {
@@ -93,6 +110,9 @@ impl DeliveryHandler for Router {
         };
         let registry = view::load(&*tx.packages())?;
         let actor = tx.store().host_actor.clone();
+        // Who caused the announcement: a package's handler's effect intent, at some depth.
+        let origin = delivery.entry.payload["originPackageId"].as_str();
+        let depth = delivery.entry.payload["depth"].as_u64().unwrap_or(0);
         for (package, (record, active)) in &registry {
             let Some(version) = active
                 .as_ref()
@@ -108,6 +128,16 @@ impl DeliveryHandler for Router {
                 .iter()
                 .filter(|c| c.kind == "EventHandler")
             {
+                // A handler never hears of what its own intent caused, and a cascade of
+                // handler-caused events stops at the depth bound. The delivery is still written
+                // (so the package's log says why) and settles without running the handler.
+                let skip = if origin == Some(package.as_str()) {
+                    Some("its own effect intent caused the event")
+                } else if depth > MAX_CASCADE_DEPTH {
+                    Some("the event is too deep in a cascade of events handlers caused")
+                } else {
+                    None
+                };
                 let event = EventId(tx.new_id(IdKind::Event));
                 tx.history().append(NewEvent {
                     id: event.clone(),
@@ -123,7 +153,7 @@ impl DeliveryHandler for Router {
                         "schemaId": schema, "contributionId": handler.id,
                         "digest": version.manifest_digest,
                         "sourceEventId": delivery.event.id, "sourceKind": delivery.event.kind,
-                        "event": delivery.entry.payload,
+                        "event": delivery.entry.payload, "depth": depth, "skip": skip,
                     }),
                 })?;
                 let entry = tx.new_id(IdKind::QueueEntry);
@@ -138,7 +168,8 @@ impl DeliveryHandler for Router {
                     priority: 0,
                     ready_at_ms,
                     payload: json!({"packageId": package, "contributionId": handler.id,
-                        "digest": version.manifest_digest, "schemaId": schema}),
+                        "digest": version.manifest_digest, "schemaId": schema,
+                        "depth": depth, "skip": skip}),
                 })?;
             }
         }
@@ -257,6 +288,9 @@ fn run(
     let Some(target) = target(&entry.payload) else {
         return AsyncOutcome::Poison("invalid package event delivery".into());
     };
+    if let Some(why) = entry.payload["skip"].as_str() {
+        return skipped(&host, &target.package, why);
+    }
     let Ok(subscription) = Id::new(target.contribution.replace('/', "--")) else {
         return AsyncOutcome::Poison("invalid handler identity".into());
     };
@@ -401,26 +435,79 @@ fn run(
     }
 }
 
-/// Saves `document` as a host artifact: the handler's input (one per delivery attempt).
+impl PackageHost {
+    /// The handler input artifact of `delivery` holding `document`: the one an earlier attempt
+    /// recorded, or a new one.
+    pub fn stage_event_input(
+        &self,
+        document: &Value,
+        delivery: &Id,
+    ) -> Result<wire::ArtifactRef, String> {
+        let ports = self
+            .broker
+            .get()
+            .ok_or("package artifacts are not composed")?;
+        stage_input(self, ports, document, delivery)
+    }
+}
+
+/// The history aggregate recording the input artifact of a delivery.
+const INPUT_AGGREGATE: &str = "package_event_input";
+
+/// Saves `document` as a host artifact: the handler's input. It is one per delivery: a rerun of
+/// the delivery (after a crash or a retry) finds the artifact the first attempt recorded in
+/// history and reuses it, so attempts never accumulate artifacts. The artifact is kept after the
+/// delivery settles, as the record of what the handler was given (explicitly retained artifacts
+/// are not reclaimed by artifact collection).
 fn stage_input(
     host: &PackageHost,
     ports: &super::broker::BrokerPorts,
     document: &Value,
     delivery: &Id,
 ) -> Result<wire::ArtifactRef, String> {
+    let bytes = document.to_string().into_bytes();
+    let digest = sha256_hex(&bytes);
+    let aggregate = EventFilter::Aggregate {
+        kind: INPUT_AGGREGATE.into(),
+        id: delivery.as_str().to_owned(),
+    };
+    let earlier = read_snapshot(&*host.store, &ReadOptions::default(), |s| {
+        for event in s.history().page(&aggregate, 0, 16)?.events {
+            let Ok(reference) =
+                serde_json::from_value::<HostArtifact>(event.payload["input"].clone())
+            else {
+                continue;
+            };
+            let live = s
+                .artifacts()
+                .version(&reference.version_id)?
+                .is_some_and(|v| v.live() && v.blob_digest == digest);
+            if live && String::from(reference.sha256.clone()) == digest {
+                return Ok(Some(reference));
+            }
+        }
+        Ok(None)
+    })
+    .map_err(|e| format!("{e:?}"))?;
+    if let Some(reference) = earlier {
+        return serde_json::to_value(&reference)
+            .and_then(serde_json::from_value)
+            .map_err(|e| e.to_string());
+    }
     let staged = ports
         .artifacts
         .stage_host_bytes(
             &*host.store,
-            document.to_string().as_bytes(),
+            &bytes,
             json!({"kind": "PackageEvent", "deliveryId": delivery}),
         )
         .map_err(|e| format!("{e:?}"))?
         .map_err(|e| e.to_string())?;
-    let (service, pending, owner) = (
+    let (service, pending, owner, aggregate_id) = (
         ports.artifacts.clone(),
         staged.clone(),
         host.store.info().host_actor,
+        delivery.as_str().to_owned(),
     );
     let provenance = json!({"kind": "PackageEvent", "deliveryId": delivery});
     let committed = run_write(&*host.store, WriteOptions::default(), move |tx| {
@@ -432,10 +519,24 @@ fn stage_input(
                 media_type: "application/json",
                 provenance,
                 scope: ArtifactScope::Workspace,
-                owner,
+                owner: owner.clone(),
             },
         )?;
-        Ok(version_ref(&version))
+        let reference = version_ref(&version);
+        let event = EventId(tx.new_id(IdKind::Event));
+        tx.history().append(NewEvent {
+            id: event,
+            actor: owner,
+            project_id: None,
+            root_id: None,
+            operation_id: None,
+            aggregate_kind: INPUT_AGGREGATE.into(),
+            aggregate_id,
+            aggregate_revision: 1,
+            kind: "PackageEventInputStaged".into(),
+            payload: json!({"input": reference}),
+        })?;
+        Ok(reference)
     });
     ports
         .artifacts

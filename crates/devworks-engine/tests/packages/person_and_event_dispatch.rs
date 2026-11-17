@@ -7,7 +7,7 @@ use devworks_core::ports::storage::UsageAttemptFilter;
 use devworks_core::protocol::OperationState;
 use devworks_core::protocol::records::PackageInvocation;
 use devworks_core::services::packages::index::AVAILABILITY_CHANGED;
-use devworks_engine::package_host::events::{CONSUMER, ROUTER};
+use devworks_engine::package_host::events::{CONSUMER, MAX_CASCADE_DEPTH, ROUTER};
 use devworks_engine::package_host::inference::{
     REQUEST_SCHEMA_ID, person_session_id, request_schema,
 };
@@ -83,7 +83,7 @@ fn a_person_runs_a_package_tool_through_the_gateway_and_reads_its_result() {
     spec.contributions = vec!["echo"];
     package(a.install(&a.user, &spec));
     a.ready("run-pack");
-    let input = a.save(&a.user, b"hello");
+    let input = a.save(&a.user, br#"{"text":"hello"}"#);
 
     let started = invocation_of(
         a.app()
@@ -117,7 +117,7 @@ fn an_agent_cannot_start_a_person_invocation_nor_read_one() {
     spec.contributions = vec!["echo"];
     package(a.install(&a.user, &spec));
     a.ready("guarded-pack");
-    let input = a.save(&a.user, b"hello");
+    let input = a.save(&a.user, br#"{"text":"hello"}"#);
     let agent = a.app().command(
         &a.agent,
         "addons.invoke",
@@ -156,7 +156,7 @@ fn a_person_invocation_names_an_installed_tool_of_the_active_version() {
     spec.handlers = vec!["react"];
     package(a.install(&a.user, &spec));
     a.ready("named-pack");
-    let input = a.save(&a.user, b"hello");
+    let input = a.save(&a.user, br#"{"text":"hello"}"#);
     let refusal = |package: &str, contribution: &str| {
         refused(
             a.app()
@@ -371,4 +371,298 @@ fn an_announcement_committed_while_the_host_was_down_is_delivered_once_after_res
     // Each announcement ran the handler once.
     assert_eq!(attempts(&a).len(), 2);
     assert_eq!(queue_status(&a, CONSUMER).completed, 2);
+}
+
+// ---------------------------------------------------------------------------------------------
+// A person's invocation is verified before it is recorded.
+
+fn recorded_invocations(a: &App) -> usize {
+    read(&*a.store, |s| {
+        s.operations().operations_for_capability(
+            "package.invoke",
+            &[
+                OperationState::IntentRecorded,
+                OperationState::Dispatching,
+                OperationState::ObservedComplete,
+                OperationState::Failed,
+                OperationState::OutcomeUnknown,
+            ],
+            None,
+            50,
+        )
+    })
+    .len()
+}
+
+#[test]
+fn a_person_invocation_with_a_bad_or_unreadable_input_records_nothing() {
+    let _s = serial();
+    let a = App::new();
+    let mut spec = Spec::new("verified-pack", "1.0.0");
+    spec.contributions = vec!["echo"];
+    package(a.install(&a.user, &spec));
+    a.ready("verified-pack");
+    let run = |ctx: &InvocationContext, input: &Value| {
+        a.app()
+            .command(
+                ctx,
+                "addons.invoke",
+                &invoke_frame(&a, "verified-pack", "echo", input),
+            )
+            .unwrap()
+    };
+    // Input that is not a JSON object, and input the tool's schema rejects.
+    let not_json = a.save(&a.user, b"hello");
+    assert_eq!(
+        refused(run(&a.user, &not_json)).0,
+        DomainErrorCode::InvalidArgument
+    );
+    let wrong_type = a.save(&a.user, br#"{"text": 5}"#);
+    assert_eq!(
+        refused(run(&a.user, &wrong_type)).0,
+        DomainErrorCode::InvalidArgument
+    );
+    let extra = a.save(&a.user, br#"{"text": "x", "other": 1}"#);
+    assert_eq!(
+        refused(run(&a.user, &extra)).0,
+        DomainErrorCode::InvalidArgument
+    );
+    // An artifact of project-a is not readable from another project's context.
+    let good = a.save(&a.user, br#"{"text": "hello"}"#);
+    let elsewhere = a.user.clone().with_lineage(
+        Some(devworks_core::protocol::ProjectId(id("project-z"))),
+        None,
+        None,
+    );
+    assert_eq!(
+        refused(run(&elsewhere, &good)).0,
+        DomainErrorCode::InvalidArgument
+    );
+    assert_eq!(recorded_invocations(&a), 0, "nothing was recorded");
+    // The same input from the person's own context is recorded.
+    invocation_of(run(&a.user, &good));
+    assert_eq!(recorded_invocations(&a), 1);
+}
+
+// ---------------------------------------------------------------------------------------------
+// Event cascades are bounded.
+
+/// Commits an announcement the router fans out, naming what caused it.
+fn announce(a: &App, package: &str, origin: Option<&str>, depth: u64) {
+    let payload = match origin {
+        Some(origin) => json!({"packageId": package, "originPackageId": origin, "depth": depth}),
+        None => json!({"packageId": package}),
+    };
+    let package = package.to_owned();
+    write(&*a.store, move |tx| {
+        let event = devworks_core::protocol::EventId(tx.new_id(IdKind::Event));
+        let actor = tx.store().host_actor.clone();
+        tx.history().append(NewEvent {
+            id: event.clone(),
+            actor,
+            project_id: None,
+            root_id: None,
+            operation_id: None,
+            aggregate_kind: "package_availability".into(),
+            aggregate_id: package,
+            aggregate_revision: 99,
+            kind: AVAILABILITY_CHANGED.into(),
+            payload: payload.clone(),
+        })?;
+        let entry = tx.new_id(IdKind::QueueEntry);
+        tx.queue().enqueue(NewQueueEntry {
+            id: entry,
+            consumer: ROUTER.into(),
+            event_id: event,
+            root_id: None,
+            operation_id: None,
+            partition: None,
+            priority: 0,
+            ready_at_ms: 0,
+            payload,
+        })?;
+        Ok(())
+    })
+    .unwrap();
+}
+
+/// Waits until both consumers have nothing left to do (installs announce several changes), and
+/// returns how many deliveries each has settled.
+fn quiet(a: &App) -> (i64, i64) {
+    let until = Instant::now() + PATIENCE;
+    let mut last = (-1, -1);
+    let mut steady = 0;
+    loop {
+        let (router, handlers) = (queue_status(a, ROUTER), queue_status(a, CONSUMER));
+        let now = (router.completed, handlers.completed);
+        let idle = router.ready + router.claimed + handlers.ready + handlers.claimed == 0;
+        steady = if idle && now == last { steady + 1 } else { 0 };
+        if steady >= 20 {
+            return now;
+        }
+        last = now;
+        assert!(Instant::now() < until, "never quiet: {now:?}");
+        super::event_intents::drive(a, Duration::from_millis(50));
+    }
+}
+
+#[test]
+fn a_handler_never_hears_of_the_event_its_own_package_caused() {
+    let _s = serial();
+    let a = App::with_model();
+    let scripts = [react_script(&a, "self-pack"), react_script(&a, "peer-pack")];
+    package(a.install(&a.user, &handler_pack("self-pack", "1.0.0")));
+    package(a.install(&a.user, &handler_pack("peer-pack", "1.0.0")));
+    let (routed, handled) = quiet(&a);
+    let ran = attempts(&a).len();
+
+    announce(&a, "self-pack", Some("self-pack"), 1);
+    settled(&a, ROUTER, routed + 1);
+    settled(&a, CONSUMER, handled + 2);
+    scripts.iter().for_each(|p| {
+        let _ = std::fs::remove_file(p);
+    });
+    // Only the peer's handler ran: the originating package's delivery was skipped and logged.
+    assert_eq!(attempts(&a).len(), ran + 1);
+    assert_eq!(a.logged("self-pack", "PackageEventSkipped"), 1);
+    assert_eq!(a.logged("peer-pack", "PackageEventSkipped"), 0);
+}
+
+#[test]
+fn two_packages_whose_handlers_cause_each_others_events_stop_at_the_depth_bound() {
+    let _s = serial();
+    let a = App::with_model();
+    let scripts = [react_script(&a, "ping-pack"), react_script(&a, "pong-pack")];
+    package(a.install(&a.user, &handler_pack("ping-pack", "1.0.0")));
+    package(a.install(&a.user, &handler_pack("pong-pack", "1.0.0")));
+    let (routed, handled) = quiet(&a);
+    let ran = attempts(&a).len();
+
+    // Each handler's intent announces a change one deeper than the delivery that committed it,
+    // naming its own package: ping at depth 1, pong at 2, and so on.
+    let steps = MAX_CASCADE_DEPTH + 2;
+    for depth in 1..=steps {
+        let origin = if depth % 2 == 1 {
+            "ping-pack"
+        } else {
+            "pong-pack"
+        };
+        announce(&a, origin, Some(origin), depth);
+        settled(&a, ROUTER, routed + depth as i64);
+        settled(&a, CONSUMER, handled + 2 * depth as i64);
+    }
+    scripts.iter().for_each(|p| {
+        let _ = std::fs::remove_file(p);
+    });
+    // Within the bound the other package's handler ran once per step; beyond it, none ran.
+    assert_eq!(attempts(&a).len() as u64, ran as u64 + MAX_CASCADE_DEPTH);
+    let skipped =
+        a.logged("ping-pack", "PackageEventSkipped") + a.logged("pong-pack", "PackageEventSkipped");
+    // One skip per step within the bound (the origin's own), and both past it.
+    assert_eq!(
+        skipped as u64,
+        MAX_CASCADE_DEPTH + 2 * (steps - MAX_CASCADE_DEPTH)
+    );
+}
+
+// ---------------------------------------------------------------------------------------------
+// Reruns of an event delivery.
+
+#[test]
+fn a_rerun_of_a_delivery_reuses_its_input_artifact() {
+    let _s = serial();
+    let a = App::new();
+    let host = a.app().packages().unwrap();
+    let delivery = id("delivery-one");
+    let document = json!({"eventId": "e-1", "event": {"packageId": "x"}});
+    let published = |a: &App| {
+        read(&*a.store, |s| {
+            s.history().page(
+                &EventFilter::Aggregate {
+                    kind: "package_event_input".into(),
+                    id: "delivery-one".into(),
+                },
+                0,
+                50,
+            )
+        })
+        .events
+        .len()
+    };
+    let first = host.stage_event_input(&document, &delivery).unwrap();
+    let again = host.stage_event_input(&document, &delivery).unwrap();
+    let third = host.stage_event_input(&document, &delivery).unwrap();
+    assert_eq!(
+        serde_json::to_value(&first).unwrap(),
+        serde_json::to_value(&again).unwrap()
+    );
+    assert_eq!(
+        serde_json::to_value(&first).unwrap(),
+        serde_json::to_value(&third).unwrap()
+    );
+    assert_eq!(published(&a), 1, "one artifact for three attempts");
+    // Another delivery gets its own.
+    let other = host
+        .stage_event_input(&document, &id("delivery-two"))
+        .unwrap();
+    assert_ne!(first.artifact_id, other.artifact_id);
+}
+
+/// Runs the `react` handler of `package` on a fresh delivery under `operation`.
+fn run_react(a: &App, package: &str, n: usize, operation: &Id) -> Vec<String> {
+    let delivery = super::event_intents::claimed(a, package, n);
+    let document = a.save(
+        &a.user,
+        json!({"subscriptionId": format!("sub-{n}"), "eventId": delivery.event_id.0.as_str(),
+            "expectedCheckpoint": "0"})
+        .to_string()
+        .as_bytes(),
+    );
+    let mut invocation = super::event_intents::invocation(a, &delivery, n);
+    invocation.package_id = package.into();
+    let handle = a
+        .app()
+        .packages()
+        .unwrap()
+        .invoke(InvokeRequest {
+            package_id: package.into(),
+            contribution_id: format!("{package}/react"),
+            scope: InvocationScope::Workspace,
+            input: serde_json::from_value(document).unwrap(),
+            operation_id: operation.clone(),
+            deadline: Duration::from_secs(30),
+            allowed_operations: vec![],
+            kind: InvocationKind::Event(Box::new(invocation)),
+            principal: None,
+            expected_digest: None,
+        })
+        .unwrap();
+    finished(handle.wait(Duration::from_secs(20)));
+    handle.progress().0
+}
+
+#[test]
+fn a_rerun_of_a_handler_under_its_operation_is_not_charged_again() {
+    let _s = serial();
+    let a = App::with_model();
+    let script = react_script(&a, "rerun-pack");
+    package(a.install(&a.user, &handler_pack("rerun-pack", "1.0.0")));
+    settled(&a, ROUTER, 1);
+    settled(&a, CONSUMER, 1);
+    let charged = attempts(&a).len();
+    // The same operation identity (one per delivery) run twice, as a crashed delivery is rerun.
+    let operation = id("pkgevt-rerun");
+    for n in 1..=2 {
+        let progress = run_react(&a, "rerun-pack", n, &operation);
+        assert!(
+            progress.iter().any(|p| p.starts_with("infer:")),
+            "{progress:?}"
+        );
+    }
+    let _ = std::fs::remove_file(&script);
+    assert_eq!(
+        attempts(&a).len(),
+        charged + 1,
+        "the rerun replayed the recorded answer instead of inferring again"
+    );
 }

@@ -324,6 +324,8 @@ enum Prep {
     Bundle(Box<BundlePrep>),
     Lifecycle(GuardCell),
     Configure(GuardCell, ConfigRefusal),
+    /// What `addons.invoke` verified before its unit of work.
+    Invoke(invoke::Verified),
 }
 
 fn invalid(field: &'static str) -> Refusal {
@@ -2644,6 +2646,11 @@ impl CommandHandler for PackageService {
             }
             return Ok(Some(Prepared::new(Prep::Bundle(Box::new(prep)))));
         }
+        if let OperationInput::Addons(ops::Input::Invoke(i)) = command.input() {
+            return Ok(Some(Prepared::new(Prep::Invoke(
+                self.verify_invocation(ctx, i, env)?,
+            ))));
+        }
         let Some((_, cmd)) = lifecycle(command.input()) else {
             // addons.configure: fence the package's admissions while the change commits.
             return Ok(Some(Prepared::new(match command.input() {
@@ -2708,6 +2715,7 @@ impl CommandHandler for PackageService {
                 }
             }
             Some(Prep::Lifecycle(g)) => g.release(),
+            Some(Prep::Invoke(_)) => {}
             Some(Prep::Configure(g, refusal)) => {
                 g.release();
                 let refused = matches!(
@@ -2775,7 +2783,7 @@ impl CommandHandler for PackageService {
                     self.configure(tx, ctx, i, refusal)
                 }
                 OperationInput::Addons(ops::Input::Propose(i)) => self.propose(tx, ctx, i, bundle),
-                OperationInput::Addons(ops::Input::Invoke(i)) => self.invoke(tx, ctx, i),
+                OperationInput::Addons(ops::Input::Invoke(i)) => self.invoke(tx, ctx, i, prep),
                 input => match lifecycle(input) {
                     Some((
                         _,
@@ -2862,7 +2870,8 @@ impl CommandHandler for PackageService {
                 // Every effective availability or active-version change this command made is
                 // announced in its own unit of work (ADDON-04).
                 if matches!(d, DomainDecision::Applied { .. }) {
-                    self.observe(tx, command.descriptor().name)?;
+                    let origin = Self::event_origin(tx, ctx)?;
+                    self.observe_from(tx, command.descriptor().name, origin.as_ref())?;
                 }
                 tx.release(sp)?;
                 Ok(d)

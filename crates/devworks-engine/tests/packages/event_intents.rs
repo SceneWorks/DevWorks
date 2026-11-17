@@ -39,8 +39,13 @@ fn disable_intent(args: &Value) -> Value {
 
 /// A claimed delivery of a subscription of `package` no consumer handles (the test drives it).
 pub(super) fn claimed(a: &App, package: &str, n: usize) -> QueueEntry {
+    claimed_with(a, package, n, json!({}))
+}
+
+/// [`claimed`], with `payload` (an event handler's delivery carries its cascade `depth`).
+fn claimed_with(a: &App, package: &str, n: usize, payload: Value) -> QueueEntry {
     let consumer = format!("pkg-{package}-sub-{n}");
-    enqueue(&*a.store, &consumer, None, json!({}));
+    enqueue(&*a.store, &consumer, None, payload);
     write(&*a.store, move |tx| {
         tx.queue().claim_ready(&ClaimRequest {
             consumer: consumer.clone(),
@@ -218,7 +223,20 @@ pub(super) fn commit_directly(
     contribution: &str,
     intents: Value,
 ) {
-    let delivery = claimed(a, package, n);
+    commit_directly_at(a, package, digest, n, contribution, intents, 0);
+}
+
+/// [`commit_directly`] for a delivery at cascade depth `depth`.
+fn commit_directly_at(
+    a: &App,
+    package: &str,
+    digest: &str,
+    n: usize,
+    contribution: &str,
+    intents: Value,
+    depth: u64,
+) {
+    let delivery = claimed_with(a, package, n, json!({"depth": depth}));
     let mut inv = invocation(a, &delivery, n);
     inv.package_id = package.into();
     inv.process_session_id = "s-direct".into();
@@ -348,4 +366,67 @@ fn an_intent_outside_the_packages_grant_is_refused_and_never_executed() {
     let cause = format!("{:?}", failed);
     assert!(cause.contains("OutsideGrant"), "{failed:?}");
     assert!(a.record("target-pack").enabled);
+}
+
+/// The announcements of `package` that name what caused them: `(originPackageId, depth)`.
+fn caused_announcements(a: &App, package: &str) -> Vec<(Option<String>, Option<u64>)> {
+    let package = package.to_owned();
+    read(&*a.store, move |s| {
+        s.history().page(
+            &EventFilter::Aggregate {
+                kind: "package_availability".into(),
+                id: package,
+            },
+            0,
+            500,
+        )
+    })
+    .events
+    .into_iter()
+    .filter(|e| e.kind == AVAILABILITY_CHANGED)
+    .map(|e| {
+        (
+            e.payload["originPackageId"].as_str().map(str::to_owned),
+            e.payload["depth"].as_u64(),
+        )
+    })
+    .collect()
+}
+
+#[test]
+fn an_announcement_an_event_intent_causes_names_its_package_and_one_deeper_level() {
+    let _s = serial();
+    let a = App::new();
+    installed(&a, "origin-pack", "Mutation");
+    let before = caused_announcements(&a, "target-pack");
+    assert!(
+        before
+            .iter()
+            .all(|(origin, depth)| origin.is_none() && depth.is_none()),
+        "installing announces without an origin: {before:?}"
+    );
+    let args = disable_args(&a);
+    let digest = digest_of(&a.record("origin-pack"));
+    // The delivery that committed the intent was itself two deep in a cascade.
+    commit_directly_at(
+        &a,
+        "origin-pack",
+        &digest,
+        1,
+        "event",
+        disable_intent(&args),
+        2,
+    );
+    settled(&a, OperationState::ObservedComplete);
+    assert!(!a.record("target-pack").enabled);
+    let after = caused_announcements(&a, "target-pack");
+    assert_eq!(
+        after.last(),
+        Some(&(Some("origin-pack".to_owned()), Some(3))),
+        "{after:?}"
+    );
+    // A person's own change names no origin.
+    package(a.simple(&a.user, "addons.enable", "Enable", "target-pack"));
+    let person = caused_announcements(&a, "target-pack");
+    assert_eq!(person.last(), Some(&(None, None)), "{person:?}");
 }

@@ -176,7 +176,8 @@ fn execute(
         origin.approver.clone(),
         PrincipalKind::Human,
         op.id.0.clone(),
-        Id::new("package-intents").expect("static ingress"),
+        Id::new(devworks_core::services::packages::index::EVENT_INTENT_INGRESS)
+            .expect("static ingress"),
         epoch,
         policy_revision,
     );

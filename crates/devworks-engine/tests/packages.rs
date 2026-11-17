@@ -448,16 +448,38 @@ fn bundle(spec: &Spec) -> (Vec<u8>, String) {
             .as_ref()
             .map_or("d".repeat(64), |d| sha256_hex(d)),
     );
-    let assets: Vec<Value> = config_doc
+    // The tools' input schema: an object with an optional `text`, shipped so an invocation's
+    // input can be verified against it.
+    let input_doc = json!({"type": "object", "properties": {"text": {"type": "string"}},
+        "additionalProperties": false});
+    let input_ref = schema(
+        &format!("{}/input", spec.package),
+        &sha256_hex(
+            devworks_core::jcs::canonicalize(&input_doc)
+                .unwrap()
+                .as_bytes(),
+        ),
+    );
+    let ids = spec.ids();
+    if !ids.is_empty() {
+        files.push((
+            "schemas/input.json".into(),
+            input_doc.to_string().into_bytes(),
+        ));
+    }
+    let mut assets: Vec<Value> = config_doc
         .iter()
         .map(|_| json!({"reference": config_ref, "path": "schemas/config.json"}))
         .collect();
+    if !ids.is_empty() {
+        assets.push(json!({"reference": input_ref, "path": "schemas/input.json"}));
+    }
     let contributions: Vec<Value> = spec
         .ids()
         .iter()
         .map(|id| {
             let meta = json!({"id": id,
-                "inputSchema": schema(&format!("{}/input", spec.package), &"b".repeat(64)),
+                "inputSchema": input_ref,
                 "outputSchema": schema(&format!("{}/output", spec.package), &"c".repeat(64)),
                 "helpTopic": "help", "required": false, "cancellation": "Cooperative"});
             let local = id.split('/').nth(1).unwrap_or_default();

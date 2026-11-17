@@ -8,24 +8,32 @@
 //! narrowed by the version's approved manifest grants. A result that cannot be established is
 //! held for reconciliation and never run again.
 //!
+//! Before it records anything, [`PackageService::verify_invocation`] runs outside the unit of
+//! work what an agent's package tool call is verified with: the tool is a verified contribution
+//! of the active version (its descriptor matches its approved digest and its input schema is a
+//! shipped, hash-checked document), the person can read the input artifact, and the input
+//! satisfies that schema. A failure refuses the command and records nothing.
+//!
 //! `addons.invocation` reads one such operation back: its state and, once it completed, the
 //! artifacts its package returned or, when it failed, the recorded reason. It answers only the
 //! person who started the invocation.
-use super::{PackageService, conflict, invalid, not_found, policy};
+use super::{PackageService, Prep, conflict, invalid, not_found, policy};
 use crate::authority::policy::resolve_policy;
 use crate::context::{InvocationContext, PrincipalKind};
 use crate::fingerprint::sha256_hex;
 use crate::operations::addons as ops;
+use crate::ports::packages::InspectedFile;
 use crate::ports::storage::{
     NewEvent, NewOperation, NewQueueEntry, OperationRecord, ReadSnapshot, StorageError,
     WriteTransaction,
 };
-use crate::ports::{AuthorityFence, IdKind};
+use crate::ports::{AuthorityFence, IdKind, Preparation};
 use crate::protocol::provider::ArtifactRef;
 use crate::protocol::records::PackageInvocation;
 use crate::protocol::results::{DomainDecision, OperationResult};
 use crate::protocol::support::{BoundedList, BoundedText};
 use crate::protocol::{DomainErrorCode, EventId, OperationId, OperationState};
+use crate::services::artifacts::lifecycle::ExactReadRefusal;
 use crate::services::sessions::{Failure, Refusal};
 use serde_json::json;
 
@@ -34,13 +42,115 @@ pub const CAPABILITY: &str = "package.invoke";
 /// The consumer that runs queued package tool invocations.
 pub const CONSUMER: &str = "package-tools";
 
+/// What verifying an invocation outside the unit of work found: the manifest digest it verified
+/// the tool and input against, or the refusal.
+pub(super) type Verified = Result<String, (DomainErrorCode, &'static str)>;
+
+/// The largest input artifact or schema document of an invocation that is read.
+const MAX_DOCUMENT: u64 = 8 * 1024 * 1024;
+
 impl PackageService {
+    /// Verifies the tool and input of `i` for `ctx`'s person (see the module documentation).
+    pub(super) fn verify_invocation(
+        &self,
+        ctx: &InvocationContext,
+        i: &ops::InvokeInput,
+        env: &Preparation<'_>,
+    ) -> Result<Verified, StorageError> {
+        if ctx.principal_kind() != PrincipalKind::Human {
+            return Ok(Err((
+                DomainErrorCode::PermissionDenied,
+                "package_invocation",
+            )));
+        }
+        let unavailable = (DomainErrorCode::NotFound, "package_tool");
+        let found = env.read(|s| {
+            let Some(active) = s
+                .packages()
+                .package(i.package_id.as_str())?
+                .filter(|p| p.installed && p.enabled)
+                .and_then(|p| p.active_digest)
+            else {
+                return Ok(None);
+            };
+            Ok(s.packages()
+                .package_version(i.package_id.as_str(), &active)?
+                .map(|version| (active, version)))
+        })?;
+        let Some((digest, version)) = found else {
+            return Ok(Err((DomainErrorCode::NotFound, "package_version")));
+        };
+        let Some(inspection) = policy::inspection(&version) else {
+            return Ok(Err(unavailable));
+        };
+        // The tool is a contribution whose verified descriptor is the approved one.
+        let Some((contribution, descriptor)) = inspection
+            .contributions
+            .iter()
+            .find(|c| c.id == i.contribution_id.0.as_str() && c.kind == "Tool")
+            .and_then(|c| Some((c, c.descriptor.as_ref()?)))
+        else {
+            return Ok(Err(unavailable));
+        };
+        if crate::fingerprint::canonical_digest(descriptor)
+            .ok()
+            .as_deref()
+            != Some(contribution.contract_digest.as_str())
+        {
+            return Ok(Err(unavailable));
+        }
+        // Its input schema is a document the package ships, whose bytes are the installed ones.
+        let schema_file = inspection
+            .schema_assets
+            .iter()
+            .find(|a| a.reference == descriptor["meta"]["inputSchema"])
+            .and_then(|a| inspection.files.iter().find(|f| f.path == a.path));
+        let Some(schema) =
+            schema_file.and_then(|file| self.read_schema(&inspection.package_id, &digest, file))
+        else {
+            return Ok(Err(unavailable));
+        };
+        // The person can read the input, and it satisfies the schema.
+        let bytes = match self
+            .artifacts
+            .read_exact(&*self.store, ctx, &i.input, MAX_DOCUMENT)
+        {
+            Ok((bytes, _)) => bytes,
+            Err(ExactReadRefusal::Storage(e)) => return Err(e),
+            Err(_) => return Ok(Err((DomainErrorCode::InvalidArgument, "input"))),
+        };
+        let Some(value) = crate::framing::parse(&bytes)
+            .ok()
+            .and_then(|object| serde_json::to_value(object).ok())
+        else {
+            return Ok(Err((DomainErrorCode::InvalidArgument, "input")));
+        };
+        if self.validator.validate(&schema, &value).is_err() {
+            return Ok(Err((DomainErrorCode::InvalidArgument, "input")));
+        }
+        Ok(Ok(digest))
+    }
+
+    fn read_schema(
+        &self,
+        package: &str,
+        digest: &str,
+        file: &InspectedFile,
+    ) -> Option<serde_json::Value> {
+        let bytes = self
+            .files
+            .read_verified(package, digest, file, MAX_DOCUMENT)
+            .ok()?;
+        serde_json::from_slice(&bytes).ok()
+    }
+
     /// Records the calling person's invocation of a tool contribution of the active version.
     pub(super) fn invoke(
         &self,
         tx: &mut dyn WriteTransaction,
         ctx: &InvocationContext,
         i: &ops::InvokeInput,
+        prepared: Option<&Prep>,
     ) -> Result<DomainDecision, Failure> {
         if ctx.principal_kind() != PrincipalKind::Human {
             return Err(Refusal::new(
@@ -89,6 +199,14 @@ impl PackageService {
             });
         if !input_is_live {
             return Err(invalid("input").into());
+        }
+        // What was verified outside this unit of work is what is recorded: the same version.
+        match prepared {
+            Some(Prep::Invoke(Ok(verified))) if *verified == active => {}
+            Some(Prep::Invoke(Err((code, field)))) => {
+                return Err(Refusal::new(*code, field, None).into());
+            }
+            _ => return Err(conflict("package_version", i.package_id.as_str()).into()),
         }
         let policy_digest = resolve_policy(&*tx.configuration(), ctx.project_id())?.digest();
         let fences = vec![AuthorityFence::Policy {
