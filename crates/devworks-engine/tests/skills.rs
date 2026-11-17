@@ -732,6 +732,69 @@ fn shared_skills_are_discovered_in_place_and_harness_skills_take_precedence() {
 }
 
 #[test]
+fn a_person_adopts_skills_in_their_own_session_but_not_in_anothers_or_after_revocation() {
+    let fx = Fx::new();
+    runtime().block_on(async {
+        let (user, agent, _) = fx.principals();
+        let other = principal(&*fx.store, "other-person", PrincipalKind::Human);
+        let app = boot(fx.composition()).await.unwrap();
+        let start = |who: &InvocationContext| {
+            let s = applied(fx.command(
+                &app,
+                who,
+                "sessions.start",
+                json!({"scope":{"kind":"Workspace"},"title":"Mine"}),
+            ));
+            id(s["id"].as_str().unwrap())
+        };
+        let adoptions = |sid: &devworks_core::protocol::Id| {
+            read(&*fx.store, |s| {
+                s.history().page(
+                    &EventFilter::Aggregate {
+                        kind: "session".into(),
+                        id: sid.as_str().into(),
+                    },
+                    0,
+                    500,
+                )
+            })
+            .events
+            .iter()
+            .filter(|e| e.kind == "SkillRevisionsAdopted")
+            .count()
+        };
+        // A person's own chat session records an adoption.
+        let mine = start(&user);
+        let (_, changed) = app
+            .adopt_skills(&user.clone().with_session(mine.clone()), &mine, None)
+            .unwrap();
+        assert!(changed);
+        assert_eq!(adoptions(&mine), 1);
+        // Another person, even naming that session, is refused and nothing is recorded.
+        assert!(
+            app.adopt_skills(&other.clone().with_session(mine.clone()), &mine, None)
+                .is_err()
+        );
+        assert_eq!(adoptions(&mine), 1);
+        // An agent adopts in its own session until a person revokes its binding.
+        let theirs = start(&agent);
+        let in_theirs = agent.clone().with_session(theirs.clone());
+        app.adopt_skills(&in_theirs, &theirs, None).unwrap();
+        assert_eq!(adoptions(&theirs), 1);
+        let (u, actor) = (user.clone(), agent.principal().clone());
+        write(&*fx.store, move |tx| {
+            let revision = tx.authority().principal(&actor)?.unwrap().revision;
+            devworks_core::authority::service::revoke_principal(tx, &u, &actor, revision)
+                .map(|_| ())
+                .map_err(|e| StorageError::InvalidRecord(format!("{e:?}")))
+        })
+        .unwrap();
+        assert!(app.adopt_skills(&in_theirs, &theirs, None).is_err());
+        assert_eq!(adoptions(&theirs), 1);
+    });
+}
+
+#[test]
 fn agent_skill_changes_take_effect_only_through_exact_human_approval() {
     let fx = Fx::new();
     write_skill(

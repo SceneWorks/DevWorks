@@ -419,22 +419,12 @@ pub(crate) fn publish(
                         .sessions()
                         .session(&session_for_write)?
                         .ok_or(StorageError::ScopeDenied)?;
-                    let id = devworks_core::protocol::EventId(tx.new_id(IdKind::Event));
-                    tx.history()
-                        .append(devworks_core::ports::storage::NewEvent {
-                            id,
-                            actor: ctx_for_write.principal().clone(),
-                            project_id: session.project_id.clone(),
-                            root_id: session.root_id.clone(),
-                            operation_id: None,
-                            aggregate_kind:
-                                devworks_core::services::sessions::transcript::SESSION_AGGREGATE
-                                    .into(),
-                            aggregate_id: session.id.as_str().to_owned(),
-                            aggregate_revision: session.revision,
-                            kind: "SkillRevisionsAdopted".into(),
-                            payload,
-                        })?;
+                    crate::tool_turn::append_skill_adoption(
+                        tx,
+                        ctx_for_write.principal(),
+                        &session,
+                        payload,
+                    )?;
                 }
                 Ok(reference)
             }
