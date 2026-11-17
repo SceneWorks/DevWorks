@@ -53,7 +53,8 @@
 //! generation; an **event-handler invocation** may not use `broker.state` compare-and-set or an
 //! effectful `broker.call`: its state change, effect intents, processing receipt and checkpoint
 //! commit together through `broker.commit_event` ([`crate::package::commit_event`]) or not at
-//! all. `broker.call` is checked against the invocation's grants, which the host resolves at
+//! all (it may still read artifacts, write its own scratch artifacts and run inference as the
+//! person who approved its version, [`events`]). `broker.call` is checked against the invocation's grants, which the host resolves at
 //! admission from the approved manifest and the invoking principal ([`broker`]): application
 //! operations run as the invoking principal through the ordinary gateway, are journaled with the
 //! package as actor and answer with a result artifact. Brokered HTTP, inference and artifact
@@ -64,6 +65,7 @@
 pub mod artifact_io;
 pub mod broker;
 pub mod discovery;
+pub mod events;
 pub mod http;
 pub mod inference;
 pub mod intents;
@@ -2180,8 +2182,17 @@ struct HostBroker {
     host: Arc<PackageHost>,
 }
 
+/// Whether an event handler may not make `call` outside `broker.commit_event`. Reads and the
+/// handler's own scratch artifacts change nothing in the application, and inference only spends
+/// the approving person's budget; neither is an effect the commit must make atomic.
 fn effectful(call: &BrokerCall) -> bool {
-    !matches!(call, BrokerCall::ArtifactRead { .. })
+    !matches!(
+        call,
+        BrokerCall::ArtifactRead { .. }
+            | BrokerCall::ArtifactAppend { .. }
+            | BrokerCall::ArtifactPublish { .. }
+            | BrokerCall::Inference { .. }
+    )
 }
 
 impl Broker for HostBroker {

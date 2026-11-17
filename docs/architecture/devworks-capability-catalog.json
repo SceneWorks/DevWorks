@@ -650,7 +650,9 @@
         "propose",
         "logs",
         "rollback",
-        "uninstall"
+        "uninstall",
+        "invoke",
+        "invocation"
       ],
       "effectAndAuthority": "Version/digest-bound activation approval for agent-authored packages; declared effect classification",
       "status": "Proposed; exact command/tool schemas require review"

@@ -6662,6 +6662,42 @@
         {
           "additionalProperties": false,
           "properties": {
+            "contributionId": {
+              "$ref": "#/$defs/Text1To256"
+            },
+            "expectedDigest": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Digest"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "input": {
+              "$ref": "#/$defs/ArtifactRef"
+            },
+            "kind": {
+              "const": "addons.invoke",
+              "type": "string"
+            },
+            "packageId": {
+              "$ref": "#/$defs/Id"
+            }
+          },
+          "required": [
+            "kind",
+            "packageId",
+            "contributionId",
+            "input"
+          ],
+          "type": "object",
+          "x-since": 8
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
             "expectedHelpRevision": {
               "$ref": "#/$defs/Revision"
             },
@@ -11083,6 +11119,24 @@
             "page"
           ],
           "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "addons.invocation",
+              "type": "string"
+            },
+            "operationId": {
+              "$ref": "#/$defs/Id"
+            }
+          },
+          "required": [
+            "kind",
+            "operationId"
+          ],
+          "type": "object",
+          "x-since": 8
         },
         {
           "additionalProperties": false,

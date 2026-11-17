@@ -13,7 +13,7 @@ use crate::protocol::provider::{ArtifactRef, Digest};
 use crate::protocol::records::*;
 #[allow(unused_imports)]
 use crate::protocol::support::*;
-use crate::protocol::{Counter, Id, Revision};
+use crate::protocol::{Counter, Id, OperationId, Revision};
 use crate::registry::Mode;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -98,6 +98,45 @@ impl Revisioned for LogsInput {
     fn retain_revision(&mut self, _: u32) {}
 }
 
+/// `addons.invoke` Command input.
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct InvokeInput {
+    pub package_id: Id,
+    pub contribution_id: Label,
+    pub input: ArtifactRef,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expected_digest: Option<Digest>,
+}
+impl Check for InvokeInput {
+    fn check(&self) -> Result<(), String> {
+        self.package_id.check()?;
+        self.contribution_id.check()?;
+        self.input.check()?;
+        self.expected_digest.check()?;
+        Ok(())
+    }
+}
+impl Revisioned for InvokeInput {
+    fn retain_revision(&mut self, _: u32) {}
+}
+
+/// `addons.invocation` Query input.
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct InvocationInput {
+    pub operation_id: OperationId,
+}
+impl Check for InvocationInput {
+    fn check(&self) -> Result<(), String> {
+        self.operation_id.check()?;
+        Ok(())
+    }
+}
+impl Revisioned for InvocationInput {
+    fn retain_revision(&mut self, _: u32) {}
+}
+
 /// An admitted input of the `addons` family, built only for the selected operation and mode.
 #[derive(Clone, Debug)]
 pub enum Input {
@@ -121,6 +160,10 @@ pub enum Input {
     Rollback(crate::protocol::addons::AddonCommandRequest),
     /// `addons.uninstall` (Command).
     Uninstall(crate::protocol::addons::AddonCommandRequest),
+    /// `addons.invoke` (Command).
+    Invoke(InvokeInput),
+    /// `addons.invocation` (Query).
+    Invocation(InvocationInput),
 }
 impl Input {
     pub fn operation(&self) -> &'static str {
@@ -135,6 +178,8 @@ impl Input {
             Self::Logs(_) => "addons.logs",
             Self::Rollback(_) => "addons.rollback",
             Self::Uninstall(_) => "addons.uninstall",
+            Self::Invoke(_) => "addons.invoke",
+            Self::Invocation(_) => "addons.invocation",
         }
     }
     pub fn mode(&self) -> Mode {
@@ -149,6 +194,8 @@ impl Input {
             Self::Logs(_) => Mode::Query,
             Self::Rollback(_) => Mode::Command,
             Self::Uninstall(_) => Mode::Command,
+            Self::Invoke(_) => Mode::Command,
+            Self::Invocation(_) => Mode::Query,
         }
     }
 }

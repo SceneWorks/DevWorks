@@ -16914,6 +16914,42 @@
           "additionalProperties": false,
           "properties": {
             "kind": {
+              "const": "addons.invoke",
+              "type": "string"
+            },
+            "value": {
+              "$ref": "#/$defs/PackageInvocation"
+            }
+          },
+          "required": [
+            "kind",
+            "value"
+          ],
+          "type": "object",
+          "x-since": 8
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "addons.invocation",
+              "type": "string"
+            },
+            "value": {
+              "$ref": "#/$defs/PackageInvocation"
+            }
+          },
+          "required": [
+            "kind",
+            "value"
+          ],
+          "type": "object",
+          "x-since": 8
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
               "const": "help.search",
               "type": "string"
             },
@@ -19031,6 +19067,36 @@
         "Failed"
       ],
       "type": "string"
+    },
+    "PackageInvocation": {
+      "additionalProperties": false,
+      "properties": {
+        "artifacts": {
+          "$ref": "#/$defs/List_ArtifactRef_0_128"
+        },
+        "failure": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Text0To65536"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "operationId": {
+          "$ref": "#/$defs/Id"
+        },
+        "state": {
+          "$ref": "#/$defs/OperationState"
+        }
+      },
+      "required": [
+        "operationId",
+        "state",
+        "artifacts"
+      ],
+      "type": "object"
     },
     "PackageOffer": {
       "additionalProperties": false,

@@ -359,7 +359,7 @@ fn shared_operation_fixtures_match_recorded_outcomes() {
 
 #[test]
 fn domain_fixtures_match_recorded_outcomes() {
-    assert_eq!(run("domain-fixtures.json", 2073), 2073);
+    assert_eq!(run("domain-fixtures.json", 2077), 2077);
 }
 
 #[test]
@@ -457,8 +457,8 @@ fn every_catalog_input_has_a_positive_recorded_fixture_admitted_natively() {
     // author, session, rationale, state and approval outcome; ten operations that return lessons
     // add revision 8 for the skills that name a lesson (knowledge.search, .read, .subgraph,
     // .entity_bundle, .entity_graph, .claim_bundle, .expand_frontier, .query, .tagged_lessons and
-    // approvals.review_queue).
-    assert_eq!(admitted.len(), 658);
+    // approvals.review_queue); addons.invoke and addons.invocation arrive at revision 8.
+    assert_eq!(admitted.len(), 660);
 }
 
 #[test]

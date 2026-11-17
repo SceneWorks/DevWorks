@@ -2,7 +2,7 @@
 
 2 November 2026 · Candidate schemas, not production service acceptance. This reference is generated from the same explicit source as the native DTOs and coverage register. Read [the normative contracts](domain-operation-contracts.html) for scope, admission, results, faults and recovery. Optional fields use `?T`; all ordinary records/actions reject unknown fields. `Items`, `NonEmpty`, `Rows`, `Page`, text, counters, money and descriptor-bound JSON are defined there.
 
-All 378 qualified operations have typed input/result candidates. Existing input selectors retain their earlier schemas. The host must apply selected operation/mode, current authority and semantic rules; schema validity alone cannot authorize or complete work.
+All 380 qualified operations have typed input/result candidates. Existing input selectors retain their earlier schemas. The host must apply selected operation/mode, current authority and semantic rules; schema validity alone cannot authorize or complete work.
 
 ## Operation families
 
@@ -558,10 +558,10 @@ All 378 qualified operations have typed input/result candidates. Existing input 
 
 | Operation | Mode and input fields | Typed result value |
 | --- | --- | --- |
-| `settings.read_effective` | **Query**<br>`scope`: `DataScope`<br>`keys`: `Items<Label>`<br>`page`: `PageRequest` | `Page<SettingEntry>` |
-| `settings.validate` | **Query**<br>`scope`: `DataScope`<br>`expectedRevision`: `Revision`<br>`entries`: `NonEmpty<SettingAssignment>` | `ValidationReport` |
-| `settings.save_revision` | **Command**<br>`scope`: `DataScope`<br>`expectedRevision`: `Revision`<br>`entries`: `NonEmpty<SettingAssignment>` | `Page<SettingEntry>` |
-| `settings.explain_source` | **Query**<br>`scope`: `DataScope`<br>`key`: `Label` | `Page<SettingEntry>` |
+| `settings.read_effective` | **Query**<br>`scope`: `DataScope`<br>`repositoryId`: `?Id`<br>`keys`: `Items<Label>`<br>`page`: `PageRequest`<br><br>**Schema revisions** 1, 8 ([revision 8 input](contracts/domain-request.r8.schema.json)) | `Page<SettingEntry>` |
+| `settings.validate` | **Query**<br>`scope`: `DataScope`<br>`repositoryId`: `?Id`<br>`expectedRevision`: `Revision`<br>`entries`: `NonEmpty<SettingAssignment>`<br><br>**Schema revisions** 1, 8 ([revision 8 input](contracts/domain-request.r8.schema.json)) | `ValidationReport` |
+| `settings.save_revision` | **Command**<br>`scope`: `DataScope`<br>`repositoryId`: `?Id`<br>`expectedRevision`: `Revision`<br>`entries`: `NonEmpty<SettingAssignment>`<br><br>**Schema revisions** 1, 8 ([revision 8 input](contracts/domain-request.r8.schema.json)) | `Page<SettingEntry>` |
+| `settings.explain_source` | **Query**<br>`scope`: `DataScope`<br>`repositoryId`: `?Id`<br>`key`: `Label`<br><br>**Schema revisions** 1, 8 ([revision 8 input](contracts/domain-request.r8.schema.json)) | `Page<SettingEntry>` |
 
 ### Router
 
@@ -618,6 +618,8 @@ All 378 qualified operations have typed input/result candidates. Existing input 
 | `addons.logs` | **Query**<br>`packageId`: `Id`<br>`afterSequence`: `Counter`<br>`page`: `PageRequest` | `Page<Diagnostic>` |
 | `addons.rollback` | **Command**<br>[Existing input schema](contracts/addon-command-request.schema.json)<br>{'pointer': '/command/kind', 'equals': 'Rollback'}<br><br>**Schema revisions** 1, 2, 3 ([revision 3 input](contracts/addon-command-request.schema.json)) | `PackageRecord` |
 | `addons.uninstall` | **Command**<br>[Existing input schema](contracts/addon-command-request.schema.json)<br>{'pointer': '/command/kind', 'equals': 'Uninstall'}<br><br>**Schema revisions** 1, 2, 3 ([revision 3 input](contracts/addon-command-request.schema.json)) | `PackageRecord` |
+| `addons.invoke` | **Command**<br>`packageId`: `Id`<br>`contributionId`: `Label`<br>`input`: `ArtifactRef`<br>`expectedDigest`: `?Digest`<br><br>**Schema revisions** 8 ([revision 8 input](contracts/domain-request.r8.schema.json)) | `PackageInvocation` |
+| `addons.invocation` | **Query**<br>`operationId`: `OperationId`<br><br>**Schema revisions** 8 ([revision 8 input](contracts/domain-request.r8.schema.json)) | `PackageInvocation` |
 
 ### Help
 
@@ -2228,6 +2230,7 @@ Reference names reused from earlier shared/provider/data contracts retain their 
 | `value` | `SchemaValue` |
 | `sourceScope` | `DataScope` |
 | `revision` | `Revision` |
+| `sourceRepositoryId` | `?Id` · *revision 8+* |
 
 ### ValidationIssue
 
@@ -3262,6 +3265,15 @@ Reference names reused from earlier shared/provider/data contracts retain their 
 | `source` | `Label` |
 | `hostTargetSupported` | `bool` |
 | `newer` | `bool` |
+
+### PackageInvocation
+
+| Field | Type |
+| --- | --- |
+| `operationId` | `OperationId` |
+| `state` | `OperationState` |
+| `artifacts` | `Items<ArtifactRef>` |
+| `failure` | `?Content` |
 
 ### IndexFreshnessState
 

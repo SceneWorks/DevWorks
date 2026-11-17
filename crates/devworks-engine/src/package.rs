@@ -303,6 +303,9 @@ pub fn commit_event_from(
                 "call": call,
                 "contributionId": origin.map(|o| o.contribution_id.as_str()),
                 "manifestDigest": origin.map(|o| o.manifest_digest.as_str()),
+                // The cascade depth of the delivery that committed it: an announcement the
+                // intent causes is one deeper.
+                "eventDepth": delivery.payload["depth"].as_u64().unwrap_or(0),
             }),
         })?;
         // One event per intent: a delivery is unique per (consumer, event).
