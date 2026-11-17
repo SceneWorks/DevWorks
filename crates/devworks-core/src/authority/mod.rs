@@ -51,11 +51,82 @@
 /// // Nothing outside `devworks_core::authority` can mint the capability.
 /// let _ = devworks_core::authority::AuthorityCapability { _sealed: () };
 /// ```
+///
+/// Without it a transaction reaches authority records only through reads. The read compiles:
+///
+/// ```
+/// use devworks_core::ports::storage::*;
+/// fn read(store: &dyn ApplicationStore, actor: devworks_core::protocol::ActorId) {
+///     let _ = run_write(store, WriteOptions::fixture(), move |tx| {
+///         tx.authority().principal(&actor).map(|p| p.is_some())
+///     });
+/// }
+/// ```
+///
+/// and the same transaction cannot write (`E0599`: no such method on the read-only view):
+///
+/// ```compile_fail,E0599
+/// use devworks_core::ports::storage::*;
+/// fn forge(store: &dyn ApplicationStore) {
+///     let _ = run_write(store, WriteOptions::fixture(), |tx| {
+///         // `authority()` is read-only; issuing a grant needs `authority_writes(&capability, ..)`.
+///         tx.authority().issue_grant(todo!()).map(|_| ())
+///         // The resume-grant ledger is read-only the same way: `tx.grants().issue(..)` is an error.
+///     });
+/// }
+/// ```
 #[derive(Debug)]
 pub struct AuthorityCapability {
     _sealed: (),
 }
+impl AuthorityCapability {
+    /// A capability for seeding authority records in fixtures. Compiled only with the
+    /// `contract-suite` feature, which production crates do not enable.
+    #[cfg(feature = "contract-suite")]
+    pub fn fixture() -> Self {
+        Self { _sealed: () }
+    }
+}
+
+/// The authority ledger of `tx` with its writes, for fixtures that seed principals and grants on
+/// the store's own transaction. Compiled only with the `contract-suite` feature.
+#[cfg(feature = "contract-suite")]
+pub fn fixture_writes(
+    tx: &mut dyn crate::ports::storage::WriteTransaction,
+) -> Result<&mut dyn crate::ports::storage::AuthorityLedger, crate::ports::storage::StorageError> {
+    let actor = tx.store().host_actor.clone();
+    tx.authority_writes(&AuthorityCapability::fixture(), &actor)
+}
+
+/// The resume-grant ledger of `tx` with its writes, for fixtures (see [`fixture_writes`]).
+#[cfg(feature = "contract-suite")]
+pub fn fixture_grants(
+    tx: &mut dyn crate::ports::storage::WriteTransaction,
+) -> Result<&mut dyn crate::ports::storage::GrantLedger, crate::ports::storage::StorageError> {
+    let actor = tx.store().host_actor.clone();
+    tx.grant_writes(&AuthorityCapability::fixture(), &actor)
+}
 const CAPABILITY: AuthorityCapability = AuthorityCapability { _sealed: () };
+
+/// Spends one use of a host grant on the unwrapped store transaction. This is the gateway's own
+/// consumption step; it presents the capability here so the gateway never holds one.
+pub(crate) fn consume_host_grant(
+    tx: &mut dyn crate::ports::storage::WriteTransaction,
+    grant: &crate::ports::GrantUse,
+    actor: &crate::protocol::ActorId,
+) -> Result<crate::ports::storage::AuthorityGrant, crate::ports::storage::StorageError> {
+    tx.authority_writes(&CAPABILITY, actor)?
+        .consume_grant(grant, actor)
+}
+
+/// Spends one use of a resume grant on the unwrapped store transaction (the gateway's own step).
+pub(crate) fn consume_resume_grant(
+    tx: &mut dyn crate::ports::storage::WriteTransaction,
+    grant: &crate::ports::GrantUse,
+    actor: &crate::protocol::ActorId,
+) -> Result<crate::ports::storage::GrantRecord, crate::ports::storage::StorageError> {
+    tx.grant_writes(&CAPABILITY, actor)?.consume(grant, actor)
+}
 
 pub mod deletion;
 pub mod destructive;

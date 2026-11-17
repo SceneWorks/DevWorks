@@ -79,13 +79,13 @@ fn candidate(store: &SqliteStore, name: &str) -> StoredEmbeddingCandidate {
 }
 fn seeded(h: &Harness) -> SqliteStore {
     let s = h.store();
-    run_write(&s, WriteOptions::default(), |tx| {
+    run_write(&s, WriteOptions::fixture(), |tx| {
         tx.router().put_connection(&connection(), None)?;
         Ok(())
     })
     .unwrap();
     let c = candidate(&s, "candidate");
-    run_write(&s, WriteOptions::default(), move |tx| {
+    run_write(&s, WriteOptions::fixture(), move |tx| {
         tx.router().insert_embedding_candidate(&c, 1)
     })
     .unwrap();
@@ -109,7 +109,7 @@ fn start_with_authority(
     s: &SqliteStore,
     authority_fences: Vec<devworks_core::ports::AuthorityFence>,
 ) -> AttemptFence {
-    run_write(s, WriteOptions::default(), move |tx| {
+    run_write(s, WriteOptions::fixture(), move |tx| {
         let op = intent(tx, "qualification-operation")?;
         let event = EventId(id("qualification-event"));
         let actor = tx.store().host_actor.clone();
@@ -227,7 +227,7 @@ fn artifact(
     })
 }
 fn native_facts(s: &SqliteStore) -> StoredEmbeddingEvidence {
-    run_write(s,WriteOptions::default(),|tx|{
+    run_write(s,WriteOptions::fixture(),|tx|{
         let native=intent(tx,"native-operation")?;
         let attempt=tx.operations().begin_attempt(&native.id,1,AttemptBinding::default())?;
         tx.router().record_route_request(&StoredRouteRequest{request_id:id("native-request"),operation_id:native.id.clone(),purpose:"Embedding".into(),session_id:None,project_id:None,model_id:id("candidate"),connection_id:id("embedding-connection"),pin_id:None,created_at_ms:T0})?;
@@ -246,7 +246,7 @@ fn stage(
     fence: AttemptFence,
     evidence: StoredEmbeddingEvidence,
 ) -> StoredEmbeddingQualification {
-    run_write(s, WriteOptions::default(), move |tx| {
+    run_write(s, WriteOptions::fixture(), move |tx| {
         tx.router().stage_embedding_probe_evidence(
             &id("candidate"),
             2,
@@ -258,7 +258,7 @@ fn stage(
     .unwrap()
 }
 fn complete(s: &SqliteStore, fence: AttemptFence) -> StoredEmbeddingQualification {
-    run_write(s, WriteOptions::default(), move |tx| {
+    run_write(s, WriteOptions::fixture(), move |tx| {
         tx.operations().transition(
             &OperationId(id("qualification-operation")),
             3,
@@ -310,7 +310,7 @@ fn sql33_preserves_prefix_and_initial_selection_is_explicit_cas() {
         }
     );
     assert_eq!(
-        run_write(&s, WriteOptions::default(), |tx| tx
+        run_write(&s, WriteOptions::fixture(), |tx| tx
             .router()
             .select_embedding_candidate(1, None))
         .unwrap()
@@ -318,7 +318,7 @@ fn sql33_preserves_prefix_and_initial_selection_is_explicit_cas() {
         2
     );
     assert!(matches!(
-        run_write(&s, WriteOptions::default(), |tx| tx
+        run_write(&s, WriteOptions::fixture(), |tx| tx
             .router()
             .select_embedding_candidate(1, None)),
         Err(StorageError::RevisionConflict(_))
@@ -330,14 +330,14 @@ fn immutable_candidates_preserve_declared_names_and_paged_identity() {
     let s = seeded(&h);
     let c = candidate(&s, "candidate");
     assert!(matches!(
-        run_write(&s, WriteOptions::default(), move |tx| tx
+        run_write(&s, WriteOptions::fixture(), move |tx| tx
             .router()
             .insert_embedding_candidate(&c, 1)),
         Err(StorageError::Duplicate { .. })
     ));
     let c = candidate(&s, "second");
     assert!(matches!(
-        run_write(&s, WriteOptions::default(), move |tx| tx
+        run_write(&s, WriteOptions::fixture(), move |tx| tx
             .router()
             .insert_embedding_candidate(&c, 2)),
         Err(StorageError::RevisionConflict(_))
@@ -345,13 +345,13 @@ fn immutable_candidates_preserve_declared_names_and_paged_identity() {
     let mut c = candidate(&s, "second");
     c.name.push('x');
     assert!(
-        run_write(&s, WriteOptions::default(), move |tx| tx
+        run_write(&s, WriteOptions::fixture(), move |tx| tx
             .router()
             .insert_embedding_candidate(&c, 1))
         .is_err()
     );
     let template = candidate(&s, "template");
-    run_write(&s, WriteOptions::default(), move |tx| {
+    run_write(&s, WriteOptions::fixture(), move |tx| {
         for n in 0..501 {
             let mut c = template.clone();
             c.id = id(&format!("page-{n:04}"));
@@ -387,7 +387,7 @@ fn native_evidence_is_staged_before_terminal_qualification_and_survives_restart(
     let evidence = native_facts(&s);
     let f = fence.clone();
     assert!(
-        run_write(&s, WriteOptions::default(), move |tx| tx
+        run_write(&s, WriteOptions::fixture(), move |tx| tx
             .router()
             .finish_embedding_qualification(
                 &id("candidate"),
@@ -414,7 +414,7 @@ fn native_evidence_is_staged_before_terminal_qualification_and_survives_restart(
         complete(&s, fence).state,
         EmbeddingQualificationState::Qualified
     );
-    let selected = run_write(&s, WriteOptions::default(), |tx| {
+    let selected = run_write(&s, WriteOptions::fixture(), |tx| {
         tx.router()
             .select_embedding_candidate(1, Some((&id("candidate"), 4)))
     })
@@ -450,7 +450,7 @@ fn stale_owners_and_changed_native_evidence_cannot_qualify() {
     wrong.request_id = id("unrelated");
     let f = fence.clone();
     assert!(
-        run_write(&s, WriteOptions::default(), move |tx| tx
+        run_write(&s, WriteOptions::fixture(), move |tx| tx
             .router()
             .stage_embedding_probe_evidence(
                 &id("candidate"),
@@ -465,7 +465,7 @@ fn stale_owners_and_changed_native_evidence_cannot_qualify() {
     stale.attempt_no += 1;
     let e = evidence.clone();
     assert!(matches!(
-        run_write(&s, WriteOptions::default(), move |tx| tx
+        run_write(&s, WriteOptions::fixture(), move |tx| tx
             .router()
             .stage_embedding_probe_evidence(
                 &id("candidate"),
@@ -480,7 +480,7 @@ fn stale_owners_and_changed_native_evidence_cannot_qualify() {
     let mut changed = evidence;
     changed.reported_model = Some("different".into());
     assert!(
-        run_write(&s, WriteOptions::default(), move |tx| tx
+        run_write(&s, WriteOptions::fixture(), move |tx| tx
             .router()
             .stage_embedding_probe_evidence(
                 &id("candidate"),
@@ -512,7 +512,7 @@ fn source_changes_fence_completion_and_selection_without_relabelling_history() {
     })
     .unwrap()
     .unwrap();
-    run_write(&s, WriteOptions::default(), |tx| {
+    run_write(&s, WriteOptions::fixture(), |tx| {
         let mut c = tx
             .router()
             .connection(&id("embedding-connection"))?
@@ -524,7 +524,7 @@ fn source_changes_fence_completion_and_selection_without_relabelling_history() {
     })
     .unwrap();
     assert!(
-        run_write(&s, WriteOptions::default(), |tx| tx
+        run_write(&s, WriteOptions::fixture(), |tx| tx
             .router()
             .select_embedding_candidate(1, Some((&id("candidate"), 4))))
         .is_err()
@@ -560,7 +560,7 @@ fn unknown_probe_reconciles_same_identity_without_resend() {
     let fence = start(&s);
     let evidence = native_facts(&s);
     let f = fence.clone();
-    run_write(&s, WriteOptions::default(), move |tx| {
+    run_write(&s, WriteOptions::fixture(), move |tx| {
         tx.operations().transition(
             &OperationId(id("qualification-operation")),
             3,
@@ -588,7 +588,7 @@ fn unknown_probe_reconciles_same_identity_without_resend() {
     probe.operation_id = OperationId(id("new-operation"));
     probe.candidate_revision = 3;
     assert!(
-        run_write(&s, WriteOptions::default(), move |tx| {
+        run_write(&s, WriteOptions::fixture(), move |tx| {
             intent(tx, "new-operation")?;
             tx.router()
                 .start_embedding_qualification(&id("candidate"), 3, &probe)
@@ -609,7 +609,7 @@ fn unknown_probe_reconciles_same_identity_without_resend() {
     drop(s);
     let s = h.store();
     let f = fence.clone();
-    let staged = run_write(&s, WriteOptions::default(), move |tx| {
+    let staged = run_write(&s, WriteOptions::fixture(), move |tx| {
         tx.router().stage_embedding_probe_evidence(
             &id("candidate"),
             3,
@@ -627,7 +627,7 @@ fn unknown_probe_reconciles_same_identity_without_resend() {
             .unwrap(),
         0
     );
-    run_write(&s, WriteOptions::default(), move |tx| {
+    run_write(&s, WriteOptions::fixture(), move |tx| {
         tx.operations().transition(
             &OperationId(id("qualification-operation")),
             4,
@@ -661,7 +661,7 @@ fn restored_probe_authority_is_not_selection_authority() {
         .unwrap();
     let s = h.store();
     assert!(matches!(
-        run_write(&s, WriteOptions::default(), |tx| tx
+        run_write(&s, WriteOptions::fixture(), |tx| tx
             .router()
             .select_embedding_candidate(1, Some((&id("candidate"), 4)))),
         Err(StorageError::ScopeDenied)
@@ -684,7 +684,7 @@ fn cosmetic_connection_change_preserves_qualification_but_selection_cas_still_ap
     let evidence = native_facts(&s);
     stage(&s, fence.clone(), evidence);
     complete(&s, fence);
-    run_write(&s, WriteOptions::default(), |tx| {
+    run_write(&s, WriteOptions::fixture(), |tx| {
         let mut c = tx
             .router()
             .connection(&id("embedding-connection"))?
@@ -695,14 +695,14 @@ fn cosmetic_connection_change_preserves_qualification_but_selection_cas_still_ap
         Ok(())
     })
     .unwrap();
-    let selected = run_write(&s, WriteOptions::default(), |tx| {
+    let selected = run_write(&s, WriteOptions::fixture(), |tx| {
         tx.router()
             .select_embedding_candidate(1, Some((&id("candidate"), 4)))
     })
     .unwrap();
     assert_eq!(selected.candidate_id, Some(id("candidate")));
     assert!(matches!(
-        run_write(&s, WriteOptions::default(), |tx| tx
+        run_write(&s, WriteOptions::fixture(), |tx| tx
             .router()
             .select_embedding_candidate(2, Some((&id("candidate"), 3)))),
         Err(StorageError::RevisionConflict(_))
@@ -719,7 +719,7 @@ fn existing_vector_identity_is_never_relabelled_by_qualification() {
     let c = candidate(&s, "candidate");
     h.raw().execute("INSERT INTO embedding_spaces(id,model_digest,dimensions,metric,element_type) VALUES(?1,?2,2,'L2','Float32')",rusqlite::params![c.space_id.as_str(),sha256_hex(b"older incompatible identity")]).unwrap();
     assert!(
-        run_write(&s, WriteOptions::default(), move |tx| {
+        run_write(&s, WriteOptions::fixture(), move |tx| {
             tx.operations().transition(
                 &OperationId(id("qualification-operation")),
                 3,
@@ -778,14 +778,14 @@ fn late_cancellation_preserves_accounted_native_result_without_qualifying() {
         } else {
             2
         };
-        run_write(&s, WriteOptions::default(), |tx| {
+        run_write(&s, WriteOptions::fixture(), |tx| {
             tx.queue().cancel(&id("qualification-delivery"))
         })
         .unwrap();
         let f = fence.clone();
         let e = evidence.clone();
         assert!(matches!(
-            run_write(&s, WriteOptions::default(), move |tx| tx
+            run_write(&s, WriteOptions::fixture(), move |tx| tx
                 .router()
                 .stage_embedding_probe_evidence(
                     &id("candidate"),
@@ -796,7 +796,7 @@ fn late_cancellation_preserves_accounted_native_result_without_qualifying() {
                 )),
             Err(StorageError::Cancelled)
         ));
-        let q = run_write(&s, WriteOptions::default(), move |tx| {
+        let q = run_write(&s, WriteOptions::fixture(), move |tx| {
             tx.operations().transition(
                 &OperationId(id("qualification-operation")),
                 3,
@@ -896,7 +896,7 @@ fn durable_probe_identity_cannot_be_reassigned_to_another_candidate_or_operation
     let h = Harness::new();
     let s = seeded(&h);
     let second = candidate(&s, "second-candidate");
-    let original = run_write(&s, WriteOptions::default(), move |tx| {
+    let original = run_write(&s, WriteOptions::fixture(), move |tx| {
         tx.router().insert_embedding_candidate(&second, 1)?;
         let p = probe_intent(tx, "first-intent")?;
         tx.router()
@@ -907,7 +907,7 @@ fn durable_probe_identity_cannot_be_reassigned_to_another_candidate_or_operation
     for kind in 0..3 {
         let old = original.clone();
         assert!(
-            run_write(&s, WriteOptions::default(), move |tx| {
+            run_write(&s, WriteOptions::fixture(), move |tx| {
                 let p = if kind == 0 {
                     old
                 } else {
@@ -958,7 +958,7 @@ fn inventory_fence_tracks_non_history_status_and_original_policy_changes() {
     let h = Harness::new();
     let s = seeded(&h);
     let first = inventory_stamp(&s);
-    run_write(&s, WriteOptions::default(), |tx| {
+    run_write(&s, WriteOptions::fixture(), |tx| {
         let mut c = connection();
         c.id = id("unrelated");
         tx.router().put_connection(&c, None)?;
@@ -970,7 +970,7 @@ fn inventory_fence_tracks_non_history_status_and_original_policy_changes() {
         first,
         "unrelated connection does not invalidate candidate pages"
     );
-    run_write(&s, WriteOptions::default(), |tx| {
+    run_write(&s, WriteOptions::fixture(), |tx| {
         let mut c = tx
             .router()
             .connection(&id("embedding-connection"))?
@@ -990,7 +990,7 @@ fn inventory_fence_tracks_non_history_status_and_original_policy_changes() {
     let s = seeded(&h);
     let fence = start(&s);
     let before = inventory_stamp(&s);
-    run_write(&s, WriteOptions::default(), move |tx| {
+    run_write(&s, WriteOptions::fixture(), move |tx| {
         tx.operations().transition(
             &OperationId(id("qualification-operation")),
             3,
@@ -1007,7 +1007,7 @@ fn inventory_fence_tracks_non_history_status_and_original_policy_changes() {
         unknown.1, before.1,
         "journal-only status changes need their own fence"
     );
-    run_write(&s, WriteOptions::default(), |tx| {
+    run_write(&s, WriteOptions::fixture(), |tx| {
         tx.configuration().append_revision(
             &ConfigScope::Workspace,
             "cursor-proof",
@@ -1031,7 +1031,7 @@ fn inventory_fence_tracks_exact_retained_artifact_metadata() {
     stage(&s, fence, evidence.clone());
     let before = inventory_stamp(&s);
     let result = evidence.result_artifact.version_id.clone();
-    run_write(&s, WriteOptions::default(), move |tx| {
+    run_write(&s, WriteOptions::fixture(), move |tx| {
         tx.artifacts().tombstone_version(&result, T0)
     })
     .unwrap();
@@ -1039,7 +1039,7 @@ fn inventory_fence_tracks_exact_retained_artifact_metadata() {
     assert!(deleted.0 > before.0);
     assert_eq!(deleted.1, before.1);
     let digest = evidence.vector_artifact.sha256.as_str().to_owned();
-    run_write(&s, WriteOptions::default(), move |tx| {
+    run_write(&s, WriteOptions::fixture(), move |tx| {
         tx.artifacts().set_blob_state(
             &digest,
             BlobState::Present,
@@ -1053,7 +1053,7 @@ fn inventory_fence_tracks_exact_retained_artifact_metadata() {
     assert!(blob.0 > deleted.0);
     assert_eq!(blob.1, deleted.1);
     let artifact = evidence.vector_artifact.artifact_id.clone();
-    run_write(&s, WriteOptions::default(), move |tx| {
+    run_write(&s, WriteOptions::fixture(), move |tx| {
         let mut a = tx.artifacts().artifact(&artifact)?.unwrap();
         a.reference_revision += 1;
         tx.artifacts().update_artifact(&a)?;
@@ -1066,7 +1066,7 @@ fn inventory_fence_tracks_exact_retained_artifact_metadata() {
 }
 
 fn set_policy(s: &SqliteStore, expected: i64, value: &'static str) {
-    run_write(s, WriteOptions::default(), move |tx| {
+    run_write(s, WriteOptions::fixture(), move |tx| {
         let schema = serde_json::to_value(
             devworks_core::settings::catalog::descriptor("safety.accessProfile")
                 .unwrap()
@@ -1111,7 +1111,7 @@ fn narrowed_original_authority_prevents_publication_but_retains_exact_negative_o
         let f = fence.clone();
         let e = evidence.clone();
         assert!(matches!(
-            run_write(&s, WriteOptions::default(), move |tx| tx
+            run_write(&s, WriteOptions::fixture(), move |tx| tx
                 .router()
                 .stage_embedding_probe_evidence(
                     &id("candidate"),
@@ -1122,7 +1122,7 @@ fn narrowed_original_authority_prevents_publication_but_retains_exact_negative_o
                 )),
             Err(StorageError::ScopeDenied)
         ));
-        let q = run_write(&s, WriteOptions::default(), move |tx| {
+        let q = run_write(&s, WriteOptions::fixture(), move |tx| {
             let terminal = match state {
                 EmbeddingQualificationState::Failed => OperationState::Failed,
                 EmbeddingQualificationState::Unknown => OperationState::OutcomeUnknown,
@@ -1192,7 +1192,7 @@ fn narrowed_original_authority_prevents_publication_but_retains_exact_negative_o
 fn cancellation_before_dispatch_records_no_invented_attempt_fence() {
     let h = Harness::new();
     let s = seeded(&h);
-    let probe = run_write(&s, WriteOptions::default(), |tx| {
+    let probe = run_write(&s, WriteOptions::fixture(), |tx| {
         let p = probe_intent(tx, "unattempted-cancel")?;
         tx.router()
             .start_embedding_qualification(&id("candidate"), 1, &p)?;
@@ -1201,7 +1201,7 @@ fn cancellation_before_dispatch_records_no_invented_attempt_fence() {
     .unwrap();
     let p = probe.clone();
     assert!(
-        run_write(&s, WriteOptions::default(), move |tx| tx
+        run_write(&s, WriteOptions::fixture(), move |tx| tx
             .router()
             .finish_embedding_qualification(
                 &id("candidate"),
@@ -1214,7 +1214,7 @@ fn cancellation_before_dispatch_records_no_invented_attempt_fence() {
         .is_err()
     );
     let p = probe.clone();
-    let q = run_write(&s, WriteOptions::default(), move |tx| {
+    let q = run_write(&s, WriteOptions::fixture(), move |tx| {
         tx.queue().cancel(&p.delivery_id)?;
         assert!(
             tx.operations()
@@ -1261,7 +1261,7 @@ fn price_subject_is_atomic_deduplicated_and_never_a_chat_model() {
         "literal-model",
     );
     let c = candidate(&s, "second-price-candidate");
-    run_write(&s, WriteOptions::default(), move |tx| {
+    run_write(&s, WriteOptions::fixture(), move |tx| {
         tx.router().insert_embedding_candidate(&c, 1)
     })
     .unwrap();
@@ -1300,13 +1300,13 @@ fn price_subject_is_atomic_deduplicated_and_never_a_chat_model() {
 fn failed_candidate_cannot_leave_price_subject_even_when_caller_commits() {
     let h = Harness::new();
     let s = h.store();
-    run_write(&s, WriteOptions::default(), |tx| {
+    run_write(&s, WriteOptions::fixture(), |tx| {
         tx.router().put_connection(&connection(), None)
     })
     .unwrap();
     h.raw().execute_batch("CREATE TRIGGER reject_candidate BEFORE INSERT ON router_embedding_candidates BEGIN SELECT RAISE(ABORT,'native injected candidate failure'); END;").unwrap();
     let c = candidate(&s, "failure");
-    run_write(&s, WriteOptions::default(), move |tx| {
+    run_write(&s, WriteOptions::fixture(), move |tx| {
         assert!(tx.router().insert_embedding_candidate(&c, 1).is_err());
         // Deliberately catch the SQL error and commit the outer unit.
         Ok(())
@@ -1332,7 +1332,7 @@ fn failed_candidate_cannot_leave_price_subject_even_when_caller_commits() {
 fn price_subject_visibility_uses_identity_not_connection_routability() {
     let h = Harness::new();
     let s = seeded(&h);
-    run_write(&s, WriteOptions::default(), |tx| {
+    run_write(&s, WriteOptions::fixture(), |tx| {
         let mut c = tx
             .router()
             .connection(&id("embedding-connection"))?
@@ -1352,7 +1352,7 @@ fn price_subject_visibility_uses_identity_not_connection_routability() {
     .unwrap()
     .unwrap();
     assert!(subject.current_candidate_id.is_some());
-    run_write(&s, WriteOptions::default(), |tx| {
+    run_write(&s, WriteOptions::fixture(), |tx| {
         let mut c = tx
             .router()
             .connection(&id("embedding-connection"))?

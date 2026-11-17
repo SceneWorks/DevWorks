@@ -405,7 +405,7 @@ impl ApprovalService {
                 ..
             })
         );
-        run_write(store, WriteOptions::default(), move |tx| {
+        run_write(store, WriteOptions::settlement(), move |tx| {
             let Some(mut r) = tx.decisions().approval_resume(&id)? else {
                 return Ok(());
             };

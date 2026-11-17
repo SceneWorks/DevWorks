@@ -6865,7 +6865,7 @@ fn shutdown_does_not_wait_for_a_retained_receive_long_poll() {
                     &raw,
                     WriteOptions {
                         cancellation: Some(stop),
-                        ..WriteOptions::default()
+                        ..WriteOptions::fixture()
                     },
                 )
                 .unwrap()

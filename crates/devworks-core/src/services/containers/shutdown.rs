@@ -54,7 +54,7 @@ impl ContainerService {
         let row = row.clone();
         let detail = detail.map(|value| value.chars().take(1024).collect::<String>());
         let resources = self.resources.clone();
-        run_write(&*self.store, WriteOptions::default(), move |tx| {
+        run_write(&*self.store, WriteOptions::settlement(), move |tx| {
             let current =
                 tx.resources()
                     .container(&row.id)?

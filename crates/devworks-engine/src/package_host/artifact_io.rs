@@ -234,7 +234,7 @@ pub(super) fn publish(
         .map_or(ArtifactScope::Workspace, ArtifactScope::Project);
     let principal = owner.principal().clone();
     let live = slot.clone();
-    let committed = run_write(&*host.store, WriteOptions::default(), move |tx| {
+    let committed = run_write(&*host.store, WriteOptions::observed(), move |tx| {
         // Serialized with revocation: a cancelled or expired invocation publishes nothing.
         let _guard = live.state.lock().unwrap_or_else(|p| p.into_inner());
         if live.revoked.load(Ordering::SeqCst) {

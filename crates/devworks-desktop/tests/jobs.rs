@@ -24,7 +24,7 @@ fn id(s: &str) -> Id {
 fn seed_prompt(engine: &devworks_desktop::host::Engine) {
     run_write(
         &**engine.host().runtime().store(),
-        WriteOptions::default(),
+        WriteOptions::fixture(),
         |tx| {
             let digest = "a".repeat(64);
             tx.artifacts()
@@ -346,7 +346,7 @@ fn the_active_run_stays_shown_when_a_skipped_occurrence_is_the_latest_run() {
     let jid = job.id.clone();
     let (active, skipped) = run_write(
         &**engine.host().runtime().store(),
-        WriteOptions::default(),
+        WriteOptions::fixture(),
         move |tx| {
             use devworks_core::services::jobs::runner::{Occurrence, queue_run};
             let stored = tx.jobs().job(&jid)?.expect("job");
@@ -393,7 +393,7 @@ fn seed_runs(engine: &devworks_desktop::host::Engine, job: &Id, at: Vec<i64>) {
     let job = job.clone();
     run_write(
         &**engine.host().runtime().store(),
-        WriteOptions::default(),
+        WriteOptions::fixture(),
         move |tx| {
             use devworks_core::services::jobs::runner::{Occurrence, queue_run};
             let stored = tx.jobs().job(&job)?.expect("job");
@@ -485,7 +485,7 @@ fn a_project_jobs_prompt_picker_offers_the_projects_prompts() {
     let pid = project.id.clone();
     run_write(
         &**engine.host().runtime().store(),
-        WriteOptions::default(),
+        WriteOptions::fixture(),
         move |tx| {
             let digest = "b".repeat(64);
             tx.artifacts()
@@ -564,7 +564,7 @@ fn creating_a_job_selects_it_without_the_previous_jobs_history() {
     // Listed (so the form offers it) once it has a current version.
     run_write(
         &**engine.host().runtime().store(),
-        WriteOptions::default(),
+        WriteOptions::fixture(),
         |tx| {
             let mut a = tx.artifacts().artifact(&id("prompt-1"))?.expect("artifact");
             a.current_version_id = Some(id("prompt-v1"));
@@ -848,7 +848,7 @@ fn prompt_picker_loads_and_selects_beyond_the_first_page_in_each_scope() {
         let scope = project.clone();
         run_write(
             &**engine.host().runtime().store(),
-            WriteOptions::default(),
+            WriteOptions::fixture(),
             move |tx| {
                 let digest = "c".repeat(64);
                 tx.artifacts()

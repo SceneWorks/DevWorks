@@ -182,7 +182,7 @@ pub(crate) fn publish_initial_context(
     let ctx = ctx.clone();
     let session_id = session_id.clone();
     let binding = binding.clone();
-    let committed = run_write(store, WriteOptions::default(), move |tx| {
+    let committed = run_write(store, WriteOptions::observed(), move |tx| {
         let session = tx
             .sessions()
             .session(&session_id)?
@@ -957,7 +957,7 @@ pub(crate) fn publish_continuation(
     let session_id = session_id.clone();
     let attempt_id = attempt_id.clone();
     let binding = binding.clone();
-    let committed = run_write(store, WriteOptions::default(), move |tx| {
+    let committed = run_write(store, WriteOptions::observed(), move |tx| {
         let session = tx
             .sessions()
             .session(&session_id)?
@@ -1449,7 +1449,7 @@ pub(crate) fn append_operation_updates(
     let session_for_write = session_id.clone();
     let binding_for_write = binding.clone();
     let source_for_write = source.clone();
-    let committed = run_write(store, WriteOptions::default(), move |tx| {
+    let committed = run_write(store, WriteOptions::observed(), move |tx| {
         let session = tx
             .sessions()
             .session(&session_for_write)?
@@ -1961,7 +1961,7 @@ pub(crate) fn dispatch_one(
     let ctx_for_write = ctx.clone();
     let session_for_write = session_id.clone();
     let key_for_write = key.clone();
-    let committed = run_write(store, WriteOptions::default(), move |tx| {
+    let committed = run_write(store, WriteOptions::settlement(), move |tx| {
         let mut outcome = outcome.clone();
         if let Some(staged) = &staged_for_write {
             let session = tx
@@ -2021,7 +2021,7 @@ fn mark_dispatch_started(
     let session_id = session_id.clone();
     let key = key.clone();
     let cancellation = cancellation.cloned();
-    run_write(store, WriteOptions::default(), move |tx| {
+    run_write(store, WriteOptions::settlement(), move |tx| {
         if cancellation
             .as_ref()
             .is_some_and(Cancellation::is_cancelled)
@@ -2102,7 +2102,7 @@ pub(crate) fn cancel_before_dispatch(
     let ctx = ctx.clone();
     let session_id = session_id.clone();
     let key = key.clone();
-    run_write(store, WriteOptions::default(), move |tx| {
+    run_write(store, WriteOptions::settlement(), move |tx| {
         let session = tx
             .sessions()
             .session(&session_id)?
@@ -2268,7 +2268,7 @@ fn record_observed_operation_update(
     let ctx_for_write = ctx.clone();
     let session_for_write = session_id.clone();
     let operation_for_write = operation_id.clone();
-    let committed = run_write(store, WriteOptions::default(), move |tx| {
+    let committed = run_write(store, WriteOptions::observed(), move |tx| {
         let session = tx
             .sessions()
             .session(&session_for_write)?

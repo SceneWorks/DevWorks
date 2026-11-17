@@ -1023,7 +1023,7 @@ impl PackageService {
                     None
                 };
                 let service = self.clone_ports();
-                let produced = run_write(&*self.store, WriteOptions::default(), move |tx| {
+                let produced = run_write(&*self.store, WriteOptions::host_state(), move |tx| {
                     let Some(source) = tx
                         .packages()
                         .proposal_for(&package_id, &digest)?

@@ -142,7 +142,7 @@ fn ready(
 fn private_import_pages_publish_atomically_reopen_and_reject_stale_counts() {
     let h = Harness::new();
     let store = h.store();
-    let d = run_write(&store, WriteOptions::default(), |tx| {
+    let d = run_write(&store, WriteOptions::fixture(), |tx| {
         let d = draft(tx, "streamed")?;
         let body = capture(tx, &d, 0)?;
         for n in 1..=501 {
@@ -182,7 +182,7 @@ fn private_import_pages_publish_atomically_reopen_and_reject_stale_counts() {
     );
     let rejected = d.clone();
     assert!(
-        run_write(&store, WriteOptions::default(), move |tx| tx
+        run_write(&store, WriteOptions::fixture(), move |tx| tx
             .conventions()
             .publish_convention_import(
                 &rejected.operation_id,
@@ -195,7 +195,7 @@ fn private_import_pages_publish_atomically_reopen_and_reject_stale_counts() {
     assert!(read(&store, |r| r.artifacts().artifact(&id("streamed-entry-0"))).is_none());
     h.raw().execute_batch("CREATE TRIGGER fail_convention_import BEFORE INSERT ON convention_heads WHEN NEW.id='streamed' BEGIN SELECT RAISE(ABORT,'injected publication failure'); END;").unwrap();
     let failing = d.clone();
-    run_write(&store, WriteOptions::default(), move |tx| {
+    run_write(&store, WriteOptions::fixture(), move |tx| {
         assert!(
             tx.conventions()
                 .publish_convention_import(
@@ -223,7 +223,7 @@ fn private_import_pages_publish_atomically_reopen_and_reject_stale_counts() {
         .execute_batch("DROP TRIGGER fail_convention_import")
         .unwrap();
     let publishing = d.clone();
-    run_write(&store, WriteOptions::default(), move |tx| {
+    run_write(&store, WriteOptions::fixture(), move |tx| {
         tx.conventions().publish_convention_import(
             &publishing.operation_id,
             publishing.revision,
@@ -267,7 +267,7 @@ fn private_import_pages_publish_atomically_reopen_and_reject_stale_counts() {
 fn cancelled_import_cleanup_is_bounded_and_never_exposes_private_artifacts() {
     let h = Harness::new();
     let store = h.store();
-    run_write(&store, WriteOptions::default(), |tx| {
+    run_write(&store, WriteOptions::fixture(), |tx| {
         let d = draft(tx, "abandoned")?;
         let a = capture(tx, &d, 0)?;
         let b = capture(tx, &d, 1)?;

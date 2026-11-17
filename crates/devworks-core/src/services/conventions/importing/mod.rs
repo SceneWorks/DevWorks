@@ -52,7 +52,7 @@ impl ImportService {
     ) -> Result<T, StorageError> {
         let _phase = self.closed.enter()?;
         let closed = self.closed.clone();
-        run_write(self.store.as_ref(), WriteOptions::default(), move |tx| {
+        run_write(self.store.as_ref(), WriteOptions::host_state(), move |tx| {
             if closed.is_closed() {
                 return Err(StorageError::Cancelled);
             }

@@ -66,7 +66,7 @@ impl PurgeWorker {
             let owner = self.ids.next_id(IdKind::Operation);
             let (manifest, id, claim) =
                 (effect.manifest_id.clone(), effect.id.clone(), owner.clone());
-            let admitted = run_write(&*self.store, WriteOptions::default(), move |tx| {
+            let admitted = run_write(&*self.store, WriteOptions::host_state(), move |tx| {
                 let until = tx
                     .now_ms()
                     .checked_add(30_000)
@@ -91,7 +91,7 @@ impl PurgeWorker {
             };
             let manifest = admitted.manifest_id;
             let id = admitted.id;
-            run_write(&*self.store, WriteOptions::default(), move |tx| {
+            run_write(&*self.store, WriteOptions::host_state(), move |tx| {
                 tx.projects()
                     .settle_purge_effect(&manifest, &id, &owner, outcome)
             })?;

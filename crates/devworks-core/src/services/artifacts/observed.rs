@@ -156,7 +156,7 @@ impl ArtifactService {
         let files = self.files.clone();
         let (owned_ctx, owned, authorization) =
             (ctx.clone(), staged.clone(), authorization.clone());
-        let outcome = run_write(store, WriteOptions::default(), move |tx| {
+        let outcome = run_write(store, WriteOptions::observed(), move |tx| {
             // Everything the recording writes sits behind one savepoint: a typed refusal found
             // part-way (the storage limit is only known once the bytes are counted) rolls it back
             // before the refusal is returned, so nothing of a refused publication commits.

@@ -44,7 +44,7 @@ impl ConnectionService {
         let closed = self.lifecycle.closed.clone();
         // The queue is the publication barrier. Never wait for its writer while holding a
         // product lock: configure handlers run on that writer and also inspect lifecycle.
-        run_write(self.store.as_ref(), WriteOptions::default(), move |tx| {
+        run_write(self.store.as_ref(), WriteOptions::host_state(), move |tx| {
             if closed.load(Ordering::SeqCst) {
                 return Err(StorageError::Cancelled);
             }
@@ -82,7 +82,7 @@ impl ConnectionService {
         let handle = self.ids.next_id(IdKind::Credential);
         let candidate = handle.clone();
         let before = seen.clone();
-        run_write(self.store.as_ref(), WriteOptions::default(), move |tx| {
+        run_write(self.store.as_ref(), WriteOptions::host_state(), move |tx| {
             if closed.load(Ordering::SeqCst) {
                 return Err(StorageError::Cancelled);
             }
@@ -261,7 +261,7 @@ impl ConnectionService {
         }
         // A writer barrier drains previously accepted publications. Later callbacks see
         // closed before touching durable state; no lifecycle lock is needed on the writer.
-        run_write(self.store.as_ref(), WriteOptions::default(), |_| Ok(()))?;
+        run_write(self.store.as_ref(), WriteOptions::host_state(), |_| Ok(()))?;
         let owners = self
             .lifecycle
             .owners
@@ -282,7 +282,7 @@ impl ConnectionService {
         };
         for owner in owners {
             let owned = owner.clone();
-            let unknown = run_write(self.store.as_ref(), WriteOptions::default(), move |tx| {
+            let unknown = run_write(self.store.as_ref(), WriteOptions::host_state(), move |tx| {
                 let Some(op) = tx.operations().operation(&owned.operation)? else {
                     return Ok(false);
                 };

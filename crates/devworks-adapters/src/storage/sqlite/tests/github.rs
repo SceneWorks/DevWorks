@@ -201,7 +201,7 @@ fn task(tx: &mut dyn WriteTransaction, name: &str, project: &str) -> Result<Root
 fn github_discovery_scoped_facts_full_bodies_and_endpoint_cursors_survive_reopen() {
     let h = Harness::new();
     let store = h.store();
-    let (visible, intake) = run_write(&store, WriteOptions::default(), |tx| {
+    let (visible, intake) = run_write(&store, WriteOptions::fixture(), |tx| {
         setup(tx)?;
         tx.github()
             .put_github_repository(&metadata("not-registered", None), None)?;
@@ -347,7 +347,7 @@ fn github_discovery_scoped_facts_full_bodies_and_endpoint_cursors_survive_reopen
 fn one_global_clock_claim_lost_ack_and_restart_never_accumulate_burst_credits() {
     let h = Harness::new();
     let store = Arc::new(h.store());
-    let (rows, ops) = run_write(&*store, WriteOptions::default(), |tx| {
+    let (rows, ops) = run_write(&*store, WriteOptions::fixture(), |tx| {
         setup(tx)?;
         let mut rows = vec![];
         let mut ops = vec![];
@@ -368,7 +368,7 @@ fn one_global_clock_claim_lost_ack_and_restart_never_accumulate_burst_credits() 
             let op = ops[n].clone();
             std::thread::spawn(move || {
                 gate.wait();
-                run_write(&*s, WriteOptions::default(), move |tx| {
+                run_write(&*s, WriteOptions::fixture(), move |tx| {
                     tx.github().admit_github_issue(&row.key, 1, 1, &op)
                 })
             })
@@ -389,7 +389,7 @@ fn one_global_clock_claim_lost_ack_and_restart_never_accumulate_burst_credits() 
         .unwrap()
         .clone();
     let saved = winner.clone();
-    run_write(&*store, WriteOptions::default(), move |tx| {
+    run_write(&*store, WriteOptions::fixture(), move |tx| {
         let replay = tx
             .github()
             .admit_github_issue(&saved.issue.key, 1, 1, &saved.operation.id)?
@@ -425,7 +425,7 @@ fn one_global_clock_claim_lost_ack_and_restart_never_accumulate_burst_credits() 
         .map(|(r, o)| (r.clone(), o.clone()))
         .unwrap();
     let w = waiting.clone();
-    run_write(&*store, WriteOptions::default(), move |tx| {
+    run_write(&*store, WriteOptions::fixture(), move |tx| {
         let c = tx.github().github_intake_clock()?;
         let admitted = tx
             .github()
@@ -437,7 +437,7 @@ fn one_global_clock_claim_lost_ack_and_restart_never_accumulate_burst_credits() 
     .unwrap();
     let third = rows[2].clone();
     let third_op = ops[2].clone();
-    run_write(&*store, WriteOptions::default(), move |tx| {
+    run_write(&*store, WriteOptions::fixture(), move |tx| {
         let c = tx.github().github_intake_clock()?;
         assert!(
             tx.github()
@@ -482,7 +482,7 @@ fn resolution_ops(
 fn project_obligations_and_immutable_completion_witnesses_use_only_actual_effect_journal() {
     let h = Harness::new();
     let store = h.store();
-    let binding = run_write(&store, WriteOptions::default(), |tx| {
+    let binding = run_write(&store, WriteOptions::fixture(), |tx| {
         setup(tx)?;
         let issue = incoming(tx, "shared", 42, "issue-snapshot")?;
         let a = task(tx, "work-a", "a")?;
@@ -657,7 +657,7 @@ fn two_checkout_bindings_preserve_one_canonical_intake_across_detach_rebind_and_
 {
     let h = Harness::new();
     let store = h.store();
-    let (old, new) = run_write(&store, WriteOptions::default(), |tx| {
+    let (old, new) = run_write(&store, WriteOptions::fixture(), |tx| {
         setup(tx)?;
         let second = StoredRepository {
             id: id("second-checkout"),
@@ -847,7 +847,7 @@ fn two_checkout_bindings_preserve_one_canonical_intake_across_detach_rebind_and_
 fn provider_etag_is_not_snapshot_identity_and_direct_state_updates_cannot_bypass_pacing() {
     let h = Harness::new();
     let store = h.store();
-    run_write(&store, WriteOptions::default(), |tx| {
+    run_write(&store, WriteOptions::fixture(), |tx| {
         setup(tx)?;
         let original = incoming(tx, "shared", 5, "old-snapshot")?;
         let op = triage(tx, &original, "old-snapshot-triage")?;
@@ -926,7 +926,7 @@ fn adjudicated_obligation_retirement_preserves_history_and_invalidates_old_compl
  {
     let h = Harness::new();
     let store = h.store();
-    run_write(&store,WriteOptions::default(),|tx|{
+    run_write(&store,WriteOptions::fixture(),|tx|{
   setup(tx)?;let issue=incoming(tx,"shared",88,"retirement-source")?;let a=task(tx,"misrouted-work","a")?;let b=task(tx,"right-work","b")?;tx.github().link_github_work(&issue.key,&a,1)?;tx.github().link_github_work(&issue.key,&b,1)?;let generation=tx.github().github_obligation_revision(&issue.key)?;
   let digest="e".repeat(64);let(comment,close)=resolution_ops(tx,&issue.key,&digest,"old-scope")?;let completion=StoredGithubResolution{id:id("old-completion"),key:issue.key.clone(),state:"Draft".into(),completion_digest:digest,source_revision:issue.remote_revision.clone(),obligation_revision:generation,summary_digest:"f".repeat(64),comment_operation_id:comment,close_operation_id:close};tx.github().insert_github_resolution(&completion)?;
   let original_actor=devworks_core::protocol::ActorId(id("original-agent"));tx.actors().register(&original_actor,devworks_core::context::PrincipalKind::Agent,"Original agent")?;

@@ -122,7 +122,7 @@ async fn drive_agent_turn(
     }
     let control = runtime.runs().service().clone();
     let session = session_id.clone();
-    let turn = match store::write(runtime.store(), move |tx| {
+    let turn = match store::write(runtime.store(), WriteOptions::host_state(), move |tx| {
         control.begin_turn(tx, &session, &assignment_id, &activation_id, epoch)
     })
     .await
@@ -164,7 +164,7 @@ async fn drive_agent_turn(
     let control = runtime.runs().service().clone();
     let turn_id = turn.turn_id;
     let completed = result.is_ok() && !cancellation.is_cancelled();
-    let end = store::write(runtime.store(), move |tx| {
+    let end = store::write(runtime.store(), WriteOptions::host_state(), move |tx| {
         control.end_turn(tx, &session_id, &turn_id, completed)
     })
     .await;
@@ -211,7 +211,7 @@ async fn acknowledge_native_instructions(
         .ok_or(StorageError::ScopeDenied)?
         .clone();
     let execution = activation_id.clone();
-    let ack = store::write(runtime.store(), move |tx| {
+    let ack = store::write(runtime.store(), WriteOptions::observed(), move |tx| {
         let assignment = tx
             .runs()
             .assignment(&coordinator_assignment)?
@@ -1628,7 +1628,7 @@ pub fn ensure_membership_context(
     let root_id = agent.root_id.clone();
     let committed = run_write(
         runtime.store().as_ref(),
-        WriteOptions::default(),
+        WriteOptions::observed(),
         move |tx| {
             let session = tx
                 .sessions()
@@ -1713,7 +1713,7 @@ fn append_empty_handoff_boundary(
     let assignment_id = assignment_id.clone();
     let committed = run_write(
         runtime.store().as_ref(),
-        WriteOptions::default(),
+        WriteOptions::observed(),
         move |tx| {
             let session = tx
                 .sessions()

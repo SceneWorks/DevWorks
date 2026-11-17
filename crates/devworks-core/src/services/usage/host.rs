@@ -59,7 +59,7 @@ impl AccountingWriteFence {
         if *closed {
             return Err(StorageError::Cancelled);
         }
-        let result = run_write(store, WriteOptions::default(), work);
+        let result = run_write(store, WriteOptions::observed(), work);
         if let Ok(Admission::Admitted { attempt, .. }) = &result {
             self.admitted
                 .lock()
@@ -79,7 +79,7 @@ impl AccountingWriteFence {
         if *closed {
             return Err(StorageError::Cancelled);
         }
-        let result = run_write(store, WriteOptions::default(), work);
+        let result = run_write(store, WriteOptions::observed(), work);
         drop(closed);
         result
     }

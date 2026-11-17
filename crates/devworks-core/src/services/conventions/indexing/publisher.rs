@@ -290,7 +290,7 @@ impl IndexService {
             WriteOptions {
                 cancellation: Some(cancel.clone()),
                 deadline_ms: deadline,
-                ..Default::default()
+                ..WriteOptions::host_state()
             },
             move |tx| {
                 if closed.is_closed()

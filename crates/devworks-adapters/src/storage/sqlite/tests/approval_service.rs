@@ -49,7 +49,7 @@ impl Fx {
     fn new() -> Self {
         let h = Harness::new();
         let s = h.store();
-        run_write(&s, WriteOptions::default(), |tx| {
+        run_write(&s, WriteOptions::fixture(), |tx| {
             for (w, k) in [
                 ("user", PrincipalKind::Human),
                 ("agent", PrincipalKind::Agent),
@@ -135,7 +135,7 @@ impl Fx {
             json!([{"key":"delivery.autoMerge","value":{"schema":d.schema_ref(),"value":false}}]),
         )
         .unwrap();
-        run_write(&self.s, WriteOptions::default(), move |tx| {
+        run_write(&self.s, WriteOptions::fixture(), move |tx| {
             devworks_core::settings::service::stage_proposal(
                 tx,
                 &context,
@@ -222,7 +222,7 @@ fn settings_proposals_whose_values_would_be_redacted_are_refused_before_review()
     };
     let stage = |entries: Vec<SettingAssignment>| {
         let ctx = f.ctx("agent");
-        run_write(&f.s, WriteOptions::default(), move |tx| {
+        run_write(&f.s, WriteOptions::fixture(), move |tx| {
             Ok(
                 match devworks_core::settings::service::stage_proposal(
                     tx,
@@ -349,7 +349,7 @@ fn stale_settings_content_cannot_approve_a_new_revision() {
     let f = Fx::new();
     let p = f.stage();
     let context = f.ctx("user");
-    run_write(&f.s, WriteOptions::default(), move |tx| {
+    run_write(&f.s, WriteOptions::fixture(), move |tx| {
         let current = tx
             .configuration()
             .current(&ConfigScope::Workspace, "settings")?;
@@ -405,7 +405,7 @@ fn large_typed_plan_inspection_uses_frozen_snapshot_and_list_stays_compact_acros
         serde_json::from_value(plan.clone()).unwrap();
     let digest = devworks_core::services::work::plan_digest(&typed);
     let saved = plan.clone();
-    run_write(&f.s, WriteOptions::default(), move |tx| {
+    run_write(&f.s, WriteOptions::fixture(), move |tx| {
         tx.projects().insert_project(&StoredProject {
             id: devworks_core::protocol::ProjectId(id("project")),
             name: "Project".into(),
@@ -481,7 +481,7 @@ fn large_typed_plan_inspection_uses_frozen_snapshot_and_list_stays_compact_acros
         json!({"scope":{"kind":"Workspace"},"page":{"limit":20}}),
     );
     assert!(serde_json::to_vec(&listed).unwrap().len() < 2000);
-    run_write(&f.s, WriteOptions::default(), |tx| {
+    run_write(&f.s, WriteOptions::fixture(), |tx| {
         let mut slot = tx.work().feature_plan(&id("feature"))?.unwrap();
         slot.revision += 1;
         slot.pending = Some(json!({"draft":{"changed":true},"digest":"changed"}));
@@ -526,7 +526,7 @@ fn legal_multibyte_settings_snapshot_exceeds_dynamic_json_but_inspects_without_t
     let wanted = serde_json::to_value(&entries).unwrap();
     assert!(wanted.to_string().len() > 1048576);
     let ctx = f.ctx("agent");
-    let p = run_write(&f.s, WriteOptions::default(), move |tx| {
+    let p = run_write(&f.s, WriteOptions::fixture(), move |tx| {
         devworks_core::settings::service::stage_proposal(
             tx,
             &ctx,
@@ -554,7 +554,7 @@ fn saved_project_archive_preserves_workspace_agent_scope_and_replays_exact_recei
     let f = Fx::new();
     let human = f.ctx("user");
     let agent = f.ctx("agent");
-    run_write(&f.s, WriteOptions::default(), move |tx| {
+    run_write(&f.s, WriteOptions::fixture(), move |tx| {
         devworks_core::authority::service::bind_principal(
             tx,
             &human,
@@ -686,7 +686,7 @@ fn saved_project_archive_preserves_workspace_agent_scope_and_replays_exact_recei
         "Unknown"
     );
     let human = f.ctx("user");
-    run_write(&f.s, WriteOptions::default(), move |tx| {
+    run_write(&f.s, WriteOptions::fixture(), move |tx| {
         devworks_core::authority::service::revoke_principal(tx, &human, &actor("agent"), 1)
             .map_err(|e| StorageError::InvalidRecord(format!("{e:?}")))?;
         Ok(())

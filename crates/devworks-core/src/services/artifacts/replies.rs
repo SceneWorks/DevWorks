@@ -404,7 +404,7 @@ impl ReceiptReplies {
         let files = self.artifacts.files.clone();
         let (c, s, operation) = (claim.clone(), staged.clone(), stored.operation.clone());
         let project = event.project_id;
-        let committed = run_write(store, WriteOptions::default(), move |tx| {
+        let committed = run_write(store, WriteOptions::observed(), move |tx| {
             commit(
                 tx,
                 &c,
@@ -502,7 +502,7 @@ impl ReceiptReplies {
         intent: Intent,
     ) -> Result<ReplyOutcome, StorageError> {
         let c = claim.clone();
-        let committed = run_write(store, WriteOptions::default(), move |tx| {
+        let committed = run_write(store, WriteOptions::host_state(), move |tx| {
             if !claimed(tx, &c, &fence)? {
                 return Ok(Committed::Stale);
             }

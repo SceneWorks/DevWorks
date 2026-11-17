@@ -1076,7 +1076,7 @@ fn export_staging_attribution_survives_restart_and_normal_owner_reconciles_compl
         boot_id: info.boot_id,
         created_at_ms: 1,
     };
-    run_write(parts.sqlite.as_ref(), WriteOptions::default(), move |tx| {
+    run_write(parts.sqlite.as_ref(), WriteOptions::fixture(), move |tx| {
         tx.projects().reserve_project_managed_file(&pending)
     })
     .unwrap();
@@ -1159,7 +1159,7 @@ fn a_sweep_never_retires_an_export_this_boot_is_still_writing() {
         boot_id: info.boot_id,
         created_at_ms: 1,
     };
-    run_write(parts.sqlite.as_ref(), WriteOptions::default(), move |tx| {
+    run_write(parts.sqlite.as_ref(), WriteOptions::fixture(), move |tx| {
         tx.projects().reserve_project_managed_file(&in_flight)
     })
     .unwrap();

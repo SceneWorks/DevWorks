@@ -38,10 +38,9 @@ use crate::ports::storage::{
     ActorRegistry, ArtifactRepository, AuthorityGrant, AuthorityLedger, AuthorityRead,
     CommandLedger, CommandLedgerRead, ConfigurationRepository, DurableQueue, EventFilter,
     EventPage, EventRecord, GrantLedger, GrantRead, GrantRecord, HistoryLog, HistoryRead,
-    LedgerEntry, NewAuthorityGrant, NewEvent, NewGrant, NewPrincipalBinding, OperationJournal,
-    PackageHandlerLedger, PrincipalBinding, ReadOptions, ReceiptReply, RegisteredRepository,
-    RevisionConflict, Savepoint, SessionRepository, StorageError, StoreInfo, WriteOptions,
-    WriteTransaction, read_snapshot, run_write,
+    LedgerEntry, NewEvent, OperationJournal, PackageHandlerLedger, PrincipalBinding, ReadOptions,
+    ReceiptReply, RegisteredRepository, RevisionConflict, Savepoint, SessionRepository,
+    StorageError, StoreInfo, WriteOptions, WriteTransaction, read_snapshot, run_write,
 };
 use crate::ports::{
     AuthorityDenial, AuthorityPort, AuthorityRequest, Authorization, CommandHandler, Decided,
@@ -441,7 +440,7 @@ impl Gateway<'_> {
         raw: &[u8],
         handler: Arc<dyn CommandHandler>,
     ) -> CommandOutcome {
-        self.command_with(ctx, operation, raw, handler, WriteOptions::default())
+        self.command_with(ctx, operation, raw, handler, WriteOptions::command())
     }
 
     /// [`Gateway::command`] with explicit write admission options (cancellation, deadline).
@@ -798,7 +797,7 @@ impl Gateway<'_> {
         correlation_id: &CorrelationId,
     ) {
         let (ctx, correlation) = (ctx.clone(), correlation_id.0.as_str().to_owned());
-        let _ = run_write(self.store, WriteOptions::default(), move |tx| {
+        let _ = run_write(self.store, WriteOptions::authority(), move |tx| {
             if &tx.store().store_id != ctx.store_id()
                 || tx.actors().actor_kind(ctx.principal())?.is_none()
             {
@@ -990,11 +989,10 @@ fn unit_of_work(
                 let host = authorization.authority_grants().iter().map(|g| (true, g));
                 for (authority, grant) in resume.chain(host) {
                     let spent = if authority {
-                        tx.authority()
-                            .consume_grant(grant, ctx.principal())
-                            .map(|_| ())
+                        crate::authority::consume_host_grant(tx, grant, ctx.principal()).map(|_| ())
                     } else {
-                        tx.grants().consume(grant, ctx.principal()).map(|_| ())
+                        crate::authority::consume_resume_grant(tx, grant, ctx.principal())
+                            .map(|_| ())
                     };
                     match spent {
                         Ok(_) => {}
@@ -1242,17 +1240,6 @@ impl GrantRead for HandlerTx<'_> {
         self.inner.borrow_mut().grants().grant(id)
     }
 }
-impl GrantLedger for HandlerTx<'_> {
-    fn issue(&mut self, _: NewGrant) -> Result<GrantRecord, StorageError> {
-        Err(authority_owned())
-    }
-    fn consume(&mut self, _: &GrantUse, _: &ActorId) -> Result<GrantRecord, StorageError> {
-        Err(authority_owned())
-    }
-    fn revoke(&mut self, _: &Id, _: i64) -> Result<GrantRecord, StorageError> {
-        Err(authority_owned())
-    }
-}
 impl AuthorityRead for HandlerTx<'_> {
     fn principal(&self, actor: &ActorId) -> Result<Option<PrincipalBinding>, StorageError> {
         self.inner.borrow_mut().authority().principal(actor)
@@ -1265,32 +1252,6 @@ impl AuthorityRead for HandlerTx<'_> {
             .borrow_mut()
             .authority()
             .registered_repositories()
-    }
-}
-impl AuthorityLedger for HandlerTx<'_> {
-    fn bind_principal(
-        &mut self,
-        _: NewPrincipalBinding,
-        _: Option<i64>,
-    ) -> Result<PrincipalBinding, StorageError> {
-        Err(authority_owned())
-    }
-    fn revoke_principal(&mut self, _: &ActorId, _: i64) -> Result<PrincipalBinding, StorageError> {
-        Err(authority_owned())
-    }
-    fn issue_grant(&mut self, _: NewAuthorityGrant) -> Result<AuthorityGrant, StorageError> {
-        Err(authority_owned())
-    }
-    fn revoke_grant(
-        &mut self,
-        _: &Id,
-        _: i64,
-        _: &ActorId,
-    ) -> Result<AuthorityGrant, StorageError> {
-        Err(authority_owned())
-    }
-    fn consume_grant(&mut self, _: &GrantUse, _: &ActorId) -> Result<AuthorityGrant, StorageError> {
-        Err(authority_owned())
     }
 }
 impl CommandLedgerRead for HandlerTx<'_> {
@@ -1783,7 +1744,7 @@ impl WriteTransaction for HandlerTx<'_> {
     // Grant and authority reads pass through; their writes are refused here and reach the
     // store only through the authority seams (which hold the capability) or the gateway's own
     // consumption step, which runs on the unwrapped transaction.
-    fn grants(&mut self) -> &mut dyn GrantLedger {
+    fn grants(&mut self) -> &mut dyn GrantRead {
         self
     }
     fn grant_writes(
@@ -1802,7 +1763,7 @@ impl WriteTransaction for HandlerTx<'_> {
     fn configuration(&mut self) -> &mut dyn ConfigurationRepository {
         self.inner.get_mut().configuration()
     }
-    fn authority(&mut self) -> &mut dyn AuthorityLedger {
+    fn authority(&mut self) -> &mut dyn AuthorityRead {
         self
     }
     fn authority_writes(

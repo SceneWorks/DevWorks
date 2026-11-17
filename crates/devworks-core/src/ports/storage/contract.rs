@@ -67,7 +67,7 @@ fn write<T: Send + 'static>(
     s: &dyn ApplicationStore,
     f: impl FnOnce(&mut dyn WriteTransaction) -> Result<T, StorageError> + Send + 'static,
 ) -> Result<T, StorageError> {
-    run_write(s, WriteOptions::default(), f)
+    run_write(s, WriteOptions::fixture(), f)
 }
 fn read<T>(
     s: &dyn ApplicationStore,
@@ -719,7 +719,7 @@ pub fn cancellation_and_deadlines(h: &mut dyn StoreHarness) {
         &*s,
         WriteOptions {
             cancellation: Some(token),
-            ..Default::default()
+            ..WriteOptions::fixture()
         },
         move |tx| {
             r2.fetch_add(1, Ordering::SeqCst);
@@ -738,7 +738,7 @@ pub fn cancellation_and_deadlines(h: &mut dyn StoreHarness) {
         &*s,
         WriteOptions {
             deadline_ms: Some(past),
-            ..Default::default()
+            ..WriteOptions::fixture()
         },
         |tx| event(tx, "x", "Changed"),
     );
@@ -751,7 +751,7 @@ pub fn cancellation_and_deadlines(h: &mut dyn StoreHarness) {
         &*s,
         WriteOptions {
             cancellation: Some(token),
-            ..Default::default()
+            ..WriteOptions::fixture()
         },
         move |tx| {
             let e = event(tx, "x", "Changed")?;
@@ -768,7 +768,7 @@ pub fn cancellation_and_deadlines(h: &mut dyn StoreHarness) {
         &*s,
         WriteOptions {
             cancellation: Some(token.clone()),
-            ..Default::default()
+            ..WriteOptions::fixture()
         },
         |tx| event(tx, "y", "Changed"),
     )

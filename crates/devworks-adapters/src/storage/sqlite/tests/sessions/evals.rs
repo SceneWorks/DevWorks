@@ -683,7 +683,7 @@ impl devworks_core::ports::CommandHandler for ChangeWorkAfterPreparation {
         env: &devworks_core::ports::Preparation<'_>,
     ) -> Result<Option<devworks_core::ports::Prepared>, StorageError> {
         let prepared = self.inner.prepare(ctx, command, env)?;
-        run_write(&*self.store, WriteOptions::default(), |tx| {
+        run_write(&*self.store, WriteOptions::fixture(), |tx| {
             let mut work = tx.work().work(&id("root-a"))?.unwrap();
             let prior_revision = work.revision;
             work.title = "Changed by concurrent writer".into();

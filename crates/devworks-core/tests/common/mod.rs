@@ -481,8 +481,15 @@ impl WriteTransaction for MemTx<'_> {
     fn queue(&mut self) -> &mut dyn DurableQueue {
         &mut self.state.queue
     }
-    fn grants(&mut self) -> &mut dyn GrantLedger {
+    fn grants(&mut self) -> &mut dyn GrantRead {
         &mut self.unsupported
+    }
+    fn grant_writes(
+        &mut self,
+        _: &devworks_core::authority::AuthorityCapability,
+        _: &ActorId,
+    ) -> Result<&mut dyn GrantLedger, StorageError> {
+        Ok(&mut self.unsupported)
     }
     fn packages(&mut self) -> &mut dyn PackageHandlerLedger {
         &mut self.unsupported
@@ -490,8 +497,15 @@ impl WriteTransaction for MemTx<'_> {
     fn configuration(&mut self) -> &mut dyn ConfigurationRepository {
         &mut self.unsupported
     }
-    fn authority(&mut self) -> &mut dyn AuthorityLedger {
+    fn authority(&mut self) -> &mut dyn AuthorityRead {
         &mut self.unsupported
+    }
+    fn authority_writes(
+        &mut self,
+        _: &devworks_core::authority::AuthorityCapability,
+        _: &ActorId,
+    ) -> Result<&mut dyn AuthorityLedger, StorageError> {
+        Ok(&mut self.unsupported)
     }
     fn artifacts(&mut self) -> &mut dyn ArtifactRepository {
         &mut self.unsupported

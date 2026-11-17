@@ -459,7 +459,7 @@ fn dedicated<T: Send + 'static>(
     store: &dyn ApplicationStore,
     work: impl FnOnce(&mut dyn WriteTransaction) -> Result<T, DeletionRefusal> + Send + 'static,
 ) -> Result<T, DeletionRefusal> {
-    run_write(store, WriteOptions::default(), move |tx| Ok(work(tx)))
+    run_write(store, WriteOptions::authority(), move |tx| Ok(work(tx)))
         .map_err(DeletionRefusal::Storage)?
 }
 

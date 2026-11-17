@@ -102,7 +102,7 @@ impl ManagedFileCustody {
     }
 
     fn finish(&self, project: ProjectId, id: Id) -> Result<(), StorageError> {
-        run_write(self.store.as_ref(), WriteOptions::default(), move |tx| {
+        run_write(self.store.as_ref(), WriteOptions::host_state(), move |tx| {
             tx.projects().finish_project_managed_file(&project, &id)
         })
     }
@@ -131,7 +131,7 @@ impl ManagedFileCustody {
             created_at_ms,
         };
         let saved = reservation.clone();
-        run_write(self.store.as_ref(), WriteOptions::default(), move |tx| {
+        run_write(self.store.as_ref(), WriteOptions::host_state(), move |tx| {
             tx.projects().reserve_project_managed_file(&saved)
         })?;
         Ok(reservation)
@@ -151,7 +151,7 @@ impl ManagedFileCustody {
             witness,
             created_at_ms: reserved.created_at_ms,
         };
-        run_write(self.store.as_ref(), WriteOptions::default(), move |tx| {
+        run_write(self.store.as_ref(), WriteOptions::observed(), move |tx| {
             tx.projects().register_project_managed_file(&published)
         })
     }
@@ -248,7 +248,7 @@ impl ManagedFileCustody {
         let root = write.root();
         let reserved_id = id.clone();
         let reserved_path = relative.clone();
-        let reservation = run_write(self.store.as_ref(), WriteOptions::default(), move |tx| {
+        let reservation = run_write(self.store.as_ref(), WriteOptions::host_state(), move |tx| {
             let project = match owner {
                 StagingOwner::Project(project) => project,
                 StagingOwner::Session(None) => None,
@@ -299,7 +299,7 @@ impl ManagedFileCustody {
         if let Some(reserved) = &reservation {
             let project = reserved.project_id.clone();
             let id = id.clone();
-            run_write(self.store.as_ref(), WriteOptions::default(), move |tx| {
+            run_write(self.store.as_ref(), WriteOptions::host_state(), move |tx| {
                 tx.projects()
                     .begin_project_managed_file_write(&project, &id, identity)
             })
@@ -328,7 +328,7 @@ impl ManagedFileCustody {
                 witness,
                 created_at_ms: reserved.created_at_ms,
             };
-            run_write(self.store.as_ref(), WriteOptions::default(), move |tx| {
+            run_write(self.store.as_ref(), WriteOptions::host_state(), move |tx| {
                 tx.projects().register_project_managed_file(&published)
             })
             .map_err(|_| "staged-file publication could not be recorded".to_owned())?;
@@ -385,7 +385,7 @@ impl ManagedFileCustody {
         let root: FileIdentity = files.derived_root()?;
         let project = project.clone();
         let relative_path = key.to_owned();
-        let reserved = run_write(self.store.as_ref(), WriteOptions::default(), move |tx| {
+        let reserved = run_write(self.store.as_ref(), WriteOptions::host_state(), move |tx| {
             let info = tx.store().clone();
             let reserved = ProjectManagedFileReservation {
                 id: tx.new_id(IdKind::Artifact),

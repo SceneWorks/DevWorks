@@ -1368,8 +1368,15 @@ impl WriteTransaction for Unit<'_> {
     fn queue(&mut self) -> &mut dyn DurableQueue {
         self
     }
-    fn grants(&mut self) -> &mut dyn GrantLedger {
+    fn grants(&mut self) -> &mut dyn GrantRead {
         self
+    }
+    fn grant_writes(
+        &mut self,
+        _: &devworks_core::authority::AuthorityCapability,
+        _: &ActorId,
+    ) -> Result<&mut dyn GrantLedger, StorageError> {
+        Ok(self)
     }
     fn packages(&mut self) -> &mut dyn PackageHandlerLedger {
         self
@@ -1377,8 +1384,15 @@ impl WriteTransaction for Unit<'_> {
     fn configuration(&mut self) -> &mut dyn ConfigurationRepository {
         self
     }
-    fn authority(&mut self) -> &mut dyn AuthorityLedger {
+    fn authority(&mut self) -> &mut dyn AuthorityRead {
         self
+    }
+    fn authority_writes(
+        &mut self,
+        _: &devworks_core::authority::AuthorityCapability,
+        _: &ActorId,
+    ) -> Result<&mut dyn AuthorityLedger, StorageError> {
+        Ok(self)
     }
     fn artifacts(&mut self) -> &mut dyn ArtifactRepository {
         self

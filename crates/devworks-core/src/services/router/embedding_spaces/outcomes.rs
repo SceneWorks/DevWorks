@@ -42,7 +42,7 @@ impl EmbeddingSpaceService {
     ) -> Result<bool, StorageError> {
         let id = supplied.id.clone();
         let fence = supplied.latest_attempt().map(AttemptRecord::fence);
-        run_write(self.store.as_ref(), WriteOptions::default(), move |tx| {
+        run_write(self.store.as_ref(), WriteOptions::observed(), move |tx| {
             let operation = tx
                 .operations()
                 .operation(&id)?

@@ -441,7 +441,7 @@ impl SessionService {
     ) -> Result<(), Failure> {
         let (ctx, s) = (ctx.clone(), session.clone());
         let query_id = query.query_id().0.as_str().to_owned();
-        run_write(&*self.audit, WriteOptions::default(), move |tx| {
+        run_write(&*self.audit, WriteOptions::observed(), move |tx| {
             if &tx.store().store_id != ctx.store_id() {
                 return Err(StorageError::ScopeDenied);
             }

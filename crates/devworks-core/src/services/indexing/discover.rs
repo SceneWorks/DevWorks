@@ -376,7 +376,7 @@ pub fn scan(
                 };
                 if src.state != missing {
                     let now = env.now();
-                    run_write(&*env.store, WriteOptions::default(), move |tx| {
+                    run_write(&*env.store, WriteOptions::observed(), move |tx| {
                         // Only the identity this scan read: a concurrent observation wins.
                         let current = tx.indexing().repository_source(&src.repository_id)?;
                         if current.as_ref() != Some(&src) {
@@ -483,7 +483,7 @@ fn reconcile(
     let name: String = name.chars().take(256).collect();
     let now = env.now();
     let new_id = env.ids.next_id(IdKind::Repository);
-    run_write(&*env.store, WriteOptions::default(), move |tx| {
+    run_write(&*env.store, WriteOptions::recovery(), move |tx| {
         let existing = tx.indexing().repository_at(&location)?;
         let (id, new) = match existing {
             Some(id) => (id, false),

@@ -34,7 +34,7 @@ fn owned_git_worktrees_preserve_identity_and_reject_stale_updates() {
         last_result: None,
     };
     let first = record.clone();
-    run_write(&store, WriteOptions::default(), move |tx| {
+    run_write(&store, WriteOptions::fixture(), move |tx| {
         tx.projects().insert_project(&StoredProject {
             id: ProjectId(id("project")),
             name: "Project".into(),
@@ -142,7 +142,7 @@ fn owned_git_worktrees_preserve_identity_and_reject_stale_updates() {
     assert!(
         devworks_core::services::git::context::bind_worktree(&store, other, &id("tree")).is_err()
     );
-    run_write(&store, WriteOptions::default(), |tx| {
+    run_write(&store, WriteOptions::fixture(), |tx| {
         tx.work().set_work_repositories(&id("task"), &[])
     })
     .unwrap();
@@ -150,11 +150,11 @@ fn owned_git_worktrees_preserve_identity_and_reject_stale_updates() {
         devworks_core::services::git::context::bind_worktree(&store, ctx.clone(), &id("tree"))
             .is_err()
     );
-    run_write(&store, WriteOptions::default(), |tx| {
+    run_write(&store, WriteOptions::fixture(), |tx| {
         tx.work().set_work_repositories(&id("task"), &[id("repo")])
     })
     .unwrap();
-    run_write(&store, WriteOptions::default(), |tx| {
+    run_write(&store, WriteOptions::fixture(), |tx| {
         tx.projects().set_members(&ProjectId(id("project")), &[])
     })
     .unwrap();
@@ -162,7 +162,7 @@ fn owned_git_worktrees_preserve_identity_and_reject_stale_updates() {
         devworks_core::services::git::context::bind_worktree(&store, ctx.clone(), &id("tree"))
             .is_err()
     );
-    run_write(&store, WriteOptions::default(), |tx| {
+    run_write(&store, WriteOptions::fixture(), |tx| {
         tx.projects()
             .set_members(&ProjectId(id("project")), &[id("repo")])
     })
@@ -171,13 +171,13 @@ fn owned_git_worktrees_preserve_identity_and_reject_stale_updates() {
     changed.revision = 2;
     changed.head.hex = "b".repeat(40);
     let advance = changed.clone();
-    run_write(&store, WriteOptions::default(), move |tx| {
+    run_write(&store, WriteOptions::fixture(), move |tx| {
         tx.git().update_git_worktree(&advance, 1)
     })
     .unwrap();
     let stale = changed.clone();
     assert!(
-        run_write(&store, WriteOptions::default(), move |tx| tx
+        run_write(&store, WriteOptions::fixture(), move |tx| tx
             .git()
             .update_git_worktree(&stale, 1))
         .is_err()
@@ -191,7 +191,7 @@ fn owned_git_worktrees_preserve_identity_and_reject_stale_updates() {
             _ => wrong.work_id = id("other-task"),
         };
         assert!(
-            run_write(&store, WriteOptions::default(), move |tx| tx
+            run_write(&store, WriteOptions::fixture(), move |tx| tx
                 .git()
                 .update_git_worktree(&wrong, 2))
             .is_err()
@@ -200,7 +200,7 @@ fn owned_git_worktrees_preserve_identity_and_reject_stale_updates() {
     changed.revision = 3;
     changed.removed = true;
     let removed = changed.clone();
-    run_write(&store, WriteOptions::default(), move |tx| {
+    run_write(&store, WriteOptions::fixture(), move |tx| {
         tx.git().update_git_worktree(&removed, 2)
     })
     .unwrap();
@@ -218,7 +218,7 @@ fn owned_git_worktrees_preserve_identity_and_reject_stale_updates() {
     let history_ctx = ctx.clone();
     let own_head = changed.head.clone();
     let foreign_template = record.clone();
-    run_write(&store, WriteOptions::default(), move |tx| {
+    run_write(&store, WriteOptions::fixture(), move |tx| {
         let mut project = tx.projects().project(&ProjectId(id("project")))?.unwrap();
         project.id = ProjectId(id("project-b"));
         project.revision = 1;
@@ -306,7 +306,7 @@ fn owned_git_worktrees_preserve_identity_and_reject_stale_updates() {
     changed.revision = 4;
     changed.removed = false;
     assert!(
-        run_write(&store, WriteOptions::default(), move |tx| tx
+        run_write(&store, WriteOptions::fixture(), move |tx| tx
             .git()
             .update_git_worktree(&changed, 3))
         .is_err()

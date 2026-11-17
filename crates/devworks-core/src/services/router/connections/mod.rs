@@ -969,23 +969,31 @@ impl ConnectionService {
             .now()
             .checked_add(STAGED_TTL_MS)
             .ok_or_else(|| SecretError::Failed("settings stage expiry overflow".into()))?;
-        let ready = run_write(self.store.as_ref(), WriteOptions::default(), move |tx| {
-            if referenced(tx.router())?.contains(retired.as_str()) {
-                return Ok(false);
-            }
-            tx.configuration()
-                .retire_settings_secret(&retired, expires, abandon)
-        })
+        let ready = run_write(
+            self.store.as_ref(),
+            WriteOptions::housekeeping(),
+            move |tx| {
+                if referenced(tx.router())?.contains(retired.as_str()) {
+                    return Ok(false);
+                }
+                tx.configuration()
+                    .retire_settings_secret(&retired, expires, abandon)
+            },
+        )
         .map_err(|_| SecretError::Failed("settings credential collection unavailable".into()))?;
         if !ready {
             return Ok(false);
         }
         let deleted = self.noted(self.secrets.delete(&self.key(handle)))?;
         let finished = handle.clone();
-        run_write(self.store.as_ref(), WriteOptions::default(), move |tx| {
-            tx.configuration()
-                .finish_settings_secret_deletion(&finished)
-        })
+        run_write(
+            self.store.as_ref(),
+            WriteOptions::housekeeping(),
+            move |tx| {
+                tx.configuration()
+                    .finish_settings_secret_deletion(&finished)
+            },
+        )
         .map_err(|_| {
             SecretError::Failed("settings credential collection acknowledgement unavailable".into())
         })?;

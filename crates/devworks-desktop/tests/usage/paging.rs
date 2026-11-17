@@ -165,7 +165,7 @@ impl WriterHold {
         let cancel = Cancellation::new();
         let options = WriteOptions {
             cancellation: Some(cancel.clone()),
-            ..Default::default()
+            ..WriteOptions::fixture()
         };
         let gate = release.clone();
         let worker = std::thread::spawn(move || {

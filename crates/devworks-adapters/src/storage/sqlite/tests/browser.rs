@@ -15,7 +15,7 @@ fn id(s: &str) -> Id {
 /// A store with an actor and an operation the session can reference.
 fn seeded(h: &Harness) -> SqliteStore {
     let s = h.store();
-    run_write(&s, WriteOptions::default(), |tx| {
+    run_write(&s, WriteOptions::fixture(), |tx| {
         tx.actors()
             .register(&ActorId(id("user-a")), PrincipalKind::Human, "User")?;
         for op in ["op-create", "op-action"] {
@@ -67,7 +67,7 @@ fn write<T: Send + 'static>(
     s: &SqliteStore,
     f: impl FnOnce(&mut dyn WriteTransaction) -> Result<T, StorageError> + Send + 'static,
 ) -> Result<T, StorageError> {
-    run_write(s, WriteOptions::default(), f)
+    run_write(s, WriteOptions::fixture(), f)
 }
 fn get(s: &SqliteStore) -> StoredBrowserSession {
     read_snapshot(s, &ReadOptions::default(), |r| {
@@ -310,7 +310,7 @@ fn browser_source_migration_keeps_old_evidence_nullable_and_blocks_old_writers()
     );
     let h = Harness::new();
     let legacy = SqliteStore::open_with(h.config(), &through(21)).unwrap();
-    run_write(&legacy, WriteOptions::default(), |tx| {
+    run_write(&legacy, WriteOptions::fixture(), |tx| {
         tx.operations()
             .record_intent(NewOperation {
                 id: OperationId(id("old-browser-create")),

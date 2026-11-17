@@ -2475,7 +2475,7 @@ impl ProcessToolService {
         let id = operation.id.clone();
         let _ = crate::ports::storage::run_write(
             &*self.store,
-            crate::ports::storage::WriteOptions::default(),
+            crate::ports::storage::WriteOptions::observed(),
             move |tx| {
                 let Some(current) = tx.operations().operation(&id)? else {
                     return Ok(());
