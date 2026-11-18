@@ -9,7 +9,7 @@ use crate::protocol::records::{
     ConventionIndexPhase, ConventionIndexStatus, ConventionRecord, ConventionResourceRecord,
 };
 use crate::protocol::support::{BoundedList, BoundedText, Check, GraphText, SignedCounter};
-use crate::services::sessions::counter;
+use crate::services::kernel::counter;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
 

@@ -6,6 +6,11 @@
 //! sequence") for the order and why each step sits where it does.
 use crate::approvals::{ResumeAdmission, ResumeDispatcher};
 use crate::browser::{BrowserComposition, Supervision as BrowserSupervision};
+pub use crate::core_services::RunComposition;
+use crate::core_services::{
+    ApplicationComposition, ArtifactComposition, CorePorts, CoreServices, DiagnosticComposition,
+    KnowledgeComposition, PackageServicePorts, WebPortsFactory, owned_operation,
+};
 use crate::diagnostics::{self as diag, Monitor};
 use crate::dispatch::{self, Consumer, Dispatcher, DispatcherConfig, RecoveryReport};
 use crate::evals::EvalSupervisor;
@@ -15,7 +20,7 @@ use crate::notifications::OsNotificationSupervisor;
 use crate::package_host::{HostConfig, LaunchPorts, PackageHost};
 use crate::replies::reply_consumer;
 use crate::resources::{BootReport as ResourceBootReport, Housekeeper};
-use crate::runs::{ActivationLauncher, RunGate, RunSettings, RunSupervisor};
+use crate::runs::{RunGate, RunSettings, RunSupervisor};
 use crate::workers::{Commits, DrainAt, Loop, LoopState, Next, StopAt, Ticker, Workers};
 use devworks_core::context::InvocationContext;
 use devworks_core::gateway::{CommandOutcome, Gateway, PreparedReceive, QueryOutcome};
@@ -40,18 +45,15 @@ use devworks_core::services::browser::{BrowserRecovery, BrowserService};
 use devworks_core::services::desktop::ControlEpoch;
 use devworks_core::services::diagnostics::{DiagnosticService, ExportFailure, LogQuery};
 use devworks_core::services::evals::EvalService;
-use devworks_core::services::jobs::runner::{
-    InferenceJobs, JobLifecycle, NativeJobDispatch, NoInferencePipeline,
-};
+use devworks_core::services::jobs::runner::{JobLifecycle, NativeJobDispatch};
 use devworks_core::services::jobs::{JobConfig, JobService, NativeCatalog};
 use devworks_core::services::notifications::NotificationService;
-use devworks_core::services::packages::PackageService;
 use devworks_core::services::power::{KeepAwake, KeepAwakeStatus};
 use devworks_core::services::process::{ProcessSupervisor, ShutdownReport};
 use devworks_core::services::projects::{ProjectService, RepositoryService};
 use devworks_core::services::resources::{MachineResource, ResourceService, desktop};
 use devworks_core::services::runs::ControlService;
-use devworks_core::services::runs::recovery::{BootRecovery, LifecycleHooks, NoLifecycleHooks};
+use devworks_core::services::runs::recovery::{BootRecovery, LifecycleHooks};
 use devworks_core::services::work::WorkService;
 use devworks_core::settings::view::Health;
 use std::collections::BTreeMap;
@@ -102,41 +104,31 @@ pub struct IndexComposition {
     pub enrichers: Vec<Arc<dyn devworks_core::ports::indexing::SemanticEnricher>>,
 }
 
-/// Run root control as composed: the one control service (its plan/readiness port inside), the
-/// coordinator launcher (none until the agent supervisor exists: accepted activations then stay
-/// pending and are held at the next boot), further lifecycle hooks (keep-working, a later item;
-/// [`boot`] always composes the schedules' own hooks first) and the scheduled-inference dispatch
-/// port (none until the coordinator turn pipeline exists: a scheduled inference run then fails
-/// before dispatch with a visible reason).
-#[derive(Clone)]
-pub struct RunComposition {
-    pub service: Arc<ControlService>,
-    pub launcher: Option<Arc<dyn ActivationLauncher>>,
-    pub hooks: Arc<dyn LifecycleHooks>,
-    pub inference: Arc<dyn InferenceJobs>,
-}
-impl RunComposition {
-    pub fn new(service: Arc<ControlService>) -> Self {
-        Self {
-            service,
-            launcher: None,
-            hooks: Arc::new(NoLifecycleHooks),
-            inference: Arc::new(NoInferencePipeline),
-        }
-    }
-}
-
-/// The package lifecycle as composed: the one package service (registered for the `addons.*`
-/// use cases) and what its host needs to launch helpers.
+/// The package lifecycle as composed: the ports of the one package service (built with the other
+/// core services and registered for the `addons.*` use cases) and what its host needs to launch
+/// helpers.
 pub struct PackageComposition {
-    pub service: Arc<PackageService>,
+    pub service: PackageServicePorts,
     pub launch: LaunchPorts,
     pub config: HostConfig,
-    /// Runtime probing (the cache must be the service's runtime probe).
+    /// Runtime probing (the cache must be the service's runtime probe, `service.runtimes`).
     pub runtimes: Option<crate::package_host::RuntimePorts>,
-    /// Signed publisher index sources (fetch and verification).
-    pub index: Option<crate::package_host::IndexPorts>,
+    /// Signed publisher index sources (fetch and verification), built over the web tools' ports
+    /// (none when no web tools are composed) so the downloads share their resolver, pinned
+    /// transport and egress policy.
+    pub index: Option<IndexPortsFactory>,
 }
+
+/// Builds the package index ports from the web tools' network ports.
+/// A factory that needs the web tools refuses the composition (`Err` carries the reason) when
+/// they are not composed.
+pub type IndexPortsFactory = Arc<
+    dyn Fn(
+            Option<&devworks_core::services::web::WebPorts>,
+        ) -> Result<crate::package_host::IndexPorts, String>
+        + Send
+        + Sync,
+>;
 
 /// Lifecycle hooks run in order (schedules, then the caller's).
 struct ChainedHooks(Vec<Arc<dyn LifecycleHooks>>);
@@ -155,36 +147,45 @@ impl LifecycleHooks for ChainedHooks {
     }
 }
 
-/// Everything the runtime is composed from. Every part is a core port or core service; the one
-/// `store` backs the gateway, the dispatcher, the reply publisher and artifact recovery and
-/// collection, and the use cases the caller registered must be built over that same store.
+/// Everything the runtime is composed from. Every part is a core port; the one `store` backs the
+/// gateway, the dispatcher, the reply publisher and artifact recovery and collection. The core
+/// services (artifacts, resources, run control, diagnostics, knowledge, agents, web, packages,
+/// settings, provider connections, router, sessions, history, MCP client) are built from their
+/// ports by [`CoreServices::build`] inside [`boot`]; a use case family of one of them in
+/// [`Self::use_cases`] is refused as a composition error.
 pub struct Composition {
     pub store: Arc<dyn ApplicationStore>,
     pub clock: Arc<dyn Clock>,
     pub ids: Arc<dyn IdSource>,
     pub authority: Arc<dyn AuthorityPort>,
-    /// The one artifact service: [`boot`] registers the artifact use cases with it (replacing any
-    /// the caller registered), publishes receipt replies through it and collects with it, so its
-    /// readers, stream grants and deferred staging resolutions are shared by all three.
-    pub artifacts: Arc<ArtifactService>,
-    /// The one resource service: [`boot`] registers the `resources.*` use cases with it (replacing
-    /// any the caller registered), so dispatch tickets, owned processes and leases share one
-    /// in-flight registry.
-    pub resources: Arc<ResourceService>,
+    /// The ports of the one artifact service: [`boot`] registers the artifact use cases with it,
+    /// publishes receipt replies through it and collects with it, so its readers, stream grants
+    /// and deferred staging resolutions are shared by all three.
+    pub artifacts: ArtifactComposition,
     /// The native process launcher every owned tree is spawned through.
     pub process_host: Arc<dyn ProcessHost>,
-    /// Run root control: [`boot`] registers the `runs.*` use cases with its service (replacing
-    /// any the caller registered) and gates every consumer's root-scoped deliveries with it. It
-    /// also registers the `projects.*` and repository registration use cases, whose archival
-    /// stops roots through this same service.
+    /// Run root control: [`boot`] builds its service, registers the `runs.*` use cases and gates
+    /// every consumer's root-scoped deliveries with it. It also registers the `projects.*` and
+    /// repository registration use cases, whose archival stops roots through this same service.
     pub runs: RunComposition,
     /// The OS power facility the keep-awake setting is applied with.
     pub power: Arc<dyn PowerPort>,
-    /// The one diagnostics service: [`boot`] registers the `workspace.diagnostics`, `.logs` and
-    /// `.record_diagnostic` use cases with it (replacing any the caller registered), records
-    /// boot recovery through it, feeds it the boot report, collection passes and consumers, and
-    /// runs its retention and monitor passes.
-    pub diagnostics: Arc<DiagnosticService>,
+    /// The ports of the one diagnostics service: [`boot`] registers the `workspace.diagnostics`,
+    /// `.logs` and `.record_diagnostic` use cases with it, records boot recovery through it,
+    /// feeds it the boot report, collection passes and consumers, and runs its retention and
+    /// monitor passes.
+    pub diagnostics: DiagnosticComposition,
+    /// The ports of the one knowledge service ([`boot`] registers its use cases and its source
+    /// deletion consumer).
+    pub knowledge: KnowledgeComposition,
+    /// The ports of the settings, provider connection, router, session, history and MCP client
+    /// services ([`boot`] builds the ones composed and registers their use cases).
+    pub application: ApplicationComposition,
+    /// The web tools' network ports, built over the provider connection service's secret
+    /// resolver. When present, [`boot`] builds the web service over the artifact and
+    /// diagnostics services and registers `web.search` and `web.fetch`; the package host's
+    /// brokered HTTP calls use the same ports.
+    pub web: Option<WebPortsFactory>,
     /// Owned browser sessions (`browser.*`): when present, [`boot`] builds the one
     /// [`BrowserService`] over the composition's store, artifact service and process owner,
     /// registers its use cases and effect consumer, recovers earlier boots' sessions after the
@@ -193,13 +194,16 @@ pub struct Composition {
     pub browser: Option<BrowserComposition>,
     /// Native Git owner; missing executable/filesystem is not advertised.
     pub git: Option<crate::git::GitComposition>,
-    /// The package lifecycle: [`boot`] registers the `addons.*` use cases with its service
-    /// (replacing any the caller registered), starts the package host after process recovery and
-    /// stops its helpers cooperatively at shutdown. `None`: no package host (packages are not
-    /// offered).
+    /// The package lifecycle: [`boot`] registers the `addons.*` use cases with its service, starts
+    /// the package host after process recovery and stops its helpers cooperatively at shutdown.
+    /// `None`: no package host (packages are not offered).
     pub packages: Option<PackageComposition>,
-    /// The other use cases (queue, sessions, history, settings, ...).
+    /// The use cases of no engine-owned family (the queue, ...). One operation of an owned
+    /// family is a composition error; a test scripts one through [`Self::test_overrides`].
     pub use_cases: UseCases,
+    /// Scripted operations that replace the engine's own handlers. Only tests can fill it: the
+    /// constructor exists under the `test-support` feature, which only dev-dependencies enable.
+    pub test_overrides: TestOverrides,
     /// Consumers besides the required ones [`boot`] registers itself (package handlers, ...).
     pub consumers: Vec<Consumer>,
     /// Repository indexing (none: the `indexing.*` operations have no use case).
@@ -207,9 +211,30 @@ pub struct Composition {
     pub config: RuntimeConfig,
 }
 
+/// Operations a test scripts over the engine's own handlers. Production code can only name the
+/// empty value, so a production composition cannot replace an engine-owned operation.
+#[derive(Default)]
+pub struct TestOverrides(UseCases);
+#[cfg(feature = "test-support")]
+impl TestOverrides {
+    pub fn new(use_cases: UseCases) -> Self {
+        Self(use_cases)
+    }
+}
+
+/// Builds project purge file access over the engine's read fence.
+pub type PurgeFilesFactory = Arc<
+    dyn Fn(
+            Arc<dyn devworks_core::ports::project_purge::ProjectPurgeReadFence>,
+        ) -> Arc<dyn devworks_core::ports::project_purge::ProjectPurgeFiles>
+        + Send
+        + Sync,
+>;
 #[derive(Clone)]
 pub struct PurgeComposition {
-    pub files: Arc<dyn devworks_core::ports::project_purge::ProjectPurgeFiles>,
+    /// Builds the purge file access over the artifact service, which fences purge reads
+    /// ([`devworks_core::ports::project_purge::ProjectPurgeReadFence`]).
+    pub files: PurgeFilesFactory,
     pub client: Arc<dyn devworks_core::ports::project_purge::ProjectPurgeClient>,
 }
 #[derive(Clone)]
@@ -456,10 +481,15 @@ impl Collector {
 /// Dropping it stops delivery and collection (as [`Runtime::shutdown`] does, without waiting).
 pub struct Runtime {
     store: Arc<dyn ApplicationStore>,
-    ids: Arc<dyn IdSource>,
-    authority: Arc<dyn AuthorityPort>,
     artifacts: Arc<ArtifactService>,
+    control: Arc<ControlService>,
+    knowledge: Arc<devworks_core::services::knowledge::KnowledgeService>,
+    agents: Arc<devworks_core::services::agents::AgentService>,
+    web: Option<Arc<devworks_core::services::web::WebService>>,
+    connections: Option<Arc<devworks_core::services::router::connections::ConnectionService>>,
     use_cases: UseCases,
+    /// The narrow handle set agent turns and durable tool dispatch run on.
+    turn: crate::turn_engine::TurnEngine,
     dispatcher: Dispatcher,
     collector: Arc<Collector>,
     resources: Arc<ResourceService>,
@@ -524,11 +554,7 @@ pub struct Runtime {
 struct Engine {
     store: Arc<dyn ApplicationStore>,
     clock: Arc<dyn Clock>,
-    ids: Arc<dyn IdSource>,
-    authority: Arc<dyn AuthorityPort>,
-    artifacts: Arc<ArtifactService>,
-    resources: Arc<ResourceService>,
-    diagnostics: Arc<DiagnosticService>,
+    core: CoreServices,
     config: RuntimeConfig,
     use_cases: UseCases,
     usage: Arc<crate::usage::UsageRuntime>,
@@ -567,32 +593,57 @@ struct Engine {
     package_guard: PackageBootGuard,
 }
 
-/// Builds every engine-owned service from the composition. Nothing here recovers, deletes or
-/// starts anything: the only effect is the Git qualification probe, which decides whether the
-/// Git service (and everything composed with it) exists. Errors are recorded by [`boot`].
-async fn build(composition: Composition) -> Result<Engine, BootError> {
+/// Builds every other engine-owned service from the composition over the finished core
+/// services. Nothing here recovers, deletes or starts anything: the only effect is the Git
+/// qualification probe, which decides whether the Git service (and everything composed with it)
+/// exists. Errors are recorded by [`boot`].
+async fn build(composition: Composition, core: CoreServices) -> Result<Engine, BootError> {
     let Composition {
         store,
         clock,
         ids,
         authority,
-        artifacts,
-        resources,
+        artifacts: _,
         process_host,
         runs,
         power,
-        diagnostics,
+        diagnostics: _,
+        knowledge: _,
+        application: _,
+        web: _,
         browser,
         git,
         packages,
         use_cases,
+        test_overrides,
         mut consumers,
         indexing,
         config,
     } = composition;
+    let CoreServices {
+        artifacts,
+        resources,
+        control,
+        diagnostics,
+        knowledge,
+        agents: _,
+        web: _,
+        packages: package_service,
+        ..
+    } = core.clone();
+    consumers.push(crate::knowledge::source_deletion_consumer(
+        knowledge.clone(),
+    ));
+    // The engine's handlers first, then the composition's operations (none of an owned family:
+    // boot refused those) and a test's scripted operations over them.
+    let use_cases = core
+        .register(UseCases::new())
+        .overlay(use_cases)
+        .overlay(test_overrides.0);
+    let purge_files = config.purge.as_ref().map(|p| (p.files)(artifacts.clone()));
     let usage = crate::usage::UsageRuntime::with_process_host(
         store.clone(),
-        runs.service.clone(),
+        control.clone(),
         use_cases.inference_router(),
         process_host.clone(),
     );
@@ -673,15 +724,36 @@ async fn build(composition: Composition) -> Result<Engine, BootError> {
             .with_secrets(composition.secrets.clone()),
         )
     });
+    // GitHub calls resolve their credential through the provider connection service built with
+    // the core set.
+    let git = match git {
+        Some(mut composition) => {
+            if let Some(http) = composition.github_http.take() {
+                let Some(connections) = &core.connections else {
+                    return Err(BootError::Composition(StorageError::InvalidRecord(
+                        "GitHub calls resolve credentials through the provider connection \
+                         service"
+                            .to_owned(),
+                    )));
+                };
+                composition.config.github = Some(Arc::new(
+                    devworks_core::services::git::github::GitHubClient {
+                        http,
+                        secrets: connections.clone(),
+                    },
+                ));
+            }
+            Some(composition)
+        }
+        None => None,
+    };
     let git = git.and_then(|composition| {
         let fs = composition.config.filesystem.clone()?;
-        let helpers = Arc::new(
-            devworks_core::services::indexing::helper::SupervisedHelpers {
-                supervisor: supervisor.clone(),
-                store: store.clone(),
-                fs,
-            },
-        );
+        let helpers = Arc::new(devworks_core::services::git::helper::SupervisedHelpers {
+            supervisor: supervisor.clone(),
+            store: store.clone(),
+            fs,
+        });
         Some(Arc::new(devworks_core::services::git::GitService::new(
             store.clone(),
             helpers,
@@ -755,7 +827,7 @@ async fn build(composition: Composition) -> Result<Engine, BootError> {
                     ids.clone(),
                     clock.clone(),
                 )
-                .with_root_control(runs.service.clone())
+                .with_root_control(control.clone())
                 .with_diagnostics(diagnostics.clone()),
             ),
         ))
@@ -787,10 +859,6 @@ async fn build(composition: Composition) -> Result<Engine, BootError> {
         use_cases = use_cases.with_browser(b.clone());
         consumers.push(crate::browser::consumer(b.clone()));
     }
-    let use_cases = match &packages {
-        Some(p) => use_cases.with_packages(p.service.clone()),
-        None => use_cases,
-    };
     let price_service = Arc::new(devworks_core::services::prices::PriceService::new(
         ids.clone(),
         clock.clone(),
@@ -804,18 +872,18 @@ async fn build(composition: Composition) -> Result<Engine, BootError> {
     }
     let use_cases = use_cases.with_prices(price_service.clone());
     let work = Arc::new(
-        WorkService::new(ids.clone(), runs.service.clone())
+        WorkService::new(ids.clone(), control.clone())
             .with_staged_plans(artifacts.clone())
+            .with_plan_documents(artifacts.clone())
             .with_clock(clock.clone()),
     );
-    let mut projects =
-        ProjectService::new(ids.clone(), runs.service.clone()).with_work(work.clone());
+    let mut projects = ProjectService::new(ids.clone(), control.clone()).with_work(work.clone());
     if let Some(p) = &config.purge {
         projects = projects.with_purge(Arc::new(
             devworks_core::services::projects::purge::PurgeCoordinator::new(
                 store.clone(),
                 ids.clone(),
-                p.files.clone(),
+                purge_files.clone().expect("composed with the purge"),
                 p.client.clone(),
             ),
         ));
@@ -824,20 +892,16 @@ async fn build(composition: Composition) -> Result<Engine, BootError> {
         Arc::new(devworks_core::services::projects::purge::PurgeWorker::new(
             store.clone(),
             ids.clone(),
-            p.files.clone(),
+            purge_files.clone().expect("composed with the purge"),
             p.client.clone(),
         ))
     });
     let eval_service = Arc::new(EvalService::new(ids.clone(), clock.clone()));
     let use_cases = use_cases
         .with_evals(eval_service.clone())
-        .with_artifacts(artifacts.clone())
-        .with_resources(resources.clone())
-        .with_runs(runs.service.clone())
         .with_projects(Arc::new(projects))
         .with_work(work)
-        .with_repositories(Arc::new(RepositoryService::new(ids.clone())))
-        .with_diagnostics(diagnostics.clone());
+        .with_repositories(Arc::new(RepositoryService::new(ids.clone())));
     let conventions = Arc::new(
         devworks_core::services::conventions::ConventionService::new(
             store.clone(),
@@ -873,7 +937,7 @@ async fn build(composition: Composition) -> Result<Engine, BootError> {
             artifacts.clone(),
             ids.clone(),
             clock.clone(),
-            packages.as_ref().map(|package| package.service.clone()),
+            package_service.clone(),
         ))
     });
     let use_cases = if let Some(service) = &help {
@@ -911,7 +975,7 @@ async fn build(composition: Composition) -> Result<Engine, BootError> {
     // run-control gate (and its own port, if it has one).
     for c in &mut consumers {
         c.eligibility = Some(Arc::new(RunGate::new(
-            runs.service.clone(),
+            control.clone(),
             c.eligibility.take(),
         )));
     }
@@ -936,13 +1000,11 @@ async fn build(composition: Composition) -> Result<Engine, BootError> {
             store: store.clone(),
             parser: ix.parser,
             source: ix.source,
-            helpers: Arc::new(
-                devworks_core::services::indexing::helper::SupervisedHelpers {
-                    supervisor: supervisor.clone(),
-                    store: store.clone(),
-                    fs: ix.fs,
-                },
-            ),
+            helpers: Arc::new(devworks_core::services::git::helper::SupervisedHelpers {
+                supervisor: supervisor.clone(),
+                store: store.clone(),
+                fs: ix.fs,
+            }),
             clock: clock.clone(),
             ids: ids.clone(),
             artifacts: Some(artifacts.clone()),
@@ -982,7 +1044,7 @@ async fn build(composition: Composition) -> Result<Engine, BootError> {
     // Native jobs may run only the maintenance commands this composition can execute.
     let jobs = Arc::new(
         JobService::new(NativeCatalog::qualified(&use_cases), config.jobs)
-            .with_approval_control(runs.service.clone()),
+            .with_approval_control(control.clone()),
     );
     let use_cases = use_cases.with_jobs(jobs.clone());
     let instructions = config.instructions.clone().map(|c| {
@@ -1014,19 +1076,19 @@ async fn build(composition: Composition) -> Result<Engine, BootError> {
             Arc::new(devworks_core::authority::HostRoles {
                 store: store.clone(),
             }),
-            runs.service.clone(),
+            control.clone(),
         )
         .with_catalog(ApprovalCatalog::qualified(&use_cases))
         .with_owners(Arc::new(
             devworks_core::services::approvals::owner_preview::NativeOwnerPreviews::new(
                 git.clone(),
-                packages.as_ref().map(|p| p.service.clone()),
+                package_service.clone(),
                 Some(jobs.clone()),
             )
             .with_desktop(desktop.clone())
             .with_instructions(instructions.clone())
             .with_containers(containers.clone())
-            .with_control(runs.service.clone())
+            .with_control(control.clone())
             .with_evidence(store.clone(), artifacts.clone()),
         )),
     );
@@ -1054,7 +1116,7 @@ async fn build(composition: Composition) -> Result<Engine, BootError> {
             let schemas = Arc::new(crate::providers::schemas::RegisteredSchemas::new(
                 store.clone(),
                 use_cases.clone(),
-                packages.as_ref().map(|p| p.service.clone()),
+                package_service.clone(),
                 artifacts.clone(),
             ));
             Some(crate::providers::driver::NativeProviders::new(
@@ -1117,7 +1179,7 @@ async fn build(composition: Composition) -> Result<Engine, BootError> {
     let run_supervisor = RunSupervisor::configured(
         store.clone(),
         clock.clone(),
-        runs.service.clone(),
+        control.clone(),
         supervisor.clone(),
         runs.launcher.clone(),
         hooks,
@@ -1196,19 +1258,34 @@ async fn build(composition: Composition) -> Result<Engine, BootError> {
     if let Some(p) = packages {
         let host = PackageHost::new(
             store.clone(),
-            p.service.clone(),
+            package_service
+                .clone()
+                .expect("built with the package composition"),
             supervisor,
             ids.clone(),
             p.launch,
             p.config,
             p.runtimes,
-            p.index,
+            core.package_index
+                .as_ref()
+                .map(|i| crate::package_host::IndexPorts {
+                    transport: i.transport.clone(),
+                    verifier: i.verifier.clone(),
+                }),
         );
-        p.service.set_activity(host.clone());
+        host.service().set_activity(host.clone());
         let _ = package_tools.set(Arc::downgrade(&host));
         // Brokered application calls of packages run through this command path, as the
         // principal that invoked the package.
         let gateway: Arc<dyn crate::package_host::broker::GatewayCalls> = admitter.clone();
+        // Brokered HTTP calls use the web tools' resolver, transport and secret resolver.
+        if let Some(web) = &core.web_ports {
+            host.attach_network(crate::package_host::http::NetworkPorts {
+                resolver: web.resolver.clone(),
+                transport: web.transport.clone(),
+                secrets: web.secrets.clone(),
+            });
+        }
         host.attach_broker(crate::package_host::broker::BrokerPorts {
             gateway: Arc::downgrade(&gateway),
             artifacts: artifacts.clone(),
@@ -1226,11 +1303,7 @@ async fn build(composition: Composition) -> Result<Engine, BootError> {
     Ok(Engine {
         store,
         clock,
-        ids,
-        authority,
-        artifacts,
-        resources,
-        diagnostics,
+        core,
         config,
         use_cases,
         usage,
@@ -1294,23 +1367,45 @@ async fn build(composition: Composition) -> Result<Engine, BootError> {
 ///
 /// Must be awaited on a Tokio runtime with timers; the tasks it starts run there.
 pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
+    // The one construction of the core services; everything below receives the finished set.
+    let core = CoreServices::build(CorePorts {
+        store: &composition.store,
+        clock: &composition.clock,
+        ids: &composition.ids,
+        artifacts: &composition.artifacts,
+        diagnostics: &composition.diagnostics,
+        runs: &composition.runs,
+        knowledge: &composition.knowledge,
+        application: &composition.application,
+        web: composition.web.as_ref(),
+        packages: composition.packages.as_ref(),
+    });
     // Every error that stops boot passes through this, so each leaves a failed boot diagnostic.
-    // The diagnostics service is part of the composition, so no step runs without one; a store
+    // The diagnostics service is built with the core set, so no step runs without one; a store
     // that cannot take the record is ignored by `record_boot_failure`.
-    let diagnostics = composition.diagnostics.clone();
+    let diagnostics = core.diagnostics.clone();
     let failed = |e: BootError| {
         diag::record_boot_failure(&diagnostics, &e);
         e
     };
+    if let Some(reason) = core.refusals.first() {
+        return Err(failed(BootError::Composition(StorageError::InvalidRecord(
+            reason.clone(),
+        ))));
+    }
+    if let Some((family, operation)) = owned_operation(&composition.use_cases) {
+        return Err(failed(BootError::Composition(StorageError::InvalidRecord(
+            format!(
+                "{operation} belongs to the {family} use cases, which the engine builds and \
+                 registers; a composition must not register any of their operations"
+            ),
+        ))));
+    }
     // Every engine-owned service exists before the first recovery step below.
     let Engine {
         store,
         clock,
-        ids,
-        authority,
-        artifacts,
-        resources,
-        diagnostics,
+        core,
         config,
         use_cases,
         usage,
@@ -1346,7 +1441,17 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
         scheduler,
         resumes,
         mut package_guard,
-    } = build(composition).await.map_err(failed)?;
+    } = build(composition, core).await.map_err(failed)?;
+    let (artifacts, resources, control, diagnostics, knowledge, agents, web, connections) = (
+        core.artifacts.clone(),
+        core.resources.clone(),
+        core.control.clone(),
+        core.diagnostics.clone(),
+        core.knowledge.clone(),
+        core.agents.clone(),
+        core.web.clone(),
+        core.connections.clone(),
+    );
     if let Some(service) = &schemas {
         // Namespace/reference-only cleanup precedes password intake and command exposure.
         match service.reconcile_credential_orphans() {
@@ -1453,7 +1558,7 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
             .map_err(failed)?;
     }
     // Earlier submissions remain uncertain even if this boot has no native adapter.
-    crate::store::write(&store, |tx| {
+    crate::store::write(&store, WriteOptions::recovery(), |tx| {
         tx.decisions().recover_os_notification_deliveries()
     })
     .await
@@ -1852,7 +1957,7 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
                                                 &context,
                                                 "help.generate_capability_docs",
                                                 &frame,
-                                                WriteOptions::default(),
+                                                WriteOptions::command(),
                                             );
                                         }
                                         removed
@@ -2005,12 +2110,28 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
             ),
         );
     }
+    let turn = crate::turn_engine::TurnEngine {
+        store: store.clone(),
+        artifacts: artifacts.clone(),
+        providers: providers.clone(),
+        mcp: use_cases.mcp_service(),
+        packages: package_host.clone(),
+        approvals: approvals.clone(),
+        runs: run_supervisor.clone(),
+        instructions: instructions.clone(),
+        indexing: index_supervisor.clone(),
+        admitter: admitter.clone(),
+    };
     Ok(Runtime {
         store,
-        ids,
-        authority,
         artifacts,
+        control,
+        knowledge,
+        agents,
+        web,
+        connections,
         use_cases,
+        turn,
         dispatcher,
         collector,
         resources,
@@ -2134,6 +2255,10 @@ struct PollingStates {
 }
 
 impl Runtime {
+    /// The handles agent turns run on.
+    pub fn turn_engine(&self) -> &crate::turn_engine::TurnEngine {
+        &self.turn
+    }
     pub fn mcp_service(&self) -> Option<Arc<devworks_core::services::mcp::McpClientService>> {
         self.use_cases.mcp_service()
     }
@@ -2176,6 +2301,29 @@ impl Runtime {
         &self.artifacts
     }
     /// The resource service the `resources.*` use cases and dispatch-time checks share.
+    /// The run root control service the engine built and registered for the `runs.*` use cases.
+    pub fn control(&self) -> &Arc<ControlService> {
+        &self.control
+    }
+    /// The knowledge service the engine built and registered.
+    pub fn knowledge(&self) -> &Arc<devworks_core::services::knowledge::KnowledgeService> {
+        &self.knowledge
+    }
+    /// The agent coordination service the engine built and registered.
+    pub fn agents(&self) -> &Arc<devworks_core::services::agents::AgentService> {
+        &self.agents
+    }
+    /// The web tools service (none when no web ports were composed).
+    pub fn web(&self) -> Option<&Arc<devworks_core::services::web::WebService>> {
+        self.web.as_ref()
+    }
+    /// The provider connection service the engine built and registered (none when no
+    /// connection ports were composed).
+    pub fn connections(
+        &self,
+    ) -> Option<&Arc<devworks_core::services::router::connections::ConnectionService>> {
+        self.connections.as_ref()
+    }
     pub fn resources(&self) -> &Arc<ResourceService> {
         &self.resources
     }
@@ -2290,57 +2438,17 @@ impl Runtime {
         if adopted.is_some_and(|a| a.digest == current.digest) {
             return Ok((current, false));
         }
-        self.record_skill_adoption(
+        crate::tool_turn::record_skill_adoption(
+            self.store.as_ref(),
             ctx,
             session_id,
-            adopted.and_then(|a| a.stamp()).as_ref(),
-            current.stamp().as_ref(),
+            skill_adoption_payload(
+                adopted.and_then(|a| a.stamp()).as_ref(),
+                current.stamp().as_ref(),
+            ),
         )?;
         Ok((current, true))
     }
-    /// Appends the `SkillRevisionsAdopted` session event of a skill-set change.
-    fn record_skill_adoption(
-        &self,
-        ctx: &InvocationContext,
-        session_id: &Id,
-        before: Option<&devworks_core::providers::instructions::SkillStamp>,
-        after: Option<&devworks_core::providers::instructions::SkillStamp>,
-    ) -> Result<(), StorageError> {
-        let payload = skill_adoption_payload(before, after);
-        let (session, actor) = (session_id.clone(), ctx.principal().clone());
-        devworks_core::ports::storage::run_write(
-            self.store.as_ref(),
-            devworks_core::ports::storage::WriteOptions::default(),
-            move |tx| {
-                let stored = tx
-                    .sessions()
-                    .session(&session)?
-                    .ok_or(StorageError::ScopeDenied)?;
-                if stored.closed() {
-                    return Err(StorageError::ScopeDenied);
-                }
-                let id = devworks_core::protocol::EventId(
-                    tx.new_id(devworks_core::ports::IdKind::Event),
-                );
-                tx.history()
-                    .append(devworks_core::ports::storage::NewEvent {
-                        id,
-                        actor,
-                        project_id: stored.project_id.clone(),
-                        root_id: stored.root_id.clone(),
-                        operation_id: None,
-                        aggregate_kind:
-                            devworks_core::services::sessions::transcript::SESSION_AGGREGATE.into(),
-                        aggregate_id: stored.id.as_str().to_owned(),
-                        aggregate_revision: stored.revision,
-                        kind: "SkillRevisionsAdopted".into(),
-                        payload,
-                    })?;
-                Ok(())
-            },
-        )
-    }
-
     /// The skill set a running agent adopts at its next safe step: sources are observed first,
     /// so a saved, approved or externally changed skill is current; unapproved proposals are
     /// never included. The caller records the returned digest and revisions in its session and
@@ -2362,311 +2470,54 @@ impl Runtime {
         self.providers.as_ref()
     }
 
-    /// Drive a host-qualified native generation through durable tool dispatch and publish its
-    /// next immutable context, including an ordinary completed assistant turn. Replaying the
-    /// same request recovers saved results; it never sends inference or a gateway command twice.
+    /// See [`TurnEngine::produce_and_dispatch_native_turn`].
     pub async fn produce_and_dispatch_native_turn(
         &self,
         invocation: crate::providers::driver::NativeInvocation,
         cancellation: Option<devworks_core::ports::storage::Cancellation>,
     ) -> Result<NativeTurnProgress, StorageError> {
-        if matches!(
-            invocation.request.purpose,
-            devworks_core::protocol::provider::InferencePurpose::Compaction
-        ) {
-            // Compaction output is an artifact, not a conversation turn with a transcript
-            // start position or a publishable assistant continuation.
-            return Err(StorageError::ScopeDenied);
-        }
-        let ctx = invocation.context.clone();
-        let (session_id, previous) = match &invocation.request.input {
-            devworks_core::protocol::provider::InferenceInput::Generation {
-                session_id,
-                context,
-                ..
-            } if invocation.logical.session_id.as_ref() == Some(session_id)
-                && ctx.session_id() == Some(session_id) =>
-            {
-                (session_id.clone(), context.clone())
-            }
-            _ => return Err(StorageError::ScopeDenied),
-        };
-        let providers = self.providers.as_ref().ok_or_else(|| {
-            StorageError::unavailable(
-                Unavailable::UnsupportedRuntime,
-                "native provider unavailable",
-            )
-        })?;
-        let tool_cancellation = cancellation.clone();
-        let provider = providers
-            .produce_cancellable(invocation, cancellation)
-            .await?;
-        let mut tool_dispatches = Vec::new();
-        let mut continuation = None;
-        if matches!(
-            provider.result.outcome,
-            Some(
-                devworks_core::services::usage::accounting::AttemptEnd::ToolCallsReady
-                    | devworks_core::services::usage::accounting::AttemptEnd::Completed
-            )
-        ) {
-            let has_tools = provider.result.outcome
-                == Some(devworks_core::services::usage::accounting::AttemptEnd::ToolCallsReady);
-            let attempt_id = provider.result.attempt_id.as_ref().ok_or_else(|| {
-                StorageError::InvalidRecord("tool turn lacks settled attempt identity".into())
-            })?;
-            let binding = provider.result.binding.as_ref().ok_or_else(|| {
-                StorageError::InvalidRecord("tool turn lacks native binding".into())
-            })?;
-            let after_sequence = provider.result.turn_start_sequence.ok_or_else(|| {
-                StorageError::InvalidRecord("tool turn lacks durable start position".into())
-            })?;
-            if has_tools {
-                let pass = self.dispatch_pending_pass(
-                    &ctx,
-                    &session_id,
-                    tool_cancellation.as_ref(),
-                    true,
-                )?;
-                tool_dispatches = self.settle_pending(pass).await;
-            }
-            let unanswered =
-                !crate::tool_turn::pending_calls(self.store.as_ref(), &ctx, &session_id)?
-                    .is_empty();
-            if !unanswered {
-                let material = crate::tool_turn::continuation_context(
-                    self.store.as_ref(),
-                    &self.artifacts,
-                    &ctx,
-                    crate::tool_turn::TurnSource {
-                        session_id: &session_id,
-                        attempt_id,
-                        after_sequence,
-                        has_tools,
-                    },
-                    binding,
-                    &previous,
-                )?;
-                continuation = Some(crate::tool_turn::publish_continuation(
-                    self.store.as_ref(),
-                    &self.artifacts,
-                    &ctx,
-                    &session_id,
-                    attempt_id,
-                    binding,
-                    material,
-                )?);
-            }
-        }
-        Ok(NativeTurnProgress {
-            provider,
-            tool_dispatches,
-            continuation,
-        })
+        self.turn
+            .produce_and_dispatch_native_turn(invocation, cancellation)
+            .await
     }
-
-    /// Resume one durable provider call through the shared gateway, recording its single
-    /// initial response in the owning session. A caller can retry the same call after restart.
+    /// See [`TurnEngine::dispatch_tool_call`].
     pub fn dispatch_tool_call(
         &self,
         ctx: &InvocationContext,
         session_id: &Id,
         call: &devworks_core::protocol::provider::ToolCallKey,
     ) -> Result<devworks_core::services::sessions::transcript::BatchOutcome, StorageError> {
-        match self.dispatch_tool_call_step(ctx, session_id, call, None, false)? {
-            crate::tool_turn::DispatchStep::Answered(outcome) => Ok(outcome),
-            crate::tool_turn::DispatchStep::Parked(_) => Err(StorageError::InvalidRecord(
-                "a blocking dispatch cannot park".into(),
-            )),
-        }
+        self.turn.dispatch_tool_call(ctx, session_id, call)
     }
-
-    fn dispatch_tool_call_step(
-        &self,
-        ctx: &InvocationContext,
-        session_id: &Id,
-        call: &devworks_core::protocol::provider::ToolCallKey,
-        cancellation: Option<&Cancellation>,
-        defer_receive: bool,
-    ) -> Result<crate::tool_turn::DispatchStep, StorageError> {
-        let providers = self.providers.as_ref().ok_or_else(|| {
-            StorageError::unavailable(
-                Unavailable::UnsupportedRuntime,
-                "native provider unavailable",
-            )
-        })?;
-        crate::tool_turn::dispatch_step(
-            self,
-            self.store.as_ref(),
-            &self.artifacts,
-            providers.schemas().as_ref(),
-            ctx,
-            session_id,
-            call,
-            cancellation,
-            defer_receive,
-        )
-    }
-
-    /// The first, non-blocking look at an `agents.receive` (see [`Admitter::begin_receive`]).
-    pub(crate) fn begin_receive(
-        &self,
-        ctx: &InvocationContext,
-        raw: &[u8],
-        options: WriteOptions,
-    ) -> ReceiveStart {
-        self.admitter.begin_receive(ctx, raw, options)
-    }
-
-    /// Awaits a receive's wait and decides it (see [`Admitter::finish_receive`]).
-    pub(crate) async fn finish_receive(&self, wait: Box<ReceiveWait>) -> CommandOutcome {
-        self.admitter.clone().finish_receive(wait).await
-    }
-
-    /// Record a final cancellation only if this durable call has no dispatch-start marker.
-    /// A call already started requires same-key recovery or effect reconciliation.
+    /// See [`TurnEngine::cancel_tool_call_before_dispatch`].
     pub fn cancel_tool_call_before_dispatch(
         &self,
         ctx: &InvocationContext,
         session_id: &Id,
         call: &devworks_core::protocol::provider::ToolCallKey,
     ) -> Result<devworks_core::services::sessions::transcript::BatchOutcome, StorageError> {
-        crate::tool_turn::cancel_before_dispatch(self.store.as_ref(), ctx, session_id, call)
+        self.turn
+            .cancel_tool_call_before_dispatch(ctx, session_id, call)
     }
-
-    /// Resume the durable unanswered calls of a session. Each call is handled independently:
-    /// an approval, status uncertainty or failure leaves the other calls eligible to run.
+    /// See [`TurnEngine::dispatch_pending_tool_calls`].
     pub fn dispatch_pending_tool_calls(
         &self,
         ctx: &InvocationContext,
         session_id: &Id,
     ) -> Result<Vec<ToolDispatch>, StorageError> {
-        self.dispatch_pending_tool_calls_cancellable(ctx, session_id, None)
+        self.turn.dispatch_pending_tool_calls(ctx, session_id)
     }
-
-    /// A stopped turn cancels calls that have not started. Started calls retain their durable
-    /// marker and must reconcile under the same identity when work resumes.
+    /// See [`TurnEngine::dispatch_pending_tool_calls_cancellable`].
     pub fn dispatch_pending_tool_calls_cancellable(
         &self,
         ctx: &InvocationContext,
         session_id: &Id,
         cancellation: Option<&Cancellation>,
     ) -> Result<Vec<ToolDispatch>, StorageError> {
-        Ok(self
-            .dispatch_pending_pass(ctx, session_id, cancellation, false)?
-            .into_iter()
-            .filter_map(|pass| match pass {
-                PendingCall::Done(dispatch) => Some(dispatch),
-                PendingCall::Parked(_) => None,
-            })
-            .collect())
+        self.turn
+            .dispatch_pending_tool_calls_cancellable(ctx, session_id, cancellation)
     }
-
-    /// The synchronous part of dispatching a session's pending calls on a bounded worker set.
-    /// With `defer_receive`, an `agents.receive` that has nothing to read yet comes back parked,
-    /// holding no thread; [`Self::settle_pending`] awaits it.
-    pub(crate) fn dispatch_pending_pass(
-        &self,
-        ctx: &InvocationContext,
-        session_id: &Id,
-        cancellation: Option<&Cancellation>,
-        defer_receive: bool,
-    ) -> Result<Vec<PendingCall>, StorageError> {
-        let calls = crate::tool_turn::pending_calls(self.store.as_ref(), ctx, session_id)?;
-        if calls.is_empty() {
-            return Ok(Vec::new());
-        }
-        // A bounded worker set allows independent gateway calls to finish out of order. Each
-        // writer reads the current sequence in its own serialized transaction, so a slow sibling
-        // cannot reserve a transcript position or cancel completed results.
-        let next = std::sync::atomic::AtomicUsize::new(0);
-        let results = std::sync::Mutex::new(
-            std::iter::repeat_with(|| None)
-                .take(calls.len())
-                .collect::<Vec<Option<PendingCall>>>(),
-        );
-        std::thread::scope(|scope| {
-            for _ in 0..calls.len().min(8) {
-                let calls = &calls;
-                let next = &next;
-                let results = &results;
-                scope.spawn(move || {
-                    loop {
-                        let index = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                        let Some(call) = calls.get(index) else { break };
-                        let done = |outcome| {
-                            PendingCall::Done(ToolDispatch {
-                                call: call.clone(),
-                                outcome,
-                            })
-                        };
-                        let result = if cancellation.is_some_and(Cancellation::is_cancelled) {
-                            done(self.cancel_tool_call_before_dispatch(ctx, session_id, call))
-                        } else {
-                            match self.dispatch_tool_call_step(
-                                ctx,
-                                session_id,
-                                call,
-                                cancellation,
-                                defer_receive,
-                            ) {
-                                Ok(crate::tool_turn::DispatchStep::Answered(outcome)) => {
-                                    done(Ok(outcome))
-                                }
-                                Ok(crate::tool_turn::DispatchStep::Parked(parked)) => {
-                                    PendingCall::Parked(parked)
-                                }
-                                Err(StorageError::Cancelled) => done(
-                                    self.cancel_tool_call_before_dispatch(ctx, session_id, call),
-                                ),
-                                Err(error) => done(Err(error)),
-                            }
-                        };
-                        results.lock().unwrap_or_else(|p| p.into_inner())[index] = Some(result);
-                    }
-                });
-            }
-        });
-        Ok(results
-            .into_inner()
-            .unwrap_or_else(|p| p.into_inner())
-            .into_iter()
-            .map(|result| result.expect("joined tool worker"))
-            .collect())
-    }
-
-    /// The asynchronous part: awaits every parked receive together, without a thread each, and
-    /// returns every call's dispatch in the order the calls were listed.
-    pub(crate) async fn settle_pending(&self, passes: Vec<PendingCall>) -> Vec<ToolDispatch> {
-        let mut waiting: Vec<
-            std::pin::Pin<Box<dyn std::future::Future<Output = ToolDispatch> + Send + '_>>,
-        > = Vec::new();
-        let mut slots = Vec::new();
-        let mut dispatches = Vec::new();
-        for (index, pass) in passes.into_iter().enumerate() {
-            match pass {
-                PendingCall::Done(dispatch) => dispatches.push(Some(dispatch)),
-                PendingCall::Parked(parked) => {
-                    dispatches.push(None);
-                    slots.push(index);
-                    waiting.push(Box::pin(async move {
-                        let call = parked.key.clone();
-                        let outcome = parked.finish(self).await;
-                        ToolDispatch { call, outcome }
-                    }));
-                }
-            }
-        }
-        let mut finished = join_all(waiting).await.into_iter();
-        for index in slots {
-            dispatches[index] = finished.next();
-        }
-        dispatches.into_iter().flatten().collect()
-    }
-
-    /// Read a closed tool turn in native ordinal order after every emitted call has its one
-    /// durable initial response. The caller can then encode the next provider request without
-    /// depending on the order in which independent workers finished.
+    /// See [`TurnEngine::resolved_tool_turn`].
     pub fn resolved_tool_turn(
         &self,
         ctx: &InvocationContext,
@@ -2674,80 +2525,38 @@ impl Runtime {
         attempt_id: &devworks_core::protocol::AttemptId,
         after_sequence: i64,
     ) -> Result<Vec<crate::ResolvedToolCall>, StorageError> {
-        crate::tool_turn::resolved_turn(
-            self.store.as_ref(),
-            ctx,
-            session_id,
-            attempt_id,
-            after_sequence,
-        )
+        self.turn
+            .resolved_tool_turn(ctx, session_id, attempt_id, after_sequence)
     }
-
-    /// Record a newer journal state for an operation linked to this session's accepted tool
-    /// response. The first response remains unchanged; replaying the same revision adds nothing.
+    /// See [`TurnEngine::record_tool_operation_update`].
     pub fn record_tool_operation_update(
         &self,
         ctx: &InvocationContext,
         session_id: &Id,
         operation_id: &devworks_core::protocol::OperationId,
     ) -> Result<Option<devworks_core::protocol::provider::ArtifactRef>, StorageError> {
-        crate::tool_turn::record_operation_update(
-            self.store.as_ref(),
-            &self.artifacts,
-            ctx,
-            session_id,
-            operation_id,
-        )
+        self.turn
+            .record_tool_operation_update(ctx, session_id, operation_id)
     }
-
-    /// Reconcile every operation linked to an initial tool response without making a failure
-    /// on one operation suppress updates for unrelated calls.
+    /// See [`TurnEngine::reconcile_tool_operations`].
     pub fn reconcile_tool_operations(
         &self,
         ctx: &InvocationContext,
         session_id: &Id,
     ) -> Result<Vec<ToolOperationUpdate>, StorageError> {
-        let linked = crate::tool_turn::linked_operations(self.store.as_ref(), ctx, session_id)?;
-        let mut operations: Vec<_> = linked
-            .into_iter()
-            .filter_map(|call| call.operation_id)
-            .collect();
-        operations
-            .sort_by(|a: &devworks_core::protocol::OperationId, b| a.0.as_str().cmp(b.0.as_str()));
-        operations.dedup();
-        Ok(operations
-            .into_iter()
-            .map(|operation_id| ToolOperationUpdate {
-                outcome: self.record_tool_operation_update(ctx, session_id, &operation_id),
-                operation_id,
-            })
-            .collect())
+        self.turn.reconcile_tool_operations(ctx, session_id)
     }
-
-    /// On a session wake, record the current states of linked tool operations and append their
-    /// new facts to the previous native continuation. A redirect or epoch change requires the
-    /// caller to rebuild context before requesting more inference.
+    /// See [`TurnEngine::refresh_native_tool_context`].
     pub fn refresh_native_tool_context(
         &self,
         ctx: &InvocationContext,
         session_id: &Id,
         previous: &devworks_core::protocol::provider::ArtifactRef,
     ) -> Result<devworks_core::protocol::provider::ArtifactRef, StorageError> {
-        for update in self.reconcile_tool_operations(ctx, session_id)? {
-            update.outcome?;
-        }
-        crate::tool_turn::append_operation_updates(
-            self.store.as_ref(),
-            &self.artifacts,
-            ctx,
-            session_id,
-            previous,
-        )
+        self.turn
+            .refresh_native_tool_context(ctx, session_id, previous)
     }
-
-    /// Recover the exact context last published for this session, including frozen native
-    /// aliases. The returned cursor tells the caller whether later transcript facts need
-    /// reconciliation before another provider request.
+    /// See [`TurnEngine::recover_native_context_head`].
     pub fn recover_native_context_head(
         &self,
         ctx: &InvocationContext,
@@ -2760,16 +2569,9 @@ impl Runtime {
         )>,
         StorageError,
     > {
-        crate::tool_turn::recover_context_head(
-            self.store.as_ref(),
-            &self.artifacts,
-            ctx,
-            session_id,
-        )
+        self.turn.recover_native_context_head(ctx, session_id)
     }
-
-    /// Fix the first provider prompt and binding for a fresh session before its first send.
-    /// A restart recovers this head verbatim; a matching retry does not create another version.
+    /// See [`TurnEngine::publish_initial_native_context`].
     pub fn publish_initial_native_context(
         &self,
         ctx: &InvocationContext,
@@ -2777,18 +2579,10 @@ impl Runtime {
         binding: &devworks_core::protocol::provider::NativeBinding,
         context: &devworks_core::providers::context::ProviderContext,
     ) -> Result<devworks_core::protocol::provider::ArtifactRef, StorageError> {
-        crate::tool_turn::publish_initial_context(
-            self.store.as_ref(),
-            &self.artifacts,
-            ctx,
-            session_id,
-            binding,
-            context,
-        )
+        self.turn
+            .publish_initial_native_context(ctx, session_id, binding, context)
     }
-
-    /// Build the next provider context from the immutable request context and settled native
-    /// exchange. The caller publishes the returned material before a new request.
+    /// See [`TurnEngine::tool_continuation_context`].
     pub fn tool_continuation_context(
         &self,
         ctx: &InvocationContext,
@@ -2798,25 +2592,16 @@ impl Runtime {
         binding: &devworks_core::protocol::provider::NativeBinding,
         previous: &devworks_core::protocol::provider::ArtifactRef,
     ) -> Result<devworks_core::providers::context::ProviderContext, StorageError> {
-        crate::tool_turn::continuation_context(
-            self.store.as_ref(),
-            &self.artifacts,
+        self.turn.tool_continuation_context(
             ctx,
-            crate::tool_turn::TurnSource {
-                session_id,
-                attempt_id,
-                after_sequence,
-                has_tools: true,
-            },
+            session_id,
+            attempt_id,
+            after_sequence,
             binding,
             previous,
         )
-        .map(|material| material.context)
     }
-
-    /// Record an explicit provider-change context epoch after all emitted calls have their
-    /// initial responses. Known tool exchanges survive; opaque provider blocks are recorded as
-    /// omitted sources and cannot leak into the next provider's request.
+    /// See [`TurnEngine::change_provider_epoch`].
     pub fn change_provider_epoch(
         &self,
         ctx: &InvocationContext,
@@ -2825,9 +2610,7 @@ impl Runtime {
         previous_binding: &devworks_core::protocol::provider::NativeBinding,
         next_binding: &devworks_core::protocol::provider::NativeBinding,
     ) -> Result<devworks_core::protocol::provider::ArtifactRef, StorageError> {
-        crate::context_epoch::provider_change(
-            self.store.as_ref(),
-            &self.artifacts,
+        self.turn.change_provider_epoch(
             ctx,
             session_id,
             previous_context,
@@ -2835,10 +2618,7 @@ impl Runtime {
             next_binding,
         )
     }
-
-    /// Adopt changed repository guidance at an explicit safe context boundary. Unchanged
-    /// source stamps reuse the existing snapshot; a changed bundle creates a new immutable
-    /// context and records any opaque native state that cannot cross the epoch.
+    /// See [`TurnEngine::adopt_instruction_epoch`].
     pub fn adopt_instruction_epoch(
         &self,
         ctx: &InvocationContext,
@@ -2847,128 +2627,14 @@ impl Runtime {
         previous_binding: &devworks_core::protocol::provider::NativeBinding,
         targets: &[(Id, Vec<String>)],
     ) -> Result<devworks_core::protocol::provider::ArtifactRef, StorageError> {
-        if ctx.session_id() != Some(session_id) {
-            return Err(StorageError::ScopeDenied);
-        }
-        let previous_epoch = previous_binding.context_epoch.get();
-        devworks_core::ports::storage::read_snapshot(
-            self.store.as_ref(),
-            &devworks_core::ports::storage::ReadOptions::default(),
-            |read| {
-                let session = read
-                    .sessions()
-                    .session(session_id)?
-                    .ok_or(StorageError::ScopeDenied)?;
-                if session.closed() || session.context_epoch != previous_epoch {
-                    return Err(StorageError::ScopeDenied);
-                }
-                Ok(())
-            },
-        )?;
-        let source = crate::context_epoch::current_source(
-            self.store.as_ref(),
-            &self.artifacts,
+        self.turn.adopt_instruction_epoch(
             ctx,
             session_id,
             previous_context,
             previous_binding,
-        )?;
-        let mut base = source.context;
-        let old = std::mem::take(&mut base.instruction_stamps);
-        let old_count: usize = old.iter().map(|stamp| stamp.sources.len()).sum();
-        drop_stamped_guidance(&mut base.instructions, old_count)?;
-        let old_skills = base.skill_stamp.take();
-        if old_skills.is_some() {
-            base.instructions.pop();
-        }
-        // An assignment's context starts with its role's instructions, captured when the work
-        // began; a role changed since is adopted here, like changed guidance and skills.
-        let mut role_changed = false;
-        if let Some(role) = self.current_role_prefix(ctx)?
-            && let Some(rebound) = with_role(&base.instructions, role)
-        {
-            base.instructions = rebound;
-            role_changed = true;
-        }
-        let rebound = self.bind_provider_instructions(ctx, base, targets)?;
-        if !role_changed && rebound.instruction_stamps == old && rebound.skill_stamp == old_skills {
-            return Ok(source.artifact);
-        }
-        // Recorded in the transaction that publishes the epoch: a refused or failed transition
-        // records no adoption, and a retry records it once.
-        let adoption = (rebound.skill_stamp != old_skills)
-            .then(|| skill_adoption_payload(old_skills.as_ref(), rebound.skill_stamp.as_ref()));
-        let next_binding = devworks_core::protocol::provider::NativeBinding {
-            context_epoch: devworks_core::protocol::Counter::new(
-                previous_epoch
-                    .checked_add(1)
-                    .ok_or_else(|| StorageError::InvalidRecord("context epoch overflow".into()))?,
-            )
-            .map_err(|e| StorageError::InvalidRecord(e.into()))?,
-            ..previous_binding.clone()
-        };
-        let (converted, omitted) = rebound
-            .converted_for_new_epoch(previous_binding, &next_binding)
-            .map_err(|e| StorageError::InvalidRecord(format!("instruction adoption: {e:?}")))?;
-        crate::context_epoch::publish(
-            self.store.as_ref(),
-            &self.artifacts,
-            ctx,
-            session_id,
-            crate::context_epoch::EpochChange {
-                previous_epoch,
-                binding: next_binding,
-                observed_sequence: source.observed_sequence,
-                source: source.artifact,
-                reason: devworks_core::protocol::provider::ContextChangeReason::InstructionAdoption,
-                context: converted,
-                omitted,
-                adoption,
-            },
+            targets,
         )
     }
-
-    /// The current role instructions of the agent assignment `ctx` runs, as the role prefix of
-    /// its provider context (empty when the role has no instructions); `None` outside an agent
-    /// assignment.
-    fn current_role_prefix(
-        &self,
-        ctx: &InvocationContext,
-    ) -> Result<Option<Vec<devworks_core::providers::context::TextBlock>>, StorageError> {
-        let Some(assignment) = ctx.assignment_id() else {
-            return Ok(None);
-        };
-        devworks_core::ports::storage::read_snapshot(
-            self.store.as_ref(),
-            &devworks_core::ports::storage::ReadOptions::default(),
-            |read| {
-                let Some(source) = read.runs().agent_assignment_context(assignment)? else {
-                    return Ok(None);
-                };
-                let role =
-                    devworks_core::settings::catalog::AgentRole::parse(source.role_id.as_str())
-                        .ok_or_else(|| StorageError::InvalidRecord("assignment role".into()))?;
-                let text = devworks_core::settings::service::role_instructions(
-                    read.configuration(),
-                    role,
-                    Some(&source.project_id),
-                )
-                .map_err(|failure| match failure {
-                    devworks_core::settings::service::Failure::Storage(e) => e,
-                    devworks_core::settings::service::Failure::Refused(_) => {
-                        StorageError::InvalidRecord("role instructions".into())
-                    }
-                })?
-                .text;
-                Ok(Some(if text.is_empty() {
-                    Vec::new()
-                } else {
-                    vec![devworks_core::providers::context::TextBlock { text, cache: None }]
-                }))
-            },
-        )
-    }
-
     pub fn accounting(&self) -> &Arc<crate::usage::UsageRuntime> {
         &self.usage
     }
@@ -2998,93 +2664,33 @@ impl Runtime {
         self.indexing.as_ref()
     }
 
-    /// Resolve current path-scoped repository instructions from the checkout the invocation is
-    /// authorized to use. A missing/changed source is observed before each new dispatch; the
-    /// caller binds the returned revision and sources into its context epoch.
+    /// See [`TurnEngine::effective_instructions`].
     pub fn effective_instructions(
         &self,
         ctx: &InvocationContext,
         repository_id: &Id,
         target_paths: &[String],
     ) -> Result<devworks_core::providers::instructions::InstructionBundle, StorageError> {
-        crate::instruction_guard::InstructionGuard::new(
-            self.store.clone(),
-            self.indexing.as_ref().map(|ix| ix.env().source.clone()),
-        )
-        .resolve(ctx, repository_id, target_paths)
+        self.turn
+            .effective_instructions(ctx, repository_id, target_paths)
     }
-
-    /// The provider dispatch gate for instruction material, as the provider driver applies it:
-    /// repository guidance and the skill set bound to `context` must still be current.
+    /// See [`TurnEngine::verify_instruction_context`].
     pub fn verify_instruction_context(
         &self,
         ctx: &InvocationContext,
         context: &devworks_core::providers::context::ProviderContext,
         targets: Option<&[(Id, Vec<String>)]>,
     ) -> Result<(), StorageError> {
-        crate::instruction_guard::InstructionGuard::new(
-            self.store.clone(),
-            self.indexing.as_ref().map(|ix| ix.env().source.clone()),
-        )
-        .with_skills(self.instructions.clone())
-        .verify(ctx, context, targets)
+        self.turn.verify_instruction_context(ctx, context, targets)
     }
-
-    /// Compose the effective instruction prefix and its exact source stamps for one provider
-    /// request. The trusted turn caller supplies its authorized repository and target paths;
-    /// an empty path set means repository-root guidance only.
+    /// See [`TurnEngine::bind_provider_instructions`].
     pub fn bind_provider_instructions(
         &self,
         ctx: &InvocationContext,
         base: devworks_core::providers::context::ProviderContext,
         targets: &[(Id, Vec<String>)],
     ) -> Result<devworks_core::providers::context::ProviderContext, StorageError> {
-        let selected = if targets.is_empty() {
-            if let Some(bound) = ctx.worktree() {
-                vec![(bound.repository_id().clone(), Vec::new())]
-            } else if let Some(project) = ctx.project_id() {
-                devworks_core::ports::storage::read_snapshot(
-                    self.store.as_ref(),
-                    &devworks_core::ports::storage::ReadOptions::default(),
-                    |read| {
-                        Ok(read
-                            .projects()
-                            .members(project)?
-                            .into_iter()
-                            .map(|id| (id, Vec::new()))
-                            .collect())
-                    },
-                )?
-            } else {
-                Vec::new()
-            }
-        } else {
-            targets.to_vec()
-        };
-        if selected.len() > 64 {
-            return Err(StorageError::InvalidRecord(
-                "too many instruction repositories".into(),
-            ));
-        }
-        let mut bundles = Vec::with_capacity(selected.len());
-        for (repository, paths) in &selected {
-            let scope = if paths.is_empty() {
-                vec![".".into()]
-            } else {
-                paths.clone()
-            };
-            bundles.push(self.effective_instructions(ctx, repository, &scope)?);
-        }
-        let base = match crate::instruction_guard::InstructionGuard::new(self.store.clone(), None)
-            .with_skills(self.instructions.clone())
-            .current_skills()?
-        {
-            Some(stamp) => devworks_core::providers::instructions::bind_skills(base, stamp)
-                .map_err(|e| StorageError::InvalidRecord(format!("skill binding: {e:?}")))?,
-            None => base,
-        };
-        devworks_core::providers::instructions::bind_context(base, &bundles)
-            .map_err(|error| StorageError::InvalidRecord(format!("instruction binding: {error:?}")))
+        self.turn.bind_provider_instructions(ctx, base, targets)
     }
     /// The keep-awake request as last applied (re-checking a held request).
     pub fn keep_awake(&self) -> KeepAwakeStatus {
@@ -3119,14 +2725,6 @@ impl Runtime {
         self.collector.ticker.notify();
     }
 
-    fn gateway(&self) -> Gateway<'_> {
-        Gateway {
-            authority: &*self.authority,
-            store: &*self.store,
-            ids: &*self.ids,
-        }
-    }
-
     pub fn query(&self, ctx: &InvocationContext, operation: &str, raw: &[u8]) -> QueryOutcome {
         self.query_with(
             ctx,
@@ -3145,47 +2743,11 @@ impl Runtime {
         raw: &[u8],
         options: &devworks_core::ports::storage::ReadOptions,
     ) -> QueryOutcome {
-        let outcome =
-            self.use_cases
-                .query_with(&self.gateway(), ctx, operation, raw, options.clone());
-        if operation == DISCOVERS_REPOSITORIES
-            && let Some(ix) = &self.indexing
-            && discovery_scans_inline(ctx, &outcome)
-        {
-            // Only after the gateway admitted the query (authority, store and epoch checks) and
-            // for a person or the host: discovery then answers from a fresh scan of the
-            // invocation's sections. Other readers answer from the recorded registrations, which
-            // the supervisor's background discovery keeps current. Shutdown refuses the scan.
-            let open = self.admission.read().unwrap_or_else(|p| p.into_inner());
-            if *open {
-                return outcome;
-            }
-            let env = ix.env().clone();
-            let cancelled = || {
-                options
-                    .cancellation
-                    .as_ref()
-                    .is_some_and(devworks_core::ports::storage::Cancellation::is_cancelled)
-            };
-            // A scan that fails leaves the recorded registrations to answer; what it could not
-            // do is recorded on the indexing channel.
-            let scan =
-                devworks_core::services::indexing::discover::scan(&env, ctx, None, &cancelled);
-            devworks_core::services::indexing::discover::log_scan(&env, &scan);
-            drop(open);
-            return self.use_cases.query_with(
-                &self.gateway(),
-                ctx,
-                operation,
-                raw,
-                options.clone(),
-            );
-        }
-        outcome
+        self.admitter.query_with(ctx, operation, raw, options)
     }
 
     pub fn command(&self, ctx: &InvocationContext, operation: &str, raw: &[u8]) -> CommandOutcome {
-        self.command_with(ctx, operation, raw, WriteOptions::default())
+        self.command_with(ctx, operation, raw, WriteOptions::command())
     }
 
     /// Dedicated trusted native-human interaction. The ordinary command/tool path cannot
@@ -3703,7 +3265,7 @@ impl Drop for Runtime {
 /// The one command path: the admission fence shutdown closes, the gateway over the registered use
 /// cases, and the post-commit wakeups (reply delivery, run supervision, collection, the live log,
 /// keep-awake, the scheduler). UI, agent tools and the scheduler's native runs all go through it.
-struct Admitter {
+pub(crate) struct Admitter {
     store: Arc<dyn ApplicationStore>,
     ids: Arc<dyn IdSource>,
     authority: Arc<dyn AuthorityPort>,
@@ -3724,7 +3286,7 @@ struct Admitter {
     notifications: Option<Arc<OsNotificationSupervisor>>,
     indexing: Option<Arc<IndexSupervisor>>,
     /// Counts admissions that may have changed domain state (see [`Runtime::state_changes`]).
-    changes: watch::Sender<u64>,
+    pub(crate) changes: watch::Sender<u64>,
     /// The Tokio runtime [`boot`] ran on (a project archival's immediate stop is spawned there).
     handle: tokio::runtime::Handle,
 }
@@ -3745,7 +3307,7 @@ async fn blocking<T: Send + 'static>(work: impl FnOnce() -> T + Send + 'static) 
 }
 
 /// Drives every future to completion on the calling task and returns the outputs in order.
-async fn join_all<'a, T>(
+pub(crate) async fn join_all<'a, T>(
     mut futures: Vec<std::pin::Pin<Box<dyn std::future::Future<Output = T> + Send + 'a>>>,
 ) -> Vec<T> {
     let mut outputs: Vec<Option<T>> = futures.iter().map(|_| None).collect();
@@ -3806,11 +3368,59 @@ impl Admitter {
         }
     }
 
+    /// Reads through the gateway; a person's or the host's repository discovery answers from a
+    /// fresh scan (see [`Runtime::query_with`]).
+    pub(crate) fn query_with(
+        &self,
+        ctx: &InvocationContext,
+        operation: &str,
+        raw: &[u8],
+        options: &devworks_core::ports::storage::ReadOptions,
+    ) -> QueryOutcome {
+        let outcome =
+            self.use_cases
+                .query_with(&self.gateway(), ctx, operation, raw, options.clone());
+        if operation == DISCOVERS_REPOSITORIES
+            && let Some(ix) = &self.indexing
+            && discovery_scans_inline(ctx, &outcome)
+        {
+            // Only after the gateway admitted the query (authority, store and epoch checks) and
+            // for a person or the host: discovery then answers from a fresh scan of the
+            // invocation's sections. Other readers answer from the recorded registrations, which
+            // the supervisor's background discovery keeps current. Shutdown refuses the scan.
+            let open = self.admission.read().unwrap_or_else(|p| p.into_inner());
+            if *open {
+                return outcome;
+            }
+            let env = ix.env().clone();
+            let cancelled = || {
+                options
+                    .cancellation
+                    .as_ref()
+                    .is_some_and(devworks_core::ports::storage::Cancellation::is_cancelled)
+            };
+            // A scan that fails leaves the recorded registrations to answer; what it could not
+            // do is recorded on the indexing channel.
+            let scan =
+                devworks_core::services::indexing::discover::scan(&env, ctx, None, &cancelled);
+            devworks_core::services::indexing::discover::log_scan(&env, &scan);
+            drop(open);
+            return self.use_cases.query_with(
+                &self.gateway(),
+                ctx,
+                operation,
+                raw,
+                options.clone(),
+            );
+        }
+        outcome
+    }
+
     /// Admits a command. A command that may have committed (`Recorded`, or a lost
     /// acknowledgment) wakes delivery for the reply intent its receipt committed, an applied
     /// `artifacts.delete` starts a collection pass for the blobs it released, an applied
     /// `settings.save_revision` re-applies keep-awake and a `jobs.*` command wakes the scheduler.
-    fn command_with(
+    pub(crate) fn command_with(
         &self,
         ctx: &InvocationContext,
         operation: &str,
@@ -3913,7 +3523,7 @@ impl Admitter {
 
     /// Phase one of an `agents.receive` that holds no thread: admits it, looks once and either
     /// answers or returns the wait for the caller to await ([`Self::finish_receive`]).
-    fn begin_receive(
+    pub(crate) fn begin_receive(
         &self,
         ctx: &InvocationContext,
         raw: &[u8],
@@ -3962,7 +3572,7 @@ impl Admitter {
 
     /// Phase two: waits without holding a thread for a signal, a cancellation or the recheck
     /// interval, looks again, and decides once nothing is left to wait for.
-    async fn finish_receive(self: Arc<Self>, wait: Box<ReceiveWait>) -> CommandOutcome {
+    pub(crate) async fn finish_receive(self: Arc<Self>, wait: Box<ReceiveWait>) -> CommandOutcome {
         let ReceiveWait {
             ctx,
             raw,
@@ -4151,14 +3761,14 @@ impl crate::package_host::broker::GatewayCalls for Admitter {
     ) -> Option<CommandOutcome> {
         let options = WriteOptions {
             cancellation: Some(cancellation),
-            ..WriteOptions::default()
+            ..WriteOptions::command()
         };
         self.fenced_command(ctx, operation, raw, options, true, fence)
     }
 }
 impl NativeJobDispatch for Admitter {
     fn command(&self, ctx: &InvocationContext, operation: &str, raw: &[u8]) -> CommandOutcome {
-        self.command_with(ctx, operation, raw, WriteOptions::default())
+        self.command_with(ctx, operation, raw, WriteOptions::command())
     }
 }
 
@@ -4177,7 +3787,7 @@ impl ResumeAdmission for Admitter {
 
 /// Removes the trailing `count` guidance blocks named by the stored stamps. A stored context
 /// whose stamps name more blocks than it holds is inconsistent: refuse it, never underflow.
-fn drop_stamped_guidance(
+pub(crate) fn drop_stamped_guidance(
     instructions: &mut Vec<devworks_core::providers::context::TextBlock>,
     count: usize,
 ) -> Result<(), StorageError> {
@@ -4192,7 +3802,7 @@ fn drop_stamped_guidance(
 /// revisions and digests, the transitions and any unresolved conflicts.
 /// The role prefix replaced by `role` when its text differs, keeping the host-authored blocks
 /// that follow it (they are not part of the role); `None` when the role is unchanged.
-fn with_role(
+pub(crate) fn with_role(
     instructions: &[devworks_core::providers::context::TextBlock],
     role: Vec<devworks_core::providers::context::TextBlock>,
 ) -> Option<Vec<devworks_core::providers::context::TextBlock>> {
@@ -4214,7 +3824,7 @@ fn with_role(
     )
 }
 
-fn skill_adoption_payload(
+pub(crate) fn skill_adoption_payload(
     before: Option<&devworks_core::providers::instructions::SkillStamp>,
     after: Option<&devworks_core::providers::instructions::SkillStamp>,
 ) -> serde_json::Value {

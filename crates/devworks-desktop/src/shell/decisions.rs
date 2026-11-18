@@ -1,337 +1,132 @@
-//! Approval and notification view state. All eligibility, promotion, and wakeups are server-owned.
+//! The Approvals and notifications controller: approvals, the Knowledge review queue, the
+//! notification center, completion cards and notification preferences, read and changed
+//! through the shared services' frames. It implements [`Screen`] for [`DecisionsUi`]; state
+//! and views are in [`crate::decisions_screen`]. All eligibility, promotion, and wakeups are
+//! server-owned.
 use super::*;
-use crate::decision_ops as dops;
-use devworks_core::protocol::records::{
-    ApprovalContent, ApprovalReviewedContent, ApprovalState, ApprovalViewRecord,
-    KnowledgeReviewItem, NotificationConfig, NotificationLink, NotificationRecord,
-};
+use crate::decision_ops::{self as dops, DecisionsSlot};
+pub use crate::decisions_screen::*;
+use crate::screen::{Screen, ScreenContext, controller};
+use devworks_core::protocol::records::{NotificationLink, NotificationRecord};
 use devworks_core::protocol::results::OperationResult;
+use serde_json::json;
 
-#[derive(Default)]
-pub struct DecisionsUi {
-    pub project: Option<String>,
-    pub tab: usize,
-    pub history_state: Option<String>,
-    pub approvals: Vec<ApprovalViewRecord>,
-    gathering: Vec<ApprovalViewRecord>,
-    pub loaded: bool,
-    pub error: Option<String>,
-    /// The inspected proposal is the exact displayed snapshot; a refresh never replaces a draft.
-    pub selected: Option<ApprovalViewRecord>,
-    inspecting: Option<String>,
-    current: Option<ApprovalStatus>,
-    pub rationale: String,
-    pub text: Option<ApprovalText>,
-    pub decision_error: Option<String>,
-    pub reviews: Vec<KnowledgeReviewItem>,
-    review_gathering: Vec<KnowledgeReviewItem>,
-    pub reviews_loaded: bool,
-    pub notifications: Vec<NotificationRecord>,
-    notification_gathering: Vec<NotificationRecord>,
-    pub notifications_loaded: bool,
-    pub notification_error: Option<String>,
-    pub notification_project: Option<String>,
-    pub unread_only: bool,
-    pub unacknowledged_only: bool,
-    pub category: String,
-    pub notification: Option<NotificationRecord>,
-    reading_notification: Option<String>,
-    /// Complete authoritative unacknowledged verified-completion feed, independent of filters.
-    pub completions: Vec<NotificationRecord>,
-    completion_gathering: Vec<NotificationRecord>,
-    pub completion_error: Option<String>,
-    pub permission: Option<devworks_core::ports::os_notifications::OsNotificationPermission>,
-    pub config: Option<(NotificationConfig, String)>,
-    pub config_draft: Option<NotificationConfig>,
-    config_saving: Option<NotificationConfig>,
-    config_kinds: String,
-    config_kinds_saving: Option<String>,
+controller!(DecisionsCtl, decisions: DecisionsUi);
+
+impl Screen for DecisionsUi {
+    type Slot = DecisionsSlot;
+    const ID: ScreenId = ScreenId::Decisions;
+    fn load(&mut self, cx: &mut Cx, _route: Route) {
+        self.tab = cx.routes.entry(Route::Approvals).or_default().tab;
+        DecisionsCtl {
+            decisions: self,
+            cx,
+        }
+        .load_approvals();
+    }
+    /// The shell refreshes approvals and notifications on every route
+    /// ([`DecisionsUi::refresh_decisions`]): completion cards show everywhere.
+    fn refresh(&mut self, _cx: &mut Cx, _route: Route) {}
+    fn apply(&mut self, cx: &mut Cx, slot: DecisionsSlot, reply: Reply) {
+        if let Some((slot, reply)) = (DecisionsCtl {
+            decisions: self,
+            cx,
+        })
+        .apply_decisions(slot, reply)
+        {
+            cx.unhandled(&slot, reply);
+        }
+    }
+    fn ui(&mut self, cx: &mut Cx, _route: Route, ui: &mut Ui) {
+        DecisionsCtl {
+            decisions: self,
+            cx,
+        }
+        .approvals_screen(ui);
+    }
+    fn purge_live(&self, out: &mut crate::project_purge::Live) {
+        if let Some(devworks_core::protocol::data::DataScope::Project { project_id }) =
+            self.selected.as_ref().and_then(|r| r.scope.as_ref())
+        {
+            out.projects
+                .entry(project_id.0.as_str().into())
+                .or_insert_with(|| json!({}))["decision"] = json!(self.rationale);
+        }
+    }
+    fn remove_purged(&mut self, scope: &devworks_core::ports::storage::ProjectPurgeClientScope) {
+        self.purge_owned(scope);
+    }
+    fn context(&self, _route: Route, _mem: &RouteMemory) -> ScreenContext {
+        ScreenContext {
+            tab: self.tab,
+            selection: self.selected.as_ref().map(|v| v.id.as_str().to_owned()),
+        }
+    }
 }
 
+/// What the shell asks of the approvals and notifications controller.
 impl DecisionsUi {
-    pub(super) fn purge_owned(
-        &mut self,
-        scope: &devworks_core::ports::storage::ProjectPurgeClientScope,
-    ) {
-        use devworks_core::protocol::data::DataScope;
-        let owned=self.selected.as_ref().is_some_and(|r| matches!(&r.scope,Some(DataScope::Project{project_id}) if project_id==&scope.project_id));
-        if owned {
-            self.selected = None;
-            self.inspecting = None;
-            self.current = None;
-            self.rationale.clear();
-            self.text = None;
-            self.decision_error = None;
+    pub(crate) fn load_completion_notifications(&mut self, cx: &mut Cx) {
+        DecisionsCtl {
+            decisions: self,
+            cx,
         }
-        self.approvals.clear();
-        self.gathering.clear();
-        self.loaded = false;
-        self.reviews.clear();
-        self.review_gathering.clear();
-        self.reviews_loaded = false;
-        self.notifications.clear();
-        self.notification_gathering.clear();
-        self.notifications_loaded = false;
-        self.notification = None;
-        self.reading_notification = None;
-        self.completions.clear();
-        self.completion_gathering.clear();
-        if self.project.as_deref() == Some(scope.project_id.0.as_str()) {
-            self.project = None;
+        .load_completion_notifications();
+    }
+    /// A hint or the periodic repair: completion cards, the open Approvals screen and the open
+    /// notification center are read again.
+    pub(crate) fn refresh_decisions(&mut self, cx: &mut Cx) {
+        let mut ctl = DecisionsCtl {
+            decisions: self,
+            cx,
+        };
+        ctl.load_completion_notifications();
+        if ctl.route() == Route::Approvals
+            && !ctl.pending(&DecisionsSlot::ApprovalsList)
+            && !ctl.pending(&DecisionsSlot::ReviewQueue)
+        {
+            ctl.load_approvals();
         }
-        if self.notification_project.as_deref() == Some(scope.project_id.0.as_str()) {
-            self.notification_project = None;
+        if ctl.decisions.notifications_open && !ctl.pending(&DecisionsSlot::NotificationsList) {
+            ctl.load_notification_history();
         }
-        // Notification configuration drafts are independent workspace authoring state.
+    }
+    pub(crate) fn inspect_approval(&mut self, cx: &mut Cx, id: String) {
+        DecisionsCtl {
+            decisions: self,
+            cx,
+        }
+        .inspect_approval(id);
+    }
+    pub(crate) fn notification_center(&mut self, cx: &mut Cx, ctx: &egui::Context) {
+        DecisionsCtl {
+            decisions: self,
+            cx,
+        }
+        .notification_center(ctx);
+    }
+    pub(crate) fn completion_action(&mut self, cx: &mut Cx, ctx: &egui::Context, a: CardAction) {
+        DecisionsCtl {
+            decisions: self,
+            cx,
+        }
+        .completion_action(ctx, a);
     }
 }
 
-struct ApprovalStatus {
-    revision: String,
-    state: ApprovalState,
-    stale: Option<bool>,
-    content_digest: String,
-    target_revision: String,
-}
-impl From<&ApprovalViewRecord> for ApprovalStatus {
-    fn from(p: &ApprovalViewRecord) -> Self {
-        Self {
-            revision: p.revision.as_str().into(),
-            state: p.state.clone(),
-            stale: p.stale,
-            content_digest: p.content_digest.as_str().into(),
-            target_revision: p.target_revision.as_str().into(),
+impl DecisionsCtl<'_, '_> {
+    fn set_card_status(&mut self, id: &str, status: Option<String>) {
+        if let Some(c) = self.cx.completions.as_deref_mut() {
+            c.set_status(id, status);
         }
     }
-}
-
-pub struct ApprovalText {
-    artifact: devworks_core::protocol::provider::ArtifactRef,
-    pages: Vec<String>,
-    page: usize,
-    next: Option<String>,
-    error: Option<String>,
-}
-
-/// A small owner-derived package review carries its source bundle as an attachment. Large
-/// reviews instead carry mandatory JSON evidence; plans always require their exact text.
-fn package_source_attachment(p: &ApprovalViewRecord) -> bool {
-    let Some(artifact) = &p.artifact else {
-        return false;
-    };
-    if artifact.media_type != "application/vnd.devworks.package"
-        || !matches!(p.payload, Some(ApprovalContent::SavedOperation { .. }))
-        || !matches!(
-            p.operation_kind.0.as_str(),
-            "addons.install"
-                | "addons.update"
-                | "addons.enable"
-                | "addons.configure"
-                | "addons.rollback"
-        )
-    {
-        return false;
-    }
-    let Some(reviewed) = &p.reviewed_content else {
-        return false;
-    };
-    reviewed.0["operation"] == p.operation_kind.0
-        && reviewed.0["inspection"].is_object()
-        && reviewed.0.pointer("/source/bundle")
-            == Some(&serde_json::to_value(artifact).expect("typed package source"))
-}
-/// The readable review of an agent's `containers.create`: the image and command, each mount
-/// source with its host path and read-only flag, and each published port with its bind address.
-/// `None` when the proposal is not one or its review is held in an evidence artifact instead.
-fn container_create_review(p: &ApprovalViewRecord) -> Option<Vec<String>> {
-    if p.operation_kind.0 != "containers.create" {
-        return None;
-    }
-    let reviewed = &p.reviewed_content.as_ref()?.0;
-    if reviewed["operation"] != "containers.create" {
-        return None;
-    }
-    let text = |v: &serde_json::Value| v.as_str().unwrap_or("?").to_owned();
-    let mut lines = vec![format!("Image: {}", text(&reviewed["image"]))];
-    let command: Vec<String> = reviewed["command"].as_array()?.iter().map(text).collect();
-    lines.push(if command.is_empty() {
-        "Command: image default".into()
-    } else {
-        format!("Command: {}", command.join(" "))
-    });
-    let mounts = reviewed["mounts"].as_array()?;
-    if mounts.is_empty() {
-        lines.push("Mounts: none".into());
-    }
-    for mount in mounts {
-        lines.push(format!(
-            "Mount {} ({} / {}) at {}, {}",
-            text(&mount["hostPath"]),
-            text(&mount["source"]["rootId"]),
-            text(&mount["source"]["relative"]),
-            text(&mount["destination"]),
-            if mount["readOnly"].as_bool()? {
-                "read-only"
-            } else {
-                "writable"
-            }
-        ));
-    }
-    let ports = reviewed["ports"].as_array()?;
-    if ports.is_empty() {
-        lines.push("Published ports: none".into());
-    }
-    for port in ports {
-        lines.push(format!(
-            "Port {}/{} on {} to container port {}{}",
-            port["hostPort"].as_u64()?,
-            text(&port["protocol"]),
-            text(&port["bindAddress"]),
-            port["containerPort"].as_u64()?,
-            if port["exposeBeyondLoopback"].as_bool()? {
-                ", reachable from other machines"
-            } else {
-                ""
-            }
-        ));
-    }
-    for entry in reviewed["environment"].as_array().into_iter().flatten() {
-        lines.push(match entry["credentialRef"].as_str() {
-            Some(credential) => format!(
-                "Environment {} from credential {credential}",
-                text(&entry["name"])
-            ),
-            None => format!(
-                "Environment {}={}",
-                text(&entry["name"]),
-                text(&entry["value"])
-            ),
-        });
-    }
-    Some(lines)
-}
-/// The readable review of an agent's `containers.build`, `pull`, `start` or `exec`, with its
-/// heading: the build context and Dockerfile, the image and registry, or the container with its
-/// owner, and for exec the command and environment (secret values arrive already redacted).
-/// `None` when the proposal is not one or its review is held in an evidence artifact instead.
-fn container_operation_review(p: &ApprovalViewRecord) -> Option<(&'static str, Vec<String>)> {
-    let reviewed = &p.reviewed_content.as_ref()?.0;
-    if reviewed["operation"] != p.operation_kind.0 {
-        return None;
-    }
-    let text = |v: &serde_json::Value| v.as_str().unwrap_or("?").to_owned();
-    let container = |lines: &mut Vec<String>| {
-        let c = &reviewed["container"];
-        lines.push(format!(
-            "Container {} from image {}, {}",
-            text(&c["containerId"]),
-            text(&c["image"]),
-            text(&c["phase"])
-        ));
-        lines.push(format!(
-            "Owner {} ({}), session {}",
-            text(&c["owner"]["actor"]),
-            text(&c["owner"]["ownerKind"]),
-            c["owner"]["sessionId"].as_str().unwrap_or("none")
-        ));
-    };
-    let mut lines = Vec::new();
-    let heading = match p.operation_kind.0.as_str() {
-        "containers.build" => {
-            let context = &reviewed["context"];
-            let definition = &reviewed["definition"];
-            lines.push(format!("Tag: {}", text(&reviewed["tag"])));
-            lines.push(format!(
-                "Context {} ({} / {})",
-                text(&context["hostPath"]),
-                text(&context["source"]["rootId"]),
-                text(&context["source"]["relative"])
-            ));
-            lines.push(format!(
-                "Dockerfile {} bytes, sha256 {}",
-                text(&definition["byteLength"]),
-                text(&definition["sha256"])
-            ));
-            lines.extend(text(&definition["text"]).lines().map(|l| format!("  {l}")));
-            "Image to build"
-        }
-        "containers.pull" => {
-            lines.push(format!("Image: {}", text(&reviewed["image"])));
-            lines.push(format!("Registry: {}", text(&reviewed["registry"])));
-            if let Some(credential) = reviewed["credentialRef"].as_str() {
-                lines.push(format!("Registry credential {credential}"));
-            }
-            "Image to pull"
-        }
-        "containers.start" => {
-            container(&mut lines);
-            "Container to start"
-        }
-        "containers.exec" => {
-            container(&mut lines);
-            let command: Vec<String> = reviewed["command"].as_array()?.iter().map(text).collect();
-            lines.push(format!("Command: {}", command.join(" ")));
-            lines.push(format!(
-                "Working directory: {}",
-                text(&reviewed["workingDirectory"])
-            ));
-            for entry in reviewed["environment"].as_array().into_iter().flatten() {
-                lines.push(match entry["credentialRef"].as_str() {
-                    Some(credential) => format!(
-                        "Environment {} from credential {credential}",
-                        text(&entry["name"])
-                    ),
-                    None => format!(
-                        "Environment {}={}",
-                        text(&entry["name"]),
-                        text(&entry["value"])
-                    ),
-                });
-            }
-            "Command to run in a container"
-        }
-        _ => return None,
-    };
-    Some((heading, lines))
-}
-fn required_approval_text(
-    p: &ApprovalViewRecord,
-) -> Option<devworks_core::protocol::provider::ArtifactRef> {
-    match &p.reviewed_source {
-        Some(ApprovalReviewedContent::FeaturePlan { plan, .. }) => Some(plan.content.clone()),
-        _ if package_source_attachment(p) => None,
-        _ => p.artifact.clone(),
-    }
-}
-#[derive(Clone)]
-enum Action {
-    Reload,
-    Inspect(String),
-    Decide(bool),
-    WaitForDesktop,
-    ReloadNotifications,
-    Read(String),
-    MarkRead(NotificationRecord, bool),
-    Acknowledge(NotificationRecord),
-    Link(NotificationLink),
-    Approval(String),
-    OpenKnowledge(devworks_core::protocol::Id),
-    SaveConfig,
-    RequestPermission,
-    NextText,
-    PreviousText,
-    OpenWork(String),
-    OpenArtifact(devworks_core::protocol::Id),
-    ReloadConfig,
-}
-
-impl Shell {
-    fn unresolved(&self, slot: &Slot) -> bool {
+    fn unresolved(&self, slot: &DecisionsSlot) -> bool {
+        let slot = Slot::from(slot.clone());
         self.client
             .as_ref()
-            .is_some_and(|c| c.unresolved().iter().any(|u| &u.slot == slot))
+            .is_some_and(|c| c.unresolved().iter().any(|u| u.slot == slot))
     }
-    pub(super) fn load_approvals(&mut self) {
+    fn load_approvals(&mut self) {
         self.decisions.gathering.clear();
         self.approval_page(None);
         self.decisions.review_gathering.clear();
@@ -345,7 +140,7 @@ impl Shell {
             self.decisions.history_state.clone()
         };
         self.query(
-            Slot::ApprovalsList,
+            DecisionsSlot::ApprovalsList,
             "Loading approvals",
             "approvals.list",
             move |b| {
@@ -366,25 +161,25 @@ impl Shell {
         // The retained informational queue requires a project.
         let project = project.clone();
         self.query(
-            Slot::ReviewQueue,
+            DecisionsSlot::ReviewQueue,
             "Loading Knowledge review queue",
             "approvals.review_queue",
             move |b| dops::query(b, dops::review_queue(&project, cursor.as_deref())),
         );
     }
-    pub(super) fn load_completion_notifications(&mut self) {
-        if self.pending(&Slot::CompletionList) {
+    fn load_completion_notifications(&mut self) {
+        if self.pending(&DecisionsSlot::CompletionList) {
             return;
         }
         self.decisions.completion_gathering.clear();
         self.notification_page(true, None);
     }
-    pub(super) fn load_notification_history(&mut self) {
+    fn load_notification_history(&mut self) {
         self.decisions.notification_gathering.clear();
         self.notification_page(false, None);
-        if self.decisions.config.is_none() && !self.pending(&Slot::NotificationSettings) {
+        if self.decisions.config.is_none() && !self.pending(&DecisionsSlot::NotificationSettings) {
             self.query(
-                Slot::NotificationSettings,
+                DecisionsSlot::NotificationSettings,
                 "Loading notification settings",
                 "notifications.settings",
                 |b| dops::query(b, dops::settings_query()),
@@ -399,9 +194,9 @@ impl Shell {
             self.decisions.category.clone(),
         );
         let slot = if completion {
-            Slot::CompletionList
+            DecisionsSlot::CompletionList
         } else {
-            Slot::NotificationsList
+            DecisionsSlot::NotificationsList
         };
         self.query(
             slot,
@@ -440,7 +235,7 @@ impl Shell {
         }
         self.decisions.inspecting = Some(id.clone());
         self.query(
-            Slot::ApprovalInspect(key),
+            DecisionsSlot::ApprovalInspect(key),
             "Inspecting exact approval content",
             "approvals.inspect",
             move |b| dops::query(b, dops::approval_inspect(&id)),
@@ -461,7 +256,7 @@ impl Shell {
         }
         let id = p.id.as_str().to_owned();
         self.query(
-            Slot::ApprovalRefresh(id.clone()),
+            DecisionsSlot::ApprovalRefresh(id.clone()),
             "Checking inspected proposal status",
             "approvals.inspect",
             move |b| dops::query(b, dops::approval_inspect(&id)),
@@ -475,7 +270,7 @@ impl Shell {
         let artifact = text.artifact.clone();
         let cursor = text.next.clone();
         self.query(
-            Slot::ApprovalContent(id),
+            DecisionsSlot::ApprovalContent(id),
             "Reading exact proposal artifact",
             "artifacts.read",
             move |b| ops::artifact_read_after(b, &artifact, cursor.as_deref()),
@@ -485,7 +280,7 @@ impl Shell {
         let Some(p) = &self.decisions.selected else {
             return;
         };
-        let slot = Slot::ApprovalDecision(p.id.as_str().to_owned());
+        let slot = DecisionsSlot::ApprovalDecision(p.id.as_str().to_owned());
         let desktop_takeover = p.operation_kind.0 == "desktop.request_control";
         if self.online().is_err()
             || self.pending(&slot)
@@ -508,12 +303,12 @@ impl Shell {
         };
         let frame = dops::command(&*b, dops::decision(p, approve, rationale));
         if let Some(c) = &mut self.client {
-            c.human_decision(slot, "Recording your approval decision", frame);
+            c.human_decision(slot.into(), "Recording your approval decision", frame);
         }
     }
     fn change_notification(&mut self, record: NotificationRecord, read: Option<bool>) {
         let id = record.id.as_str().to_owned();
-        let slot = Slot::NotificationChange(id.clone());
+        let slot = DecisionsSlot::NotificationChange(id.clone());
         if self.pending(&slot) || self.unresolved(&slot) {
             return;
         }
@@ -583,11 +378,17 @@ impl Shell {
                 }
             })
             .collect();
-        self.completions.reconcile(cards);
+        if let Some(c) = self.cx.completions.as_deref_mut() {
+            c.reconcile(cards);
+        }
     }
-    pub(super) fn apply_decisions(&mut self, slot: Slot, reply: Reply) -> Option<(Slot, Reply)> {
+    fn apply_decisions(
+        &mut self,
+        slot: DecisionsSlot,
+        reply: Reply,
+    ) -> Option<(DecisionsSlot, Reply)> {
         match (slot, reply) {
-            (Slot::ApprovalsList, Reply::Query(q)) => match dops::approvals(q) {
+            (DecisionsSlot::ApprovalsList, Reply::Query(q)) => match dops::approvals(q) {
                 Ok((rows, next)) => {
                     self.decisions.gathering.extend(rows);
                     if next.is_some() {
@@ -601,9 +402,9 @@ impl Shell {
                 }
                 Err(e) => self.decisions.error = Some(e.describe()),
             },
-            (Slot::ApprovalInspect(id), Reply::Query(_))
+            (DecisionsSlot::ApprovalInspect(id), Reply::Query(_))
                 if self.decisions.inspecting.as_deref() != Some(id.as_str()) => {}
-            (Slot::ApprovalInspect(_), Reply::Query(q)) => match dops::approval(q) {
+            (DecisionsSlot::ApprovalInspect(_), Reply::Query(q)) => match dops::approval(q) {
                 Ok(p) => {
                     let artifact = required_approval_text(&p);
                     self.decisions.text = artifact.map(|artifact| ApprovalText {
@@ -624,7 +425,7 @@ impl Shell {
                     self.decisions.decision_error = Some(e.describe());
                 }
             },
-            (Slot::ApprovalRefresh(id), Reply::Query(q)) => {
+            (DecisionsSlot::ApprovalRefresh(id), Reply::Query(q)) => {
                 if self
                     .decisions
                     .selected
@@ -637,7 +438,7 @@ impl Shell {
                     }
                 }
             }
-            (Slot::ApprovalContent(id), Reply::Query(q)) => {
+            (DecisionsSlot::ApprovalContent(id), Reply::Query(q)) => {
                 if self
                     .decisions
                     .selected
@@ -670,7 +471,7 @@ impl Shell {
                     }
                 }
             }
-            (Slot::ApprovalDecision(id), Reply::Command(q)) => {
+            (DecisionsSlot::ApprovalDecision(id), Reply::Command(q)) => {
                 let selected = self
                     .decisions
                     .selected
@@ -694,8 +495,8 @@ impl Shell {
             }
             // Clearing the project may leave an older project's reply in flight. It cannot
             // restore hidden rows or continue paging without a selected project.
-            (Slot::ReviewQueue, Reply::Query(_)) if self.decisions.project.is_none() => {}
-            (Slot::ReviewQueue, Reply::Query(q)) => match dops::reviews(q) {
+            (DecisionsSlot::ReviewQueue, Reply::Query(_)) if self.decisions.project.is_none() => {}
+            (DecisionsSlot::ReviewQueue, Reply::Query(q)) => match dops::reviews(q) {
                 Ok((rows, next)) => {
                     self.decisions.review_gathering.extend(rows);
                     if next.is_some() {
@@ -708,7 +509,7 @@ impl Shell {
                 }
                 Err(e) => self.decisions.error = Some(e.describe()),
             },
-            (Slot::CompletionList, Reply::Query(q)) => match dops::notifications(q) {
+            (DecisionsSlot::CompletionList, Reply::Query(q)) => match dops::notifications(q) {
                 Ok((rows, next)) => {
                     self.decisions.completion_gathering.extend(rows);
                     if next.is_some() {
@@ -728,7 +529,7 @@ impl Shell {
                 }
                 Err(e) => self.decisions.completion_error = Some(e.describe()),
             },
-            (Slot::NotificationsList, Reply::Query(q)) => match dops::notifications(q) {
+            (DecisionsSlot::NotificationsList, Reply::Query(q)) => match dops::notifications(q) {
                 Ok((rows, next)) => {
                     self.decisions.notification_gathering.extend(rows);
                     if next.is_some() {
@@ -745,15 +546,15 @@ impl Shell {
                     self.decisions.notification_error = Some(e.describe());
                 }
             },
-            (Slot::NotificationRead(id), Reply::Query(_))
+            (DecisionsSlot::NotificationRead(id), Reply::Query(_))
                 if self.decisions.reading_notification.as_deref() != Some(id.as_str()) => {}
-            (Slot::NotificationRead(_), Reply::Query(q)) => match dops::notification(q) {
+            (DecisionsSlot::NotificationRead(_), Reply::Query(q)) => match dops::notification(q) {
                 Ok(n) => self.decisions.notification = Some(n),
                 Err(e) => self.decisions.notification_error = Some(e.describe()),
             },
-            (Slot::NotificationChange(id), Reply::Command(q)) => match dops::notified(q) {
+            (DecisionsSlot::NotificationChange(id), Reply::Command(q)) => match dops::notified(q) {
                 Ok(n) => {
-                    self.completions.set_status(&id, None);
+                    self.set_card_status(&id, None);
                     self.notification_updated(n);
                     self.decisions.notification_error = None;
                     self.load_notification_history();
@@ -761,11 +562,11 @@ impl Shell {
                     self.notification_page(true, None);
                 }
                 Err(e) => {
-                    self.completions.set_status(&id, Some(e.describe()));
+                    self.set_card_status(&id, Some(e.describe()));
                     self.decisions.notification_error = Some(e.describe());
                 }
             },
-            (Slot::NotificationSettings, Reply::Query(q)) => match ops::query_result(q) {
+            (DecisionsSlot::NotificationSettings, Reply::Query(q)) => match ops::query_result(q) {
                 Ok((OperationResult::NotificationsSettings { value }, _)) => {
                     if self.decisions.config_draft.is_none() {
                         self.decisions.config_kinds = value
@@ -787,35 +588,37 @@ impl Shell {
                 }
                 Err(e) => self.decisions.notification_error = Some(e.describe()),
             },
-            (Slot::NotificationSettingsSave, Reply::Command(q)) => match ops::command_result(q) {
-                Ok(OperationResult::NotificationsSettings { value }) => {
-                    if serde_json::to_value(&self.decisions.config_draft).ok()
-                        == serde_json::to_value(&self.decisions.config_saving).ok()
-                        && self.decisions.config_kinds_saving.as_deref()
-                            == Some(self.decisions.config_kinds.as_str())
-                    {
-                        self.decisions.config_kinds = value
-                            .config
-                            .kinds
-                            .0
-                            .iter()
-                            .map(|k| k.0.as_str())
-                            .collect::<Vec<_>>()
-                            .join(", ");
-                        self.decisions.config_draft = Some(value.config.clone());
+            (DecisionsSlot::NotificationSettingsSave, Reply::Command(q)) => {
+                match ops::command_result(q) {
+                    Ok(OperationResult::NotificationsSettings { value }) => {
+                        if serde_json::to_value(&self.decisions.config_draft).ok()
+                            == serde_json::to_value(&self.decisions.config_saving).ok()
+                            && self.decisions.config_kinds_saving.as_deref()
+                                == Some(self.decisions.config_kinds.as_str())
+                        {
+                            self.decisions.config_kinds = value
+                                .config
+                                .kinds
+                                .0
+                                .iter()
+                                .map(|k| k.0.as_str())
+                                .collect::<Vec<_>>()
+                                .join(", ");
+                            self.decisions.config_draft = Some(value.config.clone());
+                        }
+                        self.decisions.config_saving = None;
+                        self.decisions.config_kinds_saving = None;
+                        self.decisions.config =
+                            Some((value.config, value.revision.as_str().to_owned()));
                     }
-                    self.decisions.config_saving = None;
-                    self.decisions.config_kinds_saving = None;
-                    self.decisions.config =
-                        Some((value.config, value.revision.as_str().to_owned()));
+                    Ok(_) => {
+                        self.decisions.notification_error =
+                            Some("Unexpected notification settings reply".into())
+                    }
+                    Err(e) => self.decisions.notification_error = Some(e.describe()),
                 }
-                Ok(_) => {
-                    self.decisions.notification_error =
-                        Some("Unexpected notification settings reply".into())
-                }
-                Err(e) => self.decisions.notification_error = Some(e.describe()),
-            },
-            (Slot::OsNotificationPermission, Reply::OsNotificationPermission(value)) => {
+            }
+            (DecisionsSlot::OsNotificationPermission, Reply::OsNotificationPermission(value)) => {
                 self.decisions.permission = Some(value);
             }
             (s, r) => return Some((s, r)),
@@ -847,7 +650,7 @@ impl Shell {
                     self.decisions.reading_notification = Some(id.clone());
                     let key = id.clone();
                     self.query(
-                        Slot::NotificationRead(key),
+                        DecisionsSlot::NotificationRead(key),
                         "Reading notification",
                         "notifications.read",
                         move |b| dops::query(b, dops::notification_read(&id)),
@@ -857,7 +660,7 @@ impl Shell {
                 Action::Acknowledge(n) => self.change_notification(n, None),
                 Action::Approval(id) => {
                     self.navigate(Route::Approvals);
-                    self.inspect_approval(id);
+                    self.cx.effects.push(Effect::InspectApproval(id));
                 }
                 Action::OpenArtifact(id) => {
                     self.routes.entry(Route::Artifacts).or_default().selection =
@@ -866,7 +669,7 @@ impl Shell {
                 }
                 Action::OpenKnowledge(id) => {
                     self.navigate(Route::Knowledge);
-                    self.knowledge_actions(vec![KnowledgeAction::Select(id)]);
+                    self.cx.effects.push(Effect::SelectKnowledge(id));
                 }
                 Action::Link(link) => self.open_notification_link(ctx, link),
                 Action::NextText => {
@@ -914,7 +717,7 @@ impl Shell {
                         self.decisions.config_kinds_saving =
                             Some(self.decisions.config_kinds.clone());
                         self.command(
-                            Slot::NotificationSettingsSave,
+                            DecisionsSlot::NotificationSettingsSave,
                             "Saving notification settings",
                             "notifications.settings",
                             move |b| dops::command(b, dops::settings_save(&revision, saved)),
@@ -933,11 +736,13 @@ impl Shell {
             match link.kind.0.to_ascii_lowercase().as_str() {
                 "approval" | "decision" => {
                     self.navigate(Route::Approvals);
-                    self.inspect_approval(id.as_str().into());
+                    self.cx
+                        .effects
+                        .push(Effect::InspectApproval(id.as_str().into()));
                 }
                 "knowledge" => {
                     self.navigate(Route::Knowledge);
-                    self.knowledge_actions(vec![KnowledgeAction::Select(id)]);
+                    self.cx.effects.push(Effect::SelectKnowledge(id));
                 }
                 "artifact" => {
                     self.navigate(Route::Artifacts);
@@ -945,16 +750,17 @@ impl Shell {
                 "feature" | "issue" | "task" | "work" | "root" => self.open_work(id.as_str()),
                 "session" | "chat" => self.open_session(id.as_str().to_owned()),
                 "project" => {
-                    self.select_project(Some(id.as_str().into()));
+                    self.cx
+                        .effects
+                        .push(Effect::SelectProject(Some(id.as_str().into())));
                     self.navigate(Route::Overview);
                 }
                 "connection" => {
                     self.navigate(Route::Settings);
-                    self.settings.show_connections = true;
-                    self.load_connections();
+                    self.cx.effects.push(Effect::OpenConnections);
                 }
                 _ => {
-                    self.status = Some(format!(
+                    *self.cx.status = Some(format!(
                         "No native view is registered for {} target {}.",
                         link.kind.0,
                         id.as_str()
@@ -967,7 +773,7 @@ impl Shell {
             ctx.open_url(egui::OpenUrl::new_tab(url.0));
         }
     }
-    pub(super) fn completion_action(&mut self, ctx: &egui::Context, action: CardAction) {
+    fn completion_action(&mut self, ctx: &egui::Context, action: CardAction) {
         let id = match &action {
             CardAction::Open(id) | CardAction::Dismiss(id) => id,
         };
@@ -982,8 +788,7 @@ impl Shell {
         };
         match action {
             CardAction::Dismiss(_) => {
-                self.completions
-                    .set_status(n.id.as_str(), Some("Confirming dismissal…".into()));
+                self.set_card_status(n.id.as_str(), Some("Confirming dismissal…".into()));
                 self.change_notification(n, None);
             }
             CardAction::Open(_) => {
@@ -992,14 +797,14 @@ impl Shell {
                 } else if let Some(link) = n.links.as_ref().and_then(|x| x.0.first()).cloned() {
                     self.open_notification_link(ctx, link);
                 } else {
-                    self.notifications_open = true;
+                    self.decisions.notifications_open = true;
                     self.decision_actions(ctx, vec![Action::Read(n.id.as_str().into())]);
                 }
             }
         }
     }
-    pub(super) fn approvals_screen(&mut self, ui: &mut Ui) {
-        let offline = self.online().err();
+    fn approvals_screen(&mut self, ui: &mut Ui) {
+        let offline = self.online().err().map(str::to_owned);
         let online = offline.is_none();
         let mut actions = Vec::new();
         let projects: Vec<_> = self
@@ -1011,8 +816,8 @@ impl Shell {
             .collect();
         let pending = self.decisions.inspecting.is_some()
             || self.decisions.selected.as_ref().is_some_and(|p| {
-                self.pending(&Slot::ApprovalDecision(p.id.as_str().into()))
-                    || self.unresolved(&Slot::ApprovalDecision(p.id.as_str().into()))
+                self.pending(&DecisionsSlot::ApprovalDecision(p.id.as_str().into()))
+                    || self.unresolved(&DecisionsSlot::ApprovalDecision(p.id.as_str().into()))
             });
         let tab = self.decisions.tab;
         let mut newtab = tab;
@@ -1187,11 +992,12 @@ impl Shell {
         self.routes.entry(Route::Approvals).or_default().tab = self.decisions.tab;
         self.decision_actions(ui.ctx(), actions);
     }
-    pub(super) fn notification_center(&mut self, ctx: &egui::Context) {
-        if !self.notifications_open {
+    fn notification_center(&mut self, ctx: &egui::Context) {
+        if !self.decisions.notifications_open {
             return;
         }
-        if !self.decisions.notifications_loaded && !self.pending(&Slot::NotificationsList) {
+        if !self.decisions.notifications_loaded && !self.pending(&DecisionsSlot::NotificationsList)
+        {
             self.load_notification_history();
         }
         let mut open = true;
@@ -1200,9 +1006,9 @@ impl Shell {
         if let Some(b) = self.backend() {
             self.decisions.permission = Some(b.os_notification_permission());
         }
-        let requesting_permission = self.pending(&Slot::OsNotificationPermission);
-        let preferences_busy = self.pending(&Slot::NotificationSettingsSave)
-            || self.unresolved(&Slot::NotificationSettingsSave)
+        let requesting_permission = self.pending(&DecisionsSlot::OsNotificationPermission);
+        let preferences_busy = self.pending(&DecisionsSlot::NotificationSettingsSave)
+            || self.unresolved(&DecisionsSlot::NotificationSettingsSave)
             || self.online().is_err();
         let projects: Vec<_> = self
             .projects
@@ -1216,8 +1022,8 @@ impl Shell {
             .notifications
             .iter()
             .filter(|n| {
-                self.pending(&Slot::NotificationChange(n.id.as_str().into()))
-                    || self.unresolved(&Slot::NotificationChange(n.id.as_str().into()))
+                self.pending(&DecisionsSlot::NotificationChange(n.id.as_str().into()))
+                    || self.unresolved(&DecisionsSlot::NotificationChange(n.id.as_str().into()))
             })
             .map(|n| n.id.as_str().to_owned())
             .collect();
@@ -1276,516 +1082,12 @@ impl Shell {
                 }
             });
         });
-        self.notifications_open = open && !help_preferences;
+        self.decisions.notifications_open = open && !help_preferences;
         self.decision_actions(ctx, actions);
         if help_preferences {
-            self.open_help_context("settings-Notifications");
+            self.cx
+                .effects
+                .push(Effect::OpenHelp("settings-Notifications".into()));
         }
-    }
-}
-fn project_filter(
-    ui: &mut Ui,
-    id: &str,
-    projects: &[(String, String)],
-    selected: &mut Option<String>,
-) {
-    let label = selected
-        .as_ref()
-        .and_then(|s| projects.iter().find(|(id, _)| id == s))
-        .map_or("All projects", |(_, name)| name.as_str());
-    let filter = egui::ComboBox::from_id_salt(id)
-        .selected_text(label)
-        .show_ui(ui, |ui| {
-            ui.selectable_value(selected, None, "All projects");
-            for (id, name) in projects {
-                ui.selectable_value(selected, Some(id.clone()), name);
-            }
-        });
-    filter
-        .response
-        .widget_info(|| egui::WidgetInfo::labeled(egui::Role::ComboBox, true, id));
-}
-fn json_view(ui: &mut Ui, label: &str, value: &impl serde::Serialize) {
-    ui.collapsing(label, |ui| {
-        let text = serde_json::to_string_pretty(value)
-            .unwrap_or_else(|e| format!("Content unavailable: {e}"));
-        ui.add(
-            egui::Label::new(RichText::new(text).monospace())
-                .wrap()
-                .selectable(true),
-        );
-    });
-}
-fn approval_detail(ui: &mut Ui, d: &mut DecisionsUi, actions: &mut Vec<Action>, enabled: bool) {
-    if let Some(e) = &d.decision_error {
-        ui.colored_label(theme::RED, e);
-    }
-    let Some(p) = &d.selected else {
-        ui.label("Inspect a proposal to review its exact content and binding.");
-        return;
-    };
-    ui.label(RichText::new(&p.summary.0).strong());
-    ui.label(format!(
-        "Proposal {} @ {}",
-        p.id.as_str(),
-        p.revision.as_str()
-    ));
-    ui.label(format!("{} · {:?}", p.operation_kind.0, p.state));
-    ui.label(format!(
-        "Target {} @ {}",
-        p.target_id.as_str(),
-        p.target_revision.as_str()
-    ));
-    ui.label(format!("Content digest: {}", p.content_digest.as_str()));
-    if let Some(actor) = &p.requested_by {
-        ui.label(format!("Requested by {}", actor.0.as_str()));
-    }
-    if let Some(at) = &p.created_at_ms {
-        ui.label(format!("Requested {}", display_time(at.get())));
-    }
-    if let Some(scope) = &p.scope {
-        json_view(ui, "Scope", scope);
-    }
-    if let Some(artifact) = &p.artifact {
-        if package_source_attachment(p) {
-            ui.label(format!(
-                "Package source attachment · {} bytes",
-                artifact.byte_length.as_str()
-            ));
-            json_view(ui, "Package source attachment identity", artifact);
-            if ui.button("Open package source artifact").clicked() {
-                actions.push(Action::OpenArtifact(artifact.artifact_id.clone()));
-            }
-            ui.label("The binary bundle is attached separately from the exact owner-derived review below.");
-        } else {
-            json_view(ui, "Reviewed artifact identity", artifact);
-        }
-    }
-    if let Some(digest) = &p.scope_digest {
-        ui.label(format!("Scope digest: {}", digest.as_str()));
-    }
-    let changed = d.current.as_ref().is_some_and(|current| {
-        current.revision != p.revision.as_str()
-            || current.content_digest != p.content_digest.as_str()
-            || current.target_revision != p.target_revision.as_str()
-    });
-    if changed {
-        ui.colored_label(theme::AMBER,"A newer proposal revision is available. This draft remains bound to the inspected revision.");
-    }
-    let stale = p.stale == Some(true)
-        || d.current.as_ref().is_some_and(|current| {
-            current.stale == Some(true) || matches!(current.state, ApprovalState::Superseded)
-        });
-    if let Some(current) = &d.current
-        && (changed || !matches!(current.state, ApprovalState::Pending))
-    {
-        ui.label(format!(
-            "Current proposal: {:?} @ {}",
-            current.state, current.revision
-        ));
-    }
-    if stale {
-        ui.colored_label(
-            theme::AMBER,
-            "This proposal is stale. Review the current target before deciding.",
-        );
-    }
-    if let Some(payload) = &p.payload {
-        match payload {
-            ApprovalContent::FindingRisk {
-                feature_id,
-                finding_id,
-                assessment_revision,
-            } => {
-                if ui.button("Open finding's feature").clicked() {
-                    actions.push(Action::OpenWork(feature_id.as_str().into()));
-                }
-                ui.label(format!(
-                    "Accept risk only for finding {} in feature {} at assessment {}.",
-                    finding_id.as_str(),
-                    feature_id.as_str(),
-                    assessment_revision.as_str()
-                ));
-                ui.label("Risk acceptance does not waive prerequisites, permissions, verification, or other readiness findings.");
-            }
-            ApprovalContent::FeaturePlan { .. } => {
-                if ui.button("Open feature").clicked() {
-                    actions.push(Action::OpenWork(p.target_id.as_str().into()));
-                }
-                ui.label("Approval promotes this exact pending plan. It does not clear pauses or accept readiness risks.");
-            }
-            _ => {}
-        }
-        json_view(ui, "Proposal payload", payload);
-    }
-    if let Some(source) = &p.reviewed_source {
-        match source {
-            ApprovalReviewedContent::Settings { entries } => {
-                ui.label("Exact proposed settings");
-                for (i, entry) in entries.0.iter().enumerate() {
-                    ui.push_id(i, |ui| json_view(ui, &format!("Setting {}", i + 1), entry));
-                }
-            }
-            ApprovalReviewedContent::FeaturePlan { plan, budget } => {
-                if let Some(budget) = budget {
-                    crate::usage_screen::budget_choice(ui, budget);
-                }
-                ui.label("Exact proposed plan");
-                json_view(ui, "Plan artifact identity", &plan.content);
-                json_view(ui, "Repositories", &plan.repository_ids);
-                for (i, goal) in plan.goals.0.iter().enumerate() {
-                    ui.collapsing(format!("Goal {}", i + 1), |ui| {
-                        ui.add(egui::Label::new(&goal.0).wrap().selectable(true));
-                    });
-                }
-                for requirement in &plan.requirements.0 {
-                    ui.push_id(requirement.id.as_str(), |ui| {
-                        json_view(
-                            ui,
-                            &format!("Requirement {}", requirement.id.as_str()),
-                            requirement,
-                        )
-                    });
-                }
-                for criterion in &plan.acceptance.0 {
-                    ui.push_id(("acceptance", criterion.id.as_str()), |ui| {
-                        json_view(
-                            ui,
-                            &format!("Acceptance {}", criterion.id.as_str()),
-                            criterion,
-                        )
-                    });
-                }
-                for criterion in &plan.acceptance_tests.0 {
-                    ui.push_id(("test", criterion.id.as_str()), |ui| {
-                        json_view(
-                            ui,
-                            &format!("Acceptance test {}", criterion.id.as_str()),
-                            criterion,
-                        )
-                    });
-                }
-            }
-        }
-    }
-    if let Some(lines) = container_create_review(p) {
-        ui.label(RichText::new("Container to create").strong());
-        for line in lines {
-            ui.add(egui::Label::new(line).wrap().selectable(true));
-        }
-    }
-    if let Some((heading, lines)) = container_operation_review(p) {
-        ui.label(RichText::new(heading).strong());
-        for line in lines {
-            ui.add(egui::Label::new(line).wrap().selectable(true));
-        }
-    }
-    if let Some(content) = &p.reviewed_content {
-        json_view(ui, "Reviewed binding and evidence", content);
-    }
-    let exact_content = match &p.payload {
-        Some(ApprovalContent::FeaturePlan { .. } | ApprovalContent::Settings { .. }) => {
-            p.reviewed_source.is_some()
-        }
-        _ => p.reviewed_source.is_some() || p.reviewed_content.is_some(),
-    };
-    if !exact_content {
-        ui.colored_label(
-            theme::AMBER,
-            "Exact reviewed content is unavailable. Refresh the proposal before approving.",
-        );
-    }
-    if let Some(text) = &d.text {
-        ui.collapsing("Exact proposal artifact text", |ui| {
-            if let Some(error) = &text.error {
-                ui.colored_label(theme::RED, error);
-            }
-            if let Some(page) = text.pages.get(text.page) {
-                ui.label(format!(
-                    "Page {}{}",
-                    text.page + 1,
-                    if text.next.is_some() {
-                        " · more text available"
-                    } else {
-                        ""
-                    }
-                ));
-                ui.add(egui::Label::new(page).wrap().selectable(true));
-            } else {
-                ui.label("Loading exact artifact text…");
-            }
-            ui.horizontal(|ui| {
-                if ui
-                    .add_enabled(text.page > 0, egui::Button::new("Previous text page"))
-                    .clicked()
-                {
-                    actions.push(Action::PreviousText);
-                }
-                if ui
-                    .add_enabled(
-                        text.page + 1 < text.pages.len() || text.next.is_some(),
-                        egui::Button::new("Next text page"),
-                    )
-                    .clicked()
-                {
-                    actions.push(Action::NextText);
-                }
-            });
-        });
-    }
-    if let Some(preview) = &p.operation_preview {
-        json_view(ui, "Saved operation preview", preview);
-    }
-    if let Some(rationale) = &p.rationale {
-        ui.label(format!("Recorded rationale: {}", rationale.0));
-    }
-    if let Some(status) = &p.resume_status {
-        ui.label(format!("Saved operation: {}", status.0));
-    }
-    if let Some(id) = &p.resumed_operation_id {
-        ui.label(format!("Operation {}", id.0.as_str()));
-    }
-    if ui.button("Refresh inspected proposal").clicked() {
-        actions.push(Action::Inspect(p.id.as_str().into()));
-    }
-    let desktop_takeover = p.operation_kind.0 == "desktop.request_control";
-    if desktop_takeover {
-        ui.label("Desktop control is waiting for your OK. Wait keeps this request pending and sends no input.");
-    } else {
-        ui.label("Decision rationale");
-        let rationale_input = ui.add(
-            egui::TextEdit::multiline(&mut d.rationale)
-                .id_salt("approval-rationale")
-                .desired_rows(3)
-                .hint_text("Explain your decision for this exact proposal"),
-        );
-        rationale_input.widget_info(|| {
-            egui::WidgetInfo::labeled(egui::Role::TextInput, true, "Decision rationale")
-        });
-    }
-    let can = enabled
-        && matches!(p.state, ApprovalState::Pending)
-        && d.current
-            .as_ref()
-            .is_none_or(|current| matches!(current.state, ApprovalState::Pending))
-        && !changed
-        && (desktop_takeover || !d.rationale.trim().is_empty());
-    let approve = can
-        && !stale
-        && !changed
-        && exact_content
-        && d.text
-            .as_ref()
-            .is_none_or(|t| !t.pages.is_empty() && t.error.is_none());
-    if ui
-        .add_enabled(
-            approve,
-            egui::Button::new(if desktop_takeover {
-                "OK"
-            } else if matches!(p.payload, Some(ApprovalContent::FindingRisk { .. })) {
-                "Accept this finding's risk"
-            } else {
-                "Approve exact proposal"
-            }),
-        )
-        .clicked()
-    {
-        actions.push(Action::Decide(true));
-    }
-    if desktop_takeover {
-        if ui.add_enabled(can, egui::Button::new("Wait")).clicked() {
-            actions.push(Action::WaitForDesktop);
-        }
-    } else if ui
-        .add_enabled(can, egui::Button::new("Reject proposal"))
-        .clicked()
-    {
-        actions.push(Action::Decide(false));
-    }
-    if !enabled {
-        ui.label("Decisions require an online host and confirmation of any earlier outcome.");
-    }
-}
-
-fn permission_label(
-    permission: &devworks_core::ports::os_notifications::OsNotificationPermission,
-) -> String {
-    use devworks_core::ports::os_notifications::OsNotificationPermission as P;
-    match permission {
-        P::Allowed => "OS permission allowed; submission does not guarantee visibility.".into(),
-        P::SystemManaged => {
-            "The desktop notification service manages delivery; visibility is unconfirmed.".into()
-        }
-        P::NotDetermined => {
-            "OS permission has not been requested. In-app notifications remain available.".into()
-        }
-        P::Denied => "OS permission denied. In-app notifications remain available.".into(),
-        P::Suppressed(reason) => {
-            format!("OS notifications suppressed: {reason}. In-app notifications remain available.")
-        }
-        P::Unavailable(reason) => format!(
-            "OS notifications unavailable: {reason}. In-app notifications remain available."
-        ),
-    }
-}
-
-fn display_time(ms: i64) -> String {
-    jiff::Timestamp::from_millisecond(ms)
-        .map(|at| {
-            at.to_zoned(jiff::tz::TimeZone::system())
-                .strftime("%Y-%m-%d %H:%M")
-                .to_string()
-        })
-        .unwrap_or_else(|_| "Time unavailable".into())
-}
-
-#[cfg(test)]
-mod artifact_review_tests {
-    use super::*;
-    use serde_json::json;
-    fn proposal(operation: &str) -> ApprovalViewRecord {
-        let artifact = json!({"artifactId":"source","versionId":"version","sha256":"a".repeat(64),"byteLength":"123","mediaType":"application/vnd.devworks.package"});
-        serde_json::from_value(json!({"id":"review","revision":"1","contentDigest":"b".repeat(64),"state":"Pending","operationKind":operation,"targetId":"pack","targetRevision":"1","summary":"Review exact package","artifact":artifact,"payload":{"kind":"SavedOperation","schemaRevision":"1","input":{}},"reviewedContent":{"operation":operation,"inspection":{},"source":{"bundle":artifact}}})).unwrap()
-    }
-    #[test]
-    fn container_create_review_lists_mounts_ports_and_image() {
-        let mut p: ApprovalViewRecord = serde_json::from_value(json!({"id":"review","revision":"1","contentDigest":"b".repeat(64),"state":"Pending","operationKind":"containers.create","targetId":"project-a","targetRevision":"1","summary":"Review container","payload":{"kind":"SavedOperation","schemaRevision":"8","input":{}},
-            "reviewedContent":{"operation":"containers.create","engineId":"docker","projectId":"project-a","image":"alpine:3.20","command":["sh","-c","serve"],
-                "mounts":[{"source":{"rootId":"repo","relative":"src"},"hostPath":"/work/repo/src","destination":"/src","readOnly":true},
-                          {"source":{"rootId":"repo","relative":"data"},"hostPath":"/work/repo/data","destination":"/data","readOnly":false}],
-                "ports":[{"hostPort":8080,"containerPort":80,"protocol":"tcp","exposeBeyondLoopback":false,"bindAddress":"127.0.0.1"},
-                         {"hostPort":5353,"containerPort":53,"protocol":"udp","exposeBeyondLoopback":true,"bindAddress":"all host interfaces"}],
-                "environment":[{"name":"MODE","value":"dev"},{"name":"TOKEN","credentialRef":"cred-1"}],"resourceIds":[]}})).unwrap();
-        assert_eq!(
-            container_create_review(&p).unwrap(),
-            [
-                "Image: alpine:3.20",
-                "Command: sh -c serve",
-                "Mount /work/repo/src (repo / src) at /src, read-only",
-                "Mount /work/repo/data (repo / data) at /data, writable",
-                "Port 8080/tcp on 127.0.0.1 to container port 80",
-                "Port 5353/udp on all host interfaces to container port 53, reachable from other machines",
-                "Environment MODE=dev",
-                "Environment TOKEN from credential cred-1",
-            ]
-        );
-        p.operation_kind.0 = "git.commit".into();
-        assert!(container_create_review(&p).is_none());
-    }
-    #[test]
-    fn container_build_pull_start_and_exec_reviews_list_their_key_inputs() {
-        let review = |operation: &str, reviewed: serde_json::Value| {
-            let p: ApprovalViewRecord = serde_json::from_value(json!({"id":"review","revision":"1","contentDigest":"b".repeat(64),"state":"Pending","operationKind":operation,"targetId":"project-a","targetRevision":"1","summary":"Review container","payload":{"kind":"SavedOperation","schemaRevision":"1","input":{}},"reviewedContent":reviewed})).unwrap();
-            container_operation_review(&p)
-        };
-        let container = json!({"containerId":"c-1","revision":"1","engine":"docker","image":"alpine:3.20","phase":"Running",
-            "owner":{"actor":"agent-a","ownerKind":"Agent","sessionId":"s-a","projectId":"project-a","rootId":null,"assignmentId":null}});
-        assert_eq!(
-            review(
-                "containers.build",
-                json!({"operation":"containers.build","tag":"app:1",
-                "context":{"source":{"rootId":"repo","relative":"ctx"},"hostPath":"/work/repo/ctx"},
-                "definition":{"sha256":"c".repeat(64),"byteLength":"32","text":"FROM alpine:3.20\nRUN make"}})
-            ),
-            Some((
-                "Image to build",
-                vec![
-                    "Tag: app:1".into(),
-                    "Context /work/repo/ctx (repo / ctx)".into(),
-                    format!("Dockerfile 32 bytes, sha256 {}", "c".repeat(64)),
-                    "  FROM alpine:3.20".into(),
-                    "  RUN make".into(),
-                ]
-            ))
-        );
-        assert_eq!(
-            review(
-                "containers.pull",
-                json!({"operation":"containers.pull","image":"ghcr.io/acme/tool:1","registry":"ghcr.io","credentialRef":"cred-1"})
-            ),
-            Some((
-                "Image to pull",
-                vec![
-                    "Image: ghcr.io/acme/tool:1".to_owned(),
-                    "Registry: ghcr.io".into(),
-                    "Registry credential cred-1".into(),
-                ]
-            ))
-        );
-        assert_eq!(
-            review(
-                "containers.start",
-                json!({"operation":"containers.start","container":container})
-            ),
-            Some((
-                "Container to start",
-                vec![
-                    "Container c-1 from image alpine:3.20, Running".to_owned(),
-                    "Owner agent-a (Agent), session s-a".into(),
-                ]
-            ))
-        );
-        assert_eq!(
-            review(
-                "containers.exec",
-                json!({"operation":"containers.exec","container":container,
-                "command":["sh","-c","make test"],"workingDirectory":"container default",
-                "environment":[{"name":"API_TOKEN","value":"[REDACTED]"},{"name":"KEY","credentialRef":"cred-1"}]})
-            ),
-            Some((
-                "Command to run in a container",
-                vec![
-                    "Container c-1 from image alpine:3.20, Running".to_owned(),
-                    "Owner agent-a (Agent), session s-a".into(),
-                    "Command: sh -c make test".into(),
-                    "Working directory: container default".into(),
-                    "Environment API_TOKEN=[REDACTED]".into(),
-                    "Environment KEY from credential cred-1".into(),
-                ]
-            ))
-        );
-        // Another operation, or a review held in evidence, gets no readable lines.
-        assert!(
-            review(
-                "containers.create",
-                json!({"operation":"containers.create"})
-            )
-            .is_none()
-        );
-        assert!(review("containers.pull", json!({"operation":"containers.build"})).is_none());
-    }
-    #[test]
-    fn only_exact_owner_package_sources_are_optional_binary_attachments() {
-        for operation in [
-            "addons.install",
-            "addons.update",
-            "addons.enable",
-            "addons.configure",
-            "addons.rollback",
-        ] {
-            let mut p = proposal(operation);
-            assert!(package_source_attachment(&p));
-            assert!(required_approval_text(&p).is_none());
-            p.artifact.as_mut().unwrap().media_type = "application/json".into();
-            assert!(!package_source_attachment(&p));
-            assert!(
-                required_approval_text(&p).is_some(),
-                "required JSON evidence is never exempted"
-            );
-            p = proposal(operation);
-            p.reviewed_content = None;
-            assert!(
-                required_approval_text(&p).is_some(),
-                "missing owner review cannot establish source-attachment role"
-            );
-            p = proposal(operation);
-            p.artifact.as_mut().unwrap().version_id =
-                devworks_core::protocol::Id::new("different").unwrap();
-            assert!(
-                required_approval_text(&p).is_some(),
-                "a different artifact cannot bypass required evidence loading"
-            );
-        }
-        assert!(required_approval_text(&proposal("git.commit")).is_some());
     }
 }

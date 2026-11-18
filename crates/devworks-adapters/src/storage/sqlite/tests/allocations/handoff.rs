@@ -52,7 +52,7 @@ fn fixture(h: &Harness, previous: Option<Value>) -> (SqliteStore, StoredAssignme
     let s = seeded(h);
     let old_execution = activate(&s, "feature");
     let actor = s.info().host_actor;
-    run_write(&s, WriteOptions::default(), move |tx| {
+    run_write(&s, WriteOptions::fixture(), move |tx| {
         tx.work().insert_work(&work("feature-b", "feature", None))?;
         for a in [
             assignment("coord-a", "feature", "feature", None),
@@ -137,7 +137,7 @@ fn reparent(
     assignment: i64,
     session: i64,
 ) -> Result<(), StorageError> {
-    run_write(s, WriteOptions::default(), move |tx| {
+    run_write(s, WriteOptions::fixture(), move |tx| {
         tx.runs().reparent_assignment(&moved, assignment, session)
     })
 }
@@ -170,7 +170,7 @@ fn handoff_moves_same_worker_session_and_only_local_holds_preserving_history() {
     let h = Harness::new();
     let checkpoint = Some(json!({"checkpoint":"exact","revision":7}));
     let (s, moved) = fixture(&h, checkpoint.clone());
-    run_write(&s, WriteOptions::default(), |tx| {
+    run_write(&s, WriteOptions::fixture(), |tx| {
         tx.operations().record_intent(NewOperation {
             id: OperationId(id("operation")),
             root_id: Some(RootId(id("feature"))),
@@ -287,7 +287,7 @@ fn handoff_checks_both_revisions_scope_parent_and_ordinary_immutability() {
         Err(StorageError::InvalidRecord(_))
     ));
     let valid = moved.clone();
-    run_write(&s, WriteOptions::default(), move |tx| {
+    run_write(&s, WriteOptions::fixture(), move |tx| {
         assert!(matches!(
             tx.runs().update_assignment(&moved, 1),
             Err(StorageError::InvalidRecord(_))
@@ -310,7 +310,7 @@ fn handoff_checks_both_revisions_scope_parent_and_ordinary_immutability() {
 fn handoff_unlink_preserves_absent_checkpoint_and_requires_no_parent() {
     let h = Harness::new();
     let (s, mut moved) = fixture(&h, None);
-    run_write(&s, WriteOptions::default(), |tx| {
+    run_write(&s, WriteOptions::fixture(), |tx| {
         let mut w = tx.work().work(&id("task-a"))?.unwrap();
         w.parent_feature_id = None;
         w.revision += 1;
@@ -334,7 +334,7 @@ fn handoff_unlink_preserves_absent_checkpoint_and_requires_no_parent() {
 fn handoff_savepoint_rolls_back_assignment_and_epoch_when_hold_move_fails() {
     let h = Harness::new();
     let (s, moved) = fixture(&h, None);
-    run_write(&s, WriteOptions::default(), |tx| {
+    run_write(&s, WriteOptions::fixture(), |tx| {
         let a = hold("collision", Some("worker"), None, "feature");
         let mut b = a.clone();
         b.id = id("existing-target");
@@ -343,7 +343,7 @@ fn handoff_savepoint_rolls_back_assignment_and_epoch_when_hold_move_fails() {
         tx.runs().insert_blocker(&b)
     })
     .unwrap();
-    run_write(&s, WriteOptions::default(), move |tx| {
+    run_write(&s, WriteOptions::fixture(), move |tx| {
         assert!(tx.runs().reparent_assignment(&moved, 1, 1).is_err());
         Ok(())
     })
@@ -477,7 +477,7 @@ fn global_assignment_lookup_finds_worker_under_old_membership_using_existing_ind
 fn aba_reassociation_restores_marked_worker_only_after_quiescence_and_both_cas() {
     let h = Harness::new();
     let (s, mut restored) = fixture(&h, Some(json!({"saved":"checkpoint"})));
-    run_write(&s, WriteOptions::default(), |tx| {
+    run_write(&s, WriteOptions::fixture(), |tx| {
         let mut task = tx.work().work(&id("task-a"))?.unwrap();
         task.parent_feature_id = Some(id("feature"));
         task.revision += 1;
@@ -487,7 +487,7 @@ fn aba_reassociation_restores_marked_worker_only_after_quiescence_and_both_cas()
     restored.root_id = RootId(id("feature"));
     restored.parent_id = Some(AssignmentId(id("coord-a")));
     let boot = s.info().boot_id.unwrap();
-    run_write(&s, WriteOptions::default(), move |tx| {
+    run_write(&s, WriteOptions::fixture(), move |tx| {
         tx.runs().insert_turn(&StoredTurn {
             session_id: id("session-worker"),
             turn_id: id("aba-turn"),
@@ -509,7 +509,7 @@ fn aba_reassociation_restores_marked_worker_only_after_quiescence_and_both_cas()
         reparent(&s, restored.clone(), 1, 1),
         Err(StorageError::Busy)
     ));
-    run_write(&s, WriteOptions::default(), |tx| {
+    run_write(&s, WriteOptions::fixture(), |tx| {
         tx.runs()
             .delete_turn(&id("session-worker"), &id("aba-turn"))
     })
@@ -592,7 +592,7 @@ fn inherited_requirement_read_fact_keeps_all_ids_and_refuses_invalid_stored_shap
             false,
         ),
     ] {
-        run_write(&s, WriteOptions::default(), move |tx| {
+        run_write(&s, WriteOptions::fixture(), move |tx| {
             let mut w = tx.work().work(&id("task-a"))?.unwrap();
             let expected = w.revision;
             w.revision += 1;
@@ -615,7 +615,7 @@ fn inherited_requirement_read_fact_keeps_all_ids_and_refuses_invalid_stored_shap
 fn same_root_restoration_never_revives_an_unmarked_ended_assignment() {
     let h = Harness::new();
     let (s, mut moved) = fixture(&h, None);
-    run_write(&s, WriteOptions::default(), |tx| {
+    run_write(&s, WriteOptions::fixture(), |tx| {
         let mut task = tx.work().work(&id("task-a"))?.unwrap();
         task.parent_feature_id = Some(id("feature"));
         task.revision += 1;
@@ -676,7 +676,7 @@ fn coordinator_usage(
     raw.execute("INSERT INTO operation_attempts(id,operation_id,attempt_no,boot_id,state,observations_json) VALUES(?1,?2,1,?3,'Dispatching','[]')",rusqlite::params![name,operation,boot.as_str()]).unwrap();
     raw.execute("INSERT INTO router_requests(request_id,operation_id,purpose,session_id,project_id,model_id,connection_id,created_at) VALUES(?1,?2,'Conversation',?3,'project','sol','connection',?4)",rusqlite::params![request,operation,session,T0]).unwrap();
     raw.execute("INSERT INTO usage_attempts(attempt_id,request_id,operation_id,attempt_number,project_id,work_id,assignment_id,execution_root_id,execution_id,session_id,actor_id,role,purpose,catalog_model_id,connection_id,endpoint_profile,access_mode,pricing_snapshot_json,state,revision,created_at) VALUES(?1,?2,?3,1,'project',?4,NULL,?5,?6,?7,?8,'Coordinator','Conversation','sol','connection','OpenAiResponses','ApiKey','{}','Dispatched',2,?9)",rusqlite::params![name,request,operation,work,root,execution,session,actor.0.as_str(),T0]).unwrap();
-    run_write(s, WriteOptions::default(), {
+    run_write(s, WriteOptions::fixture(), {
         let name = name.to_owned();
         move |tx| {
             tx.usage().put_attempt_balance(
@@ -706,7 +706,7 @@ fn issue_coordinator_without_semantic_assignment_fences_read_and_atomic_handoff_
     let old_execution = activate(&s, "issue");
     let actor = s.info().host_actor;
     let execution_id = old_execution.id.clone();
-    run_write(&s, WriteOptions::default(), move |tx| {
+    run_write(&s, WriteOptions::fixture(), move |tx| {
         let parent = assignment("target-coordinator", "feature", "feature", None);
         tx.sessions()
             .insert_session(&session(&parent, actor.clone()))?;
@@ -769,7 +769,7 @@ fn issue_coordinator_without_semantic_assignment_fences_read_and_atomic_handoff_
     let mut newer = old_execution;
     newer.id = id("later-issue-execution");
     newer.generation = 2;
-    run_write(&s, WriteOptions::default(), move |tx| {
+    run_write(&s, WriteOptions::fixture(), move |tx| {
         tx.runs().insert_activation(&newer)
     })
     .unwrap();
@@ -783,7 +783,7 @@ fn issue_coordinator_without_semantic_assignment_fences_read_and_atomic_handoff_
         reparent(&s, moved.clone(), 1, 1),
         Err(StorageError::Busy)
     ));
-    run_write(&s, WriteOptions::default(), |tx| {
+    run_write(&s, WriteOptions::fixture(), |tx| {
         let mut b = tx.usage().attempt_balance(&id("issue-source"))?.unwrap();
         b.revision += 1;
         b.local_quiescent = true;

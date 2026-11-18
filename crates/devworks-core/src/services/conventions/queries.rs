@@ -11,7 +11,7 @@ use crate::{
     },
     services::{
         cursor::CursorBinding,
-        sessions::{Failure, Refusal, rev},
+        kernel::{Failure, Refusal, rev},
     },
 };
 use serde::{Serialize, de::DeserializeOwned};

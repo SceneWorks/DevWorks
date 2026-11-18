@@ -1690,10 +1690,12 @@ fn offered_download_survives_lost_save_requests_and_relaunch() {
     assert!(frames.iter().all(|f| f == &frames[0]));
     h.state_mut().on_exit();
     let saved = devworks_desktop::memory::Memory::load(&root.memory());
-    let devworks_desktop::backend::Slot::AddonsSave {
-        download: Some(path),
-        ..
-    } = &saved.pending.commands[0].slot
+    let devworks_desktop::backend::Slot::AddOns(
+        devworks_desktop::addons_ops::AddonsSlot::AddonsSave {
+            download: Some(path),
+            ..
+        },
+    ) = &saved.pending.commands[0].slot
     else {
         panic!("download ownership persisted")
     };
@@ -1729,10 +1731,12 @@ fn offered_download_held_past_close_is_cleaned_after_confirmation() {
         matches!(s.lifecycle(), Lifecycle::Closed)
     });
     let saved = devworks_desktop::memory::Memory::load(&root.memory());
-    let devworks_desktop::backend::Slot::AddonsSave {
-        download: Some(path),
-        ..
-    } = &saved.pending.commands[0].slot
+    let devworks_desktop::backend::Slot::AddOns(
+        devworks_desktop::addons_ops::AddonsSlot::AddonsSave {
+            download: Some(path),
+            ..
+        },
+    ) = &saved.pending.commands[0].slot
     else {
         panic!("download ownership persisted")
     };

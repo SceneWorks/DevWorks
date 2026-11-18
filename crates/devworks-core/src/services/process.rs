@@ -463,7 +463,7 @@ impl ProcessSupervisor {
         };
         if let Some(refusal) = refusal {
             let (c, a, v) = (ctx.clone(), argv.clone(), verdict.clone());
-            run_write(&*self.store, WriteOptions::default(), move |tx| {
+            run_write(&*self.store, WriteOptions::settlement(), move |tx| {
                 record_verdict(tx, &c, "process.launch", &a, &v)
             })?;
             return Err(refusal);
@@ -482,7 +482,7 @@ impl ProcessSupervisor {
         let resources = self.resources.clone();
         let (c, claim) = (ctx.clone(), request.lease.clone());
         let operation_id = request.operation_id.clone();
-        let intent = run_write(&*self.store, WriteOptions::default(), move |tx| {
+        let intent = run_write(&*self.store, WriteOptions::settlement(), move |tx| {
             // An archived (or deleted) project's work is fenced from the archival's commit: no
             // tree is launched for it, whatever path asks. The archival epoch this intent was
             // recorded under is rechecked once the tree is registered (see below).
@@ -994,7 +994,7 @@ impl ProcessSupervisor {
     pub fn shutdown(&self, grace: Duration, bound: Duration) -> ShutdownReport {
         let stopped = self.stop(&StopScope::All, grace, bound);
         let resources = self.resources.clone();
-        let reconciliation = run_write(&*self.store, WriteOptions::default(), move |tx| {
+        let reconciliation = run_write(&*self.store, WriteOptions::settlement(), move |tx| {
             resources.reconcile(tx, ReconcileCause::Shutdown)
         });
         ShutdownReport {
@@ -1094,7 +1094,7 @@ impl ProcessSupervisor {
             }
         }
         let resources = self.resources.clone();
-        report.resources = run_write(&*self.store, WriteOptions::default(), move |tx| {
+        report.resources = run_write(&*self.store, WriteOptions::recovery(), move |tx| {
             resources.reconcile(tx, ReconcileCause::Boot)
         })?;
         Ok(report)
@@ -1114,7 +1114,7 @@ impl ProcessSupervisor {
             return Err(ConfirmRefusal::StillOwned);
         }
         let (p, c, resources) = (process.clone(), ctx.clone(), self.resources.clone());
-        run_write(&*self.store, WriteOptions::default(), move |tx| {
+        run_write(&*self.store, WriteOptions::settlement(), move |tx| {
             let Some(mut record) = tx.resources().process(&p)? else {
                 return Ok(Err(ConfirmRefusal::NotFound));
             };
@@ -1165,7 +1165,7 @@ impl ProcessSupervisor {
     ) -> Result<(), StorageError> {
         let mut next = record.clone();
         let host = self.store.info().host_actor;
-        let updated = run_write(&*self.store, WriteOptions::default(), move |tx| {
+        let updated = run_write(&*self.store, WriteOptions::settlement(), move |tx| {
             apply(tx, &host, &mut next, phase, kind, payload)?;
             Ok(next)
         })?;
@@ -1184,7 +1184,7 @@ impl ProcessSupervisor {
     ) -> Result<(), StorageError> {
         let mut next = record.clone();
         let (host, resources) = (self.store.info().host_actor, self.resources.clone());
-        let updated = run_write(&*self.store, WriteOptions::default(), move |tx| {
+        let updated = run_write(&*self.store, WriteOptions::settlement(), move |tx| {
             settle_in(
                 tx, &host, &resources, &mut next, phase, exit_code, detail, kind,
             )?;

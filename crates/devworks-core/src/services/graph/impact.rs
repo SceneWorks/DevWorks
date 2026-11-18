@@ -14,7 +14,7 @@ use crate::protocol::records::{
     CodeAffectedNode, CodeImpact, CodeImpactSummary, CodeNodeSelection, CodeRepositoryLink,
     CodeRisk,
 };
-use crate::services::sessions::Failure;
+use crate::services::kernel::Failure;
 use std::collections::{BTreeMap, BTreeSet};
 
 const DEPENDENCIES: &[&str] = &[

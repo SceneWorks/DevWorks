@@ -37,8 +37,8 @@ use crate::protocol::records::{
 };
 use crate::protocol::support::BoundedList;
 use crate::protocol::{ActorId, DomainErrorCode, EventId, Id, RevisionDimension, RootId};
+use crate::services::kernel::{content, counter, rev};
 use crate::services::runs::scope::{PlanState, Readiness, ScopeUnit};
-use crate::services::sessions::{content, counter, rev};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};

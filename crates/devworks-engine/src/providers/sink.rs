@@ -337,7 +337,7 @@ impl ProviderSink {
             let staged=service.stage_host_bytes(store.as_ref(),bytes,json!({"kind":"ProviderOutput","requestId":attempt.request_id,"attemptId":attempt.attempt_id}))?
                 .map_err(|_|invalid("provider artifact staging failed"))?;
             let pending=staged.clone(); let service_in=service.clone();
-            let committed=run_write(store.as_ref(),WriteOptions::default(),move|tx| {
+            let committed=run_write(store.as_ref(),WriteOptions::observed(),move|tx| {
                 validate(tx,&context,&attempt)?;
                 validate_binding(tx,&binding)?;
                 let scope=attempt.project_id.clone().map_or(ArtifactScope::Workspace,ArtifactScope::Project);
@@ -602,7 +602,7 @@ impl OwnedInferenceSink for ProviderSink {
                     let binding = self.prepared.identity.binding.clone();
                     let epoch = binding.context_epoch.get();
                     fence.publication(|| {
-                        run_write(store.as_ref(), WriteOptions::default(), move |tx| {
+                        run_write(store.as_ref(), WriteOptions::observed(), move |tx| {
                             validate(tx, &context, &current)?;
                             validate_binding(tx, &binding)?;
                             Ok(())
@@ -835,7 +835,7 @@ impl ProviderSink {
                         }
                     }
                     let pending=staged.clone();let native=service.clone();
-                    let committed=run_write(store.as_ref(),WriteOptions::default(),move|tx| {
+                    let committed=run_write(store.as_ref(),WriteOptions::settlement(),move|tx| {
                         validate(tx,&context,&current)?;
                         validate_binding(tx,&binding)?;
                         let mut references=Vec::new();

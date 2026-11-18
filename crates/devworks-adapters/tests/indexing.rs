@@ -31,8 +31,8 @@ use devworks_core::protocol::{
 };
 use devworks_core::services::UseCases;
 use devworks_core::services::artifacts::ArtifactService;
+use devworks_core::services::git::helper::SupervisedHelpers;
 use devworks_core::services::indexing::discover::{self, worktree_id};
-use devworks_core::services::indexing::helper::SupervisedHelpers;
 use devworks_core::services::indexing::paths::location_identity;
 use devworks_core::services::indexing::worker::IndexWorker;
 use devworks_core::services::indexing::{IndexCoordinator, IndexEnv, IndexSettings, views};
@@ -352,7 +352,7 @@ impl Fx {
         &self,
         f: impl FnOnce(&mut dyn WriteTransaction) -> Result<T, StorageError> + Send + 'static,
     ) -> T {
-        run_write(&*self.store, WriteOptions::default(), f).expect("write")
+        run_write(&*self.store, WriteOptions::fixture(), f).expect("write")
     }
     fn read<T>(&self, f: impl FnOnce(&dyn ReadSnapshot) -> Result<T, StorageError>) -> T {
         read_snapshot(&*self.store, &ReadOptions::default(), f).expect("read")
@@ -1093,7 +1093,7 @@ fn a_cancel_recorded_without_a_local_signal_stops_the_run_at_its_next_checkpoint
         3,
         Box::new(move || {
             let run_id = run_id.clone();
-            run_write(&*store, WriteOptions::default(), move |tx| {
+            run_write(&*store, WriteOptions::fixture(), move |tx| {
                 let cur = tx.indexing().run(&run_id)?.expect("run");
                 let mut next = cur.clone();
                 next.revision += 1;
@@ -1263,7 +1263,7 @@ fn a_slower_builder_never_overwrites_a_newer_publication() {
         3,
         Box::new(move || {
             let (r, v) = (r2.clone(), v2.clone());
-            run_write(&*store, WriteOptions::default(), move |tx| {
+            run_write(&*store, WriteOptions::fixture(), move |tx| {
                 let current = tx.indexing().published(&r)?.unwrap().revision;
                 let mut other = v.clone();
                 other.view_id = Id::new("view-concurrent").unwrap();
@@ -1300,7 +1300,7 @@ fn a_slower_builder_never_overwrites_a_newer_publication() {
     assert_eq!(published.revision, 3);
     // The repository refuses a publication from a stale pointer revision.
     let r3 = repo_id.clone();
-    let stale = run_write(&*fx.store, WriteOptions::default(), move |tx| {
+    let stale = run_write(&*fx.store, WriteOptions::fixture(), move |tx| {
         tx.indexing()
             .publish(&r3, &Id::new("view-concurrent").unwrap(), 1)
     });

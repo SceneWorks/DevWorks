@@ -6,8 +6,8 @@ use crate::protocol::data::DataScope;
 use crate::protocol::results::OperationResult;
 use crate::services::{
     cursor::{self, CursorBinding},
+    kernel::Failure,
     knowledge,
-    sessions::Failure,
 };
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};

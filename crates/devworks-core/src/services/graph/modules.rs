@@ -2,7 +2,7 @@
 //! All discovery is inside the exact composition; no filesystem/project-file reads occur here.
 use super::{budget::Budget, scan};
 use crate::ports::storage::*;
-use crate::services::sessions::Failure;
+use crate::services::kernel::Failure;
 
 fn captured_directory(unit: &str) -> &str {
     unit.rsplit_once('/').map_or("", |(parent, _)| parent)

@@ -1,30 +1,22 @@
 //! The shell: navigation, the integrated page layout, the shared conversation and its
 //! app-level sidebar, Settings, the completion overlay, status and the close lifecycle. It holds
 //! view state only; every record comes through [`Client`] from the runtime's gateway.
-use crate::attachments;
 use crate::backend::{Backend, Client, Reply, Slot, TaskOutput, Unresolved, is_unknown};
 use crate::chat::Chat;
-use crate::knowledge_screen::{self, KnowledgeAction, KnowledgeScreen};
-use crate::mcp_panel::McpAction;
+use crate::knowledge_screen::KnowledgeScreen;
 use crate::memory::{Memory, RouteMemory};
 use crate::notifications::{CardAction, Completions};
 use crate::ops::{self, Failure};
+use crate::projects_ops::ProjectsSlot;
 use crate::projects_screen::ProjectLists;
 use crate::route::{NAV_ORDER, NavGroup, Route};
 use crate::screen::{Cx, DynScreen, Effect, ScreenId};
-use crate::settings_screen::{KEEP_AWAKE, SettingsAction, SettingsScreen};
+use crate::settings_screen::SettingsScreen;
 use crate::theme;
 use crate::virtual_list::{self, Scrolls};
-use crate::web_panel::WebAction;
 use crate::widgets::{self, Header, Tone, ViewState, chip};
-use devworks_core::operations::{OperationInput as In, mcp};
 use devworks_core::protocol::provider::ArtifactRef;
-use devworks_core::protocol::records::{
-    ConnectionLifecycle, ItemState, LifeState, McpTransport, ProjectRecord, RouterConfigAction,
-};
-use devworks_core::protocol::{DomainErrorCode, Id};
-use devworks_core::settings::validate::codes;
-use devworks_core::settings::view::Health;
+use devworks_core::protocol::records::{LifeState, ProjectRecord};
 use eframe::egui::{self, Align, Frame, Layout, Panel, RichText, Ui, ViewportCommand, accesskit};
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -32,6 +24,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::watch;
 
+mod addons;
 pub mod chat;
 mod conventions;
 mod databases;
@@ -41,8 +34,10 @@ pub mod help;
 pub mod indexing;
 mod instructions;
 pub mod jobs;
+mod knowledge;
 mod project_purge;
 pub mod projects;
+mod settings;
 mod settings_secrets;
 pub mod usage;
 mod watchers;
@@ -201,6 +196,7 @@ pub struct Shell {
     /// (DW-11), and Indexing.
     pub projects: crate::projects_screen::ProjectsUi,
     pub purge: project_purge::PurgeUi,
+    placeholder: crate::placeholder_screen::PlaceholderScreen,
     pub jobs: jobs::JobsUi,
     /// Features, the board, Issues and Overview of the selected project (DW-12).
     pub work: work::WorkUi,
@@ -224,17 +220,10 @@ pub struct Shell {
     editors_changed: bool,
     started: bool,
     saved: Option<Memory>,
-    purge_reviews: BTreeMap<String, serde_json::Value>,
     last_save: Instant,
     last_poll: Instant,
     /// The window's context, from the first frame on (screens make textures through it).
     egui: Option<egui::Context>,
-    /// The drafts the pending `settings.validate` checked; a report for other drafts is stale.
-    validated_drafts: Option<BTreeMap<String, serde_json::Value>>,
-    /// The settings revision each pending `settings.explain_source` was asked at; a chain read
-    /// before the view moved to another revision is stale.
-    explained_at: BTreeMap<String, Option<i64>>,
-    notifications_open: bool,
     updates_open: bool,
     shutdown_summary: Option<String>,
     /// The text scale the native minimum window size was last set for.
@@ -243,33 +232,86 @@ pub struct Shell {
     control: Option<Box<dyn HostControl>>,
 }
 
-/// The migrated screens: `screens!(Id => field, ...)` binds each [`ScreenId`] to the `Shell`
-/// field holding that screen. Indexing (`projects.indexing`) is bound in the macro itself: every
+/// The run status a context lends while Jobs, which holds it, is the screen called.
+static NO_JOB_STATUS: BTreeMap<String, String> = BTreeMap::new();
+
+/// The migrated screens: `screens!(Id => field, ...; Id => field, ...)` binds each [`ScreenId`]
+/// to the `Shell` field holding that screen; the ones after the `;` live inside another screen
+/// and are reached by ID only. Settings is bound in the macro too: its context lends the Indexing
+/// screen's state to draw the sources section. Indexing (`projects.indexing`) is bound in the macro itself: every
 /// other screen's context reads it. So is Chat: every other screen's context reads its router
-/// catalog, and its own context lends it the watcher lists its sidebar shows.
+/// catalog, and its own context lends it the watcher lists its sidebar shows. And so is Jobs:
+/// every other screen's context reads its projects' run status.
 macro_rules! screens {
-    ($($id:ident => $($field:ident).+),* $(,)?) => {
+    ($($id:ident => $($field:ident).+),* $(,)? ; $($nid:ident => $($nfield:ident).+),* $(,)?) => {
         impl Shell {
             fn screens(&self) -> Vec<&dyn DynScreen> {
-                vec![$(&self.$($field).+,)* &self.projects.indexing, &self.chat]
+                vec![
+                    $(&self.$($field).+,)*
+                    &self.projects.indexing,
+                    &self.chat,
+                    &self.jobs,
+                    &self.decisions,
+                    &self.work,
+                    &self.settings,
+                ]
             }
             fn screens_mut(&mut self) -> Vec<&mut dyn DynScreen> {
-                vec![$(&mut self.$($field).+,)* &mut self.projects.indexing, &mut self.chat]
+                vec![
+                    $(&mut self.$($field).+,)*
+                    &mut self.projects.indexing,
+                    &mut self.chat,
+                    &mut self.jobs,
+                    &mut self.decisions,
+                    &mut self.work,
+                    &mut self.settings,
+                ]
             }
             fn screen(&self, id: ScreenId) -> Option<&dyn DynScreen> {
                 match id {
                     $(ScreenId::$id => Some(&self.$($field).+),)*
+                    $(ScreenId::$nid => Some(&self.$($nfield).+),)*
                     ScreenId::Indexing => Some(&self.projects.indexing),
                     ScreenId::Chat => Some(&self.chat),
-                    ScreenId::Legacy => None,
+                    ScreenId::Jobs => Some(&self.jobs),
+                    ScreenId::Decisions => Some(&self.decisions),
+                    ScreenId::Work => Some(&self.work),
+                    ScreenId::Settings => Some(&self.settings),
                 }
             }
             /// The screen `id` with a context over the rest of the shell.
             fn screen_mut(&mut self, id: ScreenId) -> Option<(&mut dyn DynScreen, Cx<'_>)> {
-                if id == ScreenId::Legacy {
-                    return None;
-                }
                 let online = self.online();
+                // Work holds the archive counts every other context lends, so its own context
+                // lends none (it reads its own).
+                if id == ScreenId::Work {
+                    let cx = Cx {
+                        client: self.client.as_mut(),
+                        online,
+                        status: &mut self.status,
+                        route: self.route,
+                        routes: &mut self.routes,
+                        scrolls: &mut self.scrolls,
+                        dialogs: &mut *self.dialogs,
+                        selected_project: self.selected_project.clone(),
+                        projects: ProjectLists {
+                            list: &self.projects.list,
+                            repositories: &self.projects.repositories,
+                            members: &self.projects.members,
+                            members_of: self.projects.members_of.as_deref(),
+                            indexing: Some(&self.projects.indexing),
+                        },
+                        catalog: &self.chat.routing.catalog,
+                        job_status: &self.jobs.project_status,
+                        archive_counts: &NO_ARCHIVE_COUNTS,
+                        ctx: self.egui.clone(),
+                        watchers: Some(&self.watchers),
+                        completions: None,
+                        indexing: None,
+                        effects: Vec::new(),
+                    };
+                    return Some((&mut self.work, cx));
+                }
                 let mut cx = Cx {
                     client: self.client.as_mut(),
                     online,
@@ -287,47 +329,89 @@ macro_rules! screens {
                         indexing: None,
                     },
                     catalog: &[],
-                    job_status: &self.jobs.project_status,
+                    job_status: &NO_JOB_STATUS,
                     archive_counts: &self.work.archive_counts,
                     ctx: self.egui.clone(),
                     watchers: None,
+                    completions: None,
+                    indexing: None,
                     effects: Vec::new(),
                 };
                 match id {
                     $(ScreenId::$id => {
                         cx.projects.indexing = Some(&self.projects.indexing);
                         cx.catalog = &self.chat.routing.catalog;
+                        cx.job_status = &self.jobs.project_status;
                         Some((&mut self.$($field).+, cx))
+                    })*
+                    $(ScreenId::$nid => {
+                        cx.projects.indexing = Some(&self.projects.indexing);
+                        cx.catalog = &self.chat.routing.catalog;
+                        cx.job_status = &self.jobs.project_status;
+                        Some((&mut self.$($nfield).+, cx))
                     })*
                     // The Indexing screen's own context does not hold its state.
                     ScreenId::Indexing => {
                         cx.catalog = &self.chat.routing.catalog;
+                        cx.job_status = &self.jobs.project_status;
                         Some((&mut self.projects.indexing, cx))
                     }
                     // Nor does Chat's: it reads its own catalog.
                     ScreenId::Chat => {
                         cx.projects.indexing = Some(&self.projects.indexing);
+                        cx.job_status = &self.jobs.project_status;
                         cx.watchers = Some(&self.watchers);
                         Some((&mut self.chat, cx))
                     }
-                    ScreenId::Legacy => None,
+                    // Decisions keeps the shell's completion cards current.
+                    ScreenId::Decisions => {
+                        cx.projects.indexing = Some(&self.projects.indexing);
+                        cx.catalog = &self.chat.routing.catalog;
+                        cx.job_status = &self.jobs.project_status;
+                        cx.completions = Some(&mut self.completions);
+                        Some((&mut self.decisions, cx))
+                    }
+                    // Nor does Jobs': it reads its own run status.
+                    ScreenId::Jobs => {
+                        cx.projects.indexing = Some(&self.projects.indexing);
+                        cx.catalog = &self.chat.routing.catalog;
+                        Some((&mut self.jobs, cx))
+                    }
+                    // Settings draws the indexing sources: its context holds that state.
+                    ScreenId::Settings => {
+                        cx.projects.indexing = None;
+                        cx.catalog = &self.chat.routing.catalog;
+                        cx.job_status = &self.jobs.project_status;
+                        cx.indexing = Some(&mut self.projects.indexing);
+                        Some((&mut self.settings, cx))
+                    }
+                    ScreenId::Work => None,
                 }
             }
         }
     };
 }
+/// The archive counts the Work screen's own context lends (it reads its own).
+static NO_ARCHIVE_COUNTS: BTreeMap<String, (usize, usize)> = BTreeMap::new();
 screens!(
     Help => help,
     Usage => usage,
     Graph => graph,
     Databases => databases,
-    Instructions => settings.instructions,
     Conventions => conventions,
     Artifacts => artifacts,
     Resources => resources,
     Browser => browser,
     Projects => projects.screen,
     Watchers => watchers,
+    AddOns => addons,
+    Knowledge => knowledge,
+    Purge => purge,
+    Placeholder => placeholder,
+    ;
+    // Inside another registered screen: reached by its ID, not iterated (Roles and skills keep
+    // no pending, purge or close state, and Settings holds and draws them).
+    Instructions => settings.instructions,
 );
 
 impl Shell {
@@ -367,7 +451,11 @@ impl Shell {
             browser: Default::default(),
             addons: Default::default(),
             projects: Default::default(),
-            purge: Default::default(),
+            purge: project_purge::PurgeUi {
+                reviews: memory.purge_reviews.clone(),
+                ..Default::default()
+            },
+            placeholder: Default::default(),
             jobs: jobs::JobsUi::default(),
             work: work::WorkUi::default(),
             usage: crate::usage_screen::UsageScreen::default(),
@@ -385,13 +473,9 @@ impl Shell {
             editors_changed: true,
             started: false,
             saved: Some(memory.clone()),
-            purge_reviews: memory.purge_reviews.clone(),
             last_save: Instant::now(),
             last_poll: Instant::now(),
             egui: None,
-            validated_drafts: None,
-            explained_at: BTreeMap::new(),
-            notifications_open: false,
             updates_open: false,
             shutdown_summary: None,
             applied_scale: 0.0,
@@ -458,7 +542,7 @@ impl Shell {
         self.status = Some(text.into());
     }
 
-    /// Runs `f` on screen `id`, then the effects it asked for; `false` for a legacy screen.
+    /// Runs `f` on screen `id`, then the effects it asked for; `false` when no screen is registered under `id`.
     fn with_screen(&mut self, id: ScreenId, f: impl FnOnce(&mut dyn DynScreen, &mut Cx)) -> bool {
         let Some((screen, mut cx)) = self.screen_mut(id) else {
             return false;
@@ -478,6 +562,11 @@ impl Shell {
                 cx,
             )
         });
+    }
+    /// Opens Settings on the embedding setup of Provider connections.
+    pub(crate) fn open_embedding_setup(&mut self) {
+        self.navigate(Route::Settings);
+        self.with_typed(|s: &mut SettingsScreen, cx| s.show_embedding_setup(cx));
     }
     fn run_effects(&mut self, effects: Vec<Effect>) {
         for effect in effects {
@@ -507,8 +596,12 @@ impl Shell {
                     self.jobs.set_scope(Some(p));
                     self.navigate(Route::Jobs);
                 }
-                Effect::LoadProjectJobs(p) => self.load_project_jobs(&p),
-                Effect::CountArchiveWork(p) => self.count_archive_work(&p),
+                Effect::LoadProjectJobs(p) => {
+                    self.with_typed(|j: &mut jobs::JobsUi, cx| j.load_project_jobs(cx, &p))
+                }
+                Effect::CountArchiveWork(p) => {
+                    self.with_typed(|w: &mut work::WorkUi, cx| w.count_archive_work(cx, &p))
+                }
                 Effect::ForgetArchiveCount(p) => self.work.forget_archive_count(&p),
                 Effect::ReviewPurge(p) => self.start_purge_review(p),
                 Effect::OpenGraph(id, name) => self.open_repository_graph(&id, &name),
@@ -519,15 +612,43 @@ impl Shell {
                 Effect::ConfirmOutcomes => self.confirm_outcomes(),
                 Effect::OpenEmbeddingSetup => self.open_embedding_setup(),
                 Effect::OpenInstructions => {
-                    self.settings.category =
-                        Some(devworks_core::settings::catalog::Category::Instructions);
-                    if let Some(v) = &mut self.settings.view {
-                        v.set_category(self.settings.category);
-                    }
+                    self.with_typed(|s: &mut SettingsScreen, _| s.show_instructions());
                     self.navigate(Route::Settings);
                 }
-                Effect::ArtifactsChanged => self.artifacts.mutations += 1,
+                Effect::ArtifactsChanged => self
+                    .with_typed(|a: &mut crate::artifacts_screen::ArtifactsScreen, _| a.changed()),
+                Effect::OpenConnections => {
+                    self.with_typed(|s: &mut SettingsScreen, cx| s.show_connections_topic(cx))
+                }
+                Effect::OpenHelp(screen) => self.open_help_context(&screen),
+                Effect::InspectApproval(id) => {
+                    self.with_typed(|d: &mut decisions::DecisionsUi, cx| d.inspect_approval(cx, id))
+                }
+                Effect::SelectKnowledge(id) => {
+                    self.with_typed(|k: &mut KnowledgeScreen, cx| k.select(cx, id));
+                }
                 Effect::Watch(actions) => self.watch_act(actions),
+                Effect::OpenGitSession(id) => {
+                    self.with_typed(|c: &mut Chat, cx| {
+                        c.notice = None;
+                        c.open_session(cx, id);
+                    });
+                    self.navigate(Route::Chat);
+                }
+                Effect::SetRoute(route) => self.route = route,
+                Effect::OpenPrices(models) => {
+                    self.with_typed(|u: &mut crate::usage_screen::UsageScreen, cx| {
+                        u.show_prices(models);
+                        cx.routes.entry(Route::Usage).or_default().tab = 2;
+                        cx.navigate(Route::Usage);
+                    });
+                }
+                Effect::OpenNotifications => self.decisions.notifications_open = true,
+                Effect::InvalidateRouting => self.invalidate_routing(),
+                Effect::ProjectList(result) => self.projects_listed(result),
+                Effect::RepositoryList(result) => self.repositories_listed(result),
+                Effect::ProjectMembers(project, result) => self.members_listed(project, result),
+                Effect::ConfirmPurge => self.confirm_purge(),
             }
         }
     }
@@ -548,7 +669,7 @@ impl Shell {
     /// conversation in the centre pane; navigating elsewhere never opens it (UI-13).
     pub fn navigate(&mut self, route: Route) {
         if route != Route::Databases {
-            self.databases.generated_key = None;
+            self.with_typed(|d: &mut crate::databases_screen::DatabasesScreen, _| d.left());
         }
         if route == Route::Chat {
             self.chat.coordinator_open = false;
@@ -562,14 +683,22 @@ impl Shell {
         self.with_typed(|c: &mut Chat, cx| c.open_session(cx, id));
         self.navigate(Route::Chat);
     }
+    pub fn load_jobs(&mut self) {
+        self.with_typed(|j: &mut jobs::JobsUi, cx| j.load_jobs(cx));
+    }
     pub fn load_sessions(&mut self) {
         self.with_typed(|c: &mut Chat, cx| c.load_sessions(cx));
     }
-    fn load_transcript(&mut self, id: &str) {
-        self.with_typed(|c: &mut Chat, cx| c.load_transcript(cx, id));
-    }
     fn load_router_catalog(&mut self) {
         self.with_typed(|c: &mut Chat, cx| c.load_router_catalog(cx));
+    }
+    /// Reads the selected project's work lists again (the work screens are open).
+    fn load_work(&mut self) {
+        self.with_typed(|w: &mut work::WorkUi, cx| w.load_work(cx));
+    }
+    /// Opens a work item by ID: its project is selected and its screen shown with it selected.
+    fn open_work(&mut self, id: &str) {
+        self.with_typed(|w: &mut work::WorkUi, cx| w.open_work(cx, id));
     }
     fn invalidate_routing(&mut self) {
         self.with_typed(|c: &mut Chat, cx| c.invalidate_routing(cx));
@@ -613,30 +742,17 @@ impl Shell {
                 self.routes.get(&self.route).unwrap_or(&default_memory),
             )
         });
-        let tab = match self.route {
-            _ if screen_context.is_some() => screen_context.as_ref().map_or(0, |c| c.tab),
-            Route::Approvals => self.decisions.tab,
-            Route::Knowledge => self.knowledge.tab,
-            _ => self.routes.get(&self.route).map_or(0, |view| view.tab),
-        };
-        let selection = match self.route {
-            _ if screen_context.is_some() => {
-                screen_context.as_ref().and_then(|c| c.selection.as_deref())
-            }
-            Route::Approvals => self.decisions.selected.as_ref().map(|v| v.id.as_str()),
-            Route::Knowledge => self.knowledge.selected.as_ref().map(Id::as_str),
-            Route::Jobs => self.jobs.selected.as_deref(),
-            Route::AddOns => self.addons.selected.as_deref(),
-            _ => self
-                .routes
-                .get(&self.route)
-                .and_then(|view| view.selection.as_deref()),
-        };
-        let selection = selection.unwrap_or("");
+        let tab = screen_context.as_ref().map_or(0, |c| c.tab);
+        let selection = screen_context
+            .as_ref()
+            .and_then(|c| c.selection.as_deref())
+            .unwrap_or("");
         let knowledge_project = if self.route == Route::Knowledge {
-            self.knowledge.project.as_deref().unwrap_or("")
+            self.screen(ScreenId::Knowledge)
+                .and_then(|s| s.scope())
+                .unwrap_or_default()
         } else {
-            ""
+            String::new()
         };
         let key = format!(
             "{}|{}|{}|{}|{}|{}|{}",
@@ -664,7 +780,7 @@ impl Shell {
             if knowledge_project.is_empty() {
                 "workspace"
             } else {
-                knowledge_project
+                &knowledge_project
             },
             screen.help_topic
         );
@@ -673,67 +789,11 @@ impl Shell {
 
     fn load_route(&mut self) {
         let route = self.route;
-        if self.with_screen(route.screen().owner, |s, cx| s.load(cx, route)) {
-            return;
+        if route == Route::Jobs {
+            // The job form's route selectors.
+            self.load_router_catalog();
         }
-        match self.route {
-            Route::Approvals => {
-                self.decisions.tab = self.routes.entry(Route::Approvals).or_default().tab;
-                self.load_approvals();
-            }
-            Route::Settings if self.settings.view.is_none() && !self.settings.loading => {
-                self.load_settings();
-            }
-            Route::AddOns => {
-                self.load_addons();
-                if let Some(c) = &mut self.client {
-                    c.network_task(
-                        Slot::AddonsDiscovery,
-                        "Checking runtimes and package indexes",
-                        |b| b.refresh_packages().map(|()| TaskOutput::Refreshed),
-                    );
-                }
-            }
-            Route::Knowledge => {
-                // Scope choices are the projects the user can see.
-                if !self.projects.list.loaded && !self.pending(&Slot::ProjectsList) {
-                    self.load_projects();
-                }
-                if self
-                    .routes
-                    .get(&Route::Knowledge)
-                    .is_none_or(|r| r.tab != 2)
-                    && !self.knowledge.loaded
-                    && self.knowledge.listing.is_none()
-                {
-                    self.load_knowledge();
-                }
-            }
-            Route::Jobs => {
-                self.load_router_catalog();
-                self.load_jobs();
-                if !self.projects.list.loaded {
-                    self.load_projects();
-                }
-            }
-            Route::Overview | Route::Features | Route::Issues => {
-                self.load_projects();
-                self.load_work();
-            }
-            _ => {}
-        }
-    }
-
-    fn pending(&self, slot: &Slot) -> bool {
-        self.client.as_ref().is_some_and(|c| c.is_pending(slot))
-    }
-    /// Whether a command of `slot` is running or its outcome is still not confirmed.
-    fn waiting(&self, slot: &Slot) -> bool {
-        self.pending(slot)
-            || self
-                .client
-                .as_ref()
-                .is_some_and(|c| c.unresolved().iter().any(|u| &u.slot == slot))
+        self.with_screen(route.screen().owner, |s, cx| s.load(cx, route));
     }
 
     // -----------------------------------------------------------------------------------------
@@ -742,7 +802,7 @@ impl Shell {
     pub fn load_projects(&mut self) {
         self.projects.list_at = self.projects.mutations;
         self.query(
-            Slot::ProjectsList,
+            ProjectsSlot::ProjectsList.into(),
             "Loading projects",
             "projects.list",
             |b| ops::projects_list(b, None),
@@ -750,18 +810,103 @@ impl Shell {
     }
     pub fn load_repositories(&mut self) {
         self.query(
-            Slot::RepositoriesList,
+            ProjectsSlot::RepositoriesList.into(),
             "Loading repositories",
             "repositories.list",
             |b| ops::repositories_list(b, None),
         );
         if let Some(p) = self.selected_project.clone() {
             self.query(
-                Slot::ProjectRepositories(p.clone()),
+                ProjectsSlot::ProjectRepositories(p.clone()).into(),
                 "Loading the project's repositories",
                 "repositories.list",
                 move |b| ops::repositories_list(b, Some(&p)),
             );
+        }
+    }
+    /// A project list reply, read: a list requested before a project mutation is requested
+    /// again.
+    fn projects_listed(&mut self, result: Result<(Vec<ProjectRecord>, bool), String>) {
+        if self.projects.list_at != self.projects.mutations {
+            self.load_projects();
+            return;
+        }
+        match result {
+            Ok((items, more)) => {
+                self.projects.list = ListState {
+                    items,
+                    loaded: true,
+                    error: None,
+                    more,
+                };
+                // A selection that no longer exists (deleted elsewhere) is dropped.
+                if let Some(s) = self.selected_project.clone()
+                    && !self.projects.list.more
+                    && !self
+                        .projects
+                        .list
+                        .items
+                        .iter()
+                        .any(|p| p.id.0.as_str() == s)
+                {
+                    self.select_project(None);
+                }
+                // Without a selection the browser sessions of every listed project show.
+                if self.route == Route::Browser && self.selected_project.is_none() {
+                    self.with_screen(ScreenId::Browser, |s, cx| s.load(cx, Route::Browser));
+                }
+            }
+            Err(e) => self.projects.list.error = Some(e),
+        }
+    }
+    fn repositories_listed(
+        &mut self,
+        result: Result<
+            (
+                Vec<devworks_core::protocol::records::RepositoryRecord>,
+                bool,
+            ),
+            String,
+        >,
+    ) {
+        match result {
+            Ok((items, more)) => {
+                self.projects.repositories = ListState {
+                    items,
+                    loaded: true,
+                    error: None,
+                    more,
+                };
+            }
+            Err(e) => self.projects.repositories.error = Some(e),
+        }
+    }
+    fn members_listed(
+        &mut self,
+        project: String,
+        result: Result<
+            (
+                Vec<devworks_core::protocol::records::RepositoryRecord>,
+                bool,
+            ),
+            String,
+        >,
+    ) {
+        // A reply for a project no longer selected is stale.
+        if self.selected_project.as_deref() != Some(project.as_str()) {
+            return;
+        }
+        match result {
+            Ok((items, more)) => {
+                self.projects.members = ListState {
+                    items,
+                    loaded: true,
+                    error: None,
+                    more,
+                };
+                self.projects.members_of = Some(project);
+            }
+            Err(e) => self.projects.members.error = Some(e),
         }
     }
     /// The project the navigation selected, if it is still listed.
@@ -782,9 +927,7 @@ impl Shell {
             return;
         }
         self.selected_project = project;
-        self.graph.opened = false;
-        self.graph.sequence = self.graph.sequence.wrapping_add(1);
-        self.graph.loading = false;
+        self.with_typed(|g: &mut crate::graph_screen::GraphScreen, _| g.project_changed());
         self.projects.members = ListState::default();
         self.projects.members_of = None;
         if self.route == Route::Repositories {
@@ -860,461 +1003,8 @@ impl Shell {
         let online = self.online().is_ok();
         crate::screen::submit_query(self.client.as_mut(), online, slot, label, op, frame)
     }
-    /// Submits a command; `false` when it was not submitted now (offline or closing; a closed
-    /// client keeps it unresolved). A caller that marked state for it restores that state.
-    fn command(
-        &mut self,
-        slot: Slot,
-        label: &str,
-        op: &'static str,
-        frame: impl FnOnce(&dyn Backend) -> Vec<u8>,
-    ) -> bool {
-        let online = self.online().is_ok();
-        crate::screen::submit_command(
-            self.client.as_mut(),
-            online,
-            &mut self.status,
-            slot,
-            label,
-            op,
-            frame,
-        )
-    }
-
     pub fn load_settings(&mut self) {
-        if let Some(backend) = self.backend() {
-            self.settings.connections.secret_store = Some(backend.secret_store());
-        }
-        self.settings.loading = true;
-        self.query(
-            Slot::SettingsRead,
-            "Loading settings",
-            "settings.read_effective",
-            ops::settings_read,
-        );
-        self.refresh_container_capabilities();
-        if !self.projects.list.loaded && !self.pending(&Slot::ProjectsList) {
-            self.load_projects();
-        }
-        self.load_mcp_servers(None);
-    }
-    fn refresh_container_capabilities(&mut self) {
-        self.query(
-            Slot::ContainerCapabilities,
-            "Checking container runtimes",
-            "containers.capabilities",
-            ops::container_capabilities,
-        );
-    }
-    /// Loads the whole catalog, following its pages (see the `AddonsList` reply).
-    fn load_addons(&mut self) {
-        self.addons.catalog_pending = None;
-        self.query(Slot::AddonsList, "Loading add-ons", "addons.catalog", |b| {
-            crate::addons::catalog_frame(b, None)
-        });
-    }
-    /// Loads a package's logs from the start, following their pages to the end.
-    fn load_addon_logs(&mut self, package: String) {
-        self.addons.logs_pending.insert(package.clone(), Vec::new());
-        let p = package.clone();
-        self.query(
-            Slot::AddonsLogs(package),
-            "Loading add-on logs",
-            "addons.logs",
-            move |b| crate::addons::logs_frame(b, &p, None),
-        );
-    }
-    fn addons_actions(&mut self, actions: Vec<crate::addons::AddonsAction>) {
-        use crate::addons::{self as a, AddonsAction};
-        for action in actions {
-            let registry = self.addons.registry_revision;
-            let lifecycle = match action {
-                AddonsAction::Refresh => {
-                    self.load_addons();
-                    None
-                }
-                AddonsAction::Discover => {
-                    if let Some(c) = &mut self.client {
-                        c.network_task(
-                            Slot::AddonsDiscovery,
-                            "Checking runtimes and package indexes",
-                            |b| b.refresh_packages().map(|()| TaskOutput::Refreshed),
-                        );
-                    }
-                    None
-                }
-                AddonsAction::InstallOffer {
-                    package,
-                    digest,
-                    update,
-                } => {
-                    if let Some(c) = &mut self.client {
-                        self.addons.busy = c.network_task(
-                            Slot::AddonsSave {
-                                update: update.then_some(package.clone()),
-                                registry,
-                                download: None,
-                            },
-                            "Downloading the add-on",
-                            move |b| {
-                                let path = b.fetch_index_bundle(&package, &digest)?;
-                                a::prepare_downloaded_install(b, path)
-                            },
-                        );
-                    }
-                    None
-                }
-                AddonsAction::Select(id) => {
-                    self.addons.selected = Some(id);
-                    None
-                }
-                AddonsAction::Logs(id) => {
-                    self.load_addon_logs(id);
-                    None
-                }
-                AddonsAction::OpenIndexing => {
-                    self.navigate(Route::Indexing);
-                    None
-                }
-                AddonsAction::InstallFromFile(update) => {
-                    if let Some(path) = self.dialogs.pick_package()
-                        && let Some(c) = &mut self.client
-                    {
-                        self.addons.busy = c.task(
-                            Slot::AddonsSave {
-                                update,
-                                registry,
-                                download: None,
-                            },
-                            "Preparing the add-on",
-                            move |b| a::prepare_install_from_file(b, &path),
-                        );
-                    }
-                    None
-                }
-                AddonsAction::Approve {
-                    package,
-                    bundle,
-                    update,
-                } => Some(a::install_command(
-                    bundle,
-                    update.then_some(package.as_str()),
-                    registry,
-                )),
-                AddonsAction::Enable(p) => Some(a::enable_command(&p, registry)),
-                AddonsAction::Disable(p) => Some(a::disable_command(&p, registry)),
-                AddonsAction::Uninstall(p) => Some(a::uninstall_command(&p, registry)),
-                AddonsAction::Rollback {
-                    package,
-                    target,
-                    generation,
-                } => Some(a::rollback_command(&package, &target, registry, generation)),
-                AddonsAction::TrustPublisher {
-                    package,
-                    revision,
-                    trust,
-                } => {
-                    self.addons.busy = true;
-                    self.command(
-                        Slot::AddonsCommand,
-                        "Saving publisher trust",
-                        "addons.configure",
-                        move |b| a::trust_frame(b, &package, revision, trust),
-                    );
-                    None
-                }
-                AddonsAction::Configure {
-                    package,
-                    revision,
-                    schema,
-                    value,
-                } => {
-                    self.addons.busy = true;
-                    self.command(
-                        Slot::AddonsCommand,
-                        "Saving the add-on configuration",
-                        "addons.configure",
-                        move |b| a::configure_frame(b, &package, revision, schema, value),
-                    );
-                    None
-                }
-                AddonsAction::ProjectEnablement {
-                    package,
-                    revision,
-                    disabled,
-                } => {
-                    self.addons.busy = true;
-                    self.command(
-                        Slot::AddonsCommand,
-                        "Saving project enablement",
-                        "addons.configure",
-                        move |b| a::project_frame(b, &package, revision, &disabled),
-                    );
-                    None
-                }
-            };
-            match lifecycle {
-                Some(Some(command)) => {
-                    self.addons.busy = true;
-                    self.command(
-                        Slot::AddonsCommand,
-                        "Updating the add-on",
-                        a::operation(&command),
-                        move |b| a::lifecycle_frame(b, command),
-                    );
-                }
-                Some(None) => {
-                    self.addons.notice = Some("The add-on request is not valid.".into());
-                }
-                None => {}
-            }
-        }
-    }
-
-    /// Starts a new Knowledge listing (first page) and refreshes the retrieval mode. A listing
-    /// that could not be submitted is not left in progress.
-    fn load_knowledge(&mut self) {
-        let (op, body) = self.knowledge.begin_listing(false);
-        let generation = self.knowledge.generation;
-        if !self.query(
-            Slot::KnowledgeList(generation),
-            "Loading Knowledge",
-            op,
-            move |b| knowledge_screen::query(b, body),
-        ) {
-            self.knowledge.listing = None;
-        }
-        let body = self.knowledge.diagnostics_input();
-        self.query(
-            Slot::KnowledgeDiagnostics,
-            "Checking Knowledge",
-            "knowledge.diagnostics",
-            move |b| knowledge_screen::query(b, body),
-        );
-    }
-    /// Gives the Knowledge screen the projects the user can see (active and archived, from
-    /// `projects.list`) and follows the navigation's project selection; a changed scope lists
-    /// again.
-    fn sync_knowledge_scope(&mut self, actions: &mut Vec<KnowledgeAction>) {
-        use devworks_core::protocol::records::LifeState;
-        if !self.projects.list.loaded {
-            return;
-        }
-        let projects: Vec<(String, String)> = self
-            .projects
-            .list
-            .items
-            .iter()
-            .filter(|p| matches!(p.lifecycle, LifeState::Active | LifeState::Archived))
-            .map(|p| {
-                let name = match p.lifecycle {
-                    LifeState::Archived => format!("{} (archived)", p.name.0),
-                    _ => p.name.0.clone(),
-                };
-                (p.id.0.as_str().to_owned(), name)
-            })
-            .collect();
-        let mut changed = self.knowledge.set_projects(projects);
-        let nav = self.selected_project().map(str::to_owned);
-        if self.knowledge.followed.as_ref() != Some(&nav) {
-            self.knowledge.followed = Some(nav.clone());
-            changed |= self.knowledge.follow_navigation(nav.as_deref());
-        }
-        if changed && self.knowledge.loaded {
-            actions.push(KnowledgeAction::Search);
-        }
-    }
-    /// Stores the first of `paths` as the user's artifact (like a chat attachment), then
-    /// previews its import. One import at a time; nothing is imported before Confirm.
-    fn import_knowledge_file(&mut self, paths: Vec<PathBuf>) {
-        let Some(path) = paths.into_iter().next() else {
-            return;
-        };
-        let name = path
-            .file_name()
-            .map(|n| n.to_string_lossy().into_owned())
-            .unwrap_or_else(|| "import.json".into());
-        if !self.knowledge.begin_import(&name) {
-            self.knowledge.message = Some((
-                widgets::Tone::Attention,
-                "An import is already in progress.".into(),
-            ));
-            return;
-        }
-        let media = if path
-            .extension()
-            .is_some_and(|e| e.eq_ignore_ascii_case("json"))
-        {
-            "application/json"
-        } else {
-            attachments::media_type(&path)
-        };
-        let submitted = self.online().is_ok()
-            && self.client.as_mut().is_some_and(|c| {
-                c.task(
-                    Slot::KnowledgeImportSave,
-                    "Storing the import file",
-                    move |b| attachments::prepare_file(b, &path, &name, media, "knowledge-import"),
-                )
-            });
-        if !submitted {
-            self.knowledge.import = Some(knowledge_screen::ImportStage::Failed {
-                name: "the file".into(),
-                error: "DevWorks is offline or closing.".into(),
-            });
-        }
-    }
-    fn read_knowledge(&mut self, claim: devworks_core::protocol::Id) {
-        let body = self.knowledge.read_input(&claim);
-        self.query(
-            Slot::KnowledgeRead(claim.as_str().to_owned()),
-            "Loading a Knowledge entry",
-            "knowledge.read",
-            move |b| knowledge_screen::query(b, body),
-        );
-    }
-    /// Submits one Knowledge write at a time; what it took from the screen's forms
-    /// (`submitted`) stays until its outcome is recorded.
-    fn knowledge_write(
-        &mut self,
-        label: &str,
-        op: &'static str,
-        body: Option<devworks_core::operations::OperationInput>,
-        submitted: knowledge_screen::Submitted,
-    ) {
-        if self.knowledge.writing.is_some() {
-            return;
-        }
-        self.knowledge.writing = Some(label.to_owned());
-        self.knowledge.submitted = Some(submitted);
-        if !self.command(Slot::KnowledgeWrite, label, op, move |b| {
-            knowledge_screen::command(b, body)
-        }) {
-            // Refused because an earlier write is unresolved: that one stays the write in
-            // flight until Confirm outcomes settles it.
-            let held = self.client.as_ref().and_then(|c| {
-                c.unresolved()
-                    .iter()
-                    .find(|u| u.slot == Slot::KnowledgeWrite)
-                    .map(|u| u.label.clone())
-            });
-            self.knowledge.message = Some((
-                widgets::Tone::Attention,
-                match &held {
-                    Some(earlier) => format!(
-                        "{earlier}: the outcome is not confirmed yet. Use Confirm outcomes \
-                         first; Knowledge changes wait until it is known."
-                    ),
-                    None => format!("{label} was not sent: DevWorks is offline or closing."),
-                },
-            ));
-            self.knowledge.writing = held;
-            self.knowledge.submitted = None;
-        }
-    }
-    fn knowledge_actions(&mut self, actions: Vec<KnowledgeAction>) {
-        for a in actions {
-            match a {
-                KnowledgeAction::Search => self.load_knowledge(),
-                KnowledgeAction::More => {
-                    if self.knowledge.listing.is_some() || self.knowledge.cursor.is_none() {
-                        continue;
-                    }
-                    let (op, body) = self.knowledge.begin_listing(true);
-                    let generation = self.knowledge.generation;
-                    if !self.query(
-                        Slot::KnowledgeList(generation),
-                        "Loading more Knowledge",
-                        op,
-                        move |b| knowledge_screen::query(b, body),
-                    ) {
-                        self.knowledge.listing = None;
-                    }
-                }
-                KnowledgeAction::Select(id) => {
-                    self.knowledge.selected = Some(id.clone());
-                    self.knowledge.detail = None;
-                    self.knowledge.detail_error = None;
-                    self.read_knowledge(id);
-                }
-                KnowledgeAction::Save(draft) => match self.knowledge.save_input(&draft) {
-                    Ok((op, body)) => self.knowledge_write(
-                        "Entry",
-                        op,
-                        body,
-                        knowledge_screen::Submitted::Draft(draft),
-                    ),
-                    Err(m) => self.knowledge.message = Some((widgets::Tone::Attention, m)),
-                },
-                KnowledgeAction::PreviewSource => match self.knowledge.preview_input() {
-                    Ok((source, body)) => {
-                        self.knowledge.source_preview = None;
-                        self.query(
-                            Slot::KnowledgePreview(source),
-                            "Previewing a cleanup",
-                            "knowledge.diagnostics",
-                            move |b| knowledge_screen::query(b, body),
-                        );
-                    }
-                    Err(m) => self.knowledge.message = Some((widgets::Tone::Attention, m)),
-                },
-                KnowledgeAction::ImportDialog => {
-                    let picked = self.dialogs.pick_files();
-                    self.import_knowledge_file(picked);
-                }
-                KnowledgeAction::ImportFiles(paths) => self.import_knowledge_file(paths),
-                KnowledgeAction::ConfirmImport => match self.knowledge.import_input() {
-                    Ok(body) => {
-                        if self.command(
-                            Slot::KnowledgeImport,
-                            "Importing Knowledge",
-                            "knowledge.import_user_data",
-                            move |b| knowledge_screen::command(b, body),
-                        ) {
-                            self.knowledge.import_started();
-                        } else {
-                            self.knowledge.message = Some((
-                                widgets::Tone::Attention,
-                                "The import was not sent: DevWorks is offline or closing.".into(),
-                            ));
-                        }
-                    }
-                    Err(m) => self.knowledge.message = Some((widgets::Tone::Attention, m)),
-                },
-                KnowledgeAction::CancelImport => {
-                    if !self.knowledge.import.as_ref().is_some_and(|s| s.busy()) {
-                        self.knowledge.import = None;
-                    }
-                }
-                KnowledgeAction::DeleteSource => match self.knowledge.delete_source_input() {
-                    Ok((op, body)) => self.knowledge_write(
-                        "Delete by source",
-                        op,
-                        body,
-                        knowledge_screen::Submitted::Nothing,
-                    ),
-                    Err(m) => self.knowledge.message = Some((widgets::Tone::Attention, m)),
-                },
-                KnowledgeAction::Change(change) => match self.knowledge.change_input(change) {
-                    Ok((op, body)) => {
-                        let submitted = self.knowledge.change_submission(change);
-                        self.knowledge_write(change.label(), op, body, submitted)
-                    }
-                    Err(m) => self.knowledge.message = Some((widgets::Tone::Attention, m)),
-                },
-            }
-        }
-    }
-
-    /// Admits a Knowledge import file's exact save frame (prepared, or unconfirmed).
-    fn submit_import_save(&mut self, frame: Vec<u8>) -> bool {
-        self.client.as_mut().is_some_and(|c| {
-            c.task(
-                Slot::KnowledgeImportSave,
-                "Storing the import file",
-                move |b| attachments::save(b, frame, None),
-            )
-        })
+        self.with_typed(|s: &mut SettingsScreen, cx| s.reload(cx));
     }
 
     // -----------------------------------------------------------------------------------------
@@ -1344,806 +1034,7 @@ impl Shell {
 
     fn apply(&mut self, slot: Slot, reply: Reply) {
         let owner = slot.screen();
-        if owner != ScreenId::Legacy {
-            self.with_screen(owner, |s, cx| s.apply(cx, slot, reply));
-            return;
-        }
-        let Some((slot, reply)) = self.apply_purge(slot, reply) else {
-            return;
-        };
-        let Some((slot, reply)) = self.apply_jobs(slot, reply) else {
-            return;
-        };
-        let Some((slot, reply)) = self.apply_work(slot, reply) else {
-            return;
-        };
-        let Some((slot, reply)) = self.apply_decisions(slot, reply) else {
-            return;
-        };
-        match (slot, reply) {
-            (Slot::ProjectsList, Reply::Query(_))
-                if self.projects.list_at != self.projects.mutations =>
-            {
-                self.load_projects();
-            }
-            (Slot::ProjectsList, Reply::Query(q)) => match ops::projects(q) {
-                Ok((items, more)) => {
-                    self.projects.list = ListState {
-                        items,
-                        loaded: true,
-                        error: None,
-                        more,
-                    };
-                    // A selection that no longer exists (deleted elsewhere) is dropped.
-                    if let Some(s) = self.selected_project.clone()
-                        && !self.projects.list.more
-                        && !self
-                            .projects
-                            .list
-                            .items
-                            .iter()
-                            .any(|p| p.id.0.as_str() == s)
-                    {
-                        self.select_project(None);
-                    }
-                    // Without a selection the browser sessions of every listed project show.
-                    if self.route == Route::Browser && self.selected_project.is_none() {
-                        self.with_screen(ScreenId::Browser, |s, cx| s.load(cx, Route::Browser));
-                    }
-                }
-                Err(e) => self.projects.list.error = Some(e.describe()),
-            },
-            (Slot::RepositoriesList, Reply::Query(q)) => match ops::repositories(q) {
-                Ok((items, more)) => {
-                    self.projects.repositories = ListState {
-                        items,
-                        loaded: true,
-                        error: None,
-                        more,
-                    };
-                }
-                Err(e) => self.projects.repositories.error = Some(e.describe()),
-            },
-            (Slot::ProjectRepositories(p), Reply::Query(q)) => {
-                // A reply for a project no longer selected is stale.
-                if self.selected_project.as_deref() == Some(p.as_str()) {
-                    match ops::repositories(q) {
-                        Ok((items, more)) => {
-                            self.projects.members = ListState {
-                                items,
-                                loaded: true,
-                                error: None,
-                                more,
-                            };
-                            self.projects.members_of = Some(p);
-                        }
-                        Err(e) => self.projects.members.error = Some(e.describe()),
-                    }
-                }
-            }
-            // Started before a session mutation was applied: it may lack that change.
-            (Slot::ContainerCapabilities, Reply::Query(q)) => {
-                match ops::container_capability_entries(q) {
-                    Ok(entries) => {
-                        self.settings.container_capabilities = Some(entries);
-                        self.settings.container_error = None;
-                    }
-                    Err(error) => self.settings.container_error = Some(error.describe()),
-                }
-            }
-            (Slot::SettingsRead, Reply::Query(q)) => match ops::settings_entries(q) {
-                Ok((revision, entries)) => {
-                    self.settings.loaded(revision, &entries);
-                    self.check_settings_health(revision);
-                }
-                Err(e) => {
-                    self.settings.loading = false;
-                    // The save committed but its result could not be read back: keep every
-                    // draft (a later save of an already-saved value is a no-op change).
-                    self.settings.after_save = false;
-                    self.settings.saving = false;
-                    self.settings.submitted.clear();
-                    self.settings.error = Some(e.describe());
-                }
-            },
-            (Slot::SettingsValidate, Reply::Query(_))
-                if self.validated_drafts.take() != Some(self.settings.drafts()) =>
-            {
-                // The drafts changed while it ran: its findings describe other values.
-                self.settings.validating = false;
-                self.settings.message = Some((
-                    Tone::Neutral,
-                    "Values changed while validating; validate again.".into(),
-                ));
-            }
-            (Slot::SettingsValidate, Reply::Query(q)) => {
-                self.settings.validating = false;
-                match ops::settings_report(q) {
-                    Ok(report) => {
-                        let valid = report.valid;
-                        if let Some(v) = &mut self.settings.view {
-                            v.apply_report(&report);
-                        }
-                        self.settings.message = Some(if valid {
-                            (Tone::Good, "The changes are valid.".into())
-                        } else {
-                            (Tone::Bad, "Some values need attention.".into())
-                        });
-                    }
-                    Err(e) => self.settings.message = Some((Tone::Bad, e.describe())),
-                }
-            }
-            (Slot::SettingsHealth, Reply::Query(q)) => {
-                if let Ok(report) = ops::settings_report(q) {
-                    for (key, _) in self.settings.directories() {
-                        let unavailable = report
-                            .issues
-                            .0
-                            .iter()
-                            .find(|i| i.path.0 == key && i.code.0 == codes::PATH_UNAVAILABLE);
-                        let health = match unavailable {
-                            Some(i) => Health::Unavailable(i.message.0.clone()),
-                            None => Health::Available,
-                        };
-                        self.settings.set_health(key, health);
-                    }
-                }
-            }
-            (Slot::SettingsSave, Reply::Command(c)) => {
-                let outcome = ops::settings_saved(c);
-                self.settings.unconfirmed = matches!(outcome, Err(Failure::Unknown));
-                match outcome {
-                    Err(Failure::Unknown) => {
-                        // Still "saving": the identical request confirms it, never a new one.
-                        self.settings.message = Some((
-                            Tone::Attention,
-                            "Not yet confirmed whether the settings were saved. Use Confirm \
-                             outcomes to check again."
-                                .into(),
-                        ));
-                        self.announce("Settings: outcome not confirmed.");
-                    }
-                    Ok(()) => {
-                        // Tier membership and other routing settings may have changed: the
-                        // selectors' catalog and every availability are read again.
-                        self.invalidate_routing();
-                        // Still saving until the follow-up read settles the drafts.
-                        self.settings.after_save = true;
-                        self.settings.message = Some((Tone::Good, "Settings saved.".into()));
-                        self.announce("Settings saved.");
-                        self.load_settings();
-                    }
-                    Err(e) => {
-                        self.settings.saving = false;
-                        self.settings.submitted.clear();
-                        let conflict = matches!(&e, Failure::Refused(f) if f.code == DomainErrorCode::RevisionConflict);
-                        self.settings.message = Some((
-                            Tone::Bad,
-                            if conflict {
-                                "Settings changed elsewhere; your changes are kept for review."
-                                    .into()
-                            } else {
-                                e.describe()
-                            },
-                        ));
-                        self.announce("Settings were not saved.");
-                        if conflict {
-                            self.load_settings();
-                        }
-                    }
-                }
-            }
-            (Slot::SettingsExplain(key), Reply::Query(_))
-                if self.explained_at.get(&key).copied().flatten() != self.settings_revision() =>
-            {
-                // The view moved to another revision meanwhile: explain it at that one.
-                self.explain(key);
-            }
-            (Slot::WebFetch, Reply::Query(q)) => {
-                let web = &mut self.settings.web;
-                web.fetching = false;
-                match ops::web_document(q) {
-                    Ok(doc) => {
-                        web.document = Some(doc);
-                        web.error = None;
-                    }
-                    Err(e) => web.error = Some(e.describe()),
-                }
-                self.web_action(WebAction::LoadActivity);
-            }
-            (Slot::WebSearch, Reply::Query(q)) => {
-                let web = &mut self.settings.web;
-                web.searching = false;
-                match ops::web_results(q) {
-                    Ok(results) => {
-                        web.results = Some(results);
-                        web.error = None;
-                    }
-                    Err(e) => web.error = Some(e.describe()),
-                }
-                self.web_action(WebAction::LoadActivity);
-            }
-            (Slot::WebActivity, Reply::Query(q)) => {
-                let web = &mut self.settings.web;
-                web.activity_loading = false;
-                web.activity = Some(ops::web_entries(q).map_err(|e| e.describe()));
-            }
-            (Slot::McpServers(scope, _), Reply::Query(_)) if scope != self.mcp_scope_key() => {}
-            (Slot::McpServers(_, cursor), Reply::Query(q)) => match ops::mcp_server_page(q) {
-                Ok((servers, next)) => {
-                    self.settings
-                        .mcp
-                        .loaded_servers(servers, cursor.is_some(), next.is_none());
-                    if let Some(next) = next {
-                        self.load_mcp_servers(Some(next));
-                    } else {
-                        self.settings.mcp.loading = false;
-                        self.settings.mcp.last_refresh = Some(Instant::now());
-                        if let Some(server) = self.settings.mcp.selected.as_ref().and_then(|id| {
-                            self.settings
-                                .mcp
-                                .servers
-                                .iter()
-                                .find(|server| &server.id == id)
-                        }) && matches!(server.state, ItemState::Failed)
-                        {
-                            self.settings.mcp.error = Some(server.last_failure.as_ref().map_or_else(
-                                || "The MCP server operation failed. Check its configuration and retry.".into(),
-                                |failure| failure.0.clone(),
-                            ));
-                        }
-                        if let Some(server) = self.settings.mcp.selected.as_ref().and_then(|id| {
-                            self.settings
-                                .mcp
-                                .servers
-                                .iter()
-                                .find(|server| &server.id == id)
-                        }) {
-                            self.load_mcp_capabilities(server.id.clone(), None);
-                        }
-                    }
-                }
-                Err(error) => {
-                    self.settings.mcp.loading = false;
-                    self.settings.mcp.error = Some(error.describe());
-                }
-            },
-            (Slot::McpContent(scope, _), Reply::Task(_)) if scope != self.mcp_scope_key() => {}
-            (Slot::McpContent(_, server), Reply::Task(t)) => {
-                if let Ok(server) = Id::new(server) {
-                    self.settings.mcp.opened(
-                        &server,
-                        match t {
-                            Ok(TaskOutput::McpContent(text)) => Ok(text),
-                            Ok(_) => Err("unexpected reply".into()),
-                            Err(error) => Err(error),
-                        },
-                    );
-                }
-            }
-            (Slot::McpCapabilities(scope, _, _), Reply::Query(_))
-                if scope != self.mcp_scope_key() => {}
-            (Slot::McpCapabilities(_, server, cursor), Reply::Query(q)) => {
-                match ops::mcp_capability_page(q) {
-                    Ok((capabilities, next)) => {
-                        if let Ok(id) = Id::new(server) {
-                            self.settings
-                                .mcp
-                                .loaded_catalog(&id, capabilities, cursor.is_some());
-                            if let Some(next) = next {
-                                self.load_mcp_capabilities(id, Some(next));
-                            }
-                        }
-                    }
-                    Err(error) => self.settings.mcp.error = Some(error.describe()),
-                }
-            }
-            (Slot::McpCommand, Reply::Task(Ok(TaskOutput::Prepared { frame }))) => {
-                if !self.client.as_mut().is_some_and(|client| {
-                    client.command(Slot::McpCommand, "Updating MCP", "mcp.configure", frame)
-                }) {
-                    self.settings.mcp.busy = false;
-                    self.settings.mcp.error =
-                        Some("MCP configuration could not be submitted.".into());
-                }
-            }
-            (Slot::McpCommand, Reply::Task(Err(error))) => {
-                self.settings.mcp.busy = false;
-                self.settings.mcp.pending_server = None;
-                self.settings.mcp.error = Some(error);
-            }
-            (Slot::McpRelease, Reply::Task(Err(error))) => {
-                self.settings.mcp.error = Some(format!(
-                    "The removed MCP token could not be deleted: {error}"
-                ));
-            }
-            (Slot::McpRelease, Reply::Task(Ok(_))) => {}
-            (Slot::McpCommand, Reply::Command(c)) => {
-                self.settings.mcp.busy = false;
-                match ops::mcp_command_status(c) {
-                    Ok((message, operation, configured)) => {
-                        self.settings.mcp.message = Some(message);
-                        self.settings.mcp.error = None;
-                        let reconnect = self.settings.mcp.reconnect.take();
-                        // A removed server's tokens are no longer referenced once the removal
-                        // is saved, whether or not its session has closed yet.
-                        if let Some(handles) = self.settings.mcp.removing.take() {
-                            if self.settings.mcp.pending_server.as_ref()
-                                == self.settings.mcp.selected.as_ref()
-                            {
-                                self.settings.mcp.selected = None;
-                                self.settings.mcp.capabilities.clear();
-                            }
-                            self.release_mcp_credentials(handles);
-                        }
-                        if let Some(server) = &configured {
-                            self.release_dropped_mcp_credentials(server);
-                            self.settings.mcp.saved(server);
-                        }
-                        if let Some(server) = &configured {
-                            self.settings.mcp.selected = Some(server.id.clone());
-                        }
-                        self.settings.mcp.pending_operation = operation;
-                        if self.settings.mcp.pending_operation.is_none() {
-                            self.settings.mcp.pending_server = None;
-                        }
-                        self.load_mcp_servers(None);
-                        if let Some(server) =
-                            configured.filter(|s| reconnect.as_ref() == Some(&s.id))
-                        {
-                            self.mcp_action(McpAction::Connect(server.id, server.revision.get()));
-                        }
-                    }
-                    Err(error) => {
-                        self.settings.mcp.reconnect = None;
-                        self.settings.mcp.removing = None;
-                        self.settings.mcp.keep_selection = false;
-                        self.settings.mcp.pending_server = None;
-                        self.settings.mcp.pending_operation = None;
-                        self.settings.mcp.error = Some(error.describe());
-                    }
-                }
-            }
-            (Slot::McpOperation(scope), Reply::Query(_)) if scope != self.mcp_scope_key() => {}
-            (Slot::McpOperation(_), Reply::Query(q)) => match ops::query_result(q) {
-                Ok((
-                    devworks_core::protocol::results::OperationResult::HistoryOperationStatus {
-                        value,
-                    },
-                    _,
-                )) => {
-                    if self
-                        .settings
-                        .mcp
-                        .observed_operation(&value.operation_id, value.state)
-                    {
-                        self.load_mcp_servers(None);
-                    }
-                }
-                Ok(_) => {
-                    self.settings.mcp.error =
-                        Some("Unexpected MCP operation status response".into())
-                }
-                Err(error) => self.settings.mcp.error = Some(error.describe()),
-            },
-            (Slot::SettingsExplain(key), Reply::Query(q)) => match ops::settings_chain(q) {
-                Ok(chain) => {
-                    if let Some(v) = &mut self.settings.view {
-                        v.apply_explanation(&key, &chain);
-                    }
-                    self.settings.explained.insert(key);
-                }
-                Err(e) => self.settings.message = Some((Tone::Bad, e.describe())),
-            },
-            (Slot::AddonsList, Reply::Query(q)) => match crate::addons::catalog(q) {
-                Ok((items, registry, next)) => {
-                    let (mut all, first) = self
-                        .addons
-                        .catalog_pending
-                        .take()
-                        .unwrap_or_else(|| (Vec::new(), registry));
-                    let pages = all.len() / usize::from(crate::ops::PAGE_LIMIT) + 1;
-                    if registry != first {
-                        // The registry changed between pages: read it again from the start.
-                        self.load_addons();
-                    } else if let Some(cursor) =
-                        next.filter(|_| pages < crate::addons::CATALOG_PAGES)
-                    {
-                        all.extend(items);
-                        self.addons.catalog_pending = Some((all, first));
-                        self.query(
-                            Slot::AddonsList,
-                            "Loading add-ons",
-                            "addons.catalog",
-                            move |b| crate::addons::catalog_frame(b, Some(&cursor)),
-                        );
-                    } else {
-                        all.extend(items);
-                        self.addons.items = all;
-                        self.addons.registry_revision = registry;
-                        self.addons.loaded = true;
-                        self.addons.error = None;
-                    }
-                }
-                Err(e) => {
-                    self.addons.catalog_pending = None;
-                    self.addons.error = Some(e.describe());
-                }
-            },
-            (Slot::AddonsLogs(id), Reply::Query(q)) => match crate::addons::logs(q) {
-                Ok((entries, next)) => {
-                    let mut all = self.addons.logs_pending.remove(&id).unwrap_or_default();
-                    all.extend(entries);
-                    if let Some((p, d)) = self.addons.awaiting.clone()
-                        && p == id
-                        && let Some(e) = all.iter().find(|e| e.id.as_str() == d)
-                    {
-                        self.addons.config_errors.insert(p, e.message.0.clone());
-                        self.addons.awaiting = None;
-                    }
-                    // Only the newest entries are kept while the log is followed to its end.
-                    if all.len() > crate::addons::LOGS_KEPT {
-                        all.drain(..all.len() - crate::addons::LOGS_KEPT);
-                    }
-                    match next {
-                        Some(cursor) => {
-                            self.addons.logs_pending.insert(id.clone(), all);
-                            self.query(
-                                Slot::AddonsLogs(id.clone()),
-                                "Loading add-on logs",
-                                "addons.logs",
-                                move |b| crate::addons::logs_frame(b, &id, Some(&cursor)),
-                            );
-                        }
-                        None => {
-                            self.addons.logs.insert(id, all);
-                        }
-                    }
-                }
-                Err(e) => {
-                    self.addons.logs_pending.remove(&id);
-                    self.addons.notice = Some(e.describe());
-                }
-            },
-            (Slot::AddonsCommand, Reply::Command(outcome)) => {
-                self.addons.busy = is_unknown(&outcome);
-                // A configuration refused by the package's schema names the diagnostic that
-                // carries its field errors: fetch it for the form.
-                if let Some(package) = crate::addons::configured_package(&outcome) {
-                    self.addons.config_errors.remove(&package);
-                }
-                if let Some((package, diagnostic)) = crate::addons::configuration_refusal(&outcome)
-                {
-                    self.addons.awaiting = Some((package.clone(), diagnostic));
-                    self.load_addon_logs(package);
-                }
-                self.addons.notice = Some(crate::addons::describe(outcome));
-                self.load_addons();
-            }
-            (Slot::AddonsDiscovery, Reply::Task(t)) => {
-                if let Err(e) = t {
-                    self.addons.notice = Some(e);
-                }
-                self.load_addons();
-            }
-            (
-                Slot::AddonsSave {
-                    update, registry, ..
-                },
-                Reply::Task(Ok(TaskOutput::PackagePrepared { frame, download })),
-            ) => {
-                if let Some(client) = &mut self.client {
-                    client.command(
-                        Slot::AddonsSave {
-                            update,
-                            registry,
-                            download: Some(download.into_path()),
-                        },
-                        "Saving the add-on bundle",
-                        "artifacts.save",
-                        frame,
-                    );
-                }
-            }
-            (
-                Slot::AddonsSave {
-                    update,
-                    registry,
-                    download,
-                },
-                Reply::Task(Ok(TaskOutput::Prepared { frame })),
-            ) => {
-                if let Some(client) = &mut self.client {
-                    client.command(
-                        Slot::AddonsSave {
-                            update,
-                            registry,
-                            download,
-                        },
-                        "Saving the add-on bundle",
-                        "artifacts.save",
-                        frame,
-                    );
-                }
-            }
-            (
-                Slot::AddonsSave {
-                    update,
-                    registry,
-                    download,
-                },
-                Reply::Command(outcome),
-            ) => {
-                let unknown = is_unknown(&outcome);
-                if !unknown && let (Some(path), Some(backend)) = (&download, self.backend()) {
-                    attachments::remove_owned(path, &backend.scratch_dir().join("packages"));
-                }
-                match ops::saved_artifact(outcome) {
-                    Ok(saved) => {
-                        if let Some(backend) = self.backend() {
-                            let (op, frame) = crate::addons::install_saved(
-                                &*backend,
-                                &saved.artifact,
-                                update.as_deref(),
-                                registry,
-                            );
-                            if let Some(client) = &mut self.client {
-                                client.command(
-                                    Slot::AddonsCommand,
-                                    "Installing the add-on",
-                                    op,
-                                    frame,
-                                );
-                            }
-                        }
-                    }
-                    Err(e) => {
-                        self.addons.busy = unknown;
-                        self.addons.notice = Some(e.describe());
-                    }
-                }
-            }
-            (Slot::AddonsSave { .. }, Reply::Task(t)) => {
-                self.addons.busy = false;
-                self.addons.notice = Some(match t {
-                    Err(e) => e,
-                    Ok(_) => "unexpected reply".into(),
-                });
-            }
-            (Slot::KnowledgeList(generation), Reply::Query(q)) => {
-                if self.knowledge.listed(generation, q) {
-                    self.load_knowledge();
-                }
-            }
-            (Slot::KnowledgeRead(claim), Reply::Query(q)) => self.knowledge.read_reply(&claim, q),
-            (Slot::KnowledgeDiagnostics, Reply::Query(q)) => self.knowledge.diagnostics_reply(q),
-            (Slot::KnowledgeImportSave, Reply::Task(r)) => match self.knowledge.import_saved(r) {
-                knowledge_screen::ImportNext::Store(frame) => {
-                    if !self.submit_import_save(frame) {
-                        // Not admitted: nothing was stored.
-                        self.knowledge.import = Some(knowledge_screen::ImportStage::Failed {
-                            name: "the file".into(),
-                            error: "DevWorks is offline or closing.".into(),
-                        });
-                    }
-                }
-                knowledge_screen::ImportNext::Preview(body) => {
-                    let submitted = self.query(
-                        Slot::KnowledgeImportPreview,
-                        "Previewing an import",
-                        "knowledge.diagnostics",
-                        move |b| knowledge_screen::query(b, body),
-                    );
-                    if !submitted {
-                        self.knowledge.import = None;
-                    }
-                }
-                knowledge_screen::ImportNext::Nothing => {}
-            },
-            (Slot::KnowledgeImportPreview, Reply::Query(q)) => self.knowledge.import_previewed(q),
-            (Slot::KnowledgeImport, Reply::Command(c)) => {
-                if self.knowledge.import_done(c) {
-                    self.load_knowledge();
-                }
-            }
-            (Slot::KnowledgePreview(source), Reply::Query(q)) => {
-                self.knowledge.preview_reply(&source, q)
-            }
-            (Slot::KnowledgeWrite, Reply::Command(c)) => {
-                if self.knowledge.written(c) {
-                    self.load_knowledge();
-                    if let Some(id) = self.knowledge.selected.clone() {
-                        self.read_knowledge(id);
-                    }
-                }
-            }
-            (Slot::EmbeddingSpaces(g), Reply::Query(q)) => {
-                let panel = &mut self.settings.connections.embedding_spaces;
-                if g != panel.generation {
-                    return;
-                }
-                panel.loading = false;
-                match ops::embedding_space_page(q) {
-                    Ok(page) => panel.loaded(page),
-                    Err(error) => panel.error = Some(error.describe()),
-                }
-            }
-            (Slot::Connections(g), Reply::Query(q)) => {
-                if g != self.settings.connections.generation {
-                    return;
-                }
-                match ops::connection_records(q) {
-                    Ok((items, next)) => {
-                        self.settings.connections.gathering.extend(items);
-                        match next {
-                            Some(cursor) => {
-                                if !self.query(
-                                    Slot::Connections(g),
-                                    "Loading provider connections",
-                                    "router.connections",
-                                    move |b| ops::router_connections(b, Some(&cursor)),
-                                ) {
-                                    self.settings.connections.loading = false;
-                                }
-                            }
-                            None => {
-                                let all = std::mem::take(&mut self.settings.connections.gathering);
-                                self.settings.connections.loaded(all);
-                            }
-                        }
-                    }
-                    Err(e) => {
-                        self.settings.connections.loading = false;
-                        self.settings.connections.error = Some(e.describe());
-                    }
-                }
-            }
-            (Slot::ConnectionCatalog(g), Reply::Query(q)) => {
-                if g != self.settings.connections.catalog_generation {
-                    return;
-                }
-                match ops::route_models(q) {
-                    Ok((items, next)) => {
-                        self.settings.connections.catalog_gathering.extend(items);
-                        match next {
-                            Some(cursor) => {
-                                self.query(
-                                    Slot::ConnectionCatalog(g),
-                                    "Loading models",
-                                    "router.catalog",
-                                    move |b| ops::router_catalog_all(b, Some(&cursor)),
-                                );
-                            }
-                            None => {
-                                let all = std::mem::take(
-                                    &mut self.settings.connections.catalog_gathering,
-                                );
-                                self.settings.connections.catalog_loaded(all);
-                            }
-                        }
-                    }
-                    Err(e) => self.settings.connections.catalog_error = Some(e.describe()),
-                }
-            }
-            (Slot::Configure(n), Reply::Task(Ok(TaskOutput::Prepared { frame }))) => {
-                self.settings.connections.prepared_edit(n, &frame);
-                let label = self
-                    .settings
-                    .connections
-                    .busy
-                    .iter()
-                    .find(|(k, _)| *k == n)
-                    .map(|(_, label)| label.clone())
-                    .unwrap_or_else(|| "Configuring provider".into());
-                // Preparation has no router effects. The client owns the exact frame before
-                // admission, including when a close has already stopped new requests.
-                if let Some(client) = &mut self.client {
-                    client.command(Slot::Configure(n), &label, "router.configure", frame);
-                }
-            }
-            (Slot::Configure(n), Reply::Command(outcome)) => {
-                let unknown = is_unknown(&outcome);
-                let result = ops::configured(outcome);
-                let p = &mut self.settings.connections;
-                let label = p
-                    .busy
-                    .iter()
-                    .find(|(k, _)| *k == n)
-                    .map(|(_, label)| label.clone())
-                    .unwrap_or_default();
-                if !unknown {
-                    p.busy.retain(|(k, _)| *k != n);
-                }
-                p.edit_finished(n, result.is_ok(), unknown);
-                p.message = Some(match result {
-                    Ok(true) => (Tone::Good, format!("{label}: done.")),
-                    Ok(false) => (Tone::Neutral, format!("{label}: nothing changed.")),
-                    Err(e) => (Tone::Bad, format!("{label}: {}", e.describe())),
-                });
-                self.load_connections();
-                self.invalidate_routing();
-            }
-            (Slot::Configure(n), Reply::Task(t)) => {
-                // A task failure before preparation has no router effects. A failed command
-                // worker, however, leaves its exact frame unresolved in the client.
-                let unconfirmed = self
-                    .client
-                    .as_ref()
-                    .is_some_and(|c| c.unconfirmed().iter().any(|u| u.slot == Slot::Configure(n)));
-                let p = &mut self.settings.connections;
-                p.edit_finished(n, false, unconfirmed);
-                let label = p
-                    .busy
-                    .iter()
-                    .find(|(k, _)| *k == n)
-                    .map(|(_, label)| label.clone())
-                    .unwrap_or_default();
-                if !unconfirmed {
-                    p.busy.retain(|(k, _)| *k != n);
-                }
-                p.message = Some((
-                    if unconfirmed {
-                        Tone::Attention
-                    } else {
-                        Tone::Bad
-                    },
-                    match t {
-                        Err(e) => format!(
-                            "{label}: {e}{}",
-                            if unconfirmed {
-                                ". The original change is awaiting confirmation."
-                            } else {
-                                ""
-                            }
-                        ),
-                        Ok(_) => format!("{label}: unexpected reply."),
-                    },
-                ));
-            }
-            (Slot::SettingsSecret(key), Reply::Task(result)) => {
-                self.setting_secret_prepared(&key, result)
-            }
-            (slot, Reply::Task(Err(e))) => {
-                self.announce(format!("A request for {slot:?} failed: {e}"));
-            }
-            (slot, _) => self.announce(format!("Unexpected reply for {slot:?}")),
-        }
-    }
-
-    fn settings_revision(&self) -> Option<i64> {
-        self.settings.view.as_ref().map(|v| v.revision)
-    }
-
-    fn explain(&mut self, key: String) {
-        self.explained_at
-            .insert(key.clone(), self.settings_revision());
-        let k = key.clone();
-        self.query(
-            Slot::SettingsExplain(key),
-            "Explaining a setting",
-            "settings.explain_source",
-            move |b| ops::settings_explain(b, &k),
-        );
-    }
-
-    fn check_settings_health(&mut self, revision: i64) {
-        if let Some(b) = self.backend() {
-            self.settings.set_health(KEEP_AWAKE, b.keep_awake_health());
-        }
-        let dirs = self.settings.directories();
-        if dirs.is_empty() {
-            return;
-        }
-        self.query(
-            Slot::SettingsHealth,
-            "Checking directories",
-            "settings.validate",
-            move |b| {
-                let entries: Vec<(&str, serde_json::Value)> =
-                    dirs.iter().map(|(k, v)| (*k, v.clone())).collect();
-                ops::settings_validate_values(b, revision, &entries)
-            },
-        );
+        self.with_screen(owner, |s, cx| s.apply(cx, slot, reply));
     }
 
     fn poll_hints(&mut self, ctx: &egui::Context) {
@@ -2186,554 +1077,9 @@ impl Shell {
             return;
         }
         self.with_typed(|c: &mut Chat, cx| c.refresh_conversation(cx));
-        self.load_completion_notifications();
-        if self.route == Route::Approvals
-            && !self.pending(&Slot::ApprovalsList)
-            && !self.pending(&Slot::ReviewQueue)
-        {
-            self.load_approvals();
-        }
-        if self.notifications_open && !self.pending(&Slot::NotificationsList) {
-            self.load_notification_history();
-        }
-        // Background discovery commits independently of the manual refresh command. Read the
-        // completed inventory on normal hints/periodic repair, including while Settings is open.
-        // Loading keeps unsaved model edits and leaves unknown configure outcomes untouched.
-        if self.route == Route::Settings
-            && self.settings.show_connections
-            && !self.settings.connections.loading
-        {
-            self.load_connections();
-        }
+        self.with_typed(|d: &mut decisions::DecisionsUi, cx| d.refresh_decisions(cx));
         let route = self.route;
-        if self.with_screen(route.screen().owner, |s, cx| s.refresh(cx, route)) {
-            return;
-        }
-        match self.route {
-            // Only an unpaged listing is re-read in place: a re-read of a list the user paged
-            // through would drop the pages they loaded.
-            Route::Knowledge
-                if self
-                    .routes
-                    .get(&Route::Knowledge)
-                    .is_none_or(|r| r.tab != 2)
-                    && self.knowledge.loaded
-                    && self.knowledge.listing.is_none()
-                    && self.knowledge.items.len() <= knowledge_screen::PAGE as usize =>
-            {
-                self.load_knowledge();
-            }
-            // Run status moves while the screen is open (claims, runs, cancellations).
-            Route::Jobs if !self.pending(&Slot::JobsList) && self.jobs.list_refresh.is_none() => {
-                self.load_jobs();
-            }
-            // Changes an agent made reach the work screens (the lists are read in full again).
-            Route::Overview | Route::Features | Route::Issues if !self.work_loading() => {
-                self.load_work();
-            }
-            _ => {}
-        }
-    }
-
-    // -----------------------------------------------------------------------------------------
-    // Actions
-
-    fn settings_actions(&mut self, actions: Vec<SettingsAction>) {
-        for a in actions {
-            match a {
-                SettingsAction::Reload => self.load_settings(),
-                SettingsAction::RefreshContainers => self.refresh_container_capabilities(),
-                SettingsAction::Validate => {
-                    let Some(b) = self.backend() else { continue };
-                    let Some(frame) = self
-                        .settings
-                        .view
-                        .as_ref()
-                        .and_then(|v| ops::settings_submit(&*b, v, true))
-                    else {
-                        continue;
-                    };
-                    self.settings.validating = true;
-                    self.validated_drafts = Some(self.settings.drafts());
-                    if let Some(c) = &mut self.client {
-                        c.query(
-                            Slot::SettingsValidate,
-                            "Validating settings",
-                            "settings.validate",
-                            frame,
-                        );
-                    }
-                }
-                SettingsAction::Save => {
-                    let Some(b) = self.backend() else { continue };
-                    let Some(frame) = self
-                        .settings
-                        .view
-                        .as_ref()
-                        .and_then(|v| ops::settings_submit(&*b, v, false))
-                    else {
-                        continue;
-                    };
-                    self.settings.saving = true;
-                    self.settings.submitted = self
-                        .settings
-                        .view
-                        .as_ref()
-                        .map(|v| {
-                            v.dirty_keys()
-                                .into_iter()
-                                .filter_map(|k| Some((k.to_owned(), v.item(k)?.draft.clone()?)))
-                                .collect()
-                        })
-                        .unwrap_or_default();
-                    if let Some(c) = &mut self.client {
-                        c.command(
-                            Slot::SettingsSave,
-                            "Saving settings",
-                            "settings.save_revision",
-                            frame,
-                        );
-                    }
-                }
-                SettingsAction::StoreSecret { key, value } => {
-                    self.store_setting_secret(&key, value)
-                }
-                SettingsAction::Explain(key) => self.explain(key),
-                SettingsAction::ChooseDirectory(key) => {
-                    let start = self
-                        .settings
-                        .view
-                        .as_ref()
-                        .and_then(|v| v.item(&key))
-                        .and_then(|i| i.shown().as_str().map(str::to_owned));
-                    if let Some(p) = self.dialogs.pick_folder(start.as_deref()) {
-                        self.settings.choose(&key, p.display().to_string());
-                    }
-                }
-                SettingsAction::OpenAddOns => self.navigate(Route::AddOns),
-                SettingsAction::OpenJobs => self.navigate(Route::Jobs),
-                SettingsAction::OpenNotifications => {
-                    self.notifications_open = true;
-                }
-                SettingsAction::OpenConnections => self.load_connections(),
-                SettingsAction::OpenHelp(topic) => self.open_help_context(&topic),
-                SettingsAction::Connection(a) => self.connection_action(a),
-                SettingsAction::Web(action) => self.web_action(action),
-                SettingsAction::Instructions(action) => self.with_typed(
-                    |p: &mut crate::instructions_screen::InstructionsPanel, cx| p.act(cx, action),
-                ),
-                SettingsAction::Mcp(action) => self.mcp_action(action),
-            }
-        }
-    }
-
-    fn mcp_scope_key(&self) -> String {
-        self.settings.mcp.project.as_ref().map_or_else(
-            || "workspace".to_owned(),
-            |project| format!("project:{}", project.0.as_str()),
-        )
-    }
-
-    fn load_mcp_servers(&mut self, cursor: Option<String>) {
-        if cursor.is_none() {
-            self.settings.mcp.loading = true;
-        }
-        let next = cursor.clone();
-        let scope = self.settings.mcp.project.clone();
-        let scope_key = self.mcp_scope_key();
-        if !self.query(
-            Slot::McpServers(scope_key, cursor),
-            "Loading MCP servers",
-            "mcp.servers",
-            move |backend| ops::mcp_servers(backend, scope.as_ref(), next.as_deref()),
-        ) {
-            self.settings.mcp.loading = false;
-        }
-    }
-
-    fn load_mcp_capabilities(&mut self, server_id: Id, cursor: Option<String>) {
-        let Some(server) = self
-            .settings
-            .mcp
-            .servers
-            .iter()
-            .find(|server| server.id == server_id)
-        else {
-            return;
-        };
-        let revision = server.catalog_revision.get();
-        let scope = self.settings.mcp.project.clone();
-        let slot = Slot::McpCapabilities(
-            self.mcp_scope_key(),
-            server_id.as_str().to_owned(),
-            cursor.clone(),
-        );
-        self.query(
-            slot,
-            "Loading MCP capabilities",
-            "mcp.capabilities",
-            move |backend| {
-                ops::mcp_capabilities(
-                    backend,
-                    scope.as_ref(),
-                    &server_id,
-                    revision,
-                    cursor.as_deref(),
-                )
-            },
-        );
-    }
-
-    /// A removed or replaced bearer token leaves its stored secret unreferenced once the new
-    /// configuration is saved; delete it then.
-    fn release_dropped_mcp_credentials(
-        &mut self,
-        saved: &devworks_core::protocol::records::McpServer,
-    ) {
-        let Some(old) = self
-            .settings
-            .mcp
-            .servers
-            .iter()
-            .find(|server| server.id == saved.id)
-        else {
-            return;
-        };
-        let kept = crate::mcp_panel::credential_handles(saved);
-        let dropped: Vec<Id> = crate::mcp_panel::credential_handles(old)
-            .into_iter()
-            .filter(|handle| !kept.contains(handle))
-            .collect();
-        self.release_mcp_credentials(dropped);
-    }
-
-    /// Delete the stored secrets behind MCP handles no saved server references any more.
-    fn release_mcp_credentials(&mut self, dropped: Vec<Id>) {
-        if dropped.is_empty() {
-            return;
-        }
-        if let Some(client) = self.client.as_mut() {
-            client.task(
-                Slot::McpRelease,
-                "Removing MCP credential",
-                move |backend| {
-                    backend.release_mcp_credentials(dropped)?;
-                    // Nothing to submit: the release reply only reports a failure.
-                    Ok(TaskOutput::Prepared { frame: Vec::new() })
-                },
-            );
-        }
-    }
-
-    fn mcp_action(&mut self, action: McpAction) {
-        if let McpAction::Sampling(id, ..) = &action {
-            self.settings.mcp.reconnect = Some(id.clone());
-        }
-        match action {
-            McpAction::Reload => self.load_mcp_servers(None),
-            McpAction::Catalog(id, _revision) => self.load_mcp_capabilities(id, None),
-            McpAction::Open(id, catalog_revision, request) => {
-                let server = id.clone();
-                let scope = self.settings.mcp.project.clone();
-                let slot = Slot::McpContent(self.mcp_scope_key(), id.as_str().to_owned());
-                let submitted = self.online().is_ok()
-                    && self.client.as_mut().is_some_and(|client| {
-                        client.network_task(slot, "Reading MCP content", move |backend| {
-                            ops::mcp_content(
-                                backend,
-                                scope.as_ref(),
-                                &id,
-                                catalog_revision,
-                                &request,
-                            )
-                            .map(TaskOutput::McpContent)
-                        })
-                    });
-                if !submitted {
-                    self.settings
-                        .mcp
-                        .opened(&server, Err("the app is offline or closing".into()));
-                }
-            }
-            mut other => {
-                let pending_server = match &other {
-                    McpAction::Connect(id, _)
-                    | McpAction::Disable(id, _)
-                    | McpAction::Discover(id, _) => Some(id.clone()),
-                    McpAction::Remove(id, _, handles) => {
-                        self.settings.mcp.removing = Some(handles.clone());
-                        Some(id.clone())
-                    }
-                    _ => None,
-                };
-                let secret = match &mut other {
-                    McpAction::Configure { secret, .. } => secret.take(),
-                    _ => None,
-                };
-                let submitted = match (other.input(self.settings.mcp.project.as_ref()), secret) {
-                    (None, _) => false,
-                    (Some(mut input), Some(secret)) => {
-                        self.online().is_ok()
-                            && self.client.as_mut().is_some_and(|client| {
-                                client.task(
-                                    Slot::McpCommand,
-                                    "Storing MCP credential",
-                                    move |backend| {
-                                        let handle = backend.stage_mcp_api_key(secret)?;
-                                        // The key goes to the OS secret store first; only its
-                                        // handle travels.
-                                        if let In::Mcp(mcp::Input::Configure(configure)) =
-                                            &mut input
-                                            && let McpTransport::Http { credential_ref, .. } =
-                                                &mut configure.transport
-                                        {
-                                            *credential_ref = Some(handle);
-                                        }
-                                        Ok(TaskOutput::Prepared {
-                                            frame: ops::mcp_command(backend, input),
-                                        })
-                                    },
-                                )
-                            })
-                    }
-                    (Some(input), None) => self.command(
-                        Slot::McpCommand,
-                        "Updating MCP",
-                        input.operation(),
-                        move |backend| ops::mcp_command(backend, input),
-                    ),
-                };
-                if !submitted {
-                    self.settings.mcp.busy = false;
-                    self.settings.mcp.reconnect = None;
-                    self.settings.mcp.removing = None;
-                    self.settings.mcp.error = Some("MCP command could not be submitted.".into());
-                } else {
-                    self.settings.mcp.pending_server = pending_server;
-                    self.settings.mcp.pending_operation = None;
-                    self.settings.mcp.last_operation_poll = None;
-                }
-            }
-        }
-    }
-
-    /// Runs a web fetch, search or activity load through the same use cases agents call.
-    fn web_action(&mut self, action: WebAction) {
-        match action {
-            WebAction::Fetch(url) => {
-                if !self.query(Slot::WebFetch, "Fetching a page", "web.fetch", |b| {
-                    ops::web_fetch(b, &url)
-                }) {
-                    self.settings.web.fetching = false;
-                }
-            }
-            WebAction::Search { query, provider } => {
-                if !self.query(Slot::WebSearch, "Searching the web", "web.search", |b| {
-                    ops::web_search(b, &query, &provider)
-                }) {
-                    self.settings.web.searching = false;
-                }
-            }
-            WebAction::LoadActivity => {
-                if !self.query(
-                    Slot::WebActivity,
-                    "Loading web activity",
-                    "workspace.logs",
-                    ops::web_activity,
-                ) {
-                    self.settings.web.activity_loading = false;
-                }
-            }
-        }
-    }
-
-    // -----------------------------------------------------------------------------------------
-    // Settings → Provider connections (DW-18)
-
-    /// Loads every connection and the whole catalog, page by page, as new loads.
-    fn load_connections(&mut self) {
-        if let Some(b) = self.backend() {
-            self.settings.connections.secret_store = Some(b.secret_store());
-        }
-        let p = &mut self.settings.connections;
-        p.generation += 1;
-        p.gathering.clear();
-        p.loading = true;
-        p.last_load = Some(Instant::now());
-        p.catalog_generation += 1;
-        p.catalog_gathering.clear();
-        let (g, cg) = (p.generation, p.catalog_generation);
-        if !self.query(
-            Slot::Connections(g),
-            "Loading provider connections",
-            "router.connections",
-            |b| ops::router_connections(b, None),
-        ) {
-            self.settings.connections.loading = false;
-        }
-        self.query(
-            Slot::ConnectionCatalog(cg),
-            "Loading models",
-            "router.catalog",
-            |b| ops::router_catalog_all(b, None),
-        );
-        self.load_embedding_spaces(None);
-    }
-
-    pub(crate) fn open_embedding_setup(&mut self) {
-        self.navigate(Route::Settings);
-        self.settings.show_connections = true;
-        self.settings.connections.embedding_spaces.open = true;
-        self.load_connections();
-    }
-    fn load_embedding_spaces(&mut self, cursor: Option<String>) {
-        let panel = &mut self.settings.connections.embedding_spaces;
-        panel.generation += 1;
-        panel.loading = true;
-        panel.last_load = Some(Instant::now());
-        let generation = panel.generation;
-        if !self.query(
-            Slot::EmbeddingSpaces(generation),
-            "Loading embedding spaces",
-            "router.embedding_spaces",
-            move |b| ops::router_embedding_spaces(b, cursor.as_deref()),
-        ) {
-            self.settings.connections.embedding_spaces.loading = false;
-        }
-    }
-
-    fn connection_action(&mut self, action: crate::connections_screen::ConnectionAction) {
-        use crate::connections_screen::ConnectionAction as A;
-        let saving_editor = matches!(&action, A::ConfigureEdit { .. });
-        match action {
-            A::Reload => self.load_connections(),
-            A::EmbeddingSetup => self.open_embedding_setup(),
-            A::EmbeddingPrice(model) => {
-                self.usage.price_models = model;
-                self.usage.price_providers.clear();
-                self.usage.price_snapshots.clear();
-                self.usage.history = false;
-                self.routes.entry(Route::Usage).or_default().tab = 2;
-                self.navigate(Route::Usage);
-            }
-            A::EmbeddingSpaces { cursor } => self.load_embedding_spaces(cursor),
-            A::UseSessionOnly => {
-                if let Some(b) = self.backend() {
-                    match b.use_session_only_secrets() {
-                        Ok(()) => {
-                            self.settings.connections.message = Some((
-                                Tone::Attention,
-                                "Credentials are kept in memory for this session only; sign in \
-                                 again after a restart."
-                                    .into(),
-                            ));
-                            self.settings.connections.secret_store = Some(b.secret_store());
-                        }
-                        Err(e) => self.settings.connections.message = Some((Tone::Bad, e)),
-                    }
-                }
-            }
-            A::Configure {
-                label,
-                action,
-                key,
-                code,
-            }
-            | A::ConfigureEdit {
-                label,
-                action,
-                key,
-                code,
-            } => {
-                if self.online().is_err() {
-                    self.settings.connections.message =
-                        Some((Tone::Bad, "DevWorks is offline or closing.".into()));
-                    return;
-                }
-                let p = &mut self.settings.connections;
-                p.sequence += 1;
-                let n = p.sequence;
-                if saving_editor {
-                    p.preparing_edit(n, &action);
-                }
-                let submitted = self.client.as_mut().is_some_and(|c| {
-                    c.task(Slot::Configure(n), &label, move |b| {
-                        let mut action = action;
-                        // The key goes to the OS secret store first; only its handle travels.
-                        if let Some(key) = key {
-                            let handle = b
-                                .stage_api_key(key)
-                                .map_err(|e| format!("the secret store refused the key: {e}"))?;
-                            if let RouterConfigAction::Connection { credential_ref, .. } =
-                                &mut action
-                            {
-                                *credential_ref = Some(handle);
-                            }
-                        }
-                        if let Some((flow, pasted)) = code {
-                            b.submit_sign_in_code(&flow, pasted)?;
-                        }
-                        Ok(TaskOutput::Prepared {
-                            frame: ops::router_configure(b, action),
-                        })
-                    })
-                });
-                if submitted {
-                    self.settings.connections.busy.push((n, label));
-                } else {
-                    self.settings.connections.edit_finished(n, false, false);
-                    self.settings.connections.message =
-                        Some((Tone::Bad, "The change was not submitted.".into()));
-                }
-            }
-        }
-    }
-
-    /// Reloads the connections panel while a sign-in is open (a device code finishes in the
-    /// background), at most every few seconds.
-    fn poll_connections(&mut self, ctx: &egui::Context) {
-        let p = &self.settings.connections;
-        let signing_in = p.records.iter().any(|r| {
-            r.lifecycle.as_ref().is_some_and(|l| {
-                matches!(
-                    l,
-                    ConnectionLifecycle::Authorizing | ConnectionLifecycle::Refreshing
-                )
-            })
-        });
-        let qualifying = p.embedding_spaces.qualifying();
-        if !self.settings.show_connections || (!signing_in && !qualifying) {
-            return;
-        }
-        let due = !p.loading && p.last_load.is_none_or(|t| t.elapsed() >= CONNECTION_POLL);
-        if due {
-            self.load_connections();
-        }
-        ctx.request_repaint_after(CONNECTION_POLL);
-    }
-
-    fn poll_mcp(&mut self, ctx: &egui::Context) {
-        let Some(operation) = self.settings.mcp.pending_operation.clone() else {
-            return;
-        };
-        let interval = Duration::from_secs(2);
-        let slot = Slot::McpOperation(self.mcp_scope_key());
-        if !self.pending(&slot)
-            && self
-                .settings
-                .mcp
-                .last_operation_poll
-                .is_none_or(|last| last.elapsed() >= interval)
-        {
-            self.settings.mcp.last_operation_poll = Some(Instant::now());
-            self.query(
-                slot,
-                "Checking MCP operation",
-                "history.operation_status",
-                move |backend| crate::usage_ops::operation_status(backend, &operation),
-            );
-        }
-        ctx.request_repaint_after(interval);
+        self.with_screen(route.screen().owner, |s, cx| s.refresh(cx, route));
     }
 
     // -----------------------------------------------------------------------------------------
@@ -2742,7 +1088,9 @@ impl Shell {
     /// Begins the close lifecycle (the window's close button lands here).
     pub fn request_close(&mut self) {
         if self.lifecycle == Lifecycle::Open {
-            self.conventions.cancel_queries();
+            for screen in self.screens_mut() {
+                screen.closing();
+            }
             if let Some(c) = &mut self.client {
                 c.close();
             }
@@ -2810,7 +1158,9 @@ impl Shell {
     /// Called when the window is gone without the lifecycle (process exit paths): saves view
     /// state; the engine's own drop still performs its bounded shutdown.
     pub fn on_exit(&mut self) {
-        self.conventions.cancel_queries();
+        for screen in self.screens_mut() {
+            screen.closing();
+        }
         self.persist(true);
         if let Some(c) = &mut self.client {
             c.close();
@@ -2828,7 +1178,7 @@ impl Shell {
         let mut memory = Memory {
             version: crate::memory::VERSION,
             purge_live: None,
-            purge_reviews: self.purge_reviews.clone(),
+            purge_reviews: self.purge.reviews.clone(),
             purge_fences: self
                 .saved
                 .as_ref()
@@ -2882,9 +1232,14 @@ impl Shell {
                 Some((screen.id().key().to_owned(), saved))
             })
             .collect();
-        // The conversation keeps the named fields its state had before it had its own screen.
+        // The conversation, the work screens and Knowledge keep the named fields their state had
+        // before they had their own screens.
         let chat: ChatPendingMemory = screens
             .remove(ScreenId::Chat.key())
+            .and_then(|v| serde_json::from_value(v).ok())
+            .unwrap_or_default();
+        let work: crate::memory::WorkPendingMemory = screens
+            .remove(ScreenId::Work.key())
             .and_then(|v| serde_json::from_value(v).ok())
             .unwrap_or_default();
         PendingMemory {
@@ -2898,16 +1253,10 @@ impl Shell {
             submitted: chat.submitted,
             removed_while_sending: chat.removed_while_sending,
             removed: chat.removed,
-            knowledge_import: self
-                .knowledge
-                .import_frame(false)
-                .map(|(name, frame)| crate::memory::UnconfirmedImport { name, frame }),
-            plans: self
-                .work
-                .plan_saving
-                .values()
-                .filter_map(|f| serde_json::to_value(f).ok())
-                .collect(),
+            knowledge_import: screens
+                .remove(ScreenId::Knowledge.key())
+                .and_then(|v| serde_json::from_value(v).ok()),
+            plans: work.plans,
             commands,
             screens,
         }
@@ -2915,8 +1264,8 @@ impl Shell {
 
     /// Puts back what [`Self::pending_memory`] kept; the first frame confirms it.
     fn restore_pending(&mut self, mut pending: crate::memory::PendingMemory) {
-        // Conventions, Databases and Chat keep the named fields their state had before the
-        // per-screen map, so earlier files read back unchanged.
+        // Conventions, Databases, Chat, Work and Knowledge keep the named fields their state had
+        // before the per-screen map, so earlier files read back unchanged.
         let chat = crate::memory::ChatPendingMemory {
             starting: pending.starting.take(),
             submitted: pending.submitted.take(),
@@ -2928,6 +1277,14 @@ impl Shell {
                 .screens
                 .insert(ScreenId::Chat.key().to_owned(), chat);
         }
+        let work = crate::memory::WorkPendingMemory {
+            plans: std::mem::take(&mut pending.plans),
+        };
+        if let Ok(work) = serde_json::to_value(work) {
+            pending
+                .screens
+                .insert(ScreenId::Work.key().to_owned(), work);
+        }
         for (id, saved) in [
             (ScreenId::Conventions, &mut pending.conventions),
             (ScreenId::Databases, &mut pending.databases),
@@ -2938,18 +1295,20 @@ impl Shell {
                     .insert(id.key().to_owned(), std::mem::take(saved));
             }
         }
-        if let Some(i) = &pending.knowledge_import {
-            self.knowledge.import = Some(knowledge_screen::ImportStage::Unconfirmed {
-                name: i.name.clone(),
-                frame: i.frame.clone(),
-            });
+        if let Some(import) = pending
+            .knowledge_import
+            .take()
+            .and_then(|i| serde_json::to_value(i).ok())
+        {
+            pending
+                .screens
+                .insert(ScreenId::Knowledge.key().to_owned(), import);
         }
         for screen in self.screens_mut() {
             if let Some(saved) = pending.screens.get(screen.id().key()) {
                 screen.restore_pending(saved);
             }
         }
-        let mut confirming: Vec<String> = Vec::new();
         for c in pending.commands {
             let slot = c.slot.clone();
             let Some(u) =
@@ -2962,35 +1321,10 @@ impl Shell {
                     screen.restore_in_flight(&u);
                 }
             }
-            match &slot {
-                Slot::WorkPlan(id) => confirming.push(id.clone()),
-                Slot::AddonsSave { .. } | Slot::AddonsCommand => self.addons.busy = true,
-                Slot::Configure(n) => {
-                    let p = &mut self.settings.connections;
-                    p.sequence = p.sequence.max(*n);
-                    p.restore_edit(*n, u.frame());
-                    p.busy.push((*n, u.label.clone()));
-                }
-                Slot::SettingsSave => {
-                    self.settings.saving = true;
-                    self.settings.unconfirmed = true;
-                }
-                // Knowledge changes stay blocked until the earlier write's outcome is known.
-                Slot::KnowledgeWrite => {
-                    self.knowledge.writing = Some(u.label.clone());
-                }
-                _ => {}
-            }
             if let Some(client) = &mut self.client {
                 client.keep_unresolved(u);
             }
         }
-        let plans = pending
-            .plans
-            .into_iter()
-            .filter_map(|v| serde_json::from_value(v).ok())
-            .collect();
-        self.restore_plan_saves(plans, &confirming);
         let ids: Vec<ScreenId> = self.screens().iter().map(|s| s.id()).collect();
         for id in ids {
             self.with_screen(id, |s, cx| s.restored(cx));
@@ -3051,7 +1385,9 @@ impl Shell {
                 });
             }
             self.load_sessions();
-            self.load_completion_notifications();
+            self.with_typed(|d: &mut decisions::DecisionsUi, cx| {
+                d.load_completion_notifications(cx)
+            });
             // The navigation's project selector lists the projects on every screen.
             if self.route != Route::Portfolio && self.route != Route::Repositories {
                 self.load_projects();
@@ -3098,8 +1434,9 @@ impl Shell {
         egui::CentralPanel::default()
             .frame(Frame::new().fill(theme::BG).inner_margin(theme::GUTTER))
             .show(ui, |ui| self.content(ui));
+        let route = self.route;
         self.overlays(&ctx);
-        self.purge_overlay(&ctx);
+        self.with_screen(ScreenId::Purge, |p, cx| p.ui(cx, route, ui));
         if self.lifecycle == Lifecycle::Open && self.last_save.elapsed() > Duration::from_secs(3) {
             self.save_memory();
         }
@@ -3143,7 +1480,7 @@ impl Shell {
                 });
             } else if self.route == Route::Knowledge {
                 // A file dropped on an entry view is previewed before import.
-                self.knowledge_actions(vec![KnowledgeAction::ImportFiles(dropped)]);
+                self.with_typed(|k: &mut KnowledgeScreen, cx| k.import_files(cx, dropped));
             } else {
                 self.announce("Open the workspace coordinator to attach dropped files.");
             }
@@ -3172,11 +1509,11 @@ impl Shell {
                             "Notifications",
                             "Notifications",
                             true,
-                            Some(self.notifications_open),
+                            Some(self.decisions.notifications_open),
                         )
                         .clicked()
                         {
-                            self.notifications_open = !self.notifications_open;
+                            self.decisions.notifications_open = !self.decisions.notifications_open;
                         }
                         ui.add_enabled(false, egui::Button::new("Find work, code, knowledge"))
                             .on_disabled_hover_text(
@@ -3194,20 +1531,7 @@ impl Shell {
                             )
                         });
                         if help.clicked() {
-                            let screen = if self.route == Route::Repositories && self.graph.opened {
-                                "code-exploration"
-                            } else if self.route == Route::Settings {
-                                self.settings.help_topic()
-                            } else if self.route == Route::Knowledge
-                                && self
-                                    .routes
-                                    .get(&Route::Knowledge)
-                                    .is_some_and(|r| r.tab == 2)
-                            {
-                                "knowledge-conventions"
-                            } else {
-                                self.route.screen().id
-                            };
+                            let screen = self.help_topic();
                             self.open_help_context(screen);
                         }
                         let open = self.chat.coordinator_open;
@@ -3232,6 +1556,15 @@ impl Shell {
                     });
                 });
             });
+    }
+
+    /// The Help topic of the screen shown: its own, or the route's.
+    fn help_topic(&self) -> &'static str {
+        let default_memory = RouteMemory::default();
+        let mem = self.routes.get(&self.route).unwrap_or(&default_memory);
+        self.screen(self.shown_screen())
+            .and_then(|s| s.help_topic(self.route, mem))
+            .unwrap_or(self.route.screen().id)
     }
 
     fn statusbar(&mut self, ui: &mut Ui) {
@@ -3323,8 +1656,11 @@ impl Shell {
     /// Commands and attachment saves whose outcome is not confirmed yet.
     pub fn unconfirmed_count(&self) -> usize {
         self.client.as_ref().map_or(0, |c| c.unresolved().len())
-            + self.chat.unconfirmed_count()
-            + usize::from(self.knowledge.import_frame(true).is_some())
+            + self
+                .screens()
+                .iter()
+                .map(|s| s.unconfirmed_count())
+                .sum::<usize>()
     }
 
     /// Resubmits every unconfirmed request with its identical frame (same request key).
@@ -3333,15 +1669,10 @@ impl Shell {
             c.resubmit_unresolved();
         }
         // The resubmitted save runs again (and says so) until its outcome arrives.
-        self.settings.unconfirmed = false;
+        self.with_typed(|s: &mut SettingsScreen, _| s.outcomes_confirmed());
         self.with_typed(|c: &mut Chat, cx| c.confirm_attachments(cx));
-        // A Knowledge import file's save: its identical frame (not submitted while closing: it
-        // stays unconfirmed, its frame kept).
-        if let Some((name, frame)) = self.knowledge.import_frame(true)
-            && self.submit_import_save(frame.clone())
-        {
-            self.knowledge.import = Some(knowledge_screen::ImportStage::Storing { name, frame });
-        }
+        // A Knowledge import file's save: its identical frame.
+        self.with_typed(|k: &mut KnowledgeScreen, cx| k.confirm_import(cx));
         self.with_typed(|c: &mut Chat, cx| c.confirm_removed(cx));
     }
 
@@ -3483,179 +1814,18 @@ impl Shell {
     fn content(&mut self, ui: &mut Ui) {
         let route = self.route;
         self.sync_watch_projects();
-        if self.with_screen(self.shown_screen(), |s, cx| s.ui(cx, route, ui)) {
-            return;
-        }
-        match self.route {
-            Route::Settings => {
-                let online = self.online();
-                let mut actions = Vec::new();
-                self.settings.mcp.projects = self.projects.list.items.clone();
-                // Repository indexing sources sit with the repository paths (General).
-                let mut index_actions = Vec::new();
-                let up = online.is_ok();
-                let indexing = &mut self.projects.indexing;
-                let load_sources = indexing.sources.is_none() && indexing.sources_error.is_none();
-                let mut general = |ui: &mut Ui| {
-                    ui.add_space(8.0);
-                    indexing::sources_panel(ui, indexing, up, &mut index_actions);
-                    if widgets::secondary_button(ui, "Open indexing runs").clicked() {
-                        index_actions.push(indexing::IndexAction::Runs);
-                    }
-                };
-                self.settings.ui(
-                    ui,
-                    online.as_ref().map(|_| ()).map_err(String::as_str),
-                    &mut actions,
-                    &mut general,
-                );
-                self.settings_actions(actions);
-                if index_actions
-                    .iter()
-                    .any(|a| matches!(a, indexing::IndexAction::Runs))
-                {
-                    self.route = Route::Indexing;
-                }
-                if load_sources && online.is_ok() {
-                    index_actions.insert(0, indexing::IndexAction::LoadSources);
-                }
-                self.with_typed(|s: &mut indexing::IndexingScreen, cx| s.act(cx, index_actions));
-                let ctx = ui.ctx().clone();
-                self.poll_connections(&ctx);
-                self.poll_mcp(&ctx);
-            }
-            Route::AddOns => {
-                let online = self.online();
-                let mut actions = Vec::new();
-                self.addons.ui(
-                    ui,
-                    online.as_ref().map(|_| ()).map_err(String::as_str),
-                    &mut actions,
-                );
-                self.addons_actions(actions);
-            }
-            Route::Knowledge => {
-                let online = self.online();
-                let mut actions = Vec::new();
-                self.sync_knowledge_scope(&mut actions);
-                // The selected subview is route memory, kept across navigation and restarts.
-                self.knowledge.tab = self.routes.entry(Route::Knowledge).or_default().tab;
-                self.knowledge.ui(
-                    ui,
-                    online.as_ref().map(|_| ()).map_err(String::as_str),
-                    &mut actions,
-                );
-                self.routes.entry(Route::Knowledge).or_default().tab = self.knowledge.tab;
-                self.knowledge_actions(actions);
-            }
-            Route::Approvals => self.approvals_screen(ui),
-            Route::Jobs => self.jobs_screen(ui),
-            Route::Overview => self.overview_screen(ui),
-            Route::Features => self.features_screen(ui),
-            Route::Issues => self.issues_screen(ui),
-            _ => self.pending_screen(ui),
-        }
-    }
-
-    /// A screen whose content belongs to a later item: the full shell, integrated header,
-    /// subviews, summary strip and inner sidebar, with a designed unavailable state.
-    fn pending_screen(&mut self, ui: &mut Ui) {
-        let route = self.route;
-        let screen = route.screen();
-        let online = self.online();
-        let mut link = false;
-        let tab = self.routes.entry(route).or_default().tab;
-        let primary = |ui: &mut Ui, link: &mut bool| -> usize {
-            widgets::pane(
-                ui,
-                Header {
-                    title: screen.title,
-                    summary: screen.summary,
-                    tabs: screen.subviews,
-                    tab,
-                },
-                link,
-                |ui, link| {
-                    if let Some((label, _)) = screen.link
-                        && widgets::secondary_button(ui, label).clicked()
-                    {
-                        *link = true;
-                    }
-                    if route == Route::Approvals {
-                        ui.add_enabled(false, egui::Button::new("All projects"))
-                            .on_disabled_hover_text(
-                                "Project filtering applies once projects exist (DW-11).",
-                            );
-                    }
-                },
-                |ui, _, tab| {
-                    if !screen.summary_strip.is_empty() {
-                        let items: Vec<(&str, Option<String>)> =
-                            screen.summary_strip.iter().map(|l| (*l, None)).collect();
-                        let owner = screen.pending.map_or("", |p| p.owner);
-                        widgets::summary_strip(ui, &items, &format!("not available until {owner}"));
-                        ui.add_space(10.0);
-                    }
-                    let state = match (&online, screen.pending) {
-                        (Err(reason), _) => ViewState::Offline {
-                            reason: reason.clone(),
-                        },
-                        (Ok(()), Some(p)) => ViewState::Unavailable {
-                            what: match screen.subviews.get(tab) {
-                                Some(s) => format!("{s}: {}", p.what),
-                                None => p.what.to_owned(),
-                            },
-                            owner: p.owner.to_owned(),
-                        },
-                        (Ok(()), None) => ViewState::Empty {
-                            title: "Nothing here yet".into(),
-                            body: String::new(),
-                        },
-                    };
-                    widgets::state_block(ui, &state);
-                },
-            )
-            .1
-        };
-        let new_tab = match screen.inner_sidebar {
-            Some(title) => {
-                let mut st = (&mut link, tab);
-                widgets::with_right_sidebar(
-                    ui,
-                    theme::SIDEBAR,
-                    &mut st,
-                    |ui, st| st.1 = primary(ui, st.0),
-                    |ui, _| {
-                        widgets::secondary_pane(ui, title, |ui| {
-                            widgets::state_block(
-                                ui,
-                                &ViewState::Empty {
-                                    title: "Nothing selected".into(),
-                                    body: "Select an item to see its detail here.".into(),
-                                },
-                            );
-                        });
-                    },
-                );
-                st.1
-            }
-            None => primary(ui, &mut link),
-        };
-        self.routes.entry(route).or_default().tab = new_tab;
-        if link && let Some((_, target)) = screen.link {
-            self.navigate(target);
-        }
+        self.with_screen(self.shown_screen(), |s, cx| s.ui(cx, route, ui));
     }
 
     fn overlays(&mut self, ctx: &egui::Context) {
         let card_actions = self.completions.ui(ctx, TOOLBAR + 8.0);
         for a in card_actions {
-            self.completion_action(ctx, a);
+            self.with_typed(|d: &mut decisions::DecisionsUi, cx| d.completion_action(cx, ctx, a));
         }
         if let Some(text) = self.completions.take_announcement() {
             self.announce(text);
         }
-        self.notification_center(ctx);
+        self.with_typed(|d: &mut decisions::DecisionsUi, cx| d.notification_center(cx, ctx));
         if self.updates_open {
             let mut open = true;
             egui::Window::new("Updates")

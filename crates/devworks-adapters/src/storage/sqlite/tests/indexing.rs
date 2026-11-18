@@ -20,7 +20,7 @@ fn write<T: Send + 'static>(
     s: &Arc<dyn ApplicationStore>,
     f: impl FnOnce(&mut dyn WriteTransaction) -> Result<T, StorageError> + Send + 'static,
 ) -> Result<T, StorageError> {
-    run_write(&**s, WriteOptions::default(), f)
+    run_write(&**s, WriteOptions::fixture(), f)
 }
 fn registered(s: &Arc<dyn ApplicationStore>, repo: &str) {
     let r = StoredRepository {

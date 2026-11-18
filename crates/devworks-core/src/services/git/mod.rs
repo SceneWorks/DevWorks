@@ -1,9 +1,11 @@
 //! Native Git use cases. All process work is prepared outside store snapshots; the answer
 //! rechecks repository/worktree ownership against the snapshot the gateway returns.
 mod approval;
+pub mod client;
 mod commands;
 pub mod context;
 pub mod github;
+pub mod helper;
 mod location;
 mod transport;
 use crate::context::InvocationContext;
@@ -18,9 +20,9 @@ use crate::protocol::results::OperationResult;
 use crate::protocol::{CorrelationId, DomainErrorCode, DomainFault, Id, OperationState};
 use crate::services::artifacts::evidence::{Evidence, EvidenceFailure};
 use crate::services::artifacts::{ArtifactService, AuthorizedScope};
-use crate::services::indexing::git::{Git, GitFault};
-use crate::services::indexing::helper::{HelperFault, HelperRunner};
-use crate::services::sessions::{Failure, Refusal, query_fault, rev};
+use crate::services::git::client::{Git, GitFault};
+use crate::services::git::helper::{HelperFault, HelperRunner};
+use crate::services::kernel::{Failure, Refusal, query_fault, rev};
 pub use commands::{EFFECT_CONSUMER, RegisteredGitRoot};
 use std::path::Path;
 use std::sync::Arc;
@@ -166,7 +168,7 @@ impl GitService {
             crate::context::PrincipalKind::Host,
             self.ids.next_id(IdKind::Command),
             Id::new("git-qualification").expect("namespace"),
-            crate::services::sessions::counter(info.restore_epoch),
+            crate::services::kernel::counter(info.restore_epoch),
             rev(1),
         );
         let stop = || self.is_stopped();

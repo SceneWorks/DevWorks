@@ -1,7 +1,7 @@
 //! Deterministic report sections share the query's authenticated continuation.
 use crate::ports::storage::StorageError;
 use crate::services::graph::read::{DrilldownPosition, Position, Reader};
-use crate::services::sessions::Failure;
+use crate::services::kernel::Failure;
 use serde_json::{Value, json};
 
 const FIELDS: &[&str] = &[

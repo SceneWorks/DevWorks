@@ -48,6 +48,9 @@ impl Screen for GraphScreen {
     fn hosted(&self, route: Route, _mem: &RouteMemory) -> bool {
         route == Route::Repositories && self.opened
     }
+    fn help_topic(&self, _route: Route, _mem: &RouteMemory) -> Option<&'static str> {
+        Some("code-exploration")
+    }
     fn restore_in_flight(&mut self, _slot: &GraphSlot, _u: &Unresolved) {
         // Only a trust change is a command.
         self.trust_busy = true;

@@ -14,7 +14,7 @@ use crate::{
     },
     services::{
         cursor::{self, CursorBinding},
-        sessions::{Failure, Refusal, query_fault, rev},
+        kernel::{Failure, Refusal, query_fault, rev},
     },
 };
 use serde::Serialize;

@@ -337,6 +337,7 @@ impl Worker {
                 info: &self.cfg.info,
                 savepoints: 0,
                 serial: self.serial,
+                authority_log: None,
             };
             let ran = catch_unwind(AssertUnwindSafe(|| job.run(&mut unit)));
             (ran, unit.savepoints)

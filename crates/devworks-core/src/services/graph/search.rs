@@ -9,7 +9,7 @@ use crate::protocol::records::{
     CodeNodesResult, CodeSearchHit, CodeSearchMode, CodeSearchRepository, CodeSearchResult,
 };
 use crate::protocol::support::BoundedList;
-use crate::services::sessions::Failure;
+use crate::services::kernel::Failure;
 use std::cmp::Ordering;
 
 pub(super) struct Search<'a> {

@@ -14,7 +14,7 @@ use crate::{
         artifacts::ArtifactService,
         conventions::control,
         effect_job,
-        sessions::{Failure, Refusal},
+        kernel::{Failure, Refusal},
     },
 };
 use serde::{Deserialize, Serialize};
@@ -303,7 +303,7 @@ impl SchemaService {
             runtime.store.as_ref(),
             WriteOptions {
                 cancellation: Some(cancel.clone()),
-                ..Default::default()
+                ..WriteOptions::host_state()
             },
             move |tx| {
                 let (source, ctx) = current(tx, &op, &job)?;
@@ -321,9 +321,10 @@ impl SchemaService {
         let runtime = self.runtime.as_ref().ok_or(StorageError::Cancelled)?;
         let op = op.clone();
         let job: SchemaJob = serde_json::from_value(op.payload.clone()).map_err(|_| invalid())?;
-        runtime
-            .closed
-            .write(runtime.store.as_ref(), WriteOptions::default(), move |tx| {
+        runtime.closed.write(
+            runtime.store.as_ref(),
+            WriteOptions::settlement(),
+            move |tx| {
                 if tx.store().store_id != job.store_id
                     || tx.store().restore_epoch != job.restore_epoch
                 {
@@ -360,7 +361,8 @@ impl SchemaService {
                 ));
                 source.updated_at_ms = tx.now_ms();
                 tx.schemas().revise_schema_source(&source, expected)
-            })
+            },
+        )
     }
     /// Observing repeats only metadata reads, never caller SQL or source writes. The immutable
     /// publication witness is checked before current-source eligibility, including after edits.
@@ -377,7 +379,7 @@ impl SchemaService {
         {
             return Err(invalid());
         }
-        let completed = run_write(runtime.store.as_ref(), WriteOptions::default(), {
+        let completed = run_write(runtime.store.as_ref(), WriteOptions::settlement(), {
             let id = op.id.clone();
             move |tx| tx.schemas().schema_publication(&id)
         })?;

@@ -81,7 +81,7 @@ use crate::protocol::{
     ProjectId, RetryAdvice, RevisionDimension, RootId,
 };
 use crate::services::cursor::{self, CursorBinding};
-use crate::services::sessions::{
+use crate::services::kernel::{
     Failure, Refusal, counter, decided, label, not_found, project_visible, query_fault, rev,
     visible_session,
 };
@@ -1379,7 +1379,7 @@ impl InferenceRouter {
         if tx.actors().actor_kind(ctx.principal())? != Some(ctx.principal_kind())
             || &tx.store().store_id != ctx.store_id()
             || tx.store().restore_epoch != ctx.restore_epoch().get()
-            || !crate::services::sessions::project_visible(ctx, a.project_id.as_ref())
+            || !crate::services::kernel::project_visible(ctx, a.project_id.as_ref())
         {
             return Err(StorageError::ScopeDenied);
         }

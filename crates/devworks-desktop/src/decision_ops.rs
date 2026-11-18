@@ -1,5 +1,5 @@
 //! Native decision/notification frames. Records and eligibility come from the shared services.
-use crate::backend::Backend;
+use crate::backend::{Backend, screen_slot};
 use crate::frame::{self, Negotiate};
 use crate::ops::{self, Failure};
 use devworks_core::gateway::{CommandOutcome, QueryOutcome};
@@ -12,6 +12,26 @@ use devworks_core::protocol::records::{
 };
 use devworks_core::protocol::results::OperationResult;
 use devworks_core::protocol::support::BoundedList;
+
+/// The requests the approvals and notification views wait for. The names are persisted (see
+/// [`crate::backend::Slot`]).
+#[derive(Clone, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+pub enum DecisionsSlot {
+    ApprovalsList,
+    ApprovalInspect(String),
+    ApprovalRefresh(String),
+    ApprovalContent(String),
+    ApprovalDecision(String),
+    ReviewQueue,
+    NotificationsList,
+    CompletionList,
+    NotificationRead(String),
+    NotificationChange(String),
+    NotificationSettings,
+    NotificationSettingsSave,
+    OsNotificationPermission,
+}
+screen_slot!(DecisionsSlot, Decisions);
 
 /// The frame of an approvals or notifications request (at the newest revision). A request that
 /// did not convert (`None`) is no bytes, which the gateway rejects like any malformed request.

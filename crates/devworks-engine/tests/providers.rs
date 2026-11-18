@@ -41,6 +41,9 @@ use devworks_core::{
     },
 };
 use devworks_engine::{
+    ArtifactComposition, DiagnosticComposition, KnowledgeComposition, RunComposition,
+};
+use devworks_engine::{
     providers::{
         driver::{EmbeddingRegistration, InstructionTargets, NativeProviders, ProviderComposition},
         schemas::RegisteredSchemas,
@@ -211,6 +214,7 @@ impl HttpStream for Stream {
 struct Fx {
     h: Harness,
     store: Arc<dyn ApplicationStore>,
+    artifact_ports: ArtifactComposition,
     artifacts: Arc<ArtifactService>,
     connections: Arc<ConnectionService>,
     usage: Arc<UsageRuntime>,
@@ -243,16 +247,15 @@ impl Fx {
         let store = h.open();
         let context =
             principal(store.as_ref(), "host", PrincipalKind::Host).with_session(id("session"));
-        let artifacts = Arc::new(ArtifactService::new(
+        let artifact_ports = ArtifactComposition::new(
             Arc::new(NativeArtifactFiles::new(
                 h.root.clone(),
                 h.root.with_extension("cache"),
             )),
             Arc::new(HostArtifactSources::new(h.clock(), h.ids.clone())),
             Arc::new(NativeFilesystem::new()),
-            h.clock(),
-            h.ids.clone(),
-        ));
+        );
+        let artifacts = h.artifact_service(&store, &artifact_ports);
         let oauth = matches!(
             profile,
             "CodexSubscriptionResponses" | "ClaudeSubscriptionMessages"
@@ -435,6 +438,7 @@ impl Fx {
         Self {
             h,
             store,
+            artifact_ports,
             artifacts,
             connections,
             usage,
@@ -721,28 +725,6 @@ impl Fx {
 }
 
 fn tool_runtime_composition(f: &Fx) -> devworks_engine::Composition {
-    let connections = Arc::new(ConnectionService::new(
-        f.h.ids.clone(),
-        f.h.clock(),
-        f.store.clone(),
-        Arc::new(NoNetwork),
-        Arc::new(SessionSecrets::new()),
-        Arc::new(EntropyFixture),
-    ));
-    let router = Arc::new(InferenceRouter::new(
-        f.h.ids.clone(),
-        f.h.clock(),
-        connections.clone(),
-    ));
-    let cases = UseCases::new()
-        .with_router(router)
-        .with_connections(connections)
-        .with_sessions(Arc::new(
-            devworks_core::services::sessions::SessionService::new(
-                f.h.ids.clone(),
-                f.store.clone(),
-            ),
-        ));
     let mut config = devworks_engine::RuntimeConfig::new(id("tool-dispatcher"));
     config.providers = Some(ProviderComposition::new(f.http.clone()));
     config.collect_interval = std::time::Duration::from_secs(3600);
@@ -751,26 +733,29 @@ fn tool_runtime_composition(f: &Fx) -> devworks_engine::Composition {
         clock: f.h.clock(),
         ids: f.h.ids.clone(),
         authority: Arc::new(Authority),
-        artifacts: f.artifacts.clone(),
-        resources: Arc::new(devworks_core::services::resources::ResourceService::new(
-            f.h.ids.clone(),
-            f.h.clock(),
-        )),
+        artifacts: f.artifact_ports.clone(),
         process_host: Arc::new(devworks_adapters::process::NativeProcessHost),
-        runs: devworks_engine::RunComposition::new(Arc::new(ControlService::new(f.h.ids.clone()))),
+        runs: RunComposition::default(),
+        knowledge: KnowledgeComposition::default(),
+        application: devworks_engine::ApplicationComposition {
+            connections: Some(devworks_engine::ConnectionPorts {
+                http: Arc::new(NoNetwork),
+                secrets: Arc::new(SessionSecrets::new()),
+                entropy: Arc::new(EntropyFixture),
+                endpoints: None,
+            }),
+            router: Some(Default::default()),
+            sessions: Some(Default::default()),
+            ..Default::default()
+        },
+        web: None,
         power: Arc::new(devworks_adapters::power::NativePower),
-        diagnostics: Arc::new(
-            devworks_core::services::diagnostics::DiagnosticService::new(
-                f.store.clone(),
-                f.h.ids.clone(),
-                f.h.clock(),
-                None,
-            ),
-        ),
+        diagnostics: DiagnosticComposition::default(),
         git: None,
         browser: None,
         packages: None,
-        use_cases: cases,
+        use_cases: UseCases::new(),
+        test_overrides: Default::default(),
         consumers: vec![],
         indexing: None,
         config,
@@ -1300,7 +1285,7 @@ fn reviewer_agent_context_head_routes_with_its_existing_model_pin() {
             .await
             .unwrap();
         let route = devworks_engine::agent_turns::route_context_head(
-            &app,
+            app.turn_engine(),
             &agent,
             &id("agent-session"),
             0,
@@ -1320,7 +1305,7 @@ fn reviewer_agent_context_head_routes_with_its_existing_model_pin() {
             ["tools"]
         );
         let replay = devworks_engine::agent_turns::route_context_head(
-            &app,
+            app.turn_engine(),
             &agent,
             &id("agent-session"),
             0,
@@ -1340,7 +1325,7 @@ fn reviewer_agent_context_head_routes_with_its_existing_model_pin() {
         })
         .unwrap();
         let image_route = devworks_engine::agent_turns::route_context_head(
-            &app,
+            app.turn_engine(),
             &agent,
             &id("agent-session"),
             0,
@@ -2355,6 +2340,115 @@ fn cancelled_native_tool_dispatch_records_only_predispatch_responses() {
             && entry.body["outcome"]["kind"] == "CancelledBeforeDispatch"));
         assert!(app.dispatch_pending_tool_calls(&f.context, &id("session")).unwrap().is_empty());
         assert_eq!(f.http.lock().unwrap().requests.lock().unwrap().len(), 1);
+        app.shutdown().await;
+    });
+}
+
+#[test]
+fn cancel_before_dispatch_applies_the_whole_session_gate() {
+    runtime().block_on(async {
+        use devworks_core::services::sessions::{
+            transcript::{BatchOutcome, SessionBatch, SessionWriter},
+            turn,
+        };
+        let wire = "data: {\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"gate-call\",\"type\":\"function\",\"function\":{\"name\":\"get_session\",\"arguments\":\"{\\\"sessionId\\\":\\\"session\\\"}\"}}]},\"finish_reason\":null}]}\n\ndata: {\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"tool_calls\"}]}\n\ndata: [DONE]\n\n";
+        let f = Fx::new("CompatibleChat", Script::sse(wire), false);
+        let tool = f.driver.schemas().builtin("sessions.get", devworks_core::registry::Mode::Query,
+            devworks_core::registry::SchemaRevision(1), "get_session").unwrap();
+        assert_eq!(f.produce(f.generation(vec![tool])).await.unwrap().result.outcome,
+            Some(AttemptEnd::ToolCallsReady));
+        let app = devworks_engine::boot(tool_runtime_composition(&f)).await.unwrap();
+        let recorded: CompleteToolCall = serde_json::from_value(
+            f.transcript().iter().find(|entry| entry.kind == "ToolCallRecorded").unwrap()
+                .body["toolCall"].clone()
+        ).unwrap();
+        let responses = || f.transcript().iter().filter(|e| e.kind == "ToolResponseRecorded").count();
+
+        // A context from another restore epoch is refused; the same call then cancels normally.
+        let moved = devworks_core::context::HostIngress::new(f.store.as_ref()).context(
+            ActorId(id("host")), PrincipalKind::Host, id("inv-moved"), id("ingress-moved"),
+            Counter::new(f.store.info().restore_epoch + 1).unwrap(), Revision::new(1).unwrap(),
+        ).with_session(id("session"));
+        assert!(matches!(
+            app.cancel_tool_call_before_dispatch(&moved, &id("session"), &recorded.call),
+            Err(StorageError::ScopeDenied)));
+        assert_eq!(responses(), 0);
+        assert!(matches!(
+            app.cancel_tool_call_before_dispatch(&f.context, &id("session"), &recorded.call),
+            Ok(BatchOutcome::Accepted(_))));
+        assert_eq!(responses(), 1);
+
+        // An agent session: cancellation passes while the binding is active and is refused once
+        // the binding is deactivated.
+        let human = principal(f.store.as_ref(), "gate-owner", PrincipalKind::Human);
+        let agent = principal(f.store.as_ref(), "gate-agent", PrincipalKind::Agent)
+            .with_session(id("gate-session"));
+        write(f.store.as_ref(), {
+            let human = human.clone();
+            move |tx| {
+                bind_principal(tx, &human, NewPrincipalBinding {
+                    actor: ActorId(id("gate-agent")),
+                    kind: PrincipalKind::Agent,
+                    role: Some(devworks_core::settings::catalog::AgentRole::Worker),
+                    project_id: None,
+                    tool_families: None,
+                    bound_by: ActorId(id("gate-owner")),
+                }, None).map_err(|error| StorageError::InvalidRecord(format!("binding: {error:?}")))?;
+                tx.sessions().insert_session(&StoredSession {
+                    id: id("gate-session"),
+                    conversation_id: id("gate-conversation"),
+                    agent_id: ActorId(id("gate-agent")),
+                    project_id: None,
+                    root_id: None,
+                    title: "Gate session".into(),
+                    context_epoch: 0,
+                    revision: 1,
+                    created_by: ActorId(id("gate-owner")),
+                    created_at_ms: T0,
+                    closed_at_ms: None,
+                    closed_by: None,
+                    next_sequence: 1,
+                    checkpoint_sequence: 0,
+                })
+            }
+        }).unwrap();
+        let append_call = |native: &str, ordinal: i64| {
+            let mut call = recorded.clone();
+            call.call.native_call_id = native.into();
+            call.call.ordinal = Counter::new(ordinal).unwrap();
+            let key = call.call.clone();
+            // The host records the call: it can see the host-owned artifacts the call cites.
+            let ctx = f.context.clone().with_session(id("gate-session"));
+            write(f.store.as_ref(), move |tx| {
+                let session = tx.sessions().session(&id("gate-session"))?.unwrap();
+                let batch = turn::batch_of(&id("gate-session"), tx.new_id(IdKind::TranscriptBatch),
+                    session.context_epoch, session.next_sequence,
+                    vec![TranscriptBody::ToolCallRecorded { tool_call: call }],
+                    || tx.new_id(IdKind::TranscriptEntry));
+                assert!(matches!(SessionWriter::append_in(tx, &ctx, &SessionBatch::entries(batch))?,
+                    BatchOutcome::Accepted(_)));
+                Ok(())
+            }).unwrap();
+            key
+        };
+        let active = append_call("agent-call-active", 1);
+        let revoked = append_call("agent-call-revoked", 2);
+        assert!(matches!(
+            app.cancel_tool_call_before_dispatch(&agent, &id("gate-session"), &active),
+            Ok(BatchOutcome::Accepted(_))));
+        write(f.store.as_ref(), move |tx| {
+            let current = tx.authority().principal(&ActorId(id("gate-agent")))?.unwrap();
+            devworks_core::authority::service::revoke_principal(
+                tx, &human, &ActorId(id("gate-agent")), current.revision)
+                .map(|_| ()).map_err(|e| StorageError::InvalidRecord(format!("{e:?}")))
+        }).unwrap();
+        assert!(matches!(
+            app.cancel_tool_call_before_dispatch(&agent, &id("gate-session"), &revoked),
+            Err(StorageError::ScopeDenied)));
+        let agent_responses = read(f.store.as_ref(), |s| s.sessions().entries(&id("gate-session"), 0, 500))
+            .iter().filter(|e| e.kind == "ToolResponseRecorded").count();
+        assert_eq!(agent_responses, 1);
+        assert_eq!(responses(), 1);
         app.shutdown().await;
     });
 }

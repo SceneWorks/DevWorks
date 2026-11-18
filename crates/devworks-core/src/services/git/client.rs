@@ -8,10 +8,10 @@
 //! never indexed). Blob contents come from the object database (`cat-file --batch`), so a
 //! baseline is exactly its commit, never the live worktree.
 use super::helper::{HelperFault, HelperLimits, HelperRunner};
-use super::paths::{relative_ok, unit_key};
 use crate::context::InvocationContext;
 use crate::ports::process::ProcessSpec;
 use crate::protocol::OperationId;
+use crate::services::indexing::paths::{relative_ok, unit_key};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -26,8 +26,8 @@ pub const MAX_LISTING_BYTES: usize = 128 * 1024 * 1024;
 /// Most content bytes one blob batch may produce: never below the largest file (or extraction
 /// group) the configuration accepts, since a batch always admits its first blob whole.
 pub const MAX_BATCH_BYTES: usize = {
-    let file = super::config::MAX_FILE_BYTES_LIMIT as usize;
-    let group = super::worker::MAX_GROUP_BYTES;
+    let file = crate::services::indexing::config::MAX_FILE_BYTES_LIMIT as usize;
+    let group = crate::services::indexing::worker::MAX_GROUP_BYTES;
     if file > group { file } else { group }
 };
 
@@ -1825,11 +1825,11 @@ mod tests {
 
     #[test]
     fn a_blob_read_admits_the_largest_accepted_file() {
-        let largest = super::super::config::MAX_FILE_BYTES_LIMIT as usize;
+        let largest = crate::services::indexing::config::MAX_FILE_BYTES_LIMIT as usize;
         // One file at the accepted maximum, with its header, fits the read bound.
         assert!(blob_output_limit(largest, 1) >= largest + 100);
         // So does a whole extraction group at its maximum.
-        let group = super::super::worker::MAX_GROUP_BYTES;
+        let group = crate::services::indexing::worker::MAX_GROUP_BYTES;
         assert!(blob_output_limit(group, 200) >= group + 200 * 100);
         // A small read is bounded by what it expects.
         assert_eq!(blob_output_limit(10, 1), 10 + 128);

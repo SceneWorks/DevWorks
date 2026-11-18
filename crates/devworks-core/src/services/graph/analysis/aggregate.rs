@@ -2,7 +2,7 @@ use super::{properties, text, yes};
 use crate::ports::storage::*;
 use crate::protocol::Id;
 use crate::services::graph::{dataset, read::Reader, scan};
-use crate::services::sessions::Failure;
+use crate::services::kernel::Failure;
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
 
@@ -308,7 +308,7 @@ pub(super) fn rust_semantic(reader: &mut Reader<'_>, scope: &GraphScope) -> Resu
         if group["outcome"] == "semantic" {
             continue;
         }
-        let mut row = json!({"index":group["index"].as_u64().ok_or_else(||crate::services::sessions::Refusal::new(crate::protocol::DomainErrorCode::ViewUnavailable,"recorded_semantic_index",None))?.to_string(),"crates":group.get("crates").cloned().unwrap_or(json!([])),"outcome":group["outcome"]});
+        let mut row = json!({"index":group["index"].as_u64().ok_or_else(||crate::services::kernel::Refusal::new(crate::protocol::DomainErrorCode::ViewUnavailable,"recorded_semantic_index",None))?.to_string(),"crates":group.get("crates").cloned().unwrap_or(json!([])),"outcome":group["outcome"]});
         for name in ["failureCode", "detailCode"] {
             if let Some(value) = group.get(name).filter(|v| !v.is_null()) {
                 row[name] = value.clone();

@@ -7,7 +7,7 @@ use crate::{
     protocol::{provider::ArtifactRef, records::*},
     services::{
         artifacts::{ConventionSourceLease, ConventionSourceSelection},
-        sessions::{Failure, Refusal},
+        kernel::{Failure, Refusal},
     },
 };
 use std::sync::Arc;

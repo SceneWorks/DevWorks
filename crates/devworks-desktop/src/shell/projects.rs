@@ -2,7 +2,7 @@
 //! `repositories.*` or `settings.*` command an agent tool submits; nothing here decides what a
 //! use case decides. A command whose outcome is not known keeps its exact frame (Confirm
 //! outcomes, and the next launch, resubmit it).
-use crate::backend::{Reply, Slot, Unresolved};
+use crate::backend::{Reply, Unresolved};
 use crate::memory::RouteMemory;
 use crate::ops::{self, Failure, LifecycleChange};
 use crate::project_purge::Live;
@@ -64,7 +64,8 @@ impl Screen for ProjectsScreen {
         }
     }
     fn refresh(&mut self, cx: &mut Cx, route: Route) {
-        if !cx.pending(&Slot::ProjectsList) && !cx.pending(&Slot::RepositoriesList) {
+        if !cx.pending(&ProjectsSlot::ProjectsList) && !cx.pending(&ProjectsSlot::RepositoriesList)
+        {
             Screen::load(self, cx, route);
         }
     }
@@ -383,6 +384,19 @@ impl ProjectsCtl<'_, '_> {
         reply: Reply,
     ) -> Option<(ProjectsSlot, Reply)> {
         match (slot, reply) {
+            // The lists the shell keeps for every screen: it reads them from these results.
+            (ProjectsSlot::ProjectsList, Reply::Query(q)) => {
+                let result = ops::projects(q).map_err(|e| e.describe());
+                self.effects.push(Effect::ProjectList(result));
+            }
+            (ProjectsSlot::RepositoriesList, Reply::Query(q)) => {
+                let result = ops::repositories(q).map_err(|e| e.describe());
+                self.effects.push(Effect::RepositoryList(result));
+            }
+            (ProjectsSlot::ProjectRepositories(p), Reply::Query(q)) => {
+                let result = ops::repositories(q).map_err(|e| e.describe());
+                self.effects.push(Effect::ProjectMembers(p, result));
+            }
             (ProjectsSlot::DeletedProjects, Reply::Query(q)) => match ops::projects(q) {
                 Ok((items, more)) => {
                     self.projects.deleted = ListState {
@@ -877,7 +891,7 @@ impl ProjectsCtl<'_, '_> {
         // The selected project's scheduled jobs (their run status), once per selection.
         if let Some(p) = selection
             && !self.job_status.contains_key(&p)
-            && !self.pending(&Slot::ProjectJobs(p.clone()))
+            && !self.pending(&crate::jobs_ops::JobsSlot::ProjectJobs(p.clone()))
             && online.is_ok()
         {
             self.effects.push(Effect::LoadProjectJobs(p));

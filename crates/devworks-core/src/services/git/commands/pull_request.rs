@@ -319,7 +319,7 @@ impl GitService {
         let result = json!({"result":OperationResult::GitPullRequest { value }});
         let checkpoint = result.clone();
         let (j, op) = (job.clone(), operation.clone());
-        match run_write(&*self.store, WriteOptions::default(), move |tx| {
+        match run_write(&*self.store, WriteOptions::settlement(), move |tx| {
             let mut tree = tx
                 .git()
                 .git_worktree(&j.tree.id)?

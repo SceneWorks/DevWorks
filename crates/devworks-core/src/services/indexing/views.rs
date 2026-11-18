@@ -12,8 +12,8 @@ use crate::ports::storage::*;
 use crate::protocol::DomainErrorCode;
 use crate::protocol::Id;
 use crate::protocol::data::ViewSelection;
+use crate::services::kernel::{Failure, Refusal};
 use crate::services::projects::visible_repository;
-use crate::services::sessions::{Failure, Refusal};
 
 /// The layers of one view, highest first.
 #[derive(Clone, Debug, PartialEq)]

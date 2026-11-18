@@ -223,7 +223,7 @@ impl Fx {
         &self,
         f: impl FnOnce(&mut dyn WriteTransaction) -> Result<T, StorageError> + Send + 'static,
     ) -> T {
-        run_write(&*self.store, WriteOptions::default(), f).expect("write")
+        run_write(&*self.store, WriteOptions::fixture(), f).expect("write")
     }
     fn read<T>(&self, f: impl FnOnce(&dyn ReadSnapshot) -> Result<T, StorageError>) -> T {
         read_snapshot(&*self.store, &ReadOptions::default(), f).expect("read")
@@ -1017,7 +1017,7 @@ fn explicit_effort_constrains_eligibility_and_survives_failover() {
     let mut bad = fx.pin_row("s2").unwrap();
     bad.effective_effort = "High".into();
     let r = bad.revision;
-    let err = run_write(&*fx.store, WriteOptions::default(), move |tx| {
+    let err = run_write(&*fx.store, WriteOptions::fixture(), move |tx| {
         tx.router().put_session_pin(&bad, Some(r))
     })
     .unwrap_err();
@@ -1120,7 +1120,7 @@ fn custom_members_join_the_full_tier_pool() {
     assert_eq!(ids(&a), ["haiku", "local-qwen"]);
     assert_eq!(codes(&a), ["NotDiscovered"]);
     // The store refuses a decision model in the conversational catalog.
-    let err = run_write(&*fx.store, WriteOptions::default(), |tx| {
+    let err = run_write(&*fx.store, WriteOptions::fixture(), |tx| {
         tx.router()
             .put_route_model(&custom("jev", "SystemOne", false, None), None)
     })
@@ -1329,7 +1329,7 @@ fn request_status_reads_the_operation_journal() {
     );
     // The binding is unique.
     let router = fx.router.clone();
-    let err = run_write(&*fx.store, WriteOptions::default(), move |tx| {
+    let err = run_write(&*fx.store, WriteOptions::fixture(), move |tx| {
         router.admit_request(
             tx,
             &RequestAdmission {
@@ -1490,7 +1490,7 @@ fn migration_13_is_additive_and_seeds_the_catalog_once() {
         .unwrap();
     assert_eq!(n, 9);
     // Edits survive a reopen: the seed is not reapplied.
-    run_write(&store, WriteOptions::default(), |tx| {
+    run_write(&store, WriteOptions::fixture(), |tx| {
         let mut m = tx.router().route_model(&id("luna"))?.unwrap();
         m.display_name = "Luna (edited)".into();
         let r = m.revision;
@@ -1509,7 +1509,7 @@ fn migration_13_is_additive_and_seeds_the_catalog_once() {
         ("Luna (edited)", 2)
     );
     // A stale catalog revision is a conflict.
-    let err = run_write(&store, WriteOptions::default(), move |tx| {
+    let err = run_write(&store, WriteOptions::fixture(), move |tx| {
         tx.router().put_route_model(&luna, Some(1))
     })
     .unwrap_err();
@@ -1524,20 +1524,20 @@ fn pins_and_cursors_are_compare_and_set_in_the_store() {
     // A writer holding a stale revision cannot replace the pin.
     let mut stale = pin.clone();
     stale.model_id = id("sol");
-    let err = run_write(&*fx.store, WriteOptions::default(), move |tx| {
+    let err = run_write(&*fx.store, WriteOptions::fixture(), move |tx| {
         tx.router().put_session_pin(&stale, Some(pin.revision + 5))
     })
     .unwrap_err();
     assert!(matches!(err, StorageError::RevisionConflict(_)), "{err:?}");
     // A second first pin of the same session is a duplicate, never a competing pin.
     let again = fx.pin_row("s1").unwrap();
-    let err = run_write(&*fx.store, WriteOptions::default(), move |tx| {
+    let err = run_write(&*fx.store, WriteOptions::fixture(), move |tx| {
         tx.router().put_session_pin(&again, None)
     })
     .unwrap_err();
     assert!(matches!(err, StorageError::Duplicate { .. }), "{err:?}");
     // A cursor that moved since it was read cannot take the same turn again.
-    let err = run_write(&*fx.store, WriteOptions::default(), |tx| {
+    let err = run_write(&*fx.store, WriteOptions::fixture(), |tx| {
         tx.router().advance_tier_cursor("High", 0)
     })
     .unwrap_err();

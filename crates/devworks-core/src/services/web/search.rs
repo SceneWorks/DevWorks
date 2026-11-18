@@ -367,7 +367,7 @@ impl WebService {
         // a principal revoked or re-bound while the provider answered records no success.
         let (diagnostics, owned_ctx, authorization) =
             (self.diagnostics.clone(), ctx.clone(), authorization.clone());
-        let recorded = run_write(&*self.store, WriteOptions::default(), move |tx| {
+        let recorded = run_write(&*self.store, WriteOptions::observed(), move |tx| {
             if !crate::authority::authorization_holds_in(tx, &owned_ctx, &authorization)? {
                 return Ok(false);
             }

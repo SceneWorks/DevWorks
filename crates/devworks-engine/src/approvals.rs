@@ -141,7 +141,7 @@ impl ResumeDispatcher {
                 }
                 devworks_core::ports::storage::run_write(
                     &*store,
-                    WriteOptions::default(),
+                    WriteOptions::host_state(),
                     move |tx| service.publish_pending_notifications(tx, cursor.as_ref(), PAGE),
                 )
             })
@@ -199,7 +199,7 @@ impl ResumeDispatcher {
                                 &command.frame,
                                 WriteOptions {
                                     cancellation: Some(cancellation),
-                                    ..WriteOptions::default()
+                                    ..WriteOptions::settlement()
                                 },
                             );
                             // Even an unknown outcome is settled under the original binding.

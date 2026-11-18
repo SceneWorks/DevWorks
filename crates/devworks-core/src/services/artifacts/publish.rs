@@ -158,7 +158,7 @@ impl ArtifactService {
         };
         let files = self.files.clone();
         let owned = staged.clone();
-        let outcome = run_write(store, WriteOptions::default(), move |tx| {
+        let outcome = run_write(store, WriteOptions::observed(), move |tx| {
             let savepoint = tx.savepoint()?;
             // The producer's authority is re-checked here, at the write's linearization point: a
             // principal revoked or re-bound, or a policy narrowed, while the content was being

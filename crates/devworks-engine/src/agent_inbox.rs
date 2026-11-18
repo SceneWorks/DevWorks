@@ -70,7 +70,7 @@ impl RetainedInboxDriver {
                 &self.store,
                 WriteOptions {
                     cancellation: cancellation.clone(),
-                    ..WriteOptions::default()
+                    ..WriteOptions::observed()
                 },
                 move |tx| {
                     deliver_inbox(
@@ -111,7 +111,7 @@ impl RetainedInboxDriver {
         selection: AckSelection,
         resolution: Option<Resolution>,
     ) -> Result<Acknowledged, StorageError> {
-        store::write(&self.store, move |tx| {
+        store::write(&self.store, WriteOptions::host_state(), move |tx| {
             acknowledge(tx, &context, &project, &recipient, selection, resolution)
                 .map_err(Failure::into_storage)
         })

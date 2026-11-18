@@ -7,7 +7,7 @@ use crate::ports::storage::*;
 use crate::protocol::{DomainErrorCode, data::GraphResult, records::*};
 use crate::services::{
     artifacts::ArtifactService,
-    sessions::{Failure, Refusal},
+    kernel::{Failure, Refusal},
 };
 use serde_json::json;
 const PAGE: usize = 64 * 1024;
@@ -41,7 +41,7 @@ pub(super) fn prepare(
         CodeSourceSelection::Node { node_id, .. } => {
             let node = reader
                 .find_id(node_id)?
-                .ok_or_else(|| crate::services::sessions::not_found("node", node_id))?;
+                .ok_or_else(|| crate::services::kernel::not_found("node", node_id))?;
             (
                 node.repository_id.clone(),
                 node.node.unit_key.clone(),

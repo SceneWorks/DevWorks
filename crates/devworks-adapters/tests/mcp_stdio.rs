@@ -116,7 +116,7 @@ fn a_registered_stdio_mcp_server_is_launched_called_and_reaped() {
         ))
         .expect("open store"),
     );
-    run_write(&*store, WriteOptions::default(), |tx| {
+    run_write(&*store, WriteOptions::fixture(), |tx| {
         tx.actors().register(
             &ActorId(Id::new("user-a").unwrap()),
             PrincipalKind::Human,

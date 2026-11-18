@@ -134,7 +134,7 @@ pub fn rows(
 ) -> Result<(), StorageError> {
     let projects: Vec<_> = projects.iter().map(ProjectSeed::stored).collect();
     let work: Vec<_> = work.iter().map(WorkSeed::stored).collect();
-    run_write(store, WriteOptions::default(), move |tx| {
+    run_write(store, WriteOptions::fixture(), move |tx| {
         for p in &projects {
             if tx.projects().project(&p.id)?.is_none() {
                 tx.projects().insert_project(p)?;

@@ -12,7 +12,7 @@ use crate::protocol::results::OperationResult;
 use crate::protocol::support::{BoundedText, PositiveCounter};
 use crate::protocol::{CorrelationId, DomainErrorCode, DomainFault, Id, OperationState};
 use crate::services::cursor::{self, CursorBinding};
-use crate::services::sessions::{Failure, Refusal, counter, query_fault, rev};
+use crate::services::kernel::{Failure, Refusal, counter, query_fault, rev};
 
 fn invalid(why: &str) -> StorageError {
     StorageError::unavailable(Unavailable::Corrupt, why)

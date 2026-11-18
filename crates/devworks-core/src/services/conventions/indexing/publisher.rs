@@ -241,7 +241,7 @@ impl IndexService {
             WriteOptions {
                 cancellation: Some(run.cancel.clone()),
                 deadline_ms: deadline,
-                ..Default::default()
+                ..WriteOptions::host_state()
             },
             move |tx| {
                 if deadline.is_some_and(|d| clock.now_ms().get() >= d) {

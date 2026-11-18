@@ -16,8 +16,8 @@ use devworks_core::{
             },
             publisher::IndexOutcome,
         },
+        kernel::{Failure, Refusal},
         router::embedding_spaces::ProbePreparation,
-        sessions::{Failure, Refusal},
     },
 };
 use devworks_engine::conventions::embedding::NativeEmbeddings;

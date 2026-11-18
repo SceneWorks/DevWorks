@@ -239,7 +239,7 @@ pub fn queue(
         activation: ctx.activation().map(|(id, epoch)| (id.clone(), epoch)),
     };
     let ctx = ctx.clone();
-    run_write(store, WriteOptions::default(), move |tx| {
+    run_write(store, WriteOptions::host_state(), move |tx| {
         record(tx, &ctx, &operation, &digest, &request)
     })
 }

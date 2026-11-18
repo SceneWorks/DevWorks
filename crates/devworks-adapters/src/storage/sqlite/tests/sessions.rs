@@ -284,7 +284,7 @@ impl Fx {
         &self,
         f: impl FnOnce(&mut dyn WriteTransaction) -> Result<T, StorageError> + Send + 'static,
     ) -> T {
-        run_write(&*self.store, WriteOptions::default(), f).expect("write")
+        run_write(&*self.store, WriteOptions::fixture(), f).expect("write")
     }
     fn read<T>(&self, f: impl FnOnce(&dyn ReadSnapshot) -> Result<T, StorageError>) -> T {
         read_snapshot(&*self.store, &ReadOptions::default(), f).expect("read")
@@ -390,7 +390,7 @@ impl Fx {
         SessionWriter {
             store: &*self.store,
         }
-        .append(ctx, batch, WriteOptions::default())
+        .append(ctx, batch, WriteOptions::fixture())
         .expect("append")
     }
     fn session(&self, s: &str) -> StoredSession {
@@ -979,7 +979,7 @@ fn crash_before_and_after_commit() {
     let batch = SessionBatch::entries(calls_and_response("session-a"));
     // Crash before commit: the unit of work dies after appending; nothing remains.
     let (ctx, b) = (worker.clone(), batch.clone());
-    let crashed = run_write(&*fx.store, WriteOptions::default(), move |tx| {
+    let crashed = run_write(&*fx.store, WriteOptions::fixture(), move |tx| {
         accepted(append_session_batch(
             tx,
             &ctx,
@@ -1828,7 +1828,7 @@ fn provider_context_head_is_durable_and_rejects_a_stale_revision() {
     head.artifact = art_b();
     let mut stale = head.clone();
     stale.revision = 1;
-    let refused = run_write(&*fx.store, WriteOptions::default(), move |tx| {
+    let refused = run_write(&*fx.store, WriteOptions::fixture(), move |tx| {
         tx.sessions().put_provider_context_head(&stale, Some(0))
     });
     assert!(refused.is_err());

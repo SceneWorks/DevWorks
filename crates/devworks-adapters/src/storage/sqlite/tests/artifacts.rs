@@ -278,7 +278,7 @@ impl Fx {
         &self,
         f: impl FnOnce(&mut dyn WriteTransaction) -> Result<T, StorageError> + Send + 'static,
     ) -> T {
-        run_write(&*self.store, WriteOptions::default(), f).expect("write")
+        run_write(&*self.store, WriteOptions::fixture(), f).expect("write")
     }
     fn read<T>(&self, f: impl FnOnce(&dyn ReadSnapshot) -> Result<T, StorageError>) -> T {
         read_snapshot(&*self.store, &ReadOptions::default(), f).expect("read")
@@ -317,7 +317,7 @@ impl Fx {
             .expect("addressable")
     }
     fn command(&self, ctx: &InvocationContext, op: &str, frame: Value) -> DomainCommandReply {
-        self.command_with(ctx, op, frame, WriteOptions::default())
+        self.command_with(ctx, op, frame, WriteOptions::fixture())
     }
     fn query(
         &self,
@@ -1151,7 +1151,7 @@ fn assigned_worker_reads_only_own_or_explicitly_referenced_artifacts() {
     let blocked_sender = worker.clone();
     let blocked_attachment = sibling.clone();
     assert!(matches!(
-        run_write(fx.store.as_ref(), WriteOptions::default(), move |tx| {
+        run_write(fx.store.as_ref(), WriteOptions::fixture(), move |tx| {
             Ok(devworks_core::services::agents::post_assignment(
                 tx,
                 &blocked_sender,
@@ -1167,8 +1167,8 @@ fn assigned_worker_reads_only_own_or_explicitly_referenced_artifacts() {
                 },
             ))
         }),
-        Ok(Err(devworks_core::services::sessions::Failure::Refused(
-            devworks_core::services::sessions::Refusal {
+        Ok(Err(devworks_core::services::kernel::Failure::Refused(
+            devworks_core::services::kernel::Refusal {
                 code: DomainErrorCode::PermissionDenied,
                 ..
             }
@@ -1552,7 +1552,7 @@ fn versions_are_never_overwritten_and_exact_references_survive() {
         staged.clone(),
     );
     // A stale expected revision is a conflict and publishes nothing.
-    let conflict = run_write(&*fx.store, WriteOptions::default(), move |tx| {
+    let conflict = run_write(&*fx.store, WriteOptions::fixture(), move |tx| {
         as_failure(svc.publish_version(
             tx,
             &ctx,
@@ -2338,7 +2338,7 @@ fn a_cancelled_save_stages_nothing_and_unselected_variants_are_rejected() {
     );
     let options = WriteOptions {
         cancellation: Some(cancellation),
-        ..WriteOptions::default()
+        ..WriteOptions::fixture()
     };
     let reply = fx.command_with(&user, "artifacts.save", frame.clone(), options);
     assert_eq!(rejected(reply), Rejection::StorageUnavailable);
@@ -2683,7 +2683,7 @@ fn abandoning_a_staged_file_never_unlinks_bytes_a_concurrent_save_committed() {
     );
     let authority = fx.authority();
     let a = refused_after_staging(&fx);
-    let f = refused(fx.command_via(&cases, &authority, &a, &frame, WriteOptions::default()));
+    let f = refused(fx.command_via(&cases, &authority, &a, &frame, WriteOptions::fixture()));
     assert_eq!(target(&f), "origin_work");
     // B could not commit metadata for a file A had claimed: it is refused as retryable.
     let b = slot
@@ -2761,7 +2761,7 @@ fn a_digest_another_save_is_staging_is_never_claimed() {
         &authority,
         &fx.user(),
         &b_frame,
-        WriteOptions::default(),
+        WriteOptions::fixture(),
     ))
     .artifact;
     assert_eq!(
@@ -2804,7 +2804,7 @@ fn recovery_running_while_saves_stage_removes_nothing_in_flight() {
         &authority,
         &fx.user(),
         &frame,
-        WriteOptions::default(),
+        WriteOptions::fixture(),
     ))
     .artifact;
     let reports = reports.lock().unwrap().clone();
@@ -2980,7 +2980,7 @@ fn replay_only_and_expired_commands_prepare_nothing() {
         &ReplayOnly,
         &fx.user(),
         &frame,
-        WriteOptions::default(),
+        WriteOptions::fixture(),
     );
     assert_eq!(rejected(reply), Rejection::PermissionDenied);
     assert!(!resolved.load(Ordering::SeqCst), "the source was resolved");
@@ -2988,7 +2988,7 @@ fn replay_only_and_expired_commands_prepare_nothing() {
     // An expired command reads no source and stages nothing either.
     let options = WriteOptions {
         deadline_ms: Some(T0 - 1),
-        ..WriteOptions::default()
+        ..WriteOptions::fixture()
     };
     let reply = fx.command_with(&fx.user(), "artifacts.save", frame.clone(), options);
     assert_eq!(rejected(reply), Rejection::StorageUnavailable);
@@ -3004,7 +3004,7 @@ fn replay_only_and_expired_commands_prepare_nothing() {
     }));
     let options = WriteOptions {
         deadline_ms: Some(T0 + 5_000),
-        ..WriteOptions::default()
+        ..WriteOptions::fixture()
     };
     let authority = fx.authority();
     let reply = fx.command_via(&cases, &authority, &fx.user(), &frame, options);
@@ -3288,7 +3288,7 @@ fn previews_are_served_from_the_derived_cache_until_it_is_collected() {
     );
     let authority = fx.authority();
     let r =
-        saved(fx.command_via(&cases, &authority, &user, &frame, WriteOptions::default())).artifact;
+        saved(fx.command_via(&cases, &authority, &user, &frame, WriteOptions::fixture())).artifact;
     let gateway = Gateway {
         authority: &authority,
         store: &*fx.store,
@@ -3341,7 +3341,7 @@ fn host_issued_sources_resolve_only_for_their_binding() {
     let bytes = b"picked by the user";
     let save = |ctx: &InvocationContext, p: &str, source: Value| {
         let frame = fx.save_frame(&fx.key(), p, "Picked", "text/plain", source, bytes);
-        fx.command_via(&cases, &authority, ctx, &frame, WriteOptions::default())
+        fx.command_via(&cases, &authority, ctx, &frame, WriteOptions::fixture())
     };
     let in_a = fx
         .user()
@@ -3587,7 +3587,7 @@ fn a_stale_claim_finished_meanwhile_never_removes_the_newer_generation() {
             // Between recovery's listing and its adoption: the owner finishes, then the save.
             files.unlink(&b.digest, &b.generation).unwrap();
             let (d, g) = (b.digest.clone(), b.generation.clone());
-            run_write(&*store, WriteOptions::default(), move |tx| {
+            run_write(&*store, WriteOptions::fixture(), move |tx| {
                 tx.artifacts()
                     .finish_claim(&d, &g, "earlier-boot.claimant", None)
             })
@@ -3695,7 +3695,7 @@ fn a_stale_adopter_never_takes_over_a_newer_claim() {
             let r = saved(reply).artifact;
             let (aid, vid) = (r.artifact_id.clone(), r.version_id.clone());
             let d = String::from(r.sha256.clone());
-            let row = run_write(&*store, WriteOptions::default(), move |tx| {
+            let row = run_write(&*store, WriteOptions::fixture(), move |tx| {
                 let now = tx.now_ms();
                 tx.artifacts().tombstone_version(&vid, now)?;
                 tx.artifacts().set_blob_state(
@@ -3767,7 +3767,7 @@ fn abandon_recovery_and_a_save_of_the_same_bytes_interleave_safely() {
         &authority,
         &refused_after_staging(&fx),
         &frame,
-        WriteOptions::default(),
+        WriteOptions::fixture(),
     ));
     assert_eq!(target(&f), "origin_work");
     let b = saved(slot.lock().unwrap().take().unwrap()).artifact;
@@ -4051,7 +4051,7 @@ fn reusing_a_pending_generation_while_collection_claims_it_is_refused() {
         &authority,
         &fx.user(),
         &frame,
-        WriteOptions::default(),
+        WriteOptions::fixture(),
     );
     assert_eq!(rejected(reply), Rejection::StorageUnavailable);
     let row = fx.blob(&old.digest).unwrap();
@@ -4063,7 +4063,7 @@ fn reusing_a_pending_generation_while_collection_claims_it_is_refused() {
         &authority,
         &fx.user(),
         &frame,
-        WriteOptions::default(),
+        WriteOptions::fixture(),
     ))
     .artifact;
     assert_eq!(read_text(&fx, &fx.user(), &r).as_bytes(), bytes);
@@ -4108,7 +4108,7 @@ fn healing_past_a_wrong_length_generation_quarantines_it() {
         &authority,
         &fx.user(),
         &frame,
-        WriteOptions::default(),
+        WriteOptions::fixture(),
     ))
     .artifact;
     let b = saved(slot.lock().unwrap().take().unwrap()).artifact;
@@ -4606,7 +4606,7 @@ fn workspace_upload_tickets_resolve_only_for_a_workspace_save() {
             frame["command"]["workspace"] = json!(true);
             frame["schemaRevision"] = json!(3);
         }
-        fx.command_via(&cases, &authority, ctx, &frame, WriteOptions::default())
+        fx.command_via(&cases, &authority, ctx, &frame, WriteOptions::fixture())
     };
     // User ingress from a workspace invocation only.
     assert_eq!(

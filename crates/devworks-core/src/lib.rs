@@ -45,6 +45,7 @@ pub mod fingerprint;
 pub mod framing;
 pub mod gateway;
 pub mod jcs;
+pub mod kernel;
 pub mod operations;
 pub mod ports;
 pub mod protocol;

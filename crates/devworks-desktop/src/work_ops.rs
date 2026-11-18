@@ -28,6 +28,55 @@ pub enum Family {
     Tasks,
 }
 
+/// The requests the work screens (Overview, Features and Issues) wait for. The names are
+/// persisted (see [`crate::backend::Slot`]).
+#[derive(Clone, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+pub enum WorkSlot {
+    /// Every feature of a project (all pages, read in order).
+    WorkFeatures(String),
+    /// The complete authoritative workflow, fenced by load generation.
+    WorkWorkflow(String, u64),
+    WorkWorkflowCommand(String),
+    /// A queue snapshot; a lease requests a claim after the read completes.
+    AllocationQueue(String, Option<String>, Option<u64>),
+    AllocationClaim(String, Option<String>),
+    AllocationInspect(String),
+    AllocationRelease(String),
+    /// Every card (feature task or standalone issue) of a project.
+    WorkCards(String),
+    /// The project change feed (Activity) of a project.
+    WorkActivity(String, Option<String>, u64),
+    WorkMessagesHistory(String),
+    WorkMessagesInbox(String),
+    WorkMessagesEvents(String),
+    WorkMessagePost(String),
+    WorkMessageAck(String, String),
+    /// One work item's current record (readiness included).
+    WorkDetail(String),
+    WorkGit(String),
+    WorkGitInspect(String, String),
+    /// A change of one work item (one at a time per item).
+    WorkCommand(String),
+    /// A new feature, task or issue in a project.
+    WorkCreate(String),
+    /// A prioritization of one queue (`<project>/<queue>`).
+    WorkOrder(String),
+    /// A plan text stored as an artifact for a feature's pending plan.
+    WorkPlanText(String),
+    /// Project-owned decisions for requirements dropped by a plan save.
+    WorkPlanDrop(String),
+    /// A feature's plan draft save (`features.edit_plan`).
+    WorkPlan(String),
+    /// A root's run controls (inspect) and one Start/Pause/Continue.
+    WorkInspect(String),
+    WorkRun(String),
+    /// The roots and running work of a project an archival would stop (features, issues).
+    ArchiveCount(String, bool),
+    /// Work opened from elsewhere (a completion card): read as a card (`false`) or a feature.
+    WorkOpen(String, bool),
+}
+crate::backend::screen_slot!(WorkSlot, Work);
+
 pub fn message_history(backend: &dyn Backend, project: &str, before: Option<i64>) -> Vec<u8> {
     frame::with(backend, Negotiate::Latest, || {
         Some(In::Agents(agents::Input::History(agents::HistoryInput {

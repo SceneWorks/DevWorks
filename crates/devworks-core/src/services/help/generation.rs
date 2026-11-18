@@ -11,7 +11,7 @@ use crate::protocol::results::OperationResult;
 use crate::protocol::support::BoundedText;
 use crate::protocol::{EventId, Id, OperationId, OperationState};
 use crate::services::effect::{EffectOutcome, JournaledEffect};
-use crate::services::sessions::rev;
+use crate::services::kernel::rev;
 use serde_json::{Value, json};
 use sha2::{Digest as _, Sha256};
 
@@ -149,7 +149,7 @@ impl HelpService {
         + 'static,
     ) -> Result<T, StorageError> {
         let (service, operation, job) = (self.clone(), operation.clone(), job.clone());
-        run_write(&*self.store, WriteOptions::default(), move |tx| {
+        run_write(&*self.store, WriteOptions::host_state(), move |tx| {
             service.current(tx, &operation, &job)?;
             work(tx, &service)
         })

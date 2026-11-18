@@ -132,7 +132,7 @@ fn owned_container_intent_survives_restart_and_stop_listing_is_agent_scoped() {
             .any(|row| row.table == "owned_containers"
                 && row.reason == ProjectPurgeUnresolvedReason::ActiveContainer)
     );
-    let stale = run_write(&*fx.store, WriteOptions::default(), move |tx| {
+    let stale = run_write(&*fx.store, WriteOptions::fixture(), move |tx| {
         tx.resources().update_container(&running, 1)
     });
     assert!(matches!(stale, Err(StorageError::LeaseLost { .. })));
@@ -395,7 +395,7 @@ impl Fx {
         &self,
         f: impl FnOnce(&mut dyn WriteTransaction) -> Result<T, StorageError> + Send + 'static,
     ) -> T {
-        run_write(&*self.store, WriteOptions::default(), f).expect("write")
+        run_write(&*self.store, WriteOptions::fixture(), f).expect("write")
     }
     fn read<T>(&self, f: impl FnOnce(&dyn ReadSnapshot) -> Result<T, StorageError>) -> T {
         read_snapshot(&*self.store, &ReadOptions::default(), f).expect("read")
@@ -1390,7 +1390,7 @@ fn migration_10_adds_reservations_and_processes_to_a_version_9_store() {
         ),
         (10, 8, 9)
     );
-    let created = run_write(&s, WriteOptions::default(), |tx| {
+    let created = run_write(&s, WriteOptions::fixture(), |tx| {
         tx.resources().insert_resource(NewResource {
             id: Id::new("res-1").unwrap(),
             name: "gpu".into(),
@@ -1436,25 +1436,25 @@ fn migration_10_adds_reservations_and_processes_to_a_version_9_store() {
         lease("l-2", "h-1", 0, LeasePhase::Waiting),
         lease("l-3", "h-2", 1, LeasePhase::Held),
     );
-    run_write(&s, WriteOptions::default(), move |tx| {
+    run_write(&s, WriteOptions::fixture(), move |tx| {
         tx.resources().insert_lease(&l1)
     })
     .unwrap();
     assert!(matches!(
-        run_write(&s, WriteOptions::default(), move |tx| tx
+        run_write(&s, WriteOptions::fixture(), move |tx| tx
             .resources()
             .insert_lease(&l2)),
         Err(StorageError::Duplicate { .. })
     ));
     assert!(
-        run_write(&s, WriteOptions::default(), move |tx| tx
+        run_write(&s, WriteOptions::fixture(), move |tx| tx
             .resources()
             .insert_lease(&l3))
         .is_err(),
         "fence reuse"
     );
     assert!(
-        run_write(&s, WriteOptions::default(), |tx| tx
+        run_write(&s, WriteOptions::fixture(), |tx| tx
             .resources()
             .insert_resource(NewResource {
                 id: Id::new("res-2").unwrap(),
@@ -1471,7 +1471,7 @@ fn migration_10_adds_reservations_and_processes_to_a_version_9_store() {
     let mut stale = lease("l-1", "h-1", 1, LeasePhase::Held);
     stale.revision = 3;
     assert!(matches!(
-        run_write(&s, WriteOptions::default(), move |tx| tx
+        run_write(&s, WriteOptions::fixture(), move |tx| tx
             .resources()
             .update_lease(&stale, 2)),
         Err(StorageError::LeaseLost { .. })

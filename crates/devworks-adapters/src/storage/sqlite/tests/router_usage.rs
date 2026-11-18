@@ -723,7 +723,7 @@ fn served_model_preserves_the_actual_text_contract_including_unicode() {
         let mut frame = observation("invalid", 1, Some(100), None);
         frame.provider_model_id = Some(model);
         assert!(
-            run_write(f.fx.store.as_ref(), WriteOptions::default(), move |tx| {
+            run_write(f.fx.store.as_ref(), WriteOptions::fixture(), move |tx| {
                 accounting::observe(tx, &c, &id, &frame)
             })
             .is_err()

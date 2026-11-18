@@ -39,13 +39,15 @@ use devworks_core::protocol::{
     ActorId, CommandReply, DomainErrorCode, Id, OperationId, OperationState, ProjectId, RetryAdvice,
 };
 use devworks_core::services::UseCases;
-use devworks_core::services::artifacts::ArtifactService;
 use devworks_core::services::artifacts::evidence::Evidence;
 use devworks_core::services::browser::cdp::encode_base64;
 use devworks_core::services::browser::live::MAX_FRAMES;
 use devworks_core::services::browser::{BrowserConfig, BrowserService, EFFECT_CONSUMER};
 use devworks_core::settings::catalog::AgentRole;
 use devworks_engine::browser::BrowserComposition;
+use devworks_engine::{
+    ArtifactComposition, DiagnosticComposition, KnowledgeComposition, RunComposition,
+};
 use devworks_engine::{Composition, Runtime, RuntimeConfig, ShutdownStage, boot};
 use devworks_test_support::{FaultFiles, FileOp};
 use serde_json::{Value, json};
@@ -1473,16 +1475,14 @@ fn composition(
     browser: BrowserConfig,
     unverified_stop: Arc<std::sync::atomic::AtomicBool>,
 ) -> Composition {
-    let artifacts = Arc::new(ArtifactService::new(
+    let artifacts = ArtifactComposition::new(
         Arc::new(NativeArtifactFiles::new(
             h.root.clone(),
             h.root.with_extension("cache"),
         )),
         Arc::new(HostArtifactSources::new(h.clock(), h.ids.clone())),
         Arc::new(NativeFilesystem::new()),
-        h.clock(),
-        h.ids.clone(),
-    ));
+    );
     let mut config = RuntimeConfig::new(id("dispatcher-1"));
     config.collect_interval = Duration::from_secs(3600);
     config.shutdown_grace = Duration::from_millis(200);
@@ -1500,25 +1500,15 @@ fn composition(
             clock: h.clock(),
         }),
         artifacts,
-        resources: Arc::new(devworks_core::services::resources::ResourceService::new(
-            h.ids.clone(),
-            h.clock(),
-        )),
         process_host: Arc::new(StopHookHost {
             unverified: unverified_stop,
         }),
-        runs: devworks_engine::RunComposition::new(Arc::new(
-            devworks_core::services::runs::ControlService::new(h.ids.clone()),
-        )),
+        runs: RunComposition::default(),
+        knowledge: KnowledgeComposition::default(),
+        application: Default::default(),
+        web: None,
         power: Arc::new(NoPower),
-        diagnostics: Arc::new(
-            devworks_core::services::diagnostics::DiagnosticService::new(
-                store.clone(),
-                h.ids.clone(),
-                h.clock(),
-                None,
-            ),
-        ),
+        diagnostics: DiagnosticComposition::default(),
         git: None,
         browser: Some(BrowserComposition {
             platform,
@@ -1528,6 +1518,7 @@ fn composition(
             resolver: Arc::new(FixtureResolver),
         }),
         use_cases: UseCases::new().with_queue(),
+        test_overrides: Default::default(),
         consumers: Vec::new(),
         config,
     }
@@ -4528,7 +4519,7 @@ fn concurrent_evidence_publications_cannot_exceed_the_storage_limit() {
     let (started, blocking) = std::sync::mpsc::channel::<()>();
     let st = store.clone();
     let blocker = std::thread::spawn(move || {
-        run_write(&*st, WriteOptions::default(), move |_| {
+        run_write(&*st, WriteOptions::fixture(), move |_| {
             started.send(()).unwrap();
             held.recv().unwrap();
             Ok(())
@@ -4845,7 +4836,7 @@ fn publish_while_authority_changes(
         .unwrap();
     });
     let h = fx.h();
-    let service = ArtifactService::new(
+    let ports = ArtifactComposition::new(
         // An artifact file store that runs `hook` once, right after the content is flushed: after
         // the publication's pre-checks and before its recording write.
         {
@@ -4863,9 +4854,8 @@ fn publish_while_authority_changes(
         },
         Arc::new(HostArtifactSources::new(h.clock(), h.ids.clone())),
         Arc::new(NativeFilesystem::new()),
-        h.clock(),
-        h.ids.clone(),
     );
+    let service = h.artifact_service(&store, &ports);
     let evidence = Evidence {
         scope: ArtifactScope::Workspace,
         producer: agent.principal().clone(),
@@ -5701,7 +5691,7 @@ fn source_fixture(
     let primary = primary.canonicalize().unwrap();
     let owned = owned.canonicalize().unwrap();
     let tree = owned.join("tree");
-    let tree_argument = devworks_core::services::indexing::git::path_argument(&tree).unwrap();
+    let tree_argument = devworks_core::services::git::client::path_argument(&tree).unwrap();
     source_git(&primary, &["init", "-b", "main"]);
     std::fs::write(primary.join("source.txt"), "initial\n").unwrap();
     source_git(&primary, &["add", "source.txt"]);
@@ -5753,7 +5743,7 @@ fn source_fixture(
         last_result: None,
     };
     let path = primary.to_str().unwrap().to_owned();
-    run_write(store, WriteOptions::default(), move |tx| {
+    run_write(store, WriteOptions::fixture(), move |tx| {
         tx.projects().insert_repository(&StoredRepository {
             id: id("tested-repository"),
             location: path.clone(),
@@ -5781,6 +5771,7 @@ fn source_fixture(
             filesystem: Some(Arc::new(fs)),
             ..GitConfig::default()
         },
+        github_http: None,
     }
 }
 #[test]
@@ -5972,7 +5963,7 @@ fn browser_source_case(native: bool, missing_load: bool) {
     );
     let store = fx.app().store();
     let host = store.info().host_actor;
-    run_write(&**store, WriteOptions::default(), move |tx| {
+    run_write(&**store, WriteOptions::fixture(), move |tx| {
         let mut row = tx.git().git_worktree(&id("tested-tree"))?.unwrap();
         let revision = row.revision;
         row.revision += 1;

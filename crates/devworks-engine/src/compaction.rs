@@ -69,7 +69,7 @@ pub(crate) fn publish_input(
     let session_id = session_id.clone();
     let binding = binding.clone();
     let source_artifact = source.artifact.clone();
-    let committed = run_write(store, WriteOptions::default(), move |tx| {
+    let committed = run_write(store, WriteOptions::observed(), move |tx| {
         let session = tx
             .sessions()
             .session(&session_id)?

@@ -49,7 +49,8 @@
 pub mod auth;
 pub mod discovery;
 pub mod lifecycle;
-pub mod profiles;
+pub use crate::providers::openrouter::open_router_request_fields;
+pub use crate::providers::profiles;
 
 use crate::context::{InvocationContext, PrincipalKind};
 use crate::gateway::{AdmittedCommand, AdmittedQuery};
@@ -72,8 +73,8 @@ use crate::ports::{
 use crate::protocol::provider::Digest;
 use crate::protocol::records::{
     AccountAction, ConnectionLifecycle, ConnectionRecord, DecisionModel, EndpointKind, ItemState,
-    MutationSummary, OpenRouterConstraints, OpenRouterPercentiles, RouteModel, RouterConfigAction,
-    SignInChallenge, SignInMethod, TierName,
+    MutationSummary, OpenRouterConstraints, RouteModel, RouterConfigAction, SignInChallenge,
+    SignInMethod, TierName,
 };
 use crate::protocol::results::{DomainCommandReply, DomainDecision, OperationResult};
 use crate::protocol::support::{BoundedList, BoundedText, Url};
@@ -82,8 +83,8 @@ use crate::protocol::{
     RevisionDimension,
 };
 use crate::services::cursor::{self, CursorBinding};
+use crate::services::kernel::{Failure, Refusal, counter, decided, label, query_fault, rev};
 use crate::services::router::{TIERS, select, tier_members};
-use crate::services::sessions::{Failure, Refusal, counter, decided, label, query_fault, rev};
 use auth::{AuthFailure, Credential, DeviceCode, Tokens};
 use discovery::{Discovery, ListFailure};
 use profiles::{AuthEndpoints, Profile, profile};
@@ -571,121 +572,6 @@ fn status_filter(c: &StoredConnection) -> ConnectionStatus {
     }
 }
 
-/// The members an OpenRouter Chat Completions request carries for `constraints` (for the
-/// transport, DW-19): the `provider` routing object (OpenRouter's snake_case wire names) and,
-/// for the automatic route, the auto-router plugin with the allowed/excluded model patterns and
-/// cost tier (reference `OpenRouterRequest.Translate`).
-pub fn open_router_request_fields(
-    constraints: &OpenRouterConstraints,
-    upstream_model: &str,
-) -> serde_json::Map<String, Value> {
-    let mut out = serde_json::Map::new();
-    let plugin_id = match upstream_model {
-        select::OPEN_ROUTER_AUTO_UPSTREAM => Some("auto-router"),
-        "openrouter/auto-beta" => Some("auto-beta-router"),
-        _ => None,
-    };
-    if let Some(plugin_id) = plugin_id {
-        let mut plugin = json!({"id": plugin_id});
-        if let Some(t) = &constraints.cost_tier {
-            plugin["cost_tier"] = json!(wire(t));
-        }
-        if !constraints.allowed_models.0.is_empty() {
-            plugin["allowed_models"] = json!(
-                constraints
-                    .allowed_models
-                    .0
-                    .iter()
-                    .map(|m| &m.0)
-                    .collect::<Vec<_>>()
-            );
-        }
-        if !constraints.excluded_models.0.is_empty() {
-            plugin["excluded_models"] = json!(
-                constraints
-                    .excluded_models
-                    .0
-                    .iter()
-                    .map(|m| &m.0)
-                    .collect::<Vec<_>>()
-            );
-        }
-        out.insert("plugins".into(), json!([plugin]));
-    }
-    if let Some(p) = &constraints.provider {
-        let mut provider = serde_json::Map::new();
-        let labels = |l: &crate::protocol::support::Items<crate::protocol::support::Label>| {
-            json!(l.0.iter().map(|x| &x.0).collect::<Vec<_>>())
-        };
-        if let Some(v) = &p.order {
-            provider.insert("order".into(), labels(v));
-        }
-        if let Some(v) = p.allow_fallbacks {
-            provider.insert("allow_fallbacks".into(), json!(v));
-        }
-        if let Some(v) = p.require_parameters {
-            provider.insert("require_parameters".into(), json!(v));
-        }
-        if let Some(v) = &p.data_collection {
-            provider.insert("data_collection".into(), json!(wire(v)));
-        }
-        if let Some(v) = p.zdr {
-            provider.insert("zdr".into(), json!(v));
-        }
-        if let Some(v) = p.enforce_distillable_text {
-            provider.insert("enforce_distillable_text".into(), json!(v));
-        }
-        if let Some(v) = &p.only {
-            provider.insert("only".into(), labels(v));
-        }
-        if let Some(v) = &p.ignore {
-            provider.insert("ignore".into(), labels(v));
-        }
-        if let Some(v) = &p.quantizations {
-            provider.insert(
-                "quantizations".into(),
-                json!(v.0.iter().map(wire).collect::<Vec<_>>()),
-            );
-        }
-        if let Some(s) = &p.sort {
-            let mut sort = json!({"by": wire(&s.by)});
-            if let Some(part) = &s.partition {
-                sort["partition"] = json!(wire(part));
-            }
-            provider.insert("sort".into(), sort);
-        }
-        let percentiles =
-            |q: &OpenRouterPercentiles| serde_json::to_value(q).unwrap_or(Value::Null);
-        if let Some(v) = &p.preferred_min_throughput {
-            provider.insert("preferred_min_throughput".into(), percentiles(v));
-        }
-        if let Some(v) = &p.preferred_max_latency {
-            provider.insert("preferred_max_latency".into(), percentiles(v));
-        }
-        if let Some(m) = &p.max_price {
-            // USD amounts; OpenRouter takes numbers.
-            let mut price = serde_json::Map::new();
-            for (k, v) in [
-                ("prompt", &m.prompt),
-                ("completion", &m.completion),
-                ("request", &m.request),
-                ("image", &m.image),
-            ] {
-                if let Some(v) = v
-                    && let Ok(n) = v.0.parse::<f64>()
-                {
-                    price.insert(k.into(), json!(n));
-                }
-            }
-            provider.insert("max_price".into(), Value::Object(price));
-        }
-        if !provider.is_empty() {
-            out.insert("provider".into(), Value::Object(provider));
-        }
-    }
-    out
-}
-
 /// Validates constraints a user configured: non-empty patterns without whitespace, positive
 /// throughput and latency preferences.
 fn check_constraints(o: &OpenRouterConstraints) -> Result<(), &'static str> {
@@ -969,23 +855,31 @@ impl ConnectionService {
             .now()
             .checked_add(STAGED_TTL_MS)
             .ok_or_else(|| SecretError::Failed("settings stage expiry overflow".into()))?;
-        let ready = run_write(self.store.as_ref(), WriteOptions::default(), move |tx| {
-            if referenced(tx.router())?.contains(retired.as_str()) {
-                return Ok(false);
-            }
-            tx.configuration()
-                .retire_settings_secret(&retired, expires, abandon)
-        })
+        let ready = run_write(
+            self.store.as_ref(),
+            WriteOptions::housekeeping(),
+            move |tx| {
+                if referenced(tx.router())?.contains(retired.as_str()) {
+                    return Ok(false);
+                }
+                tx.configuration()
+                    .retire_settings_secret(&retired, expires, abandon)
+            },
+        )
         .map_err(|_| SecretError::Failed("settings credential collection unavailable".into()))?;
         if !ready {
             return Ok(false);
         }
         let deleted = self.noted(self.secrets.delete(&self.key(handle)))?;
         let finished = handle.clone();
-        run_write(self.store.as_ref(), WriteOptions::default(), move |tx| {
-            tx.configuration()
-                .finish_settings_secret_deletion(&finished)
-        })
+        run_write(
+            self.store.as_ref(),
+            WriteOptions::housekeeping(),
+            move |tx| {
+                tx.configuration()
+                    .finish_settings_secret_deletion(&finished)
+            },
+        )
         .map_err(|_| {
             SecretError::Failed("settings credential collection acknowledgement unavailable".into())
         })?;

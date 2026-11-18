@@ -12,7 +12,7 @@ use crate::{
     services::{
         approvals,
         conventions::access,
-        sessions::{Failure, Refusal},
+        kernel::{Failure, Refusal},
     },
 };
 use serde::{Deserialize, Serialize};
@@ -112,7 +112,7 @@ impl IndexService {
                     "convention",
                     id.clone(),
                     input.expected_revision.clone(),
-                    crate::services::sessions::rev(row.revision),
+                    crate::services::kernel::rev(row.revision),
                 )
                 .into());
             }
@@ -138,7 +138,7 @@ impl IndexService {
                         KnowledgeScope::Project(project) => project.0.clone(),
                     },
                     input.expected_revision.clone(),
-                    crate::services::sessions::rev(revision),
+                    crate::services::kernel::rev(revision),
                 )
                 .into());
             }

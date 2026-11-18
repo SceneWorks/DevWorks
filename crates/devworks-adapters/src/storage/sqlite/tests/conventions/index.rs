@@ -14,7 +14,7 @@ pub(super) fn space() -> StoredConventionEmbeddingSpace {
 fn scoped_current_generation_ranking_uses_full_corpus_and_exact_vectors() {
     let h = Harness::new();
     let store = h.store();
-    let (row, generation) = run_write(&store, WriteOptions::default(), |tx| {
+    let (row, generation) = run_write(&store, WriteOptions::fixture(), |tx| {
         tx.conventions().put_convention_embedding_space(&space())?;
         let row = record(
             "rules",
@@ -171,7 +171,7 @@ fn scoped_current_generation_ranking_uses_full_corpus_and_exact_vectors() {
     assert_eq!(saved.status, "Ready");
     let saved_index = generation.clone();
     assert!(
-        run_write(&store, WriteOptions::default(), move |tx| tx
+        run_write(&store, WriteOptions::fixture(), move |tx| tx
             .conventions()
             .discard_convention_index_chunks(
                 &saved_index.generation_id,
@@ -196,7 +196,7 @@ fn scoped_current_generation_ranking_uses_full_corpus_and_exact_vectors() {
 fn lexical_candidates_keep_their_exact_dense_score_outside_dense_top_four_k() {
     let h = Harness::new();
     let store = h.store();
-    let generation = run_write(&store, WriteOptions::default(), |tx| {
+    let generation = run_write(&store, WriteOptions::fixture(), |tx| {
         tx.conventions().put_convention_embedding_space(&space())?;
         let row = record(
             "fusion",
@@ -282,7 +282,7 @@ fn lexical_candidates_keep_their_exact_dense_score_outside_dense_top_four_k() {
 fn source_revision_and_operation_cancellation_fence_publication_and_cleanup_is_bounded() {
     let h = Harness::new();
     let store = h.store();
-    let (row, generation) = run_write(&store, WriteOptions::default(), |tx| {
+    let (row, generation) = run_write(&store, WriteOptions::fixture(), |tx| {
         let row = record(
             "rules",
             KnowledgeScope::Workspace,
@@ -305,7 +305,7 @@ fn source_revision_and_operation_cancellation_fence_publication_and_cleanup_is_b
     let stale = generation.clone();
     let mut revised = next(&row);
     revised.title = "Changed title".into();
-    run_write(&store, WriteOptions::default(), move |tx| {
+    run_write(&store, WriteOptions::fixture(), move |tx| {
         tx.conventions().revise_convention(&revised, 1)?;
         assert!(
             tx.conventions()
@@ -329,7 +329,7 @@ fn source_revision_and_operation_cancellation_fence_publication_and_cleanup_is_b
         "Stale"
     );
     let op = generation.operation_id.clone();
-    run_write(&store, WriteOptions::default(), move |tx| {
+    run_write(&store, WriteOptions::fixture(), move |tx| {
         tx.operations()
             .transition(
                 &op,
@@ -342,7 +342,7 @@ fn source_revision_and_operation_cancellation_fence_publication_and_cleanup_is_b
     })
     .unwrap();
     let saved_index = generation.clone();
-    run_write(&store, WriteOptions::default(), move |tx| {
+    run_write(&store, WriteOptions::fixture(), move |tx| {
         assert!(!tx.conventions().discard_convention_index_chunks(
             &saved_index.generation_id,
             &saved_index.operation_id,
@@ -376,7 +376,7 @@ fn source_revision_and_operation_cancellation_fence_publication_and_cleanup_is_b
 fn embedding_input_replay_keeps_winner_refs_and_exact_actor_scope_space_and_bytes() {
     let h = Harness::new();
     let store = h.store();
-    let row = run_write(&store, WriteOptions::default(), |tx| {
+    let row = run_write(&store, WriteOptions::fixture(), |tx| {
         let scope = project(tx, "inputs-project")?;
         tx.conventions().put_convention_embedding_space(&space())?;
         let digest=sha256_hex(devworks_core::jcs::canonicalize(&json!([{"sha256":sha256_hex(b"exact input"),"byteCount":11}])).unwrap().as_bytes());
@@ -436,7 +436,7 @@ fn embedding_input_replay_keeps_winner_refs_and_exact_actor_scope_space_and_byte
 fn concurrent_embedding_cache_admission_keeps_one_exact_frame_and_rejects_forged_host_refs() {
     let h = Harness::new();
     let store = std::sync::Arc::new(h.store());
-    let candidates=run_write(&*store,WriteOptions::default(),|tx| {
+    let candidates=run_write(&*store,WriteOptions::fixture(),|tx| {
         tx.conventions().put_convention_embedding_space(&space())?;
         let digest=sha256_hex(devworks_core::jcs::canonicalize(&json!([{"sha256":sha256_hex(b"same"),"byteCount":4}])).unwrap().as_bytes());
         let marker=json!({"principalKind":"Host","producedBy":"host","derived":{"kind":"ConventionEmbeddingInput","requestId":"racing-input-request","contextDigest":"d".repeat(64),"embeddingSpace":"recorded-space","inputDigest":digest,"inputIndex":0}});
@@ -453,7 +453,7 @@ fn concurrent_embedding_cache_admission_keeps_one_exact_frame_and_rejects_forged
             let barrier = barrier.clone();
             std::thread::spawn(move || {
                 barrier.wait();
-                run_write(&*store, WriteOptions::default(), move |tx| {
+                run_write(&*store, WriteOptions::fixture(), move |tx| {
                     tx.conventions()
                         .insert_convention_embedding_inputs(&candidate)
                 })
@@ -478,7 +478,7 @@ fn concurrent_embedding_cache_admission_keeps_one_exact_frame_and_rejects_forged
 fn pending_index_status_and_scoped_revision_track_actual_publication_without_catalog_changes() {
     let h = Harness::new();
     let store = h.store();
-    run_write(&store, WriteOptions::default(), |tx| {
+    run_write(&store, WriteOptions::fixture(), |tx| {
         let scope = KnowledgeScope::Workspace;
         let owner = record(
             "status-rules",
@@ -618,7 +618,7 @@ fn ranked_excerpts_center_late_lexical_matches_and_keep_source_immutable() {
         "tail ".repeat(40)
     );
     let source = text.clone();
-    let generation = run_write(&store, WriteOptions::default(), move |tx| {
+    let generation = run_write(&store, WriteOptions::fixture(), move |tx| {
         let row = record(
             "long-rules",
             KnowledgeScope::Workspace,

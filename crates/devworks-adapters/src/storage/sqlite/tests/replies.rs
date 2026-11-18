@@ -244,7 +244,7 @@ impl Fx {
         &self,
         f: impl FnOnce(&mut dyn WriteTransaction) -> Result<T, StorageError> + Send + 'static,
     ) -> T {
-        run_write(&*self.store, WriteOptions::default(), f).expect("write")
+        run_write(&*self.store, WriteOptions::fixture(), f).expect("write")
     }
     fn read<T>(&self, f: impl FnOnce(&dyn ReadSnapshot) -> Result<T, StorageError>) -> T {
         read_snapshot(&*self.store, &ReadOptions::default(), f).expect("read")
@@ -1637,7 +1637,7 @@ fn a_backfilled_receipt_publishes_through_its_decision_event() {
         .collect();
     let reply = {
         let store = Arc::new(SqliteStore::open_with(h.config(), &before).unwrap());
-        run_write(&*store, WriteOptions::default(), |tx| {
+        run_write(&*store, WriteOptions::fixture(), |tx| {
             tx.actors()
                 .register(&actor("user-a"), PrincipalKind::Human, "user-a")
         })

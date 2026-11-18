@@ -154,7 +154,7 @@ pub fn prepare(
             .into(),
         ),
     ];
-    use crate::services::router::connections::profiles;
+    use super::profiles;
     if matches!(
         profile,
         EndpointProfile::AnthropicMessages | EndpointProfile::ClaudeSubscriptionMessages
@@ -226,7 +226,7 @@ fn check(
             {
                 return Err(ProviderError::InvalidInput("anthropic_beta"));
             }
-            let oauth = beta == crate::services::router::connections::profiles::CLAUDE_OAUTH_BETA;
+            let oauth = beta == super::profiles::CLAUDE_OAUTH_BETA;
             if !messages
                 || (oauth
                     && caps.binding.endpoint_profile != EndpointProfile::ClaudeSubscriptionMessages)
@@ -711,7 +711,7 @@ impl Encoder<'_> {
                 if profile == &EndpointProfile::OpenRouterChat
                     && let Some(constraints) = constraints
                 {
-                    for (k, v) in crate::services::router::connections::open_router_request_fields(
+                    for (k, v) in super::openrouter::open_router_request_fields(
                         constraints,
                         &self.identity.upstream_model,
                     ) {

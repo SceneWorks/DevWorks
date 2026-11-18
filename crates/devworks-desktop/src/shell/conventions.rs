@@ -39,6 +39,13 @@ impl Screen for ConventionsScreen {
     fn hosted(&self, route: Route, mem: &RouteMemory) -> bool {
         route == Route::Knowledge && mem.tab == 2
     }
+    fn help_topic(&self, _route: Route, _mem: &RouteMemory) -> Option<&'static str> {
+        Some("knowledge-conventions")
+    }
+    /// Searches in flight stop with the window.
+    fn closing(&mut self) {
+        self.cancel_queries();
+    }
     fn pending_memory(&self, _unresolved: &[&Unresolved]) -> Option<serde_json::Value> {
         Some(self.conventions_pending_memory()).filter(|v| !v.is_null())
     }

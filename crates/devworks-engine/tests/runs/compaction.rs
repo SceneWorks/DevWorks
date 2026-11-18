@@ -105,26 +105,16 @@ async fn runtime_on(
         Arc::new(Authority),
         host,
     );
-    let connections = Arc::new(
-        devworks_core::services::router::connections::ConnectionService::new(
-            fx.h.ids.clone(),
-            fx.h.clock(),
-            fx.store.clone(),
-            Arc::new(devworks_core::ports::http::NoNetwork),
-            Arc::new(devworks_core::ports::secrets::SessionSecrets::new()),
-            Arc::new(Entropy),
-        ),
-    );
-    composed.use_cases = UseCases::new()
-        .with_runs(fx.service.clone())
-        .with_connections(connections.clone())
-        .with_router(Arc::new(
-            devworks_core::services::router::InferenceRouter::new(
-                fx.h.ids.clone(),
-                fx.h.clock(),
-                connections,
-            ),
-        ));
+    composed.application = devworks_engine::ApplicationComposition {
+        connections: Some(devworks_engine::ConnectionPorts {
+            http: Arc::new(devworks_core::ports::http::NoNetwork),
+            secrets: Arc::new(devworks_core::ports::secrets::SessionSecrets::new()),
+            entropy: Arc::new(Entropy),
+            endpoints: None,
+        }),
+        router: Some(Default::default()),
+        ..Default::default()
+    };
     composed.config.providers =
         Some(devworks_engine::providers::driver::ProviderComposition::new(wire));
     Arc::new(boot(composed).await.unwrap())
@@ -225,7 +215,8 @@ fn second_turn(percent: Option<i64>, third: bool) -> SecondTurn {
                 .unwrap()
                 .unwrap();
             let tokens_before =
-                devworks_engine::agent_turns::context_tokens(&app, &context, &head, 0).unwrap();
+                devworks_engine::agent_turns::context_tokens(app.turn_engine(), &context, &head, 0)
+                    .unwrap();
             // The next request is at 60% of this window: over a 50% threshold, under 80%.
             let window = tokens_before * 100 / 60;
             set_context_window(&fx, window);
@@ -238,14 +229,21 @@ fn second_turn(percent: Option<i64>, third: bool) -> SecondTurn {
                 .unwrap()
                 .unwrap();
             let tokens_after =
-                devworks_engine::agent_turns::context_tokens(&app, &context, &head, 0).unwrap();
+                devworks_engine::agent_turns::context_tokens(app.turn_engine(), &context, &head, 0)
+                    .unwrap();
             if third {
                 completed_turn(&app, &context, &primary).await;
             }
             let compacted_tokens =
                 read(&*fx.store, |s| s.sessions().epoch(&session_id, 1)).map(|epoch| {
                     let root = serde_json::from_value(epoch.context).unwrap();
-                    devworks_engine::agent_turns::context_tokens(&app, &context, &root, 0).unwrap()
+                    devworks_engine::agent_turns::context_tokens(
+                        app.turn_engine(),
+                        &context,
+                        &root,
+                        0,
+                    )
+                    .unwrap()
                 });
             let epochs = read(&*fx.store, |s| s.sessions().entries(&session_id, 0, 500))
                 .into_iter()
@@ -442,7 +440,8 @@ async fn over_the_threshold(
         .recover_native_context_head(context, context.session_id().unwrap())
         .unwrap()
         .unwrap();
-    let tokens = devworks_engine::agent_turns::context_tokens(app, context, &head, 0).unwrap();
+    let tokens =
+        devworks_engine::agent_turns::context_tokens(app.turn_engine(), context, &head, 0).unwrap();
     set_context_window(fx, tokens * 100 / 60);
     set_threshold(fx, 50);
 }
@@ -613,7 +612,8 @@ fn a_context_whose_summary_alone_reaches_the_threshold_is_compacted_again() {
             .unwrap()
             .unwrap();
         let tokens =
-            devworks_engine::agent_turns::context_tokens(&app, &context, &head, 0).unwrap();
+            devworks_engine::agent_turns::context_tokens(app.turn_engine(), &context, &head, 0)
+                .unwrap();
         let window = read(&*fx.store, |s| {
             s.router().route_model(&id("approval-wait-model"))
         })
@@ -849,7 +849,8 @@ async fn compact_after_messages(
         .recover_native_context_head(context, session_id)
         .unwrap()
         .unwrap();
-    let tokens = devworks_engine::agent_turns::context_tokens(app, context, &head, 0).unwrap();
+    let tokens =
+        devworks_engine::agent_turns::context_tokens(app.turn_engine(), context, &head, 0).unwrap();
     set_context_window(fx, tokens * 100 / 60);
     let end = run_turn(app, context, primary).await;
     assert!(

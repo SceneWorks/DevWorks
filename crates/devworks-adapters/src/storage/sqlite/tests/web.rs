@@ -390,7 +390,7 @@ impl Fx {
         &self,
         f: impl FnOnce(&mut dyn WriteTransaction) -> Result<T, StorageError> + Send + 'static,
     ) -> T {
-        run_write(&*self.store, WriteOptions::default(), f).expect("write")
+        run_write(&*self.store, WriteOptions::fixture(), f).expect("write")
     }
     fn read<T>(&self, f: impl FnOnce(&dyn ReadSnapshot) -> Result<T, StorageError>) -> T {
         read_snapshot(&*self.store, &ReadOptions::default(), f).expect("read")
@@ -1429,7 +1429,7 @@ fn a_storage_limit_found_in_the_recording_write_rolls_the_recording_back() {
 
 /// Changes the agent's binding (revoked, or re-bound to another project) from inside a request.
 fn rebind(store: &Arc<SqliteStore>, user: InvocationContext, revoke: bool) {
-    run_write(&**store, WriteOptions::default(), move |tx| {
+    run_write(&**store, WriteOptions::fixture(), move |tx| {
         let revision = tx
             .authority()
             .principal(&actor("agent-a"))?

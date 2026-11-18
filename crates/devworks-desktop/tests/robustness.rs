@@ -832,7 +832,9 @@ fn a_replayed_settings_save_answered_before_the_first_read_still_finishes_saving
         900.0,
     );
     let deadline = std::time::Instant::now() + SETTLE_BOUND;
-    while h.state().client().unwrap().is_pending(&Slot::SettingsSave) {
+    while h.state().client().unwrap().is_pending(&Slot::Settings(
+        devworks_desktop::settings_ops::SettingsSlot::SettingsSave,
+    )) {
         assert!(std::time::Instant::now() < deadline, "the save is answered");
         h.step();
     }

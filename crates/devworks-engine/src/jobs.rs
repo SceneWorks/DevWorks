@@ -21,6 +21,7 @@
 use crate::dispatch::{Either, first};
 use crate::store;
 use crate::workers::Ticker;
+use devworks_core::ports::storage::WriteOptions;
 use devworks_core::ports::storage::{ApplicationStore, StorageError, StoredJobRun};
 use devworks_core::protocol::Id;
 use devworks_core::services::jobs::JobService;
@@ -155,15 +156,23 @@ impl Scheduler {
             return Ok(report);
         }
         let svc = self.service.clone();
-        report.queued = store::write(&self.store, move |tx| svc.claim_due(tx))
-            .await?
-            .into_iter()
-            .map(|r| r.id)
-            .collect();
+        report.queued = store::write(&self.store, WriteOptions::host_state(), move |tx| {
+            svc.claim_due(tx)
+        })
+        .await?
+        .into_iter()
+        .map(|r| r.id)
+        .collect();
         let svc = self.service.clone();
-        report.settled = store::write(&self.store, move |tx| svc.poll_inner(tx)).await?;
+        report.settled = store::write(&self.store, WriteOptions::settlement(), move |tx| {
+            svc.poll_inner(tx)
+        })
+        .await?;
         let svc = self.service.clone();
-        let cancels = store::write(&self.store, move |tx| svc.cancellations(tx)).await?;
+        let cancels = store::write(&self.store, WriteOptions::host_state(), move |tx| {
+            svc.cancellations(tx)
+        })
+        .await?;
         for run in cancels {
             if self.executing(&run.id) {
                 // Its own task settles it once its dispatch returns (the run knows it was asked).
@@ -179,21 +188,29 @@ impl Scheduler {
         // A start that committed after its task ended (its acknowledgment lost, or the task
         // gone): queued again, or settled from what is known of its effect.
         let svc = self.service.clone();
-        let unsettled = store::write(&self.store, move |tx| svc.unsettled_starts(tx)).await?;
+        let unsettled = store::write(&self.store, WriteOptions::recovery(), move |tx| {
+            svc.unsettled_starts(tx)
+        })
+        .await?;
         for run in unsettled {
             if self.executing(&run.id) {
                 continue;
             }
             let (svc, id) = (self.service.clone(), run.id.clone());
-            if store::write(&self.store, move |tx| svc.reclaim(tx, &id))
-                .await?
-                .is_some()
+            if store::write(&self.store, WriteOptions::recovery(), move |tx| {
+                svc.reclaim(tx, &id)
+            })
+            .await?
+            .is_some()
             {
                 report.reclaimed.push(run.id);
             }
         }
         let svc = self.service.clone();
-        let runnable = store::write(&self.store, move |tx| svc.runnable(tx)).await?;
+        let runnable = store::write(&self.store, WriteOptions::host_state(), move |tx| {
+            svc.runnable(tx)
+        })
+        .await?;
         for run in runnable {
             if self.ticker.is_stopped() {
                 break;
@@ -253,7 +270,7 @@ impl Scheduler {
             }
         }
         let (svc, id, revision) = (self.service.clone(), run.id.clone(), run.revision);
-        let settled = store::write(&self.store, move |tx| {
+        let settled = store::write(&self.store, WriteOptions::settlement(), move |tx| {
             svc.settle_cancel(tx, &id, revision, &verdict)
         })
         .await?;
@@ -295,7 +312,7 @@ impl Scheduler {
     {
         let mut wait = self.retry_backoff;
         loop {
-            match store::write(&self.store, step.clone()).await {
+            match store::write(&self.store, WriteOptions::observed(), step.clone()).await {
                 Ok(v) => return Ok(v),
                 Err(e) if self.ticker.is_stopped() => return Err(e),
                 Err(_) => {
@@ -311,8 +328,10 @@ impl Scheduler {
         let (svc, inference, id) = (self.service.clone(), self.inference.clone(), run.clone());
         // Not retried: a start that failed never started (the next tick starts it again), and
         // one whose acknowledgment was lost is reclaimed by the next tick.
-        let Some(begun) =
-            store::write(&self.store, move |tx| svc.begin(tx, &id, &*inference)).await?
+        let Some(begun) = store::write(&self.store, WriteOptions::settlement(), move |tx| {
+            svc.begin(tx, &id, &*inference)
+        })
+        .await?
         else {
             return Ok(());
         };

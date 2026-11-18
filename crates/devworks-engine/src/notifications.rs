@@ -174,7 +174,7 @@ impl OsNotificationSupervisor {
         }
         if !self.recovered.load(Ordering::SeqCst) {
             let stopping = self.ticker.flag();
-            store::write(&self.store, move |tx| {
+            store::write(&self.store, WriteOptions::recovery(), move |tx| {
                 if stopping.load(Ordering::SeqCst) {
                     return Ok(0);
                 }
@@ -283,7 +283,7 @@ impl OsNotificationSupervisor {
         let id = row.id.clone();
         let focus = self.focus.clone();
         let stopping = self.ticker.flag();
-        let claimed = store::write(&self.store, move |tx| {
+        let claimed = store::write(&self.store, WriteOptions::observed(), move |tx| {
             if stopping.load(Ordering::SeqCst) || focus.load(Ordering::SeqCst) != 2 {
                 return Ok(None);
             }
@@ -341,7 +341,7 @@ impl OsNotificationSupervisor {
                 _ => None,
             };
             let (state, detail) = outcome_record(outcome);
-            run_write(&*store, WriteOptions::default(), move |tx| {
+            run_write(&*store, WriteOptions::observed(), move |tx| {
                 tx.decisions().settle_os_notification_delivery(&row.user_id, &row.id, &claim.fence(), state, detail.as_deref())?;
                 let event = EventId(ids.next_id(IdKind::Event));
                 let actor = tx.store().host_actor.clone();

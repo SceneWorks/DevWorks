@@ -33,15 +33,15 @@ use crate::admission::{self, AdmissionError, CallerKey, Refusal, Selection};
 use crate::authority::AuthorityCapability;
 use crate::context::{InvocationContext, PrincipalKind, ReceiptIdentity};
 use crate::fingerprint::{self, Fingerprint};
+use crate::kernel::failure::storage_fault;
 use crate::operations::OperationInput;
 use crate::ports::storage::{
     ActorRegistry, ArtifactRepository, AuthorityGrant, AuthorityLedger, AuthorityRead,
     CommandLedger, CommandLedgerRead, ConfigurationRepository, DurableQueue, EventFilter,
     EventPage, EventRecord, GrantLedger, GrantRead, GrantRecord, HistoryLog, HistoryRead,
-    LedgerEntry, NewAuthorityGrant, NewEvent, NewGrant, NewPrincipalBinding, OperationJournal,
-    PackageHandlerLedger, PrincipalBinding, ReadOptions, ReceiptReply, RegisteredRepository,
-    RevisionConflict, Savepoint, SessionRepository, StorageError, StoreInfo, WriteOptions,
-    WriteTransaction, read_snapshot, run_write,
+    LedgerEntry, NewEvent, OperationJournal, PackageHandlerLedger, PrincipalBinding, ReadOptions,
+    ReceiptReply, RegisteredRepository, RevisionConflict, Savepoint, SessionRepository,
+    StorageError, StoreInfo, WriteOptions, WriteTransaction, read_snapshot, run_write,
 };
 use crate::ports::{
     AuthorityDenial, AuthorityPort, AuthorityRequest, Authorization, CommandHandler, Decided,
@@ -58,7 +58,6 @@ use crate::protocol::{
     EventId, Id, Protocol, QueryId, Receipt, Rejection, RequestKey, RetryAdvice, Revision,
 };
 use crate::registry::{EffectClass, Mode, ModeBinding, OperationDescriptor, SchemaRevision};
-use crate::services::failure::storage_fault;
 use serde_json::json;
 use std::cell::RefCell;
 use std::fmt;
@@ -459,7 +458,7 @@ impl Gateway<'_> {
         raw: &[u8],
         handler: Arc<dyn CommandHandler>,
     ) -> CommandOutcome {
-        self.command_with(ctx, operation, raw, handler, WriteOptions::default())
+        self.command_with(ctx, operation, raw, handler, WriteOptions::command())
     }
 
     /// [`Gateway::command`] with explicit write admission options (cancellation, deadline).
@@ -882,7 +881,7 @@ impl Gateway<'_> {
         correlation_id: &CorrelationId,
     ) {
         let (ctx, correlation) = (ctx.clone(), correlation_id.0.as_str().to_owned());
-        let _ = run_write(self.store, WriteOptions::default(), move |tx| {
+        let _ = run_write(self.store, WriteOptions::authority(), move |tx| {
             if &tx.store().store_id != ctx.store_id()
                 || tx.actors().actor_kind(ctx.principal())?.is_none()
             {
@@ -1074,11 +1073,10 @@ fn unit_of_work(
                 let host = authorization.authority_grants().iter().map(|g| (true, g));
                 for (authority, grant) in resume.chain(host) {
                     let spent = if authority {
-                        tx.authority()
-                            .consume_grant(grant, ctx.principal())
-                            .map(|_| ())
+                        crate::authority::consume_host_grant(tx, grant, ctx.principal()).map(|_| ())
                     } else {
-                        tx.grants().consume(grant, ctx.principal()).map(|_| ())
+                        crate::authority::consume_resume_grant(tx, grant, ctx.principal())
+                            .map(|_| ())
                     };
                     match spent {
                         Ok(_) => {}
@@ -1167,7 +1165,7 @@ fn unit_of_work(
         },
     )?;
     // The receipt's durable typed reply is published after commit; its intent commits here.
-    crate::services::artifacts::replies::record_intent(
+    crate::kernel::reply_intent::record_intent(
         tx,
         &command.identity,
         &receipt.command_id,
@@ -1265,33 +1263,17 @@ fn decision_scope(
 /// records (written through [`WriteTransaction::authority_history`]), and receipt reply
 /// publication (written by the reply publisher on its own transaction).
 fn gateway_owned(event: &NewEvent) -> bool {
-    use crate::authority::deletion::DELETION_AGGREGATE;
-    use crate::authority::service::{DENIAL_AGGREGATE, GRANT_AGGREGATE, PRINCIPAL_AGGREGATE};
-    use crate::services::artifacts::replies::REPLY_AGGREGATE;
-    matches!(
-        event.aggregate_kind.as_str(),
-        "command"
-            | "command_receipt"
-            | DENIAL_AGGREGATE
-            | PRINCIPAL_AGGREGATE
-            | GRANT_AGGREGATE
-            | DELETION_AGGREGATE
-            | REPLY_AGGREGATE
-    ) || matches!(
-        event.kind.as_str(),
-        "CommandDecided"
-            | "ReceiptIncompatible"
-            | "AuthorityDenied"
-            | "PrincipalAuthorityBound"
-            | "PrincipalAuthorityRevoked"
-            | "AuthorityGrantIssued"
-            | "AuthorityGrantRevoked"
-            | "RepositoryDeletionConfirmed"
-            | "RepositoryDeletionAuthorized"
-            | "RepositoryDeletionCompleted"
-            | "RepositoryDeletionPartial"
-            | "ReceiptReplyPublished"
-    )
+    use crate::authority::service::DENIAL_AGGREGATE;
+    use crate::kernel::reply_intent::REPLY_AGGREGATE;
+    crate::authority::is_authority_history(event)
+        || matches!(
+            event.aggregate_kind.as_str(),
+            "command" | "command_receipt" | DENIAL_AGGREGATE | REPLY_AGGREGATE
+        )
+        || matches!(
+            event.kind.as_str(),
+            "CommandDecided" | "ReceiptIncompatible" | "AuthorityDenied" | "ReceiptReplyPublished"
+        )
 }
 
 /// The transaction a use case decides against: every repository of the unit of work except the
@@ -1326,17 +1308,6 @@ impl GrantRead for HandlerTx<'_> {
         self.inner.borrow_mut().grants().grant(id)
     }
 }
-impl GrantLedger for HandlerTx<'_> {
-    fn issue(&mut self, _: NewGrant) -> Result<GrantRecord, StorageError> {
-        Err(authority_owned())
-    }
-    fn consume(&mut self, _: &GrantUse, _: &ActorId) -> Result<GrantRecord, StorageError> {
-        Err(authority_owned())
-    }
-    fn revoke(&mut self, _: &Id, _: i64) -> Result<GrantRecord, StorageError> {
-        Err(authority_owned())
-    }
-}
 impl AuthorityRead for HandlerTx<'_> {
     fn principal(&self, actor: &ActorId) -> Result<Option<PrincipalBinding>, StorageError> {
         self.inner.borrow_mut().authority().principal(actor)
@@ -1349,32 +1320,6 @@ impl AuthorityRead for HandlerTx<'_> {
             .borrow_mut()
             .authority()
             .registered_repositories()
-    }
-}
-impl AuthorityLedger for HandlerTx<'_> {
-    fn bind_principal(
-        &mut self,
-        _: NewPrincipalBinding,
-        _: Option<i64>,
-    ) -> Result<PrincipalBinding, StorageError> {
-        Err(authority_owned())
-    }
-    fn revoke_principal(&mut self, _: &ActorId, _: i64) -> Result<PrincipalBinding, StorageError> {
-        Err(authority_owned())
-    }
-    fn issue_grant(&mut self, _: NewAuthorityGrant) -> Result<AuthorityGrant, StorageError> {
-        Err(authority_owned())
-    }
-    fn revoke_grant(
-        &mut self,
-        _: &Id,
-        _: i64,
-        _: &ActorId,
-    ) -> Result<AuthorityGrant, StorageError> {
-        Err(authority_owned())
-    }
-    fn consume_grant(&mut self, _: &GrantUse, _: &ActorId) -> Result<AuthorityGrant, StorageError> {
-        Err(authority_owned())
     }
 }
 impl CommandLedgerRead for HandlerTx<'_> {
@@ -1741,7 +1686,7 @@ impl QueueRead for HandlerTx<'_> {
 }
 impl DurableQueue for HandlerTx<'_> {
     fn enqueue(&mut self, entry: NewQueueEntry) -> Result<QueueEntry, StorageError> {
-        if entry.consumer == crate::services::artifacts::replies::REPLY_CONSUMER {
+        if entry.consumer == crate::kernel::reply_intent::REPLY_CONSUMER {
             return Err(StorageError::InvalidRecord(
                 "receipt reply intents are recorded only by the gateway".into(),
             ));
@@ -1867,7 +1812,7 @@ impl WriteTransaction for HandlerTx<'_> {
     // Grant and authority reads pass through; their writes are refused here and reach the
     // store only through the authority seams (which hold the capability) or the gateway's own
     // consumption step, which runs on the unwrapped transaction.
-    fn grants(&mut self) -> &mut dyn GrantLedger {
+    fn grants(&mut self) -> &mut dyn GrantRead {
         self
     }
     fn grant_writes(
@@ -1886,7 +1831,7 @@ impl WriteTransaction for HandlerTx<'_> {
     fn configuration(&mut self) -> &mut dyn ConfigurationRepository {
         self.inner.get_mut().configuration()
     }
-    fn authority(&mut self) -> &mut dyn AuthorityLedger {
+    fn authority(&mut self) -> &mut dyn AuthorityRead {
         self
     }
     fn authority_writes(

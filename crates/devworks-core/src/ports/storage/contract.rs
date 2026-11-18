@@ -36,6 +36,7 @@ macro_rules! store_contract_tests {
             atomic_unit_of_work, savepoints_undo_only_inner_work, snapshot_isolation,
             deletion_and_old_snapshots, restart_persists_committed_state, gateway_command_unit,
             concurrent_duplicates_decide_once, cancellation_and_deadlines, history_paging,
+            raw_history_refuses_authority_records,
             actor_registry, operation_lifecycle_and_fencing, interrupted_work_after_restart,
             queue_claims_and_fencing, queue_retry_terminal_and_cancel,
             queue_partitions_progress_and_dependents, partition_checkpoint_stays_contiguous,
@@ -67,7 +68,7 @@ fn write<T: Send + 'static>(
     s: &dyn ApplicationStore,
     f: impl FnOnce(&mut dyn WriteTransaction) -> Result<T, StorageError> + Send + 'static,
 ) -> Result<T, StorageError> {
-    run_write(s, WriteOptions::default(), f)
+    run_write(s, WriteOptions::fixture(), f)
 }
 fn read<T>(
     s: &dyn ApplicationStore,
@@ -719,7 +720,7 @@ pub fn cancellation_and_deadlines(h: &mut dyn StoreHarness) {
         &*s,
         WriteOptions {
             cancellation: Some(token),
-            ..Default::default()
+            ..WriteOptions::fixture()
         },
         move |tx| {
             r2.fetch_add(1, Ordering::SeqCst);
@@ -738,7 +739,7 @@ pub fn cancellation_and_deadlines(h: &mut dyn StoreHarness) {
         &*s,
         WriteOptions {
             deadline_ms: Some(past),
-            ..Default::default()
+            ..WriteOptions::fixture()
         },
         |tx| event(tx, "x", "Changed"),
     );
@@ -751,7 +752,7 @@ pub fn cancellation_and_deadlines(h: &mut dyn StoreHarness) {
         &*s,
         WriteOptions {
             cancellation: Some(token),
-            ..Default::default()
+            ..WriteOptions::fixture()
         },
         move |tx| {
             let e = event(tx, "x", "Changed")?;
@@ -768,7 +769,7 @@ pub fn cancellation_and_deadlines(h: &mut dyn StoreHarness) {
         &*s,
         WriteOptions {
             cancellation: Some(token.clone()),
-            ..Default::default()
+            ..WriteOptions::fixture()
         },
         |tx| event(tx, "y", "Changed"),
     )
@@ -793,6 +794,76 @@ pub fn cancellation_and_deadlines(h: &mut dyn StoreHarness) {
     assert!(matches!(out, Err(StorageError::Cancelled)));
 }
 
+/// A raw transaction's history takes no authority-history record, by aggregate or by kind; the
+/// capability path takes the same records.
+pub fn raw_history_refuses_authority_records(h: &mut dyn StoreHarness) {
+    let s = h.open();
+    let before = counts(&*s).0;
+    let forged = [
+        ("principal_authority", "Noted"),
+        ("authority_grant", "Noted"),
+        ("repository_deletion", "Noted"),
+        ("fixture", "PrincipalAuthorityBound"),
+        ("fixture", "PrincipalAuthorityRevoked"),
+        ("fixture", "AuthorityGrantIssued"),
+        ("fixture", "AuthorityGrantRevoked"),
+        ("fixture", "RepositoryDeletionConfirmed"),
+        ("fixture", "RepositoryDeletionAuthorized"),
+        ("fixture", "RepositoryDeletionCompleted"),
+        ("fixture", "RepositoryDeletionPartial"),
+    ];
+    for (aggregate, kind) in forged {
+        let refused = write(&*s, move |tx| {
+            let id = EventId(tx.new_id(IdKind::Event));
+            let actor = tx.store().host_actor.clone();
+            Ok(matches!(
+                tx.history().append(NewEvent {
+                    id,
+                    actor,
+                    project_id: None,
+                    root_id: None,
+                    operation_id: None,
+                    aggregate_kind: aggregate.into(),
+                    aggregate_id: "forged".into(),
+                    aggregate_revision: 1,
+                    kind: kind.into(),
+                    payload: json!({}),
+                }),
+                Err(StorageError::InvalidRecord(_))
+            ))
+        })
+        .unwrap();
+        assert!(refused, "a raw transaction appended {aggregate}/{kind}");
+    }
+    assert_eq!(counts(&*s).0, before, "nothing forged was stored");
+    write(&*s, move |tx| {
+        let actor = tx.store().host_actor.clone();
+        let capability = crate::authority::AuthorityCapability::fixture();
+        for (i, (aggregate, kind)) in forged.into_iter().enumerate() {
+            let id = EventId(tx.new_id(IdKind::Event));
+            tx.authority_history(&capability, &actor)?
+                .append(NewEvent {
+                    id,
+                    actor: actor.clone(),
+                    project_id: None,
+                    root_id: None,
+                    operation_id: None,
+                    aggregate_kind: aggregate.into(),
+                    aggregate_id: format!("seeded-{i}"),
+                    aggregate_revision: 1,
+                    kind: kind.into(),
+                    payload: json!({}),
+                })?;
+        }
+        Ok(())
+    })
+    .unwrap();
+    assert_eq!(
+        counts(&*s).0,
+        before + forged.len(),
+        "the capability path appends"
+    );
+}
 pub fn history_paging(h: &mut dyn StoreHarness) {
     let s = h.open();
     write(&*s, |tx| {

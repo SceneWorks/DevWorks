@@ -89,7 +89,7 @@ impl WriteFence {
         if self.is_closed() {
             return Err(StorageError::Cancelled);
         }
-        let result = run_write(store, WriteOptions::default(), work);
+        let result = run_write(store, WriteOptions::observed(), work);
         if let Some(id) = result.as_ref().ok().and_then(attempt) {
             self.admitted
                 .lock()

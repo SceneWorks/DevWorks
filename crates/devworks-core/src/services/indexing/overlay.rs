@@ -37,7 +37,6 @@
 //! or when its index is removed. Only the run an overlay names can change its state. An ended
 //! ref overlay's record is pruned by record retention ([`prune_ref_overlays`]).
 use super::config::{EffectiveConfig, MANIFEST_DIRECTORIES};
-use super::git::{Change, EMPTY_TREE_SHA1, EMPTY_TREE_SHA256, TreeEntry};
 use super::worker::{
     Exec, PlanUnit, Stop, build_unit, coverage_of, dir_key, link_generation, plan, push_warning,
     retire_unused, staged_keys,
@@ -54,8 +53,9 @@ use crate::ports::storage::*;
 use crate::protocol::records::Severity;
 use crate::protocol::results::{DomainDecision, OperationResult};
 use crate::protocol::{DomainErrorCode, Id, RevisionDimension};
+use crate::services::git::client::{Change, EMPTY_TREE_SHA1, EMPTY_TREE_SHA256, TreeEntry};
+use crate::services::kernel::{Failure, Refusal, rev};
 use crate::services::projects::visible_repository;
-use crate::services::sessions::{Failure, Refusal, rev};
 use crate::settings::catalog::{OVERLAY_RECORD_RETENTION_DAYS_KEY, OVERLAY_RECORDS_KEPT_KEY};
 use serde_json::json;
 use std::collections::{BTreeMap, BTreeSet};
@@ -170,7 +170,7 @@ fn observe_inner(
     let wt = wt.ok_or("the worktree is not a recorded worktree of this repository")?;
     let base = base.ok_or("the repository has no published baseline")?;
     let ctx = env.host_context(None);
-    let git = super::git::Git {
+    let git = crate::services::git::client::Git {
         runner: &*env.helpers,
         ctx: &ctx,
         program: &env.settings.git_program,
@@ -768,7 +768,7 @@ pub(crate) fn prune_ref_overlays(
         if pruned >= usize::from(batch) || stop() {
             break;
         }
-        let removed = run_write(&*env.store, WriteOptions::default(), move |tx| {
+        let removed = run_write(&*env.store, WriteOptions::housekeeping(), move |tx| {
             let Some(cur) = tx.indexing().overlay(&o.id)? else {
                 return Ok(false);
             };
@@ -883,7 +883,7 @@ pub(crate) fn observe_all(
         }
         let ttl = env.settings.overlay_ttl_ms;
         let max = env.settings.max_attempts;
-        let did = run_write(&*env.store, WriteOptions::default(), move |tx| {
+        let did = run_write(&*env.store, WriteOptions::observed(), move |tx| {
             let Some(cur) = tx.indexing().overlay(&o.id)? else {
                 return Ok((false, false));
             };

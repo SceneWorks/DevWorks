@@ -25,7 +25,7 @@ use crate::protocol::support::BoundedText;
 use crate::registry::Mode;
 use crate::services::artifacts::observed::Observed;
 use crate::services::effect::{EffectOutcome, JournaledEffect};
-use crate::services::sessions::rev;
+use crate::services::kernel::rev;
 use base64::Engine as _;
 use serde_json::json;
 use std::collections::BTreeSet;
@@ -224,7 +224,7 @@ impl ContainerService {
         terminal: ContainerPhase,
     ) -> Result<StoredContainer, EffectOutcome> {
         let resources = self.resources.clone();
-        run_write(&*self.store, WriteOptions::default(), move |tx| {
+        run_write(&*self.store, WriteOptions::settlement(), move |tx| {
             let row = tx
                 .resources()
                 .container(&id)?
@@ -371,7 +371,7 @@ impl ContainerService {
         let lease_ids = row.resource_lease_ids.clone();
         let project = row.project_id.clone();
         let holder = format!("session:{}", row.id.as_str());
-        let leases_valid = run_write(&*self.store, WriteOptions::default(), move |tx| {
+        let leases_valid = run_write(&*self.store, WriteOptions::settlement(), move |tx| {
             if lease_ids.len() != expected_resources.len() {
                 return Ok(false);
             }
@@ -987,7 +987,7 @@ impl ContainerService {
             let lease_ids = row.resource_lease_ids.clone();
             let project = row.project_id.clone();
             let holder = format!("session:{}", row.id.as_str());
-            let valid = run_write(&*self.store, WriteOptions::default(), move |tx| {
+            let valid = run_write(&*self.store, WriteOptions::settlement(), move |tx| {
                 for id in &lease_ids {
                     let Some(lease) = tx.resources().lease(id)? else {
                         return Ok(false);

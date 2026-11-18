@@ -4,7 +4,7 @@ use crate::{
     protocol::Id,
     services::{
         conventions::model,
-        sessions::{Failure, Refusal},
+        kernel::{Failure, Refusal},
     },
 };
 use sha2::{Digest, Sha256};

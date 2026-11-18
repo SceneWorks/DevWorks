@@ -16,7 +16,7 @@ fn write<T: Send + 'static>(
     s: &SqliteStore,
     f: impl FnOnce(&mut dyn WriteTransaction) -> Result<T, StorageError> + Send + 'static,
 ) -> T {
-    run_write(s, WriteOptions::default(), f).unwrap()
+    run_write(s, WriteOptions::fixture(), f).unwrap()
 }
 fn repository(tx: &mut dyn WriteTransaction, repo: &str) -> Result<(), StorageError> {
     tx.projects().insert_repository(&StoredRepository {
@@ -483,7 +483,7 @@ fn graph31_trust_is_view_content_bound_revisioned_and_concurrent_cas_has_one_win
     bad.revision = 3;
     let scope = a.clone();
     assert!(
-        run_write(&*f.s, WriteOptions::default(), move |tx| tx
+        run_write(&*f.s, WriteOptions::fixture(), move |tx| tx
             .graph()
             .put_graph_trust(&scope, &bad, 2))
         .is_err()
@@ -499,7 +499,7 @@ fn graph31_trust_is_view_content_bound_revisioned_and_concurrent_cas_has_one_win
         row.trusted = trusted;
         workers.push(std::thread::spawn(move || {
             gate.wait();
-            run_write(&*s, WriteOptions::default(), move |tx| {
+            run_write(&*s, WriteOptions::fixture(), move |tx| {
                 tx.graph().put_graph_trust(&scope, &row, 2)
             })
         }));
@@ -723,13 +723,13 @@ fn graph31_pin_renewal_ownership_expiry_reopen_and_gc_are_atomic() {
     }
     let held_view = p.scope.views[0].view_id.clone();
     assert!(
-        run_write(&*f.s, WriteOptions::default(), move |tx| tx
+        run_write(&*f.s, WriteOptions::fixture(), move |tx| tx
             .indexing()
             .remove_view(&held_view))
         .is_err()
     );
     assert!(
-        run_write(&*f.s, WriteOptions::default(), |tx| {
+        run_write(&*f.s, WriteOptions::fixture(), |tx| {
             let mut g = tx.indexing().generation(&id("gb"))?.unwrap();
             g.state = GEN_RETIRED.into();
             tx.indexing().update_generation(&g)
@@ -737,7 +737,7 @@ fn graph31_pin_renewal_ownership_expiry_reopen_and_gc_are_atomic() {
         .is_err()
     );
     assert!(
-        run_write(&*f.s, WriteOptions::default(), |tx| tx
+        run_write(&*f.s, WriteOptions::fixture(), |tx| tx
             .graph()
             .renew_graph_pin(&id("lease"), "wrong-owner", 1, T0 + 2000))
         .is_err()
@@ -758,7 +758,7 @@ fn graph31_pin_renewal_ownership_expiry_reopen_and_gc_are_atomic() {
     let mut old_new = pin(&f, "new-pin-for-old");
     old_new.created_at_ms = T0;
     assert!(
-        run_write(&*f.s, WriteOptions::default(), move |tx| tx
+        run_write(&*f.s, WriteOptions::fixture(), move |tx| tx
             .graph()
             .acquire_graph_pin(&old_new))
         .is_err()
@@ -770,7 +770,7 @@ fn graph31_pin_renewal_ownership_expiry_reopen_and_gc_are_atomic() {
         let gate = barrier.clone();
         workers.push(std::thread::spawn(move || {
             gate.wait();
-            run_write(&*s, WriteOptions::default(), |tx| {
+            run_write(&*s, WriteOptions::fixture(), |tx| {
                 tx.graph()
                     .renew_graph_pin(&id("lease"), "actual-owner", 1, T0 + 2000)
             })
@@ -799,7 +799,7 @@ fn graph31_pin_renewal_ownership_expiry_reopen_and_gc_are_atomic() {
         .0
         .store(T0 + 2000, std::sync::atomic::Ordering::SeqCst);
     assert!(
-        run_write(&s, WriteOptions::default(), |tx| tx
+        run_write(&s, WriteOptions::fixture(), |tx| tx
             .graph()
             .renew_graph_pin(&id("lease"), "actual-owner", 2, T0 + 3000))
         .is_err()
@@ -873,7 +873,7 @@ fn graph31_source_is_private_immutable_shared_inherited_and_backup_retained() {
     assert!(read(&s, |r| r.artifacts().pinned(&digest)));
     let digest2 = digest.clone();
     assert!(
-        run_write(&s, WriteOptions::default(), move |tx| {
+        run_write(&s, WriteOptions::fixture(), move |tx| {
             let mut row = tx.graph().graph_source_capture(&id("capture-a"))?.unwrap();
             row.blob_digest = digest2;
             row.byte_count = 4;
@@ -935,7 +935,7 @@ fn graph31_capture_binding_fault_rolls_back_and_migration_is_additive() {
         repository(tx, "repo")?;
         generation(tx, "g", "repo", LAYER_BASELINE)
     });
-    let result = run_write(&s, WriteOptions::default(), |tx| {
+    let result = run_write(&s, WriteOptions::fixture(), |tx| {
         let sha = sha256_hex(b"abc");
         tx.artifacts().put_blob(&sha, 3, "generation", "path")?;
         tx.graph()
@@ -981,7 +981,7 @@ fn graph31_pin_binding_failures_write_nothing_and_broken_child_is_never_a_valid_
             _ => record.scope.views[0].view_digest = "e".repeat(64),
         }
         assert!(
-            run_write(&*f.s, WriteOptions::default(), move |tx| tx
+            run_write(&*f.s, WriteOptions::fixture(), move |tx| tx
                 .graph()
                 .acquire_graph_pin(&record))
             .is_err()
@@ -1271,7 +1271,7 @@ fn graph31_unavailable_selection_stays_immutable_when_repository_becomes_indexed
     overlapping.id = id("bad-partial");
     overlapping.unavailable_repositories[0].repository_id = id("a");
     assert!(
-        run_write(&s, WriteOptions::default(), move |tx| tx
+        run_write(&s, WriteOptions::fixture(), move |tx| tx
             .graph()
             .acquire_graph_pin(&overlapping))
         .is_err()

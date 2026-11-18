@@ -9,7 +9,7 @@ use crate::protocol::support::{BoundedList, BoundedText};
 use crate::protocol::{CorrelationId, DomainErrorCode, DomainFault, Id};
 use crate::registry::{Mode, SchemaRevision};
 use crate::services::cursor::CursorBinding;
-use crate::services::sessions::{Failure, Refusal, counter, query_fault, rev};
+use crate::services::kernel::{Failure, Refusal, counter, query_fault, rev};
 use serde_json::json;
 
 type R<T> = Result<T, Failure>;

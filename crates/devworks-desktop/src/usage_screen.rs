@@ -215,6 +215,13 @@ pub enum Action {
     OpenSession(String),
 }
 impl UsageScreen {
+    /// Shows the prices of `models` (the model IDs the embedding setup priced), current only.
+    pub(crate) fn show_prices(&mut self, models: String) {
+        self.price_models = models;
+        self.price_providers.clear();
+        self.price_snapshots.clear();
+        self.history = false;
+    }
     pub fn kind(&self) -> &'static str {
         if self.tab == 1 {
             "Attempts"

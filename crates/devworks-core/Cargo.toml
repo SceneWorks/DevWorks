@@ -30,6 +30,10 @@ url = "=2.5.8"
 # The same pin and features as devworks-adapters, so it adds no package to the lockfile.
 toml = { version = "=1.1.8", default-features = false, features = ["parse", "serde", "preserve_order"] }
 
+# Reads a repository's `.yarnrc.yml` event by event, so anchors, aliases, merge keys and tags
+# can be refused before any value is resolved.
+yaml-rust2 = { version = "=0.13.0", default-features = false }
+
 [features]
 # Reusable behavioral contract suite for `ports::storage` implementations (STORE-11).
 contract-suite = []

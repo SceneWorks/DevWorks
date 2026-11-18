@@ -143,6 +143,17 @@ impl Harness {
     pub fn clock(&self) -> Arc<dyn Clock> {
         self.clock.clone()
     }
+    /// The artifact service over `ports` and `store` for a fixture that drives it directly
+    /// (seeding, reading) before or beside boot. The booted runtime builds its own from the same
+    /// ports through the one engine builder (`CoreServices`); read that from the `Runtime`.
+    pub fn artifact_service(
+        &self,
+        store: &Arc<dyn devworks_core::ports::storage::ApplicationStore>,
+        ports: &devworks_engine::ArtifactComposition,
+    ) -> Arc<devworks_core::services::artifacts::ArtifactService> {
+        let ids: Arc<dyn devworks_core::ports::IdSource> = self.ids.clone();
+        devworks_engine::CoreServices::for_fixture(store, &self.clock(), &ids, ports).artifacts
+    }
 }
 
 /// The SQLite store with a probe that counts its work: read snapshots, SQLite virtual-machine
@@ -337,7 +348,7 @@ pub fn write<T: Send + 'static>(
     s: &dyn ApplicationStore,
     f: impl FnOnce(&mut dyn WriteTransaction) -> Result<T, StorageError> + Send + 'static,
 ) -> Result<T, StorageError> {
-    run_write(s, WriteOptions::default(), f)
+    run_write(s, WriteOptions::fixture(), f)
 }
 pub fn read<T>(
     s: &dyn ApplicationStore,

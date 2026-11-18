@@ -3,7 +3,7 @@ use super::*;
 fn exact_artifact_version_witness_survives_new_latest_but_deleted_bytes_never_publish() {
     let h = Harness::new();
     let store = h.store();
-    let (owner, first, second) = run_write(&store, WriteOptions::default(), |tx| {
+    let (owner, first, second) = run_write(&store, WriteOptions::fixture(), |tx| {
         let scope = KnowledgeScope::Workspace;
         let a = artifact(tx, "body", &scope, "alpha")?;
         let owner = record("rules", scope, Some(a));
@@ -95,7 +95,7 @@ fn exact_artifact_version_witness_survives_new_latest_but_deleted_bytes_never_pu
 fn attachment_only_revisions_reuse_exact_body_index_but_same_digest_new_version_does_not() {
     let h = Harness::new();
     let store = h.store();
-    run_write(&store, WriteOptions::default(), |tx| {
+    run_write(&store, WriteOptions::fixture(), |tx| {
         let scope = KnowledgeScope::Workspace;
         let body = artifact(tx, "body", &scope, "alpha")?;
         let owner = record("owner", scope.clone(), Some(body.clone()));
@@ -208,7 +208,7 @@ fn post_section(
 fn huge_heading_source_spans_shared_dictionary_exact_batches_and_compact_lexical_results() {
     let h = Harness::new();
     let store = h.store();
-    let generation = run_write(&store, WriteOptions::default(), |tx| {
+    let generation = run_write(&store, WriteOptions::fixture(), |tx| {
         tx.conventions()
             .put_convention_embedding_space(&super::retrieval::space())?;
         let heading = "q".repeat(8 * 1024 * 1024);
@@ -396,7 +396,7 @@ fn huge_heading_source_spans_shared_dictionary_exact_batches_and_compact_lexical
 fn additive_term_batches_require_complete_source_counts_and_replay_exactly() {
     let h = Harness::new();
     let store = h.store();
-    run_write(&store, WriteOptions::default(), |tx| {
+    run_write(&store, WriteOptions::fixture(), |tx| {
         let text = format!("# {}\nbody", "alpha ".repeat(750));
         let mut owner = record(
             "batch-owner",
@@ -485,7 +485,7 @@ fn additive_term_batches_require_complete_source_counts_and_replay_exactly() {
 fn deletion_cascades_resource_association_history_in_same_revision_transaction() {
     let h = Harness::new();
     let store = h.store();
-    let (owner, resource) = run_write(&store, WriteOptions::default(), |tx| {
+    let (owner, resource) = run_write(&store, WriteOptions::fixture(), |tx| {
         let owner = record("deleting", KnowledgeScope::Workspace, None);
         tx.conventions().create_convention(&owner)?;
         let resource = StoredConventionResource {
@@ -507,7 +507,7 @@ fn deletion_cascades_resource_association_history_in_same_revision_transaction()
     .unwrap();
     let o = owner.clone();
     let r = resource.clone();
-    run_write(&store, WriteOptions::default(), move |tx| {
+    run_write(&store, WriteOptions::fixture(), move |tx| {
         let mut deleted = next(&o);
         deleted.lifecycle = "Deleted".into();
         tx.conventions().revise_convention(&deleted, 1)?;
@@ -533,7 +533,7 @@ fn deletion_cascades_resource_association_history_in_same_revision_transaction()
     .unwrap();
     let stale = resource;
     assert!(
-        run_write(&store, WriteOptions::default(), move |tx| {
+        run_write(&store, WriteOptions::fixture(), move |tx| {
             let mut r = stale;
             r.revision = 3;
             r.convention_revision = 2;
@@ -549,7 +549,7 @@ fn deletion_cascades_resource_association_history_in_same_revision_transaction()
 fn small_heading_caches_are_exact_source_segments_once_and_large_or_nul_segments_keep_spans() {
     let h = Harness::new();
     let store = h.store();
-    let (generation, source_bytes) = run_write(&store, WriteOptions::default(), |tx| {
+    let (generation, source_bytes) = run_write(&store, WriteOptions::fixture(), |tx| {
         let large = "λ".repeat(32769);
         let source = format!(
             "# λ hello\r\nalpha\n## β two\r\nbeta\n# nul\0title\r\ngamma\n# {large}\r\ndelta"
@@ -665,7 +665,7 @@ fn small_heading_caches_are_exact_source_segments_once_and_large_or_nul_segments
 fn queued_refresh_keeps_valid_published_coverage_and_old_space_vectors_never_qualify_new_space() {
     let h = Harness::new();
     let store = h.store();
-    run_write(&store,WriteOptions::default(),|tx|{
+    run_write(&store,WriteOptions::fixture(),|tx|{
   let old_space=super::retrieval::space();let mut next_space=old_space.clone();next_space.id="new-exact-space".into();next_space.configuration_digest="d".repeat(64);tx.conventions().put_convention_embedding_space(&old_space)?;tx.conventions().put_convention_embedding_space(&next_space)?;
   let owner=record("head-owner",KnowledgeScope::Workspace,Some(artifact(tx,"head-source",&KnowledgeScope::Workspace,"alpha")?));tx.conventions().create_convention(&owner)?;
   let current=index(tx,&owner,"current-head",Some(&old_space.id))?;tx.conventions().stage_convention_index(&current)?;stage_chunks(tx,&current.generation_id,&[chunk(&current,0,"alpha",1,Some(vec![1.0,0.0]))])?;tx.conventions().publish_convention_index(&current.generation_id,1,None,1)?;

@@ -13,6 +13,7 @@
 use crate::store;
 use crate::workers::Ticker;
 use devworks_core::ports::Clock;
+use devworks_core::ports::storage::WriteOptions;
 use devworks_core::ports::storage::{ApplicationStore, StorageError, StoredResource};
 use devworks_core::services::process::{ProcessSupervisor, RecoveryReport, ShutdownReport};
 use devworks_core::services::resources::{
@@ -65,10 +66,11 @@ impl Housekeeper {
 
     /// Registers `machine` resources, then recovers earlier boots' trees and leases.
     pub async fn boot(&self, machine: Vec<MachineResource>) -> Result<BootReport, StorageError> {
-        let registered: Vec<StoredResource> = store::write(&self.store, move |tx| {
-            machine.iter().map(|m| register_machine(tx, m)).collect()
-        })
-        .await?;
+        let registered: Vec<StoredResource> =
+            store::write(&self.store, WriteOptions::recovery(), move |tx| {
+                machine.iter().map(|m| register_machine(tx, m)).collect()
+            })
+            .await?;
         let supervisor = self.supervisor.clone();
         let recovery = tokio::task::spawn_blocking(move || supervisor.recover())
             .await
@@ -99,7 +101,10 @@ impl Housekeeper {
             ReconcileCause::Sweep
         };
         let (resources, c) = (self.resources.clone(), cause.clone());
-        let report = store::write(&self.store, move |tx| resources.reconcile(tx, c)).await?;
+        let report = store::write(&self.store, WriteOptions::recovery(), move |tx| {
+            resources.reconcile(tx, c)
+        })
+        .await?;
         Ok((cause, report))
     }
 

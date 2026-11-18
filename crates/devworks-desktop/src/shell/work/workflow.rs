@@ -195,7 +195,7 @@ pub enum WorkflowAction {
     Reload(String),
 }
 
-impl Shell {
+impl WorkCtl<'_, '_> {
     pub(super) fn load_workflow(&mut self, project: &str, replace: bool) {
         let generation = self
             .work
@@ -203,7 +203,7 @@ impl Shell {
             .entry(project.into())
             .or_default()
             .generation;
-        if !replace && self.pending(&Slot::WorkWorkflow(project.into(), generation)) {
+        if !replace && self.pending(&WorkSlot::WorkWorkflow(project.into(), generation)) {
             return;
         }
         let state = self.work.workflows.entry(project.into()).or_default();
@@ -212,7 +212,7 @@ impl Shell {
         let generation = state.generation;
         let p = project.to_owned();
         self.query(
-            Slot::WorkWorkflow(p.clone(), generation),
+            WorkSlot::WorkWorkflow(p.clone(), generation),
             "Loading project workflow",
             "workflows.list",
             move |b| wops::workflow_list(b, &p, None),
@@ -227,11 +227,11 @@ impl Shell {
         let key = (project.to_owned(), feature.clone());
         if lease.is_some()
             && (self.work.allocation_busy.contains(&key)
-                || self.waiting(&Slot::AllocationClaim(project.into(), feature.clone())))
+                || self.waiting(&WorkSlot::AllocationClaim(project.into(), feature.clone())))
         {
             return;
         }
-        let slot = Slot::AllocationQueue(project.into(), feature.clone(), lease);
+        let slot = WorkSlot::AllocationQueue(project.into(), feature.clone(), lease);
         if self.waiting(&slot) {
             return;
         }
@@ -265,13 +265,13 @@ impl Shell {
         }
     }
     pub(super) fn inspect_allocation(&mut self, claim: &str) {
-        if self.pending(&Slot::AllocationInspect(claim.into())) {
+        if self.pending(&WorkSlot::AllocationInspect(claim.into())) {
             return;
         }
         let id = claim.to_owned();
         self.work.allocation_inspect_errors.remove(claim);
         self.query(
-            Slot::AllocationInspect(id.clone()),
+            WorkSlot::AllocationInspect(id.clone()),
             "Inspecting work claim",
             "next_work.inspect_claim",
             move |b| wops::allocation_inspect(b, &id),
@@ -298,7 +298,7 @@ impl Shell {
         }
     }
     pub(super) fn release_allocation(&mut self, id: &str) {
-        if self.waiting(&Slot::AllocationRelease(id.into())) {
+        if self.waiting(&WorkSlot::AllocationRelease(id.into())) {
             return;
         }
         let Some(claim) = self.work.allocation_claims.get(id) else {
@@ -306,7 +306,7 @@ impl Shell {
         };
         let input = release_request(claim);
         self.command(
-            Slot::AllocationRelease(id.into()),
+            WorkSlot::AllocationRelease(id.into()),
             "Releasing work claim",
             "next_work.release_claim",
             move |b| wops::allocation_command(b, input),
@@ -320,11 +320,11 @@ impl Shell {
                 operation,
                 input,
             } => {
-                if self.waiting(&Slot::WorkWorkflowCommand(project.clone())) {
+                if self.waiting(&WorkSlot::WorkWorkflowCommand(project.clone())) {
                     return;
                 }
                 if self.command(
-                    Slot::WorkWorkflowCommand(project.clone()),
+                    WorkSlot::WorkWorkflowCommand(project.clone()),
                     "Changing project workflow",
                     operation,
                     move |b| wops::workflow_command(b, input),
@@ -339,8 +339,13 @@ impl Shell {
             }
         }
     }
-    pub(super) fn apply_workflow(&mut self, slot: Slot, reply: Reply) -> Option<(Slot, Reply)> {
-        if let (Slot::AllocationClaim(project, feature), Reply::Command(outcome)) = (&slot, &reply)
+    pub(super) fn apply_workflow(
+        &mut self,
+        slot: WorkSlot,
+        reply: Reply,
+    ) -> Option<(WorkSlot, Reply)> {
+        if let (WorkSlot::AllocationClaim(project, feature), Reply::Command(outcome)) =
+            (&slot, &reply)
             && !is_unknown(outcome)
         {
             self.work
@@ -348,7 +353,7 @@ impl Shell {
                 .remove(&(project.clone(), feature.clone()));
         }
         match (slot, reply) {
-            (Slot::WorkWorkflow(project, generation), Reply::Query(query)) => {
+            (WorkSlot::WorkWorkflow(project, generation), Reply::Query(query)) => {
                 let state = self.work.workflows.entry(project.clone()).or_default();
                 if generation != state.generation {
                     return None;
@@ -358,7 +363,7 @@ impl Shell {
                         state.gathering.extend(rows);
                         if let Some(cursor) = next {
                             self.query(
-                                Slot::WorkWorkflow(project.clone(), generation),
+                                WorkSlot::WorkWorkflow(project.clone(), generation),
                                 "Loading project workflow",
                                 "workflows.list",
                                 move |b| wops::workflow_list(b, &project, Some(&cursor)),
@@ -399,7 +404,7 @@ impl Shell {
                     }
                 }
             }
-            (Slot::WorkWorkflowCommand(project), Reply::Command(outcome)) => {
+            (WorkSlot::WorkWorkflowCommand(project), Reply::Command(outcome)) => {
                 let unknown = is_unknown(&outcome);
                 if !unknown {
                     self.work.workflows.entry(project.clone()).or_default().busy = false;
@@ -423,7 +428,7 @@ impl Shell {
                     }
                 }
             }
-            (Slot::AllocationQueue(project, feature, lease), Reply::Query(query)) => {
+            (WorkSlot::AllocationQueue(project, feature, lease), Reply::Query(query)) => {
                 match wops::queue_snapshot(query) {
                     Ok(snapshot) => {
                         self.work
@@ -443,7 +448,7 @@ impl Shell {
                                 filters.claim(&project, feature.as_deref(), &snapshot, lease);
                             let key = (project.clone(), feature.clone());
                             if !self.command(
-                                Slot::AllocationClaim(project, feature),
+                                WorkSlot::AllocationClaim(project, feature),
                                 "Selecting work",
                                 operation,
                                 move |b| wops::allocation_command(b, input),
@@ -459,7 +464,7 @@ impl Shell {
                     }
                 }
             }
-            (Slot::AllocationClaim(_, _), Reply::Command(outcome)) => {
+            (WorkSlot::AllocationClaim(_, _), Reply::Command(outcome)) => {
                 match wops::allocation_selection(outcome) {
                     Ok(AllocationSelection::Current(AllocationOutcome::Claimed {
                         claim,
@@ -498,7 +503,7 @@ impl Shell {
                     Err(error) => self.work_failure("Selecting work", error),
                 }
             }
-            (Slot::AllocationRelease(_), Reply::Command(outcome)) => {
+            (WorkSlot::AllocationRelease(_), Reply::Command(outcome)) => {
                 match wops::allocation_released(outcome) {
                     Ok(claim) => {
                         self.work.message = Some((
@@ -513,7 +518,7 @@ impl Shell {
                     Err(error) => self.work_failure("Releasing work", error),
                 }
             }
-            (Slot::AllocationInspect(id), Reply::Query(query)) => {
+            (WorkSlot::AllocationInspect(id), Reply::Query(query)) => {
                 match wops::inspected_claim(query) {
                     Ok(claim) => {
                         self.work.allocation_claims.insert(id, claim);
@@ -558,11 +563,11 @@ impl Shell {
         ));
         self.load_work();
     }
-    pub(super) fn workflow_dialog(&mut self, ctx: &egui::Context, actions: &mut Vec<Action>) {
+    pub(crate) fn workflow_dialog(&mut self, ctx: &egui::Context, actions: &mut Vec<Action>) {
         let Some(project) = self.work.of.clone() else {
             return;
         };
-        let waiting = self.waiting(&Slot::WorkWorkflowCommand(project.clone()));
+        let waiting = self.waiting(&WorkSlot::WorkWorkflowCommand(project.clone()));
         let Some(workflow) = self.work.workflows.get_mut(&project) else {
             return;
         };
@@ -629,7 +634,7 @@ pub(crate) fn next_task(
         ));
     }
 }
-pub(super) fn controls(
+pub(crate) fn controls(
     ui: &mut Ui,
     work: &mut WorkUi,
     enabled: bool,

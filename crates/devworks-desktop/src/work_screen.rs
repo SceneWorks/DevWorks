@@ -2,9 +2,14 @@
 //! Kanban board and its accessible ordering controls. Feature and card detail and the plan
 //! editor are in [`detail`]. They draw [`WorkUi`] state and report what the user did as
 //! actions the shell submits (`shell/work.rs`).
+pub mod activity;
 pub mod detail;
+pub mod features;
+pub mod issues;
+pub mod messages;
+pub mod overview;
 use crate::frame;
-use crate::shell::Shell;
+use crate::shell::ListState;
 use crate::theme;
 use crate::widgets::{self, Tone, ViewState, chip};
 use devworks_core::protocol::Id;
@@ -338,7 +343,7 @@ pub(crate) fn feature_list(
             .response
             .widget_info(|| egui::WidgetInfo::labeled(egui::Role::ComboBox, true, "Status filter"));
     });
-    if !Shell::list_state(ui, &work.features, "features") {
+    if !list_state(ui, &work.features, "features") {
         return;
     }
     let all = &work.features.items;
@@ -428,7 +433,7 @@ pub(crate) fn issue_list(
             .desired_width(240.0),
     );
     r.widget_info(|| egui::WidgetInfo::labeled(egui::Role::TextInput, true, "Search issues"));
-    if !Shell::list_state(ui, &work.cards, "issues") {
+    if !list_state(ui, &work.cards, "issues") {
         return;
     }
     let standalone: Vec<&WorkRecord> = work
@@ -522,9 +527,7 @@ pub(crate) fn board(
     waiting: &BTreeSet<String>,
     actions: &mut Vec<Action>,
 ) {
-    if !Shell::list_state(ui, &work.features, "features")
-        || !Shell::list_state(ui, &work.cards, "cards")
-    {
+    if !list_state(ui, &work.features, "features") || !list_state(ui, &work.cards, "cards") {
         return;
     }
     let label = work
@@ -712,4 +715,40 @@ pub(crate) fn board(
     if let Some((c, to)) = dropped {
         actions.push(Action::Move(c, to));
     }
+}
+
+pub(crate) fn no_project(ui: &mut Ui, online: &Result<(), String>) {
+    let state = match online {
+        Err(reason) => ViewState::Offline {
+            reason: reason.clone(),
+        },
+        Ok(()) => ViewState::Empty {
+            title: "No project selected".into(),
+            body: "Select a project in the navigation to see its work.".into(),
+        },
+    };
+    widgets::state_block(ui, &state);
+}
+pub(crate) fn list_state(ui: &mut Ui, list: &ListState<WorkRecord>, what: &str) -> bool {
+    if let Some(e) = &list.error {
+        widgets::state_block(
+            ui,
+            &if list.loaded {
+                ViewState::Stale { what: what.into() }
+            } else {
+                ViewState::Failed {
+                    what: what.into(),
+                    error: e.clone(),
+                }
+            },
+        );
+        if !list.loaded {
+            return false;
+        }
+    }
+    if !list.loaded {
+        widgets::state_block(ui, &ViewState::Loading { what: what.into() });
+        return false;
+    }
+    true
 }

@@ -10,7 +10,7 @@ use crate::protocol::{
     data::{Direction, GraphResult},
     records::*,
 };
-use crate::services::sessions::Failure;
+use crate::services::kernel::Failure;
 use serde_json::json;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
@@ -28,7 +28,7 @@ pub(super) fn detail(
 ) -> Result<GraphResult, Failure> {
     let target = reader
         .find_id(id)?
-        .ok_or_else(|| crate::services::sessions::not_found("node", id))?;
+        .ok_or_else(|| crate::services::kernel::not_found("node", id))?;
     let (node, property) = reader.node(&target, reader.position.property.clone().as_ref())?;
     if let Some(property) = property {
         reader.next = Some(Position {

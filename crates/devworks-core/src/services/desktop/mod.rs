@@ -35,7 +35,7 @@ use crate::services::artifacts::ArtifactService;
 use crate::services::artifacts::evidence::{Evidence, EvidenceFailure};
 use crate::services::effect::{EffectOutcome, JournaledEffect};
 use crate::services::git::context::SourceBinding;
-use crate::services::sessions::{Failure, Refusal, counter, decided, query_fault, rev};
+use crate::services::kernel::{Failure, Refusal, counter, decided, query_fault, rev};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::sync::Arc;
@@ -994,7 +994,7 @@ impl DesktopService {
         let resources = self.resources.clone();
         let context = ctx.clone();
         let command = job.input.clone();
-        let ticket = run_write(&*self.store, WriteOptions::default(), move |tx| {
+        let ticket = run_write(&*self.store, WriteOptions::settlement(), move |tx| {
             let ticket = resources
                 .authorize_dispatch(
                     tx,
@@ -1159,7 +1159,7 @@ impl QueryHandler for DesktopService {
         if ctx.principal_kind() == PrincipalKind::Agent {
             let capture_ctx = ctx.clone();
             let desktop_id = input.desktop_id.clone();
-            run_write(&*self.store, WriteOptions::default(), move |tx| {
+            run_write(&*self.store, WriteOptions::host_state(), move |tx| {
                 Self::validate_capture_consent(tx, &capture_ctx, &desktop_id)
                     .map_err(|_| StorageError::ScopeDenied)
             })

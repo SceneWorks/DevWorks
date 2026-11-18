@@ -33,8 +33,7 @@ use devworks_core::services::UseCases;
 use devworks_core::services::artifacts::ArtifactService;
 use devworks_core::services::jobs::argument_schema;
 use devworks_core::services::process::{LaunchPolicy, LaunchRequest};
-use devworks_core::services::resources::ResourceService;
-use devworks_core::services::runs::ControlService;
+use devworks_engine::{ArtifactComposition, DiagnosticComposition, KnowledgeComposition};
 use devworks_engine::{Composition, RunComposition, Runtime, RuntimeConfig, boot};
 use serde_json::{Value, json};
 use std::sync::Arc;
@@ -296,16 +295,14 @@ fn boot_over(
     config.housekeeping_interval = Duration::from_secs(3600);
     config.shutdown_grace = Duration::from_millis(50);
     config.shutdown_bound = Duration::from_secs(5);
-    let artifacts = Arc::new(ArtifactService::new(
+    let artifacts = ArtifactComposition::new(
         Arc::new(NativeArtifactFiles::new(
             h.root.clone(),
             h.root.with_extension("cache"),
         )),
         Arc::new(HostArtifactSources::new(h.clock(), h.ids.clone())),
         Arc::new(NativeFilesystem::new()),
-        h.clock(),
-        h.ids.clone(),
-    ));
+    );
     let mut use_cases = UseCases::new().with_queue();
     use_cases.register(DOCS, None, Some(docs.clone()));
     let composition = Composition {
@@ -320,22 +317,18 @@ fn boot_over(
             clock: h.clock(),
         }),
         artifacts,
-        resources: Arc::new(ResourceService::new(h.ids.clone(), h.clock())),
         process_host: host.clone(),
         runs: RunComposition {
             inference,
-            ..RunComposition::new(Arc::new(ControlService::new(h.ids.clone())))
+            ..RunComposition::default()
         },
+        knowledge: KnowledgeComposition::default(),
+        application: Default::default(),
+        web: None,
         power: Arc::new(NoPower),
-        diagnostics: Arc::new(
-            devworks_core::services::diagnostics::DiagnosticService::new(
-                store.clone(),
-                h.ids.clone(),
-                h.clock(),
-                None,
-            ),
-        ),
+        diagnostics: DiagnosticComposition::default(),
         use_cases,
+        test_overrides: Default::default(),
         consumers: Vec::new(),
         indexing: None,
         config,

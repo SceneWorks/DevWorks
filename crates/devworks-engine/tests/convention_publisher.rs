@@ -312,12 +312,10 @@ fn search_input(
         _ => panic!("selected actual search input"),
     }
 }
-fn fault(
-    error: devworks_core::services::sessions::Failure,
-) -> devworks_core::protocol::DomainFault {
+fn fault(error: devworks_core::services::kernel::Failure) -> devworks_core::protocol::DomainFault {
     use devworks_core::{
         protocol::{CorrelationId, DomainErrorCode},
-        services::sessions::{Failure, Refusal},
+        services::kernel::{Failure, Refusal},
     };
     let refusal = match error {
         Failure::Refused(r) => r,
@@ -463,7 +461,7 @@ impl devworks_core::ports::CommandHandler for IndexCommand {
             panic!("actual selected index input")
         };
         self.0.decide_index(ctx, c, tx, input).map_err(|e| match e {
-            devworks_core::services::sessions::Failure::Storage(e) => e.into(),
+            devworks_core::services::kernel::Failure::Storage(e) => e.into(),
             e => panic!("unexpected actual owner refusal {e:?}"),
         })
     }

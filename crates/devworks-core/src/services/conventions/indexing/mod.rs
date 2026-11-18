@@ -87,7 +87,7 @@ impl IndexService {
         T: Send + 'static,
         F: FnOnce(&mut dyn WriteTransaction) -> Result<T, StorageError> + Send + 'static,
     {
-        self.write_options(WriteOptions::default(), work)
+        self.write_options(WriteOptions::host_state(), work)
     }
 
     pub(crate) fn write_options<T, F>(

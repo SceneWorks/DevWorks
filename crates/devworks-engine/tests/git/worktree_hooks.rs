@@ -267,7 +267,7 @@ pub(super) fn assert_reviewed_create(
         let branch = tree.branch.strip_prefix("refs/heads/").unwrap();
         git(source, &["branch", "--", branch, &tree.head.hex]);
         let checkout_argument =
-            devworks_core::services::indexing::git::path_argument(Path::new(&tree.path))
+            devworks_core::services::git::client::path_argument(Path::new(&tree.path))
                 .expect("stored native worktree path is representable by Git");
         git(
             source,

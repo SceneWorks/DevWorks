@@ -131,7 +131,7 @@ fn write<T: Send + 'static>(
     s: &dyn ApplicationStore,
     f: impl FnOnce(&mut dyn WriteTransaction) -> Result<T, StorageError> + Send + 'static,
 ) -> Result<T, StorageError> {
-    run_write(s, WriteOptions::default(), f)
+    run_write(s, WriteOptions::fixture(), f)
 }
 fn append(
     tx: &mut dyn WriteTransaction,
@@ -1228,7 +1228,7 @@ fn spawn_blocker(s: &SqliteStore) -> (mpsc::Sender<()>, mpsc::Receiver<()>) {
     let (started_tx, started_rx) = mpsc::channel::<()>();
     let release_rx = Mutex::new(release_rx);
     s.submit_write(
-        WriteOptions::default(),
+        WriteOptions::fixture(),
         write_job(
             move |_| {
                 started_tx.send(()).unwrap();
@@ -1260,7 +1260,7 @@ fn authoritative_work_has_precedence_with_a_reserved_bulk_share_and_bounded_mail
         s.submit_write(
             WriteOptions {
                 priority,
-                ..Default::default()
+                ..WriteOptions::fixture()
             },
             write_job(
                 move |_| {
@@ -1334,13 +1334,13 @@ fn block_on<F: Future>(f: F) -> F::Output {
 fn async_facade_resolves_after_commit_and_dropping_it_never_rolls_back() {
     let h = Harness::new();
     let s = h.store();
-    let seq = block_on(write_async(&s, WriteOptions::default(), |tx| {
+    let seq = block_on(write_async(&s, WriteOptions::fixture(), |tx| {
         append(tx, "Async", json!({}))
     }))
     .unwrap();
     assert_eq!(sequence(&s), seq);
     // The caller stops waiting immediately; the admitted job still commits.
-    drop(write_async(&s, WriteOptions::default(), |tx| {
+    drop(write_async(&s, WriteOptions::fixture(), |tx| {
         append(tx, "Abandoned", json!({}))
     }));
     write(&s, |_| Ok(())).unwrap(); // FIFO barrier on the same mailbox
@@ -1483,7 +1483,7 @@ fn grant_use_is_consumed_atomically_with_the_receipt() {
     let s = h.store();
     seed(&s);
     write(&s, |tx| {
-        tx.grants().issue(NewGrant {
+        devworks_core::authority::fixture_grants(tx)?.issue(NewGrant {
             id: Id::new("grant-1").unwrap(),
             actor: ActorId(Id::new("user-a").unwrap()),
             root_id: RootId(Id::new("root-a").unwrap()),
@@ -1598,7 +1598,7 @@ fn a_panicking_responder_never_stops_the_write_owner() {
     let h = Harness::new();
     let s = h.store();
     s.submit_write(
-        WriteOptions::default(),
+        WriteOptions::fixture(),
         write_job(
             |tx| append(tx, "Committed", json!({})),
             |_| panic!("responder panicked"),
@@ -1617,7 +1617,7 @@ fn queued_jobs_are_finished_when_the_owner_stops() {
     let (release, _) = spawn_blocker(&s);
     let (tx, rx) = mpsc::channel();
     s.submit_write(
-        WriteOptions::default(),
+        WriteOptions::fixture(),
         write_job(
             |tx| append(tx, "Queued", json!({})),
             move |r| {
@@ -1660,7 +1660,7 @@ fn a_store_dropped_by_its_own_write_job_commits_stops_cleanly_and_frees_the_data
     let held = s.clone();
     let (tx, rx) = mpsc::channel();
     s.submit_write(
-        WriteOptions::default(),
+        WriteOptions::fixture(),
         write_job(
             move |tx| {
                 let committed = append(tx, "Last", json!({}))?;

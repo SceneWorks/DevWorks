@@ -28,7 +28,7 @@ use crate::protocol::records::{
 use crate::protocol::results::{DomainDecision, OperationResult};
 use crate::protocol::{DomainErrorCode, EventId, Id, Revision, RevisionDimension};
 use crate::services::artifacts::{Viewer, visible};
-use crate::services::sessions::{Failure, Refusal, not_found, rev};
+use crate::services::kernel::{Failure, Refusal, not_found, rev};
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 

@@ -168,7 +168,7 @@ fn native_review_purge_preserves_shared_git_and_other_drafts_and_recovers_after_
     let inserted = repository.clone();
     run_write(
         &**engine.host().runtime().store(),
-        WriteOptions::default(),
+        WriteOptions::fixture(),
         move |tx| tx.projects().insert_repository(&inserted),
     )
     .unwrap();

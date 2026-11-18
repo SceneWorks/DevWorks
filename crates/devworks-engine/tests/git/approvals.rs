@@ -143,7 +143,7 @@ pub(super) fn assert_reviewed_commit(
             store: store.clone(),
             fs: Arc::new(NativeFilesystem::new()),
         };
-        let capture = devworks_core::services::indexing::git::Git {
+        let capture = devworks_core::services::git::client::Git {
             runner: &helpers,
             ctx: &agent,
             program: "git",
@@ -452,7 +452,7 @@ fn saved_commit_manifest_honors_repository_filemode_for_new_files() {
             Counter::new(info.restore_epoch).unwrap(),
             Revision::new(1).unwrap(),
         );
-        let capture = devworks_core::services::indexing::git::Git {
+        let capture = devworks_core::services::git::client::Git {
             runner: &helpers,
             ctx: &ctx,
             program: "git",
@@ -539,7 +539,7 @@ fn assert_saved_manifest_matches_staging(prefix_setting: Option<&str>) {
         Counter::new(info.restore_epoch).unwrap(),
         Revision::new(1).unwrap(),
     );
-    let capture = devworks_core::services::indexing::git::Git {
+    let capture = devworks_core::services::git::client::Git {
         runner: &helpers,
         ctx: &ctx,
         program: "git",
@@ -809,7 +809,7 @@ fn approve_owned_force_result(
 }
 
 fn assert_filtered_untracked_manifest_is_nonexecuting(driver: &str, file: &std::ffi::OsStr) {
-    use devworks_core::services::indexing::git::{Git, GitFault};
+    use devworks_core::services::git::client::{Git, GitFault};
     let h = Harness::new();
     let store = h.open();
     let dir = h.root.join("filtered-manifest");

@@ -8,7 +8,7 @@ fn a_non_positive_revision_number_is_invalid_input_not_a_corrupt_store() {
     let h = Harness::new();
     let s = h.store();
     for number in [0, -1] {
-        let result = run_write(&s, WriteOptions::default(), move |tx| {
+        let result = run_write(&s, WriteOptions::fixture(), move |tx| {
             Ok(tx.instructions().set_instruction_revision_state(
                 &Id::new("instruction-a").unwrap(),
                 number,

@@ -785,7 +785,7 @@ fn selected_receive_cancellation_keeps_the_request_key_retryable() {
                     raw_ref,
                     WriteOptions {
                         cancellation: Some(stop),
-                        ..WriteOptions::default()
+                        ..WriteOptions::fixture()
                     },
                 )
                 .unwrap()
@@ -813,7 +813,7 @@ fn selected_receive_cancellation_keeps_the_request_key_retryable() {
                 &raw,
                 WriteOptions {
                     deadline_ms: Some(harness.now() - 1),
-                    ..WriteOptions::default()
+                    ..WriteOptions::fixture()
                 },
             )
             .unwrap(),
@@ -1071,7 +1071,7 @@ fn parked_receives_wake_on_a_delivery_and_on_cancellation() {
                             user,
                             "agents.receive",
                             &raw,
-                            WriteOptions::default(),
+                            WriteOptions::fixture(),
                         )
                         .unwrap()
                 })
@@ -1090,7 +1090,7 @@ fn parked_receives_wake_on_a_delivery_and_on_cancellation() {
                         &raw,
                         WriteOptions {
                             cancellation: Some(stop),
-                            ..WriteOptions::default()
+                            ..WriteOptions::fixture()
                         },
                     )
                     .unwrap()

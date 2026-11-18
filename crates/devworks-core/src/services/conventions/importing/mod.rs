@@ -50,6 +50,6 @@ impl ImportService {
         work: impl FnOnce(&mut dyn WriteTransaction) -> Result<T, StorageError> + Send + 'static,
     ) -> Result<T, StorageError> {
         self.closed
-            .write(self.store.as_ref(), WriteOptions::default(), work)
+            .write(self.store.as_ref(), WriteOptions::host_state(), work)
     }
 }
