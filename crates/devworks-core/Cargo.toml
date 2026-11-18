@@ -41,6 +41,8 @@ contract-suite = []
 # production build does not compile them.
 test-support = []
 [dev-dependencies]
+# Integration tests build the library without cfg(test): they need its test-only helpers.
+devworks-core = { path = ".", features = ["test-support"] }
 # Only tests/extension_scalar_parity.rs: the package protocol mirrors core's wire scalars without
 # depending on core, and that test holds both copies to one corpus.
 devworks-extension-protocol = { path = "../devworks-extension-protocol" }

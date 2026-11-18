@@ -77,7 +77,8 @@ impl Materials for OwnedMaterials<'_> {
         if original != *binding
             || provenance["principalKind"] != "Host"
             || provenance["producedBy"].as_str() != Some(&host)
-            || provenance["derived"]["kind"] != "ProviderNativeContinuation"
+            || !crate::services::artifacts::derivation::DerivedKind::ProviderNativeContinuation
+                .is_in(&provenance)
         {
             return Err(ProviderError::ForeignNative);
         }

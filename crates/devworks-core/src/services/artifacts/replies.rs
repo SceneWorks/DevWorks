@@ -117,12 +117,6 @@ fn names_decision(event: &crate::ports::storage::EventRecord, intent: &Intent) -
         && &event.actor == intent.identity.actor_id()
 }
 
-/// Whether a [`REPLY_CONSUMER`] delivery can never be honoured: its payload is not a publication
-/// intent, it does not name its receipt's own `CommandDecided` decision, or its receipt identity
-/// holds no receipt of that command (the cases [`ReceiptReplies::publish`] poisons). An
-/// incompatible receipt keeps its reply mandatory: publication holds until it can be read. Only
-/// an unhonourable delivery may be acknowledged as poison (`queue.resolve`); every other reply
-/// delivery is retried until published.
 /// Fault target kind of a resolution that would abandon a receipt's mandatory reply
 /// (`Conflict`, retry `Never`): cancelling a [`REPLY_CONSUMER`] delivery, or acknowledging one
 /// as poison while it can still be honoured.
@@ -158,6 +152,12 @@ impl crate::services::queue::ConsumerHook for ReplyQueueHook {
     }
 }
 
+/// Whether a [`REPLY_CONSUMER`] delivery can never be honoured: its payload is not a publication
+/// intent, it does not name its receipt's own `CommandDecided` decision, or its receipt identity
+/// holds no receipt of that command (the cases [`ReceiptReplies::publish`] poisons). An
+/// incompatible receipt keeps its reply mandatory: publication holds until it can be read. Only
+/// an unhonourable delivery may be acknowledged as poison (`queue.resolve`); every other reply
+/// delivery is retried until published.
 pub(crate) fn unhonourable(
     tx: &mut dyn WriteTransaction,
     entry: &QueueEntry,

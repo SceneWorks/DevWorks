@@ -102,7 +102,7 @@ pub trait ConsumerHook: Send + Sync {
 }
 
 /// The queue use cases (all state is in the store; only the consumer hooks are held).
-#[derive(Clone, Default)]
+#[derive(Clone)]
 pub struct QueueService {
     hooks: Vec<std::sync::Arc<dyn ConsumerHook>>,
 }

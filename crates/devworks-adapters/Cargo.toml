@@ -125,6 +125,8 @@ x11rb = { version = "=0.13.2", default-features = false }
 atspi = { version = "=0.29.0", default-features = false }
 
 [dev-dependencies]
+# Integration tests build the library without cfg(test): they need its test-only helpers.
+devworks-adapters = { path = ".", features = ["test-support"] }
 # Shared test doubles and seeding helpers (no production crate depends on it).
 devworks-test-support = { path = "../devworks-test-support" }
 # An in-memory server proves the outgoing stdio protocol handshake without requiring Node,

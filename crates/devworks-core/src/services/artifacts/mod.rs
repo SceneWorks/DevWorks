@@ -545,7 +545,10 @@ pub(crate) fn retained_convention(
                     .is_some_and(|s| !s.is_empty())
                 && derived["inputIndex"].as_u64().is_some_and(|n| n < 32)
         }
-        DerivedKind::HelpTopic | DerivedKind::Instruction | DerivedKind::ConventionImport => false,
+        DerivedKind::HelpTopic
+        | DerivedKind::Instruction
+        | DerivedKind::ConventionImport
+        | DerivedKind::ProviderNativeContinuation => false,
     }
 }
 

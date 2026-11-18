@@ -429,7 +429,8 @@ impl ConventionIndexRepository for Unit<'_> {
                 trusted_derivative(self.conn, &reference, &self.info.host_actor)?;
             let derived = &provenance["derived"];
             if owner.as_deref() != Some(r.actor_id.0.as_str())
-                || derived["kind"] != "ConventionEmbeddingInput"
+                || !devworks_core::services::artifacts::derivation::DerivedKind::ConventionEmbeddingInput
+                    .is_in(&provenance)
                 || derived["requestId"].as_str() != Some(r.request_id.as_str())
                 || derived["contextDigest"] != r.context_digest
                 || derived["embeddingSpace"] != r.embedding_space

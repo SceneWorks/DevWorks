@@ -16,6 +16,7 @@ pub enum DerivedKind {
     ConventionImport,
     EmbeddingProbeInput,
     ConventionEmbeddingInput,
+    ProviderNativeContinuation,
 }
 
 impl DerivedKind {
@@ -29,6 +30,7 @@ impl DerivedKind {
             Self::ConventionImport => "ConventionImport",
             Self::EmbeddingProbeInput => "EmbeddingProbeInput",
             Self::ConventionEmbeddingInput => "ConventionEmbeddingInput",
+            Self::ProviderNativeContinuation => "ProviderNativeContinuation",
         }
     }
 
@@ -41,6 +43,7 @@ impl DerivedKind {
             Self::ConventionImport,
             Self::EmbeddingProbeInput,
             Self::ConventionEmbeddingInput,
+            Self::ProviderNativeContinuation,
         ]
         .into_iter()
         .find(|k| k.as_str() == name)
@@ -79,5 +82,30 @@ impl DerivedKind {
                 | Self::EmbeddingProbeInput
                 | Self::ConventionEmbeddingInput
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::DerivedKind;
+
+    /// SQL filters and other raw readers name these kinds as literals; they must match the enum.
+    #[test]
+    fn stored_names_are_stable() {
+        for (kind, name) in [
+            (DerivedKind::HelpTopic, "HelpTopic"),
+            (DerivedKind::Instruction, "Instruction"),
+            (
+                DerivedKind::ConventionEmbeddingInput,
+                "ConventionEmbeddingInput",
+            ),
+            (
+                DerivedKind::ProviderNativeContinuation,
+                "ProviderNativeContinuation",
+            ),
+        ] {
+            assert_eq!(kind.as_str(), name);
+            assert_eq!(DerivedKind::parse(name), Some(kind));
+        }
     }
 }
