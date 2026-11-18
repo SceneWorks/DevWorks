@@ -55,6 +55,12 @@ def macro_arguments(source, start):
     raise ValueError('unclosed setting macro')
 
 
+def rust_string(literal):
+    """A Rust string literal's value: a backslash before a line break continues the string,
+    skipping the break and the next line's leading whitespace (which JSON does not allow)."""
+    return json.loads(re.sub(r'(?<!\\)((?:\\\\)*)\\\n\s*', r'\1', literal))
+
+
 def setting_rows():
     source = (ROOT / 'crates/devworks-core/src/settings/catalog.rs').read_text()
     constants = dict(re.findall(r'pub const (\w+): &str = "([^"]+)";', source))
@@ -65,8 +71,8 @@ def setting_rows():
             continue
         if len(args) not in (8, 9):
             raise ValueError(f'unknown setting macro shape: {args[0]}')
-        key = json.loads(args[0]) if args[0].startswith('"') else constants[args[0]]
-        label, description = json.loads(args[1]), json.loads(args[2])
+        key = rust_string(args[0]) if args[0].startswith('"') else constants[args[0]]
+        label, description = rust_string(args[1]), rust_string(args[2])
         scope = {'WORKSPACE': 'Workspace only', 'INHERITED': 'Workspace → Project',
                  'DELIVERY': 'Workspace → Project → Repository'}[args[4]]
         default = re.sub(r'\s+', ' ', args[6])
