@@ -7,12 +7,19 @@
 //! not an OS sandbox. The current authority policy requires an exact native exception under
 //! Project scope; its effective execution profile is still `Full`. No confined launcher is
 //! qualified, so `Project` and `Confined` are refused instead of silently upgraded.
+#[path = "tool_modules/bindings.rs"]
 mod bindings;
+#[path = "tool_modules/decide.rs"]
 mod decide;
+#[path = "tool_modules/execute.rs"]
 mod execute;
+#[path = "tool_modules/install.rs"]
 mod install;
+#[path = "tool_modules/install_safety.rs"]
 mod install_safety;
+#[path = "tool_modules/jobs.rs"]
 mod jobs;
+#[path = "tool_modules/output.rs"]
 mod output;
 use super::executables::PathExecutables;
 use super::{
@@ -957,4 +964,5 @@ impl JournaledEffect for Arc<ProcessToolService> {
 }
 
 #[cfg(test)]
+#[path = "tool_modules/tests.rs"]
 mod tests;
