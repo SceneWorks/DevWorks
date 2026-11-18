@@ -381,7 +381,7 @@ impl WorkCtl<'_, '_> {
                             Applied::Stale => return None,
                             Applied::Continue(fetch) => self.send_workflow(&project, fetch),
                             Applied::Fenced => state.rows.error = Some(INCOMPLETE.into()),
-                            Applied::Replaced => {
+                            Applied::Replaced
                                 if self.work.of.as_deref() == Some(project.as_str())
                                     && self.work.status_filter.as_ref().is_some_and(|id| {
                                         !state
@@ -389,10 +389,9 @@ impl WorkCtl<'_, '_> {
                                             .items
                                             .iter()
                                             .any(|status| status.id.as_str() == id)
-                                    })
-                                {
-                                    self.work.status_filter = None;
-                                }
+                                    }) =>
+                            {
+                                self.work.status_filter = None;
                             }
                             _ => {}
                         }

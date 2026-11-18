@@ -270,9 +270,10 @@ impl AddonsCtl<'_, '_> {
                         self.addons.awaiting = None;
                     }
                     let log = self.addons.logs.get_mut(&id)?;
-                    match log.apply_current(Ok(Page::new(entries, next))) {
-                        Applied::Continue(fetch) => self.send_logs(id, fetch),
-                        _ => {}
+                    if let Applied::Continue(fetch) =
+                        log.apply_current(Ok(Page::new(entries, next)))
+                    {
+                        self.send_logs(id, fetch)
                     }
                 }
                 Err(e) => {
