@@ -123,6 +123,41 @@ fn names_decision(event: &crate::ports::storage::EventRecord, intent: &Intent) -
 /// incompatible receipt keeps its reply mandatory: publication holds until it can be read. Only
 /// an unhonourable delivery may be acknowledged as poison (`queue.resolve`); every other reply
 /// delivery is retried until published.
+/// Fault target kind of a resolution that would abandon a receipt's mandatory reply
+/// (`Conflict`, retry `Never`): cancelling a [`REPLY_CONSUMER`] delivery, or acknowledging one
+/// as poison while it can still be honoured.
+pub const REPLY_REQUIRED: &str = "receipt_reply_required";
+
+/// The queue hook of [`REPLY_CONSUMER`]: a receipt's reply is mandatory, so its delivery is never
+/// cancelled, and is dismissed only when it can never be honoured (it is not a publication
+/// intent, or does not name its receipt's decision). Any other failed reply is retried
+/// (`queue.retry`), never abandoned.
+pub struct ReplyQueueHook;
+
+impl crate::services::queue::ConsumerHook for ReplyQueueHook {
+    fn consumer(&self) -> &'static str {
+        REPLY_CONSUMER
+    }
+
+    fn refuse(
+        &self,
+        tx: &mut dyn WriteTransaction,
+        entry: &QueueEntry,
+        resolution: &crate::protocol::records::QueueResolution,
+    ) -> Result<Option<&'static str>, StorageError> {
+        use crate::protocol::records::QueueResolution as R;
+        let abandons = match resolution {
+            R::CancelBeforeDispatch => true,
+            R::AcknowledgePoison => {
+                entry.state == crate::ports::storage::QueueState::Failed
+                    && !unhonourable(tx, entry)?
+            }
+            R::Retry | R::Reconcile => false,
+        };
+        Ok(abandons.then_some(REPLY_REQUIRED))
+    }
+}
+
 pub(crate) fn unhonourable(
     tx: &mut dyn WriteTransaction,
     entry: &QueueEntry,

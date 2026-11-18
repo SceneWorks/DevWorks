@@ -107,6 +107,15 @@ pub const AGENT_OPERATIONS: [&str; 11] = [
     "agents.checkpoint",
 ];
 
+/// The queue service with the hook of every consumer that has rules of its own around operator
+/// resolution. Adding such a consumer is one line here.
+pub fn queue_service() -> queue::QueueService {
+    queue::QueueService::new(vec![
+        Arc::new(artifacts::replies::ReplyQueueHook),
+        Arc::new(schemas::indexing::QueueHook),
+    ])
+}
+
 impl UseCases {
     /// Outgoing MCP configuration and selected capabilities share the gateway with UI and tools.
     pub fn with_mcp(mut self, service: Arc<mcp::McpClientService>) -> Self {
@@ -179,7 +188,7 @@ impl UseCases {
 
     /// Registers the queue family (`QueueDispatcher`).
     pub fn with_queue(mut self) -> Self {
-        let service = Arc::new(queue::QueueService);
+        let service = Arc::new(queue_service());
         for op in queue::OPERATIONS {
             self.register(op, Some(service.clone()), Some(service.clone()));
         }
