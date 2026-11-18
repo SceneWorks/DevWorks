@@ -223,7 +223,7 @@ impl ArtifactService {
             || a.owner.as_ref() != Some(&info.host_actor)
             || a.provenance["producedBy"].as_str() != Some(info.host_actor.0.as_str())
             || a.provenance["principalKind"] != "Host"
-            || a.provenance["derived"]["kind"] != "HelpTopic"
+            || !super::derivation::DerivedKind::HelpTopic.is_in(&a.provenance)
             || !v.live()
             || v.artifact_id != a.id
             || v.blob_digest != reference.sha256.as_str()
@@ -231,7 +231,7 @@ impl ArtifactService {
             || v.media_type != reference.media_type
             || v.source["producedBy"].as_str() != Some(info.host_actor.0.as_str())
             || v.source["principalKind"] != "Host"
-            || v.source["source"]["kind"] != "HelpTopic"
+            || v.source["source"]["kind"] != super::derivation::DerivedKind::HelpTopic.as_str()
         {
             return Err(StorageError::ViewUnavailable);
         }

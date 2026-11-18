@@ -119,6 +119,7 @@
 //! `StorageUnavailable`.
 pub(crate) mod convention_import;
 mod convention_source;
+pub mod derivation;
 pub mod evidence;
 pub mod host;
 mod index_source;
@@ -164,6 +165,7 @@ use crate::registry::SchemaRevision;
 use crate::services::cursor::{self, CursorBinding};
 use crate::settings::catalog::{ARTIFACT_MAX_FILE_KEY, ARTIFACT_QUOTA_KEY, AgentRole, descriptor};
 use crate::settings::model::{chain, current_chain};
+use derivation::DerivedKind;
 use lifecycle::{Readers, StreamPurpose, Streams};
 use serde_json::{Value, json};
 use std::sync::Arc;
@@ -393,7 +395,7 @@ pub(crate) fn visible_in(
 /// A skill/role version captured by the host for the instruction owner.
 fn instruction_capture(artifact: &StoredArtifact) -> bool {
     artifact.provenance["principalKind"] == "Host"
-        && artifact.provenance["derived"]["kind"] == "Instruction"
+        && DerivedKind::Instruction.is_in(&artifact.provenance)
         && artifact
             .owner
             .as_ref()
@@ -503,12 +505,7 @@ fn visible_artifact(
 /// Host-captured Help topics and skill/role instruction versions are retained the same way: they
 /// are the exact evidence their owners' history refers to, and they stay out of user listings.
 fn retained_help(artifact: &StoredArtifact, host: &crate::protocol::ActorId) -> bool {
-    artifact.provenance["principalKind"] == "Host"
-        && artifact.provenance["producedBy"].as_str() == Some(host.0.as_str())
-        && matches!(
-            artifact.provenance["derived"]["kind"].as_str(),
-            Some("HelpTopic" | "Instruction")
-        )
+    DerivedKind::of_host_artifact(artifact, host).is_some_and(DerivedKind::is_help_evidence)
 }
 
 /// Only actual trusted-Host convention derivatives are immutable through public artifact
@@ -517,11 +514,9 @@ pub(crate) fn retained_convention(
     artifact: &StoredArtifact,
     host: &crate::protocol::ActorId,
 ) -> bool {
-    if artifact.provenance["principalKind"] != "Host"
-        || artifact.provenance["producedBy"].as_str() != Some(host.0.as_str())
-    {
+    let Some(kind) = DerivedKind::of_host_artifact(artifact, host) else {
         return false;
-    }
+    };
     let derived = &artifact.provenance["derived"];
     let id = |key: &str| {
         derived[key]
@@ -533,15 +528,15 @@ pub(crate) fn retained_convention(
             .as_str()
             .is_some_and(crate::fingerprint::is_sha256_hex)
     };
-    match derived["kind"].as_str() {
-        Some("ConventionContent") => id("conventionId") && digest("sourceDigest"),
-        Some("ConventionResource") => {
+    match kind {
+        DerivedKind::ConventionContent => id("conventionId") && digest("sourceDigest"),
+        DerivedKind::ConventionResource => {
             id("conventionId") && id("resourceId") && digest("sourceDigest")
         }
-        Some("EmbeddingProbeInput") => {
+        DerivedKind::EmbeddingProbeInput => {
             id("candidateId") && id("operationId") && id("requestId") && id("admissionKey")
         }
-        Some("ConventionEmbeddingInput") => {
+        DerivedKind::ConventionEmbeddingInput => {
             id("requestId")
                 && digest("contextDigest")
                 && digest("inputDigest")
@@ -550,7 +545,7 @@ pub(crate) fn retained_convention(
                     .is_some_and(|s| !s.is_empty())
                 && derived["inputIndex"].as_u64().is_some_and(|n| n < 32)
         }
-        _ => false,
+        DerivedKind::HelpTopic | DerivedKind::Instruction | DerivedKind::ConventionImport => false,
     }
 }
 

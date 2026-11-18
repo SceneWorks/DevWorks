@@ -97,7 +97,7 @@ impl InstructionService {
                 .stage_host_bytes(
                     &*self.store,
                     &file.bytes,
-                    json!({"kind": "Instruction", "path": file.path, "source": source}),
+                    json!({"kind": crate::services::artifacts::derivation::DerivedKind::Instruction.as_str(), "path": file.path, "source": source}),
                 )?
                 .map_err(|cause| StorageError::InvalidRecord(format!("skill capture: {cause}")))
         };
@@ -888,7 +888,7 @@ pub(crate) fn publish_instruction_text(
         crate::services::artifacts::host::HostArtifactPublication {
             title: &format!("{title} {}", scan::SKILL_FILE),
             media_type: staged.instruction_media,
-            provenance: json!({"kind": "Instruction", "instructionId": item.id.as_str(), "path": scan::SKILL_FILE}),
+            provenance: json!({"kind": crate::services::artifacts::derivation::DerivedKind::Instruction.as_str(), "instructionId": item.id.as_str(), "path": scan::SKILL_FILE}),
             scope,
             owner,
         },
@@ -925,7 +925,7 @@ pub(crate) fn record_capture(
             crate::services::artifacts::host::HostArtifactPublication {
                 title: &format!("{} {path}", recorded.title),
                 media_type: media,
-                provenance: json!({"kind": "Instruction", "instructionId": item.id.as_str(), "path": path}),
+                provenance: json!({"kind": crate::services::artifacts::derivation::DerivedKind::Instruction.as_str(), "instructionId": item.id.as_str(), "path": path}),
                 scope: scope.clone(),
                 owner: owner.clone(),
             },

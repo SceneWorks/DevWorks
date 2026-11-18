@@ -303,7 +303,7 @@ impl ArtifactService {
             current_version_id: Some(version_id.clone()),
             state: ArtifactState::Live,
             created_at_ms: now,
-            provenance: json!({"producedBy":host,"principalKind":"Host","derived":{"kind":if resource{"ConventionResource"}else{"ConventionContent"},"conventionId":convention,"sourceVersionId":source.id,"sourceArtifactId":source.artifact_id}}),
+            provenance: json!({"producedBy":host,"principalKind":"Host","derived":{"kind":if resource{super::derivation::DerivedKind::ConventionResource}else{super::derivation::DerivedKind::ConventionContent}.as_str(),"conventionId":convention,"sourceVersionId":source.id,"sourceArtifactId":source.artifact_id}}),
         };
         let version = StoredVersion {
             id: version_id.clone(),
