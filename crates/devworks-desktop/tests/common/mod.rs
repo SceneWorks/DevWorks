@@ -134,6 +134,9 @@ pub fn config(root: &Path) -> DesktopConfig {
         devworks_core::ports::secrets::SessionSecrets::new(),
     ));
     c.http = Some(Arc::new(devworks_core::ports::http::NoNetwork));
+    // Nor a docker, podman or container CLI on the host: Settings probes them, and a Docker
+    // Desktop `docker version` can take the full probe timeout.
+    c.container_search_path = Some(Arc::new(|| Some(std::ffi::OsString::new())));
     c
 }
 
