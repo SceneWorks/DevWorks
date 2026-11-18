@@ -102,6 +102,10 @@ pub struct Paged<T> {
     keep_last: Option<usize>,
     /// The generation of the newest read of the list from its first page.
     reload_generation: u64,
+    /// The gathering read under way was already started again after a failed continuation.
+    gather_retried: bool,
+    /// The gathering read is a refresh of rows shown (one failed page is read again once).
+    retryable: bool,
 }
 impl<T> Default for Paged<T> {
     fn default() -> Self {
@@ -120,6 +124,8 @@ impl<T> Default for Paged<T> {
             staged_fence: None,
             keep_last: None,
             reload_generation: 0,
+            gather_retried: false,
+            retryable: false,
         }
     }
 }
@@ -143,6 +149,10 @@ impl<T> Paged<T> {
             (None, true) => Some(Ok(&self.items)),
             (None, false) => None,
         }
+    }
+    /// The request in flight is part of a gathering read (a refresh), not a single page.
+    pub fn gathering(&self) -> bool {
+        self.inflight.is_some_and(|f| f.gather.is_some())
     }
     /// A request is in flight.
     pub fn loading(&self) -> bool {
@@ -191,10 +201,17 @@ impl<T> Paged<T> {
     /// requested and still in flight. The rows stay until the last of them arrives, so a
     /// refresh keeps a list the user expanded.
     pub fn refresh(&mut self) -> Fetch {
-        let requested = self.pages + usize::from(self.inflight.is_some_and(|f| f.append));
+        // Only a real Load more counts: a gather's own continuation is the page already shown.
+        let requested = self.pages
+            + usize::from(
+                self.inflight
+                    .is_some_and(|f| f.append && f.gather.is_none()),
+            );
         self.staged.clear();
         self.staged_pages = 0;
-        self.start(None, false, Some(requested.max(1)))
+        let fetch = self.start(None, false, Some(requested.max(1)));
+        self.retryable = true;
+        fetch
     }
     /// Starts reading pages one after another like [`reload_all`](Self::reload_all), but stops
     /// after `pages` of them; the list then holds those and [`more`](Self::more) says the rest
@@ -202,7 +219,9 @@ impl<T> Paged<T> {
     pub fn reload_up_to(&mut self, pages: usize) -> Fetch {
         self.staged.clear();
         self.staged_pages = 0;
-        self.start(None, false, Some(pages.max(1)))
+        let fetch = self.start(None, false, Some(pages.max(1)));
+        self.retryable = false;
+        fetch
     }
     /// Starts reading every page, one after another ([`Applied::Continue`] names each next
     /// request). The rows shown stay until the last page arrives, so a list that must be
@@ -210,7 +229,9 @@ impl<T> Paged<T> {
     pub fn reload_all(&mut self) -> Fetch {
         self.staged.clear();
         self.staged_pages = 0;
-        self.start(None, false, Some(usize::MAX))
+        let fetch = self.start(None, false, Some(usize::MAX));
+        self.retryable = false;
+        fetch
     }
     /// Starts the request a saved frame carries (it holds its own cursor): the first page, or a
     /// continuation of the rows shown.
@@ -233,6 +254,9 @@ impl<T> Paged<T> {
     }
     fn start(&mut self, cursor: Option<String>, append: bool, gather: Option<usize>) -> Fetch {
         self.generation += 1;
+        if !append {
+            self.gather_retried = false;
+        }
         if !append {
             self.reload_generation = self.generation;
         }
@@ -310,7 +334,7 @@ impl<T> Paged<T> {
         self.inflight = None;
         let next = page.next.take();
         if let Some(latest) = page.items.pop() {
-            if self.staged_pages == 0 {
+            if self.staged_pages == 0 || self.staged.is_empty() {
                 self.staged = vec![latest];
             } else if let Err(reason) = join(&mut self.staged[0], latest) {
                 self.staged.clear();
@@ -415,6 +439,17 @@ impl<T> Paged<T> {
                 } else {
                     Applied::Replaced
                 }
+            }
+            Err(error) if self.retryable && self.staged_pages > 0 && !self.gather_retried => {
+                // A page after the first of a re-read failed (its cursor expired because the
+                // source changed, say): read again from the start once, keeping the rows,
+                // before the failure is shown.
+                let _ = error;
+                self.staged.clear();
+                self.staged_pages = 0;
+                let fetch = self.start(None, false, inflight.gather);
+                self.gather_retried = true;
+                Applied::Continue(fetch)
             }
             Err(error) => {
                 self.staged.clear();
@@ -548,6 +583,8 @@ impl<T> Paged<T> {
             staged_fence: None,
             keep_last: None,
             reload_generation: 0,
+            gather_retried: false,
+            retryable: false,
             generation: 0,
             inflight: parts.iter().any(|p| p.loading()).then_some(Inflight {
                 generation: 0,
@@ -575,6 +612,8 @@ impl<T> Paged<T> {
             staged_fence: None,
             keep_last: None,
             reload_generation: 0,
+            gather_retried: false,
+            retryable: false,
             generation: self.generation,
             inflight: self.inflight,
             failed_append: self.failed_append,
@@ -1229,6 +1268,85 @@ mod tests {
             Applied::Fenced
         );
         assert_eq!(list.items, [1, 2]);
+    }
+
+    #[test]
+    fn re_reads_during_a_gather_do_not_ask_for_more_pages() {
+        let mut list = Paged::<u32>::default();
+        let first = list.reload();
+        list.apply(first.generation, Ok(page(&[1], Some("c1"))));
+        let next = list.more_page().unwrap();
+        list.apply(next.generation, Ok(page(&[2], None)));
+        let one = list.refresh();
+        let Applied::Continue(_) = list.apply(one.generation, Ok(page(&[10], Some("d1")))) else {
+            panic!("the second page is read");
+        };
+        // Started again while its continuation is in flight, twice: still two pages.
+        list.refresh();
+        let again = list.refresh();
+        let Applied::Continue(second) = list.apply(again.generation, Ok(page(&[20], Some("e1"))))
+        else {
+            panic!("the second page is read");
+        };
+        assert_eq!(
+            list.apply(second.generation, Ok(page(&[21], Some("e2")))),
+            Applied::Replaced,
+            "two pages, not three"
+        );
+        assert_eq!(list.items, [20, 21]);
+    }
+
+    #[test]
+    fn a_failed_continuation_of_a_re_read_is_read_again_once_before_it_shows() {
+        let mut list = Paged::<u32>::default();
+        let first = list.reload();
+        list.apply(first.generation, Ok(page(&[1], Some("c1"))));
+        let next = list.more_page().unwrap();
+        list.apply(next.generation, Ok(page(&[2], None)));
+        let again = list.refresh();
+        let Applied::Continue(second) = list.apply(again.generation, Ok(page(&[10], Some("d1"))))
+        else {
+            panic!("the second page is read");
+        };
+        let Applied::Continue(retry) = list.apply(second.generation, Err("expired".into())) else {
+            panic!("the re-read starts over once");
+        };
+        assert_eq!(retry.cursor, None);
+        assert!(
+            list.error.is_none() && list.items == [1, 2],
+            "the rows stay"
+        );
+        let Applied::Continue(second) = list.apply(retry.generation, Ok(page(&[11], Some("f1"))))
+        else {
+            panic!("the second page is read");
+        };
+        assert_eq!(
+            list.apply(second.generation, Err("expired again".into())),
+            Applied::Failed
+        );
+        assert_eq!(list.error.as_deref(), Some("expired again"));
+        assert_eq!(list.items, [1, 2]);
+    }
+
+    #[test]
+    fn a_joined_gather_whose_first_page_is_empty_does_not_panic() {
+        let join = |shown: &mut Vec<u32>, more: Vec<u32>| -> Result<(), String> {
+            shown.extend(more);
+            Ok(())
+        };
+        let mut list = Paged::<Vec<u32>>::default();
+        let first = list.reload();
+        list.apply_joined(first.generation, Ok(Page::new(vec![vec![1]], None)), join);
+        let again = list.reload_up_to(2);
+        let Applied::Continue(second) = list.apply_joined(
+            again.generation,
+            Ok(Page::new(Vec::new(), Some("c".into()))),
+            join,
+        ) else {
+            panic!("the next page is read");
+        };
+        list.apply_joined(second.generation, Ok(Page::new(vec![vec![5]], None)), join);
+        assert_eq!(list.items, [vec![5]]);
     }
 
     #[test]

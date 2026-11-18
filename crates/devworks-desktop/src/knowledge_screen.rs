@@ -439,6 +439,9 @@ pub struct KnowledgeScreen {
     /// The scope the shown listing was read in: its project (`None`: general Knowledge), or
     /// `None` before any listing.
     pub listed_scope: Option<Option<String>>,
+    /// The first-page request the listing shown was read with: a re-read and a continuation are
+    /// built from it, so a filter typed since (and not submitted) never reaches them.
+    listed_query: Option<(&'static str, Option<In>)>,
     /// The source a cleanup names, and its preview once read.
     pub cleanup_source: String,
     pub source_preview: Option<SourcePreview>,
@@ -528,26 +531,45 @@ impl KnowledgeScreen {
             }
             self.listed_scope = Some(scope);
         }
-        let cursor = if append {
-            self.claims.more_page().and_then(|f| f.cursor)
-        } else {
-            self.claims.reload();
-            None
-        };
-        self.listing_input(cursor)
+        if append {
+            let cursor = self.claims.more_page().and_then(|f| f.cursor);
+            return self.listing_after(cursor);
+        }
+        self.claims.reload();
+        let first = self.listing_input(None);
+        self.listed_query = Some(first.clone());
+        first
     }
-    /// Starts re-reading the pages shown, in the scope listed, and returns the first request
-    /// (a changed scope starts over like [`begin_listing`](Self::begin_listing)).
+    /// Starts re-reading the pages shown, in the scope and query listed, and returns the first
+    /// request (a changed scope starts over like [`begin_listing`](Self::begin_listing)).
     pub fn begin_refresh(&mut self) -> (&'static str, Option<In>) {
-        if self.listed_scope.as_ref() != Some(&self.typed_scope()) {
+        if self.listed_query.is_none() || self.listed_scope.as_ref() != Some(&self.typed_scope()) {
             return self.begin_listing(false);
         }
         let fetch = self.claims.reread();
-        self.listing_input(fetch.cursor)
+        self.listing_after(fetch.cursor)
     }
     /// The request after `fetch`, which [`Applied::Continue`] named for a gathering read.
     pub fn continue_listing(&self, fetch: &Fetch) -> (&'static str, Option<In>) {
-        self.listing_input(fetch.cursor.clone())
+        self.listing_after(fetch.cursor.clone())
+    }
+    /// The request for the page after `cursor` (the first without one) of the listed query.
+    fn listing_after(&self, cursor: Option<String>) -> (&'static str, Option<In>) {
+        let Some((op, first)) = &self.listed_query else {
+            return self.listing_input(cursor);
+        };
+        let input = match cursor {
+            None => first.clone(),
+            Some(cursor) => first.clone().and_then(|mut input| {
+                if let In::Knowledge(knowledge::Input::Search(search)) = &mut input {
+                    search.page = frame::page(PAGE, Some(&cursor))?;
+                    Some(input)
+                } else {
+                    None
+                }
+            }),
+        };
+        (op, input)
     }
     fn listing_input(&self, cursor: Option<String>) -> (&'static str, Option<In>) {
         let states: Vec<String> = LIFECYCLES
@@ -857,6 +879,17 @@ impl KnowledgeScreen {
                 let error = format!("Unexpected reply {}", other.operation());
                 self.claims.apply(generation, Err(error));
                 Listed::Done
+            }
+            Err(e)
+                if self.claims.gathering()
+                    && matches!(&e, Failure::Refused(f) if f.code == DomainErrorCode::CursorExpired) =>
+            {
+                // A re-read of the shown pages met a changed list: it reads again once (the
+                // rows stay), and only then shows the failure.
+                match self.claims.apply(generation, Err(e.describe())) {
+                    Applied::Continue(fetch) => Listed::Continue(fetch),
+                    _ => Listed::Done,
+                }
             }
             Err(Failure::Refused(f)) if f.code == DomainErrorCode::CursorExpired => {
                 if !self.claims.abandon(generation) {
@@ -1917,6 +1950,37 @@ mod tests {
     /// The `/body` members of a typed request.
     fn body_of(input: Option<In>) -> Value {
         input.expect("a typed input").body().expect("a body")
+    }
+
+    #[test]
+    fn a_re_read_and_its_pages_use_the_query_listed_not_the_form() {
+        let mut s = KnowledgeScreen::new();
+        s.text = "listed".into();
+        s.begin_listing(false);
+        let first = s.claims.generation();
+        s.claims
+            .apply(first, Ok(Page::new(Vec::new(), Some("c1".into()))));
+        // Typed since, not submitted.
+        s.text = "half typed".into();
+        let (_, input) = s.begin_refresh();
+        assert_eq!(body_of(input)["text"], "listed");
+        let fetch = Fetch {
+            generation: s.claims.generation(),
+            cursor: Some("c9".into()),
+        };
+        let (_, input) = s.continue_listing(&fetch);
+        let body = body_of(input);
+        assert_eq!(body["text"], "listed");
+        assert_eq!(body["page"]["cursor"], "c9");
+        // Load more reads the listed query's next page too.
+        s.claims.reload();
+        let again = s.claims.generation();
+        s.claims
+            .apply(again, Ok(Page::new(Vec::new(), Some("c2".into()))));
+        let (_, input) = s.begin_listing(true);
+        let body = body_of(input);
+        assert_eq!(body["text"], "listed");
+        assert_eq!(body["page"]["cursor"], "c2");
     }
 
     #[test]

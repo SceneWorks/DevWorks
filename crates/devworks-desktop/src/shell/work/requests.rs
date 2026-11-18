@@ -165,6 +165,15 @@ impl WorkCtl<'_, '_> {
             return;
         };
         let explicit = reset || self.work.messages.project.as_deref() != Some(project.as_str());
+        // A re-read under way is not superseded by every message event: one more follows when
+        // it is done, so a busy stream cannot keep a long history from ever finishing.
+        if reset
+            && self.work.messages.project.as_deref() == Some(project.as_str())
+            && self.work.messages.history.gathering()
+        {
+            self.work.messages.history_again = true;
+            return;
+        }
         if explicit {
             let same_project = self.work.messages.project.as_deref() == Some(project.as_str());
             let inbox_refresh_pending =

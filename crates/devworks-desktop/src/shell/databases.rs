@@ -946,6 +946,12 @@ impl DatabasesCtl<'_, '_> {
 }
 impl DatabasesCtl<'_, '_> {
     fn begin_database_sync_all(&mut self) {
+        if self.databases.connections.loading() {
+            // The scan and the sources list are read one at a time.
+            self.databases.notice =
+                Some("Wait for the database sources to finish loading, then sync all.".into());
+            return;
+        }
         self.databases.batch_remaining.clear();
         self.databases.batch_scanning = true;
         self.databases.batch_active = true;

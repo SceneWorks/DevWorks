@@ -106,6 +106,12 @@ impl IndexingCtl<'_, '_> {
                 IndexAction::Runs => {
                     // Route entry, the Refresh button and a finished command all re-read the
                     // runs: the pages shown stay.
+                    // Another project's runs start over, not as many pages as the last had.
+                    let project = self.selected_project().map(str::to_owned);
+                    if self.indexing.runs_project.as_ref() != Some(&project) {
+                        self.indexing.runs.reset();
+                        self.indexing.runs_project = Some(project);
+                    }
                     let fetch = self.indexing.runs.reread();
                     self.send_runs(fetch, "Loading index runs");
                 }

@@ -21,6 +21,8 @@ pub struct MessageBoard {
     /// The project's messages, newest first; each older page continues before the last one
     /// (its cursor is that message sequence).
     pub history: Paged<RetainedMessage>,
+    /// A re-read was asked for while the history was being re-read: read again when it ends.
+    pub history_again: bool,
     pub inbox: Vec<RetainedMessage>,
     pub inbox_cursor: Option<String>,
     pub inbox_loaded: bool,
