@@ -37,6 +37,8 @@ tokio = { version = "=1.54.1", default-features = false, features = ["net", "rt"
 libc = "=0.2.191"
 
 [dev-dependencies]
+# Shared test doubles and seeding helpers (no production crate depends on it).
+devworks-test-support = { path = "../devworks-test-support" }
 # Seeds empty test data roots from one migrated store per test binary (test builds only).
 devworks-adapters = { path = "../devworks-adapters", features = ["test-support"] }
 egui_kittest = "=0.37.0"
