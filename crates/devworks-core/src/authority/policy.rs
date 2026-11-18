@@ -583,10 +583,6 @@ pub fn registered_tool_visibility(
     let Some(_) = policy.profile else {
         return Verdict::Deny(DenialReason::UnsupportedProfile);
     };
-    if !command {
-        return Verdict::Allow;
-    }
-
     Verdict::Allow
 }
 

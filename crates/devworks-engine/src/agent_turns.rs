@@ -2070,15 +2070,6 @@ fn plan_request(
             provider_model_id: pin.upstream_model_id,
             connection_id: connection.id,
             endpoint_profile: connection.profile.clone(),
-            access_mode: if matches!(
-                connection.profile.as_str(),
-                "CodexSubscriptionResponses" | "ClaudeSubscriptionMessages"
-            ) {
-                "Subscription"
-            } else {
-                "Api"
-            }
-            .into(),
             service_tier: None,
             input_tokens: None,
             cache_write_ttl_ms: None,

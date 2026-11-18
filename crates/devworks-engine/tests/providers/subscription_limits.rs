@@ -196,7 +196,6 @@ async fn produce_model(
         provider_model_id: Some(upstream.into()),
         connection_id: id("connection"),
         endpoint_profile: f.profile.clone(),
-        access_mode: "Api".into(),
         service_tier: None,
         input_tokens: Some(10),
         cache_write_ttl_ms: None,

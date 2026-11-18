@@ -130,7 +130,6 @@ fn official_tariff_edit(profile: &str, endpoint: &str, upstream: &str) {
         provider_model_id: Some(upstream.into()),
         connection_id: connection.id,
         endpoint_profile: profile.into(),
-        access_mode: "ApiKey".into(),
         service_tier: None,
         input_tokens: Some(100),
         cache_write_ttl_ms: Some(3_600_000),

@@ -991,7 +991,6 @@ impl NativeProviders {
                 provider_model_id: Some(registration.upstream_model_id.clone()),
                 connection_id: connection.id,
                 endpoint_profile: "Embedding".into(),
-                access_mode: "Api".into(),
                 service_tier: None,
                 input_tokens: None,
                 cache_write_ttl_ms: None,

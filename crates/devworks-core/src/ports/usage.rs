@@ -71,7 +71,6 @@ pub struct PriceQuery {
     pub provider_model_id: Option<String>,
     pub connection_id: Id,
     pub endpoint_profile: String,
-    pub access_mode: String,
     pub service_tier: Option<String>,
     pub input_tokens: Option<i64>,
     pub cache_write_ttl_ms: Option<i64>,

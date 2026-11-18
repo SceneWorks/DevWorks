@@ -262,7 +262,6 @@ mod tests {
             provider_model_id: Some("unit-model".into()),
             connection_id: Id::new("connection-1").unwrap(),
             endpoint_profile: "OpenAiResponses".into(),
-            access_mode: "Api".into(),
             service_tier: None,
             input_tokens: Some(272_000),
             cache_write_ttl_ms: None,

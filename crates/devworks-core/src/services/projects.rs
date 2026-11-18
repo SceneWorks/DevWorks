@@ -51,9 +51,10 @@
 //!   worktree or remote is removed, and shared artifacts and history remain. A tombstone stays
 //!   readable through `projects.get` so retained references show the deletion honestly.
 //!
-//! `proposalId` names an approval proposal; proposals arrive with the approvals item, so one is
-//! never found yet (`NotFound`, `proposal`) and the user's own command is the confirmation (the
-//! native screen shows the concrete consequences before submitting it).
+//! `proposalId` names an approval proposal. These operations never accept one: a proposal is
+//! created and decided through the approvals service, so a command that names one is refused
+//! (`NotFound`, `proposal`) and the user's own command is the confirmation (the native screen
+//! shows the concrete consequences before submitting it).
 //!
 //! # Repository indexes and texts
 //!
@@ -482,7 +483,8 @@ fn stopping(p: &ProjectId) -> Failure {
     r.into()
 }
 
-/// Approval proposals arrive with the approvals item: none can be found yet.
+/// Refuses any named approval proposal: the project operations are confirmed by the user's own
+/// command, not by a proposal reference.
 fn no_proposal(proposal: Option<&Id>) -> Result<(), Failure> {
     match proposal {
         Some(p) => Err(not_found("proposal", p).into()),

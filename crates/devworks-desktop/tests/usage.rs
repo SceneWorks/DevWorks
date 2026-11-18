@@ -1543,7 +1543,6 @@ fn native_blank_tariff_editor_prices_default_requests_and_preserves_exact_custom
         provider_model_id: Some("fixture/default-tier".into()),
         connection_id: connection.id.clone(),
         endpoint_profile: "CompatibleChat".into(),
-        access_mode: "Api".into(),
         service_tier: None,
         input_tokens: Some(100),
         cache_write_ttl_ms: None,
