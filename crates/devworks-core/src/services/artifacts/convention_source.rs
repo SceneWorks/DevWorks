@@ -12,7 +12,7 @@ use crate::ports::storage::{
 use crate::protocol::data::DataScope;
 use crate::protocol::provider::ArtifactRef;
 use crate::services::conventions::access;
-use crate::services::sessions::{Failure, Refusal, not_found};
+use crate::services::kernel::{Failure, Refusal, not_found};
 use std::io::Read;
 use std::sync::Arc;
 
@@ -254,7 +254,7 @@ impl ArtifactService {
             storage::{ArtifactRetention, ArtifactScope, StoredArtifact},
         };
         use crate::protocol::provider::Digest;
-        use crate::services::sessions::counter;
+        use crate::services::kernel::counter;
         use serde_json::json;
         let changed = || {
             crate::ports::storage::StorageError::InvalidRecord(

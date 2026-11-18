@@ -16,7 +16,7 @@ use crate::{
     services::{
         artifacts::{ConventionSourceLease, ConventionSourceSelection},
         cursor::CursorBinding,
-        sessions::{Failure, Refusal, counter},
+        kernel::{Failure, Refusal, counter},
     },
 };
 use std::{
@@ -147,7 +147,7 @@ fn resolve(
     }
     let source = ConventionPathSource {
         artifact,
-        convention_revision: crate::services::sessions::rev(captured.revision),
+        convention_revision: crate::services::kernel::rev(captured.revision),
         headings: BoundedList(spans),
     };
     source.check().map_err(invalid)?;

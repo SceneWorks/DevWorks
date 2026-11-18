@@ -54,7 +54,7 @@ fn strings(v: &Value, key: &str) -> Vec<String> {
 }
 fn oid_ok(o: &Option<String>) -> bool {
     o.as_deref()
-        .is_none_or(devworks_core::services::indexing::git::oid_ok)
+        .is_none_or(devworks_core::services::git::client::oid_ok)
 }
 fn repository_exists(conn: &Connection, id: &Id) -> Result<bool, StorageError> {
     db(db(conn.prepare_cached("SELECT 1 FROM repositories WHERE id=?1"))?.exists([id.as_str()]))

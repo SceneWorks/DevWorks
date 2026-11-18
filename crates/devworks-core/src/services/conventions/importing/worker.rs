@@ -10,7 +10,7 @@ use crate::{
     services::{
         artifacts::host::HostStream,
         conventions::{model, parent_path},
-        sessions::Failure,
+        kernel::Failure,
     },
 };
 use serde_json::json;
@@ -364,7 +364,7 @@ impl ImportService {
                         actor_id: d.author_id.clone(),
                         source: reference,
                         schema: j.schema.clone(),
-                        imported_at_ms: crate::services::sessions::counter(now),
+                        imported_at_ms: crate::services::kernel::counter(now),
                     },
                 )
                 .map_err(|_| invalid("provenance"))?,

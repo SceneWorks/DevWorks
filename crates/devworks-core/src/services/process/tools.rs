@@ -45,7 +45,7 @@ use crate::protocol::{
 use crate::protocol::{Id, ProjectId};
 use crate::registry::Mode;
 use crate::services::artifacts::{Viewer, visible};
-use crate::services::sessions::{Refusal, counter, decided, query_fault, rev};
+use crate::services::kernel::{Refusal, counter, decided, query_fault, rev};
 use base64::Engine;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -3315,7 +3315,7 @@ impl ProcessToolService {
         let id = operation.id.clone();
         let _ = crate::ports::storage::run_write(
             &*self.store,
-            crate::ports::storage::WriteOptions::default(),
+            crate::ports::storage::WriteOptions::observed(),
             move |tx| {
                 let Some(current) = tx.operations().operation(&id)? else {
                     return Ok(());

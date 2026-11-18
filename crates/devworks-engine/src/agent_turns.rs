@@ -49,6 +49,7 @@ use crate::agent_supervisor::AgentTurnExecutor;
 use crate::providers::driver::NativeInvocation;
 use crate::runs::{LaunchEnd, LaunchFuture};
 use crate::store;
+use crate::turn_engine::TurnEngine;
 use crate::turn_error::{TurnError, artifact_read_fault};
 use devworks_core::services::runs::substrate::ActivationFailure;
 use devworks_core::services::usage::accounting::AttemptEnd;
@@ -82,7 +83,12 @@ impl AgentTurnExecutor for NativeAgentTurnExecutor {
                     detail: Some("runtime stopped before agent turn".into()),
                 };
             };
-            drive_agent_turn(runtime, context, coordinator, stop).await
+            // The turn holds the runtime for its whole run, as before: the engine's handles
+            // alone do not keep the runtime's workers alive.
+            let engine = runtime.turn_engine().clone();
+            let end = drive_agent_turn(engine, context, coordinator, stop).await;
+            drop(runtime);
+            end
         })
     }
 }
@@ -99,7 +105,7 @@ fn cancelled() -> LaunchEnd {
 }
 
 async fn drive_agent_turn(
-    runtime: Arc<Runtime>,
+    engine: TurnEngine,
     ctx: InvocationContext,
     coordinator: AgentRecord,
     mut stop: watch::Receiver<bool>,
@@ -117,12 +123,12 @@ async fn drive_agent_turn(
         return turn_failure(StorageError::ScopeDenied);
     };
     let activation_id = activation_id.clone();
-    if let Err(error) = acknowledge_native_instructions(&runtime, &ctx, &coordinator).await {
+    if let Err(error) = acknowledge_native_instructions(&engine, &ctx, &coordinator).await {
         return turn_failure(error);
     }
-    let control = runtime.runs().service().clone();
+    let control = engine.runs().service().clone();
     let session = session_id.clone();
-    let turn = match store::write(runtime.store(), move |tx| {
+    let turn = match store::write(engine.store(), WriteOptions::host_state(), move |tx| {
         control.begin_turn(tx, &session, &assignment_id, &activation_id, epoch)
     })
     .await
@@ -149,7 +155,7 @@ async fn drive_agent_turn(
     let mut retry_at_ms = None;
     let mut credentials_rejected = false;
     let result = run_native_loop(
-        &runtime,
+        &engine,
         &ctx,
         &coordinator,
         Stop {
@@ -161,10 +167,10 @@ async fn drive_agent_turn(
     )
     .await;
     bridge.abort();
-    let control = runtime.runs().service().clone();
+    let control = engine.runs().service().clone();
     let turn_id = turn.turn_id;
     let completed = result.is_ok() && !cancellation.is_cancelled();
-    let end = store::write(runtime.store(), move |tx| {
+    let end = store::write(engine.store(), WriteOptions::host_state(), move |tx| {
         control.end_turn(tx, &session_id, &turn_id, completed)
     })
     .await;
@@ -199,19 +205,19 @@ async fn drive_agent_turn(
 }
 
 async fn acknowledge_native_instructions(
-    runtime: &Runtime,
+    engine: &TurnEngine,
     ctx: &InvocationContext,
     coordinator: &AgentRecord,
 ) -> Result<(), StorageError> {
     let (activation_id, epoch) = ctx.activation().ok_or(StorageError::ScopeDenied)?;
-    let control = runtime.runs().service().clone();
+    let control = engine.runs().service().clone();
     let root_id = coordinator.root_id.clone();
     let coordinator_assignment = ctx
         .assignment_id()
         .ok_or(StorageError::ScopeDenied)?
         .clone();
     let execution = activation_id.clone();
-    let ack = store::write(runtime.store(), move |tx| {
+    let ack = store::write(engine.store(), WriteOptions::observed(), move |tx| {
         let assignment = tx
             .runs()
             .assignment(&coordinator_assignment)?
@@ -275,7 +281,7 @@ async fn wait_for_state_change(
 const STALE_HEAD_ATTEMPTS: u32 = 3;
 
 async fn run_native_loop(
-    runtime: &Arc<Runtime>,
+    engine: &TurnEngine,
     ctx: &InvocationContext,
     agent: &AgentRecord,
     mut stop: Stop<'_>,
@@ -285,10 +291,10 @@ async fn run_native_loop(
     let cancellation = stop.cancellation;
     // Marked seen before each dispatch, so a change committed while a call is dispatched still
     // wakes the wait that follows it.
-    let mut changes = runtime.state_changes();
+    let mut changes = engine.state_changes();
     let session_id = ctx.session_id().ok_or(StorageError::ScopeDenied)?;
-    ensure_membership_context(runtime, ctx, agent)?;
-    let mut recovered = runtime.recover_native_context_head(ctx, session_id)?;
+    ensure_membership_context(engine, ctx, agent)?;
+    let mut recovered = engine.recover_native_context_head(ctx, session_id)?;
     let mut window = 0;
     let mut completed_windows = 0;
     // The digest of the last context this turn compacted to.
@@ -302,16 +308,16 @@ async fn run_native_loop(
         let (mut head, mut binding, observed_sequence) = match recovered.take() {
             Some(value) => value,
             None => {
-                let tools_required = !runtime
+                let tools_required = !engine
                     .providers()
                     .ok_or(StorageError::ScopeDenied)?
                     .schemas()
                     .selected_agent_tools(ctx)?
                     .is_empty();
                 let needs_images =
-                    context_has_images(&initial_context(runtime.store().as_ref(), ctx, agent)?);
+                    context_has_images(&initial_context(engine.store().as_ref(), ctx, agent)?);
                 let route = route_context_head(
-                    runtime,
+                    engine,
                     ctx,
                     session_id,
                     0,
@@ -319,12 +325,12 @@ async fn run_native_loop(
                     tools_required,
                     needs_images,
                 )?;
-                let (head, binding) = publish_first_context(runtime, ctx, agent, &route)?;
+                let (head, binding) = publish_first_context(engine, ctx, agent, &route)?;
                 (head, binding, 0)
             }
         };
         if let Some(unpublished) =
-            unpublished_turn(runtime.store().as_ref(), ctx, session_id, observed_sequence)?
+            unpublished_turn(engine.store().as_ref(), ctx, session_id, observed_sequence)?
         {
             let (attempt_id, has_tools) = match unpublished {
                 UnpublishedTurn::Settled {
@@ -336,9 +342,9 @@ async fn run_native_loop(
                     sequence,
                     facts,
                 } => {
-                    let bytes = runtime
+                    let bytes = engine
                         .artifacts()
-                        .read_exact(runtime.store().as_ref(), ctx, &head, 8 * 1024 * 1024)
+                        .read_exact(engine.store().as_ref(), ctx, &head, 8 * 1024 * 1024)
                         .map_err(artifact_read_fault)?
                         .0;
                     let mut context: ProviderContext = serde_json::from_slice(&bytes)
@@ -353,16 +359,16 @@ async fn run_native_loop(
                     for fact in facts {
                         crate::tool_turn::append_context_fact(
                             &mut context,
-                            runtime.store().as_ref(),
-                            runtime.artifacts(),
+                            engine.store().as_ref(),
+                            engine.artifacts(),
                             ctx,
                             session_id,
                             fact,
                         )?;
                     }
                     crate::tool_turn::publish_continuation(
-                        runtime.store().as_ref(),
-                        runtime.artifacts(),
+                        engine.store().as_ref(),
+                        engine.artifacts(),
                         ctx,
                         session_id,
                         &attempt_id,
@@ -372,15 +378,15 @@ async fn run_native_loop(
                             observed_sequence: sequence,
                         },
                     )?;
-                    recovered = runtime.recover_native_context_head(ctx, session_id)?;
+                    recovered = engine.recover_native_context_head(ctx, session_id)?;
                     continue;
                 }
             };
             if has_tools {
                 changes.borrow_and_update();
                 let dispatched = tokio::time::Instant::now();
-                dispatch_pending_off_thread(runtime, ctx, session_id, cancellation).await?;
-                if !crate::tool_turn::pending_calls(runtime.store().as_ref(), ctx, session_id)?
+                dispatch_pending_off_thread(engine, ctx, session_id, cancellation).await?;
+                if !crate::tool_turn::pending_calls(engine.store().as_ref(), ctx, session_id)?
                     .is_empty()
                 {
                     // A call without an answer yet (an unknown command status, a refusal that
@@ -392,8 +398,8 @@ async fn run_native_loop(
                 }
             }
             let material = crate::tool_turn::continuation_context(
-                runtime.store().as_ref(),
-                runtime.artifacts(),
+                engine.store().as_ref(),
+                engine.artifacts(),
                 ctx,
                 crate::tool_turn::TurnSource {
                     session_id,
@@ -405,20 +411,20 @@ async fn run_native_loop(
                 &head,
             )?;
             crate::tool_turn::publish_continuation(
-                runtime.store().as_ref(),
-                runtime.artifacts(),
+                engine.store().as_ref(),
+                engine.artifacts(),
                 ctx,
                 session_id,
                 &attempt_id,
                 &binding,
                 material,
             )?;
-            recovered = runtime.recover_native_context_head(ctx, session_id)?;
+            recovered = engine.recover_native_context_head(ctx, session_id)?;
             continue;
         }
-        wait_for_running_mcp_calls(runtime, ctx, session_id, cancellation).await?;
-        head = runtime.refresh_native_tool_context(ctx, session_id, &head)?;
-        let selected_count = runtime
+        wait_for_running_mcp_calls(engine, ctx, session_id, cancellation).await?;
+        head = engine.refresh_native_tool_context(ctx, session_id, &head)?;
+        let selected_count = engine
             .providers()
             .ok_or(StorageError::ScopeDenied)?
             .schemas()
@@ -427,9 +433,9 @@ async fn run_native_loop(
         let tools_required = selected_count != 0;
         let windows = tool_window_count(selected_count);
         window %= windows;
-        let needs_images = context_head_has_images(runtime, ctx, &head)?;
+        let needs_images = context_head_has_images(engine, ctx, &head)?;
         let route = route_context_head(
-            runtime,
+            engine,
             ctx,
             session_id,
             binding.context_epoch.get(),
@@ -437,7 +443,7 @@ async fn run_native_loop(
             tools_required,
             needs_images,
         )?;
-        let next = binding_for_route(runtime, &route, binding.context_epoch.get())?;
+        let next = binding_for_route(engine, &route, binding.context_epoch.get())?;
         if next.connection_id != binding.connection_id
             || next.model_id != binding.model_id
             || next.account_revision != binding.account_revision
@@ -452,22 +458,22 @@ async fn run_native_loop(
                 context_epoch: Counter::new(epoch).map_err(|_| StorageError::ScopeDenied)?,
                 ..next
             };
-            head = runtime.change_provider_epoch(ctx, session_id, &head, &binding, &next)?;
+            head = engine.change_provider_epoch(ctx, session_id, &head, &binding, &next)?;
             binding = next;
         }
-        head = runtime.adopt_instruction_epoch(ctx, session_id, &head, &binding, &[])?;
-        binding = runtime
+        head = engine.adopt_instruction_epoch(ctx, session_id, &head, &binding, &[])?;
+        binding = engine
             .recover_native_context_head(ctx, session_id)?
             .ok_or(StorageError::ScopeDenied)?
             .1;
-        acknowledge_native_instructions(runtime, ctx, agent).await?;
+        acknowledge_native_instructions(engine, ctx, agent).await?;
         // A context this turn just compacted is sent as it is, even if it still reaches the
         // threshold: compacting it again could not shrink it.
         if compacted.as_deref() != Some(head.sha256.as_str())
-            && compaction_due(runtime, ctx, &route, &head, window)?
+            && compaction_due(engine, ctx, &route, &head, window)?
         {
             match compact(
-                runtime,
+                engine,
                 ctx,
                 &route,
                 &binding,
@@ -480,24 +486,27 @@ async fn run_native_loop(
                 Ok(root) => compacted = Some(root.sha256.as_str().to_owned()),
                 Err(TurnError::Store(StorageError::ScopeDenied))
                     if crate::tool_turn::native_head_became_stale(
-                        runtime.store().as_ref(),
+                        engine.store().as_ref(),
                         ctx,
                         session_id,
                         &head,
                     )? => {}
                 Err(error) => return Err(error),
             }
-            recovered = runtime.recover_native_context_head(ctx, session_id)?;
+            recovered = engine.recover_native_context_head(ctx, session_id)?;
             continue;
         }
-        let invocation = plan_generation_window(runtime, ctx, &route, &binding, &head, window)?;
+        let invocation = plan_generation_window(engine, ctx, &route, &binding, &head, window)?;
         let attempt = (
             invocation.request.request_id.clone(),
             head.version_id.clone(),
         );
         changes.borrow_and_update();
         let dispatched = tokio::time::Instant::now();
-        let worker = Arc::clone(runtime);
+        // The worker's TurnEngine clone does not own the runtime: the launch that calls
+        // drive_agent_turn holds an upgraded Arc<Runtime> for the whole turn, which keeps the
+        // runtime alive until this blocking task is awaited.
+        let worker = engine.clone();
         let stopped = cancellation.clone();
         let handle = tokio::runtime::Handle::current();
         let progress = tokio::task::spawn_blocking(move || {
@@ -509,7 +518,7 @@ async fn run_native_loop(
             Ok(progress) => progress,
             Err(StorageError::ScopeDenied)
                 if crate::tool_turn::native_head_became_stale(
-                    runtime.store().as_ref(),
+                    engine.store().as_ref(),
                     ctx,
                     session_id,
                     &head,
@@ -531,7 +540,7 @@ async fn run_native_loop(
                         version_id.as_str()
                     ))));
                 }
-                recovered = runtime.recover_native_context_head(ctx, session_id)?;
+                recovered = engine.recover_native_context_head(ctx, session_id)?;
                 continue;
             }
             Err(error) => return Err(error.into()),
@@ -544,23 +553,23 @@ async fn run_native_loop(
             Some(AttemptEnd::Completed) if progress.continuation.is_some() => {
                 completed_windows += 1;
                 if completed_windows >= windows {
-                    wait_for_linked_effects(runtime, ctx, session_id, cancellation).await?;
+                    wait_for_linked_effects(engine, ctx, session_id, cancellation).await?;
                     return Ok(());
                 }
                 window = (window + 1) % windows;
-                recovered = runtime.recover_native_context_head(ctx, session_id)?;
+                recovered = engine.recover_native_context_head(ctx, session_id)?;
             }
             Some(AttemptEnd::ToolCallsReady) if progress.continuation.is_some() => {
                 completed_windows = 0;
                 window = (window + 1) % windows;
-                recovered = runtime.recover_native_context_head(ctx, session_id)?;
+                recovered = engine.recover_native_context_head(ctx, session_id)?;
             }
             Some(AttemptEnd::ToolCallsReady) => {
                 // An approval or a still-running operation can delay the initial result. The
                 // native request is durable: replaying its key resumes the pending dispatches
                 // without sending a second provider request.
                 wait_for_state_change(&mut changes, &mut stop, dispatched).await;
-                recovered = runtime
+                recovered = engine
                     .recover_native_context_head(ctx, session_id)?
                     .or(Some((head, binding, observed_sequence)));
             }
@@ -583,7 +592,7 @@ async fn run_native_loop(
 }
 
 async fn wait_for_linked_effects(
-    runtime: &Runtime,
+    engine: &TurnEngine,
     ctx: &InvocationContext,
     session_id: &Id,
     cancellation: &Cancellation,
@@ -592,9 +601,8 @@ async fn wait_for_linked_effects(
         if cancellation.is_cancelled() {
             return Err(StorageError::Cancelled);
         }
-        let linked =
-            crate::tool_turn::linked_operations(runtime.store().as_ref(), ctx, session_id)?;
-        let pending = read_snapshot(runtime.store().as_ref(), &ReadOptions::default(), |read| {
+        let linked = crate::tool_turn::linked_operations(engine.store().as_ref(), ctx, session_id)?;
+        let pending = read_snapshot(engine.store().as_ref(), &ReadOptions::default(), |read| {
             let mut pending = false;
             for call in &linked {
                 let Some(operation_id) = &call.operation_id else {
@@ -632,7 +640,7 @@ async fn wait_for_linked_effects(
 /// waits for it and carries the result instead of only the accepted receipt. A call that needs
 /// input or whose outcome is unknown does not hold the agent.
 async fn wait_for_running_mcp_calls(
-    runtime: &Runtime,
+    engine: &TurnEngine,
     ctx: &InvocationContext,
     session_id: &Id,
     cancellation: &Cancellation,
@@ -641,9 +649,8 @@ async fn wait_for_running_mcp_calls(
         if cancellation.is_cancelled() {
             return Err(StorageError::Cancelled);
         }
-        let linked =
-            crate::tool_turn::linked_operations(runtime.store().as_ref(), ctx, session_id)?;
-        let running = read_snapshot(runtime.store().as_ref(), &ReadOptions::default(), |read| {
+        let linked = crate::tool_turn::linked_operations(engine.store().as_ref(), ctx, session_id)?;
+        let running = read_snapshot(engine.store().as_ref(), &ReadOptions::default(), |read| {
             for operation_id in linked.iter().filter_map(|call| call.operation_id.as_ref()) {
                 let operation = read
                     .operations()
@@ -671,12 +678,13 @@ async fn wait_for_running_mcp_calls(
 }
 
 async fn dispatch_pending_off_thread(
-    runtime: &Arc<Runtime>,
+    engine: &TurnEngine,
     ctx: &InvocationContext,
     session_id: &Id,
     cancellation: &Cancellation,
 ) -> Result<(), TurnError> {
-    let worker = Arc::clone(runtime);
+    // As above: the caller's upgraded Arc<Runtime> outlives this blocking task.
+    let worker = engine.clone();
     let ctx = ctx.clone();
     let session_id = session_id.clone();
     let cancellation = cancellation.clone();
@@ -801,11 +809,11 @@ fn unpublished_turn(
 }
 
 fn binding_for_route(
-    runtime: &Runtime,
+    engine: &TurnEngine,
     route: &RouteChoice,
     epoch: i64,
 ) -> Result<NativeBinding, StorageError> {
-    read_snapshot(runtime.store().as_ref(), &ReadOptions::default(), |read| {
+    read_snapshot(engine.store().as_ref(), &ReadOptions::default(), |read| {
         let connection = read
             .router()
             .connection(&route.connection_id)?
@@ -845,12 +853,12 @@ fn tool_window_count(total: usize) -> usize {
 /// arguments and native blocks the context only references count at their artifact size, and
 /// tools at their resolved definition, since the request carries their content.
 pub fn context_tokens(
-    runtime: &Runtime,
+    engine: &TurnEngine,
     ctx: &InvocationContext,
     head: &ArtifactRef,
     window: usize,
 ) -> Result<i64, StorageError> {
-    measure(runtime, ctx, head, window).map(|size| size.tokens)
+    measure(engine, ctx, head, window).map(|size| size.tokens)
 }
 
 struct RequestSize {
@@ -863,13 +871,13 @@ struct RequestSize {
 }
 
 fn measure(
-    runtime: &Runtime,
+    engine: &TurnEngine,
     ctx: &InvocationContext,
     head: &ArtifactRef,
     window: usize,
 ) -> Result<RequestSize, StorageError> {
     use devworks_core::providers::materialize::SchemaDocuments;
-    let schemas = runtime
+    let schemas = engine
         .providers()
         .ok_or(StorageError::ScopeDenied)?
         .schemas();
@@ -886,9 +894,9 @@ fn measure(
             .checked_add(bytes.len())
             .ok_or(StorageError::ScopeDenied)?;
     }
-    let (context_bytes, _) = runtime
+    let (context_bytes, _) = engine
         .artifacts()
-        .read_exact(runtime.store().as_ref(), ctx, head, 32 * 1024 * 1024)
+        .read_exact(engine.store().as_ref(), ctx, head, 32 * 1024 * 1024)
         .map_err(artifact_read_fault)?;
     let context: ProviderContext = serde_json::from_slice(&context_bytes)
         .map_err(|error| StorageError::InvalidRecord(format!("agent context: {error}")))?;
@@ -948,14 +956,14 @@ fn measure(
 /// blocks as one epoch change can record as omitted. When the kept part alone reaches the
 /// threshold, compacting cannot help and the request is sent as before.
 fn compaction_due(
-    runtime: &Runtime,
+    engine: &TurnEngine,
     ctx: &InvocationContext,
     route: &RouteChoice,
     head: &ArtifactRef,
     window: usize,
 ) -> Result<bool, StorageError> {
     let (limit, percent) =
-        read_snapshot(runtime.store().as_ref(), &ReadOptions::default(), |read| {
+        read_snapshot(engine.store().as_ref(), &ReadOptions::default(), |read| {
             let model = read
                 .router()
                 .route_model(&route.model_id)?
@@ -967,7 +975,7 @@ fn compaction_due(
                 )?,
             ))
         })?;
-    let size = measure(runtime, ctx, head, window)?;
+    let size = measure(engine, ctx, head, window)?;
     let reaches = |tokens: i64| {
         limit.is_some_and(|limit| tokens.saturating_mul(100) >= limit.saturating_mul(percent))
     };
@@ -978,7 +986,7 @@ fn compaction_due(
 /// Summarize `head` through the agent's own pinned route and publish the summary as the root of
 /// the next context epoch.
 async fn compact(
-    runtime: &Arc<Runtime>,
+    engine: &TurnEngine,
     ctx: &InvocationContext,
     route: &RouteChoice,
     binding: &NativeBinding,
@@ -987,10 +995,10 @@ async fn compact(
     retry_at_ms: &mut Option<i64>,
 ) -> Result<ArtifactRef, TurnError> {
     let session_id = ctx.session_id().ok_or(StorageError::ScopeDenied)?;
-    let store = runtime.store().as_ref();
+    let store = engine.store().as_ref();
     let source = crate::context_epoch::current_source(
         store,
-        runtime.artifacts(),
+        engine.artifacts(),
         ctx,
         session_id,
         head,
@@ -1000,14 +1008,14 @@ async fn compact(
     crate::compaction::omitted_native(&source.context, binding)?;
     let input = crate::compaction::publish_input(
         store,
-        runtime.artifacts(),
+        engine.artifacts(),
         ctx,
         session_id,
         binding,
         &source,
     )?;
-    let invocation = plan_compaction(runtime, ctx, route, binding, &input)?;
-    let providers = Arc::clone(runtime.providers().ok_or(StorageError::ScopeDenied)?);
+    let invocation = plan_compaction(engine, ctx, route, binding, &input)?;
+    let providers = Arc::clone(engine.providers().ok_or(StorageError::ScopeDenied)?);
     let stopped = cancellation.clone();
     let handle = tokio::runtime::Handle::current();
     let produced = tokio::task::spawn_blocking(move || {
@@ -1027,7 +1035,7 @@ async fn compact(
             });
         }
     };
-    let bytes = runtime
+    let bytes = engine
         .artifacts()
         .read_exact(store, ctx, &summary, 8 * 1024 * 1024)
         .map_err(artifact_read_fault)?
@@ -1036,7 +1044,7 @@ async fn compact(
         .map_err(|_| StorageError::InvalidRecord("compaction summary is not text".into()))?;
     Ok(crate::compaction::publish_compacted(
         store,
-        runtime.artifacts(),
+        engine.artifacts(),
         ctx,
         session_id,
         binding,
@@ -1056,7 +1064,7 @@ fn output_headroom(context_tokens: Option<i64>) -> i64 {
 /// while the head and observed pin revision are unchanged. A new head or pin permits fresh
 /// availability assessment.
 pub fn route_context_head(
-    runtime: &Runtime,
+    engine: &TurnEngine,
     ctx: &InvocationContext,
     session_id: &Id,
     context_epoch: i64,
@@ -1065,7 +1073,7 @@ pub fn route_context_head(
     needs_images: bool,
 ) -> Result<RouteChoice, TurnError> {
     let (intent, effort, mut required, pin_revision, reviewer) =
-        read_snapshot(runtime.store().as_ref(), &ReadOptions::default(), |read| {
+        read_snapshot(engine.store().as_ref(), &ReadOptions::default(), |read| {
             let session = read
                 .sessions()
                 .session(session_id)?
@@ -1140,8 +1148,8 @@ pub fn route_context_head(
     // Reviewers cannot issue Commands. Routing is host bookkeeping for their own validated
     // session; their later selected tool inventory still uses the read-only reviewer principal.
     let route_ctx = if reviewer {
-        let info = runtime.store().info();
-        let mut host = HostIngress::new(runtime.store().as_ref())
+        let info = engine.store().info();
+        let mut host = HostIngress::new(engine.store().as_ref())
             .context(
                 info.host_actor,
                 PrincipalKind::Host,
@@ -1164,7 +1172,7 @@ pub fn route_context_head(
         ctx.clone()
     };
     let refused = |detail: String, retry| TurnError::Command { detail, retry };
-    let reply = runtime
+    let reply = engine
         .command(&route_ctx, "router.route", &frame)
         .map_err(|error| refused(format!("agent route gateway: {error}"), RetryAdvice::Never))?;
     let choice = match reply {
@@ -1197,7 +1205,7 @@ pub fn route_context_head(
         )),
     }?;
     Ok(read_snapshot(
-        runtime.store().as_ref(),
+        engine.store().as_ref(),
         &ReadOptions::default(),
         |read| {
             let pin = read
@@ -1231,13 +1239,13 @@ fn context_has_images(context: &ProviderContext) -> bool {
 }
 
 fn context_head_has_images(
-    runtime: &Runtime,
+    engine: &TurnEngine,
     ctx: &InvocationContext,
     head: &ArtifactRef,
 ) -> Result<bool, StorageError> {
-    let bytes = runtime
+    let bytes = engine
         .artifacts()
-        .read_exact(runtime.store().as_ref(), ctx, head, 32 * 1024 * 1024)
+        .read_exact(engine.store().as_ref(), ctx, head, 32 * 1024 * 1024)
         .map_err(artifact_read_fault)?
         .0;
     let context: ProviderContext = serde_json::from_slice(&bytes)
@@ -1384,12 +1392,12 @@ pub(crate) const TOOL_WINDOW_NOTICE: &str = "Selected tools are presented in suc
 /// A membership handoff advances the session epoch in the same transaction as its root change.
 /// Rebuild the provider root before the destination child sends another native request.
 pub fn ensure_membership_context(
-    runtime: &Runtime,
+    engine: &TurnEngine,
     ctx: &InvocationContext,
     agent: &AgentRecord,
 ) -> Result<(), TurnError> {
     let session_id = ctx.session_id().ok_or(StorageError::ScopeDenied)?;
-    let pending = read_snapshot(runtime.store().as_ref(), &ReadOptions::default(), |read| {
+    let pending = read_snapshot(engine.store().as_ref(), &ReadOptions::default(), |read| {
         let session = read
             .sessions()
             .session(session_id)?
@@ -1430,31 +1438,31 @@ pub fn ensure_membership_context(
     let Some((epoch, sequence, source)) = pending else {
         return Ok(());
     };
-    let fresh = initial_context(runtime.store().as_ref(), ctx, agent)?;
-    let host = HostIngress::new(runtime.store().as_ref())
+    let fresh = initial_context(engine.store().as_ref(), ctx, agent)?;
+    let host = HostIngress::new(engine.store().as_ref())
         .context(
-            runtime.store().info().host_actor,
+            engine.store().info().host_actor,
             PrincipalKind::Host,
             ctx.invocation_id().clone(),
             Id::new("membership-context").expect("static ingress"),
-            Counter::new(runtime.store().info().restore_epoch)
+            Counter::new(engine.store().info().restore_epoch)
                 .map_err(|_| StorageError::ScopeDenied)?,
             Revision::new(1).expect("positive policy revision"),
         )
         .with_session(session_id.clone())
         .with_lineage(ctx.project_id().cloned(), ctx.root_id().cloned(), None);
     if sequence == 0 {
-        append_empty_handoff_boundary(runtime, &host, session_id, &agent.assignment_id, epoch)?;
-        return ensure_membership_context(runtime, ctx, agent);
+        append_empty_handoff_boundary(engine, &host, session_id, &agent.assignment_id, epoch)?;
+        return ensure_membership_context(engine, ctx, agent);
     }
     let previous = source
         .as_ref()
         .map(|source| {
             let reference: ArtifactRef =
                 serde_json::from_value(source.clone()).map_err(|_| StorageError::ScopeDenied)?;
-            let (bytes, provenance) = runtime
+            let (bytes, provenance) = engine
                 .artifacts()
-                .read_exact(runtime.store().as_ref(), &host, &reference, 8 * 1024 * 1024)
+                .read_exact(engine.store().as_ref(), &host, &reference, 8 * 1024 * 1024)
                 .map_err(artifact_read_fault)?;
             let context: ProviderContext =
                 serde_json::from_slice(&bytes).map_err(|_| StorageError::ScopeDenied)?;
@@ -1476,14 +1484,14 @@ pub fn ensure_membership_context(
     let previous = match previous {
         Some((mut context, binding, observed, reference)) => {
             if observed < sequence {
-                match unpublished_turn(runtime.store().as_ref(), ctx, session_id, observed)? {
+                match unpublished_turn(engine.store().as_ref(), ctx, session_id, observed)? {
                     Some(UnpublishedTurn::Settled {
                         attempt_id,
                         has_tools,
                     }) => {
                         let material = crate::tool_turn::handoff_continuation_context(
-                            runtime.store().as_ref(),
-                            runtime.artifacts(),
+                            engine.store().as_ref(),
+                            engine.artifacts(),
                             ctx,
                             crate::tool_turn::TurnSource {
                                 session_id,
@@ -1517,8 +1525,8 @@ pub fn ensure_membership_context(
                         for fact in facts {
                             crate::tool_turn::append_context_fact(
                                 &mut context,
-                                runtime.store().as_ref(),
-                                runtime.artifacts(),
+                                engine.store().as_ref(),
+                                engine.artifacts(),
                                 &host,
                                 session_id,
                                 fact,
@@ -1526,12 +1534,11 @@ pub fn ensure_membership_context(
                         }
                     }
                     None => {
-                        for fact in handoff_fact_messages(runtime, session_id, observed, sequence)?
-                        {
+                        for fact in handoff_fact_messages(engine, session_id, observed, sequence)? {
                             crate::tool_turn::append_context_fact(
                                 &mut context,
-                                runtime.store().as_ref(),
-                                runtime.artifacts(),
+                                engine.store().as_ref(),
+                                engine.artifacts(),
                                 &host,
                                 session_id,
                                 fact,
@@ -1545,14 +1552,14 @@ pub fn ensure_membership_context(
         None => None,
     };
     let missing_head_facts = if source.is_none() && sequence > 0 {
-        if unpublished_turn(runtime.store().as_ref(), ctx, session_id, 0)?.is_some() {
+        if unpublished_turn(engine.store().as_ref(), ctx, session_id, 0)?.is_some() {
             return Err(StorageError::ScopeDenied.into());
         }
-        handoff_fact_messages(runtime, session_id, 0, sequence)?
+        handoff_fact_messages(engine, session_id, 0, sequence)?
     } else {
         Vec::new()
     };
-    let tools_required = !runtime
+    let tools_required = !engine
         .providers()
         .ok_or(StorageError::ScopeDenied)?
         .schemas()
@@ -1563,7 +1570,7 @@ pub fn ensure_membership_context(
         |(context, _)| context_has_images(context),
     );
     let route = route_context_head(
-        runtime,
+        engine,
         ctx,
         session_id,
         epoch,
@@ -1571,7 +1578,7 @@ pub fn ensure_membership_context(
         tools_required,
         needs_images,
     )?;
-    let binding = binding_for_route(runtime, &route, epoch)?;
+    let binding = binding_for_route(engine, &route, epoch)?;
     let (mut context, omitted) = if let Some((previous, old_binding)) = previous {
         previous
             .converted_for_new_epoch(&old_binding, &binding)
@@ -1581,8 +1588,8 @@ pub fn ensure_membership_context(
         for fact in missing_head_facts {
             crate::tool_turn::append_context_fact(
                 &mut context,
-                runtime.store().as_ref(),
-                runtime.artifacts(),
+                engine.store().as_ref(),
+                engine.artifacts(),
                 &host,
                 session_id,
                 fact,
@@ -1604,16 +1611,16 @@ pub fn ensure_membership_context(
             cache: None,
         }],
     });
-    let context = runtime.bind_provider_instructions(ctx, context, &[])?;
+    let context = engine.bind_provider_instructions(ctx, context, &[])?;
     context
         .validate()
         .map_err(|error| StorageError::InvalidRecord(format!("handoff context: {error:?}")))?;
     let bytes = serde_json::to_vec(&context)
         .map_err(|error| StorageError::InvalidRecord(error.to_string()))?;
-    let staged = runtime
+    let staged = engine
         .artifacts()
         .stage_host_bytes(
-            runtime.store().as_ref(),
+            engine.store().as_ref(),
             &bytes,
             json!({"kind":"ProviderContextEpoch","reason":"MembershipHandoff",
                 "sessionId":session_id,"previousEpoch":epoch-1,"nextEpoch":epoch,
@@ -1621,14 +1628,14 @@ pub fn ensure_membership_context(
         )?
         .map_err(StorageError::InvalidRecord)?;
     let staged_for_write = staged.clone();
-    let service = runtime.artifacts().clone();
+    let service = engine.artifacts().clone();
     let session_id = session_id.clone();
     let ctx = ctx.clone();
     let assignment_id = agent.assignment_id.clone();
     let root_id = agent.root_id.clone();
     let committed = run_write(
-        runtime.store().as_ref(),
-        WriteOptions::default(),
+        engine.store().as_ref(),
+        WriteOptions::observed(),
         move |tx| {
             let session = tx
                 .sessions()
@@ -1682,38 +1689,38 @@ pub fn ensure_membership_context(
             Ok(())
         },
     );
-    runtime
+    engine
         .artifacts()
-        .settle_host_bytes(runtime.store().as_ref(), &staged, committed.is_ok());
+        .settle_host_bytes(engine.store().as_ref(), &staged, committed.is_ok());
     Ok(committed?)
 }
 
 /// The epoch row must name an existing transcript position. A queued child can move before
 /// its first provider turn, so create a host-authored boundary that the rebuilt prompt reads.
 fn append_empty_handoff_boundary(
-    runtime: &Runtime,
+    engine: &TurnEngine,
     host: &InvocationContext,
     session_id: &Id,
     assignment_id: &devworks_core::protocol::AssignmentId,
     epoch: i64,
 ) -> Result<(), StorageError> {
     let notice = "Assignment transferred before the first provider turn.";
-    let staged = runtime
+    let staged = engine
         .artifacts()
         .stage_host_bytes(
-            runtime.store().as_ref(),
+            engine.store().as_ref(),
             notice.as_bytes(),
             json!({"kind":"MembershipHandoffBoundary","sessionId":session_id}),
         )?
         .map_err(StorageError::InvalidRecord)?;
     let pending = staged.clone();
-    let artifacts = runtime.artifacts().clone();
+    let artifacts = engine.artifacts().clone();
     let host = host.clone();
     let session_id = session_id.clone();
     let assignment_id = assignment_id.clone();
     let committed = run_write(
-        runtime.store().as_ref(),
-        WriteOptions::default(),
+        engine.store().as_ref(),
+        WriteOptions::observed(),
         move |tx| {
             let session = tx
                 .sessions()
@@ -1767,19 +1774,19 @@ fn append_empty_handoff_boundary(
             }
         },
     );
-    runtime
+    engine
         .artifacts()
-        .settle_host_bytes(runtime.store().as_ref(), &staged, committed.is_ok());
+        .settle_host_bytes(engine.store().as_ref(), &staged, committed.is_ok());
     committed
 }
 
 fn handoff_fact_messages(
-    runtime: &Runtime,
+    engine: &TurnEngine,
     session_id: &Id,
     after: i64,
     sequence: i64,
 ) -> Result<Vec<TranscriptBody>, StorageError> {
-    let facts = read_snapshot(runtime.store().as_ref(), &ReadOptions::default(), |read| {
+    let facts = read_snapshot(engine.store().as_ref(), &ReadOptions::default(), |read| {
         let mut position = after;
         let mut facts = Vec::new();
         while position < sequence {
@@ -1819,20 +1826,20 @@ fn handoff_fact_messages(
 /// The immutable role brief, repository instructions and native account binding share the
 /// first durable context head.
 pub fn publish_first_context(
-    runtime: &Runtime,
+    engine: &TurnEngine,
     ctx: &InvocationContext,
     agent: &AgentRecord,
     route: &RouteChoice,
 ) -> Result<(ArtifactRef, NativeBinding), StorageError> {
     let session_id = ctx.session_id().ok_or(StorageError::ScopeDenied)?;
-    if runtime
+    if engine
         .recover_native_context_head(ctx, session_id)?
         .is_some()
     {
         return Err(StorageError::ScopeDenied);
     }
     let (binding, headroom) =
-        read_snapshot(runtime.store().as_ref(), &ReadOptions::default(), |read| {
+        read_snapshot(engine.store().as_ref(), &ReadOptions::default(), |read| {
             let pin = read
                 .router()
                 .session_pin(session_id)?
@@ -1872,8 +1879,8 @@ pub fn publish_first_context(
                 output_headroom(model.context_tokens),
             ))
         })?;
-    let mut prompt = initial_context(runtime.store().as_ref(), ctx, agent)?;
-    let selected_count = runtime
+    let mut prompt = initial_context(engine.store().as_ref(), ctx, agent)?;
+    let selected_count = engine
         .providers()
         .ok_or(StorageError::ScopeDenied)?
         .schemas()
@@ -1888,52 +1895,52 @@ pub fn publish_first_context(
     if binding.endpoint_profile != EndpointProfile::CodexSubscriptionResponses {
         prompt.parameters.max_output_tokens = Some(headroom as u32);
     }
-    let bound = runtime.bind_provider_instructions(ctx, prompt, &[])?;
-    let head = runtime.publish_initial_native_context(ctx, session_id, &binding, &bound)?;
+    let bound = engine.bind_provider_instructions(ctx, prompt, &[])?;
+    let head = engine.publish_initial_native_context(ctx, session_id, &binding, &bound)?;
     Ok((head, binding))
 }
 
 /// Build an attributed native request from the exact published head and routed pin. The driver
 /// rechecks the pin, current owner, price and context before sending anything to a provider.
 pub fn plan_generation(
-    runtime: &Runtime,
+    engine: &TurnEngine,
     ctx: &InvocationContext,
     route: &RouteChoice,
     binding: &NativeBinding,
     head: &ArtifactRef,
 ) -> Result<NativeInvocation, StorageError> {
-    plan_generation_window(runtime, ctx, route, binding, head, 0)
+    plan_generation_window(engine, ctx, route, binding, head, 0)
 }
 
 /// A bounded, deterministic window of the complete selected tool inventory. The caller rotates
 /// across windows after settled turns so every selected binding can be offered without changing
 /// the immutable alias map of an already dispatched request.
 pub fn plan_generation_window(
-    runtime: &Runtime,
+    engine: &TurnEngine,
     ctx: &InvocationContext,
     route: &RouteChoice,
     binding: &NativeBinding,
     head: &ArtifactRef,
     window: usize,
 ) -> Result<NativeInvocation, StorageError> {
-    plan_request(runtime, ctx, route, binding, head, Some(window))
+    plan_request(engine, ctx, route, binding, head, Some(window))
 }
 
 /// A compaction request for the agent's own pinned route: the exact `input` context, no tools,
 /// router purpose `Compaction`, and usage attributed like the agent's other requests.
 pub(crate) fn plan_compaction(
-    runtime: &Runtime,
+    engine: &TurnEngine,
     ctx: &InvocationContext,
     route: &RouteChoice,
     binding: &NativeBinding,
     input: &ArtifactRef,
 ) -> Result<NativeInvocation, StorageError> {
-    plan_request(runtime, ctx, route, binding, input, None)
+    plan_request(engine, ctx, route, binding, input, None)
 }
 
 /// `window` selects the offered tools of a generation request; `None` plans a compaction.
 fn plan_request(
-    runtime: &Runtime,
+    engine: &TurnEngine,
     ctx: &InvocationContext,
     route: &RouteChoice,
     binding: &NativeBinding,
@@ -1946,7 +1953,7 @@ fn plan_request(
     if binding.model_id != route.model_id || binding.connection_id != route.connection_id {
         return Err(StorageError::ScopeDenied);
     }
-    let providers = runtime.providers().ok_or(StorageError::ScopeDenied)?;
+    let providers = engine.providers().ok_or(StorageError::ScopeDenied)?;
     let tools = match window {
         Some(window) => {
             let selected = providers.schemas().selected_agent_tools(ctx)?;
@@ -1958,9 +1965,9 @@ fn plan_request(
     let tool_bytes = serde_json::to_vec(&tools)
         .map_err(|error| StorageError::InvalidRecord(format!("tool schemas: {error}")))?
         .len();
-    let (context_bytes, _) = runtime
+    let (context_bytes, _) = engine
         .artifacts()
-        .read_exact(runtime.store().as_ref(), ctx, head, 32 * 1024 * 1024)
+        .read_exact(engine.store().as_ref(), ctx, head, 32 * 1024 * 1024)
         .map_err(artifact_read_fault)?;
     let provider_context: ProviderContext = serde_json::from_slice(&context_bytes)
         .map_err(|error| StorageError::InvalidRecord(format!("agent context: {error}")))?;
@@ -1998,7 +2005,7 @@ fn plan_request(
         sha256_hex(identity.as_bytes())
     ))
     .map_err(|_| StorageError::ScopeDenied)?;
-    let info = runtime.store().info();
+    let info = engine.store().info();
     let (
         query,
         owner,
@@ -2009,7 +2016,7 @@ fn plan_request(
         work,
         headroom,
         required,
-    ) = read_snapshot(runtime.store().as_ref(), &ReadOptions::default(), |read| {
+    ) = read_snapshot(engine.store().as_ref(), &ReadOptions::default(), |read| {
         let pin = read
             .router()
             .session_pin(session_id)?

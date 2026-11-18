@@ -2,7 +2,7 @@
 use super::{properties, reference};
 use crate::ports::storage::*;
 use crate::services::graph::{modules::Modules, read::Reader, scan};
-use crate::services::sessions::Failure;
+use crate::services::kernel::Failure;
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
 

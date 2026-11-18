@@ -1306,6 +1306,7 @@ version = "0.1.0"
 dependencies = [
  "devworks-adapters",
  "devworks-core",
+ "devworks-engine",
  "devworks-extension-protocol",
  "ed25519-dalek",
  "rmcp",

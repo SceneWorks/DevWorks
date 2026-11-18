@@ -54,7 +54,7 @@ use crate::gateway::{AdmittedCommand, AdmittedQuery};
 use crate::operations::{OperationInput, sessions as ops};
 use crate::ports::storage::{
     ApplicationStore, NewEvent, ReadSnapshot, SessionPosition, SessionRead, SessionScope,
-    StorageError, StoredLink, StoredSession, WorkRoot, WriteOptions, WriteTransaction, run_write,
+    StorageError, StoredLink, StoredSession, WriteOptions, WriteTransaction, run_write,
 };
 use crate::ports::{
     CommandHandler, Decided, HandlerFailure, IdKind, IdSource, QueryAnswer, QueryHandler,
@@ -68,8 +68,8 @@ use crate::protocol::records::{ContextSource, SessionRecord};
 use crate::protocol::results::{DomainDecision, OperationResult};
 use crate::protocol::support::{BoundedList, BoundedText, Page};
 use crate::protocol::{
-    ActorId, CorrelationId, Counter, DomainErrorCode, DomainFault, EventId, Id, ProjectId,
-    Protocol, RetryAdvice, Revision, RevisionDimension, RootId,
+    ActorId, CorrelationId, Counter, DomainErrorCode, DomainFault, EventId, Id, Protocol,
+    RetryAdvice, RevisionDimension,
 };
 use crate::services::cursor::{self, CursorBinding};
 use crate::services::knowledge::rules_for;
@@ -100,53 +100,10 @@ pub const EPOCH_CHANGED: &str = "context_epoch";
 // ---------------------------------------------------------------------------------------------
 // Refusals and helpers shared with the history service
 
-pub use crate::services::failure::{Failure, Refusal};
-pub(crate) fn not_found(kind: &'static str, id: &Id) -> Refusal {
-    Refusal::new(DomainErrorCode::NotFound, kind, Some(id.clone()))
-}
-
-/// The query fault of a failure; a storage error maps through the shared storage fault.
-pub(crate) fn query_fault(
-    f: Failure,
-    kind: &'static str,
-    correlation: CorrelationId,
-) -> DomainFault {
-    f.query_fault(kind, correlation)
-}
-
-/// The command decision of a use-case outcome.
-pub(crate) fn decided(
-    tx: &mut dyn WriteTransaction,
-    outcome: Result<DomainDecision, Failure>,
-) -> Result<Decided, HandlerFailure> {
-    match outcome {
-        Ok(decision) => Ok(Decided {
-            decision,
-            operation_id: None,
-        }),
-        Err(Failure::Refused(r)) => Ok(Decided {
-            decision: DomainDecision::Refused {
-                fault: r.fault(CorrelationId(tx.new_id(IdKind::Correlation))),
-            },
-            operation_id: None,
-        }),
-        Err(Failure::Storage(e)) => Err(HandlerFailure::Storage(e)),
-    }
-}
-
-pub(crate) fn rev(n: i64) -> Revision {
-    Revision::new(n.max(1)).expect("positive revision")
-}
-pub(crate) fn counter(n: i64) -> Counter {
-    Counter::new(n.max(0)).expect("non-negative counter")
-}
-pub(crate) fn label(s: &str, fallback: &str) -> BoundedText<1, 256> {
-    let t: String = s.chars().take(256).collect();
-    BoundedText(if t.is_empty() { fallback.into() } else { t })
-}
-pub(crate) fn content(s: &str) -> BoundedText<0, 65536> {
-    BoundedText(s.chars().take(65536).collect())
-}
+use super::kernel::{
+    Failure, Refusal, bound_agent_session, counter, decided, label, not_found, project_session,
+    query_fault, require_project, rev, visible_root, visible_session,
+};
 /// Tokens of `bytes` by the conservative attributed estimate (4 bytes per token, rounded up).
 pub fn token_estimate(bytes: i64) -> i64 {
     (bytes.max(0) + 3) / 4
@@ -160,87 +117,6 @@ fn related_paths(a: &str, b: &str) -> bool {
     a.split(['/', '\\'])
         .zip(b.split(['/', '\\']))
         .all(|(x, y)| x == y)
-}
-
-/// A request naming `project` must match the invocation's project, when it has one.
-pub(crate) fn require_project(ctx: &InvocationContext, project: &ProjectId) -> Result<(), Refusal> {
-    match ctx.project_id() {
-        Some(p) if p != project => Err(Refusal::new(
-            DomainErrorCode::PermissionDenied,
-            "project",
-            Some(project.0.clone()),
-        )),
-        _ => Ok(()),
-    }
-}
-/// Whether the invocation may see a session of `project` (`None`: a workspace session).
-pub(crate) fn project_visible(ctx: &InvocationContext, project: Option<&ProjectId>) -> bool {
-    match ctx.project_id() {
-        None => true,
-        Some(p) => project == Some(p),
-    }
-}
-/// The work root `id` if this invocation may see it (otherwise `NotFound`).
-pub(crate) fn visible_root(
-    snapshot: &dyn crate::ports::storage::SessionRead,
-    ctx: &InvocationContext,
-    id: &RootId,
-) -> Result<WorkRoot, Failure> {
-    match snapshot.work_root(id)? {
-        Some(w) if project_visible(ctx, Some(&w.project_id)) => Ok(w),
-        _ => Err(not_found("root", &id.0).into()),
-    }
-}
-pub(crate) fn visible_session(
-    read: &dyn crate::ports::storage::SessionRead,
-    ctx: &InvocationContext,
-    id: &Id,
-) -> Result<StoredSession, Failure> {
-    let owner = bound_agent_session(read, ctx)?;
-    let session = project_session(read, ctx, id)?;
-    if owner.as_ref().is_none_or(|own| {
-        session.id == own.id
-            || (own.root_id.is_some()
-                && session.root_id == own.root_id
-                && session.project_id == own.project_id)
-    }) {
-        Ok(session)
-    } else {
-        Err(not_found("session", id).into())
-    }
-}
-
-fn project_session(
-    read: &dyn SessionRead,
-    ctx: &InvocationContext,
-    id: &Id,
-) -> Result<StoredSession, Failure> {
-    match read.session(id)? {
-        Some(session) if project_visible(ctx, session.project_id.as_ref()) => Ok(session),
-        _ => Err(not_found("session", id).into()),
-    }
-}
-
-fn bound_agent_session(
-    read: &dyn SessionRead,
-    ctx: &InvocationContext,
-) -> Result<Option<StoredSession>, Failure> {
-    if ctx.principal_kind() != PrincipalKind::Agent {
-        return Ok(None);
-    }
-    let Some(id) = ctx.session_id() else {
-        return Ok(None);
-    };
-    let own = read.session(id)?.ok_or_else(|| not_found("session", id))?;
-    if own.agent_id != *ctx.principal()
-        || !project_visible(ctx, own.project_id.as_ref())
-        || ctx
-            .root_id()
-            .is_some_and(|root| own.root_id.as_ref() != Some(root))
-    {
-        return Err(not_found("session", id).into());
-    }
-    Ok(Some(own))
 }
 
 /// The wire record of a session.
@@ -441,7 +317,7 @@ impl SessionService {
     ) -> Result<(), Failure> {
         let (ctx, s) = (ctx.clone(), session.clone());
         let query_id = query.query_id().0.as_str().to_owned();
-        run_write(&*self.audit, WriteOptions::default(), move |tx| {
+        run_write(&*self.audit, WriteOptions::observed(), move |tx| {
             if &tx.store().store_id != ctx.store_id() {
                 return Err(StorageError::ScopeDenied);
             }

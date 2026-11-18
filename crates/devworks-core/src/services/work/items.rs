@@ -26,8 +26,8 @@ use crate::protocol::results::{DomainDecision, OperationResult};
 use crate::protocol::support::{BoundedList, Label, Page};
 use crate::protocol::{DomainErrorCode, EventId, Id, ProjectId, RevisionDimension, RootId};
 use crate::services::cursor::{self, CursorBinding};
+use crate::services::kernel::{Failure, rev};
 use crate::services::runs::{control_of, ensure_control};
-use crate::services::sessions::{Failure, rev};
 use serde_json::json;
 use std::collections::{BTreeMap, BTreeSet};
 

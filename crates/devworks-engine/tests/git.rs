@@ -14,8 +14,8 @@ use devworks_core::{
     protocol::{Counter, Revision},
     services::{
         artifacts::ArtifactService,
+        git::helper::SupervisedHelpers,
         git::{GitConfig, GitService},
-        indexing::helper::SupervisedHelpers,
         process::ProcessSupervisor,
         resources::ResourceService,
     },
@@ -1737,7 +1737,7 @@ struct CommitReplyLost(
     Option<ReviewedCommitCase>,
     Option<Arc<push_transport::State>>,
 );
-impl devworks_core::services::indexing::helper::HelperRunner for CommitReplyLost {
+impl devworks_core::services::git::helper::HelperRunner for CommitReplyLost {
     fn filesystem(&self) -> Option<&dyn devworks_core::authority::destructive::FilesystemResolver> {
         self.0.filesystem()
     }
@@ -1748,9 +1748,9 @@ impl devworks_core::services::indexing::helper::HelperRunner for CommitReplyLost
         &self,
         ctx: &devworks_core::context::InvocationContext,
         spec: devworks_core::ports::process::ProcessSpec,
-        limits: devworks_core::services::indexing::helper::HelperLimits,
+        limits: devworks_core::services::git::helper::HelperLimits,
         stop: &(dyn Fn() -> bool + Sync),
-    ) -> Result<Vec<u8>, devworks_core::services::indexing::helper::HelperFault> {
+    ) -> Result<Vec<u8>, devworks_core::services::git::helper::HelperFault> {
         if let Some(state) = &self.2 {
             state.assert_recorded(&spec, false);
         }
@@ -1772,19 +1772,19 @@ impl devworks_core::services::indexing::helper::HelperRunner for CommitReplyLost
         &self,
         ctx: &devworks_core::context::InvocationContext,
         spec: devworks_core::ports::process::ProcessSpec,
-        limits: devworks_core::services::indexing::helper::HelperLimits,
+        limits: devworks_core::services::git::helper::HelperLimits,
         stop: &(dyn Fn() -> bool + Sync),
-    ) -> Result<Vec<u8>, devworks_core::services::indexing::helper::HelperFault> {
+    ) -> Result<Vec<u8>, devworks_core::services::git::helper::HelperFault> {
         self.0.run_difference(ctx, spec, limits, stop)
     }
     fn run_recorded_difference(
         &self,
         ctx: &devworks_core::context::InvocationContext,
         spec: devworks_core::ports::process::ProcessSpec,
-        limits: devworks_core::services::indexing::helper::HelperLimits,
+        limits: devworks_core::services::git::helper::HelperLimits,
         stop: &(dyn Fn() -> bool + Sync),
         operation: &devworks_core::protocol::OperationId,
-    ) -> Result<Vec<u8>, devworks_core::services::indexing::helper::HelperFault> {
+    ) -> Result<Vec<u8>, devworks_core::services::git::helper::HelperFault> {
         self.0
             .run_recorded_difference(ctx, spec, limits, stop, operation)
     }
@@ -1792,11 +1792,11 @@ impl devworks_core::services::indexing::helper::HelperRunner for CommitReplyLost
         &self,
         ctx: &devworks_core::context::InvocationContext,
         spec: devworks_core::ports::process::ProcessSpec,
-        limits: devworks_core::services::indexing::helper::HelperLimits,
+        limits: devworks_core::services::git::helper::HelperLimits,
         stop: &(dyn Fn() -> bool + Sync),
         operation: &devworks_core::protocol::OperationId,
         approved_hold: bool,
-    ) -> Result<Vec<u8>, devworks_core::services::indexing::helper::HelperFault> {
+    ) -> Result<Vec<u8>, devworks_core::services::git::helper::HelperFault> {
         if let Some(state) = &self.2 {
             state.assert_recorded(&spec, true);
         }
@@ -1837,7 +1837,7 @@ impl devworks_core::services::indexing::helper::HelperRunner for CommitReplyLost
                 return Ok(reply);
             }
             Err(
-                devworks_core::services::indexing::helper::HelperFault::Uncertain(
+                devworks_core::services::git::helper::HelperFault::Uncertain(
                     "successful commit reply lost".into(),
                 ),
             )

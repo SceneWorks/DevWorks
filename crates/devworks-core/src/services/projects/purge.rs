@@ -1,8 +1,14 @@
 //! Native preparation and exact confirmation fences. A permit is opaque, cannot be
 //! deserialized, and is minted only after the ingress-bound Human decision and fresh owners.
 use super::*;
+pub use crate::ports::project_purge::PurgePermit;
+
+/// The only value that can issue a `PurgePermit`; its field is private to this file.
+struct ConfirmationToken(());
+impl PurgeConfirmation for ConfirmationToken {}
 use crate::ports::project_purge::{
-    ProjectPurgeClient, ProjectPurgeFiles, PurgeClientSnapshot, PurgeFileFault, PurgeFileSnapshot,
+    ProjectPurgeClient, ProjectPurgeFiles, PurgeClientSnapshot, PurgeConfirmation, PurgeFileFault,
+    PurgeFileSnapshot,
 };
 use crate::ports::storage::{
     ProjectPurgeInventory, ProjectPurgeRowAction, ProjectPurgeRowReason, StoredProjectPurge,
@@ -66,7 +72,7 @@ impl PurgeWorker {
             let owner = self.ids.next_id(IdKind::Operation);
             let (manifest, id, claim) =
                 (effect.manifest_id.clone(), effect.id.clone(), owner.clone());
-            let admitted = run_write(&*self.store, WriteOptions::default(), move |tx| {
+            let admitted = run_write(&*self.store, WriteOptions::host_state(), move |tx| {
                 let until = tx
                     .now_ms()
                     .checked_add(30_000)
@@ -91,40 +97,13 @@ impl PurgeWorker {
             };
             let manifest = admitted.manifest_id;
             let id = admitted.id;
-            run_write(&*self.store, WriteOptions::default(), move |tx| {
+            run_write(&*self.store, WriteOptions::settlement(), move |tx| {
                 tx.projects()
                     .settle_purge_effect(&manifest, &id, &owner, outcome)
             })?;
             settled += 1;
         }
         Ok(settled)
-    }
-}
-
-/// Its fields and constructor are private to this confirmation owner. A generic authority
-/// grant or a wire input can never construct this storage capability.
-pub struct PurgePermit {
-    reviewed: StoredProjectPurge,
-    files: PurgeFileSnapshot,
-    client: PurgeClientSnapshot,
-    scope: crate::ports::storage::ProjectPurgeClientScope,
-    confirmed_by: ActorId,
-}
-impl PurgePermit {
-    pub fn reviewed(&self) -> &StoredProjectPurge {
-        &self.reviewed
-    }
-    pub fn files(&self) -> &PurgeFileSnapshot {
-        &self.files
-    }
-    pub fn client(&self) -> &PurgeClientSnapshot {
-        &self.client
-    }
-    pub fn client_scope(&self) -> &crate::ports::storage::ProjectPurgeClientScope {
-        &self.scope
-    }
-    pub fn confirmed_by(&self) -> &ActorId {
-        &self.confirmed_by
     }
 }
 
@@ -337,13 +316,14 @@ impl PurgeCoordinator {
             };
             return Err(refuse(DomainErrorCode::Conflict, reason, None));
         }
-        Ok(PurgePermit {
-            reviewed: stored,
-            files: snapshot.removing,
-            client: snapshot.client,
-            scope: snapshot.inventory.client,
-            confirmed_by: ctx.principal().clone(),
-        })
+        Ok(PurgePermit::issue(
+            &ConfirmationToken(()),
+            stored,
+            snapshot.removing,
+            snapshot.client,
+            snapshot.inventory.client,
+            ctx.principal().clone(),
+        ))
     }
 
     pub fn manifest_page(

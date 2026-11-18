@@ -66,7 +66,7 @@ use crate::protocol::records::{InstructionRecord, RegisteredPath};
 use crate::protocol::support::{BoundedList, RelativePath};
 use crate::protocol::{CorrelationId, DomainErrorCode, DomainFault, Id, ProjectId};
 use crate::services::artifacts::ArtifactService;
-use crate::services::sessions::{Failure, Refusal, decided, label, not_found, query_fault, rev};
+use crate::services::kernel::{Failure, Refusal, decided, label, not_found, query_fault, rev};
 use crate::settings::catalog::AgentRole;
 use crate::settings::service::PrincipalRoles;
 use serde_json::Value;
@@ -215,7 +215,7 @@ pub(crate) fn config_scope(
     match scope {
         DataScope::Workspace => Ok(ConfigScope::Workspace),
         DataScope::Project { project_id } => {
-            crate::services::sessions::require_project(ctx, project_id)?;
+            crate::services::kernel::require_project(ctx, project_id)?;
             Ok(ConfigScope::Project(project_id.clone()))
         }
     }
@@ -225,7 +225,7 @@ pub(crate) fn config_scope(
 pub(crate) fn visible(ctx: &InvocationContext, scope: &ConfigScope) -> bool {
     match scope {
         ConfigScope::Workspace => true,
-        ConfigScope::Project(p) => crate::services::sessions::project_visible(ctx, Some(p)),
+        ConfigScope::Project(p) => crate::services::kernel::project_visible(ctx, Some(p)),
     }
 }
 /// The item if it exists, is of `kind` and is visible to the invocation (else `NotFound`).
@@ -243,7 +243,7 @@ pub(crate) fn visible_item(
 /// Whether the invocation may see `confined`'s draft: a draft a project-confined agent wrote is
 /// visible only within that project (and to callers not confined to any project).
 fn confinement_visible(ctx: &InvocationContext, confined: Option<&ProjectId>) -> bool {
-    confined.is_none_or(|p| crate::services::sessions::project_visible(ctx, Some(p)))
+    confined.is_none_or(|p| crate::services::kernel::project_visible(ctx, Some(p)))
 }
 /// Whether the invocation may see the item: its scope and any draft confinement.
 pub(crate) fn item_visible(ctx: &InvocationContext, item: &StoredInstructionItem) -> bool {

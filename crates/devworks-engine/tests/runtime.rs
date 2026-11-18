@@ -30,11 +30,10 @@ use devworks_core::protocol::results::{
 };
 use devworks_core::protocol::{Check, CommandReply, ProjectId};
 use devworks_core::services::UseCases;
-use devworks_core::services::artifacts::ArtifactService;
 use devworks_core::services::artifacts::replies::REPLY_CONSUMER;
-use devworks_core::services::history::HistoryService;
-use devworks_core::services::resources::ResourceService;
-use devworks_core::services::sessions::SessionService;
+use devworks_engine::{
+    ArtifactComposition, DiagnosticComposition, KnowledgeComposition, RunComposition,
+};
 use devworks_engine::{BootError, BootReport, Composition, Runtime, RuntimeConfig, boot};
 use serde_json::json;
 use std::io::Read;
@@ -216,13 +215,7 @@ fn composition(
     files: Arc<dyn ArtifactFiles>,
     sources: Arc<dyn ArtifactSources>,
 ) -> Composition {
-    let artifacts = Arc::new(ArtifactService::new(
-        files,
-        sources,
-        Arc::new(NativeFilesystem::new()),
-        h.clock(),
-        h.ids.clone(),
-    ));
+    let artifacts = ArtifactComposition::new(files, sources, Arc::new(NativeFilesystem::new()));
     let mut config = RuntimeConfig::new(id("dispatcher-1"));
     // Only the boot pass and triggered passes run within a test.
     config.collect_interval = Duration::from_secs(3600);
@@ -232,27 +225,22 @@ fn composition(
         ids: h.ids.clone(),
         authority: Arc::new(Authority),
         artifacts,
-        resources: Arc::new(ResourceService::new(h.ids.clone(), h.clock())),
         process_host: Arc::new(NativeProcessHost),
-        runs: devworks_engine::RunComposition::new(Arc::new(
-            devworks_core::services::runs::ControlService::new(h.ids.clone()),
-        )),
+        runs: RunComposition::default(),
+        knowledge: KnowledgeComposition::default(),
+        application: devworks_engine::ApplicationComposition {
+            sessions: Some(Default::default()),
+            history: true,
+            ..Default::default()
+        },
+        web: None,
         power: Arc::new(NativePower),
-        diagnostics: Arc::new(
-            devworks_core::services::diagnostics::DiagnosticService::new(
-                store.clone(),
-                h.ids.clone(),
-                h.clock(),
-                None,
-            ),
-        ),
+        diagnostics: DiagnosticComposition::default(),
         git: None,
         browser: None,
         packages: None,
-        use_cases: UseCases::new()
-            .with_queue()
-            .with_sessions(Arc::new(SessionService::new(h.ids.clone(), store)))
-            .with_history(Arc::new(HistoryService::new(h.ids.clone()))),
+        use_cases: UseCases::new().with_queue(),
+        test_overrides: Default::default(),
         consumers: Vec::new(),
         indexing: None,
         config,

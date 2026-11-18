@@ -6,7 +6,7 @@ use crate::ports::storage::*;
 use crate::protocol::results::DomainDecision;
 use crate::protocol::shared::CommandReply;
 use crate::protocol::{Counter, Id, RequestKey, StoreId};
-use crate::services::sessions::Failure;
+use crate::services::kernel::Failure;
 use serde_json::{Value, json};
 pub struct ApprovedCommand {
     pub context: InvocationContext,
@@ -405,7 +405,7 @@ impl ApprovalService {
                 ..
             })
         );
-        run_write(store, WriteOptions::default(), move |tx| {
+        run_write(store, WriteOptions::settlement(), move |tx| {
             let Some(mut r) = tx.decisions().approval_resume(&id)? else {
                 return Ok(());
             };

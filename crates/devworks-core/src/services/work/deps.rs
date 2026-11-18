@@ -20,7 +20,7 @@ use crate::ports::storage::{FEATURE, StoredWork, WorkRead, WriteTransaction};
 use crate::protocol::records::DependencyEdge;
 use crate::protocol::results::{DomainDecision, OperationResult};
 use crate::protocol::{DomainErrorCode, Id, ProjectId, RetryAdvice};
-use crate::services::sessions::Refusal;
+use crate::services::kernel::Refusal;
 use serde_json::json;
 use std::collections::BTreeSet;
 

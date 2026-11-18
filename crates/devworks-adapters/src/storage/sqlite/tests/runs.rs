@@ -19,7 +19,7 @@ fn write<T: Send + 'static>(
     s: &SqliteStore,
     f: impl FnOnce(&mut dyn WriteTransaction) -> Result<T, StorageError> + Send + 'static,
 ) -> Result<T, StorageError> {
-    run_write(s, WriteOptions::default(), f)
+    run_write(s, WriteOptions::fixture(), f)
 }
 fn activation(s: &SqliteStore, a: &str, r: &str, generation: i64) -> StoredActivation {
     StoredActivation {

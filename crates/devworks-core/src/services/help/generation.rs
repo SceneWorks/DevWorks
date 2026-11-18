@@ -10,7 +10,7 @@ use crate::protocol::records::{HelpProvenance, OperationRef};
 use crate::protocol::results::OperationResult;
 use crate::protocol::support::BoundedText;
 use crate::protocol::{EventId, Id, OperationId, OperationState};
-use crate::services::sessions::rev;
+use crate::services::kernel::rev;
 use serde_json::{Value, json};
 use sha2::{Digest as _, Sha256};
 
@@ -261,7 +261,7 @@ impl HelpService {
         let op = operation.clone();
         let source = job.clone();
         let metadata = document.topic.clone();
-        let existing = run_write(&*self.store, WriteOptions::default(), move |tx| {
+        let existing = run_write(&*self.store, WriteOptions::host_state(), move |tx| {
             service.current(tx, &op, &source)?;
             let existing = tx
                 .help()
@@ -348,7 +348,7 @@ impl HelpService {
         let op = operation.clone();
         let source = job.clone();
         let artifact = staged.clone();
-        let result = run_write(&*self.store, WriteOptions::default(), move |tx| {
+        let result = run_write(&*self.store, WriteOptions::host_state(), move |tx| {
             service.current(tx, &op, &source)?;
             if let Some(existing) = tx
                 .help()
@@ -670,7 +670,7 @@ impl HelpService {
         let service = self.clone();
         let operation = operation.clone();
         let job = job.clone();
-        run_write(&*self.store, WriteOptions::default(), move |tx| {
+        run_write(&*self.store, WriteOptions::host_state(), move |tx| {
             service.current(tx, &operation, &job)?;
             let old = tx.help().help_head()?;
             let candidate = StoredHelpHead {

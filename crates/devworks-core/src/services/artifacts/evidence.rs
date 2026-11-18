@@ -157,7 +157,7 @@ impl ArtifactService {
         };
         let files = self.files.clone();
         let s = staged.clone();
-        let committed = run_write(store, WriteOptions::default(), move |tx| {
+        let committed = run_write(store, WriteOptions::observed(), move |tx| {
             // The storage limit is checked again with the new version in place, inside the
             // publishing transaction (as a save does): concurrent publications that each passed
             // the check above cannot together exceed it. Over the limit, nothing is kept.

@@ -11,7 +11,7 @@ use crate::{
     },
     services::{
         graph::lease,
-        sessions::{Failure, rev},
+        kernel::{Failure, rev},
     },
 };
 use serde_json::json;
@@ -138,7 +138,7 @@ impl SchemaService {
             WriteOptions {
                 cancellation: cancellation.clone(),
                 deadline_ms: deadline,
-                ..Default::default()
+                ..WriteOptions::host_state()
             },
             move |tx| {
                 // Storage validates new leases against this transaction's captured
@@ -226,13 +226,17 @@ impl SchemaService {
         };
         let _phase = runtime.closed.enter()?;
         let (closed, clock) = (runtime.closed.clone(), self.clock.clone());
-        run_write(runtime.store.as_ref(), WriteOptions::default(), move |tx| {
-            if closed.is_closed() {
-                return Err(StorageError::Cancelled);
-            }
-            let pins = tx.schemas().expire_schema_pins(clock.now_ms().get(), 500)?;
-            let rows = tx.schemas().prune_schema_views(500)?;
-            Ok(pins + rows)
-        })
+        run_write(
+            runtime.store.as_ref(),
+            WriteOptions::housekeeping(),
+            move |tx| {
+                if closed.is_closed() {
+                    return Err(StorageError::Cancelled);
+                }
+                let pins = tx.schemas().expire_schema_pins(clock.now_ms().get(), 500)?;
+                let rows = tx.schemas().prune_schema_views(500)?;
+                Ok(pins + rows)
+            },
+        )
     }
 }

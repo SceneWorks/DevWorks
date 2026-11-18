@@ -11,6 +11,10 @@ use std::time::Duration;
 #[derive(Clone)]
 pub struct GitComposition {
     pub config: GitConfig,
+    /// The transport of GitHub API calls. When present, [`crate::boot`] sets the config's GitHub
+    /// client over it and the provider connection service's secret resolver (which must be
+    /// composed).
+    pub github_http: Option<Arc<dyn devworks_core::ports::http::HttpTransport>>,
 }
 struct Effects(Arc<GitService>);
 fn result(outcome: EffectOutcome) -> EffectResult {

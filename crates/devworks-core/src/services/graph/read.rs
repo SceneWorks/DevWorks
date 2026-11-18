@@ -12,7 +12,7 @@ use crate::ports::storage::*;
 use crate::protocol::data::DataScope;
 use crate::protocol::records::{CodeNode, CodeNodeSelection};
 use crate::protocol::{DomainErrorCode, Id, ReadStamp};
-use crate::services::sessions::{Failure, Refusal};
+use crate::services::kernel::{Failure, Refusal};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::cell::{Cell, RefCell};

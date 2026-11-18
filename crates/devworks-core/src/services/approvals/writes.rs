@@ -8,7 +8,7 @@ use crate::protocol::Id;
 use crate::protocol::provider::ArtifactRef;
 use crate::protocol::records::{ApprovalContent, ProposalDecision};
 use crate::protocol::results::OperationResult;
-use crate::services::sessions::{Failure, not_found, project_visible};
+use crate::services::kernel::{Failure, not_found, project_visible};
 use serde_json::{Value, json};
 
 impl ApprovalService {
@@ -125,7 +125,7 @@ impl ApprovalService {
                 }
                 let binding = json!({"featureId":feature_id,"finding":finding,"assessmentRevision":r.revision,"assessmentDigest":model::hash(&r.body),"restoreEpoch":ctx.restore_epoch()});
                 let mut proposal = i.clone();
-                proposal.summary = crate::services::sessions::content(
+                proposal.summary = crate::services::kernel::content(
                     finding
                         .get("summary")
                         .and_then(Value::as_str)
@@ -441,7 +441,7 @@ pub(crate) fn stage_saved_as(
     check_authority(tx, ctx, request)?;
     let authority = super::authority_binding(tx, ctx)?;
     let mut input = i.clone();
-    input.summary = crate::services::sessions::content(&preview.summary);
+    input.summary = crate::services::kernel::content(&preview.summary);
     input.artifact = preview
         .reviewed
         .get("artifact")

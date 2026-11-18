@@ -108,7 +108,7 @@ fn write<T: Send + 'static>(
     s: &dyn ApplicationStore,
     f: impl FnOnce(&mut dyn WriteTransaction) -> Result<T, StorageError> + Send + 'static,
 ) -> T {
-    run_write(s, WriteOptions::default(), f).unwrap()
+    run_write(s, WriteOptions::fixture(), f).unwrap()
 }
 fn start_producer(engine: &Engine, session: Id) -> std::thread::JoinHandle<()> {
     let runtime = engine.host().runtime().clone();

@@ -109,11 +109,11 @@ use crate::protocol::{
     RevisionDimension,
 };
 use crate::services::cursor::{self, CursorBinding};
-use crate::services::runs::{ControlService, control_of};
-use crate::services::sessions::{
+use crate::services::kernel::{
     Failure, Refusal, content, counter, decided, label, not_found, project_visible, query_fault,
     rev,
 };
+use crate::services::runs::{ControlService, control_of};
 use crate::settings::catalog::descriptor;
 use serde_json::{Value, json};
 use std::collections::BTreeSet;

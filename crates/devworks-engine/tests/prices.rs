@@ -17,6 +17,9 @@ use devworks_core::services::{
     prices::{PriceService, refresh},
 };
 use devworks_engine::prices::PriceSupervisor;
+use devworks_engine::{
+    ArtifactComposition, DiagnosticComposition, KnowledgeComposition, RunComposition,
+};
 use devworks_engine::{Dispatcher, DispatcherConfig};
 use serde_json::{Value, json};
 use std::collections::VecDeque;
@@ -110,7 +113,7 @@ impl Fx {
             &self.user,
             "router.price_refresh",
             &raw,
-            WriteOptions::default(),
+            WriteOptions::fixture(),
         ));
         (raw, op)
     }
@@ -404,7 +407,7 @@ fn manual_refresh_is_accepted_persisted_and_replayed_while_complete_snapshots_ke
                 &fx.user,
                 "router.price_refresh",
                 &raw,
-                WriteOptions::default()
+                WriteOptions::fixture()
             )),
             op
         );
@@ -455,7 +458,7 @@ fn global_refresh_cas_is_atomic_and_cancellation_never_records_intent() {
         &fx.user,
         "router.price_refresh",
         &raw,
-        WriteOptions::default(),
+        WriteOptions::fixture(),
     );
     assert!(
         !matches!(rejected,devworks_core::protocol::CommandReply::Recorded{receipt,..}if matches!(receipt.decision,DomainDecision::Accepted{..}))
@@ -475,7 +478,7 @@ fn global_refresh_cas_is_atomic_and_cancellation_never_records_intent() {
         &raw,
         WriteOptions {
             cancellation: Some(cancellation),
-            ..WriteOptions::default()
+            ..WriteOptions::fixture()
         },
     );
     assert!(read(&*fx.store, |s| s.usage().price_status("openai")).is_none());
@@ -490,7 +493,7 @@ fn global_refresh_cas_is_atomic_and_cancellation_never_records_intent() {
         &fx.user,
         "router.price_refresh",
         &stale,
-        WriteOptions::default(),
+        WriteOptions::fixture(),
     );
     assert!(read(&*fx.store, |s| s.usage().price_status("anthropic")).is_none());
 }
@@ -498,7 +501,7 @@ fn global_refresh_cas_is_atomic_and_cancellation_never_records_intent() {
 #[test]
 fn positive_baseline_override_requires_actual_human_preserves_dimensions_and_survives_refresh_until_clear()
  {
-    runtime().block_on(async{let fx=Fx::new();let change=json!({"kind":"Set","tariffs":[{"upstreamModelId":"priced-model","serviceTier":"Priority","contextLowerExclusive":"1000","modality":"Audio","chargeKind":"Input","unit":"Second","units":"1","amountUsd":"0.025","region":"us","endpointProfile":"OpenAiResponses"}]});let raw=fx.frame("router.price_override",3,"Command",json!({"modelId":"priced-model","expectedRevision":"1","change":change}));let denied=fx.command(&fx.agent,"router.price_override",&raw,WriteOptions::default());assert!(!matches!(denied,devworks_core::protocol::CommandReply::Recorded{receipt,..}if matches!(receipt.decision,DomainDecision::Applied{..})));assert_eq!(read(&*fx.store,|s|s.usage().price_override_revision(&id("priced-model"))),1);let result=applied(fx.command(&fx.user,"router.price_override",&raw,WriteOptions::default()));assert_eq!(result["revision"],"2");let view=fx.query(json!({"modelIds":["priced-model"],"page":{"limit":50}}));assert_eq!(view["result"]["value"]["models"][0]["revision"],"2");let saved=read(&*fx.store,|s|s.usage().price_override(&id("priced-model"))).unwrap();assert_eq!(saved.tariffs[0].modality,"Audio");let(worker,dispatcher)=fx.dispatcher(Source::new(vec![]));fx.refresh(&["openai"]);deliver(&dispatcher).await;assert_eq!(read(&*fx.store,|s|s.usage().price_override(&id("priced-model"))).unwrap(),saved);let clear=fx.frame("router.price_override",3,"Command",json!({"modelId":"priced-model","expectedRevision":"2","change":{"kind":"Clear"}}));assert_eq!(applied(fx.command(&fx.user,"router.price_override",&clear,WriteOptions::default()))["revision"],"3");assert_eq!(read(&*fx.store,|s|s.usage().price_override(&id("priced-model"))).unwrap().mode,"Clear");let view=fx.query(json!({"modelIds":["priced-model"],"page":{"limit":50}}));assert_eq!(view["result"]["value"]["models"][0]["revision"],"3");worker.drain().await;dispatcher.stop();});
+    runtime().block_on(async{let fx=Fx::new();let change=json!({"kind":"Set","tariffs":[{"upstreamModelId":"priced-model","serviceTier":"Priority","contextLowerExclusive":"1000","modality":"Audio","chargeKind":"Input","unit":"Second","units":"1","amountUsd":"0.025","region":"us","endpointProfile":"OpenAiResponses"}]});let raw=fx.frame("router.price_override",3,"Command",json!({"modelId":"priced-model","expectedRevision":"1","change":change}));let denied=fx.command(&fx.agent,"router.price_override",&raw,WriteOptions::fixture());assert!(!matches!(denied,devworks_core::protocol::CommandReply::Recorded{receipt,..}if matches!(receipt.decision,DomainDecision::Applied{..})));assert_eq!(read(&*fx.store,|s|s.usage().price_override_revision(&id("priced-model"))),1);let result=applied(fx.command(&fx.user,"router.price_override",&raw,WriteOptions::fixture()));assert_eq!(result["revision"],"2");let view=fx.query(json!({"modelIds":["priced-model"],"page":{"limit":50}}));assert_eq!(view["result"]["value"]["models"][0]["revision"],"2");let saved=read(&*fx.store,|s|s.usage().price_override(&id("priced-model"))).unwrap();assert_eq!(saved.tariffs[0].modality,"Audio");let(worker,dispatcher)=fx.dispatcher(Source::new(vec![]));fx.refresh(&["openai"]);deliver(&dispatcher).await;assert_eq!(read(&*fx.store,|s|s.usage().price_override(&id("priced-model"))).unwrap(),saved);let clear=fx.frame("router.price_override",3,"Command",json!({"modelId":"priced-model","expectedRevision":"2","change":{"kind":"Clear"}}));assert_eq!(applied(fx.command(&fx.user,"router.price_override",&clear,WriteOptions::fixture()))["revision"],"3");assert_eq!(read(&*fx.store,|s|s.usage().price_override(&id("priced-model"))).unwrap().mode,"Clear");let view=fx.query(json!({"modelIds":["priced-model"],"page":{"limit":50}}));assert_eq!(view["result"]["value"]["models"][0]["revision"],"3");worker.drain().await;dispatcher.stop();});
 }
 
 #[test]
@@ -510,7 +513,7 @@ fn price_catalog_pages_unpriced_models_dimensions_and_history_with_exact_query_b
     assert_eq!(models.len(),2);assert!(models.iter().any(|v|v["modelId"]=="unpriced-model"&&v["priceKind"]=="Untracked"));assert_eq!(snapshots.len(),2);assert_eq!(rates.len(),4);assert!(rates.iter().any(|v|v["tariff"]["amountUsd"]=="1.25"));assert!(rates.iter().any(|v|v["tariff"]["amountUsd"]=="2.50"));
     let wrong=fx.query(json!({"modelIds":["priced-model"],"includeHistory":true,"page":{"limit":2,"cursor":first_cursor.clone().unwrap()}}));assert_ne!(wrong["kind"],"Result","changed filter must not reuse cursor");
     let selected=fx.query(json!({"modelIds":["priced-model"],"snapshotIds":[first.id],"includeHistory":false,"page":{"limit":50}}));let selected=&selected["result"]["value"];assert_eq!(selected["snapshots"].as_array().unwrap().len(),1);assert!(selected["items"].as_array().unwrap().iter().all(|v|v["snapshotId"]==first.id.as_str()));
-    let change=fx.frame("router.price_override",3,"Command",json!({"modelId":"priced-model","expectedRevision":"1","price":{"inputUsdPerMillion":"5","outputUsdPerMillion":"10"}}));applied(fx.command(&fx.user,"router.price_override",&change,WriteOptions::default()));let stale=fx.query(json!({"modelIds":["priced-model","unpriced-model"],"includeHistory":true,"page":{"limit":2,"cursor":first_cursor.unwrap()}}));assert_ne!(stale["kind"],"Result","price mutation expires earlier view");worker.drain().await;dispatcher.stop();
+    let change=fx.frame("router.price_override",3,"Command",json!({"modelId":"priced-model","expectedRevision":"1","price":{"inputUsdPerMillion":"5","outputUsdPerMillion":"10"}}));applied(fx.command(&fx.user,"router.price_override",&change,WriteOptions::fixture()));let stale=fx.query(json!({"modelIds":["priced-model","unpriced-model"],"includeHistory":true,"page":{"limit":2,"cursor":first_cursor.unwrap()}}));assert_ne!(stale["kind"],"Result","price mutation expires earlier view");worker.drain().await;dispatcher.stop();
 });
 }
 
@@ -687,7 +690,7 @@ fn source_filters_and_legacy_results_are_exact_or_truthfully_unrepresentable() {
     let fx=Fx::new();let(worker,dispatcher)=fx.dispatcher(Source::new(vec![]));fx.refresh(&["openai"]);deliver(&dispatcher).await;fx.refresh(&["openai"]);deliver(&dispatcher).await;
     let legacy=fx.query_schema(json!({"modelIds":["priced-model"],"page":{"limit":50}}),1);assert_eq!(legacy["kind"],"Result","{legacy}");assert_eq!(legacy["result"]["value"]["items"][0]["price"]["inputUsdPerMillion"],"1.25");assert_eq!(legacy["result"]["value"]["items"][0]["price"]["revision"],"1","publication revisions never become override CAS tokens");
     let filtered=fx.query(json!({"modelIds":["priced-model","unpriced-model"],"providerIds":["anthropic"],"includeHistory":true,"page":{"limit":50}}));let view=&filtered["result"]["value"];assert_eq!(view["models"].as_array().unwrap().len(),1);assert_eq!(view["models"][0]["modelId"],"unpriced-model");assert!(view["items"].as_array().unwrap().is_empty());assert!(view["providers"].as_array().unwrap().iter().all(|p|p["providerId"]=="anthropic"));
-    let raw=fx.frame("router.price_override",3,"Command",json!({"modelId":"priced-model","expectedRevision":"1","change":{"kind":"Set","tariffs":[{"upstreamModelId":"priced-model","serviceTier":"Priority","modality":"Audio","chargeKind":"Input","unit":"Second","units":"1","amountUsd":"0.0125"}]}}));applied(fx.command(&fx.user,"router.price_override",&raw,WriteOptions::default()));let legacy=fx.query_schema(json!({"modelIds":["priced-model"],"page":{"limit":50}}),1);assert_ne!(legacy["kind"],"Result","exact dimensions cannot become legacy zero shadows: {legacy}");assert!(legacy.to_string().contains("UnsupportedCapability"),"{legacy}");worker.drain().await;dispatcher.stop();
+    let raw=fx.frame("router.price_override",3,"Command",json!({"modelId":"priced-model","expectedRevision":"1","change":{"kind":"Set","tariffs":[{"upstreamModelId":"priced-model","serviceTier":"Priority","modality":"Audio","chargeKind":"Input","unit":"Second","units":"1","amountUsd":"0.0125"}]}}));applied(fx.command(&fx.user,"router.price_override",&raw,WriteOptions::fixture()));let legacy=fx.query_schema(json!({"modelIds":["priced-model"],"page":{"limit":50}}),1);assert_ne!(legacy["kind"],"Result","exact dimensions cannot become legacy zero shadows: {legacy}");assert!(legacy.to_string().contains("UnsupportedCapability"),"{legacy}");worker.drain().await;dispatcher.stop();
 });
 }
 
@@ -805,10 +808,7 @@ fn composition(
         power::NativePower,
         process::NativeProcessHost,
     };
-    use devworks_core::services::{
-        artifacts::ArtifactService, diagnostics::DiagnosticService, resources::ResourceService,
-        runs::ControlService,
-    };
+
     let mut config = devworks_engine::RuntimeConfig::new(id("native-price-runtime"));
     let mut prices = devworks_engine::prices::PriceComposition::new(source);
     prices.interval = std::time::Duration::from_secs(3600);
@@ -821,30 +821,26 @@ fn composition(
             store: store.clone(),
             clock: h.clock(),
         }),
-        artifacts: Arc::new(ArtifactService::new(
+        artifacts: ArtifactComposition::new(
             Arc::new(NativeArtifactFiles::new(
                 h.root.clone(),
                 h.root.with_extension("cache"),
             )),
             Arc::new(HostArtifactSources::new(h.clock(), h.ids.clone())),
             Arc::new(NativeFilesystem::new()),
-            h.clock(),
-            h.ids.clone(),
-        )),
-        resources: Arc::new(ResourceService::new(h.ids.clone(), h.clock())),
+        ),
         process_host: Arc::new(NativeProcessHost),
-        runs: devworks_engine::RunComposition::new(Arc::new(ControlService::new(h.ids.clone()))),
+        runs: RunComposition::default(),
+        knowledge: KnowledgeComposition::default(),
+        application: Default::default(),
+        web: None,
         power: Arc::new(NativePower),
-        diagnostics: Arc::new(DiagnosticService::new(
-            store,
-            h.ids.clone(),
-            h.clock(),
-            None,
-        )),
+        diagnostics: DiagnosticComposition::default(),
         browser: None,
         git: None,
         packages: None,
         use_cases: UseCases::new(),
+        test_overrides: Default::default(),
         consumers: vec![],
         indexing: None,
         config,
@@ -1198,7 +1194,7 @@ fn configured_history_preserves_set_a_set_b_clear_authorship_and_original_quotes
             &fx.user,
             "router.price_override",
             &raw,
-            WriteOptions::default(),
+            WriteOptions::fixture(),
         ))
     };
     let query = PriceQuery {
@@ -1312,7 +1308,7 @@ fn configured_history_preserves_set_a_set_b_clear_authorship_and_original_quotes
         &fx.user,
         "router.price_override",
         &clear,
-        WriteOptions::default(),
+        WriteOptions::fixture(),
     ));
     let expired=fx.query(json!({"modelIds":["priced-model"],"providerIds":["user-configured"],"includeHistory":true,"page":{"limit":2,"cursor":old_cursor}}));
     assert_ne!(expired["kind"], "Result");
@@ -1514,7 +1510,7 @@ async fn price_shutdown_case(recovering: bool, receipt_race_control: bool) {
     let receipt_gate = Gate::new();
     receipt_gate.release();
     let _release_receipts = Release(receipt_gate.clone());
-    composed.artifacts = Arc::new(devworks_core::services::artifacts::ArtifactService::new(
+    composed.artifacts = ArtifactComposition::new(
         Arc::new(GatedFiles {
             inner: NativeArtifactFiles::new(fx.h.root.clone(), fx.h.root.with_extension("cache")),
             gate: receipt_gate.clone(),
@@ -1525,9 +1521,7 @@ async fn price_shutdown_case(recovering: bool, receipt_race_control: bool) {
             fx.h.ids.clone(),
         )),
         Arc::new(devworks_adapters::fs::NativeFilesystem::new()),
-        fx.h.clock(),
-        fx.h.ids.clone(),
-    ));
+    );
     composed.config.shutdown_bound = std::time::Duration::from_millis(100);
     phase.phase = "boot";
     let app = devworks_engine::boot(composed).await.unwrap();
@@ -1608,7 +1602,7 @@ async fn price_shutdown_case(recovering: bool, receipt_race_control: bool) {
             &fx.user,
             "router.price_override",
             &raw,
-            WriteOptions::default(),
+            WriteOptions::fixture(),
         ));
     }
     let setup_receipts = read(&*fx.store, |s| {
@@ -1821,7 +1815,7 @@ fn a_stalled_price_source_does_not_keep_the_tokio_runtime_alive_after_app_shutdo
     for priority in [WritePriority::Authoritative, WritePriority::Bulk] {
         let options = WriteOptions {
             priority,
-            ..WriteOptions::default()
+            ..WriteOptions::fixture()
         };
         run_write(&*store, options, |_| Ok(())).unwrap();
     }
@@ -1917,7 +1911,7 @@ fn candidate_price_subject_uses_real_price_override_and_never_chat_registration(
             &fx.user,
             "router.price_override",
             &change,
-            WriteOptions::default()
+            WriteOptions::fixture()
         ))["revision"],
         "2"
     );
@@ -1965,7 +1959,7 @@ fn candidate_price_subject_uses_real_price_override_and_never_chat_registration(
             &fx.user,
             "router.price_override",
             &clear,
-            WriteOptions::default()
+            WriteOptions::fixture()
         ))["revision"],
         "3"
     );
@@ -1989,7 +1983,7 @@ fn candidate_price_subject_uses_real_price_override_and_never_chat_registration(
         &fx.user,
         "router.price_override",
         &stale,
-        WriteOptions::default(),
+        WriteOptions::fixture(),
     ))
     .unwrap();
     assert!(refused.to_string().contains("SourceChanged"), "{refused}");

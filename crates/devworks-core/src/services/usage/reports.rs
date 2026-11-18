@@ -12,7 +12,7 @@ use crate::protocol::support::{BoundedList, BoundedText, Check, Cursor};
 use crate::protocol::{Counter, DomainErrorCode, Id, Revision, RootId};
 use crate::services::{
     cursor::CursorBinding,
-    sessions::{Failure, Refusal},
+    kernel::{Failure, Refusal},
 };
 use calendar::{DAY, Interval};
 use serde::{Serialize, de::DeserializeOwned};

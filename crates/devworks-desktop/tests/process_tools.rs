@@ -53,7 +53,7 @@ fn native_execute_has_receipt_identity_completion_and_bounded_output() {
     };
     run_write(
         &**engine.host().runtime().store(),
-        WriteOptions::default(),
+        WriteOptions::fixture(),
         move |tx| tx.projects().insert_repository(&row),
     )
     .expect("registered root");

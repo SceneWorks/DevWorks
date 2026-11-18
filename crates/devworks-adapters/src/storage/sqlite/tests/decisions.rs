@@ -17,7 +17,7 @@ fn project() -> ProjectId {
 }
 fn seed(h: &Harness) -> SqliteStore {
     let s = h.store();
-    run_write(&s, WriteOptions::default(), |tx| {
+    run_write(&s, WriteOptions::fixture(), |tx| {
         for (name, kind) in [
             ("human-a", PrincipalKind::Human),
             ("human-b", PrincipalKind::Human),
@@ -88,7 +88,7 @@ fn approval(name: &str) -> StoredApproval {
     }
 }
 fn put(s: &SqliteStore, a: StoredApproval, expected: Option<i64>) -> Result<(), StorageError> {
-    run_write(s, WriteOptions::default(), move |tx| {
+    run_write(s, WriteOptions::fixture(), move |tx| {
         tx.decisions().put_approval(&a, expected)
     })
 }
@@ -129,7 +129,7 @@ fn put_notification(
     n: StoredNotification,
     e: Option<i64>,
 ) -> Result<(), StorageError> {
-    run_write(s, WriteOptions::default(), move |tx| {
+    run_write(s, WriteOptions::fixture(), move |tx| {
         tx.decisions().put_notification(&n, e)
     })
 }
@@ -175,7 +175,7 @@ fn migration_27_preserves_legacy_absence_and_captures_new_plan_snapshots() {
     }).unwrap();
     drop(old);
     let s = SqliteStore::open_with(h.config(), &through(27)).unwrap();
-    run_write(&s, WriteOptions::default(), |tx| {
+    run_write(&s, WriteOptions::fixture(), |tx| {
         tx.actors()
             .register(&actor("human-a"), PrincipalKind::Human, "Human")?;
         tx.work().put_proposal(&plan("new"), None)
@@ -196,7 +196,7 @@ fn migration_27_preserves_legacy_absence_and_captures_new_plan_snapshots() {
         Ok(())
     })
     .unwrap();
-    run_write(&s, WriteOptions::default(), |tx| {
+    run_write(&s, WriteOptions::fixture(), |tx| {
         tx.work().put_feature_plan(
             &StoredFeaturePlan {
                 feature_id: id("feature"),
@@ -230,7 +230,7 @@ fn approval_sources_merge_owners_with_exclusive_tied_cursors_and_scope() {
     let h = Harness::new();
     let s = seed(&h);
     put(&s, approval("shared"), None).unwrap();
-    run_write(&s, WriteOptions::default(), |tx| {
+    run_write(&s, WriteOptions::fixture(), |tx| {
         tx.configuration().stage(NewProposal {
             id: id("shared"),
             scope: ConfigScope::Project(project()),
@@ -339,7 +339,7 @@ fn immutable_approval_and_human_audit_bind_exact_actor_revision_and_snapshot() {
         reviewed_snapshot: pending.payload,
     };
     let invalid = audit.clone();
-    run_write(&s, WriteOptions::default(), move |tx| {
+    run_write(&s, WriteOptions::fixture(), move |tx| {
         let mut other = invalid;
         other.actor = actor("human-b");
         assert!(tx.decisions().insert_human_decision(&other).is_err());
@@ -347,13 +347,13 @@ fn immutable_approval_and_human_audit_bind_exact_actor_revision_and_snapshot() {
     })
     .unwrap();
     let saved = audit.clone();
-    run_write(&s, WriteOptions::default(), move |tx| {
+    run_write(&s, WriteOptions::fixture(), move |tx| {
         tx.decisions().insert_human_decision(&saved)
     })
     .unwrap();
     let saved = audit.clone();
     assert!(matches!(
-        run_write(&s, WriteOptions::default(), move |tx| tx
+        run_write(&s, WriteOptions::fixture(), move |tx| tx
             .decisions()
             .insert_human_decision(&saved)),
         Err(StorageError::Duplicate { .. })
@@ -389,7 +389,7 @@ fn notification_recipient_is_host_bound_human_not_every_registered_actor() {
         Ok(())
     })
     .unwrap();
-    run_write(&s, WriteOptions::default(), |tx| {
+    run_write(&s, WriteOptions::fixture(), |tx| {
         assert!(
             tx.decisions()
                 .bind_notification_user(&actor("agent"))
@@ -559,8 +559,8 @@ fn private_resume_preserves_original_actor_exact_request_and_unknown_replay_iden
     let h = Harness::new();
     let s = seed(&h);
     approve(&s, "saved");
-    run_write(&s, WriteOptions::default(), |tx| {
-        tx.authority().issue_grant(NewAuthorityGrant {
+    run_write(&s, WriteOptions::fixture(), |tx| {
+        devworks_core::authority::fixture_writes(tx)?.issue_grant(NewAuthorityGrant {
             id: id("internal-grant"),
             actor: actor("agent"),
             kind: GrantKind::Operation,
@@ -578,7 +578,7 @@ fn private_resume_preserves_original_actor_exact_request_and_unknown_replay_iden
     wrong.principal = actor("human-a");
     wrong.principal_kind = PrincipalKind::Human;
     assert!(matches!(
-        run_write(&s, WriteOptions::default(), move |tx| tx
+        run_write(&s, WriteOptions::fixture(), move |tx| tx
             .decisions()
             .put_approval_resume(&wrong, Some(1))),
         Err(StorageError::ScopeDenied)
@@ -588,7 +588,7 @@ fn private_resume_preserves_original_actor_exact_request_and_unknown_replay_iden
     pending.state = "Unknown".into();
     pending.result = Some(json!({"outcome":"CommitUnknown"}));
     let saved = pending.clone();
-    run_write(&s, WriteOptions::default(), move |tx| {
+    run_write(&s, WriteOptions::fixture(), move |tx| {
         tx.decisions().put_approval_resume(&saved, Some(1))
     })
     .unwrap();
@@ -607,7 +607,7 @@ fn private_resume_preserves_original_actor_exact_request_and_unknown_replay_iden
     changed.state = "Admitted".into();
     changed.request_key = id("new-retry-key");
     assert!(matches!(
-        run_write(&s, WriteOptions::default(), move |tx| tx
+        run_write(&s, WriteOptions::fixture(), move |tx| tx
             .decisions()
             .put_approval_resume(&changed, Some(2))),
         Err(StorageError::InvalidRecord(_))
@@ -616,7 +616,7 @@ fn private_resume_preserves_original_actor_exact_request_and_unknown_replay_iden
     pending.state = "Admitted".into();
     pending.result = Some(json!({"operationId":"native-operation"}));
     let saved = pending.clone();
-    run_write(&s, WriteOptions::default(), move |tx| {
+    run_write(&s, WriteOptions::fixture(), move |tx| {
         tx.decisions().put_approval_resume(&saved, Some(2))
     })
     .unwrap();
@@ -659,7 +659,7 @@ fn legal_large_source_snapshot_is_retained_without_a_new_one_mib_truncation() {
         reviewed_snapshot: a.payload.clone(),
     };
     let saved = audit.clone();
-    run_write(&s, WriteOptions::default(), move |tx| {
+    run_write(&s, WriteOptions::fixture(), move |tx| {
         tx.decisions().insert_human_decision(&saved)
     })
     .unwrap();
@@ -697,7 +697,7 @@ fn pending_resume_id_cursor_reaches_later_work_behind_waiting_rows() {
         row.grant_id = None;
         row.request_key = id(&format!("key-{name}"));
         row.invocation = json!({"originalActor":"human-a","projectId":"project"});
-        run_write(&s, WriteOptions::default(), move |tx| {
+        run_write(&s, WriteOptions::fixture(), move |tx| {
             tx.decisions().put_approval_resume(&row, None)
         })
         .unwrap();
@@ -731,7 +731,7 @@ fn project_tombstone_preserves_decision_history_and_does_not_remove_notification
     let n = notification("card", "human-a", "verified-retained");
     put_notification(&s, n.clone(), None).unwrap();
     for (state, expected) in [("Archived", 1), ("Deleted", 2)] {
-        run_write(&s, WriteOptions::default(), move |tx| {
+        run_write(&s, WriteOptions::fixture(), move |tx| {
             let mut p = tx.projects().project(&project())?.unwrap();
             p.lifecycle = state.into();
             p.revision = expected + 1;
@@ -761,7 +761,7 @@ fn seed_os(s: &SqliteStore) {
     n.decision_id = Some(id("os-pending"));
     put(s, approval("os-pending"), None).unwrap();
     put_notification(s, n, None).unwrap();
-    run_write(s, WriteOptions::default(), |tx| {
+    run_write(s, WriteOptions::fixture(), |tx| {
         tx.decisions().bind_notification_user(&actor("human-a"))
     })
     .unwrap();
@@ -771,7 +771,7 @@ fn claim_os(
     expected: Option<i64>,
     retry: bool,
 ) -> Result<StoredOsNotificationDelivery, StorageError> {
-    run_write(s, WriteOptions::default(), move |tx| {
+    run_write(s, WriteOptions::fixture(), move |tx| {
         tx.decisions().claim_os_notification_delivery(
             &actor("human-a"),
             &id("os-card"),
@@ -785,7 +785,7 @@ fn settle_os(
     fence: OsNotificationDeliveryFence,
     state: &'static str,
 ) -> Result<StoredOsNotificationDelivery, StorageError> {
-    run_write(s, WriteOptions::default(), move |tx| {
+    run_write(s, WriteOptions::fixture(), move |tx| {
         tx.decisions().settle_os_notification_delivery(
             &actor("human-a"),
             &id("os-card"),
@@ -802,7 +802,7 @@ fn os_delivery_identity_ignores_read_ack_revision_and_never_resubmits_submitted(
     let s = seed(&h);
     seed_os(&s);
     assert!(matches!(
-        run_write(&s, WriteOptions::default(), |tx| tx
+        run_write(&s, WriteOptions::fixture(), |tx| tx
             .decisions()
             .claim_os_notification_delivery(
                 &actor("human-b"),
@@ -814,7 +814,7 @@ fn os_delivery_identity_ignores_read_ack_revision_and_never_resubmits_submitted(
     ));
     let claimed = claim_os(&s, None, false).unwrap();
     assert_eq!((claimed.attempt, claimed.revision), (1, 1));
-    run_write(&s, WriteOptions::default(), |tx| {
+    run_write(&s, WriteOptions::fixture(), |tx| {
         let mut n = tx
             .decisions()
             .notification(&actor("human-a"), &id("os-card"))?
@@ -830,7 +830,7 @@ fn os_delivery_identity_ignores_read_ack_revision_and_never_resubmits_submitted(
         claim_os(&s, Some(submitted.revision), true),
         Err(StorageError::InvalidRecord(_))
     ));
-    run_write(&s, WriteOptions::default(), |tx| {
+    run_write(&s, WriteOptions::fixture(), |tx| {
         let mut n = tx
             .decisions()
             .notification(&actor("human-a"), &id("os-card"))?
@@ -917,14 +917,14 @@ fn os_prior_boot_claim_recovery_is_unknown_not_a_blind_resend() {
         Err(StorageError::LeaseLost { .. })
     ));
     assert_eq!(
-        run_write(&s, WriteOptions::default(), |tx| tx
+        run_write(&s, WriteOptions::fixture(), |tx| tx
             .decisions()
             .recover_os_notification_deliveries())
         .unwrap(),
         1
     );
     assert_eq!(
-        run_write(&s, WriteOptions::default(), |tx| tx
+        run_write(&s, WriteOptions::fixture(), |tx| tx
             .decisions()
             .recover_os_notification_deliveries())
         .unwrap(),
@@ -996,7 +996,7 @@ fn os_concurrent_workers_claim_one_attempt_and_acknowledged_candidates_are_refus
     n.revision = 2;
     put_notification(&s, n, Some(1)).unwrap();
     assert!(matches!(
-        run_write(s.as_ref(), WriteOptions::default(), |tx| tx
+        run_write(s.as_ref(), WriteOptions::fixture(), |tx| tx
             .decisions()
             .claim_os_notification_delivery(
                 &actor("human-a"),
@@ -1059,8 +1059,8 @@ fn saved_command_outbox_retains_legal_wrapped_dynamic_input_and_refuses_over_one
     put(&s, a, Some(1)).unwrap();
     approve(&s, "oversize");
     let expected = input.clone();
-    run_write(&s, WriteOptions::default(), move |tx| {
-        tx.authority().issue_grant(NewAuthorityGrant {
+    run_write(&s, WriteOptions::fixture(), move |tx| {
+        devworks_core::authority::fixture_writes(tx)?.issue_grant(NewAuthorityGrant {
             id: id("internal-grant"),
             actor: actor("agent"),
             kind: GrantKind::Operation,

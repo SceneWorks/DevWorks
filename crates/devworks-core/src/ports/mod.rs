@@ -383,7 +383,7 @@ impl<'a> Preparation<'a> {
         T: Send + 'static,
         F: FnOnce(&mut StagingTx<'_>) -> Result<T, StorageError> + Send + 'static,
     {
-        storage::run_write(self.store, storage::WriteOptions::default(), move |tx| {
+        storage::run_write(self.store, storage::WriteOptions::host_state(), move |tx| {
             work(&mut StagingTx { tx })
         })
     }

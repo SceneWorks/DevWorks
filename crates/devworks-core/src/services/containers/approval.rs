@@ -27,7 +27,7 @@ use crate::protocol::records::{ContainerSpec, EnvironmentEntry, PortProtocol, Re
 use crate::protocol::{DomainErrorCode, Id, ProjectId};
 use crate::services::approvals::OwnerPreview;
 use crate::services::approvals::owner_preview::artifact_binding;
-use crate::services::sessions::{Failure, Refusal};
+use crate::services::kernel::{Failure, Refusal};
 use serde_json::{Value, json};
 
 /// The address a published port binds: loopback unless the request asks for every interface.

@@ -1046,7 +1046,7 @@ fn recorded_report_origins(engine: &devworks_desktop::host::Engine, project: &st
     let session=ops::started(b.command("sessions.start", &ops::command_frame(&*b,"sessions.start",json!({"scope":{"kind":"Project","projectId":project},"title":"Recorded report context"})))).unwrap().id;
     let project = ProjectId(Id::new(project).unwrap());
     let other = ProjectId(Id::new(other).unwrap());
-    run_write(&**engine.host().runtime().store(),WriteOptions::default(),move |tx| {
+    run_write(&**engine.host().runtime().store(),WriteOptions::fixture(),move |tx| {
         // Immutable historical source fixtures, deliberately without canonical attempt identity.
         // This exercises the actual SQLite/gateway projection, not a frontend report substitute.
         for (source,category,input,output) in [("assistant","Assistant",10,5),("review","CodeReview",7,3),("analysis","RepositoryAnalysis",2,1)] {
@@ -1291,7 +1291,7 @@ fn native_usage_paging_keeps_applied_filters_and_preserves_unsubmitted_filter_dr
     .unwrap()
     .id;
     let project_id = ProjectId(Id::new(p.clone()).unwrap());
-    run_write(&**engine.host().runtime().store(),WriteOptions::default(),move|tx|{
+    run_write(&**engine.host().runtime().store(),WriteOptions::fixture(),move|tx|{
         for i in 0..120 {
             tx.usage().insert_usage_origin(&StoredUsageOrigin{source_kind:"SessionUsage".into(),source_id:format!("page-{i:03}"),attempt_id:None,request_id:Some(Id::new(format!("recorded-page-{i:03}")).unwrap()),project_id:Some(project_id.clone()),feature_id:None,work_id:None,session_id:Some(session.clone()),job_run_id:None,payload:json!({"actorId":format!("recorded-user-{i:03}"),"providerId":"openrouter","reportCategory":"Assistant","item":{"purpose":"Conversation","modelId":format!("recorded-model-{i:03}"),"inputTokens":"1","outputTokens":"1"}}),recorded_at_ms:1000,priced_micro_usd:None,classification:"Untracked".into(),monetary_complete:false,incomplete:true,unknown_tail:false,committed_sequence:Some(1)})?;
         }Ok(())

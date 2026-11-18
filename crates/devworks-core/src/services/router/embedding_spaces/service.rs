@@ -64,7 +64,7 @@ impl EmbeddingSpaceService {
         operation: &OperationRecord,
     ) -> Result<ProbePreparation, StorageError> {
         let id = operation.id.clone();
-        run_write(self.store.as_ref(), WriteOptions::default(), move |tx| {
+        run_write(self.store.as_ref(), WriteOptions::host_state(), move |tx| {
             let operation = tx
                 .operations()
                 .operation(&id)?

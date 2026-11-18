@@ -493,7 +493,7 @@ impl McpSampling {
         let pending = staged.clone();
         let service = self.artifacts.clone();
         let ctx = grant.context.clone();
-        let committed = run_write(self.store.as_ref(), WriteOptions::default(), move |tx| {
+        let committed = run_write(self.store.as_ref(), WriteOptions::observed(), move |tx| {
             let version = service.commit_host_bytes_in_scope(
                 tx,
                 &pending,

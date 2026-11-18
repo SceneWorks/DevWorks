@@ -8,8 +8,8 @@ use crate::{
         records::{SchemaConnection, SchemaExposureMode},
     },
     services::{
+        kernel::{Failure, not_found},
         knowledge,
-        sessions::{Failure, not_found},
     },
 };
 

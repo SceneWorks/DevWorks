@@ -29,6 +29,7 @@ struct Fx {
     h: Harness,
     store: Arc<dyn ApplicationStore>,
     artifacts: Arc<ArtifactService>,
+    files: Arc<dyn devworks_core::ports::files::ArtifactFiles>,
     service: Arc<ImportService>,
     catalog: Arc<ConventionService>,
     ctx: InvocationContext,
@@ -49,7 +50,7 @@ impl Fx {
         let store = h.open();
         let ctx = principal(store.as_ref(), "actual-human", PrincipalKind::Human);
         let artifacts = Arc::new(ArtifactService::new(
-            files,
+            files.clone(),
             Arc::new(HostArtifactSources::new(h.clock(), h.ids.clone())),
             Arc::new(NativeFilesystem::new()),
             h.clock(),
@@ -66,6 +67,7 @@ impl Fx {
             h,
             store,
             artifacts,
+            files,
             service,
             catalog,
             ctx,
@@ -477,6 +479,7 @@ fn actual_reopen_resumes_private_checkpoint_and_observes_publication_without_dup
             h,
             store,
             artifacts,
+            files: _,
             service,
             catalog,
             ctx,
@@ -851,7 +854,9 @@ fn convention_only_owner_status_needs_no_history_and_revoke_blocks_the_actual_wo
     );
     let actor = f.ctx.principal().clone();
     write(f.store.as_ref(), move |tx| {
-        tx.authority().revoke_principal(&actor, 1).map(|_| ())
+        devworks_core::authority::fixture_writes(tx)?
+            .revoke_principal(&actor, 1)
+            .map(|_| ())
     })
     .unwrap();
     let record = f.dispatch(&op);

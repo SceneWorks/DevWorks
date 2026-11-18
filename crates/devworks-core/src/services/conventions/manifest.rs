@@ -17,7 +17,7 @@ use crate::{
     services::{
         artifacts::{ConventionSourceLease, ConventionSourceSelection},
         cursor::CursorBinding,
-        sessions::{Failure, Refusal, counter},
+        kernel::{Failure, Refusal, counter},
     },
 };
 use serde::{Deserialize, Serialize};

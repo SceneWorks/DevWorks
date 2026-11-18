@@ -19,7 +19,7 @@ use crate::{
     services::{
         conventions::{access, model},
         cursor::CursorBinding,
-        sessions::{Failure, counter, rev},
+        kernel::{Failure, counter, rev},
     },
 };
 use serde::{Deserialize, Serialize};
@@ -218,7 +218,7 @@ impl IndexService {
                 WriteOptions {
                     cancellation: Some(cancel.clone()),
                     deadline_ms: env.deadline_ms,
-                    ..Default::default()
+                    ..WriteOptions::host_state()
                 },
                 move |tx| {
                     if &tx.store().store_id != context.store_id()

@@ -8,7 +8,7 @@ use crate::ports::{Clock, IdKind, IdSource};
 use crate::protocol::Id;
 use crate::protocol::data::{DataScope, ViewSelection};
 use crate::services::indexing::views::ViewLayers;
-use crate::services::sessions::Failure;
+use crate::services::kernel::Failure;
 use serde_json::json;
 use std::sync::Arc;
 
@@ -112,11 +112,11 @@ pub(super) fn select(
         WriteOptions {
             deadline_ms: options.deadline_ms,
             cancellation: options.cancellation.clone(),
-            ..Default::default()
+            ..WriteOptions::host_state()
         },
         move |tx| {
             if !crate::authority::authorization_holds_in(tx, &context, &authority)? {
-                return Ok(Err(crate::services::sessions::Refusal::new(
+                return Ok(Err(crate::services::kernel::Refusal::new(
                     crate::protocol::DomainErrorCode::PermissionDenied,
                     "graph_scope",
                     None,
@@ -147,7 +147,7 @@ pub(super) fn select(
                         .members(project_id)?
                         .contains(&missing.repository_id)
                 {
-                    return Ok(Err(crate::services::sessions::Refusal::new(
+                    return Ok(Err(crate::services::kernel::Refusal::new(
                         crate::protocol::DomainErrorCode::PermissionDenied,
                         "graph_scope",
                         None,

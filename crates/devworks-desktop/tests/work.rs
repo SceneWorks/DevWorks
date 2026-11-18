@@ -1417,7 +1417,7 @@ fn approve_plan(
     let ctx = engine.host().user().clone();
     run_write(
         &**engine.host().runtime().store(),
-        WriteOptions::default(),
+        WriteOptions::fixture(),
         move |tx| {
             devworks_core::services::work::plans::decide_plan_approval(
                 tx,
@@ -2097,7 +2097,7 @@ fn seed_history(
     let root = RootId(Id::new(card).unwrap());
     let actor = engine.host().user().principal().clone();
     let (tx, rx) = std::sync::mpsc::sync_channel(1);
-    engine.host().runtime().store().submit_write(Default::default(),write_job(move |tx| {
+    engine.host().runtime().store().submit_write(devworks_core::ports::storage::WriteOptions::fixture(),write_job(move |tx| {
         let mut last=0;
         for i in 0..n {
             last=tx.history().append(NewEvent {
@@ -2365,7 +2365,7 @@ fn the_work_card_assigns_its_working_agent_and_clears_the_assignment_through_tas
             .runtime()
             .store()
             .submit_write(
-                Default::default(),
+                devworks_core::ports::storage::WriteOptions::fixture(),
                 write_job(
                     move |tx| {
                         let host = tx.store().host_actor.clone();

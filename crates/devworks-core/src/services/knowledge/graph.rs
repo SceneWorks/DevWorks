@@ -32,7 +32,7 @@ use crate::protocol::records::{
 use crate::protocol::support::BoundedList;
 use crate::protocol::{DomainErrorCode, Id};
 use crate::services::cursor::{self, CursorBinding};
-use crate::services::sessions::{Failure, Refusal, content, counter, label, not_found, rev};
+use crate::services::kernel::{Failure, Refusal, content, counter, label, not_found, rev};
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 
 /// The empty answer CodeGraph returned for a query that matched nothing.

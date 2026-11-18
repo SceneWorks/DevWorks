@@ -15,10 +15,10 @@ use crate::protocol::results::{DomainDecision, OperationResult};
 use crate::protocol::{
     ActorId, AssignmentId, DomainErrorCode, Id, ProjectId, RevisionDimension, RootId,
 };
+use crate::services::kernel::{Refusal, counter};
 use crate::services::runs::activity::RootActivity;
 use crate::services::runs::scope::{PlanState, Readiness};
 use crate::services::runs::{ControlService, Gate, Target, control_of, root_assignments};
-use crate::services::sessions::{Refusal, counter};
 use serde_json::json;
 
 pub const OPERATIONS: [&str; 5] = [
@@ -142,11 +142,11 @@ fn wire(c: &StoredAllocationClaim, now: i64) -> AllocationClaimRecord {
         } else {
             WorkKind::Issue
         }),
-        work_revision: Some(crate::services::sessions::rev(c.work_revision)),
+        work_revision: Some(crate::services::kernel::rev(c.work_revision)),
         project_id: Some(c.project_id.clone()),
         root_id: Some(c.root_id.clone()),
         owner_session_id: c.session_id.clone(),
-        queue_revision: Some(crate::services::sessions::rev(c.queue_revision)),
+        queue_revision: Some(crate::services::kernel::rev(c.queue_revision)),
         state: match c.state.as_str() {
             "Active" if c.expires_at_ms > now => LeaseState::Held,
             "Transferred" => LeaseState::Held,
@@ -201,10 +201,10 @@ fn selection(
                     let unavailable = payload.is_none();
                     last_activity = Some(crate::protocol::records::AllocationActivity {
                         event_id: event.id.0.clone(),
-                        sequence: crate::services::sessions::rev(event.sequence),
+                        sequence: crate::services::kernel::rev(event.sequence),
                         actor_id: event.actor.clone(),
                         occurred_at_ms: counter(event.created_at_ms),
-                        kind: crate::services::sessions::label(&event.kind, "work_change"),
+                        kind: crate::services::kernel::label(&event.kind, "work_change"),
                         work_id: w.id.clone(),
                         payload,
                         payload_unavailable_reason: unavailable.then(|| {
@@ -484,8 +484,8 @@ impl WorkService {
                 value: crate::protocol::records::AllocationQueueSnapshot {
                     project_id: i.project_id.clone(),
                     feature_id: i.feature_id.clone(),
-                    queue_revision: crate::services::sessions::rev(revision),
-                    workflow_revision: crate::services::sessions::rev(
+                    queue_revision: crate::services::kernel::rev(revision),
+                    workflow_revision: crate::services::kernel::rev(
                         read.work().queue_revision(&i.project_id, WORKFLOW_QUEUE)?,
                     ),
                 },
@@ -1182,7 +1182,7 @@ pub fn reconcile_project(
             change(tx, &c, "Yielded", &actor)?;
             super::items::bump(tx, project, std::slice::from_ref(&c.queue_key)).map_err(
                 |f| match f {
-                    crate::services::sessions::Failure::Storage(e) => e,
+                    crate::services::kernel::Failure::Storage(e) => e,
                     _ => StorageError::InvalidRecord("allocation queue".into()),
                 },
             )?;

@@ -157,7 +157,7 @@ impl EmbeddingSpaceService {
         &self,
         verified: VerifiedProbeEvidence,
     ) -> Result<(), StorageError> {
-        run_write(self.store.as_ref(), WriteOptions::default(), move |tx| {
+        run_write(self.store.as_ref(), WriteOptions::settlement(), move |tx| {
             persist_verified_in(tx, verified)
         })
     }

@@ -6,7 +6,14 @@ use crate::backend::screen_slot;
 /// (see [`crate::backend::Slot`]).
 #[derive(Clone, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub enum ProjectsSlot {
+    /// Active and archived projects, the navigation selector's list.
+    ProjectsList,
+    /// Deleted projects (their tombstones).
     DeletedProjects,
+    /// Every registered repository.
+    RepositoriesList,
+    /// The repositories of one project.
+    ProjectRepositories(String),
     ProjectCreate,
     /// An edit, membership or lifecycle command of one project (one at a time per project).
     ProjectCommand(String),

@@ -241,7 +241,7 @@ fn managed_conventions_only_agent_embeddings_reuse_actual_turn_and_refuse_missin
     let actor = ctx.principal().clone();
     write(f.store.as_ref(), move |tx| {
         let p = tx.authority().principal(&actor)?.unwrap();
-        tx.authority().bind_principal(
+        devworks_core::authority::fixture_writes(tx)?.bind_principal(
             NewPrincipalBinding {
                 actor: p.actor,
                 kind: p.kind,

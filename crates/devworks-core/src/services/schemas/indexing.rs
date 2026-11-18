@@ -13,7 +13,7 @@ use crate::{
         approvals,
         artifacts::ArtifactService,
         conventions::control,
-        sessions::{Failure, Refusal},
+        kernel::{Failure, Refusal},
     },
 };
 use serde::{Deserialize, Serialize};
@@ -294,7 +294,7 @@ impl SchemaService {
             runtime.store.as_ref(),
             WriteOptions {
                 cancellation: Some(cancel.clone()),
-                ..Default::default()
+                ..WriteOptions::host_state()
             },
             move |tx| {
                 if closed.is_closed() || token.is_cancelled() {
@@ -317,46 +317,51 @@ impl SchemaService {
         let closed = runtime.closed.clone();
         let op = op.clone();
         let job: SchemaJob = serde_json::from_value(op.payload.clone()).map_err(|_| invalid())?;
-        run_write(runtime.store.as_ref(), WriteOptions::default(), move |tx| {
-            if closed.is_closed() {
-                return Err(StorageError::Cancelled);
-            }
-            if tx.store().store_id != job.store_id || tx.store().restore_epoch != job.restore_epoch
-            {
-                return Err(StorageError::ScopeDenied);
-            }
-            if tx.schemas().schema_publication(&op.id)?.is_some() {
-                return Ok(());
-            }
-            let actual = tx.operations().operation(&op.id)?.ok_or_else(invalid)?;
-            if actual.payload != op.payload
-                || actual.latest_attempt().map(|a| a.fence())
-                    != op.latest_attempt().map(|a| a.fence())
-            {
-                return Err(StorageError::LeaseLost {
-                    kind: "schema_metadata",
-                    id: op.id.0.as_str().into(),
-                });
-            }
-            let Some(mut source) = tx.schemas().schema_source(&job.connection_id)? else {
-                return Ok(());
-            };
-            if source.connection.active_operation_id.as_ref() != Some(&op.id.0) {
-                return Ok(());
-            }
-            let expected = source.connection.revision.get();
-            source.connection.revision = source
-                .connection
-                .revision
-                .checked_next()
-                .ok_or_else(invalid)?;
-            source.connection.active_operation_id = None;
-            source.connection.last_error = Some(crate::protocol::support::BoundedText(format!(
-                "Metadata{reason:?}"
-            )));
-            source.updated_at_ms = tx.now_ms();
-            tx.schemas().revise_schema_source(&source, expected)
-        })
+        run_write(
+            runtime.store.as_ref(),
+            WriteOptions::settlement(),
+            move |tx| {
+                if closed.is_closed() {
+                    return Err(StorageError::Cancelled);
+                }
+                if tx.store().store_id != job.store_id
+                    || tx.store().restore_epoch != job.restore_epoch
+                {
+                    return Err(StorageError::ScopeDenied);
+                }
+                if tx.schemas().schema_publication(&op.id)?.is_some() {
+                    return Ok(());
+                }
+                let actual = tx.operations().operation(&op.id)?.ok_or_else(invalid)?;
+                if actual.payload != op.payload
+                    || actual.latest_attempt().map(|a| a.fence())
+                        != op.latest_attempt().map(|a| a.fence())
+                {
+                    return Err(StorageError::LeaseLost {
+                        kind: "schema_metadata",
+                        id: op.id.0.as_str().into(),
+                    });
+                }
+                let Some(mut source) = tx.schemas().schema_source(&job.connection_id)? else {
+                    return Ok(());
+                };
+                if source.connection.active_operation_id.as_ref() != Some(&op.id.0) {
+                    return Ok(());
+                }
+                let expected = source.connection.revision.get();
+                source.connection.revision = source
+                    .connection
+                    .revision
+                    .checked_next()
+                    .ok_or_else(invalid)?;
+                source.connection.active_operation_id = None;
+                source.connection.last_error = Some(crate::protocol::support::BoundedText(
+                    format!("Metadata{reason:?}"),
+                ));
+                source.updated_at_ms = tx.now_ms();
+                tx.schemas().revise_schema_source(&source, expected)
+            },
+        )
     }
     /// Observing repeats only metadata reads, never caller SQL or source writes. The immutable
     /// publication witness is checked before current-source eligibility, including after edits.
@@ -373,7 +378,7 @@ impl SchemaService {
         {
             return Err(invalid());
         }
-        let completed = run_write(runtime.store.as_ref(), WriteOptions::default(), {
+        let completed = run_write(runtime.store.as_ref(), WriteOptions::settlement(), {
             let id = op.id.clone();
             move |tx| tx.schemas().schema_publication(&id)
         })?;

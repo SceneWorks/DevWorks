@@ -34,7 +34,6 @@ use devworks_core::gateway::{CommandOutcome, QueryOutcome};
 use devworks_core::ports::diagnostics::StorageHealthProbe;
 use devworks_core::ports::http::HttpTransport;
 use devworks_core::ports::packages::{HostPlatform, RuntimeCache};
-use devworks_core::ports::retrieval::NoVectorIndex;
 use devworks_core::ports::router::ConnectionDirectory;
 use devworks_core::ports::secrets::{Secret, SecretResolver, SecretStore, SwitchableSecrets};
 use devworks_core::ports::storage::{
@@ -43,29 +42,20 @@ use devworks_core::ports::storage::{
 use devworks_core::ports::{Clock, IdKind, IdSource};
 use devworks_core::protocol::{ActorId, Counter, Id, Revision};
 use devworks_core::services::UseCases;
-use devworks_core::services::agents::AgentService;
-use devworks_core::services::artifacts::ArtifactService;
 use devworks_core::services::desktop::ControlEpoch;
-use devworks_core::services::diagnostics::DiagnosticService;
-use devworks_core::services::history::HistoryService;
 use devworks_core::services::indexing::IndexSettings;
-use devworks_core::services::knowledge::KnowledgeService;
-use devworks_core::services::mcp::McpClientService;
-use devworks_core::services::packages::PackageService;
 use devworks_core::services::process::ShutdownReport;
 use devworks_core::services::projects::managed_files::ManagedFileCustody;
-use devworks_core::services::resources::ResourceService;
-use devworks_core::services::router::InferenceRouter;
 use devworks_core::services::router::connections::{ConnectionService, IntakeError};
-use devworks_core::services::runs::ControlService;
-use devworks_core::services::sessions::SessionService;
-use devworks_core::services::web::{WebPorts, WebService, read_policy};
-use devworks_core::settings::service::SettingsService;
+use devworks_core::services::web::{WebService, read_policy};
 use devworks_core::settings::view::Health;
 use devworks_engine::package_host::{HostConfig, IndexPorts, LaunchPorts, RuntimePorts};
+use devworks_engine::runtime::IndexPortsFactory;
 use devworks_engine::{
-    BootError, BootReport, Composition, IndexComposition, IndexingConfig, PackageComposition,
-    RunComposition, Runtime, RuntimeConfig, ShutdownStage, boot,
+    ApplicationComposition, ArtifactComposition, BootError, BootReport, Composition,
+    ConnectionPorts, DiagnosticComposition, IndexComposition, IndexingConfig, KnowledgeComposition,
+    PackageComposition, PackageServicePorts, RouterPorts, RunComposition, Runtime, RuntimeConfig,
+    SessionPorts, SettingsPorts, ShutdownStage, boot,
 };
 use std::path::{Path, PathBuf};
 use std::sync::mpsc;
@@ -101,7 +91,7 @@ fn macos_major_version() -> u32 {
 }
 
 /// Builds the web tools' ports over the secret resolver the host composed.
-pub type WebPortsFactory = Arc<dyn Fn(Arc<dyn SecretResolver>) -> WebPorts + Send + Sync>;
+pub type WebPortsFactory = devworks_engine::WebPortsFactory;
 
 /// What the composition root is configured with.
 #[derive(Clone)]
@@ -313,23 +303,14 @@ async fn compose(
         config.data_root.clone(),
         config.data_root.join("cache"),
     ));
-    let artifacts = Arc::new(
-        ArtifactService::new(
+    let artifact_ports = ArtifactComposition {
+        project_previews: Some(custody),
+        ..ArtifactComposition::new(
             artifact_files.clone(),
             sources.clone(),
             Arc::new(NativeFilesystem::new()),
-            clock.clone(),
-            id_source.clone(),
         )
-        .with_project_previews(custody),
-    );
-    let settings = Arc::new(SettingsService {
-        roles: Arc::new(HostRoles {
-            store: store.clone(),
-        }),
-        paths: Arc::new(FsPathProbe),
-        ids: id_source.clone(),
-    });
+    };
     // Provider connections (DW-18): the OS secret facility (or the configured one), native
     // HTTPS (or the configured transport) and the OS random generator.
     let (secrets, switchable): (Arc<dyn SecretStore>, Option<Arc<SwitchableSecrets>>) =
@@ -344,130 +325,98 @@ async fn compose(
         .http
         .clone()
         .unwrap_or_else(|| Arc::new(devworks_adapters::http::NativeHttp::new()));
-    let connections = Arc::new(ConnectionService::new(
-        id_source.clone(),
-        clock.clone(),
-        store.clone(),
-        http.clone(),
-        secrets.clone(),
-        Arc::new(devworks_adapters::OsEntropy),
-    ));
-    let directory: Arc<dyn ConnectionDirectory> = config
-        .connections
-        .clone()
-        .unwrap_or_else(|| connections.clone());
     // The Home coordinator agent is bound by the Home chat item (DW-16); until it exists a
     // human's Home session is conducted by its creator, and no reply is ever fabricated.
-    // Unified Knowledge. Retrieval is lexical until an embedding route exists (vector search is
-    // never reported as run); imports read their saved artifact version. A large delete by
-    // source continues through its durable consumer, registered with the dispatcher below.
-    let knowledge = Arc::new(
-        KnowledgeService::new(
-            id_source.clone(),
-            clock.clone(),
-            Some(artifact_files),
-            Arc::new(NoVectorIndex),
-        )
-        .with_summaries(store.clone(), artifacts.clone()),
-    );
-    let run_control = Arc::new(ControlService::new(id_source.clone()));
-    let agents = Arc::new(AgentService::new(id_source.clone(), run_control.clone()));
-    let mcp_service = Arc::new(McpClientService::new(id_source.clone()));
-    let use_cases = UseCases::new()
-        .with_queue()
-        .with_settings(settings)
-        .with_sessions(Arc::new(SessionService::new(
-            id_source.clone(),
-            store.clone(),
-        )))
-        .with_agents(agents.clone())
-        .with_history(Arc::new(HistoryService::new(id_source.clone())))
+    // Unified Knowledge retrieval is lexical until an embedding route exists (vector search is
+    // never reported as run). The engine builds every core service from these ports.
+    let application = ApplicationComposition {
+        settings: Some(SettingsPorts {
+            roles: Arc::new(HostRoles {
+                store: store.clone(),
+            }),
+            paths: Arc::new(FsPathProbe),
+        }),
+        connections: Some(ConnectionPorts {
+            http: http.clone(),
+            secrets: secrets.clone(),
+            entropy: Arc::new(devworks_adapters::OsEntropy),
+            endpoints: None,
+        }),
         // The router resolves tiers, named models, effort and availability over the provider
-        // connections' durable rows (the same unit of work as each route).
-        .with_router(Arc::new(InferenceRouter::new(
-            id_source.clone(),
-            clock.clone(),
-            directory,
-        )))
-        .with_connections(connections.clone())
-        .with_mcp(mcp_service)
-        .with_knowledge(knowledge.clone());
+        // connections' durable rows (the same unit of work as each route), unless a test
+        // scripts the directory.
+        router: Some(RouterPorts {
+            directory: config.connections.clone(),
+        }),
+        sessions: Some(SessionPorts::default()),
+        history: true,
+        mcp: true,
+    };
+    let use_cases = UseCases::new().with_queue();
     let authority = Arc::new(StoreAuthority {
         store: store.clone(),
         clock: clock.clone(),
     });
     // Diagnostics read the store's own health probes; exports are staged as the user's uploads.
-    let diagnostics = Arc::new(DiagnosticService::new(
-        store.clone(),
-        id_source.clone(),
-        clock.clone(),
-        Some(sqlite as Arc<dyn StorageHealthProbe>),
-    ));
-    diagnostics.set_export_staging(Arc::new(
-        DiagnosticExports::new(
-            config.data_root.join("diagnostics").join("exports"),
-            sources.clone(),
-        )
-        .with_store(store.clone()),
-    ));
+    let diagnostic_ports = DiagnosticComposition {
+        storage: Some(sqlite as Arc<dyn StorageHealthProbe>),
+        export_staging: Some(Arc::new(
+            DiagnosticExports::new(
+                config.data_root.join("diagnostics").join("exports"),
+                sources.clone(),
+            )
+            .with_store(store.clone()),
+        )),
+        secrets: Vec::new(),
+    };
     // Managed executable packages (ADDON-01..04, EXT-01..07): verified bundles install into
     // content-addressed directories under the data root; helpers launch through the process
     // owner. No optional runtime is assumed present until a runtime probe is qualified.
     let runtimes = Arc::new(RuntimeCache::new());
-    let packages = Arc::new(PackageService::new(
-        store.clone(),
-        id_source.clone(),
-        artifacts.clone(),
-        Arc::new(BundleInspector),
-        Arc::new(NativePackageFiles::new(config.data_root.join("packages"))),
-        runtimes.clone(),
-        HostPlatform {
+    let package_ports = PackageServicePorts {
+        inspector: Arc::new(BundleInspector),
+        files: Arc::new(NativePackageFiles::new(config.data_root.join("packages"))),
+        runtimes: runtimes.clone(),
+        platform: HostPlatform {
             target_triple: host_target_triple(),
             host_version: env!("CARGO_PKG_VERSION").into(),
             protocol_major: 1,
             protocol_minor: 0,
         },
-        diagnostics.clone(),
-        Arc::new(JsonSchemaValidator),
-    ));
-    // The shared web tools: fetched pages become artifacts through the one artifact service and
-    // every search and fetch is recorded through the one diagnostics service. The search
-    // credential resolves through the provider connection service, i.e. the same OS secret
-    // store (one secret-store abstraction).
-    let web_ports = (config.web)(connections.clone());
-    // Package index and bundle downloads use the same resolver, pinned-address transport and
-    // egress policy as web.fetch, read fresh for each download (refused on a read failure).
-    let package_index = {
+        validator: Arc::new(JsonSchemaValidator),
+        quiesce_wait: None,
+        availability_consumers: Vec::new(),
+        log_ids: None,
+    };
+    // The shared web tools' ports are built by the engine over the one connection service (the
+    // search credential resolves from the same OS secret store, one secret-store abstraction)
+    // and handed to the package index and the package host's brokered HTTP calls. Package index
+    // and bundle downloads use the same resolver, pinned-address transport and egress policy as
+    // web.fetch, read fresh for each download (refused on a read failure).
+    let package_index: IndexPortsFactory = {
         let store = store.clone();
-        NativeIndexTransport::new(
-            web_ports.resolver.clone(),
-            web_ports.transport.clone(),
-            Arc::new(move || {
-                read_snapshot(&*store, &ReadOptions::default(), |s| {
-                    Ok(read_policy(s.configuration()))
-                })
-                .ok()
-                .and_then(Result::ok)
-                .is_some_and(|p| p.allow_private)
-            }),
-        )
+        Arc::new(move |web| {
+            let web = web.ok_or_else(|| {
+                "the package index needs the web tools' ports (a web composition)".to_owned()
+            })?;
+            let store = store.clone();
+            Ok(IndexPorts {
+                transport: Arc::new(NativeIndexTransport::new(
+                    web.resolver.clone(),
+                    web.transport.clone(),
+                    Arc::new(move || {
+                        read_snapshot(&*store, &ReadOptions::default(), |s| {
+                            Ok(read_policy(s.configuration()))
+                        })
+                        .ok()
+                        .and_then(Result::ok)
+                        .is_some_and(|p| p.allow_private)
+                    }),
+                )),
+                verifier: Arc::new(BundleIndexVerifier),
+            })
+        })
     };
-    // Brokered package HTTP calls use the same resolver, pinned-address transport and egress
-    // policy, and resolve connection credentials through the same secret store.
-    let package_network = devworks_engine::package_host::http::NetworkPorts {
-        resolver: web_ports.resolver.clone(),
-        transport: web_ports.transport.clone(),
-        secrets: web_ports.secrets.clone(),
-    };
-    let web = Arc::new(WebService::new(
-        store.clone(),
-        artifacts.clone(),
-        diagnostics.clone(),
-        clock.clone(),
-        id_source.clone(),
-        web_ports,
-    ));
-    let use_cases = use_cases.with_web(web.clone());
     let purge_client = Arc::new(
         crate::project_purge::NativePurgeClient::new(
             config.data_root.join(crate::memory::FILE),
@@ -477,14 +426,22 @@ async fn compose(
     );
     let mut runtime_config = RuntimeConfig::new(ids.next_id(IdKind::Boot));
     runtime_config.purge = Some(devworks_engine::runtime::PurgeComposition {
-        files: Arc::new(
-            devworks_adapters::fs::purge::NativeProjectPurgeFiles::new(
+        files: {
+            let (data_root, paste_root) = (
                 config.data_root.clone(),
-                config.data_root.join("cache"),
-            )
-            .with_paste_root(config.data_root.join("staging-ui"))
-            .with_read_fence(artifacts.clone()),
-        ),
+                config.data_root.join("staging-ui"),
+            );
+            Arc::new(move |fence| {
+                Arc::new(
+                    devworks_adapters::fs::purge::NativeProjectPurgeFiles::new(
+                        data_root.clone(),
+                        data_root.join("cache"),
+                    )
+                    .with_paste_root(paste_root.clone())
+                    .with_read_fence(fence),
+                )
+            })
+        },
         client: purge_client.clone(),
     });
     runtime_config.shutdown_bound = config.shutdown_bound;
@@ -609,14 +566,9 @@ async fn compose(
                     )),
                     roots: vec![devworks_core::services::git::RegisteredGitRoot { id: root, path }],
                     filesystem: Some(Arc::new(NativeFilesystem::new())),
-                    github: Some(Arc::new(
-                        devworks_core::services::git::github::GitHubClient {
-                            http,
-                            secrets: connections.clone(),
-                        },
-                    )),
                     ..devworks_core::services::git::GitConfig::default()
                 },
+                github_http: Some(http),
             })
         });
     let composition = Composition {
@@ -624,14 +576,19 @@ async fn compose(
         clock: clock.clone(),
         ids: id_source.clone(),
         authority: authority.clone(),
-        artifacts,
-        resources: Arc::new(ResourceService::new(id_source.clone(), clock.clone())),
+        artifacts: artifact_ports,
         process_host: Arc::new(NativeProcessHost),
-        // The production run-control service (stored plan approval, no coordinator launcher
-        // until the agent supervisor exists): accepted work is held at shutdown and boot.
-        runs: RunComposition::new(run_control),
+        // Production run control (stored plan approval, no coordinator launcher until the agent
+        // supervisor exists): accepted work is held at shutdown and boot.
+        runs: RunComposition::default(),
         power: Arc::new(NativePower),
-        diagnostics,
+        diagnostics: diagnostic_ports,
+        knowledge: KnowledgeComposition {
+            files: Some(artifact_files),
+            ..KnowledgeComposition::default()
+        },
+        application,
+        web: Some(config.web.clone()),
         // Owned browser sessions: discovered or configured Chromium-family browsers, owned
         // profiles under the data root, launched through the process owner.
         git,
@@ -646,7 +603,7 @@ async fn compose(
             resolver: Arc::new(devworks_adapters::web::resolve::SystemResolver),
         }),
         packages: Some(PackageComposition {
-            service: packages,
+            service: package_ports,
             launch: LaunchPorts {
                 fs: Arc::new(NativeFilesystem::new()),
                 roots: protected_roots(config),
@@ -657,12 +614,10 @@ async fn compose(
                 cache: runtimes,
                 search_path: None,
             }),
-            index: Some(IndexPorts {
-                transport: Arc::new(package_index),
-                verifier: Arc::new(BundleIndexVerifier),
-            }),
+            index: Some(package_index),
         }),
         use_cases,
+        test_overrides: Default::default(),
         // Repository discovery and structural indexing (DW-23): Tree-sitter grammars, native
         // no-follow source reads and Git through the process owner. Semantic packs register
         // with the indexing environment when installed (DW-24..27).
@@ -674,16 +629,19 @@ async fn compose(
             config: config.indexing.clone(),
             enrichers: Vec::new(),
         }),
-        consumers: vec![devworks_engine::knowledge::source_deletion_consumer(
-            knowledge,
-        )],
+        consumers: Vec::new(),
         config: runtime_config,
     };
     // Recovery and every required consumer start here, before any request below is admitted.
     let runtime = Arc::new(boot(composition).await.map_err(StartError::Boot)?);
-    if let Some(host) = runtime.packages() {
-        host.attach_network(package_network);
-    }
+    let web = runtime
+        .web()
+        .cloned()
+        .ok_or_else(|| StartError::Thread("the runtime composed no web tools".into()))?;
+    let connections = runtime
+        .connections()
+        .cloned()
+        .ok_or_else(|| StartError::Thread("the runtime composed no provider connections".into()))?;
     // A previous boot cannot still be producing a paste. Live draft files require the
     // client keeper snapshot; this owner only reconciles incomplete reserved writes.
     if let Err(error) = ManagedFileCustody::new(store.clone()).recover_client_staging(
@@ -699,7 +657,7 @@ async fn compose(
     let (registered, name) = (user.clone(), config.user_name.clone());
     let st = store.clone();
     tokio::task::spawn_blocking(move || {
-        run_write(&*st, WriteOptions::default(), move |tx| {
+        run_write(&*st, WriteOptions::recovery(), move |tx| {
             tx.actors()
                 .register(&registered, PrincipalKind::Human, &name)?;
             tx.decisions().bind_notification_user(&registered)
@@ -723,7 +681,7 @@ async fn compose(
             devworks_engine::agent_supervisor::AgentLauncher::new(
                 store.clone(),
                 id_source,
-                agents,
+                runtime.agents().clone(),
                 Arc::new(devworks_engine::agent_turns::NativeAgentTurnExecutor::new(
                     &runtime,
                 )),

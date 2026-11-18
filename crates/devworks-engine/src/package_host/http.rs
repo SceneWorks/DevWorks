@@ -535,7 +535,7 @@ pub(super) fn call(
     }
     let finish = |state: OperationState, observation: Value| {
         let operation = operation.clone();
-        let _ = run_write(&*host.store, WriteOptions::default(), move |tx| {
+        let _ = run_write(&*host.store, WriteOptions::observed(), move |tx| {
             broker::settle(tx, &operation, state, observation)
         });
     };

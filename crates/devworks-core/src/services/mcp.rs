@@ -29,7 +29,7 @@ use crate::protocol::{
 };
 use crate::services::artifacts::ArtifactService;
 use crate::services::cursor::CursorBinding;
-use crate::services::sessions::{Failure, Refusal, decided, query_fault, rev};
+use crate::services::kernel::{Failure, Refusal, decided, query_fault, rev};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
@@ -624,7 +624,7 @@ impl McpClientService {
         let digest_for_write = digest.clone();
         crate::ports::storage::run_write(
             &*native.store,
-            crate::ports::storage::WriteOptions::default(),
+            crate::ports::storage::WriteOptions::host_state(),
             move |tx| {
                 if let Some(existing) = tx.operations().operation(&operation_for_write)? {
                     return if existing.capability == "mcp.tool"
@@ -888,7 +888,7 @@ impl McpClientService {
         let operation_for_write = op.id.clone();
         let settled = crate::ports::storage::run_write(
             &*native.store,
-            crate::ports::storage::WriteOptions::default(),
+            crate::ports::storage::WriteOptions::settlement(),
             move |tx| {
                 let (version, mut state) = current(tx.configuration(), &scope_for_write)?;
                 let server = state
@@ -1284,7 +1284,7 @@ impl McpClientService {
         let origin = origin.clone();
         let decided = crate::ports::storage::run_write(
             &*native.store,
-            crate::ports::storage::WriteOptions::default(),
+            crate::ports::storage::WriteOptions::host_state(),
             move |tx| {
                 let Some(op) = tx.operations().operation(&origin.operation_id)? else {
                     return Ok(Err("mcp_sampling_call"));
@@ -1366,7 +1366,7 @@ impl McpClientService {
         let expected_catalog = server.public.catalog_revision;
         let published = crate::ports::storage::run_write(
             &*native.store,
-            crate::ports::storage::WriteOptions::default(),
+            crate::ports::storage::WriteOptions::settlement(),
             move |tx| {
                 let (_, state) = current(tx.configuration(), &scope_for_write)?;
                 if !state.servers.iter().any(|server| {
@@ -1441,7 +1441,7 @@ impl McpClientService {
         let operation = op.id.clone();
         let _ = crate::ports::storage::run_write(
             &*native.store,
-            crate::ports::storage::WriteOptions::default(),
+            crate::ports::storage::WriteOptions::settlement(),
             move |tx| {
                 let (version, mut state) = current(tx.configuration(), &scope)?;
                 let server = state
@@ -2942,7 +2942,7 @@ impl CommandHandler for McpClientService {
             }
             _ => decided(
                 tx,
-                Err(crate::services::sessions::Refusal::new(
+                Err(crate::services::kernel::Refusal::new(
                     DomainErrorCode::UnsupportedCapability,
                     "operation",
                     None,

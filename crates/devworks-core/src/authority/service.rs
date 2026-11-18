@@ -946,7 +946,7 @@ fn resume_grants(
     }
     // Only a grant that covers a current manual-resume hold is attached (and so spent): a
     // Continue with nothing to clear never uses one up.
-    let holds: Vec<_> = crate::services::runs::active_blockers(
+    let holds: Vec<_> = crate::kernel::run_roots::active_blockers(
         s.runs(),
         &crate::ports::storage::BlockerFilter::RootLevel(root_id.clone()),
     )?
@@ -960,7 +960,7 @@ fn resume_grants(
         };
         out.replayable |= &g.actor == ctx.principal() && &g.root_id == root_id && !g.revoked;
         let covers =
-            serde_json::from_value::<crate::services::runs::ResumeBinding>(g.binding.clone())
+            serde_json::from_value::<crate::kernel::run_roots::ResumeBinding>(g.binding.clone())
                 .is_ok_and(|b| holds.iter().any(|h| b.covers(h)));
         let usable = &g.actor == ctx.principal()
             && &g.root_id == root_id
@@ -1448,7 +1448,7 @@ pub fn mint_resume_grant(
     ctx: &InvocationContext,
     holder: ActorId,
     root: RootId,
-    binding: crate::services::runs::ResumeBinding,
+    binding: crate::kernel::run_roots::ResumeBinding,
     bounds: GrantBounds,
 ) -> Result<GrantRecord, AdminError> {
     use crate::ports::storage::{BlockerFilter, NewGrant};
@@ -1459,7 +1459,7 @@ pub fn mint_resume_grant(
     // A run root, or a linked card with controls of its own (its unlink pause, or the
     // activation it kept): its own holds are resumable under a grant like a root's.
     let controlled = match tx.sessions().work_root(&root)? {
-        Some(w) if crate::services::runs::is_run_root(&w) => true,
+        Some(w) if crate::kernel::run_roots::is_run_root(&w) => true,
         Some(w) => tx.runs().root_control(&w.id)?.is_some(),
         None => false,
     };
@@ -1476,8 +1476,10 @@ pub fn mint_resume_grant(
             "a standing resume grant covers human pauses only",
         ));
     }
-    let active =
-        crate::services::runs::active_blockers(tx.runs(), &BlockerFilter::RootLevel(root.clone()))?;
+    let active = crate::kernel::run_roots::active_blockers(
+        tx.runs(),
+        &BlockerFilter::RootLevel(root.clone()),
+    )?;
     for h in &binding.holds {
         let current = active.iter().any(|b| {
             b.id == h.hold_id.0 && b.revision == h.revision.get() && b.cause.manual_resume()

@@ -77,7 +77,7 @@ fn seed(
 ) {
     run_write(
         &**engine.host().runtime().store(),
-        WriteOptions::default(),
+        WriteOptions::fixture(),
         f,
     )
     .expect("seeded rows");

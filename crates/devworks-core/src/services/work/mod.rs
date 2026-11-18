@@ -85,10 +85,10 @@ use crate::protocol::provider::ArtifactRef;
 use crate::protocol::{
     CorrelationId, DomainErrorCode, DomainFault, EventId, Id, ProjectId, RevisionDimension,
 };
-use crate::services::runs::ControlService;
-use crate::services::sessions::{
+use crate::services::kernel::{
     Failure, Refusal, decided, not_found, project_visible, query_fault, rev,
 };
+use crate::services::runs::ControlService;
 use serde_json::{Value, json};
 use std::collections::BTreeSet;
 use std::sync::Arc;

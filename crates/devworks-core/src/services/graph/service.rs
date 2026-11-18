@@ -16,7 +16,7 @@ use crate::{
     services::{
         artifacts::ArtifactService,
         indexing::{IndexEnv, views},
-        sessions::{self, Failure, Refusal, rev},
+        kernel::{self, Failure, Refusal, rev},
     },
 };
 use serde_json::json;
@@ -76,7 +76,7 @@ impl GraphService {
         self
     }
     fn fault(&self, failure: Failure) -> DomainFault {
-        sessions::query_fault(
+        kernel::query_fault(
             failure,
             "graph",
             CorrelationId(self.ids.next_id(IdKind::Correlation)),
@@ -1223,7 +1223,7 @@ impl CommandHandler for GraphService {
                 },
             })
         })();
-        sessions::decided(tx, outcome)
+        kernel::decided(tx, outcome)
     }
 }
 fn dataset_identity(node: &GraphNode) -> GraphNodeIdentity {

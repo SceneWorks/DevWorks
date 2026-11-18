@@ -886,7 +886,7 @@ impl DiagnosticService {
         check_entry(&entry).map_err(LogRefusal::Invalid)?;
         let actor = self.store.info().host_actor;
         let record = self.record(id, self.now(), actor, DiagnosticOrigin::Host, &entry);
-        let stored = run_write(&*self.store, WriteOptions::default(), move |tx| {
+        let stored = run_write(&*self.store, WriteOptions::observed(), move |tx| {
             tx.diagnostics().append_diagnostic(&record)
         })?;
         self.watch.raise(stored.sequence);
@@ -919,7 +919,7 @@ impl DiagnosticService {
     pub fn prune(&self) -> Result<PrunedDiagnostics, StorageError> {
         let host = self.store.info().host_actor;
         let id = self.ids.next_id(IdKind::Diagnostic);
-        let outcome = run_write(&*self.store, WriteOptions::default(), {
+        let outcome = run_write(&*self.store, WriteOptions::housekeeping(), {
             let redactor = self
                 .redactor
                 .read()
@@ -998,7 +998,7 @@ impl DiagnosticService {
         });
         let probe = (!stopped()).then(|| {
             let start = std::time::Instant::now();
-            run_write(&*self.store, WriteOptions::default(), |tx| {
+            run_write(&*self.store, WriteOptions::observed(), |tx| {
                 tx.committed_sequence()
             })
             .map(|_| start.elapsed().as_millis() as u64)
@@ -1287,7 +1287,7 @@ impl DiagnosticService {
         };
         let claim = |intent: ExportIntent| {
             let identity = identity.clone();
-            run_write(&*self.store, WriteOptions::default(), move |tx| {
+            run_write(&*self.store, WriteOptions::host_state(), move |tx| {
                 let stored = tx.diagnostics().claim_export_intent(&intent)?;
                 let receipt = tx.receipts().lookup(&identity)?.is_some();
                 Ok((stored, receipt))
@@ -1313,7 +1313,7 @@ impl DiagnosticService {
             }
             if self.now().saturating_sub(stored.created_at_ms) > EXPORT_CLAIM_STALE_MS {
                 let (from, takeover) = (stored.claim.clone(), mine.clone());
-                let taken = run_write(&*self.store, WriteOptions::default(), move |tx| {
+                let taken = run_write(&*self.store, WriteOptions::recovery(), move |tx| {
                     tx.diagnostics().take_over_export_intent(&takeover, &from)
                 })
                 .map_err(ExportFailure::Storage)?;
@@ -1332,7 +1332,7 @@ impl DiagnosticService {
         // This attempt holds the claim.
         let release_claim = |intent: &ExportIntent| {
             let intent = intent.clone();
-            let _ = run_write(&*self.store, WriteOptions::default(), move |tx| {
+            let _ = run_write(&*self.store, WriteOptions::host_state(), move |tx| {
                 tx.diagnostics().release_export_intent(&intent)
             });
         };
@@ -1363,7 +1363,7 @@ impl DiagnosticService {
             "expectedBytes": rendered.bytes.len().to_string()}})
         .to_string();
         let (claimed, command) = (mine.clone(), frame.clone());
-        let recorded = run_write(&*self.store, WriteOptions::default(), move |tx| {
+        let recorded = run_write(&*self.store, WriteOptions::settlement(), move |tx| {
             tx.diagnostics().complete_export_intent(&claimed, &command)
         });
         match recorded {

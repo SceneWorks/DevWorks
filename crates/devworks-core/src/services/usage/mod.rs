@@ -4,7 +4,7 @@ pub mod auxiliary;
 pub mod budget;
 pub mod host;
 pub mod ingest;
-pub mod meter;
+pub use crate::providers::meter;
 pub mod money;
 pub mod pricing;
 pub mod reports;
@@ -23,7 +23,7 @@ use crate::{
         results::OperationResult,
         support::{BoundedList, Money},
     },
-    services::sessions::{Failure, Refusal, query_fault},
+    services::kernel::{Failure, Refusal, query_fault},
 };
 use std::sync::Arc;
 

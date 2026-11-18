@@ -312,7 +312,7 @@ fn help_only(engine: &devworks_desktop::host::Engine) -> Arc<HelpOnly> {
     let user = engine.host().user().clone();
     let actor = ActorId(Id::new("help-only-reviewer").unwrap());
     let who = actor.clone();
-    run_write(&*store, WriteOptions::default(), move |tx| {
+    run_write(&*store, WriteOptions::fixture(), move |tx| {
         tx.actors()
             .register(&who, PrincipalKind::Agent, "Help reviewer")?;
         devworks_core::authority::service::bind_principal(

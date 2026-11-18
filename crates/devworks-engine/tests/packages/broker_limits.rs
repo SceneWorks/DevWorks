@@ -27,10 +27,13 @@ fn a_host_side_failure_reaches_the_package_as_its_class_and_a_fixed_message() {
     spec.contributions = vec!["call"];
     package(a.install(&a.user, &spec));
     a.ready(&name);
-    // This composition registers no use case for `agents.inbox`: the gateway fails the query.
-    let args = a.save(&a.user, br#"{"assignmentId":"assignment-a","page":{"limit":10},"unacknowledgedOnly":false,"direction":"Inbound"}"#);
-    let mut step = json!({"actionKey": "list", "call": application("agents.inbox",
-        input_schema("agents.inbox", Mode::Query, None), json!("$input"))});
+    // This composition registers no indexing use case: the gateway fails the query.
+    let args = a.save(
+        &a.user,
+        br#"{"scope":{"kind":"Workspace"},"roots":[],"page":{"limit":50}}"#,
+    );
+    let mut step = json!({"actionKey": "list", "call": application("indexing.discover",
+        input_schema("indexing.discover", Mode::Query, None), json!("$input"))});
     step["reportMessage"] = json!(true);
     let (progress, _) = run_calls(
         &a,
@@ -55,7 +58,7 @@ fn a_host_side_failure_reaches_the_package_as_its_class_and_a_fixed_message() {
     });
     assert_eq!(calls.len(), 1, "{calls:?}");
     assert!(
-        format!("{:?}", calls[0]).contains("no use case is registered for agents.inbox"),
+        format!("{:?}", calls[0]).contains("no use case is registered for indexing.discover"),
         "{calls:?}"
     );
 }

@@ -83,7 +83,7 @@ use crate::protocol::{
     RevisionDimension, RootId,
 };
 use crate::services::cursor::{self, CursorBinding};
-use crate::services::sessions::{Failure, Refusal, counter, decided, query_fault, rev};
+use crate::services::kernel::{Failure, Refusal, counter, decided, query_fault, rev};
 use serde_json::{Value, json};
 use std::collections::{BTreeSet, HashMap};
 use std::sync::{Arc, Mutex};
@@ -402,7 +402,7 @@ impl ResourceService {
             resource_id: ResourceId(Id::new(name).map_err(|_| {
                 Refusal::new(DomainErrorCode::InvalidArgument, "container_resource", None)
             })?),
-            expected_revision: crate::services::sessions::rev(
+            expected_revision: crate::services::kernel::rev(
                 resource.as_ref().map_or(1, |resource| resource.revision),
             ),
             units: Limit::new(1).expect("one resource unit"),

@@ -27,7 +27,7 @@ fn seed(h: &Harness) -> SqliteStore {
     raw.execute("INSERT INTO work_items(id,project_id,kind,parent_feature_id,title,priority,manual_order,revision,scope_revision,created_at,brief_json) VALUES('issue','project-a','issue','feature','Issue',0,0,1,1,?1,'{}')",[T0]).unwrap();
     raw.execute("INSERT INTO router_connections(id,name,profile,endpoint,credential_revision,lifecycle,revision,created_at,updated_at) VALUES('connection','Actual transport','OpenAiResponses','https://example.test',0,'Disconnected',1,?1,?1)",[T0]).unwrap();
     drop(raw);
-    run_write(&s, WriteOptions::default(), |tx| {
+    run_write(&s, WriteOptions::fixture(), |tx| {
         while !ingest::bootstrap_page(tx, 64)?.complete {}
         Ok(())
     })
@@ -114,7 +114,7 @@ fn attempt(
         local_quiescent: true,
         summary: serde_json::to_value(summary).unwrap(),
     };
-    run_write(s, WriteOptions::default(), move |tx| {
+    run_write(s, WriteOptions::fixture(), move |tx| {
         tx.usage().insert_inference_attempt(&a)?;
         tx.usage().put_attempt_balance(&b, None)?;
         Ok(())
@@ -154,7 +154,7 @@ fn origin(
         unknown_tail: false,
         committed_sequence: (kind == "SessionUsage").then_some(1),
     };
-    run_write(s, WriteOptions::default(), move |tx| {
+    run_write(s, WriteOptions::fixture(), move |tx| {
         tx.usage().insert_usage_origin(&o)
     })
     .unwrap();
@@ -457,7 +457,7 @@ fn scopes_intersect_and_report_cursor_is_bound_to_range_view_limit_and_read_revi
         T0
     )
     .is_err())));
-    run_write(&s, WriteOptions::default(), |tx| {
+    run_write(&s, WriteOptions::fixture(), |tx| {
         super::append(tx, "SourceChanged", json!({}))
     })
     .unwrap();
@@ -712,7 +712,7 @@ fn contradictory_cache_measurements_remain_observable_without_a_fabricated_uncac
         1,
         (Some(20), Some(1), 100),
     );
-    run_write(&s, WriteOptions::default(), |tx| {
+    run_write(&s, WriteOptions::fixture(), |tx| {
         let mut b = tx.usage().attempt_balance(&id("cache-attempt"))?.unwrap();
         let mut summary: BalanceSummary = serde_json::from_value(b.summary).unwrap();
         summary.meter.quantities.cached_read_tokens = Some(10);
@@ -890,7 +890,7 @@ fn full_dimensional_unknown_cost_reasons_are_current_and_never_truncated_to_a_qu
         1,
         (Some(4), Some(2), 3),
     );
-    let expected = run_write(&s, WriteOptions::default(), |tx| {
+    let expected = run_write(&s, WriteOptions::fixture(), |tx| {
         let a = tx
             .usage()
             .inference_attempt(&id("unit-cost-attempt"))?
@@ -940,7 +940,7 @@ fn aggregate_observed_subtotals_never_claim_complete_coverage_of_an_unknown_remo
     let s = seed(&h);
     request(&h, "tail", "Assistant", T0);
     attempt(&h, &s, "tail-attempt", "tail", 1, (Some(4), Some(2), 3));
-    run_write(&s, WriteOptions::default(), |tx| {
+    run_write(&s, WriteOptions::fixture(), |tx| {
         let mut b = tx.usage().attempt_balance(&id("tail-attempt"))?.unwrap();
         b.revision += 1;
         b.unknown_tail = true;

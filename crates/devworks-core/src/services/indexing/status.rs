@@ -13,8 +13,8 @@ use crate::protocol::records::{
 };
 use crate::protocol::support::{BoundedList, BoundedText};
 use crate::protocol::{Id, OperationState};
+use crate::services::kernel::{Failure, counter, label, rev};
 use crate::services::projects::visible_repository;
-use crate::services::sessions::{Failure, counter, label, rev};
 use serde_json::Value;
 
 /// The `OperationState` a run reports.
@@ -297,7 +297,7 @@ pub fn overlay_status(
     overlay: &Id,
     revision: u32,
 ) -> Result<RepositoryIndexStatus, Failure> {
-    let hidden = || -> Failure { crate::services::sessions::not_found("overlay", overlay).into() };
+    let hidden = || -> Failure { crate::services::kernel::not_found("overlay", overlay).into() };
     let o = read.indexing().overlay(overlay)?.ok_or_else(hidden)?;
     status(env, read, ctx, &o.repository_id, revision, Some(&o)).map_err(|f| match f {
         Failure::Refused(_) => hidden(),
@@ -319,7 +319,7 @@ pub fn status(
     if let Some(own) = ctx.project_id()
         && !read.projects().members(own)?.contains(&r.id)
     {
-        return Err(crate::services::sessions::not_found("repository", repository).into());
+        return Err(crate::services::kernel::not_found("repository", repository).into());
     }
     let idx = read.indexing();
     let now = env.now();

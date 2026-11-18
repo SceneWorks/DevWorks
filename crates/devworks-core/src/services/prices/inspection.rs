@@ -10,7 +10,7 @@ use crate::protocol::records::*;
 use crate::protocol::support::{BoundedList, Check, Page};
 use crate::protocol::{DomainErrorCode, Id};
 use crate::services::cursor::CursorBinding;
-use crate::services::sessions::{Failure, Refusal};
+use crate::services::kernel::{Failure, Refusal};
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
 use std::collections::BTreeSet;

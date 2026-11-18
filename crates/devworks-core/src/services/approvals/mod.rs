@@ -12,7 +12,7 @@ use crate::context::InvocationContext;
 use crate::ports::Preparation;
 use crate::ports::storage::{ConfigScope, WriteTransaction};
 use crate::protocol::Id;
-use crate::services::sessions::Failure;
+use crate::services::kernel::Failure;
 use serde_json::Value;
 
 /// Actual owner-derived contents and the source-generation fence reviewed by the person.

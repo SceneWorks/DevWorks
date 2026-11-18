@@ -11,7 +11,7 @@ use crate::protocol::records::{
 use crate::protocol::results::{DomainDecision, OperationResult};
 use crate::protocol::{DomainErrorCode, EventId, Id, OperationId, RevisionDimension};
 use crate::providers::capabilities::EmbeddingDimensions;
-use crate::services::sessions::{Failure, Refusal, rev};
+use crate::services::kernel::{Failure, Refusal, rev};
 use serde_json::json;
 
 fn result(id: Id, revision: i64, changed: bool, operation_id: Option<OperationId>) -> Decided {
