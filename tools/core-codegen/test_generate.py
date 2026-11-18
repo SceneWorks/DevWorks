@@ -150,7 +150,7 @@ class SchemaRevisionRules(unittest.TestCase):
         self.assertNotIn('latest_family', generate.TYPES['RouteModel']['fields'])
         catalog = next(o for _, o in generate.operations() if o['operation'] == 'router.catalog')
         configure = next(o for _, o in generate.operations() if o['operation'] == 'router.configure')
-        self.assertEqual(generate.introduced_in(catalog), {2, 3})
+        self.assertEqual(generate.introduced_in(catalog), {2, 3, 4})
         self.assertEqual(generate.introduced_in(configure), {2, 3})
 
     def test_approval_views_preserve_owner_records_and_new_operations_begin_at_three(self):

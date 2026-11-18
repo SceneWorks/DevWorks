@@ -8040,7 +8040,12 @@ pub(super) static CATALOG: [OperationDescriptor; 380] = [
         result_type: "Page<RouteCatalogModel>",
         result_schema: schema_of::<Page<RouteCatalogModel>>,
         completion: false,
-        revisions: &[SchemaRevision(1), SchemaRevision(2), SchemaRevision(3)],
+        revisions: &[
+            SchemaRevision(1),
+            SchemaRevision(2),
+            SchemaRevision(3),
+            SchemaRevision(4),
+        ],
         native_execution: false,
         approval_required: false,
         human_only: false,

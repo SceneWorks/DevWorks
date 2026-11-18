@@ -391,7 +391,10 @@ pub(crate) fn approval_detail(
         ui.label(format!("Requested by {}", actor.0.as_str()));
     }
     if let Some(at) = &p.created_at_ms {
-        ui.label(format!("Requested {}", display_time(at.get())));
+        ui.label(format!(
+            "Requested {}",
+            crate::widgets::local_time(at.get())
+        ));
     }
     if let Some(scope) = &p.scope {
         json_view(ui, "Scope", scope);
@@ -677,16 +680,6 @@ pub(crate) fn permission_label(
             "OS notifications unavailable: {reason}. In-app notifications remain available."
         ),
     }
-}
-
-pub(crate) fn display_time(ms: i64) -> String {
-    jiff::Timestamp::from_millisecond(ms)
-        .map(|at| {
-            at.to_zoned(jiff::tz::TimeZone::system())
-                .strftime("%Y-%m-%d %H:%M")
-                .to_string()
-        })
-        .unwrap_or_else(|_| "Time unavailable".into())
 }
 
 #[cfg(test)]

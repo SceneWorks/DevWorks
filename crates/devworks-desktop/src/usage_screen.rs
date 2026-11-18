@@ -2,7 +2,7 @@
 //! by the shared services; drafts retain their inspected revision across refreshes.
 use crate::{
     frame, theme,
-    widgets::{self, Header, Tone, ViewState, chip},
+    widgets::{self, Header, Tone, ViewState, chip, local_time},
 };
 use devworks_core::operations::{
     OperationInput as In,
@@ -423,7 +423,7 @@ impl UsageScreen {
             ui,
             format!(
                 "Applied {} to {} UTC · {} buckets · read revision {}",
-                time(
+                local_time(
                     context
                         .range
                         .start_ms
@@ -431,7 +431,7 @@ impl UsageScreen {
                         .parse::<i64>()
                         .expect("validated range timestamp")
                 ),
-                time(
+                local_time(
                     context
                         .range
                         .end_ms
@@ -554,7 +554,7 @@ impl UsageScreen {
                                     ui.strong(label);
                                     ui.end_row();
                                     for (at, value) in points {
-                                        ui.label(time(at));
+                                        ui.label(local_time(at));
                                         ui.label(value);
                                         ui.end_row();
                                     }
@@ -670,10 +670,10 @@ impl UsageScreen {
                         },
                     );
                     if let Some(at) = &provider.last_checked_at_ms {
-                        ui.label(format!("Checked {}", time(at.get())));
+                        ui.label(format!("Checked {}", local_time(at.get())));
                     }
                     if let Some(at) = &provider.next_check_at_ms {
-                        ui.label(format!("Next check {}", time(at.get())));
+                        ui.label(format!("Next check {}", local_time(at.get())));
                     }
                     if let Some(e) = &provider.error {
                         ui.colored_label(theme::RED, &e.0);
@@ -717,7 +717,7 @@ impl UsageScreen {
                         ui.hyperlink_to("Official source", &snapshot.source_url.0);
                         ui.label(format!(
                             "Verified {} · parser {}",
-                            time(snapshot.verified_at_ms.get()),
+                            local_time(snapshot.verified_at_ms.get()),
                             snapshot.parser_version.0
                         ));
                         ui.label(format!("Source digest {}", snapshot.source_digest.as_str()));
@@ -805,7 +805,7 @@ impl UsageScreen {
                                     .map_or("Not recorded", |actor| actor.0.as_str()),
                                 updated.as_ref().map_or_else(
                                     || "Time not recorded".into(),
-                                    |at| time(at.get())
+                                    |at| local_time(at.get())
                                 )
                             ));
                             if let PriceOverrideOutcome::Set { tariffs, .. } = change {
@@ -947,15 +947,6 @@ pub fn human(key: &str) -> String {
     chars.next().map_or(String::new(), |first| {
         first.to_uppercase().collect::<String>() + chars.as_str()
     })
-}
-pub fn time(ms: i64) -> String {
-    jiff::Timestamp::from_millisecond(ms)
-        .map(|t| {
-            t.to_zoned(jiff::tz::TimeZone::UTC)
-                .strftime("%Y-%m-%d %H:%M")
-                .to_string()
-        })
-        .unwrap_or_else(|_| "Time unavailable".into())
 }
 pub fn usd(micro: i64) -> String {
     format!("${}.{:06}", micro / 1_000_000, micro % 1_000_000)

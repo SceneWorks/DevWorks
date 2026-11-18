@@ -308,7 +308,23 @@ fn catalog_model(
         resolves_to_model_ids: None,
         available: None,
         availability_reason: None,
+        offered_efforts: None,
     })
+}
+
+/// The explicit efforts `models` declare between them, lowest first, each once. Default is never
+/// listed: every selection offers it.
+fn offered_efforts<'a>(
+    models: impl IntoIterator<Item = &'a StoredRouteModel>,
+) -> Result<crate::protocol::support::Items<EffortName>, StorageError> {
+    const ORDER: [&str; 6] = ["Minimal", "Low", "Medium", "High", "XHigh", "Max"];
+    let declared: Vec<&String> = models.into_iter().flat_map(|m| &m.efforts).collect();
+    ORDER
+        .into_iter()
+        .filter(|effort| declared.iter().any(|d| d.as_str() == *effort))
+        .map(parse_wire::<EffortName>)
+        .collect::<Result<Vec<_>, _>>()
+        .map(BoundedList)
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1034,6 +1050,12 @@ impl InferenceRouter {
             let inventory = select::inventory(m, &connections);
             row.available = inventory.available;
             row.availability_reason = inventory.reason.map(wire_label);
+            // A model that is turned off or known unavailable is not selectable, so it offers none.
+            row.offered_efforts = Some(if m.enabled && inventory.available != Some(false) {
+                offered_efforts([m])?
+            } else {
+                BoundedList(Vec::new())
+            });
             rows.push((m.position, m.id.as_str().to_owned(), row));
         }
         if revision >= 3 {
@@ -1141,6 +1163,14 @@ impl InferenceRouter {
                     }
                     Some(false) => Some(wire_label("NoListedFamilyVersion")),
                 };
+                // An alias offers what the targets it resolves to offer, those it could select.
+                row.offered_efforts = Some(if m.enabled && row.available == Some(true) {
+                    offered_efforts(target_rows.iter().copied().filter(|m| {
+                        m.enabled && select::inventory(m, &connections).available != Some(false)
+                    }))?
+                } else {
+                    BoundedList(Vec::new())
+                });
                 row.resolves_to_model_ids = Some(BoundedList(targets));
                 rows.push((i64::MIN + position as i64, id.as_str().to_owned(), row));
             }

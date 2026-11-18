@@ -467,7 +467,7 @@ fn the_registry_lists_the_revisions_the_desktop_used_to_hard_code() {
         ("sessions.start", 2),
         ("sessions.get", 2),
         ("browser.sessions", 3),
-        ("router.catalog", 3),
+        ("router.catalog", 4),
         ("router.availability", 3),
         ("router.pin", 3),
         ("router.route", 3),

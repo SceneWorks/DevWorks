@@ -50,7 +50,7 @@ impl Prepared {
     pub fn import(scope: &Scope) -> Option<Self> {
         Some(Self::Import(PortableImport {
             scope: scope.data()?,
-            schema: devworks_core::services::conventions::model::manifest_schema(),
+            schema: devworks_core::protocol::helpers::conventions::manifest_schema(),
             source: None,
         }))
     }
@@ -238,7 +238,7 @@ fn prepare_edit_inner(
             submission,
         })
     } else {
-        use devworks_core::services::conventions::model::{
+        use devworks_core::protocol::helpers::conventions::{
             EditorConvention, EditorResource, EditorText, write_editor_manifest,
         };
         let md_hash = hash(d.markdown.as_bytes());

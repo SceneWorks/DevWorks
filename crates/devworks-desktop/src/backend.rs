@@ -14,7 +14,7 @@ use devworks_core::locks::LockExt;
 use devworks_core::ports::secrets::Secret;
 use devworks_core::protocol::CommandReply;
 use devworks_core::protocol::Id;
-use devworks_core::services::desktop::ControlEpoch;
+use devworks_core::protocol::helpers::ControlEpoch;
 use devworks_core::settings::view::Health;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -217,7 +217,7 @@ pub trait Backend: Send + Sync {
     }
     /// The native maintenance capabilities a scheduled job may run in this build (only those
     /// with a registered use case; none are advertised otherwise).
-    fn native_job_capabilities(&self) -> Vec<devworks_core::services::jobs::NativeCapability> {
+    fn native_job_capabilities(&self) -> Vec<devworks_core::protocol::helpers::NativeCapability> {
         Vec::new()
     }
     /// Human-only retained AES key utility. The returned value is transient and redacted.

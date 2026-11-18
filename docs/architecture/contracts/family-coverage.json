@@ -15886,11 +15886,19 @@
               "queryReplySchema": "domain-query-reply.r3.schema.json",
               "commandReplySchema": null,
               "completionSchema": null
+            },
+            {
+              "revision": 4,
+              "inputSchema": "domain-request.r3.schema.json",
+              "resultSchema": "operation-result.r4.schema.json",
+              "queryReplySchema": "domain-query-reply.r4.schema.json",
+              "commandReplySchema": null,
+              "completionSchema": null
             }
           ],
           "authority": "Scoped",
           "effect": "Local",
-          "semanticRules": "Read-only conversational catalog in display order (SystemOne decision models never appear). Schema revision 2: each model's declared context window in tokens (contextTokens, absent when unknown) and the one connection that serves it (connectionId, absent when any connection of its endpoint profile may serve it). Schema revision 3 adds query-only latestFamily, resolvesToModelIds, available and availabilityReason metadata without changing configured RouteModel input. The eight reserved family-latest IDs use existing Model route intent. Alias rows retain all concrete configured serving-scope targets; an empty target list is explicit unavailable, unknown complete inventory remains unknown rather than guessed. Inventory availability is distinct from user enablement, authentication, cooldown and request capability eligibility. Revision 1/2 readers keep their exact recorded schema and do not receive virtual alias rows. Complete authoritative inventories are per connection; failed, malformed or partial lists never remove availability, and returning models do not override user-disabled choices.",
+          "semanticRules": "Read-only conversational catalog in display order (SystemOne decision models never appear). Schema revision 2: each model's declared context window in tokens (contextTokens, absent when unknown) and the one connection that serves it (connectionId, absent when any connection of its endpoint profile may serve it). Schema revision 3 adds query-only latestFamily, resolvesToModelIds, available and availabilityReason metadata without changing configured RouteModel input. The eight reserved family-latest IDs use existing Model route intent. Alias rows retain all concrete configured serving-scope targets; an empty target list is explicit unavailable, unknown complete inventory remains unknown rather than guessed. Inventory availability is distinct from user enablement, authentication, cooldown and request capability eligibility. Revision 1/2 readers keep their exact recorded schema and do not receive virtual alias rows. Complete authoritative inventories are per connection; failed, malformed or partial lists never remove availability, and returning models do not override user-disabled choices. Schema revision 4 adds query-only offeredEfforts: the explicit efforts (lowest first, never Default) the router offers when this row is selected on its own, empty while the row is turned off or unavailable, and for a family-latest alias the efforts of the enabled, available targets it resolves to; a tier offers the union over its member rows.",
           "familyRules": "Direct tiers/named/Auto and separate effort; durable pins, trusted capabilities, host attribution/price provenance and explicit unknown tails.",
           "admission": "Validate protocol, strict fields and selected operation/mode first; derive host principal, current scope/role/grants, then apply command receipt and dispatch policy. Payload IDs are references, not authority.",
           "errorSchema": "DomainFault in domain-query-reply or domain-command-reply; shared pre-admission rejections and legacy specialized control replies remain available",

@@ -13,11 +13,11 @@ use crate::shell::ListState;
 use crate::theme;
 use crate::widgets::{self, Tone, ViewState, chip};
 use devworks_core::protocol::Id;
+use devworks_core::protocol::helpers::work::fold;
 use devworks_core::protocol::records::{
     ApprovalState, FindingState, QueuePlacement, QueueSide, ReadinessFreshness, WorkKind,
     WorkRecord,
 };
-use devworks_core::services::work::fold;
 use eframe::egui::{self, RichText, Ui};
 use std::collections::BTreeSet;
 

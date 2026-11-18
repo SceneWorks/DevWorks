@@ -7,6 +7,7 @@ use devworks_core::protocol::records::{
     ConnectionRecord, EmbeddingDimensionMode, EmbeddingMetric, EmbeddingSpacePage,
     RouterConfigAction,
 };
+use devworks_core::protocol::wire_name;
 use eframe::egui::{self, Ui};
 
 #[derive(Default)]
@@ -23,12 +24,6 @@ pub struct EmbeddingSpacesPanel {
     dimensions: String,
     parameter: bool,
     l2: bool,
-}
-fn wire(value: &impl serde::Serialize) -> String {
-    serde_json::to_value(value)
-        .ok()
-        .and_then(|v| v.as_str().map(str::to_owned))
-        .unwrap_or_default()
 }
 /// The action creating an embedding space from the form's text, `None` when a value is outside
 /// the wire types.
@@ -80,9 +75,12 @@ impl EmbeddingSpacesPanel {
         self.error = None;
     }
     pub fn qualifying(&self) -> bool {
-        self.page
-            .as_ref()
-            .is_some_and(|p| p.items.0.iter().any(|r| wire(&r.status) == "Qualifying"))
+        self.page.as_ref().is_some_and(|p| {
+            p.items
+                .0
+                .iter()
+                .any(|r| wire_name(&r.status) == "Qualifying")
+        })
     }
     pub fn ui(
         &mut self,
@@ -127,7 +125,7 @@ impl EmbeddingSpacesPanel {
             let current=self.connection.as_ref().and_then(|(id,_)|connections.iter().find(|c|c.id.as_str()==id));
             egui::ComboBox::from_label("Embedding connection")
                 .selected_text(current.map_or("Choose an embedding connection",|c|c.name.0.as_str()))
-                .show_ui(ui,|ui| {for c in connections.iter().filter(|c|wire(&c.profile)=="Embedding") {
+                .show_ui(ui,|ui| {for c in connections.iter().filter(|c|wire_name(&c.profile)=="Embedding") {
                     if ui.selectable_label(self.connection.as_ref().is_some_and(|(id,_)|id==c.id.as_str()),&c.name.0).clicked() {self.connection=Some((c.id.as_str().into(),c.revision.as_str().into()));}
                 }});
             field(ui,"Embedding upstream model",&mut self.model);
@@ -172,12 +170,12 @@ impl EmbeddingSpacesPanel {
         for record in &page.items.0 {
             ui.push_id(record.id.as_str(), |ui| {
                 ui.group(|ui| {
-                    ui.strong(format!("{}: {}", record.name.0, wire(&record.status)));
+                    ui.strong(format!("{}: {}", record.name.0, wire_name(&record.status)));
                     ui.label(format!(
                         "Model: {} · {} dimensions · {}",
                         record.upstream_model_id.0,
                         record.dimensions.0,
-                        wire(&record.metric)
+                        wire_name(&record.metric)
                     ));
                     ui.monospace(format!("Space: {}", record.space_id.as_str()));
                     if let Some(reason) = &record.reason {
@@ -187,7 +185,7 @@ impl EmbeddingSpacesPanel {
                         ui.label(format!(
                             "Qualification operation: {} ({})",
                             operation.operation_id.0.as_str(),
-                            wire(&operation.state)
+                            wire_name(&operation.state)
                         ));
                     }
                     if let Some(model) = &record.pricing_model_id
@@ -200,7 +198,7 @@ impl EmbeddingSpacesPanel {
                     {
                         actions.push(ConnectionAction::EmbeddingPrice(model.as_str().into()));
                     }
-                    let state = wire(&record.status);
+                    let state = wire_name(&record.status);
                     if record.can_qualify
                         && ui
                             .add_enabled(

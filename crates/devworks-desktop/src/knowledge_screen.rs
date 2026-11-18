@@ -22,6 +22,7 @@ use devworks_core::protocol::records::{
 };
 use devworks_core::protocol::results::OperationResult;
 use devworks_core::protocol::support::{BoundedList, Limit, Probability};
+use devworks_core::protocol::wire_name;
 use devworks_core::protocol::{DomainErrorCode, Id};
 use eframe::egui::{self, RichText, Ui};
 
@@ -53,9 +54,6 @@ pub fn query(backend: &dyn Backend, input: impl Into<Option<In>>) -> Vec<u8> {
 }
 pub fn command(backend: &dyn Backend, input: impl Into<Option<In>>) -> Vec<u8> {
     frame::build(backend, Negotiate::Latest, input.into())
-}
-fn wire<T: std::fmt::Debug>(v: &T) -> String {
-    format!("{v:?}")
 }
 fn split(list: &str) -> Vec<String> {
     list.split(',')
@@ -151,7 +149,7 @@ impl Draft {
             entry_kind: ENTRY_KINDS
                 .iter()
                 .map(|(e, _)| *e)
-                .find(|e| Some(e.to_string()) == c.entry_kind.as_ref().map(wire))
+                .find(|e| Some(e.to_string()) == c.entry_kind.as_ref().map(wire_name))
                 .unwrap_or("Fact"),
             subject: String::new(),
             value: c.value.as_ref().map(|v| v.0.clone()).unwrap_or_default(),
@@ -325,7 +323,7 @@ pub enum ImportNext {
 }
 /// The import format's schema reference.
 fn import_schema() -> Option<SchemaRef> {
-    use devworks_core::services::knowledge::import::{
+    use devworks_core::protocol::helpers::knowledge::{
         IMPORT_SCHEMA_ID, IMPORT_SCHEMA_REVISION, import_schema_digest,
     };
     Some(SchemaRef {
@@ -1672,7 +1670,10 @@ impl KnowledgeScreen {
             .show(ui, |ui| {
                 for c in &self.items {
                     let selected = self.selected.as_ref() == Some(&c.id);
-                    let kind = c.entry_kind.as_ref().map_or_else(|| wire(&c.kind), wire);
+                    let kind = c
+                        .entry_kind
+                        .as_ref()
+                        .map_or_else(|| wire_name(&c.kind), wire_name);
                     let mut line = format!(
                         "{}  ·  {}",
                         kind,
@@ -1680,11 +1681,11 @@ impl KnowledgeScreen {
                             .as_ref()
                             .map_or(c.predicate.0.as_str(), |v| v.0.as_str())
                     );
-                    if let Some(l) = c.lifecycle.as_ref().filter(|l| wire(*l) != "Active") {
-                        line.push_str(&format!("  ·  {}", wire(l)));
+                    if let Some(l) = c.lifecycle.as_ref().filter(|l| wire_name(*l) != "Active") {
+                        line.push_str(&format!("  ·  {}", wire_name(l)));
                     }
                     if let Some(lesson) = &c.lesson {
-                        line.push_str(&format!("  ·  rule {}", wire(&lesson.rule_state)));
+                        line.push_str(&format!("  ·  rule {}", wire_name(&lesson.rule_state)));
                     }
                     if c.stale == Some(true) {
                         line.push_str("  ·  stale");
@@ -1794,8 +1795,8 @@ impl KnowledgeScreen {
                 ui.label(&n.0);
             }
             ui.horizontal_wrapped(|ui| {
-                chip(ui, c.entry_kind.as_ref().map_or_else(|| wire(&c.kind), wire), Tone::Accent);
-                chip(ui, c.lifecycle.as_ref().map_or_else(|| wire(&c.state), wire), Tone::Neutral);
+                chip(ui, c.entry_kind.as_ref().map_or_else(|| wire_name(&c.kind), wire_name), Tone::Accent);
+                chip(ui, c.lifecycle.as_ref().map_or_else(|| wire_name(&c.state), wire_name), Tone::Neutral);
                 if c.stale == Some(true) {
                     chip(ui, "Stale: its source changed", Tone::Attention);
                 }
@@ -1812,7 +1813,7 @@ impl KnowledgeScreen {
             ));
             widgets::caption(ui, format!(
                 "Origin {} · recorded by {} · revision {}",
-                c.origin.as_ref().map_or("—".into(), wire),
+                c.origin.as_ref().map_or("—".into(), wire_name),
                 c.author_id.as_ref().map_or("—", |a| a.0.as_str()),
                 c.revision.get()
             ));
@@ -1824,9 +1825,9 @@ impl KnowledgeScreen {
                 ui.label(RichText::new("Rule").strong());
                 widgets::caption(ui, format!(
                     "{} · {} · from {} · recurred in {} of {} events · supplied to {} sessions",
-                    wire(&l.rule_state),
-                    l.effect.as_ref().map_or("not in effect".into(), wire),
-                    wire(&l.source),
+                    wire_name(&l.rule_state),
+                    l.effect.as_ref().map_or("not in effect".into(), wire_name),
+                    wire_name(&l.source),
                     l.recurrence.get(),
                     l.recurrence_threshold.get(),
                     l.delivered_sessions.get()
@@ -1835,13 +1836,13 @@ impl KnowledgeScreen {
                     widgets::caption(ui, format!("Applies when {}", l.applicability.activities.0.iter().map(|a| a.0.as_str()).collect::<Vec<_>>().join(", ")));
                 }
                 for a in &l.addressed_by.0 {
-                    widgets::caption(ui, format!("Addressed by {} {}", wire(&a.kind), a.name.0));
+                    widgets::caption(ui, format!("Addressed by {} {}", wire_name(&a.kind), a.name.0));
                 }
             }
             let challenges = c.challenges.as_ref().map(|v| v.0.as_slice())
                 .or_else(|| c.lesson.as_ref().map(|l| l.challenges.0.as_slice())).unwrap_or_default();
             for ch in challenges {
-                widgets::caption(ui, format!("Challenge ({}): {}", wire(&ch.state), ch.reason.0));
+                widgets::caption(ui, format!("Challenge ({}): {}", wire_name(&ch.state), ch.reason.0));
                 if !ch.evidence_ids.0.is_empty() {
                     widgets::caption(ui, format!("Citations: {}", ch.evidence_ids.0.iter().map(Id::as_str).collect::<Vec<_>>().join(", ")));
                 }
@@ -1861,7 +1862,7 @@ impl KnowledgeScreen {
                 widgets::caption(ui, "No source evidence recorded.");
             }
             for e in &bundle.evidence.0 {
-                widgets::caption(ui, format!("{} {}: {}", wire(&e.source.kind), e.source.source_ref.0, e.snippet.0));
+                widgets::caption(ui, format!("{} {}: {}", wire_name(&e.source.kind), e.source.source_ref.0, e.snippet.0));
             }
             if let Some(revisions) = &bundle.revisions {
                 widgets::divider(ui);
@@ -1876,7 +1877,7 @@ impl KnowledgeScreen {
             let r = ui.add(egui::TextEdit::singleline(&mut self.reason).hint_text("Reason (verify, retract, challenge, retire, reject)"));
             r.widget_info(|| egui::WidgetInfo::labeled(egui::Role::TextInput, true, "Change reason"));
             let enabled = online.is_ok() && self.writing.is_none();
-            let lifecycle = c.lifecycle.as_ref().map_or_else(|| "Active".to_owned(), wire);
+            let lifecycle = c.lifecycle.as_ref().map_or_else(|| "Active".to_owned(), wire_name);
             ui.horizontal_wrapped(|ui| {
                 if ui.add_enabled(enabled && lifecycle == "Active", egui::Button::new("Edit")).clicked() {
                     let opened = Draft::of(&c);

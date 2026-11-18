@@ -591,15 +591,6 @@ fn field(ui: &mut Ui, label: &str, value: &mut String) {
     ui.add(egui::TextEdit::singleline(value))
         .widget_info(|| egui::WidgetInfo::labeled(egui::Role::TextInput, true, label));
 }
-fn claim_time(milliseconds: i64) -> String {
-    jiff::Timestamp::from_millisecond(milliseconds)
-        .map(|time| {
-            time.to_zoned(jiff::tz::TimeZone::system())
-                .strftime("%Y-%m-%d %H:%M:%S %Z")
-                .to_string()
-        })
-        .unwrap_or_else(|_| "unknown time".into())
-}
 fn lease(work: &WorkUi) -> Option<u64> {
     work.claim_lease_ms
         .as_deref()
@@ -780,7 +771,7 @@ pub(crate) fn controls(
                     claim.id.as_str(),
                     claim.state,
                     claim.owner_id.0.as_str(),
-                    claim_time(claim.expires_at_ms.get())
+                    crate::widgets::local_time(claim.expires_at_ms.get())
                 ),
             );
             widgets::caption(
@@ -846,7 +837,7 @@ pub(crate) fn controls(
                                     activity.kind.0,
                                     activity.sequence.as_str(),
                                     activity.actor_id.0.as_str(),
-                                    claim_time(activity.occurred_at_ms.get())
+                                    crate::widgets::local_time(activity.occurred_at_ms.get())
                                 ),
                             );
                         }
@@ -1005,7 +996,7 @@ fn editor(ui: &mut Ui, project: &str, workflow: &mut WorkflowUi, actions: &mut V
                 ui.label(RichText::new("New project status").strong());
                 field(ui,"Status name",label);
                 egui::ComboBox::from_label("Status meaning").selected_text(category.as_str()).show_ui(ui,|ui| {
-                    for (_,name,semantic) in devworks_core::services::work::workflow::DEFAULT_STATUSES { ui.selectable_value(category,semantic.to_owned(),name); }
+                    for (_,name,semantic) in devworks_core::protocol::helpers::work::DEFAULT_STATUSES { ui.selectable_value(category,semantic.to_owned(),name); }
                 });
                 let placement = after_status_id.as_ref().map(|id| rows.iter().find(|row|row.id.as_str()==id).map_or(id.as_str(),|row|row.label.0.as_str())).unwrap_or("End of workflow");
                 egui::ComboBox::from_label("Place after").selected_text(placement).show_ui(ui,|ui| {

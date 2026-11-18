@@ -13,15 +13,16 @@ use crate::backend::SecretStoreStatus;
 use crate::frame;
 use crate::widgets::{self, Tone, chip};
 use devworks_core::ports::secrets::Secret;
+use devworks_core::protocol::helpers::profiles::{
+    Auth, PROFILES, Profile, RISK_NOTICE, profile, risk_notice_sha256,
+};
 use devworks_core::protocol::records::{
     AccountAction, ConnectionRecord, OpenRouterConstraints, OpenRouterProviderRouting,
     RouteCatalogModel, RouteModel, RouterConfigAction,
 };
 use devworks_core::protocol::support::BoundedList;
+use devworks_core::protocol::wire_name;
 use devworks_core::protocol::{Id, Revision};
-use devworks_core::services::router::connections::profiles::{
-    Auth, PROFILES, Profile, RISK_NOTICE, profile, risk_notice_sha256,
-};
 use eframe::egui::{self, RichText, Ui};
 use std::collections::BTreeMap;
 
@@ -157,12 +158,6 @@ pub(crate) struct NewModel {
 fn profile_label(wire: &str) -> &'static str {
     profile(wire).map_or("Unknown profile", |p| p.label)
 }
-fn wire<T: serde::Serialize>(v: &T) -> String {
-    serde_json::to_value(v)
-        .ok()
-        .and_then(|v| v.as_str().map(str::to_owned))
-        .unwrap_or_default()
-}
 fn lifecycle_tone(l: &str) -> Tone {
     match l {
         "Connected" => Tone::Good,
@@ -212,7 +207,7 @@ impl ConnectionsPanel {
                 e.excluded = o.map(|o| joined(&o.excluded_models.0)).unwrap_or_default();
                 e.cost_tier = o
                     .and_then(|o| o.cost_tier.as_ref())
-                    .and_then(|t| COST_TIERS.iter().position(|c| *c == wire(t)))
+                    .and_then(|t| COST_TIERS.iter().position(|c| *c == wire_name(t)))
                     .unwrap_or(0);
                 e.provider = o
                     .and_then(|o| o.provider.as_ref())
@@ -307,7 +302,7 @@ impl ConnectionsPanel {
             edit.excluded = joined(&c.excluded_models.0);
             edit.cost_tier = c
                 .cost_tier
-                .map(|tier| wire(&tier))
+                .map(|tier| wire_name(&tier))
                 .and_then(|tier| COST_TIERS.iter().position(|t| *t == tier))
                 .unwrap_or(0);
             edit.provider = c
@@ -498,9 +493,9 @@ impl ConnectionsPanel {
         actions: &mut Vec<ConnectionAction>,
     ) {
         let id = r.id.as_str().to_owned();
-        let wire_profile = wire(&r.profile);
+        let wire_profile = wire_name(&r.profile);
         let p = profile(&wire_profile);
-        let lifecycle = r.lifecycle.as_ref().map(wire).unwrap_or_default();
+        let lifecycle = r.lifecycle.as_ref().map(wire_name).unwrap_or_default();
         let revision = r.revision.get().to_string();
         ui.group(|ui| {
             ui.horizontal_wrapped(|ui| {
@@ -1092,7 +1087,13 @@ impl ConnectionsPanel {
         let connections: Vec<(String, String, String)> = self
             .records
             .iter()
-            .map(|r| (r.id.as_str().to_owned(), r.name.0.clone(), wire(&r.profile)))
+            .map(|r| {
+                (
+                    r.id.as_str().to_owned(),
+                    r.name.0.clone(),
+                    wire_name(&r.profile),
+                )
+            })
             .collect();
         let catalog = self.catalog.clone();
         egui::Grid::new("catalog-grid")
@@ -1155,7 +1156,7 @@ impl ConnectionsPanel {
                     named(r, egui::Role::CheckBox, format!("{name} enabled"));
                     let r = ui.add(egui::TextEdit::singleline(&mut e.context).desired_width(90.0));
                     named(r, egui::Role::TextInput, format!("{name} context tokens"));
-                    let profile_wire = wire(&m.endpoint_profile);
+                    let profile_wire = wire_name(&m.endpoint_profile);
                     let selected = connections
                         .iter()
                         .find(|(id, _, _)| *id == e.connection)

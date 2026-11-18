@@ -1336,14 +1336,14 @@ fn repository_detail(
                         .remote_url
                         .as_ref()
                         .and_then(|u| {
-                            devworks_core::services::git::github::Repository::from_remote(&u.0)
+                            devworks_core::protocol::helpers::git::Repository::from_remote(&u.0)
                         })
                         .map(|r| format!("https://github.com/{}/{}", r.owner, r.name));
                     if let Some(branch) = &state.branch {
                         if let Some(url) = &github {
                             ui.hyperlink_to(
                                 &branch.0,
-                                devworks_core::services::git::github::branch_url(url, &branch.0)
+                                devworks_core::protocol::helpers::git::branch_url(url, &branch.0)
                                     .unwrap_or_else(|| url.clone()),
                             );
                         } else {

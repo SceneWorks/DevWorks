@@ -17,6 +17,7 @@
 use devworks_core::protocol::records::{
     EffortName, RouteAvailability, RouteCatalogModel, RouteChoice, RouteIntent, TierName,
 };
+use devworks_core::protocol::wire_name;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
@@ -28,7 +29,8 @@ pub struct Selection {
 }
 impl PartialEq for Selection {
     fn eq(&self, other: &Self) -> bool {
-        same_intent(&self.intent, &other.intent) && wire(&self.effort) == wire(&other.effort)
+        same_intent(&self.intent, &other.intent)
+            && wire_name(&self.effort) == wire_name(&other.effort)
     }
 }
 impl Default for Selection {
@@ -199,7 +201,7 @@ pub const LATEST_FAMILIES: [(&str, &str); 8] = [
 ];
 
 pub fn is_latest(m: &RouteCatalogModel) -> bool {
-    devworks_core::services::router::latest::alias_family(m.id.as_str()).is_some()
+    devworks_core::protocol::helpers::router::alias_family(m.id.as_str()).is_some()
 }
 
 pub fn selectable(m: &RouteCatalogModel) -> bool {
@@ -208,16 +210,9 @@ pub fn selectable(m: &RouteCatalogModel) -> bool {
 
 const OPEN_ROUTER_AUTO_UPSTREAM: &str = "openrouter/auto";
 
-fn wire<T: Serialize>(v: &T) -> String {
-    serde_json::to_value(v)
-        .ok()
-        .and_then(|v| v.as_str().map(str::to_owned))
-        .unwrap_or_default()
-}
-
 /// Whether a catalog model is OpenRouter's own automatic route.
 pub fn is_open_router_auto(m: &RouteCatalogModel) -> bool {
-    wire(&m.endpoint_profile) == "OpenRouterChat"
+    wire_name(&m.endpoint_profile) == "OpenRouterChat"
         && m.upstream_model_id.0 == OPEN_ROUTER_AUTO_UPSTREAM
 }
 
@@ -289,42 +284,13 @@ pub fn intent_label(catalog: &[RouteCatalogModel], intent: &RouteIntent) -> Stri
                 .map(|m| m.display_name.0.clone())
                 .unwrap_or_else(|| model_id.as_str().to_owned()),
             RouteIntent::OpenRouterAuto {} => "Open Router Auto".into(),
-            RouteIntent::Tier { tier } => format!("Tier {}", wire(tier)),
+            RouteIntent::Tier { tier } => format!("Tier {}", wire_name(tier)),
         })
 }
 
-fn models_of<'c>(
-    catalog: &'c [RouteCatalogModel],
-    intent: &RouteIntent,
-) -> Vec<&'c RouteCatalogModel> {
-    catalog
-        .iter()
-        .filter(|m| m.enabled && m.available != Some(false))
-        .filter(|m| match intent {
-            RouteIntent::Tier { tier } => {
-                m.tier_memberships.0.iter().any(|t| wire(t) == wire(tier))
-            }
-            RouteIntent::Model { model_id } => {
-                if devworks_core::services::router::latest::alias_family(model_id.as_str())
-                    .is_some()
-                {
-                    catalog
-                        .iter()
-                        .find(|a| &a.id == model_id)
-                        .filter(|a| a.available == Some(true))
-                        .and_then(|a| a.resolves_to_model_ids.as_ref())
-                        .is_some_and(|ids| ids.0.contains(&m.id))
-                } else {
-                    &m.id == model_id
-                }
-            }
-            RouteIntent::OpenRouterAuto {} => is_open_router_auto(m),
-        })
-        .collect()
-}
-
-/// The efforts offered for `intent`: Provider default, then every explicit effort a pooled
-/// model declares (lowest first).
+/// The efforts offered for `intent`: Provider default, then every explicit effort the catalog
+/// says the selection offers (lowest first). The router decides what each row offers
+/// (`offeredEfforts`); a tier offers what its member rows offer.
 pub fn efforts(catalog: &[RouteCatalogModel], intent: &RouteIntent) -> Vec<EffortName> {
     const ORDER: [EffortName; 6] = [
         EffortName::Minimal,
@@ -334,36 +300,25 @@ pub fn efforts(catalog: &[RouteCatalogModel], intent: &RouteIntent) -> Vec<Effor
         EffortName::XHigh,
         EffortName::Max,
     ];
-    let declared: Vec<String> = models_of(catalog, intent)
+    let declared: Vec<String> = catalog
         .iter()
-        .flat_map(|m| {
-            if is_latest(m) {
-                m.resolves_to_model_ids
-                    .as_ref()
-                    .map(|ids| {
-                        ids.0
-                            .iter()
-                            .filter_map(|id| {
-                                catalog.iter().find(|target| {
-                                    &target.id == id
-                                        && target.enabled
-                                        && target.available != Some(false)
-                                })
-                            })
-                            .flat_map(|target| target.efforts.0.iter().map(wire))
-                            .collect::<Vec<_>>()
-                    })
-                    .unwrap_or_default()
-            } else {
-                m.efforts.0.iter().map(wire).collect()
-            }
+        .filter(|m| match intent {
+            RouteIntent::Tier { tier } => m
+                .tier_memberships
+                .0
+                .iter()
+                .any(|t| wire_name(t) == wire_name(tier)),
+            RouteIntent::Model { model_id } => &m.id == model_id,
+            RouteIntent::OpenRouterAuto {} => is_open_router_auto(m),
         })
+        .flat_map(|m| m.offered_efforts.iter().flat_map(|e| e.0.iter()))
+        .map(wire_name)
         .collect();
     let mut out = vec![EffortName::Default];
     out.extend(
         ORDER
             .into_iter()
-            .filter(|e| declared.iter().any(|d| *d == wire(e))),
+            .filter(|e| declared.iter().any(|d| *d == wire_name(e))),
     );
     out
 }
@@ -372,7 +327,7 @@ pub fn effort_label(e: &EffortName) -> String {
     match e {
         EffortName::Default => "Provider default".into(),
         EffortName::XHigh => "Extra high".into(),
-        other => wire(other),
+        other => wire_name(other),
     }
 }
 
@@ -397,17 +352,6 @@ pub fn reason(code: &str) -> &'static str {
         "NoInventory" => "waiting for complete provider inventory",
         _ => "unavailable",
     }
-}
-
-/// Local wall-clock time of a UTC millisecond instant.
-pub fn local_time(ms: i64) -> String {
-    jiff::Timestamp::from_millisecond(ms)
-        .map(|t| {
-            t.to_zoned(jiff::tz::TimeZone::system())
-                .strftime("%H:%M:%S")
-                .to_string()
-        })
-        .unwrap_or_else(|_| "an unknown time".into())
 }
 
 /// The status line of a selection: the pinned route, or the selection's truthful availability.
@@ -461,7 +405,7 @@ pub fn status_line(
     let wait = a
         .retry_at_ms
         .as_ref()
-        .map(|t| format!("; rechecked at {}", local_time(t.get())))
+        .map(|t| format!("; rechecked at {}", crate::widgets::local_time(t.get())))
         .unwrap_or_default();
     format!(
         "{pinned}{route} · {effort} · no eligible model: {}{wait}",
@@ -529,24 +473,61 @@ mod tests {
         );
     }
 
+    fn offering(mut m: RouteCatalogModel, efforts: &[&str]) -> RouteCatalogModel {
+        m.offered_efforts = Some(serde_json::from_value(serde_json::json!(efforts)).unwrap());
+        m
+    }
+
+    fn names(efforts: Vec<EffortName>) -> Vec<String> {
+        efforts.iter().map(wire_name).collect()
+    }
+
     #[test]
-    fn latest_effort_comes_only_from_its_current_targets_and_pin_keeps_both_names() {
-        let mut concrete = model("astra-v2");
-        concrete.available = Some(true);
-        concrete.efforts.0 = vec![EffortName::High];
-        let mut alias = model("astra-latest");
-        alias.display_name = serde_json::from_value(serde_json::json!("Astra Latest")).unwrap();
-        alias.available = Some(true);
-        alias.resolves_to_model_ids =
-            Some(serde_json::from_value(serde_json::json!([concrete.id])).unwrap());
+    fn the_effort_selector_offers_what_the_catalog_says_each_selection_offers() {
+        let alias = offering(model("astra-latest"), &["High"]);
         let selection = Selection {
             intent: intent_of(&alias),
             effort: EffortName::High,
         };
-        let mut catalog = vec![alias, concrete];
-        assert_eq!(efforts(&catalog, &selection.intent).len(), 2);
-        catalog[0].available = Some(false);
-        assert_eq!(efforts(&catalog, &selection.intent).len(), 1);
+        let mut catalog = vec![alias, model("astra-v2")];
+        assert_eq!(
+            names(efforts(&catalog, &selection.intent)),
+            ["Default", "High"]
+        );
+        catalog[0] = offering(model("astra-latest"), &[]);
+        assert_eq!(names(efforts(&catalog, &selection.intent)), ["Default"]);
+        // A row without the member (an older reply) offers only the provider default.
+        let none = vec![model("a")];
+        assert_eq!(names(efforts(&none, &selection.intent)), ["Default"]);
+    }
+
+    #[test]
+    fn a_tier_offers_the_union_of_its_member_rows_lowest_first() {
+        let mut high = offering(model("a"), &["High", "Low"]);
+        high.tier_memberships = serde_json::from_value(serde_json::json!(["High"])).unwrap();
+        let mut other = offering(model("b"), &["Max"]);
+        other.tier_memberships = serde_json::from_value(serde_json::json!(["High"])).unwrap();
+        let mut outside = offering(model("c"), &["Minimal"]);
+        outside.tier_memberships = serde_json::from_value(serde_json::json!(["Low"])).unwrap();
+        let catalog = vec![high, other, outside];
+        let tier = RouteIntent::Tier {
+            tier: serde_json::from_value(serde_json::json!("High")).unwrap(),
+        };
+        assert_eq!(
+            names(efforts(&catalog, &tier)),
+            ["Default", "Low", "High", "Max"]
+        );
+    }
+
+    #[test]
+    fn a_pin_keeps_both_names() {
+        let mut alias = model("astra-latest");
+        alias.display_name = serde_json::from_value(serde_json::json!("Astra Latest")).unwrap();
+        let selection = Selection {
+            intent: intent_of(&alias),
+            effort: EffortName::High,
+        };
+        let catalog = vec![alias];
         assert_eq!(
             effort_label(&selection.effort),
             "High",

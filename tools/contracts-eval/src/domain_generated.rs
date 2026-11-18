@@ -11339,6 +11339,13 @@ pub struct RouteCatalogModel {
     )]
     #[schemars(with = "Label", extend("x-since" = 3))]
     pub availability_reason: Option<Label>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Items<EffortName>", extend("x-since" = 4))]
+    pub offered_efforts: Option<Items<EffortName>>,
 }
 impl Check for RouteCatalogModel {
     fn check(&self) -> Result<(), String> {
@@ -11358,6 +11365,7 @@ impl Check for RouteCatalogModel {
         self.resolves_to_model_ids.check()?;
         self.available.check()?;
         self.availability_reason.check()?;
+        self.offered_efforts.check()?;
         super::domain_rules::record(
             "RouteCatalogModel",
             &serde_json::to_value(self).map_err(|e| e.to_string())?,
@@ -11385,6 +11393,9 @@ impl Revisioned for RouteCatalogModel {
         }
         if revision < 3 {
             self.availability_reason = None;
+        }
+        if revision < 4 {
+            self.offered_efforts = None;
         }
     }
 }

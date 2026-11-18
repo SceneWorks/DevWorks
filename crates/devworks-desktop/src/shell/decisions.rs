@@ -373,7 +373,7 @@ impl DecisionsCtl<'_, '_> {
                         .map_or("Verified completion", |c| c.0.as_str())
                         .into(),
                     title: n.title.0.clone(),
-                    at: display_time(n.created_at_ms.get()),
+                    at: crate::widgets::local_time(n.created_at_ms.get()),
                     link: "completed work".into(),
                 }
             })

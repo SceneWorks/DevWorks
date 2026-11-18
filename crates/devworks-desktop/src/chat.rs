@@ -18,11 +18,11 @@ use crate::routing::{self, Routing, Selection};
 use crate::theme;
 use crate::virtual_list::{self, Blocks, Scrolls};
 use crate::widgets::{self, Tone, ViewState, chip};
+use devworks_core::protocol::helpers::WATCHER_NOTICE_MEDIA_TYPE;
 use devworks_core::protocol::provider::{
     ArtifactRef, TranscriptBody, TranscriptEntry, TranscriptPage, UserContent,
 };
 use devworks_core::protocol::records::SessionRecord;
-use devworks_core::services::watch::WATCHER_NOTICE_MEDIA_TYPE;
 use eframe::egui::{self, Align, Key, Layout, Modifiers, RichText, TextureHandle, Ui};
 use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;

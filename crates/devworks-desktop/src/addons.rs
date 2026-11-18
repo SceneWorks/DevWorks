@@ -684,13 +684,13 @@ use devworks_core::gateway::{CommandOutcome, QueryOutcome};
 use devworks_core::operations::{OperationInput as In, addons};
 use devworks_core::protocol::Revision;
 use devworks_core::protocol::addons::{AddonCommand, AddonCommandRequest};
+use devworks_core::protocol::helpers::packages::{
+    PROJECT_ENABLEMENT_SCHEMA, UPDATE_POLICY_SCHEMA, host_schema_ref,
+};
 use devworks_core::protocol::provider::SchemaRef;
 use devworks_core::protocol::records::SchemaValue;
 use devworks_core::protocol::results::OperationResult;
 use devworks_core::protocol::support::DynamicJson;
-use devworks_core::services::packages::{
-    PROJECT_ENABLEMENT_SCHEMA, UPDATE_POLICY_SCHEMA, host_schema_ref,
-};
 use serde_json::{Value, json};
 
 /// Media type of a package bundle artifact.

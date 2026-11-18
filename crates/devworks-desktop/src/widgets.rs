@@ -28,6 +28,25 @@ impl Tone {
     }
 }
 
+/// A stored instant (milliseconds since the epoch) in the user's local time, with its zone:
+/// `2026-11-18 14:05 CET`. Every screen uses this one format and this one fallback text.
+pub fn local_time(ms: i64) -> String {
+    time_in(ms, &jiff::tz::TimeZone::system())
+}
+
+/// What [`local_time`] shows when the instant cannot be converted.
+pub const TIME_UNAVAILABLE: &str = "Time unavailable";
+
+fn time_in(ms: i64, zone: &jiff::tz::TimeZone) -> String {
+    jiff::Timestamp::from_millisecond(ms)
+        .map(|t| {
+            t.to_zoned(zone.clone())
+                .strftime("%Y-%m-%d %H:%M %Z")
+                .to_string()
+        })
+        .unwrap_or_else(|_| TIME_UNAVAILABLE.into())
+}
+
 /// A small bordered label.
 pub fn chip(ui: &mut Ui, text: impl Into<String>, tone: Tone) -> egui::Response {
     let (fg, bg) = tone.colors();
@@ -447,4 +466,25 @@ pub fn icon_button(
         None => egui::WidgetInfo::labeled(egui::Role::Button, enabled, label.clone()),
     });
     response.on_hover_text(tooltip)
+}
+
+#[cfg(test)]
+mod time_tests {
+    use super::*;
+
+    #[test]
+    fn a_time_shows_date_minute_and_zone_in_the_given_zone() {
+        let utc = jiff::tz::TimeZone::UTC;
+        assert_eq!(time_in(1_700_000_000_000, &utc), "2023-11-14 22:13 UTC");
+        let tokyo = jiff::tz::TimeZone::get("Asia/Tokyo").unwrap();
+        assert_eq!(time_in(1_700_000_000_000, &tokyo), "2023-11-15 07:13 JST");
+    }
+
+    #[test]
+    fn an_instant_outside_the_supported_range_shows_one_fallback_text() {
+        assert_eq!(
+            time_in(i64::MAX, &jiff::tz::TimeZone::UTC),
+            TIME_UNAVAILABLE
+        );
+    }
 }

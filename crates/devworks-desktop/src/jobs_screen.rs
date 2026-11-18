@@ -10,6 +10,7 @@ use crate::frame;
 use crate::ops::JobCommand;
 use crate::shell::ListState;
 use crate::widgets::{self, Tone, ViewState, chip};
+use devworks_core::protocol::helpers::NativeCapability;
 use devworks_core::protocol::records::SchemaValue;
 use devworks_core::protocol::records::{
     ArtifactRecord, EffortName, JobDefinition, JobHold, JobInspection, JobRecord, JobRun,
@@ -17,7 +18,6 @@ use devworks_core::protocol::records::{
 };
 use devworks_core::protocol::support::DynamicJson;
 use devworks_core::protocol::{Counter, ProjectId};
-use devworks_core::services::jobs::NativeCapability;
 use eframe::egui::{self, RichText, Ui};
 use serde_json::{Value, json};
 
@@ -327,15 +327,9 @@ pub fn describe_schedule(s: &Schedule) -> String {
         } => format!("{} ({})", expression.0, timezone.0),
     }
 }
-/// A stored instant in the user's local time.
+/// A stored instant in the user's local time, or a dash when none is recorded.
 pub fn local_time(at: Option<&Counter>) -> String {
-    at.and_then(|c| jiff::Timestamp::from_millisecond(c.get()).ok())
-        .map(|t| {
-            t.to_zoned(jiff::tz::TimeZone::system())
-                .strftime("%Y-%m-%d %H:%M %Z")
-                .to_string()
-        })
-        .unwrap_or_else(|| "—".into())
+    at.map_or_else(|| "—".into(), |c| crate::widgets::local_time(c.get()))
 }
 pub(crate) fn status_label(s: Option<&JobRunStatus>) -> (&'static str, Tone) {
     match s {
