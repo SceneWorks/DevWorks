@@ -594,7 +594,9 @@ fn statement(sql: &str) -> Vec<Use> {
                 if is_kw(toks.get(k), "as") {
                     k += 1;
                 }
-                if matches!(toks.get(k), Some(Tok::Word(a)) if !stop_word(a)) {
+                if matches!(toks.get(k), Some(Tok::Word(a)) if !stop_word(a))
+                    || matches!(toks.get(k), Some(Tok::Quoted(_)))
+                {
                     k += 1;
                 }
                 if toks.get(k) == Some(&Tok::Punct(',')) {
@@ -609,8 +611,9 @@ fn statement(sql: &str) -> Vec<Use> {
             if is_kw(toks.get(k), "as") {
                 k += 1;
             }
-            if let Some(Tok::Word(alias)) = toks.get(k)
-                && !stop_word(alias)
+            // A quoted alias is never a keyword (`AS "where"` is a name).
+            if let Some(Tok::Word(alias) | Tok::Quoted(alias)) = toks.get(k)
+                && (matches!(toks.get(k), Some(Tok::Quoted(_))) || !stop_word(alias))
             {
                 if at.is_some() {
                     aliases.insert((scope_of[i], alias.to_lowercase()), name.clone());
@@ -1332,6 +1335,29 @@ mod tests {
         let found =
             tables("WITH r AS (SELECT id FROM a) DELETE FROM b WHERE id IN (SELECT id FROM r)");
         assert!(found.contains(&t("b")), "{found:?}");
+    }
+
+    #[test]
+    fn quoted_aliases_bind_columns_with_or_without_as() {
+        for sql in [
+            r#"SELECT "u"."id" FROM "users" AS "u""#,
+            r#"SELECT "u"."id" FROM "users" "u""#,
+            "SELECT `u`.`id` FROM `users` AS `u`",
+            "SELECT [u].[id] FROM [users] [u]",
+        ] {
+            let found = tables(sql);
+            assert!(found.contains(&c("users", "id")), "{sql}: {found:?}");
+        }
+        // A quoted alias that spells a keyword is still an alias.
+        let found = tables(r#"SELECT "where"."id" FROM users AS "where""#);
+        assert!(found.contains(&c("users", "id")), "{found:?}");
+        // Quoted aliases are scoped to their query like bare ones.
+        let found = tables(
+            r#"SELECT "u"."id" FROM users "u" WHERE EXISTS (SELECT "u"."token" FROM tokens "u")"#,
+        );
+        assert!(found.contains(&c("users", "id")), "{found:?}");
+        assert!(found.contains(&c("tokens", "token")), "{found:?}");
+        assert!(!found.contains(&c("tokens", "id")), "{found:?}");
     }
 
     #[test]
