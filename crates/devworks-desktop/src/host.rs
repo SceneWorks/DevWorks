@@ -141,6 +141,10 @@ pub struct DesktopConfig {
     /// The user's shared skill folder read in place (`~/.agents/skills` by default); `None`
     /// reads no shared skills. Harness skills always live under `<data_root>/skills`.
     pub shared_skills: Option<PathBuf>,
+    /// The search path the container CLIs (`docker`, `podman`, `container`) resolve against.
+    /// `None` (production) is the process `PATH`. Tests pass an empty path so opening Settings
+    /// never runs a host container CLI; process tools keep resolving from `PATH` either way.
+    pub container_search_path: Option<devworks_core::services::process::executables::SearchPath>,
 }
 impl std::fmt::Debug for DesktopConfig {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -176,6 +180,7 @@ impl DesktopConfig {
             shared_skills: std::env::var_os("HOME")
                 .or_else(|| std::env::var_os("USERPROFILE"))
                 .map(|home| PathBuf::from(home).join(".agents").join("skills")),
+            container_search_path: None,
         }
     }
 }
@@ -473,7 +478,18 @@ async fn compose(
             store.clone(),
         ),
     );
-    let container_bindings = container_bindings(config, executables.clone())
+    let container_executables = Arc::new(match config.container_search_path.clone() {
+        Some(path) => {
+            devworks_core::services::process::executables::PathExecutables::from_settings_on(
+                store.clone(),
+                path,
+            )
+        }
+        None => devworks_core::services::process::executables::PathExecutables::from_settings(
+            store.clone(),
+        ),
+    });
+    let container_bindings = container_bindings(config, container_executables)
         .map_err(|reason| StartError::Thread(reason.into()))?;
     let container_private_files = Arc::new(
         devworks_adapters::containers::NativeRegistryAuth::new(
