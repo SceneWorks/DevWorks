@@ -2,7 +2,7 @@
 //! by the shared services; drafts retain their inspected revision across refreshes.
 use crate::{
     frame, theme,
-    widgets::{self, Header, Tone, ViewState, chip, local_time},
+    widgets::{self, Header, Tone, ViewState, chip, local_time, utc_time},
 };
 use devworks_core::operations::{
     OperationInput as In,
@@ -422,8 +422,8 @@ impl UsageScreen {
         widgets::caption(
             ui,
             format!(
-                "Applied {} to {} UTC · {} buckets · read revision {}",
-                local_time(
+                "Applied {} to {} · {} buckets · read revision {}",
+                utc_time(
                     context
                         .range
                         .start_ms
@@ -431,7 +431,7 @@ impl UsageScreen {
                         .parse::<i64>()
                         .expect("validated range timestamp")
                 ),
-                local_time(
+                utc_time(
                     context
                         .range
                         .end_ms
@@ -554,7 +554,7 @@ impl UsageScreen {
                                     ui.strong(label);
                                     ui.end_row();
                                     for (at, value) in points {
-                                        ui.label(local_time(at));
+                                        ui.label(utc_time(at));
                                         ui.label(value);
                                         ui.end_row();
                                     }

@@ -34,6 +34,12 @@ pub fn local_time(ms: i64) -> String {
     time_in(ms, &jiff::tz::TimeZone::system())
 }
 
+/// A stored instant in UTC with its zone, in the same format as [`local_time`]. For values the
+/// contract defines in UTC (a report's range and buckets), which local time would shift.
+pub fn utc_time(ms: i64) -> String {
+    time_in(ms, &jiff::tz::TimeZone::UTC)
+}
+
 /// What [`local_time`] shows when the instant cannot be converted.
 pub const TIME_UNAVAILABLE: &str = "Time unavailable";
 
