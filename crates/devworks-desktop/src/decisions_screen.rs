@@ -1,4 +1,5 @@
 //! Approval and notification view state. All eligibility, promotion, and wakeups are server-owned.
+use crate::paged::Paged;
 use crate::theme;
 use devworks_core::protocol::records::{
     ApprovalContent, ApprovalReviewedContent, ApprovalState, ApprovalViewRecord,
@@ -11,10 +12,8 @@ pub struct DecisionsUi {
     pub project: Option<String>,
     pub tab: usize,
     pub history_state: Option<String>,
-    pub approvals: Vec<ApprovalViewRecord>,
-    pub(crate) gathering: Vec<ApprovalViewRecord>,
-    pub loaded: bool,
-    pub error: Option<String>,
+    /// The approvals of the shown tab, every page read before they show.
+    pub approvals: Paged<ApprovalViewRecord>,
     /// The inspected proposal is the exact displayed snapshot; a refresh never replaces a draft.
     pub selected: Option<ApprovalViewRecord>,
     pub(crate) inspecting: Option<String>,
@@ -22,14 +21,12 @@ pub struct DecisionsUi {
     pub rationale: String,
     pub text: Option<ApprovalText>,
     pub decision_error: Option<String>,
-    pub reviews: Vec<KnowledgeReviewItem>,
-    pub(crate) review_gathering: Vec<KnowledgeReviewItem>,
-    pub reviews_loaded: bool,
+    /// The Knowledge review queue of the project, every page read before it shows.
+    pub reviews: Paged<KnowledgeReviewItem>,
     /// The notification center is open.
     pub(crate) notifications_open: bool,
-    pub notifications: Vec<NotificationRecord>,
-    pub(crate) notification_gathering: Vec<NotificationRecord>,
-    pub notifications_loaded: bool,
+    pub notifications: Paged<NotificationRecord>,
+    /// A refused notification read or change (the list's own failure is `notifications.error`).
     pub notification_error: Option<String>,
     pub notification_project: Option<String>,
     pub unread_only: bool,
@@ -38,9 +35,7 @@ pub struct DecisionsUi {
     pub notification: Option<NotificationRecord>,
     pub(crate) reading_notification: Option<String>,
     /// Complete authoritative unacknowledged verified-completion feed, independent of filters.
-    pub completions: Vec<NotificationRecord>,
-    pub(crate) completion_gathering: Vec<NotificationRecord>,
-    pub completion_error: Option<String>,
+    pub completions: Paged<NotificationRecord>,
     pub permission: Option<devworks_core::ports::os_notifications::OsNotificationPermission>,
     pub config: Option<(NotificationConfig, String)>,
     pub config_draft: Option<NotificationConfig>,
@@ -64,19 +59,12 @@ impl DecisionsUi {
             self.text = None;
             self.decision_error = None;
         }
-        self.approvals.clear();
-        self.gathering.clear();
-        self.loaded = false;
-        self.reviews.clear();
-        self.review_gathering.clear();
-        self.reviews_loaded = false;
-        self.notifications.clear();
-        self.notification_gathering.clear();
-        self.notifications_loaded = false;
+        self.approvals.reset();
+        self.reviews.reset();
+        self.notifications.reset();
         self.notification = None;
         self.reading_notification = None;
-        self.completions.clear();
-        self.completion_gathering.clear();
+        self.completions.reset();
         if self.project.as_deref() == Some(scope.project_id.0.as_str()) {
             self.project = None;
         }

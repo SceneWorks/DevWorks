@@ -64,10 +64,10 @@ fn pane(list: Paged<String>) -> Harness<'static, Pane> {
 }
 
 fn page(items: &[&str], next: Option<&str>) -> Page<String> {
-    Page {
-        items: items.iter().map(|s| (*s).to_owned()).collect(),
-        next: next.map(str::to_owned),
-    }
+    Page::new(
+        items.iter().map(|s| (*s).to_owned()).collect(),
+        next.map(str::to_owned),
+    )
 }
 
 fn first_page(items: &[&str], next: Option<&str>) -> Paged<String> {
@@ -191,12 +191,12 @@ fn the_sidebar_offers_older_conversations_and_asks_for_the_next_page() {
     let fetch = chat.sessions.reload();
     chat.sessions.apply(
         fetch.generation,
-        Ok(Page {
-            items: (0..3)
+        Ok(Page::new(
+            (0..3)
                 .map(|n| serde_json::from_value(record(n)).unwrap())
                 .collect(),
-            next: Some("older".into()),
-        }),
+            Some("older".into()),
+        )),
     );
     let mut h = Harness::builder()
         .with_size(egui::vec2(360.0, 700.0))
@@ -282,4 +282,32 @@ fn projects_beyond_the_first_page_are_reached_with_load_more() {
     click(&mut h, Role::Button, "Load more");
     step_until(&mut h, "the next page", |s| !s.projects.list.more());
     assert_eq!(h.state().projects.list.items.len(), page + 3);
+}
+
+#[test]
+fn a_page_from_another_snapshot_is_refused_with_its_reason_and_retries_that_page() {
+    let mut list = Paged::default();
+    let first = list.reload();
+    list.apply(
+        first.generation,
+        Ok(Page::new(vec!["alpha".to_owned()], Some("c1".into())).fenced("catalog-1")),
+    );
+    let next = list.more_page().unwrap();
+    let applied = list.apply(
+        next.generation,
+        Ok(Page::new(vec!["zeta".to_owned()], None).fenced("catalog-2")),
+    );
+    assert_eq!(applied, devworks_desktop::paged::Applied::Fenced);
+    list.fail("The catalog changed while paging. Refresh to load a consistent list.");
+    let mut h = pane(list);
+    assert!(
+        has(&h, "alpha"),
+        "the rows read before stay: {:?}",
+        shown(&h)
+    );
+    assert!(!has(&h, "zeta"), "the refused page never shows");
+    assert!(has(&h, "The catalog changed while paging"));
+    h.get_by_role_and_label(Role::Button, "Retry").click();
+    h.run_steps(2);
+    assert!(h.state().more && !h.state().reload);
 }

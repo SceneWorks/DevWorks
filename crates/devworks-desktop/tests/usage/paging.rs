@@ -32,12 +32,12 @@ fn native_price_more_gesture_survives_same_frame_catalog_hint_without_replacing_
     let _writer = WriterHold::new(engine.host().runtime().store().clone());
     press(&mut h, "Apply price catalog filters");
 
-    let before_rows = h.state().usage.prices.as_ref().unwrap().items.0.len();
-    assert!(before_rows < 105 && h.state().usage.prices.as_ref().unwrap().has_more);
+    let before_rows = h.state().usage.price_view().unwrap().items.0.len();
+    assert!(before_rows < 105 && h.state().usage.price_view().unwrap().has_more);
     h.get_by_role_and_label(Role::Button, "Load more price rows")
         .scroll_to_me();
     settle(&mut h);
-    let before_generation = h.state().usage.price_generation;
+    let before_generation = h.state().usage.prices.generation();
     let target = h
         .get_by_role_and_label(Role::Button, "Load more price rows")
         .rect();
@@ -66,9 +66,12 @@ fn native_price_more_gesture_survives_same_frame_catalog_hint_without_replacing_
     h.get_by_role_and_label(Role::Button, "Load more price rows")
         .click();
     h.step();
+    // Only the cursor append started (one request more): a background revalidation did not
+    // start a first-page read that would replace the loaded page set in the gesture frame.
+    let append_generation = h.state().usage.prices.generation();
     assert_eq!(
-        h.state().usage.price_generation,
-        before_generation,
+        append_generation,
+        before_generation + 1,
         "background revalidation cannot supersede the cursor's loaded page set in the gesture frame"
     );
     assert!(
@@ -76,7 +79,7 @@ fn native_price_more_gesture_survives_same_frame_catalog_hint_without_replacing_
             .client()
             .unwrap()
             .is_pending(&devworks_desktop::backend::Slot::Usage(
-                devworks_desktop::usage_ops::UsageSlot::Prices(before_generation, true)
+                devworks_desktop::usage_ops::UsageSlot::Prices(append_generation, true)
             )),
         "the single pointer gesture must submit its cursor append"
     );
@@ -89,8 +92,8 @@ fn native_price_more_gesture_survives_same_frame_catalog_hint_without_replacing_
     );
     gate.open();
     settle(&mut h);
-    assert_eq!(h.state().usage.prices.as_ref().unwrap().items.0.len(), 105);
-    assert_eq!(h.state().usage.price_pages, 2);
+    assert_eq!(h.state().usage.price_view().unwrap().items.0.len(), 105);
+    assert_eq!(h.state().usage.prices.pages(), 2);
     assert_eq!(
         devworks_core::ports::storage::read_snapshot(
             &**engine.host().runtime().store(),

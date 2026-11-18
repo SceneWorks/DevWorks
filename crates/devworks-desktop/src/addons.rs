@@ -13,6 +13,7 @@
 //!
 //! Nothing here decides a rule: every action is a framed command the gateway admits, and a
 //! refusal is shown as the use case recorded it.
+use crate::paged::Paged;
 use crate::theme;
 use crate::widgets::{self, Tone};
 use devworks_core::protocol::provider::ArtifactRef;
@@ -75,13 +76,14 @@ pub enum AddonsAction {
 /// The screen's state between frames.
 #[derive(Default)]
 pub struct AddonsScreen {
-    pub items: Vec<PackageRecord>,
-    pub loaded: bool,
-    pub error: Option<String>,
+    /// The installed and available packages: the catalog's pages are read to their end (up to
+    /// [`CATALOG_PAGES`]) and fenced by the registry revision they were read at.
+    pub catalog: Paged<PackageRecord>,
     /// The registry revision the list was read at (the lifecycle commands' expected revision).
     pub registry_revision: i64,
     pub selected: Option<String>,
-    pub logs: HashMap<String, Vec<Diagnostic>>,
+    /// Each package's log, read oldest first to its end (only the newest entries are kept).
+    pub logs: HashMap<String, Paged<Diagnostic>>,
     /// The outcome of the last action, shown above the detail.
     pub notice: Option<String>,
     /// Configuration being edited (JSON), per package.
@@ -96,11 +98,6 @@ pub struct AddonsScreen {
     pub awaiting: Option<(String, String)>,
     /// The field errors of the last refused configuration, per package.
     pub config_errors: HashMap<String, String>,
-    /// Log pages read so far while a package's logs are followed to their end.
-    pub logs_pending: HashMap<String, Vec<Diagnostic>>,
-    /// Catalog pages read so far (and the registry revision of the first) while the catalog is
-    /// followed to its end.
-    pub catalog_pending: Option<(Vec<PackageRecord>, i64)>,
 }
 
 pub fn availability_label(a: Option<&PackageAvailability>) -> (&'static str, Tone) {
@@ -143,7 +140,7 @@ fn list(
 impl AddonsScreen {
     pub fn selected(&self) -> Option<&PackageRecord> {
         let s = self.selected.as_deref()?;
-        self.items.iter().find(|r| r.id.as_str() == s)
+        self.catalog.items.iter().find(|r| r.id.as_str() == s)
     }
 
     pub fn ui(&mut self, ui: &mut Ui, online: Result<(), &str>, actions: &mut Vec<AddonsAction>) {
@@ -179,7 +176,7 @@ impl AddonsScreen {
             ui.label(RichText::new(why).color(theme::MUTED));
             return;
         }
-        if let Some(e) = &self.error {
+        if let Some(e) = &self.catalog.error {
             widgets::chip(ui, format!("Could not load add-ons: {e}"), Tone::Bad);
         }
         if let Some(n) = &self.notice {
@@ -189,11 +186,11 @@ impl AddonsScreen {
             ui,
             "A package helper is a separate process for failure containment, not an OS sandbox: it runs with your user account's rights. Approval and publisher trust record who published which exact contents and that you agreed to run them.",
         );
-        if !self.loaded {
+        if !self.catalog.loaded {
             ui.label("Loading add-ons…");
             return;
         }
-        if self.items.is_empty() {
+        if self.catalog.items.is_empty() {
             ui.label(RichText::new("No add-ons installed").strong());
             ui.label("Install a language pack or harness package from a bundle file.");
             return;
@@ -207,6 +204,7 @@ impl AddonsScreen {
         ui.add_space(6.0);
         let filter = self.filter.to_lowercase();
         let rows: Vec<PackageRecord> = self
+            .catalog
             .items
             .iter()
             .filter(|r| filter.is_empty() || r.id.as_str().to_lowercase().contains(&filter))
@@ -651,7 +649,7 @@ impl AddonsScreen {
                 }
             });
         }
-        if let Some(entries) = self.logs.get(&id) {
+        if let Some(entries) = self.logs.get(&id).filter(|l| l.loaded).map(|l| &l.items) {
             ui.collapsing(format!("Logs ({})", entries.len()), |ui| {
                 egui::ScrollArea::vertical()
                     .id_salt("addon-logs")

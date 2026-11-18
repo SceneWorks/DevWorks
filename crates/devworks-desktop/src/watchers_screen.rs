@@ -159,10 +159,7 @@ impl WatchersScreen {
         match (slot, reply) {
             (WatchSlot::WatcherList(view, generation, _), Reply::Query(outcome)) => {
                 let page = watch_ops::page(outcome)
-                    .map(|page| Page {
-                        items: page.items.0,
-                        next: page.next_cursor.map(|c| c.0),
-                    })
+                    .map(|page| Page::new(page.items.0, page.next_cursor.map(|c| c.0)))
                     .map_err(|e| e.describe());
                 let list = self.list_mut(view);
                 match list.rows.apply(generation, page) {

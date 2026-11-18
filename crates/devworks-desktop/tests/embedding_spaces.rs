@@ -62,7 +62,12 @@ fn setup_qualify_reopen(paid: bool, lose_acks: bool) {
                 .accesskit_node()
                 .is_disabled(),
             "pricing link must be actionable: loading={}, busy={:?}",
-            h.state().settings.connections.embedding_spaces.loading,
+            h.state()
+                .settings
+                .connections
+                .embedding_spaces
+                .spaces
+                .loading(),
             h.state().settings.connections.busy
         );
         click(&mut h, Role::Button, "Configure price for Recorded space");
@@ -386,7 +391,7 @@ fn retained_embedding_controls_survive_an_actual_background_read() {
             .settings
             .connections
             .embedding_spaces
-            .page
+            .page()
             .is_some()
     );
     let connection = ops::connection_records(backend.query(
@@ -401,7 +406,14 @@ fn retained_embedding_controls_survive_an_actual_background_read() {
     // reply, so the loading interval covers the entire pointer interaction deterministically.
     ops::configured(backend.command("router.configure", &ops::router_configure(&*backend, serde_json::from_value(serde_json::json!({"kind":"Connection","connectionId":connection.id,"expectedRevision":connection.revision,"name":"Background renamed connection","profile":"Embedding","endpoint":connection.endpoint.unwrap().0})).unwrap()))).unwrap();
     let deadline = std::time::Instant::now() + SETTLE_BOUND;
-    while !h.state().settings.connections.embedding_spaces.loading {
+    while !h
+        .state()
+        .settings
+        .connections
+        .embedding_spaces
+        .spaces
+        .loading()
+    {
         assert!(
             std::time::Instant::now() < deadline,
             "the actual background read starts"
@@ -411,7 +423,7 @@ fn retained_embedding_controls_survive_an_actual_background_read() {
     }
     let panel = &h.state().settings.connections.embedding_spaces;
     assert!(
-        panel.page.is_some(),
+        panel.page().is_some(),
         "the inspected candidate remains retained during the read"
     );
     assert!(

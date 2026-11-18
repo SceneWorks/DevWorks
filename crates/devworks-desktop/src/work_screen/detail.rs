@@ -1073,9 +1073,12 @@ pub(crate) fn card_detail(
                         actions.push(Action::RefreshHistory(Some(w.id.as_str().to_owned())));
                     }
                 }
-                if feed.more
+                if feed.more()
                     && ui
-                        .add_enabled(!feed.loading, egui::Button::new("Load older card changes"))
+                        .add_enabled(
+                            !feed.loading(),
+                            egui::Button::new("Load older card changes"),
+                        )
                         .clicked()
                 {
                     actions.push(Action::OlderHistory(Some(w.id.as_str().to_owned())));

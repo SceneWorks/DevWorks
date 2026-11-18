@@ -68,10 +68,9 @@ pub struct MessageDraft {
 #[derive(Default)]
 pub struct MessageBoard {
     pub project: Option<String>,
-    pub history: Vec<RetainedMessage>,
-    pub history_before: Option<i64>,
-    pub history_loaded: bool,
-    pub history_refresh_pending: bool,
+    /// The project's messages, newest first; each older page continues before the last one
+    /// (its cursor is that message sequence).
+    pub history: Paged<RetainedMessage>,
     pub inbox: Vec<RetainedMessage>,
     pub inbox_cursor: Option<String>,
     pub inbox_loaded: bool,
@@ -473,22 +472,13 @@ pub fn plan_body(form: &PlanForm, content: &ArtifactRef) -> Option<PlanDraft> {
         acceptance_tests: merged_criteria(&form.acceptance_tests, &form.base.acceptance_tests)?,
     })
 }
-/// A bounded newest-first project or card feed. Refresh re-reads only the number of
-/// pages the user requested, publishing the replacement once the bounded refresh finishes.
+/// A bounded newest-first project or card feed: its events are a paged list (a refresh re-reads
+/// only the pages the user requested, and publishes the replacement once they are read), and the
+/// filters narrow what is shown of it.
 #[derive(Default)]
 pub struct Activity {
     /// Loaded events, newest first.
-    pub items: Vec<Event>,
-    /// Where the next read starts (`None`: the beginning).
-    pub resume: Option<String>,
-    /// Whether the initial page has been read.
-    pub loaded: bool,
-    pub more: bool,
-    pub loading: bool,
-    pub generation: u64,
-    pub pages: usize,
-    refresh: Option<HistoryRefresh>,
-    pub error: Option<String>,
+    pub feed: Paged<Event>,
     /// 0 everything, 1 features, 2 issues, 3 tasks, 4 the project itself.
     pub kind: usize,
     /// 0 everyone, 1 you, 2 agents and others.
@@ -497,60 +487,10 @@ pub struct Activity {
     /// Only this work item (from a detail's history link).
     pub item: Option<String>,
 }
-
-struct HistoryRefresh {
-    target: usize,
-    items: Vec<Event>,
-    pages: usize,
-}
-impl Activity {
-    fn refresh(&mut self, generation: u64) {
-        self.generation = generation;
-        self.loading = true;
-        self.error = None;
-        self.refresh = Some(HistoryRefresh {
-            target: self.pages.max(1),
-            items: Vec::new(),
-            pages: 0,
-        });
-    }
-    fn receive(&mut self, items: Vec<Event>, cursor: Option<String>, more: bool) -> Option<String> {
-        self.loading = false;
-        self.error = None;
-        let append = |target: &mut Vec<Event>, items: Vec<Event>| {
-            let mut seen: BTreeSet<_> = target
-                .iter()
-                .map(|e| e.event_id.0.as_str().to_owned())
-                .collect();
-            target.extend(
-                items
-                    .into_iter()
-                    .filter(|e| seen.insert(e.event_id.0.as_str().to_owned())),
-            );
-        };
-        if let Some(refresh) = &mut self.refresh {
-            append(&mut refresh.items, items);
-            refresh.pages += 1;
-            if more && refresh.pages < refresh.target {
-                self.loading = true;
-                return cursor;
-            }
-            let refresh = self.refresh.take().unwrap();
-            self.items = refresh.items;
-            self.pages = refresh.pages;
-        } else {
-            append(&mut self.items, items);
-            self.pages += 1;
-        }
-        self.resume = cursor;
-        self.more = more;
-        self.loaded = true;
-        None
-    }
-    fn failed(&mut self, message: String) {
-        self.loading = false;
-        self.refresh = None;
-        self.error = Some(message);
+impl std::ops::Deref for Activity {
+    type Target = Paged<Event>;
+    fn deref(&self) -> &Paged<Event> {
+        &self.feed
     }
 }
 
@@ -558,7 +498,6 @@ impl Activity {
 pub struct WorkUi {
     pub messages: MessageBoard,
     pub histories: BTreeMap<String, Activity>,
-    history_serial: u64,
 
     /// Workflow drafts and inspected claims survive project switches; records remain authoritative.
     pub workflows: BTreeMap<String, WorkflowUi>,
@@ -1031,7 +970,7 @@ impl WorkCtl<'_, '_> {
             self.load_detail(&w);
         }
         // Initial activity loads one newest page.
-        if !self.work.activity.loaded && !self.work.activity.loading {
+        if !self.work.activity.feed.loaded && !self.work.activity.feed.loading() {
             self.load_activity();
         }
     }
@@ -1039,7 +978,16 @@ impl WorkCtl<'_, '_> {
     /// what survives a project switch.
     fn reset_for(&mut self, project: Option<String>) {
         *self.work = WorkUi {
-            history_serial: self.work.history_serial,
+            // The project's feed keeps its request counter, so a late reply of the old project
+            // stays refused.
+            activity: {
+                let mut feed = std::mem::take(&mut self.work.activity.feed);
+                feed.reset();
+                Activity {
+                    feed,
+                    ..Activity::default()
+                }
+            },
             of: project,
             workflows: std::mem::take(&mut self.work.workflows),
             allocation_claims: std::mem::take(&mut self.work.allocation_claims),
@@ -1072,47 +1020,44 @@ impl WorkCtl<'_, '_> {
             None => &mut self.work.activity,
         }
     }
-    fn request_history(&mut self, root: Option<String>, cursor: Option<String>, generation: u64) {
+    fn request_history(&mut self, root: Option<String>, fetch: Fetch) {
         let Some(project) = self.work.of.clone() else {
             return;
         };
         let requested = root.clone();
-        let submitted = self.query(
-            WorkSlot::WorkActivity(project.clone(), root.clone(), generation),
+        let slot = WorkSlot::WorkActivity(project.clone(), root.clone(), fetch.generation);
+        let list = match &root {
+            Some(root) => &mut self.work.histories.entry(root.clone()).or_default().feed,
+            None => &mut self.work.activity.feed,
+        };
+        let sent = self.cx.paged(
+            list,
+            fetch,
+            slot,
             "Loading history",
             "history.events",
-            move |backend| {
-                wops::history_events(backend, &project, requested.as_deref(), cursor.as_deref())
+            move |backend, cursor| {
+                wops::history_events(backend, &project, requested.as_deref(), cursor)
             },
         );
-        if !submitted {
-            self.history_feed(root.as_deref())
-                .failed("History is unavailable while closing or offline.".into());
+        if !sent {
+            self.history_feed(root.as_deref()).feed.error =
+                Some("History is unavailable while closing or offline.".into());
         }
     }
     fn refresh_history(&mut self, root: Option<String>) {
         if self.work.of.is_none() {
             return;
         }
-        self.work.history_serial += 1;
-        let generation = self.work.history_serial;
-        self.history_feed(root.as_deref()).refresh(generation);
-        self.request_history(root, None, generation);
+        self.history_feed(root.as_deref()).feed.error = None;
+        let fetch = self.history_feed(root.as_deref()).feed.refresh();
+        self.request_history(root, fetch);
     }
     fn older_history(&mut self, root: Option<String>) {
-        let feed = self.history_feed(root.as_deref());
-        if feed.loading || !feed.more {
-            return;
-        }
-        let Some(cursor) = feed.resume.clone() else {
+        let Some(fetch) = self.history_feed(root.as_deref()).feed.more_page() else {
             return;
         };
-        self.work.history_serial += 1;
-        let generation = self.work.history_serial;
-        let feed = self.history_feed(root.as_deref());
-        feed.generation = generation;
-        feed.loading = true;
-        self.request_history(root, Some(cursor), generation);
+        self.request_history(root, fetch);
     }
     fn load_activity(&mut self) {
         self.refresh_history(None);
@@ -1123,8 +1068,6 @@ impl WorkCtl<'_, '_> {
         };
         if reset || self.work.messages.project.as_deref() != Some(project.as_str()) {
             let same_project = self.work.messages.project.as_deref() == Some(project.as_str());
-            let history_refresh_pending =
-                same_project && self.pending(&WorkSlot::WorkMessagesHistory(project.clone()));
             let inbox_refresh_pending =
                 same_project && self.pending(&WorkSlot::WorkMessagesInbox(project.clone()));
             let (draft, events, event_after, event_poll_at) = if same_project {
@@ -1145,7 +1088,11 @@ impl WorkCtl<'_, '_> {
                     std::mem::take(&mut self.work.messages.inbox),
                 )
             } else {
-                (Vec::new(), Vec::new())
+                // Another project's list starts empty; its request counter carries on, so a
+                // late reply of the old project stays refused.
+                let mut history = std::mem::take(&mut self.work.messages.history);
+                history.reset();
+                (history, Vec::new())
             };
             self.work.messages = MessageBoard {
                 project: Some(project.clone()),
@@ -1155,12 +1102,10 @@ impl WorkCtl<'_, '_> {
                 events,
                 event_after,
                 event_poll_at,
-                history_refresh_pending,
                 inbox_refresh_pending,
                 ..MessageBoard::default()
             };
         }
-        let history_before = self.work.messages.history_before;
         let event_after = self.work.messages.event_after;
         // Subscribe from the current event head before reading the initial inbox/history.
         // Otherwise a post between those reads and the subscription can be missed forever.
@@ -1176,15 +1121,9 @@ impl WorkCtl<'_, '_> {
             }
             return;
         }
-        if !self.pending(&WorkSlot::WorkMessagesHistory(project.clone())) {
-            let p = project.clone();
-            self.query(
-                WorkSlot::WorkMessagesHistory(project.clone()),
-                "Reading messages",
-                "agents.history",
-                move |be| wops::message_history(be, &p, history_before),
-            );
-        }
+        // A refresh asks again; a read still in flight is superseded by it.
+        let fetch = self.work.messages.history.reload();
+        self.send_history(project.clone(), fetch);
         if !self.pending(&WorkSlot::WorkMessagesInbox(project.clone())) {
             let p = project.clone();
             self.command(
@@ -1199,18 +1138,22 @@ impl WorkCtl<'_, '_> {
         let Some(project) = self.selected_project.clone() else {
             return;
         };
-        let Some(before) = self.work.messages.history_before else {
+        let Some(fetch) = self.work.messages.history.more_page() else {
             return;
         };
-        if self.pending(&WorkSlot::WorkMessagesHistory(project.clone())) {
-            return;
-        }
+        self.send_history(project, fetch);
+    }
+    fn send_history(&mut self, project: String, fetch: Fetch) {
         let p = project.clone();
-        self.query(
+        self.cx.paged(
+            &mut self.work.messages.history,
+            fetch,
             WorkSlot::WorkMessagesHistory(project),
-            "Reading older messages",
+            "Reading messages",
             "agents.history",
-            move |be| wops::message_history(be, &p, Some(before)),
+            move |be, cursor| {
+                wops::message_history(be, &p, cursor.and_then(|before| before.parse().ok()))
+            },
         );
     }
     fn load_detail(&mut self, w: &WorkRecord) {
@@ -1218,7 +1161,7 @@ impl WorkCtl<'_, '_> {
             .work
             .histories
             .get(w.id.as_str())
-            .is_some_and(|feed| feed.loading)
+            .is_some_and(|feed| feed.feed.loading())
         {
             self.refresh_history(Some(w.id.as_str().to_owned()));
         }
@@ -1442,8 +1385,8 @@ impl WorkCtl<'_, '_> {
                         .work
                         .workflows
                         .get(&p)
-                        .filter(|w| w.loaded)
-                        .and_then(|w| w.rows.iter().find(|s| s.category.0 == "Backlog"))
+                        .filter(|w| w.rows.loaded)
+                        .and_then(|w| w.rows.items.iter().find(|s| s.category.0 == "Backlog"))
                         .map(|s| s.id.as_str().to_owned())
                     else {
                         self.work.message = Some((
@@ -1529,7 +1472,7 @@ impl WorkCtl<'_, '_> {
                         .work
                         .histories
                         .get(&id)
-                        .is_some_and(|feed| feed.loaded || feed.loading)
+                        .is_some_and(|feed| feed.feed.loaded || feed.feed.loading())
                     {
                         self.refresh_history(Some(id.clone()));
                     }
@@ -1722,27 +1665,21 @@ impl WorkCtl<'_, '_> {
                 if self.work.messages.project.as_deref() != Some(project.as_str()) {
                     return None;
                 }
-                if self.work.messages.history_refresh_pending {
-                    self.work.messages.history_refresh_pending = false;
-                    self.load_messages(false);
-                    return None;
-                }
-                match wops::message_history_page(reply) {
-                    Ok(page) => {
-                        let board = &mut self.work.messages;
-                        if !board.history_loaded {
-                            board.history.clear();
-                        }
-                        for message in page.items.0 {
-                            if !board.history.iter().any(|known| known.id == message.id) {
-                                board.history.push(message);
-                            }
-                        }
-                        board.history_before = page.next_before.map(|before| before.get());
-                        board.history_loaded = true;
-                        board.error = None;
-                    }
-                    Err(error) => self.work.messages.error = Some(error.describe()),
+                let page = wops::message_history_page(reply)
+                    .map(|page| {
+                        let next = page.next_before.map(|before| before.get().to_string());
+                        Page::new(page.items.0, next)
+                    })
+                    .map_err(|error| error.describe());
+                let board = &mut self.work.messages;
+                // A message listed on two pages (one was posted between reads) shows once.
+                match board
+                    .history
+                    .apply_current_unique(page, |m| m.id.as_str().to_owned())
+                {
+                    Applied::Replaced | Applied::Appended => board.error = None,
+                    Applied::Failed => board.error = board.history.error.clone(),
+                    _ => {}
                 }
             }
             (WorkSlot::WorkMessagesInbox(project), Reply::Command(reply)) => {
@@ -1801,7 +1738,7 @@ impl WorkCtl<'_, '_> {
                         board.error = None;
                         if changed {
                             self.load_messages(true);
-                        } else if !board.history_loaded || !board.inbox_loaded {
+                        } else if !board.history.loaded || !board.inbox_loaded {
                             self.load_messages(false);
                         }
                     }
@@ -1860,7 +1797,7 @@ impl WorkCtl<'_, '_> {
             }
             (WorkSlot::WorkFeatures(p), Reply::Query(q)) => match wops::work_page(q) {
                 Ok((items, next)) => {
-                    let page = Page { items, next };
+                    let page = Page::new(items, next);
                     if let Applied::Continue(fetch) = self.work.features.apply_current(Ok(page)) {
                         self.send_features(&p, fetch);
                     }
@@ -1874,7 +1811,7 @@ impl WorkCtl<'_, '_> {
             },
             (WorkSlot::WorkCards(p), Reply::Query(q)) => match wops::work_page(q) {
                 Ok((items, next)) => {
-                    let page = Page { items, next };
+                    let page = Page::new(items, next);
                     match self.work.cards.apply_current(Ok(page)) {
                         Applied::Continue(fetch) => self.send_cards(&p, fetch),
                         Applied::Replaced => {
@@ -1904,17 +1841,16 @@ impl WorkCtl<'_, '_> {
                 if self.work.of.as_deref() != Some(project.as_str()) {
                     return None;
                 }
-                let feed = self.history_feed(root.as_deref());
-                if feed.generation != generation {
-                    return None;
-                }
-                match wops::events_page(reply) {
-                    Ok((items, cursor, more)) => {
-                        if let Some(next) = feed.receive(items, cursor, more) {
-                            self.request_history(root, Some(next), generation);
-                        }
-                    }
-                    Err(error) => feed.failed(error.describe()),
+                let page = wops::events_page(reply)
+                    .map(|(items, resume, _)| Page::new(items, resume))
+                    .map_err(|error| error.describe());
+                // An event listed on two pages (the feed moved between reads) shows once.
+                let applied =
+                    self.history_feed(root.as_deref())
+                        .feed
+                        .apply_unique(generation, page, |e| e.event_id.0.as_str().to_owned());
+                if let Applied::Continue(fetch) = applied {
+                    self.request_history(root, fetch);
                 }
             }
             (WorkSlot::WorkGitInspect(_, tree), Reply::Query(q)) => {
@@ -1924,10 +1860,7 @@ impl WorkCtl<'_, '_> {
             }
             (WorkSlot::WorkGit(id), Reply::Query(q)) => {
                 let page = wops::git_links_result(q)
-                    .map(|page| Page {
-                        items: page.items.0,
-                        next: page.next_cursor.map(|c| c.0),
-                    })
+                    .map(|page| Page::new(page.items.0, page.next_cursor.map(|c| c.0)))
                     .map_err(|e| e.describe());
                 if let Some(list) = self.work.git.get_mut(&id)
                     && let Applied::Continue(fetch) = list.apply_current(page)

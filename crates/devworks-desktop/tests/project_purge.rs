@@ -604,7 +604,7 @@ fn native_confirmation_ui_removes_owned_session_drafts_and_paste_keeps_home_and_
     wait_quiescent(&engine, &p.id);
     click(&mut h, Role::Button, "Review permanent purge");
     step_until(&mut h, "reviewed manifest", |s| {
-        s.purge.loaded || s.purge.error.is_some()
+        s.purge.fully_read() || s.purge.error.is_some()
     });
     assert!(
         h.state().purge.error.is_none(),

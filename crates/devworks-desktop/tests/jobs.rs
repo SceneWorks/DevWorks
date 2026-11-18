@@ -619,7 +619,7 @@ fn creating_a_job_selects_it_without_the_previous_jobs_history() {
         )
     };
     assert!(shown(&h, 1), "job A's older page is loaded");
-    assert!(!h.state().jobs.older.is_empty());
+    assert!(!h.state().jobs.older.items.is_empty());
     // Create job B from the form: it becomes the selection.
     click(&mut h, Role::Button, "New job");
     settle(&mut h);
@@ -637,8 +637,8 @@ fn creating_a_job_selects_it_without_the_previous_jobs_history() {
         .unwrap_or_else(|| panic!("job B: {:?}", h.state().jobs.form_error));
     let state = &h.state().jobs;
     assert_eq!(state.selected.as_deref(), Some(b.id.as_str()));
-    assert!(state.older.is_empty(), "no run of A in B's history");
-    assert!(state.older_cursor.is_none(), "no cursor of A's history");
+    assert!(state.older.items.is_empty(), "no run of A in B's history");
+    assert!(!state.older.more(), "no cursor of A's history");
     assert_eq!(
         state.inspection.as_ref().map(|i| i.job.id.as_str()),
         Some(b.id.as_str())
@@ -660,26 +660,41 @@ fn a_selection_change_drops_the_previous_jobs_paging() {
     let fetch = list.reload();
     list.apply(
         fetch.generation,
-        Ok(devworks_desktop::paged::Page {
-            items: Vec::new(),
-            next: Some("list".into()),
-        }),
+        Ok(devworks_desktop::paged::Page::new(
+            Vec::new(),
+            Some("list".into()),
+        )),
     );
+    let older_with = |cursor: &str| {
+        let mut older = devworks_desktop::paged::Paged::default();
+        let fetch = older.reload();
+        older.apply(
+            fetch.generation,
+            Ok(devworks_desktop::paged::Page::new(
+                Vec::new(),
+                Some(cursor.into()),
+            )),
+        );
+        older
+    };
     let mut jobs = JobsUi {
         selected: Some("a".into()),
-        older_cursor: Some("cursor-of-a".into()),
+        older: older_with("cursor-of-a"),
         inspection_error: Some("a failed".into()),
         list,
         ..JobsUi::default()
     };
     jobs.select(Some("a".into()));
-    assert_eq!(jobs.older_cursor.as_deref(), Some("cursor-of-a"));
+    assert!(
+        jobs.older.more(),
+        "reselecting the same job keeps its pages"
+    );
     jobs.select(Some("b".into()));
     assert_eq!(jobs.selected.as_deref(), Some("b"));
-    assert!(jobs.older_cursor.is_none() && jobs.inspection_error.is_none());
-    jobs.older_cursor = Some("cursor-of-b".into());
+    assert!(!jobs.older.more() && jobs.inspection_error.is_none());
+    jobs.older = older_with("cursor-of-b");
     jobs.set_scope(Some("project".into()));
-    assert!(jobs.selected.is_none() && jobs.older_cursor.is_none());
+    assert!(jobs.selected.is_none() && !jobs.older.more());
     assert!(!jobs.list.more() && !jobs.list.loaded);
 }
 

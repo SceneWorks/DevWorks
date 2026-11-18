@@ -3,6 +3,7 @@
 //! and `web.search` use cases agents call (as the user), their results with provenance and
 //! trust, and the recent web activity record (`workspace.logs` of the `web` components). The
 //! settings themselves are edited in the list above it, like every other setting.
+use crate::paged::Paged;
 use crate::theme;
 use crate::widgets::{self, Tone, chip};
 use devworks_core::protocol::records::{DiagnosticEntry, WebDocument, WebResult};
@@ -27,8 +28,8 @@ pub struct WebPanel {
     pub results: Option<Vec<WebResult>>,
     /// The last fetch or search refusal, described honestly.
     pub error: Option<String>,
-    pub activity: Option<Result<Vec<DiagnosticEntry>, String>>,
-    pub activity_loading: bool,
+    /// The recent web activity: one bounded read of the log, newest first.
+    pub activity: Paged<DiagnosticEntry>,
 }
 
 /// The effective web settings the section summarizes.
@@ -168,12 +169,11 @@ impl WebPanel {
         ui.add_space(8.0);
         ui.horizontal(|ui| {
             ui.label(RichText::new("Recent web activity").strong());
-            if widgets::secondary_button(ui, "Refresh").clicked() && !self.activity_loading {
-                self.activity_loading = true;
+            if widgets::secondary_button(ui, "Refresh").clicked() && !self.activity.loading() {
                 actions.push(WebAction::LoadActivity);
             }
         });
-        match &self.activity {
+        match self.activity.result() {
             None => widgets::caption(ui, "Not loaded yet."),
             Some(Err(e)) => widgets::caption(ui, format!("Activity could not be loaded: {e}")),
             Some(Ok(items)) if items.is_empty() => {

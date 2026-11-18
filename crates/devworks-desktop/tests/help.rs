@@ -27,8 +27,12 @@ fn open(engine: &devworks_desktop::host::Engine, root: &Root) -> Ui {
     settle(&mut h);
     click_nav(&mut h, "Help");
     ready(&mut h, root);
-    assert!(h.state().help.loaded, "real Help service answered");
-    assert!(h.state().help.error.is_none(), "{:?}", h.state().help.error);
+    assert!(h.state().help.topics.loaded, "real Help service answered");
+    assert!(
+        h.state().help.topics.error.is_none(),
+        "{:?}",
+        h.state().help.topics.error
+    );
     h
 }
 fn ready(h: &mut Ui, root: &Root) {
@@ -36,7 +40,7 @@ fn ready(h: &mut Ui, root: &Root) {
         h,
         "real initial Help publication",
         || root.write_progress(),
-        |shell| !shell.help.topics.is_empty() && !shell.help.generating,
+        |shell| !shell.help.topics.items.is_empty() && !shell.help.generating,
     );
     settle(h);
 }
@@ -152,9 +156,9 @@ fn native_help_search_and_bounded_passages_use_local_version_references() {
     let mut h = open(&engine, &root);
     replace(&mut h, "Search local Help", "routing");
     press(&mut h, "Search Help");
-    assert!(h.state().help.error.is_none());
-    assert!(!h.state().help.topics.is_empty());
-    let topic = h.state().help.topics[0].clone();
+    assert!(h.state().help.topics.error.is_none());
+    assert!(!h.state().help.topics.items.is_empty());
+    let topic = h.state().help.topics.items[0].clone();
     press(
         &mut h,
         &format!(
@@ -202,8 +206,8 @@ fn native_missing_context_is_explicit_and_never_becomes_an_empty_success() {
     let mut h = open(&engine, &root);
     h.state_mut().open_help_context("not-a-real-screen");
     settle(&mut h);
-    assert!(h.state().help.notice.is_some() || h.state().help.error.is_some());
-    assert!(h.state().help.topics.is_empty());
+    assert!(h.state().help.notice.is_some() || h.state().help.topics.error.is_some());
+    assert!(h.state().help.topics.items.is_empty());
     assert!(has_text(&h, "Missing") || has_text(&h, "unavailable") || has_text(&h, "Refused"));
 }
 #[test]
@@ -380,6 +384,7 @@ fn native_read_only_help_needs_no_artifact_or_addon_authority_and_cannot_generat
         .state()
         .help
         .topics
+        .items
         .first()
         .expect("Help-only browsing")
         .clone();
@@ -438,7 +443,7 @@ fn native_help_navigation_is_first_class_and_unavailable_runtime_is_explicit() {
             .accesskit_node()
             .is_disabled()
     );
-    assert!(h.state().help.topics.is_empty());
+    assert!(h.state().help.topics.items.is_empty());
 }
 
 #[test]
@@ -447,27 +452,29 @@ fn native_help_pages_search_results_and_reads_the_complete_maintained_source_exa
     let root = Root::new("help-native-pages");
     let engine = start(&root);
     let mut h = open(&engine, &root);
-    let before = h.state().help.topics.len();
+    let before = h.state().help.topics.items.len();
     assert!(
-        h.state().help.next_cursor.is_some(),
+        h.state().help.topics.more(),
         "the real bundled catalog exceeds one native page"
     );
     press(&mut h, "More Help topics");
-    assert!(h.state().help.topics.len() > before);
+    assert!(h.state().help.topics.items.len() > before);
     let unique = h
         .state()
         .help
         .topics
+        .items
         .iter()
         .map(|topic| (topic.id.as_str(), topic.version.0.as_str()))
         .collect::<std::collections::BTreeSet<_>>();
-    assert_eq!(unique.len(), h.state().help.topics.len());
+    assert_eq!(unique.len(), h.state().help.topics.items.len());
     replace(&mut h, "Search local Help", "echo");
     press(&mut h, "Search Help");
     let topic = h
         .state()
         .help
         .topics
+        .items
         .iter()
         .find(|topic| topic.id.as_str() == "sdk-echo-source")
         .expect("maintained full SDK source guide")
@@ -592,6 +599,7 @@ fn native_help_regeneration_reports_actual_completion_and_registration_facts() {
         .state()
         .help
         .topics
+        .items
         .iter()
         .find(|topic| {
             topic
@@ -645,7 +653,7 @@ fn native_stale_generation_refusal_keeps_the_inspected_version_and_unsaved_searc
     settle(&mut h);
     click_nav(&mut h, "Help");
     ready(&mut h, &root);
-    let topic = h.state().help.topics[0].clone();
+    let topic = h.state().help.topics.items[0].clone();
     press(
         &mut h,
         &format!(
@@ -858,7 +866,7 @@ fn native_installed_package_help_has_exact_unicode_passages_and_stale_version_co
         .set_missing_glyph_policy(egui::MissingGlyphPolicy::Tofu);
     replace(&mut h, "Search local Help", "Offline guide marker");
     press(&mut h, "Search Help");
-    let topic = h.state().help.topics.iter().find(|topic| matches!(&topic.provenance,Some(HelpProvenance::Package {package_id,..}) if package_id.as_str()=="local-help-fixture")).expect("installed package guide is discoverable with Help search").clone();
+    let topic = h.state().help.topics.items.iter().find(|topic| matches!(&topic.provenance,Some(HelpProvenance::Package {package_id,..}) if package_id.as_str()=="local-help-fixture")).expect("installed package guide is discoverable with Help search").clone();
     assert!(
         matches!(&topic.provenance,Some(HelpProvenance::Package {package_version,manifest_digest,..}) if package_version.0=="1.0.0" && manifest_digest.as_str()==digest)
     );
@@ -886,7 +894,7 @@ fn native_installed_package_help_has_exact_unicode_passages_and_stale_version_co
         "scalar offsets never split or replace UTF-8"
     );
     press(&mut h, "All guides for this package");
-    assert!(h.state().help.topics.iter().all(|topic| matches!(&topic.provenance,Some(HelpProvenance::Package {package_id,package_version,..}) if package_id.as_str()=="local-help-fixture" && package_version.0=="1.0.0")));
+    assert!(h.state().help.topics.items.iter().all(|topic| matches!(&topic.provenance,Some(HelpProvenance::Package {package_id,package_version,..}) if package_id.as_str()=="local-help-fixture" && package_version.0=="1.0.0")));
     let second = "# Updated local guide\n\nOffline guide marker, version two.\n";
     let next_digest = install_guide(&engine, &root, "2.0.0", second, true);
     press(&mut h, "Refresh Help");
@@ -971,7 +979,7 @@ fn native_help_rebases_passage_cursor_after_unrelated_catalog_revision_without_c
     ready(&mut h, &root);
     replace(&mut h, "Search local Help", "Stable cursor marker");
     press(&mut h, "Search Help");
-    let topic=h.state().help.topics.iter().find(|topic|matches!(&topic.provenance,Some(HelpProvenance::Package{package_id,..}) if package_id.as_str()=="local-help-fixture")).expect("actual signed package guide").clone();
+    let topic=h.state().help.topics.items.iter().find(|topic|matches!(&topic.provenance,Some(HelpProvenance::Package{package_id,..}) if package_id.as_str()=="local-help-fixture")).expect("actual signed package guide").clone();
     press(
         &mut h,
         &format!(

@@ -1,6 +1,7 @@
 //! Native workflow and allocation controls. All mutations go through the shared gateway;
 //! this module stores only editors, authoritative snapshots, and command progress.
 use super::*;
+use crate::paged::{Applied, Fetch, Page, Paged};
 
 #[derive(Clone, Debug)]
 pub enum Draft {
@@ -21,11 +22,9 @@ pub enum Draft {
 }
 #[derive(Default)]
 pub struct WorkflowUi {
-    pub rows: Vec<StatusRecord>,
-    pub loaded: bool,
-    pub error: Option<String>,
-    pub generation: u64,
-    pub gathering: Vec<StatusRecord>,
+    /// The project's statuses, every page read before they show. Their workflow revision must
+    /// agree, or the snapshot is refused as incomplete.
+    pub rows: Paged<StatusRecord>,
     pub open: bool,
     pub draft: Option<Draft>,
     pub busy: bool,
@@ -177,6 +176,7 @@ impl AllocationFilters {
 impl WorkflowUi {
     pub fn revision(&self) -> Option<String> {
         self.rows
+            .items
             .first()?
             .workflow_revision
             .as_ref()
@@ -197,26 +197,27 @@ pub enum WorkflowAction {
 
 impl WorkCtl<'_, '_> {
     pub(super) fn load_workflow(&mut self, project: &str, replace: bool) {
-        let generation = self
-            .work
-            .workflows
-            .entry(project.into())
-            .or_default()
-            .generation;
-        if !replace && self.pending(&WorkSlot::WorkWorkflow(project.into(), generation)) {
+        let state = self.work.workflows.entry(project.into()).or_default();
+        if !replace && state.rows.loading() {
             return;
         }
-        let state = self.work.workflows.entry(project.into()).or_default();
-        state.generation += 1;
-        state.gathering.clear();
-        let generation = state.generation;
+        state.rows.error = None;
+        let fetch = state.rows.reload_all();
+        self.send_workflow(project, fetch);
+    }
+    fn send_workflow(&mut self, project: &str, fetch: Fetch) {
         let p = project.to_owned();
-        self.query(
-            WorkSlot::WorkWorkflow(p.clone(), generation),
-            "Loading project workflow",
-            "workflows.list",
-            move |b| wops::workflow_list(b, &p, None),
-        );
+        let slot = WorkSlot::WorkWorkflow(p.clone(), fetch.generation);
+        if let Some(state) = self.work.workflows.get_mut(project) {
+            self.cx.paged(
+                &mut state.rows,
+                fetch,
+                slot,
+                "Loading project workflow",
+                "workflows.list",
+                move |b, cursor| wops::workflow_list(b, &p, cursor),
+            );
+        }
     }
     pub(super) fn load_allocation_queue(
         &mut self,
@@ -355,52 +356,48 @@ impl WorkCtl<'_, '_> {
         match (slot, reply) {
             (WorkSlot::WorkWorkflow(project, generation), Reply::Query(query)) => {
                 let state = self.work.workflows.entry(project.clone()).or_default();
-                if generation != state.generation {
-                    return None;
-                }
                 match wops::workflow_page(query) {
                     Ok((rows, next)) => {
-                        state.gathering.extend(rows);
-                        if let Some(cursor) = next {
-                            self.query(
-                                WorkSlot::WorkWorkflow(project.clone(), generation),
-                                "Loading project workflow",
-                                "workflows.list",
-                                move |b| wops::workflow_list(b, &project, Some(&cursor)),
-                            );
-                        } else {
-                            let revision = state
-                                .gathering
-                                .first()
-                                .and_then(|s| s.workflow_revision.as_ref());
-                            if revision.is_none()
-                                || state
-                                    .gathering
-                                    .iter()
-                                    .any(|s| s.workflow_revision.as_ref() != revision)
-                            {
-                                state.gathering.clear();
-                                state.error = Some("The workflow snapshot is incomplete; refresh it before editing.".into());
-                            } else {
-                                state.rows = std::mem::take(&mut state.gathering);
-                                state.loaded = true;
-                                state.error = None;
-                                if self.work.of.as_deref() == Some(project.as_str())
+                        match state.rows.apply(generation, Ok(Page::new(rows, next))) {
+                            Applied::Stale => return None,
+                            Applied::Continue(fetch) => self.send_workflow(&project, fetch),
+                            Applied::Replaced => {
+                                let revision = state
+                                    .rows
+                                    .items
+                                    .first()
+                                    .and_then(|s| s.workflow_revision.as_ref());
+                                if revision.is_none()
+                                    || state
+                                        .rows
+                                        .items
+                                        .iter()
+                                        .any(|s| s.workflow_revision.as_ref() != revision)
+                                {
+                                    state.rows.reset();
+                                    state.rows.error = Some("The workflow snapshot is incomplete; refresh it before editing.".into());
+                                } else if self.work.of.as_deref() == Some(project.as_str())
                                     && self.work.status_filter.as_ref().is_some_and(|id| {
-                                        !state.rows.iter().any(|status| status.id.as_str() == id)
+                                        !state
+                                            .rows
+                                            .items
+                                            .iter()
+                                            .any(|status| status.id.as_str() == id)
                                     })
                                 {
                                     self.work.status_filter = None;
                                 }
                             }
+                            _ => {}
                         }
                     }
                     Err(Failure::Refused(ref f)) if f.code == DomainErrorCode::CursorExpired => {
-                        self.load_workflow(&project, true)
+                        if state.rows.abandon(generation) {
+                            self.load_workflow(&project, true)
+                        }
                     }
                     Err(error) => {
-                        state.gathering.clear();
-                        state.error = Some(error.describe());
+                        state.rows.apply(generation, Err(error.describe()));
                     }
                 }
             }
@@ -929,9 +926,9 @@ pub(crate) fn controls(
         }
     });
     if let Some(workflow) = work.workflows.get(&project) {
-        if let Some(error) = &workflow.error {
+        if let Some(error) = &workflow.rows.error {
             chip(ui, error.clone(), Tone::Bad);
-        } else if !workflow.loaded {
+        } else if !workflow.rows.loaded {
             widgets::caption(ui, "Loading the project's workflow…");
         }
     }
@@ -943,17 +940,17 @@ fn editor(ui: &mut Ui, project: &str, workflow: &mut WorkflowUi, actions: &mut V
         ui,
         "Names and order belong to this project. Each column keeps its fixed workflow meaning; execution controls are separate.",
     );
-    if let Some(error) = &workflow.error {
+    if let Some(error) = &workflow.rows.error {
         chip(ui, error.clone(), Tone::Bad);
     }
-    if !workflow.loaded {
+    if !workflow.rows.loaded {
         widgets::caption(ui, "Loading workflow…");
         if ui.button("Refresh workflow").clicked() {
             actions.push(Action::Workflow(WorkflowAction::Reload(project.into())));
         }
         return;
     }
-    let rows = workflow.rows.clone();
+    let rows = workflow.rows.items.clone();
     let revision = workflow.revision();
     if let Some(revision) = &revision {
         widgets::caption(ui, format!("Workflow revision {revision}"));

@@ -137,38 +137,46 @@ impl JobsCtl<'_, '_> {
                     self.load_job(&id);
                 }
                 JobAction::OlderRuns => {
-                    let (Some(job), Some(cursor)) = (
-                        self.jobs.selected.clone(),
-                        self.jobs.older_cursor.clone().or_else(|| {
-                            self.jobs
-                                .inspection
-                                .as_ref()
-                                .and_then(|i| i.runs_next_cursor.as_ref())
-                                .map(|c| c.0.clone())
-                        }),
-                    ) else {
+                    let Some(job) = self.jobs.selected.clone() else {
                         continue;
                     };
-                    self.query(
-                        JobsSlot::JobHistory(job.clone()),
+                    // The first older page continues after the cursor the inspection carries.
+                    let fetch = if self.jobs.older.loaded {
+                        self.jobs.older.more_page()
+                    } else {
+                        self.jobs
+                            .inspection
+                            .as_ref()
+                            .and_then(|i| i.runs_next_cursor.as_ref())
+                            .map(|c| c.0.clone())
+                            .map(|cursor| self.jobs.older.continue_from(cursor))
+                    };
+                    let Some(fetch) = fetch else {
+                        continue;
+                    };
+                    let slot = JobsSlot::JobHistory(job.clone());
+                    self.cx.paged(
+                        &mut self.jobs.older,
+                        fetch,
+                        slot,
                         "Loading older runs",
                         "jobs.inspect",
-                        move |b| ops::jobs_inspect(b, &job, Some(&cursor)),
+                        move |b, cursor| ops::jobs_inspect(b, &job, cursor),
                     );
                 }
                 JobAction::MorePrompts(project) => {
-                    if let Some(cursor) = self
+                    if self
                         .jobs
                         .prompt_pages
                         .get(&project)
-                        .and_then(|p| p.cursor.clone())
+                        .is_some_and(|p| p.more())
                     {
-                        self.load_prompt_page(project, Some(cursor));
+                        self.load_prompt_page(project, true);
                     }
                 }
                 JobAction::RetryPrompts(project) => {
                     self.jobs.prompt_pages.remove(&project);
-                    self.load_prompt_page(project, None);
+                    self.load_prompt_page(project, false);
                 }
                 JobAction::NewJob => {
                     self.jobs.capabilities = self
@@ -317,13 +325,13 @@ impl JobsCtl<'_, '_> {
                         // Older pages already loaded continue after the previous first page:
                         // runs that moved off the refreshed first page join them, so none falls
                         // into a gap at the boundary.
-                        if self.jobs.older_cursor.is_some()
+                        if self.jobs.older.loaded
                             && let Some(before) = &self.jobs.inspection
                         {
                             reconcile_history(
                                 before.runs.as_ref().map_or(&[][..], |r| &r.0[..]),
                                 i.runs.as_ref().map_or(&[][..], |r| &r.0[..]),
-                                &mut self.jobs.older,
+                                &mut self.jobs.older.items,
                             );
                         }
                         self.jobs.inspection = Some(i);
@@ -339,24 +347,14 @@ impl JobsCtl<'_, '_> {
                 if generation != self.jobs.prompt_generation || self.jobs.form.is_none() {
                     return None;
                 }
-                let page = self.jobs.prompt_pages.entry(project).or_default();
-                page.loading = false;
-                match ops::prompt_artifact_page(q) {
-                    Ok((items, cursor)) => {
-                        for item in items {
-                            if !page
-                                .items
-                                .iter()
-                                .any(|old| old.artifact.artifact_id == item.artifact.artifact_id)
-                            {
-                                page.items.push(item);
-                            }
-                        }
-                        page.cursor = cursor;
-                        page.error = None;
-                    }
-                    Err(error) => page.error = Some(error.describe()),
-                }
+                let page = ops::prompt_artifact_page(q)
+                    .map(|(items, next)| crate::paged::Page::new(items, next))
+                    .map_err(|e| e.describe());
+                let list = self.jobs.prompt_pages.entry(project).or_default();
+                // Prompts listed on two pages (the list moved between reads) show once.
+                list.apply_current_unique(page, |item| {
+                    item.artifact.artifact_id.as_str().to_owned()
+                });
             }
             (JobsSlot::JobActiveRun(j), Reply::Query(q)) => {
                 if self.jobs.selected.as_deref() != Some(j.as_str()) {
@@ -383,16 +381,16 @@ impl JobsCtl<'_, '_> {
                 }
                 match ops::job_inspection(q) {
                     Ok(i) => {
+                        let runs = i.runs.map(|r| r.0).unwrap_or_default();
+                        let next = i.runs_next_cursor.map(|c| c.0);
                         self.jobs
                             .older
-                            .extend(i.runs.map(|r| r.0).unwrap_or_default());
-                        self.jobs.older_cursor = i.runs_next_cursor.map(|c| c.0);
-                        if self.jobs.older_cursor.is_none() {
-                            // The last page: nothing more to load.
-                            self.jobs.older_cursor = Some(String::new());
-                        }
+                            .apply_current(Ok(crate::paged::Page::new(runs, next)));
                     }
-                    Err(e) => self.jobs.inspection_error = Some(e.describe()),
+                    Err(e) => {
+                        self.jobs.older.apply_current(Err(e.describe()));
+                        self.jobs.inspection_error = Some(e.describe());
+                    }
                 }
             }
             (slot @ (JobsSlot::JobCommand(_) | JobsSlot::JobCreate), Reply::Command(c)) => {
@@ -479,7 +477,7 @@ impl JobsCtl<'_, '_> {
             .then(|| target.to_owned())
         })
     }
-    fn load_prompt_page(&mut self, project: Option<String>, cursor: Option<String>) {
+    fn load_prompt_page(&mut self, project: Option<String>, append: bool) {
         if self.jobs.form.is_none() {
             return;
         }
@@ -487,11 +485,24 @@ impl JobsCtl<'_, '_> {
         if self.pending(&slot) {
             return;
         }
+        let list = self.jobs.prompt_pages.entry(project.clone()).or_default();
+        let Some(fetch) = (if append {
+            list.more_page()
+        } else {
+            Some(list.reload())
+        }) else {
+            return;
+        };
         let scope = project.clone();
-        if self.query(slot, "Loading saved prompts", "artifacts.list", move |b| {
-            ops::prompt_artifacts(b, scope.as_deref(), cursor.as_deref())
-        }) {
-            self.jobs.prompt_pages.entry(project).or_default().loading = true;
+        if let Some(list) = self.jobs.prompt_pages.get_mut(&project) {
+            self.cx.paged(
+                list,
+                fetch,
+                slot,
+                "Loading saved prompts",
+                "artifacts.list",
+                move |b, cursor| ops::prompt_artifacts(b, scope.as_deref(), cursor),
+            );
         }
     }
     fn load_prompt_candidates(&mut self) {
@@ -504,7 +515,7 @@ impl JobsCtl<'_, '_> {
         }
         for scope in scopes {
             if !self.jobs.prompt_pages.contains_key(&scope) {
-                self.load_prompt_page(scope, None);
+                self.load_prompt_page(scope, false);
             }
         }
     }
@@ -611,24 +622,24 @@ impl JobsCtl<'_, '_> {
                             } else {
                                 "workspace"
                             };
-                            if page.loading {
+                            if page.loading() {
                                 widgets::caption(ui, format!("Loading {name} prompts…"));
                             }
                             if let Some(error) = &page.error {
                                 widgets::caption(ui, error);
                                 if ui
                                     .add_enabled(
-                                        !page.loading,
+                                        !page.loading(),
                                         egui::Button::new(format!("Reload {name} prompts")),
                                     )
                                     .clicked()
                                 {
                                     st.1.push(JobAction::RetryPrompts(scope.clone()));
                                 }
-                            } else if page.cursor.is_some()
+                            } else if page.more()
                                 && ui
                                     .add_enabled(
-                                        !page.loading,
+                                        !page.loading(),
                                         egui::Button::new(format!("Load more {name} prompts")),
                                     )
                                     .clicked()

@@ -18,6 +18,24 @@ use eframe::egui::{self, RichText, Ui};
 pub struct Page<T> {
     pub items: Vec<T>,
     pub next: Option<String>,
+    /// The snapshot the rows were read from (a catalog revision, say). A page that continues a
+    /// list read from another snapshot is refused ([`Applied::Fenced`]); `None` carries none.
+    pub fence: Option<String>,
+}
+impl<T> Page<T> {
+    /// A page that carries no snapshot.
+    pub fn new(items: Vec<T>, next: Option<String>) -> Self {
+        Self {
+            items,
+            next,
+            fence: None,
+        }
+    }
+    /// The same page, read from `fence`.
+    pub fn fenced(mut self, fence: impl Into<String>) -> Self {
+        self.fence = Some(fence.into());
+        self
+    }
 }
 
 /// A request to send: the generation to return with the reply and the cursor to read after
@@ -47,6 +65,9 @@ pub enum Applied {
     Failed,
     /// A gathering read holds a page and needs the next: send this request.
     Continue(Fetch),
+    /// The page was read from another snapshot than the rows it would join: nothing changed,
+    /// and the caller says why (see [`Paged::fail`]) or starts over.
+    Fenced,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -65,6 +86,8 @@ pub struct Paged<T> {
     pub loaded: bool,
     pub error: Option<String>,
     next: Option<String>,
+    /// The snapshot the rows shown were read from.
+    fence: Option<String>,
     generation: u64,
     inflight: Option<Inflight>,
     /// The last failure was a further page (retry reads that page, not the first).
@@ -74,6 +97,7 @@ pub struct Paged<T> {
     staged_pages: usize,
     /// How many pages the rows shown came from.
     pages: usize,
+    staged_fence: Option<String>,
 }
 impl<T> Default for Paged<T> {
     fn default() -> Self {
@@ -82,12 +106,14 @@ impl<T> Default for Paged<T> {
             loaded: false,
             error: None,
             next: None,
+            fence: None,
             generation: 0,
             inflight: None,
             failed_append: false,
             staged: Vec::new(),
             staged_pages: 0,
             pages: 0,
+            staged_fence: None,
         }
     }
 }
@@ -96,6 +122,21 @@ impl<T> Paged<T> {
     /// Another page exists after the rows shown.
     pub fn more(&self) -> bool {
         self.next.is_some()
+    }
+    /// A list that is already read: `items` as a complete first page.
+    pub fn from_items(items: Vec<T>) -> Self {
+        let mut list = Self::default();
+        list.replace(items);
+        list
+    }
+    /// The list as an outcome, for a view that has no rows to keep when a read failed: `None`
+    /// while the first read is under way, `Err` when the last read failed, else the rows.
+    pub fn result(&self) -> Option<Result<&Vec<T>, &String>> {
+        match (&self.error, self.loaded) {
+            (Some(error), _) => Some(Err(error)),
+            (None, true) => Some(Ok(&self.items)),
+            (None, false) => None,
+        }
     }
     /// A request is in flight.
     pub fn loading(&self) -> bool {
@@ -123,6 +164,14 @@ impl<T> Paged<T> {
         self.staged_pages = 0;
         self.start(None, false, Some(requested.max(1)))
     }
+    /// Starts reading pages one after another like [`reload_all`](Self::reload_all), but stops
+    /// after `pages` of them; the list then holds those and [`more`](Self::more) says the rest
+    /// exist.
+    pub fn reload_up_to(&mut self, pages: usize) -> Fetch {
+        self.staged.clear();
+        self.staged_pages = 0;
+        self.start(None, false, Some(pages.max(1)))
+    }
     /// Starts reading every page, one after another ([`Applied::Continue`] names each next
     /// request). The rows shown stay until the last page arrives, so a list that must be
     /// complete to be correct (a board) never shows a part of itself.
@@ -130,6 +179,17 @@ impl<T> Paged<T> {
         self.staged.clear();
         self.staged_pages = 0;
         self.start(None, false, Some(usize::MAX))
+    }
+    /// Starts the request a saved frame carries (it holds its own cursor): the first page, or a
+    /// continuation of the rows shown.
+    pub fn resume(&mut self, append: bool) -> Fetch {
+        let cursor = append.then(|| self.next.clone().unwrap_or_default());
+        self.start(cursor, append, None)
+    }
+    /// Starts reading the pages after `cursor`, which came from somewhere else (the first page
+    /// of a record read another way) and joins the rows shown.
+    pub fn continue_from(&mut self, cursor: String) -> Fetch {
+        self.start(Some(cursor), true, None)
     }
     /// Starts reading the next page; `None` when there is none or a request is in flight.
     pub fn more_page(&mut self) -> Option<Fetch> {
@@ -155,6 +215,42 @@ impl<T> Paged<T> {
     pub fn apply(&mut self, generation: u64, reply: Result<Page<T>, String>) -> Applied {
         self.apply_with(generation, reply, None)
     }
+    /// [`apply`](Self::apply) for a list whose one row is a whole page object (a report, a price
+    /// catalog) that later pages extend: the page joins the object already shown with `join`,
+    /// which refuses a page that does not belong to it. A refusal is [`Applied::Fenced`] and
+    /// its reason becomes the list's error; the object shown is untouched.
+    pub fn apply_joined(
+        &mut self,
+        generation: u64,
+        reply: Result<Page<T>, String>,
+        join: impl FnOnce(&mut T, T) -> Result<(), String>,
+    ) -> Applied {
+        let appending = self
+            .inflight
+            .is_some_and(|f| f.generation == generation && f.append && f.gather.is_none());
+        if !appending || self.items.is_empty() {
+            return self.apply(generation, reply);
+        }
+        let mut page = match reply {
+            Ok(page) => page,
+            Err(error) => return self.apply(generation, Err(error)),
+        };
+        self.inflight = None;
+        let next = page.next.take();
+        let Some(latest) = page.items.pop() else {
+            self.next = next;
+            return Applied::Appended;
+        };
+        if let Err(reason) = join(&mut self.items[0], latest) {
+            self.fail(reason);
+            return Applied::Fenced;
+        }
+        self.next = next;
+        self.pages += 1;
+        self.error = None;
+        self.failed_append = false;
+        Applied::Appended
+    }
     /// [`apply`](Self::apply) for rows that carry a key: a row already listed is not listed
     /// twice when pages overlap because the list changed between reads.
     pub fn apply_unique(
@@ -175,6 +271,23 @@ impl<T> Paged<T> {
             return Applied::Stale;
         };
         self.inflight = None;
+        if let Ok(page) = &reply {
+            // A continuation must come from the snapshot the rows before it came from.
+            let held = if inflight.gather.is_some() && self.staged_pages > 0 {
+                self.staged_fence.as_ref()
+            } else if inflight.append && inflight.gather.is_none() {
+                self.fence.as_ref()
+            } else {
+                None
+            };
+            if let (Some(held), Some(got)) = (held, &page.fence)
+                && held != got
+            {
+                self.staged.clear();
+                self.staged_pages = 0;
+                return Applied::Fenced;
+            }
+        }
         match reply {
             Ok(page)
                 if inflight
@@ -182,6 +295,9 @@ impl<T> Paged<T> {
                     .is_some_and(|limit| page.next.is_some() && self.staged_pages + 1 < limit) =>
             {
                 Self::join(&mut self.staged, page.items, key);
+                if self.staged_pages == 0 {
+                    self.staged_fence = page.fence.clone();
+                }
                 self.staged_pages += 1;
                 let limit = inflight.gather;
                 let fetch = self.start(page.next, true, limit);
@@ -202,6 +318,10 @@ impl<T> Paged<T> {
                     self.pages = 1;
                 }
                 self.next = page.next;
+                if !appended {
+                    self.fence = page.fence.clone();
+                }
+                self.staged_fence = None;
                 self.loaded = true;
                 self.error = None;
                 self.failed_append = false;
@@ -229,12 +349,39 @@ impl<T> Paged<T> {
             }
         }
     }
+    /// Records a failure of the page that was refused ([`Applied::Fenced`]): the rows stay, the
+    /// cursor stays, and a retry reads that page again.
+    pub fn fail(&mut self, error: impl Into<String>) {
+        self.error = Some(error.into());
+        self.failed_append = true;
+    }
+    /// Starts a request that reads the first page without touching the rows (a cheap check
+    /// whether the source changed). It is in flight until [`end`](Self::end).
+    pub fn probe(&mut self) -> Fetch {
+        self.start(None, false, None)
+    }
+    /// Ends the request `generation` named, which carried no rows. `false` when it is no longer
+    /// the current request.
+    pub fn end(&mut self, generation: u64) -> bool {
+        self.abandon(generation)
+    }
     /// Applies a reply whose slot cannot carry a generation: the slot's newest request is the
     /// one in flight (an older reply was superseded before it got here), so a reply with none
     /// in flight is stale.
     pub fn apply_current(&mut self, reply: Result<Page<T>, String>) -> Applied {
         match self.inflight {
             Some(f) => self.apply(f.generation, reply),
+            None => Applied::Stale,
+        }
+    }
+    /// [`apply_current`](Self::apply_current) for rows that carry a key.
+    pub fn apply_current_unique(
+        &mut self,
+        reply: Result<Page<T>, String>,
+        key: impl Fn(&T) -> String,
+    ) -> Applied {
+        match self.inflight {
+            Some(f) => self.apply_unique(f.generation, reply, key),
             None => Applied::Stale,
         }
     }
@@ -247,12 +394,24 @@ impl<T> Paged<T> {
         }
         current
     }
+    /// Replaces where the next page starts, for a cursor learned another way (a retained one,
+    /// or one a test expires), keeping the rows and the count of pages they came from.
+    pub fn set_next(&mut self, cursor: Option<String>) {
+        self.next = cursor;
+    }
+    /// Shows `page` as the list's first page, which arrived without a request of this list.
+    pub fn adopt(&mut self, page: Page<T>) {
+        self.replace(page.items);
+        self.next = page.next;
+        self.fence = page.fence;
+    }
     /// Shows `items` as a complete list that arrived without a request (it was read elsewhere).
     pub fn replace(&mut self, items: Vec<T>) {
         self.items = items;
         self.loaded = true;
         self.error = None;
         self.next = None;
+        self.fence = None;
         self.failed_append = false;
         self.pages = 1;
         self.staged.clear();
@@ -266,6 +425,7 @@ impl<T> Paged<T> {
         self.loaded = false;
         self.error = None;
         self.next = None;
+        self.fence = None;
         self.inflight = None;
         self.failed_append = false;
         self.staged.clear();
@@ -285,6 +445,8 @@ impl<T> Paged<T> {
             loaded: !parts.is_empty() && parts.iter().all(|p| p.loaded),
             error: parts.iter().find_map(|p| p.error.clone()),
             next: parts.iter().any(|p| p.more()).then(String::new),
+            fence: None,
+            staged_fence: None,
             generation: 0,
             inflight: parts.iter().any(|p| p.loading()).then_some(Inflight {
                 generation: 0,
@@ -308,6 +470,8 @@ impl<T> Paged<T> {
             loaded: self.loaded,
             error: self.error.clone(),
             next: self.next.clone(),
+            fence: self.fence.clone(),
+            staged_fence: None,
             generation: self.generation,
             inflight: self.inflight,
             failed_append: self.failed_append,
@@ -484,10 +648,7 @@ mod tests {
     use super::*;
 
     fn page(items: &[u32], next: Option<&str>) -> Page<u32> {
-        Page {
-            items: items.to_vec(),
-            next: next.map(str::to_owned),
-        }
+        Page::new(items.to_vec(), next.map(str::to_owned))
     }
 
     #[test]
@@ -689,6 +850,125 @@ mod tests {
         let next = list.more_page().unwrap();
         list.apply_unique(next.generation, Ok(page(&[2, 3], None)), |n| n.to_string());
         assert_eq!(list.items, [1, 2, 3]);
+    }
+
+    #[test]
+    fn a_page_from_another_snapshot_is_refused_and_the_rows_stay() {
+        let mut list = Paged::<u32>::default();
+        let first = list.reload();
+        list.apply(first.generation, Ok(page(&[1], Some("c1")).fenced("rev-1")));
+        let next = list.more_page().unwrap();
+        assert_eq!(
+            list.apply(next.generation, Ok(page(&[2], None).fenced("rev-2"))),
+            Applied::Fenced
+        );
+        assert_eq!(list.items, [1]);
+        assert!(!list.loading() && list.more(), "the cursor is kept");
+        list.fail("The catalog changed while paging.");
+        assert_eq!(
+            list.error.as_deref(),
+            Some("The catalog changed while paging.")
+        );
+        let retry = list.more_page().unwrap();
+        assert_eq!(
+            list.apply(retry.generation, Ok(page(&[2], None).fenced("rev-1"))),
+            Applied::Appended
+        );
+        assert_eq!(list.items, [1, 2]);
+    }
+
+    #[test]
+    fn a_first_page_adopts_a_new_snapshot() {
+        let mut list = Paged::<u32>::default();
+        let first = list.reload();
+        list.apply(first.generation, Ok(page(&[1], None).fenced("rev-1")));
+        let again = list.reload();
+        assert_eq!(
+            list.apply(again.generation, Ok(page(&[9], Some("c")).fenced("rev-2"))),
+            Applied::Replaced
+        );
+        let next = list.more_page().unwrap();
+        assert_eq!(
+            list.apply(next.generation, Ok(page(&[10], None).fenced("rev-1"))),
+            Applied::Fenced,
+            "the old snapshot no longer continues the list"
+        );
+    }
+
+    #[test]
+    fn a_gathering_read_refuses_a_page_from_another_snapshot() {
+        let mut list = Paged::<u32>::default();
+        let all = list.reload_all();
+        let Applied::Continue(second) =
+            list.apply(all.generation, Ok(page(&[1], Some("c1")).fenced("rev-1")))
+        else {
+            panic!("a page follows");
+        };
+        assert_eq!(
+            list.apply(second.generation, Ok(page(&[2], None).fenced("rev-2"))),
+            Applied::Fenced
+        );
+        assert!(list.items.is_empty() && !list.loading());
+    }
+
+    #[test]
+    fn a_probe_leaves_the_rows_and_a_newer_request_makes_its_reply_stale() {
+        let mut list = Paged::<u32>::default();
+        let first = list.reload();
+        list.apply(first.generation, Ok(page(&[1], None)));
+        let probe = list.probe();
+        assert!(list.loading() && list.items == [1]);
+        let newer = list.reload();
+        assert!(!list.end(probe.generation));
+        assert!(list.end(newer.generation));
+    }
+
+    #[test]
+    fn a_page_object_joins_the_one_shown_or_is_refused() {
+        let mut list = Paged::<Vec<u32>>::default();
+        let first = list.reload();
+        list.apply(
+            first.generation,
+            Ok(Page::new(vec![vec![1]], Some("c1".into()))),
+        );
+        let join = |shown: &mut Vec<u32>, more: Vec<u32>| -> Result<(), String> {
+            if more.first() == Some(&99) {
+                return Err("The report changed while paging.".into());
+            }
+            shown.extend(more);
+            Ok(())
+        };
+        let next = list.more_page().unwrap();
+        assert_eq!(
+            list.apply_joined(
+                next.generation,
+                Ok(Page::new(vec![vec![2]], Some("c2".into()))),
+                join
+            ),
+            Applied::Appended
+        );
+        assert_eq!(list.items, [vec![1, 2]]);
+        assert!(list.more());
+        let next = list.more_page().unwrap();
+        assert_eq!(
+            list.apply_joined(next.generation, Ok(Page::new(vec![vec![99]], None)), join),
+            Applied::Fenced
+        );
+        assert_eq!(list.items, [vec![1, 2]], "the report shown is untouched");
+        assert_eq!(
+            list.error.as_deref(),
+            Some("The report changed while paging.")
+        );
+        assert!(list.more(), "the cursor is kept for a retry");
+        // A stale reply is refused before it is joined.
+        let stale = list.more_page().unwrap();
+        let newer = list.reload();
+        assert_eq!(
+            list.apply_joined(stale.generation, Ok(Page::new(vec![vec![5]], None)), join),
+            Applied::Stale
+        );
+        list.apply_joined(newer.generation, Ok(Page::new(vec![vec![7]], None)), join);
+        assert_eq!(list.items, [vec![7]]);
     }
 
     #[test]

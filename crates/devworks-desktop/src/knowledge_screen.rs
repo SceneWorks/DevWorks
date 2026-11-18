@@ -819,10 +819,7 @@ impl KnowledgeScreen {
                 | OperationResult::KnowledgeTaggedLessons { value },
                 _,
             )) => {
-                let page = Page {
-                    items: value.items.0,
-                    next: value.next_cursor.map(|c| c.0),
-                };
+                let page = Page::new(value.items.0, value.next_cursor.map(|c| c.0));
                 self.claims.apply(generation, Ok(page));
                 false
             }
@@ -1927,10 +1924,7 @@ mod tests {
         let first = s.claims.reload();
         s.claims.apply(
             first.generation,
-            Ok(Page {
-                items: Vec::new(),
-                next: Some("c".into()),
-            }),
+            Ok(Page::new(Vec::new(), Some("c".into()))),
         );
         s.project = None;
         let (_, input) = s.begin_listing(true);

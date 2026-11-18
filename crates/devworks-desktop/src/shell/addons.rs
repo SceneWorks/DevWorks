@@ -7,6 +7,7 @@ use crate::attachments;
 use crate::backend::{Reply, TaskOutput, Unresolved, is_unknown};
 use crate::memory::RouteMemory;
 use crate::ops;
+use crate::paged::{Applied, Fetch, Page};
 use crate::route::Route;
 use crate::screen::{Cx, Screen, ScreenContext, ScreenId, controller};
 use eframe::egui::Ui;
@@ -52,12 +53,18 @@ impl Screen for AddonsScreen {
 impl AddonsCtl<'_, '_> {
     /// Loads the whole catalog, following its pages (see the `AddonsList` reply).
     fn load_addons(&mut self) {
-        self.addons.catalog_pending = None;
-        self.query(
+        self.addons.catalog.error = None;
+        let fetch = self.addons.catalog.reload_up_to(a::CATALOG_PAGES);
+        self.send_catalog(fetch);
+    }
+    fn send_catalog(&mut self, fetch: Fetch) {
+        self.cx.paged(
+            &mut self.addons.catalog,
+            fetch,
             AddonsSlot::AddonsList,
             "Loading add-ons",
             "addons.catalog",
-            |b| a::catalog_frame(b, None),
+            a::catalog_frame,
         );
     }
     /// Checks the runtimes and refreshes the package indexes.
@@ -72,14 +79,26 @@ impl AddonsCtl<'_, '_> {
     }
     /// Loads a package's logs from the start, following their pages to the end.
     fn load_addon_logs(&mut self, package: String) {
-        self.addons.logs_pending.insert(package.clone(), Vec::new());
+        let fetch = self
+            .addons
+            .logs
+            .entry(package.clone())
+            .or_default()
+            .reload_all();
+        self.send_logs(package, fetch);
+    }
+    fn send_logs(&mut self, package: String, fetch: Fetch) {
         let p = package.clone();
-        self.query(
-            AddonsSlot::AddonsLogs(package),
-            "Loading add-on logs",
-            "addons.logs",
-            move |b| a::logs_frame(b, &p, None),
-        );
+        if let Some(log) = self.addons.logs.get_mut(&package) {
+            self.cx.paged(
+                log,
+                fetch,
+                AddonsSlot::AddonsLogs(package),
+                "Loading add-on logs",
+                "addons.logs",
+                move |b, cursor| a::logs_frame(b, &p, cursor),
+            );
+        }
     }
     fn addons_actions(&mut self, actions: Vec<AddonsAction>) {
         for action in actions {
@@ -227,69 +246,45 @@ impl AddonsCtl<'_, '_> {
         match (slot, reply) {
             (AddonsSlot::AddonsList, Reply::Query(q)) => match a::catalog(q) {
                 Ok((items, registry, next)) => {
-                    let (mut all, first) = self
-                        .addons
-                        .catalog_pending
-                        .take()
-                        .unwrap_or_else(|| (Vec::new(), registry));
-                    let pages = all.len() / usize::from(ops::PAGE_LIMIT) + 1;
-                    if registry != first {
+                    let page = Page::new(items, next).fenced(registry.to_string());
+                    match self.addons.catalog.apply_current(Ok(page)) {
                         // The registry changed between pages: read it again from the start.
-                        self.load_addons();
-                    } else if let Some(cursor) = next.filter(|_| pages < a::CATALOG_PAGES) {
-                        all.extend(items);
-                        self.addons.catalog_pending = Some((all, first));
-                        self.query(
-                            AddonsSlot::AddonsList,
-                            "Loading add-ons",
-                            "addons.catalog",
-                            move |b| a::catalog_frame(b, Some(&cursor)),
-                        );
-                    } else {
-                        all.extend(items);
-                        self.addons.items = all;
-                        self.addons.registry_revision = registry;
-                        self.addons.loaded = true;
-                        self.addons.error = None;
+                        Applied::Fenced => self.load_addons(),
+                        Applied::Continue(fetch) => self.send_catalog(fetch),
+                        Applied::Replaced => self.addons.registry_revision = registry,
+                        _ => {}
                     }
                 }
                 Err(e) => {
-                    self.addons.catalog_pending = None;
-                    self.addons.error = Some(e.describe());
+                    self.addons.catalog.apply_current(Err(e.describe()));
                 }
             },
             (AddonsSlot::AddonsLogs(id), Reply::Query(q)) => match a::logs(q) {
                 Ok((entries, next)) => {
-                    let mut all = self.addons.logs_pending.remove(&id).unwrap_or_default();
-                    all.extend(entries);
                     if let Some((p, d)) = self.addons.awaiting.clone()
                         && p == id
-                        && let Some(e) = all.iter().find(|e| e.id.as_str() == d)
+                        && let Some(e) = entries.iter().find(|e| e.id.as_str() == d)
                     {
                         self.addons.config_errors.insert(p, e.message.0.clone());
                         self.addons.awaiting = None;
                     }
-                    // Only the newest entries are kept while the log is followed to its end.
-                    if all.len() > a::LOGS_KEPT {
-                        all.drain(..all.len() - a::LOGS_KEPT);
-                    }
-                    match next {
-                        Some(cursor) => {
-                            self.addons.logs_pending.insert(id.clone(), all);
-                            self.query(
-                                AddonsSlot::AddonsLogs(id.clone()),
-                                "Loading add-on logs",
-                                "addons.logs",
-                                move |b| a::logs_frame(b, &id, Some(&cursor)),
-                            );
+                    let log = self.addons.logs.get_mut(&id)?;
+                    match log.apply_current(Ok(Page::new(entries, next))) {
+                        Applied::Continue(fetch) => self.send_logs(id, fetch),
+                        Applied::Replaced => {
+                            // Only the newest entries are kept once the log is read to its end.
+                            let kept = a::LOGS_KEPT;
+                            if log.items.len() > kept {
+                                log.items.drain(..log.items.len() - kept);
+                            }
                         }
-                        None => {
-                            self.addons.logs.insert(id, all);
-                        }
+                        _ => {}
                     }
                 }
                 Err(e) => {
-                    self.addons.logs_pending.remove(&id);
+                    if let Some(log) = self.addons.logs.get_mut(&id) {
+                        log.apply_current(Err(e.describe()));
+                    }
                     self.addons.notice = Some(e.describe());
                 }
             },

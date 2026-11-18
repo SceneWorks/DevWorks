@@ -53,6 +53,7 @@ fn settings_adds_and_lists_an_outgoing_mcp_server() {
             .settings
             .mcp
             .servers
+            .items
             .iter()
             .any(|server| server.name.0 == "Read server")
     );
@@ -144,8 +145,11 @@ fn settings_can_select_and_configure_a_project_scoped_server() {
     click(&mut h, Role::Button, "Add server");
     settle(&mut h);
     assert!(has_text(&h, "MCP configuration applied"));
-    assert_eq!(h.state().settings.mcp.servers.len(), 1);
-    assert_eq!(h.state().settings.mcp.servers[0].name.0, "Project server");
+    assert_eq!(h.state().settings.mcp.servers.items.len(), 1);
+    assert_eq!(
+        h.state().settings.mcp.servers.items[0].name.0,
+        "Project server"
+    );
 }
 
 #[test]
@@ -193,6 +197,7 @@ fn settings_sampling_toggle_saves_the_selection_then_reconnects() {
         .settings
         .mcp
         .capabilities
+        .items
         .iter()
         .find(|cap| cap.kind.0 == "sampling")
         .expect("sampling capability")
@@ -233,6 +238,7 @@ fn settings_sampling_toggle_saves_the_selection_then_reconnects() {
         .settings
         .mcp
         .servers
+        .items
         .iter()
         .find(|record| record.id == server)
         .unwrap()
@@ -266,7 +272,7 @@ fn settings_shows_a_saved_server_renames_it_in_place_and_removes_its_token() {
     h.step();
     click(&mut h, Role::Button, "Add server");
     settle(&mut h);
-    let saved = h.state().settings.mcp.servers[0].clone();
+    let saved = h.state().settings.mcp.servers.items[0].clone();
     let Some(McpTransport::Http {
         credential_ref: Some(handle),
         ..
@@ -289,7 +295,7 @@ fn settings_shows_a_saved_server_renames_it_in_place_and_removes_its_token() {
     h.state_mut().settings.mcp.name = "Renamed server".into();
     click(&mut h, Role::Button, "Update server");
     settle(&mut h);
-    let renamed = h.state().settings.mcp.servers[0].clone();
+    let renamed = h.state().settings.mcp.servers.items[0].clone();
     assert_eq!(renamed.name.0, "Renamed server");
     assert_eq!(renamed.catalog_revision, saved.catalog_revision);
     assert_eq!(format!("{:?}", renamed.state), format!("{:?}", saved.state));
@@ -300,7 +306,7 @@ fn settings_shows_a_saved_server_renames_it_in_place_and_removes_its_token() {
     // Removing the token drops the reference and deletes the stored secret.
     click(&mut h, Role::Button, "Remove token");
     settle(&mut h);
-    let cleared = h.state().settings.mcp.servers[0].clone();
+    let cleared = h.state().settings.mcp.servers.items[0].clone();
     assert!(matches!(
         &cleared.configuration,
         Some(McpTransport::Http {
@@ -316,7 +322,7 @@ fn settings_shows_a_saved_server_renames_it_in_place_and_removes_its_token() {
     click(&mut h, Role::Button, "Update server");
     settle(&mut h);
     assert!(matches!(
-        &h.state().settings.mcp.servers[0].configuration,
+        &h.state().settings.mcp.servers.items[0].configuration,
         Some(McpTransport::Http {
             credential_ref: None,
             ..
@@ -368,7 +374,7 @@ fn settings_disables_enables_and_removes_a_server_and_deletes_its_token() {
     // Disable: the server shows it was disabled by the human and offers Enable.
     click(&mut h, Role::Button, "Disable");
     step_until(&mut h, "the disconnect settles", idle);
-    assert_eq!(h.state().settings.mcp.servers[0].disabled, Some(true));
+    assert_eq!(h.state().settings.mcp.servers.items[0].disabled, Some(true));
     assert!(has_text(
         &h,
         "Status: Disabled by you · Transport: http · Catalog revision: 1"
@@ -378,17 +384,17 @@ fn settings_disables_enables_and_removes_a_server_and_deletes_its_token() {
     // Enable connects it again; the unreachable endpoint fails, but it is no longer disabled.
     click(&mut h, Role::Button, "Enable");
     step_until(&mut h, "the reconnect settles", idle);
-    assert_eq!(h.state().settings.mcp.servers[0].disabled, None);
+    assert_eq!(h.state().settings.mcp.servers.items[0].disabled, None);
     assert!(h.query_by_role_and_label(Role::Button, "Disable").is_some());
 
     // Remove asks once more, then deletes the server and its stored token.
     click(&mut h, Role::Button, "Remove server");
-    assert_eq!(h.state().settings.mcp.servers.len(), 1);
+    assert_eq!(h.state().settings.mcp.servers.items.len(), 1);
     click(&mut h, Role::Button, "Confirm remove");
     step_until(&mut h, "the removal settles", |shell| {
-        idle(shell) && shell.settings.mcp.servers.is_empty()
+        idle(shell) && shell.settings.mcp.servers.items.is_empty()
     });
-    assert!(h.state().settings.mcp.servers.is_empty());
+    assert!(h.state().settings.mcp.servers.items.is_empty());
     assert!(h.state().settings.mcp.selected.is_none());
     assert_eq!(secrets.len(), 0);
     let references = read_snapshot(
@@ -569,6 +575,7 @@ fn settings_opens_a_servers_resources_and_prompts_as_untrusted_content() {
         .settings
         .mcp
         .servers
+        .items
         .iter()
         .find(|record| record.id == server)
         .unwrap()
@@ -697,6 +704,7 @@ fn settings_shows_tool_annotations_and_saves_a_read_only_classification() {
         .settings
         .mcp
         .capabilities
+        .items
         .iter()
         .find(|cap| cap.name.0 == "purge")
         .expect("purge tool")
@@ -745,6 +753,7 @@ fn settings_names_a_stdio_servers_missing_runtime_before_connecting() {
         .settings
         .mcp
         .servers
+        .items
         .iter()
         .find(|server| server.name.0 == "Local server")
         .expect("saved stdio server")

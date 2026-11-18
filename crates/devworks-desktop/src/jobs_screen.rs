@@ -367,26 +367,19 @@ pub struct JobsUi {
     /// occurrence may be a skipped one while it continues).
     pub active_run: Option<JobRun>,
     /// History pages loaded after the first, and where the next one starts.
-    pub older: Vec<JobRun>,
-    pub older_cursor: Option<String>,
+    pub older: Paged<JobRun>,
     pub form: Option<JobForm>,
     pub form_error: Option<String>,
     pub confirm_delete: Option<JobRecord>,
     pub notice: Option<(Tone, String)>,
     pub capabilities: Vec<NativeCapability>,
     /// Scoped prompt pages belong to a single create/edit form, independently of artifacts UI.
-    pub prompt_pages: std::collections::BTreeMap<Option<String>, PromptPage>,
+    pub prompt_pages: std::collections::BTreeMap<Option<String>, Paged<ArtifactRecord>>,
+    /// The form the prompt pages belong to: a reply for an earlier form is refused. (The form's
+    /// identity, not a list's request generation.)
     pub prompt_generation: u64,
     /// A one-line run status of each project's jobs, for the project's own views.
     pub project_status: std::collections::BTreeMap<String, String>,
-}
-
-#[derive(Default)]
-pub struct PromptPage {
-    pub(crate) items: Vec<ArtifactRecord>,
-    pub(crate) cursor: Option<String>,
-    pub(crate) error: Option<String>,
-    pub(crate) loading: bool,
 }
 
 impl JobsUi {
@@ -426,8 +419,7 @@ impl JobsUi {
         self.inspection = None;
         self.inspection_error = None;
         self.active_run = None;
-        self.older.clear();
-        self.older_cursor = None;
+        self.older.reset();
     }
     /// Lists `scope`'s jobs (`None`: the app-level ones) from their first page, with no job
     /// selected.
@@ -640,13 +632,14 @@ pub(crate) fn runs(ui: &mut Ui, jobs: &JobsUi, actions: &mut Vec<JobAction>, bus
     egui::ScrollArea::vertical()
         .id_salt("job-runs")
         .show(ui, |ui| {
-            for r in first.iter().chain(&jobs.older) {
+            for r in first.iter().chain(&jobs.older.items) {
                 run_row(ui, r, actions, busy);
                 widgets::divider(ui);
             }
-            let more = match &jobs.older_cursor {
-                Some(c) => !c.is_empty(),
-                None => i.runs_next_cursor.is_some(),
+            let more = if jobs.older.loaded {
+                jobs.older.more()
+            } else {
+                i.runs_next_cursor.is_some()
             };
             if more && widgets::secondary_button(ui, "Older runs").clicked() {
                 actions.push(JobAction::OlderRuns);

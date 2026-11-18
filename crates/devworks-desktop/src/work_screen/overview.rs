@@ -21,7 +21,7 @@ impl WorkCtl<'_, '_> {
             .work
             .workflows
             .get(project.as_deref().unwrap_or(""))
-            .map(|workflow| columns(&workflow.rows))
+            .map(|workflow| columns(&workflow.rows.items))
             .unwrap_or_default();
         let user = devworks_desktop_user();
         let messages_tab = mem.tab.min(2) == 2;

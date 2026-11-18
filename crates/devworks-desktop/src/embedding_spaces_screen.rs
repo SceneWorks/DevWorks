@@ -2,6 +2,7 @@
 //! the panel neither qualifies a model nor chooses a conversational/default route.
 use crate::connections_screen::ConnectionAction;
 use crate::frame;
+use crate::paged::Paged;
 use crate::widgets::{self, Tone, chip};
 use devworks_core::protocol::records::{
     ConnectionRecord, EmbeddingDimensionMode, EmbeddingMetric, EmbeddingSpacePage,
@@ -13,10 +14,11 @@ use eframe::egui::{self, Ui};
 #[derive(Default)]
 pub struct EmbeddingSpacesPanel {
     pub open: bool,
-    pub page: Option<EmbeddingSpacePage>,
-    pub loading: bool,
+    /// The page of embedding spaces shown: one page object (with the selection it carries) that
+    /// each read replaces, so a later page never mixes with an earlier one.
+    pub spaces: Paged<EmbeddingSpacePage>,
+    /// A refused form or action (not a list read; list failures are `spaces.error`).
     pub error: Option<String>,
-    pub generation: u64,
     pub last_load: Option<std::time::Instant>,
     name: String,
     connection: Option<(String, String)>,
@@ -69,13 +71,16 @@ fn configure(actions: &mut Vec<ConnectionAction>, label: String, action: RouterC
     });
 }
 impl EmbeddingSpacesPanel {
+    /// The page of spaces shown.
+    pub fn page(&self) -> Option<&EmbeddingSpacePage> {
+        self.spaces.items.first()
+    }
     pub fn loaded(&mut self, page: EmbeddingSpacePage) {
-        self.page = Some(page);
-        self.loading = false;
+        self.spaces.replace(vec![page]);
         self.error = None;
     }
     pub fn qualifying(&self) -> bool {
-        self.page.as_ref().is_some_and(|p| {
+        self.page().is_some_and(|p| {
             p.items
                 .0
                 .iter()
@@ -103,18 +108,14 @@ impl EmbeddingSpacesPanel {
         }
 
         ui.label("Choose an exact embedding connection, model and vector shape. Nothing is selected automatically.");
-        if let Some(error) = &self.error {
+        if let Some(error) = self.error.as_ref().or(self.spaces.error.as_ref()) {
             chip(ui, error, Tone::Bad);
         }
         // A background refresh keeps its layout and inspected revisions. Current-source
         // validation and CAS still run when a user submits a retained action.
-        ui.add_visible(self.loading, egui::Spinner::new());
-        let actionable = idle && (!self.loading || self.page.is_some());
-        if let Some(reason) = self
-            .page
-            .as_ref()
-            .and_then(|p| p.availability_reason.as_ref())
-        {
+        ui.add_visible(self.spaces.loading(), egui::Spinner::new());
+        let actionable = idle && (!self.spaces.loading() || self.page().is_some());
+        if let Some(reason) = self.page().and_then(|p| p.availability_reason.as_ref()) {
             chip(ui, &reason.0, Tone::Attention);
         }
         if widgets::secondary_button(ui, "Reload embedding spaces").clicked() {
@@ -145,7 +146,7 @@ impl EmbeddingSpacesPanel {
             }
             ui.label("Creating a space sends no inference. Qualification sends one fixed probe through that connection and records its usage; it may incur a charge.");
         });
-        let Some(page) = &self.page else {
+        let Some(page) = self.spaces.items.first() else {
             return;
         };
         ui.label("A selected space can be used for future indexing and searches. Usage is recorded through its connection.");

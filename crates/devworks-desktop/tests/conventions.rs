@@ -48,8 +48,8 @@ fn native_conventions_empty_listing_keeps_draft_and_separates_knowledge_navigati
         state.available,
         "the actual registered convention owner answered"
     );
-    assert!(state.list_error.is_none());
-    assert!(state.items.is_empty() && state.hits.is_empty());
+    assert!(state.list.error.is_none());
+    assert!(state.list.items.is_empty() && state.hits.is_empty());
     click(&mut h, Role::Button, "New convention");
     replace(&mut h, "Convention title", "Literal title, 日本語");
     replace(&mut h, "Convention slug", "literal-slug");

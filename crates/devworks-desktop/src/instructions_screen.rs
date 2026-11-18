@@ -3,6 +3,7 @@
 //! and change is a gateway operation the shell submits for this panel; agent proposals are
 //! decided in Approvals, never here.
 use crate::instructions_ops::{self as iop, Kind, Origin, State};
+use crate::paged::Paged;
 use crate::theme;
 use crate::widgets::{self, Tone, ViewState, chip};
 use devworks_core::protocol::records::{InstructionRecord, SkillResource};
@@ -59,30 +60,24 @@ pub struct Selection {
 
 #[derive(Default)]
 pub struct Detail {
-    /// Fences history replies (and everything on a new selection).
-    pub generation: u64,
-    /// Fences text replies on their own, so viewing another revision never strands the
-    /// history or resource listing in flight.
+    /// Fences the text reply (one document, not a list) on its own, so viewing another
+    /// revision never strands the history or resource listing in flight.
     pub text_generation: u64,
-    /// Fences resource listing replies on their own.
-    pub resources_generation: u64,
-    /// The revision the resource listing belongs to (its pages continue with it).
+    /// The revision the resource listing belongs to (its pages are requested with it).
     pub resources_revision: Option<i64>,
-    /// `None` while loading.
-    pub history: Option<Result<Vec<InstructionRecord>, String>>,
-    pub history_gathering: Vec<InstructionRecord>,
+    /// The selected item's history, every page read before it shows.
+    pub history: Paged<InstructionRecord>,
     /// The revision whose text is shown and its text (`None` while loading).
     pub shown: Option<i64>,
     pub text: Option<Result<String, String>>,
-    pub resources: Option<Result<Vec<SkillResource>, String>>,
-    pub resources_gathering: Vec<SkillResource>,
+    pub resources: Paged<SkillResource>,
     /// The text and resources wait for the history: they load from its current revision, so
     /// the shown text and the save's expected revision come from one observation.
     pub follow_history: bool,
 }
 impl Detail {
     pub fn latest(&self) -> Option<i64> {
-        match &self.history {
+        match self.history.result() {
             Some(Ok(h)) => iop::latest_revision(h),
             _ => None,
         }
@@ -116,10 +111,8 @@ pub enum Stage {
 #[derive(Default)]
 pub struct InstructionsPanel {
     pub requested: bool,
-    pub skills_generation: u64,
-    /// `None` while the first discovery is loading.
-    pub skills: Option<Result<Vec<InstructionRecord>, String>>,
-    pub skills_gathering: Vec<InstructionRecord>,
+    /// The discovered skills: the workspace's, then each active project's, read as one list.
+    pub skills: Paged<InstructionRecord>,
     /// Active role records by role item ID (absent while loading).
     pub roles: BTreeMap<String, Result<InstructionRecord, String>>,
     pub selected: Option<Selection>,
@@ -164,11 +157,16 @@ impl InstructionsPanel {
     }
     /// Selects an item and resets its detail (a new generation fences older replies).
     pub fn select(&mut self, selection: Selection) {
-        let generation = self.detail.generation.wrapping_add(1);
+        // The lists keep their request counters, so a reply to the previous item's read stays
+        // refused.
+        let mut history = std::mem::take(&mut self.detail.history);
+        let mut resources = std::mem::take(&mut self.detail.resources);
+        history.reset();
+        resources.reset();
         self.detail = Detail {
-            generation,
+            history,
+            resources,
             text_generation: self.detail.text_generation.wrapping_add(1),
-            resources_generation: self.detail.resources_generation.wrapping_add(1),
             shown: Some(selection.record.revision.get()),
             ..Detail::default()
         };
@@ -299,7 +297,7 @@ impl InstructionsPanel {
             }
         });
         self.new_skill_ui(ui, actions);
-        match &self.skills {
+        match self.skills.result() {
             None => {
                 widgets::state_block(
                     ui,
@@ -555,7 +553,7 @@ impl InstructionsPanel {
         // History
         ui.add_space(4.0);
         ui.label(RichText::new("History").strong());
-        match &self.detail.history {
+        match self.detail.history.result() {
             None => {
                 widgets::state_block(
                     ui,
@@ -787,7 +785,7 @@ impl InstructionsPanel {
         if sel.kind == Kind::Skill {
             ui.add_space(4.0);
             ui.label(RichText::new("Resources").strong());
-            match &self.detail.resources {
+            match self.detail.resources.result() {
                 None => {
                     widgets::state_block(
                         ui,
@@ -905,12 +903,12 @@ mod tests {
     fn a_save_expects_the_revision_its_edit_began_from() {
         let mut panel = InstructionsPanel {
             requested: true,
-            skills: Some(Ok(vec![rec(2)])),
+            skills: Paged::from_items(vec![rec(2)]),
             ..InstructionsPanel::default()
         };
         panel.select(InstructionsPanel::skill_selection(&rec(1)));
         // A refresh has since loaded revision 2, recorded elsewhere while the edit was open.
-        panel.detail.history = Some(Ok(vec![rec(2), rec(1)]));
+        panel.detail.history = Paged::from_items(vec![rec(2), rec(1)]);
         panel.detail.text = Some(Ok("revision 2".into()));
         panel.editor = Some(Editor {
             text: "edited from revision 1".into(),
@@ -945,7 +943,7 @@ mod tests {
 
     fn saves_after_clicking(mut panel: InstructionsPanel, button: &str) -> Vec<Option<String>> {
         panel.requested = true;
-        panel.skills = Some(Ok(vec![]));
+        panel.skills = Paged::from_items(vec![]);
         let mut harness = egui_kittest::Harness::builder()
             .with_size(egui::vec2(1200.0, 2400.0))
             .build_ui_state(
@@ -996,7 +994,7 @@ mod tests {
         };
         let mut panel = InstructionsPanel::default();
         panel.select(InstructionsPanel::skill_selection(&record));
-        panel.detail.history = Some(Ok(vec![record]));
+        panel.detail.history = Paged::from_items(vec![record]);
         panel.detail.text = Some(Ok("text".into()));
         panel.editor = Some(Editor {
             text: "edited".into(),

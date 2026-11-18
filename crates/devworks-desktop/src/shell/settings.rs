@@ -9,7 +9,7 @@ use crate::indexing_screen::{self as indexing, IndexAction};
 use crate::mcp_panel::McpAction;
 use crate::memory::RouteMemory;
 use crate::ops::{self, Failure};
-use crate::paged::Applied;
+use crate::paged::{Applied, Page};
 use crate::projects_ops::ProjectsSlot;
 use crate::route::Route;
 use crate::screen::{Cx, Effect, Screen, ScreenContext, ScreenId, controller};
@@ -172,7 +172,7 @@ impl SettingsCtl<'_, '_> {
         if !self.projects.list.loaded && !self.pending(&ProjectsSlot::ProjectsList) {
             self.load_projects();
         }
-        self.load_mcp_servers(None);
+        self.load_mcp_servers(false);
     }
     fn refresh_container_capabilities(&mut self) {
         self.query(
@@ -313,28 +313,34 @@ impl SettingsCtl<'_, '_> {
         )
     }
 
-    fn load_mcp_servers(&mut self, cursor: Option<String>) {
-        if cursor.is_none() {
-            self.settings.mcp.loading = true;
-        }
-        let next = cursor.clone();
-        let scope = self.settings.mcp.project.clone();
+    fn load_mcp_servers(&mut self, append: bool) {
+        let panel = &mut self.settings.mcp;
+        let Some(fetch) = (if append {
+            panel.servers.more_page()
+        } else {
+            Some(panel.servers.reload())
+        }) else {
+            return;
+        };
+        let scope = panel.project.clone();
         let scope_key = self.mcp_scope_key();
-        if !self.query(
-            SettingsSlot::McpServers(scope_key, cursor),
+        let slot = SettingsSlot::McpServers(scope_key, fetch.cursor.clone());
+        self.cx.paged(
+            &mut self.settings.mcp.servers,
+            fetch,
+            slot,
             "Loading MCP servers",
             "mcp.servers",
-            move |backend| ops::mcp_servers(backend, scope.as_ref(), next.as_deref()),
-        ) {
-            self.settings.mcp.loading = false;
-        }
+            move |backend, cursor| ops::mcp_servers(backend, scope.as_ref(), cursor),
+        );
     }
 
-    fn load_mcp_capabilities(&mut self, server_id: Id, cursor: Option<String>) {
+    fn load_mcp_capabilities(&mut self, server_id: Id, append: bool) {
         let Some(server) = self
             .settings
             .mcp
             .servers
+            .items
             .iter()
             .find(|server| server.id == server_id)
         else {
@@ -342,23 +348,27 @@ impl SettingsCtl<'_, '_> {
         };
         let revision = server.catalog_revision.get();
         let scope = self.settings.mcp.project.clone();
+        let panel = &mut self.settings.mcp;
+        let Some(fetch) = (if append {
+            panel.capabilities.more_page()
+        } else {
+            Some(panel.capabilities.reload())
+        }) else {
+            return;
+        };
         let slot = SettingsSlot::McpCapabilities(
             self.mcp_scope_key(),
             server_id.as_str().to_owned(),
-            cursor.clone(),
+            fetch.cursor.clone(),
         );
-        self.query(
+        self.cx.paged(
+            &mut self.settings.mcp.capabilities,
+            fetch,
             slot,
             "Loading MCP capabilities",
             "mcp.capabilities",
-            move |backend| {
-                ops::mcp_capabilities(
-                    backend,
-                    scope.as_ref(),
-                    &server_id,
-                    revision,
-                    cursor.as_deref(),
-                )
+            move |backend, cursor| {
+                ops::mcp_capabilities(backend, scope.as_ref(), &server_id, revision, cursor)
             },
         );
     }
@@ -373,6 +383,7 @@ impl SettingsCtl<'_, '_> {
             .settings
             .mcp
             .servers
+            .items
             .iter()
             .find(|server| server.id == saved.id)
         else {
@@ -409,8 +420,8 @@ impl SettingsCtl<'_, '_> {
             self.settings.mcp.reconnect = Some(id.clone());
         }
         match action {
-            McpAction::Reload => self.load_mcp_servers(None),
-            McpAction::Catalog(id, _revision) => self.load_mcp_capabilities(id, None),
+            McpAction::Reload => self.load_mcp_servers(false),
+            McpAction::Catalog(id, _revision) => self.load_mcp_capabilities(id, false),
             McpAction::Open(id, catalog_revision, request) => {
                 let server = id.clone();
                 let scope = self.settings.mcp.project.clone();
@@ -520,14 +531,15 @@ impl SettingsCtl<'_, '_> {
                 }
             }
             WebAction::LoadActivity => {
-                if !self.query(
+                let fetch = self.settings.web.activity.reload();
+                self.cx.paged(
+                    &mut self.settings.web.activity,
+                    fetch,
                     SettingsSlot::WebActivity,
                     "Loading web activity",
                     "workspace.logs",
-                    ops::web_activity,
-                ) {
-                    self.settings.web.activity_loading = false;
-                }
+                    |b, _| ops::web_activity(b),
+                );
             }
         }
     }
@@ -575,18 +587,19 @@ impl SettingsCtl<'_, '_> {
 
     fn load_embedding_spaces(&mut self, cursor: Option<String>) {
         let panel = &mut self.settings.connections.embedding_spaces;
-        panel.generation += 1;
-        panel.loading = true;
         panel.last_load = Some(Instant::now());
-        let generation = panel.generation;
-        if !self.query(
-            SettingsSlot::EmbeddingSpaces(generation),
+        // Each read replaces the page shown, so the request is a first-page read whose frame
+        // carries the cursor of the page asked for.
+        let fetch = panel.spaces.resume(false);
+        let slot = SettingsSlot::EmbeddingSpaces(fetch.generation);
+        self.cx.paged(
+            &mut self.settings.connections.embedding_spaces.spaces,
+            fetch,
+            slot,
             "Loading embedding spaces",
             "router.embedding_spaces",
-            move |b| ops::router_embedding_spaces(b, cursor.as_deref()),
-        ) {
-            self.settings.connections.embedding_spaces.loading = false;
-        }
+            move |b, _| ops::router_embedding_spaces(b, cursor.as_deref()),
+        );
     }
 
     fn connection_action(&mut self, action: crate::connections_screen::ConnectionAction) {
@@ -869,52 +882,61 @@ impl SettingsCtl<'_, '_> {
                 self.web_action(WebAction::LoadActivity);
             }
             (SettingsSlot::WebActivity, Reply::Query(q)) => {
-                let web = &mut self.settings.web;
-                web.activity_loading = false;
-                web.activity = Some(ops::web_entries(q).map_err(|e| e.describe()));
+                let page = ops::web_entries(q)
+                    .map(|entries| Page::new(entries, None))
+                    .map_err(|e| e.describe());
+                self.settings.web.activity.apply_current(page);
             }
             (SettingsSlot::McpServers(scope, _), Reply::Query(_))
                 if scope != self.mcp_scope_key() => {}
-            (SettingsSlot::McpServers(_, cursor), Reply::Query(q)) => match ops::mcp_server_page(q)
-            {
-                Ok((servers, next)) => {
-                    self.settings
-                        .mcp
-                        .loaded_servers(servers, cursor.is_some(), next.is_none());
-                    if let Some(next) = next {
-                        self.load_mcp_servers(Some(next));
-                    } else {
-                        self.settings.mcp.loading = false;
-                        self.settings.mcp.last_refresh = Some(Instant::now());
-                        if let Some(server) = self.settings.mcp.selected.as_ref().and_then(|id| {
-                            self.settings
-                                .mcp
-                                .servers
-                                .iter()
-                                .find(|server| &server.id == id)
-                        }) && matches!(server.state, ItemState::Failed)
-                        {
-                            self.settings.mcp.error = Some(server.last_failure.as_ref().map_or_else(
-                                || "The MCP server operation failed. Check its configuration and retry.".into(),
-                                |failure| failure.0.clone(),
-                            ));
-                        }
-                        if let Some(server) = self.settings.mcp.selected.as_ref().and_then(|id| {
-                            self.settings
-                                .mcp
-                                .servers
-                                .iter()
-                                .find(|server| &server.id == id)
-                        }) {
-                            self.load_mcp_capabilities(server.id.clone(), None);
+            (SettingsSlot::McpServers(..), Reply::Query(q)) => {
+                let page = ops::mcp_server_page(q)
+                    .map(|(servers, next)| Page::new(servers, next))
+                    .map_err(|error| error.describe());
+                match self.settings.mcp.servers.apply_current(page) {
+                    Applied::Replaced | Applied::Appended => {
+                        let more = self.settings.mcp.servers.more();
+                        self.settings.mcp.servers_loaded(!more);
+                        if more {
+                            self.load_mcp_servers(true);
+                        } else {
+                            self.settings.mcp.last_refresh = Some(Instant::now());
+                            if let Some(server) =
+                                self.settings.mcp.selected.as_ref().and_then(|id| {
+                                    self.settings
+                                        .mcp
+                                        .servers
+                                        .items
+                                        .iter()
+                                        .find(|server| &server.id == id)
+                                })
+                                && matches!(server.state, ItemState::Failed)
+                            {
+                                self.settings.mcp.error = Some(server.last_failure.as_ref().map_or_else(
+                                    || "The MCP server operation failed. Check its configuration and retry.".into(),
+                                    |failure| failure.0.clone(),
+                                ));
+                            }
+                            if let Some(server) =
+                                self.settings.mcp.selected.as_ref().and_then(|id| {
+                                    self.settings
+                                        .mcp
+                                        .servers
+                                        .items
+                                        .iter()
+                                        .find(|server| &server.id == id)
+                                })
+                            {
+                                self.load_mcp_capabilities(server.id.clone(), false);
+                            }
                         }
                     }
+                    Applied::Failed => {
+                        self.settings.mcp.error = self.settings.mcp.servers.error.clone();
+                    }
+                    _ => {}
                 }
-                Err(error) => {
-                    self.settings.mcp.loading = false;
-                    self.settings.mcp.error = Some(error.describe());
-                }
-            },
+            }
             (SettingsSlot::McpContent(scope, _), Reply::Task(_))
                 if scope != self.mcp_scope_key() => {}
             (SettingsSlot::McpContent(_, server), Reply::Task(t)) => {
@@ -931,19 +953,27 @@ impl SettingsCtl<'_, '_> {
             }
             (SettingsSlot::McpCapabilities(scope, _, _), Reply::Query(_))
                 if scope != self.mcp_scope_key() => {}
-            (SettingsSlot::McpCapabilities(_, server, cursor), Reply::Query(q)) => {
-                match ops::mcp_capability_page(q) {
-                    Ok((capabilities, next)) => {
-                        if let Ok(id) = Id::new(server) {
-                            self.settings
-                                .mcp
-                                .loaded_catalog(&id, capabilities, cursor.is_some());
-                            if let Some(next) = next {
-                                self.load_mcp_capabilities(id, Some(next));
-                            }
+            (SettingsSlot::McpCapabilities(_, server, _), Reply::Query(q)) => {
+                let page = ops::mcp_capability_page(q)
+                    .map(|(capabilities, next)| Page::new(capabilities, next))
+                    .map_err(|error| error.describe());
+                // A reply for a server no longer selected belongs to a list that was reset.
+                let Ok(id) = Id::new(server) else {
+                    return None;
+                };
+                match self.settings.mcp.capabilities.apply_current(page) {
+                    applied @ (Applied::Replaced | Applied::Appended) => {
+                        self.settings
+                            .mcp
+                            .catalog_loaded(&id, applied == Applied::Replaced);
+                        if self.settings.mcp.capabilities.more() {
+                            self.load_mcp_capabilities(id, true);
                         }
                     }
-                    Err(error) => self.settings.mcp.error = Some(error.describe()),
+                    Applied::Failed => {
+                        self.settings.mcp.error = self.settings.mcp.capabilities.error.clone();
+                    }
+                    _ => {}
                 }
             }
             (SettingsSlot::McpCommand, Reply::Task(Ok(TaskOutput::Prepared { frame }))) => {
@@ -985,7 +1015,7 @@ impl SettingsCtl<'_, '_> {
                                 == self.settings.mcp.selected.as_ref()
                             {
                                 self.settings.mcp.selected = None;
-                                self.settings.mcp.capabilities.clear();
+                                self.settings.mcp.capabilities.reset();
                             }
                             self.release_mcp_credentials(handles);
                         }
@@ -1000,7 +1030,7 @@ impl SettingsCtl<'_, '_> {
                         if self.settings.mcp.pending_operation.is_none() {
                             self.settings.mcp.pending_server = None;
                         }
-                        self.load_mcp_servers(None);
+                        self.load_mcp_servers(false);
                         if let Some(server) =
                             configured.filter(|s| reconnect.as_ref() == Some(&s.id))
                         {
@@ -1031,7 +1061,7 @@ impl SettingsCtl<'_, '_> {
                         .mcp
                         .observed_operation(&value.operation_id, value.state)
                     {
-                        self.load_mcp_servers(None);
+                        self.load_mcp_servers(false);
                     }
                 }
                 Ok(_) => {
@@ -1051,37 +1081,37 @@ impl SettingsCtl<'_, '_> {
             },
             (SettingsSlot::EmbeddingSpaces(g), Reply::Query(q)) => {
                 let panel = &mut self.settings.connections.embedding_spaces;
-                if g != panel.generation {
-                    return None;
-                }
-                panel.loading = false;
-                match ops::embedding_space_page(q) {
-                    Ok(page) => panel.loaded(page),
-                    Err(error) => panel.error = Some(error.describe()),
+                let reply = ops::embedding_space_page(q)
+                    .map(|page| Page::new(vec![page], None))
+                    .map_err(|error| error.describe());
+                match panel.spaces.apply(g, reply) {
+                    Applied::Stale => return None,
+                    Applied::Replaced => panel.error = None,
+                    _ => {}
                 }
             }
             (SettingsSlot::Connections(g), Reply::Query(q)) => {
                 let page = ops::connection_records(q)
-                    .map(|(items, next)| crate::paged::Page { items, next })
+                    .map(|(items, next)| crate::paged::Page::new(items, next))
                     .map_err(|e| e.describe());
                 let panel = &mut self.settings.connections;
                 match panel.connections.apply(g, page) {
                     Applied::Continue(fetch) => self.send_connections(fetch),
                     Applied::Replaced => panel.adopt_connections(),
                     Applied::Stale => return None,
-                    Applied::Failed | Applied::Appended => {}
+                    Applied::Failed | Applied::Appended | Applied::Fenced => {}
                 }
             }
             (SettingsSlot::ConnectionCatalog(g), Reply::Query(q)) => {
                 let page = ops::route_models(q)
-                    .map(|(items, next)| crate::paged::Page { items, next })
+                    .map(|(items, next)| crate::paged::Page::new(items, next))
                     .map_err(|e| e.describe());
                 let panel = &mut self.settings.connections;
                 match panel.catalog.apply(g, page) {
                     Applied::Continue(fetch) => self.send_connection_catalog(fetch),
                     Applied::Replaced => panel.adopt_catalog(),
                     Applied::Stale => return None,
-                    Applied::Failed | Applied::Appended => {}
+                    Applied::Failed | Applied::Appended | Applied::Fenced => {}
                 }
             }
             (SettingsSlot::Configure(n), Reply::Task(Ok(TaskOutput::Prepared { frame }))) => {

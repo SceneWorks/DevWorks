@@ -27,12 +27,9 @@ fn wait(h: &mut egui_kittest::Harness<'_, Shell>, what: &str, done: impl Fn(&She
             p.selected
                 .as_ref()
                 .map(|s| (&s.id, s.record.revision.get())),
-            p.detail.history.as_ref().map(|h| h.as_ref().map(Vec::len)),
+            p.detail.history.result().map(|h| h.map(|h| h.len())),
             p.detail.text.as_ref().map(|t| t.as_ref().map(String::len)),
-            p.detail
-                .resources
-                .as_ref()
-                .map(|r| r.as_ref().map(Vec::len)),
+            p.detail.resources.result().map(|r| r.map(|r| r.len())),
             p.pending,
             p.message,
         );
@@ -60,7 +57,8 @@ fn roles_are_drafted_and_reset_and_harness_skills_are_created() {
     click(&mut h, Role::Button, "Role instructions");
     assert!(has_text(&h, "Roles and skills"));
     wait(&mut h, "every role read", |s| {
-        s.settings.instructions.roles.len() == 7 && s.settings.instructions.skills.is_some()
+        s.settings.instructions.roles.len() == 7
+            && s.settings.instructions.skills.result().is_some()
     });
     for (id, r) in &h.state().settings.instructions.roles {
         assert!(r.is_ok(), "{id}: {r:?}");
@@ -96,7 +94,7 @@ fn roles_are_drafted_and_reset_and_harness_skills_are_created() {
     let saved = history_latest(h.state()).unwrap();
     {
         let s = h.state();
-        let history = match &s.settings.instructions.detail.history {
+        let history = match s.settings.instructions.detail.history.result() {
             Some(Ok(h)) => h.clone(),
             other => panic!("{other:?}"),
         };
@@ -118,7 +116,7 @@ fn roles_are_drafted_and_reset_and_harness_skills_are_created() {
             let p = &s.settings.instructions;
             idle(s)
                 && matches!(p.roles.get("role-worker"), Some(Ok(r)) if r.revision.get() == reset)
-                && matches!(&p.detail.history, Some(Ok(h)) if h.iter().any(|r| {
+                && matches!(p.detail.history.result(), Some(Ok(h)) if h.iter().any(|r| {
                     r.revision.get() == reset && iop::record_status(r).active
                 }))
                 && matches!(&p.detail.text, Some(Ok(t)) if *t == default)
@@ -136,7 +134,7 @@ fn roles_are_drafted_and_reset_and_harness_skills_are_created() {
     click(&mut h, Role::Button, "Create skill");
     wait(&mut h, "skill created and listed", |s| {
         idle(s)
-            && matches!(&s.settings.instructions.skills, Some(Ok(list)) if list.iter().any(|r| {
+            && matches!(s.settings.instructions.skills.result(), Some(Ok(list)) if list.iter().any(|r| {
                 r.name.0 == "release-notes"
                     && iop::record_status(r).origin == iop::Origin::Harness
             }))
@@ -176,7 +174,7 @@ fn roles_are_drafted_and_reset_and_harness_skills_are_created() {
             .is_some()
     );
     assert!(
-        matches!(&h.state().settings.instructions.detail.history, Some(Ok(hist)) if !hist.is_empty())
+        matches!(h.state().settings.instructions.detail.history.result(), Some(Ok(hist)) if !hist.is_empty())
     );
     click(&mut h, Role::Button, "Enable skill");
     wait(&mut h, "skill enabled", |s| {
@@ -203,12 +201,12 @@ fn a_skill_lists_its_resource_files_by_path() {
     wait(
         &mut h,
         "skills listed",
-        |s| matches!(&s.settings.instructions.skills, Some(Ok(list)) if list.iter().any(|r| r.name.0 == "lint")),
+        |s| matches!(s.settings.instructions.skills.result(), Some(Ok(list)) if list.iter().any(|r| r.name.0 == "lint")),
     );
     click(&mut h, Role::Button, "lint");
     // skills.resources at schema revision 3 carries each resource's skill-relative path.
     wait(&mut h, "resources listed", |s| {
-        matches!(&s.settings.instructions.detail.resources, Some(Ok(list))
+        matches!(s.settings.instructions.detail.resources.result(), Some(Ok(list))
             if list.len() == 1 && list[0].path.0 == "references/setup.md" && !list[0].executable)
     });
     settle(&mut h);
@@ -248,7 +246,8 @@ fn a_person_creates_and_edits_a_skill_for_one_project() {
     click_nav(&mut h, "Settings");
     click(&mut h, Role::Button, "Role instructions");
     wait(&mut h, "skills listed and the project known", |s| {
-        s.settings.instructions.skills.is_some() && !s.settings.instructions.projects.is_empty()
+        s.settings.instructions.skills.result().is_some()
+            && !s.settings.instructions.projects.is_empty()
     });
     // The scope choice offers the project; choosing it saves the skill into its own store.
     click(&mut h, Role::Button, "New harness skill");
@@ -259,7 +258,7 @@ fn a_person_creates_and_edits_a_skill_for_one_project() {
     replace_text(&mut h, "New skill text", "Deploy this project.");
     click(&mut h, Role::Button, "Create skill");
     let project_skill = |s: &Shell| -> bool {
-        matches!(&s.settings.instructions.skills, Some(Ok(list)) if list.iter().any(|r| {
+        matches!(s.settings.instructions.skills.result(), Some(Ok(list)) if list.iter().any(|r| {
             r.name.0 == "deploy" && iop::record_project(r).as_deref() == Some("skill-project")
         }))
     };

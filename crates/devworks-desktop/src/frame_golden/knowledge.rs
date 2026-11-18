@@ -63,10 +63,7 @@ pub fn frames() -> Vec<(&'static str, Vec<u8>)> {
     let first = s.claims.reload();
     s.claims.apply(
         first.generation,
-        Ok(crate::paged::Page {
-            items: Vec::new(),
-            next: Some("cursor-1".into()),
-        }),
+        Ok(crate::paged::Page::new(Vec::new(), Some("cursor-1".into()))),
     );
     s.project = None;
     let (_, body) = s.begin_listing(true);

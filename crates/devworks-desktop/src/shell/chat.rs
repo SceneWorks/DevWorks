@@ -1491,7 +1491,7 @@ impl ChatCtl<'_, '_> {
             },
             (ChatSlot::RouterCatalog(generation), Reply::Query(q)) => {
                 let reply = ops::route_models(q)
-                    .map(|(items, next)| crate::paged::Page { items, next })
+                    .map(|(items, next)| crate::paged::Page::new(items, next))
                     .map_err(|e| format!("Named models are unavailable: {}", e.describe()));
                 let routing = &mut self.chat.routing;
                 match routing.catalog.apply(generation, reply) {
@@ -1504,7 +1504,7 @@ impl ChatCtl<'_, '_> {
                         routing.catalog_loaded = true;
                         routing.catalog_error = routing.catalog.error.take();
                     }
-                    Applied::Stale | Applied::Appended => {}
+                    Applied::Stale | Applied::Appended | Applied::Fenced => {}
                 }
             }
             (ChatSlot::RouteSession(id), Reply::Query(q)) => {

@@ -143,8 +143,8 @@ pub(crate) fn activity(
         return;
     }
     let items = &feed.items;
-    let more = feed.more;
-    let loading = feed.loading;
+    let more = feed.more();
+    let loading = feed.loading();
     let a = &work.activity;
     let titles: BTreeMap<String, &WorkRecord> = work
         .features

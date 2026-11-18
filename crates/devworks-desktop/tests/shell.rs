@@ -1378,13 +1378,14 @@ fn the_add_ons_screen_installs_a_bundle_and_shows_availability_apart_from_enable
     click(&mut h, Role::Button, "Install from file…");
     step_until(&mut h, "the installed pack is listed", |s| {
         s.addons
+            .catalog
             .items
             .iter()
             .any(|r| r.id.as_str() == "foreign-pack")
     });
     settle(&mut h);
     // Configured enablement and effective availability are separate.
-    let rec = h.state().addons.items[0].clone();
+    let rec = h.state().addons.catalog.items[0].clone();
     assert!(rec.enabled);
     assert_eq!(format!("{:?}", rec.availability.unwrap()), "Incompatible");
     assert!(has_text(&h, "Incompatible"));
@@ -1397,13 +1398,16 @@ fn the_add_ons_screen_installs_a_bundle_and_shows_availability_apart_from_enable
     ));
     click(&mut h, Role::Button, "Disable");
     step_until(&mut h, "the pack is disabled", |s| {
-        s.addons.items.first().is_some_and(|r| !r.enabled)
+        s.addons.catalog.items.first().is_some_and(|r| !r.enabled)
     });
     settle(&mut h);
     assert_eq!(
         format!(
             "{:?}",
-            h.state().addons.items[0].availability.clone().unwrap()
+            h.state().addons.catalog.items[0]
+                .availability
+                .clone()
+                .unwrap()
         ),
         "Disabled"
     );
@@ -1412,7 +1416,7 @@ fn the_add_ons_screen_installs_a_bundle_and_shows_availability_apart_from_enable
         s.addons
             .logs
             .get("foreign-pack")
-            .is_some_and(|l| !l.is_empty())
+            .is_some_and(|l| !l.items.is_empty())
     });
 }
 
@@ -1432,6 +1436,7 @@ fn the_add_ons_form_shows_configuration_field_errors_from_the_packages_schema() 
     click(&mut h, Role::Button, "Install from file…");
     step_until(&mut h, "the installed pack is listed", |s| {
         s.addons
+            .catalog
             .items
             .iter()
             .any(|r| r.id.as_str() == "foreign-pack")
@@ -1481,12 +1486,13 @@ fn the_add_ons_screen_follows_every_log_page_to_the_requested_field_errors() {
     click(&mut h, Role::Button, "Install from file…");
     step_until(&mut h, "the installed pack is listed", |s| {
         s.addons
+            .catalog
             .items
             .iter()
             .any(|r| r.id.as_str() == "foreign-pack")
     });
     // More refusals than one log page holds, before the one the form waits for.
-    let rec = h.state().addons.items[0].clone();
+    let rec = h.state().addons.catalog.items[0].clone();
     let schema_ref = rec.configuration_schema.clone().unwrap();
     for _ in 0..(devworks_desktop::ops::PAGE_LIMIT as usize + 5) {
         let frame = devworks_desktop::addons::configure_frame(
@@ -1512,7 +1518,7 @@ fn the_add_ons_screen_follows_every_log_page_to_the_requested_field_errors() {
     assert!(h.state().addons.config_errors["foreign-pack"].contains("/threads"));
     // The whole log was read: every refusal is listed, newest first in the view.
     settle(&mut h);
-    let logs = &h.state().addons.logs["foreign-pack"];
+    let logs = &h.state().addons.logs["foreign-pack"].items;
     let refusals = logs
         .iter()
         .filter(|d| d.code.0 == "ConfigurationInvalid")
@@ -1565,7 +1571,7 @@ fn the_add_ons_catalog_follows_every_page() {
     settle(&mut h);
     click(&mut h, Role::Button, "Refresh");
     step_until(&mut h, "every offered pack is listed", |s| {
-        s.addons.items.len() == count
+        s.addons.catalog.items.len() == count
     });
 }
 
@@ -1632,6 +1638,7 @@ fn open_offered_pack(
     click(&mut h, Role::Button, "Refresh");
     step_until(&mut h, "the offered pack is listed", |s| {
         s.addons
+            .catalog
             .items
             .iter()
             .any(|r| r.id.as_str() == "foreign-pack")
@@ -1647,6 +1654,7 @@ fn assert_offered_pack_installed(
 ) {
     step_until(h, "the offered pack is installed", |s| {
         s.addons
+            .catalog
             .items
             .iter()
             .any(|r| r.id.as_str() == "foreign-pack" && r.trust_state.0 != "Available")

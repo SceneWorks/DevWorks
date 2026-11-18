@@ -63,7 +63,7 @@ fn page_of<T>(
             "{operation} reported more pages without a cursor"
         )));
     }
-    Ok(Page { items, next })
+    Ok(Page::new(items, next))
 }
 
 /// Why a request produced no usable result. Never rendered as success or as zero values.

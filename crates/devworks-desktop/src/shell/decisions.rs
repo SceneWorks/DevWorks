@@ -127,56 +127,58 @@ impl DecisionsCtl<'_, '_> {
             .is_some_and(|c| c.unresolved().iter().any(|u| u.slot == slot))
     }
     fn load_approvals(&mut self) {
-        self.decisions.gathering.clear();
-        self.approval_page(None);
-        self.decisions.review_gathering.clear();
-        self.review_page(None);
+        let fetch = self.decisions.approvals.reload_all();
+        self.approval_page(fetch);
+        let fetch = self.decisions.reviews.reload_all();
+        self.review_page(fetch);
     }
-    fn approval_page(&mut self, cursor: Option<String>) {
+    fn approval_page(&mut self, fetch: Fetch) {
         let project = self.decisions.project.clone();
         let state = if self.decisions.tab == 0 {
             Some("Pending".to_owned())
         } else {
             self.decisions.history_state.clone()
         };
-        self.query(
+        self.cx.paged(
+            &mut self.decisions.approvals,
+            fetch,
             DecisionsSlot::ApprovalsList,
             "Loading approvals",
             "approvals.list",
-            move |b| {
+            move |b, cursor| {
                 dops::query(
                     b,
-                    dops::approvals_list(project.as_deref(), state.as_deref(), cursor.as_deref()),
+                    dops::approvals_list(project.as_deref(), state.as_deref(), cursor),
                 )
             },
         );
     }
-    fn review_page(&mut self, cursor: Option<String>) {
+    fn review_page(&mut self, fetch: Fetch) {
         let Some(project) = &self.decisions.project else {
-            self.decisions.reviews.clear();
-            self.decisions.review_gathering.clear();
-            self.decisions.reviews_loaded = false;
+            self.decisions.reviews.reset();
             return;
         };
         // The retained informational queue requires a project.
         let project = project.clone();
-        self.query(
+        self.cx.paged(
+            &mut self.decisions.reviews,
+            fetch,
             DecisionsSlot::ReviewQueue,
             "Loading Knowledge review queue",
             "approvals.review_queue",
-            move |b| dops::query(b, dops::review_queue(&project, cursor.as_deref())),
+            move |b, cursor| dops::query(b, dops::review_queue(&project, cursor)),
         );
     }
     fn load_completion_notifications(&mut self) {
         if self.pending(&DecisionsSlot::CompletionList) {
             return;
         }
-        self.decisions.completion_gathering.clear();
-        self.notification_page(true, None);
+        let fetch = self.decisions.completions.reload_all();
+        self.notification_page(true, fetch);
     }
     fn load_notification_history(&mut self) {
-        self.decisions.notification_gathering.clear();
-        self.notification_page(false, None);
+        let fetch = self.decisions.notifications.reload_all();
+        self.notification_page(false, fetch);
         if self.decisions.config.is_none() && !self.pending(&DecisionsSlot::NotificationSettings) {
             self.query(
                 DecisionsSlot::NotificationSettings,
@@ -186,7 +188,7 @@ impl DecisionsCtl<'_, '_> {
             );
         }
     }
-    fn notification_page(&mut self, completion: bool, cursor: Option<String>) {
+    fn notification_page(&mut self, completion: bool, fetch: Fetch) {
         let filter = (
             self.decisions.notification_project.clone(),
             self.decisions.unacknowledged_only,
@@ -198,15 +200,22 @@ impl DecisionsCtl<'_, '_> {
         } else {
             DecisionsSlot::NotificationsList
         };
-        self.query(
+        let list = if completion {
+            &mut self.decisions.completions
+        } else {
+            &mut self.decisions.notifications
+        };
+        self.cx.paged(
+            list,
+            fetch,
             slot,
             "Loading notifications",
             "notifications.list",
-            move |b| {
+            move |b, cursor| {
                 dops::query(
                     b,
                     if completion {
-                        dops::completions(cursor.as_deref())
+                        dops::completions(cursor)
                     } else {
                         let (project, unacknowledged, unread, category) = &filter;
                         dops::notifications_list(
@@ -214,7 +223,7 @@ impl DecisionsCtl<'_, '_> {
                             *unacknowledged,
                             *unread,
                             category,
-                            cursor.as_deref(),
+                            cursor,
                         )
                     },
                 )
@@ -248,6 +257,7 @@ impl DecisionsCtl<'_, '_> {
         if let Some(row) = self
             .decisions
             .approvals
+            .items
             .iter()
             .find(|row| row.id.as_str() == p.id.as_str())
         {
@@ -324,8 +334,8 @@ impl DecisionsCtl<'_, '_> {
     }
     fn notification_updated(&mut self, record: NotificationRecord) {
         for rows in [
-            &mut self.decisions.notifications,
-            &mut self.decisions.completions,
+            &mut self.decisions.notifications.items,
+            &mut self.decisions.completions.items,
         ] {
             if let Some(row) = rows
                 .iter_mut()
@@ -342,13 +352,14 @@ impl DecisionsCtl<'_, '_> {
         {
             self.decisions.notification = Some(record);
         }
-        self.decisions.completions.retain(|n| !n.acknowledged);
+        self.decisions.completions.items.retain(|n| !n.acknowledged);
         self.sync_completion_cards();
     }
     fn sync_completion_cards(&mut self) {
         let cards = self
             .decisions
             .completions
+            .items
             .iter()
             .filter(|n| !n.acknowledged)
             .map(|n| {
@@ -388,20 +399,16 @@ impl DecisionsCtl<'_, '_> {
         reply: Reply,
     ) -> Option<(DecisionsSlot, Reply)> {
         match (slot, reply) {
-            (DecisionsSlot::ApprovalsList, Reply::Query(q)) => match dops::approvals(q) {
-                Ok((rows, next)) => {
-                    self.decisions.gathering.extend(rows);
-                    if next.is_some() {
-                        self.approval_page(next);
-                    } else {
-                        self.decisions.approvals = std::mem::take(&mut self.decisions.gathering);
-                        self.decisions.loaded = true;
-                        self.decisions.error = None;
-                        self.refresh_selected_approval();
-                    }
+            (DecisionsSlot::ApprovalsList, Reply::Query(q)) => {
+                let page = dops::approvals(q)
+                    .map(|(rows, next)| Page::new(rows, next))
+                    .map_err(|e| e.describe());
+                match self.decisions.approvals.apply_current(page) {
+                    Applied::Continue(fetch) => self.approval_page(fetch),
+                    Applied::Replaced => self.refresh_selected_approval(),
+                    _ => {}
                 }
-                Err(e) => self.decisions.error = Some(e.describe()),
-            },
+            }
             (DecisionsSlot::ApprovalInspect(id), Reply::Query(_))
                 if self.decisions.inspecting.as_deref() != Some(id.as_str()) => {}
             (DecisionsSlot::ApprovalInspect(_), Reply::Query(q)) => match dops::approval(q) {
@@ -496,56 +503,46 @@ impl DecisionsCtl<'_, '_> {
             // Clearing the project may leave an older project's reply in flight. It cannot
             // restore hidden rows or continue paging without a selected project.
             (DecisionsSlot::ReviewQueue, Reply::Query(_)) if self.decisions.project.is_none() => {}
-            (DecisionsSlot::ReviewQueue, Reply::Query(q)) => match dops::reviews(q) {
-                Ok((rows, next)) => {
-                    self.decisions.review_gathering.extend(rows);
-                    if next.is_some() {
-                        self.review_page(next);
-                    } else {
-                        self.decisions.reviews =
-                            std::mem::take(&mut self.decisions.review_gathering);
-                        self.decisions.reviews_loaded = true;
-                    }
+            (DecisionsSlot::ReviewQueue, Reply::Query(q)) => {
+                let page = dops::reviews(q)
+                    .map(|(rows, next)| Page::new(rows, next))
+                    .map_err(|e| e.describe());
+                if let Applied::Continue(fetch) = self.decisions.reviews.apply_current(page) {
+                    self.review_page(fetch);
                 }
-                Err(e) => self.decisions.error = Some(e.describe()),
-            },
-            (DecisionsSlot::CompletionList, Reply::Query(q)) => match dops::notifications(q) {
-                Ok((rows, next)) => {
-                    self.decisions.completion_gathering.extend(rows);
-                    if next.is_some() {
-                        self.notification_page(true, next);
-                    } else {
-                        self.decisions.completions =
-                            std::mem::take(&mut self.decisions.completion_gathering);
-                        self.decisions.completions.sort_by(|a, b| {
+            }
+            (DecisionsSlot::CompletionList, Reply::Query(q)) => {
+                let page = dops::notifications(q)
+                    .map(|(rows, next)| Page::new(rows, next))
+                    .map_err(|e| e.describe());
+                match self.decisions.completions.apply_current(page) {
+                    Applied::Continue(fetch) => self.notification_page(true, fetch),
+                    Applied::Replaced => {
+                        self.decisions.completions.items.sort_by(|a, b| {
                             b.created_at_ms
                                 .get()
                                 .cmp(&a.created_at_ms.get())
                                 .then_with(|| b.id.as_str().cmp(a.id.as_str()))
                         });
-                        self.decisions.completion_error = None;
                         self.sync_completion_cards();
                     }
+                    _ => {}
                 }
-                Err(e) => self.decisions.completion_error = Some(e.describe()),
-            },
-            (DecisionsSlot::NotificationsList, Reply::Query(q)) => match dops::notifications(q) {
-                Ok((rows, next)) => {
-                    self.decisions.notification_gathering.extend(rows);
-                    if next.is_some() {
-                        self.notification_page(false, next);
-                    } else {
-                        self.decisions.notifications =
-                            std::mem::take(&mut self.decisions.notification_gathering);
-                        self.decisions.notifications_loaded = true;
-                        self.decisions.notification_error = None;
+            }
+            (DecisionsSlot::NotificationsList, Reply::Query(q)) => {
+                let page = dops::notifications(q)
+                    .map(|(rows, next)| Page::new(rows, next))
+                    .map_err(|e| e.describe());
+                match self.decisions.notifications.apply_current(page) {
+                    Applied::Continue(fetch) => self.notification_page(false, fetch),
+                    Applied::Replaced => self.decisions.notification_error = None,
+                    Applied::Failed => {
+                        self.decisions.notification_error =
+                            self.decisions.notifications.error.clone();
                     }
+                    _ => {}
                 }
-                Err(e) => {
-                    self.decisions.notifications_loaded = true;
-                    self.decisions.notification_error = Some(e.describe());
-                }
-            },
+            }
             (DecisionsSlot::NotificationRead(id), Reply::Query(_))
                 if self.decisions.reading_notification.as_deref() != Some(id.as_str()) => {}
             (DecisionsSlot::NotificationRead(_), Reply::Query(q)) => match dops::notification(q) {
@@ -558,8 +555,8 @@ impl DecisionsCtl<'_, '_> {
                     self.notification_updated(n);
                     self.decisions.notification_error = None;
                     self.load_notification_history();
-                    self.decisions.completion_gathering.clear();
-                    self.notification_page(true, None);
+                    let fetch = self.decisions.completions.reload_all();
+                    self.notification_page(true, fetch);
                 }
                 Err(e) => {
                     self.set_card_status(&id, Some(e.describe()));
@@ -629,10 +626,8 @@ impl DecisionsCtl<'_, '_> {
         for a in actions {
             match a {
                 Action::Reload => {
-                    self.decisions.approvals.clear();
-                    self.decisions.loaded = false;
-                    self.decisions.reviews.clear();
-                    self.decisions.reviews_loaded = false;
+                    self.decisions.approvals.reset();
+                    self.decisions.reviews.reset();
                     self.load_approvals();
                 }
                 Action::Inspect(id) => self.inspect_approval(id),
@@ -642,8 +637,7 @@ impl DecisionsCtl<'_, '_> {
                     self.decisions.rationale.clear();
                 }
                 Action::ReloadNotifications => {
-                    self.decisions.notifications.clear();
-                    self.decisions.notifications_loaded = false;
+                    self.decisions.notifications.reset();
                     self.load_notification_history();
                 }
                 Action::Read(id) => {
@@ -780,6 +774,7 @@ impl DecisionsCtl<'_, '_> {
         let Some(n) = self
             .decisions
             .completions
+            .items
             .iter()
             .find(|n| n.id.as_str() == id)
             .cloned()
@@ -894,7 +889,7 @@ impl DecisionsCtl<'_, '_> {
                                 },
                             );
                         }
-                        if let Some(e) = &d.error {
+                        if let Some(e) = d.approvals.error.as_ref().or(d.reviews.error.as_ref()) {
                             ui.colored_label(theme::RED, e);
                         }
                         egui::ScrollArea::vertical()
@@ -903,13 +898,13 @@ impl DecisionsCtl<'_, '_> {
                                 if tab == 2 && d.project.is_none() {
                                     ui.label("Select a project to review Knowledge. This informational queue belongs to one project.");
                                 } else if tab == 2 {
-                                    if !d.reviews_loaded && online && d.error.is_none() {
+                                    if !d.reviews.loaded && online && d.reviews.error.is_none() {
                                         ui.label("Loading Knowledge review queue…");
                                     }
-                                    if d.reviews_loaded && d.reviews.is_empty() {
+                                    if d.reviews.loaded && d.reviews.items.is_empty() {
                                         ui.label("No Knowledge entries need review.");
                                     }
-                                    for r in &d.reviews {
+                                    for r in &d.reviews.items {
                                         ui.push_id((format!("{:?}",r.kind),r.entry.id.as_str(),r.other.as_ref().map(|row|row.id.as_str())),|ui| {
                                         ui.group(|ui| {
                                             ui.label(format!(
@@ -934,13 +929,13 @@ impl DecisionsCtl<'_, '_> {
                                         });
                                     }
                                 } else {
-                                    if !d.loaded && online && d.error.is_none() {
+                                    if !d.approvals.loaded && online && d.approvals.error.is_none() {
                                         ui.label("Loading approvals…");
                                     }
-                                    if d.loaded && d.approvals.is_empty() {
+                                    if d.approvals.loaded && d.approvals.items.is_empty() {
                                         ui.label("No approvals in this view.");
                                     }
-                                    for p in &d.approvals {
+                                    for p in &d.approvals.items {
                                         ui.push_id(p.id.as_str(), |ui| {
                                             ui.group(|ui| {
                                                 ui.label(RichText::new(&p.summary.0).strong());
@@ -996,8 +991,9 @@ impl DecisionsCtl<'_, '_> {
         if !self.decisions.notifications_open {
             return;
         }
-        if !self.decisions.notifications_loaded && !self.pending(&DecisionsSlot::NotificationsList)
-        {
+        // A failed read counts as settled (its error is shown), so it is not retried every frame.
+        let n = &self.decisions.notifications;
+        if !n.loaded && n.error.is_none() && !self.pending(&DecisionsSlot::NotificationsList) {
             self.load_notification_history();
         }
         let mut open = true;
@@ -1020,6 +1016,7 @@ impl DecisionsCtl<'_, '_> {
         let busy: std::collections::BTreeSet<_> = self
             .decisions
             .notifications
+            .items
             .iter()
             .filter(|n| {
                 self.pending(&DecisionsSlot::NotificationChange(n.id.as_str().into()))
@@ -1036,10 +1033,10 @@ impl DecisionsCtl<'_, '_> {
             if old!=(d.notification_project.clone(),d.unread_only,d.unacknowledged_only){actions.push(Action::ReloadNotifications);}
             ui.label("Reading, acknowledging, and opening links never approve or resume work.");
             if let Some(e)=&d.notification_error {ui.colored_label(theme::RED,e);}
-            if let Some(e)=&d.completion_error {ui.colored_label(theme::RED,format!("Completion feed: {e}"));}
+            if let Some(e)=&d.completions.error {ui.colored_label(theme::RED,format!("Completion feed: {e}"));}
             egui::ScrollArea::vertical().id_salt("notification-history").max_height(340.0).show(ui,|ui|{
-                if d.notifications_loaded&&d.notifications.is_empty(){ui.label("No notifications in this view.");}
-                for n in &d.notifications {
+                if (d.notifications.loaded||d.notifications.error.is_some())&&d.notifications.items.is_empty(){ui.label("No notifications in this view.");}
+                for n in &d.notifications.items {
                     ui.push_id(n.id.as_str(),|ui|{ui.group(|ui|{
                         ui.label(RichText::new(&n.title.0).strong());
                     if n.requires_input==Some(true){ui.label("Input required");}

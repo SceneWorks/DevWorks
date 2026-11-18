@@ -54,7 +54,7 @@ fn confirm_after_relaunch(
         "upload is stored once even when installation is refused"
     );
     assert!(
-        h.state().addons.items.is_empty(),
+        h.state().addons.catalog.items.is_empty(),
         "invalid bundle is never installed"
     );
 }
