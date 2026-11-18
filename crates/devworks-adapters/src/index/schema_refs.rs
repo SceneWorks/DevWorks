@@ -64,7 +64,7 @@ pub(crate) fn extract(language: &str, source: &[u8], root: Node<'_>, out: &mut F
         return;
     };
     let mut uses = Vec::new();
-    literals(root, source, &mut uses);
+    literals(language, root, source, &mut uses);
     orm(language, text, root, out, &mut uses);
     record(source, uses, out);
 }
@@ -72,7 +72,7 @@ pub(crate) fn extract(language: &str, source: &[u8], root: Node<'_>, out: &mut F
 // -- SQL in string literals ---------------------------------------------------------------------
 
 /// Every outermost string literal without interpolation that holds a whole SQL statement.
-fn literals(root: Node<'_>, source: &[u8], uses: &mut Vec<Use>) {
+fn literals(language: &str, root: Node<'_>, source: &[u8], uses: &mut Vec<Use>) {
     let mut stack = vec![(root, 0usize)];
     while let Some((n, depth)) = stack.pop() {
         if depth >= MAX_DEPTH {
@@ -81,11 +81,11 @@ fn literals(root: Node<'_>, source: &[u8], uses: &mut Vec<Use>) {
         if n.kind().contains("string") && !n.kind().contains("content") {
             if !interpolated(n)
                 && let Ok(raw) = n.utf8_text(source)
-                && let Some(sql) = unquote(raw)
+                && let Some(sql) = unquote(language, raw)
             {
-                for found in statement(sql) {
+                for found in statement(&sql) {
                     uses.push(Use {
-                        snippet: snippet(sql),
+                        snippet: snippet(&sql),
                         at: n.start_byte(),
                         extractor: "sql-literal",
                         confidence: 0.8,
@@ -121,16 +121,171 @@ fn interpolated(n: Node<'_>) -> bool {
     false
 }
 
-/// The text inside a literal's quotes, or `None` for an f-string or a literal with no quotes.
-fn unquote(raw: &str) -> Option<&str> {
+/// How a literal's body is written, which decides how its escapes read.
+#[derive(Clone, Copy, PartialEq)]
+enum Form {
+    /// No escapes (Rust `r"…"`, Python `r'…'`, Go backticks, Kotlin and C# `"""…"""`).
+    Raw,
+    /// Only a doubled quote stands for a quote (C# `@"…"`).
+    Verbatim,
+    /// Only `\\` and an escaped quote (Ruby and PHP single quotes).
+    Single,
+    /// The language's full escapes (`\n`, `\"`, `\x41`, `\u{41}`, a line continuation).
+    Escaped,
+}
+
+/// The SQL a literal holds, with its escapes decoded the way `language` reads that form of
+/// literal, or `None` for an f-string, a `$` string or a literal with no quotes. The tokenizer
+/// then sees `"users"` for `"SELECT * FROM \"users\""` and a real newline for `\n`.
+fn unquote<'a>(language: &str, raw: &'a str) -> Option<std::borrow::Cow<'a, str>> {
     let open = raw.find(['"', '\'', '`'])?;
     let prefix = &raw[..open];
     if prefix.contains(['f', 'F', '$']) {
         return None;
     }
-    let body = raw[open..].trim_start_matches(['"', '\'', '`']);
-    let body = body.trim_end_matches('#');
-    Some(body.trim_end_matches(['"', '\'', '`']))
+    let quote = raw[open..].chars().next()?;
+    let run = raw[open..].chars().take_while(|c| *c == quote).count();
+    // An empty literal is two quotes; three or more open a triple-quoted, text-block or raw one.
+    let delimiter = if run == 2 && raw.len() == open + 2 {
+        1
+    } else if run >= 3 {
+        run
+    } else {
+        1
+    };
+    let hashes = prefix.chars().filter(|c| *c == '#').count();
+    let start = open + delimiter;
+    let end = raw
+        .len()
+        .checked_sub(delimiter + hashes)
+        .filter(|end| *end >= start)
+        .unwrap_or(raw.len());
+    let body = raw.get(start..end)?;
+    let form = match language {
+        "rust" if prefix.contains(['r', 'R']) => Form::Raw,
+        "python" if prefix.contains(['r', 'R']) => Form::Raw,
+        "csharp" if prefix.contains('@') => Form::Verbatim,
+        "csharp" | "kotlin" if delimiter >= 3 => Form::Raw,
+        "go" if quote == '`' => Form::Raw,
+        "ruby" | "php" if quote == '\'' => Form::Single,
+        _ => Form::Escaped,
+    };
+    Some(decode(language, body, quote, form))
+}
+
+fn decode<'a>(language: &str, body: &'a str, quote: char, form: Form) -> std::borrow::Cow<'a, str> {
+    use std::borrow::Cow;
+    match form {
+        Form::Raw => Cow::Borrowed(body),
+        Form::Verbatim if !body.contains(quote) => Cow::Borrowed(body),
+        Form::Verbatim => {
+            let doubled: String = [quote, quote].iter().collect();
+            Cow::Owned(body.replace(&doubled, &quote.to_string()))
+        }
+        _ if !body.contains('\\') => Cow::Borrowed(body),
+        _ => {
+            let mut out = String::with_capacity(body.len());
+            let mut chars = body.chars().peekable();
+            while let Some(c) = chars.next() {
+                if c != '\\' {
+                    out.push(c);
+                    continue;
+                }
+                let Some(e) = chars.next() else {
+                    out.push('\\');
+                    break;
+                };
+                if form == Form::Single {
+                    if e == '\\' || e == quote {
+                        out.push(e);
+                    } else {
+                        out.push('\\');
+                        out.push(e);
+                    }
+                    continue;
+                }
+                match e {
+                    'n' => out.push('\n'),
+                    't' => out.push('\t'),
+                    'r' => out.push('\r'),
+                    'b' => out.push('\u{8}'),
+                    'f' => out.push('\u{c}'),
+                    'v' => out.push('\u{b}'),
+                    'a' => out.push('\u{7}'),
+                    'e' => out.push('\u{1b}'),
+                    's' if language == "java" => out.push(' '),
+                    '0'..='7' => {
+                        let mut value = e.to_digit(8).unwrap_or(0);
+                        for _ in 0..2 {
+                            match chars.peek().and_then(|d| d.to_digit(8)) {
+                                Some(d) if value * 8 + d <= 0o377 => {
+                                    value = value * 8 + d;
+                                    chars.next();
+                                }
+                                _ => break,
+                            }
+                        }
+                        out.extend(char::from_u32(value));
+                    }
+                    'x' | 'u' | 'U' => {
+                        let braced = chars.peek() == Some(&'{');
+                        if braced {
+                            chars.next();
+                        }
+                        let limit = match (e, braced) {
+                            (_, true) => 8,
+                            ('x', _) => 2,
+                            ('u', _) => 4,
+                            _ => 8,
+                        };
+                        let mut digits = String::new();
+                        while digits.len() < limit
+                            && let Some(d) = chars.peek().filter(|d| d.is_ascii_hexdigit())
+                        {
+                            digits.push(*d);
+                            chars.next();
+                        }
+                        if braced && chars.peek() == Some(&'}') {
+                            chars.next();
+                        }
+                        match u32::from_str_radix(&digits, 16)
+                            .ok()
+                            .and_then(char::from_u32)
+                        {
+                            Some(decoded) => out.push(decoded),
+                            None => {
+                                out.push('\\');
+                                out.push(e);
+                                out.push_str(&digits);
+                            }
+                        }
+                    }
+                    // A line continuation joins the lines (Rust also drops the next line's indent).
+                    '\n' | '\r' => {
+                        if e == '\r' && chars.peek() == Some(&'\n') {
+                            chars.next();
+                        }
+                        if language == "rust" {
+                            while chars.peek().is_some_and(|c| c.is_whitespace()) {
+                                chars.next();
+                            }
+                        }
+                    }
+                    // Python and PHP keep the backslash of an escape they do not know.
+                    other
+                        if matches!(language, "python" | "php")
+                            && other != quote
+                            && other != '\\' =>
+                    {
+                        out.push('\\');
+                        out.push(other);
+                    }
+                    other => out.push(other),
+                }
+            }
+            Cow::Owned(out)
+        }
+    }
 }
 
 fn snippet(text: &str) -> String {
@@ -1483,11 +1638,100 @@ mod tests {
 
     #[test]
     fn literals_unquote_and_skip_interpolated_strings() {
-        assert_eq!(unquote(r#""SELECT 1""#), Some("SELECT 1"));
-        assert_eq!(unquote(r##"r#"SELECT 1"#"##), Some("SELECT 1"));
-        assert_eq!(unquote("'''SELECT 1'''"), Some("SELECT 1"));
-        assert_eq!(unquote(r#"@"SELECT 1""#), Some("SELECT 1"));
-        assert_eq!(unquote(r#"f"SELECT {x}""#), None);
-        assert_eq!(unquote(r#"$"SELECT {x}""#), None);
+        let u = |language: &str, raw: &str| unquote(language, raw).map(|s| s.into_owned());
+        let some = |s: &str| Some(s.to_owned());
+        assert_eq!(u("java", r#""SELECT 1""#), some("SELECT 1"));
+        assert_eq!(u("rust", r##"r#"SELECT 1"#"##), some("SELECT 1"));
+        assert_eq!(u("python", "'''SELECT 1'''"), some("SELECT 1"));
+        assert_eq!(u("csharp", r#"@"SELECT 1""#), some("SELECT 1"));
+        assert_eq!(u("python", r#"f"SELECT {x}""#), None);
+        assert_eq!(u("csharp", r#"$"SELECT {x}""#), None);
+        assert_eq!(u("java", r#""""#), some(""));
+    }
+
+    #[test]
+    fn escapes_in_literals_are_decoded_by_the_language_and_literal_form() {
+        // Rust: an escaped quoted identifier and an escaped newline before FROM.
+        let rust = uses(
+            "rust",
+            "load.rs",
+            "fn load() { db.query(\"SELECT * FROM \\\"users\\\"\"); \
+                db.query(\"SELECT id\\nFROM\\n  orders\"); }\n",
+        );
+        assert!(
+            has(&rust, "USES_TABLE", "load", "users", "", "sql-literal"),
+            "{rust:?}"
+        );
+        assert!(
+            has(&rust, "USES_TABLE", "load", "orders", "", "sql-literal"),
+            "{rust:?}"
+        );
+        // Java, including a text block's escapes.
+        let java = uses(
+            "java",
+            "Repo.java",
+            "class Repo {\n  void a() { jdbc.query(\"SELECT * FROM \\\"users\\\"\"); }\n  \
+                void b() { jdbc.query(\"SELECT id\\nFROM\\nline_items\"); }\n  \
+                void c() { jdbc.query(\"\"\"\n    SELECT *\\\n    FROM \\\"audit\\\"\n    \"\"\"); }\n}\n",
+        );
+        assert!(
+            has(&java, "USES_TABLE", "a", "users", "", "sql-literal"),
+            "{java:?}"
+        );
+        assert!(
+            has(&java, "USES_TABLE", "b", "line_items", "", "sql-literal"),
+            "{java:?}"
+        );
+        assert!(
+            has(&java, "USES_TABLE", "c", "audit", "", "sql-literal"),
+            "{java:?}"
+        );
+        // Raw and verbatim forms keep their backslashes and read their own quote escapes.
+        let rust_raw = uses(
+            "rust",
+            "raw.rs",
+            "fn raw() { db.query(r#\"SELECT * FROM \"events\"\"#); \
+                db.query(r\"SELECT * FROM \\ghost\"); }\n",
+        );
+        assert!(
+            has(&rust_raw, "USES_TABLE", "raw", "events", "", "sql-literal"),
+            "{rust_raw:?}"
+        );
+        assert!(!tables_of(&rust_raw).contains("ghost"), "{rust_raw:?}");
+        let cs = uses(
+            "csharp",
+            "Q.cs",
+            "class Q {\n  void V() { db.Query(@\"SELECT * FROM \"\"users\"\"\"); }\n  \
+                void E() { db.Query(\"SELECT * FROM \\\"accounts\\\"\"); }\n}\n",
+        );
+        assert!(
+            has(&cs, "USES_TABLE", "V", "users", "", "sql-literal"),
+            "{cs:?}"
+        );
+        assert!(
+            has(&cs, "USES_TABLE", "E", "accounts", "", "sql-literal"),
+            "{cs:?}"
+        );
+        let py = uses(
+            "python",
+            "q.py",
+            "def a():\n    db.execute(\"SELECT * FROM \\\"users\\\"\")\n\
+                def b():\n    db.execute(r\"SELECT * FROM \\ghost\")\n",
+        );
+        assert!(
+            has(&py, "USES_TABLE", "a", "users", "", "sql-literal"),
+            "{py:?}"
+        );
+        assert!(!tables_of(&py).contains("ghost"), "{py:?}");
+        // JavaScript template literals without substitutions read their escapes too.
+        let js = uses(
+            "javascript",
+            "q.js",
+            "function q() { db.query(`SELECT *\\nFROM \\\"carts\\\"`); }\n",
+        );
+        assert!(
+            has(&js, "USES_TABLE", "q", "carts", "", "sql-literal"),
+            "{js:?}"
+        );
     }
 }

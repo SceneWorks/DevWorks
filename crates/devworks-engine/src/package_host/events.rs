@@ -248,6 +248,16 @@ struct Target {
     digest: String,
     schema: String,
 }
+/// The opaque subscription id of a handler contribution. A qualified id such as
+/// `pkg/on.changed` may hold periods or exceed the opaque id's 128 characters, so those get
+/// `sha256-` and the digest of the whole contribution id. Every other contribution keeps its
+/// `/`-to-`--` form, the id its stored processing receipts already carry; the two forms cannot
+/// meet, since only the first has `--`.
+fn subscription_id(contribution: &str) -> Result<Id, &'static str> {
+    Id::new(contribution.replace('/', "--"))
+        .or_else(|_| Id::new(format!("sha256-{}", sha256_hex(contribution.as_bytes()))))
+}
+
 fn target(payload: &Value) -> Option<Target> {
     let field = |name: &str| payload.get(name)?.as_str().map(str::to_owned);
     Some(Target {
@@ -291,7 +301,7 @@ fn run(
     if let Some(why) = entry.payload["skip"].as_str() {
         return skipped(&host, &target.package, why);
     }
-    let Ok(subscription) = Id::new(target.contribution.replace('/', "--")) else {
+    let Ok(subscription) = subscription_id(&target.contribution) else {
         return AsyncOutcome::Poison("invalid handler identity".into());
     };
     let checked = read_snapshot(&**store, &ReadOptions::default(), |s| {
@@ -546,4 +556,30 @@ fn stage_input(
     serde_json::to_value(&reference)
         .and_then(serde_json::from_value)
         .map_err(|e| e.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::subscription_id;
+
+    #[test]
+    fn a_valid_contribution_id_keeps_the_subscription_id_receipts_already_carry() {
+        assert_eq!(
+            subscription_id("sample-pack/on_changed").unwrap().as_str(),
+            "sample-pack--on_changed"
+        );
+    }
+
+    #[test]
+    fn a_dotted_or_long_contribution_id_gets_a_bounded_digest_subscription_id() {
+        let dotted = subscription_id("sample-pack/on.changed").unwrap();
+        assert!(dotted.as_str().starts_with("sha256-"), "{dotted:?}");
+        let long = format!("{}/{}", "p".repeat(64), "h".repeat(64));
+        let long_id = subscription_id(&long).unwrap();
+        assert!(long_id.as_str().len() <= 128);
+        // Stable, and distinct per contribution.
+        assert_eq!(dotted, subscription_id("sample-pack/on.changed").unwrap());
+        assert_ne!(dotted, subscription_id("sample-pack/on.other").unwrap());
+        assert_ne!(dotted, long_id);
+    }
 }

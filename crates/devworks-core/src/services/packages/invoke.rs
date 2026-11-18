@@ -80,9 +80,17 @@ impl PackageService {
         let Some((digest, version)) = found else {
             return Ok(Err((DomainErrorCode::NotFound, "package_version")));
         };
-        let Some(inspection) = policy::inspection(&version) else {
+        let Some(mut inspection) = policy::inspection(&version) else {
             return Ok(Err(unavailable));
         };
+        // A version stored with an older compact inspection has no descriptors or schema
+        // assets: recover them from the bundle it retains (digest re-verified), or refuse.
+        if super::recovery::compact(&inspection) {
+            match super::recovery::recover(&*self.store, &self.artifacts, self, ctx, &version) {
+                Ok(full) => inspection = full,
+                Err(_) => return Ok(Err(unavailable)),
+            }
+        }
         // The tool is a contribution whose verified descriptor is the approved one.
         let Some((contribution, descriptor)) = inspection
             .contributions

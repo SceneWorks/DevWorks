@@ -159,6 +159,7 @@ pub mod approval;
 pub mod index;
 pub mod invoke;
 pub mod policy;
+pub mod recovery;
 mod review_evidence;
 pub mod view;
 /// A manifest-bound verified guide stream; no package activation or caller authority is added.
