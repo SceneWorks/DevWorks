@@ -1,6 +1,7 @@
 //! Durable metadata capture. Target I/O is outside the writer; every local phase rechecks
 //! the captured source, authority and operation attempt before publishing an immutable view.
 use super::{SchemaService, access};
+use crate::locks::LockExt;
 use crate::{
     context::InvocationContext,
     gateway::AdmittedCommand,
@@ -151,7 +152,7 @@ impl SchemaService {
     pub fn stop(&self) {
         if let Some(r) = &self.runtime {
             r.closed.begin_close();
-            for token in r.active.lock().unwrap_or_else(|p| p.into_inner()).values() {
+            for token in r.active.locked().values() {
                 token.cancel();
             }
             r.closed.drain();
@@ -387,7 +388,7 @@ impl SchemaService {
             return Ok(SchemaOutcome::Completed(json!(done.result)));
         }
         {
-            let mut active = runtime.active.lock().unwrap_or_else(|p| p.into_inner());
+            let mut active = runtime.active.locked();
             if runtime.closed.is_closed() || cancel.is_cancelled() {
                 return Err(StorageError::Cancelled);
             }
@@ -570,11 +571,7 @@ struct Active<'a> {
 }
 impl Drop for Active<'_> {
     fn drop(&mut self) {
-        self.runtime
-            .active
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .remove(&self.id);
+        self.runtime.active.locked().remove(&self.id);
     }
 }
 fn current(

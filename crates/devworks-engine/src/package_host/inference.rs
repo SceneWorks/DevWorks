@@ -35,6 +35,7 @@ use crate::providers::driver::NativeProviders;
 use devworks_core::authority::authorization_holds;
 use devworks_core::context::{HostIngress, InvocationContext, PrincipalKind};
 use devworks_core::fingerprint::{canonical_digest, sha256_hex};
+use devworks_core::locks::LockExt;
 use devworks_core::ports::mcp::{SamplingCall, SamplingMessage};
 use devworks_core::ports::storage::{
     ACTIVE, ApplicationStore, ArtifactScope, HOST_SESSION_PREFIX, ReadOptions, StorageError,
@@ -561,7 +562,7 @@ pub(super) fn call(
     let (operation, live) = (ctx.operation_id.clone(), slot.clone());
     let committed = run_write(&*host.store, WriteOptions::observed(), move |tx| {
         // Serialized with revocation: a cancelled or expired invocation publishes nothing.
-        let _guard = live.state.lock().unwrap_or_else(|p| p.into_inner());
+        let _guard = live.state.locked();
         if live.revoked.load(std::sync::atomic::Ordering::SeqCst) {
             return Err(devworks_core::ports::storage::StorageError::ScopeDenied);
         }

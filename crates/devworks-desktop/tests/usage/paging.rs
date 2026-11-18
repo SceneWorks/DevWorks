@@ -1,4 +1,5 @@
 use super::*;
+use devworks_core::locks::LockExt;
 
 #[test]
 fn native_price_more_gesture_survives_same_frame_catalog_hint_without_replacing_partial_page() {
@@ -171,7 +172,7 @@ impl WriterHold {
         let worker = std::thread::spawn(move || {
             run_write(&*store, options, move |_| {
                 entered.send(()).map_err(|_| StorageError::Cancelled)?;
-                let mut open = gate.0.lock().unwrap_or_else(|p| p.into_inner());
+                let mut open = gate.0.locked();
                 while !*open {
                     open = gate.1.wait(open).unwrap_or_else(|p| p.into_inner());
                 }
@@ -192,7 +193,7 @@ impl WriterHold {
 impl Drop for WriterHold {
     fn drop(&mut self) {
         self.cancel.cancel();
-        *self.release.0.lock().unwrap_or_else(|p| p.into_inner()) = true;
+        *self.release.0.locked() = true;
         self.release.1.notify_one();
         let result = self.worker.take().expect("owned writer worker").join();
         if !std::thread::panicking() {

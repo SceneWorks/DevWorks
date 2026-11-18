@@ -46,6 +46,7 @@ pub mod framing;
 pub mod gateway;
 pub mod jcs;
 pub mod kernel;
+pub mod locks;
 pub mod operations;
 pub mod ports;
 pub mod protocol;

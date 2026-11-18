@@ -14,6 +14,7 @@ use devworks_adapters::storage::sqlite::{SqliteConfig, SqliteStore};
 use devworks_core::authority::HostAuthority;
 use devworks_core::context::{HostIngress, InvocationContext, PrincipalKind};
 use devworks_core::gateway::Gateway;
+use devworks_core::locks::LockExt;
 use devworks_core::ports::indexing::{
     ExtractFault, FileExtract, LanguageInfo, SourceTree, StructuralParser,
 };
@@ -54,7 +55,7 @@ use devworks_test_support::{TempRoot, TestClock, TestIds};
 
 fn serial() -> MutexGuard<'static, ()> {
     static SERIAL: Mutex<()> = Mutex::new(());
-    SERIAL.lock().unwrap_or_else(|p| p.into_inner())
+    SERIAL.locked()
 }
 fn id(s: &str) -> Id {
     Id::new(s).unwrap()

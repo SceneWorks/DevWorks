@@ -1,6 +1,7 @@
 //! Cancellation reaches the real accepted body-index source, without touching other work.
 use super::super::conventions::{DirectNative, imported_body};
 use super::super::*;
+use devworks_core::locks::LockExt;
 use devworks_core::protocol::provider::ArtifactRef;
 use devworks_test_support::{FaultFiles, FileOp};
 use std::sync::{Condvar, Weak};
@@ -156,7 +157,7 @@ impl SourceVerificationGate {
         );
     }
     fn release(&self) {
-        *self.released.lock().unwrap_or_else(|e| e.into_inner()) = true;
+        *self.released.locked() = true;
         self.wake.notify_all();
     }
 }

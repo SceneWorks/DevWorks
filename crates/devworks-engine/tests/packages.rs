@@ -20,6 +20,7 @@ use devworks_core::authority::reads::ReadRoot;
 use devworks_core::authority::service::bind_principal;
 use devworks_core::context::{InvocationContext, PrincipalKind};
 use devworks_core::fingerprint::sha256_hex;
+use devworks_core::locks::LockExt;
 use devworks_core::ports::files::{ArtifactSources, ResolvedSource, SourceOrigin, SourceRefusal};
 use devworks_core::ports::packages::HostPlatform;
 use devworks_core::ports::packages::{
@@ -83,13 +84,13 @@ struct Serial {
 }
 impl Drop for Serial {
     fn drop(&mut self) {
-        *self.done.0.lock().unwrap_or_else(|p| p.into_inner()) = true;
+        *self.done.0.locked() = true;
         self.done.1.notify_all();
     }
 }
 fn serial() -> Serial {
     static SERIAL: Mutex<()> = Mutex::new(());
-    let slot = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
+    let slot = SERIAL.locked();
     let done = Arc::new((Mutex::new(false), Condvar::new()));
     let (watched, test) = (
         done.clone(),
@@ -98,11 +99,7 @@ fn serial() -> Serial {
     std::thread::spawn(move || {
         let (finished, cv) = &*watched;
         let finished = cv
-            .wait_timeout_while(
-                finished.lock().unwrap_or_else(|p| p.into_inner()),
-                WATCHDOG,
-                |done| !*done,
-            )
+            .wait_timeout_while(finished.locked(), WATCHDOG, |done| !*done)
             .unwrap_or_else(|p| p.into_inner())
             .0;
         if !*finished {

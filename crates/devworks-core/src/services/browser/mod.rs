@@ -68,6 +68,7 @@ use crate::authority::redact::Redactor;
 use crate::context::{InvocationContext, PrincipalKind};
 use crate::fingerprint::sha256_hex;
 use crate::gateway::{AdmittedCommand, AdmittedQuery};
+use crate::locks::{LockExt, RwLockExt};
 use crate::operations::{OperationInput, browser as ops};
 use crate::ports::browser::{
     BrowserAsset, BrowserPlatform, Profile, Qualification, STAGED_NAME_MAX_BYTES,
@@ -640,14 +641,11 @@ impl BrowserService {
     /// Re-reads the browser assets of this target (discovery reads the filesystem only).
     pub fn refresh_assets(&self) {
         let assets = self.platform.assets();
-        *self.assets.write().unwrap_or_else(|p| p.into_inner()) = assets;
+        *self.assets.write_locked() = assets;
     }
     /// The browser assets of this target as last discovered.
     pub fn assets(&self) -> Vec<BrowserAsset> {
-        self.assets
-            .read()
-            .unwrap_or_else(|p| p.into_inner())
-            .clone()
+        self.assets.read_locked().clone()
     }
     fn asset(&self, id: &str) -> Option<BrowserAsset> {
         self.assets().into_iter().find(|a| a.id == id)
@@ -655,8 +653,7 @@ impl BrowserService {
 
     fn slot(&self, id: &Id) -> Arc<Slot> {
         self.slots
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
+            .locked()
             .entry(id.as_str().to_owned())
             .or_insert_with(|| {
                 Arc::new(Slot {
@@ -668,42 +665,26 @@ impl BrowserService {
             .clone()
     }
     fn existing_slot(&self, id: &Id) -> Option<Arc<Slot>> {
-        self.slots
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .get(id.as_str())
-            .cloned()
+        self.slots.locked().get(id.as_str()).cloned()
     }
     fn forget(&self, id: &Id) {
-        self.slots
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .remove(id.as_str());
-        self.views
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .remove(id.as_str());
+        self.slots.locked().remove(id.as_str());
+        self.views.locked().remove(id.as_str());
     }
     fn publish_view(&self, live: &Live) {
         self.views
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
+            .locked()
             .insert(live.session.as_str().to_owned(), view_of(live));
     }
     fn view(&self, id: &Id) -> Option<View> {
-        self.views
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .get(id.as_str())
-            .cloned()
+        self.views.locked().get(id.as_str()).cloned()
     }
 
     /// Sessions this boot holds a running browser for.
     pub fn live_sessions(&self) -> Vec<Id> {
         let mut ids: Vec<Id> = self
             .views
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
+            .locked()
             .keys()
             .filter_map(|k| Id::new(k.clone()).ok())
             .collect();
@@ -872,7 +853,7 @@ impl BrowserService {
 
     fn run_create(&self, id: &Id, op: &OperationRecord) -> EffectOutcome {
         let slot = self.slot(id);
-        let mut guard = slot.live.lock().unwrap_or_else(|p| p.into_inner());
+        let mut guard = slot.live.locked();
         let s = match self.read_session(id) {
             Ok(Some(s)) => s,
             Ok(None) => {
@@ -1058,13 +1039,10 @@ impl BrowserService {
             self.teardown(id, &process, Some(live), &why, BrowserPhase::Failed);
             return failed(DomainErrorCode::ExternalFailure, ASSET, &why);
         }
-        self.verified
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .insert(
-                s.asset_id.clone(),
-                (live.product.clone(), live.protocol.clone()),
-            );
+        self.verified.locked().insert(
+            s.asset_id.clone(),
+            (live.product.clone(), live.protocol.clone()),
+        );
         let (targets, policy, product, protocol) = (
             live.open_targets(),
             live.policy.clone(),
@@ -1110,8 +1088,7 @@ impl BrowserService {
 
     fn note_launch_failure(&self, asset: &str, why: &str) {
         self.launch_failures
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
+            .locked()
             .insert(asset.to_owned(), detail(why));
     }
 
@@ -1249,7 +1226,7 @@ impl BrowserService {
                         self.processes
                             .cancel(&by_id(pid), Duration::ZERO, self.config.close_bound);
                 }
-                slot.live.lock().unwrap_or_else(|p| p.into_inner())
+                slot.live.locked()
             }
         };
         let s = match self.read_session(id) {
@@ -1456,7 +1433,7 @@ impl BrowserService {
         let mut observed_operation = op.clone();
         observed_operation.payload["testedRepository"] = source.unwrap_or(Value::Null);
         let op = &observed_operation;
-        let mut guard = slot.live.lock().unwrap_or_else(|p| p.into_inner());
+        let mut guard = slot.live.locked();
         let Some(live) = guard.as_mut() else {
             return failed(
                 DomainErrorCode::Conflict,
@@ -1566,7 +1543,7 @@ impl BrowserService {
             return;
         };
         let written = {
-            let mut recorded = slot.recorded.lock().unwrap_or_else(|p| p.into_inner());
+            let mut recorded = slot.recorded.locked();
             // A list captured before the one already recorded is stale: never written over it.
             if version <= *recorded {
                 return;
@@ -1585,7 +1562,7 @@ impl BrowserService {
         };
         if written.is_err()
             && let Some(slot) = self.existing_slot(id)
-            && let Some(live) = slot.live.lock().unwrap_or_else(|p| p.into_inner()).as_mut()
+            && let Some(live) = slot.live.locked().as_mut()
         {
             live.targets_changed = true;
         }
@@ -1992,8 +1969,7 @@ impl BrowserService {
     pub fn tick(&self) {
         let slots: Vec<(String, Arc<Slot>)> = self
             .slots
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
+            .locked()
             .iter()
             .map(|(k, v)| (k.clone(), v.clone()))
             .collect();
@@ -2142,16 +2118,11 @@ impl BrowserService {
     /// Closes every running session (application shutdown), each through the process owner
     /// within the remaining bound, and settles its record.
     pub fn shutdown(&self) -> usize {
-        let slots: Vec<(String, Arc<Slot>)> = self
-            .slots
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .drain()
-            .collect();
+        let slots: Vec<(String, Arc<Slot>)> = self.slots.locked().drain().collect();
         let mut n = 0;
         for (k, slot) in slots {
             slot.closing.store(true, Ordering::SeqCst);
-            let live = slot.live.lock().unwrap_or_else(|p| p.into_inner()).take();
+            let live = slot.live.locked().take();
             let Ok(id) = Id::new(k) else { continue };
             if let Some(l) = live {
                 let process = l.process.clone();
@@ -2172,16 +2143,8 @@ impl BrowserService {
     /// (`workspace.diagnostics` health source).
     pub fn health(&self, _now_ms: i64) -> Vec<HealthCheck> {
         use crate::protocol::records::HealthState;
-        let verified = self
-            .verified
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .clone();
-        let failures = self
-            .launch_failures
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .clone();
+        let verified = self.verified.locked().clone();
+        let failures = self.launch_failures.locked().clone();
         let target = self.platform.target();
         let mut out = Vec::new();
         for a in self.assets() {
@@ -2930,7 +2893,7 @@ impl BrowserService {
         let Some(slot) = self.existing_slot(id) else {
             return Err(not_running().into());
         };
-        let mut guard = slot.live.lock().unwrap_or_else(|p| p.into_inner());
+        let mut guard = slot.live.locked();
         let Some(live) = guard.as_mut() else {
             return Err(not_running().into());
         };
@@ -3087,7 +3050,7 @@ impl BrowserService {
             && let Some(slot) = self.existing_slot(id)
         {
             let pending = {
-                let mut guard = slot.live.lock().unwrap_or_else(|p| p.into_inner());
+                let mut guard = slot.live.locked();
                 match guard.as_mut() {
                     Some(live) => {
                         let _ = live.pump(Duration::from_millis(20), &self.config.bounds());
@@ -3111,7 +3074,7 @@ impl BrowserService {
                     Ok(_) => {}
                     Err(e) => {
                         // Nothing was recorded: the notifications stay pending for a retry.
-                        let mut guard = slot.live.lock().unwrap_or_else(|p| p.into_inner());
+                        let mut guard = slot.live.locked();
                         if let Some(live) = guard.as_mut() {
                             live.cdp.dropped += cdp;
                             match channel {

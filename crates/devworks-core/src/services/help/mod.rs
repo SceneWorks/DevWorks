@@ -8,6 +8,7 @@ mod prepared;
 mod queries;
 mod text;
 
+use crate::locks::RwLockExt;
 use crate::operations::help::GenerateCapabilityDocsInput;
 use crate::ports::storage::{ApplicationStore, ReadSnapshot, StorageError, WriteTransaction};
 use crate::ports::{Clock, IdSource};
@@ -71,10 +72,7 @@ impl HelpService {
                 registered.insert((operation.name.into(), "Command".into()));
             }
         }
-        let mut current = self
-            .registered
-            .write()
-            .unwrap_or_else(|lock| lock.into_inner());
+        let mut current = self.registered.write_locked();
         *current = registered;
         let mut sources = Vec::new();
         for (name, mode) in current.iter() {
@@ -91,10 +89,7 @@ impl HelpService {
                 "authority":format!("{:?}",binding.authority),"effect":format!("{:?}",binding.effect),"revision":revision.0,
                 "input":binding.input_schema(revision),"result":descriptor.result_schema(revision)}));
         }
-        *self
-            .host_source
-            .write()
-            .unwrap_or_else(|lock| lock.into_inner()) = crate::fingerprint::sha256_hex(
+        *self.host_source.write_locked() = crate::fingerprint::sha256_hex(
             serde_json::to_string(&sources)
                 .expect("registered schema sources")
                 .as_bytes(),
@@ -107,13 +102,10 @@ impl HelpService {
         self.stopping.load(Ordering::SeqCst)
     }
     fn source_digest(&self, registry: i64) -> String {
-        let registered = self
-            .registered
-            .read()
-            .unwrap_or_else(|lock| lock.into_inner());
+        let registered = self.registered.read_locked();
         let digest = bundle::commitment();
         let source = serde_json::json!({"app":APP_VERSION,"bundle":digest,"registry":registry,"handlers":*registered,
-            "contracts":*self.host_source.read().unwrap_or_else(|lock|lock.into_inner())});
+            "contracts":*self.host_source.read_locked()});
         crate::fingerprint::sha256_hex(source.to_string().as_bytes())
     }
 }

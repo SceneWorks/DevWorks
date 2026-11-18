@@ -1,6 +1,7 @@
 //! Bounded native CLI execution through the shared owned-process supervisor.
 use crate::authority::destructive::{FilesystemResolver, ProtectedRoots};
 use crate::context::InvocationContext;
+use crate::locks::LockExt;
 use crate::ports::process::ProcessSpec;
 use crate::protocol::OperationId;
 use crate::services::process::tools::{BoundedOutput, redacted_output};
@@ -129,10 +130,7 @@ impl ContainerRunner {
             let output = output.clone();
             CaptureStream {
                 on_chunk: Box::new(move |chunk| {
-                    output
-                        .lock()
-                        .unwrap_or_else(|p| p.into_inner())
-                        .append(chunk);
+                    output.locked().append(chunk);
                 }),
                 on_end: None,
             }
@@ -163,8 +161,8 @@ impl ContainerRunner {
                 }
             })?;
         let exit_code = exit.exit_code;
-        let stdout_bytes = stdout_bytes.lock().unwrap_or_else(|p| p.into_inner());
-        let stderr_bytes = stderr_bytes.lock().unwrap_or_else(|p| p.into_inner());
+        let stdout_bytes = stdout_bytes.locked();
+        let stderr_bytes = stderr_bytes.locked();
         let truncated = stdout_bytes.truncated() || stderr_bytes.truncated();
         let stdout_seen = stdout_bytes.seen();
         let stderr_seen = stderr_bytes.seen();

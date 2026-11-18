@@ -19,6 +19,7 @@
 //!   pipe within a bound is visible through [`Session::write_stalled`], and terminating the
 //!   process (which never needs the writer) unblocks it.
 use devworks_core::framing;
+use devworks_core::locks::LockExt;
 use devworks_core::ports::storage::Cancellation;
 use devworks_extension_protocol::frame::{self, FrameError, MAX_FRAME_BYTES};
 use devworks_extension_protocol::package::{
@@ -90,19 +91,15 @@ impl Slot {
     /// Serialize revocation with broker mutations already executing in a store transaction (a
     /// brokered call holds the state lock only for its final decision, never its preparation).
     pub fn revoke(&self) {
-        let _guard = self.state.lock().unwrap_or_else(|p| p.into_inner());
+        let _guard = self.state.locked();
         self.revoked.store(true, Ordering::SeqCst);
         self.cancellation.cancel();
     }
     pub fn terminal(&self) -> Option<Reply> {
-        self.state
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .terminal
-            .clone()
+        self.state.locked().terminal.clone()
     }
     fn finish(&self, reply: Reply) {
-        let mut s = self.state.lock().unwrap_or_else(|p| p.into_inner());
+        let mut s = self.state.locked();
         if s.terminal.is_none() {
             s.terminal = Some(reply);
         }
@@ -112,7 +109,7 @@ impl Slot {
     /// Waits up to `timeout` for the terminal reply.
     pub fn wait(&self, timeout: Duration) -> Option<Reply> {
         let until = Instant::now() + timeout;
-        let mut s = self.state.lock().unwrap_or_else(|p| p.into_inner());
+        let mut s = self.state.locked();
         loop {
             if let Some(t) = &s.terminal {
                 return Some(t.clone());
@@ -219,10 +216,7 @@ impl Session {
 
     /// Why the session failed, if it did.
     pub fn failure(&self) -> Option<String> {
-        self.failure
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .clone()
+        self.failure.locked().clone()
     }
     pub fn is_closed(&self) -> bool {
         self.closed.load(Ordering::SeqCst)
@@ -230,7 +224,7 @@ impl Session {
     /// Waits up to `timeout` for the stream to close.
     pub fn wait_closed(&self, timeout: Duration) -> bool {
         let until = Instant::now() + timeout;
-        let mut g = self.closed_mx.lock().unwrap_or_else(|p| p.into_inner());
+        let mut g = self.closed_mx.locked();
         while !self.is_closed() {
             let now = Instant::now();
             if now >= until {
@@ -248,7 +242,7 @@ impl Session {
     /// Fails the session: every outstanding request and invocation ends `Lost`.
     pub fn fail(&self, reason: &str) {
         {
-            let mut f = self.failure.lock().unwrap_or_else(|p| p.into_inner());
+            let mut f = self.failure.locked();
             if f.is_none() {
                 *f = Some(reason.chars().take(1024).collect());
             }
@@ -259,33 +253,22 @@ impl Session {
     fn close(&self, reason: &str) {
         self.closed.store(true, Ordering::SeqCst);
         {
-            let mut o = self.outbox.lock().unwrap_or_else(|p| p.into_inner());
+            let mut o = self.outbox.locked();
             o.closed = true;
             o.frames.clear();
             o.bytes = 0;
         }
         self.outbox_cv.notify_all();
-        let pending: Vec<_> = self
-            .pending
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .drain()
-            .collect();
+        let pending: Vec<_> = self.pending.locked().drain().collect();
         for (_, tx) in pending {
             let _ = tx.send(Reply::Lost(reason.to_owned()));
         }
-        let slots: Vec<_> = self
-            .slots
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .values()
-            .cloned()
-            .collect();
+        let slots: Vec<_> = self.slots.locked().values().cloned().collect();
         for s in slots {
             s.revoke();
             s.finish(Reply::Lost(reason.to_owned()));
         }
-        let _g = self.closed_mx.lock().unwrap_or_else(|p| p.into_inner());
+        let _g = self.closed_mx.locked();
         self.closed_cv.notify_all();
     }
 
@@ -295,7 +278,7 @@ impl Session {
         if bytes.len() > self.max_frame {
             return Err("the frame exceeds the frame limit".into());
         }
-        let mut o = self.outbox.lock().unwrap_or_else(|p| p.into_inner());
+        let mut o = self.outbox.locked();
         if o.closed {
             return Err(self.failure().unwrap_or_else(|| "session closed".into()));
         }
@@ -313,8 +296,7 @@ impl Session {
     /// (the helper stopped reading its input).
     pub fn write_stalled(&self, bound: Duration) -> bool {
         self.outbox
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
+            .locked()
             .writing_since
             .is_some_and(|t| t.elapsed() > bound)
     }
@@ -325,7 +307,7 @@ impl Session {
     fn write_loop(self: Arc<Self>, mut output: Box<dyn Write + Send>) {
         loop {
             let bytes = {
-                let mut o = self.outbox.lock().unwrap_or_else(|p| p.into_inner());
+                let mut o = self.outbox.locked();
                 loop {
                     if o.closed {
                         return;
@@ -339,10 +321,7 @@ impl Session {
                 }
             };
             let written = frame::write_frame(&mut output, &bytes);
-            self.outbox
-                .lock()
-                .unwrap_or_else(|p| p.into_inner())
-                .writing_since = None;
+            self.outbox.locked().writing_since = None;
             if let Err(e) = written {
                 self.fail(&format!("write failed: {e}"));
                 return;
@@ -369,28 +348,19 @@ impl Session {
             return Reply::Lost("the host built an invalid request".into());
         }
         let (tx, rx) = mpsc::channel();
-        self.pending
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .insert(id.clone(), tx);
+        self.pending.locked().insert(id.clone(), tx);
         let sent = serde_json::to_value(&req)
             .map_err(|e| e.to_string())
             .and_then(|v| self.write_value(&v));
         if let Err(e) = sent {
-            self.pending
-                .lock()
-                .unwrap_or_else(|p| p.into_inner())
-                .remove(&id);
+            self.pending.locked().remove(&id);
             self.fail(&format!("write failed: {e}"));
             return Reply::Lost(e);
         }
         match rx.recv_timeout(timeout) {
             Ok(r) => r,
             Err(_) => {
-                self.pending
-                    .lock()
-                    .unwrap_or_else(|p| p.into_inner())
-                    .remove(&id);
+                self.pending.locked().remove(&id);
                 Reply::Lost("no answer within the deadline".into())
             }
         }
@@ -410,13 +380,9 @@ impl Session {
         let req = build(id.clone());
         req.validate().map_err(str::to_owned)?;
         self.slots
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
+            .locked()
             .insert(slot.invocation_id.clone(), slot.clone());
-        self.invokes
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .insert(id.clone(), slot.clone());
+        self.invokes.locked().insert(id.clone(), slot.clone());
         let sent = serde_json::to_value(&req)
             .map_err(|e| e.to_string())
             .and_then(|v| self.write_value(&v));
@@ -430,8 +396,7 @@ impl Session {
     /// The slot of a live invocation whose token matches (never a revoked one).
     pub fn slot(&self, invocation_id: &str, token: &str) -> Option<Arc<Slot>> {
         self.slots
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
+            .locked()
             .get(invocation_id)
             .filter(|s| s.token == token && !s.revoked.load(Ordering::SeqCst))
             .cloned()
@@ -440,27 +405,19 @@ impl Session {
     /// removed that already (the session closed first). The host forgets only terminal
     /// invocations, so a later answer to that request is a duplicate terminal response.
     pub fn forget(&self, invocation_id: &str) {
-        self.slots
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .remove(invocation_id);
+        self.slots.locked().remove(invocation_id);
         self.invokes
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
+            .locked()
             .retain(|_, slot| slot.invocation_id != invocation_id);
     }
 
     /// Whether the session still holds `invocation_id`: its slot or its unanswered
     /// `host.invoke` request.
     pub fn holds(&self, invocation_id: &str) -> bool {
-        self.slots
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .contains_key(invocation_id)
+        self.slots.locked().contains_key(invocation_id)
             || self
                 .invokes
-                .lock()
-                .unwrap_or_else(|p| p.into_inner())
+                .locked()
                 .values()
                 .any(|slot| slot.invocation_id == invocation_id)
     }
@@ -573,12 +530,7 @@ impl Session {
                 }
             },
         };
-        if let Some(slot) = self
-            .invokes
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .remove(&id)
-        {
+        if let Some(slot) = self.invokes.locked().remove(&id) {
             match &reply {
                 Reply::Result(RpcResult::InvocationFinished { invocation_id, .. })
                     if invocation_id.as_str() == slot.invocation_id => {}
@@ -591,12 +543,7 @@ impl Session {
             slot.finish(reply);
             return Ok(());
         }
-        match self
-            .pending
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .remove(&id)
-        {
+        match self.pending.locked().remove(&id) {
             Some(tx) => {
                 let _ = tx.send(reply);
                 Ok(())
@@ -618,7 +565,7 @@ impl Session {
                     return;
                 };
                 let seq = String::from(params.sequence).parse().unwrap_or(0);
-                let mut s = slot.state.lock().unwrap_or_else(|p| p.into_inner());
+                let mut s = slot.state.locked();
                 s.dropped_progress += String::from(params.dropped_count)
                     .parse::<i64>()
                     .unwrap_or(0);
@@ -640,7 +587,7 @@ impl Session {
                 ) else {
                     return;
                 };
-                let mut s = slot.state.lock().unwrap_or_else(|p| p.into_inner());
+                let mut s = slot.state.locked();
                 if s.events.len() < EVENTS_KEPT {
                     s.events.push(params.event);
                 } else {
@@ -654,16 +601,8 @@ impl Session {
 
     /// Records that a `host.cancel` was acknowledged for `invocation_id`.
     pub fn acknowledge_cancel(&self, invocation_id: &str) {
-        if let Some(s) = self
-            .slots
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .get(invocation_id)
-        {
-            s.state
-                .lock()
-                .unwrap_or_else(|p| p.into_inner())
-                .cancel_acknowledged = true;
+        if let Some(s) = self.slots.locked().get(invocation_id) {
+            s.state.locked().cancel_acknowledged = true;
         }
     }
 }

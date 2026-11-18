@@ -32,6 +32,7 @@ use super::paths::{edge_id, fold, node_id, parent, symbol_id};
 use super::{IndexEnv, RUN_AGGREGATE, digest, effective_config, history};
 use crate::context::InvocationContext;
 use crate::fingerprint::sha256_hex;
+use crate::locks::LockExt;
 use crate::ports::IdKind;
 use crate::ports::indexing::{
     EdgeTarget, ExtractFault, ExtractedNode, FileExtract, LanguageMode, Span,
@@ -888,12 +889,7 @@ impl IndexWorker {
     /// Signals the run's in-memory stop (after a committed `indexing.cancel`); the durable
     /// request is what the fence checks.
     pub fn cancel_local(&self, run: &Id) {
-        if let Some(l) = self
-            .live
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .get(run.as_str())
-        {
+        if let Some(l) = self.live.locked().get(run.as_str()) {
             l.stop.store(true, Ordering::SeqCst);
         }
     }
@@ -905,7 +901,7 @@ impl IndexWorker {
     }
     /// Runs being executed right now.
     pub fn executing(&self) -> usize {
-        self.live.lock().unwrap_or_else(|p| p.into_inner()).len()
+        self.live.locked().len()
     }
     pub fn stopping(&self) -> bool {
         self.stopping.load(Ordering::SeqCst)
@@ -919,13 +915,7 @@ impl IndexWorker {
         }
         let owner = self.owner.clone();
         let lease = self.env.settings.lease_ms;
-        let executing: Vec<String> = self
-            .live
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .keys()
-            .cloned()
-            .collect();
+        let executing: Vec<String> = self.live.locked().keys().cloned().collect();
         let claimed = run_write(&*self.env.store, WriteOptions::host_state(), move |tx| {
             let now = tx.now_ms();
             let busy: BTreeSet<String> = tx
@@ -1019,7 +1009,7 @@ impl IndexWorker {
             Ok(None)
         })?;
         if let Some(r) = &claimed {
-            self.live.lock().unwrap_or_else(|p| p.into_inner()).insert(
+            self.live.locked().insert(
                 r.id.as_str().to_owned(),
                 LiveRun {
                     attempt: r.attempt,
@@ -1033,7 +1023,7 @@ impl IndexWorker {
     /// Executes a claimed run to its outcome (or until its claim is lost).
     pub fn execute(&self, run: StoredIndexRun) {
         let stop = {
-            let live = self.live.lock().unwrap_or_else(|p| p.into_inner());
+            let live = self.live.locked();
             match live.get(run.id.as_str()) {
                 Some(l) if l.attempt == run.attempt => l.stop.clone(),
                 _ => Arc::new(AtomicBool::new(false)),
@@ -1059,10 +1049,7 @@ impl IndexWorker {
             exec.baseline()
         };
         exec.finish(outcome);
-        self.live
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .remove(run.id.as_str());
+        self.live.locked().remove(run.id.as_str());
     }
 
     /// Expires overlays past their retention, reclaims retired generations in bounded batches and

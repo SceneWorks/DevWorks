@@ -2,6 +2,7 @@
 //! written as a complete tree beside the live one and swapped in with renames, so a reader sees
 //! the old or the new tree. Nothing outside this root is ever written; shared skill folders are
 //! only read, through the source-tree adapter.
+use devworks_core::locks::LockExt;
 use devworks_core::ports::skill_files::{SkillFile, SkillFileFault, SkillFiles};
 use std::collections::HashSet;
 use std::fs::{self, File};
@@ -205,8 +206,7 @@ static NEXT_SWAP: AtomicU64 = AtomicU64::new(0);
 static ACTIVE: Mutex<Option<HashSet<(PathBuf, String)>>> = Mutex::new(None);
 fn is_active(root: &Path, tag: &str) -> bool {
     ACTIVE
-        .lock()
-        .unwrap_or_else(|p| p.into_inner())
+        .locked()
         .as_ref()
         .is_some_and(|set| set.contains(&(root.to_path_buf(), tag.to_string())))
 }
@@ -215,17 +215,13 @@ struct ActiveSwap(PathBuf, String);
 impl ActiveSwap {
     fn new(root: &Path, tag: &str) -> Self {
         let key = (root.to_path_buf(), tag.to_string());
-        ACTIVE
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .get_or_insert_with(HashSet::new)
-            .insert(key);
+        ACTIVE.locked().get_or_insert_with(HashSet::new).insert(key);
         Self(root.to_path_buf(), tag.to_string())
     }
 }
 impl Drop for ActiveSwap {
     fn drop(&mut self) {
-        if let Some(set) = ACTIVE.lock().unwrap_or_else(|p| p.into_inner()).as_mut() {
+        if let Some(set) = ACTIVE.locked().as_mut() {
             set.remove(&(self.0.clone(), self.1.clone()));
         }
     }

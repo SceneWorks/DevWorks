@@ -18,6 +18,7 @@ use devworks_core::authority::destructive::ProtectedRoots;
 use devworks_core::authority::service as auth;
 use devworks_core::context::{HostIngress, InvocationContext, PrincipalKind};
 use devworks_core::gateway::Gateway;
+use devworks_core::locks::LockExt;
 use devworks_core::ports::Authorization;
 use devworks_core::ports::process::{Probe, ProcessHost, ProcessSpec, ProcessTree, TreeStatus};
 #[cfg(unix)]
@@ -72,7 +73,7 @@ use devworks_test_support::{T0, TempRoot, TestClock, TestIds};
 /// Serializes the tests of this binary (see the module documentation).
 fn serial() -> MutexGuard<'static, ()> {
     static SERIAL: Mutex<()> = Mutex::new(());
-    SERIAL.lock().unwrap_or_else(|p| p.into_inner())
+    SERIAL.locked()
 }
 
 /// A temporary data root reopened across simulated process restarts.

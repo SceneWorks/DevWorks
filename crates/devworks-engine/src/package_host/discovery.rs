@@ -4,6 +4,7 @@
 //! (fetched through the index transport port and verified against each source's key).
 use super::{PackageHost, child_environment};
 use devworks_core::fingerprint::sha256_hex;
+use devworks_core::locks::LockExt;
 use devworks_core::ports::packages::{
     IndexTransport, IndexVerifier, MAX_INDEX_BYTES, RuntimeCache, RuntimeObservation,
 };
@@ -238,7 +239,7 @@ impl PackageHost {
                 readers.push(std::thread::spawn(move || {
                     let mut buf = Vec::new();
                     let _ = pipe.by_ref().take(64 * 1024).read_to_end(&mut buf);
-                    sink.lock().unwrap_or_else(|p| p.into_inner()).extend(buf);
+                    sink.locked().extend(buf);
                 }));
             }
         }
@@ -258,8 +259,7 @@ impl PackageHost {
                 timeout.as_millis()
             ));
         }
-        let text =
-            String::from_utf8_lossy(&out.lock().unwrap_or_else(|p| p.into_inner())).into_owned();
+        let text = String::from_utf8_lossy(&out.locked()).into_owned();
         match finished {
             Some(devworks_core::services::process::StopOutcome::Reaped {
                 exit_code: Some(0),

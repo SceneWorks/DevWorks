@@ -1,6 +1,7 @@
 //! Human password intake has its own store/purpose namespace. Protocol bodies carry only
 //! host-minted handles; startup reconciliation reads references, never password values.
 use super::SchemaService;
+use crate::locks::LockExt;
 use crate::{
     context::{InvocationContext, PrincipalKind},
     ports::{
@@ -46,7 +47,7 @@ impl Credentials {
         )
     }
     pub(super) fn valid(&self, context: &InvocationContext, handle: &Id, now: i64) -> bool {
-        let mut intake = self.intake.lock().unwrap_or_else(|p| p.into_inner());
+        let mut intake = self.intake.locked();
         intake.started = true;
         if context.store_id() != &self.store.info().store_id {
             return false;
@@ -119,7 +120,7 @@ impl SchemaService {
         if password.is_empty() || password.len() > 65_536 {
             return Err(SecretError::TooLarge);
         }
-        let mut intake = owner.intake.lock().unwrap_or_else(|p| p.into_inner());
+        let mut intake = owner.intake.locked();
         intake.started = true;
         // A committed handle is owned by its durable source, not an everlasting intake slot.
         // Keep uncertain reserved handles until startup reconciliation can prove them unused.
@@ -169,7 +170,7 @@ impl SchemaService {
             .credentials
             .as_ref()
             .ok_or_else(|| SecretError::Unavailable("no schema credential facility".into()))?;
-        let mut intake = owner.intake.lock().unwrap_or_else(|p| p.into_inner());
+        let mut intake = owner.intake.locked();
         if context.principal_kind() != PrincipalKind::Human
             || context.store_id() != &owner.store.info().store_id
             || !intake
@@ -197,7 +198,7 @@ impl SchemaService {
             .credentials
             .as_ref()
             .ok_or_else(|| SecretError::Unavailable("no schema credential facility".into()))?;
-        let mut intake = owner.intake.lock().unwrap_or_else(|p| p.into_inner());
+        let mut intake = owner.intake.locked();
         if intake.started {
             return Err(SecretError::Failed(
                 "schema startup reconciliation already closed".into(),

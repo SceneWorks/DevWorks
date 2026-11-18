@@ -3,6 +3,7 @@
 //! not read/ack revision; recovered or unconfirmed submissions are never blindly repeated.
 use crate::store;
 use crate::workers::Ticker;
+use devworks_core::locks::{LockExt, RwLockExt};
 use devworks_core::ports::os_notifications::{
     OsDeliveryOutcome, OsNotification, OsNotificationPermission, OsNotificationPort,
 };
@@ -88,11 +89,7 @@ impl OsNotificationSupervisor {
         }
     }
     pub fn permission(&self) -> OsNotificationPermission {
-        self.permission
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .value
-            .clone()
+        self.permission.locked().value.clone()
     }
     pub fn watch(&self) -> watch::Receiver<Option<NotificationPass>> {
         self.status.subscribe()
@@ -109,7 +106,7 @@ impl OsNotificationSupervisor {
         self.ticker.close();
     }
     fn cache_permission(&self, value: OsNotificationPermission, explicit: bool) {
-        let mut cache = self.permission.lock().unwrap_or_else(|p| p.into_inner());
+        let mut cache = self.permission.locked();
         // SystemManaged provides no proof that a prior denial was lifted. It can requalify
         // known non-delivery only through the explicit human permission/retry interaction.
         let lifted = matches!(
@@ -127,7 +124,7 @@ impl OsNotificationSupervisor {
         let fence = self.ticker.fence();
         let stopping = self.ticker.flag();
         let value = tokio::task::spawn_blocking(move || {
-            let closed = fence.read().unwrap_or_else(|p| p.into_inner());
+            let closed = fence.read_locked();
             if *closed || stopping.load(Ordering::SeqCst) {
                 return OsNotificationPermission::Unavailable(
                     "Native notification delivery is stopping".into(),
@@ -185,8 +182,7 @@ impl OsNotificationSupervisor {
         }
         let due = self
             .permission
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
+            .locked()
             .checked_at
             .is_none_or(|at| at.elapsed() >= PERMISSION_INTERVAL);
         if due {
@@ -321,7 +317,7 @@ impl OsNotificationSupervisor {
         tokio::task::spawn_blocking(move || {
             // Keep this one admitted external attempt owned through its durable outcome. Drain
             // fences new effects and waits for this section rather than orphaning a callback.
-            let closed = fence.read().unwrap_or_else(|p| p.into_inner());
+            let closed = fence.read_locked();
             if *closed { return Ok((false, None)); }
             let permitted = !*closed && !stopping.load(Ordering::SeqCst) && focus.load(Ordering::SeqCst) == 2;
             let current = if permitted {

@@ -5,6 +5,7 @@
 //! `INCLUDES_MODULE`, `CALLS` from outputs, the cross-repository `DEPLOYS`/`CONFIGURES` and the
 //! URL/host/connection-string references).
 use super::{Lines, Out, file_stem, props, utf16_len};
+use devworks_core::locks::LockExt;
 use devworks_core::ports::indexing::ExtractFault;
 use regex::Regex;
 use serde_json::{Map, Value, json};
@@ -49,7 +50,7 @@ static STRING_VALUE: LazyLock<Mutex<HashMap<String, Regex>>> =
 /// `ExtractStringValue`: `key = "value"` or `key = value` on a line of `body`.
 fn string_value(body: &str, key: &str) -> Option<String> {
     let r = {
-        let mut cache = STRING_VALUE.lock().unwrap_or_else(|e| e.into_inner());
+        let mut cache = STRING_VALUE.locked();
         cache
             .entry(key.to_owned())
             .or_insert_with(|| {

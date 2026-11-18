@@ -88,6 +88,7 @@ pub mod worker;
 use crate::context::{InvocationContext, PrincipalKind};
 use crate::fingerprint::sha256_hex;
 use crate::gateway::{AdmittedCommand, AdmittedQuery};
+use crate::locks::RwLockExt;
 use crate::operations::{OperationInput, indexing as iops};
 use crate::ports::indexing::{SemanticEnricher, SourceTree, StructuralParser};
 use crate::ports::storage::*;
@@ -214,16 +215,10 @@ impl IndexEnv {
     }
     /// Registers a semantic pack (its contributions join the next generation it applies to).
     pub fn register_enricher(&self, enricher: Arc<dyn SemanticEnricher>) {
-        self.enrichers
-            .write()
-            .unwrap_or_else(|p| p.into_inner())
-            .push(enricher);
+        self.enrichers.write_locked().push(enricher);
     }
     pub fn enrichers(&self) -> Vec<Arc<dyn SemanticEnricher>> {
-        self.enrichers
-            .read()
-            .unwrap_or_else(|p| p.into_inner())
-            .clone()
+        self.enrichers.read_locked().clone()
     }
     /// The host invocation helper processes of `project`'s work are launched under (the process
     /// owner fences it by the project's archival).

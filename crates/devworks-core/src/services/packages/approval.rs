@@ -2,6 +2,7 @@
 //! Reading a review never publishes files, drains helpers, trusts a publisher or activates code.
 use super::*;
 use crate::admission::DecodedRequest;
+use crate::locks::RwLockExt;
 use crate::ports::packages::InspectedBundle;
 use crate::ports::storage::ConfigScope;
 use crate::services::approvals::OwnerPreview;
@@ -449,11 +450,7 @@ impl PackageService {
             return Ok(None);
         };
         let binding = self.expand_review_binding(tx, ctx, &binding)?;
-        let control = self
-            .approval_control
-            .read()
-            .unwrap_or_else(|p| p.into_inner())
-            .clone();
+        let control = self.approval_control.read_locked().clone();
         crate::services::approvals::owner_preview::recheck_control(tx, ctx, control.as_deref())?;
         let input = match command.input() {
             OperationInput::Addons(ops::Input::Configure(i)) => {

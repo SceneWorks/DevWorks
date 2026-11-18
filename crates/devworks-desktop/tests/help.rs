@@ -2,6 +2,7 @@
 //! These tests run headlessly; no remote HTTP or learned inference is permitted.
 mod common;
 use common::*;
+use devworks_core::locks::LockExt;
 use devworks_core::protocol::records::{HelpProvenance, HelpReadView};
 use devworks_core::settings::catalog::Category;
 use devworks_desktop::{
@@ -17,9 +18,7 @@ use std::sync::{Arc, Mutex, MutexGuard};
 // still performs its real cold publication within the unchanged readiness bound.
 fn native_help_guard() -> MutexGuard<'static, ()> {
     static NATIVE_HELP: Mutex<()> = Mutex::new(());
-    NATIVE_HELP
-        .lock()
-        .unwrap_or_else(|poison| poison.into_inner())
+    NATIVE_HELP.locked()
 }
 
 type Ui = egui_kittest::Harness<'static, devworks_desktop::shell::Shell>;

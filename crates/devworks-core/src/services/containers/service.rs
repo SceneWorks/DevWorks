@@ -8,6 +8,7 @@ use super::runner::ContainerRunner;
 use super::selection;
 use crate::context::{InvocationContext, PrincipalKind};
 use crate::gateway::AdmittedQuery;
+use crate::locks::LockExt;
 use crate::operations::{OperationInput, containers as ops};
 use crate::ports::storage::{
     ApplicationStore, ReadSnapshot, RepositoryFilter, StoredContainer, read_snapshot,
@@ -82,10 +83,7 @@ fn agent_mount_source(root: &std::path::Path, name: &str) -> Option<PathBuf> {
 
 impl ContainerService {
     pub(super) fn lifecycle_gate(&self, id: &Id) -> Arc<Mutex<()>> {
-        let mut gates = self
-            .lifecycle_gates
-            .lock()
-            .unwrap_or_else(|p| p.into_inner());
+        let mut gates = self.lifecycle_gates.locked();
         if let Some(gate) = gates.get(id).and_then(Weak::upgrade) {
             return gate;
         }

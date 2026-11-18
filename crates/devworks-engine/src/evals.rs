@@ -3,6 +3,7 @@
 //! provider or inference port is available here. Suite selection/activation belongs to DW-72.
 use crate::store;
 use crate::workers::Ticker;
+use devworks_core::locks::RwLockExt;
 use devworks_core::ports::storage::{
     ApplicationStore, SessionPosition, SessionScope, StorageError,
 };
@@ -134,7 +135,7 @@ impl EvalSupervisor {
                         self.ticker.flag(),
                     );
                     let result = tokio::task::spawn_blocking(move || {
-                        let closed = fence.read().unwrap_or_else(|p| p.into_inner());
+                        let closed = fence.read_locked();
                         if *closed || stopping.load(Ordering::SeqCst) {
                             return Ok(false);
                         }

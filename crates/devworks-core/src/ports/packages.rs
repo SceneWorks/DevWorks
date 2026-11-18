@@ -16,6 +16,7 @@
 //!
 //! None of these is a security boundary for the package's own code: an installed native helper
 //! runs with the desktop user's rights (see `crate::services::packages`, "Trust model").
+use crate::locks::RwLockExt;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::path::PathBuf;
@@ -350,12 +351,12 @@ impl RuntimeCache {
     }
     /// Replaces the observations of a probe pass.
     pub fn set(&self, observed: std::collections::BTreeMap<String, RuntimeObservation>) {
-        *self.seen.write().unwrap_or_else(|p| p.into_inner()) = observed;
+        *self.seen.write_locked() = observed;
         self.refreshed_at
             .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
     }
     pub fn observations(&self) -> std::collections::BTreeMap<String, RuntimeObservation> {
-        self.seen.read().unwrap_or_else(|p| p.into_inner()).clone()
+        self.seen.read_locked().clone()
     }
     /// How many probe passes have completed.
     pub fn passes(&self) -> u64 {
@@ -364,23 +365,13 @@ impl RuntimeCache {
 }
 impl RuntimeProbe for RuntimeCache {
     fn runtime(&self, runtime_id: &str) -> Option<String> {
-        match self
-            .seen
-            .read()
-            .unwrap_or_else(|p| p.into_inner())
-            .get(runtime_id)
-        {
+        match self.seen.read_locked().get(runtime_id) {
             Some(RuntimeObservation::Found(v)) => Some(v.clone()),
             _ => None,
         }
     }
     fn missing_reason(&self, runtime_id: &str) -> Option<String> {
-        match self
-            .seen
-            .read()
-            .unwrap_or_else(|p| p.into_inner())
-            .get(runtime_id)
-        {
+        match self.seen.read_locked().get(runtime_id) {
             Some(RuntimeObservation::Missing(why)) => Some(why.clone()),
             Some(RuntimeObservation::Found(_)) => None,
             None => Some("not probed yet".into()),

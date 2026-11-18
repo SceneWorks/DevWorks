@@ -3,6 +3,7 @@ use super::{
     APP_VERSION, EFFECT_CONSUMER, HelpService, JOB_KIND, bundle, commands::GenerationJob, metadata,
 };
 use crate::fingerprint::sha256_hex;
+use crate::locks::RwLockExt;
 use crate::ports::packages::Inspection;
 use crate::ports::storage::*;
 use crate::protocol::provider::ArtifactRef;
@@ -476,11 +477,7 @@ impl HelpService {
                 },
             )?)?;
         }
-        let registered = self
-            .registered
-            .read()
-            .unwrap_or_else(|lock| lock.into_inner())
-            .clone();
+        let registered = self.registered.read_locked().clone();
         for (operation_name, mode) in registered {
             let Some(metadata) = self
                 .capability_metadata(&operation_name)

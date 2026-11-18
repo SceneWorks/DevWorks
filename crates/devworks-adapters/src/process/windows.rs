@@ -1,5 +1,6 @@
 //! Owned process trees on Windows: a kill-on-close Job Object per tree, assigned while the
 //! child is still suspended.
+use devworks_core::locks::LockExt;
 use devworks_core::ports::process::{
     ControlChannel, NativeIdentity, Probe, ProcessError, ProcessSpec, ProcessTree, TreeStatus,
 };
@@ -182,7 +183,7 @@ pub(super) fn spawn(spec: &ProcessSpec) -> Result<Box<dyn ProcessTree>, ProcessE
         }
     };
     // Hold the spawn lock while inheritable output and control handles exist.
-    let serial = SPAWN.lock().unwrap_or_else(|p| p.into_inner());
+    let serial = SPAWN.locked();
     let merged_output: Option<Box<dyn Read + Send>> = if spec.merge_output {
         if !spec.capture_output {
             return Err(ProcessError::Spawn("merged output requires capture".into()));

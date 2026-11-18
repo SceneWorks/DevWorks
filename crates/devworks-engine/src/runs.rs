@@ -18,6 +18,7 @@
 use crate::dispatch::{Either, RootEligibility, Wakeup, first};
 use crate::store;
 use crate::workers::Ticker;
+use devworks_core::locks::LockExt;
 use devworks_core::ports::Clock;
 use devworks_core::ports::process::NativeIdentity;
 use devworks_core::ports::storage::WriteOptions;
@@ -279,7 +280,7 @@ impl RunSupervisor {
         if self.ticker.is_stopped() {
             return Err(StorageError::ScopeDenied);
         }
-        let mut slot = self.launcher.lock().unwrap_or_else(|p| p.into_inner());
+        let mut slot = self.launcher.locked();
         if slot.is_some() {
             return Err(StorageError::ScopeDenied);
         }
@@ -294,7 +295,7 @@ impl RunSupervisor {
     }
     /// IDs of the activations this supervisor has launched and not yet seen end.
     pub fn launched(&self) -> Vec<Id> {
-        let map = self.running.lock().unwrap_or_else(|p| p.into_inner());
+        let map = self.running.locked();
         let mut ids: Vec<Id> = map.values().map(|r| r.activation.clone()).collect();
         ids.sort_by(|a, b| a.as_str().cmp(b.as_str()));
         ids.dedup();
@@ -303,7 +304,7 @@ impl RunSupervisor {
 
     /// How many launch tasks this supervisor still tracks (one per launched claim).
     pub fn launches(&self) -> usize {
-        self.running.lock().unwrap_or_else(|p| p.into_inner()).len()
+        self.running.locked().len()
     }
 
     /// Signals every launch to stop and aborts its task at once, without recording anything
@@ -312,7 +313,7 @@ impl RunSupervisor {
     pub fn abort_launches(&self) {
         self.stop();
         let tasks: Vec<Running> = {
-            let mut map = self.running.lock().unwrap_or_else(|p| p.into_inner());
+            let mut map = self.running.locked();
             map.drain().map(|(_, r)| r).collect()
         };
         for r in tasks {
@@ -332,15 +333,10 @@ impl RunSupervisor {
 
     /// Connects the dispatcher whose held root work supervision commits may make eligible.
     pub fn set_dispatcher_wakeup(&self, wakeup: Wakeup) {
-        *self.dispatcher.lock().unwrap_or_else(|p| p.into_inner()) = Some(wakeup);
+        *self.dispatcher.locked() = Some(wakeup);
     }
     fn wake_dispatcher(&self) {
-        if let Some(w) = self
-            .dispatcher
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .as_ref()
-        {
+        if let Some(w) = self.dispatcher.locked().as_ref() {
             w.wake();
         }
     }
@@ -356,7 +352,7 @@ impl RunSupervisor {
         let wall = self.clock.now_ms().get();
         let mono = Instant::now();
         report.woke = {
-            let mut last = self.last.lock().unwrap_or_else(|p| p.into_inner());
+            let mut last = self.last.locked();
             let woke = last.is_some_and(|(m0, w0)| {
                 let mono_ms =
                     i64::try_from(mono.duration_since(m0).as_millis()).unwrap_or(i64::MAX);
@@ -399,11 +395,7 @@ impl RunSupervisor {
         {
             self.wake_dispatcher();
         }
-        let has_launcher = self
-            .launcher
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .is_some();
+        let has_launcher = self.launcher.locked().is_some();
         if has_launcher && !self.ticker.is_stopped() {
             loop {
                 // Shutdown (or drop) may begin while this tick runs: no further claim, and a
@@ -441,11 +433,7 @@ impl RunSupervisor {
         &self,
     ) -> Result<(Vec<(RootId, OperationState)>, Vec<(RootId, String)>), StorageError> {
         let batch = self.stop_batch.clamp(1, 500);
-        let cursor = self
-            .stop_cursor
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .clone();
+        let cursor = self.stop_cursor.locked().clone();
         let from = cursor.clone();
         let mut pending = store::read(&self.store, move |s| {
             s.runs().pending_stops(from.as_ref(), batch)
@@ -457,12 +445,11 @@ impl RunSupervisor {
                 store::read(&self.store, move |s| s.runs().pending_stops(None, batch)).await?;
         }
         // A full page continues after its last root next pass; a short one starts over.
-        *self.stop_cursor.lock().unwrap_or_else(|p| p.into_inner()) =
-            if pending.len() == usize::from(batch) {
-                pending.last().map(|c| c.root_id.clone())
-            } else {
-                None
-            };
+        *self.stop_cursor.locked() = if pending.len() == usize::from(batch) {
+            pending.last().map(|c| c.root_id.clone())
+        } else {
+            None
+        };
         let mut out = Vec::new();
         let mut failed = Vec::new();
         for c in pending {
@@ -600,7 +587,7 @@ impl RunSupervisor {
 
     /// Signals the launches of `root` whose activation generation is at most `generation`.
     fn signal_covered(&self, root: &RootId, generation: i64) {
-        let map = self.running.lock().unwrap_or_else(|p| p.into_inner());
+        let map = self.running.locked();
         for r in map
             .values()
             .filter(|r| &r.root == root && r.generation <= generation)
@@ -614,7 +601,7 @@ impl RunSupervisor {
     /// same activation, or a newer generation of the root, is not signalled.
     async fn signal_stopping(&self) -> Result<(), StorageError> {
         let claims: Vec<(String, Id, i64)> = {
-            let map = self.running.lock().unwrap_or_else(|p| p.into_inner());
+            let map = self.running.locked();
             map.iter()
                 .map(|(k, r)| (k.clone(), r.activation.clone(), r.epoch))
                 .collect()
@@ -636,7 +623,7 @@ impl RunSupervisor {
             Ok(out)
         })
         .await?;
-        let map = self.running.lock().unwrap_or_else(|p| p.into_inner());
+        let map = self.running.locked();
         for key in stopping {
             if let Some(r) = map.get(&key) {
                 let _ = r.stop.send(true);
@@ -646,12 +633,7 @@ impl RunSupervisor {
     }
 
     fn spawn_launch(self: &Arc<Self>, activation: StoredActivation) {
-        let Some(launcher) = self
-            .launcher
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .clone()
-        else {
+        let Some(launcher) = self.launcher.locked().clone() else {
             return;
         };
         let (stop_tx, stop_rx) = watch::channel(false);
@@ -672,7 +654,7 @@ impl RunSupervisor {
         let id_for_task = id.clone();
         // Held across the spawn: the task removes its entry under this lock when it ends, so it
         // can never remove it before it is inserted.
-        let mut map = self.running.lock().unwrap_or_else(|p| p.into_inner());
+        let mut map = self.running.locked();
         let key = launch_key(&id, epoch);
         let task_key = key.clone();
         let task = tokio::spawn(async move {
@@ -749,10 +731,7 @@ impl RunSupervisor {
                 }
             }
             // Only this claim's entry: a relaunch of the activation has its own key.
-            me.running
-                .lock()
-                .unwrap_or_else(|p| p.into_inner())
-                .remove(&task_key);
+            me.running.locked().remove(&task_key);
             me.ticker.notify();
         });
         map.insert(
@@ -846,7 +825,7 @@ impl RunSupervisor {
         })
         .await;
         let tasks: Vec<Running> = {
-            let mut map = self.running.lock().unwrap_or_else(|p| p.into_inner());
+            let mut map = self.running.locked();
             map.drain().map(|(_, r)| r).collect()
         };
         for r in &tasks {
@@ -920,7 +899,7 @@ impl RunSupervisor {
         epoch: i64,
     ) -> Result<Vec<(RootId, OperationState)>, StorageError> {
         let lock = {
-            let mut map = self.archive_stops.lock().unwrap_or_else(|p| p.into_inner());
+            let mut map = self.archive_stops.locked();
             map.entry(project.0.as_str().to_owned())
                 .or_default()
                 .clone()

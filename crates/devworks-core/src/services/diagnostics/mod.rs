@@ -69,6 +69,7 @@ use crate::authority::redact::{REDACTED, Redactor};
 use crate::context::{InvocationContext, PrincipalKind, ReceiptIdentity};
 use crate::fingerprint::sha256_hex;
 use crate::gateway::{AdmittedCommand, AdmittedQuery, CommandOutcome};
+use crate::locks::{LockExt, RwLockExt};
 use crate::operations::OperationInput;
 use crate::operations::workspace::{Input, LogsInput, RecordDiagnosticInput};
 use crate::ports::diagnostics::{
@@ -458,10 +459,10 @@ pub struct LogWatch {
 }
 impl LogWatch {
     pub fn latest(&self) -> i64 {
-        *self.latest.lock().unwrap_or_else(|p| p.into_inner())
+        *self.latest.locked()
     }
     fn raise(&self, sequence: i64) {
-        let mut latest = self.latest.lock().unwrap_or_else(|p| p.into_inner());
+        let mut latest = self.latest.locked();
         if sequence > *latest {
             *latest = sequence;
             self.changed.notify_all();
@@ -470,7 +471,7 @@ impl LogWatch {
     /// Blocks (a non-UI thread) until a record after `after` committed or `timeout` passed, and
     /// returns the latest sequence known.
     pub fn wait_beyond(&self, after: i64, timeout: Duration) -> i64 {
-        let latest = self.latest.lock().unwrap_or_else(|p| p.into_inner());
+        let latest = self.latest.locked();
         let (latest, _) = self
             .changed
             .wait_timeout_while(latest, timeout, |l| *l <= after)
@@ -804,29 +805,20 @@ impl DiagnosticService {
     /// whose escaping would hide a secret from the exact-value redactor), redacted with the
     /// registered secrets.
     fn error_text(&self, e: &StorageError) -> String {
-        self.redactor
-            .read()
-            .unwrap_or_else(|p| p.into_inner())
-            .redact_text(&e.to_string())
+        self.redactor.read_locked().redact_text(&e.to_string())
     }
 
     /// Registers a resolved secret value: every later record and export has it removed.
     pub fn register_secret(&self, value: &str) {
-        self.redactor
-            .write()
-            .unwrap_or_else(|p| p.into_inner())
-            .register(value);
+        self.redactor.write_locked().register(value);
     }
     /// Adds a health source (boot recovery, collection, a later indexer helper, the router).
     pub fn register_source(&self, source: Arc<dyn HealthSource>) {
-        self.sources
-            .write()
-            .unwrap_or_else(|p| p.into_inner())
-            .push(source);
+        self.sources.write_locked().push(source);
     }
     /// The durable delivery consumers whose queue health is reported.
     pub fn set_consumers(&self, consumers: Vec<String>) {
-        *self.consumers.write().unwrap_or_else(|p| p.into_inner()) = Some(consumers);
+        *self.consumers.write_locked() = Some(consumers);
     }
     /// The live-inspection seam.
     pub fn watch(&self) -> &LogWatch {
@@ -834,10 +826,7 @@ impl DiagnosticService {
     }
     /// The monitor probes' last results.
     pub fn monitor(&self) -> MonitorState {
-        self.monitor
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .clone()
+        self.monitor.locked().clone()
     }
     pub fn store(&self) -> &Arc<dyn ApplicationStore> {
         &self.store
@@ -856,7 +845,7 @@ impl DiagnosticService {
         origin: DiagnosticOrigin,
         e: &LogEntry,
     ) -> StoredDiagnostic {
-        let redactor = self.redactor.read().unwrap_or_else(|p| p.into_inner());
+        let redactor = self.redactor.read_locked();
         build_record(&redactor, id, now_ms, actor, origin, e)
     }
 
@@ -920,11 +909,7 @@ impl DiagnosticService {
         let host = self.store.info().host_actor;
         let id = self.ids.next_id(IdKind::Diagnostic);
         let outcome = run_write(&*self.store, WriteOptions::housekeeping(), {
-            let redactor = self
-                .redactor
-                .read()
-                .unwrap_or_else(|p| p.into_inner())
-                .clone();
+            let redactor = self.redactor.read_locked().clone();
             move |tx| {
                 let r = retention(tx.configuration())?;
                 let now = tx.now_ms();
@@ -966,10 +951,8 @@ impl DiagnosticService {
                 Ok(pruned)
             }
         });
-        self.monitor
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .retention = Some((self.now(), outcome.clone().map_err(|e| self.error_text(&e))));
+        self.monitor.locked().retention =
+            Some((self.now(), outcome.clone().map_err(|e| self.error_text(&e))));
         self.committed();
         outcome
     }
@@ -1004,7 +987,7 @@ impl DiagnosticService {
             .map(|_| start.elapsed().as_millis() as u64)
             .map_err(|e| self.error_text(&e))
         });
-        let mut m = self.monitor.lock().unwrap_or_else(|p| p.into_inner());
+        let mut m = self.monitor.locked();
         if integrity.is_some() {
             m.integrity = integrity;
         }
@@ -1032,7 +1015,7 @@ impl DiagnosticService {
     ) -> Result<Vec<DiagnosticEntry>, StorageError> {
         let now = self.now();
         let host = self.store.info().host_actor;
-        let redactor = self.redactor.read().unwrap_or_else(|p| p.into_inner());
+        let redactor = self.redactor.read_locked();
         self.health(ctx)?
             .iter()
             .map(|c| health::wire(c, &host, now, &redactor))
@@ -1067,7 +1050,7 @@ impl DiagnosticService {
     /// Plain text of selected records for the clipboard (already redacted records, redacted
     /// again).
     pub fn copy_text(&self, entries: &[DiagnosticEntry]) -> String {
-        let redactor = self.redactor.read().unwrap_or_else(|p| p.into_inner());
+        let redactor = self.redactor.read_locked();
         let mut out = String::new();
         for e in entries {
             let line = format!(
@@ -1111,11 +1094,7 @@ impl DiagnosticService {
         let mut q = query.clone();
         q.descending = false;
         let now = self.now();
-        let redactor = self
-            .redactor
-            .read()
-            .unwrap_or_else(|p| p.into_inner())
-            .clone();
+        let redactor = self.redactor.read_locked().clone();
         let (records, matched, health) =
             read_snapshot(&*self.store, &ReadOptions::default(), |s| {
                 let Some(audience) = audience(s.authority(), ctx)? else {
@@ -1205,19 +1184,12 @@ impl DiagnosticService {
 
     /// Attaches the staging used by [`Self::export`] and swept by [`Self::sweep_exports`].
     pub fn set_export_staging(&self, staging: Arc<dyn ExportStaging>) {
-        *self
-            .export_staging
-            .write()
-            .unwrap_or_else(|p| p.into_inner()) = Some(staging);
+        *self.export_staging.write_locked() = Some(staging);
     }
     /// Removes staged export files left past their ticket's lifetime (a save that never
     /// resolved them); the runtime's diagnostics monitor runs it every pass.
     pub fn sweep_exports(&self) -> usize {
-        let staging = self
-            .export_staging
-            .read()
-            .unwrap_or_else(|p| p.into_inner())
-            .clone();
+        let staging = self.export_staging.read_locked().clone();
         staging.map_or(0, |s| s.sweep())
     }
 
@@ -1254,8 +1226,7 @@ impl DiagnosticService {
         };
         let staging = self
             .export_staging
-            .read()
-            .unwrap_or_else(|p| p.into_inner())
+            .read_locked()
             .clone()
             .ok_or(ExportFailure::Staging(ExportRefused::Unavailable))?;
         let key = Id::new(request_key)
@@ -1680,7 +1651,7 @@ impl QueryHandler for DiagnosticService {
                     .0
                     .into_iter()
                     .map(|c| {
-                        let redactor = self.redactor.read().unwrap_or_else(|p| p.into_inner());
+                        let redactor = self.redactor.read_locked();
                         health::wire(c, &host, now, &redactor)
                     })
                     .collect::<Result<Vec<_>, _>>()

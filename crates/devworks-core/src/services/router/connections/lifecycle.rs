@@ -1,6 +1,7 @@
 //! OAuth refresh custody. Only short native publication units hold this fence; HTTP and
 //! keychain calls run outside it. A closed application never publishes a late credential.
 use super::*;
+use crate::locks::LockExt;
 use crate::ports::storage::{AttemptBinding, AttemptFence, NewOperation, OperationRecord};
 use crate::protocol::{OperationId, OperationState};
 use std::sync::{
@@ -142,8 +143,7 @@ impl ConnectionService {
             // Register before this writer callback retires. A close queued behind it must
             // see every accepted refresh, even if the caller has not received its result.
             owners
-                .lock()
-                .unwrap_or_else(|p| p.into_inner())
+                .locked()
                 .insert(owner.operation.0.as_str().into(), owner.clone());
             Ok(owner)
         })
@@ -159,8 +159,7 @@ impl ConnectionService {
         if result.is_ok() && crate::ports::storage::is_terminal(to) {
             self.lifecycle
                 .owners
-                .lock()
-                .unwrap_or_else(|p| p.into_inner())
+                .locked()
                 .remove(owner.operation.0.as_str());
         }
         result
@@ -168,8 +167,7 @@ impl ConnectionService {
     pub(super) fn refresh_published(&self, owner: &RefreshOwner) {
         self.lifecycle
             .owners
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
+            .locked()
             .remove(owner.operation.0.as_str());
     }
     pub(super) fn check_refresh_owner(
@@ -251,11 +249,7 @@ impl ConnectionService {
     /// Drains accepted credential units, closes publication and marks every possibly spent
     /// refresh token unknown. It never waits for HTTP or an already-started OS secret write.
     pub fn close(&self) -> Result<RefreshCloseReport, StorageError> {
-        let _closing = self
-            .lifecycle
-            .closing
-            .lock()
-            .unwrap_or_else(|p| p.into_inner());
+        let _closing = self.lifecycle.closing.locked();
         if self.lifecycle.closed.swap(true, Ordering::SeqCst) {
             return Ok(RefreshCloseReport::default());
         }
@@ -265,8 +259,7 @@ impl ConnectionService {
         let owners = self
             .lifecycle
             .owners
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
+            .locked()
             .values()
             .cloned()
             .collect::<Vec<_>>();

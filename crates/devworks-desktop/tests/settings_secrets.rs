@@ -2,6 +2,7 @@
 mod common;
 use common::*;
 use devworks_adapters::web::brave::BraveSearch;
+use devworks_core::locks::LockExt;
 use devworks_core::ports::secrets::{Secret, SecretError, SecretKey, SecretStore, SessionSecrets};
 use devworks_core::ports::storage::Cancellation;
 use devworks_core::ports::web::{HopRequest, HopResponse, HopTransport, NetFault, Resolver};
@@ -284,7 +285,7 @@ impl GatedStore {
         assert!(entered, "native secret staging starts");
     }
     fn release(&self) {
-        self.state.lock().unwrap_or_else(|p| p.into_inner()).1 = true;
+        self.state.locked().1 = true;
         self.changed.notify_all();
     }
 }

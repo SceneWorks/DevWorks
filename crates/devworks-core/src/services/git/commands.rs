@@ -7,6 +7,7 @@ use super::*;
 use crate::authority::destructive::EntryKind;
 use crate::context::PrincipalKind;
 use crate::gateway::AdmittedCommand;
+use crate::locks::RwLockExt;
 use crate::ports::storage::*;
 use crate::ports::{AuthorityFence, CommandHandler, Decided, HandlerFailure};
 use crate::protocol::data::GitCommand;
@@ -351,11 +352,7 @@ impl GitService {
         let reviewed_binding =
             crate::services::approvals::owner_preview::approved_binding(tx, ctx, command)?;
         if let Some(binding) = &reviewed_binding {
-            let control = self
-                .approval_control
-                .read()
-                .unwrap_or_else(|p| p.into_inner())
-                .clone();
+            let control = self.approval_control.read_locked().clone();
             crate::services::approvals::owner_preview::recheck_control(
                 tx,
                 ctx,

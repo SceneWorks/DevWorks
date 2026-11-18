@@ -83,6 +83,7 @@ use super::{
 use crate::context::ReceiptIdentity;
 use crate::fingerprint::sha256_hex;
 pub use crate::kernel::reply_intent::{REPLY_AGGREGATE, REPLY_CONSUMER, record_intent};
+use crate::locks::LockExt;
 use crate::ports::Preparation;
 use crate::ports::files::{ArtifactFiles, FileFault, SourceOrigin};
 use crate::ports::storage::{
@@ -259,7 +260,7 @@ impl ReceiptReplies {
         descriptor: &'static OperationDescriptor,
         revision: SchemaRevision,
     ) -> Option<SchemaRef> {
-        let mut cache = self.schemas.lock().unwrap_or_else(|p| p.into_inner());
+        let mut cache = self.schemas.locked();
         if let Some(s) = cache.get(&(descriptor.name, revision)) {
             return Some(s.clone());
         }

@@ -2,6 +2,7 @@
 //! This driver executes injected metadata sources, never synthesizes provider inference.
 use crate::workers::Ticker;
 use crate::{dispatch::first, store};
+use devworks_core::locks::LockExt;
 use devworks_core::ports::process::ProcessHost;
 use devworks_core::ports::storage::*;
 use devworks_core::protocol::Id;
@@ -146,7 +147,7 @@ impl UsageRuntime {
         })?;
         let cancellation = Cancellation::new();
         {
-            let mut active = self.active.lock().unwrap_or_else(|p| p.into_inner());
+            let mut active = self.active.locked();
             if self.ticker.is_stopped() {
                 return Err(StorageError::Cancelled);
             }
@@ -263,7 +264,7 @@ impl UsageRuntime {
             )
         })?;
         {
-            let _active = self.active.lock().unwrap_or_else(|p| p.into_inner());
+            let _active = self.active.locked();
             if self.ticker.is_stopped() {
                 return Err(StorageError::Cancelled);
             }
@@ -308,7 +309,7 @@ impl UsageRuntime {
             };
             let cancellation = cancellation.unwrap_or_else(Cancellation::new);
             {
-                let mut active = runtime.active.lock().unwrap_or_else(|p| p.into_inner());
+                let mut active = runtime.active.locked();
                 match active.entry(attempt.attempt_id.clone()) {
                     std::collections::hash_map::Entry::Occupied(_) => {
                         return Ok(DriveOutcome::AlreadyDispatched);
@@ -353,15 +354,9 @@ impl UsageRuntime {
             if let Some(host) = &self.host {
                 let _ = host.retain_unclosed(id.clone());
             }
-            self.uncertain
-                .lock()
-                .unwrap_or_else(|p| p.into_inner())
-                .insert(id.clone());
+            self.uncertain.locked().insert(id.clone());
         }
-        self.active
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .remove(id);
+        self.active.locked().remove(id);
         self.changed.notify_one();
     }
     async fn write<T, F>(&self, work: F) -> Result<T, StorageError>
@@ -396,20 +391,8 @@ impl UsageRuntime {
             })?;
         let pending_preparations = self.preparing.load(Ordering::SeqCst);
         let mut ids = self.fence.admitted();
-        ids.extend(
-            self.uncertain
-                .lock()
-                .unwrap_or_else(|p| p.into_inner())
-                .iter()
-                .cloned(),
-        );
-        ids.extend(
-            self.active
-                .lock()
-                .unwrap_or_else(|p| p.into_inner())
-                .keys()
-                .cloned(),
-        );
+        ids.extend(self.uncertain.locked().iter().cloned());
+        ids.extend(self.active.locked().keys().cloned());
         let unclosed = store::read(&self.store, move |s| {
             let mut unclosed = Vec::new();
             for id in ids {
@@ -431,7 +414,7 @@ impl UsageRuntime {
         })
     }
     pub fn stop(&self) {
-        let active = self.active.lock().unwrap_or_else(|p| p.into_inner());
+        let active = self.active.locked();
         self.ticker.stop();
         for cancellation in active.values() {
             cancellation.cancel();
@@ -442,13 +425,7 @@ impl UsageRuntime {
         let _tick = self.ticking.lock().await;
         loop {
             let changed = self.changed.notified();
-            if self
-                .active
-                .lock()
-                .unwrap_or_else(|p| p.into_inner())
-                .is_empty()
-                && self.preparing.load(Ordering::SeqCst) == 0
-            {
+            if self.active.locked().is_empty() && self.preparing.load(Ordering::SeqCst) == 0 {
                 break;
             }
             changed.await;
@@ -461,8 +438,7 @@ impl UsageRuntime {
         }
         let active = self
             .active
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
+            .locked()
             .iter()
             .map(|(id, c)| (id.clone(), c.clone()))
             .collect::<Vec<_>>();
@@ -499,7 +475,7 @@ impl UsageRuntime {
             .write(move |tx| ingest::bootstrap_page(tx, PAGE))
             .await?;
         let (after, complete) = {
-            let r = self.recovery.lock().unwrap_or_else(|p| p.into_inner());
+            let r = self.recovery.locked();
             (r.after.clone(), r.complete)
         };
         let mut recovery_more = false;
@@ -530,11 +506,8 @@ impl UsageRuntime {
             let progress = self
                 .write(move |tx| host::apply_recovery(tx, &control, prepared))
                 .await?;
-            self.uncertain
-                .lock()
-                .unwrap_or_else(|p| p.into_inner())
-                .extend(progress.unclosed);
-            let mut r = self.recovery.lock().unwrap_or_else(|p| p.into_inner());
+            self.uncertain.locked().extend(progress.unclosed);
+            let mut r = self.recovery.locked();
             r.unresolved += progress.unresolved;
             recovery_more = progress.visited.len() == usize::from(PAGE);
             if recovery_more {
@@ -551,11 +524,7 @@ impl UsageRuntime {
             indexing_complete: page.complete,
             recovery_complete,
             recovery_more,
-            unresolved: self
-                .uncertain
-                .lock()
-                .unwrap_or_else(|p| p.into_inner())
-                .len(),
+            unresolved: self.uncertain.locked().len(),
             cancelled,
         })
     }

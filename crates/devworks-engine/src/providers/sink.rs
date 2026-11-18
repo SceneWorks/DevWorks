@@ -1,4 +1,5 @@
 //! Trusted native output persistence. Provider bytes are data, never a storage callback.
+use devworks_core::locks::LockExt;
 use devworks_core::{
     context::InvocationContext,
     ports::{IdKind, storage::*},
@@ -698,15 +699,11 @@ impl OwnedInferenceSink for ProviderSink {
                     devworks_core::providers::decode::DecodeErrorKind::Cooldown
                         | devworks_core::providers::decode::DecodeErrorKind::Overloaded
                 );
-                self.result
-                    .lock()
-                    .unwrap_or_else(|p| p.into_inner())
-                    .faults
-                    .push(format!(
-                        "{:?}:{}",
-                        error.kind,
-                        error.code.as_deref().unwrap_or("provider_error")
-                    ));
+                self.result.locked().faults.push(format!(
+                    "{:?}:{}",
+                    error.kind,
+                    error.code.as_deref().unwrap_or("provider_error")
+                ));
 
                 let bytes=serde_json::to_vec(&json!({"kind":format!("{:?}",error.kind),"code":error.code,"message":error.message})).map_err(|_|invalid("error JSON"))?;
                 self.evidence(attempt,json!({"kind":"error","rawJson":String::from_utf8(bytes).map_err(|_|invalid("error UTF8"))?}),fence)?;
@@ -726,7 +723,7 @@ impl OwnedInferenceSink for ProviderSink {
     ) -> Result<(), StorageError> {
         self.finish_output(attempt, outcome, fence)?;
         let result = {
-            let mut result = self.result.lock().unwrap_or_else(|p| p.into_inner());
+            let mut result = self.result.locked();
             result.attempt_id = Some(AttemptId(attempt.attempt_id.clone()));
             result.binding = Some(self.prepared.identity.binding.clone());
             result.turn_start_sequence = self.turn_start_sequence;
@@ -797,10 +794,7 @@ impl ProviderSink {
                     }
                     Ok(())
                 })?;
-                self.result
-                    .lock()
-                    .unwrap_or_else(|p| p.into_inner())
-                    .retry_at_ms = Some(until_ms);
+                self.result.locked().retry_at_ms = Some(until_ms);
             }
         }
         if let Some((space, inputs)) = &self.embedding {
@@ -860,15 +854,12 @@ impl ProviderSink {
                     .pop()
                     .ok_or_else(|| invalid("missing embedding manifest"))?;
                 let artifacts = published;
-                let mut channel = self.result.lock().unwrap_or_else(|p| p.into_inner());
+                let mut channel = self.result.locked();
                 channel.vector_artifacts = artifacts;
                 channel.result_artifact = Some(result);
                 channel.outcome = Some(outcome);
             } else {
-                self.result
-                    .lock()
-                    .unwrap_or_else(|p| p.into_inner())
-                    .outcome = Some(outcome);
+                self.result.locked().outcome = Some(outcome);
             }
             return Ok(());
         }
@@ -906,15 +897,9 @@ impl ProviderSink {
                     kind,
                     fence,
                 )?;
-                self.result
-                    .lock()
-                    .unwrap_or_else(|p| p.into_inner())
-                    .result_artifact = Some(artifact);
+                self.result.locked().result_artifact = Some(artifact);
             }
-            self.result
-                .lock()
-                .unwrap_or_else(|p| p.into_inner())
-                .outcome = Some(outcome);
+            self.result.locked().outcome = Some(outcome);
             return Ok(());
         }
         let terminal = match outcome {
@@ -956,10 +941,7 @@ impl ProviderSink {
                 Ok(())
             })?;
         }
-        self.result
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .outcome = Some(outcome);
+        self.result.locked().outcome = Some(outcome);
         Ok(())
     }
 }

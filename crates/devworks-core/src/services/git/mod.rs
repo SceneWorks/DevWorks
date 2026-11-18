@@ -10,6 +10,7 @@ mod location;
 mod transport;
 use crate::context::InvocationContext;
 use crate::gateway::AdmittedQuery;
+use crate::locks::RwLockExt;
 use crate::operations::{OperationInput, git as ops};
 use crate::ports::storage::ArtifactScope;
 use crate::ports::storage::{ApplicationStore, ReadSnapshot, StoredGitWorktree, StoredRepository};
@@ -144,10 +145,7 @@ impl GitService {
         }
     }
     pub(crate) fn set_approval_control(&self, control: Arc<crate::services::runs::ControlService>) {
-        *self
-            .approval_control
-            .write()
-            .unwrap_or_else(|p| p.into_inner()) = Some(control);
+        *self.approval_control.write_locked() = Some(control);
     }
     pub fn stop(&self) {
         self.stopping

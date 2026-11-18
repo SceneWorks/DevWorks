@@ -43,6 +43,7 @@ use crate::authority::shell::{
 };
 use crate::context::{InvocationContext, PrincipalKind};
 use crate::fingerprint::sha256_hex;
+use crate::locks::LockExt;
 use crate::ports::IdKind;
 use crate::ports::process::{
     NativeIdentity, Probe, ProcessError, ProcessHost, ProcessSpec, ProcessTree,
@@ -350,21 +351,14 @@ impl ProcessSupervisor {
     }
 
     fn entry(&self, id: &Id) -> Option<Arc<Mutex<Live>>> {
-        self.live
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .get(id.as_str())
-            .cloned()
+        self.live.locked().get(id.as_str()).cloned()
     }
     fn forget(&self, id: &Id) {
-        self.live
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .remove(id.as_str());
+        self.live.locked().remove(id.as_str());
     }
     /// IDs of the trees this supervisor currently owns.
     pub fn owned(&self) -> Vec<Id> {
-        let map = self.live.lock().unwrap_or_else(|p| p.into_inner());
+        let map = self.live.locked();
         let mut ids: Vec<Id> = map.keys().filter_map(|k| Id::new(k.clone()).ok()).collect();
         ids.sort_by(|a, b| a.as_str().cmp(b.as_str()));
         ids
@@ -536,10 +530,7 @@ impl ProcessSupervisor {
 
         match self.host.spawn(&request.spec) {
             Err(e) => {
-                self.pending_cancel
-                    .lock()
-                    .unwrap_or_else(|p| p.into_inner())
-                    .remove(record.id.as_str());
+                self.pending_cancel.locked().remove(record.id.as_str());
                 let detail = Redactor::new().redact_text(&e.to_string());
                 let mut failed = record.clone();
                 self.settle(
@@ -564,10 +555,7 @@ impl ProcessSupervisor {
                     json!({"pid": identity.pid}),
                 );
                 if let Err(e) = recorded {
-                    self.pending_cancel
-                        .lock()
-                        .unwrap_or_else(|p| p.into_inner())
-                        .remove(record.id.as_str());
+                    self.pending_cancel.locked().remove(record.id.as_str());
                     // The identity could not be recorded: never leave an untracked tree running.
                     let mut tree = tree;
                     let _ = tree.kill();
@@ -575,7 +563,7 @@ impl ProcessSupervisor {
                 }
                 let id = running.id.clone();
                 let cancel_requested = {
-                    let mut live = self.live.lock().unwrap_or_else(|p| p.into_inner());
+                    let mut live = self.live.locked();
                     live.insert(
                         id.as_str().to_owned(),
                         Arc::new(Mutex::new(Live {
@@ -585,10 +573,7 @@ impl ProcessSupervisor {
                             stopped: false,
                         })),
                     );
-                    self.pending_cancel
-                        .lock()
-                        .unwrap_or_else(|p| p.into_inner())
-                        .remove(id.as_str())
+                    self.pending_cancel.locked().remove(id.as_str())
                 };
                 let owned = OwnedProcess {
                     id,
@@ -627,7 +612,7 @@ impl ProcessSupervisor {
         p: &OwnedProcess,
     ) -> Option<(Box<dyn Read + Send>, Box<dyn Read + Send>)> {
         let entry = self.entry(&p.id)?;
-        let mut live = entry.lock().unwrap_or_else(|e| e.into_inner());
+        let mut live = entry.locked();
         live.tree.take_output()
     }
 
@@ -710,7 +695,7 @@ impl ProcessSupervisor {
     /// The control channel of a tree launched with a control pipe, once.
     pub fn take_control(&self, p: &OwnedProcess) -> Option<crate::ports::process::ControlChannel> {
         let entry = self.entry(&p.id)?;
-        let mut live = entry.lock().unwrap_or_else(|e| e.into_inner());
+        let mut live = entry.locked();
         live.tree.take_control()
     }
 
@@ -720,14 +705,14 @@ impl ProcessSupervisor {
         let Some(entry) = self.entry(&p.id) else {
             return true;
         };
-        let mut live = entry.lock().unwrap_or_else(|e| e.into_inner());
+        let mut live = entry.locked();
         live.tree.root_exited().unwrap_or(false)
     }
 
     /// The stdin pipe of a tree launched with `pipe_stdin`, once.
     pub fn take_input(&self, p: &OwnedProcess) -> Option<Box<dyn std::io::Write + Send>> {
         let entry = self.entry(&p.id)?;
-        let mut live = entry.lock().unwrap_or_else(|e| e.into_inner());
+        let mut live = entry.locked();
         live.tree.take_input()
     }
 
@@ -736,7 +721,7 @@ impl ProcessSupervisor {
         let Some(entry) = self.entry(&p.id) else {
             return Ok(Some(self.settled_outcome(&p.id)?));
         };
-        let mut live = entry.lock().unwrap_or_else(|e| e.into_inner());
+        let mut live = entry.locked();
         match live.tree.poll() {
             Ok(s) if s.empty => {
                 let mut record = live.record.clone();
@@ -794,12 +779,11 @@ impl ProcessSupervisor {
     ) -> Result<StopOutcome, StopFailure> {
         let start = Instant::now();
         let entry = {
-            let live = self.live.lock().unwrap_or_else(|p| p.into_inner());
+            let live = self.live.locked();
             let entry = live.get(p.id.as_str()).cloned();
             if entry.is_none() {
                 self.pending_cancel
-                    .lock()
-                    .unwrap_or_else(|p| p.into_inner())
+                    .locked()
                     .insert(p.id.as_str().to_owned());
             }
             entry
@@ -810,17 +794,14 @@ impl ProcessSupervisor {
                 &outcome,
                 Ok(StopOutcome::Reaped { .. }) | Err(StorageError::NotFound { .. })
             ) {
-                self.pending_cancel
-                    .lock()
-                    .unwrap_or_else(|p| p.into_inner())
-                    .remove(p.id.as_str());
+                self.pending_cancel.locked().remove(p.id.as_str());
             }
             return outcome.map_err(|error| StopFailure {
                 outcome: StopOutcome::Uncertain("the stored record could not be read".into()),
                 error,
             });
         };
-        let mut live = entry.lock().unwrap_or_else(|e| e.into_inner());
+        let mut live = entry.locked();
         let mut record = live.record.clone();
         let mut unrecorded = None;
         // A tree that already exited keeps its own outcome: the stop did not end it.
@@ -935,10 +916,7 @@ impl ProcessSupervisor {
     /// Asks for the stop of a tree that may not be recorded yet (a launch in progress): the stop is
     /// held and applied as soon as a launch with this ID registers its tree.
     pub fn hold_cancel(&self, id: &Id) {
-        self.pending_cancel
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .insert(id.as_str().to_owned());
+        self.pending_cancel.locked().insert(id.as_str().to_owned());
     }
 
     /// Cancels every owned tree in `scope`, sharing one bound: the writer stop before Git
@@ -948,11 +926,11 @@ impl ProcessSupervisor {
     pub fn stop(&self, scope: &StopScope, grace: Duration, bound: Duration) -> Vec<StopResult> {
         let start = Instant::now();
         let matching: Vec<Id> = {
-            let map = self.live.lock().unwrap_or_else(|p| p.into_inner());
+            let map = self.live.locked();
             let mut ids: Vec<Id> = map
                 .values()
                 .filter_map(|e| {
-                    let live = e.lock().unwrap_or_else(|p| p.into_inner());
+                    let live = e.locked();
                     let r = &live.record;
                     let hit = match scope {
                         StopScope::All => true,

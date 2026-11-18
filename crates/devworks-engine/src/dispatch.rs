@@ -57,6 +57,7 @@
 //! is held for reconciliation (its operation is possibly dispatched), the late result is
 //! recorded against the operation's attempt fence, and the effect is never re-executed.
 use crate::store;
+use devworks_core::locks::LockExt;
 use devworks_core::ports::Clock;
 use devworks_core::ports::storage::WriteOptions;
 use devworks_core::ports::storage::{
@@ -373,15 +374,8 @@ struct Slot {
 }
 impl Drop for Slot {
     fn drop(&mut self) {
-        self.inner
-            .in_flight
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .remove(&self.id);
-        self.inner
-            .consumer_load
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())[self.idx] -= 1;
+        self.inner.in_flight.locked().remove(&self.id);
+        self.inner.consumer_load.locked()[self.idx] -= 1;
         drop(self.permit.take());
         self.inner.status.send_modify(|v| *v = v.wrapping_add(1));
         // Capacity freed: more ready work may be claimable now.
@@ -518,11 +512,7 @@ impl Dispatcher {
 
     /// Deliveries currently being handled by this dispatcher.
     pub fn in_flight(&self) -> usize {
-        self.inner
-            .in_flight
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .len()
+        self.inner.in_flight.locked().len()
     }
 
     /// Passes completed by [`Dispatcher::run`] (diagnostics).
@@ -537,19 +527,11 @@ impl Dispatcher {
 
     /// The latest failed pass, or delivery failure that could not be recorded (diagnostics).
     pub fn last_failure(&self) -> Option<String> {
-        self.inner
-            .last_failure
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .clone()
+        self.inner.last_failure.locked().clone()
     }
 
     fn note_failure(&self, failure: String) {
-        *self
-            .inner
-            .last_failure
-            .lock()
-            .unwrap_or_else(|p| p.into_inner()) = Some(store::bounded(&failure));
+        *self.inner.last_failure.locked() = Some(store::bounded(&failure));
     }
 
     /// Stops admission; in-flight deliveries finish (see [`Dispatcher::idle`]). Running
@@ -614,7 +596,7 @@ impl Dispatcher {
         let wall = inner.clock.now_ms().get();
         let mono = Instant::now();
         report.woke = {
-            let mut last = inner.last_tick.lock().unwrap_or_else(|p| p.into_inner());
+            let mut last = inner.last_tick.locked();
             let woke = last.is_some_and(|(m0, w0)| {
                 let mono_ms =
                     i64::try_from(mono.duration_since(m0).as_millis()).unwrap_or(i64::MAX);
@@ -626,8 +608,7 @@ impl Dispatcher {
         if report.woke {
             let mine: Vec<(Id, QueueFence)> = inner
                 .in_flight
-                .lock()
-                .unwrap_or_else(|p| p.into_inner())
+                .locked()
                 .iter()
                 .map(|(k, v)| (k.clone(), v.clone()))
                 .collect();
@@ -669,10 +650,7 @@ impl Dispatcher {
         // claim, so concurrent passes never exceed a cap together; what is not claimed is
         // released right after.
         let order: Vec<(usize, String, usize)> = {
-            let mut load = inner
-                .consumer_load
-                .lock()
-                .unwrap_or_else(|p| p.into_inner());
+            let mut load = inner.consumer_load.locked();
             (0..inner.consumers.len())
                 .map(|i| (start + i) % inner.consumers.len())
                 .map(|i| {
@@ -707,10 +685,7 @@ impl Dispatcher {
         .await;
         {
             // Release the reservation: each claimed delivery keeps one unit, held by its slot.
-            let mut load = inner
-                .consumer_load
-                .lock()
-                .unwrap_or_else(|p| p.into_inner());
+            let mut load = inner.consumer_load.locked();
             for (idx, room) in reserved {
                 let kept = claiming
                     .as_ref()
@@ -722,11 +697,7 @@ impl Dispatcher {
         report.claimed = claimed.len();
         for ((idx, entry), permit) in claimed.into_iter().zip(permits) {
             if let Some(f) = entry.fence() {
-                inner
-                    .in_flight
-                    .lock()
-                    .unwrap_or_else(|p| p.into_inner())
-                    .insert(entry.id.clone(), f);
+                inner.in_flight.locked().insert(entry.id.clone(), f);
             }
             // The slot releases the delivery's worker permit, in-flight entry and consumer load
             // when the task ends, whether the delivery returns or its handler panics.
@@ -763,7 +734,7 @@ impl Dispatcher {
         }
         let generation = scan.generation.load(Ordering::SeqCst);
         let mut cursors = {
-            let mut c = scan.cursors.lock().unwrap_or_else(|p| p.into_inner());
+            let mut c = scan.cursors.locked();
             if c.0 != generation {
                 *c = (generation, HashMap::new());
             }
@@ -814,7 +785,7 @@ impl Dispatcher {
             }
         }
         {
-            let mut c = scan.cursors.lock().unwrap_or_else(|p| p.into_inner());
+            let mut c = scan.cursors.locked();
             // A restart meanwhile invalidated these cursors; the next pass starts over.
             if c.0 == generation {
                 c.1 = cursors;

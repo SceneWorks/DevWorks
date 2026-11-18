@@ -6,6 +6,7 @@
 //! knob: caller limits bound decoded headers after parsing, before publishing the head; they
 //! are not advertised as preallocation limits. Body handoff is demand-driven, with one
 //! bounded native chunk.
+use devworks_core::locks::LockExt;
 use devworks_core::ports::{
     http::{HeaderValue, HttpRequest, Method},
     provider_http::{
@@ -279,7 +280,7 @@ impl StreamCloser for Control {
     fn close(&self) -> Result<(), TransportError> {
         self.closed.store(true, Ordering::SeqCst);
         self.wake.notify_waiters();
-        let mut done = self.done.lock().unwrap_or_else(|e| e.into_inner());
+        let mut done = self.done.locked();
         while !*done {
             done = self.quiescent.wait(done).unwrap_or_else(|e| e.into_inner());
         }
@@ -289,7 +290,7 @@ impl StreamCloser for Control {
 struct Finish(Arc<Control>);
 impl Drop for Finish {
     fn drop(&mut self) {
-        *self.0.done.lock().unwrap_or_else(|e| e.into_inner()) = true;
+        *self.0.done.locked() = true;
         self.0.quiescent.notify_all();
     }
 }
@@ -341,8 +342,7 @@ impl HttpStream for NativeStream {
             return Err(self
                 .control
                 .terminal
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
+                .locked()
                 .clone()
                 .unwrap_or_else(|| after(TransportFailure::Protocol)));
         }
@@ -351,8 +351,7 @@ impl HttpStream for NativeStream {
             Err(self
                 .control
                 .terminal
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
+                .locked()
                 .clone()
                 .unwrap_or_else(|| after(TransportFailure::Protocol)))
         });
@@ -424,10 +423,7 @@ impl StreamingHttp for NativeStreamingHttp {
             .run()
             .await;
             if let Err(error) = result {
-                *task_control
-                    .terminal
-                    .lock()
-                    .unwrap_or_else(|e| e.into_inner()) = Some(error.clone());
+                *task_control.terminal.locked() = Some(error.clone());
                 let _ = head.send(Err(error));
             }
         });

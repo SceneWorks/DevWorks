@@ -8,6 +8,7 @@
 //! and leaves its items unchanged.
 use super::scan::{self, ScannedFile, ScannedSkill};
 use super::{InstructionService, event, role_item_id};
+use crate::locks::LockExt;
 use crate::ports::IdKind;
 use crate::ports::indexing::SourceFault;
 use crate::ports::skill_files::SkillFile;
@@ -140,10 +141,7 @@ impl InstructionService {
         &self,
         kind: Option<InstructionKind>,
     ) -> Result<SyncReport, StorageError> {
-        let _guard = self
-            .sync_lock
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _guard = self.sync_lock.locked();
         let mut report = SyncReport::default();
         if kind != Some(InstructionKind::Role) {
             let harness = self
@@ -706,10 +704,7 @@ impl InstructionService {
     /// always reconciled against the item's current active revision, so a stale write can never
     /// be observed as a user edit. `Ok(false)` when there is nothing to write.
     pub(crate) fn materialize(&self, item: &StoredInstructionItem) -> Result<bool, StorageError> {
-        let _guard = self
-            .sync_lock
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _guard = self.sync_lock.locked();
         self.materialize_locked(&item.id)
     }
 

@@ -31,6 +31,7 @@ use devworks_core::authority::HostRoles;
 use devworks_core::authority::destructive::ProtectedRoots;
 use devworks_core::context::{HostIngress, InvocationContext, PrincipalKind};
 use devworks_core::gateway::{CommandOutcome, QueryOutcome};
+use devworks_core::locks::LockExt;
 use devworks_core::ports::diagnostics::StorageHealthProbe;
 use devworks_core::ports::http::HttpTransport;
 use devworks_core::ports::packages::{HostPlatform, RuntimeCache};
@@ -818,9 +819,7 @@ impl Engine {
                     let waker = host.waker.clone();
                     let forward = tokio::spawn(async move {
                         while hints.changed().await.is_ok() {
-                            if let Some(w) =
-                                waker.lock().unwrap_or_else(|p| p.into_inner()).as_ref()
-                            {
+                            if let Some(w) = waker.locked().as_ref() {
                                 w();
                             }
                         }
@@ -1171,7 +1170,7 @@ impl Backend for DesktopBackend {
         Some(self.host.runtime.dispatcher().subscribe())
     }
     fn set_waker(&self, waker: Waker) {
-        *self.host.waker.lock().unwrap_or_else(|p| p.into_inner()) = Some(waker);
+        *self.host.waker.locked() = Some(waker);
     }
     fn token(&self, prefix: &str) -> String {
         self.host.ids.token(prefix)
