@@ -8,6 +8,7 @@ pub use crate::indexing_screen::{
 };
 use crate::memory::RouteMemory;
 use crate::ops::{self, Failure};
+use crate::paged::Applied;
 use crate::project_purge::Live;
 use crate::route::Route;
 use crate::screen::{Cx, Screen, ScreenContext, ScreenId, controller};
@@ -103,7 +104,15 @@ impl IndexingCtl<'_, '_> {
                     );
                 }
                 IndexAction::Runs => {
-                    let fetch = self.indexing.runs.reload();
+                    // Route entry, the Refresh button and a finished command all re-read the
+                    // runs: the pages shown stay.
+                    // Another project's runs start over, not as many pages as the last had.
+                    let project = self.selected_project().map(str::to_owned);
+                    if self.indexing.runs_project.as_ref() != Some(&project) {
+                        self.indexing.runs.reset();
+                        self.indexing.runs_project = Some(project);
+                    }
+                    let fetch = self.indexing.runs.reread();
                     self.send_runs(fetch, "Loading index runs");
                 }
                 IndexAction::MoreRuns => {
@@ -244,8 +253,12 @@ impl IndexingCtl<'_, '_> {
                 ix.status.insert(r, state);
             }
             (IndexingSlot::IndexRuns(_), Reply::Query(q)) => {
-                ix.runs
+                let applied = ix
+                    .runs
                     .apply_current(ops::index_runs_result(q).map_err(failure_text));
+                if let Applied::Continue(fetch) = applied {
+                    self.send_runs(fetch, "Loading index runs");
+                }
             }
             (IndexingSlot::IndexCommand(r), Reply::Command(c)) => {
                 match ops::index_run_result(c) {

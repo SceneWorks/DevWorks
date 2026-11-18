@@ -40,6 +40,8 @@ pub struct SourcesForm {
 pub struct IndexingScreen {
     pub status: BTreeMap<String, StatusState>,
     pub runs: Paged<IndexRunRecord>,
+    /// The project the runs were read for (`None`: every project).
+    pub runs_project: Option<Option<String>>,
     pub sources: Option<SourcesForm>,
     pub sources_error: Option<String>,
     pub message: Option<(Tone, String)>,

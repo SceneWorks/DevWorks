@@ -317,6 +317,51 @@ fn a_projects_re_read_keeps_the_pages_load_more_added() {
 }
 
 #[test]
+fn an_artifacts_re_read_keeps_the_pages_load_more_added() {
+    let root = Root::new("paging-artifacts-reread");
+    let engine = start(&root);
+    let backend = engine.backend();
+    let page = usize::from(ops::PAGE_LIMIT);
+    for n in 0..page + 3 {
+        let bytes = format!("artifact {n:03}").into_bytes();
+        let path = root.file(&format!("a-{n:03}.txt"), &bytes);
+        let ticket = backend.mint_workspace_upload(&path).unwrap();
+        let digest = devworks_core::fingerprint::sha256_hex(&bytes);
+        let saved = ops::saved_artifact(backend.command(
+            "artifacts.save",
+            &ops::save_workspace_artifact(
+                &*backend,
+                ticket.as_str(),
+                &format!("Artifact {n:03}"),
+                "text/plain",
+                &digest,
+                bytes.len() as u64,
+                &[],
+            ),
+        ));
+        assert!(saved.is_ok(), "{n}");
+    }
+    let mut h = harness(shell(&engine, &root, Script::default()), 1440.0, 900.0);
+    settle(&mut h);
+    click_nav(&mut h, "Artifacts");
+    step_until(&mut h, "the first page", |s| s.artifacts.list.loaded);
+    assert_eq!(h.state().artifacts.list.items.len(), page);
+    assert!(h.state().artifacts.list.more());
+    click(&mut h, Role::Button, "Load more");
+    step_until(&mut h, "both pages", |s| {
+        !s.artifacts.list.loading() && !s.artifacts.list.more()
+    });
+    let all = h.state().artifacts.list.items.len();
+    assert!(all > page, "{all}");
+    // The periodic re-read covers every page shown, and the reply of its first page asks for
+    // the second.
+    h.state_mut().refresh_visible();
+    step_until(&mut h, "the re-read", |s| !s.artifacts.list.loading());
+    assert_eq!(h.state().artifacts.list.items.len(), all);
+    assert!(!h.state().artifacts.list.more());
+}
+
+#[test]
 fn a_page_from_another_snapshot_is_refused_with_its_reason_and_retries_from_the_start() {
     let mut list = Paged::default();
     let first = list.reload();

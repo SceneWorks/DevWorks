@@ -79,6 +79,7 @@ impl HelpScreen {
         self.reading = false;
         self.load_help_topics(cx, false);
     }
+    /// Reads the topics of the scope from the first page (it was opened, searched or changed).
     fn load_help_topics(&mut self, cx: &mut Cx, append: bool) {
         let fetch = if append {
             let Some(fetch) = self.topics.more_page() else {
@@ -88,6 +89,10 @@ impl HelpScreen {
         } else {
             self.topics.reload()
         };
+        self.send_help_topics(cx, fetch);
+    }
+    fn send_help_topics(&mut self, cx: &mut Cx, fetch: crate::paged::Fetch) {
+        let append = fetch.append();
         let scope = self.scope.clone();
         let operation = match scope {
             HelpScope::Search(_) => "help.search",
@@ -133,9 +138,13 @@ impl HelpScreen {
         self.read = None;
         self.read_help_passage(cx);
     }
+    /// Reads the same scope again: every page shown is re-read, so the rows the user loaded
+    /// stay. A page from another catalog snapshot than the first ends the read as it ends
+    /// paging, with the prompt to refresh.
     fn refresh_help(&mut self, cx: &mut Cx) {
         if !self.topics.loading() {
-            self.load_help_topics(cx, false);
+            let fetch = self.topics.reread();
+            self.send_help_topics(cx, fetch);
         }
     }
     fn probe_help(&mut self, cx: &mut Cx) {
@@ -212,6 +221,10 @@ impl HelpScreen {
                             Applied::Stale => return,
                             Applied::Fenced => {
                                 self.topics.fail("Local documentation changed while paging. Refresh Help to load a consistent catalog.");
+                                return;
+                            }
+                            Applied::Continue(fetch) => {
+                                self.send_help_topics(cx, fetch);
                                 return;
                             }
                             _ => {}

@@ -5,7 +5,7 @@ use crate::{
     databases_screen::{Action, DatabasesScreen, Draft, ReadIntent},
     memory::RouteMemory,
     ops::{self, Failure},
-    paged::{Applied, Page},
+    paged::{Applied, Fetch, Page},
     route::Route,
     screen::{Cx, Effect, Screen, ScreenContext, ScreenId, controller},
 };
@@ -33,7 +33,7 @@ impl Screen for DatabasesScreen {
         .load_databases(false);
     }
     fn refresh(&mut self, cx: &mut Cx, _route: Route) {
-        if !self.connections.loading() && !self.batch_scanning && self.connections.pages() <= 1 {
+        if !self.connections.loading() && !self.batch_scanning {
             DatabasesCtl {
                 databases: self,
                 cx,
@@ -149,24 +149,34 @@ impl DatabasesCtl<'_, '_> {
         }
         self.databases.sequence = self.databases.sequence.wrapping_add(1);
         let scanning = self.databases.batch_scanning;
-        let project = if scanning {
-            self.databases.batch_scope.clone()
-        } else {
-            self.databases.project.clone()
-        };
         let list = if scanning {
             &mut self.databases.scan
         } else {
             &mut self.databases.connections
         };
+        // A sync-all scan always starts at the first page (its list was reset). The sources
+        // list belongs to `databases.project`, which only changes where the lists are reset,
+        // so a re-read of it covers every page shown.
         let Some(fetch) = (if append {
             list.more_page()
-        } else {
+        } else if scanning {
             Some(list.reload())
+        } else {
+            Some(list.reread())
         }) else {
             return;
         };
-        let slot = DatabasesSlot::DatabaseList(fetch.generation, append);
+        self.send_database_list(fetch);
+    }
+    /// Submits the inventory request `fetch` names, for the scan or the shown sources.
+    fn send_database_list(&mut self, fetch: Fetch) {
+        let scanning = self.databases.batch_scanning;
+        let project = if scanning {
+            self.databases.batch_scope.clone()
+        } else {
+            self.databases.project.clone()
+        };
+        let slot = DatabasesSlot::DatabaseList(fetch.generation, fetch.append());
         let cursor = fetch.cursor.clone();
         let generation = fetch.generation;
         if !self.query(
@@ -683,8 +693,13 @@ impl DatabasesCtl<'_, '_> {
                             return None;
                         }
                         let rows = Page::new(value.items.0, next);
-                        if self.databases.connections.apply(g, Ok(rows)) == Applied::Stale {
-                            return None;
+                        match self.databases.connections.apply(g, Ok(rows)) {
+                            Applied::Stale => return None,
+                            Applied::Continue(fetch) => {
+                                self.send_database_list(fetch);
+                                return None;
+                            }
+                            _ => {}
                         }
                         self.resume_database_read();
                     }
@@ -931,6 +946,12 @@ impl DatabasesCtl<'_, '_> {
 }
 impl DatabasesCtl<'_, '_> {
     fn begin_database_sync_all(&mut self) {
+        if self.databases.connections.loading() {
+            // The scan and the sources list are read one at a time.
+            self.databases.notice =
+                Some("Wait for the database sources to finish loading, then sync all.".into());
+            return;
+        }
         self.databases.batch_remaining.clear();
         self.databases.batch_scanning = true;
         self.databases.batch_active = true;

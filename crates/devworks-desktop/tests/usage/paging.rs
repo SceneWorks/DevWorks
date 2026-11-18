@@ -106,6 +106,71 @@ fn native_price_more_gesture_survives_same_frame_catalog_hint_without_replacing_
     );
 }
 
+#[test]
+fn native_price_re_read_after_a_saved_override_keeps_the_pages_load_more_added() {
+    let _case = native_runtime_case();
+    let root = Root::new("usage-price-reread-pages");
+    let engine = start(&root);
+    startup::settled(&engine, &root);
+    let b = engine.backend();
+    let model = "reread-paged-model";
+    ops::configured(b.command("router.configure",&ops::router_configure(&*b, serde_json::from_value(json!({"kind":"Model","model":{"id":model,"displayName":"Re-read paged model","endpointProfile":"CompatibleChat","upstreamModelId":"fixture/reread-paged","enabled":true,"tierMemberships":[],"efforts":[],"imageInput":false,"tools":false,"revision":"1"}})).unwrap()))).unwrap();
+    let tariffs=(0..105).map(|i|json!({"upstreamModelId":"fixture/reread-paged","serviceTier":format!("service-{i:03}"),"modality":"Text","chargeKind":"Input","unit":"Token","units":"1000000","amountUsd":"1"})).collect::<Vec<_>>();
+    uops::overridden(b.command("router.price_override",&uops::command(&*b, command_input("router.price_override", json!({"modelId":model,"expectedRevision":"1","change":{"kind":"Set","tariffs":tariffs}}))))).unwrap();
+    let gate = Gate::new("router.price_status");
+    let mut h = harness(
+        shell_with(Ok(gate.over(b.clone())), &root, Script::default(), None),
+        1800.0,
+        1800.0,
+    );
+    settle(&mut h);
+    h.state_mut().navigate(Route::Usage);
+    settle(&mut h);
+    press(&mut h, "Prices");
+    {
+        // The continuation needs one unchanged real event snapshot.
+        let _writer = WriterHold::new(engine.host().runtime().store().clone());
+        press(&mut h, "Apply price catalog filters");
+        assert!(h.state().usage.price_view().unwrap().has_more);
+        press(&mut h, "Load more price rows");
+        assert_eq!(h.state().usage.price_view().unwrap().items.0.len(), 105);
+        assert_eq!(h.state().usage.prices.pages(), 2);
+    }
+    // Saving an override re-reads the applied catalog: both pages are read again and joined
+    // into one view, so the rows (and the editor they allow) stay.
+    press(&mut h, &format!("Edit tariff override for {model}"));
+    // The re-read's first request waits at the gate until the save's own writes are done and
+    // the writer slot is held, so both pages are read at one event snapshot.
+    h.get_by_role_and_label(Role::Button, "Save tariff override")
+        .scroll_to_me();
+    settle(&mut h);
+    gate.close();
+    h.get_by_role_and_label(Role::Button, "Save tariff override")
+        .click();
+    let deadline = std::time::Instant::now() + SETTLE_BOUND;
+    while !gate.has_waiter() {
+        h.step();
+        assert!(std::time::Instant::now() < deadline, "the first request");
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    let writer = WriterHold::new(engine.host().runtime().store().clone());
+    gate.open();
+    step_until(&mut h, "the saved override", |s| {
+        !s.usage.price_busy && s.usage.price_draft.is_none()
+    });
+    step_until(&mut h, "the re-read", |s| !s.usage.prices.loading());
+    drop(writer);
+    assert_eq!(h.state().usage.prices.pages(), 2);
+    let view = h.state().usage.price_view().unwrap();
+    assert!(!view.has_more);
+    assert_eq!(view.items.0.len(), 105);
+    assert!(
+        h.state().usage.price_error.is_none(),
+        "{:?}",
+        h.state().usage.price_error
+    );
+}
+
 struct Hinted {
     inner: std::sync::Arc<dyn Backend>,
     hints: tokio::sync::watch::Receiver<u64>,

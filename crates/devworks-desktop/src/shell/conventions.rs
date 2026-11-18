@@ -267,6 +267,56 @@ impl ConventionsCtl<'_, '_> {
             );
         }
     }
+    /// Reads the listing shown again (after a change, or Refresh): every page shown is read
+    /// again, in the query they were read with, so the pages the user loaded stay. A listing
+    /// whose query changed in the form, a search, or one not yet read starts from the first
+    /// page ([`load_conventions`](Self::load_conventions)).
+    fn reread_conventions(&mut self) {
+        let scope = self.conventions.scope.clone();
+        let same = self.conventions.states.get(&scope).is_some_and(|s| {
+            let form = cop::list(&scope, &s.applicability, s.lifecycle, s.order);
+            s.list.loaded
+                && !s.searched
+                && s.active_search.is_none()
+                && s.search_recovery.is_none()
+                && match (&s.query_snapshot, form) {
+                    (Some(shown), Some(form)) => format!("{shown:?}") == format!("{form:?}"),
+                    _ => false,
+                }
+        });
+        if !same {
+            self.load_conventions(false, false);
+            return;
+        }
+        let state = self.conventions.states.get_mut(&scope).expect("scope");
+        let fetch = state.list.refresh();
+        self.send_convention_list(&scope, &fetch);
+    }
+    /// Submits the request `fetch` names of the shown listing, in the query it was read with.
+    fn send_convention_list(&mut self, scope: &Scope, fetch: &crate::paged::Fetch) {
+        let key = scope.key();
+        let state = self.conventions.states.get_mut(scope).expect("scope");
+        let input = state
+            .query_snapshot
+            .as_ref()
+            .and_then(|shown| match fetch.cursor.as_deref() {
+                Some(cursor) => cop::at_cursor(shown, cursor),
+                None => Some(shown.clone()),
+            });
+        let generation = fetch.generation;
+        if !self.query(
+            ConventionsSlot::ConventionsList(key, generation, fetch.append(), false),
+            "Reading conventions",
+            "conventions.list",
+            move |b| cop::query(b, input),
+        ) {
+            let state = self.conventions.states.get_mut(scope).expect("scope");
+            state.list.abandon(generation);
+            state.list.error = Some(
+                "Conventions cannot be read while offline or closing. Drafts are kept.".into(),
+            );
+        }
+    }
     fn read_convention(&mut self, target: Target, remember: bool) {
         let scope = self.conventions.scope.clone();
         let state = self.conventions.states.entry(scope).or_default();
@@ -557,6 +607,11 @@ impl ConventionsCtl<'_, '_> {
                             Applied::Fenced => {
                                 s.list.fail("The convention listing changed while paging. Refresh for a current \
                                     listing; drafts are kept.");
+                                return None;
+                            }
+                            Applied::Continue(fetch) => {
+                                // A re-read of the listing needs its next page.
+                                self.send_convention_list(&scope, &fetch);
                                 return None;
                             }
                             _ => {}
@@ -1249,7 +1304,7 @@ impl ConventionsCtl<'_, '_> {
                     ),
                 ));
                 if self.conventions.scope == scope {
-                    self.load_conventions(false, false);
+                    self.reread_conventions();
                     if let Some(target) = refresh_target {
                         self.read_convention(target, false);
                     }
@@ -1333,7 +1388,7 @@ impl ConventionsCtl<'_, '_> {
                 }
             }
             cv::Action::Refresh => {
-                self.load_conventions(false, false);
+                self.reread_conventions();
                 if let Some(mut target) = self
                     .conventions
                     .state()

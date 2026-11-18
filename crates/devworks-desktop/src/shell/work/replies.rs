@@ -22,8 +22,14 @@ impl WorkCtl<'_, '_> {
                     .history
                     .apply_current_unique(page, |m| m.id.as_str().to_owned())
                 {
-                    Applied::Replaced | Applied::Appended => board.error = None,
+                    Applied::Replaced | Applied::Appended => {
+                        board.error = None;
+                        if std::mem::take(&mut board.history_again) {
+                            self.load_messages(true);
+                        }
+                    }
                     Applied::Failed => board.error = board.history.error.clone(),
+                    Applied::Continue(fetch) => self.send_history(project, fetch),
                     _ => {}
                 }
             }
