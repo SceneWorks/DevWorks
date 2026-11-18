@@ -63,13 +63,15 @@ impl IdSource for TestIds {
     }
 }
 
+type ReadHook = Box<dyn Fn(&TestClock, usize) + Send + Sync>;
+
 /// A [`TestClock`] that runs a hook on every read, to move time or raise a signal at a chosen
 /// read. The hook gets the clock and the number of reads before this one, and runs before the
 /// read returns.
 pub struct HookedClock {
     inner: Arc<TestClock>,
     reads: AtomicUsize,
-    hook: Box<dyn Fn(&TestClock, usize) + Send + Sync>,
+    hook: ReadHook,
 }
 impl HookedClock {
     pub fn over(

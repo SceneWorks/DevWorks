@@ -1144,7 +1144,7 @@ fn incompatible_stores_are_refused_before_any_write() {
 
     // Not a DevWorks store.
     let h = Harness::new();
-    std::fs::create_dir_all(&h.root.path()).unwrap();
+    std::fs::create_dir_all(h.root.path()).unwrap();
     h.raw().execute_batch("CREATE TABLE unrelated(x)").unwrap();
     let digest = file_digest(&h);
     assert!(matches!(
@@ -1418,12 +1418,14 @@ fn ctx(s: &SqliteStore) -> InvocationContext {
 /// Host fixture rows the command path references (owned by later work repositories).
 fn seed(s: &SqliteStore) {
     s.with_writer_connection(|c| {
-        db(c.execute_batch(
-            "INSERT INTO actors VALUES('user-a','human','User A');
-             INSERT INTO projects VALUES('project-a','Fixture','Active',1,1,1);
-             INSERT INTO work_items VALUES('root-a','project-a','feature',NULL,NULL,NULL,'Fixture',1,0,1,1,1,'{}');",
-        ))
+        db(c.execute_batch("INSERT INTO actors VALUES('user-a','human','User A');"))
     })
+    .unwrap();
+    devworks_test_support::seed::rows(
+        s,
+        &[devworks_test_support::seed::ProjectSeed::new("project-a").name("Fixture")],
+        &[devworks_test_support::seed::WorkSeed::feature("root-a", "project-a").title("Fixture")],
+    )
     .unwrap();
 }
 fn grant_state(s: &SqliteStore) -> GrantRecord {

@@ -612,13 +612,7 @@ fn with_native_call_pair(work: impl FnOnce(&Runtime, &InvocationContext, &str, &
     let executor = runtime();
     let store = h.open();
     let src = sources();
-    struct SourceCleanup(std::path::PathBuf);
-    impl Drop for SourceCleanup {
-        fn drop(&mut self) {
-            let _ = std::fs::remove_dir_all(&self.0);
-        }
-    }
-    let _source = SourceCleanup(src.clone());
+    let _source = devworks_test_support::TempRoot::adopt(src.clone());
     let repo = src.join("traversal-pair");
     std::fs::create_dir_all(repo.join("src")).unwrap();
     std::fs::write(

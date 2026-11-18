@@ -4103,7 +4103,7 @@ fn native_purge_files_cover_all_owned_classes_and_preserve_sources_and_other_gen
     let h = Harness::new();
     let store = Arc::new(h.store());
     let _ = purge_storage_fixture(store.as_ref());
-    let data = &h.root.path();
+    let data = h.root.path();
     let cache = data.join("cache");
     let paste = data.join("paste");
     let digest = devworks_core::fingerprint::sha256_hex(b"owned blob");

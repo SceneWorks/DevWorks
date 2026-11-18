@@ -1083,9 +1083,7 @@ fn recovery_retains_live_native_owner_and_retires_only_after_verified_process_ex
             tokio::time::sleep(Duration::from_millis(5)).await;
         };
         let original_cleanup = original.clone();
-        struct ChildFiles(std::path::PathBuf);
-        impl Drop for ChildFiles { fn drop(&mut self) { let _=std::fs::remove_dir_all(&self.0); } }
-        let _files = ChildFiles(original_cleanup);
+        let _files = devworks_test_support::TempRoot::adopt(original_cleanup);
         let connection = rusqlite::Connection::open(original.join("workspace.sqlite")).unwrap();
         connection.execute("VACUUM INTO ?1", [h.root.join("workspace.sqlite").to_string_lossy().as_ref()]).unwrap();
         drop(connection);
