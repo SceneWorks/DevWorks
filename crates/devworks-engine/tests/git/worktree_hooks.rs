@@ -150,6 +150,8 @@ pub(super) fn assert_reviewed_create(
     .unwrap();
     let human = principal(store.as_ref(), "worktree-reviewer", PrincipalKind::Human);
     let cases = UseCases::new().with_git(service.clone());
+    let control = Arc::new(ControlService::new(h.ids.clone()));
+    service.set_approval_control(control.clone());
     let approvals = Arc::new(
         ApprovalService::new(
             h.ids.clone(),
@@ -157,12 +159,11 @@ pub(super) fn assert_reviewed_create(
             Arc::new(devworks_core::authority::HostRoles {
                 store: store.clone(),
             }),
-            Arc::new(ControlService::new(h.ids.clone())),
+            control.clone(),
         )
         .with_catalog(ApprovalCatalog::qualified(&cases))
         .with_owners(Arc::new(
-            NativeOwnerPreviews::new(Some(service.clone()), None, None)
-                .with_control(Arc::new(ControlService::new(h.ids.clone()))),
+            NativeOwnerPreviews::default().register(service.clone()),
         )),
     );
     let cases = cases.with_approvals(approvals.clone());

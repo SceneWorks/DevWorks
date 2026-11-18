@@ -547,7 +547,7 @@ pub struct Runtime {
     /// The loops built on [`Commits`], by name (tests check every polling loop is among them).
     polling_loops: Arc<Mutex<Vec<&'static str>>>,
     /// What each polling loop has seen, with the commit and delivery counts to compare it to.
-#[cfg(any(test, feature = "test-support"))]
+    #[cfg(any(test, feature = "test-support"))]
     polling_states: PollingStates,
     /// What the usage worker's drain established, for the shutdown report.
     usage_drain: Arc<Mutex<Option<Result<crate::usage::UsageDrain, StorageError>>>>,
@@ -1083,6 +1083,31 @@ async fn build(composition: Composition, core: CoreServices) -> Result<Engine, B
         Some(service) => use_cases.with_instructions(service.clone()),
         None => use_cases,
     };
+    // Each approvable operation has one owner, registered here.
+    let mut owners =
+        devworks_core::services::approvals::owner_preview::NativeOwnerPreviews::default()
+            .register(Arc::new(
+                devworks_core::services::projects::ProjectApprovals,
+            ))
+            .register(jobs.clone());
+    if let Some(git) = &git {
+        git.set_approval_control(control.clone());
+        owners = owners.register(git.clone());
+    }
+    if let Some(packages) = &package_service {
+        packages.set_approval_control(control.clone());
+        owners = owners.register(packages.clone());
+    }
+    if let Some(desktop) = &desktop {
+        owners = owners.register(desktop.clone());
+    }
+    if let Some(instructions) = &instructions {
+        owners = owners.register(instructions.clone());
+    }
+    if let Some(containers) = &containers {
+        owners = owners.register(containers.clone());
+    }
+    let owners = owners.with_evidence(store.clone(), artifacts.clone());
     let approvals = Arc::new(
         ApprovalService::new(
             ids.clone(),
@@ -1093,18 +1118,7 @@ async fn build(composition: Composition, core: CoreServices) -> Result<Engine, B
             control.clone(),
         )
         .with_catalog(ApprovalCatalog::qualified(&use_cases))
-        .with_owners(Arc::new(
-            devworks_core::services::approvals::owner_preview::NativeOwnerPreviews::new(
-                git.clone(),
-                package_service.clone(),
-                Some(jobs.clone()),
-            )
-            .with_desktop(desktop.clone())
-            .with_instructions(instructions.clone())
-            .with_containers(containers.clone())
-            .with_control(control.clone())
-            .with_evidence(store.clone(), artifacts.clone()),
-        )),
+        .with_owners(Arc::new(owners)),
     );
     let use_cases = use_cases
         .with_approvals(approvals.clone())

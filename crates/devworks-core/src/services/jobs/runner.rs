@@ -70,8 +70,8 @@ use crate::protocol::provider::ArtifactRef;
 use crate::protocol::records::{EffortName, JobDefinition, RouteIntent};
 use crate::protocol::results::{DomainCommandReply, DomainDecision};
 use crate::protocol::{
-    ActorId, CommandReply, Id, OperationId, OperationState, ProjectId, Rejection,
-    RequestKey, Revision, RootId,
+    ActorId, CommandReply, Id, OperationId, OperationState, ProjectId, Rejection, RequestKey,
+    Revision, RootId,
 };
 use crate::services::runs::recovery::LifecycleHooks;
 use crate::settings::catalog::AgentRole;

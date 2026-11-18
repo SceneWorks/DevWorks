@@ -19,11 +19,11 @@
 //!
 //! Every write is fenced by the run: it must be active and owned by this boot, so a late task of
 //! a finished, cancelled or superseded run can never record into it or a later run.
+#[cfg(any(test, feature = "test-support"))]
+use crate::ports::storage::StoredJobUsage;
 use crate::ports::storage::{
     StorageError, StoredJobAction, StoredJobCheckpoint, StoredJobRun, WriteTransaction,
 };
-#[cfg(any(test, feature = "test-support"))]
-use crate::ports::storage::StoredJobUsage;
 use crate::protocol::{Id, RootId};
 use serde_json::{Value, json};
 

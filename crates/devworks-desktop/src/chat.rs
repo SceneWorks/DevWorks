@@ -108,8 +108,7 @@ pub struct Attachment {
     pub preview: Option<TextureHandle>,
     pub preview_note: Option<String>,
 }
-impl Attachment {
-}
+impl Attachment {}
 
 #[derive(Default)]
 pub struct Draft {

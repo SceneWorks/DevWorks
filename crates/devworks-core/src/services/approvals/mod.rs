@@ -31,6 +31,11 @@ pub struct OwnerPreview {
 /// reuses owner rules inside the deciding transaction; actual dispatch runs them again.
 pub trait SavedOperationOwners: Send + Sync {
     fn supports(&self, operation: &str) -> bool;
+    /// Whether a refused agent call of `operation` may be held as an approval. A person's own
+    /// operation is decided by that person, so its owner says no.
+    fn holdable(&self, _operation: &str) -> bool {
+        true
+    }
     fn decide_source(
         &self,
         _tx: &mut dyn WriteTransaction,

@@ -1634,6 +1634,42 @@ fn validate_reviewed_project_command(
     Ok(())
 }
 
+/// The owner of the approvable project operations: the project and its index views are the
+/// target, and a person's own decision is the only way to approve them (a refused agent call is
+/// never held for approval).
+pub struct ProjectApprovals;
+
+impl crate::services::approvals::SavedOperationOwners for ProjectApprovals {
+    fn supports(&self, operation: &str) -> bool {
+        matches!(
+            operation,
+            "projects.archive" | "projects.delete" | "repositories.remove_index"
+        )
+    }
+    fn holdable(&self, _operation: &str) -> bool {
+        false
+    }
+    fn prepare(
+        &self,
+        ctx: &InvocationContext,
+        request: &crate::admission::DecodedRequest,
+        env: &crate::ports::Preparation<'_>,
+    ) -> Result<crate::services::approvals::OwnerPreview, Failure> {
+        env.read(|s| Ok(approval_preview(s.projects(), ctx, request)))
+            .map_err(Failure::Storage)
+            .and_then(|v| v)
+    }
+    fn validate(
+        &self,
+        tx: &mut dyn WriteTransaction,
+        ctx: &InvocationContext,
+        request: &crate::admission::DecodedRequest,
+        preview: &crate::services::approvals::OwnerPreview,
+    ) -> Result<(), Failure> {
+        validate_approval_preview(tx, ctx, request, preview)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::display_remote;

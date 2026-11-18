@@ -1908,6 +1908,32 @@ impl JobService {
     }
 }
 
+impl crate::services::approvals::SavedOperationOwners for JobService {
+    fn supports(&self, operation: &str) -> bool {
+        matches!(
+            operation,
+            "jobs.create" | "jobs.edit" | "jobs.enable" | "jobs.run_now"
+        )
+    }
+    fn prepare(
+        &self,
+        ctx: &crate::context::InvocationContext,
+        request: &crate::admission::DecodedRequest,
+        env: &crate::ports::Preparation<'_>,
+    ) -> Result<crate::services::approvals::OwnerPreview, crate::services::kernel::Failure> {
+        self.approval_preview(ctx, request, env)
+    }
+    fn validate(
+        &self,
+        tx: &mut dyn crate::ports::storage::WriteTransaction,
+        ctx: &crate::context::InvocationContext,
+        request: &crate::admission::DecodedRequest,
+        preview: &crate::services::approvals::OwnerPreview,
+    ) -> Result<(), crate::services::kernel::Failure> {
+        self.validate_approval_preview(tx, ctx, request, preview)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -1360,7 +1360,7 @@ fn agent_container_create_approval_preview_lists_mounts_ports_and_image() {
         tx.projects()
             .set_members(&project("project-a"), &[id("mount-repo")])
     });
-    let owners = Arc::new(NativeOwnerPreviews::default().with_containers(Some(service)));
+    let owners = Arc::new(NativeOwnerPreviews::default().register(service));
     assert!(owners.supports("containers.create"));
     let context = fx.agent("agent-a", "project-a", "s-a");
     let spec = |relative: &str| {
@@ -1506,9 +1506,7 @@ fn approved_container_create_replays_only_while_its_reviewed_mounts_are_unchange
             Arc::new(ControlService::new(fx.h.ids.clone())),
         )
         .with_catalog(ApprovalCatalog::qualified(&fx.cases))
-        .with_owners(Arc::new(
-            NativeOwnerPreviews::default().with_containers(Some(service)),
-        )),
+        .with_owners(Arc::new(NativeOwnerPreviews::default().register(service))),
     );
     fx.cases = fx.cases.clone().with_approvals(approvals.clone());
     // Project work outside a feature root, so no run-control hold applies to the replay.
@@ -1685,7 +1683,7 @@ fn approved_container_build_pull_start_and_exec_review_replay_and_refuse_changes
             .set_members(&project("project-a"), &[id("build-repo")])
     });
     fx.cases = fx.cases.clone().with_containers(service.clone());
-    let owners = Arc::new(NativeOwnerPreviews::default().with_containers(Some(service.clone())));
+    let owners = Arc::new(NativeOwnerPreviews::default().register(service.clone()));
     for operation in [
         "containers.build",
         "containers.pull",

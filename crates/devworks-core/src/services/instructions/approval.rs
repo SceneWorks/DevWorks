@@ -270,3 +270,42 @@ pub(crate) fn shadowed_workspace_skill(
         })
         .map(|(i, _)| i.name))
 }
+
+impl crate::services::approvals::SavedOperationOwners for InstructionService {
+    fn supports(&self, operation: &str) -> bool {
+        matches!(operation, "skills.rollback" | "roles.rollback")
+    }
+    fn prepare(
+        &self,
+        ctx: &crate::context::InvocationContext,
+        request: &crate::admission::DecodedRequest,
+        env: &crate::ports::Preparation<'_>,
+    ) -> Result<crate::services::approvals::OwnerPreview, crate::services::kernel::Failure> {
+        self.approval_preview(ctx, request, env)
+    }
+    fn validate(
+        &self,
+        tx: &mut dyn crate::ports::storage::WriteTransaction,
+        ctx: &crate::context::InvocationContext,
+        request: &crate::admission::DecodedRequest,
+        preview: &crate::services::approvals::OwnerPreview,
+    ) -> Result<(), crate::services::kernel::Failure> {
+        self.validate_approval(tx, ctx, request, preview)
+    }
+    fn decide_source(
+        &self,
+        tx: &mut dyn crate::ports::storage::WriteTransaction,
+        human: &crate::context::InvocationContext,
+        request: &crate::admission::DecodedRequest,
+        preview: &crate::services::approvals::OwnerPreview,
+        approve: bool,
+    ) -> Result<(), crate::services::kernel::Failure> {
+        // A review sealed into evidence is decided over its complete original binding.
+        let expanded = if approve {
+            crate::services::approvals::review_evidence::expand(tx.artifacts(), preview)?
+        } else {
+            crate::services::approvals::review_evidence::expand_historical(preview)?
+        };
+        self.decide_approval(tx, human, request, &expanded, approve)
+    }
+}

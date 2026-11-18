@@ -18,13 +18,13 @@ use crate::gateway::AdmittedQuery;
 use crate::operations::OperationInput;
 use crate::ports::Preparation;
 use crate::ports::files::FileFault;
+#[cfg(any(test, feature = "test-support"))]
+use crate::ports::storage::BlobRecord;
 use crate::ports::storage::{
     ApplicationStore, ArtifactLink, ArtifactState, BlobState, NewEvent, OperationRecord,
     ReadOptions, ReadSnapshot, StorageError, StoredArtifact, StoredVersion, SubjectKey,
     WriteOptions, WriteTransaction, read_snapshot, run_write,
 };
-#[cfg(any(test, feature = "test-support"))]
-use crate::ports::storage::BlobRecord;
 use crate::ports::{AuthorityDenial, AuthorityPort, AuthorityRequest, Clock, IdKind};
 use crate::protocol::provider::ArtifactRef;
 use crate::protocol::records::MutationSummary;

@@ -142,11 +142,7 @@ impl ApprovalService {
         preview: &OwnerPreview,
     ) -> Result<(), Failure> {
         check_authority(tx, ctx, request)?;
-        if builtin(request.descriptor.name) {
-            crate::services::projects::validate_approval_preview(tx, ctx, request, preview)
-        } else {
-            self.owners.validate(tx, ctx, request, preview)
-        }
+        self.owners.validate(tx, ctx, request, preview)
     }
     pub(crate) fn decoded(
         &self,
@@ -158,7 +154,7 @@ impl ApprovalService {
             op,
             revision,
             input,
-            self.catalog.contains(op) && (builtin(op) || self.owners.supports(op)),
+            self.catalog.contains(op) && self.owners.supports(op),
         )
         .map_err(|e| match e {
             requests::RequestFailure::Unsupported => unsupported(),
@@ -420,20 +416,7 @@ impl CommandHandler for ApprovalService {
         if !env.read(|s| super::prepare_authority(s, &original, &request))? {
             return Ok(None);
         }
-        let prepared = if builtin(&op) {
-            env.read(|s| {
-                Ok(crate::services::projects::approval_preview(
-                    s.projects(),
-                    &original,
-                    &request,
-                ))
-            })
-            .map_err(Failure::Storage)
-            .and_then(|v| v)
-        } else {
-            self.owners.prepare(&original, &request, env)
-        };
-        match prepared {
+        match self.owners.prepare(&original, &request, env) {
             Ok(preview) => Ok(Some(Prepared::new(PreparedOwner { preview }))),
             Err(Failure::Storage(e)) => Err(e),
             Err(Failure::Refused(refusal)) => {
@@ -459,13 +442,6 @@ impl CommandHandler for ApprovalService {
         };
         crate::services::kernel::decided(tx, out.map(|result| DomainDecision::Applied { result }))
     }
-}
-
-pub(crate) fn builtin(op: &str) -> bool {
-    matches!(
-        op,
-        "projects.archive" | "projects.delete" | "repositories.remove_index"
-    )
 }
 
 fn policy_permits(
