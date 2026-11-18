@@ -635,6 +635,7 @@ impl PackageHost {
         let _ = self.inference.set(ports);
     }
     /// How many restart budgets the host tracks (one per desired instance key at most).
+    #[cfg(any(test, feature = "test-support"))]
     pub fn tracked_budgets(&self) -> usize {
         self.attempts
             .lock()
@@ -872,6 +873,7 @@ impl PackageHost {
     }
 
     /// The instances of a package (current and retiring), for inspection.
+    #[cfg(any(test, feature = "test-support"))]
     pub fn instance_status(&self, package_id: &str) -> Vec<(String, InstanceStatus)> {
         self.instances
             .lock()

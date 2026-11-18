@@ -733,6 +733,7 @@ impl Client {
     }
 
     /// Changes how long dropping the client waits for its workers (tests).
+    #[cfg(any(test, feature = "test-support"))]
     pub fn set_join_bound(&mut self, bound: Duration) {
         self.join_bound = bound;
     }

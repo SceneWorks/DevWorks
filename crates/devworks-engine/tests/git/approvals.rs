@@ -671,6 +671,8 @@ fn approve_owned_force_result(
         "unowned Full force must require separate operation consent: {denied:?}"
     );
     let cases = UseCases::new().with_git(service.clone());
+    let control = Arc::new(ControlService::new(h.ids.clone()));
+    service.set_approval_control(control.clone());
     let approvals = Arc::new(
         ApprovalService::new(
             h.ids.clone(),
@@ -678,12 +680,11 @@ fn approve_owned_force_result(
             Arc::new(devworks_core::authority::HostRoles {
                 store: store.clone(),
             }),
-            Arc::new(ControlService::new(h.ids.clone())),
+            control.clone(),
         )
         .with_catalog(ApprovalCatalog::qualified(&cases))
         .with_owners(Arc::new(
-            NativeOwnerPreviews::new(Some(service.clone()), None, None)
-                .with_control(Arc::new(ControlService::new(h.ids.clone()))),
+            NativeOwnerPreviews::default().register(service.clone()),
         )),
     );
     let cases = cases.with_approvals(approvals.clone());

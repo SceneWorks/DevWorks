@@ -188,6 +188,7 @@ impl Plan {
     pub fn blocking(&self) -> impl Iterator<Item = &Issue> {
         self.issues.iter().filter(|i| i.blocking)
     }
+    #[cfg(any(test, feature = "test-support"))]
     pub fn is_valid(&self) -> bool {
         self.blocking().next().is_none()
     }

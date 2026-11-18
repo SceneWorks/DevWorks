@@ -17,14 +17,20 @@
 //! [`DestructiveExecutor`] verifies the same identities through no-follow handles before acting.
 //! These are accident guards for supported paths, not interception of arbitrary user-level code.
 use super::deletion::PrimaryDeletionPermit;
+#[cfg(any(test, feature = "test-support"))]
 use crate::context::InvocationContext;
 use crate::fingerprint::sha256_hex;
+#[cfg(any(test, feature = "test-support"))]
 use crate::ports::IdKind;
 use crate::ports::storage::{
-    ApplicationStore, NewEvent, ReadOptions, RegisteredRepository, StorageError, WriteTransaction,
-    read_snapshot,
+    ApplicationStore, ReadOptions, RegisteredRepository, StorageError, read_snapshot,
 };
-use crate::protocol::{EventId, Id, StoreId};
+#[cfg(any(test, feature = "test-support"))]
+use crate::ports::storage::{NewEvent, WriteTransaction};
+#[cfg(any(test, feature = "test-support"))]
+use crate::protocol::EventId;
+use crate::protocol::{Id, StoreId};
+#[cfg(any(test, feature = "test-support"))]
 use serde_json::json;
 use std::path::{Path, PathBuf};
 
@@ -959,6 +965,7 @@ pub trait DestructiveExecutor: Send + Sync {
 /// Records a blocked or held decision in history, attributed to the invoking principal with its
 /// work lineage and linked human authorization sources. Allowed decisions record nothing here;
 /// the owning operation journals the effect.
+#[cfg(any(test, feature = "test-support"))]
 pub fn record_refusal(
     tx: &mut dyn WriteTransaction,
     ctx: &InvocationContext,

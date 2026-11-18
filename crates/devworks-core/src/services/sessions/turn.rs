@@ -213,10 +213,6 @@ impl TurnAssembler {
     pub fn preview(&self) -> &str {
         &self.preview
     }
-    /// Complete calls observed so far, in arrival order (retained even when not dispatchable).
-    pub fn observed_calls(&self) -> &[CompleteToolCall] {
-        &self.calls
-    }
 
     /// The stream ended without a terminal event (EOF, a dropped connection): the turn is
     /// interrupted and its calls are not dispatchable. Returns the remaining durable entries.

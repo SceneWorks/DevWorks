@@ -6,41 +6,25 @@ use crate::ports::Preparation;
 use crate::ports::storage::WriteTransaction;
 use crate::protocol::DomainErrorCode;
 use crate::services::approvals::{OwnerPreview, SavedOperationOwners};
-use crate::services::desktop::DesktopService;
 use crate::services::kernel::{Failure, Refusal};
-use crate::services::{git::GitService, jobs::JobService, packages::PackageService};
 use std::sync::Arc;
 
-/// Composition registers actual business-owner instances. Missing owners never qualify an
-/// operation; generic metadata or an arbitrary registered command is insufficient authority.
+/// The registered saved-operation owners. Composition registers each actual business owner
+/// ([`NativeOwnerPreviews::register`]); an operation no registered owner supports never
+/// qualifies, and generic metadata or an arbitrary registered command is insufficient authority.
+/// Adding an approvable operation is one registration.
 #[derive(Default)]
 pub struct NativeOwnerPreviews {
-    git: Option<Arc<GitService>>,
-    packages: Option<Arc<PackageService>>,
-    jobs: Option<Arc<JobService>>,
-    desktop: Option<Arc<DesktopService>>,
-    instructions: Option<Arc<crate::services::instructions::InstructionService>>,
-    containers: Option<Arc<crate::services::containers::service::ContainerService>>,
+    owners: Vec<Arc<dyn SavedOperationOwners>>,
     evidence: Option<(
         Arc<dyn crate::ports::storage::ApplicationStore>,
         Arc<crate::services::artifacts::ArtifactService>,
     )>,
 }
 impl NativeOwnerPreviews {
-    pub fn new(
-        git: Option<Arc<GitService>>,
-        packages: Option<Arc<PackageService>>,
-        jobs: Option<Arc<JobService>>,
-    ) -> Self {
-        Self {
-            git,
-            packages,
-            jobs,
-            desktop: None,
-            instructions: None,
-            containers: None,
-            evidence: None,
-        }
+    pub fn register(mut self, owner: Arc<dyn SavedOperationOwners>) -> Self {
+        self.owners.push(owner);
+        self
     }
     pub fn with_evidence(
         mut self,
@@ -50,32 +34,11 @@ impl NativeOwnerPreviews {
         self.evidence = Some((store, artifacts));
         self
     }
-    pub fn with_control(self, control: Arc<crate::services::runs::ControlService>) -> Self {
-        if let Some(git) = &self.git {
-            git.set_approval_control(control.clone());
-        }
-        if let Some(packages) = &self.packages {
-            packages.set_approval_control(control);
-        }
-        self
-    }
-    pub fn with_desktop(mut self, desktop: Option<Arc<DesktopService>>) -> Self {
-        self.desktop = desktop;
-        self
-    }
-    pub fn with_instructions(
-        mut self,
-        instructions: Option<Arc<crate::services::instructions::InstructionService>>,
-    ) -> Self {
-        self.instructions = instructions;
-        self
-    }
-    pub fn with_containers(
-        mut self,
-        containers: Option<Arc<crate::services::containers::service::ContainerService>>,
-    ) -> Self {
-        self.containers = containers;
-        self
+    fn owner(&self, operation: &str) -> Option<&dyn SavedOperationOwners> {
+        self.owners
+            .iter()
+            .find(|o| o.supports(operation))
+            .map(|o| o.as_ref())
     }
 }
 fn unsupported() -> Failure {
@@ -88,17 +51,10 @@ fn unsupported() -> Failure {
 }
 impl SavedOperationOwners for NativeOwnerPreviews {
     fn supports(&self, operation: &str) -> bool {
-        match operation {
-            "git.worktree" | "git.commit" | "git.push" => self.git.is_some(),
-            "addons.install" | "addons.update" | "addons.enable" | "addons.rollback"
-            | "addons.configure" => self.packages.is_some(),
-            "jobs.create" | "jobs.edit" | "jobs.enable" | "jobs.run_now" => self.jobs.is_some(),
-            "desktop.request_control" => self.desktop.is_some(),
-            "skills.rollback" | "roles.rollback" => self.instructions.is_some(),
-            "containers.build" | "containers.pull" | "containers.create" | "containers.start"
-            | "containers.exec" => self.containers.is_some(),
-            _ => false,
-        }
+        self.owner(operation).is_some()
+    }
+    fn holdable(&self, operation: &str) -> bool {
+        self.owner(operation).is_some_and(|o| o.holdable(operation))
     }
     fn prepare(
         &self,
@@ -106,42 +62,10 @@ impl SavedOperationOwners for NativeOwnerPreviews {
         request: &DecodedRequest,
         env: &Preparation<'_>,
     ) -> Result<OwnerPreview, Failure> {
-        if !self.supports(request.descriptor.name) {
-            return Err(unsupported());
-        }
-        let preview = match request.descriptor.family {
-            "git" => self
-                .git
-                .as_ref()
-                .ok_or_else(unsupported)?
-                .approval_preview(ctx, request, env),
-            "addons" => self
-                .packages
-                .as_ref()
-                .ok_or_else(unsupported)?
-                .approval_preview(ctx, request, env),
-            "jobs" => self
-                .jobs
-                .as_ref()
-                .ok_or_else(unsupported)?
-                .approval_preview(ctx, request, env),
-            "desktop" => self
-                .desktop
-                .as_ref()
-                .ok_or_else(unsupported)?
-                .approval_preview(ctx, request, env),
-            "skills" | "roles" => self
-                .instructions
-                .as_ref()
-                .ok_or_else(unsupported)?
-                .approval_preview(ctx, request, env),
-            "containers" => self
-                .containers
-                .as_ref()
-                .ok_or_else(unsupported)?
-                .approval_preview(ctx, request, env),
-            _ => Err(unsupported()),
-        }?;
+        let preview = self
+            .owner(request.descriptor.name)
+            .ok_or_else(unsupported)?
+            .prepare(ctx, request, env)?;
         if !crate::services::approvals::review_evidence::needed(&preview) {
             return Ok(preview);
         }
@@ -174,45 +98,12 @@ impl SavedOperationOwners for NativeOwnerPreviews {
         request: &DecodedRequest,
         preview: &OwnerPreview,
     ) -> Result<(), Failure> {
-        if !self.supports(request.descriptor.name) {
-            return Err(unsupported());
-        }
+        let owner = self
+            .owner(request.descriptor.name)
+            .ok_or_else(unsupported)?;
         let expanded =
             crate::services::approvals::review_evidence::expand(tx.artifacts(), preview)?;
-        let preview = &expanded;
-        match request.descriptor.family {
-            "git" => self
-                .git
-                .as_ref()
-                .ok_or_else(unsupported)?
-                .validate_approval_preview(tx, ctx, request, preview),
-            "addons" => self
-                .packages
-                .as_ref()
-                .ok_or_else(unsupported)?
-                .validate_approval_preview(tx, ctx, request, preview),
-            "jobs" => self
-                .jobs
-                .as_ref()
-                .ok_or_else(unsupported)?
-                .validate_approval_preview(tx, ctx, request, preview),
-            "desktop" => self
-                .desktop
-                .as_ref()
-                .ok_or_else(unsupported)?
-                .validate_approval_preview(tx, ctx, request, preview),
-            "skills" | "roles" => self
-                .instructions
-                .as_ref()
-                .ok_or_else(unsupported)?
-                .validate_approval(tx, ctx, request, preview),
-            "containers" => self
-                .containers
-                .as_ref()
-                .ok_or_else(unsupported)?
-                .validate_approval_preview(tx, ctx, request, preview),
-            _ => Err(unsupported()),
-        }
+        owner.validate(tx, ctx, request, &expanded)
     }
     fn decide_source(
         &self,
@@ -222,31 +113,10 @@ impl SavedOperationOwners for NativeOwnerPreviews {
         preview: &OwnerPreview,
         approve: bool,
     ) -> Result<(), Failure> {
-        if !matches!(request.descriptor.family, "skills" | "roles" | "addons") {
-            return Ok(());
+        match self.owner(request.descriptor.name) {
+            Some(owner) => owner.decide_source(tx, human, request, preview, approve),
+            None => Ok(()),
         }
-        // A review sealed into evidence is decided over its complete original binding.
-        let expanded = if approve {
-            crate::services::approvals::review_evidence::expand(tx.artifacts(), preview)?
-        } else {
-            crate::services::approvals::review_evidence::expand_historical(preview)?
-        };
-        let preview = &expanded;
-        if matches!(request.descriptor.family, "skills" | "roles") {
-            return self
-                .instructions
-                .as_ref()
-                .ok_or_else(unsupported)?
-                .decide_approval(tx, human, request, preview, approve);
-        }
-        if request.descriptor.family == "addons" {
-            return self
-                .packages
-                .as_ref()
-                .ok_or_else(unsupported)?
-                .decide_approval_source(tx, human, request, preview, approve);
-        }
-        Ok(())
     }
 }
 

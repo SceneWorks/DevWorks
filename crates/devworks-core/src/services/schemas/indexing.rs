@@ -75,6 +75,27 @@ pub(crate) fn settle_cancelled(
     }
     Ok(())
 }
+
+/// The queue hook of [`EFFECT_CONSUMER`]: a cancellation before dispatch settles the schema
+/// source in the same writer unit.
+pub struct QueueHook;
+
+impl crate::services::queue::ConsumerHook for QueueHook {
+    fn consumer(&self) -> &'static str {
+        EFFECT_CONSUMER
+    }
+
+    fn cancelled(
+        &self,
+        tx: &mut dyn WriteTransaction,
+        entry: &crate::ports::storage::QueueEntry,
+    ) -> Result<(), StorageError> {
+        match &entry.operation_id {
+            Some(operation) => settle_cancelled(tx, operation),
+            None => Ok(()),
+        }
+    }
+}
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct SchemaJob {

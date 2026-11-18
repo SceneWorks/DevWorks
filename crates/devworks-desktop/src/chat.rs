@@ -108,11 +108,7 @@ pub struct Attachment {
     pub preview: Option<TextureHandle>,
     pub preview_note: Option<String>,
 }
-impl Attachment {
-    pub fn is_image(&self) -> bool {
-        self.media_type.starts_with("image/")
-    }
-}
+impl Attachment {}
 
 #[derive(Default)]
 pub struct Draft {

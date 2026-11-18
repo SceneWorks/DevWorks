@@ -453,7 +453,7 @@ fn cost(
     let name = classification.map_or("Unknown", CostClassification::as_str);
     json!({"priceKind":kind,"priceOrigin":origin,"amountMicroUsd":optional(amount),"currency":reported.map(|r|r.currency.as_str()).or(quote.map(|q|q.currency.as_str())),"originalAmount":reported.map(|r|r.amount.as_str()),"classification":name,"priceSnapshotId":quote.and_then(|q|q.snapshot_id.as_ref()),"priceRevision":optional(quote.and_then(|q|q.price_revision)),"overrideRevision":optional(quote.and_then(|q|q.override_revision)),"subscriptionEquivalent":classification==Some(CostClassification::SubscriptionApiEquivalent),"incomplete":incomplete,"untrackedReason":reason,"tariffs":quote.map(|q|q.tariffs.iter().map(tariff_json).collect::<Vec<_>>()).unwrap_or_default(),"monetaryComplete":complete})
 }
-fn attempt(read: &dyn ReadSnapshot, a: StoredInferenceAttempt, gaps: &mut Gaps) -> SResult<Fact> {
+fn attempt(read: &dyn ReadSnapshot, a: StoredInferenceAttempt) -> SResult<Fact> {
     let admitted = accounting::snapshot(&a)?;
     let balance = read.usage().attempt_balance(&a.attempt_id)?;
     let summary = balance
@@ -493,15 +493,6 @@ fn attempt(read: &dyn ReadSnapshot, a: StoredInferenceAttempt, gaps: &mut Gaps) 
             .map_err(|_| invalid("usage_meter"))?
     };
     let provider = provider(&a.endpoint_profile, &a.connection_id);
-    if balance.as_ref().is_none_or(|b| !b.monetary_complete) {
-        gaps.add("monetary-coverage-incomplete");
-    }
-    if balance.as_ref().is_none_or(|b| b.incomplete) {
-        gaps.add("usage-observation-incomplete");
-    }
-    if balance.as_ref().is_some_and(|b| b.unknown_tail) {
-        gaps.add("remote-outcome-unknown");
-    }
     let b = balance.as_ref();
     let classification = b.map(|b| b.classification);
     let mut row = json!({"id":a.attempt_id,"requestId":a.request_id,"attemptId":a.attempt_id,"attemptNumber":a.attempt_number.to_string(),"sourceKind":"InferenceAttempt","sourceId":a.attempt_id,"actorId":a.actor_id,"projectId":a.project_id,"featureId":a.feature_id,"workId":a.work_id,"assignmentId":a.assignment_id,"sessionId":a.session_id,"jobRunId":a.job_run_id,"operationId":a.operation_id});
@@ -826,7 +817,7 @@ fn collect(read: &dyn ReadSnapshot, q: &Query, gaps: &mut Gaps) -> SResult<Vec<F
                 None
             };
             if q.in_range(a.created_at_ms) || logical_time.is_some_and(|at| q.in_range(at)) {
-                facts.push(attempt(read, a, &mut Gaps::default())?);
+                facts.push(attempt(read, a)?);
             }
         }
         Ok(())

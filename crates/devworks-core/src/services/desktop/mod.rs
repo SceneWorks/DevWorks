@@ -264,12 +264,6 @@ impl DesktopService {
         CorrelationId(self.ids.next_id(crate::ports::IdKind::Correlation))
     }
 
-    /// Native automation can generate ordinary UI events. Trusted confirmation ingress stays
-    /// closed while any desktop holder may inject them, regardless of that holder's project.
-    pub fn automation_may_be_active(&self) -> bool {
-        self.control_epoch().held()
-    }
-
     /// The desktop control state now ([`ControlEpoch`]); unreadable state is held.
     pub fn control_epoch(&self) -> ControlEpoch {
         read_snapshot(&*self.store, &ReadOptions::default(), |snapshot| {
@@ -1403,5 +1397,28 @@ impl JournaledEffect for DesktopService {
     }
     fn observe(&self, operation: &OperationRecord) -> EffectOutcome {
         self.observe_input(operation)
+    }
+}
+
+impl crate::services::approvals::SavedOperationOwners for DesktopService {
+    fn supports(&self, operation: &str) -> bool {
+        matches!(operation, "desktop.request_control")
+    }
+    fn prepare(
+        &self,
+        ctx: &crate::context::InvocationContext,
+        request: &crate::admission::DecodedRequest,
+        env: &crate::ports::Preparation<'_>,
+    ) -> Result<crate::services::approvals::OwnerPreview, crate::services::kernel::Failure> {
+        self.approval_preview(ctx, request, env)
+    }
+    fn validate(
+        &self,
+        tx: &mut dyn crate::ports::storage::WriteTransaction,
+        ctx: &crate::context::InvocationContext,
+        request: &crate::admission::DecodedRequest,
+        preview: &crate::services::approvals::OwnerPreview,
+    ) -> Result<(), crate::services::kernel::Failure> {
+        self.validate_approval_preview(tx, ctx, request, preview)
     }
 }

@@ -1200,6 +1200,7 @@ impl ControlService {
 
     /// The incorporated stage: records the coordinator's disposition of an acknowledged
     /// instruction and supersedes exactly the incompatible assignments it names.
+    #[cfg(any(test, feature = "test-support"))]
     pub fn incorporate_instruction(
         &self,
         tx: &mut dyn WriteTransaction,
@@ -1378,6 +1379,7 @@ impl ControlService {
     /// Decides whether a submitted result is current evidence (CONTROL-04): a result from an
     /// earlier activation or claim epoch, a superseded assignment or an older plan revision is
     /// retained as attributable history but never accepted as current.
+    #[cfg(any(test, feature = "test-support"))]
     pub fn accept_result(
         &self,
         tx: &mut dyn WriteTransaction,
@@ -1461,36 +1463,6 @@ impl ControlService {
             )?;
         }
         Ok(verdict)
-    }
-
-    /// Records an explicit adoption of compatible older evidence by the current owner after it
-    /// validated it against current requirements (it is never adopted automatically).
-    pub fn adopt_evidence(
-        &self,
-        tx: &mut dyn WriteTransaction,
-        actor: &ActorId,
-        assignment: &AssignmentId,
-        evidence: &str,
-        rationale: &str,
-    ) -> Gate<()> {
-        let Some(a) = tx.runs().assignment(assignment)? else {
-            return Ok(Err(Fenced::NotFound("assignment")));
-        };
-        let Some(root) = work_root(tx, &a.root_id)? else {
-            return Ok(Err(Fenced::NotFound("root")));
-        };
-        record(
-            tx,
-            actor,
-            &root,
-            None,
-            ASSIGNMENT_AGGREGATE,
-            a.id.0.as_str(),
-            a.revision,
-            "EvidenceAdopted",
-            json!({"evidence": evidence, "rationale": rationale}),
-        )?;
-        Ok(Ok(()))
     }
 
     /// Whether the root currently permits any root-scoped dispatch: enabled, not archived, and

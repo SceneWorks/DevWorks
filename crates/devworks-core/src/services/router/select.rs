@@ -77,13 +77,6 @@ impl Need {
         need.labels.sort();
         Ok(need)
     }
-    /// The same requirements with another requested effort.
-    pub fn with_effort(&self, effort: &str) -> Self {
-        Self {
-            effort: effort.to_owned(),
-            ..self.clone()
-        }
-    }
 }
 
 /// Why a pooled model is not eligible. Codes are the wire `blockedReasonCodes`.

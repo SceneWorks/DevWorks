@@ -438,6 +438,7 @@ fn run(
 impl PackageHost {
     /// The handler input artifact of `delivery` holding `document`: the one an earlier attempt
     /// recorded, or a new one.
+    #[cfg(any(test, feature = "test-support"))]
     pub fn stage_event_input(
         &self,
         document: &Value,

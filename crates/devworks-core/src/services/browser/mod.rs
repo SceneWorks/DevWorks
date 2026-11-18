@@ -698,19 +698,6 @@ impl BrowserService {
             .cloned()
     }
 
-    /// Sessions this boot holds a running browser for.
-    pub fn live_sessions(&self) -> Vec<Id> {
-        let mut ids: Vec<Id> = self
-            .views
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .keys()
-            .filter_map(|k| Id::new(k.clone()).ok())
-            .collect();
-        ids.sort_by(|a, b| a.as_str().cmp(b.as_str()));
-        ids
-    }
-
     /// The host context a journaled effect runs under: the session's principal and lineage.
     /// `None` when the stored owner kind is not recognised.
     fn host_context(

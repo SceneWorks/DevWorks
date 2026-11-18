@@ -1330,25 +1330,6 @@ impl QueryHandler for WatchService {
     }
 }
 
-/// The events an in-flight turn carries: delivered to its session before the turn began and
-/// acknowledged only when it completes.
-pub fn turn_input(
-    read: &dyn ReadSnapshot,
-    session: &Id,
-    turn: &Id,
-) -> Result<Vec<StoredWatchEvent>, StorageError> {
-    Ok(read
-        .watchers()
-        .watch_events(
-            session,
-            &[WatchEventState::Delivered],
-            crate::ports::storage::MAX_PAGE,
-        )?
-        .into_iter()
-        .filter(|event| event.carried_turn_id.as_ref() == Some(turn))
-        .collect())
-}
-
 /// What one write step did to an open watcher.
 #[derive(Debug)]
 enum Step {

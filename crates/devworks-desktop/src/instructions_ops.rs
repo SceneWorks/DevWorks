@@ -66,12 +66,6 @@ impl Kind {
             Self::Role => "roles",
         }
     }
-    pub fn read_op(self) -> &'static str {
-        match self {
-            Self::Skill => "skills.read",
-            Self::Role => "roles.read",
-        }
-    }
     pub fn history_op(self) -> &'static str {
         match self {
             Self::Skill => "skills.history",
@@ -502,9 +496,6 @@ pub fn changed(outcome: CommandOutcome) -> Result<InstructionRecord, Failure> {
 /// A stale `expectedRevision`: the item moved since it was loaded.
 pub fn is_conflict(failure: &Failure) -> bool {
     matches!(failure, Failure::Refused(f) if f.code == DomainErrorCode::RevisionConflict)
-}
-pub fn is_not_found(failure: &Failure) -> bool {
-    matches!(failure, Failure::Refused(f) if f.code == DomainErrorCode::NotFound)
 }
 
 // ---------------------------------------------------------------------------------------------

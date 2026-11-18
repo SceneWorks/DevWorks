@@ -68,7 +68,11 @@ impl Fx {
             ApprovalService::new(h.ids.clone(), h.clock.clone(), Arc::new(Roles), control)
                 .with_catalog(
                     devworks_core::services::approvals::ApprovalCatalog::qualified(&base),
-                ),
+                )
+                .with_owners(Arc::new(
+                    devworks_core::services::approvals::owner_preview::NativeOwnerPreviews::default()
+                        .register(Arc::new(devworks_core::services::projects::ProjectApprovals)),
+                )),
         );
         Self {
             h,
@@ -664,7 +668,12 @@ fn saved_project_archive_preserves_workspace_agent_scope_and_replays_exact_recei
         Arc::new(Roles),
         Arc::new(ControlService::new(f.h.ids.clone())),
     )
-    .with_catalog(devworks_core::services::approvals::ApprovalCatalog::qualified(&f.cases));
+    .with_catalog(devworks_core::services::approvals::ApprovalCatalog::qualified(&f.cases))
+    .with_owners(Arc::new(
+        devworks_core::services::approvals::owner_preview::NativeOwnerPreviews::default().register(
+            Arc::new(devworks_core::services::projects::ProjectApprovals),
+        ),
+    ));
     let devworks_core::services::approvals::ResumePreparation::Ready(request) =
         service.prepare_resume(&f.s, &p.id).unwrap()
     else {

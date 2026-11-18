@@ -295,6 +295,7 @@ impl LoopState {
         })
     }
     /// True when the loop waits and has seen every commit and delivery up to the given counts.
+    #[cfg(any(test, feature = "test-support"))]
     pub(crate) fn caught_up(&self, stored: u64, delivered: u64) -> bool {
         !self.busy.load(Ordering::SeqCst)
             && self.stored.load(Ordering::SeqCst) == stored

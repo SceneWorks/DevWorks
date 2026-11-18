@@ -56,7 +56,6 @@ impl NativeFx {
                 provider_model_id: pin.upstream_model_id,
                 connection_id: id("api"),
                 endpoint_profile: profile.into(),
-                access_mode: "NotBillingAuthority".into(),
                 service_tier: None,
                 input_tokens: Some(100),
                 cache_write_ttl_ms: None,
@@ -1175,10 +1174,6 @@ fn subscription_reported_usd_never_becomes_api_charge_without_a_matching_tariff(
             );
             let attempt = f.admitted();
             assert_eq!(attempt.access_mode, "Subscription");
-            assert_eq!(
-                accounting::snapshot(&attempt).unwrap().query.access_mode,
-                "Subscription"
-            );
             let (src, _) = source(
                 vec![
                     InferenceFrame::Usage(observation(

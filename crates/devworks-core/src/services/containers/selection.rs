@@ -1,7 +1,9 @@
 //! Project settings choose one backend; missing tooling never changes that choice.
 use super::backend::Backend;
 use crate::ports::storage::{ConfigScope, ConfigurationRead, StorageError};
-use crate::protocol::{Id, ProjectId};
+#[cfg(any(test, feature = "test-support"))]
+use crate::protocol::Id;
+use crate::protocol::ProjectId;
 use crate::settings::model::{current_chain, effective_values};
 
 pub const PREFERRED_RUNTIME: &str = "containers.preferredRuntime";
@@ -30,6 +32,7 @@ pub enum SelectionError {
 }
 
 /// A caller's engine ID is an assertion of the effective project choice, not a fallback hint.
+#[cfg(any(test, feature = "test-support"))]
 pub fn require_selected(
     read: &dyn ConfigurationRead,
     project: &ProjectId,

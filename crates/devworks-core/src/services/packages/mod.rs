@@ -416,7 +416,7 @@ impl PackageService {
             approval_control: Arc::new(RwLock::new(None)),
         }
     }
-    pub(crate) fn set_approval_control(&self, control: Arc<crate::services::runs::ControlService>) {
+    pub fn set_approval_control(&self, control: Arc<crate::services::runs::ControlService>) {
         *self
             .approval_control
             .write()
@@ -2887,20 +2887,4 @@ impl CommandHandler for PackageService {
         };
         decided(tx, outcome)
     }
-}
-
-/// `true` when `e` is a revision conflict of the package registry (the caller re-reads).
-pub fn is_registry_conflict(e: &StorageError) -> bool {
-    matches!(e, StorageError::RevisionConflict(c) if c.target_kind == "package_registry")
-}
-
-#[doc(hidden)]
-pub fn _assert_send_sync() {
-    fn check<T: Send + Sync>() {}
-    check::<PackageService>();
-}
-
-/// For callers composing an [`InspectError`] into a refusal code.
-pub fn inspect_code(e: &InspectError) -> &'static str {
-    e.code()
 }

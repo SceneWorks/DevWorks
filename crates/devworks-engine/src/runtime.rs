@@ -43,7 +43,9 @@ use devworks_core::services::artifacts::lifecycle::{
 use devworks_core::services::artifacts::replies::ReceiptReplies;
 use devworks_core::services::browser::{BrowserRecovery, BrowserService};
 use devworks_core::services::desktop::ControlEpoch;
-use devworks_core::services::diagnostics::{DiagnosticService, ExportFailure, LogQuery};
+use devworks_core::services::diagnostics::DiagnosticService;
+#[cfg(any(test, feature = "test-support"))]
+use devworks_core::services::diagnostics::{ExportFailure, LogQuery};
 use devworks_core::services::evals::EvalService;
 use devworks_core::services::jobs::runner::{JobLifecycle, NativeJobDispatch};
 use devworks_core::services::jobs::{JobConfig, JobService, NativeCatalog};
@@ -499,6 +501,7 @@ pub struct Runtime {
     providers: Option<Arc<crate::providers::driver::NativeProviders>>,
     conventions: Arc<devworks_core::services::conventions::ConventionService>,
     instructions: Option<Arc<devworks_core::services::instructions::InstructionService>>,
+    #[cfg(any(test, feature = "test-support"))]
     instruction_boot:
         Option<Result<devworks_core::services::instructions::SyncReport, StorageError>>,
     schemas: Option<Arc<devworks_core::services::schemas::SchemaService>>,
@@ -544,6 +547,7 @@ pub struct Runtime {
     /// The loops built on [`Commits`], by name (tests check every polling loop is among them).
     polling_loops: Arc<Mutex<Vec<&'static str>>>,
     /// What each polling loop has seen, with the commit and delivery counts to compare it to.
+    #[cfg(any(test, feature = "test-support"))]
     polling_states: PollingStates,
     /// What the usage worker's drain established, for the shutdown report.
     usage_drain: Arc<Mutex<Option<Result<crate::usage::UsageDrain, StorageError>>>>,
@@ -1079,6 +1083,31 @@ async fn build(composition: Composition, core: CoreServices) -> Result<Engine, B
         Some(service) => use_cases.with_instructions(service.clone()),
         None => use_cases,
     };
+    // Each approvable operation has one owner, registered here.
+    let mut owners =
+        devworks_core::services::approvals::owner_preview::NativeOwnerPreviews::default()
+            .register(Arc::new(
+                devworks_core::services::projects::ProjectApprovals,
+            ))
+            .register(jobs.clone());
+    if let Some(git) = &git {
+        git.set_approval_control(control.clone());
+        owners = owners.register(git.clone());
+    }
+    if let Some(packages) = &package_service {
+        packages.set_approval_control(control.clone());
+        owners = owners.register(packages.clone());
+    }
+    if let Some(desktop) = &desktop {
+        owners = owners.register(desktop.clone());
+    }
+    if let Some(instructions) = &instructions {
+        owners = owners.register(instructions.clone());
+    }
+    if let Some(containers) = &containers {
+        owners = owners.register(containers.clone());
+    }
+    let owners = owners.with_evidence(store.clone(), artifacts.clone());
     let approvals = Arc::new(
         ApprovalService::new(
             ids.clone(),
@@ -1089,18 +1118,7 @@ async fn build(composition: Composition, core: CoreServices) -> Result<Engine, B
             control.clone(),
         )
         .with_catalog(ApprovalCatalog::qualified(&use_cases))
-        .with_owners(Arc::new(
-            devworks_core::services::approvals::owner_preview::NativeOwnerPreviews::new(
-                git.clone(),
-                package_service.clone(),
-                Some(jobs.clone()),
-            )
-            .with_desktop(desktop.clone())
-            .with_instructions(instructions.clone())
-            .with_containers(containers.clone())
-            .with_control(control.clone())
-            .with_evidence(store.clone(), artifacts.clone()),
-        )),
+        .with_owners(Arc::new(owners)),
     );
     let use_cases = use_cases
         .with_approvals(approvals.clone())
@@ -1608,8 +1626,9 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
     // without a commit signal falls back to admitted commands (and the interval).
     let polling_passes = Arc::new(AtomicU64::new(0));
     let polling_loops = Arc::new(Mutex::new(Vec::new()));
+    #[cfg(any(test, feature = "test-support"))]
     let loop_states = Arc::new(Mutex::new(Vec::new()));
-    let (commits, polling_marks) = {
+    let (stored, delivered) = {
         let stored = match store.commit_signal() {
             Some(signal) => {
                 let (tx, rx) = watch::channel(signal.generation());
@@ -1620,16 +1639,22 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
             }
             None => admitter.changes.subscribe(),
         };
-        let delivered = dispatcher.subscribe();
-        let marks = (stored.clone(), delivered.clone());
+        (stored, dispatcher.subscribe())
+    };
+    #[cfg(any(test, feature = "test-support"))]
+    let polling_marks = (stored.clone(), delivered.clone());
+    let commits = {
         let (passes, fallback) = (polling_passes.clone(), config.polling_interval);
-        let (registered, states) = (polling_loops.clone(), loop_states.clone());
-        let register = move |name: &'static str| {
+        let registered = polling_loops.clone();
+        #[cfg(any(test, feature = "test-support"))]
+        let states = loop_states.clone();
+        move |name: &'static str| {
             registered
                 .lock()
                 .unwrap_or_else(|p| p.into_inner())
                 .push(name);
             let state = LoopState::new();
+            #[cfg(any(test, feature = "test-support"))]
             states
                 .lock()
                 .unwrap_or_else(|p| p.into_inner())
@@ -1641,8 +1666,7 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
                 passes.clone(),
                 state,
             )
-        };
-        (register, marks)
+        }
     };
     let (run, stop, idle) = (dispatcher.clone(), dispatcher.clone(), dispatcher.clone());
     workers.start(
@@ -2150,6 +2174,7 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
         usage,
         providers,
         conventions,
+        #[cfg(any(test, feature = "test-support"))]
         instruction_boot: instructions.as_ref().map(|service| service.sync()),
         instructions,
         schemas,
@@ -2181,6 +2206,7 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
         usage_drain,
         polling_passes,
         polling_loops,
+        #[cfg(any(test, feature = "test-support"))]
         polling_states: PollingStates {
             states: loop_states,
             marks: polling_marks,
@@ -2258,6 +2284,7 @@ pub struct NativeTurnProgress {
     pub continuation: Option<devworks_core::protocol::provider::ArtifactRef>,
 }
 
+#[cfg(any(test, feature = "test-support"))]
 /// The commit-woken loops' progress and the commit and delivery counts it is compared to.
 struct PollingStates {
     states: Arc<Mutex<Vec<Arc<LoopState>>>>,
@@ -2281,6 +2308,7 @@ impl Runtime {
     /// delivery so far, so none has a wake or a pass pending. A burst of commits (boot's Help
     /// ingestion) leaves loops with a coalesced pass up to five seconds out; an idle check
     /// starts only after this holds.
+    #[cfg(any(test, feature = "test-support"))]
     pub fn polling_settled(&self) -> bool {
         let (stored, delivered) = &self.polling_states.marks;
         let (stored, delivered) = (*stored.borrow(), *delivered.borrow());
@@ -2346,6 +2374,7 @@ impl Runtime {
     /// invocation's project: rendered bounded and redacted, staged by the diagnostics service's
     /// export staging (a person's upload ticket in production) and saved by an `artifacts.save`
     /// admitted through this runtime under `request_key`. A retry with the same key replays.
+    #[cfg(any(test, feature = "test-support"))]
     pub fn export_diagnostics(
         &self,
         ctx: &InvocationContext,
@@ -2425,6 +2454,7 @@ impl Runtime {
         self.instructions.as_ref()
     }
     /// What the boot observation of skill directories and role settings found.
+    #[cfg(any(test, feature = "test-support"))]
     pub fn instruction_boot_sync(
         &self,
     ) -> Option<&Result<devworks_core::services::instructions::SyncReport, StorageError>> {
@@ -2435,6 +2465,7 @@ impl Runtime {
     /// is appended to the session's history with the selected skills, their exact revisions
     /// and digests, the transitions and any unresolved conflicts; completed steps keep the
     /// revisions they used. Returns the current set and whether it changed.
+    #[cfg(any(test, feature = "test-support"))]
     pub fn adopt_skills(
         &self,
         ctx: &InvocationContext,
@@ -2725,16 +2756,6 @@ impl Runtime {
     pub fn keep_awake_health(&self) -> Health {
         self.keep_awake.health()
     }
-    /// Re-applies the effective `power.keepAwake` setting. Commands through
-    /// [`Self::command_with`] do this after every committed `settings.save_revision`; host code
-    /// that changes settings outside the runtime's commands (proposal approval, rollback) calls
-    /// it after its unit of work commits.
-    pub fn refresh_keep_awake(&self) -> Result<KeepAwakeStatus, StorageError> {
-        let ka = &self.keep_awake;
-        devworks_core::ports::storage::read_snapshot(&*self.store, &Default::default(), |s| {
-            ka.refresh(s.configuration())
-        })
-    }
 
     /// The running dispatcher (status hints, wakeups, diagnostics).
     pub fn dispatcher(&self) -> &Dispatcher {
@@ -2743,11 +2764,6 @@ impl Runtime {
     /// The latest artifact collection pass (`None` until the boot pass finished).
     pub fn collections(&self) -> watch::Receiver<Option<CollectionPass>> {
         self.collector.status.subscribe()
-    }
-    /// Requests a collection pass now, for a change made outside the runtime's commands that can
-    /// let a blob go (for example a released backup pin).
-    pub fn request_collection(&self) {
-        self.collector.ticker.notify();
     }
 
     pub fn query(&self, ctx: &InvocationContext, operation: &str, raw: &[u8]) -> QueryOutcome {
@@ -2922,6 +2938,7 @@ impl Runtime {
     pub fn price_service(&self) -> &Arc<devworks_core::services::prices::PriceService> {
         &self.price_service
     }
+    #[cfg(any(test, feature = "test-support"))]
     pub fn price_refreshes(&self) -> Option<&Arc<crate::prices::PriceSupervisor>> {
         self.prices.as_ref()
     }
@@ -2954,6 +2971,7 @@ impl Runtime {
     /// looks again when a command commits or every five seconds. Any other operation runs as
     /// [`Self::command_with`] does. Callers that cannot await keep [`Self::command_with`], which
     /// parks the calling thread for the wait.
+    #[cfg(any(test, feature = "test-support"))]
     pub async fn command_awaiting(
         &self,
         ctx: &InvocationContext,

@@ -467,16 +467,6 @@ impl LogWatch {
             self.changed.notify_all();
         }
     }
-    /// Blocks (a non-UI thread) until a record after `after` committed or `timeout` passed, and
-    /// returns the latest sequence known.
-    pub fn wait_beyond(&self, after: i64, timeout: Duration) -> i64 {
-        let latest = self.latest.lock().unwrap_or_else(|p| p.into_inner());
-        let (latest, _) = self
-            .changed
-            .wait_timeout_while(latest, timeout, |l| *l <= after)
-            .unwrap_or_else(|p| p.into_inner());
-        *latest
-    }
 }
 
 /// Results of the periodic monitor probes (too costly or effectful for a query).
@@ -1026,6 +1016,7 @@ impl DiagnosticService {
 
     /// The current health checks as wire records (what `workspace.diagnostics` returns at
     /// revision 2), redacted with the registered secrets.
+    #[cfg(any(test, feature = "test-support"))]
     pub fn health_entries(
         &self,
         ctx: &InvocationContext,

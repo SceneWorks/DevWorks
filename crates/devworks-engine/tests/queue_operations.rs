@@ -14,7 +14,7 @@ use devworks_core::protocol::{
 };
 use devworks_core::services::UseCases;
 use devworks_core::services::artifacts::replies::REPLY_CONSUMER;
-use devworks_core::services::queue::REPLY_REQUIRED;
+use devworks_core::services::artifacts::replies::REPLY_REQUIRED;
 use devworks_engine::{EffectResult, Outcome};
 use serde_json::json;
 use std::sync::Arc;

@@ -143,7 +143,7 @@ impl GitService {
             approval_control: std::sync::RwLock::new(None),
         }
     }
-    pub(crate) fn set_approval_control(&self, control: Arc<crate::services::runs::ControlService>) {
+    pub fn set_approval_control(&self, control: Arc<crate::services::runs::ControlService>) {
         *self
             .approval_control
             .write()

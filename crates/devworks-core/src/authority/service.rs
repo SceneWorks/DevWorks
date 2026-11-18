@@ -216,6 +216,7 @@ impl HostAuthority<'_> {
     }
 
     /// The principal's effective permissions in its invocation scope.
+    #[cfg(any(test, feature = "test-support"))]
     pub fn effective_permissions(
         &self,
         ctx: &InvocationContext,
@@ -1260,6 +1261,7 @@ pub fn revoke_principal(
 /// an explicit expiry within [`MAX_GRANT_LIFETIME_MS`] and 1..=[`MAX_GRANT_USES`] uses. Native
 /// grants bind one exact request, an exact workspace/project scope and its effective policy digest.
 /// Primary repository deletion has its own confirmation seam.
+#[cfg(any(test, feature = "test-support"))]
 pub fn mint_grant(
     tx: &mut dyn WriteTransaction,
     ctx: &InvocationContext,

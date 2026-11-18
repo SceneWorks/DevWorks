@@ -332,7 +332,7 @@ impl IndexService {
         let stage_result = self.publication(|| {
             for (index,text) in texts.iter().enumerate() {
                 bounded()?;
-                staged.push(self.artifacts.stage_host_bytes(self.store.as_ref(),text.as_bytes(),json!({"kind":"ConventionEmbeddingInput","requestId":request_id,"inputIndex":index}))?
+                staged.push(self.artifacts.stage_host_bytes(self.store.as_ref(),text.as_bytes(),json!({"kind":crate::services::artifacts::derivation::DerivedKind::ConventionEmbeddingInput.as_str(),"requestId":request_id,"inputIndex":index}))?
                     .map_err(StorageError::InvalidRecord)?);
             }
             Ok(())
@@ -381,7 +381,7 @@ impl IndexService {
                 let version=artifacts.commit_host_bytes_in_scope(tx,file,HostArtifactPublication {
                     title:"Convention embedding input",media_type:"text/plain; charset=utf-8",
                     scope:ctx.project_id().cloned().map_or(ArtifactScope::Workspace,ArtifactScope::Project),owner:ctx.principal().clone(),
-                    provenance:json!({"kind":"ConventionEmbeddingInput","requestId":request,"contextDigest":context_hash,"embeddingSpace":space,"inputDigest":input_hash,"inputIndex":index}),
+                    provenance:json!({"kind":crate::services::artifacts::derivation::DerivedKind::ConventionEmbeddingInput.as_str(),"requestId":request,"contextDigest":context_hash,"embeddingSpace":space,"inputDigest":input_hash,"inputIndex":index}),
                 })?;
                 refs.push(serde_json::to_value(version_ref(&version)).map_err(|_|invalid("embedding input ref"))?);
             }

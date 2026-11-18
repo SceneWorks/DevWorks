@@ -589,14 +589,6 @@ impl Git<'_> {
         Ok(result)
     }
 
-    /// Resolve one literal ref, with no revision-expression interpretation.
-    pub fn branch_head(&self, dir: &Path, reference: &str) -> Result<Option<String>, GitFault> {
-        if !reference.starts_with("refs/heads/") || reference.contains(['\0', '\n']) {
-            return Err(GitFault::Malformed("invalid branch ref".into()));
-        }
-        self.line(dir, &["show-ref", "--verify", "--hash", reference])
-    }
-
     /// Local-only configuration inventory for the host-owned transport boundary. Values may
     /// contain credentials: callers must never publish them as approval or journal evidence.
     pub(crate) fn transport_configuration(&self, dir: &Path) -> Result<Vec<u8>, GitFault> {

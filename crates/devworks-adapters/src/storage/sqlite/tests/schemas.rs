@@ -2124,7 +2124,7 @@ fn native_review7_generic_queue_cancellation_releases_source_without_losing_publ
             &schema_context(&s, "schema-owner"),
             "queue.resolve",
             frame.as_bytes(),
-            std::sync::Arc::new(devworks_core::services::queue::QueueService),
+            std::sync::Arc::new(devworks_core::services::queue_service()),
         )
         .unwrap();
     assert!(

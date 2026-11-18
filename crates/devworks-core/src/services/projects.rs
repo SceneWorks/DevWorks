@@ -51,9 +51,10 @@
 //!   worktree or remote is removed, and shared artifacts and history remain. A tombstone stays
 //!   readable through `projects.get` so retained references show the deletion honestly.
 //!
-//! `proposalId` names an approval proposal; proposals arrive with the approvals item, so one is
-//! never found yet (`NotFound`, `proposal`) and the user's own command is the confirmation (the
-//! native screen shows the concrete consequences before submitting it).
+//! `proposalId` names an approval proposal. These operations never accept one: a proposal is
+//! created and decided through the approvals service, so a command that names one is refused
+//! (`NotFound`, `proposal`) and the user's own command is the confirmation (the native screen
+//! shows the concrete consequences before submitting it).
 //!
 //! # Repository indexes and texts
 //!
@@ -482,7 +483,8 @@ fn stopping(p: &ProjectId) -> Failure {
     r.into()
 }
 
-/// Approval proposals arrive with the approvals item: none can be found yet.
+/// Refuses any named approval proposal: the project operations are confirmed by the user's own
+/// command, not by a proposal reference.
 fn no_proposal(proposal: Option<&Id>) -> Result<(), Failure> {
     match proposal {
         Some(p) => Err(not_found("proposal", p).into()),
@@ -1630,6 +1632,42 @@ fn validate_reviewed_project_command(
         return Err(conflict("reviewed_scope_changed", &current.target_id));
     }
     Ok(())
+}
+
+/// The owner of the approvable project operations: the project and its index views are the
+/// target, and a person's own decision is the only way to approve them (a refused agent call is
+/// never held for approval).
+pub struct ProjectApprovals;
+
+impl crate::services::approvals::SavedOperationOwners for ProjectApprovals {
+    fn supports(&self, operation: &str) -> bool {
+        matches!(
+            operation,
+            "projects.archive" | "projects.delete" | "repositories.remove_index"
+        )
+    }
+    fn holdable(&self, _operation: &str) -> bool {
+        false
+    }
+    fn prepare(
+        &self,
+        ctx: &InvocationContext,
+        request: &crate::admission::DecodedRequest,
+        env: &crate::ports::Preparation<'_>,
+    ) -> Result<crate::services::approvals::OwnerPreview, Failure> {
+        env.read(|s| Ok(approval_preview(s.projects(), ctx, request)))
+            .map_err(Failure::Storage)
+            .and_then(|v| v)
+    }
+    fn validate(
+        &self,
+        tx: &mut dyn WriteTransaction,
+        ctx: &InvocationContext,
+        request: &crate::admission::DecodedRequest,
+        preview: &crate::services::approvals::OwnerPreview,
+    ) -> Result<(), Failure> {
+        validate_approval_preview(tx, ctx, request, preview)
+    }
 }
 
 #[cfg(test)]

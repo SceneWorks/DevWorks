@@ -2590,6 +2590,7 @@ pub(crate) fn link_generation(
 
 /// Re-evaluates inherited edges against the complete immutable composed view. The
 /// generation linker uses these same name, receiver, import and Swift-module rules.
+#[cfg(any(test, feature = "test-support"))]
 pub(crate) fn link_view_edges(
     read: &dyn IndexRead,
     repository: &str,

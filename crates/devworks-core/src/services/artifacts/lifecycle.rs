@@ -18,10 +18,12 @@ use crate::gateway::AdmittedQuery;
 use crate::operations::OperationInput;
 use crate::ports::Preparation;
 use crate::ports::files::FileFault;
+#[cfg(any(test, feature = "test-support"))]
+use crate::ports::storage::BlobRecord;
 use crate::ports::storage::{
-    ApplicationStore, ArtifactLink, ArtifactState, BlobRecord, BlobState, NewEvent,
-    OperationRecord, ReadOptions, ReadSnapshot, StorageError, StoredArtifact, StoredVersion,
-    SubjectKey, WriteOptions, WriteTransaction, read_snapshot, run_write,
+    ApplicationStore, ArtifactLink, ArtifactState, BlobState, NewEvent, OperationRecord,
+    ReadOptions, ReadSnapshot, StorageError, StoredArtifact, StoredVersion, SubjectKey,
+    WriteOptions, WriteTransaction, read_snapshot, run_write,
 };
 use crate::ports::{AuthorityDenial, AuthorityPort, AuthorityRequest, Clock, IdKind};
 use crate::protocol::provider::ArtifactRef;
@@ -1366,6 +1368,7 @@ impl ArtifactService {
 /// Reserves the backup deletion barrier: pins every retained blob (not yet unlinked) for
 /// `holder` and returns the retained-file manifest (digest, managed path, length). Pinned blobs
 /// are never physically removed until [`release_backup`].
+#[cfg(any(test, feature = "test-support"))]
 pub fn pin_for_backup(
     tx: &mut dyn WriteTransaction,
     holder: &Id,

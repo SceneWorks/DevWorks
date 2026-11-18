@@ -600,13 +600,11 @@ pub(crate) fn admit_attempt(
         }
     }
     .to_owned();
-    let mut query = request.query.clone();
-    query.access_mode = access_mode.clone();
     let admitted = AdmittedSnapshot {
         admission_key: request.admission_key.clone(),
         intent_digest: digest,
         quote: request.quote.clone(),
-        query,
+        query: request.query.clone(),
         price_generation: request.price_generation,
         override_revision: request.override_revision,
         pricing: request.pricing.clone(),

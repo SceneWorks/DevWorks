@@ -348,7 +348,6 @@ pub(super) fn run_case(writer_race: bool) {
                 provider_model_id: Some("native-metadata-source".into()),
                 connection_id: id("usage-connection"),
                 endpoint_profile: "CodexSubscriptionResponses".into(),
-                access_mode: "Subscription".into(),
                 service_tier: None,
                 input_tokens: Some(10),
                 cache_write_ttl_ms: None,

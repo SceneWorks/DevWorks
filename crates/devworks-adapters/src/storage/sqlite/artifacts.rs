@@ -19,6 +19,12 @@ fn bounded(limit: u16) -> Result<i64, StorageError> {
     Ok(limit as i64)
 }
 
+/// The `derived.kind` values of host artifacts that stay out of user listings (see
+/// `retained_help` in core), named once from the typed enum.
+const HELP_KIND: &str =
+    devworks_core::services::artifacts::derivation::DerivedKind::HelpTopic.as_str();
+const INSTRUCTION_KIND: &str =
+    devworks_core::services::artifacts::derivation::DerivedKind::Instruction.as_str();
 const ARTIFACT_COLUMNS: &str = "id,origin_project_id,origin_work_id,title,revision,current_project_id,scope_revision,reference_revision,current_version_id,state,created_at,provenance_json,scope_kind,owner_actor_id,retention";
 struct ArtifactRaw {
     id: String,
@@ -254,7 +260,7 @@ fn list(
            AND (?8 IS NULL OR a.scope_kind='Workspace' OR a.owner_actor_id IS NULL OR a.owner_actor_id=?8)
            AND NOT (json_extract(a.provenance_json,'$.principalKind') IS 'Host'
                     AND json_extract(a.provenance_json,'$.producedBy') IS ?7
-                    AND (json_extract(a.provenance_json,'$.derived.kind') IS 'HelpTopic' OR json_extract(a.provenance_json,'$.derived.kind') IS 'Instruction'))
+                    AND (json_extract(a.provenance_json,'$.derived.kind') IS '{HELP_KIND}' OR json_extract(a.provenance_json,'$.derived.kind') IS '{INSTRUCTION_KIND}'))
            AND (?2=9223372036854775807 OR a.created_at<?2 OR (a.created_at=?2 AND a.id<?3))
            AND (?6=0 OR (SELECT COUNT(*) FROM artifact_tags t WHERE t.artifact_id=a.id
                          AND t.tag IN (SELECT value FROM json_each(?5)))=?6)
@@ -296,7 +302,7 @@ fn list_workspace(
            AND a.retention='Explicit' AND (?1 IS NULL OR a.owner_actor_id=?1)
            AND NOT (json_extract(a.provenance_json,'$.principalKind') IS 'Host'
                     AND json_extract(a.provenance_json,'$.producedBy') IS ?7
-                    AND (json_extract(a.provenance_json,'$.derived.kind') IS 'HelpTopic' OR json_extract(a.provenance_json,'$.derived.kind') IS 'Instruction'))
+                    AND (json_extract(a.provenance_json,'$.derived.kind') IS '{HELP_KIND}' OR json_extract(a.provenance_json,'$.derived.kind') IS '{INSTRUCTION_KIND}'))
            AND (?2=9223372036854775807 OR a.created_at<?2 OR (a.created_at=?2 AND a.id<?3))
            AND (?6=0 OR (SELECT COUNT(*) FROM artifact_tags t WHERE t.artifact_id=a.id
                          AND t.tag IN (SELECT value FROM json_each(?5)))=?6)

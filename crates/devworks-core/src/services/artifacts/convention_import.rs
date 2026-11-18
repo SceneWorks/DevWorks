@@ -215,7 +215,7 @@ impl ArtifactService {
             current_version_id: Some(version_id.clone()),
             state: ArtifactState::Live,
             created_at_ms: now,
-            provenance: json!({"producedBy":host,"principalKind":"Host","derived":{"kind":"ConventionImport","operationId":draft.operation_id,"actorId":draft.author_id}}),
+            provenance: json!({"producedBy":host,"principalKind":"Host","derived":{"kind":super::derivation::DerivedKind::ConventionImport.as_str(),"operationId":draft.operation_id,"actorId":draft.author_id}}),
         };
         let version = StoredVersion {
             id: version_id,

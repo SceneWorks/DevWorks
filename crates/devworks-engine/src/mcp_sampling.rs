@@ -293,15 +293,6 @@ impl McpSampling {
                 provider_model_id: Some(route.upstream_model_id.clone()),
                 connection_id: route.connection_id.clone(),
                 endpoint_profile: route.endpoint_profile.clone(),
-                access_mode: if matches!(
-                    route.endpoint_profile.as_str(),
-                    "CodexSubscriptionResponses" | "ClaudeSubscriptionMessages"
-                ) {
-                    "Subscription"
-                } else {
-                    "Api"
-                }
-                .into(),
                 service_tier: None,
                 input_tokens: None,
                 cache_write_ttl_ms: None,

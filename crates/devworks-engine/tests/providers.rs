@@ -640,7 +640,6 @@ impl Fx {
                     provider_model_id: Some("fixture-model".into()),
                     connection_id: id("connection"),
                     endpoint_profile: self.profile.clone(),
-                    access_mode: "Api".into(),
                     service_tier,
                     input_tokens: Some(10),
                     cache_write_ttl_ms: None,

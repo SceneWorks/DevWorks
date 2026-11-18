@@ -341,7 +341,7 @@ impl HelpService {
                 .ok_or_else(|| invalid("Help projection missing"))?;
             let result=self.artifacts.stage_host_reader(self.store.as_ref(),crate::services::artifacts::host::HostStream {
                 reader:body.reader(),digest:&content.digest,byte_count:content.byte_count,
-                source:json!({"kind":"HelpTopic","generationId":job.generation,"topicId":document.topic.id,"helpIndexDigest":content.commitment().map_err(|_|invalid("Help index commitment"))?}),
+                source:json!({"kind":crate::services::artifacts::derivation::DerivedKind::HelpTopic.as_str(),"generationId":job.generation,"topicId":document.topic.id,"helpIndexDigest":content.commitment().map_err(|_|invalid("Help index commitment"))?}),
             },&mut||control.stopped());
             Some(
                 control
@@ -367,7 +367,7 @@ impl HelpService {
             }
             if let Some(staged) = artifact.as_ref() {
                 let version=service.artifacts.commit_host_bytes(tx,staged,&document.topic.title,"text/markdown",
-                    json!({"kind":"HelpTopic","generationId":source.generation,"topicId":document.topic.id,"operationId":op.id}))?;
+                    json!({"kind":crate::services::artifacts::derivation::DerivedKind::HelpTopic.as_str(),"generationId":source.generation,"topicId":document.topic.id,"operationId":op.id}))?;
                 document.topic.content_ref = Some(
                     serde_json::to_value(crate::services::artifacts::version_ref(&version))
                         .map_err(|e| invalid(&e.to_string()))?,

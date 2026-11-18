@@ -328,7 +328,10 @@ impl ProviderSink {
         let source_context = self.source_context.clone();
         let artifact_kind = match kind {
             ArtifactKind::Evidence => "ProviderEvidence",
-            ArtifactKind::NativeContinuation => "ProviderNativeContinuation",
+            ArtifactKind::NativeContinuation => {
+                devworks_core::services::artifacts::derivation::DerivedKind::ProviderNativeContinuation
+                    .as_str()
+            }
             ArtifactKind::CompactionSummary => "ProviderCompactionSummary",
             ArtifactKind::SampledText => "ProviderSampledText",
         };

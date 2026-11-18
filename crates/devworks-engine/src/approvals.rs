@@ -83,10 +83,6 @@ impl ResumeDispatcher {
             settled,
         })
     }
-    /// Sets what runs after each settled readmission (at most once).
-    pub fn on_settled(&self, settled: Settled) {
-        let _ = self.settled.set(settled);
-    }
     pub fn notify(&self) {
         self.ticker.notify();
     }
