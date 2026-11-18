@@ -8,7 +8,6 @@ use crate::{
 };
 use devworks_core::ports::storage::ProjectPurgeClientScope;
 use devworks_core::protocol::{OperationState, records::*, results::OperationResult};
-use serde_json::json;
 
 fn values(input: &str) -> Vec<&str> {
     input
@@ -16,6 +15,10 @@ fn values(input: &str) -> Vec<&str> {
         .map(str::trim)
         .filter(|s| !s.is_empty())
         .collect()
+}
+/// The comma separated values of a filter, or nothing when it is blank.
+fn given(text: &str) -> Option<Vec<&str>> {
+    (!text.trim().is_empty()).then(|| values(text))
 }
 controller!(UsageCtl, usage: UsageScreen);
 
@@ -139,7 +142,7 @@ impl UsageCtl<'_, '_> {
             UsageSlot::Usage(generation, false),
             "Loading usage report",
             "router.usage",
-            move |b| uops::query(b, "router.usage", body),
+            move |b| uops::query(b, body),
         );
         if kind != "Filters" {
             self.usage.options.clear();
@@ -157,7 +160,7 @@ impl UsageCtl<'_, '_> {
             UsageSlot::UsageOptions(generation),
             "Loading available usage filter values",
             "router.usage",
-            move |b| uops::query(b, "router.usage", body),
+            move |b| uops::query(b, body),
         );
     }
     fn more_usage(&mut self) {
@@ -175,7 +178,7 @@ impl UsageCtl<'_, '_> {
             UsageSlot::Usage(self.usage.generation, true),
             "Loading more usage rows",
             "router.usage",
-            move |b| uops::query(b, "router.usage", body),
+            move |b| uops::query(b, body),
         );
     }
     /// Keep a user's loaded page set intact when a background refresh publishes a new catalog.
@@ -192,13 +195,7 @@ impl UsageCtl<'_, '_> {
                 UsageSlot::PriceProbe(generation),
                 "Checking for updated price catalog",
                 "router.price_status",
-                move |b| {
-                    uops::query(
-                        b,
-                        "router.price_status",
-                        json!({"modelIds":[],"page":{"limit":1}}),
-                    )
-                },
+                |b| uops::query(b, uops::price_probe()),
             );
         }
     }
@@ -214,11 +211,11 @@ impl UsageCtl<'_, '_> {
             UsageSlot::Prices(generation, false),
             "Refreshing applied price catalog",
             "router.price_status",
-            move |b| uops::query(b, "router.price_status", body),
+            move |b| uops::query(b, uops::price_page(body, None)),
         );
     }
     fn load_prices(&mut self, append: bool) {
-        let body = if append {
+        let (body, cursor) = if append {
             let Some(cursor) = self
                 .usage
                 .prices
@@ -228,22 +225,23 @@ impl UsageCtl<'_, '_> {
             else {
                 return;
             };
-            let Some(mut body) = self.usage.price_query.clone() else {
+            let Some(body) = self.usage.price_query.clone() else {
                 return;
             };
-            body["page"]["cursor"] = json!(cursor);
-            body
+            (body, Some(cursor))
         } else {
             self.usage.price_generation += 1;
-            let mut body = json!({"modelIds":values(&self.usage.price_models),"page":{"limit":100},"includeHistory":self.usage.history});
-            if !self.usage.price_providers.trim().is_empty() {
-                body["providerIds"] = json!(values(&self.usage.price_providers));
-            }
-            if !self.usage.price_snapshots.trim().is_empty() {
-                body["snapshotIds"] = json!(values(&self.usage.price_snapshots));
-            }
+            let Some(body) = uops::price_status(
+                &values(&self.usage.price_models),
+                given(&self.usage.price_providers).as_deref(),
+                given(&self.usage.price_snapshots).as_deref(),
+                self.usage.history,
+            ) else {
+                self.usage.price_error = Some("Check the price filters.".into());
+                return;
+            };
             self.usage.price_query = Some(body.clone());
-            body
+            (body, None)
         };
         self.usage.prices_loading = true;
         let generation = self.usage.price_generation;
@@ -251,7 +249,7 @@ impl UsageCtl<'_, '_> {
             UsageSlot::Prices(generation, append),
             "Loading price catalog",
             "router.price_status",
-            move |b| uops::query(b, "router.price_status", body),
+            move |b| uops::query(b, uops::price_page(body, cursor.as_deref())),
         );
     }
     fn edit_price(&mut self, model: String) {
@@ -380,8 +378,8 @@ impl UsageCtl<'_, '_> {
         let Some(draft) = self.usage.price_draft.clone() else {
             return;
         };
-        let change = if clear {
-            json!({"kind":"Clear"})
+        let tariffs = if clear {
+            None
         } else {
             let tariffs = match draft
                 .tariffs
@@ -395,16 +393,16 @@ impl UsageCtl<'_, '_> {
                     return;
                 }
             };
-            json!({"kind":"Set","tariffs":tariffs})
+            Some(tariffs)
         };
-        let body = json!({"modelId":draft.model,"expectedRevision":draft.revision,"change":change});
+        let input = uops::price_override(&draft.model, &draft.revision, tariffs);
         self.usage.price_saving = Some(draft);
         self.usage.price_busy = true;
         if !self.command(
             UsageSlot::PriceOverride,
             "Saving tariff override",
             "router.price_override",
-            move |b| uops::command(b, "router.price_override", body),
+            move |b| uops::command(b, input),
         ) {
             self.usage.price_busy = false;
         }
@@ -432,15 +430,14 @@ impl UsageCtl<'_, '_> {
                 Some("Select an official price source to refresh (openai or anthropic).".into());
             return;
         }
-        let body =
-            json!({"providerIds":providers,"expectedPriceRevision":catalog.catalog_revision});
+        let input = uops::price_refresh(&providers, &catalog.catalog_revision);
         self.usage.price_busy = true;
         // Refresh retains its original revision 1 contract; status and override negotiate 3.
         if !self.command(
             UsageSlot::PriceRefresh,
             "Requesting official price refresh",
             "router.price_refresh",
-            move |b| ops::command_frame(b, "router.price_refresh", body),
+            move |b| uops::command(b, input),
         ) {
             self.usage.price_busy = false;
         }
@@ -457,7 +454,12 @@ impl UsageCtl<'_, '_> {
         {
             let id = operation.operation_id.clone();
             self.usage.last_refresh = Some(Instant::now());
-            self.query(UsageSlot::PriceOperation,"Checking price refresh completion","history.operation_status",move|b|json!({"protocol":ops::PROTOCOL,"queryId":b.token("q"),"query":{"kind":"history.operation_status","operationId":id}}).to_string().into_bytes());
+            self.query(
+                UsageSlot::PriceOperation,
+                "Checking price refresh completion",
+                "history.operation_status",
+                move |b| uops::operation_status(b, &id),
+            );
         }
         ctx.request_repaint_after(Duration::from_secs(3));
     }

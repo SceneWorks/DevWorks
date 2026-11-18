@@ -126,12 +126,13 @@ fn the_composition_root_reports_storage_health_through_workspace_diagnostics() {
     let root = Root::new("diagnostics");
     let engine = start(&root);
     let backend = engine.backend();
-    let mut frame: serde_json::Value = serde_json::from_slice(&ops::query_frame(
-        &*backend,
-        "workspace.diagnostics",
-        json!({"page": {"limit": 200}}),
-    ))
-    .unwrap();
+    let mut frame: serde_json::Value =
+        serde_json::from_slice(&devworks_desktop::frame::fixture::query(
+            &*backend,
+            "workspace.diagnostics",
+            json!({"page": {"limit": 200}}),
+        ))
+        .unwrap();
     frame["schemaRevision"] = json!(2);
     let (result, _) =
         ops::query_result(backend.query("workspace.diagnostics", frame.to_string().as_bytes()))
@@ -598,7 +599,7 @@ fn a_pasted_image_refused_by_the_artifact_quota_keeps_its_file() {
         {"key": d.key, "value": {"schema": d.schema_ref(), "value": 1}}]});
     ops::settings_saved(backend.command(
         "settings.save_revision",
-        &ops::command_frame(&*backend, "settings.save_revision", body),
+        &devworks_desktop::frame::fixture::command(&*backend, "settings.save_revision", body),
     ))
     .expect("a one-byte quota");
     let mut h = harness(shell(&engine, &root, Script::default()), 1440.0, 900.0);
@@ -816,7 +817,7 @@ fn settings_are_categorized_searchable_validated_saved_and_keep_unsaved_changes(
         {"key": d.key, "value": {"schema": d.schema_ref(), "value": 5}}]});
     ops::settings_saved(backend.command(
         "settings.save_revision",
-        &ops::command_frame(&*backend, "settings.save_revision", body),
+        &devworks_desktop::frame::fixture::command(&*backend, "settings.save_revision", body),
     ))
     .expect("another surface saves");
     click(&mut h, Role::Button, "Save changes");
@@ -1478,7 +1479,7 @@ fn the_add_ons_screen_follows_every_log_page_to_the_requested_field_errors() {
     });
     // More refusals than one log page holds, before the one the form waits for.
     let rec = h.state().addons.items[0].clone();
-    let schema_ref = serde_json::to_value(rec.configuration_schema.clone().unwrap()).unwrap();
+    let schema_ref = rec.configuration_schema.clone().unwrap();
     for _ in 0..(devworks_desktop::ops::PAGE_LIMIT as usize + 5) {
         let frame = devworks_desktop::addons::configure_frame(
             &*backend,
@@ -1547,7 +1548,7 @@ fn the_add_ons_catalog_follows_every_page() {
         {"key": d.key, "value": {"schema": d.schema_ref(), "value": [{"location": dir.display().to_string(), "publicKey": hex}]}}]});
     ops::settings_saved(backend.command(
         "settings.save_revision",
-        &ops::command_frame(&*backend, "settings.save_revision", body),
+        &devworks_desktop::frame::fixture::command(&*backend, "settings.save_revision", body),
     ))
     .expect("an index source");
     let mut h = harness(shell(&engine, &root, Script::default()), 1440.0, 900.0);
@@ -1602,7 +1603,7 @@ fn prepare_offered_pack(root: &Root, backend: &dyn Backend) -> String {
         {"key": d.key, "value": {"schema": d.schema_ref(), "value": [{"location": dir.display().to_string(), "publicKey": hex}]}}]});
     ops::settings_saved(backend.command(
         "settings.save_revision",
-        &ops::command_frame(backend, "settings.save_revision", body),
+        &devworks_desktop::frame::fixture::command(backend, "settings.save_revision", body),
     ))
     .expect("an index source");
     inspected.version.to_string()

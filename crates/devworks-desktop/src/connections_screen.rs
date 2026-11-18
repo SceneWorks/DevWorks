@@ -10,18 +10,19 @@
 //! the field is cleared at once. The Claude subscription shows the exact risk notice and can only
 //! be enabled by accepting it.
 use crate::backend::SecretStoreStatus;
+use crate::frame;
 use crate::widgets::{self, Tone, chip};
 use devworks_core::ports::secrets::Secret;
-use devworks_core::protocol::Id;
 use devworks_core::protocol::records::{
-    ConnectionRecord, OpenRouterConstraints, OpenRouterProviderRouting, RouteCatalogModel,
-    RouteModel,
+    AccountAction, ConnectionRecord, OpenRouterConstraints, OpenRouterProviderRouting,
+    RouteCatalogModel, RouteModel, RouterConfigAction,
 };
+use devworks_core::protocol::support::BoundedList;
+use devworks_core::protocol::{Id, Revision};
 use devworks_core::services::router::connections::profiles::{
     Auth, PROFILES, Profile, RISK_NOTICE, profile, risk_notice_sha256,
 };
 use eframe::egui::{self, RichText, Ui};
-use serde_json::{Value, json};
 use std::collections::BTreeMap;
 
 /// The accessible label of the panel's add-connection button.
@@ -34,7 +35,7 @@ pub const COST_TIERS: [&str; 6] = ["", "low", "medium", "high", "xhigh", "max"];
 pub const SESSION_ONLY_LABEL: &str = "Keep credentials for this session only";
 
 /// What the panel asks the shell to do.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug)]
 pub enum ConnectionAction {
     /// Reload connections and the catalog.
     Reload,
@@ -49,14 +50,14 @@ pub enum ConnectionAction {
     /// `code#state`) is attached to the open sign-in `flow` first.
     Configure {
         label: String,
-        action: Value,
+        action: RouterConfigAction,
         key: Option<Secret>,
         code: Option<(Id, Secret)>,
     },
     /// A save from the open editor. Its captured draft is settled only by this command.
     ConfigureEdit {
         label: String,
-        action: Value,
+        action: RouterConfigAction,
         key: Option<Secret>,
         code: Option<(Id, Secret)>,
     },
@@ -97,10 +98,10 @@ struct PendingEdit {
 
 /// One catalog row's editable fields.
 #[derive(Default, Clone, PartialEq)]
-struct ModelEdit {
-    context: String,
-    connection: String,
-    enabled: bool,
+pub(crate) struct ModelEdit {
+    pub(crate) context: String,
+    pub(crate) connection: String,
+    pub(crate) enabled: bool,
 }
 
 #[derive(Default)]
@@ -141,16 +142,16 @@ pub struct ConnectionsPanel {
 }
 
 #[derive(Default)]
-struct NewModel {
-    id: String,
-    name: String,
+pub(crate) struct NewModel {
+    pub(crate) id: String,
+    pub(crate) name: String,
     profile: usize,
-    upstream: String,
-    context: String,
+    pub(crate) upstream: String,
+    pub(crate) context: String,
     connection: String,
-    efforts: [bool; 6],
-    vision: bool,
-    tools: bool,
+    pub(crate) efforts: [bool; 6],
+    pub(crate) vision: bool,
+    pub(crate) tools: bool,
 }
 
 fn profile_label(wire: &str) -> &'static str {
@@ -227,13 +228,15 @@ impl ConnectionsPanel {
         self.loading = false;
         self.error = None;
     }
-    pub fn preparing_edit(&mut self, sequence: u64, action: &Value) {
-        if action["kind"] != "Connection" {
-            return;
-        }
-        let Some(id) = action["connectionId"].as_str() else {
+    pub fn preparing_edit(&mut self, sequence: u64, action: &RouterConfigAction) {
+        let RouterConfigAction::Connection {
+            connection_id: Some(id),
+            ..
+        } = action
+        else {
             return;
         };
+        let id = id.as_str();
         if let Some(edit) = self.edits.get(id).filter(|edit| edit.open) {
             self.pending_edits.insert(
                 sequence,
@@ -249,9 +252,7 @@ impl ConnectionsPanel {
     pub fn prepared_edit(&mut self, sequence: u64, frame: &[u8]) {
         if let Some(pending) = self.pending_edits.get_mut(&sequence) {
             pending.frame = Some(frame.to_vec());
-            pending.request_key = serde_json::from_slice::<Value>(frame)
-                .ok()
-                .and_then(|v| v["requestKey"].as_str().map(str::to_owned));
+            pending.request_key = sent_configure(frame).map(|(key, _)| key);
         }
     }
     pub fn edit_finished(&mut self, sequence: u64, successful: bool, unknown: bool) {
@@ -274,52 +275,46 @@ impl ConnectionsPanel {
     /// Reconstruct only the non-secret edit from the client's original unresolved frame.
     /// The client retains and confirms those exact bytes and their original schema revision.
     pub fn restore_edit(&mut self, sequence: u64, frame: &[u8]) {
-        let Ok(v) = serde_json::from_slice::<Value>(frame) else {
+        let Some((
+            request_key,
+            RouterConfigAction::Connection {
+                connection_id: Some(id),
+                expected_revision,
+                name,
+                endpoint,
+                local_free,
+                open_router,
+                ..
+            },
+        )) = sent_configure(frame)
+        else {
             return;
         };
-        let action = &v["body"]["action"];
-        if action["kind"] != "Connection" {
-            return;
-        }
-        let Some(id) = action["connectionId"].as_str() else {
-            return;
-        };
+        let id = id.as_str();
         let mut edit = Edit {
             open: true,
-            name: action["name"].as_str().unwrap_or_default().into(),
-            endpoint: action["endpoint"].as_str().unwrap_or_default().into(),
-            revision: action["expectedRevision"]
-                .as_str()
-                .unwrap_or_default()
-                .into(),
-            local_free: action["localFree"].as_bool().unwrap_or(false),
-            local_free_changed: action["localFree"].is_boolean(),
+            name: name.0,
+            endpoint: endpoint.0,
+            revision: expected_revision
+                .map(|r| r.as_str().to_owned())
+                .unwrap_or_default(),
+            local_free: local_free.unwrap_or(false),
+            local_free_changed: local_free.is_some(),
             ..Edit::default()
         };
-        if let Some(c) = action.get("openRouter") {
-            edit.allowed = c["allowedModels"]
-                .as_array()
-                .map(|a| {
-                    a.iter()
-                        .filter_map(Value::as_str)
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                })
-                .unwrap_or_default();
-            edit.excluded = c["excludedModels"]
-                .as_array()
-                .map(|a| {
-                    a.iter()
-                        .filter_map(Value::as_str)
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                })
-                .unwrap_or_default();
-            edit.cost_tier = c["costTier"]
-                .as_str()
+        if let Some(c) = open_router {
+            edit.allowed = joined(&c.allowed_models.0);
+            edit.excluded = joined(&c.excluded_models.0);
+            edit.cost_tier = c
+                .cost_tier
+                .map(|tier| wire(&tier))
                 .and_then(|tier| COST_TIERS.iter().position(|t| *t == tier))
                 .unwrap_or(0);
-            edit.provider = c.get("provider").map(Value::to_string).unwrap_or_default();
+            edit.provider = c
+                .provider
+                .and_then(|p| serde_json::to_value(p).ok())
+                .map(|p| p.to_string())
+                .unwrap_or_default();
         }
         self.edits.insert(id.into(), edit.clone());
         self.pending_edits.insert(
@@ -327,7 +322,7 @@ impl ConnectionsPanel {
             PendingEdit {
                 id: id.into(),
                 draft: edit,
-                request_key: v["requestKey"].as_str().map(str::to_owned),
+                request_key: Some(request_key),
                 frame: Some(frame.to_vec()),
             },
         );
@@ -585,7 +580,7 @@ impl ConnectionsPanel {
             // removing it and deleting its credential stay available.
             let gated = p.risk_gated && !r.subscription_risk_accepted;
             if p.risk_gated {
-                self.risk_ui(ui, r, &id, &revision, actions);
+                self.risk_ui(ui, r, &id, actions);
             }
             if !gated && let Some(ch) = &r.sign_in {
                 self.challenge_ui(ui, r, &id, ch, actions);
@@ -599,23 +594,38 @@ impl ConnectionsPanel {
                             "Sign in"
                         };
                         if ui.button(label).clicked() {
-                            actions.push(sign_in(&id, "BeginSignIn", None, "Starting sign-in"));
+                            actions.push(sign_in(
+                                &r.id,
+                                AccountAction::BeginSignIn,
+                                None,
+                                "Starting sign-in",
+                            ));
                         }
                     }
                     _ => {}
                 }
                 if !gated && (r.credential_ref.is_some() || !p.needs_credential()) {
                     if ui.button("Test connection").clicked() {
-                        actions.push(sign_in(&id, "Inspect", None, "Testing the connection"));
+                        actions.push(sign_in(
+                            &r.id,
+                            AccountAction::Inspect,
+                            None,
+                            "Testing the connection",
+                        ));
                     }
                     if ui.button("Refresh models").clicked() {
-                        actions.push(sign_in(&id, "Refresh", None, "Refreshing"));
+                        actions.push(sign_in(&r.id, AccountAction::Refresh, None, "Refreshing"));
                     }
                 }
                 if r.credential_ref.is_some() {
                     let what = if p.oauth() { "Sign out" } else { "Remove key" };
                     if ui.button(what).clicked() {
-                        actions.push(sign_in(&id, "Disconnect", None, "Removing the credential"));
+                        actions.push(sign_in(
+                            &r.id,
+                            AccountAction::Disconnect,
+                            None,
+                            "Removing the credential",
+                        ));
                     }
                 }
                 let e = self.edits.entry(id.clone()).or_default();
@@ -637,16 +647,25 @@ impl ConnectionsPanel {
                     .button(if enabled { "Turn off" } else { "Turn on" })
                     .clicked()
                 {
+                    let Some(action) = connection_action(
+                        Some((&id, &revision)),
+                        &r.name.0,
+                        p.name,
+                        r.endpoint.as_ref().map_or("", |u| u.0.as_str()),
+                        Some(!enabled),
+                        None,
+                        None,
+                    ) else {
+                        self.message = Some((Tone::Bad, INVALID_CHANGE.into()));
+                        return;
+                    };
                     actions.push(ConnectionAction::Configure {
                         label: if enabled {
                             "Turning the connection off".into()
                         } else {
                             "Turning the connection on".into()
                         },
-                        action: json!({"kind": "Connection", "connectionId": id,
-                            "expectedRevision": revision, "name": r.name.0, "profile": p.name,
-                            "endpoint": r.endpoint.as_ref().map(|u| u.0.as_str()).unwrap_or(""),
-                            "enabled": !enabled}),
+                        action,
                         key: None,
                         code: None,
                     });
@@ -654,8 +673,10 @@ impl ConnectionsPanel {
                 if ui.button("Remove connection").clicked() {
                     actions.push(ConnectionAction::Configure {
                         label: "Removing the connection".into(),
-                        action: json!({"kind": "RemoveConnection", "connectionId": id,
-                            "expectedRevision": revision}),
+                        action: RouterConfigAction::RemoveConnection {
+                            connection_id: r.id.clone(),
+                            expected_revision: r.revision.clone(),
+                        },
                         key: None,
                         code: None,
                     });
@@ -672,7 +693,6 @@ impl ConnectionsPanel {
         ui: &mut Ui,
         r: &ConnectionRecord,
         id: &str,
-        revision: &str,
         actions: &mut Vec<ConnectionAction>,
     ) {
         let e = self.edits.entry(id.to_owned()).or_default();
@@ -682,9 +702,7 @@ impl ConnectionsPanel {
                 if ui.button("Withdraw acceptance").clicked() {
                     actions.push(ConnectionAction::Configure {
                         label: "Withdrawing the risk acceptance".into(),
-                        action: json!({"kind": "SubscriptionRisk", "connectionId": id,
-                            "expectedRevision": revision, "noticeSha256": risk_notice_sha256(),
-                            "accepted": false}),
+                        action: risk_action(&r.id, &r.revision, false),
                         key: None,
                         code: None,
                     });
@@ -705,9 +723,7 @@ impl ConnectionsPanel {
             e.notice_read = false;
             actions.push(ConnectionAction::Configure {
                 label: "Accepting the risk notice".into(),
-                action: json!({"kind": "SubscriptionRisk", "connectionId": id,
-                    "expectedRevision": revision, "noticeSha256": risk_notice_sha256(),
-                    "accepted": true}),
+                action: risk_action(&r.id, &r.revision, true),
                 key: None,
                 code: None,
             });
@@ -762,8 +778,11 @@ impl ConnectionsPanel {
                     let pasted = Secret::new(std::mem::take(&mut e.code));
                     actions.push(ConnectionAction::Configure {
                         label: "Finishing sign-in".into(),
-                        action: json!({"kind": "SignIn", "connectionId": id,
-                            "action": "CompleteSignIn", "flowId": ch.flow_id.as_str()}),
+                        action: RouterConfigAction::SignIn {
+                            connection_id: r.id.clone(),
+                            action: AccountAction::CompleteSignIn,
+                            flow_id: Some(ch.flow_id.clone()),
+                        },
                         key: None,
                         code: Some((ch.flow_id.clone(), pasted)),
                     });
@@ -943,24 +962,32 @@ impl ConnectionsPanel {
             )
             .clicked()
         {
-            let mut action = json!({"kind": "Connection", "connectionId": id,
-                "expectedRevision": e.revision, "name": e.name.trim(), "profile": p.name,
-                "endpoint": e.endpoint.trim()});
-            if e.local_free_changed {
-                action["localFree"] = json!(e.local_free);
-            }
-            if open_router {
+            let open_router = if open_router {
                 match constraints_of_edit(e) {
                     Ok(c) => {
-                        action["openRouter"] = c;
                         e.constraints_error = None;
+                        Some(c)
                     }
                     Err(err) => {
                         e.constraints_error = Some(err);
                         return;
                     }
                 }
-            }
+            } else {
+                None
+            };
+            let Some(action) = connection_action(
+                Some((id, &e.revision)),
+                e.name.trim(),
+                p.name,
+                e.endpoint.trim(),
+                None,
+                e.local_free_changed.then_some(e.local_free),
+                open_router,
+            ) else {
+                e.constraints_error = Some(INVALID_CHANGE.into());
+                return;
+            };
             let key = submitted_key(p, &mut e.key);
             actions.push(ConnectionAction::ConfigureEdit {
                 label: "Saving the connection".into(),
@@ -1032,13 +1059,23 @@ impl ConnectionsPanel {
         {
             // Only a kind that takes a key sends one (and so writes it to the secret store).
             let key = submitted_key(&p, &mut self.add_key);
-            actions.push(ConnectionAction::Configure {
-                label: "Adding the connection".into(),
-                action: json!({"kind": "Connection", "name": self.add_name.trim(),
-                    "profile": p.name, "endpoint": self.add_endpoint.trim(),"localFree":self.add_local_free}),
-                key,
-                code: None,
-            });
+            match connection_action(
+                None,
+                self.add_name.trim(),
+                p.name,
+                self.add_endpoint.trim(),
+                None,
+                Some(self.add_local_free),
+                None,
+            ) {
+                Some(action) => actions.push(ConnectionAction::Configure {
+                    label: "Adding the connection".into(),
+                    action,
+                    key,
+                    code: None,
+                }),
+                None => self.message = Some((Tone::Bad, INVALID_CHANGE.into())),
+            }
         }
     }
 
@@ -1221,27 +1258,23 @@ impl ConnectionsPanel {
             ui.checkbox(&mut n.tools, "Tools");
         });
         if ui.button("Add model").clicked() {
-            let mut model = json!({"id": n.id.trim(), "displayName": n.name.trim(),
-                "endpointProfile": current.name, "upstreamModelId": n.upstream.trim(),
-                "enabled": true, "tierMemberships": [],
-                "efforts": EFFORTS.iter().zip(n.efforts).filter(|(_, on)| *on).map(|(e, _)| *e).collect::<Vec<_>>(),
-                "imageInput": n.vision, "tools": n.tools, "revision": "1"});
-            if !n.context.trim().is_empty() {
-                model["contextTokens"] = json!(n.context.trim());
-            }
             // Only a binding the form offers for the chosen profile is sent.
-            if connections
+            let bound = connections
                 .iter()
                 .any(|(id, _, p)| *id == n.connection && *p == current.name)
-            {
-                model["connectionId"] = json!(n.connection);
+                .then_some(n.connection.as_str());
+            match new_model_action(n, current.name, bound) {
+                Ok(action) => actions.push(ConnectionAction::Configure {
+                    label: "Adding the model".into(),
+                    action,
+                    key: None,
+                    code: None,
+                }),
+                Err(why) => {
+                    self.message = Some((Tone::Bad, why));
+                    return;
+                }
             }
-            actions.push(ConnectionAction::Configure {
-                label: "Adding the model".into(),
-                action: json!({"kind": "Model", "model": model}),
-                key: None,
-                code: None,
-            });
             *n = NewModel::default();
         }
     }
@@ -1281,87 +1314,213 @@ fn joined(l: &[devworks_core::protocol::support::Text]) -> String {
         .join(", ")
 }
 
-/// The `openRouter` member an editor's constraint fields describe (all of them: an empty set
-/// clears the stored constraints), validated against the wire types before it is sent.
-fn constraints_of_edit(e: &Edit) -> Result<Value, String> {
-    let list = |s: &str| -> Vec<String> {
-        s.split(',')
-            .map(str::trim)
-            .filter(|p| !p.is_empty())
-            .map(str::to_owned)
-            .collect()
+/// The OpenRouter constraints an editor's constraint fields describe (all of them: an empty set
+/// clears the stored constraints), validated against the wire types before they are sent.
+fn constraints_of_edit(e: &Edit) -> Result<OpenRouterConstraints, String> {
+    let list = |s: &str| {
+        frame::texts(
+            &s.split(',')
+                .map(str::trim)
+                .filter(|p| !p.is_empty())
+                .map(str::to_owned)
+                .collect::<Vec<_>>(),
+        )
+        .ok_or_else(|| {
+            "The OpenRouter constraints are not valid: a model pattern is not valid.".to_owned()
+        })
     };
-    let mut c = json!({"allowedModels": list(&e.allowed), "excludedModels": list(&e.excluded)});
-    if let Some(t) = COST_TIERS.get(e.cost_tier).filter(|t| !t.is_empty()) {
-        c["costTier"] = json!(t);
-    }
-    if !e.provider.trim().is_empty() {
-        let provider: OpenRouterProviderRouting = serde_json::from_str(e.provider.trim())
-            .map_err(|err| format!("The provider routing is not valid: {err}"))?;
-        c["provider"] = serde_json::to_value(provider).map_err(|err| err.to_string())?;
-    }
-    serde_json::from_value::<OpenRouterConstraints>(c.clone())
-        .map_err(|err| format!("The OpenRouter constraints are not valid: {err}"))?;
-    Ok(c)
+    let provider = match e.provider.trim() {
+        "" => None,
+        text => Some(
+            serde_json::from_str::<OpenRouterProviderRouting>(text)
+                .map_err(|err| format!("The provider routing is not valid: {err}"))?,
+        ),
+    };
+    Ok(OpenRouterConstraints {
+        allowed_models: list(&e.allowed)?,
+        excluded_models: list(&e.excluded)?,
+        cost_tier: match COST_TIERS.get(e.cost_tier).filter(|t| !t.is_empty()) {
+            Some(tier) => Some(frame::text(tier).ok_or_else(|| {
+                "The OpenRouter constraints are not valid: the cost tier is not valid.".to_owned()
+            })?),
+            None => None,
+        },
+        provider,
+    })
 }
 
-fn sign_in(id: &str, action: &str, flow: Option<&Id>, label: &str) -> ConnectionAction {
-    let mut a = json!({"kind": "SignIn", "connectionId": id, "action": action});
-    if let Some(f) = flow {
-        a["flowId"] = json!(f.as_str());
+/// Shown when a change cannot be written as a request.
+const INVALID_CHANGE: &str =
+    "The change is not valid: check the name, the endpoint and the revision.";
+
+/// The `Connection` action adding a connection (`target` is `None`) or changing the one at
+/// `(id, revision)`. `None` when a value is outside the wire types.
+pub(crate) fn connection_action(
+    target: Option<(&str, &str)>,
+    name: &str,
+    profile: &str,
+    endpoint: &str,
+    enabled: Option<bool>,
+    local_free: Option<bool>,
+    open_router: Option<OpenRouterConstraints>,
+) -> Option<RouterConfigAction> {
+    let (connection_id, expected_revision) = match target {
+        Some((id, revision)) => (Some(frame::id(id)?), Some(frame::text(revision)?)),
+        None => (None, None),
+    };
+    Some(RouterConfigAction::Connection {
+        connection_id,
+        expected_revision,
+        name: frame::text(name)?,
+        profile: frame::text(profile)?,
+        endpoint: frame::text(endpoint)?,
+        credential_ref: None,
+        enabled,
+        open_router,
+        local_free,
+    })
+}
+
+/// The `SubscriptionRisk` action accepting or withdrawing the risk notice.
+pub(crate) fn risk_action(
+    connection_id: &Id,
+    expected_revision: &Revision,
+    accepted: bool,
+) -> RouterConfigAction {
+    RouterConfigAction::SubscriptionRisk {
+        connection_id: connection_id.clone(),
+        expected_revision: expected_revision.clone(),
+        notice_sha256: frame::text(&risk_notice_sha256())
+            .expect("the notice digest is a SHA-256 digest"),
+        accepted,
     }
+}
+
+pub(crate) fn sign_in(
+    connection_id: &Id,
+    action: AccountAction,
+    flow: Option<&Id>,
+    label: &str,
+) -> ConnectionAction {
     ConnectionAction::Configure {
         label: label.into(),
-        action: a,
+        action: RouterConfigAction::SignIn {
+            connection_id: connection_id.clone(),
+            action,
+            flow_id: flow.cloned(),
+        },
         key: None,
         code: None,
     }
 }
 
 /// The `Model` action saving a catalog row's edits (its tier memberships unchanged).
-fn model_action(m: &RouteCatalogModel, e: &ModelEdit) -> Result<Value, String> {
+pub(crate) fn model_action(
+    m: &RouteCatalogModel,
+    e: &ModelEdit,
+) -> Result<RouterConfigAction, String> {
     // Build the configure DTO explicitly: query facts never become writable input.
-    let configured = RouteModel {
-        id: m.id.clone(),
-        display_name: m.display_name.clone(),
-        endpoint_profile: m.endpoint_profile.clone(),
-        upstream_model_id: m.upstream_model_id.clone(),
-        enabled: m.enabled,
-        tier_memberships: m.tier_memberships.clone(),
-        efforts: m.efforts.clone(),
-        image_input: m.image_input,
-        tools: m.tools,
-        revision: m.revision.clone(),
-        context_tokens: m.context_tokens.clone(),
-        connection_id: m.connection_id.clone(),
-    };
-    let mut model = serde_json::to_value(configured).map_err(|e| e.to_string())?;
-    model["enabled"] = json!(e.enabled);
-    match e.context.trim() {
-        "" => {
-            model.as_object_mut().map(|o| o.remove("contextTokens"));
-        }
-        c => {
-            let n: u64 = c
-                .parse()
+    let context_tokens = match e.context.trim() {
+        "" => None,
+        c => Some(
+            c.parse::<u64>()
                 .ok()
                 .filter(|n| *n > 0)
-                .ok_or_else(|| format!("{c} is not a positive token count"))?;
-            model["contextTokens"] = json!(n.to_string());
+                .and_then(|n| frame::text(&n.to_string()))
+                .ok_or_else(|| format!("{c} is not a positive token count"))?,
+        ),
+    };
+    let connection_id = match e.connection.as_str() {
+        "" => None,
+        c => Some(frame::id(c).ok_or_else(|| format!("{c} is not a connection ID"))?),
+    };
+    Ok(RouterConfigAction::Model {
+        model: RouteModel {
+            id: m.id.clone(),
+            display_name: m.display_name.clone(),
+            endpoint_profile: m.endpoint_profile.clone(),
+            upstream_model_id: m.upstream_model_id.clone(),
+            enabled: e.enabled,
+            tier_memberships: m.tier_memberships.clone(),
+            efforts: m.efforts.clone(),
+            image_input: m.image_input,
+            tools: m.tools,
+            revision: m.revision.clone(),
+            context_tokens,
+            connection_id,
+        },
+        expected_revision: Some(m.revision.clone()),
+    })
+}
+
+/// The `Model` action adding the model the form describes, bound to `connection` when given.
+pub(crate) fn new_model_action(
+    n: &NewModel,
+    profile: &str,
+    connection: Option<&str>,
+) -> Result<RouterConfigAction, String> {
+    let invalid = |what: &str| format!("The model {what} is not valid.");
+    let efforts: Vec<String> = EFFORTS
+        .iter()
+        .zip(n.efforts)
+        .filter(|(_, on)| *on)
+        .map(|(e, _)| (*e).to_owned())
+        .collect();
+    let context_tokens = match n.context.trim() {
+        "" => None,
+        c => Some(frame::text(c).ok_or_else(|| invalid("context tokens"))?),
+    };
+    let connection_id = match connection {
+        Some(c) => Some(frame::id(c).ok_or_else(|| invalid("connection"))?),
+        None => None,
+    };
+    Ok(RouterConfigAction::Model {
+        model: RouteModel {
+            id: frame::id(n.id.trim()).ok_or_else(|| invalid("ID"))?,
+            display_name: frame::text(n.name.trim()).ok_or_else(|| invalid("name"))?,
+            endpoint_profile: frame::text(profile).ok_or_else(|| invalid("profile"))?,
+            upstream_model_id: frame::text(n.upstream.trim())
+                .ok_or_else(|| invalid("upstream ID"))?,
+            enabled: true,
+            tier_memberships: BoundedList(Vec::new()),
+            efforts: frame::texts(&efforts).ok_or_else(|| invalid("efforts"))?,
+            image_input: n.vision,
+            tools: n.tools,
+            revision: frame::text("1").ok_or_else(|| invalid("revision"))?,
+            context_tokens,
+            connection_id,
+        },
+        expected_revision: None,
+    })
+}
+
+/// The request key and `router.configure` action of a frame this panel sent.
+fn sent_configure(frame: &[u8]) -> Option<(String, RouterConfigAction)> {
+    use devworks_core::admission::{CallerKey, Selection, decode};
+    use devworks_core::operations::{OperationInput, router};
+    let decoded = decode(
+        Selection {
+            operation: "router.configure",
+            mode: devworks_core::registry::Mode::Command,
+        },
+        frame,
+    )
+    .ok()?;
+    let CallerKey::Command(key) = decoded.key else {
+        return None;
+    };
+    match decoded.input {
+        OperationInput::Router(router::Input::Configure(input)) => {
+            Some((key.0.as_str().to_owned(), input.action))
         }
+        _ => None,
     }
-    if e.connection.is_empty() {
-        model.as_object_mut().map(|o| o.remove("connectionId"));
-    } else {
-        model["connectionId"] = json!(e.connection);
-    }
-    Ok(json!({"kind": "Model", "model": model,
-        "expectedRevision": m.revision.get().to_string()}))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
     #[test]
     fn model_configuration_never_submits_query_facts() {
         let model: RouteCatalogModel = serde_json::from_value(json!({
@@ -1377,16 +1536,22 @@ mod tests {
             },
         )
         .unwrap();
-        let configured: devworks_core::protocol::records::RouteModel =
-            serde_json::from_value(action["model"].clone()).unwrap();
+        let RouterConfigAction::Model {
+            model: configured, ..
+        } = action
+        else {
+            panic!("a Model action");
+        };
         assert_eq!(configured.id.as_str(), "version-1");
+        // The wire value of the model holds the configurable members only.
+        let wire = serde_json::to_value(&configured).unwrap();
         for key in [
             "available",
             "availabilityReason",
             "latestFamily",
             "resolvesToModelIds",
         ] {
-            assert!(action["model"].get(key).is_none());
+            assert!(wire.get(key).is_none());
         }
     }
 }

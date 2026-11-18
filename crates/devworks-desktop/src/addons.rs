@@ -52,7 +52,7 @@ pub enum AddonsAction {
     Configure {
         package: String,
         revision: i64,
-        schema: serde_json::Value,
+        schema: SchemaRef,
         value: serde_json::Value,
     },
     ProjectEnablement {
@@ -89,7 +89,7 @@ pub struct AddonsScreen {
     /// Project IDs the package is disabled for, being edited (comma separated), per package.
     pub projects_text: HashMap<String, String>,
     project_bases: HashMap<String, (String, i64)>,
-    config_bases: HashMap<String, (String, i64, serde_json::Value)>,
+    config_bases: HashMap<String, (String, i64, SchemaRef)>,
     pub filter: String,
     pub busy: bool,
     /// A configuration refusal whose field errors are being fetched: (package, diagnostic).
@@ -554,7 +554,7 @@ impl AddonsScreen {
                     .unwrap_or_else(|| serde_json::json!({}));
                 let saved =
                     serde_json::to_string_pretty(&saved_value).unwrap_or_else(|_| "{}".into());
-                let saved_schema = serde_json::to_value(schema).unwrap_or_default();
+                let saved_schema = schema.clone();
                 let text = self
                     .config_text
                     .entry(id.clone())
@@ -678,16 +678,21 @@ pub struct PickedBundle {
 // Frames and replies (the same use cases agent tools reach)
 
 use crate::backend::{Backend, TaskOutput};
-use crate::ops::{self, Failure, PROTOCOL};
+use crate::frame::{self, Negotiate};
+use crate::ops::{self, Failure};
 use devworks_core::gateway::{CommandOutcome, QueryOutcome};
+use devworks_core::operations::{OperationInput as In, addons};
+use devworks_core::protocol::Revision;
+use devworks_core::protocol::addons::{AddonCommand, AddonCommandRequest};
+use devworks_core::protocol::provider::SchemaRef;
+use devworks_core::protocol::records::SchemaValue;
 use devworks_core::protocol::results::OperationResult;
+use devworks_core::protocol::support::DynamicJson;
 use devworks_core::services::packages::{
     PROJECT_ENABLEMENT_SCHEMA, UPDATE_POLICY_SCHEMA, host_schema_ref,
 };
 use serde_json::{Value, json};
 
-/// The revision of `addons.*` records the screen reads (effective availability and the rest).
-pub const ADDONS_REVISION: u64 = 3;
 /// Media type of a package bundle artifact.
 pub const BUNDLE_MEDIA_TYPE: &str = "application/vnd.devworks.package";
 /// Largest bundle file the screen hashes and uploads.
@@ -708,19 +713,13 @@ pub const LOGS_KEPT: usize = 2000;
 /// Most catalog pages followed in one load.
 pub const CATALOG_PAGES: usize = 50;
 
-fn page(cursor: Option<&str>) -> Value {
-    match cursor {
-        Some(c) => json!({"limit": ops::PAGE_LIMIT, "cursor": c}),
-        None => json!({"limit": ops::PAGE_LIMIT}),
-    }
-}
 /// One catalog page (`cursor`: the previous page's continuation).
 pub fn catalog_frame(backend: &dyn Backend, cursor: Option<&str>) -> Vec<u8> {
-    json!({"mode": "Query", "protocol": PROTOCOL, "queryId": backend.token("q"),
-        "schemaRevision": ADDONS_REVISION,
-        "body": {"kind": "addons.catalog", "page": page(cursor)}})
-    .to_string()
-    .into_bytes()
+    frame::with(backend, Negotiate::Latest, || {
+        Some(In::Addons(addons::Input::Catalog(addons::CatalogInput {
+            page: frame::page(ops::PAGE_LIMIT.into(), cursor)?,
+        })))
+    })
 }
 /// A catalog page, the registry revision it was read at and its continuation.
 pub fn catalog(
@@ -737,11 +736,13 @@ pub fn catalog(
 }
 /// One page of a package's logs, oldest first (the contract's order), after `cursor`.
 pub fn logs_frame(backend: &dyn Backend, package: &str, cursor: Option<&str>) -> Vec<u8> {
-    json!({"mode": "Query", "protocol": PROTOCOL, "queryId": backend.token("q"),
-        "body": {"kind": "addons.logs", "packageId": package, "afterSequence": "0",
-            "page": page(cursor)}})
-    .to_string()
-    .into_bytes()
+    frame::with(backend, Negotiate::Initial, || {
+        Some(In::Addons(addons::Input::Logs(addons::LogsInput {
+            package_id: frame::id(package)?,
+            after_sequence: frame::number(0)?,
+            page: frame::page(ops::PAGE_LIMIT.into(), cursor)?,
+        })))
+    })
 }
 /// A page of log entries and its continuation.
 pub fn logs(outcome: QueryOutcome) -> Result<(Vec<Diagnostic>, Option<String>), Failure> {
@@ -754,36 +755,72 @@ pub fn logs(outcome: QueryOutcome) -> Result<(Vec<Diagnostic>, Option<String>), 
         ))),
     }
 }
-/// A lifecycle command (`AddonCommandRequest`) at the record revision the screen reads.
-pub fn lifecycle_frame(backend: &dyn Backend, command: Value) -> Vec<u8> {
-    json!({"protocol": PROTOCOL, "requestKey": backend.token("rk"),
-        "schemaRevision": ADDONS_REVISION, "command": command})
-    .to_string()
-    .into_bytes()
+/// The operation a lifecycle command runs.
+pub fn operation(command: &AddonCommand) -> &'static str {
+    match command {
+        AddonCommand::Install { .. } => "addons.install",
+        AddonCommand::Update { .. } => "addons.update",
+        AddonCommand::Enable { .. } => "addons.enable",
+        AddonCommand::Disable { .. } => "addons.disable",
+        AddonCommand::Rollback { .. } => "addons.rollback",
+        AddonCommand::Uninstall { .. } => "addons.uninstall",
+    }
+}
+fn lifecycle_input(request: AddonCommandRequest) -> In {
+    In::Addons(match request.command {
+        AddonCommand::Install { .. } => addons::Input::Install(request),
+        AddonCommand::Update { .. } => addons::Input::Update(request),
+        AddonCommand::Enable { .. } => addons::Input::Enable(request),
+        AddonCommand::Disable { .. } => addons::Input::Disable(request),
+        AddonCommand::Rollback { .. } => addons::Input::Rollback(request),
+        AddonCommand::Uninstall { .. } => addons::Input::Uninstall(request),
+    })
+}
+/// A lifecycle command (`AddonCommandRequest`) at the schema revision the screen reads.
+pub fn lifecycle_frame(backend: &dyn Backend, command: AddonCommand) -> Vec<u8> {
+    frame::with(backend, Negotiate::Latest, || {
+        Some(lifecycle_input(AddonCommandRequest {
+            protocol: frame::protocol(),
+            request_key: frame::request_key(backend)?,
+            command,
+        }))
+    })
 }
 pub fn configure_frame(
     backend: &dyn Backend,
     package: &str,
     revision: i64,
-    schema: Value,
+    schema: SchemaRef,
     value: Value,
 ) -> Vec<u8> {
-    json!({"mode": "Command", "protocol": PROTOCOL, "requestKey": backend.token("rk"),
-        "schemaRevision": ADDONS_REVISION,
-        "body": {"kind": "addons.configure", "packageId": package,
-            "expectedRevision": revision.max(1).to_string(),
-            "config": {"schema": schema, "value": value}}})
-    .to_string()
-    .into_bytes()
+    frame::with(backend, Negotiate::Latest, || {
+        Some(In::Addons(addons::Input::Configure(
+            addons::ConfigureInput {
+                package_id: frame::id(package)?,
+                expected_revision: frame::number(revision.max(1))?,
+                config: SchemaValue {
+                    schema,
+                    value: DynamicJson(value),
+                },
+            },
+        )))
+    })
+}
+/// A host-defined configuration schema as a wire reference.
+fn host_schema(id: &str) -> Option<SchemaRef> {
+    serde_json::from_value(host_schema_ref(id)?).ok()
 }
 pub fn trust_frame(backend: &dyn Backend, package: &str, revision: i64, trust: bool) -> Vec<u8> {
-    configure_frame(
-        backend,
-        package,
-        revision,
-        host_schema_ref(UPDATE_POLICY_SCHEMA).unwrap_or_default(),
-        json!({"trustPublisherUpdates": trust, "releaseStream": "stable"}),
-    )
+    match host_schema(UPDATE_POLICY_SCHEMA) {
+        Some(schema) => configure_frame(
+            backend,
+            package,
+            revision,
+            schema,
+            json!({"trustPublisherUpdates": trust, "releaseStream": "stable"}),
+        ),
+        None => Vec::new(),
+    }
 }
 pub fn project_frame(
     backend: &dyn Backend,
@@ -791,13 +828,70 @@ pub fn project_frame(
     revision: i64,
     disabled: &[String],
 ) -> Vec<u8> {
-    configure_frame(
-        backend,
-        package,
-        revision,
-        host_schema_ref(PROJECT_ENABLEMENT_SCHEMA).unwrap_or_default(),
-        json!({"disabledProjects": disabled}),
-    )
+    match host_schema(PROJECT_ENABLEMENT_SCHEMA) {
+        Some(schema) => configure_frame(
+            backend,
+            package,
+            revision,
+            schema,
+            json!({"disabledProjects": disabled}),
+        ),
+        None => Vec::new(),
+    }
+}
+/// The registry revision a lifecycle command expects, never below the first.
+fn registry_revision(registry: i64) -> Option<Revision> {
+    frame::number(registry.max(1))
+}
+/// Install a new package from `bundle`, or update `package` with it.
+pub fn install_command(
+    bundle: ArtifactRef,
+    package: Option<&str>,
+    registry: i64,
+) -> Option<AddonCommand> {
+    let expected_registry_revision = registry_revision(registry)?;
+    Some(match package {
+        Some(p) => AddonCommand::Update {
+            package_id: frame::id(p)?,
+            bundle,
+            expected_registry_revision,
+        },
+        None => AddonCommand::Install {
+            bundle,
+            expected_registry_revision,
+        },
+    })
+}
+pub fn enable_command(package: &str, registry: i64) -> Option<AddonCommand> {
+    Some(AddonCommand::Enable {
+        package_id: frame::id(package)?,
+        expected_registry_revision: registry_revision(registry)?,
+    })
+}
+pub fn disable_command(package: &str, registry: i64) -> Option<AddonCommand> {
+    Some(AddonCommand::Disable {
+        package_id: frame::id(package)?,
+        expected_registry_revision: registry_revision(registry)?,
+    })
+}
+pub fn uninstall_command(package: &str, registry: i64) -> Option<AddonCommand> {
+    Some(AddonCommand::Uninstall {
+        package_id: frame::id(package)?,
+        expected_registry_revision: registry_revision(registry)?,
+    })
+}
+pub fn rollback_command(
+    package: &str,
+    target: &str,
+    registry: i64,
+    generation: i64,
+) -> Option<AddonCommand> {
+    Some(AddonCommand::Rollback {
+        package_id: frame::id(package)?,
+        target_manifest_digest: frame::text(target)?,
+        expected_registry_revision: registry_revision(registry)?,
+        expected_state_generation: registry_revision(generation)?,
+    })
 }
 /// The package record a lifecycle command applied (or left unchanged).
 pub fn package_result(outcome: CommandOutcome) -> Result<PackageRecord, Failure> {
@@ -947,21 +1041,15 @@ pub fn install_saved(
     update: Option<&str>,
     registry: i64,
 ) -> (&'static str, Vec<u8>) {
-    let bundle = serde_json::to_value(artifact).expect("artifact reference");
-    let expected = registry.max(1).to_string();
-    let (op, command) = match update {
-        Some(p) => (
-            "addons.update",
-            json!({"kind": "Update", "packageId": p, "bundle": bundle,
-                "expectedRegistryRevision": expected}),
-        ),
-        None => (
-            "addons.install",
-            json!({"kind": "Install", "bundle": bundle, "expectedRegistryRevision": expected}),
-        ),
+    let operation = if update.is_some() {
+        "addons.update"
+    } else {
+        "addons.install"
     };
-    let frame = lifecycle_frame(backend, command);
-    (op, frame)
+    let frame = install_command(artifact.clone(), update, registry)
+        .map(|command| lifecycle_frame(backend, command))
+        .unwrap_or_default();
+    (operation, frame)
 }
 
 #[cfg(test)]

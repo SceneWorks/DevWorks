@@ -116,8 +116,13 @@ fn native_apply_price_filters_survives_same_frame_catalog_revalidation_hint() {
     click(&mut h, Role::CheckBox, "Include historical price sources");
     assert!(h.state().usage.history);
     assert_eq!(
-        h.state().usage.price_query.as_ref().unwrap()["includeHistory"],
-        json!(false)
+        h.state()
+            .usage
+            .price_query
+            .as_ref()
+            .unwrap()
+            .include_history,
+        Some(false)
     );
     h.get_by_role_and_label(Role::Button, "Apply price catalog filters")
         .scroll_to_me();
@@ -166,8 +171,13 @@ fn native_apply_price_filters_survives_same_frame_catalog_revalidation_hint() {
         "the enabled target stays beneath the original pointer"
     );
     assert_eq!(
-        h.state().usage.price_query.as_ref().unwrap()["includeHistory"],
-        json!(true),
+        h.state()
+            .usage
+            .price_query
+            .as_ref()
+            .unwrap()
+            .include_history,
+        Some(true),
         "the single enabled gesture must apply the user's current filters while the older catalog revalidates"
     );
     gate.open();

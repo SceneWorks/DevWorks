@@ -1,10 +1,13 @@
 //! Settings-owned explicit embedding configuration. Every state comes from the router owner;
 //! the panel neither qualifies a model nor chooses a conversational/default route.
 use crate::connections_screen::ConnectionAction;
+use crate::frame;
 use crate::widgets::{self, Tone, chip};
-use devworks_core::protocol::records::{ConnectionRecord, EmbeddingSpacePage};
+use devworks_core::protocol::records::{
+    ConnectionRecord, EmbeddingDimensionMode, EmbeddingMetric, EmbeddingSpacePage,
+    RouterConfigAction,
+};
 use eframe::egui::{self, Ui};
-use serde_json::{Value, json};
 
 #[derive(Default)]
 pub struct EmbeddingSpacesPanel {
@@ -27,13 +30,42 @@ fn wire(value: &impl serde::Serialize) -> String {
         .and_then(|v| v.as_str().map(str::to_owned))
         .unwrap_or_default()
 }
+/// The action creating an embedding space from the form's text, `None` when a value is outside
+/// the wire types.
+pub(crate) fn create_action(
+    name: &str,
+    connection: &str,
+    connection_revision: &str,
+    model: &str,
+    dimensions: u32,
+    parameter: bool,
+    l2: bool,
+) -> Option<RouterConfigAction> {
+    Some(RouterConfigAction::CreateEmbeddingSpace {
+        name: frame::text(name)?,
+        connection_id: frame::id(connection)?,
+        expected_connection_revision: frame::text(connection_revision)?,
+        upstream_model_id: frame::text(model)?,
+        dimensions: frame::number(dimensions.into())?,
+        dimension_mode: if parameter {
+            EmbeddingDimensionMode::Parameter
+        } else {
+            EmbeddingDimensionMode::Native
+        },
+        metric: if l2 {
+            EmbeddingMetric::L2
+        } else {
+            EmbeddingMetric::Cosine
+        },
+    })
+}
 fn field(ui: &mut Ui, label: &str, text: &mut String) {
     ui.horizontal(|ui| {
         let name = ui.label(label);
         ui.text_edit_singleline(text).labelled_by(name.id);
     });
 }
-fn configure(actions: &mut Vec<ConnectionAction>, label: String, action: Value) {
+fn configure(actions: &mut Vec<ConnectionAction>, label: String, action: RouterConfigAction) {
     actions.push(ConnectionAction::Configure {
         label,
         action,
@@ -108,7 +140,10 @@ impl EmbeddingSpacesPanel {
             if ui.add_enabled(valid,egui::Button::new("Create embedding space")).clicked()
                 && let (Some((connection,revision)),Some(dimensions))=(&self.connection,dimensions)
             {
-                configure(actions,"Create embedding space".into(),json!({"kind":"CreateEmbeddingSpace","name":self.name,"connectionId":connection,"expectedConnectionRevision":revision,"upstreamModelId":self.model,"dimensions":dimensions.to_string(),"dimensionMode":if self.parameter {"Parameter"}else{"Native"},"metric":if self.l2 {"L2"}else{"Cosine"}}));
+                match create_action(&self.name,connection,revision,&self.model,dimensions,self.parameter,self.l2) {
+                    Some(action) => configure(actions,"Create embedding space".into(),action),
+                    None => self.error = Some("The embedding space is not valid: check the name, the connection and the model.".into()),
+                }
             }
             ui.label("Creating a space sends no inference. Qualification sends one fixed probe through that connection and records its usage; it may incur a charge.");
         });
@@ -129,25 +164,84 @@ impl EmbeddingSpacesPanel {
             configure(
                 actions,
                 "Clear embedding selection".into(),
-                json!({"kind":"ClearEmbeddingSpace","expectedSelectionRevision":page.selection_revision}),
+                RouterConfigAction::ClearEmbeddingSpace {
+                    expected_selection_revision: page.selection_revision.clone(),
+                },
             );
         }
         for record in &page.items.0 {
-            ui.push_id(record.id.as_str(),|ui| {ui.group(|ui| {
-                ui.strong(format!("{}: {}",record.name.0,wire(&record.status)));
-                ui.label(format!("Model: {} · {} dimensions · {}",record.upstream_model_id.0,record.dimensions.0,wire(&record.metric)));
-                ui.monospace(format!("Space: {}",record.space_id.as_str()));
-                if let Some(reason)=&record.reason {ui.label(&reason.0);}
-                if let Some(operation)=&record.qualification_operation {ui.label(format!("Qualification operation: {} ({})",operation.operation_id.0.as_str(),wire(&operation.state)));}
-                if let Some(model)=&record.pricing_model_id && ui.add_enabled(actionable,egui::Button::new(format!("Configure price for {}",record.name.0))).clicked() {actions.push(ConnectionAction::EmbeddingPrice(model.as_str().into()));}
-                let state=wire(&record.status);
-                if record.can_qualify && ui.add_enabled(actionable,egui::Button::new(format!("Queue qualification for {} (may incur usage)",record.name.0))).clicked() {
-                    configure(actions,format!("Queue qualification for {}",record.name.0),json!({"kind":"QualifyEmbeddingSpace","candidateId":record.id,"expectedRevision":record.revision}));
-                }
-                if state=="Qualified" && page.selected_candidate_id.as_ref()!=Some(&record.id) && ui.add_enabled(actionable,egui::Button::new(format!("Use embedding space {}",record.name.0))).clicked() {
-                    configure(actions,format!("Select embedding space {}",record.name.0),json!({"kind":"SelectEmbeddingSpace","candidateId":record.id,"expectedRevision":record.revision,"expectedSelectionRevision":page.selection_revision}));
-                }
-            });});
+            ui.push_id(record.id.as_str(), |ui| {
+                ui.group(|ui| {
+                    ui.strong(format!("{}: {}", record.name.0, wire(&record.status)));
+                    ui.label(format!(
+                        "Model: {} · {} dimensions · {}",
+                        record.upstream_model_id.0,
+                        record.dimensions.0,
+                        wire(&record.metric)
+                    ));
+                    ui.monospace(format!("Space: {}", record.space_id.as_str()));
+                    if let Some(reason) = &record.reason {
+                        ui.label(&reason.0);
+                    }
+                    if let Some(operation) = &record.qualification_operation {
+                        ui.label(format!(
+                            "Qualification operation: {} ({})",
+                            operation.operation_id.0.as_str(),
+                            wire(&operation.state)
+                        ));
+                    }
+                    if let Some(model) = &record.pricing_model_id
+                        && ui
+                            .add_enabled(
+                                actionable,
+                                egui::Button::new(format!("Configure price for {}", record.name.0)),
+                            )
+                            .clicked()
+                    {
+                        actions.push(ConnectionAction::EmbeddingPrice(model.as_str().into()));
+                    }
+                    let state = wire(&record.status);
+                    if record.can_qualify
+                        && ui
+                            .add_enabled(
+                                actionable,
+                                egui::Button::new(format!(
+                                    "Queue qualification for {} (may incur usage)",
+                                    record.name.0
+                                )),
+                            )
+                            .clicked()
+                    {
+                        configure(
+                            actions,
+                            format!("Queue qualification for {}", record.name.0),
+                            RouterConfigAction::QualifyEmbeddingSpace {
+                                candidate_id: record.id.clone(),
+                                expected_revision: record.revision.clone(),
+                            },
+                        );
+                    }
+                    if state == "Qualified"
+                        && page.selected_candidate_id.as_ref() != Some(&record.id)
+                        && ui
+                            .add_enabled(
+                                actionable,
+                                egui::Button::new(format!("Use embedding space {}", record.name.0)),
+                            )
+                            .clicked()
+                    {
+                        configure(
+                            actions,
+                            format!("Select embedding space {}", record.name.0),
+                            RouterConfigAction::SelectEmbeddingSpace {
+                                candidate_id: record.id.clone(),
+                                expected_revision: record.revision.clone(),
+                                expected_selection_revision: page.selection_revision.clone(),
+                            },
+                        );
+                    }
+                });
+            });
         }
         if page.has_more
             && let Some(cursor) = &page.next_cursor

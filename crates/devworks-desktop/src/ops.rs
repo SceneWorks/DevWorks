@@ -5,38 +5,47 @@ use crate::backend::Backend;
 use crate::frame::{self, Negotiate};
 use devworks_core::gateway::{CommandOutcome, GatewayFailure, QueryOutcome};
 use devworks_core::operations::{
-    OperationInput as In, browser, containers, git, indexing, jobs, mcp, projects, repositories,
-    resources, router, sessions, settings, web, workspace,
+    OperationInput as In, artifacts, browser, containers, git, indexing, jobs, mcp, projects,
+    repositories, resources, router, sessions, settings, web, workspace,
+};
+use devworks_core::protocol::OperationId;
+use devworks_core::protocol::ProjectId;
+use devworks_core::protocol::data::{
+    ArtifactCommand, ArtifactCommandRequest, ArtifactDeletion, ArtifactDeletionRequest,
+    ArtifactQuery, ArtifactQueryRequest, ArtifactSource, ArtifactTags, IndexCommand,
+    IndexCommandRequest,
 };
 use devworks_core::protocol::data::{DataScope, GitOid, ObjectFormat, ViewSelection};
-use devworks_core::protocol::provider::{ArtifactRef, TranscriptPage};
-use devworks_core::protocol::records::{
-    AccessMode, ArtifactRecord, BrowserSession, ConnectionRecord, ContainerCapability,
-    DiagnosticEntry, EffortName, JobInspection, JobRecord, JobRun, MutationSummary, ProjectRecord,
-    RepositoryRecord, RepositoryText, ResourceRecord, RouteAvailability, RouteCatalogModel,
-    RouteChoice, RouteIntent, SessionRecord, SettingEntry, ValidationReport, WebDocument,
-    WebResult,
+use devworks_core::protocol::provider::{
+    ArtifactRef, SessionCommandRequest, SessionQueryRequest, TranscriptPage, UserContent,
 };
 use devworks_core::protocol::records::{
-    BrowserSessionAction, IndexSourceConfig, ProjectPatch, SchemaValue, SettingAssignment,
-    SortDirection,
+    AccessMode, ArtifactRecord, BrowserSession, ConnectionRecord, ContainerCapability,
+    DiagnosticEntry, EffortName, JobDefinition, JobInspection, JobRecord, JobRun, MutationSummary,
+    ProjectRecord, RepositoryRecord, RepositoryText, ResourceRecord, RouteAvailability,
+    RouteCatalogModel, RouteChoice, RouteIntent, Schedule, SessionRecord, SettingEntry,
+    ValidationReport, WebDocument, WebResult,
+};
+use devworks_core::protocol::records::{
+    BrowserSessionAction, IndexSourceConfig, ProjectPatch, ProjectPurgeManifest,
+    RouterConfigAction, SchemaValue, SettingAssignment, SortDirection,
 };
 use devworks_core::protocol::results::{DomainDecision, DomainQueryReply, OperationResult};
 use devworks_core::protocol::support::{BoundedList, BoundedText, DynamicJson};
 use devworks_core::protocol::{CommandReply, DomainFault};
 use devworks_core::settings::view::SettingsView;
-use serde_json::{Value, json};
+use serde_json::Value;
 
 pub const PROTOCOL: &str = "1.0-draft.1";
-/// Workspace artifacts (attachments without a project) need artifact schema revision 3.
-pub const WORKSPACE_ARTIFACT_REVISION: u64 = 3;
+/// Workspace artifacts (attachments without a project) need artifact schema revision 3. The
+/// registry lists a newer one for `artifacts.save`; the desktop keeps sending the revision its
+/// workspace saves were written against.
+const WORKSPACE_ARTIFACT_NEGOTIATION: Negotiate = Negotiate::pinned(
+    3,
+    "workspace artifact saves are written against schema revision 3",
+);
 /// Most rows one page request asks for.
 pub const PAGE_LIMIT: u16 = 200;
-/// Session records carry their start and last-activity times from session schema revision 2.
-pub const SESSION_REVISION: u64 = 2;
-/// Transcripts carry the tool dispatch fence and accepted-operation outcomes from schema
-/// revision 8 (earlier revisions leave the fence out and read acceptance as an unknown outcome).
-pub const TRANSCRIPT_REVISION: u64 = 8;
 
 /// Why a request produced no usable result. Never rendered as success or as zero values.
 #[derive(Clone, Debug)]
@@ -119,26 +128,6 @@ pub(crate) fn unexpected(op: &str, r: &OperationResult) -> Failure {
     Failure::Other(format!("{op} returned {}", r.operation()))
 }
 
-pub fn query_frame(backend: &dyn Backend, operation: &str, mut body: Value) -> Vec<u8> {
-    body["kind"] = json!(operation);
-    json!({"mode": "Query", "protocol": PROTOCOL, "queryId": backend.token("q"), "body": body})
-        .to_string()
-        .into_bytes()
-}
-/// A frame negotiating schema `revision` (the envelope member `schemaRevision`).
-pub(crate) fn at_revision(frame: Vec<u8>, revision: u64) -> Vec<u8> {
-    let mut v: Value = serde_json::from_slice(&frame).expect("frames are JSON");
-    v["schemaRevision"] = json!(revision);
-    v.to_string().into_bytes()
-}
-pub fn command_frame(backend: &dyn Backend, operation: &str, mut body: Value) -> Vec<u8> {
-    body["kind"] = json!(operation);
-    json!({"mode": "Command", "protocol": PROTOCOL, "requestKey": backend.token("rk"),
-        "body": body})
-    .to_string()
-    .into_bytes()
-}
-
 pub fn mcp_servers(
     backend: &dyn Backend,
     scope: Option<&devworks_core::protocol::ProjectId>,
@@ -151,10 +140,6 @@ pub fn mcp_servers(
         })))
     })
 }
-
-/// Revision 8 of the outgoing MCP operations carries each server-targeted input's scope and
-/// each server's last failure and saved transport.
-pub const MCP_REVISION: u64 = 8;
 
 pub fn mcp_server_page(
     outcome: QueryOutcome,
@@ -203,13 +188,6 @@ fn router_catalog_input(cursor: Option<&str>) -> Option<In> {
     })))
 }
 
-pub fn mcp_scope(project: Option<&devworks_core::protocol::ProjectId>) -> Value {
-    project.map_or_else(
-        || json!({"kind":"Workspace"}),
-        |id| json!({"kind":"Project","projectId":id}),
-    )
-}
-
 pub fn mcp_capability_page(
     outcome: QueryOutcome,
 ) -> Result<
@@ -231,15 +209,15 @@ pub fn mcp_capability_page(
 pub const MCP_CONTENT_VIEW_BYTES: u64 = 1024 * 1024;
 
 /// One resource or prompt a person asked to open from Settings.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug)]
 pub enum McpContentRequest {
     Resource {
         uri: String,
     },
-    /// `arguments` is the prompt's `{schema, value}` pair when the person filled any in.
+    /// `arguments` is the prompt's schema and value when the person filled any in.
     Prompt {
         name: String,
-        arguments: Option<Value>,
+        arguments: Option<SchemaValue>,
     },
 }
 
@@ -270,10 +248,7 @@ pub(crate) fn mcp_content_frame(
                     server_id,
                     catalog_revision,
                     name: Some(frame::text(name)?),
-                    arguments: match arguments {
-                        Some(value) => Some(serde_json::from_value(value.clone()).ok()?),
-                        None => None,
-                    },
+                    arguments: arguments.clone(),
                     page,
                 })
             }
@@ -320,8 +295,9 @@ pub fn mcp_content(
     })
 }
 
-pub fn mcp_command(backend: &dyn Backend, operation: &str, body: Value) -> Vec<u8> {
-    at_revision(command_frame(backend, operation, body), MCP_REVISION)
+/// An `mcp.*` command at the newest schema revision.
+pub fn mcp_command(backend: &dyn Backend, input: In) -> Vec<u8> {
+    frame::build(backend, Negotiate::Latest, Some(input))
 }
 
 /// The message, any accepted operation, and the configured or reselected server.
@@ -524,12 +500,17 @@ pub fn started(outcome: CommandOutcome) -> Result<SessionRecord, Failure> {
 }
 /// One transcript page after `after` (the projection's tail cursor).
 pub fn transcript(backend: &dyn Backend, session: &str, after: Option<&str>) -> Vec<u8> {
-    let mut frame = json!({"protocol": PROTOCOL, "queryId": backend.token("q"),
-        "sessionId": session, "limit": 200, "schemaRevision": TRANSCRIPT_REVISION});
-    if let Some(a) = after {
-        frame["after"] = json!(a);
-    }
-    frame.to_string().into_bytes()
+    frame::with(backend, Negotiate::Latest, || {
+        Some(In::Sessions(sessions::Input::Transcript(
+            SessionQueryRequest {
+                protocol: frame::protocol(),
+                query_id: frame::query_id(backend)?,
+                session_id: frame::id(session)?,
+                after: after.map(str::to_owned),
+                limit: 200,
+            },
+        )))
+    })
 }
 pub fn transcript_page(outcome: QueryOutcome) -> Result<TranscriptPage, Failure> {
     match query_result(outcome)? {
@@ -545,18 +526,26 @@ pub fn append_message(
     text: &str,
     attachments: &[ArtifactRef],
 ) -> Vec<u8> {
-    let mut content = Vec::new();
-    if !text.trim().is_empty() {
-        content.push(json!({"kind": "Text", "text": text}));
-    }
-    for a in attachments {
-        content.push(json!({"kind": "Attachment", "artifact": a}));
-    }
-    json!({"protocol": PROTOCOL, "requestKey": backend.token("rk"), "sessionId": session,
-        "expectedSessionRevision": revision.to_string(), "content": content,
-        "schemaRevision": SESSION_REVISION})
-    .to_string()
-    .into_bytes()
+    frame::with(backend, Negotiate::Latest, || {
+        let mut content = Vec::new();
+        if !text.trim().is_empty() {
+            content.push(UserContent::Text {
+                text: text.to_owned(),
+            });
+        }
+        content.extend(attachments.iter().map(|artifact| UserContent::Attachment {
+            artifact: artifact.clone(),
+        }));
+        Some(In::Sessions(sessions::Input::AppendMessage(
+            SessionCommandRequest {
+                protocol: frame::protocol(),
+                request_key: frame::request_key(backend)?,
+                session_id: frame::id(session)?,
+                expected_session_revision: frame::text(&revision.to_string())?,
+                content,
+            },
+        )))
+    })
 }
 pub fn appended(outcome: CommandOutcome) -> Result<SessionRecord, Failure> {
     match command_result(outcome)? {
@@ -585,16 +574,37 @@ pub fn save_workspace_artifact(
     bytes: u64,
     tags: &[String],
 ) -> Vec<u8> {
-    let mut command = json!({"kind": "Save", "workspace": true, "title": title,
-        "mediaType": media_type, "source": {"kind": "Upload", "ticketId": ticket},
-        "expectedDigest": digest, "expectedBytes": bytes.to_string()});
-    if !tags.is_empty() {
-        command["tags"] = json!(tags);
-    }
-    json!({"protocol": PROTOCOL, "requestKey": backend.token("rk"),
-        "schemaRevision": WORKSPACE_ARTIFACT_REVISION, "command": command})
-    .to_string()
-    .into_bytes()
+    frame::with(backend, WORKSPACE_ARTIFACT_NEGOTIATION, || {
+        artifact_save(
+            backend,
+            ArtifactCommand::Save {
+                project_id: None,
+                workspace: Some(true),
+                title: title.to_owned(),
+                media_type: media_type.to_owned(),
+                source: ArtifactSource::Upload {
+                    ticket_id: frame::id(ticket)?,
+                },
+                expected_digest: frame::text(digest)?,
+                expected_bytes: frame::text(&bytes.to_string())?,
+                tags: if tags.is_empty() {
+                    None
+                } else {
+                    Some(ArtifactTags::new(tags.to_vec()).ok()?)
+                },
+            },
+        )
+    })
+}
+/// The `artifacts.save` input of one save command.
+fn artifact_save(backend: &dyn Backend, command: ArtifactCommand) -> Option<In> {
+    Some(In::Artifacts(artifacts::Input::Save(
+        ArtifactCommandRequest {
+            protocol: frame::protocol(),
+            request_key: frame::request_key(backend)?,
+            command,
+        },
+    )))
 }
 /// An `artifacts.save` frame storing an upload into `project` (ticket from
 /// `mint_project_upload`).
@@ -607,12 +617,23 @@ pub fn save_project_artifact(
     digest: &str,
     bytes: u64,
 ) -> Vec<u8> {
-    json!({"protocol": PROTOCOL, "requestKey": backend.token("rk"),
-        "command": {"kind": "Save", "projectId": project, "title": title,
-            "mediaType": media_type, "source": {"kind": "Upload", "ticketId": ticket},
-            "expectedDigest": digest, "expectedBytes": bytes.to_string()}})
-    .to_string()
-    .into_bytes()
+    frame::with(backend, Negotiate::Initial, || {
+        artifact_save(
+            backend,
+            ArtifactCommand::Save {
+                project_id: Some(ProjectId(frame::id(project)?)),
+                workspace: None,
+                title: title.to_owned(),
+                media_type: media_type.to_owned(),
+                source: ArtifactSource::Upload {
+                    ticket_id: frame::id(ticket)?,
+                },
+                expected_digest: frame::text(digest)?,
+                expected_bytes: frame::text(&bytes.to_string())?,
+                tags: None,
+            },
+        )
+    })
 }
 pub fn saved_artifact(outcome: CommandOutcome) -> Result<ArtifactRecord, Failure> {
     match command_result(outcome)? {
@@ -622,11 +643,28 @@ pub fn saved_artifact(outcome: CommandOutcome) -> Result<ArtifactRecord, Failure
 }
 /// `artifacts.read` of one version (binary content comes back as a stream handle).
 pub fn artifact_read(backend: &dyn Backend, artifact: &ArtifactRef) -> Vec<u8> {
-    json!({"protocol": PROTOCOL, "queryId": backend.token("q"),
-        "query": {"kind": "Read", "artifactId": artifact.artifact_id,
-            "versionId": artifact.version_id}, "limit": 1})
-    .to_string()
-    .into_bytes()
+    artifact_read_after(backend, artifact, None)
+}
+/// [`artifact_read`] continuing at the byte cursor of the previous page.
+pub fn artifact_read_after(
+    backend: &dyn Backend,
+    artifact: &ArtifactRef,
+    cursor: Option<&str>,
+) -> Vec<u8> {
+    frame::with(backend, Negotiate::Initial, || {
+        Some(In::Artifacts(artifacts::Input::Read(
+            ArtifactQueryRequest {
+                protocol: frame::protocol(),
+                query_id: frame::query_id(backend)?,
+                query: ArtifactQuery::Read {
+                    artifact_id: artifact.artifact_id.clone(),
+                    version_id: artifact.version_id.clone(),
+                },
+                limit: 1,
+                cursor: cursor.map(str::to_owned),
+            },
+        )))
+    })
 }
 /// The complete bytes of `artifact` through `artifacts.read` (paged by byte cursor, or a
 /// verified stream for non-text bytes), checked against the reference's length and digest.
@@ -636,12 +674,7 @@ pub fn read_artifact_bytes(b: &dyn Backend, artifact: &ArtifactRef) -> Result<Ve
     let mut bytes: Vec<u8> = Vec::with_capacity(expected as usize);
     let mut cursor: Option<String> = None;
     loop {
-        let mut frame: Value =
-            serde_json::from_slice(&artifact_read(b, artifact)).map_err(|e| e.to_string())?;
-        if let Some(c) = &cursor {
-            frame["cursor"] = json!(c);
-        }
-        let frame = frame.to_string().into_bytes();
+        let frame = artifact_read_after(b, artifact, cursor.as_deref());
         match read_content(b.query("artifacts.read", &frame)).map_err(|e| e.describe())? {
             devworks_core::protocol::records::ArtifactReadContent::Text {
                 content,
@@ -688,12 +721,20 @@ pub fn read_content(
 /// `artifacts.delete` of the one version of an attachment saved for a draft and removed from it
 /// before it was ever sent (revision and reference revision 1: nothing referenced it).
 pub fn delete_unsent_attachment(backend: &dyn Backend, artifact: &ArtifactRef) -> Vec<u8> {
-    json!({"protocol": PROTOCOL, "requestKey": backend.token("rk"), "deletion": {
-        "kind": "DeleteVersion", "artifactId": artifact.artifact_id,
-        "versionId": artifact.version_id, "expectedRevision": "1",
-        "expectedReferenceRevision": "1"}})
-    .to_string()
-    .into_bytes()
+    frame::with(backend, Negotiate::Initial, || {
+        Some(In::Artifacts(artifacts::Input::Delete(
+            ArtifactDeletionRequest {
+                protocol: frame::protocol(),
+                request_key: frame::request_key(backend)?,
+                deletion: ArtifactDeletion::DeleteVersion {
+                    artifact_id: artifact.artifact_id.clone(),
+                    version_id: artifact.version_id.clone(),
+                    expected_revision: frame::text("1")?,
+                    expected_reference_revision: frame::text("1")?,
+                },
+            },
+        )))
+    })
 }
 pub fn deleted(outcome: CommandOutcome) -> Result<(), Failure> {
     match command_result(outcome)? {
@@ -702,19 +743,34 @@ pub fn deleted(outcome: CommandOutcome) -> Result<(), Failure> {
     }
 }
 pub fn workspace_artifacts(backend: &dyn Backend) -> Vec<u8> {
-    json!({"protocol": PROTOCOL, "queryId": backend.token("q"),
-        "schemaRevision": 4,
-        "query": {"kind": "List", "workspace": true}, "limit": PAGE_LIMIT})
-    .to_string()
-    .into_bytes()
+    artifact_list(backend, None, true, None)
+}
+/// One page of `artifacts.list` of the workspace (`workspace`) or of `project`.
+fn artifact_list(
+    backend: &dyn Backend,
+    project: Option<&str>,
+    workspace: bool,
+    cursor: Option<&str>,
+) -> Vec<u8> {
+    frame::with(backend, Negotiate::Latest, || {
+        Some(In::Artifacts(artifacts::Input::List(
+            ArtifactQueryRequest {
+                protocol: frame::protocol(),
+                query_id: frame::query_id(backend)?,
+                query: ArtifactQuery::List {
+                    project_id: frame::lift(project.map(|p| frame::id(p).map(ProjectId)))?,
+                    workspace: workspace.then_some(true),
+                    tags: None,
+                },
+                limit: PAGE_LIMIT,
+                cursor: cursor.map(str::to_owned),
+            },
+        )))
+    })
 }
 /// `artifacts.list` of one project's artifacts.
 pub fn project_artifacts(backend: &dyn Backend, project: &str) -> Vec<u8> {
-    json!({"protocol": PROTOCOL, "queryId": backend.token("q"),
-        "schemaRevision": 4,
-        "query": {"kind": "List", "projectId": project}, "limit": PAGE_LIMIT})
-    .to_string()
-    .into_bytes()
+    artifact_list(backend, Some(project), false, None)
 }
 /// A bounded prompt-picker page, independent of the artifacts screen's current page.
 pub fn prompt_artifacts(
@@ -722,16 +778,7 @@ pub fn prompt_artifacts(
     project: Option<&str>,
     cursor: Option<&str>,
 ) -> Vec<u8> {
-    let query = project.map_or_else(
-        || json!({"kind":"List","workspace":true}),
-        |project| json!({"kind":"List","projectId":project}),
-    );
-    let mut frame = json!({"protocol":PROTOCOL,"queryId":backend.token("q"),
-        "schemaRevision":4,"query":query,"limit":PAGE_LIMIT});
-    if let Some(cursor) = cursor {
-        frame["cursor"] = json!(cursor);
-    }
-    serde_json::to_vec(&frame).expect("prompt list frame")
+    artifact_list(backend, project, project.is_none(), cursor)
 }
 pub fn prompt_artifact_page(
     outcome: QueryOutcome,
@@ -1070,38 +1117,100 @@ pub fn project_membership(
         )))
     })
 }
+/// A project lifecycle change.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LifecycleChange {
+    Archive,
+    Restore,
+    Delete,
+}
+impl LifecycleChange {
+    /// The operation the change runs.
+    pub const fn operation(self) -> &'static str {
+        match self {
+            Self::Archive => "projects.archive",
+            Self::Restore => "projects.restore",
+            Self::Delete => "projects.delete",
+        }
+    }
+}
 /// `projects.archive`, `.restore` or `.delete` of `project` at its revision.
 pub fn project_lifecycle(
     backend: &dyn Backend,
-    operation: &str,
+    change: LifecycleChange,
     project: &ProjectRecord,
 ) -> Vec<u8> {
     frame::with(backend, Negotiate::Initial, || {
         let (project_id, expected_revision) = (project.id.clone(), project.revision.clone());
-        Some(In::Projects(match operation {
-            "projects.archive" => projects::Input::Archive(projects::ArchiveInput {
+        Some(In::Projects(match change {
+            LifecycleChange::Archive => projects::Input::Archive(projects::ArchiveInput {
                 project_id,
                 expected_revision,
                 proposal_id: None,
             }),
-            "projects.restore" => projects::Input::Restore(projects::RestoreInput {
+            LifecycleChange::Restore => projects::Input::Restore(projects::RestoreInput {
                 project_id,
                 expected_revision,
                 proposal_id: None,
             }),
-            "projects.delete" => projects::Input::Delete(projects::DeleteInput {
+            LifecycleChange::Delete => projects::Input::Delete(projects::DeleteInput {
                 project_id,
                 expected_revision,
                 proposal_id: None,
             }),
-            "projects.prepare_purge" => {
-                projects::Input::PreparePurge(projects::PreparePurgeInput {
-                    project_id,
-                    expected_revision,
-                })
-            }
-            _ => return None,
         }))
+    })
+}
+/// `projects.prepare_purge` of a project at its revision.
+pub fn purge_prepare(b: &dyn Backend, project: &ProjectRecord) -> Vec<u8> {
+    frame::with(b, Negotiate::Latest, || {
+        Some(In::Projects(projects::Input::PreparePurge(
+            projects::PreparePurgeInput {
+                project_id: project.id.clone(),
+                expected_revision: project.revision.clone(),
+            },
+        )))
+    })
+}
+/// `projects.purge_status` of a prepared manifest.
+pub fn purge_status(b: &dyn Backend, m: &ProjectPurgeManifest) -> Vec<u8> {
+    frame::with(b, Negotiate::Latest, || {
+        Some(In::Projects(projects::Input::PurgeStatus(
+            projects::PurgeStatusInput {
+                project_id: m.project_id.clone(),
+                manifest_id: m.id.clone(),
+            },
+        )))
+    })
+}
+/// `projects.purge_manifest`: one page of a manifest's entries.
+pub fn purge_manifest_page(
+    b: &dyn Backend,
+    m: &ProjectPurgeManifest,
+    cursor: Option<&str>,
+) -> Vec<u8> {
+    frame::with(b, Negotiate::Latest, || {
+        Some(In::Projects(projects::Input::PurgeManifest(
+            projects::PurgeManifestInput {
+                project_id: m.project_id.clone(),
+                manifest_id: m.id.clone(),
+                expected_revision: m.revision.clone(),
+                page: frame::page(200, cursor)?,
+            },
+        )))
+    })
+}
+/// `projects.purge` of the reviewed manifest.
+pub fn purge_confirm(b: &dyn Backend, m: &ProjectPurgeManifest) -> Vec<u8> {
+    frame::with(b, Negotiate::Latest, || {
+        Some(In::Projects(projects::Input::Purge(projects::PurgeInput {
+            project_id: m.project_id.clone(),
+            manifest_id: m.id.clone(),
+            expected_revision: m.revision.clone(),
+            expected_digest: m.digest.clone(),
+            expected_project_revision: m.project_revision.clone(),
+            confirm: true,
+        })))
     })
 }
 /// The project a projects command applied (or left unchanged).
@@ -1134,23 +1243,23 @@ pub fn repositories(outcome: QueryOutcome) -> Result<(Vec<RepositoryRecord>, boo
         (other, _) => Err(unexpected("repositories.list", &other)),
     }
 }
-/// `repositories.readme` or `.summary` of the repository's latest published view.
-pub fn repository_text(backend: &dyn Backend, operation: &str, repository: &str) -> Vec<u8> {
+/// `repositories.readme` (or `.summary`) of the repository's latest published view.
+pub fn repository_text(backend: &dyn Backend, repository: &str, readme: bool) -> Vec<u8> {
     frame::with(backend, Negotiate::Initial, || {
         let repository_id = frame::id(repository)?;
         let views = ViewSelection::Published {
             repository_ids: vec![repository_id.clone()],
         };
-        Some(In::Repositories(match operation {
-            "repositories.readme" => repositories::Input::Readme(repositories::ReadmeInput {
+        Some(In::Repositories(if readme {
+            repositories::Input::Readme(repositories::ReadmeInput {
                 repository_id,
                 views,
-            }),
-            "repositories.summary" => repositories::Input::Summary(repositories::SummaryInput {
+            })
+        } else {
+            repositories::Input::Summary(repositories::SummaryInput {
                 repository_id,
                 views,
-            }),
-            _ => return None,
+            })
         }))
     })
 }
@@ -1287,10 +1396,26 @@ pub fn index_repository(
 }
 /// `indexing.cancel` of a run (or of every run of the request batch it opened).
 pub fn cancel_index_run(backend: &dyn Backend, run: &str) -> Vec<u8> {
-    json!({"protocol": PROTOCOL, "requestKey": backend.token("rk"),
-        "command": {"kind": "Cancel", "operationId": run}})
-    .to_string()
-    .into_bytes()
+    frame::with(backend, Negotiate::Initial, || {
+        index_command(
+            backend,
+            IndexCommand::Cancel {
+                operation_id: OperationId(frame::id(run)?),
+            },
+        )
+    })
+}
+/// The `indexing.cancel` or `indexing.refresh_overlay` input of one index command.
+fn index_command(backend: &dyn Backend, command: IndexCommand) -> Option<In> {
+    let request = IndexCommandRequest {
+        protocol: frame::protocol(),
+        request_key: frame::request_key(backend)?,
+        command,
+    };
+    Some(In::Indexing(match request.command {
+        IndexCommand::Cancel { .. } => indexing::Input::Cancel(request),
+        _ => indexing::Input::RefreshOverlay(request),
+    }))
 }
 /// `indexing.refresh_overlay` of one worktree.
 pub fn refresh_overlay(
@@ -1299,11 +1424,17 @@ pub fn refresh_overlay(
     worktree: &str,
     section_revision: i64,
 ) -> Vec<u8> {
-    json!({"protocol": PROTOCOL, "requestKey": backend.token("rk"),
-        "command": {"kind": "RefreshOverlay", "repositoryId": repository, "worktreeId": worktree,
-            "expectedSourceRevision": section_revision.max(1).to_string()}})
-    .to_string()
-    .into_bytes()
+    frame::with(backend, Negotiate::Initial, || {
+        index_command(
+            backend,
+            IndexCommand::RefreshOverlay {
+                repository_id: frame::id(repository)?,
+                worktree_id: Some(frame::id(worktree)?),
+                git_ref: None,
+                expected_source_revision: frame::number(section_revision.max(1))?,
+            },
+        )
+    })
 }
 /// `indexing.retire_view` of an overlay at its revision.
 pub fn retire_view(backend: &dyn Backend, view: &str, revision: &str) -> Vec<u8> {
@@ -1451,16 +1582,16 @@ pub fn job_create(
     backend: &dyn Backend,
     project: Option<&str>,
     title: &str,
-    schedule: &Value,
-    definition: &Value,
+    schedule: &Schedule,
+    definition: &JobDefinition,
     enabled: bool,
 ) -> Vec<u8> {
     frame::with(backend, Negotiate::Latest, || {
         Some(In::Jobs(jobs::Input::Create(jobs::CreateInput {
             scope: frame::scope(project)?,
             title: frame::text(title)?,
-            schedule: serde_json::from_value(schedule.clone()).ok()?,
-            definition: serde_json::from_value(definition.clone()).ok()?,
+            schedule: schedule.clone(),
+            definition: definition.clone(),
             enabled,
         })))
     })
@@ -1470,41 +1601,48 @@ pub fn job_edit(
     backend: &dyn Backend,
     job: &JobRecord,
     title: &str,
-    schedule: &Value,
-    definition: &Value,
+    schedule: &Schedule,
+    definition: &JobDefinition,
 ) -> Vec<u8> {
     frame::with(backend, Negotiate::Latest, || {
         Some(In::Jobs(jobs::Input::Edit(jobs::EditInput {
             job_id: job.id.clone(),
             expected_revision: job.revision.clone(),
             title: frame::text(title)?,
-            schedule: serde_json::from_value(schedule.clone()).ok()?,
-            definition: serde_json::from_value(definition.clone()).ok()?,
+            schedule: schedule.clone(),
+            definition: definition.clone(),
         })))
     })
 }
+/// A command on one job that takes only the job and its revision.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum JobCommand {
+    Enable,
+    Disable,
+    Delete,
+    RunNow,
+}
 /// `jobs.enable`, `.disable`, `.delete` or `.run_now` of a job at its record's revision.
-pub fn job_command(backend: &dyn Backend, operation: &str, job: &JobRecord) -> Vec<u8> {
+pub fn job_command(backend: &dyn Backend, command: JobCommand, job: &JobRecord) -> Vec<u8> {
     frame::with(backend, Negotiate::Latest, || {
         let (job_id, expected_revision) = (job.id.clone(), job.revision.clone());
-        Some(In::Jobs(match operation {
-            "jobs.enable" => jobs::Input::Enable(jobs::EnableInput {
+        Some(In::Jobs(match command {
+            JobCommand::Enable => jobs::Input::Enable(jobs::EnableInput {
                 job_id,
                 expected_revision,
             }),
-            "jobs.disable" => jobs::Input::Disable(jobs::DisableInput {
+            JobCommand::Disable => jobs::Input::Disable(jobs::DisableInput {
                 job_id,
                 expected_revision,
             }),
-            "jobs.delete" => jobs::Input::Delete(jobs::DeleteInput {
+            JobCommand::Delete => jobs::Input::Delete(jobs::DeleteInput {
                 job_id,
                 expected_revision,
             }),
-            "jobs.run_now" => jobs::Input::RunNow(jobs::RunNowInput {
+            JobCommand::RunNow => jobs::Input::RunNow(jobs::RunNowInput {
                 job_id,
                 expected_revision,
             }),
-            _ => return None,
         }))
     })
 }
@@ -1546,10 +1684,6 @@ pub fn job_changed(outcome: CommandOutcome) -> Result<JobChange, Failure> {
 
 // ---------------------------------------------------------------------------------------------
 // Provider connections (DW-18)
-
-/// Current connection/configure revision 3 includes explicit local/free billing policy.
-/// Earlier saved command frames keep their original schema and exact bytes.
-pub const ROUTER_CONNECTIONS_REVISION: u64 = 3;
 
 pub fn router_connections(backend: &dyn Backend, cursor: Option<&str>) -> Vec<u8> {
     frame::with(backend, Negotiate::Latest, || {
@@ -1605,10 +1739,14 @@ pub fn embedding_space_page(
 pub fn router_catalog_all(backend: &dyn Backend, cursor: Option<&str>) -> Vec<u8> {
     frame::with(backend, Negotiate::Latest, || router_catalog_input(cursor))
 }
-pub fn router_configure(backend: &dyn Backend, action: Value) -> Vec<u8> {
-    at_revision(
-        command_frame(backend, "router.configure", json!({"action": action})),
-        ROUTER_CONNECTIONS_REVISION,
+/// A `router.configure` command at the newest schema revision.
+pub fn router_configure(backend: &dyn Backend, action: RouterConfigAction) -> Vec<u8> {
+    frame::build(
+        backend,
+        Negotiate::Latest,
+        Some(In::Router(router::Input::Configure(
+            router::ConfigureInput { action },
+        ))),
     )
 }
 /// Whether `router.configure` changed something (`Applied`) or found it as asked (`NoChange`).

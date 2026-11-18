@@ -8,6 +8,19 @@ use devworks_desktop::{
     shell::{Dialogs, Shell, ShellInit},
 };
 use sha2::{Digest, Sha256};
+
+/// A convention command of a JSON body, through the typed input the registry decodes it into.
+fn request_command(
+    backend: &dyn devworks_desktop::backend::Backend,
+    operation: &str,
+    body: serde_json::Value,
+) -> Vec<u8> {
+    cop::command(
+        backend,
+        devworks_desktop::frame::fixture::command_input(operation, body),
+    )
+}
+
 use std::{
     fs::File,
     io::{BufWriter, Write},
@@ -421,7 +434,7 @@ fn native_registered_import_loads_all_source_pages_and_stale_save_keeps_opening_
     assert_eq!(&**d.markdown, text);
     assert_eq!(&**d.raw, raw);
     replace(&mut h, "Convention title", "My retained title");
-    let frame = cop::command(
+    let frame = request_command(
         &*backend,
         "conventions.edit",
         serde_json::json!({"scope":first.scope,"conventionId":first.id,"expectedRevision":first.revision,"content":first.content,"title":"Concurrent title","sortOrder":"91"}),
@@ -773,7 +786,7 @@ fn native_registered_hierarchical_move_preserves_subtree_scope_and_independent_d
     let root = Root::new("conventions-real-move");
     let engine = start(&root);
     let backend = engine.backend();
-    let project=match devworks_desktop::ops::command_result(backend.command("projects.create",&cop::command(&*backend,"projects.create",serde_json::json!({"name":"Convention destination","description":"Scoped convention fixture","repositoryIds":[]})))).unwrap(){OperationResult::ProjectsCreate{value}=>value,other=>panic!("actual projectcreation: {other:?}")};
+    let project=match devworks_desktop::ops::command_result(backend.command("projects.create",&request_command(&*backend,"projects.create",serde_json::json!({"name":"Convention destination","description":"Scoped convention fixture","repositoryIds":[]})))).unwrap(){OperationResult::ProjectsCreate{value}=>value,other=>panic!("actual projectcreation: {other:?}")};
     let files = Files::default();
     let mut h = open(backend, &root, files.clone());
     let parent = manifest(
@@ -1752,7 +1765,7 @@ fn native_section_path_keeps_requested_revision_after_metadata_only_edit() {
     import(&mut h, &files, path);
     let first = select(&mut h, "Path metadata guide");
     indexed(&mut h);
-    let frame = cop::command(
+    let frame = request_command(
         &*backend,
         "conventions.edit",
         serde_json::json!({"scope":first.scope,"conventionId":first.id,"expectedRevision":first.revision,"content":first.content,"slug":"path-after-edit","sortOrder":"91"}),

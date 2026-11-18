@@ -7,8 +7,8 @@ use crate::ops;
 use devworks_core::gateway::{CommandOutcome, GatewayFailure, QueryOutcome};
 use devworks_core::protocol::Id;
 use devworks_core::protocol::records::{
-    AccessMode, EffortName, JobRecord, JobRun, ProjectRecord, RepositoryRecord, RouteIntent,
-    WatcherRecord,
+    AccessMode, EffortName, JobDefinition, JobRecord, JobRun, ProjectRecord, RepositoryRecord,
+    RouteIntent, Schedule, WatcherRecord,
 };
 use devworks_core::settings::view::Health;
 use serde_json::json;
@@ -16,8 +16,25 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use tokio::sync::watch;
 
+mod addons;
+mod conventions;
+mod databases;
+mod decisions;
+mod graph;
+mod help;
+mod instructions;
+mod jobs;
+mod knowledge;
+mod mcp;
+mod misc;
+mod projects;
+mod router;
+mod specialized;
+mod usage;
+mod work;
+
 /// A backend that answers nothing and mints the token prefix itself, so frames are reproducible.
-struct Silent;
+pub(super) struct Silent;
 impl Backend for Silent {
     fn query(&self, op: &str, _: &[u8]) -> QueryOutcome {
         Err(GatewayFailure::NoUseCase(op.into()))
@@ -42,6 +59,14 @@ impl Backend for Silent {
         None
     }
     fn set_waker(&self, _: Waker) {}
+    fn stage_project_text(
+        &self,
+        _: Option<&devworks_core::protocol::ProjectId>,
+        extension: &str,
+        _: &[u8],
+    ) -> Result<PathBuf, String> {
+        Ok(PathBuf::from(format!("/staged/file.{extension}")))
+    }
     fn token(&self, prefix: &str) -> String {
         prefix.into()
     }
@@ -53,7 +78,7 @@ impl Backend for Silent {
     }
 }
 
-fn from<T: serde::de::DeserializeOwned>(value: serde_json::Value) -> T {
+pub(super) fn from<T: serde::de::DeserializeOwned>(value: serde_json::Value) -> T {
     serde_json::from_value(value).expect("sample")
 }
 
@@ -81,9 +106,11 @@ fn frames() -> BTreeMap<String, String> {
     let watcher: WatcherRecord = from(json!({"id":"watcher-a","revision":"2","state":"Active",
         "sourceKind":"Process","sessionId":"session-a","createdAtMs":"1","elapsedMs":"2",
         "outputTruncated":false,"stopRequested":false}));
-    let schedule = json!({"kind":"Interval","seconds":"60"});
-    let definition = json!({"kind":"Native","capabilityId":"capability-a","arguments":{"schema":
-        {"schemaId":"core/jobs-arguments","revision":"1","sha256":"b".repeat(64)},"value":{}}});
+    let schedule: Schedule = from(json!({"kind":"Interval","seconds":"60"}));
+    let definition: JobDefinition = from(
+        json!({"kind":"Native","capabilityId":"capability-a","arguments":{"schema":
+        {"schemaId":"core/jobs-arguments","revision":"1","sha256":"b".repeat(64)},"value":{}}}),
+    );
     let project_id: devworks_core::protocol::ProjectId = from(json!("project-a"));
     let server: Id = from(json!("server-a"));
     let access: AccessMode = from(json!("Project"));
@@ -166,11 +193,11 @@ fn frames() -> BTreeMap<String, String> {
         ),
         (
             "project_archive",
-            ops::project_lifecycle(b, "projects.archive", &project),
+            ops::project_lifecycle(b, ops::LifecycleChange::Archive, &project),
         ),
         (
             "project_restore",
-            ops::project_lifecycle(b, "projects.restore", &project),
+            ops::project_lifecycle(b, ops::LifecycleChange::Restore, &project),
         ),
         (
             "repositories_list_workspace",
@@ -180,13 +207,10 @@ fn frames() -> BTreeMap<String, String> {
             "repositories_list_project",
             ops::repositories_list(b, Some("project-a")),
         ),
-        (
-            "repository_readme",
-            ops::repository_text(b, "repositories.readme", "repo-a"),
-        ),
+        ("repository_readme", ops::repository_text(b, "repo-a", true)),
         (
             "repository_summary",
-            ops::repository_text(b, "repositories.summary", "repo-a"),
+            ops::repository_text(b, "repo-a", false),
         ),
         ("remove_index", ops::remove_index(b, &repository)),
         (
@@ -270,10 +294,22 @@ fn frames() -> BTreeMap<String, String> {
             "job_edit",
             ops::job_edit(b, &job, "Renamed", &schedule, &definition),
         ),
-        ("job_enable", ops::job_command(b, "jobs.enable", &job)),
-        ("job_disable", ops::job_command(b, "jobs.disable", &job)),
-        ("job_delete", ops::job_command(b, "jobs.delete", &job)),
-        ("job_run_now", ops::job_command(b, "jobs.run_now", &job)),
+        (
+            "job_enable",
+            ops::job_command(b, ops::JobCommand::Enable, &job),
+        ),
+        (
+            "job_disable",
+            ops::job_command(b, ops::JobCommand::Disable, &job),
+        ),
+        (
+            "job_delete",
+            ops::job_command(b, ops::JobCommand::Delete, &job),
+        ),
+        (
+            "job_run_now",
+            ops::job_command(b, ops::JobCommand::RunNow, &job),
+        ),
         ("job_cancel", ops::job_cancel(b, &run)),
         ("watch_cancel", crate::watch_ops::cancel(b, &watcher, true)),
         (
@@ -347,6 +383,22 @@ fn frames() -> BTreeMap<String, String> {
             ),
         ),
     ];
+    out.extend(addons::frames());
+    out.extend(conventions::frames());
+    out.extend(databases::frames());
+    out.extend(decisions::frames());
+    out.extend(graph::frames());
+    out.extend(help::frames());
+    out.extend(instructions::frames());
+    out.extend(jobs::frames());
+    out.extend(knowledge::frames());
+    out.extend(mcp::frames());
+    out.extend(misc::frames());
+    out.extend(projects::frames());
+    out.extend(router::frames());
+    out.extend(specialized::frames());
+    out.extend(usage::frames());
+    out.extend(work::frames());
     out.sort_by_key(|(name, _)| *name);
     out.into_iter()
         .map(|(name, frame)| {
@@ -366,9 +418,18 @@ fn golden_path() -> PathBuf {
 fn typed_frames_match_the_recorded_wire_bytes() {
     let now = frames();
     if std::env::var_os("UPDATE_FRAMES").is_some() {
+        // Adds the frames the file does not hold yet and never rewrites a recorded one, so a
+        // frame is recorded from the builder it came from before that builder changes.
+        let mut kept: BTreeMap<String, String> = std::fs::read(golden_path())
+            .ok()
+            .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+            .unwrap_or_default();
+        for (name, frame) in &now {
+            kept.entry(name.clone()).or_insert_with(|| frame.clone());
+        }
         std::fs::write(
             golden_path(),
-            serde_json::to_string_pretty(&now).unwrap() + "\n",
+            serde_json::to_string_pretty(&kept).unwrap() + "\n",
         )
         .unwrap();
         return;
@@ -479,10 +540,10 @@ fn settings_and_mcp_content_frames_match_the_earlier_json_builders() {
     );
     let prompt = ops::McpContentRequest::Prompt {
         name: "summarize".into(),
-        arguments: Some(
+        arguments: Some(from(
             json!({"schema":{"schemaId":"mcp/server-a.summarize","revision":"1",
             "sha256":"a".repeat(64)},"value":{"topic":"x"}}),
-        ),
+        )),
     };
     assert_eq!(
         ops::mcp_content_frame(b, None, &server, 5, &prompt),

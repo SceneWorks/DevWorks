@@ -3,26 +3,30 @@
 //! tool submits; nothing here decides anything the work service decides.
 use crate::backend::Backend;
 use crate::frame::{self, Negotiate};
-use crate::ops::{
-    Failure, PAGE_LIMIT, PROTOCOL, at_revision, command_frame, command_result, query_frame,
-    query_result, unexpected,
-};
+use crate::ops::{Failure, PAGE_LIMIT, command_result, query_result, unexpected};
 use devworks_core::gateway::{CommandOutcome, QueryOutcome};
-use devworks_core::operations::{OperationInput as In, agents, next_work};
-use devworks_core::protocol::ProjectId;
+use devworks_core::operations::{
+    OperationInput as In, agents, features, history, issues, next_work, runs, tasks, workflows,
+};
 use devworks_core::protocol::records::{
-    AllocationClaimRecord, AllocationQueueSnapshot, AllocationSelection, MutationSummary,
-    ProposalRecord, RetainedAckResult, RetainedEventPage, RetainedHistoryPage, RetainedInboxResult,
-    RetainedPostResult, RootSnapshot, StatusRecord, WorkRecord,
+    AllocationClaimRecord, AllocationQueueSnapshot, AllocationSelection, DetailLevel,
+    MutationSummary, ProposalRecord, RetainedAckResult, RetainedEventPage, RetainedHistoryPage,
+    RetainedInboxResult, RetainedPostResult, RootSnapshot, StatusRecord, WorkRecord,
 };
 use devworks_core::protocol::results::OperationResult;
 use devworks_core::protocol::support::BoundedList;
 use devworks_core::protocol::{Cause, Event};
-use serde_json::{Value, json};
+use devworks_core::protocol::{
+    CommandRequest, HoldRef, ProjectId, Query, QueryRequest, RootCommand, RootId,
+};
 
-/// Work records include authored task types and labels from schema revision 3.
-pub const WORK_REVISION: u64 = 3;
-pub const MESSAGE_REVISION: u64 = 7;
+/// The work family a list or get request reads.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Family {
+    Features,
+    Issues,
+    Tasks,
+}
 
 pub fn message_history(backend: &dyn Backend, project: &str, before: Option<i64>) -> Vec<u8> {
     frame::with(backend, Negotiate::Latest, || {
@@ -67,13 +71,10 @@ pub fn message_inbox_page(outcome: CommandOutcome) -> Result<RetainedInboxResult
     }
 }
 
-pub fn message_post(backend: &dyn Backend, project: &str, body: Value) -> Vec<u8> {
-    let mut body = body;
-    body["projectId"] = json!(project);
-    at_revision(
-        command_frame(backend, "agents.post", body),
-        MESSAGE_REVISION,
-    )
+/// `agents.post`. A post that did not convert (`None`) is sent as no bytes, which the gateway
+/// rejects like any malformed request.
+pub fn message_post(backend: &dyn Backend, input: impl Into<Option<In>>) -> Vec<u8> {
+    frame::build(backend, Negotiate::Latest, input.into())
 }
 
 pub fn message_posted(outcome: CommandOutcome) -> Result<RetainedPostResult, Failure> {
@@ -124,26 +125,50 @@ pub fn message_events_page(outcome: QueryOutcome) -> Result<RetainedEventPage, F
     }
 }
 
-/// A page of `features.list`, `issues.list` or `tasks.list` of `project` (schema revision 3).
+/// A patch or request that sets nothing; the caller sets the members it changes.
+pub(crate) fn empty<T: serde::de::DeserializeOwned>() -> Option<T> {
+    serde_json::from_str("{}").ok()
+}
+
+/// A page of the list of `family` in `project`.
 pub fn work_list(
     backend: &dyn Backend,
-    operation: &str,
+    family: Family,
     project: &str,
     cursor: Option<&str>,
 ) -> Vec<u8> {
-    let mut page = json!({"limit": PAGE_LIMIT});
-    if let Some(c) = cursor {
-        page["cursor"] = json!(c);
-    }
-    at_revision(
-        query_frame(
-            backend,
-            operation,
-            json!({"projectId": project, "page": page, "statusIds": [], "repositoryIds": [],
-                "detailLevel": "Summary"}),
-        ),
-        WORK_REVISION,
-    )
+    frame::with(backend, Negotiate::Latest, || {
+        let project_id = ProjectId(frame::id(project)?);
+        let page = frame::page(PAGE_LIMIT.into(), cursor)?;
+        let (status_ids, repository_ids) = (BoundedList(Vec::new()), BoundedList(Vec::new()));
+        let detail_level = DetailLevel::Summary;
+        Some(match family {
+            Family::Features => In::Features(features::Input::List(features::ListInput {
+                project_id,
+                page,
+                status_ids,
+                repository_ids,
+                text: None,
+                detail_level,
+            })),
+            Family::Issues => In::Issues(issues::Input::List(issues::ListInput {
+                project_id,
+                page,
+                status_ids,
+                repository_ids,
+                text: None,
+                detail_level,
+            })),
+            Family::Tasks => In::Tasks(tasks::Input::List(tasks::ListInput {
+                project_id,
+                page,
+                status_ids,
+                repository_ids,
+                text: None,
+                detail_level,
+            })),
+        })
+    })
 }
 /// One page of work records and the cursor of the next page.
 pub fn work_page(outcome: QueryOutcome) -> Result<(Vec<WorkRecord>, Option<String>), Failure> {
@@ -157,16 +182,29 @@ pub fn work_page(outcome: QueryOutcome) -> Result<(Vec<WorkRecord>, Option<Strin
         (other, _) => Err(unexpected("work list", &other)),
     }
 }
-/// `features.get` or `tasks.get` of one item (schema revision 3, including readiness and metadata).
-pub fn work_get(backend: &dyn Backend, operation: &str, work: &str) -> Vec<u8> {
-    at_revision(
-        query_frame(
-            backend,
-            operation,
-            json!({"workId": work, "detailLevel": "Summary"}),
-        ),
-        WORK_REVISION,
-    )
+/// The get of one item of `family` (schema revision 3, including readiness and metadata).
+pub fn work_get(backend: &dyn Backend, family: Family, work: &str) -> Vec<u8> {
+    frame::with(backend, Negotiate::Latest, || {
+        let work_id = frame::id(work)?;
+        let detail_level = DetailLevel::Summary;
+        Some(match family {
+            Family::Features => In::Features(features::Input::Get(features::GetInput {
+                work_id,
+                detail_level,
+                detail_page: None,
+            })),
+            Family::Issues => In::Issues(issues::Input::Get(issues::GetInput {
+                work_id,
+                detail_level,
+                detail_page: None,
+            })),
+            Family::Tasks => In::Tasks(tasks::Input::Get(tasks::GetInput {
+                work_id,
+                detail_level,
+                detail_page: None,
+            })),
+        })
+    })
 }
 pub fn work_record(outcome: QueryOutcome) -> Result<WorkRecord, Failure> {
     match query_result(outcome)? {
@@ -179,25 +217,23 @@ pub fn work_record(outcome: QueryOutcome) -> Result<WorkRecord, Failure> {
         (other, _) => Err(unexpected("work get", &other)),
     }
 }
-/// Operations whose result is not a work record negotiate only revision 1.
-const REVISION_ONE: [&str; 1] = ["features.request_plan_approval"];
-/// Work records use revision 3 (authored metadata); queue placement keeps revision 2 and
-/// plan-approval requests retain their original revision. Saved unknown frames are never rebuilt.
-pub fn work_command(backend: &dyn Backend, operation: &str, body: Value) -> Vec<u8> {
-    let frame = command_frame(backend, operation, body);
-    if REVISION_ONE.contains(&operation) {
-        frame
-    } else if [
-        "features.prioritize",
-        "issues.prioritize",
-        "tasks.prioritize",
-    ]
-    .contains(&operation)
-    {
-        at_revision(frame, 2)
-    } else {
-        at_revision(frame, WORK_REVISION)
-    }
+/// A work command. Work records use the newest revision (authored metadata); queue placement
+/// keeps revision 2 and plan-approval requests keep their original revision. A command that did
+/// not convert (`None`) is sent as no bytes, which the gateway rejects like any malformed
+/// request.
+pub fn work_command(backend: &dyn Backend, input: impl Into<Option<In>>) -> Vec<u8> {
+    let input = input.into();
+    let negotiate = match input.as_ref().map(In::operation) {
+        Some("features.prioritize" | "issues.prioritize" | "tasks.prioritize") => {
+            Negotiate::pinned(2, "queue placement was written against schema revision 2")
+        }
+        Some("features.request_plan_approval") => Negotiate::pinned(
+            1,
+            "plan-approval requests keep the revision they were written against",
+        ),
+        _ => Negotiate::Latest,
+    };
+    frame::build(backend, negotiate, input)
 }
 /// The work record a work command answered (applied or unchanged).
 pub fn work_changed(outcome: CommandOutcome) -> Result<WorkRecord, Failure> {
@@ -250,18 +286,23 @@ pub fn history_events(
     root: Option<&str>,
     after: Option<&str>,
 ) -> Vec<u8> {
-    let mut query = json!({"kind":"history.events","limit":ACTIVITY_PAGE,"newestFirst":true});
-    if let Some(root) = root {
-        query["rootId"] = json!(root);
-    } else {
-        query["projectId"] = json!(project);
-    }
-    if let Some(after) = after {
-        query["after"] = json!(after);
-    }
-    json!({"protocol":PROTOCOL,"queryId":backend.token("q"),"schemaRevision":3,"query":query})
-        .to_string()
-        .into_bytes()
+    frame::with(backend, Negotiate::Latest, || {
+        let (root_id, project_id) = match root {
+            Some(root) => (Some(frame::text::<RootId>(root)?), None),
+            None => (None, Some(ProjectId(frame::id(project)?))),
+        };
+        Some(In::History(history::Input::Events(QueryRequest {
+            protocol: frame::protocol(),
+            query_id: frame::query_id(backend)?,
+            query: Query::Events {
+                root_id,
+                project_id,
+                newest_first: Some(true),
+                after: after.map(str::to_owned),
+                limit: ACTIVITY_PAGE,
+            },
+        })))
+    })
 }
 pub fn project_events(backend: &dyn Backend, project: &str, after: Option<&str>) -> Vec<u8> {
     history_events(backend, project, None, after)
@@ -278,10 +319,15 @@ pub fn events_page(outcome: QueryOutcome) -> Result<(Vec<Event>, Option<String>,
 }
 /// `runs.inspect` of a root (its control revision and holds).
 pub fn run_inspect(backend: &dyn Backend, root: &str) -> Vec<u8> {
-    json!({"protocol": PROTOCOL, "queryId": backend.token("q"),
-        "query": {"kind": "runs.inspect", "rootId": root}})
-    .to_string()
-    .into_bytes()
+    frame::with(backend, Negotiate::Initial, || {
+        Some(In::Runs(runs::Input::Inspect(QueryRequest {
+            protocol: frame::protocol(),
+            query_id: frame::query_id(backend)?,
+            query: Query::Root {
+                root_id: frame::text(root)?,
+            },
+        })))
+    })
 }
 pub fn run_snapshot(outcome: QueryOutcome) -> Result<RootSnapshot, Failure> {
     match query_result(outcome)? {
@@ -303,27 +349,42 @@ pub fn run_control(
     root: &WorkRecord,
     snapshot: &RootSnapshot,
 ) -> Vec<u8> {
-    let control = snapshot.root.revision.as_str();
-    let command = match operation {
-        "runs.start" => json!({"kind": operation, "rootId": root.id,
-            "expectedWorkRevision": root.revision, "expectedControlRevision": control}),
-        "runs.pause" => json!({"kind": operation, "rootId": root.id,
-            "expectedControlRevision": control}),
-        _ => {
-            let holds: Vec<Value> = snapshot
-                .blockers
-                .items
-                .iter()
-                .filter(|b| manual_hold(&b.cause))
-                .map(|b| json!({"holdId": b.hold_id, "revision": b.revision}))
-                .collect();
-            json!({"kind": operation, "rootId": root.id,
-                "expectedControlRevision": control, "coveredHolds": holds})
-        }
-    };
-    json!({"protocol": PROTOCOL, "requestKey": backend.token("rk"), "command": command})
-        .to_string()
-        .into_bytes()
+    frame::with(backend, Negotiate::Initial, || {
+        let root_id = RootId(root.id.clone());
+        let expected_control_revision = snapshot.root.revision.clone();
+        let request = |command| {
+            Some(CommandRequest {
+                protocol: frame::protocol(),
+                request_key: frame::request_key(backend)?,
+                command,
+            })
+        };
+        Some(match operation {
+            "runs.start" => In::Runs(runs::Input::Start(request(RootCommand::Start {
+                root_id,
+                expected_work_revision: root.revision.clone(),
+                expected_control_revision,
+            })?)),
+            "runs.pause" => In::Runs(runs::Input::Pause(request(RootCommand::Pause {
+                root_id,
+                expected_control_revision,
+            })?)),
+            _ => In::Runs(runs::Input::Continue(request(RootCommand::Continue {
+                root_id,
+                expected_control_revision,
+                covered_holds: snapshot
+                    .blockers
+                    .items
+                    .iter()
+                    .filter(|b| manual_hold(&b.cause))
+                    .map(|b| HoldRef {
+                        hold_id: b.hold_id.clone(),
+                        revision: b.revision.clone(),
+                    })
+                    .collect(),
+            })?)),
+        })
+    })
 }
 /// The root snapshot a run control command answered.
 pub fn run_changed(outcome: CommandOutcome) -> Result<RootSnapshot, Failure> {
@@ -337,12 +398,14 @@ pub fn run_changed(outcome: CommandOutcome) -> Result<RootSnapshot, Failure> {
 
 /// Retained source-control associations use the shared history query, including removed paths.
 pub fn git_links(backend: &dyn Backend, root: &str, cursor: Option<&str>) -> Vec<u8> {
-    let mut frame = json!({"protocol":PROTOCOL,"schemaRevision":3,"queryId":backend.token("q"),"mode":"Query",
-        "body":{"kind":"history.git_links","rootId":root,"page":{"limit":200}}});
-    if let Some(cursor) = cursor {
-        frame["body"]["page"]["cursor"] = json!(cursor);
-    }
-    frame.to_string().into_bytes()
+    frame::with(backend, Negotiate::Latest, || {
+        Some(In::History(history::Input::GitLinks(
+            history::GitLinksInput {
+                root_id: frame::text(root)?,
+                page: frame::page(200, cursor)?,
+            },
+        )))
+    })
 }
 pub fn git_links_result(
     outcome: QueryOutcome,
@@ -360,18 +423,14 @@ pub fn git_links_result(
 
 /// Project workflow columns, including the backend's edit/removal fences.
 pub fn workflow_list(backend: &dyn Backend, project: &str, cursor: Option<&str>) -> Vec<u8> {
-    let mut page = json!({"limit":PAGE_LIMIT});
-    if let Some(cursor) = cursor {
-        page["cursor"] = json!(cursor);
-    }
-    at_revision(
-        query_frame(
-            backend,
-            "workflows.list",
-            json!({"projectId":project,"page":page}),
-        ),
-        3,
-    )
+    frame::with(backend, Negotiate::Latest, || {
+        Some(In::Workflows(workflows::Input::List(
+            workflows::ListInput {
+                project_id: ProjectId(frame::id(project)?),
+                page: frame::page(PAGE_LIMIT.into(), cursor)?,
+            },
+        )))
+    })
 }
 pub fn workflow_page(
     outcome: QueryOutcome,
@@ -391,13 +450,14 @@ pub fn workflow_page(
         (other, _) => Err(unexpected("workflows.list", &other)),
     }
 }
-pub fn workflow_command(backend: &dyn Backend, operation: &str, body: Value) -> Vec<u8> {
-    let frame = command_frame(backend, operation, body);
-    if operation == "workflows.reassign_and_remove" {
-        frame
-    } else {
-        at_revision(frame, 3)
-    }
+/// A workflow command; one that did not convert (`None`) is sent as no bytes.
+pub fn workflow_command(backend: &dyn Backend, input: impl Into<Option<In>>) -> Vec<u8> {
+    let input = input.into();
+    let negotiate = match input.as_ref().map(In::operation) {
+        Some("workflows.reassign_and_remove") => Negotiate::Initial,
+        _ => Negotiate::Latest,
+    };
+    frame::build(backend, negotiate, input)
 }
 pub fn workflow_changed(outcome: CommandOutcome) -> Result<(), Failure> {
     match command_result(outcome)? {
@@ -424,8 +484,9 @@ pub fn queue_snapshot(outcome: QueryOutcome) -> Result<AllocationQueueSnapshot, 
         (other, _) => Err(unexpected("next_work.inspect_queue", &other)),
     }
 }
-pub fn allocation_command(backend: &dyn Backend, operation: &str, body: Value) -> Vec<u8> {
-    at_revision(command_frame(backend, operation, body), 3)
+/// A work-allocation command; one that did not convert (`None`) is sent as no bytes.
+pub fn allocation_command(backend: &dyn Backend, input: impl Into<Option<In>>) -> Vec<u8> {
+    frame::build(backend, Negotiate::Latest, input.into())
 }
 pub fn allocation_inspect(backend: &dyn Backend, claim: &str) -> Vec<u8> {
     frame::with(backend, Negotiate::Latest, || {

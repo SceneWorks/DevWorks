@@ -4,6 +4,7 @@ mod common;
 use common::*;
 use devworks_core::protocol::records::{ApprovalViewRecord, WorkRecord};
 use devworks_desktop::backend::{Backend, CommandDispatch};
+use devworks_desktop::frame::fixture::{command_input, query_input};
 use devworks_desktop::route::Route;
 use devworks_desktop::{decision_ops as dops, ops, work_ops as wops};
 use eframe::egui::accesskit::Role;
@@ -71,21 +72,24 @@ fn try_feature_plan_source(
         ),
     ))
     .unwrap();
-    wops::work_changed(b.command("features.create",&wops::work_command(b,"features.create",json!({"projectId":p.id,"creation":{"kind":"Single","title":title,"description":"A concrete native approval fixture.","repositoryIds":[],"statusId":status.id,"priority":10,"plan":{"content":artifact.artifact,"goals":["Ship the inspected plan"],"requirements":requirements,"acceptance":[],"acceptanceTests":[],"repositoryIds":[]}}}))))
+    wops::work_changed(b.command("features.create",&wops::work_command(b, command_input("features.create", json!({"projectId":p.id,"creation":{"kind":"Single","title":title,"description":"A concrete native approval fixture.","repositoryIds":[],"statusId":status.id,"priority":10,"plan":{"content":artifact.artifact,"goals":["Ship the inspected plan"],"requirements":requirements,"acceptance":[],"acceptanceTests":[],"repositoryIds":[]}}})))))
 }
 fn request(b: &dyn Backend, feature: &WorkRecord) -> ApprovalViewRecord {
     let pending = feature.pending_plan.as_ref().unwrap();
-    let p=wops::approval_requested(b.command("features.request_plan_approval",&wops::work_command(b,"features.request_plan_approval",json!({"featureId":feature.id,"expectedRevision":feature.revision,"planRevision":pending.revision,"planDigest":devworks_core::services::work::plan_digest(&pending.draft)})))).unwrap();
+    let p=wops::approval_requested(b.command("features.request_plan_approval",&wops::work_command(b, command_input("features.request_plan_approval", json!({"featureId":feature.id,"expectedRevision":feature.revision,"planRevision":pending.revision,"planDigest":devworks_core::services::work::plan_digest(&pending.draft)}))))).unwrap();
     dops::approval(b.query(
         "approvals.inspect",
-        &dops::query(b, "approvals.inspect", json!({"proposalId":p.id})),
+        &dops::query(
+            b,
+            query_input("approvals.inspect", json!({"proposalId":p.id})),
+        ),
     ))
     .unwrap()
 }
 fn get(b: &dyn Backend, w: &WorkRecord) -> WorkRecord {
     wops::work_record(b.query(
         "features.get",
-        &wops::work_get(b, "features.get", w.id.as_str()),
+        &wops::work_get(b, wops::Family::Features, w.id.as_str()),
     ))
     .unwrap()
 }
@@ -106,8 +110,10 @@ fn native_approval_inspects_frozen_content_and_promotes_only_through_trusted_hum
     let p = request(&*b, &feature);
     let generic = dops::command(
         &*b,
-        "approvals.record_human_decision",
-        json!({"proposalId":p.id,"expectedRevision":p.revision,"contentDigest":p.content_digest,"decision":"Approve","rationale":"Generic command cannot mint a Human witness"}),
+        command_input(
+            "approvals.record_human_decision",
+            json!({"proposalId":p.id,"expectedRevision":p.revision,"contentDigest":p.content_digest,"decision":"Approve","rationale":"Generic command cannot mint a Human witness"}),
+        ),
     );
     assert!(ops::command_result(b.command("approvals.record_human_decision", &generic)).is_err());
     assert!(get(&*b, &feature).approval.is_none());
@@ -182,11 +188,7 @@ fn plan_drafts_with_text_the_redaction_would_change_are_refused_at_save() {
     refused(
         wops::work_changed(b.command(
             "features.edit_plan",
-            &wops::work_command(
-                &*b,
-                "features.edit_plan",
-                json!({"featureId":feature.id,"expectedRevision":current.revision,"plan":revised}),
-            ),
+            &wops::work_command(&*b, command_input("features.edit_plan", json!({"featureId":feature.id,"expectedRevision":current.revision,"plan":revised}))),
         )),
         "edit_plan with a URL password",
     );
@@ -228,8 +230,10 @@ fn a_refreshed_inbox_keeps_the_inspected_draft_and_reports_target_staleness() {
         "features.edit_plan",
         &wops::work_command(
             &*b,
-            "features.edit_plan",
-            json!({"featureId":feature.id,"expectedRevision":current.revision,"plan":revised}),
+            command_input(
+                "features.edit_plan",
+                json!({"featureId":feature.id,"expectedRevision":current.revision,"plan":revised}),
+            ),
         ),
     ))
     .unwrap();
@@ -332,7 +336,10 @@ fn seed_notification(
 fn notification(b: &dyn Backend, id: &str) -> devworks_core::protocol::records::NotificationRecord {
     dops::notification(b.query(
         "notifications.read",
-        &dops::query(b, "notifications.read", json!({"notificationId":id})),
+        &dops::query(
+            b,
+            query_input("notifications.read", json!({"notificationId":id})),
+        ),
     ))
     .unwrap()
 }
@@ -521,11 +528,11 @@ fn finding_specific_native_risk_acceptance_keeps_prerequisites_blocking_and_ack_
     let b = engine.backend();
     let feature = feature_plan(&*b, &root, "Finding risk scope");
     let p = request(&*b, &feature);
-    dops::decided(b.human_decision(&dops::command(&*b,"approvals.record_human_decision",json!({"proposalId":p.id,"expectedRevision":p.revision,"contentDigest":p.content_digest,"decision":"Approve","rationale":"Approve exact plan for readiness assessment."})), b.control_epoch())).unwrap();
+    dops::decided(b.human_decision(&dops::command(&*b, command_input("approvals.record_human_decision", json!({"proposalId":p.id,"expectedRevision":p.revision,"contentDigest":p.content_digest,"decision":"Approve","rationale":"Approve exact plan for readiness assessment."}))), b.control_epoch())).unwrap();
     let feature = get(&*b, &feature);
     let approval = feature.approval.as_ref().unwrap();
     let finding = |id: &str, prerequisite: bool| json!({"id":id,"disposition":"NeedsUserDecision","blocking":true,"prerequisite":prerequisite,"state":"Open","requirementIds":["E1"],"scopeKey":"E1","affectedWorkIds":[],"summary":if prerequisite{"Required dependency unavailable"}else{"Product choice remains uncertain"},"missing":"A scoped decision","consequence":"Verification remains blocked","attempts":["Read repository conventions"],"insufficiency":"Requires an explicit product decision","closureCondition":"Resolve this exact finding","evidence":[],"question":"Which supported behavior is intended?","recommendation":"Keep the current supported behavior","closureEvidence":[]});
-    let assessed=wops::work_changed(b.command("features.edit",&wops::work_command(&*b,"features.edit",json!({"workId":feature.id,"expectedRevision":feature.revision,"changes":{"readiness":{"kind":"Assess","planRevision":approval.plan_revision,"planDigest":approval.plan_digest,"summary":"Two independently scoped readiness findings","findings":[finding("F1",false),finding("F2",true)]}}})))).unwrap();
+    let assessed=wops::work_changed(b.command("features.edit",&wops::work_command(&*b, command_input("features.edit", json!({"workId":feature.id,"expectedRevision":feature.revision,"changes":{"readiness":{"kind":"Assess","planRevision":approval.plan_revision,"planDigest":approval.plan_digest,"summary":"Two independently scoped readiness findings","findings":[finding("F1",false),finding("F2",true)]}}}))))).unwrap();
     let assessment = assessed.readiness.as_ref().unwrap();
     let proposal_body = |finding: &str| {
         let payload = json!({"kind":"FindingRisk","featureId":feature.id,"findingId":finding,"assessmentRevision":assessment.revision});
@@ -538,16 +545,12 @@ fn finding_specific_native_risk_acceptance_keeps_prerequisites_blocking_and_ack_
     };
     let proposed = dops::decided(b.command(
         "approvals.propose",
-        &dops::command(&*b, "approvals.propose", proposal_body("F1")),
+        &dops::command(&*b, command_input("approvals.propose", proposal_body("F1"))),
     ))
     .unwrap();
     let notifications = dops::notifications(b.query(
         "notifications.list",
-        &dops::query(
-            &*b,
-            "notifications.list",
-            json!({"scope":{"kind":"Workspace"},"page":{"limit":100},"unacknowledgedOnly":true}),
-        ),
+        &dops::query(&*b, query_input("notifications.list", json!({"scope":{"kind":"Workspace"},"page":{"limit":100},"unacknowledgedOnly":true}))),
     ))
     .unwrap()
     .0;
@@ -563,8 +566,10 @@ fn finding_specific_native_risk_acceptance_keeps_prerequisites_blocking_and_ack_
         "notifications.acknowledge",
         &dops::command(
             &*b,
-            "notifications.acknowledge",
-            json!({"notificationId":n.id,"expectedRevision":n.revision}),
+            command_input(
+                "notifications.acknowledge",
+                json!({"notificationId":n.id,"expectedRevision":n.revision}),
+            ),
         ),
     ))
     .unwrap();
@@ -578,7 +583,7 @@ fn finding_specific_native_risk_acceptance_keeps_prerequisites_blocking_and_ack_
     assert!(
         ops::command_result(b.command(
             "approvals.propose",
-            &dops::command(&*b, "approvals.propose", proposal_body("F2"))
+            &dops::command(&*b, command_input("approvals.propose", proposal_body("F2")))
         ))
         .is_err(),
         "a prerequisite is never presented as waivable risk"
@@ -641,7 +646,7 @@ fn native_notification_preferences_use_their_own_revision_and_keep_in_app_access
     press(&mut h, "Save notification preferences");
     match ops::query_result(b.query(
         "notifications.settings",
-        &ops::query_frame(&*b, "notifications.settings", json!({})),
+        &devworks_desktop::frame::fixture::query(&*b, "notifications.settings", json!({})),
     ))
     .unwrap()
     .0
@@ -729,12 +734,12 @@ fn challenged_facts(
 ) -> std::collections::BTreeSet<String> {
     use devworks_desktop::knowledge_screen as knowledge;
     let claims=(0..count).map(|i|json!({"kind":"Fact","subjectId":"topic","predicate":format!("review-{i}"),"value":format!("A scoped fact requiring review {i}"),"confidence":0.8,"evidenceIds":[],"tags":[]})).collect::<Vec<_>>();
-    let ids=match ops::command_result(b.command("knowledge.record",&knowledge::command(b,"knowledge.record",json!({"scope":scope,"batch":{"entities":[{"clientId":"topic","label":"Scoped review fixture","entityType":"topic","aliases":[]}],"evidence":[],"claims":claims}})))).unwrap() {
+    let ids=match ops::command_result(b.command("knowledge.record",&knowledge::command(b,command_input("knowledge.record",json!({"scope":scope,"batch":{"entities":[{"clientId":"topic","label":"Scoped review fixture","entityType":"topic","aliases":[]}],"evidence":[],"claims":claims}}))))).unwrap() {
         devworks_core::protocol::results::OperationResult::KnowledgeRecord{value}=>value.claim_ids.0,
         other=>panic!("{other:?}")
     };
     for id in &ids {
-        ops::command_result(b.command("knowledge.challenge",&knowledge::command(b,"knowledge.challenge",json!({"scope":scope,"claimId":id,"expectedRevision":"1","reason":"Review this project's current evidence","evidenceIds":[]})))).unwrap();
+        ops::command_result(b.command("knowledge.challenge",&knowledge::command(b,command_input("knowledge.challenge",json!({"scope":scope,"claimId":id,"expectedRevision":"1","reason":"Review this project's current evidence","evidenceIds":[]}))))).unwrap();
     }
     ids.into_iter().map(|id| id.as_str().to_owned()).collect()
 }
@@ -905,7 +910,7 @@ fn signed_package_proposal(
     .unwrap();
     let result = ops::command_result(b.command(
         "addons.propose",
-        &ops::command_frame(
+        &devworks_desktop::frame::fixture::command(
             &*b,
             "addons.propose",
             json!({"source":source.artifact,"manifestDigest":sha256_hex(manifest.as_bytes())}),
@@ -917,8 +922,10 @@ fn signed_package_proposal(
         "approvals.list",
         &dops::query(
             &*b,
-            "approvals.list",
-            json!({"scope":{"kind":"Workspace"},"page":{"limit":100}}),
+            query_input(
+                "approvals.list",
+                json!({"scope":{"kind":"Workspace"},"page":{"limit":100}}),
+            ),
         ),
     ))
     .unwrap();
@@ -928,7 +935,10 @@ fn signed_package_proposal(
         .expect("owner-generated package review");
     dops::approval(b.query(
         "approvals.inspect",
-        &dops::query(&*b, "approvals.inspect", json!({"proposalId":proposal.id})),
+        &dops::query(
+            &*b,
+            query_input("approvals.inspect", json!({"proposalId":proposal.id})),
+        ),
     ))
     .unwrap()
 }
@@ -974,7 +984,10 @@ fn native_small_signed_package_approves_owner_review_without_rendering_binary_so
     loop {
         let current = dops::approval(b.query(
             "approvals.inspect",
-            &dops::query(&*b, "approvals.inspect", json!({"proposalId":p.id})),
+            &dops::query(
+                &*b,
+                query_input("approvals.inspect", json!({"proposalId":p.id})),
+            ),
         ))
         .unwrap();
         assert!(matches!(current.state, ApprovalState::Approved));

@@ -317,7 +317,7 @@ fn an_unconfirmed_pin_change_is_confirmed_with_its_frame_at_the_next_launch() {
     settle(&mut h);
     click(&mut h, Role::Button, "New Chat");
     let session = h.state().chat.selected.clone().unwrap();
-    let route = ops::command_frame(
+    let route = devworks_desktop::frame::fixture::command(
         &*real,
         "router.route",
         json!({"sessionId": session, "expectedContextEpoch": "0",
@@ -503,7 +503,7 @@ fn returning_to_a_conversation_rereads_a_pin_changed_meanwhile() {
     settle(&mut h);
     click(&mut h, Role::Button, "New Chat");
     let first = h.state().chat.selected.clone().unwrap();
-    let route = ops::command_frame(
+    let route = devworks_desktop::frame::fixture::command(
         &*backend,
         "router.route",
         json!({"sessionId": first, "expectedContextEpoch": "0",
