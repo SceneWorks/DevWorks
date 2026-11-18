@@ -14,7 +14,7 @@ use devworks_core::protocol::*;
 use devworks_core::registry::{EffectClass, SchemaRevision};
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 pub fn id(s: &str) -> Id {
@@ -61,21 +61,7 @@ impl<T: Clone> Slot<T> {
     }
 }
 
-pub struct FixedClock;
-impl Clock for FixedClock {
-    fn now_ms(&self) -> Counter {
-        Counter::new(1_700_000_000_000).expect("time")
-    }
-}
-
-#[derive(Default)]
-pub struct SeqIds(AtomicU64);
-impl IdSource for SeqIds {
-    fn next_id(&self, kind: IdKind) -> Id {
-        let n = self.0.fetch_add(1, Ordering::SeqCst) + 1;
-        id(&format!("{kind:?}-{n}").to_lowercase())
-    }
-}
+pub use devworks_test_support::{FixedClock, TestIds as SeqIds};
 
 #[derive(Default)]
 pub struct Authority {
@@ -117,8 +103,6 @@ pub struct MemoryStore {
     pub recorded: Count,
     /// The next submission is not admitted with this error.
     pub refuse_next: Slot<Option<StorageError>>,
-    /// The next successful commit reports a lost acknowledgment.
-    pub lose_next_ack: AtomicBool,
 }
 impl MemoryStore {
     pub fn new(actors: &[&str]) -> Self {
@@ -140,7 +124,6 @@ impl MemoryStore {
             reads: Count::default(),
             recorded: Count::default(),
             refuse_next: Slot::default(),
-            lose_next_ack: AtomicBool::new(false),
         }
     }
     pub fn touched(&self) -> usize {
@@ -229,11 +212,7 @@ impl ApplicationStore for MemoryStore {
             Ok(()) => {
                 *guard = tx.state;
                 drop(guard);
-                if self.lose_next_ack.swap(false, Ordering::SeqCst) {
-                    job.finish(Err(StorageError::CommitUnknown));
-                } else {
-                    job.finish(Ok(()));
-                }
+                job.finish(Ok(()));
             }
             Err(e) => {
                 drop(guard);
@@ -744,7 +723,7 @@ impl HistoryLog for MemTx<'_> {
 }
 
 /// Repositories the in-memory substitute does not model (generated in `devworks-test-support`).
-use devworks_test_support::{Unmodelled as Unsupported, unmodelled as nope};
+use devworks_test_support::{LoseAcks, Unmodelled as Unsupported, unmodelled as nope};
 
 /// Scripted command use case: returns its configured decision and counts calls.
 type DecideFn = dyn Fn(&AdmittedCommand) -> Result<Decided, HandlerFailure> + Send + Sync;
@@ -830,21 +809,25 @@ pub fn result(operation: &str, value: serde_json::Value) -> OperationResult {
 
 pub struct Harness {
     pub authority: Authority,
-    pub store: MemoryStore,
+    pub store: Arc<MemoryStore>,
+    /// The store behind the gateway: `acks.lose_nth_commit(1)` loses the next commit's acknowledgment.
+    pub acks: Arc<LoseAcks>,
     pub ids: SeqIds,
 }
 impl Harness {
     pub fn new() -> Self {
+        let store = Arc::new(MemoryStore::new(&["user-a", "user-b", "agent-a"]));
         Self {
             authority: Authority::default(),
-            store: MemoryStore::new(&["user-a", "user-b", "agent-a"]),
+            acks: LoseAcks::over(store.clone()),
+            store,
             ids: SeqIds::default(),
         }
     }
     pub fn gateway(&self) -> Gateway<'_> {
         Gateway {
             authority: &self.authority,
-            store: &self.store,
+            store: &*self.acks,
             ids: &self.ids,
         }
     }
