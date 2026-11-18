@@ -456,6 +456,38 @@ fn name_at(toks: &[Tok], mut i: usize) -> Option<(String, usize)> {
     Some((parts[keep..].join("."), i))
 }
 
+/// Where the body of a common table expression named just before `i` opens: an optional column
+/// list (`name(a, b)`), then `AS`, an optional `MATERIALIZED` or `NOT MATERIALIZED`, and `(`.
+fn cte_body(toks: &[Tok], mut i: usize) -> Option<usize> {
+    if toks.get(i) == Some(&Tok::Punct('(')) {
+        i += 1;
+        loop {
+            match toks.get(i)? {
+                Tok::Word(_) | Tok::Quoted(_) => i += 1,
+                _ => return None,
+            }
+            match toks.get(i)? {
+                Tok::Punct(',') => i += 1,
+                Tok::Punct(')') => {
+                    i += 1;
+                    break;
+                }
+                _ => return None,
+            }
+        }
+    }
+    if !is_kw(toks.get(i), "as") {
+        return None;
+    }
+    i += 1;
+    if is_kw(toks.get(i), "not") && is_kw(toks.get(i + 1), "materialized") {
+        i += 2;
+    } else if is_kw(toks.get(i), "materialized") {
+        i += 1;
+    }
+    (toks.get(i) == Some(&Tok::Punct('('))).then_some(i)
+}
+
 /// The tables (with their columns where the statement names them unambiguously) of one SQL
 /// statement, or none when the text is not one: a statement keyword first, then the clause that
 /// keyword requires (`SELECT … FROM`, `INSERT INTO … (`/`VALUES`/`SELECT`, `UPDATE … SET`,
@@ -484,10 +516,10 @@ fn statement(sql: &str) -> Vec<Use> {
     let mut first_cte = None;
     if kind == "with" {
         for (i, t) in toks.iter().enumerate() {
-            if let Tok::Word(w) = t
-                && is_kw(toks.get(i + 1), "as")
-                && toks.get(i + 2) == Some(&Tok::Punct('('))
-            {
+            let (Tok::Word(w) | Tok::Quoted(w)) = t else {
+                continue;
+            };
+            if cte_body(&toks, i + 1).is_some() {
                 first_cte.get_or_insert(i);
                 ctes.push(w.to_lowercase());
             }
@@ -1335,6 +1367,22 @@ mod tests {
         let found =
             tables("WITH r AS (SELECT id FROM a) DELETE FROM b WHERE id IN (SELECT id FROM r)");
         assert!(found.contains(&t("b")), "{found:?}");
+    }
+
+    #[test]
+    fn ctes_with_column_lists_quoted_names_or_materialization_are_recognised() {
+        for sql in [
+            "WITH recent(id) AS (SELECT id FROM events) SELECT * FROM recent",
+            "WITH recent (id, at) AS (SELECT id, at FROM events) SELECT * FROM recent",
+            r#"WITH "recent" AS (SELECT id FROM events) SELECT * FROM "recent""#,
+            r#"WITH "recent"("id") AS (SELECT id FROM events) SELECT * FROM recent"#,
+            "WITH recent AS MATERIALIZED (SELECT id FROM events) SELECT * FROM recent",
+            "WITH recent AS NOT MATERIALIZED (SELECT id FROM events) SELECT * FROM recent",
+        ] {
+            let found = tables(sql);
+            assert!(found.contains(&t("events")), "{sql}: {found:?}");
+            assert!(!found.contains(&t("recent")), "{sql}: {found:?}");
+        }
     }
 
     #[test]
