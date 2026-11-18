@@ -19,6 +19,7 @@ use crate::context::{InvocationContext, PrincipalKind};
 use crate::fingerprint::Fingerprint;
 use crate::fingerprint::sha256_hex;
 use crate::gateway::{AdmittedCommand, AdmittedQuery};
+use crate::locks::LockExt;
 use crate::operations::{OperationInput, process as ops};
 use crate::ports::process::{NativeIdentity, Probe, ProcessSpec as NativeProcessSpec};
 use crate::ports::secrets::{SecretKey, SecretStore};
@@ -2536,21 +2537,9 @@ struct LiveOutputGuard<'a> {
 }
 impl Drop for LiveOutputGuard<'_> {
     fn drop(&mut self) {
-        self.service
-            .live_output
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .remove(self.id.as_str());
-        self.service
-            .live_matches
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .remove(self.id.as_str());
-        self.service
-            .live_tails
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .remove(self.id.as_str());
+        self.service.live_output.locked().remove(self.id.as_str());
+        self.service.live_matches.locked().remove(self.id.as_str());
+        self.service.live_tails.locked().remove(self.id.as_str());
     }
 }
 
@@ -2862,11 +2851,10 @@ impl ProcessToolService {
     pub(crate) fn live_match_count(&self, process_id: &Id) -> Option<i64> {
         let matches = self
             .live_matches
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
+            .locked()
             .get(process_id.as_str())
             .cloned()?;
-        let counters = matches.lock().unwrap_or_else(|p| p.into_inner());
+        let counters = matches.locked();
         Some(counters[0].count() + counters[1].count())
     }
 
@@ -2983,13 +2971,8 @@ impl ProcessToolService {
     /// The redacted output tail of a running watcher process, and whether earlier bytes were
     /// discarded. `None` once the process settled (its tail is in the completion).
     pub fn live_tail(&self, process_id: &Id) -> Option<(Vec<u8>, bool)> {
-        let (tail, redactions) = self
-            .live_tails
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .get(process_id.as_str())
-            .cloned()?;
-        let tail = tail.lock().unwrap_or_else(|p| p.into_inner());
+        let (tail, redactions) = self.live_tails.locked().get(process_id.as_str()).cloned()?;
+        let tail = tail.locked();
         Some((
             redacted_tail(&tail.retained(), &redactions, tail.truncated(), true),
             tail.truncated(),
@@ -3271,19 +3254,14 @@ impl ProcessToolService {
         let service = self.clone();
         let monitored = operation.clone();
         self.monitoring
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
+            .locked()
             .insert(operation.id.0.as_str().to_owned());
         std::thread::spawn(move || {
             let outcome = service.execute_reporting(&monitored, Some(&report));
             if let Some(outcome) = report.finish(outcome) {
                 service.record_watch_outcome(&monitored, &outcome);
             }
-            service
-                .monitoring
-                .lock()
-                .unwrap_or_else(|p| p.into_inner())
-                .remove(monitored.id.0.as_str());
+            service.monitoring.locked().remove(monitored.id.0.as_str());
         });
         match launched.recv() {
             Ok(None) => {
@@ -3297,10 +3275,7 @@ impl ProcessToolService {
 
     /// Whether a monitor thread of this boot still owns the watched process `operation`.
     pub fn is_monitoring(&self, operation: &OperationId) -> bool {
-        self.monitoring
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .contains(operation.0.as_str())
+        self.monitoring.locked().contains(operation.0.as_str())
     }
 
     fn record_watch_outcome(&self, operation: &OperationRecord, outcome: &EffectOutcome) {
@@ -3586,19 +3561,15 @@ impl ProcessToolService {
         let started = Instant::now();
         let output = Arc::new(Mutex::new(BoundedOutput::new(output_limit)));
         self.live_output
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
+            .locked()
             .insert(process.id.as_str().to_owned(), output.clone());
         let redactions = Arc::new(redactions);
         let tail = (tail_limit > 0).then(|| Arc::new(Mutex::new(TailOutput::new(tail_limit))));
         if let Some(tail) = &tail {
-            self.live_tails
-                .lock()
-                .unwrap_or_else(|p| p.into_inner())
-                .insert(
-                    process.id.as_str().to_owned(),
-                    (tail.clone(), redactions.clone()),
-                );
+            self.live_tails.locked().insert(
+                process.id.as_str().to_owned(),
+                (tail.clone(), redactions.clone()),
+            );
         }
         let _output_guard = LiveOutputGuard {
             service: self,
@@ -3615,8 +3586,7 @@ impl ProcessToolService {
             .map(|counters| Arc::new(Mutex::new(counters)));
         if let Some(matches) = &matches {
             self.live_matches
-                .lock()
-                .unwrap_or_else(|p| p.into_inner())
+                .locked()
                 .insert(process.id.as_str().to_owned(), matches.clone());
         }
         let streams = [0, 1].map(|stream| {
@@ -3624,20 +3594,17 @@ impl ProcessToolService {
             let finish = matches.clone();
             CaptureStream {
                 on_chunk: Box::new(move |chunk| {
-                    output
-                        .lock()
-                        .unwrap_or_else(|p| p.into_inner())
-                        .append(chunk);
+                    output.locked().append(chunk);
                     if let Some(tail) = &tail {
-                        tail.lock().unwrap_or_else(|p| p.into_inner()).append(chunk);
+                        tail.locked().append(chunk);
                     }
                     if let Some(matches) = &matches {
-                        matches.lock().unwrap_or_else(|p| p.into_inner())[stream].feed(chunk);
+                        matches.locked()[stream].feed(chunk);
                     }
                 }),
                 on_end: finish.map(|matches| {
                     Box::new(move || {
-                        matches.lock().unwrap_or_else(|p| p.into_inner())[stream].finish();
+                        matches.locked()[stream].finish();
                     }) as Box<dyn FnOnce() + Send>
                 }),
             }
@@ -3674,7 +3641,7 @@ impl ProcessToolService {
         let Ok(Some(stored)) = stored else {
             return EffectOutcome::Unknown("owned process record unavailable".into());
         };
-        let output = output.lock().unwrap_or_else(|p| p.into_inner());
+        let output = output.locked();
         let bytes = redacted_output(output.retained(), &redactions, output.truncated());
         let truncated = output.truncated()
             || redactions
@@ -3708,11 +3675,11 @@ impl ProcessToolService {
         }
         // Every match in the whole output, counted as it streamed (both streams drained above).
         if let Some(matches) = &matches {
-            let counters = matches.lock().unwrap_or_else(|p| p.into_inner());
+            let counters = matches.locked();
             evidence["matches"] = json!(counters[0].count() + counters[1].count());
         }
         if let Some(tail) = &tail {
-            let tail = tail.lock().unwrap_or_else(|p| p.into_inner());
+            let tail = tail.locked();
             let bytes = redacted_tail(&tail.retained(), &redactions, tail.truncated(), false);
             evidence["tailBase64"] = json!(base64::engine::general_purpose::STANDARD.encode(bytes));
             evidence["tailTruncated"] = json!(tail.truncated());
@@ -4534,12 +4501,7 @@ impl QueryHandler for ProcessToolService {
             ),
         };
         let completed = operation.state == OperationState::ObservedComplete && !launch_only;
-        let live = self
-            .live_output
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .get(process.id.as_str())
-            .cloned();
+        let live = self.live_output.locked().get(process.id.as_str()).cloned();
         // Launched but no longer monitored and never observed ending: its output is unknown.
         let unobserved = launch_only && live.is_none() && !self.is_monitoring(&operation.id);
         if (completed && evidence.is_none()) || unobserved {
@@ -4582,7 +4544,7 @@ impl QueryHandler for ProcessToolService {
                     },
                 });
             }
-            let live = live.lock().unwrap_or_else(|p| p.into_inner());
+            let live = live.locked();
             let literals: Vec<String> = job
                 .into_iter()
                 .flat_map(|job| job.spec.environment.0.into_iter())

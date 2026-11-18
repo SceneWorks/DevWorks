@@ -4,9 +4,9 @@ use crate::backend::{Reply, screen_slot};
 use crate::chat;
 use crate::memory::RouteMemory;
 use crate::ops::{self, Failure};
+use crate::paged::{ListText, Page, Paged, list_body};
 use crate::route::Route;
 use crate::screen::{Cx, Screen, ScreenContext, ScreenId};
-use crate::shell::{ListState, ListText, list_body};
 use crate::widgets::{self, Header, ViewState};
 use devworks_core::ports::storage::ProjectPurgeClientScope;
 use devworks_core::protocol::records::{ArtifactRecord, BrowserSession, ItemState, ResourceRecord};
@@ -50,7 +50,7 @@ fn route_context(mem: &RouteMemory) -> ScreenContext {
 
 #[derive(Default)]
 pub struct ArtifactsScreen {
-    pub list: ListState<ArtifactRecord>,
+    pub list: Paged<ArtifactRecord>,
     /// Applied artifact mutations (attachment saves and deletions). A list query started
     /// before the latest one may miss it: its reply is dropped and the list re-queried, so it
     /// never overwrites newer records.
@@ -74,17 +74,10 @@ impl Screen for ArtifactsScreen {
             (ArtifactsSlot::ArtifactsList, Reply::Query(_)) if self.list_at != self.mutations => {
                 self.load(cx);
             }
-            (ArtifactsSlot::ArtifactsList, Reply::Query(q)) => match ops::artifacts(q) {
-                Ok((items, more)) => {
-                    self.list = ListState {
-                        items,
-                        loaded: true,
-                        error: None,
-                        more,
-                    };
-                }
-                Err(e) => self.list.error = Some(e.describe()),
-            },
+            (ArtifactsSlot::ArtifactsList, Reply::Query(q)) => {
+                self.list
+                    .apply_current(ops::artifacts(q).map_err(|e| e.describe()));
+            }
             (slot, reply) => cx.unhandled(&slot, reply),
         }
     }
@@ -108,22 +101,38 @@ impl ArtifactsScreen {
     }
     fn load(&mut self, cx: &mut Cx) {
         self.list_at = self.mutations;
-        cx.query(
+        let fetch = self.list.reload();
+        cx.paged(
+            &mut self.list,
+            fetch,
             ArtifactsSlot::ArtifactsList,
             "Loading artifacts",
             "artifacts.list",
             ops::workspace_artifacts,
         );
     }
+    fn load_more(&mut self, cx: &mut Cx) {
+        if let Some(fetch) = self.list.more_page() {
+            cx.paged(
+                &mut self.list,
+                fetch,
+                ArtifactsSlot::ArtifactsList,
+                "Loading more artifacts",
+                "artifacts.list",
+                ops::workspace_artifacts,
+            );
+        }
+    }
     fn view(&mut self, cx: &mut Cx, ui: &mut Ui) {
         let screen = Route::Artifacts.screen();
         let online = cx.online().map_err(str::to_owned);
         let mut reload = false;
+        let mut more = false;
         let mut mem = cx.routes.remove(&Route::Artifacts).unwrap_or_default();
         let tab = mem.tab;
         let list = &self.list;
         let scrolls = &mut *cx.scrolls;
-        let mut st = (&mut reload, &mut mem);
+        let mut st = (&mut reload, &mut mem, &mut more);
         let (_, tab) = widgets::pane(
             ui,
             Header {
@@ -172,6 +181,7 @@ impl ArtifactsScreen {
                         id_salt: "artifacts-list",
                     },
                     st.0,
+                    st.2,
                     scrolls,
                     |a: &ArtifactRecord| {
                         let tags = a.tags.as_ref().map(|t| t.0.join(", ")).unwrap_or_default();
@@ -226,15 +236,18 @@ impl ArtifactsScreen {
         if reload {
             self.load(cx);
         }
+        if more {
+            self.load_more(cx);
+        }
     }
 }
 
 #[derive(Default)]
 pub struct BrowserScreen {
     /// Every listed browser session: the workspace's, then each listed project's.
-    pub list: ListState<BrowserSession>,
+    pub list: Paged<BrowserSession>,
     /// The browser sessions per scope (`None`: the workspace), combined into `list`.
-    parts: BTreeMap<Option<String>, ListState<BrowserSession>>,
+    parts: BTreeMap<Option<String>, Paged<BrowserSession>>,
 }
 
 impl Screen for BrowserScreen {
@@ -310,49 +323,62 @@ impl BrowserScreen {
         };
         self.parts
             .retain(|scope, _| scope.as_ref().is_none_or(|p| projects.contains(p)));
-        self.combine();
-        cx.query(
-            BrowserSlot::BrowserSessions,
-            "Loading browser sessions",
-            "browser.sessions",
-            |b| ops::browser_sessions_list(b, None),
-        );
-        for p in projects {
-            let q = p.clone();
-            cx.query(
-                BrowserSlot::ProjectBrowserSessions(p),
-                "Loading a project's browser sessions",
-                "browser.sessions",
-                move |b| ops::browser_sessions_list(b, Some(&q)),
-            );
+        let scopes = std::iter::once(None).chain(projects.into_iter().map(Some));
+        for scope in scopes {
+            let part = self.parts.entry(scope.clone()).or_default();
+            let fetch = part.reload();
+            Self::send(cx, part, scope, fetch, "Loading");
         }
+        self.combine();
+    }
+    /// The next page of every scope that has one.
+    fn load_more(&mut self, cx: &mut Cx) {
+        for (scope, part) in &mut self.parts {
+            if let Some(fetch) = part.more_page() {
+                Self::send(cx, part, scope.clone(), fetch, "Loading more");
+            }
+        }
+        self.combine();
+    }
+    fn send(
+        cx: &mut Cx,
+        part: &mut Paged<BrowserSession>,
+        scope: Option<String>,
+        fetch: crate::paged::Fetch,
+        verb: &str,
+    ) {
+        match scope {
+            None => cx.paged(
+                part,
+                fetch,
+                BrowserSlot::BrowserSessions,
+                &format!("{verb} browser sessions"),
+                "browser.sessions",
+                |b, cursor| ops::browser_sessions_list(b, None, cursor),
+            ),
+            Some(p) => {
+                let q = p.clone();
+                cx.paged(
+                    part,
+                    fetch,
+                    BrowserSlot::ProjectBrowserSessions(p),
+                    &format!("{verb} a project's browser sessions"),
+                    "browser.sessions",
+                    move |b, cursor| ops::browser_sessions_list(b, Some(&q), cursor),
+                )
+            }
+        };
     }
 
     /// Records one scope's page and rebuilds the combined list.
-    fn part(&mut self, scope: Option<String>, page: Result<(Vec<BrowserSession>, bool), Failure>) {
-        let part = match page {
-            Ok((items, more)) => ListState {
-                items,
-                loaded: true,
-                error: None,
-                more,
-            },
-            Err(e) => ListState {
-                error: Some(e.describe()),
-                ..ListState::default()
-            },
-        };
-        self.parts.insert(scope, part);
+    fn part(&mut self, scope: Option<String>, page: Result<Page<BrowserSession>, Failure>) {
+        if let Some(part) = self.parts.get_mut(&scope) {
+            part.apply_current(page.map_err(|e| e.describe()));
+        }
         self.combine();
     }
     fn combine(&mut self) {
-        let parts = &self.parts;
-        self.list = ListState {
-            items: parts.values().flat_map(|p| p.items.clone()).collect(),
-            loaded: !parts.is_empty() && parts.values().all(|p| p.loaded),
-            error: parts.values().find_map(|p| p.error.clone()),
-            more: parts.values().any(|p| p.more),
-        };
+        self.list = Paged::merged(self.parts.values());
     }
     /// The scope a listed browser session belongs to, for its row.
     fn scope_labels(&self, cx: &Cx) -> HashMap<String, String> {
@@ -394,12 +420,13 @@ impl BrowserScreen {
         let screen = Route::Browser.screen();
         let online = cx.online().map_err(str::to_owned);
         let mut reload = false;
+        let mut more = false;
         let mut close: Option<BrowserSession> = None;
         let mut mem = cx.routes.remove(&Route::Browser).unwrap_or_default();
         let scopes = self.scope_labels(cx);
         let list = &self.list;
         let scrolls = &mut *cx.scrolls;
-        let mut st = (&mut reload, &mut mem, &mut close);
+        let mut st = (&mut reload, &mut mem, &mut close, &mut more);
         widgets::pane(
             ui,
             Header {
@@ -443,6 +470,7 @@ impl BrowserScreen {
                         id_salt: "browser-list",
                     },
                     st.0,
+                    st.3,
                     scrolls,
                     |s: &BrowserSession| s.id.as_str().to_owned(),
                     |s: &BrowserSession| s.id.as_str().to_owned(),
@@ -500,12 +528,15 @@ impl BrowserScreen {
         if reload {
             self.load(cx);
         }
+        if more {
+            self.load_more(cx);
+        }
     }
 }
 
 #[derive(Default)]
 pub struct ResourcesScreen {
-    pub list: ListState<ResourceRecord>,
+    pub list: Paged<ResourceRecord>,
 }
 
 impl Screen for ResourcesScreen {
@@ -521,17 +552,10 @@ impl Screen for ResourcesScreen {
     }
     fn apply(&mut self, cx: &mut Cx, slot: ResourcesSlot, reply: Reply) {
         match (slot, reply) {
-            (ResourcesSlot::ResourcesList, Reply::Query(q)) => match ops::resources(q) {
-                Ok((items, more)) => {
-                    self.list = ListState {
-                        items,
-                        loaded: true,
-                        error: None,
-                        more,
-                    };
-                }
-                Err(e) => self.list.error = Some(e.describe()),
-            },
+            (ResourcesSlot::ResourcesList, Reply::Query(q)) => {
+                self.list
+                    .apply_current(ops::resources(q).map_err(|e| e.describe()));
+            }
             (slot, reply) => cx.unhandled(&slot, reply),
         }
     }
@@ -548,23 +572,39 @@ impl Screen for ResourcesScreen {
 
 impl ResourcesScreen {
     fn load(&mut self, cx: &mut Cx) {
-        cx.query(
+        let fetch = self.list.reload();
+        cx.paged(
+            &mut self.list,
+            fetch,
             ResourcesSlot::ResourcesList,
             "Loading resources",
             "resources.list",
             ops::resources_list,
         );
     }
+    fn load_more(&mut self, cx: &mut Cx) {
+        if let Some(fetch) = self.list.more_page() {
+            cx.paged(
+                &mut self.list,
+                fetch,
+                ResourcesSlot::ResourcesList,
+                "Loading more resources",
+                "resources.list",
+                ops::resources_list,
+            );
+        }
+    }
 
     fn view(&mut self, cx: &mut Cx, ui: &mut Ui) {
         let screen = Route::Resources.screen();
         let online = cx.online().map_err(str::to_owned);
         let mut reload = false;
+        let mut more = false;
         let mut link = false;
         let mut mem = cx.routes.remove(&Route::Resources).unwrap_or_default();
         let list = &self.list;
         let scrolls = &mut *cx.scrolls;
-        let mut st = (&mut reload, &mut mem, &mut link);
+        let mut st = (&mut reload, &mut mem, &mut link, &mut more);
         widgets::pane(
             ui,
             Header {
@@ -608,6 +648,7 @@ impl ResourcesScreen {
                         id_salt: "resources-list",
                     },
                     st.0,
+                    st.3,
                     scrolls,
                     |r: &ResourceRecord| r.canonical_key.0.clone(),
                     |r: &ResourceRecord| r.id.0.as_str().to_owned(),
@@ -635,6 +676,9 @@ impl ResourcesScreen {
         }
         if reload {
             self.load(cx);
+        }
+        if more {
+            self.load_more(cx);
         }
     }
 }

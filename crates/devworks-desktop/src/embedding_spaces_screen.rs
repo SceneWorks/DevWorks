@@ -2,20 +2,23 @@
 //! the panel neither qualifies a model nor chooses a conversational/default route.
 use crate::connections_screen::ConnectionAction;
 use crate::frame;
+use crate::paged::Paged;
 use crate::widgets::{self, Tone, chip};
 use devworks_core::protocol::records::{
     ConnectionRecord, EmbeddingDimensionMode, EmbeddingMetric, EmbeddingSpacePage,
     RouterConfigAction,
 };
+use devworks_core::protocol::wire_name;
 use eframe::egui::{self, Ui};
 
 #[derive(Default)]
 pub struct EmbeddingSpacesPanel {
     pub open: bool,
-    pub page: Option<EmbeddingSpacePage>,
-    pub loading: bool,
+    /// The page of embedding spaces shown: one page object (with the selection it carries) that
+    /// each read replaces, so a later page never mixes with an earlier one.
+    pub spaces: Paged<EmbeddingSpacePage>,
+    /// A refused form or action (not a list read; list failures are `spaces.error`).
     pub error: Option<String>,
-    pub generation: u64,
     pub last_load: Option<std::time::Instant>,
     name: String,
     connection: Option<(String, String)>,
@@ -23,12 +26,6 @@ pub struct EmbeddingSpacesPanel {
     dimensions: String,
     parameter: bool,
     l2: bool,
-}
-fn wire(value: &impl serde::Serialize) -> String {
-    serde_json::to_value(value)
-        .ok()
-        .and_then(|v| v.as_str().map(str::to_owned))
-        .unwrap_or_default()
 }
 /// The action creating an embedding space from the form's text, `None` when a value is outside
 /// the wire types.
@@ -74,15 +71,21 @@ fn configure(actions: &mut Vec<ConnectionAction>, label: String, action: RouterC
     });
 }
 impl EmbeddingSpacesPanel {
+    /// The page of spaces shown.
+    pub fn page(&self) -> Option<&EmbeddingSpacePage> {
+        self.spaces.items.first()
+    }
     pub fn loaded(&mut self, page: EmbeddingSpacePage) {
-        self.page = Some(page);
-        self.loading = false;
+        self.spaces.replace(vec![page]);
         self.error = None;
     }
     pub fn qualifying(&self) -> bool {
-        self.page
-            .as_ref()
-            .is_some_and(|p| p.items.0.iter().any(|r| wire(&r.status) == "Qualifying"))
+        self.page().is_some_and(|p| {
+            p.items
+                .0
+                .iter()
+                .any(|r| wire_name(&r.status) == "Qualifying")
+        })
     }
     pub fn ui(
         &mut self,
@@ -105,18 +108,14 @@ impl EmbeddingSpacesPanel {
         }
 
         ui.label("Choose an exact embedding connection, model and vector shape. Nothing is selected automatically.");
-        if let Some(error) = &self.error {
+        if let Some(error) = self.error.as_ref().or(self.spaces.error.as_ref()) {
             chip(ui, error, Tone::Bad);
         }
         // A background refresh keeps its layout and inspected revisions. Current-source
         // validation and CAS still run when a user submits a retained action.
-        ui.add_visible(self.loading, egui::Spinner::new());
-        let actionable = idle && (!self.loading || self.page.is_some());
-        if let Some(reason) = self
-            .page
-            .as_ref()
-            .and_then(|p| p.availability_reason.as_ref())
-        {
+        ui.add_visible(self.spaces.loading(), egui::Spinner::new());
+        let actionable = idle && (!self.spaces.loading() || self.page().is_some());
+        if let Some(reason) = self.page().and_then(|p| p.availability_reason.as_ref()) {
             chip(ui, &reason.0, Tone::Attention);
         }
         if widgets::secondary_button(ui, "Reload embedding spaces").clicked() {
@@ -127,7 +126,7 @@ impl EmbeddingSpacesPanel {
             let current=self.connection.as_ref().and_then(|(id,_)|connections.iter().find(|c|c.id.as_str()==id));
             egui::ComboBox::from_label("Embedding connection")
                 .selected_text(current.map_or("Choose an embedding connection",|c|c.name.0.as_str()))
-                .show_ui(ui,|ui| {for c in connections.iter().filter(|c|wire(&c.profile)=="Embedding") {
+                .show_ui(ui,|ui| {for c in connections.iter().filter(|c|wire_name(&c.profile)=="Embedding") {
                     if ui.selectable_label(self.connection.as_ref().is_some_and(|(id,_)|id==c.id.as_str()),&c.name.0).clicked() {self.connection=Some((c.id.as_str().into(),c.revision.as_str().into()));}
                 }});
             field(ui,"Embedding upstream model",&mut self.model);
@@ -147,7 +146,7 @@ impl EmbeddingSpacesPanel {
             }
             ui.label("Creating a space sends no inference. Qualification sends one fixed probe through that connection and records its usage; it may incur a charge.");
         });
-        let Some(page) = &self.page else {
+        let Some(page) = self.spaces.items.first() else {
             return;
         };
         ui.label("A selected space can be used for future indexing and searches. Usage is recorded through its connection.");
@@ -172,12 +171,12 @@ impl EmbeddingSpacesPanel {
         for record in &page.items.0 {
             ui.push_id(record.id.as_str(), |ui| {
                 ui.group(|ui| {
-                    ui.strong(format!("{}: {}", record.name.0, wire(&record.status)));
+                    ui.strong(format!("{}: {}", record.name.0, wire_name(&record.status)));
                     ui.label(format!(
                         "Model: {} · {} dimensions · {}",
                         record.upstream_model_id.0,
                         record.dimensions.0,
-                        wire(&record.metric)
+                        wire_name(&record.metric)
                     ));
                     ui.monospace(format!("Space: {}", record.space_id.as_str()));
                     if let Some(reason) = &record.reason {
@@ -187,7 +186,7 @@ impl EmbeddingSpacesPanel {
                         ui.label(format!(
                             "Qualification operation: {} ({})",
                             operation.operation_id.0.as_str(),
-                            wire(&operation.state)
+                            wire_name(&operation.state)
                         ));
                     }
                     if let Some(model) = &record.pricing_model_id
@@ -200,7 +199,7 @@ impl EmbeddingSpacesPanel {
                     {
                         actions.push(ConnectionAction::EmbeddingPrice(model.as_str().into()));
                     }
-                    let state = wire(&record.status);
+                    let state = wire_name(&record.status);
                     if record.can_qualify
                         && ui
                             .add_enabled(

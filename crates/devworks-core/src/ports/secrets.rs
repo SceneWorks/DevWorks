@@ -24,6 +24,7 @@
 //! [`SessionSecrets`] keeps secrets in memory for the current app session only: it is the test
 //! substitute and the explicit, user-chosen fallback when the OS facility is unavailable, never
 //! a silent plaintext disk fallback.
+use crate::locks::LockExt;
 use crate::protocol::Id;
 use std::collections::BTreeMap;
 use std::fmt;
@@ -181,17 +182,17 @@ impl SessionSecrets {
     }
     /// Makes every call fail as a locked or missing facility would (tests).
     pub fn set_unavailable(&self, why: Option<&str>) {
-        *self.unavailable.lock().expect("secrets") = why.map(str::to_owned);
+        *self.unavailable.locked() = why.map(str::to_owned);
     }
     fn check(&self) -> Result<(), SecretError> {
-        match self.unavailable.lock().expect("secrets").as_ref() {
+        match self.unavailable.locked().as_ref() {
             Some(why) => Err(SecretError::Unavailable(why.clone())),
             None => Ok(()),
         }
     }
     /// The number of stored secrets (tests).
     pub fn len(&self) -> usize {
-        self.items.lock().expect("secrets").len()
+        self.items.locked().len()
     }
     pub fn is_empty(&self) -> bool {
         self.len() == 0
@@ -206,31 +207,22 @@ impl SecretStore for SessionSecrets {
     }
     fn put(&self, key: &SecretKey, secret: &Secret) -> Result<(), SecretError> {
         self.check()?;
-        self.items
-            .lock()
-            .expect("secrets")
-            .insert(slot(key), secret.clone());
+        self.items.locked().insert(slot(key), secret.clone());
         Ok(())
     }
     fn get(&self, key: &SecretKey) -> Result<Option<Secret>, SecretError> {
         self.check()?;
-        Ok(self.items.lock().expect("secrets").get(&slot(key)).cloned())
+        Ok(self.items.locked().get(&slot(key)).cloned())
     }
     fn delete(&self, key: &SecretKey) -> Result<bool, SecretError> {
         self.check()?;
-        Ok(self
-            .items
-            .lock()
-            .expect("secrets")
-            .remove(&slot(key))
-            .is_some())
+        Ok(self.items.locked().remove(&slot(key)).is_some())
     }
     fn list(&self, namespace: &str) -> Result<Vec<Id>, SecretError> {
         self.check()?;
         Ok(self
             .items
-            .lock()
-            .expect("secrets")
+            .locked()
             .keys()
             .filter(|(ns, _)| ns == namespace)
             .filter_map(|(_, h)| Id::new(h.clone()).ok())

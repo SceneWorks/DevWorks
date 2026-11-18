@@ -4,6 +4,7 @@ use super::conn::db;
 use super::repos::{Snapshot, Unit};
 use super::support::{corrupt, id_of, invalid, page_limit};
 use super::{DATABASE_FILE, MIGRATIONS, SqliteStore, migrations};
+use devworks_core::locks::LockExt;
 use devworks_core::ports::diagnostics::{
     Metric, StorageDatabase, StorageFiles, StorageHealthProbe,
 };
@@ -572,14 +573,13 @@ impl ExpectedSchemas {
     ) -> Result<SchemaObjects, StorageError> {
         let cell = self
             .versions
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
+            .locked()
             .entry(version)
             .or_insert_with(|| Arc::new(Mutex::new(None)))
             .clone();
         // Single-flight per version. The global map lock is released before building the
         // private in-memory schema; no actual store transaction or writer is involved.
-        let mut ready = cell.lock().unwrap_or_else(|p| p.into_inner());
+        let mut ready = cell.locked();
         if let Some(found) = ready.as_ref() {
             return Ok(found.clone());
         }

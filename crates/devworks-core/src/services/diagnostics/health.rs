@@ -27,6 +27,7 @@ use super::{
 };
 use crate::authority::redact::Redactor;
 use crate::context::InvocationContext;
+use crate::locks::RwLockExt;
 use crate::ports::diagnostics::Metric;
 use crate::ports::storage::{
     AccessMode, DiagnosticAudience, DiagnosticFilter, ProcessFilter, ProcessPhase, ReadSnapshot,
@@ -457,11 +458,7 @@ fn storage_monitor(svc: &DiagnosticService, out: &mut Vec<HealthCheck>) {
 }
 
 fn queue_checks(svc: &DiagnosticService, snapshot: &dyn ReadSnapshot, out: &mut Vec<HealthCheck>) {
-    let consumers = svc
-        .consumers
-        .read()
-        .unwrap_or_else(|p| p.into_inner())
-        .clone();
+    let consumers = svc.consumers.read_locked().clone();
     let Some(mut consumers) = consumers else {
         out.push(unavailable(
             "queue",
@@ -943,7 +940,7 @@ pub(crate) fn checks(
     storage_checks(svc, now, &mut out);
     queue_checks(svc, snapshot, &mut out);
     process_checks(svc, snapshot, &audience, &mut out);
-    for source in svc.sources.read().unwrap_or_else(|p| p.into_inner()).iter() {
+    for source in svc.sources.read_locked().iter() {
         out.extend(source.checks(now));
     }
     indexing_checks(snapshot, &audience, now, &mut out);

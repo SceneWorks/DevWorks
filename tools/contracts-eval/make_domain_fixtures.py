@@ -748,6 +748,13 @@ case('r3-result-catalog-unknown','operation-result.r3',{'kind':'router.catalog',
 case('reject-r2-result-catalog-latest','operation-result.r2',{'kind':'router.catalog','value':{'items':[latest_alias],'hasMore':False}},False,False)
 case('reject-r1-result-catalog-latest','operation-result',{'kind':'router.catalog','value':{'items':[latest_alias],'hasMore':False}},False,False)
 case('reject-r3-result-catalog-null-availability','operation-result.r3',{'kind':'router.catalog','value':{'items':[{**latest_alias,'available':None}],'hasMore':False}},False,False)
+# Revision 4 adds each row's offered efforts, query-only like revision 3.
+offered_row={**latest_alias,'offeredEfforts':['Low','High']}
+case('r4-input-router.catalog','domain-request.r3',domain('router.catalog',4))
+case('r4-result-router.catalog','operation-result.r4',{'kind':'router.catalog','value':{'items':[offered_row],'hasMore':False}})
+case('r4-result-catalog-nothing-offered','operation-result.r4',{'kind':'router.catalog','value':{'items':[{**offered_row,'offeredEfforts':[]}],'hasMore':False}})
+case('reject-r3-result-catalog-offered-efforts','operation-result.r3',{'kind':'router.catalog','value':{'items':[offered_row],'hasMore':False}},False,False)
+case('reject-r4-result-catalog-unknown-effort','operation-result.r4',{'kind':'router.catalog','value':{'items':[{**offered_row,'offeredEfforts':['Ludicrous']}],'hasMore':False}},False,False)
 case('reject-configure-catalog-facts','domain-request.r2',command_at('router.configure',action={'kind':'Model','model':latest_alias}),False,False)
 
 case('r2-result-router.configure','operation-result.r2',{'kind':'router.configure','value':sample('MutationSummary')})

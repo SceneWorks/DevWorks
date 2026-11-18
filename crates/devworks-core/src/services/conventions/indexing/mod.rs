@@ -12,6 +12,7 @@ pub mod rank;
 pub mod selection;
 mod status;
 
+use crate::locks::{LockExt, RwLockExt};
 use crate::{
     ports::{
         Clock, IdSource,
@@ -55,18 +56,13 @@ impl IndexService {
     }
     /// Native composition installs only an actual qualified executor before exposing the gateway.
     pub fn set_embeddings(&self, executor: Option<Arc<dyn embedding::ConventionEmbeddings>>) {
-        *self.embeddings.write().unwrap_or_else(|p| p.into_inner()) = executor;
+        *self.embeddings.write_locked() = executor;
     }
     /// Stops new publication and drains admitted local metadata units. No provider/network
     /// call is ever made while this guard is held.
     pub fn stop(&self) {
         self.closed.begin_close();
-        for cancellation in self
-            .active
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .values()
-        {
+        for cancellation in self.active.locked().values() {
             cancellation.cancel();
         }
         self.closed.drain();
@@ -109,11 +105,7 @@ struct Active<'a> {
 }
 impl Drop for Active<'_> {
     fn drop(&mut self) {
-        self.service
-            .active
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .remove(&self.id);
+        self.service.active.locked().remove(&self.id);
     }
 }
 impl IndexService {
@@ -141,7 +133,7 @@ impl IndexService {
             if self.closed.is_closed() {
                 return Err(embedding::EmbeddingFailure::Cancelled);
             }
-            let mut active = self.active.lock().unwrap_or_else(|p| p.into_inner());
+            let mut active = self.active.locked();
             if active.len() >= 128 {
                 return Err(embedding::EmbeddingFailure::Unavailable(
                     "Embedding service is at capacity".into(),
@@ -154,14 +146,9 @@ impl IndexService {
             active.insert(id, request.cancellation.clone());
             Active { service: self, id }
         };
-        let executor = self
-            .embeddings
-            .read()
-            .unwrap_or_else(|p| p.into_inner())
-            .clone()
-            .ok_or_else(|| {
-                embedding::EmbeddingFailure::Unavailable("NoConfiguredEmbeddingRoute".into())
-            })?;
+        let executor = self.embeddings.read_locked().clone().ok_or_else(|| {
+            embedding::EmbeddingFailure::Unavailable("NoConfiguredEmbeddingRoute".into())
+        })?;
         let result = if observe {
             executor.observe(context, request)
         } else {

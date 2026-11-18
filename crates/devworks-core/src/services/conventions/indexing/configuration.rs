@@ -1,5 +1,6 @@
 //! One current selection/runtime witness for queued publishers and retrieval cursors.
 use super::{IndexService, embedding::EmbeddingConfiguration};
+use crate::locks::RwLockExt;
 use crate::{
     context::InvocationContext,
     ports::storage::*,
@@ -61,8 +62,7 @@ impl IndexService {
     }
     pub(super) fn native_available(&self) -> bool {
         self.embeddings
-            .read()
-            .unwrap_or_else(|p| p.into_inner())
+            .read_locked()
             .as_ref()
             .is_some_and(|p| p.is_available())
     }

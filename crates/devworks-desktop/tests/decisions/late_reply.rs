@@ -92,7 +92,12 @@ fn late_decision(stale: bool) {
         DecisionsSlot::ApprovalDecision(a.id.as_str().into())
     )));
     assert!(
-        h.state().decisions.approvals.iter().any(|p| p.id == a.id),
+        h.state()
+            .decisions
+            .approvals
+            .items
+            .iter()
+            .any(|p| p.id == a.id),
         "the held response has not refreshed A's inbox row"
     );
     gate.open();
@@ -130,7 +135,12 @@ fn late_decision(stale: bool) {
         assert!(get(&*real, &feature_a).approval.is_some());
     }
     assert!(
-        !h.state().decisions.approvals.iter().any(|p| p.id == a.id),
+        !h.state()
+            .decisions
+            .approvals
+            .items
+            .iter()
+            .any(|p| p.id == a.id),
         "A's settled or superseded row must leave the refreshed pending inbox"
     );
     let CommandReply::Recorded {

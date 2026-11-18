@@ -21,6 +21,7 @@
 use crate::dispatch::{Either, first};
 use crate::store;
 use crate::workers::Ticker;
+use devworks_core::locks::LockExt;
 use devworks_core::ports::storage::WriteOptions;
 use devworks_core::ports::storage::{ApplicationStore, StorageError, StoredJobRun};
 use devworks_core::protocol::Id;
@@ -129,7 +130,7 @@ impl Scheduler {
     }
     /// Runs currently executing on their own task.
     pub fn in_flight(&self) -> Vec<Id> {
-        let live = self.live.lock().unwrap_or_else(|p| p.into_inner());
+        let live = self.live.locked();
         let mut ids: Vec<Id> = live
             .iter()
             .filter_map(|k| Id::new(k.clone()).ok())
@@ -138,10 +139,7 @@ impl Scheduler {
         ids
     }
     fn executing(&self, run: &Id) -> bool {
-        self.live
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .contains(run.as_str())
+        self.live.locked().contains(run.as_str())
     }
     /// Requests a tick now (a committed Run now, cancel, enable or edit).
     pub fn notify(&self) {
@@ -280,15 +278,10 @@ impl Scheduler {
     fn spawn(self: &Arc<Self>, run: Id) {
         let me = self.clone();
         let key = run.as_str().to_owned();
-        if !self
-            .live
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .insert(key.clone())
-        {
+        if !self.live.locked().insert(key.clone()) {
             return;
         }
-        let mut map = self.running.lock().unwrap_or_else(|p| p.into_inner());
+        let mut map = self.running.locked();
         map.retain(|_, t| !t.is_finished());
         let k = key.clone();
         let task = tokio::spawn(async move {
@@ -421,7 +414,7 @@ impl Scheduler {
     /// happened, is reconciled at the next boot).
     pub async fn drain(&self, deadline: Instant) {
         let tasks: Vec<JoinHandle<()>> = {
-            let mut map = self.running.lock().unwrap_or_else(|p| p.into_inner());
+            let mut map = self.running.locked();
             map.drain().map(|(_, t)| t).collect()
         };
         for mut task in tasks {
@@ -438,11 +431,7 @@ impl Scheduler {
 struct Executing<'a>(&'a Scheduler, String);
 impl Drop for Executing<'_> {
     fn drop(&mut self) {
-        self.0
-            .live
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .remove(&self.1);
+        self.0.live.locked().remove(&self.1);
     }
 }
 

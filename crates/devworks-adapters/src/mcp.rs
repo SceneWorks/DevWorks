@@ -2,6 +2,7 @@
 //! adapter owns protocol framing and uses the existing process supervisor for local servers.
 use devworks_core::authority::destructive::{FilesystemResolver, ProtectedRoots};
 use devworks_core::context::InvocationContext;
+use devworks_core::locks::LockExt;
 use devworks_core::ports::mcp::{
     McpCallOrigin, McpEndpoint, McpRemote, McpRemoteFault, McpSampler, RemoteCatalog, RemotePrompt,
     RemoteResource, RemoteTool, SamplingCall, SamplingMessage, SamplingRefusal,
@@ -57,7 +58,7 @@ struct InFlight {
 struct InFlightGuard<'a>(&'a SamplingClient);
 impl Drop for InFlightGuard<'_> {
     fn drop(&mut self) {
-        *self.0.in_flight.lock().unwrap_or_else(|e| e.into_inner()) = None;
+        *self.0.in_flight.locked() = None;
     }
 }
 
@@ -80,8 +81,7 @@ impl SamplingClient {
     }
 
     fn begin(&self, origin: Option<McpCallOrigin>) -> InFlightGuard<'_> {
-        *self.in_flight.lock().unwrap_or_else(|e| e.into_inner()) =
-            origin.map(|origin| InFlight { origin, samples: 0 });
+        *self.in_flight.locked() = origin.map(|origin| InFlight { origin, samples: 0 });
         InFlightGuard(self)
     }
 
@@ -89,8 +89,7 @@ impl SamplingClient {
     fn call_deadline(&self, started: Instant) -> Instant {
         let samples = self
             .in_flight
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
+            .locked()
             .as_ref()
             .map_or(0, |call| u32::from(call.samples));
         started + CALL_DEADLINE + SAMPLE_BUDGET * samples
@@ -98,7 +97,7 @@ impl SamplingClient {
 
     /// Reserve the next sample of the attributed call, if one is outstanding.
     fn admit(&self, reserve: bool) -> Result<(McpCallOrigin, u8), rmcp::ErrorData> {
-        let mut guard = self.in_flight.lock().unwrap_or_else(|e| e.into_inner());
+        let mut guard = self.in_flight.locked();
         let call = guard.as_mut().ok_or_else(|| {
             rmcp::ErrorData::invalid_request(
                 "sampling is accepted only during a DevWorks tool call",
@@ -489,8 +488,7 @@ impl NativeMcpClients {
                 .map_err(|_| McpRemoteFault::InvalidConfiguration)?;
         let slot = self
             .sessions
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
+            .locked()
             .entry(endpoint.server_id.as_str().into())
             .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(None)))
             .clone();
@@ -533,8 +531,7 @@ impl NativeMcpClients {
         };
         let slot = self
             .sessions
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
+            .locked()
             .get(server_id.as_str())
             .cloned()
             .ok_or(McpRemoteFault::Unreachable)?;
@@ -605,8 +602,7 @@ impl McpRemote for NativeMcpClients {
     fn discover(&self, server_id: &Id) -> Result<RemoteCatalog, McpRemoteFault> {
         let slot = self
             .sessions
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
+            .locked()
             .get(server_id.as_str())
             .cloned()
             .ok_or(McpRemoteFault::Unreachable)?;
@@ -711,8 +707,7 @@ impl McpRemote for NativeMcpClients {
     ) -> Result<serde_json::Value, McpRemoteFault> {
         let slot = self
             .sessions
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
+            .locked()
             .get(server_id.as_str())
             .cloned()
             .ok_or(McpRemoteFault::Unreachable)?;
@@ -752,8 +747,7 @@ impl McpRemote for NativeMcpClients {
         };
         let slot = self
             .sessions
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
+            .locked()
             .get(server_id.as_str())
             .cloned()
             .ok_or(McpRemoteFault::Unreachable)?;
@@ -788,12 +782,7 @@ impl McpRemote for NativeMcpClients {
     }
 
     fn disconnect(&self, server_id: &Id) -> Result<(), McpRemoteFault> {
-        let slot = self
-            .sessions
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .get(server_id.as_str())
-            .cloned();
+        let slot = self.sessions.locked().get(server_id.as_str()).cloned();
         if let Some(slot) = slot {
             self.runtime.block_on(async {
                 if let Some(session) = slot.lock().await.take() {
@@ -811,12 +800,7 @@ impl McpRemote for NativeMcpClients {
         server_id: &Id,
         still_off: &mut dyn FnMut() -> bool,
     ) -> Result<(), McpRemoteFault> {
-        let slot = self
-            .sessions
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .get(server_id.as_str())
-            .cloned();
+        let slot = self.sessions.locked().get(server_id.as_str()).cloned();
         let Some(slot) = slot else {
             still_off();
             return Ok(());

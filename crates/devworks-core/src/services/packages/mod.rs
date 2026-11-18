@@ -123,6 +123,7 @@
 //! SDK's host calls); requested access is an admission input and display, not containment.
 use crate::context::{InvocationContext, PrincipalKind};
 use crate::gateway::{AdmittedCommand, AdmittedQuery};
+use crate::locks::{LockExt, RwLockExt};
 use crate::operations::{OperationInput, addons as ops};
 use crate::ports::packages::{
     FieldError, HostPlatform, InspectError, Inspection, MAX_BUNDLE_BYTES, PackageActivity,
@@ -271,10 +272,10 @@ impl GuardCell {
         Self(Mutex::new(g))
     }
     fn held(&self) -> bool {
-        self.0.lock().unwrap_or_else(|p| p.into_inner()).is_some()
+        self.0.locked().is_some()
     }
     fn release(&self) {
-        self.0.lock().unwrap_or_else(|p| p.into_inner()).take();
+        self.0.locked().take();
     }
 }
 
@@ -298,10 +299,7 @@ struct PublishHold {
 }
 impl PublishHold {
     fn new(set: &Arc<Mutex<BTreeMap<(String, String), usize>>>, key: (String, String)) -> Self {
-        *set.lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .entry(key.clone())
-            .or_default() += 1;
+        *set.locked().entry(key.clone()).or_default() += 1;
         Self {
             set: set.clone(),
             key,
@@ -310,7 +308,7 @@ impl PublishHold {
 }
 impl Drop for PublishHold {
     fn drop(&mut self) {
-        let mut m = self.set.lock().unwrap_or_else(|p| p.into_inner());
+        let mut m = self.set.locked();
         if let Some(n) = m.get_mut(&self.key) {
             *n -= 1;
             if *n == 0 {
@@ -417,28 +415,22 @@ impl PackageService {
         }
     }
     pub fn set_approval_control(&self, control: Arc<crate::services::runs::ControlService>) {
-        *self
-            .approval_control
-            .write()
-            .unwrap_or_else(|p| p.into_inner()) = Some(control);
+        *self.approval_control.write_locked() = Some(control);
     }
     /// Registers the consumers that receive availability announcements (composition root).
     pub fn set_availability_consumers(&self, consumers: Vec<String>) {
-        *self.consumers.write().unwrap_or_else(|p| p.into_inner()) = consumers;
+        *self.consumers.write_locked() = consumers;
     }
     /// Registers one more consumer of availability announcements (composition root); a consumer
     /// already registered stays registered once.
     pub fn add_availability_consumer(&self, consumer: &str) {
-        let mut all = self.consumers.write().unwrap_or_else(|p| p.into_inner());
+        let mut all = self.consumers.write_locked();
         if !all.iter().any(|c| c == consumer) {
             all.push(consumer.to_owned());
         }
     }
     pub(crate) fn consumers(&self) -> Vec<String> {
-        self.consumers
-            .read()
-            .unwrap_or_else(|p| p.into_inner())
-            .clone()
+        self.consumers.read_locked().clone()
     }
     /// Inspects bundle bytes with the service's inspector (nothing is published or trusted).
     pub fn inspect(&self, bundle: &[u8]) -> Result<Inspection, InspectError> {
@@ -450,13 +442,10 @@ impl PackageService {
     }
     /// Installs the package host's activity view (once, at boot).
     pub fn set_activity(&self, activity: Arc<dyn PackageActivity>) {
-        *self.activity.write().unwrap_or_else(|p| p.into_inner()) = activity;
+        *self.activity.write_locked() = activity;
     }
     fn activity(&self) -> Arc<dyn PackageActivity> {
-        self.activity
-            .read()
-            .unwrap_or_else(|p| p.into_inner())
-            .clone()
+        self.activity.read_locked().clone()
     }
     pub fn platform(&self) -> &HostPlatform {
         &self.platform
@@ -525,7 +514,7 @@ impl PackageService {
         };
         let i = inspected.inspection;
         // The hold and the publication happen while no collection pass decides or removes.
-        let gate = self.files_gate.lock().unwrap_or_else(|p| p.into_inner());
+        let gate = self.files_gate.locked();
         let held = PublishHold::new(
             &self.publishing,
             (i.package_id.clone(), i.manifest_digest.clone()),
@@ -549,8 +538,7 @@ impl PackageService {
             };
         }
         if let Some(p) = quiesce.filter(|p| *p == i.package_id) {
-            *guard.0.lock().unwrap_or_else(|e| e.into_inner()) =
-                self.activity().quiesce(p, self.quiesce_wait);
+            *guard.0.locked() = self.activity().quiesce(p, self.quiesce_wait);
         }
         BundlePrep {
             target: quiesce.map(str::to_owned),
@@ -2147,7 +2135,7 @@ impl PackageService {
     ) -> Result<usize, StorageError> {
         // The whole pass (eligibility in its unit of work and the removals after it) excludes
         // publication, so a republish that reuses a directory never loses its files.
-        let _gate = self.files_gate.lock().unwrap_or_else(|p| p.into_inner());
+        let _gate = self.files_gate.locked();
         // A publication in progress owns its staging directory: outside boot only abandoned
         // (old) ones are removed.
         let _ = self.files.clean_staging(orphan_age);
@@ -2158,13 +2146,7 @@ impl PackageService {
         let svc = self.clone_ports();
         let mut keep = in_use.clone();
         // Directories a command published and has not settled are never collected.
-        keep.extend(
-            self.publishing
-                .lock()
-                .unwrap_or_else(|p| p.into_inner())
-                .keys()
-                .cloned(),
-        );
+        keep.extend(self.publishing.locked().keys().cloned());
         let candidates = on_disk.clone();
         let removable: Vec<(String, String, bool)> =
             run_write(&*self.store, WriteOptions::housekeeping(), move |tx| {
@@ -2465,8 +2447,7 @@ impl PackageService {
         .fault(CorrelationId(tx.new_id(IdKind::Correlation)));
         fault.diagnostic_id = Some(diagnostic.clone());
         if let Some(c) = cell {
-            *c.0.lock().unwrap_or_else(|p| p.into_inner()) =
-                Some((diagnostic, package.to_owned(), errors));
+            *c.0.locked() = Some((diagnostic, package.to_owned(), errors));
         }
         DomainDecision::Refused { fault }
     }
@@ -2723,7 +2704,7 @@ impl CommandHandler for PackageService {
                     Some(crate::protocol::CommandReply::Recorded { receipt, .. })
                         if matches!(receipt.decision, DomainDecision::Refused { .. })
                 );
-                let detail = refusal.0.lock().unwrap_or_else(|p| p.into_inner()).take();
+                let detail = refusal.0.locked().take();
                 if let (true, Some((id, package, errors))) = (refused, detail) {
                     let lines: Vec<String> = errors
                         .iter()

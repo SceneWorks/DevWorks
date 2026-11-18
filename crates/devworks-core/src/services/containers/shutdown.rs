@@ -5,6 +5,7 @@ use super::inspection::{ObservedPhase, verified_lifecycle_target};
 use super::service::ContainerService;
 use crate::authority::policy::{AccessProfile, resolve_policy};
 use crate::context::{HostIngress, InvocationContext, PrincipalKind};
+use crate::locks::LockExt;
 use crate::ports::IdKind;
 use crate::ports::storage::{
     ConfigScope, ContainerFilter, ContainerPhase, NewEvent, ReadOptions, StorageError,
@@ -229,7 +230,7 @@ impl ContainerService {
                     continue;
                 }
                 let gate = self.lifecycle_gate(&row.id);
-                let _guard = gate.lock().unwrap_or_else(|p| p.into_inner());
+                let _guard = gate.locked();
                 let row = match read_snapshot(&*self.store, &ReadOptions::default(), |snapshot| {
                     snapshot.resources().container(&row.id)
                 }) {

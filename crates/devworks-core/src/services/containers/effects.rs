@@ -8,6 +8,7 @@ use super::selection;
 use super::service::ContainerService;
 use crate::fingerprint::Fingerprint;
 use crate::fingerprint::sha256_hex;
+use crate::locks::LockExt;
 use crate::ports::Authorization;
 use crate::ports::secrets::SessionSecrets;
 use crate::ports::storage::{
@@ -1145,10 +1146,8 @@ impl ContainerService {
             intent.command,
             ContainerCommand::Build(_) | ContainerCommand::Pull(_) | ContainerCommand::Create(_)
         )
-        .then(|| self.image_gate.lock().unwrap_or_else(|p| p.into_inner()));
-        let _lifecycle_guard = lifecycle_gate
-            .as_ref()
-            .map(|gate| gate.lock().unwrap_or_else(|p| p.into_inner()));
+        .then(|| self.image_gate.locked());
+        let _lifecycle_guard = lifecycle_gate.as_ref().map(|gate| gate.locked());
         // A competing image or lifecycle effect may hold this gate for minutes. The
         // authority observed before the wait cannot authorize the eventual native call.
         let (_, context, authorization) = match self.command_context(operation, authority) {
@@ -1234,9 +1233,7 @@ impl ContainerService {
             ContainerCommand::Stop(input) => Some(self.lifecycle_gate(&input.container_id)),
             _ => None,
         };
-        let _lifecycle_guard = lifecycle_gate
-            .as_ref()
-            .map(|gate| gate.lock().unwrap_or_else(|p| p.into_inner()));
+        let _lifecycle_guard = lifecycle_gate.as_ref().map(|gate| gate.locked());
         match &intent.command {
             ContainerCommand::Create(_) => {
                 let Some(id) = intent.container_id.as_ref() else {

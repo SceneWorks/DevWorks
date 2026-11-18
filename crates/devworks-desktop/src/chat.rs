@@ -14,15 +14,16 @@ use crate::memory::{
     UnconfirmedAttachment,
 };
 use crate::ops::Failure;
+use crate::paged;
 use crate::routing::{self, Routing, Selection};
 use crate::theme;
 use crate::virtual_list::{self, Blocks, Scrolls};
 use crate::widgets::{self, Tone, ViewState, chip};
+use devworks_core::protocol::helpers::WATCHER_NOTICE_MEDIA_TYPE;
 use devworks_core::protocol::provider::{
     ArtifactRef, TranscriptBody, TranscriptEntry, TranscriptPage, UserContent,
 };
 use devworks_core::protocol::records::SessionRecord;
-use devworks_core::services::watch::WATCHER_NOTICE_MEDIA_TYPE;
 use eframe::egui::{self, Align, Key, Layout, Modifiers, RichText, TextureHandle, Ui};
 use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
@@ -274,10 +275,7 @@ pub enum StartReason {
 pub struct Chat {
     /// Verified visible text of host notices, keyed by exact artifact version.
     pub notice_texts: HashMap<String, String>,
-    pub sessions: Vec<SessionRecord>,
-    pub sessions_loaded: bool,
-    pub sessions_error: Option<String>,
-    pub sessions_more: bool,
+    pub sessions: crate::paged::Paged<SessionRecord>,
     pub selected: Option<String>,
     pub tab: SidebarTab,
     pub history_query: String,
@@ -323,7 +321,7 @@ pub struct Chat {
     /// Applied session mutations (start, message). A list query started before the latest
     /// mutation may miss it: its reply is dropped and the list re-queried, so it never
     /// overwrites newer records.
-    pub(crate) session_mutations: u64,
+    pub session_mutations: u64,
     pub(crate) sessions_list_at: u64,
     /// What the last close kept for unconfirmed commands, until they are restored.
     pub(crate) restoring: Option<crate::memory::ChatPendingMemory>,
@@ -333,10 +331,7 @@ pub struct Chat {
 impl Chat {
     pub fn new() -> Self {
         Self {
-            sessions: Vec::new(),
-            sessions_loaded: false,
-            sessions_error: None,
-            sessions_more: false,
+            sessions: crate::paged::Paged::default(),
             selected: None,
             tab: SidebarTab::Current,
             history_query: String::new(),
@@ -377,6 +372,7 @@ impl Chat {
         let t = self.transcripts.get(turn.session_id.as_str());
         let epoch = self
             .sessions
+            .items
             .iter()
             .find(|s| s.id == turn.session_id)
             .map_or(turn.context_epoch, |s| s.context_epoch.get());
@@ -454,7 +450,7 @@ impl Chat {
             .find(|a| a.local == local)
     }
     pub fn session(&self, id: &str) -> Option<&SessionRecord> {
-        self.sessions.iter().find(|s| s.id.as_str() == id)
+        self.sessions.items.iter().find(|s| s.id.as_str() == id)
     }
     pub fn selected_session(&self) -> Option<&SessionRecord> {
         self.selected.as_deref().and_then(|s| self.session(s))
@@ -469,6 +465,7 @@ impl Chat {
             .collect();
         let mut out: Vec<&SessionRecord> = self
             .sessions
+            .items
             .iter()
             .filter(|s| {
                 let t = s.title.0.to_lowercase();
@@ -523,9 +520,9 @@ impl Chat {
         })
     }
     pub fn upsert(&mut self, record: SessionRecord) {
-        match self.sessions.iter_mut().find(|s| s.id == record.id) {
+        match self.sessions.items.iter_mut().find(|s| s.id == record.id) {
             Some(s) => *s = record,
-            None => self.sessions.push(record),
+            None => self.sessions.items.push(record),
         }
     }
 }
@@ -625,6 +622,8 @@ pub enum ChatAction {
     Remove(u64),
     OpenInstructions,
     RetrySessions,
+    /// Read the next page of older conversations.
+    MoreSessions,
     RetryTranscript,
     CloseSidebar,
     /// Resubmit an attachment's unconfirmed save frame.
@@ -1119,7 +1118,7 @@ fn composer(
         widgets::caption(
             ui,
             routing::status_line(
-                &chat.routing.catalog,
+                &chat.routing.catalog.items,
                 &chat.selection(),
                 chat.routing.status.get(&key),
             ),
@@ -1149,7 +1148,7 @@ fn selectors(
     enabled: bool,
     actions: &mut Vec<ChatAction>,
 ) {
-    let current = routing::intent_label(&r.catalog, &selection.intent);
+    let current = routing::intent_label(&r.catalog.items, &selection.intent);
     let effort_text = format!("Effort: {}", routing::effort_label(&selection.effort));
     let mut picked = None;
     let route_hover = r
@@ -1160,7 +1159,7 @@ fn selectors(
         egui::ComboBox::from_id_salt(("model", surface.salt()))
             .selected_text(current.clone())
             .show_ui(ui, |ui| {
-                for (label, intent) in routing::options(&r.catalog) {
+                for (label, intent) in routing::options(&r.catalog.items) {
                     let on = routing::same_intent(&intent, &selection.intent);
                     if ui.selectable_label(on, label).clicked() && !on {
                         picked = Some(intent);
@@ -1174,7 +1173,7 @@ fn selectors(
         egui::ComboBox::from_id_salt(("effort", surface.salt()))
             .selected_text(effort_text.clone())
             .show_ui(ui, |ui| {
-                for e in routing::efforts(&r.catalog, &selection.intent) {
+                for e in routing::efforts(&r.catalog.items, &selection.intent) {
                     let on = routing::effort_label(&e) == routing::effort_label(&selection.effort);
                     if ui.selectable_label(on, routing::effort_label(&e)).clicked() && !on {
                         effort = Some(e);
@@ -1382,25 +1381,22 @@ fn history(ui: &mut Ui, chat: &mut Chat, online: Result<(), &str>, actions: &mut
         );
         return;
     }
-    if let Some(e) = &chat.sessions_error {
-        let state = ViewState::Failed {
-            what: "conversations".into(),
-            error: e.clone(),
-        };
-        if widgets::state_block(ui, &state) == widgets::StateAction::Retry {
-            actions.push(ChatAction::RetrySessions);
-        }
-        if !chat.sessions_loaded {
-            return;
-        }
+    let (mut reload, mut more) = (false, false);
+    let ready = paged::gate(
+        ui,
+        &Ok(()),
+        &chat.sessions,
+        "conversations",
+        &mut reload,
+        &mut more,
+    );
+    if reload {
+        actions.push(ChatAction::RetrySessions);
     }
-    if !chat.sessions_loaded {
-        widgets::state_block(
-            ui,
-            &ViewState::Loading {
-                what: "conversations".into(),
-            },
-        );
+    if more {
+        actions.push(ChatAction::MoreSessions);
+    }
+    if !ready {
         return;
     }
     // Rows interleave a header before the first session of each date group.
@@ -1427,18 +1423,22 @@ fn history(ui: &mut Ui, chat: &mut Chat, online: Result<(), &str>, actions: &mut
         widgets::state_block(
             ui,
             &ViewState::Empty {
-                title: if chat.sessions.is_empty() {
+                title: if chat.sessions.items.is_empty() {
                     "No conversations yet".into()
                 } else {
                     "No conversations match".into()
                 },
-                body: if chat.sessions.is_empty() {
+                body: if chat.sessions.items.is_empty() {
                     "Start one with New Chat or by sending a message.".into()
                 } else {
-                    "Try another search.".into()
+                    "Try another search, or read older conversations.".into()
                 },
             },
         );
+        paged::load_more_control(ui, &chat.sessions, &mut more);
+        if more {
+            actions.push(ChatAction::MoreSessions);
+        }
         return;
     }
     let selected = chat.selected.clone();
@@ -1465,8 +1465,9 @@ fn history(ui: &mut Ui, chat: &mut Chat, online: Result<(), &str>, actions: &mut
             }
         },
     );
-    if chat.sessions_more {
-        widgets::caption(ui, "Older conversations are not listed yet.");
+    paged::load_more_control(ui, &chat.sessions, &mut more);
+    if more {
+        actions.push(ChatAction::MoreSessions);
     }
 }
 

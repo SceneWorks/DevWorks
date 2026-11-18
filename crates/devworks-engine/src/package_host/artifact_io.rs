@@ -17,6 +17,7 @@ use super::session::Slot;
 use super::session::rpc_error;
 use super::{PackageHost, SlotContext};
 use devworks_core::fingerprint::sha256_hex;
+use devworks_core::locks::LockExt;
 use devworks_core::ports::http::{base64url, base64url_decode};
 use devworks_core::ports::storage::{ArtifactScope, StorageError, WriteOptions, run_write};
 use devworks_core::protocol::provider::ArtifactRef as HostArtifact;
@@ -118,7 +119,7 @@ pub(super) fn append(
             "the chunk is not base64url of at most one chunk's bytes",
         ));
     };
-    let mut writes = ctx.writes.lock().unwrap_or_else(|p| p.into_inner());
+    let mut writes = ctx.writes.locked();
     if !writes.pending.contains_key(write_id) && writes.pending.len() >= MAX_PENDING {
         return Err(denied(
             "the invocation already holds its most pending writes",
@@ -169,13 +170,7 @@ pub(super) fn publish(
     media_type: &str,
     sha256: &wire::Digest,
 ) -> Result<RpcResult, RpcError> {
-    if let Some(artifact) = ctx
-        .writes
-        .lock()
-        .unwrap_or_else(|p| p.into_inner())
-        .published
-        .get(action_key)
-    {
+    if let Some(artifact) = ctx.writes.locked().published.get(action_key) {
         return Ok(RpcResult::BrokerCompleted {
             artifact: artifact.clone(),
         });
@@ -187,7 +182,7 @@ pub(super) fn publish(
         ));
     };
     let bytes = {
-        let writes = ctx.writes.lock().unwrap_or_else(|p| p.into_inner());
+        let writes = ctx.writes.locked();
         let Some(pending) = writes.pending.get(write_id) else {
             return Err(rpc_error(
                 RpcErrorClass::ProtocolViolation,
@@ -236,7 +231,7 @@ pub(super) fn publish(
     let live = slot.clone();
     let committed = run_write(&*host.store, WriteOptions::observed(), move |tx| {
         // Serialized with revocation: a cancelled or expired invocation publishes nothing.
-        let _guard = live.state.lock().unwrap_or_else(|p| p.into_inner());
+        let _guard = live.state.locked();
         if live.revoked.load(Ordering::SeqCst) {
             return Err(StorageError::ScopeDenied);
         }
@@ -267,7 +262,7 @@ pub(super) fn publish(
         .and_then(serde_json::from_value)
         .map_err(|_| rpc_error(RpcErrorClass::Unavailable, "invalid artifact"))?;
     {
-        let mut writes = ctx.writes.lock().unwrap_or_else(|p| p.into_inner());
+        let mut writes = ctx.writes.locked();
         writes.pending.remove(write_id);
         writes
             .published

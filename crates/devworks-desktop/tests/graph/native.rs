@@ -1047,15 +1047,16 @@ fn indexed_code_that_queries_a_known_table_links_to_it_in_schema_and_graph_reads
     assert_eq!(h.state().databases.filter, "orders");
     // Databases lists the code that uses the table and opens a use in the graph.
     step_until(&mut h, "the source is listed", |s| {
-        !s.databases.loading && !s.databases.connections.is_empty()
+        !s.databases.connections.loading() && !s.databases.connections.items.is_empty()
     });
     h.query_by_label("Shop").expect("the source").click();
     settle(&mut h);
     click(&mut h, Role::Button, "Search schema objects");
     step_until(&mut h, "orders is found", |s| {
-        !s.databases.read_loading
+        !s.databases.read_loading()
             && s.databases
                 .objects
+                .items
                 .iter()
                 .any(|o| o.metadata.as_ref().is_some_and(|m| m.name.0 == "orders"))
     });
@@ -1063,6 +1064,7 @@ fn indexed_code_that_queries_a_known_table_links_to_it_in_schema_and_graph_reads
         .state()
         .databases
         .objects
+        .items
         .iter()
         .find(|o| o.metadata.as_ref().is_some_and(|m| m.name.0 == "orders"))
         .unwrap()
@@ -1074,7 +1076,7 @@ fn indexed_code_that_queries_a_known_table_links_to_it_in_schema_and_graph_reads
     );
     click(&mut h, Role::Button, "Find code using this object");
     step_until(&mut h, "the code that uses orders", |s| {
-        !s.databases.read_loading && s.databases.code_references.len() == 2
+        !s.databases.read_loading() && s.databases.code_references.items.len() == 2
     });
     assert!(has_text(&h, "Used by code"));
     assert!(

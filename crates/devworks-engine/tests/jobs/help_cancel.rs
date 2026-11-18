@@ -1,4 +1,5 @@
 use super::*;
+use devworks_core::locks::LockExt;
 use devworks_core::ports::files::ArtifactFiles;
 use devworks_test_support::{FaultFiles, FileOp};
 use std::sync::Condvar;
@@ -146,7 +147,7 @@ impl PublishGate {
         }
     }
     fn release(&self) {
-        *self.released.lock().unwrap_or_else(|e| e.into_inner()) = true;
+        *self.released.locked() = true;
         self.wake.notify_all();
     }
 }
@@ -156,10 +157,7 @@ impl Drop for Release {
         if std::thread::panicking() {
             eprintln!(
                 "HELP_CANCEL_PUBLICATION_OBSERVATION {:?}",
-                self.0
-                    .last_observed
-                    .lock()
-                    .unwrap_or_else(|p| p.into_inner())
+                self.0.last_observed.locked()
             );
         }
         self.0.release();

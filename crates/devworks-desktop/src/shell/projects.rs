@@ -5,10 +5,11 @@
 use crate::backend::{Reply, Unresolved};
 use crate::memory::RouteMemory;
 use crate::ops::{self, Failure, LifecycleChange};
+use crate::paged::Paged;
 use crate::project_purge::Live;
 use crate::projects_ops::ProjectsSlot;
 use crate::projects_screen::{
-    Action, PortfolioView, RepositoriesView, confirm_window, same_access,
+    Action, MoreOf, PortfolioView, RepositoriesView, confirm_window, same_access,
 };
 pub use crate::projects_screen::{
     BASE_DIRECTORY, BaseDirectory, CONTAINER_RUNTIME, Confirm, CreateForm, EditForm, GitView,
@@ -17,7 +18,6 @@ pub use crate::projects_screen::{
 };
 use crate::route::Route;
 use crate::screen::{Cx, Effect, Screen, ScreenContext, ScreenId, controller};
-use crate::shell::ListState;
 use crate::shell::indexing::IndexAction;
 use crate::widgets::Tone;
 use devworks_core::ports::storage::{ConfigScope, ProjectPurgeClientScope};
@@ -152,12 +152,27 @@ impl ProjectsCtl<'_, '_> {
     // Requests
 
     fn load_deleted_projects(&mut self) {
-        self.query(
+        let fetch = self.projects.deleted.reload();
+        self.cx.paged(
+            &mut self.projects.deleted,
+            fetch,
             ProjectsSlot::DeletedProjects,
             "Loading deleted projects",
             "projects.list",
-            |b| ops::projects_list(b, Some("Deleted")),
+            |b, cursor| ops::projects_list(b, Some("Deleted"), cursor),
         );
+    }
+    fn load_more_deleted_projects(&mut self) {
+        if let Some(fetch) = self.projects.deleted.more_page() {
+            self.cx.paged(
+                &mut self.projects.deleted,
+                fetch,
+                ProjectsSlot::DeletedProjects,
+                "Loading more deleted projects",
+                "projects.list",
+                |b, cursor| ops::projects_list(b, Some("Deleted"), cursor),
+            );
+        }
     }
     fn load_base(&mut self, project: &str) {
         self.projects
@@ -391,6 +406,12 @@ impl ProjectsCtl<'_, '_> {
                     self.index(IndexAction::Status(r));
                 }
                 Action::Index(a) => self.index(a),
+                Action::LoadMore(of) => match of {
+                    MoreOf::Projects => self.effects.push(Effect::LoadMoreProjects),
+                    MoreOf::Repositories => self.effects.push(Effect::LoadMoreRepositories),
+                    MoreOf::Members => self.effects.push(Effect::LoadMoreMembers),
+                    MoreOf::Deleted => self.load_more_deleted_projects(),
+                },
                 Action::OpenJobs(p) => self.effects.push(Effect::OpenJobs(p)),
                 Action::ReviewDeletion(r) => {
                     let id = r.id.clone();
@@ -459,17 +480,11 @@ impl ProjectsCtl<'_, '_> {
                 let result = ops::repositories(q).map_err(|e| e.describe());
                 self.effects.push(Effect::ProjectMembers(p, result));
             }
-            (ProjectsSlot::DeletedProjects, Reply::Query(q)) => match ops::projects(q) {
-                Ok((items, more)) => {
-                    self.projects.deleted = ListState {
-                        items,
-                        loaded: true,
-                        error: None,
-                        more,
-                    };
-                }
-                Err(e) => self.projects.deleted.error = Some(e.describe()),
-            },
+            (ProjectsSlot::DeletedProjects, Reply::Query(q)) => {
+                self.projects
+                    .deleted
+                    .apply_current(ops::projects(q).map_err(|e| e.describe()));
+            }
             (ProjectsSlot::ProjectCreate, Reply::Command(c)) => match ops::project_changed(c) {
                 Ok(p) => {
                     self.effects.push(Effect::ProjectChanged(p.clone()));
@@ -1104,10 +1119,10 @@ impl ProjectsCtl<'_, '_> {
             Some(p)
                 if lists.members_of == Some(p.id.0.as_str()) || lists.members.error.is_some() =>
             {
-                lists.members.clone_state()
+                lists.members.view(|_| true)
             }
-            Some(_) => ListState::default(),
-            None => lists.repositories.clone_state(),
+            Some(_) => Paged::default(),
+            None => lists.repositories.view(|_| true),
         };
         let online = self.cx.online.clone();
         let view = RepositoriesView {

@@ -455,9 +455,9 @@ fn native_review_purge_preserves_shared_git_and_other_drafts_and_recovers_after_
     .unwrap()
     .unwrap();
     assert_eq!(actual, repository);
-    let projects = ops::projects(b.query("projects.list", &ops::projects_list(&*b, None)))
+    let projects = ops::projects(b.query("projects.list", &ops::projects_list(&*b, None, None)))
         .unwrap()
-        .0;
+        .items;
     assert!(
         projects
             .iter()
@@ -604,7 +604,7 @@ fn native_confirmation_ui_removes_owned_session_drafts_and_paste_keeps_home_and_
     wait_quiescent(&engine, &p.id);
     click(&mut h, Role::Button, "Review permanent purge");
     step_until(&mut h, "reviewed manifest", |s| {
-        s.purge.loaded || s.purge.error.is_some()
+        s.purge.fully_read() || s.purge.error.is_some()
     });
     assert!(
         h.state().purge.error.is_none(),

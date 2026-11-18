@@ -619,7 +619,7 @@ fn creating_a_job_selects_it_without_the_previous_jobs_history() {
         )
     };
     assert!(shown(&h, 1), "job A's older page is loaded");
-    assert!(!h.state().jobs.older.is_empty());
+    assert!(!h.state().jobs.older.items.is_empty());
     // Create job B from the form: it becomes the selection.
     click(&mut h, Role::Button, "New job");
     settle(&mut h);
@@ -637,8 +637,8 @@ fn creating_a_job_selects_it_without_the_previous_jobs_history() {
         .unwrap_or_else(|| panic!("job B: {:?}", h.state().jobs.form_error));
     let state = &h.state().jobs;
     assert_eq!(state.selected.as_deref(), Some(b.id.as_str()));
-    assert!(state.older.is_empty(), "no run of A in B's history");
-    assert!(state.older_cursor.is_none(), "no cursor of A's history");
+    assert!(state.older.items.is_empty(), "no run of A in B's history");
+    assert!(!state.older.more(), "no cursor of A's history");
     assert_eq!(
         state.inspection.as_ref().map(|i| i.job.id.as_str()),
         Some(b.id.as_str())
@@ -656,22 +656,46 @@ fn creating_a_job_selects_it_without_the_previous_jobs_history() {
 #[test]
 fn a_selection_change_drops_the_previous_jobs_paging() {
     use devworks_desktop::shell::jobs::JobsUi;
+    let mut list = devworks_desktop::paged::Paged::default();
+    let fetch = list.reload();
+    list.apply(
+        fetch.generation,
+        Ok(devworks_desktop::paged::Page::new(
+            Vec::new(),
+            Some("list".into()),
+        )),
+    );
+    let older_with = |cursor: &str| {
+        let mut older = devworks_desktop::paged::Paged::default();
+        let fetch = older.reload();
+        older.apply(
+            fetch.generation,
+            Ok(devworks_desktop::paged::Page::new(
+                Vec::new(),
+                Some(cursor.into()),
+            )),
+        );
+        older
+    };
     let mut jobs = JobsUi {
         selected: Some("a".into()),
-        older_cursor: Some("cursor-of-a".into()),
+        older: older_with("cursor-of-a"),
         inspection_error: Some("a failed".into()),
-        list_cursor: Some("list".into()),
+        list,
         ..JobsUi::default()
     };
     jobs.select(Some("a".into()));
-    assert_eq!(jobs.older_cursor.as_deref(), Some("cursor-of-a"));
+    assert!(
+        jobs.older.more(),
+        "reselecting the same job keeps its pages"
+    );
     jobs.select(Some("b".into()));
     assert_eq!(jobs.selected.as_deref(), Some("b"));
-    assert!(jobs.older_cursor.is_none() && jobs.inspection_error.is_none());
-    jobs.older_cursor = Some("cursor-of-b".into());
+    assert!(!jobs.older.more() && jobs.inspection_error.is_none());
+    jobs.older = older_with("cursor-of-b");
     jobs.set_scope(Some("project".into()));
-    assert!(jobs.selected.is_none() && jobs.older_cursor.is_none());
-    assert!(jobs.list_cursor.is_none() && !jobs.list.loaded);
+    assert!(jobs.selected.is_none() && !jobs.older.more());
+    assert!(!jobs.list.more() && !jobs.list.loaded);
 }
 
 /// Creates a disabled manual job titled `title` through `jobs.create`.
@@ -709,7 +733,7 @@ fn an_automatic_refresh_keeps_the_expanded_jobs_list() {
     click_nav(&mut h, "Scheduled jobs");
     settle(&mut h);
     assert_eq!(h.state().jobs.list.items.len(), page);
-    click(&mut h, Role::Button, "More jobs");
+    click(&mut h, Role::Button, "Load more");
     settle(&mut h);
     assert_eq!(h.state().jobs.list.items.len(), page + 5);
     // A job created elsewhere sorts first: its change hint refreshes the screen.
@@ -727,7 +751,7 @@ fn an_automatic_refresh_keeps_the_expanded_jobs_list() {
         .map(|j| j.title.0.clone())
         .collect();
     assert_eq!(titles, (0..=page + 5).map(title).collect::<Vec<_>>());
-    assert!(!h.state().jobs.list.more && h.state().jobs.list_pages == 2);
+    assert!(!h.state().jobs.list.more() && h.state().jobs.list.pages() == 2);
     assert!(
         has_text(&h, &title(page)),
         "the boundary job is still shown"
@@ -767,9 +791,9 @@ fn a_refresh_while_more_jobs_is_pending_keeps_the_requested_page() {
     settle(&mut h);
     click_nav(&mut h, "Scheduled jobs");
     assert_eq!(h.state().jobs.list.items.len(), page);
-    let generation = h.state().jobs.list_generation;
+    let generation = h.state().jobs.list.generation();
     gate.close();
-    h.get_by_role_and_label(Role::Button, "More jobs").click();
+    h.get_by_role_and_label(Role::Button, "Load more").click();
     step_until(&mut h, "the pending More jobs request", |s| {
         s.client().is_some_and(|c| {
             c.activities()
@@ -779,8 +803,9 @@ fn a_refresh_while_more_jobs_is_pending_keeps_the_requested_page() {
     });
     // Refresh's first page wins the race; later pages stay held until it is applied.
     h.state_mut().load_jobs();
+    // The first page was applied once the refresh asked for its second.
     step_until(&mut h, "the refreshed first page", |s| {
-        s.jobs.list_generation != generation || s.jobs.list_refresh.is_some()
+        s.jobs.list.generation() >= generation + 2
     });
     gate.open();
     settle(&mut h);
@@ -794,8 +819,8 @@ fn a_refresh_while_more_jobs_is_pending_keeps_the_requested_page() {
         .map(|j| j.title.0.clone())
         .collect();
     assert_eq!(titles, (1..=page + 5).map(title).collect::<Vec<_>>());
-    assert_eq!(h.state().jobs.list_pages, 2);
-    assert!(!h.state().jobs.list.more && h.state().jobs.list_refresh.is_none());
+    assert_eq!(h.state().jobs.list.pages(), 2);
+    assert!(!h.state().jobs.list.more() && !h.state().jobs.list.loading());
 }
 
 #[test]
@@ -916,11 +941,11 @@ fn prompt_picker_loads_and_selects_beyond_the_first_page_in_each_scope() {
             &ops::prompt_artifacts(&*backend, project.as_ref().map(|p| p.0.as_str()), None),
         ))
         .unwrap();
-        assert_eq!(first.0.len(), 200);
-        assert!(first.1);
+        assert_eq!(first.items.len(), 200);
+        assert!(first.next.is_some());
         assert!(
             !first
-                .0
+                .items
                 .iter()
                 .any(|a| a.artifact.artifact_id.as_str() == "paged-prompt-000")
         );

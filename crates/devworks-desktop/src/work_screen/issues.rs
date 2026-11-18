@@ -20,7 +20,7 @@ impl WorkCtl<'_, '_> {
             .work
             .workflows
             .get(project.as_deref().unwrap_or(""))
-            .map(|workflow| columns(&workflow.rows))
+            .map(|workflow| columns(&workflow.rows.items))
             .unwrap_or_default();
         let waiting: BTreeSet<String> = self
             .work

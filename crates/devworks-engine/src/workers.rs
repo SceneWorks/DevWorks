@@ -6,6 +6,7 @@
 //! registration order. Every worker is signalled again when the remaining work stops, and every
 //! loop is joined within what is left of the one shutdown bound (past it, the task is aborted).
 
+use devworks_core::locks::{LockExt, RwLockExt};
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -125,7 +126,7 @@ impl Workers {
     pub(crate) async fn join(&self, deadline: Instant) -> Vec<&'static str> {
         let mut aborted = Vec::new();
         for entry in &self.entries {
-            let task = entry.task.lock().unwrap_or_else(|p| p.into_inner()).take();
+            let task = entry.task.locked().take();
             let Some(mut task) = task else { continue };
             if tokio::time::timeout_at(deadline, &mut task).await.is_err() {
                 task.abort();
@@ -186,14 +187,14 @@ impl Ticker {
         self.stop();
         let fence = self.fence.clone();
         let _ = tokio::task::spawn_blocking(move || {
-            *fence.write().unwrap_or_else(|p| p.into_inner()) = true;
+            *fence.write_locked() = true;
         })
         .await;
     }
     /// [`Self::drain`] for a synchronous caller (drop), also fencing jobs that have not begun.
     pub(crate) fn close(&self) {
         self.stop();
-        *self.fence.write().unwrap_or_else(|p| p.into_inner()) = true;
+        *self.fence.write_locked() = true;
     }
     /// Waits for a wake, a stop or `interval`.
     pub(crate) async fn wait(&self, interval: Duration) {
@@ -438,8 +439,7 @@ impl Worker for Loop {
     }
     fn run(self: Arc<Self>) -> WorkerFuture<'static> {
         self.body
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
+            .locked()
             .take()
             .unwrap_or_else(|| Box::pin(async {}))
     }

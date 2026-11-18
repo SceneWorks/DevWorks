@@ -54,6 +54,7 @@ pub use crate::providers::profiles;
 
 use crate::context::{InvocationContext, PrincipalKind};
 use crate::gateway::{AdmittedCommand, AdmittedQuery};
+use crate::locks::LockExt;
 use crate::operations::{OperationInput, router as ops};
 use crate::ports::http::{Entropy, HttpTransport, base64url};
 use crate::ports::router::{ConnectionDirectory, ConnectionState, ConnectionStatus};
@@ -703,7 +704,7 @@ impl ConnectionService {
         s
     }
     fn live(&self) -> std::sync::MutexGuard<'_, Live> {
-        self.live.lock().unwrap_or_else(|p| p.into_inner())
+        self.live.locked()
     }
     fn read<T>(
         &self,
@@ -1064,8 +1065,7 @@ impl ConnectionService {
 
     fn refresh_lock(&self, connection: &Id) -> Arc<Mutex<()>> {
         self.refresh_locks
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
+            .locked()
             .entry(connection.as_str().to_owned())
             .or_default()
             .clone()
@@ -1296,7 +1296,7 @@ impl ConnectionService {
         testing: bool,
     ) -> Result<Option<Access>, AccessError> {
         let lock = self.refresh_lock(&seen.id);
-        let _serialized = lock.lock().unwrap_or_else(|p| p.into_inner());
+        let _serialized = lock.locked();
         // Another caller may have refreshed while this one waited, and the connection may have
         // been disabled meanwhile: nothing is sent for a connection that no longer passes.
         let c = self
@@ -3647,7 +3647,7 @@ impl CommandHandler for ConnectionService {
         let Some(slot) = prepared.and_then(|p| p.get::<Arc<Mutex<Option<Prep>>>>()) else {
             return;
         };
-        let prep = slot.lock().unwrap_or_else(|p| p.into_inner()).take();
+        let prep = slot.locked().take();
         if let Some(prep) = prep {
             self.settle_prep(&prep, reply);
         }
@@ -3680,7 +3680,7 @@ impl CommandHandler for ConnectionService {
         let outcome = match command.input() {
             OperationInput::Router(ops::Input::Configure(i)) => {
                 let slot = command.prepared::<Arc<Mutex<Option<Prep>>>>();
-                let guard = slot.map(|s| s.lock().unwrap_or_else(|p| p.into_inner()));
+                let guard = slot.map(|s| s.locked());
                 let prep = guard.as_ref().and_then(|g| g.as_ref());
                 self.decide_action(tx, ctx, &i.action, prep)
             }

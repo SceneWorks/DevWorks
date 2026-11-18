@@ -9,6 +9,7 @@ use crate::chat::{
 };
 use crate::memory::{ChatPendingMemory, Memory, RemovedMemory, RouteMemory, SubmittedMemory};
 use crate::ops::{self, Failure};
+use crate::paged::Applied;
 use crate::project_purge::Live;
 use crate::route::Route;
 use crate::screen::{Cx, Effect, Screen, ScreenContext, ScreenId, controller};
@@ -175,7 +176,7 @@ impl Screen for Chat {
         self.routing.first_in_flight.retain(|id| !session(id));
         self.routing.pin_in_flight.retain(|id| !session(id));
         self.routing.status_asked.retain(|id, _| !session(id));
-        self.sessions.retain(|r| !session(r.id.as_str()));
+        self.sessions.items.retain(|r| !session(r.id.as_str()));
         self.drafts.retain(|id, _| !session(id));
         self.transcripts.retain(|id, _| !session(id));
         if self.selected.as_deref().is_some_and(session) {
@@ -362,7 +363,7 @@ impl Chat {
                 ctl.refresh_route_status();
             }
             // Catalog edits and membership changes made elsewhere reach the selectors too.
-            if ctl.chat.routing.catalog_load.is_none() {
+            if !ctl.chat.routing.catalog.loading() {
                 ctl.load_router_catalog();
             }
         }
@@ -504,10 +505,10 @@ impl Chat {
 
 impl ChatCtl<'_, '_> {
     fn ensure_conversation_loaded(&mut self) {
-        if !self.chat.sessions_loaded && !self.pending(&ChatSlot::SessionsList) {
+        if !self.chat.sessions.loaded && !self.pending(&ChatSlot::SessionsList) {
             self.load_sessions();
         }
-        if !self.chat.routing.catalog_loaded && self.chat.routing.catalog_load.is_none() {
+        if !self.chat.routing.catalog_loaded && !self.chat.routing.catalog.loading() {
             self.load_router_catalog();
         }
         if let Some(id) = self.chat.selected.clone()
@@ -519,12 +520,25 @@ impl ChatCtl<'_, '_> {
 
     fn load_sessions(&mut self) {
         self.chat.sessions_list_at = self.chat.session_mutations;
-        self.query(
+        // A re-read covers every page already shown (or asked for), so loaded older
+        // conversations, and a selection among them, survive it.
+        let fetch = self.chat.sessions.refresh();
+        self.send_sessions(fetch, "Loading conversations");
+    }
+    fn send_sessions(&mut self, fetch: crate::paged::Fetch, label: &str) {
+        self.cx.paged(
+            &mut self.chat.sessions,
+            fetch,
             ChatSlot::SessionsList,
-            "Loading conversations",
+            label,
             "sessions.list",
             ops::sessions_list,
         );
+    }
+    fn load_more_sessions(&mut self) {
+        if let Some(fetch) = self.chat.sessions.more_page() {
+            self.send_sessions(fetch, "Loading older conversations");
+        }
     }
 
     fn load_transcript(&mut self, id: &str) {
@@ -545,7 +559,7 @@ impl ChatCtl<'_, '_> {
             return;
         }
         self.chat.starting = Some(reason);
-        let n = self.chat.sessions.len() + 1;
+        let n = self.chat.sessions.items.len() + 1;
         let title = format!("Conversation {n}");
         self.command(
             ChatSlot::SessionStart,
@@ -568,7 +582,11 @@ impl ChatCtl<'_, '_> {
                 self.reask_route_status_of(key);
             }
         } else {
-            self.chat.routing.catalog_load = None;
+            // Nothing in flight is wanted any more: the next visible load starts afresh.
+            self.chat
+                .routing
+                .catalog
+                .abandon(self.chat.routing.catalog.generation());
         }
     }
 
@@ -577,16 +595,22 @@ impl ChatCtl<'_, '_> {
         if self.online().is_err() {
             return;
         }
-        let generation = self.chat.routing.begin_catalog_load();
-        if !self.query(
-            ChatSlot::RouterCatalog(generation),
+        // Every page is read before the shown catalog changes; a load still paging is replaced.
+        let fetch = self.chat.routing.catalog.reload_all();
+        self.send_catalog(fetch);
+    }
+    fn send_catalog(&mut self, fetch: crate::paged::Fetch) {
+        // Never left "loading" when nothing was submitted: the next visible load (or launch)
+        // starts it again.
+        let slot = ChatSlot::RouterCatalog(fetch.generation);
+        self.cx.paged(
+            &mut self.chat.routing.catalog,
+            fetch,
+            slot,
             "Loading models and tiers",
             "router.catalog",
-            |b| ops::router_catalog(b, None),
-        ) {
-            // Never left "loading": the next visible load (or launch) starts it again.
-            self.chat.routing.abandon_catalog_load(generation);
-        }
+            ops::router_catalog,
+        );
     }
 
     /// Asks the router about the active conversation's selection (and pin).
@@ -1090,12 +1114,13 @@ impl ChatCtl<'_, '_> {
             .selected
             .clone()
             .or_else(|| self.chat.restored_selection.take());
-        let exists = |id: &str| self.chat.sessions.iter().any(|s| s.id.as_str() == id);
+        let exists = |id: &str| self.chat.sessions.items.iter().any(|s| s.id.as_str() == id);
         let pick = match wanted {
             Some(id) if exists(&id) => Some(id),
             _ => self
                 .chat
                 .sessions
+                .items
                 .iter()
                 .filter(|s| !s.closed)
                 .max_by_key(|s| chat::last_activity(s))
@@ -1138,6 +1163,7 @@ impl ChatCtl<'_, '_> {
                 ChatAction::Remove(local) => self.remove_attachment(local),
                 ChatAction::OpenInstructions => self.cx.effects.push(Effect::OpenInstructions),
                 ChatAction::RetrySessions => self.load_sessions(),
+                ChatAction::MoreSessions => self.load_more_sessions(),
                 ChatAction::RetryTranscript => {
                     if let Some(id) = self.chat.selected.clone() {
                         self.load_transcript(&id);
@@ -1445,12 +1471,16 @@ impl ChatCtl<'_, '_> {
             {
                 self.load_sessions();
             }
-            (ChatSlot::SessionsList, Reply::Query(q)) => match ops::sessions(q) {
-                Ok((items, more)) => {
-                    self.chat.sessions = items;
-                    self.chat.sessions_more = more;
-                    self.chat.sessions_loaded = true;
-                    self.chat.sessions_error = None;
+            (ChatSlot::SessionsList, Reply::Query(q)) => match self
+                .chat
+                .sessions
+                .apply_current_unique(ops::sessions(q).map_err(|e| e.describe()), |s| {
+                    s.id.as_str().to_owned()
+                }) {
+                // Recency order moves between reads, so pages can overlap: a conversation
+                // listed twice shows once.
+                Applied::Continue(fetch) => self.send_sessions(fetch, "Loading conversations"),
+                Applied::Replaced | Applied::Appended => {
                     self.reconcile_selection();
                     // A waiting first route needs its session's record (its context epoch).
                     let waiting: Vec<String> =
@@ -1459,27 +1489,26 @@ impl ChatCtl<'_, '_> {
                         self.route_first(&key);
                     }
                 }
-                Err(e) => self.chat.sessions_error = Some(e.describe()),
+                _ => {}
             },
-            (ChatSlot::RouterCatalog(generation), Reply::Query(q)) => match ops::route_models(q) {
-                Ok((models, next)) => {
-                    if let crate::routing::CatalogPage::More(cursor) =
-                        self.chat.routing.catalog_page(generation, models, next)
-                        && !self.query(
-                            ChatSlot::RouterCatalog(generation),
-                            "Loading models and tiers",
-                            "router.catalog",
-                            move |b| ops::router_catalog(b, Some(&cursor)),
-                        )
-                    {
-                        self.chat.routing.abandon_catalog_load(generation);
+            (ChatSlot::RouterCatalog(generation), Reply::Query(q)) => {
+                let reply = ops::route_models(q)
+                    .map(|(items, next)| crate::paged::Page::new(items, next))
+                    .map_err(|e| format!("Named models are unavailable: {}", e.describe()));
+                let routing = &mut self.chat.routing;
+                match routing.catalog.apply(generation, reply) {
+                    Applied::Continue(fetch) => self.send_catalog(fetch),
+                    Applied::Replaced => {
+                        routing.catalog_loaded = true;
+                        routing.catalog_error = None;
                     }
+                    Applied::Failed => {
+                        routing.catalog_loaded = true;
+                        routing.catalog_error = routing.catalog.error.take();
+                    }
+                    Applied::Stale | Applied::Appended | Applied::Fenced => {}
                 }
-                Err(e) => self.chat.routing.catalog_failed(
-                    generation,
-                    format!("Named models are unavailable: {}", e.describe()),
-                ),
-            },
+            }
             (ChatSlot::RouteSession(id), Reply::Query(q)) => {
                 if let Ok(record) = ops::session_record(q) {
                     self.chat.upsert(record);

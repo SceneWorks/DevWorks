@@ -1,5 +1,6 @@
 use super::HelpService;
 use crate::fingerprint::sha256_hex;
+use crate::locks::RwLockExt;
 use crate::protocol::provider::Digest;
 use crate::protocol::records::HelpCapabilityMetadata;
 use crate::protocol::support::BoundedText;
@@ -14,10 +15,7 @@ impl HelpService {
             .revisions
             .last()
             .expect("qualified catalog revision");
-        let registered = self
-            .registered
-            .read()
-            .unwrap_or_else(|lock| lock.into_inner());
+        let registered = self.registered.read_locked();
         descriptor.modes.iter().map(|binding| {
             let input=serde_json::to_vec(&binding.input_schema(revision)).expect("registered schema serializes");
             let result=serde_json::to_vec(&descriptor.result_schema(revision)).expect("registered schema serializes");

@@ -1,4 +1,5 @@
 //! Native database source forms and structural exploration. All records come from SchemaService.
+use crate::paged::Paged;
 use devworks_core::protocol::records::*;
 use eframe::egui::{self, Ui};
 use serde_json::{Value, json};
@@ -8,18 +9,16 @@ pub struct DatabasesScreen {
     pub generated_key: Option<devworks_core::ports::secrets::Secret>,
     pub focus_object: bool,
     pub project: Option<String>,
-    pub loaded: bool,
-    pub loading: bool,
     pub busy: bool,
     pub sequence: u64,
-    pub connections: Vec<SchemaConnection>,
-    pub next: Option<String>,
+    /// The database sources shown.
+    pub connections: Paged<SchemaConnection>,
+    /// The sources a sync-all scan reads page by page; none of them is shown.
+    pub scan: Paged<SchemaConnection>,
     pub selected: Option<String>,
     pub draft: Option<Draft>,
-    pub objects: Vec<SchemaObject>,
-    pub object_next: Option<String>,
-    pub relations: Vec<SchemaRelation>,
-    pub relation_next: Option<String>,
+    pub objects: Paged<SchemaObject>,
+    pub relations: Paged<SchemaRelation>,
     pub selected_object: Option<SchemaObject>,
     pub view: Option<String>,
     pub read_pin: Option<String>,
@@ -36,13 +35,10 @@ pub struct DatabasesScreen {
     pub batch_remaining: std::collections::VecDeque<(String, i64)>,
     pub batch_submitted: usize,
     pub batch_failures: usize,
-    pub read_sequence: u64,
-    pub read_loading: bool,
     pub pending_read: Option<(String, ReadIntent)>,
     pub relation_ids: Vec<String>,
     /// The code that uses the object `code_object` (from `schemas.code_references`).
-    pub code_references: Vec<SchemaCodeReference>,
-    pub code_next: Option<String>,
+    pub code_references: Paged<SchemaCodeReference>,
     pub code_object: Option<String>,
 }
 #[derive(Clone)]
@@ -61,18 +57,36 @@ impl DatabasesScreen {
         self.read_pin = None;
         self.object_id = None;
         self.parent = None;
-        self.object_next = None;
-        self.relation_next = None;
         self.relation_ids.clear();
-        self.objects.clear();
-        self.relations.clear();
-        self.code_references.clear();
-        self.code_next = None;
+        self.objects.reset();
+        self.relations.reset();
+        self.code_references.reset();
         self.code_object = None;
         self.selected_object = None;
         self.pending_read = None;
-        self.read_loading = false;
-        self.read_sequence = self.read_sequence.wrapping_add(1);
+    }
+    /// A read of schema objects, relationships or code is waiting or under way.
+    pub fn read_loading(&self) -> bool {
+        self.pending_read.is_some()
+            || self.objects.loading()
+            || self.relations.loading()
+            || self.code_references.loading()
+    }
+    /// A read that waits for a fresh source capture is given up, and every read in flight with
+    /// it: their replies are refused.
+    pub fn stop_reads(&mut self) {
+        self.pending_read = None;
+        self.supersede_reads();
+    }
+    /// A new read supersedes every earlier one in flight: their replies are refused. A read
+    /// waiting for a capture stays: it is the one being started again.
+    pub fn supersede_reads(&mut self) {
+        let g = self.objects.generation();
+        self.objects.abandon(g);
+        let g = self.relations.generation();
+        self.relations.abandon(g);
+        let g = self.code_references.generation();
+        self.code_references.abandon(g);
     }
 }
 #[derive(serde::Serialize, serde::Deserialize)]
@@ -279,7 +293,7 @@ impl DatabasesScreen {
     pub fn source(&self) -> Option<&SchemaConnection> {
         self.selected
             .as_deref()
-            .and_then(|id| self.connections.iter().find(|c| c.id.as_str() == id))
+            .and_then(|id| self.connections.items.iter().find(|c| c.id.as_str() == id))
     }
     pub fn ui(
         &mut self,
@@ -577,7 +591,7 @@ impl DatabasesScreen {
             );
             self.kind = kind["kind"].as_str().unwrap_or("").into();
             ui.horizontal(|ui| {
-                if button_enabled(ui, "Search schema objects", online && !self.read_loading)
+                if button_enabled(ui, "Search schema objects", online && !self.read_loading())
                     .clicked()
                 {
                     actions.push(Action::Objects(false));
@@ -587,10 +601,10 @@ impl DatabasesScreen {
                     actions.push(Action::Objects(false));
                 }
             });
-            if self.read_loading {
+            if self.read_loading() {
                 ui.spinner();
             }
-            for object in &self.objects {
+            for object in &self.objects.items {
                 ui.scope_builder(
                     egui::UiBuilder::new()
                         .scope_id(ui.make_persistent_id(("schema-object", object.id.as_str()))),
@@ -604,14 +618,14 @@ impl DatabasesScreen {
                     },
                 );
             }
-            if self.object_next.is_some()
+            if self.objects.more()
                 && ui
                     .scope_builder(
                         egui::UiBuilder::new()
                             .scope_id(ui.make_persistent_id("schema-object-paging")),
                         |ui| {
                             ui.add_enabled(
-                                !self.read_loading,
+                                !self.read_loading(),
                                 egui::Button::new("More schema objects"),
                             )
                             .clicked()
@@ -721,7 +735,7 @@ impl DatabasesScreen {
                     ) && button_enabled(
                         ui,
                         "Find code using this object",
-                        online && !self.read_loading,
+                        online && !self.read_loading(),
                     )
                     .clicked()
                     {
@@ -739,13 +753,13 @@ impl DatabasesScreen {
         if button_enabled(
             ui,
             "Load database relationships",
-            online && !self.read_loading && source.current_view_id.is_some(),
+            online && !self.read_loading() && source.current_view_id.is_some(),
         )
         .clicked()
         {
             actions.push(Action::Relations(Vec::new(), false));
         }
-        for relation in &self.relations {
+        for relation in &self.relations.items {
             ui.horizontal_wrapped(|ui| {
                 ui.label(format!(
                     "{}{}",
@@ -758,6 +772,7 @@ impl DatabasesScreen {
                 ] {
                     let name = self
                         .objects
+                        .items
                         .iter()
                         .find(|o| &o.id == endpoint)
                         .map_or("Related schema object", |o| o.qualified_name.0.as_str());
@@ -770,7 +785,7 @@ impl DatabasesScreen {
                 }
             });
         }
-        if self.relation_next.is_some() && button(ui, "More schema relationships").clicked() {
+        if self.relations.more() && button(ui, "More schema relationships").clicked() {
             actions.push(Action::Relations(self.relation_ids.clone(), true));
         }
     }
@@ -779,10 +794,10 @@ impl DatabasesScreen {
     /// The code that uses the selected object, each use with its evidence.
     fn code_ui(&self, ui: &mut Ui, actions: &mut Vec<Action>) {
         ui.label(egui::RichText::new("Used by code").strong());
-        if self.code_references.is_empty() && !self.read_loading {
+        if self.code_references.items.is_empty() && !self.read_loading() {
             ui.label(NO_CODE_REFERENCES);
         }
-        for r in &self.code_references {
+        for r in &self.code_references.items {
             ui.horizontal_wrapped(|ui| {
                 ui.label(format!(
                     "{}:{} · {} {} · {}{} · {}",
@@ -805,7 +820,7 @@ impl DatabasesScreen {
         if let Some(id) = self
             .code_object
             .clone()
-            .filter(|_| self.code_next.is_some())
+            .filter(|_| self.code_references.more())
             && button(ui, "More code uses").clicked()
         {
             actions.push(Action::CodeReferences(id, true));
@@ -818,7 +833,7 @@ impl DatabasesScreen {
                 ui.horizontal_wrapped(|ui| {
                     if ui
                         .add_enabled(
-                            online && !self.loading,
+                            online && !self.connections.loading(),
                             egui::Button::new("Refresh databases"),
                         )
                         .clicked()
@@ -836,7 +851,7 @@ impl DatabasesScreen {
                     }
                     if ui
                         .add_enabled(
-                            online && !self.busy && !self.connections.is_empty(),
+                            online && !self.busy && !self.connections.items.is_empty(),
                             egui::Button::new("Sync all enabled sources"),
                         )
                         .clicked()
@@ -850,12 +865,12 @@ impl DatabasesScreen {
             },
         );
         ui.separator();
-        if self.loading {
+        if self.connections.loading() {
             ui.spinner();
-        } else if self.loaded && self.connections.is_empty() {
+        } else if self.connections.loaded && self.connections.items.is_empty() {
             ui.label("No database sources are visible in this scope.");
         }
-        for source in &self.connections {
+        for source in &self.connections.items {
             ui.scope_builder(
                 egui::UiBuilder::new()
                     .scope_id(ui.make_persistent_id(("database-source", source.id.as_str()))),
@@ -884,7 +899,7 @@ impl DatabasesScreen {
                 },
             );
         }
-        if self.next.is_some() && button(ui, "More database sources").clicked() {
+        if self.connections.more() && button(ui, "More database sources").clicked() {
             actions.push(Action::More);
         }
     }

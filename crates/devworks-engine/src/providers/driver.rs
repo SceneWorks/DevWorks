@@ -5,6 +5,7 @@ use super::{
     source::NativeProviderSource,
 };
 use crate::usage::UsageRuntime;
+use devworks_core::locks::LockExt;
 use devworks_core::{
     context::{InvocationContext, PrincipalKind},
     fingerprint::sha256_hex,
@@ -745,7 +746,7 @@ impl NativeProviders {
         let result = if matches!(accounting, DriveOutcome::AlreadyDispatched) {
             self.recorded_result(&request_id, &admission_key)?
         } else {
-            result.lock().unwrap_or_else(|p| p.into_inner()).clone()
+            result.locked().clone()
         };
         Ok(ProviderInvocation { accounting, result })
     }
@@ -1319,7 +1320,7 @@ impl OwnedInferenceSource for LazySource {
                     Ok(())
                 })
         }));
-        *self.shared.lock().unwrap_or_else(|p| p.into_inner()) = Some(prepared);
+        *self.shared.locked() = Some(prepared);
         let result = source.start_cancellable(attempt, cancellation);
         self.inner = Some(source);
         result
@@ -1356,11 +1357,7 @@ struct LazySink {
 impl LazySink {
     fn get(&mut self) -> Result<Option<&mut ProviderSink>, StorageError> {
         if self.inner.is_none()
-            && let Some(prepared) = self
-                .shared
-                .lock()
-                .unwrap_or_else(|p| p.into_inner())
-                .clone()
+            && let Some(prepared) = self.shared.locked().clone()
         {
             let embedding = match &self.request.input {
                 InferenceInput::Embedding {

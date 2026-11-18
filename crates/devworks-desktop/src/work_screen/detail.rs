@@ -5,13 +5,13 @@ use crate::theme;
 use crate::widgets::{self, Tone, chip};
 use crate::work_ops as wops;
 use devworks_core::operations::{OperationInput as In, features, tasks};
+use devworks_core::protocol::helpers::work::MAX_PREREQUISITES;
 use devworks_core::protocol::records::{
     ApprovalState, CriterionState, DependencyEdge, DependencyReplacement, FeaturePatch,
     FindingState, ReadinessDisposition, ReadinessFreshness, RequirementStatus, WorkKind,
     WorkRecord,
 };
 use devworks_core::protocol::{AssignmentId, Event, Id};
-use devworks_core::services::work::deps::MAX_PREREQUISITES;
 use eframe::egui::{self, RichText, Ui};
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -1073,9 +1073,12 @@ pub(crate) fn card_detail(
                         actions.push(Action::RefreshHistory(Some(w.id.as_str().to_owned())));
                     }
                 }
-                if feed.more
+                if feed.more()
                     && ui
-                        .add_enabled(!feed.loading, egui::Button::new("Load older card changes"))
+                        .add_enabled(
+                            !feed.loading(),
+                            egui::Button::new("Load older card changes"),
+                        )
                         .clicked()
                 {
                     actions.push(Action::OlderHistory(Some(w.id.as_str().to_owned())));
@@ -1166,7 +1169,7 @@ pub(crate) fn source_control(ui: &mut Ui, work: &WorkUi, root: &str, actions: &m
                                 );
                                 if let Some(branch) = &state.branch {
                                     if let Some(url) = link.repository_url.as_ref().and_then(|u| {
-                                        devworks_core::services::git::github::branch_url(
+                                        devworks_core::protocol::helpers::git::branch_url(
                                             &u.0, &branch.0,
                                         )
                                     }) {
@@ -1195,7 +1198,7 @@ pub(crate) fn source_control(ui: &mut Ui, work: &WorkUi, root: &str, actions: &m
                     if let Some(url) = &link.repository_url {
                         ui.hyperlink_to(
                             &branch.0,
-                            devworks_core::services::git::github::branch_url(&url.0, &branch.0)
+                            devworks_core::protocol::helpers::git::branch_url(&url.0, &branch.0)
                                 .unwrap_or_else(|| url.0.clone()),
                         );
                     } else {

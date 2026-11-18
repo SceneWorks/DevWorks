@@ -38,9 +38,12 @@ fn register(engine: &devworks_desktop::host::Engine, id: &str, name: &str) {
 }
 
 fn listed(backend: &dyn Backend, lifecycle: Option<&str>) -> Vec<ProjectRecord> {
-    ops::projects(backend.query("projects.list", &ops::projects_list(backend, lifecycle)))
-        .unwrap()
-        .0
+    ops::projects(backend.query(
+        "projects.list",
+        &ops::projects_list(backend, lifecycle, None),
+    ))
+    .unwrap()
+    .items
 }
 
 fn type_into(
@@ -191,10 +194,10 @@ fn a_project_is_created_changed_archived_and_deleted_through_the_shared_commands
     // Its repositories stay registered.
     let repos = ops::repositories(backend.query(
         "repositories.list",
-        &ops::repositories_list(&*backend, None),
+        &ops::repositories_list(&*backend, None, None),
     ))
     .unwrap()
-    .0;
+    .items;
     assert_eq!(repos.len(), 2);
     click(&mut h, Role::Button, "Deleted");
     assert!(has_text(&h, "Engine work 2"));

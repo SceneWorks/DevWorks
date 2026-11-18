@@ -24,6 +24,7 @@ use crate::runs::{RunGate, RunSettings, RunSupervisor};
 use crate::workers::{Commits, DrainAt, Loop, LoopState, Next, StopAt, Ticker, Workers};
 use devworks_core::context::InvocationContext;
 use devworks_core::gateway::{CommandOutcome, Gateway, PreparedReceive, QueryOutcome};
+use devworks_core::locks::{LockExt, RwLockExt};
 use devworks_core::ports::files::FileFault;
 use devworks_core::ports::os_notifications::{OsNotificationPermission, OsNotificationPort};
 use devworks_core::ports::process::{PowerPort, ProcessHost};
@@ -506,13 +507,13 @@ pub struct Runtime {
         Option<Result<devworks_core::services::instructions::SyncReport, StorageError>>,
     schemas: Option<Arc<devworks_core::services::schemas::SchemaService>>,
     /// The shutdown stage ([`ShutdownStage`] as a byte) for the progress surface; the fence
-    /// itself is `admission`.
+    /// itself is `admission_closed`.
     stage: std::sync::atomic::AtomicU8,
     /// The admission fence: ordinary commands hold it through admission and commit. A retained
     /// receive waits outside it with a registered shutdown token, then holds it for its final
     /// decision. Shutdown closes it exclusively and cancels waiting receives; no command commits
-    /// after the run-control quiescence snapshot.
-    admission: Arc<std::sync::RwLock<bool>>,
+    /// after the run-control quiescence snapshot. The value is `true` once the fence is closed.
+    admission_closed: Arc<std::sync::RwLock<bool>>,
     /// The command path (admission fence, gateway, post-commit wakeups) shared with the
     /// scheduler's native runs.
     admitter: Arc<Admitter>,
@@ -589,7 +590,7 @@ struct Engine {
     monitor: Arc<Monitor>,
     notifications: Option<Arc<OsNotificationSupervisor>>,
     evals: Arc<EvalSupervisor>,
-    admission: Arc<std::sync::RwLock<bool>>,
+    admission_closed: Arc<std::sync::RwLock<bool>>,
     admitter: Arc<Admitter>,
     scheduler: Arc<Scheduler>,
     resumes: Arc<ResumeDispatcher>,
@@ -1236,13 +1237,13 @@ async fn build(composition: Composition, core: CoreServices) -> Result<Engine, B
         eval_service,
         config.automatic_eval_suites.clone(),
     );
-    let admission = Arc::new(std::sync::RwLock::new(false));
+    let admission_closed = Arc::new(std::sync::RwLock::new(false));
     let admitter = Arc::new(Admitter {
         store: store.clone(),
         ids: ids.clone(),
         authority: authority.clone(),
         use_cases: use_cases.clone(),
-        admission: admission.clone(),
+        admission_closed: admission_closed.clone(),
         receive_waiters: Arc::new(Mutex::new(BTreeMap::new())),
         next_receive_waiter: AtomicU64::new(0),
         dispatcher: dispatcher.clone(),
@@ -1362,7 +1363,7 @@ async fn build(composition: Composition, core: CoreServices) -> Result<Engine, B
         monitor,
         notifications,
         evals,
-        admission,
+        admission_closed,
         admitter,
         scheduler,
         resumes,
@@ -1464,7 +1465,7 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
         monitor,
         notifications,
         evals,
-        admission,
+        admission_closed,
         admitter,
         scheduler,
         resumes,
@@ -1649,16 +1650,10 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
         #[cfg(any(test, feature = "test-support"))]
         let states = loop_states.clone();
         move |name: &'static str| {
-            registered
-                .lock()
-                .unwrap_or_else(|p| p.into_inner())
-                .push(name);
+            registered.locked().push(name);
             let state = LoopState::new();
             #[cfg(any(test, feature = "test-support"))]
-            states
-                .lock()
-                .unwrap_or_else(|p| p.into_inner())
-                .push(state.clone());
+            states.locked().push(state.clone());
             Commits::new(
                 stored.clone(),
                 delivered.clone(),
@@ -1741,7 +1736,7 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
                 let (usage, drained) = (drain.clone(), drained.clone());
                 async move {
                     let report = usage.drain_until(deadline).await;
-                    *drained.lock().unwrap_or_else(|p| p.into_inner()) = Some(report);
+                    *drained.locked() = Some(report);
                 }
             }),
         ),
@@ -1842,7 +1837,7 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
                         let (service, after) = (imports.clone(), after.clone());
                         let collection_wakeup = collection_wakeup.clone();
                         async move {
-                            let position = after.lock().unwrap_or_else(|p| p.into_inner()).clone();
+                            let position = after.locked().clone();
                             if let Ok(Ok(pass)) = tokio::task::spawn_blocking(move || {
                                 service.cleanup_terminal_page(position)
                             })
@@ -1853,7 +1848,7 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
                                 }
                                 // A full page continues with the next one at once.
                                 let more = pass.next.is_some();
-                                *after.lock().unwrap_or_else(|p| p.into_inner()) = pass.next;
+                                *after.locked() = pass.next;
                                 return more;
                             }
                             false
@@ -2179,7 +2174,7 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
         instructions,
         schemas,
         stage: std::sync::atomic::AtomicU8::new(ShutdownStage::Open as u8),
-        admission,
+        admission_closed,
         admitter,
         jobs,
         scheduler,
@@ -2314,17 +2309,13 @@ impl Runtime {
         let (stored, delivered) = (*stored.borrow(), *delivered.borrow());
         self.polling_states
             .states
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
+            .locked()
             .iter()
             .all(|state| state.caught_up(stored, delivered))
     }
     /// Names of the background loops that wait on store commits instead of a private timer.
     pub fn polling_loops(&self) -> Vec<&'static str> {
-        self.polling_loops
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .clone()
+        self.polling_loops.locked().clone()
     }
     /// What boot recovery established.
     pub fn report(&self) -> &BootReport {
@@ -3024,17 +3015,12 @@ impl Runtime {
         // refresh and notifications drain next.
         self.workers.drain(DrainAt::Readmission, deadline).await;
         self.workers.drain(DrainAt::BeforeFence, deadline).await;
-        let inference_shutdown = self
-            .usage_drain
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .take()
-            .unwrap_or_else(|| {
-                Ok(crate::usage::UsageDrain {
-                    unclosed: Vec::new(),
-                    pending_preparations: 0,
-                })
-            });
+        let inference_shutdown = self.usage_drain.locked().take().unwrap_or_else(|| {
+            Ok(crate::usage::UsageDrain {
+                unclosed: Vec::new(),
+                pending_preparations: 0,
+            })
+        });
         let left = || deadline.saturating_duration_since(tokio::time::Instant::now());
         // The diagnostics monitor is only *signalled* here, and joined after the run-control
         // transition below: a pass in progress (a full integrity check of a large store, say)
@@ -3049,15 +3035,11 @@ impl Runtime {
         // async thread) for every
         // command in admission or commit, so none commits after the quiescence snapshot.
         self.enter(ShutdownStage::DrainingAdmission);
-        let admission = self.admission.clone();
+        let admission_closed = self.admission_closed.clone();
         let receive_waiters = self.admitter.receive_waiters.clone();
         let _ = tokio::task::spawn_blocking(move || {
-            *admission.write().unwrap_or_else(|p| p.into_inner()) = true;
-            for token in receive_waiters
-                .lock()
-                .unwrap_or_else(|p| p.into_inner())
-                .values()
-            {
+            *admission_closed.write_locked() = true;
+            for token in receive_waiters.locked().values() {
                 token.cancel();
             }
         })
@@ -3313,7 +3295,7 @@ pub(crate) struct Admitter {
     ids: Arc<dyn IdSource>,
     authority: Arc<dyn AuthorityPort>,
     use_cases: UseCases,
-    admission: Arc<std::sync::RwLock<bool>>,
+    admission_closed: Arc<std::sync::RwLock<bool>>,
     receive_waiters: Arc<Mutex<BTreeMap<u64, Cancellation>>>,
     next_receive_waiter: AtomicU64,
     dispatcher: Dispatcher,
@@ -3396,10 +3378,7 @@ struct ReceiveWaitGuard {
 }
 impl Drop for ReceiveWaitGuard {
     fn drop(&mut self) {
-        self.waiters
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .remove(&self.id);
+        self.waiters.locked().remove(&self.id);
     }
 }
 impl Admitter {
@@ -3431,8 +3410,8 @@ impl Admitter {
             // for a person or the host: discovery then answers from a fresh scan of the
             // invocation's sections. Other readers answer from the recorded registrations, which
             // the supervisor's background discovery keeps current. Shutdown refuses the scan.
-            let open = self.admission.read().unwrap_or_else(|p| p.into_inner());
-            if *open {
+            let closed = self.admission_closed.read_locked();
+            if *closed {
                 return outcome;
             }
             let env = ix.env().clone();
@@ -3447,7 +3426,7 @@ impl Admitter {
             let scan =
                 devworks_core::services::indexing::discover::scan(&env, ctx, None, &cancelled);
             devworks_core::services::indexing::discover::log_scan(&env, &scan);
-            drop(open);
+            drop(closed);
             return self.use_cases.query_with(
                 &self.gateway(),
                 ctx,
@@ -3509,18 +3488,15 @@ impl Admitter {
                 .get_or_insert_with(Cancellation::new)
                 .clone();
             let wait_guard = {
-                let open = self.admission.read().unwrap_or_else(|p| p.into_inner());
-                if *open {
+                let closed = self.admission_closed.read_locked();
+                if *closed {
                     return Some(closing_reply(
                         raw,
                         self.ids.next_id(devworks_core::ports::IdKind::Correlation),
                     ));
                 }
                 let id = self.next_receive_waiter.fetch_add(1, Ordering::Relaxed);
-                self.receive_waiters
-                    .lock()
-                    .unwrap_or_else(|p| p.into_inner())
-                    .insert(id, token);
+                self.receive_waiters.locked().insert(id, token);
                 ReceiveWaitGuard {
                     id,
                     waiters: self.receive_waiters.clone(),
@@ -3532,8 +3508,8 @@ impl Admitter {
             drop(wait_guard);
             let mut prepared = Some(prepared);
             fence(&mut || {
-                let open = self.admission.read().unwrap_or_else(|p| p.into_inner());
-                if *open {
+                let closed = self.admission_closed.read_locked();
+                if *closed {
                     return closing_reply(
                         raw,
                         self.ids.next_id(devworks_core::ports::IdKind::Correlation),
@@ -3549,8 +3525,8 @@ impl Admitter {
         } else {
             // Ordinary commands keep the fences through preparation and commit.
             fence(&mut || {
-                let open = self.admission.read().unwrap_or_else(|p| p.into_inner());
-                if *open {
+                let closed = self.admission_closed.read_locked();
+                if *closed {
                     return closing_reply(
                         raw,
                         self.ids.next_id(devworks_core::ports::IdKind::Correlation),
@@ -3577,18 +3553,15 @@ impl Admitter {
             .get_or_insert_with(Cancellation::new)
             .clone();
         let guard = {
-            let open = self.admission.read().unwrap_or_else(|p| p.into_inner());
-            if *open {
+            let closed = self.admission_closed.read_locked();
+            if *closed {
                 return ReceiveStart::Answered(closing_reply(
                     raw,
                     self.ids.next_id(devworks_core::ports::IdKind::Correlation),
                 ));
             }
             let id = self.next_receive_waiter.fetch_add(1, Ordering::Relaxed);
-            self.receive_waiters
-                .lock()
-                .unwrap_or_else(|p| p.into_inner())
-                .insert(id, token);
+            self.receive_waiters.locked().insert(id, token);
             ReceiveWaitGuard {
                 id,
                 waiters: self.receive_waiters.clone(),
@@ -3654,8 +3627,8 @@ impl Admitter {
         raw: &[u8],
         prepared: Result<PreparedReceive, CommandOutcome>,
     ) -> CommandOutcome {
-        let open = self.admission.read().unwrap_or_else(|p| p.into_inner());
-        let outcome = if *open {
+        let closed = self.admission_closed.read_locked();
+        let outcome = if *closed {
             closing_reply(
                 raw,
                 self.ids.next_id(devworks_core::ports::IdKind::Correlation),
@@ -3668,7 +3641,7 @@ impl Admitter {
                 Err(outcome) => outcome,
             }
         };
-        drop(open);
+        drop(closed);
         self.after_command("agents.receive", raw, &outcome, true);
         outcome
     }

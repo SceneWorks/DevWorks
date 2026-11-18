@@ -21,6 +21,7 @@
 //! every answer and connects only to a checked address, so an answer that changes after the
 //! check (DNS rebinding) is never reached.
 use super::cdp::RequestGate;
+use crate::locks::LockExt;
 use crate::ports::browser::ConnectPolicy;
 use crate::ports::storage::{ApplicationStore, ReadOptions, read_snapshot};
 use crate::ports::web::Resolver;
@@ -211,11 +212,7 @@ impl BrowserEgress {
     fn resolve(&self, host: &str, port: u16) -> Result<Vec<IpAddr>, String> {
         let key = (host.to_owned(), port);
         let now = Instant::now();
-        if let Some((at, addrs)) = self
-            .answers
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .get(&key)
+        if let Some((at, addrs)) = self.answers.locked().get(&key)
             && now.duration_since(*at) < ANSWER_TTL
         {
             return Ok(addrs.clone());
@@ -226,7 +223,7 @@ impl BrowserEgress {
         let addrs = resolver
             .resolve(host, port, now + RESOLVE_BOUND, &[])
             .map_err(|f| f.reason().to_owned())?;
-        let mut answers = self.answers.lock().unwrap_or_else(|p| p.into_inner());
+        let mut answers = self.answers.locked();
         if answers.len() >= KEPT_ANSWERS {
             answers.retain(|_, (at, _)| now.duration_since(*at) < ANSWER_TTL);
             if answers.len() >= KEPT_ANSWERS {

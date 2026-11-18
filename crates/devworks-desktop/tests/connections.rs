@@ -149,6 +149,7 @@ fn settings_adds_tests_and_routes_an_api_key_connection_without_exposing_the_key
         .settings
         .connections
         .catalog
+        .items
         .iter()
         .find(|m| m.id.as_str() == "sol-latest")
         .unwrap();
@@ -738,6 +739,7 @@ fn a_completed_background_inventory_updates_settings_and_the_shared_selected_ali
             .settings
             .connections
             .catalog
+            .items
             .iter()
             .find(|m| m.id.as_str() == "sol-latest")
             .unwrap()
@@ -753,6 +755,7 @@ fn a_completed_background_inventory_updates_settings_and_the_shared_selected_ali
             s.settings
                 .connections
                 .catalog
+                .items
                 .iter()
                 .any(|m| m.id.as_str() == "sol-latest" && m.available == Some(true))
         },

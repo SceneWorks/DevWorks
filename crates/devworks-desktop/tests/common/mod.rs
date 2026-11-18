@@ -3,6 +3,7 @@
 //! `egui_kittest`, and scripted native dialogs. No window, GPU, inference or network.
 #![allow(dead_code)]
 use devworks_adapters::storage::sqlite::{DATABASE_FILE, seed_migrated_store};
+use devworks_core::locks::LockExt;
 use devworks_core::ports::{IdKind, IdSource};
 use devworks_desktop::backend::Backend;
 use devworks_desktop::host::{DesktopConfig, Engine};
@@ -30,7 +31,7 @@ static NATIVE_CASES: (Mutex<usize>, std::sync::Condvar) =
 const NATIVE_CASE_LIMIT: usize = 2;
 
 pub fn native_runtime_case() -> NativeRuntimeCase {
-    let mut active = NATIVE_CASES.0.lock().unwrap_or_else(|p| p.into_inner());
+    let mut active = NATIVE_CASES.0.locked();
     while *active >= NATIVE_CASE_LIMIT {
         active = NATIVE_CASES
             .1
@@ -42,7 +43,7 @@ pub fn native_runtime_case() -> NativeRuntimeCase {
 }
 impl Drop for NativeRuntimeCase {
     fn drop(&mut self) {
-        let mut active = NATIVE_CASES.0.lock().unwrap_or_else(|p| p.into_inner());
+        let mut active = NATIVE_CASES.0.locked();
         *active -= 1;
         NATIVE_CASES.1.notify_one();
     }
@@ -834,14 +835,14 @@ pub fn step_until_progressing(
             h.state().route(),
             h.state().help.scope,
             h.state().help.selected,
-            h.state().help.loading,
+            h.state().help.topics.loading(),
             h.state().help.reading,
-            h.state().help.error,
+            h.state().help.topics.error,
             h.state().help.read_error,
             h.state().help.notice,
             h.state().databases.selected,
             h.state().databases.busy,
-            h.state().databases.loading,
+            h.state().databases.connections.loading(),
             h.state().databases.error,
             h.state().databases.notice,
             h.state().databases.connections
@@ -855,10 +856,10 @@ pub fn step_until_progressing(
 pub fn listed_sessions(backend: &dyn Backend) -> Vec<String> {
     devworks_desktop::ops::sessions(backend.query(
         "sessions.list",
-        &devworks_desktop::ops::sessions_list(backend),
+        &devworks_desktop::ops::sessions_list(backend, None),
     ))
     .unwrap()
-    .0
+    .items
     .into_iter()
     .map(|s| s.id.as_str().to_owned())
     .collect()

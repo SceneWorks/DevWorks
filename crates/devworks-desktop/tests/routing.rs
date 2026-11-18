@@ -674,14 +674,14 @@ fn the_selectors_gather_every_catalog_page() {
     drop(db);
     let mut h = harness(shell(&engine, &root, Script::default()), 1440.0, 900.0);
     settle(&mut h);
-    let catalog = &h.state().chat.routing.catalog;
+    let catalog = &h.state().chat.routing.catalog.items;
     assert_eq!(
         catalog.len(),
         267,
         "every page, including the eight logical aliases"
     );
     assert_eq!(catalog.last().unwrap().id.as_str(), "custom-249");
-    assert!(h.state().chat.routing.catalog_load.is_none());
+    assert!(!h.state().chat.routing.catalog.loading());
     let routes = options(&mut h, ROUTE_LABEL);
     assert!(
         routes

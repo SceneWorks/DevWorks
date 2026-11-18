@@ -7,6 +7,7 @@
 //! it too, and every native mechanism also ends with the process. The status separates the
 //! configured value from whether the OS request is effective or unavailable, for Settings
 //! ([`KeepAwake::health`]). It never claims to prevent explicit sleep, lid close or shutdown.
+use crate::locks::LockExt;
 use crate::ports::process::{PowerAssertion, PowerPort, PowerRequest};
 use crate::ports::storage::{ConfigScope, ConfigurationRead, StorageError};
 use crate::settings::catalog::descriptor;
@@ -68,10 +69,6 @@ impl KeepAwake {
         }
     }
 
-    fn lock(&self) -> std::sync::MutexGuard<'_, State> {
-        self.state.lock().unwrap_or_else(|p| p.into_inner())
-    }
-
     /// Makes the held request match the configured value: none when disabled; when enabled, the
     /// held request if it still works, otherwise a new one.
     fn settle(&self, st: &mut State) -> KeepAwakeStatus {
@@ -113,7 +110,7 @@ impl KeepAwake {
     /// Applies the effective setting: requests prevention of idle sleep when enabled (keeping a
     /// working request), releases it when disabled.
     pub fn apply(&self, enabled: bool) -> KeepAwakeStatus {
-        let mut st = self.lock();
+        let mut st = self.state.locked();
         st.enabled = enabled;
         self.settle(&mut st)
     }
@@ -126,7 +123,7 @@ impl KeepAwake {
     /// The current status, re-checking (and, while enabled, re-requesting) the OS request. It
     /// never requests anything while the setting is off.
     pub fn status(&self) -> KeepAwakeStatus {
-        let mut st = self.lock();
+        let mut st = self.state.locked();
         if !st.enabled {
             return KeepAwakeStatus::Off;
         }

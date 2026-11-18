@@ -61,7 +61,7 @@ fn native_refresh_gesture_survives_same_frame_catalog_revalidation_hint() {
         .click();
     h.step();
     assert!(
-        h.state().usage.prices_loading,
+        h.state().usage.prices.loading(),
         "actual background revalidation starts in the click frame"
     );
     let after = h
@@ -161,7 +161,7 @@ fn native_apply_price_filters_survives_same_frame_catalog_revalidation_hint() {
         .click();
     h.step();
     assert!(
-        h.state().usage.prices_loading,
+        h.state().usage.prices.loading(),
         "background catalog revalidation starts in the click frame"
     );
     assert!(
@@ -185,8 +185,7 @@ fn native_apply_price_filters_survives_same_frame_catalog_revalidation_hint() {
     assert!(
         h.state()
             .usage
-            .prices
-            .as_ref()
+            .price_view()
             .unwrap()
             .override_history
             .is_some(),

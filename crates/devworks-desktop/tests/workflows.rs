@@ -464,3 +464,64 @@ fn native_type_and_label_editing_preserves_unset_and_uses_selection_filters() {
     assert!(current.task_type.is_none());
     assert!(current.labels.unwrap().0.is_empty());
 }
+
+/// A workflow snapshot whose pages disagree on the workflow revision is refused as incomplete,
+/// and the rows already shown stay (the editor is not blanked).
+#[test]
+fn a_mixed_revision_workflow_snapshot_keeps_the_rows_shown() {
+    let root = Root::new("workflow-mixed-revision");
+    let engine = start(&root);
+    let backend = engine.backend();
+    let p = project(&*backend, "Mixed");
+    let spy = LoseAcks::over(backend, "none", 0);
+    let mut h = harness(
+        shell_with(Ok(spy.clone()), &root, Script::default(), None),
+        1800.0,
+        1300.0,
+    );
+    settle(&mut h);
+    h.state_mut().select_project(Some(p.clone()));
+    h.state_mut().navigate(Route::Issues);
+    settle(&mut h);
+    let shown = h.state().work.workflows[&p].rows.items.len();
+    assert!(shown >= 2 && h.state().work.workflows[&p].rows.error.is_none());
+    spy.rewrite_queries(|reply| {
+        fn visit(value: &mut Value) {
+            match value {
+                Value::Object(map) => {
+                    for child in map.values_mut() {
+                        visit(child);
+                    }
+                }
+                Value::Array(items) => {
+                    if items.len() >= 2 && items.iter().all(|i| i.get("workflowRevision").is_some())
+                    {
+                        let last = items.last_mut().unwrap();
+                        last["workflowRevision"] = json!("99999");
+                    }
+                    for child in items {
+                        visit(child);
+                    }
+                }
+                _ => {}
+            }
+        }
+        visit(reply);
+    });
+    // Reading the project's work again reads its workflow again.
+    h.state_mut().select_project(None);
+    h.state_mut().select_project(Some(p.clone()));
+    settle(&mut h);
+    let workflow = &h.state().work.workflows[&p];
+    assert!(
+        workflow
+            .rows
+            .error
+            .as_deref()
+            .is_some_and(|e| e.contains("incomplete")),
+        "{:?}",
+        workflow.rows.error
+    );
+    assert_eq!(workflow.rows.items.len(), shown, "the rows shown stay");
+    assert!(workflow.rows.loaded);
+}

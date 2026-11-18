@@ -10,10 +10,11 @@
 //! overwrites fresher state. [`Client::wait_idle`] is the synchronization point tests use
 //! (a condition variable, never a sleep).
 use devworks_core::gateway::{CommandOutcome, QueryOutcome};
+use devworks_core::locks::LockExt;
 use devworks_core::ports::secrets::Secret;
 use devworks_core::protocol::CommandReply;
 use devworks_core::protocol::Id;
-use devworks_core::services::desktop::ControlEpoch;
+use devworks_core::protocol::helpers::ControlEpoch;
 use devworks_core::settings::view::Health;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -216,7 +217,7 @@ pub trait Backend: Send + Sync {
     }
     /// The native maintenance capabilities a scheduled job may run in this build (only those
     /// with a registered use case; none are advertised otherwise).
-    fn native_job_capabilities(&self) -> Vec<devworks_core::services::jobs::NativeCapability> {
+    fn native_job_capabilities(&self) -> Vec<devworks_core::protocol::helpers::NativeCapability> {
         Vec::new()
     }
     /// Human-only retained AES key utility. The returned value is transient and redacted.
@@ -611,7 +612,7 @@ struct Shared {
 struct Alive(Arc<Shared>);
 impl Drop for Alive {
     fn drop(&mut self) {
-        let mut n = self.0.alive.lock().unwrap_or_else(|p| p.into_inner());
+        let mut n = self.0.alive.locked();
         *n = n.saturating_sub(1);
         self.0.exited.notify_all();
     }
@@ -683,14 +684,14 @@ impl Client {
                 shared.clone(),
                 waker.clone(),
             );
-            *shared.alive.lock().unwrap_or_else(|p| p.into_inner()) += 1;
+            *shared.alive.locked() += 1;
             let guard = Alive(shared.clone());
             let spawned = std::thread::Builder::new()
                 .name(format!("devworks-ui-{pool}-{n}"))
                 .spawn(move || {
                     let _alive = guard;
                     loop {
-                        let next = rx.lock().unwrap_or_else(|p| p.into_inner()).recv();
+                        let next = rx.locked().recv();
                         let Ok((ticket, job)) = next else { return };
                         let reply =
                             std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| job(&*be)))
@@ -699,11 +700,11 @@ impl Client {
                                 });
                         let _ = tx.send((ticket, reply));
                         {
-                            let mut n = sh.in_flight.lock().unwrap_or_else(|p| p.into_inner());
+                            let mut n = sh.in_flight.locked();
                             *n = n.saturating_sub(1);
                             sh.idle.notify_all();
                         }
-                        if let Some(w) = wk.lock().unwrap_or_else(|p| p.into_inner()).as_ref() {
+                        if let Some(w) = wk.locked().as_ref() {
                             w();
                         }
                     }
@@ -747,7 +748,7 @@ impl Client {
 
     /// Registers the frame-loop waker for replies and runtime hints.
     pub fn set_waker(&self, make: impl Fn() -> Waker) {
-        *self.waker.lock().unwrap_or_else(|p| p.into_inner()) = Some(make());
+        *self.waker.locked() = Some(make());
         self.backend.set_waker(make());
     }
 
@@ -792,11 +793,7 @@ impl Client {
             command,
             query: None,
         });
-        *self
-            .shared
-            .in_flight
-            .lock()
-            .unwrap_or_else(|p| p.into_inner()) += 1;
+        *self.shared.in_flight.locked() += 1;
         let queue = if network {
             &self.network_jobs
         } else {
@@ -804,11 +801,7 @@ impl Client {
         };
         if queue.send((ticket, job)).is_err() {
             // No worker could start: report the request as failed rather than leave it pending.
-            let mut n = self
-                .shared
-                .in_flight
-                .lock()
-                .unwrap_or_else(|p| p.into_inner());
+            let mut n = self.shared.in_flight.locked();
             *n = n.saturating_sub(1);
             let _ = self.reply_tx.send((
                 ticket,
@@ -1148,11 +1141,7 @@ impl Client {
     /// passes. Returns whether it became idle.
     pub fn wait_idle(&self, bound: Duration) -> bool {
         let deadline = Instant::now() + bound;
-        let mut n = self
-            .shared
-            .in_flight
-            .lock()
-            .unwrap_or_else(|p| p.into_inner());
+        let mut n = self.shared.in_flight.locked();
         while *n > 0 {
             let left = deadline.saturating_duration_since(Instant::now());
             if left.is_zero() {
@@ -1179,7 +1168,7 @@ impl Drop for Client {
         drop(std::mem::replace(&mut self.network_jobs, closed));
         // Wait (bounded) for every worker to end; join only then, so no join can block.
         let deadline = Instant::now() + self.join_bound;
-        let mut alive = self.shared.alive.lock().unwrap_or_else(|p| p.into_inner());
+        let mut alive = self.shared.alive.locked();
         while *alive > 0 {
             let left = deadline.saturating_duration_since(Instant::now());
             if left.is_zero() {

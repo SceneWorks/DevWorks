@@ -1,7 +1,9 @@
 //! Virtualization for large histories (UI-07): only blocks intersecting the viewport are laid
 //! out. Uniform rows use egui's `show_rows`; variable-height blocks (transcript messages) use
 //! [`Blocks`], which remembers each block's measured height and estimates unmeasured ones, so
-//! a ten-thousand-entry transcript costs the same per frame as a short one.
+//! a ten-thousand-entry transcript lays out only what is on screen. Each frame still adds up every
+//! block's cached height to size the scroll area, one pass over a list of numbers that grows
+//! with the transcript, so the cost is linear in the count but small per block.
 //!
 //! [`Scrolls`] records every list's vertical offset by its stable salt, so a pane returns where
 //! it was after navigation and after a restart (pane restoration).

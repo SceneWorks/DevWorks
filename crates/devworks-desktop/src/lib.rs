@@ -68,6 +68,7 @@ pub mod memory;
 pub mod native_notifications;
 pub mod notifications;
 pub mod ops;
+pub mod paged;
 pub mod placeholder_screen;
 pub mod platform;
 pub mod project_purge;

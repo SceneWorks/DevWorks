@@ -1,5 +1,6 @@
 //! The dedicated convention manager. All records and transitions come from shared handlers;
 //! this module retains only native selection, source pages and independent authoring drafts.
+use crate::paged::Paged;
 use crate::widgets::{self, Tone};
 use devworks_core::protocol::{data::DataScope, records::*};
 use eframe::egui::{self, RichText, Ui};
@@ -176,9 +177,10 @@ pub struct MoveDraft {
     pub scope: Scope,
     pub parent: Option<String>,
     pub order: String,
-    pub choices: Vec<ConventionRecord>,
-    pub scope_revision: Option<i64>,
-    pub next: Option<String>,
+    /// The destination's parents, fenced by the destination's scope revision.
+    pub choices: Paged<ConventionRecord>,
+    /// The draft's change token: it moves with every edit, and a command reply must carry the
+    /// token it was sent with. (Not a list's request generation.)
     pub generation: u64,
 }
 impl MoveDraft {
@@ -189,25 +191,21 @@ impl MoveDraft {
             scope: Scope::of(&record.scope),
             parent: record.parent_id.as_ref().map(|id| id.as_str().into()),
             order: record.sort_order.0.clone(),
-            choices: vec![],
-            scope_revision: None,
-            next: None,
+            choices: Paged::default(),
             generation: 0,
         }
     }
 }
 #[derive(Default)]
 pub struct ScopeState {
-    pub items: Vec<ConventionRecord>,
+    /// The listed conventions: a listing or search reads the first page and each More page.
+    /// Its fence is the scope revision the rows were read at. Search hits (beside the rows) and
+    /// the retrieval report follow the same pages in the fields below.
+    pub list: Paged<ConventionRecord>,
     pub hits: Vec<ConventionSearchHit>,
-    pub listing: bool,
     pub available: bool,
-    pub loaded: bool,
-    pub list_error: Option<String>,
-    pub next: Option<String>,
     pub scope_revision: Option<i64>,
     pub source_scope_revision: Option<i64>,
-    pub list_generation: u64,
     pub query_snapshot: Option<devworks_core::operations::OperationInput>,
     pub pending_listing: Option<(u64, devworks_core::operations::OperationInput)>,
     pub search_recovery: Option<crate::conventions_ops::SearchRecovery>,
@@ -230,16 +228,10 @@ pub struct ScopeState {
     pub new_draft: Option<Draft>,
     pub drafts: BTreeMap<String, Draft>,
     pub detail_tab: usize,
-    pub versions: Vec<ConventionRecord>,
-    pub version_next: Option<String>,
-    pub version_loading: bool,
-    pub version_generation: u64,
-    pub version_scope_revision: Option<i64>,
-    pub resources: Vec<ConventionResourceRecord>,
-    pub resource_next: Option<String>,
-    pub resource_loading: bool,
-    pub resource_generation: u64,
-    pub resource_scope_revision: Option<i64>,
+    /// The selected convention's versions (fenced by their scope revision).
+    pub versions: Paged<ConventionRecord>,
+    /// Its attachments (mode Attachments), fenced by their scope revision.
+    pub resources: Paged<ConventionResourceRecord>,
     pub resource_query_snapshot: Option<devworks_core::operations::OperationInput>,
     pub operation_ids: Vec<String>,
     pub operation_input: String,
@@ -250,7 +242,12 @@ pub struct ScopeState {
     pub transfer: Option<String>,
     pub move_drafts: BTreeMap<String, MoveDraft>,
     pub resource_mode: usize,
-    pub resource_catalog: Vec<ConventionRecord>,
+    /// The document catalog (mode Document catalog), fenced by its scope revision.
+    pub resource_catalog: Paged<ConventionRecord>,
+    /// The exact root document read (mode Exact root document): one document, so it has no
+    /// rows, only the request in flight. Its request generations are kept apart from the
+    /// lists' (`separate`), so the one slot can tell whose reply it is.
+    pub resource_read: Paged<()>,
     pub resource_root_slug: String,
     pub resource_document: Option<ConventionReadView>,
     pub resource_document_cursors: Vec<Option<String>>,
@@ -262,6 +259,10 @@ pub struct ScopeState {
     pub confirm_delete: Option<Delete>,
 }
 impl ScopeState {
+    /// A resource, catalog or document read is in flight.
+    pub fn resources_loading(&self) -> bool {
+        self.resources.loading() || self.resource_catalog.loading() || self.resource_read.loading()
+    }
     pub fn draft(&self) -> Option<&Draft> {
         match self.editor.as_ref()? {
             Editor::New => self.new_draft.as_ref(),
@@ -484,7 +485,7 @@ impl ConventionsScreen {
                     }
                     if ui
                         .add_enabled(
-                            online && !s.listing,
+                            online && !s.list.loading(),
                             egui::Button::new("Refresh conventions"),
                         )
                         .clicked()
@@ -519,7 +520,7 @@ impl ConventionsScreen {
                 if let Some((tone, message)) = &s.notice {
                     widgets::chip(ui, message, *tone);
                 }
-                if let Some(error) = &s.list_error {
+                if let Some(error) = &s.list.error {
                     widgets::chip(ui, error, Tone::Attention);
                 }
                 if let Some(transfer) = &s.transfer {
@@ -586,7 +587,7 @@ fn browse(
     ui.horizontal_wrapped(|ui| {
         if ui
             .add_enabled(
-                online && !s.listing && s.search_recovery.is_none(),
+                online && !s.list.loading() && s.search_recovery.is_none(),
                 egui::Button::new("Search conventions"),
             )
             .clicked()
@@ -595,7 +596,7 @@ fn browse(
         }
         if ui
             .add_enabled(
-                online && !s.listing,
+                online && !s.list.loading(),
                 egui::Button::new("Browse conventions"),
             )
             .clicked()
@@ -659,7 +660,7 @@ fn browse(
     if s.search_recovery.is_some()
         && ui
             .add_enabled(
-                online && s.active_search.is_none() && !s.listing,
+                online && s.active_search.is_none() && !s.list.loading(),
                 egui::Button::new("Start a new search"),
             )
             .clicked()
@@ -696,10 +697,10 @@ fn browse(
         field(ui, "Search result limit", &mut s.top_k);
         labels(ui, &mut s.applicability, "Applicability filter");
     });
-    if s.listing {
+    if s.list.loading() {
         ui.spinner();
     }
-    if s.loaded && s.items.is_empty() && s.hits.is_empty() {
+    if s.list.loaded && s.list.items.is_empty() && s.hits.is_empty() {
         ui.label("No conventions matched this scope and filter.");
     }
     if let Some(retrieval) = &s.retrieval {
@@ -761,7 +762,7 @@ fn browse(
             });
         }
     } else {
-        for record in &s.items {
+        for record in &s.list.items {
             ui.push_id(record.id.as_str(), |ui| {
                 if ui.button(&record.title.0).clicked() {
                     a.push(Action::Read(Target {
@@ -787,7 +788,8 @@ fn browse(
                         ui,
                         format!(
                             "Within {}",
-                            s.items
+                            s.list
+                                .items
                                 .iter()
                                 .find(|row| &row.id == parent)
                                 .map_or(parent.as_str(), |row| row.title.0.as_str())
@@ -812,7 +814,7 @@ fn browse(
     }
     if ui
         .add_enabled(
-            online && !s.listing && s.next.is_some(),
+            online && !s.list.loading() && s.list.more(),
             egui::Button::new("More conventions"),
         )
         .clicked()
@@ -884,9 +886,7 @@ fn detail(
                 ),
             );
             if scope_picker(ui, "Move destination", &mut draft.scope, projects) {
-                draft.scope_revision = None;
-                draft.choices.clear();
-                draft.next = None;
+                draft.choices.reset();
                 draft.generation = draft.generation.wrapping_add(1);
             }
             if ui
@@ -898,6 +898,7 @@ fn detail(
             let parent = draft.parent.as_ref().map_or("Root", |id| {
                 draft
                     .choices
+                    .items
                     .iter()
                     .find(|r| r.id.as_str() == id)
                     .map_or(id.as_str(), |r| r.title.0.as_str())
@@ -906,7 +907,7 @@ fn detail(
                 .selected_text(parent)
                 .show_ui(ui, |ui| {
                     ui.selectable_value(&mut draft.parent, None, "Root");
-                    for parent in &draft.choices {
+                    for parent in &draft.choices.items {
                         ui.selectable_value(
                             &mut draft.parent,
                             Some(parent.id.as_str().into()),
@@ -914,7 +915,7 @@ fn detail(
                         );
                     }
                 });
-            if draft.next.is_some() && ui.button("More destination parents").clicked() {
+            if draft.choices.more() && ui.button("More destination parents").clicked() {
                 a.push(Action::MoveChoices(true));
             }
             field(ui, "Convention sort order", &mut draft.order);
@@ -1350,17 +1351,17 @@ fn source_editor(
 fn versions(ui: &mut Ui, s: &mut ScopeState, online: bool, a: &mut Vec<Action>) {
     if ui
         .add_enabled(
-            online && !s.version_loading && s.record().is_some(),
+            online && !s.versions.loading() && s.record().is_some(),
             egui::Button::new("Load convention versions"),
         )
         .clicked()
     {
         a.push(Action::Versions(false));
     }
-    if s.version_loading {
+    if s.versions.loading() {
         ui.spinner();
     }
-    for record in &s.versions {
+    for record in &s.versions.items {
         if ui
             .button(format!(
                 "Inspect version {} · {}",
@@ -1381,7 +1382,7 @@ fn versions(ui: &mut Ui, s: &mut ScopeState, online: bool, a: &mut Vec<Action>) 
     }
     if ui
         .add_enabled(
-            online && !s.version_loading && s.version_next.is_some(),
+            online && !s.versions.loading() && s.versions.more(),
             egui::Button::new("More convention versions"),
         )
         .clicked()
@@ -1402,9 +1403,9 @@ fn resources(ui: &mut Ui, s: &mut ScopeState, online: bool, a: &mut Vec<Action>)
             }
         });
     if previous_mode != s.resource_mode {
-        s.resource_generation = s.resource_generation.wrapping_add(1);
-        s.resource_loading = false;
-        s.resource_next = None;
+        s.resources.reset();
+        s.resource_catalog.reset();
+        s.resource_read.reset();
         s.resource_document = None;
         s.resource_query_snapshot = None;
     }
@@ -1414,7 +1415,7 @@ fn resources(ui: &mut Ui, s: &mut ScopeState, online: bool, a: &mut Vec<Action>)
     ui.horizontal_wrapped(|ui| {
         if ui
             .add_enabled(
-                online && !s.resource_loading && (s.resource_mode != 0 || s.record().is_some()),
+                online && !s.resources_loading() && (s.resource_mode != 0 || s.record().is_some()),
                 egui::Button::new("Load convention resources"),
             )
             .clicked()
@@ -1431,11 +1432,11 @@ fn resources(ui: &mut Ui, s: &mut ScopeState, online: bool, a: &mut Vec<Action>)
             a.push(Action::Upload);
         }
     });
-    if s.resource_loading {
+    if s.resources_loading() {
         ui.spinner();
     }
     if s.resource_mode == 1 {
-        for record in &s.resource_catalog {
+        for record in &s.resource_catalog.items {
             if ui.button(&record.title.0).clicked() {
                 a.push(Action::Read(Target {
                     id: record.id.as_str().into(),
@@ -1489,7 +1490,7 @@ fn resources(ui: &mut Ui, s: &mut ScopeState, online: bool, a: &mut Vec<Action>)
         if s.resource_mode == 1
             && ui
                 .add_enabled(
-                    online && !s.resource_loading && s.resource_next.is_some(),
+                    online && !s.resources_loading() && s.resource_catalog.more(),
                     egui::Button::new("More document resources"),
                 )
                 .clicked()
@@ -1498,7 +1499,7 @@ fn resources(ui: &mut Ui, s: &mut ScopeState, online: bool, a: &mut Vec<Action>)
         }
         return;
     }
-    for resource in &s.resources {
+    for resource in &s.resources.items {
         ui.push_id(resource.id.as_str(), |ui| {
             ui.heading(&resource.name.0);
             widgets::caption(
@@ -1643,7 +1644,7 @@ fn resources(ui: &mut Ui, s: &mut ScopeState, online: bool, a: &mut Vec<Action>)
     }
     if ui
         .add_enabled(
-            online && !s.resource_loading && s.resource_next.is_some(),
+            online && !s.resources_loading() && s.resources.more(),
             egui::Button::new("More convention resources"),
         )
         .clicked()

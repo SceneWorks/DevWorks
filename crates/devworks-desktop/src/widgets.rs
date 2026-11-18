@@ -28,6 +28,36 @@ impl Tone {
     }
 }
 
+/// A stored instant (milliseconds since the epoch) in the user's local time, with its zone:
+/// `2026-11-18 14:05 CET`. Every screen uses this one format and this one fallback text.
+pub fn local_time(ms: i64) -> String {
+    time_in(ms, &jiff::tz::TimeZone::system())
+}
+
+/// A stored instant in UTC with its zone, in the same format as [`local_time`]. For values the
+/// contract defines in UTC (a report's range and buckets), which local time would shift.
+pub fn utc_time(ms: i64) -> String {
+    time_in(ms, &jiff::tz::TimeZone::UTC)
+}
+
+/// What [`local_time`] shows when the instant cannot be converted.
+pub const TIME_UNAVAILABLE: &str = "Time unavailable";
+
+/// [`local_time`] with the seconds, for an instant that is a few seconds away (a cooldown).
+pub fn local_time_seconds(ms: i64) -> String {
+    format_time(ms, &jiff::tz::TimeZone::system(), "%Y-%m-%d %H:%M:%S %Z")
+}
+
+fn time_in(ms: i64, zone: &jiff::tz::TimeZone) -> String {
+    format_time(ms, zone, "%Y-%m-%d %H:%M %Z")
+}
+
+fn format_time(ms: i64, zone: &jiff::tz::TimeZone, format: &str) -> String {
+    jiff::Timestamp::from_millisecond(ms)
+        .map(|t| t.to_zoned(zone.clone()).strftime(format).to_string())
+        .unwrap_or_else(|_| TIME_UNAVAILABLE.into())
+}
+
 /// A small bordered label.
 pub fn chip(ui: &mut Ui, text: impl Into<String>, tone: Tone) -> egui::Response {
     let (fg, bg) = tone.colors();
@@ -447,4 +477,39 @@ pub fn icon_button(
         None => egui::WidgetInfo::labeled(egui::Role::Button, enabled, label.clone()),
     });
     response.on_hover_text(tooltip)
+}
+
+#[cfg(test)]
+mod time_tests {
+    use super::*;
+
+    #[test]
+    fn a_time_shows_date_minute_and_zone_in_the_given_zone() {
+        let utc = jiff::tz::TimeZone::UTC;
+        assert_eq!(time_in(1_700_000_000_000, &utc), "2023-11-14 22:13 UTC");
+        let tokyo = jiff::tz::TimeZone::get("Asia/Tokyo").unwrap();
+        assert_eq!(time_in(1_700_000_000_000, &tokyo), "2023-11-15 07:13 JST");
+    }
+
+    #[test]
+    fn the_seconds_variant_tells_apart_instants_within_a_minute() {
+        let utc = jiff::tz::TimeZone::UTC;
+        let a = format_time(1_700_000_005_000, &utc, "%Y-%m-%d %H:%M:%S %Z");
+        let b = format_time(1_700_000_035_000, &utc, "%Y-%m-%d %H:%M:%S %Z");
+        assert_eq!(a, "2023-11-14 22:13:25 UTC");
+        assert_ne!(a, b);
+        assert_eq!(
+            time_in(1_700_000_005_000, &utc),
+            time_in(1_700_000_035_000, &utc),
+            "the minute format cannot"
+        );
+    }
+
+    #[test]
+    fn an_instant_outside_the_supported_range_shows_one_fallback_text() {
+        assert_eq!(
+            time_in(i64::MAX, &jiff::tz::TimeZone::UTC),
+            TIME_UNAVAILABLE
+        );
+    }
 }

@@ -7,8 +7,8 @@
 use crate::indexing_screen::{self, IndexAction, IndexingScreen};
 use crate::memory::RouteMemory;
 use crate::ops::LifecycleChange;
+use crate::paged::{ListText, Paged, list_body};
 use crate::route::Route;
-use crate::shell::{ListState, ListText, list_body};
 use crate::theme;
 use crate::virtual_list::Scrolls;
 use crate::widgets::{self, Header, Tone, ViewState, chip};
@@ -98,11 +98,11 @@ pub enum TextState {
 #[derive(Default)]
 pub struct ProjectsUi {
     /// Active and archived projects (the navigation selector and the first two tabs).
-    pub list: ListState<ProjectRecord>,
+    pub list: Paged<ProjectRecord>,
     /// Every registration (membership choices; Repositories without a selected project).
-    pub repositories: ListState<RepositoryRecord>,
+    pub repositories: Paged<RepositoryRecord>,
     /// The selected project's repositories and which project they were read for.
-    pub members: ListState<RepositoryRecord>,
+    pub members: Paged<RepositoryRecord>,
     pub members_of: Option<String>,
     /// Applied project mutations; a list query started before the latest is re-queried.
     pub mutations: u64,
@@ -126,9 +126,9 @@ impl DerefMut for ProjectsUi {
 /// The shell's project and repository lists as one screen call sees them.
 #[derive(Clone, Copy)]
 pub struct ProjectLists<'a> {
-    pub list: &'a ListState<ProjectRecord>,
-    pub repositories: &'a ListState<RepositoryRecord>,
-    pub members: &'a ListState<RepositoryRecord>,
+    pub list: &'a Paged<ProjectRecord>,
+    pub repositories: &'a Paged<RepositoryRecord>,
+    pub members: &'a Paged<RepositoryRecord>,
     pub members_of: Option<&'a str>,
     /// The Indexing screen's state (`None` in that screen's own calls).
     pub indexing: Option<&'a IndexingScreen>,
@@ -138,7 +138,7 @@ pub struct ProjectLists<'a> {
 #[derive(Default)]
 pub struct ProjectsScreen {
     /// Deleted projects' tombstones.
-    pub deleted: ListState<ProjectRecord>,
+    pub deleted: Paged<ProjectRecord>,
     pub create: Option<CreateForm>,
     pub edit: Option<EditForm>,
     pub membership: Option<MembershipForm>,
@@ -197,6 +197,17 @@ pub(crate) enum Action {
     Index(IndexAction),
     /// Scheduled jobs scoped to the project.
     OpenJobs(String),
+    /// Read the next page of a list.
+    LoadMore(MoreOf),
+}
+
+/// The list whose next page is wanted.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum MoreOf {
+    Projects,
+    Deleted,
+    Repositories,
+    Members,
 }
 
 pub fn life_label(l: &LifeState) -> &'static str {
@@ -240,7 +251,7 @@ pub(crate) struct RepositoriesView<'a> {
     /// The project the navigation selected, if it is still listed.
     pub project: Option<ProjectRecord>,
     /// The repositories shown: the selected project's, or every registration.
-    pub source: ListState<RepositoryRecord>,
+    pub source: Paged<RepositoryRecord>,
     /// Repositories (by ID) whose index removal is running or not confirmed yet.
     pub removing: BTreeSet<String>,
     /// Project names by ID.
@@ -324,17 +335,8 @@ impl ProjectsScreen {
                                 v.lists.list
                             };
                             let wanted = TABS[tab];
-                            let shown = ListState {
-                                items: source
-                                    .items
-                                    .iter()
-                                    .filter(|p| life_label(&p.lifecycle) == wanted)
-                                    .cloned()
-                                    .collect(),
-                                loaded: source.loaded,
-                                error: source.error.clone(),
-                                more: source.more,
-                            };
+                            let mut more = false;
+                            let shown = source.view(|p| life_label(&p.lifecycle) == wanted);
                             let RouteMemory {
                                 filter, selection, ..
                             } = mem;
@@ -356,6 +358,7 @@ impl ProjectsScreen {
                                     id_salt: "projects-list",
                                 },
                                 reload,
+                                &mut more,
                                 scrolls,
                                 |p: &ProjectRecord| format!("{} {}", p.name.0, p.description.0),
                                 |p: &ProjectRecord| p.id.0.as_str().to_owned(),
@@ -375,6 +378,13 @@ impl ProjectsScreen {
                                     .clicked()
                                 },
                             );
+                            if more {
+                                actions.push(Action::LoadMore(if tab == 2 {
+                                    MoreOf::Deleted
+                                } else {
+                                    MoreOf::Projects
+                                }));
+                            }
                         },
                     );
                     new_tab = t;
@@ -518,6 +528,7 @@ impl ProjectsScreen {
                                 )
                             });
                             let before = mem.selection.clone();
+                            let mut more = false;
                             let RouteMemory {
                                 filter, selection, ..
                             } = mem;
@@ -534,6 +545,7 @@ impl ProjectsScreen {
                                     id_salt: "repositories-list",
                                 },
                                 reload,
+                                &mut more,
                                 scrolls,
                                 |r: &RepositoryRecord| {
                                     format!(
@@ -561,6 +573,13 @@ impl ProjectsScreen {
                                     .clicked()
                                 },
                             );
+                            if more {
+                                actions.push(Action::LoadMore(if project.is_some() {
+                                    MoreOf::Members
+                                } else {
+                                    MoreOf::Repositories
+                                }));
+                            }
                             if mem.selection != before
                                 && let Some(id) = mem.selection.clone()
                             {
@@ -696,17 +715,6 @@ pub(crate) fn confirm_window(
             });
         });
     decided
-}
-
-impl<T: Clone> ListState<T> {
-    pub(crate) fn clone_state(&self) -> Self {
-        Self {
-            items: self.items.clone(),
-            loaded: self.loaded,
-            error: self.error.clone(),
-            more: self.more,
-        }
-    }
 }
 
 fn coverage_label(r: &RepositoryRecord) -> String {
@@ -1336,14 +1344,14 @@ fn repository_detail(
                         .remote_url
                         .as_ref()
                         .and_then(|u| {
-                            devworks_core::services::git::github::Repository::from_remote(&u.0)
+                            devworks_core::protocol::helpers::git::Repository::from_remote(&u.0)
                         })
                         .map(|r| format!("https://github.com/{}/{}", r.owner, r.name));
                     if let Some(branch) = &state.branch {
                         if let Some(url) = &github {
                             ui.hyperlink_to(
                                 &branch.0,
-                                devworks_core::services::git::github::branch_url(url, &branch.0)
+                                devworks_core::protocol::helpers::git::branch_url(url, &branch.0)
                                     .unwrap_or_else(|| url.clone()),
                             );
                         } else {

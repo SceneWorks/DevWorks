@@ -28,6 +28,7 @@
 //! ([`egress_proxy`]), which connects only to addresses the core egress policy checked.
 pub mod egress_proxy;
 
+use devworks_core::locks::LockExt;
 use devworks_core::ports::browser::{
     BrowserAsset, BrowserFault, BrowserPlatform, CdpTransport, ConnectPolicy, Profile,
     Qualification, RunningProxy, STAGED_NAME_MAX_BYTES, user_data_of,
@@ -646,7 +647,7 @@ impl PipeTransport {
             .name("devtools-pipe-writer".into())
             .spawn(move || write_messages(writer, queued, &st));
         if let Err(e) = spawned {
-            *lock(&state.failed) = Some(format!("the DevTools pipe writer did not start: {e}"));
+            *state.failed.locked() = Some(format!("the DevTools pipe writer did not start: {e}"));
         }
         Self {
             outgoing: Some(outgoing),
@@ -661,10 +662,12 @@ impl PipeTransport {
     /// Why the browser no longer takes messages, if it does not: the writer failed, or its
     /// current write has blocked past the stall bound.
     fn stalled(&self) -> Option<String> {
-        if let Some(why) = lock(&self.writer.failed).clone() {
+        if let Some(why) = self.writer.failed.locked().clone() {
             return Some(why);
         }
-        lock(&self.writer.busy_since)
+        self.writer
+            .busy_since
+            .locked()
             .filter(|t| t.elapsed() >= self.stall)
             .map(|_| "the browser stopped reading its DevTools pipe".to_owned())
     }
@@ -676,10 +679,6 @@ impl PipeTransport {
     }
 }
 
-fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
-    m.lock().unwrap_or_else(|p| p.into_inner())
-}
-
 /// Writes queued messages until the queue closes or a write fails. Dropping the writer closes
 /// the host's write end, which tells the browser the session is over.
 fn write_messages(
@@ -688,13 +687,13 @@ fn write_messages(
     state: &WriterState,
 ) {
     for message in queued {
-        *lock(&state.busy_since) = Some(Instant::now());
+        *state.busy_since.locked() = Some(Instant::now());
         let written = writer
             .write_all(&message.value)
             .and_then(|()| writer.flush());
-        *lock(&state.busy_since) = None;
+        *state.busy_since.locked() = None;
         if let Err(e) = written {
-            *lock(&state.failed) = Some(format!("DevTools pipe: {e}"));
+            *state.failed.locked() = Some(format!("DevTools pipe: {e}"));
             return;
         }
     }

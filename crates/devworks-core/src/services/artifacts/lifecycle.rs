@@ -15,6 +15,7 @@ use crate::authority::destructive::{
 use crate::context::{InvocationContext, PrincipalKind};
 use crate::fingerprint::{Fingerprint, sha256_hex};
 use crate::gateway::AdmittedQuery;
+use crate::locks::LockExt;
 use crate::operations::OperationInput;
 use crate::ports::Preparation;
 use crate::ports::files::FileFault;
@@ -116,17 +117,13 @@ impl Streams {
             input: query.input().clone(),
             fingerprint: query.fingerprint().clone(),
         };
-        let mut grants = self.grants.lock().unwrap_or_else(|p| p.into_inner());
+        let mut grants = self.grants.locked();
         grants.retain(|_, g| g.expires_at_ms > now);
         grants.insert(stream_id.as_str().to_owned(), grant.clone());
         grant
     }
     fn get(&self, id: &Id) -> Option<StreamGrant> {
-        self.grants
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .get(id.as_str())
-            .cloned()
+        self.grants.locked().get(id.as_str()).cloned()
     }
 }
 
@@ -135,23 +132,14 @@ impl Streams {
 pub struct Readers(Arc<Mutex<HashMap<String, usize>>>);
 impl Readers {
     pub(super) fn acquire(&self, digest: &str) -> ReaderGuard {
-        *self
-            .0
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .entry(digest.to_owned())
-            .or_default() += 1;
+        *self.0.locked().entry(digest.to_owned()).or_default() += 1;
         ReaderGuard {
             readers: self.clone(),
             digest: digest.to_owned(),
         }
     }
     pub fn holds(&self, digest: &str) -> bool {
-        self.0
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .get(digest)
-            .is_some_and(|n| *n > 0)
+        self.0.locked().get(digest).is_some_and(|n| *n > 0)
     }
 }
 impl crate::ports::project_purge::ProjectPurgeReadFence for Readers {
@@ -170,7 +158,7 @@ impl crate::ports::project_purge::ProjectPurgeReadFence for Readers {
         work: &mut dyn FnMut() -> Result<(), crate::ports::project_purge::PurgeFileFault>,
     ) -> Result<(), crate::ports::project_purge::PurgeFileFault> {
         use crate::ports::project_purge::{PurgeFileFault, PurgeFileOwner};
-        let readers = self.0.lock().unwrap_or_else(|p| p.into_inner());
+        let readers = self.0.locked();
         if let PurgeFileOwner::Blob { digest, .. } | PurgeFileOwner::Quarantine { digest, .. } =
             owner
             && readers.get(digest).is_some_and(|n| *n > 0)
@@ -240,7 +228,7 @@ pub struct ReaderGuard {
 }
 impl Drop for ReaderGuard {
     fn drop(&mut self) {
-        let mut map = self.readers.0.lock().unwrap_or_else(|p| p.into_inner());
+        let mut map = self.readers.0.locked();
         if let Some(n) = map.get_mut(&self.digest) {
             *n -= 1;
             if *n == 0 {
@@ -782,19 +770,13 @@ impl ArtifactService {
             // Correctness never depends on it: a claimed generation is dead and never reused, so
             // a concurrent or late removal can only remove dead bytes.
             let key = (digest.clone(), generation.clone());
-            self.removing
-                .lock()
-                .unwrap_or_else(|p| p.into_inner())
-                .insert(key.clone());
+            self.removing.locked().insert(key.clone());
             let error = self
                 .files
                 .unlink(&digest, &generation)
                 .err()
                 .map(|f| format!("{f:?}"));
-            self.removing
-                .lock()
-                .unwrap_or_else(|p| p.into_inner())
-                .remove(&key);
+            self.removing.locked().remove(&key);
             outcomes.push((digest, generation, error));
         }
         if outcomes.is_empty() {
@@ -861,11 +843,7 @@ impl ArtifactService {
             let more = page.len() == 500;
             after = page.last().map(|b| b.digest.clone());
             let me = owner.to_owned();
-            let busy = self
-                .removing
-                .lock()
-                .unwrap_or_else(|p| p.into_inner())
-                .clone();
+            let busy = self.removing.locked().clone();
             let adopted = run_write(store, WriteOptions::recovery(), move |tx| {
                 let mut adopted = Vec::new();
                 for b in page {
@@ -1128,16 +1106,13 @@ impl ArtifactService {
         reason: Value,
     ) {
         if self.abandon(env, staged, reason.clone()).is_err() {
-            self.pending
-                .lock()
-                .unwrap_or_else(|p| p.into_inner())
-                .push((staged.clone(), reason));
+            self.pending.locked().push((staged.clone(), reason));
         }
     }
 
     /// Retries deferred resolutions; those that still fail stay deferred.
     fn retry_pending(&self, env: &Preparation<'_>) {
-        let pending = std::mem::take(&mut *self.pending.lock().unwrap_or_else(|p| p.into_inner()));
+        let pending = std::mem::take(&mut *self.pending.locked());
         for (staged, reason) in pending {
             self.abandon_or_defer(env, &staged, reason);
         }

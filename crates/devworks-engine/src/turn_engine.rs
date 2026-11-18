@@ -11,6 +11,7 @@ use crate::runtime::{
 };
 use devworks_core::context::InvocationContext;
 use devworks_core::gateway::{CommandOutcome, QueryOutcome};
+use devworks_core::locks::LockExt;
 use devworks_core::ports::storage::{ApplicationStore, Cancellation, WriteOptions};
 use devworks_core::ports::storage::{StorageError, Unavailable};
 use devworks_core::protocol::Id;
@@ -343,7 +344,7 @@ impl TurnEngine {
                                 Err(error) => done(Err(error)),
                             }
                         };
-                        results.lock().unwrap_or_else(|p| p.into_inner())[index] = Some(result);
+                        results.locked()[index] = Some(result);
                     }
                 });
             }

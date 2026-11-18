@@ -71,12 +71,12 @@ pub(crate) fn message_board(
     }
     ui.add_space(10.0);
     ui.heading("Project messages");
-    if !board.history_loaded && board.history.is_empty() {
+    if !board.history.loaded && board.history.items.is_empty() {
         widgets::caption(ui, "Loading message history…");
-    } else if board.history.is_empty() {
+    } else if board.history.items.is_empty() {
         widgets::caption(ui, "No project messages yet.");
     }
-    for message in &board.history {
+    for message in &board.history.items {
         ui.group(|ui| {
             ui.label(format!("{:?} · {}", message.kind, message.from.name.0));
             ui.label(&message.body.0);
@@ -132,7 +132,7 @@ pub(crate) fn message_board(
             }
         });
     }
-    if board.history_before.is_some() && widgets::secondary_button(ui, "Older messages").clicked() {
+    if board.history.more() && widgets::secondary_button(ui, "Older messages").clicked() {
         actions.push(Action::OlderMessages);
     }
     ui.add_space(10.0);

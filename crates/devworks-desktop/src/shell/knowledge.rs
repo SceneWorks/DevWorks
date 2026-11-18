@@ -32,8 +32,8 @@ impl Screen for KnowledgeScreen {
             ctl.load_projects();
         }
         if ctl.routes.get(&Route::Knowledge).is_none_or(|r| r.tab != 2)
-            && !ctl.knowledge.loaded
-            && ctl.knowledge.listing.is_none()
+            && !ctl.knowledge.claims.loaded
+            && !ctl.knowledge.claims.loading()
         {
             ctl.load_knowledge();
         }
@@ -42,9 +42,9 @@ impl Screen for KnowledgeScreen {
         // Only an unpaged listing is re-read in place: a re-read of a list the user paged
         // through would drop the pages they loaded.
         if cx.routes.get(&Route::Knowledge).is_none_or(|r| r.tab != 2)
-            && self.loaded
-            && self.listing.is_none()
-            && self.items.len() <= knowledge_screen::PAGE as usize
+            && self.claims.loaded
+            && !self.claims.loading()
+            && self.claims.pages() <= 1
         {
             KnowledgeCtl {
                 knowledge: self,
@@ -188,14 +188,14 @@ impl KnowledgeCtl<'_, '_> {
     /// that could not be submitted is not left in progress.
     fn load_knowledge(&mut self) {
         let (op, body) = self.knowledge.begin_listing(false);
-        let generation = self.knowledge.generation;
+        let generation = self.knowledge.claims.generation();
         if !self.query(
             KnowledgeSlot::KnowledgeList(generation),
             "Loading Knowledge",
             op,
             move |b| knowledge_screen::query(b, body),
         ) {
-            self.knowledge.listing = None;
+            self.knowledge.claims.abandon(generation);
         }
         let body = self.knowledge.diagnostics_input();
         self.query(
@@ -233,7 +233,7 @@ impl KnowledgeCtl<'_, '_> {
             self.knowledge.followed = Some(nav.clone());
             changed |= self.knowledge.follow_navigation(nav.as_deref());
         }
-        if changed && self.knowledge.loaded {
+        if changed && self.knowledge.claims.loaded {
             actions.push(KnowledgeAction::Search);
         }
     }
@@ -332,18 +332,18 @@ impl KnowledgeCtl<'_, '_> {
             match a {
                 KnowledgeAction::Search => self.load_knowledge(),
                 KnowledgeAction::More => {
-                    if self.knowledge.listing.is_some() || self.knowledge.cursor.is_none() {
+                    if self.knowledge.claims.loading() || !self.knowledge.claims.more() {
                         continue;
                     }
                     let (op, body) = self.knowledge.begin_listing(true);
-                    let generation = self.knowledge.generation;
+                    let generation = self.knowledge.claims.generation();
                     if !self.query(
                         KnowledgeSlot::KnowledgeList(generation),
                         "Loading more Knowledge",
                         op,
                         move |b| knowledge_screen::query(b, body),
                     ) {
-                        self.knowledge.listing = None;
+                        self.knowledge.claims.abandon(generation);
                     }
                 }
                 KnowledgeAction::Select(id) => {

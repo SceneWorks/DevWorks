@@ -1,5 +1,6 @@
 //! Native client custody: one lock covers live review, atomic persistence and cleanup.
 use crate::memory::{Memory, purge};
+use devworks_core::locks::LockExt;
 use devworks_core::{
     fingerprint::sha256_hex,
     ports::{
@@ -227,7 +228,7 @@ impl NativePurgeClient {
             Some((memory, fences))
         });
         {
-            let mut state = self.state.lock().unwrap_or_else(|p| p.into_inner());
+            let mut state = self.state.locked();
             if let Some((memory, fences)) = restored {
                 state.live = memory.purge_live.clone().unwrap_or_default();
                 state.memory = Some(memory);
@@ -248,7 +249,7 @@ impl NativePurgeClient {
     ) -> Result<Vec<ProjectPurgeClientScope>, String> {
         serde_json::to_value(&live)
             .map_err(|_| "Native client paths cannot be safely checkpointed")?;
-        let mut state = self.state.lock().unwrap_or_else(|p| p.into_inner());
+        let mut state = self.state.locked();
         let current = state
             .memory
             .as_ref()
@@ -278,13 +279,12 @@ impl NativePurgeClient {
     }
     pub fn acknowledge(&self, scope: &ProjectPurgeClientScope) {
         self.state
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
+            .locked()
             .awaiting_ui
             .remove(scope.project_id.0.as_str());
     }
     pub fn freeze(&self, project: &str, frozen: bool) -> Result<(), String> {
-        let mut state = self.state.lock().unwrap_or_else(|p| p.into_inner());
+        let mut state = self.state.locked();
         if !frozen {
             state.frozen.remove(project);
             return Ok(());
@@ -308,14 +308,14 @@ impl ProjectPurgeClient for NativePurgeClient {
         if interrupted(&self.path) {
             return Err(PurgeFileFault::Unattributed);
         }
-        witness(&self.state.lock().unwrap_or_else(|p| p.into_inner()), scope).map(|(_, s)| s)
+        witness(&self.state.locked(), scope).map(|(_, s)| s)
     }
     fn remove_reviewed(
         &self,
         scope: &ProjectPurgeClientScope,
         digest: &str,
     ) -> Result<(), PurgeFileFault> {
-        let mut state = self.state.lock().unwrap_or_else(|p| p.into_inner());
+        let mut state = self.state.locked();
         if interrupted(&self.path) {
             return Err(PurgeFileFault::Unattributed);
         }

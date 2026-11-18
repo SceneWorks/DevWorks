@@ -182,9 +182,10 @@ fn an_unconfirmed_attachment_save_keeps_its_frame_and_is_confirmed_once() {
     click(&mut h, Role::Button, "Confirm upload of kept.txt");
     let a = &h.state().chat.draft().unwrap().attachments[0];
     assert!(matches!(a.state, AttachState::Stored(_)), "{:?}", a.state);
-    let listed = ops::artifacts(real.query("artifacts.list", &ops::workspace_artifacts(&*real)))
-        .unwrap()
-        .0;
+    let listed =
+        ops::artifacts(real.query("artifacts.list", &ops::workspace_artifacts(&*real, None)))
+            .unwrap()
+            .items;
     assert_eq!(listed.len(), 1, "stored once");
     assert!(all_same(&lossy.request_keys()));
 }
@@ -429,9 +430,9 @@ fn a_source_explanation_read_before_a_save_is_explained_again_at_the_new_revisio
 // Attachment and draft lifecycle
 
 fn workspace_artifacts(backend: &dyn Backend) -> Vec<String> {
-    ops::artifacts(backend.query("artifacts.list", &ops::workspace_artifacts(backend)))
+    ops::artifacts(backend.query("artifacts.list", &ops::workspace_artifacts(backend, None)))
         .unwrap()
-        .0
+        .items
         .into_iter()
         .map(|a| a.name.0)
         .collect()
@@ -528,7 +529,7 @@ fn a_session_list_reply_never_rehomes_the_draft_of_a_pending_start() {
     step_until(&mut h, "a start is pending", |s| s.chat.starting.is_some());
     // The list arrives first.
     list.open();
-    step_until(&mut h, "the list arrived", |s| s.chat.sessions_loaded);
+    step_until(&mut h, "the list arrived", |s| s.chat.sessions.loaded);
     h.step();
     assert!(
         h.state().chat.selected.is_none(),
@@ -550,9 +551,10 @@ fn a_session_list_reply_never_rehomes_the_draft_of_a_pending_start() {
         "the older conversation never received it"
     );
     let tag = ops::conversation_tag(&selected).unwrap();
-    let listed = ops::artifacts(real.query("artifacts.list", &ops::workspace_artifacts(&*real)))
-        .unwrap()
-        .0;
+    let listed =
+        ops::artifacts(real.query("artifacts.list", &ops::workspace_artifacts(&*real, None)))
+            .unwrap()
+            .items;
     assert!(listed[0].tags.as_ref().is_some_and(|t| t.0.contains(&tag)));
 }
 
@@ -882,7 +884,7 @@ fn an_attachment_waiting_for_a_lost_start_survives_close_and_joins_its_own_conve
         1440.0,
         900.0,
     );
-    step_until(&mut h, "the list arrived", |s| s.chat.sessions_loaded);
+    step_until(&mut h, "the list arrived", |s| s.chat.sessions.loaded);
     h.step();
     begin.open();
     settle(&mut h);
@@ -947,8 +949,9 @@ fn an_attachment_removed_during_an_unconfirmed_send_is_deleted_when_the_send_did
     h.state_mut().on_exit();
     drop(h);
     // The conversation moved on elsewhere, so the restored send is refused (never committed).
-    let (sessions, _) =
-        ops::sessions(real.query("sessions.list", &ops::sessions_list(&*real))).unwrap();
+    let sessions = ops::sessions(real.query("sessions.list", &ops::sessions_list(&*real, None)))
+        .unwrap()
+        .items;
     let revision = sessions[0].revision.get();
     ops::appended(real.command(
         "sessions.append_message",
