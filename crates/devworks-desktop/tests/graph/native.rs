@@ -172,7 +172,10 @@ impl Fx {
             ),
         ))
         .unwrap();
-        let until = Instant::now() + SETTLE_BOUND;
+        // The bound is on progress, not on the whole run: a large repository on a slow runner
+        // keeps changing its run record (revision, stage, counts); only a run that stops changing fails.
+        let mut until = Instant::now() + SETTLE_BOUND;
+        let mut seen = None;
         loop {
             let status = ops::index_status_result(b.query(
                 "indexing.status",
@@ -186,7 +189,15 @@ impl Fx {
             {
                 break;
             }
-            assert!(Instant::now() < until, "actual index publishes: {status:?}");
+            let progress = status.last_run.as_ref().map(|run| format!("{run:?}"));
+            if progress != seen {
+                seen = progress;
+                until = Instant::now() + SETTLE_BOUND;
+            }
+            assert!(
+                Instant::now() < until,
+                "actual index publishes (no progress for {SETTLE_BOUND:?}): {status:?}"
+            );
             std::thread::sleep(Duration::from_millis(20));
         }
     }
