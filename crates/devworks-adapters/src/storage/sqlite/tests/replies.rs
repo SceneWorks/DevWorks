@@ -232,8 +232,8 @@ impl Fx {
     fn open(h: Harness, n: Arc<AtomicU64>) -> Self {
         let store = Arc::new(h.store());
         let files = Arc::new(NativeArtifactFiles::new(
-            h.root.0.clone(),
-            h.root.0.with_extension("cache"),
+            h.root.path().to_path_buf(),
+            h.root.path().with_extension("cache"),
         ));
         let flaky = Arc::new(Flaky {
             inner: files.clone(),
@@ -1315,7 +1315,7 @@ fn seed_workspace_artifact(fx: &Fx, owner: &str) -> (Id, Id) {
     let owner = actor(owner);
     let generation = "seed-generation".to_owned();
     let path = fx.files.managed_path(&digest, &generation).unwrap();
-    let full = fx.h.root.0.join(&path);
+    let full = fx.h.root.join(&path);
     std::fs::create_dir_all(full.parent().unwrap()).unwrap();
     std::fs::write(&full, bytes).unwrap();
     fx.write(move |tx| {

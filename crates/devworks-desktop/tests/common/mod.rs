@@ -9,11 +9,12 @@ use devworks_desktop::host::{DesktopConfig, Engine};
 use devworks_desktop::memory;
 use devworks_desktop::platform::HostIds;
 use devworks_desktop::shell::{Dialogs, HostControl, Shell, ShellInit};
+use devworks_test_support::TempRoot;
 use eframe::egui;
 use egui_kittest::Harness;
 use egui_kittest::kittest::{NodeT, Queryable};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -47,22 +48,23 @@ impl Drop for NativeRuntimeCase {
     }
 }
 
-/// A temporary data root, removed when dropped.
-pub struct Root(pub PathBuf);
+/// A temporary data root, removed when dropped (with the sibling directories it hands out).
+pub struct Root(pub PathBuf, TempRoot);
 impl Root {
     pub fn new(name: &str) -> Self {
-        static NEXT: AtomicU64 = AtomicU64::new(0);
         // Cargo's per-target scratch directory, not the system temp directory: on GitHub's
         // Windows runners %TEMP% is on the C: OS disk, whose flush latency stalls the hundreds of
         // durable commits of native Help startup past `SETTLE_BOUND`.
-        let p = std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!(
-            "devworks-desktop-{name}-{}-{}",
-            std::process::id(),
-            NEXT.fetch_add(1, Ordering::SeqCst)
-        ));
-        let _ = std::fs::remove_dir_all(&p);
-        std::fs::create_dir_all(&p).unwrap();
-        Self(p)
+        let guard = TempRoot::under(
+            std::path::Path::new(env!("CARGO_TARGET_TMPDIR")),
+            &format!("devworks-desktop-{name}"),
+        );
+        let p = guard.path().to_path_buf();
+        let guard = guard
+            .created()
+            .and_removes(p.with_extension("files"))
+            .and_removes(p.with_extension("dirs"));
+        Self(p, guard)
     }
     pub fn memory(&self) -> PathBuf {
         self.0.join(memory::FILE)
@@ -101,13 +103,6 @@ impl Root {
         let p = self.0.with_extension("dirs").join(name);
         std::fs::create_dir_all(&p).unwrap();
         p
-    }
-}
-impl Drop for Root {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.0);
-        let _ = std::fs::remove_dir_all(self.0.with_extension("files"));
-        let _ = std::fs::remove_dir_all(self.0.with_extension("dirs"));
     }
 }
 

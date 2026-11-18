@@ -16,45 +16,11 @@ use devworks_core::protocol::{
     CommandReply, Counter, EventId, OperationId, Rejection, Revision, RootId,
 };
 use serde_json::json;
-use std::sync::atomic::{AtomicI64, AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc;
 use std::task::{Context, Poll, Wake, Waker};
 
-const T0: i64 = 1_700_000_000_000;
-
-struct TestClock(AtomicI64);
-impl Clock for TestClock {
-    fn now_ms(&self) -> Counter {
-        Counter::new(self.0.load(Ordering::SeqCst)).unwrap()
-    }
-}
-struct TestIds(AtomicU64);
-impl IdSource for TestIds {
-    fn next_id(&self, kind: IdKind) -> Id {
-        let n = self.0.fetch_add(1, Ordering::SeqCst) + 1;
-        Id::new(format!("{kind:?}-{n}").to_lowercase()).unwrap()
-    }
-}
-
-/// A uniquely named temporary data root, removed on drop.
-struct TempRoot(PathBuf);
-impl TempRoot {
-    fn new() -> Self {
-        static NEXT: AtomicU64 = AtomicU64::new(0);
-        let dir = std::env::temp_dir().join(format!(
-            "devworks-store-test-{}-{}",
-            std::process::id(),
-            NEXT.fetch_add(1, Ordering::SeqCst)
-        ));
-        let _ = std::fs::remove_dir_all(&dir);
-        Self(dir)
-    }
-}
-impl Drop for TempRoot {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.0);
-    }
-}
+use devworks_test_support::{NumberedIds, T0, TempRoot, TestClock, TestIds};
 
 pub(super) struct Harness {
     root: TempRoot,
@@ -68,15 +34,15 @@ impl Harness {
     }
     fn tuned(tune: fn(&mut SqliteConfig)) -> Self {
         Self {
-            root: TempRoot::new(),
-            clock: Arc::new(TestClock(AtomicI64::new(T0))),
-            ids: Arc::new(TestIds(AtomicU64::new(0))),
+            root: TempRoot::new("devworks-store-test"),
+            clock: Arc::new(TestClock::new(T0)),
+            ids: Arc::new(TestIds::new()),
             tune,
         }
     }
     fn config(&self) -> SqliteConfig {
         let mut c = SqliteConfig::new(
-            self.root.0.clone(),
+            self.root.path().to_path_buf(),
             self.clock.clone(),
             self.ids.clone(),
             ActorId(Id::new("host").unwrap()),
@@ -103,7 +69,7 @@ impl Harness {
         SqliteStore::open(self.config()).expect("open store")
     }
     pub(super) fn raw(&self) -> Connection {
-        let c = Connection::open(self.root.0.join(DATABASE_FILE)).unwrap();
+        let c = Connection::open(self.root.join(DATABASE_FILE)).unwrap();
         c.pragma_update(None, "foreign_keys", true).unwrap();
         super::project_purge::guard::register(&c, false).unwrap();
         c
@@ -246,8 +212,8 @@ fn seeded_store_matches_a_fresh_bootstrap() {
     drop(fresh.bootstrapped_store());
     drop(seeded.store());
     assert_eq!(
-        fresh.ids.0.load(Ordering::SeqCst),
-        seeded.ids.0.load(Ordering::SeqCst),
+        fresh.ids.issued(),
+        seeded.ids.issued(),
         "the same identities were drawn in the same order"
     );
     let (fresh, seeded) = (full_dump(&fresh.raw()), full_dump(&seeded.raw()));
@@ -923,7 +889,7 @@ fn live_statements(c: &Connection) -> usize {
 fn writer_and_reader_connections_keep_hundreds_of_cached_statements() {
     let h = Harness::new();
     drop(h.store());
-    let path = h.root.0.join(DATABASE_FILE);
+    let path = h.root.join(DATABASE_FILE);
     for role in [conn::Role::Writer, conn::Role::Reader] {
         let c = conn::open(&path, role, Duration::from_secs(1)).unwrap();
         let before = live_statements(&c);
@@ -1091,7 +1057,7 @@ fn migrations_apply_in_order_and_an_interrupted_one_leaves_nothing() {
 }
 
 fn file_digest(h: &Harness) -> String {
-    devworks_core::fingerprint::sha256_hex(&std::fs::read(h.root.0.join(DATABASE_FILE)).unwrap())
+    devworks_core::fingerprint::sha256_hex(&std::fs::read(h.root.join(DATABASE_FILE)).unwrap())
 }
 
 fn boots(h: &Harness) -> i64 {
@@ -1178,7 +1144,7 @@ fn incompatible_stores_are_refused_before_any_write() {
 
     // Not a DevWorks store.
     let h = Harness::new();
-    std::fs::create_dir_all(&h.root.0).unwrap();
+    std::fs::create_dir_all(&h.root.path()).unwrap();
     h.raw().execute_batch("CREATE TABLE unrelated(x)").unwrap();
     let digest = file_digest(&h);
     assert!(matches!(
@@ -1393,11 +1359,9 @@ impl AuthorityPort for Granting {
         Ok(self.0.lock().unwrap().clone())
     }
 }
-struct Seq(AtomicU64);
-impl IdSource for Seq {
-    fn next_id(&self, _: IdKind) -> Id {
-        Id::new(format!("corr-{}", self.0.fetch_add(1, Ordering::SeqCst))).unwrap()
-    }
+/// Correlation ids of the gateway tests.
+fn seq() -> NumberedIds {
+    NumberedIds::new("corr")
 }
 struct Accept {
     calls: AtomicUsize,
@@ -1475,7 +1439,7 @@ fn a_lost_acknowledgment_is_resolved_by_the_receipt() {
     let h = Harness::new();
     let s = h.store();
     seed(&s);
-    let ids = Seq(AtomicU64::new(0));
+    let ids = seq();
     let authority = Granting(Mutex::new(Authorization::direct()));
     let g = Gateway {
         authority: &authority,
@@ -1528,7 +1492,7 @@ fn grant_use_is_consumed_atomically_with_the_receipt() {
         })
     })
     .unwrap();
-    let ids = Seq(AtomicU64::new(0));
+    let ids = seq();
     let authority = Granting(Mutex::new(Authorization::with_grants(vec![GrantUse {
         grant_id: Id::new("grant-1").unwrap(),
         expected_revision: 1,

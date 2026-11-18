@@ -18,7 +18,6 @@ use devworks_core::ports::indexing::{
     ExtractFault, FileExtract, LanguageInfo, SourceTree, StructuralParser,
 };
 use devworks_core::ports::storage::*;
-use devworks_core::ports::{Clock, IdKind, IdSource};
 use devworks_core::protocol::records::{
     IndexFreshnessState, IndexRunRecord, LanguageCoverageMode, OverlayState, RepositoryIndexStatus,
     RepositoryRecord,
@@ -51,51 +50,29 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
 const T0: i64 = 1_800_000_000_000;
+use devworks_test_support::{TempRoot, TestClock, TestIds};
 
 fn serial() -> MutexGuard<'static, ()> {
     static SERIAL: Mutex<()> = Mutex::new(());
     SERIAL.lock().unwrap_or_else(|p| p.into_inner())
-}
-struct TestClock(AtomicI64);
-impl Clock for TestClock {
-    fn now_ms(&self) -> Counter {
-        Counter::new(self.0.load(Ordering::SeqCst)).unwrap()
-    }
-}
-struct TestIds(AtomicU64);
-impl IdSource for TestIds {
-    fn next_id(&self, kind: IdKind) -> Id {
-        let n = self.0.fetch_add(1, Ordering::SeqCst) + 1;
-        Id::new(format!("{kind:?}-{n}").to_lowercase()).unwrap()
-    }
 }
 fn id(s: &str) -> Id {
     Id::new(s).unwrap()
 }
 
 /// A removed-on-drop temporary directory.
-struct Temp(PathBuf);
+struct Temp(TempRoot);
 impl Temp {
     fn new(tag: &str) -> Self {
-        static NEXT: AtomicU64 = AtomicU64::new(0);
-        let dir = std::env::temp_dir().join(format!(
-            "devworks-index-{tag}-{}-{}",
-            std::process::id(),
-            NEXT.fetch_add(1, Ordering::SeqCst)
-        ));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TempRoot::new(&format!("devworks-index-{tag}")).created();
         // In the identity form discovery records (macOS /private/var; on Windows without the
         // verbatim prefix `canonicalize` adds, which Git also refuses in `worktree add`).
-        Self(NativeSourceTree::new().canonical_dir(&dir).unwrap())
+        let canonical = NativeSourceTree::new().canonical_dir(&dir).unwrap();
+        // Removes the directory it created, under whichever spelling the test names it.
+        Self(TempRoot::adopt(canonical).and_removes(dir.path().to_path_buf()))
     }
     fn join(&self, p: &str) -> PathBuf {
         self.0.join(p)
-    }
-}
-impl Drop for Temp {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.0);
     }
 }
 
@@ -246,7 +223,7 @@ impl Fx {
     fn new(tweak: impl FnOnce(&mut IndexSettings)) -> Self {
         let root = Temp::new("store");
         let clock = Arc::new(TestClock(AtomicI64::new(T0)));
-        let ids = Arc::new(TestIds(AtomicU64::new(0)));
+        let ids = Arc::new(TestIds::new());
         let mut settings = IndexSettings {
             retry_base_ms: 1_000,
             ..IndexSettings::default()

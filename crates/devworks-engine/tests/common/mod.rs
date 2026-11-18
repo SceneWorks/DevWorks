@@ -16,9 +16,10 @@ use devworks_engine::{
     Consumer, Delivery, DeliveryHandler, Dispatcher, DispatcherConfig, EffectExecutor,
     EffectFuture, EffectResult, Outcome, RetryPolicy,
 };
+use devworks_test_support::TempRoot;
 use serde_json::json;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicI64, AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 #[path = "native_runtime_case.rs"]
@@ -48,31 +49,13 @@ pub fn help_startup_diagnostics<'a>(
     help_startup::watch(store, dispatcher)
 }
 
-pub const T0: i64 = 1_700_000_000_000;
-
-pub struct TestClock(pub AtomicI64);
-impl Clock for TestClock {
-    fn now_ms(&self) -> Counter {
-        Counter::new(self.0.load(Ordering::SeqCst)).unwrap()
-    }
-}
-pub struct TestIds(AtomicU64);
-impl TestIds {
-    /// Identifiers issued so far; durable work such as each Help topic allocates new ones.
-    pub fn issued(&self) -> u64 {
-        self.0.load(Ordering::SeqCst)
-    }
-}
-impl IdSource for TestIds {
-    fn next_id(&self, kind: IdKind) -> Id {
-        let n = self.0.fetch_add(1, Ordering::SeqCst) + 1;
-        Id::new(format!("{kind:?}-{n}").to_lowercase()).unwrap()
-    }
-}
+pub use devworks_test_support::{T0, TestClock, TestIds};
 
 /// A temporary data root reopened across simulated process restarts.
 pub struct Harness {
     pub root: PathBuf,
+    /// Removes the root when the harness drops.
+    _root: TempRoot,
     pub clock: Arc<TestClock>,
     pub ids: Arc<TestIds>,
     /// Read connections of every store opened (0: the adapter's default).
@@ -80,20 +63,18 @@ pub struct Harness {
 }
 impl Harness {
     pub fn new() -> Self {
-        static NEXT: AtomicU64 = AtomicU64::new(0);
         // Cargo's per-target scratch directory, not the system temp directory: on GitHub's
         // Windows runners %TEMP% is on the C: OS disk, whose flush latency stalls the hundreds of
         // durable commits of native Help startup past the `within` guard.
-        let root = std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!(
-            "devworks-engine-test-{}-{}",
-            std::process::id(),
-            NEXT.fetch_add(1, Ordering::SeqCst)
-        ));
-        let _ = std::fs::remove_dir_all(&root);
+        let guard = TempRoot::under(
+            std::path::Path::new(env!("CARGO_TARGET_TMPDIR")),
+            "devworks-engine-test",
+        );
         Self {
-            root,
-            clock: Arc::new(TestClock(AtomicI64::new(T0))),
-            ids: Arc::new(TestIds(AtomicU64::new(0))),
+            root: guard.path().to_path_buf(),
+            _root: guard,
+            clock: Arc::new(TestClock::new(T0)),
+            ids: Arc::new(TestIds::new()),
             readers: AtomicUsize::new(0),
         }
     }
@@ -161,11 +142,6 @@ impl Harness {
     }
     pub fn clock(&self) -> Arc<dyn Clock> {
         self.clock.clone()
-    }
-}
-impl Drop for Harness {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.root);
     }
 }
 

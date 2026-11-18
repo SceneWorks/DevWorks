@@ -269,8 +269,8 @@ impl Fx {
         let h = Harness::new();
         let store = Arc::new(h.store());
         let files = Arc::new(NativeArtifactFiles::new(
-            h.root.0.clone(),
-            h.root.0.with_extension("cache"),
+            h.root.path().to_path_buf(),
+            h.root.path().with_extension("cache"),
         ));
         let artifacts = Arc::new(ArtifactService::new(
             files.clone(),

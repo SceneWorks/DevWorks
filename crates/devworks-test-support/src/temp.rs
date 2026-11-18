@@ -31,6 +31,14 @@ impl TempRoot {
             extra: Vec::new(),
         }
     }
+    /// Takes over a directory that exists already (made by something else): removed on drop
+    /// like the others, but not cleared first.
+    pub fn adopt(path: PathBuf) -> Self {
+        Self {
+            path,
+            extra: Vec::new(),
+        }
+    }
     /// Also creates the directory.
     pub fn created(self) -> Self {
         std::fs::create_dir_all(&self.path).expect("create the temporary directory");

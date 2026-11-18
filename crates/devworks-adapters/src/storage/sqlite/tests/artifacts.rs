@@ -124,7 +124,7 @@ struct Fx {
 impl Fx {
     fn new() -> Self {
         let h = Harness::new();
-        let src = h.root.0.with_extension("sources");
+        let src = h.root.path().with_extension("sources");
         let _ = std::fs::remove_dir_all(&src);
         std::fs::create_dir_all(&src).unwrap();
         let sources = Arc::new(Sources {
@@ -190,8 +190,8 @@ impl Fx {
     fn open(h: Harness, sources: Arc<Sources>, n: Arc<AtomicU64>) -> Self {
         let store = Arc::new(h.store());
         let files = Arc::new(NativeArtifactFiles::new(
-            h.root.0.clone(),
-            h.root.0.with_extension("cache"),
+            h.root.path().to_path_buf(),
+            h.root.path().with_extension("cache"),
         ));
         let svc = Arc::new(
             ArtifactService::new(
@@ -425,7 +425,7 @@ impl Fx {
                     |(d, g)| self.files.managed_path(&d, &g).unwrap(),
                 ),
         };
-        self.h.root.0.join(relative)
+        self.h.root.join(relative)
     }
     fn events(&self) -> Vec<EventRecord> {
         self.read(|s| {
@@ -2003,12 +2003,12 @@ fn export_destinations_are_authorized_separately_and_preflighted() {
         other => panic!("{other:?}"),
     };
     let e = export(&user);
-    let out = fx.h.root.0.with_extension("out");
+    let out = fx.h.root.path().with_extension("out");
     let _ = std::fs::remove_dir_all(&out);
     std::fs::create_dir_all(&out).unwrap();
     let resolver = NativeFilesystem::new();
     let authority = fx.authority();
-    let app_data = fx.h.root.0.to_string_lossy().into_owned();
+    let app_data = fx.h.root.path().to_string_lossy().into_owned();
     let write = |ctx: &InvocationContext, stream: &Id, dest: &std::path::Path, overwrite: bool| {
         fx.svc.write_export(
             &authority,
@@ -2058,19 +2058,14 @@ fn export_destinations_are_authorized_separately_and_preflighted() {
     assert!(!elsewhere.exists());
     // The destination passes the destructive/target preflight.
     assert!(matches!(
-        write(
-            &user,
-            &e.stream_id,
-            &fx.h.root.0.join("exported.txt"),
-            false
-        ),
+        write(&user, &e.stream_id, &fx.h.root.join("exported.txt"), false),
         Err(ExportRefusal::Blocked(BlockReason::ApplicationData))
     ));
     assert!(matches!(
         write(
             &user,
             &e.stream_id,
-            &fx.h.root.0.join("workspace.sqlite"),
+            &fx.h.root.join("workspace.sqlite"),
             true
         ),
         Err(ExportRefusal::Blocked(BlockReason::ApplicationData))
@@ -2121,7 +2116,7 @@ fn source_links_escapes_and_changed_content_are_refused_before_staging() {
     let source = |c| (c, "artifact_source".to_owned());
     #[cfg(unix)]
     {
-        let secret = fx.h.root.0.with_extension("secret");
+        let secret = fx.h.root.path().with_extension("secret");
         std::fs::write(&secret, b"private").unwrap();
         std::os::unix::fs::symlink(&secret, fx.sources.root.location.join("link.txt")).unwrap();
         fx.sources
@@ -3250,7 +3245,7 @@ fn a_corrupt_existing_file_is_an_integrity_refusal_and_recovery_quarantines_it()
     // The corrupt generation is kept as evidence in quarantine, never unlinked.
     assert!(!fx.blob_file(&d).exists());
     assert_eq!(
-        std::fs::read_dir(fx.h.root.0.join("quarantine"))
+        std::fs::read_dir(fx.h.root.join("quarantine"))
             .unwrap()
             .count(),
         1
@@ -3404,7 +3399,7 @@ fn host_issued_sources_resolve_only_for_their_binding() {
     ));
     let (_, cases) = fx.service_with(fx.files.clone(), sources.clone());
     let authority = fx.authority();
-    let dir = fx.h.root.0.with_extension("picked");
+    let dir = fx.h.root.path().with_extension("picked");
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     let file = dir.join("picked.txt");
@@ -4222,7 +4217,7 @@ fn healing_past_a_wrong_length_generation_quarantines_it() {
     // After A published its own generation, B commits its own and B's file is truncated.
     let slot = Arc::new(Mutex::new(None));
     let save_b = save_into(&fx, "tb", bytes, slot.clone());
-    let (store, root) = (fx.store.clone(), fx.h.root.0.clone());
+    let (store, root) = (fx.store.clone(), fx.h.root.path().to_path_buf());
     let digest = old.digest.clone();
     *hook.after_publish.lock().unwrap() = Some(Box::new(move || {
         save_b();
@@ -4252,7 +4247,7 @@ fn healing_past_a_wrong_length_generation_quarantines_it() {
     let b = saved(slot.lock().unwrap().take().unwrap()).artifact;
     // The corrupt generation was moved into quarantine (evidence), not swept away.
     assert_eq!(
-        std::fs::read_dir(fx.h.root.0.join("quarantine"))
+        std::fs::read_dir(fx.h.root.join("quarantine"))
             .unwrap()
             .count(),
         1
@@ -4721,7 +4716,7 @@ fn workspace_upload_tickets_resolve_only_for_a_workspace_save() {
     ));
     let (_, cases) = fx.service_with(fx.files.clone(), sources.clone());
     let authority = fx.authority();
-    let dir = fx.h.root.0.with_extension("pasted");
+    let dir = fx.h.root.path().with_extension("pasted");
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     let file = dir.join("pasted.txt");
@@ -5976,8 +5971,8 @@ fn purge_planning_kept_artifact_subjects_retain_minimal_assignment_resource_and_
         .unwrap();
     let files = Arc::new(
         crate::fs::purge::NativeProjectPurgeFiles::new(
-            fx.h.root.0.clone(),
-            fx.h.root.0.with_extension("cache"),
+            fx.h.root.path().to_path_buf(),
+            fx.h.root.path().with_extension("cache"),
         )
         .with_read_fence(fx.svc.clone()),
     );
@@ -6388,7 +6383,7 @@ fn purge_client_keeper_retains_only_its_exact_version_and_minimal_artifact_heade
             &staged,
         ))
     });
-    let native = rusqlite::Connection::open(fx.h.root.0.join("workspace.sqlite")).unwrap();
+    let native = rusqlite::Connection::open(fx.h.root.join("workspace.sqlite")).unwrap();
     super::super::project_purge::guard::register(&native, false).unwrap();
     let planning = super::super::project_purge::classification::planning_with_client_keepers(
         &native,

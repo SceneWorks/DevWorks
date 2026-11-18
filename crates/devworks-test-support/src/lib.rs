@@ -20,7 +20,7 @@ mod unmodelled;
 mod unmodelled_generated;
 
 pub use acks::LoseAcks;
-pub use clock::{FixedClock, T0, TestClock, TestIds};
+pub use clock::{FixedClock, HookedClock, NumberedIds, T0, TestClock, TestIds};
 pub use files::{Call, FaultFiles, FileOp};
 pub use temp::TempRoot;
 pub use unmodelled::{Unmodelled, unmodelled};

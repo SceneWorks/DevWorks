@@ -179,7 +179,7 @@ fn purge_preparation_and_permit_bind_native_rows_client_and_exact_human_confirma
     let sources =
         crate::fs::sources::HostArtifactSources::new(fx.h.clock.clone(), fx.h.ids.clone())
             .with_project_fence(Arc::new(ManagedFileCustody::new(fx.store.clone())));
-    let picked = fx.h.root.0.join("independent-picked-input.txt");
+    let picked = fx.h.root.join("independent-picked-input.txt");
     std::fs::write(&picked, b"user input stays byte exact").unwrap();
     let owner_context = user
         .clone()
@@ -3502,7 +3502,7 @@ fn client_paste_custody_uses_stored_session_scope_and_preserves_independent_file
         }
         Ok(())
     });
-    let root = fx.h.root.0.join("staging-ui");
+    let root = fx.h.root.join("staging-ui");
     let files = Staging::new(root.clone(), fx.store.clone());
     let path = files
         .write(
@@ -3602,7 +3602,7 @@ fn client_paste_refuses_ambiguous_legacy_session_scope_before_creating_bytes() {
             checkpoint_sequence: 0,
         })
     });
-    let root = fx.h.root.0.join("staging-ui");
+    let root = fx.h.root.join("staging-ui");
     let files = Staging::new(root.clone(), fx.store.clone());
     assert!(
         files
@@ -3629,7 +3629,7 @@ fn client_paste_recovers_only_previous_boot_incomplete_identity_bound_writes() {
     let h = Harness::new();
     let store = Arc::new(h.store());
     purge_storage_fixture(store.as_ref());
-    let root = h.root.0.join("staging-ui");
+    let root = h.root.join("staging-ui");
     std::fs::create_dir_all(&root).unwrap();
     let mut reservation = managed_reservation(store.as_ref(), "interrupted-paste");
     reservation.kind = "ClientPaste".into();
@@ -3688,7 +3688,7 @@ fn client_paste_recovery_holds_a_replaced_file_without_deleting_either_identity(
     let h = Harness::new();
     let store = Arc::new(h.store());
     purge_storage_fixture(store.as_ref());
-    let root = h.root.0.join("staging-ui");
+    let root = h.root.join("staging-ui");
     std::fs::create_dir_all(&root).unwrap();
     let mut reserved = managed_reservation(store.as_ref(), "replaced-paste");
     reserved.kind = "ClientPaste".into();
@@ -3709,7 +3709,7 @@ fn client_paste_recovery_holds_a_replaced_file_without_deleting_either_identity(
         )
     })
     .unwrap();
-    let moved = h.root.0.join("retained-original");
+    let moved = h.root.join("retained-original");
     std::fs::rename(&path, &moved).unwrap();
     std::fs::write(&path, b"independent replacement").unwrap();
     drop(store);
@@ -3733,7 +3733,7 @@ fn client_staging_custody_covers_plan_and_convention_sources_without_claiming_wo
     use devworks_core::ports::project_purge::{PurgeFileOwner, PurgeFileSelection};
     let fx = Fx::new();
     let p = fx.create("text staging project", &[]);
-    let root = fx.h.root.0.join("staging-ui");
+    let root = fx.h.root.join("staging-ui");
     let files = Staging::new(root.clone(), fx.store.clone());
     let mut owners = Vec::new();
     let mut paths = Vec::new();
@@ -3760,7 +3760,7 @@ fn client_staging_custody_covers_plan_and_convention_sources_without_claiming_wo
     };
     let physical = Recorded::new(
         fx.store.clone(),
-        NativeProjectPurgeFiles::new(fx.h.root.0.clone(), fx.h.root.0.join("cache"))
+        NativeProjectPurgeFiles::new(fx.h.root.path().to_path_buf(), fx.h.root.join("cache"))
             .with_paste_root(root),
     );
     let snapshot = physical.inventory(&selection, &mut || false).unwrap();
@@ -3958,8 +3958,10 @@ fn project_preview_writes_refuse_a_logically_purged_project_and_leave_workspace_
     let h = Harness::new();
     let store = Arc::new(h.store());
     let prepared = purge_storage_fixture(store.as_ref());
-    let files =
-        crate::fs::artifacts::NativeArtifactFiles::new(h.root.0.clone(), h.root.0.join("cache"));
+    let files = crate::fs::artifacts::NativeArtifactFiles::new(
+        h.root.path().to_path_buf(),
+        h.root.join("cache"),
+    );
     let custody = ManagedFileCustody::new(store.clone());
     let key = devworks_core::services::artifacts::preview::preview_id("before-purge");
     custody
@@ -4018,12 +4020,14 @@ fn project_preview_recovery_discards_only_the_interrupted_native_key_after_resta
     let h = Harness::new();
     let store = Arc::new(h.store());
     let _ = purge_storage_fixture(store.as_ref());
-    let files =
-        crate::fs::artifacts::NativeArtifactFiles::new(h.root.0.clone(), h.root.0.join("cache"));
+    let files = crate::fs::artifacts::NativeArtifactFiles::new(
+        h.root.path().to_path_buf(),
+        h.root.join("cache"),
+    );
     let workspace = devworks_core::services::artifacts::preview::preview_id("workspace-kept");
     files.write_derived(&workspace, b"workspace cache").unwrap();
     let key = devworks_core::services::artifacts::preview::preview_id("interrupted-key");
-    let dir = h.root.0.join("cache").join("artifact-previews");
+    let dir = h.root.join("cache").join("artifact-previews");
     let mut reserved = managed_reservation(store.as_ref(), "interrupted-preview");
     reserved.kind = "Preview".into();
     reserved.relative_path = key.clone();
@@ -4043,8 +4047,10 @@ fn project_preview_recovery_discards_only_the_interrupted_native_key_after_resta
             .pending_project_managed_writes(&project("purge-a")))
         .unwrap()
     );
-    let files =
-        crate::fs::artifacts::NativeArtifactFiles::new(h.root.0.clone(), h.root.0.join("cache"));
+    let files = crate::fs::artifacts::NativeArtifactFiles::new(
+        h.root.path().to_path_buf(),
+        h.root.join("cache"),
+    );
     ManagedFileCustody::new(store.clone())
         .recover_project_previews(&files)
         .unwrap();
@@ -4102,7 +4108,7 @@ fn native_purge_files_cover_all_owned_classes_and_preserve_sources_and_other_gen
     let h = Harness::new();
     let store = Arc::new(h.store());
     let _ = purge_storage_fixture(store.as_ref());
-    let data = &h.root.0;
+    let data = &h.root.path();
     let cache = data.join("cache");
     let paste = data.join("paste");
     let digest = devworks_core::fingerprint::sha256_hex(b"owned blob");
@@ -4209,7 +4215,7 @@ fn native_purge_files_cover_all_owned_classes_and_preserve_sources_and_other_gen
     }
     let files = Recorded::new(
         store,
-        crate::fs::purge::NativeProjectPurgeFiles::new(data.clone(), cache)
+        crate::fs::purge::NativeProjectPurgeFiles::new(data.to_path_buf(), cache)
             .with_paste_root(paste)
             .with_read_fence(Arc::new(
                 devworks_core::services::artifacts::lifecycle::Readers::default(),
@@ -4269,7 +4275,7 @@ fn native_purge_files_refuse_replacements_new_entries_wrong_bindings_and_forged_
     let h = Harness::new();
     let store = Arc::new(h.store());
     let _ = purge_storage_fixture(store.as_ref());
-    let root = h.root.0.join("browser/sessions/purge-session");
+    let root = h.root.join("browser/sessions/purge-session");
     std::fs::create_dir_all(&root).unwrap();
     std::fs::write(root.join("profile"), b"original").unwrap();
     let info = store.info();
@@ -4283,7 +4289,10 @@ fn native_purge_files_refuse_replacements_new_entries_wrong_bindings_and_forged_
     };
     let files = Recorded::new(
         store,
-        crate::fs::purge::NativeProjectPurgeFiles::new(h.root.0.clone(), h.root.0.join("cache")),
+        crate::fs::purge::NativeProjectPurgeFiles::new(
+            h.root.path().to_path_buf(),
+            h.root.join("cache"),
+        ),
     );
     let snapshot = files.inventory(&selection, &mut || false).unwrap();
     let profile = snapshot.files.iter().find(|w| !w.directory).unwrap();
@@ -4339,7 +4348,7 @@ fn native_purge_files_require_the_published_transient_file_identity_and_content(
     let h = Harness::new();
     let store = Arc::new(h.store());
     let _ = purge_storage_fixture(store.as_ref());
-    let root = h.root.0.join("diagnostics/exports");
+    let root = h.root.join("diagnostics/exports");
     let info = store.info();
     let selection = PurgeFileSelection {
         project_id: project("purge-a"),
@@ -4359,7 +4368,10 @@ fn native_purge_files_require_the_published_transient_file_identity_and_content(
     );
     let files = Recorded::new(
         store,
-        crate::fs::purge::NativeProjectPurgeFiles::new(h.root.0.clone(), h.root.0.join("cache")),
+        crate::fs::purge::NativeProjectPurgeFiles::new(
+            h.root.path().to_path_buf(),
+            h.root.join("cache"),
+        ),
     );
     let snapshot = files.inventory(&selection, &mut || false).unwrap();
     let original = &snapshot.files[0];

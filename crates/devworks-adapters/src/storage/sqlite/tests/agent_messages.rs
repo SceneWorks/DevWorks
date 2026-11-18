@@ -1537,8 +1537,8 @@ fn message_delivery_replays_after_reopen_and_rejects_cross_project_links() {
 
     let artifacts = Arc::new(devworks_core::services::artifacts::ArtifactService::new(
         Arc::new(crate::fs::artifacts::NativeArtifactFiles::new(
-            h.root.0.clone(),
-            h.root.0.join("cache"),
+            h.root.path().to_path_buf(),
+            h.root.join("cache"),
         )),
         Arc::new(crate::fs::sources::HostArtifactSources::new(
             h.clock.clone(),
