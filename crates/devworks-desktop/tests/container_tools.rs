@@ -42,7 +42,8 @@ fn opening_settings_runs_no_host_container_cli() {
     let _case = native_runtime_case();
     let bin = Root::new("container-tools-bin");
     let dir = bin.dir("bin");
-    let marker = bin.0.with_extension("ran");
+    // Inside the bin root, so its cleanup removes the marker whatever the outcome.
+    let marker = bin.0.join("ran");
     fake_clis(&dir, &marker);
     let old = std::env::var_os("PATH").unwrap_or_default();
     let mut paths = vec![dir.clone()];
@@ -65,7 +66,6 @@ fn opening_settings_runs_no_host_container_cli() {
     open_settings(&control, false);
     let ran = std::fs::read_to_string(&marker).unwrap_or_default();
     unsafe { std::env::set_var("PATH", old) };
-    let _ = std::fs::remove_file(&marker);
     assert!(
         ran.contains("docker"),
         "the control never ran a fake CLI: {ran:?}"

@@ -478,17 +478,16 @@ async fn compose(
             store.clone(),
         ),
     );
-    let container_executables = Arc::new(match config.container_search_path.clone() {
-        Some(path) => {
+    // Container CLIs share that resolver unless the configuration names a search path of its own.
+    let container_executables = match config.container_search_path.clone() {
+        Some(path) => Arc::new(
             devworks_core::services::process::executables::PathExecutables::from_settings_on(
                 store.clone(),
                 path,
-            )
-        }
-        None => devworks_core::services::process::executables::PathExecutables::from_settings(
-            store.clone(),
+            ),
         ),
-    });
+        None => executables.clone(),
+    };
     let container_bindings = container_bindings(config, container_executables)
         .map_err(|reason| StartError::Thread(reason.into()))?;
     let container_private_files = Arc::new(
