@@ -25,7 +25,7 @@ impl Read for GatedReader {
 fn fixture(root: &str) -> (Fixture, Arc<FaultFiles>) {
     let h = Harness::new();
     let store = h.open();
-    common::seed_root(&h, root);
+    common::seed_root(&*store, root);
     let ctx = principal(&*store, "body-author", PrincipalKind::Human).with_lineage(
         Some(ProjectId(id("project-a"))),
         Some(RootId(id(root))),
@@ -129,10 +129,16 @@ fn pause_after_actual_body_read_blocks_publication_without_clearing_hold_and_con
 #[test]
 fn relinked_task_cannot_publish_under_old_parent_or_waive_new_parent_pause() {
     let (mut f, files) = fixture("feature-a");
-    common::seed_root(&f.h, "feature-b");
-    let connection = rusqlite::Connection::open(f.h.root.join("workspace.sqlite")).unwrap();
-    connection.execute("INSERT INTO work_items(id,project_id,kind,parent_feature_id,status_id,title,priority,manual_order,revision,scope_revision,created_at,brief_json)VALUES('task','project-a','task','feature-a',NULL,'Task',1,0,1,1,0,'{}')",[]).unwrap();
-    drop(connection);
+    common::seed_root(&*f.store, "feature-b");
+    devworks_test_support::seed::work(
+        &*f.store,
+        &[
+            devworks_test_support::seed::WorkSeed::task("task", "project-a", "feature-a")
+                .title("Task")
+                .created_at(0),
+        ],
+    )
+    .unwrap();
     f.ctx = f.ctx.clone().with_lineage(
         Some(ProjectId(id("project-a"))),
         Some(RootId(id("task"))),

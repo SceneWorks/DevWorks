@@ -555,7 +555,7 @@ fn an_applied_delete_starts_a_collection_pass_that_removes_the_released_file() {
     let h = Harness::new();
     let rt = runtime();
     let store = h.open();
-    seed_root(&h, "root-a");
+    seed_root(&*store, "root-a");
     let src = sources(&h);
     let user = principal(&*store, "user-a", PrincipalKind::Human);
     let app = rt
@@ -697,7 +697,7 @@ fn a_committed_command_wakes_the_polling_loops_before_the_fallback_interval() {
     let h = Harness::new();
     let rt = runtime();
     let store = h.open();
-    seed_root(&h, "root-a");
+    seed_root(&*store, "root-a");
     let user = principal(&*store, "user-a", PrincipalKind::Human);
     let mut c = composition(&h, store, Arc::new(native(&h)), sources(&h));
     c.config.polling_interval = Duration::from_secs(3600);

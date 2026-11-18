@@ -1517,13 +1517,11 @@ fn a_scheduled_agent_starts_work_only_under_ordinary_controls_and_budgets() {
     let start = pipeline.started.lock().unwrap().pop().unwrap();
     // A feature root of the project, paused by a person: the scheduled agent may select it, but
     // Start leaves the pause effective (ContinueRequired) — scheduling grants no bypass.
-    let sql = format!(
-        "INSERT INTO work_items VALUES('feature-1','{}','feature',NULL,NULL,NULL,'F',1,0,1,1,1,'{{}}');",
-        p.id.0.as_str()
-    );
-    fx.store
-        .with_writer_connection(move |c| super::super::conn::db(c.execute_batch(&sql)))
-        .unwrap();
+    devworks_test_support::seed::work(
+        &*fx.store,
+        &[devworks_test_support::seed::WorkSeed::feature("feature-1", p.id.0.as_str()).title("F")],
+    )
+    .unwrap();
     let root = RootId(id("feature-1"));
     let control = |fx: &Fx| {
         let r = root.clone();
@@ -2463,13 +2461,11 @@ fn an_archival_of_the_targeted_project_fences_an_app_level_task() {
     // Its agent acts in P, not across the workspace.
     // Work it links is P's, never another project's.
     let q = fx.project("Q");
-    let sql = format!(
-        "INSERT INTO work_items VALUES('feature-q','{}','feature',NULL,NULL,NULL,'F',1,0,1,1,1,'{{}}');",
-        q.id.0.as_str()
-    );
-    fx.store
-        .with_writer_connection(move |c| super::super::conn::db(c.execute_batch(&sql)))
-        .unwrap();
+    devworks_test_support::seed::work(
+        &*fx.store,
+        &[devworks_test_support::seed::WorkSeed::feature("feature-q", q.id.0.as_str()).title("F")],
+    )
+    .unwrap();
     let (r, root) = (id(&rid), RootId(id("feature-q")));
     let linked = run_write(&*fx.store, WriteOptions::default(), move |tx| {
         discovery::link_root(tx, &r, &root)

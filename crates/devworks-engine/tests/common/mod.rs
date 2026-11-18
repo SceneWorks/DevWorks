@@ -16,7 +16,7 @@ use devworks_engine::{
     Consumer, Delivery, DeliveryHandler, Dispatcher, DispatcherConfig, EffectExecutor,
     EffectFuture, EffectResult, Outcome, RetryPolicy,
 };
-use devworks_test_support::TempRoot;
+use devworks_test_support::{TempRoot, seed};
 use serde_json::json;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -597,15 +597,15 @@ pub fn principal(s: &dyn ApplicationStore, name: &str, kind: PrincipalKind) -> I
     )
 }
 
-/// Seeds a project and a feature work item `root` directly in the store file: root-scoped
-/// deliveries need an owning root and the engine has no work-item port.
-pub fn seed_root(h: &Harness, root: &str) {
-    let c = rusqlite::Connection::open(h.root.join("workspace.sqlite")).unwrap();
-    c.busy_timeout(std::time::Duration::from_secs(5)).unwrap();
-    c.execute_batch(&format!(
-        "INSERT OR IGNORE INTO projects(id,title,lifecycle,revision,scope_revision,created_at) VALUES('project-a','A','Active',1,1,0);
-         INSERT INTO work_items VALUES('{root}','project-a','feature',NULL,NULL,NULL,'Fixture',1,0,1,1,1,'{{}}');"
-    ))
+/// Seeds project `project-a` (when it does not exist yet) and a feature work item `root` through
+/// the repository ports: root-scoped deliveries need an owning root and the engine has no
+/// work-item service to create one with a chosen id.
+pub fn seed_root(store: &dyn ApplicationStore, root: &str) {
+    seed::rows(
+        store,
+        &[seed::ProjectSeed::new("project-a").name("A").created_at(0)],
+        &[seed::WorkSeed::feature(root, "project-a").title("Fixture")],
+    )
     .unwrap();
 }
 

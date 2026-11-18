@@ -323,15 +323,18 @@ impl Fx {
             secrets,
             n: Arc::new(AtomicU64::new(0)),
         };
-        fx.store
-            .with_writer_connection(|c| {
-                super::super::conn::db(c.execute_batch(
-                    "INSERT INTO projects VALUES('project-a','A','Active',1,1,1);
-                     INSERT INTO projects VALUES('project-b','B','Active',1,1,1);
-                     INSERT INTO work_items VALUES('root-a','project-a','feature',NULL,NULL,NULL,'Feature A',1,0,1,1,1,'{}');",
-                ))
-            })
+        {
+            use devworks_test_support::seed::{ProjectSeed, WorkSeed};
+            devworks_test_support::seed::rows(
+                &*fx.store,
+                &[
+                    ProjectSeed::new("project-a").name("A"),
+                    ProjectSeed::new("project-b").name("B"),
+                ],
+                &[WorkSeed::feature("root-a", "project-a").title("Feature A")],
+            )
             .unwrap();
+        }
         fx.write(|tx| {
             for (a, k) in [
                 ("user-a", PrincipalKind::Human),

@@ -125,7 +125,8 @@ fn id(s: &str) -> Id {
     Id::new(s).expect("a valid seed id")
 }
 
-/// Writes `projects`, then `work` (parents before their tasks), in one transaction.
+/// Writes `projects` that do not exist yet, then `work` (parents before their tasks), in one
+/// transaction. A work item that exists already is an error.
 pub fn rows(
     store: &dyn ApplicationStore,
     projects: &[ProjectSeed],
@@ -135,7 +136,9 @@ pub fn rows(
     let work: Vec<_> = work.iter().map(WorkSeed::stored).collect();
     run_write(store, WriteOptions::default(), move |tx| {
         for p in &projects {
-            tx.projects().insert_project(p)?;
+            if tx.projects().project(&p.id)?.is_none() {
+                tx.projects().insert_project(p)?;
+            }
         }
         for w in &work {
             tx.work().insert_work(w)?;

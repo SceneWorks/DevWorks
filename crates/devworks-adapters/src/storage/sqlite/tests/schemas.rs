@@ -2324,7 +2324,14 @@ fn purge_planning_shared_source_access_keeps_independent_configuration_and_opera
         })
     })
     .unwrap();
-    h.raw().execute_batch("INSERT INTO work_items VALUES('source-purge-work','metadata-project','issue',NULL,NULL,NULL,'private owned work',1,0,1,1,1,'{}');").unwrap();
+    devworks_test_support::seed::work(
+        &s,
+        &[
+            devworks_test_support::seed::WorkSeed::issue("source-purge-work", "metadata-project")
+                .title("private owned work"),
+        ],
+    )
+    .unwrap();
     let mut shared = source("independent-shared-source", true);
     shared.connection.config.as_mut().unwrap().project_access=Some(serde_json::from_value(json!([{"projectId":"metadata-project","metadataEnabled":true,"dataReadEnabled":false,"dataWriteEnabled":false},{"projectId":"other-project","metadataEnabled":true,"dataReadEnabled":false,"dataWriteEnabled":false}])).unwrap());
     shared.connection.active_operation_id = Some(id("source-purge-operation"));

@@ -598,16 +598,11 @@ impl Fx {
     }
     /// Seeds work roots of `p` (as the work-planning item would record them).
     fn seed_roots(&self, p: &ProjectId, roots: &[&str]) {
-        let mut sql = String::new();
-        for r in roots {
-            sql.push_str(&format!(
-                "INSERT INTO work_items VALUES('{r}','{}','issue',NULL,NULL,NULL,'{r}',1,0,1,1,1,'{{}}');",
-                p.0.as_str()
-            ));
-        }
-        self.store
-            .with_writer_connection(move |c| super::super::conn::db(c.execute_batch(&sql)))
-            .unwrap();
+        let work: Vec<_> = roots
+            .iter()
+            .map(|r| devworks_test_support::seed::WorkSeed::issue(r, p.0.as_str()))
+            .collect();
+        devworks_test_support::seed::work(&*self.store, &work).unwrap();
     }
     fn eligible(&self, root: &str) -> bool {
         let (runs, root) = (self.runs.clone(), RootId(id(root)));

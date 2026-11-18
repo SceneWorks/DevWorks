@@ -311,7 +311,7 @@ fn records_raise_the_live_hint_and_an_export_is_a_redacted_artifact() {
     let rt = runtime();
     let store = h.open();
     drop(store);
-    seed_root(&h, "root-a");
+    seed_root(&*h.open(), "root-a");
     let (composition, parts) = compose(&h, Vec::new());
     let app = rt.block_on(boot(composition)).expect("boot");
     let user = principal(&**app.store(), "user-a", PrincipalKind::Human).with_lineage(
@@ -495,7 +495,7 @@ fn an_export_retry_replays_through_the_gateway_and_other_use_of_its_key_conflict
     let h = Harness::new();
     let rt = runtime();
     drop(h.open());
-    seed_root(&h, "root-a");
+    seed_root(&*h.open(), "root-a");
     let (composition, parts) = compose(&h, Vec::new());
     let app = rt.block_on(boot(composition)).expect("boot");
     let user = principal(&**app.store(), "user-a", PrincipalKind::Human).with_lineage(
@@ -649,7 +649,7 @@ fn overlapping_exports_of_one_request_key_have_one_claimant_and_one_command() {
     let h = Harness::new();
     let rt = runtime();
     drop(h.open());
-    seed_root(&h, "root-a");
+    seed_root(&*h.open(), "root-a");
     let (composition, parts) = compose(&h, Vec::new());
     let app = rt.block_on(boot(composition)).expect("boot");
     let gate = Arc::new(Gate {
@@ -697,7 +697,7 @@ fn a_quarantined_corrupt_artifact_at_boot_needs_attention() {
     let h = Harness::new();
     let rt = runtime();
     drop(h.open());
-    seed_root(&h, "root-a");
+    seed_root(&*h.open(), "root-a");
     let (composition, parts) = compose(&h, Vec::new());
     let app = rt.block_on(boot(composition)).expect("boot");
     let user = principal(&**app.store(), "user-a", PrincipalKind::Human).with_lineage(
@@ -770,7 +770,7 @@ fn a_retryable_save_rejection_keeps_the_staged_file_for_the_retry() {
     let h = Harness::new();
     let rt = runtime();
     drop(h.open());
-    seed_root(&h, "root-a");
+    seed_root(&*h.open(), "root-a");
     let (composition, parts) = compose(&h, Vec::new());
     let app = rt.block_on(boot(composition)).expect("boot");
     let user = principal(&**app.store(), "user-a", PrincipalKind::Human).with_lineage(
@@ -827,7 +827,7 @@ fn an_abandoned_export_claim_is_taken_over() {
     let h = Harness::new();
     let rt = runtime();
     drop(h.open());
-    seed_root(&h, "root-a");
+    seed_root(&*h.open(), "root-a");
     let (composition, parts) = compose(&h, Vec::new());
     let app = rt.block_on(boot(composition)).expect("boot");
     let user = principal(&**app.store(), "user-a", PrincipalKind::Human).with_lineage(
@@ -879,7 +879,7 @@ fn a_lost_acknowledgment_of_the_intent_keeps_the_staged_file_and_resolves_durabl
     let h = Harness::new();
     let rt = runtime();
     drop(h.open());
-    seed_root(&h, "root-a");
+    seed_root(&*h.open(), "root-a");
     let (composition, parts) = compose(&h, Vec::new());
     let app = rt.block_on(boot(composition)).expect("boot");
     let user = principal(&**app.store(), "user-a", PrincipalKind::Human).with_lineage(
@@ -956,7 +956,7 @@ fn export_staging_attribution_survives_restart_and_normal_owner_reconciles_compl
     use devworks_core::ports::diagnostics::ExportStaging;
     let h = Harness::new();
     drop(h.open());
-    seed_root(&h, "root-a");
+    seed_root(&*h.open(), "root-a");
     let (composition, parts) = compose(&h, Vec::new());
     let project = ProjectId(id("project-a"));
     let user = principal(parts.sqlite.as_ref(), "user-a", PrincipalKind::Human).with_lineage(
@@ -1041,7 +1041,7 @@ fn a_sweep_never_retires_an_export_this_boot_is_still_writing() {
     use devworks_core::ports::diagnostics::ExportStaging;
     let h = Harness::new();
     drop(h.open());
-    seed_root(&h, "root-a");
+    seed_root(&*h.open(), "root-a");
     let (composition, parts) = compose(&h, Vec::new());
     let project = ProjectId(id("project-a"));
     let user = principal(parts.sqlite.as_ref(), "user-a", PrincipalKind::Human).with_lineage(

@@ -113,30 +113,25 @@ impl StreamingHttp for AgentWire {
     }
 }
 
-fn seed(h: &Harness) {
-    let c = rusqlite::Connection::open(h.root.join("workspace.sqlite")).unwrap();
-    c.busy_timeout(Duration::from_secs(5)).unwrap();
-    let work = |id: &str, project: &str, kind: &str, parent: Option<&str>| {
-        format!(
-            "INSERT INTO work_items VALUES('{id}','{project}','{kind}',{},NULL,NULL,'{id}',1,0,1,1,1,'{{}}');",
-            parent.map_or("NULL".to_owned(), |p| format!("'{p}'"))
-        )
-    };
-    let mut sql = String::from(
-        "INSERT INTO projects(id,title,lifecycle,revision,scope_revision,created_at) VALUES('project-a','A','Active',1,1,0),('project-b','B','Active',1,1,0);",
-    );
-    for (id, project, kind, parent) in [
-        ("root-f", "project-a", "feature", None),
-        ("task-f1", "project-a", "task", Some("root-f")),
-        ("task-f2", "project-a", "task", Some("root-f")),
-        ("task-f3", "project-a", "task", Some("root-f")),
-        ("root-i", "project-a", "issue", None),
-        ("root-g", "project-a", "feature", None),
-        ("root-b", "project-b", "issue", None),
-    ] {
-        sql.push_str(&work(id, project, kind, parent));
-    }
-    c.execute_batch(&sql).unwrap();
+fn seed(store: &dyn ApplicationStore) {
+    use devworks_test_support::seed::{ProjectSeed, WorkSeed};
+    devworks_test_support::seed::rows(
+        store,
+        &[
+            ProjectSeed::new("project-a").name("A").created_at(0),
+            ProjectSeed::new("project-b").name("B").created_at(0),
+        ],
+        &[
+            WorkSeed::feature("root-f", "project-a"),
+            WorkSeed::task("task-f1", "project-a", "root-f"),
+            WorkSeed::task("task-f2", "project-a", "root-f"),
+            WorkSeed::task("task-f3", "project-a", "root-f"),
+            WorkSeed::issue("root-i", "project-a"),
+            WorkSeed::feature("root-g", "project-a"),
+            WorkSeed::issue("root-b", "project-b"),
+        ],
+    )
+    .unwrap();
 }
 
 /// The one store, control service and gateway the tests drive.
@@ -155,7 +150,7 @@ impl Fx {
     fn new() -> Self {
         let h = Harness::new();
         let store = h.open();
-        seed(&h);
+        seed(&*store);
         Self::over(h, store)
     }
     fn over(h: Harness, store: Arc<dyn ApplicationStore>) -> Self {
@@ -2184,9 +2179,9 @@ fn agent_first_context_publishes_the_assignment_brief_and_recovers_exactly() {
         empty_pin.session_id = empty_session.id.clone();
         empty_pin.pin_id = id("empty-handoff-pin");
         fx.tx(move |_, tx| tx.router().put_session_pin(&empty_pin, None));
-        db.execute(
-            "INSERT INTO work_items VALUES('root-h','project-a','feature',NULL,NULL,NULL,'root-h',1,0,1,1,1,'{}')",
-            [],
+        devworks_test_support::seed::work(
+            &*fx.store,
+            &[devworks_test_support::seed::WorkSeed::feature("root-h", "project-a")],
         )
         .unwrap();
         db.execute(
@@ -4679,7 +4674,7 @@ fn the_production_scope_fails_closed_without_recorded_readiness() {
     let _native_case = native_runtime_case();
     let h = Harness::new();
     let store = h.open();
-    seed(&h);
+    seed(&*store);
     let c = rusqlite::Connection::open(h.root.join("workspace.sqlite")).unwrap();
     c.busy_timeout(Duration::from_secs(5)).unwrap();
     c.execute_batch(
@@ -5851,7 +5846,7 @@ fn a_busy_store_does_not_lose_a_finished_activations_end() {
     let _native_case = native_runtime_case();
     let h = Harness::new();
     let inner = h.open();
-    seed(&h);
+    seed(&*inner);
     let store = Arc::new(RefuseWrites {
         inner,
         refuse: AtomicUsize::new(0),
@@ -6023,7 +6018,7 @@ fn restart_holds_active_and_accepted_unlaunched_work_until_a_selective_continue(
     let _native_case = native_runtime_case();
     let h = Harness::new();
     let store = h.open();
-    seed(&h);
+    seed(&*store);
     let fx = Fx::over(h, store);
     // Boot 1: root-i running; root-f accepted but never launched; root-g never started.
     applied(&fx.start(&fx.user, "root-i", 1, 1));

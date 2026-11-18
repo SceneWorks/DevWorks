@@ -144,7 +144,7 @@ fn a_streamed_frame_and_settled_history_cost_the_usage_host_no_store_work() {
     let _native_case = native_runtime_case();
     let h = Harness::new();
     let counted = h.open_counted();
-    seed(&h);
+    seed(&*counted.store);
     let f = Fx::over(h, counted.store.clone());
     let host = AttemptHost::new(f.store.clone(), f.service.clone(), router(&f));
     let mut n = 0;
@@ -218,7 +218,7 @@ fn a_usage_report_page_costs_the_same_behind_tenfold_history_outside_its_range()
     let _native_case = native_runtime_case();
     let h = Harness::new();
     let counted = h.open_counted();
-    seed(&h);
+    seed(&*counted.store);
     let f = Fx::over(h, counted.store.clone());
     let host = AttemptHost::new(f.store.clone(), f.service.clone(), router(&f));
     let mut n = 0;
@@ -290,7 +290,7 @@ fn late_attempts_of_a_usage_report_page_linearly() {
     let _native_case = native_runtime_case();
     let h = Harness::new();
     let counted = h.open_counted();
-    seed(&h);
+    seed(&*counted.store);
     let f = Fx::over(h, counted.store.clone());
     let host = AttemptHost::new(f.store.clone(), f.service.clone(), router(&f));
     let start = f.h.now();

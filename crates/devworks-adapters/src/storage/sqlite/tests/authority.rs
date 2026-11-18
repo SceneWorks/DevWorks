@@ -76,15 +76,18 @@ impl Fx {
         let h = Harness::new();
         h.ids.set(offset);
         let store = Arc::new(h.store());
-        store
-            .with_writer_connection(|c| {
-                super::super::conn::db(c.execute_batch(
-                    "INSERT INTO projects VALUES('project-a','A','Active',1,1,1);
-                     INSERT INTO projects VALUES('project-b','B','Active',1,1,1);
-                     INSERT INTO work_items VALUES('root-a','project-a','feature',NULL,NULL,NULL,'Fixture',1,0,1,1,1,'{}');",
-                ))
-            })
-            .unwrap();
+        devworks_test_support::seed::rows(
+            &*store,
+            &[
+                devworks_test_support::seed::ProjectSeed::new("project-a").name("A"),
+                devworks_test_support::seed::ProjectSeed::new("project-b").name("B"),
+            ],
+            &[
+                devworks_test_support::seed::WorkSeed::feature("root-a", "project-a")
+                    .title("Fixture"),
+            ],
+        )
+        .unwrap();
         let settings = Arc::new(SettingsService {
             roles: Arc::new(HostRoles {
                 store: store.clone(),

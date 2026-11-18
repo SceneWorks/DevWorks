@@ -137,17 +137,22 @@ impl Fx {
             on_resolve: Mutex::new(HashMap::new()),
         });
         let fx = Self::open(h, sources, Arc::new(AtomicU64::new(0)));
-        fx.store
-            .with_writer_connection(|c| {
-                super::super::conn::db(c.execute_batch(
-                    "INSERT INTO projects VALUES('project-a','A','Active',1,1,1);
-                     INSERT INTO projects VALUES('project-b','B','Active',1,1,1);
-                     INSERT INTO work_items VALUES('root-a','project-a','feature',NULL,NULL,NULL,'Feature A',1,0,1,1,1,'{}');
-                     INSERT INTO work_items VALUES('task-a','project-a','task','root-a',NULL,NULL,'Task A',1,0,1,1,1,'{}');
-                     INSERT INTO work_items VALUES('root-b','project-b','feature',NULL,NULL,NULL,'Feature B',1,0,1,1,1,'{}');",
-                ))
-            })
+        {
+            use devworks_test_support::seed::{ProjectSeed, WorkSeed};
+            devworks_test_support::seed::rows(
+                &*fx.store,
+                &[
+                    ProjectSeed::new("project-a").name("A"),
+                    ProjectSeed::new("project-b").name("B"),
+                ],
+                &[
+                    WorkSeed::feature("root-a", "project-a").title("Feature A"),
+                    WorkSeed::task("task-a", "project-a", "root-a").title("Task A"),
+                    WorkSeed::feature("root-b", "project-b").title("Feature B"),
+                ],
+            )
             .unwrap();
+        }
         fx.write(|tx| {
             for (a, k) in ACTORS {
                 tx.actors().register(&actor(a), k, a)?;
@@ -781,12 +786,14 @@ fn save_list_read_preview_reference_export_and_delete_through_the_gateway() {
 #[test]
 fn assigned_worker_reads_only_own_or_explicitly_referenced_artifacts() {
     let fx = Fx::new();
-    fx.h.raw()
-        .execute(
-            "INSERT INTO work_items VALUES('root-c','project-a','feature',NULL,NULL,NULL,'Feature C',1,0,1,1,1,'{}')",
-            [],
-        )
-        .unwrap();
+    devworks_test_support::seed::work(
+        &*fx.store,
+        &[
+            devworks_test_support::seed::WorkSeed::feature("root-c", "project-a")
+                .title("Feature C"),
+        ],
+    )
+    .unwrap();
     fx.write(|tx| {
         for (session_id, agent) in [
             ("scope-primary-session", "agent-p"),
