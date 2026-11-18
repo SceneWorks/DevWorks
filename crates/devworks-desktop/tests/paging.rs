@@ -285,6 +285,38 @@ fn projects_beyond_the_first_page_are_reached_with_load_more() {
 }
 
 #[test]
+fn a_projects_re_read_keeps_the_pages_load_more_added() {
+    let root = Root::new("paging-projects-reread");
+    let engine = start(&root);
+    let backend = engine.backend();
+    let page = usize::from(ops::PAGE_LIMIT);
+    for n in 0..page + 3 {
+        let made = ops::project_changed(backend.command(
+            "projects.create",
+            &ops::project_create(&*backend, &format!("Project {n:03}"), "", &[]),
+        ));
+        assert!(made.is_ok(), "{n}");
+    }
+    let mut h = harness(shell(&engine, &root, Script::default()), 1440.0, 900.0);
+    settle(&mut h);
+    click_nav(&mut h, "All projects");
+    step_until(&mut h, "the first page", |s| s.projects.list.loaded);
+    // A re-read (periodic, or after a mutation) while Load more is in flight still ends with
+    // every page.
+    click(&mut h, Role::Button, "Load more");
+    h.state_mut().load_projects();
+    step_until(&mut h, "both pages", |s| {
+        !s.projects.list.loading() && !s.projects.list.more()
+    });
+    assert_eq!(h.state().projects.list.items.len(), page + 3);
+    // And a re-read after it keeps them.
+    h.state_mut().load_projects();
+    step_until(&mut h, "the re-read", |s| !s.projects.list.loading());
+    assert_eq!(h.state().projects.list.items.len(), page + 3);
+    assert!(!h.state().projects.list.more());
+}
+
+#[test]
 fn a_page_from_another_snapshot_is_refused_with_its_reason_and_retries_from_the_start() {
     let mut list = Paged::default();
     let first = list.reload();

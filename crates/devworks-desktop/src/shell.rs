@@ -801,7 +801,13 @@ impl Shell {
 
     pub fn load_projects(&mut self) {
         self.projects.list_at = self.projects.mutations;
-        let fetch = self.projects.list.reload();
+        // Once listed, a re-read covers every page shown (and a Load more in flight), so a
+        // periodic or mutation re-read never collapses a list the user expanded.
+        let fetch = if self.projects.list.loaded {
+            self.projects.list.refresh()
+        } else {
+            self.projects.list.reload()
+        };
         self.send_projects(fetch, "Loading projects");
     }
     pub fn load_more_projects(&mut self) {
@@ -873,10 +879,12 @@ impl Shell {
             self.load_projects();
             return;
         }
-        if matches!(
-            self.projects.list.apply_current(result),
-            Applied::Replaced | Applied::Appended
-        ) {
+        let applied = self.projects.list.apply_current(result);
+        if let Applied::Continue(fetch) = applied {
+            self.send_projects(fetch, "Loading projects");
+            return;
+        }
+        if matches!(applied, Applied::Replaced | Applied::Appended) {
             // A selection that no longer exists (deleted elsewhere) is dropped.
             if let Some(s) = self.selected_project.clone()
                 && !self.projects.list.more()
