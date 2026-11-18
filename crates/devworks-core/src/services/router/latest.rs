@@ -1,9 +1,49 @@
 //! Numeric family identities for the eight stable latest selectors. Provider inventory order,
 //! lexical ordering and snapshot dates never determine a family version.
 
-pub const FAMILIES: [&str; 8] = [
-    "astra", "sol", "terra", "luna", "fable", "opus", "sonnet", "haiku",
+/// The company whose model naming a family follows. It decides the upstream grammar and the
+/// provider namespace a model id may carry.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Publisher {
+    OpenAi,
+    Anthropic,
+}
+
+impl Publisher {
+    /// The namespace an upstream id may be prefixed with (`openai/gpt-6-sol`).
+    pub fn namespace(self) -> &'static str {
+        match self {
+            Self::OpenAi => "openai",
+            Self::Anthropic => "anthropic",
+        }
+    }
+}
+
+/// Each family with its publisher, so no publisher is inferred from a position in this list.
+pub const FAMILIES: [(&str, Publisher); 8] = [
+    ("astra", Publisher::OpenAi),
+    ("sol", Publisher::OpenAi),
+    ("terra", Publisher::OpenAi),
+    ("luna", Publisher::OpenAi),
+    ("fable", Publisher::Anthropic),
+    ("opus", Publisher::Anthropic),
+    ("sonnet", Publisher::Anthropic),
+    ("haiku", Publisher::Anthropic),
 ];
+
+/// The stable name and publisher of `family`, if it is one of the eight.
+pub fn family(name: &str) -> Option<(&'static str, Publisher)> {
+    FAMILIES.iter().copied().find(|(f, _)| *f == name)
+}
+
+/// The names of the eight families, in their configured order.
+pub fn family_names() -> impl Iterator<Item = &'static str> {
+    FAMILIES.iter().map(|(name, _)| *name)
+}
+
+fn publishes(family: &str, publisher: Publisher) -> bool {
+    self::family(family).is_some_and(|(_, p)| p == publisher)
+}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ParsedVersion {
@@ -20,8 +60,8 @@ pub fn alias_id(family: &str) -> String {
 }
 
 pub fn alias_family(id: &str) -> Option<&'static str> {
-    let family = id.strip_suffix("-latest")?;
-    FAMILIES.iter().copied().find(|f| *f == family)
+    let name = id.strip_suffix("-latest")?;
+    family(name).map(|(name, _)| name)
 }
 
 /// Accept only the model family's full upstream grammar. In particular `latest`, preview
@@ -44,30 +84,26 @@ pub fn parse(upstream: &str) -> Option<ParsedVersion> {
     let (family, digits, separators): (&str, &str, &[char]) =
         if let Some(rest) = model.strip_prefix("gpt-") {
             let (digits, family) = rest.rsplit_once('-')?;
-            if !FAMILIES[..4].contains(&family) {
+            if !publishes(family, Publisher::OpenAi) {
                 return None;
             }
             (family, digits, &['.'])
         } else {
             let rest = model.strip_prefix("claude-")?;
             let (first, after) = rest.split_once('-')?;
-            let (family, digits) = if FAMILIES[4..].contains(&first) {
+            let (family, digits) = if publishes(first, Publisher::Anthropic) {
                 (first, after)
             } else {
                 // Anthropic's older releases place the numeric version before the family.
                 let (digits, family) = rest.rsplit_once('-')?;
                 (family, digits)
             };
-            if !FAMILIES[4..].contains(&family) {
+            if !publishes(family, Publisher::Anthropic) {
                 return None;
             }
             (family, digits, &['.', '-'])
         };
-    let publisher = if FAMILIES[..4].contains(&family) {
-        "openai"
-    } else {
-        "anthropic"
-    };
+    let publisher = self::family(family)?.1.namespace();
     if !namespace.is_empty() && namespace != publisher {
         return None;
     }
@@ -91,7 +127,7 @@ pub fn parse(upstream: &str) -> Option<ParsedVersion> {
         version.pop();
     }
     Some(ParsedVersion {
-        family: FAMILIES.iter().copied().find(|f| *f == family)?,
+        family: self::family(family)?.0,
         version,
         namespace: namespace.to_owned(),
         snapshot,
@@ -210,9 +246,9 @@ mod tests {
 
     #[test]
     fn families_have_exact_boundaries_and_numeric_versions() {
-        for family in FAMILIES {
+        for (family, publisher) in FAMILIES {
             assert_eq!(alias_family(&alias_id(family)), Some(family));
-            let upstream = if FAMILIES[..4].contains(&family) {
+            let upstream = if publisher == Publisher::OpenAi {
                 format!("gpt-7.2-{family}")
             } else {
                 format!("claude-{family}-7-2")

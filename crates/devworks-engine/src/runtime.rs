@@ -504,13 +504,13 @@ pub struct Runtime {
         Option<Result<devworks_core::services::instructions::SyncReport, StorageError>>,
     schemas: Option<Arc<devworks_core::services::schemas::SchemaService>>,
     /// The shutdown stage ([`ShutdownStage`] as a byte) for the progress surface; the fence
-    /// itself is `admission`.
+    /// itself is `admission_closed`.
     stage: std::sync::atomic::AtomicU8,
     /// The admission fence: ordinary commands hold it through admission and commit. A retained
     /// receive waits outside it with a registered shutdown token, then holds it for its final
     /// decision. Shutdown closes it exclusively and cancels waiting receives; no command commits
-    /// after the run-control quiescence snapshot.
-    admission: Arc<std::sync::RwLock<bool>>,
+    /// after the run-control quiescence snapshot. The value is `true` once the fence is closed.
+    admission_closed: Arc<std::sync::RwLock<bool>>,
     /// The command path (admission fence, gateway, post-commit wakeups) shared with the
     /// scheduler's native runs.
     admitter: Arc<Admitter>,
@@ -586,7 +586,7 @@ struct Engine {
     monitor: Arc<Monitor>,
     notifications: Option<Arc<OsNotificationSupervisor>>,
     evals: Arc<EvalSupervisor>,
-    admission: Arc<std::sync::RwLock<bool>>,
+    admission_closed: Arc<std::sync::RwLock<bool>>,
     admitter: Arc<Admitter>,
     scheduler: Arc<Scheduler>,
     resumes: Arc<ResumeDispatcher>,
@@ -1219,13 +1219,13 @@ async fn build(composition: Composition, core: CoreServices) -> Result<Engine, B
         eval_service,
         config.automatic_eval_suites.clone(),
     );
-    let admission = Arc::new(std::sync::RwLock::new(false));
+    let admission_closed = Arc::new(std::sync::RwLock::new(false));
     let admitter = Arc::new(Admitter {
         store: store.clone(),
         ids: ids.clone(),
         authority: authority.clone(),
         use_cases: use_cases.clone(),
-        admission: admission.clone(),
+        admission_closed: admission_closed.clone(),
         receive_waiters: Arc::new(Mutex::new(BTreeMap::new())),
         next_receive_waiter: AtomicU64::new(0),
         dispatcher: dispatcher.clone(),
@@ -1345,7 +1345,7 @@ async fn build(composition: Composition, core: CoreServices) -> Result<Engine, B
         monitor,
         notifications,
         evals,
-        admission,
+        admission_closed,
         admitter,
         scheduler,
         resumes,
@@ -1447,7 +1447,7 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
         monitor,
         notifications,
         evals,
-        admission,
+        admission_closed,
         admitter,
         scheduler,
         resumes,
@@ -2149,7 +2149,7 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
         instructions,
         schemas,
         stage: std::sync::atomic::AtomicU8::new(ShutdownStage::Open as u8),
-        admission,
+        admission_closed,
         admitter,
         jobs,
         scheduler,
@@ -3017,10 +3017,10 @@ impl Runtime {
         // async thread) for every
         // command in admission or commit, so none commits after the quiescence snapshot.
         self.enter(ShutdownStage::DrainingAdmission);
-        let admission = self.admission.clone();
+        let admission_closed = self.admission_closed.clone();
         let receive_waiters = self.admitter.receive_waiters.clone();
         let _ = tokio::task::spawn_blocking(move || {
-            *admission.write_locked() = true;
+            *admission_closed.write_locked() = true;
             for token in receive_waiters.locked().values() {
                 token.cancel();
             }
@@ -3277,7 +3277,7 @@ pub(crate) struct Admitter {
     ids: Arc<dyn IdSource>,
     authority: Arc<dyn AuthorityPort>,
     use_cases: UseCases,
-    admission: Arc<std::sync::RwLock<bool>>,
+    admission_closed: Arc<std::sync::RwLock<bool>>,
     receive_waiters: Arc<Mutex<BTreeMap<u64, Cancellation>>>,
     next_receive_waiter: AtomicU64,
     dispatcher: Dispatcher,
@@ -3392,8 +3392,8 @@ impl Admitter {
             // for a person or the host: discovery then answers from a fresh scan of the
             // invocation's sections. Other readers answer from the recorded registrations, which
             // the supervisor's background discovery keeps current. Shutdown refuses the scan.
-            let open = self.admission.read_locked();
-            if *open {
+            let closed = self.admission_closed.read_locked();
+            if *closed {
                 return outcome;
             }
             let env = ix.env().clone();
@@ -3408,7 +3408,7 @@ impl Admitter {
             let scan =
                 devworks_core::services::indexing::discover::scan(&env, ctx, None, &cancelled);
             devworks_core::services::indexing::discover::log_scan(&env, &scan);
-            drop(open);
+            drop(closed);
             return self.use_cases.query_with(
                 &self.gateway(),
                 ctx,
@@ -3470,8 +3470,8 @@ impl Admitter {
                 .get_or_insert_with(Cancellation::new)
                 .clone();
             let wait_guard = {
-                let open = self.admission.read_locked();
-                if *open {
+                let closed = self.admission_closed.read_locked();
+                if *closed {
                     return Some(closing_reply(
                         raw,
                         self.ids.next_id(devworks_core::ports::IdKind::Correlation),
@@ -3490,8 +3490,8 @@ impl Admitter {
             drop(wait_guard);
             let mut prepared = Some(prepared);
             fence(&mut || {
-                let open = self.admission.read_locked();
-                if *open {
+                let closed = self.admission_closed.read_locked();
+                if *closed {
                     return closing_reply(
                         raw,
                         self.ids.next_id(devworks_core::ports::IdKind::Correlation),
@@ -3507,8 +3507,8 @@ impl Admitter {
         } else {
             // Ordinary commands keep the fences through preparation and commit.
             fence(&mut || {
-                let open = self.admission.read_locked();
-                if *open {
+                let closed = self.admission_closed.read_locked();
+                if *closed {
                     return closing_reply(
                         raw,
                         self.ids.next_id(devworks_core::ports::IdKind::Correlation),
@@ -3535,8 +3535,8 @@ impl Admitter {
             .get_or_insert_with(Cancellation::new)
             .clone();
         let guard = {
-            let open = self.admission.read_locked();
-            if *open {
+            let closed = self.admission_closed.read_locked();
+            if *closed {
                 return ReceiveStart::Answered(closing_reply(
                     raw,
                     self.ids.next_id(devworks_core::ports::IdKind::Correlation),
@@ -3609,8 +3609,8 @@ impl Admitter {
         raw: &[u8],
         prepared: Result<PreparedReceive, CommandOutcome>,
     ) -> CommandOutcome {
-        let open = self.admission.read_locked();
-        let outcome = if *open {
+        let closed = self.admission_closed.read_locked();
+        let outcome = if *closed {
             closing_reply(
                 raw,
                 self.ids.next_id(devworks_core::ports::IdKind::Correlation),
@@ -3623,7 +3623,7 @@ impl Admitter {
                 Err(outcome) => outcome,
             }
         };
-        drop(open);
+        drop(closed);
         self.after_command("agents.receive", raw, &outcome, true);
         outcome
     }

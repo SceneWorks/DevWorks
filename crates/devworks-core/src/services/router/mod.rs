@@ -417,7 +417,7 @@ impl Facts {
     /// A family slot retains its configured position and custom models remain exact.
     fn family_slot(id: &Id, tier: bool) -> Option<&'static str> {
         latest::alias_family(id.as_str()).or_else(|| {
-            tier.then(|| latest::FAMILIES.iter().copied().find(|f| *f == id.as_str()))
+            tier.then(|| latest::family(id.as_str()).map(|(name, _)| name))
                 .flatten()
         })
     }
@@ -1037,7 +1037,7 @@ impl InferenceRouter {
             rows.push((m.position, m.id.as_str().to_owned(), row));
         }
         if revision >= 3 {
-            for (position, family) in latest::FAMILIES.into_iter().enumerate() {
+            for (position, (family, publisher)) in latest::FAMILIES.into_iter().enumerate() {
                 let id = Id::new(latest::alias_id(family)).expect("reserved alias");
                 let intent = RouteIntent::Model {
                     model_id: id.clone(),
@@ -1061,7 +1061,7 @@ impl InferenceRouter {
                 let mut m = current.cloned().unwrap_or_else(|| StoredRouteModel {
                     id: id.clone(),
                     display_name: family.into(),
-                    endpoint_profile: if latest::FAMILIES[..4].contains(&family) {
+                    endpoint_profile: if publisher == latest::Publisher::OpenAi {
                         "CodexSubscriptionResponses".into()
                     } else {
                         "ClaudeSubscriptionMessages".into()

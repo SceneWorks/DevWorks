@@ -217,7 +217,6 @@ impl UseCases {
         self
     }
 
-    /// The same offline Help owner serves every gateway entry path.
     /// Authored guidance shares one owner across native UI, tools and durable jobs.
     pub fn with_conventions(mut self, service: Arc<conventions::ConventionService>) -> Self {
         for operation in conventions::OPERATIONS {
@@ -226,6 +225,7 @@ impl UseCases {
         self
     }
 
+    /// The same offline Help owner serves every gateway entry path.
     pub fn with_help(mut self, service: Arc<help::HelpService>) -> Self {
         for operation in help::OPERATIONS {
             self.register(operation, Some(service.clone()), Some(service.clone()));

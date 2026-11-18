@@ -18,8 +18,9 @@
 //!   incompatible store opens read-only for diagnostics, never migrated or rewritten.
 //! * **No automatic backup (STORE-05/07/13).** Nothing here copies the store; manual backup and
 //!   restore extend [`StorageMaintenance`] in their own item.
-//! * **SQL stays here.** Repositories (module `repos`) are the only place statements exist. Nothing in
-//!   the public API exposes rusqlite types, rows, statements or a generic execute-SQL.
+//! * **SQL stays here.** Statements exist only in this module's files: `repos` and the per-family
+//!   repository files beside it, `migrations`, and the writer and connection setup. Nothing in the
+//!   public API exposes rusqlite types, rows, statements or a generic execute-SQL.
 //! * **Async facade.** [`write_async`] wraps the same admission with a Tokio `oneshot`; dropping
 //!   the future stops waiting but never rolls back an admitted job.
 mod agent_messages;
