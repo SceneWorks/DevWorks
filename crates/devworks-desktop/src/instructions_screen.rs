@@ -3,10 +3,10 @@
 //! and change is a gateway operation the shell submits for this panel; agent proposals are
 //! decided in Approvals, never here.
 use crate::instructions_ops::{self as iop, Kind, Origin, State};
-use crate::paged::Paged;
+use crate::paged::{Fetch, Paged};
 use crate::theme;
 use crate::widgets::{self, Tone, ViewState, chip};
-use devworks_core::protocol::records::{InstructionRecord, SkillResource};
+use devworks_core::protocol::records::{InstructionRecord, ProjectRecord, SkillResource};
 use devworks_core::settings::catalog::AgentRole;
 use eframe::egui::{self, RichText, Ui};
 use std::collections::BTreeMap;
@@ -125,10 +125,11 @@ pub struct InstructionsPanel {
     pub new_skill_project: Option<String>,
     /// The projects a skill can be scoped to, as the shell last read them (id, name).
     pub projects: Vec<(String, String)>,
-    /// Whether the shell has read the project list.
-    pub projects_loaded: bool,
-    /// A load began before the project list was read, so it reloads once the list is known.
-    pub awaiting_projects: bool,
+    /// Every active project, gathered page by page by this panel (the shell's own list holds
+    /// only the pages the Projects screen has shown).
+    pub all_projects: Paged<ProjectRecord>,
+    /// The workspace's discovery request, held until the project list is complete.
+    pub held_discovery: Option<Fetch>,
     /// Projects whose own skills the running discovery has still to read, and the one it is
     /// reading now.
     pub discover_queue: Vec<String>,
@@ -247,9 +248,8 @@ impl InstructionsPanel {
                     );
                     return;
                 }
-                if !self.requested || (self.awaiting_projects && self.projects_loaded) {
+                if !self.requested {
                     self.requested = true;
-                    self.awaiting_projects = false;
                     actions.push(InstructionAction::Load);
                 }
                 ui.horizontal(|ui| {

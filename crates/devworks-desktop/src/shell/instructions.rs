@@ -9,7 +9,6 @@ use crate::{
     memory::RouteMemory,
     ops,
     paged::{Applied, Fetch, Page},
-    projects_ops::ProjectsSlot,
     route::Route,
     screen::{Cx, Screen, ScreenContext, ScreenId, controller},
     widgets::Tone,
@@ -44,21 +43,6 @@ impl Screen for InstructionsPanel {
         }
     }
     fn ui(&mut self, cx: &mut Cx, _route: Route, ui: &mut Ui) {
-        // The projects a skill can be scoped to are the active ones the shell has read.
-        self.projects_loaded = cx.projects.list.loaded;
-        self.projects = cx
-            .projects
-            .list
-            .items
-            .iter()
-            .filter(|p| {
-                matches!(
-                    p.lifecycle,
-                    devworks_core::protocol::records::LifeState::Active
-                )
-            })
-            .map(|p| (p.id.0.as_str().to_owned(), p.name.0.clone()))
-            .collect();
         let mut actions = Vec::new();
         InstructionsPanel::ui(self, ui, cx.online().is_ok(), &mut actions);
         for action in actions {
@@ -128,27 +112,17 @@ impl InstructionsCtl<'_, '_> {
         // A failed earlier read shows as loading again; rows read earlier stay until the new
         // ones are complete.
         p.skills.error = None;
-        let fetch = p.skills.reload_all();
         // The workspace's skills are read first, then each active project's own, one after
-        // another. A load before the project list is read reloads once it is.
-        let loaded = self.projects.list.loaded;
-        if !loaded && !self.pending(&ProjectsSlot::ProjectsList) {
-            self.load_projects();
-        }
-        let projects: Vec<String> = self
-            .projects
-            .list
-            .items
-            .iter()
-            .filter(|p| matches!(p.lifecycle, LifeState::Active))
-            .map(|p| p.id.0.as_str().to_owned())
-            .collect();
-        let p = self.panel();
-        p.awaiting_projects = !loaded;
-        p.discover_queue = projects;
-        p.discover_queue.reverse();
+        // another. The discovery waits for this panel's own read of every project page: the
+        // shell's list holds only the pages the Projects screen has shown.
+        let fetch = p.skills.reload_all();
+        p.held_discovery = Some(fetch);
+        p.discover_queue.clear();
         p.discover_project = None;
-        self.discover_page(fetch);
+        let projects = p.all_projects.reload_all();
+        if !self.send_instruction_projects(projects) {
+            self.start_discovery();
+        }
         for role in AgentRole::ALL {
             let id = iop::role_id(role);
             let submitted = self.query(
@@ -174,6 +148,37 @@ impl InstructionsCtl<'_, '_> {
             p.detail.history.reset();
             p.detail.resources.reset();
             p.detail.text = None;
+        }
+    }
+
+    /// Reads one page of the project list the discovery follows; `false` when it was not sent.
+    fn send_instruction_projects(&mut self, fetch: Fetch) -> bool {
+        let slot = InstructionsSlot::InstructionProjects(fetch.generation);
+        self.cx.paged(
+            &mut self.instructions.all_projects,
+            fetch,
+            slot,
+            "Loading projects",
+            "projects.list",
+            |b, cursor| ops::projects_list(b, Some("Active"), cursor),
+        )
+    }
+
+    /// Starts the held discovery over the projects known now: the scope choices and the queue of
+    /// projects whose own skills are read.
+    fn start_discovery(&mut self) {
+        let p = self.panel();
+        p.projects = p
+            .all_projects
+            .items
+            .iter()
+            .filter(|r| matches!(r.lifecycle, LifeState::Active))
+            .map(|r| (r.id.0.as_str().to_owned(), r.name.0.clone()))
+            .collect();
+        p.discover_queue = p.projects.iter().rev().map(|(id, _)| id.clone()).collect();
+        p.discover_project = None;
+        if let Some(fetch) = p.held_discovery.take() {
+            self.discover_page(fetch);
         }
     }
 
@@ -504,6 +509,35 @@ impl InstructionsCtl<'_, '_> {
                             return None;
                         }
                     }
+                }
+            }
+            (InstructionsSlot::InstructionProjects(generation), Reply::Query(q)) => {
+                let applied = match ops::projects(q) {
+                    Ok(page) => self.panel().all_projects.apply(generation, Ok(page)),
+                    Err(e) => self
+                        .panel()
+                        .all_projects
+                        .apply(generation, Err(e.describe())),
+                };
+                match applied {
+                    Applied::Stale => return None,
+                    Applied::Continue(fetch) => {
+                        if !self.send_instruction_projects(fetch) {
+                            self.start_discovery();
+                        }
+                    }
+                    Applied::Failed => {
+                        // The workspace's skills still load; say what is missing.
+                        let p = self.panel();
+                        p.message = Some((
+                            Tone::Bad,
+                            "Projects could not be listed, so project skills are not shown. \
+                             Refresh to try again."
+                                .into(),
+                        ));
+                        self.start_discovery();
+                    }
+                    _ => self.start_discovery(),
                 }
             }
             (InstructionsSlot::InstructionRole(id), Reply::Query(q)) => {
