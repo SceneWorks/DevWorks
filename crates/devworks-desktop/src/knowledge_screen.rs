@@ -10,7 +10,7 @@
 use crate::backend::Backend;
 use crate::frame::{self, Negotiate};
 use crate::ops::{self, Failure};
-use crate::paged::{self, Page, Paged};
+use crate::paged::{self, Applied, Fetch, Page, Paged};
 use crate::theme;
 use crate::widgets::{self, Tone, ViewState, chip};
 use devworks_core::gateway::{CommandOutcome, QueryOutcome};
@@ -386,6 +386,17 @@ pub struct SourcePreview {
     pub message: String,
 }
 
+/// What a listing reply asks of the caller.
+#[derive(Debug, PartialEq, Eq)]
+pub enum Listed {
+    /// Nothing more to send.
+    Done,
+    /// The continuation expired: list again from the first page.
+    Restart,
+    /// A gathering re-read needs the page this request reads.
+    Continue(Fetch),
+}
+
 #[derive(Default)]
 pub struct KnowledgeScreen {
     /// `None`: general (workspace) Knowledge; otherwise one of [`Self::projects`].
@@ -523,6 +534,22 @@ impl KnowledgeScreen {
             self.claims.reload();
             None
         };
+        self.listing_input(cursor)
+    }
+    /// Starts re-reading the pages shown, in the scope listed, and returns the first request
+    /// (a changed scope starts over like [`begin_listing`](Self::begin_listing)).
+    pub fn begin_refresh(&mut self) -> (&'static str, Option<In>) {
+        if self.listed_scope.as_ref() != Some(&self.typed_scope()) {
+            return self.begin_listing(false);
+        }
+        let fetch = self.claims.reread();
+        self.listing_input(fetch.cursor)
+    }
+    /// The request after `fetch`, which [`Applied::Continue`] named for a gathering read.
+    pub fn continue_listing(&self, fetch: &Fetch) -> (&'static str, Option<In>) {
+        self.listing_input(fetch.cursor.clone())
+    }
+    fn listing_input(&self, cursor: Option<String>) -> (&'static str, Option<In>) {
         let states: Vec<String> = LIFECYCLES
             .iter()
             .zip(self.lifecycles)
@@ -810,9 +837,10 @@ impl KnowledgeScreen {
     // -----------------------------------------------------------------------------------------
     // Replies
 
-    /// Applies a listing reply of `generation`; returns `true` when the listing must restart
-    /// (its continuation expired because the scope changed).
-    pub fn listed(&mut self, generation: u64, outcome: QueryOutcome) -> bool {
+    /// Applies a listing reply of `generation`; says whether the listing must restart (its
+    /// continuation expired because the scope changed) or a gathering re-read needs its next
+    /// page.
+    pub fn listed(&mut self, generation: u64, outcome: QueryOutcome) -> Listed {
         match ops::query_result(outcome) {
             Ok((
                 OperationResult::KnowledgeSearch { value }
@@ -820,27 +848,29 @@ impl KnowledgeScreen {
                 _,
             )) => {
                 let page = Page::new(value.items.0, value.next_cursor.map(|c| c.0));
-                self.claims.apply(generation, Ok(page));
-                false
+                match self.claims.apply(generation, Ok(page)) {
+                    Applied::Continue(fetch) => Listed::Continue(fetch),
+                    _ => Listed::Done,
+                }
             }
             Ok((other, _)) => {
                 let error = format!("Unexpected reply {}", other.operation());
                 self.claims.apply(generation, Err(error));
-                false
+                Listed::Done
             }
             Err(Failure::Refused(f)) if f.code == DomainErrorCode::CursorExpired => {
                 if !self.claims.abandon(generation) {
-                    return false; // superseded by a newer listing
+                    return Listed::Done; // superseded by a newer listing
                 }
                 self.message = Some((
                     Tone::Attention,
                     "Knowledge changed while paging; the list was reloaded from the start.".into(),
                 ));
-                true
+                Listed::Restart
             }
             Err(e) => {
                 self.claims.apply(generation, Err(e.describe()));
-                false
+                Listed::Done
             }
         }
     }
@@ -2047,7 +2077,7 @@ mod tests {
                 "knowledge.search".into(),
             )),
         );
-        assert!(!restart);
+        assert_eq!(restart, Listed::Done);
         assert!(s.claims.loading(), "the newer listing is still awaited");
         assert!(
             s.claims.error.is_none(),

@@ -28,7 +28,8 @@ impl Screen for UsageScreen {
     const ID: ScreenId = ScreenId::Usage;
     fn load(&mut self, cx: &mut Cx, _route: Route) {
         self.tab = cx.routes.entry(Route::Usage).or_default().tab;
-        UsageCtl { usage: self, cx }.load_usage();
+        // Entering the route again re-reads what was applied, so the pages shown stay.
+        UsageCtl { usage: self, cx }.load_usage(false);
         cx.load_router_catalog();
         if !cx.projects.list.loaded {
             cx.load_projects();
@@ -57,6 +58,7 @@ impl Screen for UsageScreen {
         self.data.reset();
         self.options.reset();
         self.applied = None;
+        self.applied_kind = None;
         if self.draft.project.as_deref() == Some(p) {
             self.draft.project = None;
         }
@@ -120,30 +122,37 @@ impl UsageScreen {
 }
 
 impl UsageCtl<'_, '_> {
-    fn load_usage(&mut self) {
+    /// Reads the report (or the price catalog) for the filters in the form. `restart` is the
+    /// Apply gesture, which always starts from the first page; without it, filters that are
+    /// those already applied re-read every page shown.
+    fn load_usage(&mut self, restart: bool) {
         if self.usage.tab == 2 {
-            self.load_prices(false);
+            if restart {
+                self.load_prices(false);
+            } else {
+                self.reread_prices();
+            }
             return;
         }
         let kind = self.usage.kind();
-        let body = match self.usage.draft.body(kind, None) {
-            Ok(body) => body,
-            Err(e) => {
-                self.usage.data.error = Some(e);
-                return;
-            }
-        };
+        if let Err(e) = self.usage.draft.body(kind, None) {
+            self.usage.data.error = Some(e);
+            return;
+        }
+        let same = !restart
+            && self.usage.data.loaded
+            && self.usage.applied.as_ref() == Some(&self.usage.draft)
+            && self.usage.applied_kind == Some(kind);
         self.usage.applied = Some(self.usage.draft.clone());
+        self.usage.applied_kind = Some(kind);
         self.usage.data.error = None;
-        let fetch = self.usage.data.reload();
-        self.cx.paged(
-            &mut self.usage.data,
-            fetch.clone(),
-            UsageSlot::Usage(fetch.generation, false),
-            "Loading usage report",
-            "router.usage",
-            move |b, _| uops::query(b, body),
-        );
+        // A re-read of the applied report joins every page shown into one result again.
+        let fetch = if same {
+            self.usage.data.refresh()
+        } else {
+            self.usage.data.reload()
+        };
+        self.send_usage(fetch);
         if kind != "Filters" {
             // The filter values of the applied range are read with the report.
             self.usage.options.reset();
@@ -152,6 +161,26 @@ impl UsageCtl<'_, '_> {
         } else {
             self.usage.options.reset();
         }
+    }
+    /// Submits the report request `fetch` names, for the filters and kind applied.
+    fn send_usage(&mut self, fetch: Fetch) {
+        let (Some(filters), Some(kind)) = (&self.usage.applied, self.usage.applied_kind) else {
+            self.usage.data.abandon(fetch.generation);
+            return;
+        };
+        let filters = filters.clone();
+        let slot = UsageSlot::Usage(fetch.generation, fetch.append());
+        self.cx.paged(
+            &mut self.usage.data,
+            fetch,
+            slot,
+            "Loading usage report",
+            "router.usage",
+            move |b, cursor| match filters.body(kind, cursor) {
+                Ok(body) => uops::query(b, body),
+                Err(_) => Vec::new(),
+            },
+        );
     }
     fn load_usage_options(&mut self, fetch: Fetch) {
         let Some(filters) = &self.usage.applied else {
@@ -194,7 +223,9 @@ impl UsageCtl<'_, '_> {
     }
     /// Keep a user's loaded page set intact when a background refresh publishes a new catalog.
     /// A partial first page already owns a cursor: probing also preserves a More gesture
-    /// before its append reply arrives. Completed single pages can be reloaded normally.
+    /// before its append reply arrives. Completed single pages can be reloaded normally. A
+    /// paged catalog is deliberately not re-read here: a changed catalog revision is flagged
+    /// for the user's explicit Reload (a restart), which keeps the draft.
     fn refresh_visible_prices(&mut self) {
         if self.usage.prices.pages() <= 1
             && self
@@ -217,13 +248,40 @@ impl UsageCtl<'_, '_> {
             );
         }
     }
+    /// Re-reads the applied catalog query after a change the user made (a saved override, a
+    /// finished price refresh): as many pages as are shown are read again and joined, so the
+    /// rows the user loaded stay. A page of another catalog revision than the first ends the
+    /// read with the reload prompt, as when paging.
     fn reload_applied_prices(&mut self) {
         let Some(body) = self.usage.price_query.clone() else {
             self.load_prices(false);
             return;
         };
-        let fetch = self.usage.prices.reload();
+        let fetch = self.usage.prices.reread();
         self.send_prices(fetch, body, "Refreshing applied price catalog");
+    }
+    /// Entering the route again: the applied catalog query is re-read when the form still holds
+    /// it, else the form's filters are applied from the first page.
+    fn reread_prices(&mut self) {
+        let same = match (self.price_body(), &self.usage.price_query) {
+            (Some(form), Some(applied)) => {
+                serde_json::to_value(&form).ok() == serde_json::to_value(applied).ok()
+            }
+            _ => false,
+        };
+        if same && self.usage.prices.loaded {
+            self.reload_applied_prices();
+        } else {
+            self.load_prices(false);
+        }
+    }
+    fn price_body(&self) -> Option<devworks_core::operations::router::PriceStatusInput> {
+        uops::price_status(
+            &values(&self.usage.price_models),
+            given(&self.usage.price_providers).as_deref(),
+            given(&self.usage.price_snapshots).as_deref(),
+            self.usage.history,
+        )
     }
     fn load_prices(&mut self, append: bool) {
         let (body, fetch) = if append {
@@ -235,16 +293,12 @@ impl UsageCtl<'_, '_> {
             };
             (body, fetch)
         } else {
-            let Some(body) = uops::price_status(
-                &values(&self.usage.price_models),
-                given(&self.usage.price_providers).as_deref(),
-                given(&self.usage.price_snapshots).as_deref(),
-                self.usage.history,
-            ) else {
+            let Some(body) = self.price_body() else {
                 self.usage.price_error = Some("Check the price filters.".into());
                 return;
             };
             self.usage.price_query = Some(body.clone());
+            // The filters were applied (or the user asked for the catalog again): start over.
             (body, self.usage.prices.reload())
         };
         self.send_prices(fetch, body, "Loading price catalog");
@@ -489,8 +543,13 @@ impl UsageCtl<'_, '_> {
                             self.usage
                                 .data
                                 .apply_joined(generation, Ok(page), UsageScreen::join);
-                        if applied == Applied::Stale {
-                            return None;
+                        match applied {
+                            Applied::Stale => return None,
+                            Applied::Continue(fetch) => {
+                                self.send_usage(fetch);
+                                return None;
+                            }
+                            _ => {}
                         }
                     }
                     Err(e) => {
@@ -551,6 +610,12 @@ impl UsageCtl<'_, '_> {
                         Applied::Stale => return None,
                         Applied::Fenced => {
                             self.usage.price_error = self.usage.prices.error.clone();
+                            return None;
+                        }
+                        Applied::Continue(fetch) => {
+                            if let Some(body) = self.usage.price_query.clone() {
+                                self.send_prices(fetch, body, "Refreshing applied price catalog");
+                            }
                             return None;
                         }
                         _ => {}
@@ -633,7 +698,7 @@ impl UsageCtl<'_, '_> {
         self.routes.entry(Route::Usage).or_default().tab = self.usage.tab;
         for action in actions {
             match action {
-                Action::Apply => self.load_usage(),
+                Action::Apply => self.load_usage(true),
                 Action::More => self.more_usage(),
                 Action::LoadPrices => self.load_prices(false),
                 Action::MorePrices => self.load_prices(true),

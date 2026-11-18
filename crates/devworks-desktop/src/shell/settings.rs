@@ -315,6 +315,8 @@ impl SettingsCtl<'_, '_> {
 
     fn load_mcp_servers(&mut self, append: bool) {
         let panel = &mut self.settings.mcp;
+        // Every page is read in turn on arrival (there is no Load more), so a reload ends with
+        // the whole list and cannot collapse it.
         let Some(fetch) = (if append {
             panel.servers.more_page()
         } else {
@@ -531,6 +533,7 @@ impl SettingsCtl<'_, '_> {
                 }
             }
             WebAction::LoadActivity => {
+                // One page, never extended: nothing to keep.
                 let fetch = self.settings.web.activity.reload();
                 self.cx.paged(
                     &mut self.settings.web.activity,

@@ -167,9 +167,21 @@ impl<T> Paged<T> {
         self.generation
     }
     /// Starts reading the first page. The rows shown stay until it replies, so a refresh never
-    /// blanks the list; it replaces every page read so far.
+    /// blanks the list; it replaces every page read so far. Use it for the first read and when
+    /// the list's query changed (a scope, filter or sort); a re-read of the same query is
+    /// [`reread`](Self::reread).
     pub fn reload(&mut self) -> Fetch {
         self.start(None, false, None)
+    }
+    /// Re-reads the same query: [`refresh`](Self::refresh) once the list is loaded (so the pages
+    /// a Load more added stay), else [`reload`](Self::reload). Its reply can be
+    /// [`Applied::Continue`], which the caller sends.
+    pub fn reread(&mut self) -> Fetch {
+        if self.loaded {
+            self.refresh()
+        } else {
+            self.reload()
+        }
     }
     /// How many pages the rows shown came from (a refresh reads as many again).
     pub fn pages(&self) -> usize {
@@ -248,6 +260,12 @@ impl<T> Paged<T> {
         reply: Result<Page<T>, String>,
         join: impl FnOnce(&mut T, T) -> Result<(), String>,
     ) -> Applied {
+        if let Some(inflight) = self
+            .inflight
+            .filter(|f| f.generation == generation && f.gather.is_some())
+        {
+            return self.apply_joined_gather(inflight, reply, join);
+        }
         let appending = self
             .inflight
             .is_some_and(|f| f.generation == generation && f.append && f.gather.is_none());
@@ -273,6 +291,47 @@ impl<T> Paged<T> {
         self.error = None;
         self.failed_append = false;
         Applied::Appended
+    }
+    /// A page of a gathering read ([`refresh`](Self::refresh)) of a list whose one row is a whole
+    /// page object: the first page starts the object, each next one joins it, and the object
+    /// shown is replaced when the last arrives. A page `join` refuses (another report or
+    /// catalog revision than the first) ends the read as [`Applied::Fenced`] with its reason
+    /// as the list's error, and the object shown is untouched.
+    fn apply_joined_gather(
+        &mut self,
+        inflight: Inflight,
+        reply: Result<Page<T>, String>,
+        join: impl FnOnce(&mut T, T) -> Result<(), String>,
+    ) -> Applied {
+        let mut page = match reply {
+            Ok(page) => page,
+            Err(error) => return self.apply(inflight.generation, Err(error)),
+        };
+        self.inflight = None;
+        let next = page.next.take();
+        if let Some(latest) = page.items.pop() {
+            if self.staged_pages == 0 {
+                self.staged = vec![latest];
+            } else if let Err(reason) = join(&mut self.staged[0], latest) {
+                self.staged.clear();
+                self.staged_pages = 0;
+                self.fail(reason);
+                return Applied::Fenced;
+            }
+        }
+        self.staged_pages += 1;
+        let limit = inflight.gather.unwrap_or(usize::MAX);
+        if next.is_some() && self.staged_pages < limit {
+            return Applied::Continue(self.start(next, true, inflight.gather));
+        }
+        self.items = std::mem::take(&mut self.staged);
+        self.pages = self.staged_pages;
+        self.staged_pages = 0;
+        self.next = next;
+        self.loaded = true;
+        self.error = None;
+        self.failed_append = false;
+        Applied::Replaced
     }
     /// [`apply`](Self::apply) for rows that carry a key: a row already listed is not listed
     /// twice when pages overlap because the list changed between reads.
@@ -1072,6 +1131,104 @@ mod tests {
         );
         list.apply_joined(newer.generation, Ok(Page::new(vec![vec![7]], None)), join);
         assert_eq!(list.items, [vec![7]]);
+    }
+
+    #[test]
+    fn a_re_read_starts_over_until_loaded_then_keeps_the_pages_shown() {
+        let mut list = Paged::<u32>::default();
+        let first = list.reread();
+        assert_eq!(list.pages(), 0, "an unloaded list reads its first page");
+        list.apply(first.generation, Ok(page(&[1], Some("c1"))));
+        let next = list.more_page().unwrap();
+        list.apply(next.generation, Ok(page(&[2], None)));
+        let again = list.reread();
+        let Applied::Continue(second) = list.apply(again.generation, Ok(page(&[10], Some("d1"))))
+        else {
+            panic!("the second page is re-read too");
+        };
+        list.apply(second.generation, Ok(page(&[11], None)));
+        assert_eq!(list.items, [10, 11]);
+    }
+
+    #[test]
+    fn a_re_read_of_a_joined_list_joins_every_page_into_one_object() {
+        let join = |shown: &mut Vec<u32>, more: Vec<u32>| -> Result<(), String> {
+            if more.first() == Some(&99) {
+                return Err("The report changed while paging.".into());
+            }
+            shown.extend(more);
+            Ok(())
+        };
+        let mut list = Paged::<Vec<u32>>::default();
+        let first = list.reload();
+        list.apply_joined(
+            first.generation,
+            Ok(Page::new(vec![vec![1]], Some("c1".into()))),
+            join,
+        );
+        let next = list.more_page().unwrap();
+        list.apply_joined(next.generation, Ok(Page::new(vec![vec![2]], None)), join);
+        assert_eq!(list.items, [vec![1, 2]]);
+        let again = list.reread();
+        let Applied::Continue(second) = list.apply_joined(
+            again.generation,
+            Ok(Page::new(vec![vec![10]], Some("d1".into()))),
+            join,
+        ) else {
+            panic!("the second page is re-read too");
+        };
+        assert_eq!(
+            list.items,
+            [vec![1, 2]],
+            "the rows stay until the last page"
+        );
+        assert_eq!(second.cursor.as_deref(), Some("d1"));
+        assert_eq!(
+            list.apply_joined(second.generation, Ok(Page::new(vec![vec![11]], None)), join),
+            Applied::Replaced
+        );
+        assert_eq!(list.items, [vec![10, 11]]);
+        assert_eq!(list.pages(), 2);
+        assert!(!list.more());
+        // A page of another report ends the re-read and leaves the object shown.
+        let again = list.reread();
+        let Applied::Continue(second) = list.apply_joined(
+            again.generation,
+            Ok(Page::new(vec![vec![20]], Some("e1".into()))),
+            join,
+        ) else {
+            panic!("the second page is re-read too");
+        };
+        assert_eq!(
+            list.apply_joined(second.generation, Ok(Page::new(vec![vec![99]], None)), join),
+            Applied::Fenced
+        );
+        assert_eq!(list.items, [vec![10, 11]]);
+        assert_eq!(
+            list.error.as_deref(),
+            Some("The report changed while paging.")
+        );
+    }
+
+    #[test]
+    fn a_re_read_that_meets_another_snapshot_is_refused_and_keeps_the_rows() {
+        let mut list = Paged::<u32>::default();
+        let first = list.reload();
+        list.apply(first.generation, Ok(page(&[1], Some("c1")).fenced("rev-1")));
+        let next = list.more_page().unwrap();
+        list.apply(next.generation, Ok(page(&[2], None).fenced("rev-1")));
+        let again = list.reread();
+        let Applied::Continue(second) = list.apply(
+            again.generation,
+            Ok(page(&[10], Some("d1")).fenced("rev-2")),
+        ) else {
+            panic!("the second page is re-read too");
+        };
+        assert_eq!(
+            list.apply(second.generation, Ok(page(&[11], None).fenced("rev-3"))),
+            Applied::Fenced
+        );
+        assert_eq!(list.items, [1, 2]);
     }
 
     #[test]

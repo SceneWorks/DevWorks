@@ -828,10 +828,12 @@ impl Shell {
         }
     }
     pub fn load_repositories(&mut self) {
-        let fetch = self.projects.repositories.reload();
+        // A re-read covers every page shown; the project's list was reset when the selection
+        // changed, so it starts over then.
+        let fetch = self.projects.repositories.reread();
         self.send_repositories(fetch, "Loading repositories");
         if let Some(p) = self.selected_project.clone() {
-            let fetch = self.projects.members.reload();
+            let fetch = self.projects.members.reread();
             self.send_members(p, fetch, "Loading the project's repositories");
         }
     }
@@ -907,7 +909,9 @@ impl Shell {
         &mut self,
         result: Result<Page<devworks_core::protocol::records::RepositoryRecord>, String>,
     ) {
-        self.projects.repositories.apply_current(result);
+        if let Applied::Continue(fetch) = self.projects.repositories.apply_current(result) {
+            self.send_repositories(fetch, "Loading repositories");
+        }
     }
     fn members_listed(
         &mut self,
@@ -918,11 +922,12 @@ impl Shell {
         if self.selected_project.as_deref() != Some(project.as_str()) {
             return;
         }
-        if matches!(
-            self.projects.members.apply_current(result),
-            Applied::Replaced | Applied::Appended
-        ) {
-            self.projects.members_of = Some(project);
+        match self.projects.members.apply_current(result) {
+            Applied::Replaced | Applied::Appended => self.projects.members_of = Some(project),
+            Applied::Continue(fetch) => {
+                self.send_members(project, fetch, "Loading the project's repositories");
+            }
+            _ => {}
         }
     }
     /// The project the navigation selected, if it is still listed.
@@ -1088,7 +1093,9 @@ impl Shell {
             .then(|| self.last_poll + HINT_REFRESH_INTERVAL)
     }
 
-    fn refresh_visible(&mut self) {
+    /// Re-reads the visible screen's data: the periodic (and hint driven) refresh, also called
+    /// directly by tests.
+    pub fn refresh_visible(&mut self) {
         self.last_poll = Instant::now();
         if self.online().is_err() {
             return;

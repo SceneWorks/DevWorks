@@ -517,6 +517,26 @@ fn native_help_pages_search_results_and_reads_the_complete_maintained_source_exa
 }
 
 #[test]
+fn native_help_refresh_keeps_the_topic_pages_load_more_added() {
+    let _guard = native_help_guard();
+    let root = Root::new("help-native-refresh-pages");
+    let engine = start(&root);
+    let mut h = open(&engine, &root);
+    assert!(h.state().help.topics.more(), "the catalog exceeds one page");
+    press(&mut h, "More Help topics");
+    step_until(&mut h, "the second page", |s| !s.help.topics.loading());
+    let shown = h.state().help.topics.items.len();
+    let pages = h.state().help.topics.pages();
+    assert!(pages >= 2, "{pages}");
+    // Refresh Help reads every page shown again, all from one catalog snapshot.
+    press(&mut h, "Refresh Help");
+    step_until(&mut h, "the re-read", |s| !s.help.topics.loading());
+    assert_eq!(h.state().help.topics.items.len(), shown);
+    assert_eq!(h.state().help.topics.pages(), pages);
+    assert!(h.state().help.topics.error.is_none());
+}
+
+#[test]
 fn native_notification_preferences_help_keeps_the_unsaved_preference_draft() {
     let _guard = native_help_guard();
     let root = Root::new("help-notification-preferences");

@@ -225,7 +225,9 @@ impl WorkCtl<'_, '_> {
         // supersede it every second on a slow backend, and it would never finish.
         let history = &mut self.work.messages.history;
         if explicit || (!history.loaded && !history.loading()) {
-            let fetch = history.reload();
+            // Another project's history was reset above, so this starts it over; the same
+            // project's is re-read page for page, keeping the older messages the user loaded.
+            let fetch = history.reread();
             self.send_history(project.clone(), fetch);
         }
         if !self.pending(&WorkSlot::WorkMessagesInbox(project.clone())) {

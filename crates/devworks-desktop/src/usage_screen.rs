@@ -32,7 +32,7 @@ pub const REPORTS: [(&str, &str); 6] = [
 pub const REPOSITORY_ANALYSIS_INACTIVE: &str = "Not yet active: no DevWorks repository analysis makes model requests \
     yet, so this report shows only imported or unattributed usage.";
 pub const TABS: [&str; 3] = ["Reports", "Attempts", "Prices"];
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Filters {
     pub project: Option<String>,
     pub start: String,
@@ -187,6 +187,8 @@ pub struct UsageScreen {
     pub report: usize,
     pub draft: Filters,
     pub applied: Option<Filters>,
+    /// The report kind the applied filters were read for.
+    pub applied_kind: Option<&'static str>,
     /// The applied report: one result object that each further page extends, fenced by the
     /// result's own context (a page read for another report is refused).
     pub data: Paged<UsageQueryResult>,

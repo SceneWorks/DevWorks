@@ -5,7 +5,7 @@
 use crate::backend::{Reply, Unresolved};
 use crate::memory::RouteMemory;
 use crate::ops::{self, Failure, LifecycleChange};
-use crate::paged::Paged;
+use crate::paged::{Applied, Fetch, Paged};
 use crate::project_purge::Live;
 use crate::projects_ops::ProjectsSlot;
 use crate::projects_screen::{
@@ -152,7 +152,10 @@ impl ProjectsCtl<'_, '_> {
     // Requests
 
     fn load_deleted_projects(&mut self) {
-        let fetch = self.projects.deleted.reload();
+        let fetch = self.projects.deleted.reread();
+        self.send_deleted_projects(fetch);
+    }
+    fn send_deleted_projects(&mut self, fetch: Fetch) {
         self.cx.paged(
             &mut self.projects.deleted,
             fetch,
@@ -481,9 +484,13 @@ impl ProjectsCtl<'_, '_> {
                 self.effects.push(Effect::ProjectMembers(p, result));
             }
             (ProjectsSlot::DeletedProjects, Reply::Query(q)) => {
-                self.projects
+                let applied = self
+                    .projects
                     .deleted
                     .apply_current(ops::projects(q).map_err(|e| e.describe()));
+                if let Applied::Continue(fetch) = applied {
+                    self.send_deleted_projects(fetch);
+                }
             }
             (ProjectsSlot::ProjectCreate, Reply::Command(c)) => match ops::project_changed(c) {
                 Ok(p) => {

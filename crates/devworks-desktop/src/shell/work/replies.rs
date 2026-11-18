@@ -24,6 +24,7 @@ impl WorkCtl<'_, '_> {
                 {
                     Applied::Replaced | Applied::Appended => board.error = None,
                     Applied::Failed => board.error = board.history.error.clone(),
+                    Applied::Continue(fetch) => self.send_history(project, fetch),
                     _ => {}
                 }
             }

@@ -4,7 +4,7 @@ use crate::backend::{Reply, screen_slot};
 use crate::chat;
 use crate::memory::RouteMemory;
 use crate::ops::{self, Failure};
-use crate::paged::{ListText, Page, Paged, list_body};
+use crate::paged::{Applied, Fetch, ListText, Page, Paged, list_body};
 use crate::route::Route;
 use crate::screen::{Cx, Screen, ScreenContext, ScreenId};
 use crate::widgets::{self, Header, ViewState};
@@ -75,8 +75,12 @@ impl Screen for ArtifactsScreen {
                 self.load(cx);
             }
             (ArtifactsSlot::ArtifactsList, Reply::Query(q)) => {
-                self.list
+                let applied = self
+                    .list
                     .apply_current(ops::artifacts(q).map_err(|e| e.describe()));
+                if let Applied::Continue(fetch) = applied {
+                    self.send(cx, fetch);
+                }
             }
             (slot, reply) => cx.unhandled(&slot, reply),
         }
@@ -101,7 +105,11 @@ impl ArtifactsScreen {
     }
     fn load(&mut self, cx: &mut Cx) {
         self.list_at = self.mutations;
-        let fetch = self.list.reload();
+        // A re-read covers every page shown, so Load more's pages stay.
+        let fetch = self.list.reread();
+        self.send(cx, fetch);
+    }
+    fn send(&mut self, cx: &mut Cx, fetch: Fetch) {
         cx.paged(
             &mut self.list,
             fetch,
@@ -264,10 +272,10 @@ impl Screen for BrowserScreen {
     fn apply(&mut self, cx: &mut Cx, slot: BrowserSlot, reply: Reply) {
         match (slot, reply) {
             (BrowserSlot::BrowserSessions, Reply::Query(q)) => {
-                self.part(None, ops::browser_sessions(q));
+                self.part(cx, None, ops::browser_sessions(q));
             }
             (BrowserSlot::ProjectBrowserSessions(p), Reply::Query(q)) => {
-                self.part(Some(p), ops::browser_sessions(q));
+                self.part(cx, Some(p), ops::browser_sessions(q));
             }
             (BrowserSlot::BrowserClose(_), Reply::Command(c)) => {
                 match ops::browser_closed(c) {
@@ -326,7 +334,8 @@ impl BrowserScreen {
         let scopes = std::iter::once(None).chain(projects.into_iter().map(Some));
         for scope in scopes {
             let part = self.parts.entry(scope.clone()).or_default();
-            let fetch = part.reload();
+            // Each part is one scope's list, so a re-read keeps the pages Load more added.
+            let fetch = part.reread();
             Self::send(cx, part, scope, fetch, "Loading");
         }
         self.combine();
@@ -344,7 +353,7 @@ impl BrowserScreen {
         cx: &mut Cx,
         part: &mut Paged<BrowserSession>,
         scope: Option<String>,
-        fetch: crate::paged::Fetch,
+        fetch: Fetch,
         verb: &str,
     ) {
         match scope {
@@ -371,9 +380,16 @@ impl BrowserScreen {
     }
 
     /// Records one scope's page and rebuilds the combined list.
-    fn part(&mut self, scope: Option<String>, page: Result<Page<BrowserSession>, Failure>) {
-        if let Some(part) = self.parts.get_mut(&scope) {
-            part.apply_current(page.map_err(|e| e.describe()));
+    fn part(
+        &mut self,
+        cx: &mut Cx,
+        scope: Option<String>,
+        page: Result<Page<BrowserSession>, Failure>,
+    ) {
+        if let Some(part) = self.parts.get_mut(&scope)
+            && let Applied::Continue(fetch) = part.apply_current(page.map_err(|e| e.describe()))
+        {
+            Self::send(cx, part, scope, fetch, "Loading");
         }
         self.combine();
     }
@@ -553,8 +569,12 @@ impl Screen for ResourcesScreen {
     fn apply(&mut self, cx: &mut Cx, slot: ResourcesSlot, reply: Reply) {
         match (slot, reply) {
             (ResourcesSlot::ResourcesList, Reply::Query(q)) => {
-                self.list
+                let applied = self
+                    .list
                     .apply_current(ops::resources(q).map_err(|e| e.describe()));
+                if let Applied::Continue(fetch) = applied {
+                    self.send(cx, fetch);
+                }
             }
             (slot, reply) => cx.unhandled(&slot, reply),
         }
@@ -572,7 +592,10 @@ impl Screen for ResourcesScreen {
 
 impl ResourcesScreen {
     fn load(&mut self, cx: &mut Cx) {
-        let fetch = self.list.reload();
+        let fetch = self.list.reread();
+        self.send(cx, fetch);
+    }
+    fn send(&mut self, cx: &mut Cx, fetch: Fetch) {
         cx.paged(
             &mut self.list,
             fetch,
