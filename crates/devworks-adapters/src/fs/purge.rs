@@ -586,7 +586,17 @@ impl ProjectPurgeFiles for NativeProjectPurgeFiles {
                 return Err(PurgeFileFault::Changed);
             }
         }
-        let digest=devworks_core::fingerprint::sha256_hex(serde_json::to_string(&serde_json::json!({"projectId":selection.project_id,"storeId":selection.store_id,"restoreEpoch":selection.restore_epoch,"owners":selection.owners,"files":files})).map_err(|_|PurgeFileFault::Io)?.as_bytes());
+        let digest = devworks_core::fingerprint::sha256_hex(
+            serde_json::to_string(&serde_json::json!({
+                "projectId": selection.project_id,
+                "storeId": selection.store_id,
+                "restoreEpoch": selection.restore_epoch,
+                "owners": selection.owners,
+                "files": files
+            }))
+            .map_err(|_| PurgeFileFault::Io)?
+            .as_bytes(),
+        );
         Ok(PurgeFileSnapshot {
             selection: selection.clone(),
             files,

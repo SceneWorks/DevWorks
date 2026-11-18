@@ -301,9 +301,26 @@ impl PackageService {
             target_id: Id::new(&package_id).map_err(|_| invalid("package_id"))?,
             target_revision: prior.as_ref().map_or(1, |p| p.revision),
             summary: format!("Review {} for {}", request.descriptor.name, package_id),
-            reviewed: json!({"operation":request.descriptor.name,"input":request.normalized,"inspection":inspected_json,
-                "source":source,"current":package,"storedVersion":stored_version,"proposal":proposal,"compatibility":compatibility,"artifact":source.as_ref().map(|s|&s["bundle"])}),
-            binding: json!({"registryRevision":registry,"package":package,"version":stored_version,"proposal":proposal,"artifact":artifact,"candidate":inspected_json,"source":source}),
+            reviewed: json!({
+                "operation": request.descriptor.name,
+                "input": request.normalized,
+                "inspection": inspected_json,
+                "source": source,
+                "current": package,
+                "storedVersion": stored_version,
+                "proposal": proposal,
+                "compatibility": compatibility,
+                "artifact": source.as_ref().map(|s| &s["bundle"])
+            }),
+            binding: json!({
+                "registryRevision": registry,
+                "package": package,
+                "version": stored_version,
+                "proposal": proposal,
+                "artifact": artifact,
+                "candidate": inspected_json,
+                "source": source
+            }),
         };
         if preview.reviewed["artifact"].is_null() {
             preview

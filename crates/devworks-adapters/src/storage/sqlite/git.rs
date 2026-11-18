@@ -24,30 +24,97 @@ fn one(c: &Connection, id: &Id) -> Result<Option<StoredGitWorktree>, StorageErro
     .map(decode)
     .transpose()
 }
-macro_rules! reads { ($t:ty) => { impl GitRead for $t {
- fn git_worktree_for_branch(&self, repository: &Id, branch: &str) -> Result<Option<StoredGitWorktree>, StorageError> {
-  self.conn.query_row("SELECT payload FROM git_owned_worktrees WHERE repository_id=?1 AND branch=?2 AND json_extract(payload,'$.removed')=0", params![repository.as_str(), branch], |r| r.get::<_,String>(0)).optional().map_err(db)?.map(decode).transpose()
- }
- fn git_pending_worktrees(&self, after: Option<&Id>, limit: u16) -> Result<Vec<StoredGitWorktree>, StorageError> {
-  page_limit(limit)?;
-  let mut q=self.conn.prepare("SELECT payload FROM git_owned_worktrees WHERE json_extract(payload,'$.pending_operation_id') IS NOT NULL AND (?1 IS NULL OR id>?1) ORDER BY id LIMIT ?2").map_err(db)?;
-  let rows=q.query_map(params![after.map(Id::as_str),i64::from(limit)], |r| r.get::<_,String>(0)).map_err(db)?;
-  rows.map(|r| decode(r.map_err(db)?)).collect()
- }
- fn git_worktree(&self, id: &Id) -> Result<Option<StoredGitWorktree>, StorageError> { one(self.conn, id) }
- fn git_repository_worktrees(&self, repository: &Id, after: Option<&Id>, limit: u16) -> Result<Vec<StoredGitWorktree>, StorageError> {
-  page_limit(limit)?;
-  let mut q=self.conn.prepare("SELECT payload FROM git_owned_worktrees WHERE repository_id=?1 AND (?2 IS NULL OR id>?2) ORDER BY id LIMIT ?3").map_err(db)?;
-  let rows=q.query_map(params![repository.as_str(),after.map(Id::as_str),i64::from(limit)], |r| r.get::<_,String>(0)).map_err(db)?;
-  rows.map(|r| decode(r.map_err(db)?)).collect()
- }
- fn git_worktrees(&self, work: &Id, after: Option<&Id>, limit: u16) -> Result<Vec<StoredGitWorktree>, StorageError> {
-  page_limit(limit)?;
-  let mut q=self.conn.prepare("SELECT payload FROM git_owned_worktrees WHERE work_id=?1 AND (?2 IS NULL OR id>?2) ORDER BY id LIMIT ?3").map_err(db)?;
-  let rows=q.query_map(params![work.as_str(),after.map(Id::as_str),i64::from(limit)], |r| r.get::<_,String>(0)).map_err(db)?;
-  rows.map(|r| decode(r.map_err(db)?)).collect()
- }
-} }; }
+macro_rules! reads {
+    ($t:ty) => {
+        impl GitRead for $t {
+            fn git_worktree_for_branch(
+                &self,
+                repository: &Id,
+                branch: &str,
+            ) -> Result<Option<StoredGitWorktree>, StorageError> {
+                self.conn
+                    .query_row(
+                        "SELECT payload FROM git_owned_worktrees WHERE repository_id=?1 AND \
+      branch=?2 AND json_extract(payload,'$.removed')=0",
+                        params![repository.as_str(), branch],
+                        |r| r.get::<_, String>(0),
+                    )
+                    .optional()
+                    .map_err(db)?
+                    .map(decode)
+                    .transpose()
+            }
+            fn git_pending_worktrees(
+                &self,
+                after: Option<&Id>,
+                limit: u16,
+            ) -> Result<Vec<StoredGitWorktree>, StorageError> {
+                page_limit(limit)?;
+                let mut q = self
+                    .conn
+                    .prepare(
+                        "SELECT payload FROM git_owned_worktrees WHERE json_extract(payload,\
+      '$.pending_operation_id') IS NOT NULL AND (?1 IS NULL OR id>?1) ORDER \
+      BY id LIMIT ?2",
+                    )
+                    .map_err(db)?;
+                let rows = q
+                    .query_map(params![after.map(Id::as_str), i64::from(limit)], |r| {
+                        r.get::<_, String>(0)
+                    })
+                    .map_err(db)?;
+                rows.map(|r| decode(r.map_err(db)?)).collect()
+            }
+            fn git_worktree(&self, id: &Id) -> Result<Option<StoredGitWorktree>, StorageError> {
+                one(self.conn, id)
+            }
+            fn git_repository_worktrees(
+                &self,
+                repository: &Id,
+                after: Option<&Id>,
+                limit: u16,
+            ) -> Result<Vec<StoredGitWorktree>, StorageError> {
+                page_limit(limit)?;
+                let mut q = self
+                    .conn
+                    .prepare(
+                        "SELECT payload FROM git_owned_worktrees WHERE repository_id=?1 AND (?2 \
+      IS NULL OR id>?2) ORDER BY id LIMIT ?3",
+                    )
+                    .map_err(db)?;
+                let rows = q
+                    .query_map(
+                        params![repository.as_str(), after.map(Id::as_str), i64::from(limit)],
+                        |r| r.get::<_, String>(0),
+                    )
+                    .map_err(db)?;
+                rows.map(|r| decode(r.map_err(db)?)).collect()
+            }
+            fn git_worktrees(
+                &self,
+                work: &Id,
+                after: Option<&Id>,
+                limit: u16,
+            ) -> Result<Vec<StoredGitWorktree>, StorageError> {
+                page_limit(limit)?;
+                let mut q = self
+                    .conn
+                    .prepare(
+                        "SELECT payload FROM git_owned_worktrees WHERE work_id=?1 AND (?2 IS \
+      NULL OR id>?2) ORDER BY id LIMIT ?3",
+                    )
+                    .map_err(db)?;
+                let rows = q
+                    .query_map(
+                        params![work.as_str(), after.map(Id::as_str), i64::from(limit)],
+                        |r| r.get::<_, String>(0),
+                    )
+                    .map_err(db)?;
+                rows.map(|r| decode(r.map_err(db)?)).collect()
+            }
+        }
+    };
+}
 reads!(Snapshot<'_>);
 reads!(Unit<'_>);
 impl GitRepository for Unit<'_> {
@@ -60,7 +127,22 @@ impl GitRepository for Unit<'_> {
         }
         let payload =
             serde_json::to_string(r).map_err(|e| StorageError::InvalidRecord(e.to_string()))?;
-        self.conn.execute("INSERT INTO git_owned_worktrees(id,repository_id,work_id,owner_id,root_id,path,branch,payload,revision) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,1)",params![r.id.as_str(),r.repository_id.as_str(),r.work_id.as_str(),r.owner.0.as_str(),r.registered_root_id.as_str(),r.path,r.branch,payload]).map_err(db)?;
+        self.conn
+            .execute(
+                "INSERT INTO git_owned_worktrees(id,repository_id,work_id,owner_id,\
+            root_id,path,branch,payload,revision) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,1)",
+                params![
+                    r.id.as_str(),
+                    r.repository_id.as_str(),
+                    r.work_id.as_str(),
+                    r.owner.0.as_str(),
+                    r.registered_root_id.as_str(),
+                    r.path,
+                    r.branch,
+                    payload
+                ],
+            )
+            .map_err(db)?;
         Ok(())
     }
     fn update_git_worktree(
@@ -111,8 +193,15 @@ impl GitRepository for Unit<'_> {
         let count = self
             .conn
             .execute(
-                "UPDATE git_owned_worktrees SET payload=?1,revision=?2,owner_id=?5 WHERE id=?3 AND revision=?4",
-                params![payload, r.revision, r.id.as_str(), expected, r.owner.0.as_str()],
+                "UPDATE git_owned_worktrees SET payload=?1,revision=?2,owner_id=?5 WHERE \
+                    id=?3 AND revision=?4",
+                params![
+                    payload,
+                    r.revision,
+                    r.id.as_str(),
+                    expected,
+                    r.owner.0.as_str()
+                ],
             )
             .map_err(db)?;
         if count != 1 {

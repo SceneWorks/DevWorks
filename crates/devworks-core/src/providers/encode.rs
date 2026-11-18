@@ -237,7 +237,10 @@ fn check(
         }
     }
 
-    let has_images=c.messages.iter().any(|m|m.content.iter().any(|b|matches!(b,ContentBlock::Image{..})||matches!(b,ContentBlock::ToolResult{content,..} if content.iter().any(|v|matches!(v,ResultBlock::Image{..})))));
+    let has_images=c.messages.iter().any(|m|m.content.iter().any(|b|matches!(
+        b,
+        ContentBlock::Image { .. }
+    )||matches!(b,ContentBlock::ToolResult{content,..} if content.iter().any(|v|matches!(v,ResultBlock::Image{..})))));
     let has_calls = c.messages.iter().any(|m| {
         m.content.iter().any(|b| {
             matches!(
@@ -706,7 +709,14 @@ impl Encoder<'_> {
                     body["tool_choice"] = chat_choice(v);
                 }
                 if let Some(schema) = &r.options.output_schema {
-                    body["response_format"] = json!({"type":"json_schema","json_schema":{"name":"response","strict":true,"schema":materialize::schema(self.materials, schema)?}});
+                    body["response_format"] = json!({
+                        "type": "json_schema",
+                        "json_schema": {
+                            "name": "response",
+                            "strict": true,
+                            "schema": materialize::schema(self.materials, schema)?
+                        }
+                    });
                 }
                 if profile == &EndpointProfile::OpenRouterChat
                     && let Some(constraints) = constraints
@@ -774,7 +784,12 @@ impl Encoder<'_> {
                     };
                 }
                 if let Some(schema) = &r.options.output_schema {
-                    body["text"]["format"] = json!({"type":"json_schema","name":"response","strict":true,"schema":materialize::schema(self.materials, schema)?});
+                    body["text"]["format"] = json!({
+                        "type": "json_schema",
+                        "name": "response",
+                        "strict": true,
+                        "schema": materialize::schema(self.materials, schema)?
+                    });
                 }
             }
             EndpointProfile::Embedding => unreachable!("generation checked"),
@@ -981,28 +996,62 @@ impl Encoder<'_> {
                 flush_result_images(&mut result_images, out);
             }
             match b {
-                ContentBlock::Text{text,..}=>parts.push(json!({"type":if matches!(m.role,MessageRole::Assistant){"output_text"}else{"input_text"},"text":text})),
-                ContentBlock::Image{artifact,detail,..}=>{
-                    if !matches!(m.role,MessageRole::User){return Err(ProviderError::Unsupported("responses_assistant_image"));}
-                    let(media,data)=self.image(artifact)?;let mut v=json!({"type":"input_image","image_url":format!("data:{media};base64,{data}")});
-                    if let Some(d)=detail{v["detail"]=json!(detail_name(d));}parts.push(v);
+                ContentBlock::Text { text, .. } => parts.push(json!({
+                    "type": if matches!(m.role, MessageRole::Assistant) {
+                        "output_text"
+                    } else {
+                        "input_text"
+                    },
+                    "text": text
+                })),
+                ContentBlock::Image {
+                    artifact, detail, ..
+                } => {
+                    if !matches!(m.role, MessageRole::User) {
+                        return Err(ProviderError::Unsupported("responses_assistant_image"));
+                    }
+                    let (media, data) = self.image(artifact)?;
+                    let mut v = json!({"type":"input_image","image_url":format!("data:{media};base64,{data}")});
+                    if let Some(d) = detail {
+                        v["detail"] = json!(detail_name(d));
+                    }
+                    parts.push(v);
                 }
-                ContentBlock::ToolCall{call_id,wire_name,arguments}=>{
-                    if !matches!(m.role,MessageRole::Assistant){return Err(ProviderError::InvalidInput("tool_call_role"));}
-                    flush_responses(m,&mut parts,out);
-                    let raw=self.arguments(arguments)?;
+                ContentBlock::ToolCall {
+                    call_id,
+                    wire_name,
+                    arguments,
+                } => {
+                    if !matches!(m.role, MessageRole::Assistant) {
+                        return Err(ProviderError::InvalidInput("tool_call_role"));
+                    }
+                    flush_responses(m, &mut parts, out);
+                    let raw = self.arguments(arguments)?;
                     out.push(json!({"type":"function_call","call_id":call_id,"name":wire_name,"arguments":raw}));
                 }
-                ContentBlock::ToolResult{call_id,content,is_error,..}=>{
-                    if !matches!(m.role,MessageRole::User){return Err(ProviderError::InvalidInput("tool_result_role"));}
-                    flush_responses(m,&mut parts,out);
-                    result_images.extend(self.result_images(content,true)?);
+                ContentBlock::ToolResult {
+                    call_id,
+                    content,
+                    is_error,
+                    ..
+                } => {
+                    if !matches!(m.role, MessageRole::User) {
+                        return Err(ProviderError::InvalidInput("tool_result_role"));
+                    }
+                    flush_responses(m, &mut parts, out);
+                    result_images.extend(self.result_images(content, true)?);
                     out.push(json!({"type":"function_call_output","call_id":call_id,"output":result_text(content,*is_error)?}));
                 }
-                ContentBlock::Native{binding,artifact}=>{
-                    if !matches!(m.role,MessageRole::Assistant){return Err(ProviderError::InvalidInput("native_role"));}
-                    flush_responses(m,&mut parts,out);let v=self.native(binding,artifact)?;
-                    if !matches!(v["type"].as_str(),Some("reasoning"|"compaction")){return Err(ProviderError::InvalidInput("responses_native"));}out.push(v);
+                ContentBlock::Native { binding, artifact } => {
+                    if !matches!(m.role, MessageRole::Assistant) {
+                        return Err(ProviderError::InvalidInput("native_role"));
+                    }
+                    flush_responses(m, &mut parts, out);
+                    let v = self.native(binding, artifact)?;
+                    if !matches!(v["type"].as_str(), Some("reasoning" | "compaction")) {
+                        return Err(ProviderError::InvalidInput("responses_native"));
+                    }
+                    out.push(v);
                 }
             }
         }

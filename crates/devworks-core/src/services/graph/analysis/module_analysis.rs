@@ -84,10 +84,31 @@ pub(super) fn query(reader: &mut Reader<'_>, scope: &GraphScope) -> Result<Vec<V
         if let Some(indexed) = group.indexed {
             module["indexedNode"] = indexed;
         }
-        let mut value = json!({"module":module,"state":"NotAnalyzed","reason":"analysis_not_recorded",
-            "observedNodeCounts":group.counts.into_iter().map(|(name,count)|json!({"name":name,"count":count.to_string()})).collect::<Vec<_>>(),
-            "observedCoverage":{"state":if indexed_complete{"Complete"}else{"Partial"},"gaps":[],"moreGaps":false},
-            "endpoints":drilldown("Route",group.endpoints,complete),"services":drilldown("Service",group.services,complete),"tables":drilldown("Table",group.tables,complete)});
+        let mut value = json!({
+            "module": module,
+            "state": "NotAnalyzed",
+            "reason": "analysis_not_recorded",
+            "observedNodeCounts": group
+                .counts
+                .into_iter()
+                .map(|(name, count)| json!({
+                    "name": name,
+                    "count": count.to_string()
+                }))
+                .collect::<Vec<_>>(),
+            "observedCoverage": {
+                "state": if indexed_complete {
+                    "Complete"
+                } else {
+                    "Partial"
+                },
+                "gaps": [],
+                "moreGaps": false
+            },
+            "endpoints": drilldown("Route", group.endpoints, complete),
+            "services": drilldown("Service", group.services, complete),
+            "tables": drilldown("Table", group.tables, complete)
+        });
         if let Some(source) = group.source {
             // Accept only the closed current typed record, including its actual provenance.
             // Invalid stored analysis is unavailable, never silently replaced with invented prose.

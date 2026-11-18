@@ -902,7 +902,9 @@ fn content_types_limits_framing_and_statuses_are_handled() {
             "/untyped-binary" => response("200 OK", &[], b"\x00\x01\x02"),
             "/big" => response("200 OK", &[("Content-Type", "text/plain")], big_body.as_bytes()),
             "/chunked" => Reply::Bytes(
-                b"HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nTransfer-Encoding: chunked\r\n\r\n5;ext=1\r\nhello\r\n6\r\n world\r\n0\r\nX-Trailer: t\r\n\r\n".to_vec(),
+                b"HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nTransfer-Encoding: \
+                    chunked\r\n\r\n5;ext=1\r\nhello\r\n6\r\n world\r\n0\r\nX-Trailer: \
+                    t\r\n\r\n".to_vec(),
             ),
             "/short" => Reply::Bytes(
                 b"HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: 50\r\n\r\nonly part".to_vec(),

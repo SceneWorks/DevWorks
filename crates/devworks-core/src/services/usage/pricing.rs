@@ -653,7 +653,17 @@ mod tests {
     use crate::services::usage::meter::MeasuredQuantity;
     use serde_json::json;
     fn quote(rates: Option<UsageRates>) -> PriceQuote {
-        serde_json::from_value(json!({"classification":"OfficialEstimate","snapshot_id":null,"price_revision":null,"override_revision":null,"currency":"USD","rates":rates,"tariffs":[],"untracked_reason":null})).unwrap()
+        serde_json::from_value(json!({
+            "classification": "OfficialEstimate",
+            "snapshot_id": null,
+            "price_revision": null,
+            "override_revision": null,
+            "currency": "USD",
+            "rates": rates,
+            "tariffs": [],
+            "untracked_reason": null
+        }))
+        .unwrap()
     }
     fn context() -> PricingContext {
         PricingContext {
@@ -739,7 +749,21 @@ mod tests {
     #[test]
     fn non_token_measurements_use_exact_published_denominators() {
         let mut quote = quote(None);
-        quote.tariffs=serde_json::from_value(json!([{"upstream_model_id":"audio","service_tier":"Standard","context_lower_exclusive":null,"context_upper_inclusive":null,"modality":"Audio","charge_kind":"Runtime","cache_ttl_seconds":null,"unit":"Second","units":60,"amount_usd":"0.000001","region":null,"endpoint_profile":null}])).unwrap();
+        quote.tariffs = serde_json::from_value(json!([{
+            "upstream_model_id": "audio",
+            "service_tier": "Standard",
+            "context_lower_exclusive": null,
+            "context_upper_inclusive": null,
+            "modality": "Audio",
+            "charge_kind": "Runtime",
+            "cache_ttl_seconds": null,
+            "unit": "Second",
+            "units": 60,
+            "amount_usd": "0.000001",
+            "region": null,
+            "endpoint_profile": null
+        }]))
+        .unwrap();
         let units = vec![MeasuredQuantity {
             modality: "Audio".into(),
             charge_kind: "Runtime".into(),
@@ -844,8 +868,20 @@ mod tests {
         let mut quote = quote(None);
         let tariff = |kind: &str, modality: &str, unit: &str, amount: &str, ttl: Option<i64>| {
             serde_json::from_value(serde_json::json!({
-            "upstream_model_id":"priced", "service_tier":"Standard", "context_lower_exclusive":null,"context_upper_inclusive":null,
-            "modality":modality,"charge_kind":kind,"cache_ttl_seconds":ttl,"unit":unit,"units":1,"amount_usd":amount,"region":null,"endpoint_profile":null})).unwrap()
+                "upstream_model_id": "priced",
+                "service_tier": "Standard",
+                "context_lower_exclusive": null,
+                "context_upper_inclusive": null,
+                "modality": modality,
+                "charge_kind": kind,
+                "cache_ttl_seconds": ttl,
+                "unit": unit,
+                "units": 1,
+                "amount_usd": amount,
+                "region": null,
+                "endpoint_profile": null
+            }))
+            .unwrap()
         };
         quote.tariffs = vec![
             tariff("CacheWrite", "Text", "Token", "0.0000008", Some(300)),
@@ -962,7 +998,27 @@ mod tests {
             1_000_000_033,
             1_000_000_087,
         ]) {
-            priced.tariffs.push(serde_json::from_value(json!({"upstream_model_id":"priced","service_tier":"Standard","context_lower_exclusive":null,"context_upper_inclusive":null,"modality":modality,"charge_kind":"Runtime","cache_ttl_seconds":null,"unit":if modality == "Any" {"Request"} else {"Second"},"units":units,"amount_usd":"1","region":null,"endpoint_profile":null})).unwrap());
+            priced.tariffs.push(
+                serde_json::from_value(json!({
+                    "upstream_model_id": "priced",
+                    "service_tier": "Standard",
+                    "context_lower_exclusive": null,
+                    "context_upper_inclusive": null,
+                    "modality": modality,
+                    "charge_kind": "Runtime",
+                    "cache_ttl_seconds": null,
+                    "unit": if modality == "Any" {
+                        "Request"
+                    } else {
+                        "Second"
+                    },
+                    "units": units,
+                    "amount_usd": "1",
+                    "region": null,
+                    "endpoint_profile": null
+                }))
+                .unwrap(),
+            );
             quantities.additional.push(MeasuredQuantity {
                 modality: modality.into(),
                 charge_kind: "Runtime".into(),

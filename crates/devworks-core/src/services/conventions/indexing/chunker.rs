@@ -276,7 +276,10 @@ mod tests {
     use super::*;
     #[test]
     fn frozen_breadcrumb_frontmatter_and_code_exclusion_are_preserved() {
-        let input = "---\r\nowner: platform\r\n---\r\n# Overview\r\n\r\nIntro text.\r\n\r\n## Consumers\r\n\r\nPrefer idempotent consumers.\r\n### Code\r\n```rust\r\nlet n = 1;\r\n```\r\n## Next\r\n#### Keep this lower heading\r\nText.";
+        let input = "---\r\nowner: platform\r\n---\r\n# Overview\r\n\r\nIntro \
+            text.\r\n\r\n## Consumers\r\n\r\nPrefer idempotent consumers.\r\n### \
+            Code\r\n```rust\r\nlet n = 1;\r\n```\r\n## Next\r\n#### Keep this lower \
+            heading\r\nText.";
         let chunks: Vec<_> = MarkdownChunks::new(input, "Messaging").collect();
         assert_eq!(chunks.len(), 3);
         assert_eq!(

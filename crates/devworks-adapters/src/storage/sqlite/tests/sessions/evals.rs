@@ -104,22 +104,42 @@ fn outcome(report: &EvalReport, expected: EvalOutcome) -> bool {
 /// Capture entire stored rows in all owned work/repository/Knowledge tables, including empty
 /// tables. Evaluation receipts/reports/history are intentionally outside this invariant.
 fn protected_rows(fx: &Fx) -> Vec<(String, Vec<String>)> {
-    fx.store.with_writer_connection(|c| {
-        let mut tables = c.prepare("SELECT name FROM sqlite_master WHERE type='table' AND (name LIKE 'knowledge_%' OR name LIKE 'work_%' OR name LIKE 'project_%' OR name='projects' OR name='repositories' OR name LIKE 'git_%') ORDER BY name").unwrap();
-        let names: Vec<String> = tables.query_map([],|r|r.get(0)).unwrap().map(Result::unwrap).collect();
-        let mut snapshots = Vec::new();
-        for name in names {
-            let mut statement = c.prepare(&format!("SELECT * FROM \"{name}\"")).unwrap();
-            let count = statement.column_count();
-            let mut rows = statement.query_map([],|r| {
-                let mut cells=Vec::new();
-                for n in 0..count {cells.push(format!("{:?}",r.get_ref(n)?));}
-                Ok(cells.join("|"))
-            }).unwrap().map(Result::unwrap).collect::<Vec<_>>();
-            rows.sort();snapshots.push((name,rows));
-        }
-        Ok(snapshots)
-    }).unwrap()
+    fx.store
+        .with_writer_connection(|c| {
+            let mut tables = c
+                .prepare(
+                    "SELECT name FROM sqlite_master WHERE type='table' AND (name LIKE \
+            'knowledge_%' OR name LIKE 'work_%' OR name LIKE 'project_%' OR \
+            name='projects' OR name='repositories' OR name LIKE 'git_%') ORDER BY \
+            name",
+                )
+                .unwrap();
+            let names: Vec<String> = tables
+                .query_map([], |r| r.get(0))
+                .unwrap()
+                .map(Result::unwrap)
+                .collect();
+            let mut snapshots = Vec::new();
+            for name in names {
+                let mut statement = c.prepare(&format!("SELECT * FROM \"{name}\"")).unwrap();
+                let count = statement.column_count();
+                let mut rows = statement
+                    .query_map([], |r| {
+                        let mut cells = Vec::new();
+                        for n in 0..count {
+                            cells.push(format!("{:?}", r.get_ref(n)?));
+                        }
+                        Ok(cells.join("|"))
+                    })
+                    .unwrap()
+                    .map(Result::unwrap)
+                    .collect::<Vec<_>>();
+                rows.sort();
+                snapshots.push((name, rows));
+            }
+            Ok(snapshots)
+        })
+        .unwrap()
 }
 
 #[test]
@@ -451,9 +471,15 @@ fn record_check(name: &str, source: &str, pointer: &str, expected: Value) -> Val
 #[test]
 fn every_native_record_source_is_graded_without_replaying_or_mutating_observed_work() {
     let fx = fixture();
-    fx.store.with_writer_connection(|c| {
-        super::super::super::conn::db(c.execute_batch("INSERT INTO workflow_statuses VALUES('ready-a','project-a','Ready','Ready',1,1); UPDATE work_items SET status_id='ready-a' WHERE id='root-a';"))
-    }).unwrap();
+    fx.store
+        .with_writer_connection(|c| {
+            super::super::super::conn::db(c.execute_batch(
+                "INSERT INTO workflow_statuses VALUES('ready-a','project-a','Ready',\
+            'Ready',1,1); UPDATE work_items SET status_id='ready-a' WHERE \
+            id='root-a';",
+            ))
+        })
+        .unwrap();
     let user = fx.user();
     fx.write(move |tx| {
         for kind in [LinkKind::Git, LinkKind::PullRequest, LinkKind::Review] {

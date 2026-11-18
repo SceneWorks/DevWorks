@@ -333,7 +333,15 @@ impl ConnectionService {
                 ) {
                     Ok(handle) => handle,
                     Err(error) => {
-                        let _=self.finish_refresh(&owner,crate::protocol::OperationState::OutcomeUnknown,json!({"credentialPublication":"NotPublished","externalSecretWrite":"Unknown","allocatedHandle":owner.handle}));
+                        let _ = self.finish_refresh(
+                            &owner,
+                            crate::protocol::OperationState::OutcomeUnknown,
+                            json!({
+                                "credentialPublication": "NotPublished",
+                                "externalSecretWrite": "Unknown",
+                                "allocatedHandle": owner.handle
+                            }),
+                        );
                         self.mark(&c,"ReauthenticationRequired","the refresh succeeded but its credential could not be safely published");
                         return Err(AccessError::Unavailable(error.to_string()));
                     }
@@ -362,7 +370,14 @@ impl ConnectionService {
                         // Not published: the old refresh token may already be spent, so the
                         // connection needs a new sign-in rather than a repeat of it.
                         self.discard(&new_handle);
-                        let _ = self.finish_refresh(&owner, crate::protocol::OperationState::OutcomeUnknown, json!({"credentialPublication":"NotPublished","allocatedHandle":new_handle}));
+                        let _ = self.finish_refresh(
+                            &owner,
+                            crate::protocol::OperationState::OutcomeUnknown,
+                            json!({
+                                "credentialPublication": "NotPublished",
+                                "allocatedHandle": new_handle
+                            }),
+                        );
                         self.mark(
                             &c,
                             "ReauthenticationRequired",
@@ -445,8 +460,11 @@ impl ConnectionService {
             let Some(mut c) = tx.router().connection(&id)? else {
                 return Ok(None);
             };
-            if c.credential_ref != old_ref || c.credential_revision != old_rev || c.refresh_operation_id.as_ref() != Some(&owner.operation) || c.account_revision != owner.account_revision {
-
+            if c.credential_ref != old_ref
+                || c.credential_revision != old_rev
+                || c.refresh_operation_id.as_ref() != Some(&owner.operation)
+                || c.account_revision != owner.account_revision
+            {
                 return Ok(None);
             }
             let expected = c.revision;
@@ -477,7 +495,16 @@ impl ConnectionService {
                 "CredentialRotated",
                 connection_payload(&saved),
             )?;
-            lifecycle::finish_in(tx, &owner, crate::protocol::OperationState::ObservedComplete, json!({"credentialPublication":"Published","allocatedHandle":saved.credential_ref,"credentialRevision":saved.credential_revision}))?;
+            lifecycle::finish_in(
+                tx,
+                &owner,
+                crate::protocol::OperationState::ObservedComplete,
+                json!({
+                    "credentialPublication": "Published",
+                    "allocatedHandle": saved.credential_ref,
+                    "credentialRevision": saved.credential_revision
+                }),
+            )?;
             Ok(Some(saved.credential_revision))
         })
     }

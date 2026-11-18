@@ -1,7 +1,10 @@
 //! The durable queue: reads shared by snapshots and the write unit, and the `DurableQueue` writes.
 use super::*;
 
-pub(super) const QUEUE_COLUMNS: &str = "id,consumer,event_id,root_id,operation_id,priority,ready_at,state,owner_id,lease_until,generation,cancellation_epoch,attempt_count,payload_json,partition_key,event_seq,revision,last_error,claim_boot_id,cancel_requested,failed_at,awaiting_eligibility";
+pub(super) const QUEUE_COLUMNS: &str = "id,consumer,event_id,root_id,operation_id,priority,ready_at,state,\
+    owner_id,lease_until,generation,cancellation_epoch,attempt_count,\
+    payload_json,partition_key,event_seq,revision,last_error,claim_boot_id,\
+    cancel_requested,failed_at,awaiting_eligibility";
 
 /// SQL list of settled queue states (they never block a partition or the watermark).
 /// `Compacted` is a dedupe tombstone of a settled delivery.
@@ -180,7 +183,9 @@ pub(super) fn deliveries(
             break;
         }
         let sql = format!(
-            "SELECT {QUEUE_COLUMNS} FROM queue_entries WHERE {predicate} AND (?1 IS NULL OR consumer=?1) AND (?2 IS NULL OR operation_id=?2) AND ({}) ORDER BY {order} LIMIT ?6",
+            "SELECT {QUEUE_COLUMNS} FROM queue_entries WHERE {predicate} AND (?1 IS \
+                NULL OR consumer=?1) AND (?2 IS NULL OR operation_id=?2) AND ({}) ORDER \
+                BY {order} LIMIT ?6",
             if start.is_some() {
                 keyset
             } else {
@@ -239,7 +244,9 @@ pub(super) fn progress(
     let (lowest_unsettled, next_retry): (Option<i64>, Option<i64>) = db(stmt(
         conn,
         &format!(
-            "SELECT min(event_seq),min(CASE WHEN state='Ready' AND attempt_count>0 THEN ready_at END) FROM queue_entries WHERE consumer=?1 AND state NOT IN {SETTLED}"
+            "SELECT min(event_seq),min(CASE WHEN state='Ready' AND attempt_count>0 \
+                THEN ready_at END) FROM queue_entries WHERE consumer=?1 AND state NOT \
+                IN {SETTLED}"
         ),
     )?
     .query_row(params![consumer], |r| Ok((r.get(0)?, r.get(1)?))))?;
@@ -276,7 +283,9 @@ pub(super) fn awaiting_eligibility(
     let mut s = stmt(
         conn,
         &format!(
-            "SELECT {QUEUE_COLUMNS} FROM queue_entries WHERE consumer=?1 AND awaiting_eligibility=1 AND state='Reconciling' AND (?2 IS NULL OR id>?2) ORDER BY id LIMIT ?3"
+            "SELECT {QUEUE_COLUMNS} FROM queue_entries WHERE consumer=?1 AND \
+                awaiting_eligibility=1 AND state='Reconciling' AND (?2 IS NULL OR \
+                id>?2) ORDER BY id LIMIT ?3"
         ),
     )?;
     let raws: Vec<QueueRaw> =
@@ -287,7 +296,9 @@ pub(super) fn awaiting_eligibility(
 pub(super) fn next_due(conn: &Connection, now: i64) -> Result<Option<i64>, StorageError> {
     db(stmt(
         conn,
-        "SELECT min(t) FROM (SELECT min(ready_at) AS t FROM queue_entries WHERE state='Ready' AND ready_at>?1 UNION ALL SELECT min(lease_until) FROM queue_entries WHERE state='Claimed')",
+        "SELECT min(t) FROM (SELECT min(ready_at) AS t FROM queue_entries WHERE \
+            state='Ready' AND ready_at>?1 UNION ALL SELECT min(lease_until) FROM \
+            queue_entries WHERE state='Claimed')",
     )?
     .query_row([now], |r| r.get(0)))
 }
@@ -377,8 +388,11 @@ impl DurableQueue for Unit<'_> {
                 ));
             }
         }
-        db(stmt(self.conn,
-            "INSERT INTO queue_entries(id,consumer,event_id,root_id,operation_id,priority,ready_at,state,payload_json,partition_key,event_seq) VALUES(?1,?2,?3,?4,?5,?6,?7,'Ready',?8,?9,?10)",
+        db(stmt(
+            self.conn,
+            "INSERT INTO queue_entries(id,consumer,event_id,root_id,operation_id,\
+                priority,ready_at,state,payload_json,partition_key,event_seq) VALUES(?1,\
+                ?2,?3,?4,?5,?6,?7,'Ready',?8,?9,?10)",
         )?
         .execute(params![
             e.id.as_str(),
@@ -411,10 +425,15 @@ impl DurableQueue for Unit<'_> {
             let mut s = stmt(
                 self.conn,
                 &format!(
-                    "SELECT q.id,q.generation FROM queue_entries q WHERE q.consumer=?1 AND q.state='Ready' AND q.ready_at<=?2 \
-                     AND (q.partition_key IS NULL OR NOT EXISTS (SELECT 1 FROM queue_entries p WHERE p.consumer=q.consumer AND p.partition_key=q.partition_key AND p.event_seq<q.event_seq AND p.state NOT IN {SETTLED})) \
-                     AND (q.operation_id IS NULL OR NOT EXISTS (SELECT 1 FROM operations o WHERE o.id=q.operation_id AND o.state IN ('Dispatching','OutcomeUnknown','NeedsInput'))) \
-                     ORDER BY q.priority DESC,q.ready_at,q.id LIMIT ?3"
+                    "SELECT q.id,q.generation FROM queue_entries q WHERE q.consumer=?1 AND \
+                        q.state='Ready' AND q.ready_at<=?2 \
+                        AND (q.partition_key IS NULL OR NOT EXISTS (SELECT 1 FROM queue_entries \
+                        p WHERE p.consumer=q.consumer AND p.partition_key=q.partition_key AND \
+                        p.event_seq<q.event_seq AND p.state NOT IN {SETTLED})) \
+                        AND (q.operation_id IS NULL OR NOT EXISTS (SELECT 1 FROM operations o \
+                        WHERE o.id=q.operation_id AND o.state IN ('Dispatching',\
+                        'OutcomeUnknown','NeedsInput'))) \
+                        ORDER BY q.priority DESC,q.ready_at,q.id LIMIT ?3"
                 ),
             )?;
             db(db(s.query_map(params![req.consumer, self.now, n], |r| {
@@ -425,10 +444,20 @@ impl DurableQueue for Unit<'_> {
         let boot = self.boot()?.clone();
         let mut claimed = Vec::new();
         for (id, generation) in candidates {
-            let changed = db(stmt(self.conn,
-                "UPDATE queue_entries SET state='Claimed',owner_id=?1,lease_until=?2,generation=generation+1,attempt_count=attempt_count+1,revision=revision+1,claim_boot_id=?5 WHERE id=?3 AND state='Ready' AND generation=?4",
+            let changed = db(stmt(
+                self.conn,
+                "UPDATE queue_entries SET state='Claimed',owner_id=?1,lease_until=?2,\
+                    generation=generation+1,attempt_count=attempt_count+1,\
+                    revision=revision+1,claim_boot_id=?5 WHERE id=?3 AND state='Ready' AND \
+                    generation=?4",
             )?
-            .execute(params![req.owner.as_str(), lease_until, id, generation, boot.as_str()]))?;
+            .execute(params![
+                req.owner.as_str(),
+                lease_until,
+                id,
+                generation,
+                boot.as_str()
+            ]))?;
             if changed != 1 {
                 continue; // lost race or no longer eligible
             }
@@ -487,10 +516,18 @@ impl DurableQueue for Unit<'_> {
             }
         };
         // A completion clears the visible failure; a cancellation keeps it as evidence.
-        db(stmt(self.conn,
-            "UPDATE queue_entries SET state=?1,owner_id=NULL,lease_until=NULL,claim_boot_id=NULL,revision=revision+1,last_error=CASE WHEN ?1='Completed' THEN NULL ELSE last_error END WHERE id=?2 AND generation=?3",
+        db(stmt(
+            self.conn,
+            "UPDATE queue_entries SET state=?1,owner_id=NULL,lease_until=NULL,\
+                claim_boot_id=NULL,revision=revision+1,last_error=CASE WHEN \
+                ?1='Completed' THEN NULL ELSE last_error END WHERE id=?2 AND \
+                generation=?3",
         )?
-        .execute(params![queue_state_name(state), id.as_str(), fence.generation]))?;
+        .execute(params![
+            queue_state_name(state),
+            id.as_str(),
+            fence.generation
+        ]))?;
         let after = self.reload(id)?;
         self.settled(&after)?;
         Ok(after)
@@ -541,10 +578,20 @@ impl DurableQueue for Unit<'_> {
             FailureDisposition::Terminal => (QueueState::Failed, e.ready_at_ms),
         };
         let failed_at = (state != QueueState::Ready).then_some(self.now);
-        db(stmt(self.conn,
-            "UPDATE queue_entries SET state=?1,ready_at=?2,owner_id=NULL,lease_until=NULL,claim_boot_id=NULL,revision=revision+1,last_error=?5,failed_at=coalesce(?6,failed_at) WHERE id=?3 AND generation=?4",
+        db(stmt(
+            self.conn,
+            "UPDATE queue_entries SET state=?1,ready_at=?2,owner_id=NULL,\
+                lease_until=NULL,claim_boot_id=NULL,revision=revision+1,last_error=?5,\
+                failed_at=coalesce(?6,failed_at) WHERE id=?3 AND generation=?4",
         )?
-        .execute(params![queue_state_name(state), ready_at, id.as_str(), fence.generation, cause, failed_at]))?;
+        .execute(params![
+            queue_state_name(state),
+            ready_at,
+            id.as_str(),
+            fence.generation,
+            cause,
+            failed_at
+        ]))?;
         let after = self.reload(id)?;
         self.observe_queue(
             &after,
@@ -658,10 +705,20 @@ impl DurableQueue for Unit<'_> {
                 QueueState::Ready
             };
             let failed_at = (state == QueueState::Reconciling).then_some(self.now);
-            db(stmt(self.conn,
-                "UPDATE queue_entries SET state=?1,owner_id=NULL,lease_until=NULL,claim_boot_id=NULL,generation=generation+1,revision=revision+1,awaiting_eligibility=?4,failed_at=coalesce(?5,failed_at) WHERE id=?2 AND state='Claimed' AND generation=?3",
+            db(stmt(
+                self.conn,
+                "UPDATE queue_entries SET state=?1,owner_id=NULL,lease_until=NULL,\
+                    claim_boot_id=NULL,generation=generation+1,revision=revision+1,\
+                    awaiting_eligibility=?4,failed_at=coalesce(?5,failed_at) WHERE id=?2 \
+                    AND state='Claimed' AND generation=?3",
             )?
-            .execute(params![queue_state_name(state), id.as_str(), e.generation, awaiting, failed_at]))?;
+            .execute(params![
+                queue_state_name(state),
+                id.as_str(),
+                e.generation,
+                awaiting,
+                failed_at
+            ]))?;
             let after = self.reload(&id)?;
             self.observe_queue(
                 &after,
@@ -706,8 +763,11 @@ impl DurableQueue for Unit<'_> {
         } else {
             e.attempt_count
         };
-        db(stmt(self.conn,
-            "UPDATE queue_entries SET state='Ready',ready_at=?1,attempt_count=?4,generation=generation+1,revision=revision+1,awaiting_eligibility=0 WHERE id=?2 AND generation=?3",
+        db(stmt(
+            self.conn,
+            "UPDATE queue_entries SET state='Ready',ready_at=?1,attempt_count=?4,\
+                generation=generation+1,revision=revision+1,awaiting_eligibility=0 \
+                WHERE id=?2 AND generation=?3",
         )?
         .execute(params![ready, id.as_str(), e.generation, attempts]))?;
         let after = self.reload(id)?;
@@ -727,8 +787,12 @@ impl DurableQueue for Unit<'_> {
     ) -> Result<QueueEntry, StorageError> {
         bounded("hold cause", cause, 1024)?;
         self.fenced(id, fence)?;
-        db(stmt(self.conn,
-            "UPDATE queue_entries SET state='Reconciling',owner_id=NULL,lease_until=NULL,claim_boot_id=NULL,generation=generation+1,revision=revision+1,last_error=?1,failed_at=?4 WHERE id=?2 AND generation=?3",
+        db(stmt(
+            self.conn,
+            "UPDATE queue_entries SET state='Reconciling',owner_id=NULL,\
+                lease_until=NULL,claim_boot_id=NULL,generation=generation+1,\
+                revision=revision+1,last_error=?1,failed_at=?4 WHERE id=?2 AND \
+                generation=?3",
         )?
         .execute(params![cause, id.as_str(), fence.generation, self.now]))?;
         let after = self.reload(id)?;
@@ -749,8 +813,12 @@ impl DurableQueue for Unit<'_> {
                 "only root-scoped deliveries wait for root eligibility",
             ));
         }
-        db(stmt(self.conn,
-            "UPDATE queue_entries SET state='Reconciling',owner_id=NULL,lease_until=NULL,claim_boot_id=NULL,generation=generation+1,revision=revision+1,last_error=?1,failed_at=?4,awaiting_eligibility=1 WHERE id=?2 AND generation=?3",
+        db(stmt(
+            self.conn,
+            "UPDATE queue_entries SET state='Reconciling',owner_id=NULL,\
+                lease_until=NULL,claim_boot_id=NULL,generation=generation+1,\
+                revision=revision+1,last_error=?1,failed_at=?4,awaiting_eligibility=1 \
+                WHERE id=?2 AND generation=?3",
         )?
         .execute(params![cause, id.as_str(), fence.generation, self.now]))?;
         let after = self.reload(id)?;
@@ -894,20 +962,31 @@ impl Unit<'_> {
     /// settled delivery of this partition, never a sequence in between, so a checkpoint an
     /// in-flight invocation read stays valid while deliveries behind it settle.
     pub(super) fn settled(&self, e: &QueueEntry) -> Result<(), StorageError> {
-        db(stmt(self.conn,
-            "INSERT INTO consumer_progress(consumer,partition_key,applied_seq,revision) VALUES(?1,'',?2,1) ON CONFLICT(consumer,partition_key) DO UPDATE SET applied_seq=max(applied_seq,excluded.applied_seq),revision=revision+1",
+        db(stmt(
+            self.conn,
+            "INSERT INTO consumer_progress(consumer,partition_key,applied_seq,\
+                revision) VALUES(?1,'',?2,1) ON CONFLICT(consumer,partition_key) DO \
+                UPDATE SET applied_seq=max(applied_seq,excluded.applied_seq),\
+                revision=revision+1",
         )?
         .execute(params![e.consumer, e.event_sequence]))?;
         if let Some(p) = e.partition.as_deref() {
             let prefix: Option<i64> = db(stmt(
                 self.conn,
                 &format!(
-                    "SELECT max(event_seq) FROM queue_entries WHERE consumer=?1 AND partition_key=?2 AND state IN {SETTLED} AND event_seq<coalesce((SELECT min(event_seq) FROM queue_entries WHERE consumer=?1 AND partition_key=?2 AND state NOT IN {SETTLED}),9223372036854775807)"
+                    "SELECT max(event_seq) FROM queue_entries WHERE consumer=?1 AND \
+                        partition_key=?2 AND state IN {SETTLED} AND event_seq<coalesce((SELECT \
+                        min(event_seq) FROM queue_entries WHERE consumer=?1 AND \
+                        partition_key=?2 AND state NOT IN {SETTLED}),9223372036854775807)"
                 ),
             )?
             .query_row(params![e.consumer, p], |r| r.get(0)))?;
-            db(stmt(self.conn,
-                "INSERT INTO consumer_progress(consumer,partition_key,applied_seq,revision) VALUES(?1,?2,?3,1) ON CONFLICT(consumer,partition_key) DO UPDATE SET applied_seq=max(applied_seq,excluded.applied_seq),revision=revision+1",
+            db(stmt(
+                self.conn,
+                "INSERT INTO consumer_progress(consumer,partition_key,applied_seq,\
+                    revision) VALUES(?1,?2,?3,1) ON CONFLICT(consumer,partition_key) DO \
+                    UPDATE SET applied_seq=max(applied_seq,excluded.applied_seq),\
+                    revision=revision+1",
             )?
             .execute(params![e.consumer, p, prefix.unwrap_or(0)]))?;
         }
@@ -964,8 +1043,11 @@ impl Unit<'_> {
         cause: &str,
     ) -> Result<QueueEntry, StorageError> {
         self.cancel_operation(e)?;
-        db(stmt(self.conn,
-            "UPDATE queue_entries SET state='Cancelled',owner_id=NULL,lease_until=NULL,claim_boot_id=NULL,awaiting_eligibility=0,revision=revision+1 WHERE id=?1 AND generation=?2",
+        db(stmt(
+            self.conn,
+            "UPDATE queue_entries SET state='Cancelled',owner_id=NULL,\
+                lease_until=NULL,claim_boot_id=NULL,awaiting_eligibility=0,\
+                revision=revision+1 WHERE id=?1 AND generation=?2",
         )?
         .execute(params![e.id.as_str(), e.generation]))?;
         let after = self.reload(&e.id)?;

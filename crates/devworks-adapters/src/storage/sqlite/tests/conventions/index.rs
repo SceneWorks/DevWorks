@@ -379,13 +379,46 @@ fn embedding_input_replay_keeps_winner_refs_and_exact_actor_scope_space_and_byte
     let row = run_write(&store, WriteOptions::fixture(), |tx| {
         let scope = project(tx, "inputs-project")?;
         tx.conventions().put_convention_embedding_space(&space())?;
-        let digest=sha256_hex(devworks_core::jcs::canonicalize(&json!([{"sha256":sha256_hex(b"exact input"),"byteCount":11}])).unwrap().as_bytes());
-        let provenance=json!({"principalKind":"Host","producedBy":"host","derived":{"kind":"ConventionEmbeddingInput","requestId":"embedding-request","contextDigest":"d".repeat(64),"embeddingSpace":"recorded-space","inputDigest":digest,"inputIndex":0}});
-        let first=artifact_with_provenance(tx,"input-1",&scope,"exact input",provenance.clone())?;
-        let row=StoredConventionEmbeddingInputs {request_id:id("embedding-request"),actor_id:tx.store().host_actor.clone(),project_id:scope.project().cloned(),context_digest:"d".repeat(64),embedding_space:"recorded-space".into(),input_digest:digest,input_refs:vec![first],created_at_ms:T0};
-        let saved=tx.conventions().insert_convention_embedding_inputs(&row)?;
+        let digest = sha256_hex(
+            devworks_core::jcs::canonicalize(
+                &json!([{"sha256":sha256_hex(b"exact input"),"byteCount":11}]),
+            )
+            .unwrap()
+            .as_bytes(),
+        );
+        let provenance = json!({
+            "principalKind": "Host",
+            "producedBy": "host",
+            "derived": {
+                "kind": "ConventionEmbeddingInput",
+                "requestId": "embedding-request",
+                "contextDigest": "d".repeat(64),
+                "embeddingSpace": "recorded-space",
+                "inputDigest": digest,
+                "inputIndex": 0
+            }
+        });
+        let first =
+            artifact_with_provenance(tx, "input-1", &scope, "exact input", provenance.clone())?;
+        let row = StoredConventionEmbeddingInputs {
+            request_id: id("embedding-request"),
+            actor_id: tx.store().host_actor.clone(),
+            project_id: scope.project().cloned(),
+            context_digest: "d".repeat(64),
+            embedding_space: "recorded-space".into(),
+            input_digest: digest,
+            input_refs: vec![first],
+            created_at_ms: T0,
+        };
+        let saved = tx.conventions().insert_convention_embedding_inputs(&row)?;
         let mut candidate = row.clone();
-        candidate.input_refs = vec![artifact_with_provenance(tx,"input-2",&scope,"exact input",provenance)?];
+        candidate.input_refs = vec![artifact_with_provenance(
+            tx,
+            "input-2",
+            &scope,
+            "exact input",
+            provenance,
+        )?];
         assert_eq!(
             tx.conventions()
                 .insert_convention_embedding_inputs(&candidate)?,
@@ -436,15 +469,64 @@ fn embedding_input_replay_keeps_winner_refs_and_exact_actor_scope_space_and_byte
 fn concurrent_embedding_cache_admission_keeps_one_exact_frame_and_rejects_forged_host_refs() {
     let h = Harness::new();
     let store = std::sync::Arc::new(h.store());
-    let candidates=run_write(&*store,WriteOptions::fixture(),|tx| {
+    let candidates = run_write(&*store, WriteOptions::fixture(), |tx| {
         tx.conventions().put_convention_embedding_space(&space())?;
-        let digest=sha256_hex(devworks_core::jcs::canonicalize(&json!([{"sha256":sha256_hex(b"same"),"byteCount":4}])).unwrap().as_bytes());
-        let marker=json!({"principalKind":"Host","producedBy":"host","derived":{"kind":"ConventionEmbeddingInput","requestId":"racing-input-request","contextDigest":"d".repeat(64),"embeddingSpace":"recorded-space","inputDigest":digest,"inputIndex":0}});
-        let mut candidates=Vec::new();
-        for name in ["left-input","right-input"] {candidates.push(StoredConventionEmbeddingInputs {request_id:id("racing-input-request"),actor_id:tx.store().host_actor.clone(),project_id:None,context_digest:"d".repeat(64),embedding_space:"recorded-space".into(),input_digest:digest.clone(),input_refs:vec![artifact_with_provenance(tx,name,&KnowledgeScope::Workspace,"same",marker.clone())?],created_at_ms:T0});}
-        let mut forged_marker=marker;forged_marker["producedBy"]=json!("another-host");let mut forged=candidates[0].clone();forged.input_refs=vec![artifact_with_provenance(tx,"forged-input",&KnowledgeScope::Workspace,"same",forged_marker)?];assert!(tx.conventions().insert_convention_embedding_inputs(&forged).is_err());
+        let digest = sha256_hex(
+            devworks_core::jcs::canonicalize(
+                &json!([{"sha256":sha256_hex(b"same"),"byteCount":4}]),
+            )
+            .unwrap()
+            .as_bytes(),
+        );
+        let marker = json!({
+            "principalKind": "Host",
+            "producedBy": "host",
+            "derived": {
+                "kind": "ConventionEmbeddingInput",
+                "requestId": "racing-input-request",
+                "contextDigest": "d".repeat(64),
+                "embeddingSpace": "recorded-space",
+                "inputDigest": digest,
+                "inputIndex": 0
+            }
+        });
+        let mut candidates = Vec::new();
+        for name in ["left-input", "right-input"] {
+            candidates.push(StoredConventionEmbeddingInputs {
+                request_id: id("racing-input-request"),
+                actor_id: tx.store().host_actor.clone(),
+                project_id: None,
+                context_digest: "d".repeat(64),
+                embedding_space: "recorded-space".into(),
+                input_digest: digest.clone(),
+                input_refs: vec![artifact_with_provenance(
+                    tx,
+                    name,
+                    &KnowledgeScope::Workspace,
+                    "same",
+                    marker.clone(),
+                )?],
+                created_at_ms: T0,
+            });
+        }
+        let mut forged_marker = marker;
+        forged_marker["producedBy"] = json!("another-host");
+        let mut forged = candidates[0].clone();
+        forged.input_refs = vec![artifact_with_provenance(
+            tx,
+            "forged-input",
+            &KnowledgeScope::Workspace,
+            "same",
+            forged_marker,
+        )?];
+        assert!(
+            tx.conventions()
+                .insert_convention_embedding_inputs(&forged)
+                .is_err()
+        );
         Ok(candidates)
-    }).unwrap();
+    })
+    .unwrap();
     let barrier = std::sync::Arc::new(std::sync::Barrier::new(2));
     let threads = candidates
         .into_iter()

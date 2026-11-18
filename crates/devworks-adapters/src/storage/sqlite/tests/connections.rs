@@ -2911,10 +2911,21 @@ fn newly_discovered_rows_use_only_their_exact_provider_capability_facts() {
     let cx = Cx::new();
     let key = cx.stage("fixture-openrouter-key");
     cx.add("or", "OpenRouterChat", OPENROUTER, Some(&key));
-    cx.http.on(Method::Get, OPENROUTER, 200, json!({"data": [
-        {"id": "openai/gpt-5.1-sol", "context_length": 128000, "supported_parameters": ["tools"], "architecture": {"input_modalities": ["text", "image"]}, "reasoning": {"supported_efforts": ["low", "high"]}},
-        {"id": "openai/gpt-5.2-sol"}
-    ]}));
+    cx.http.on(
+        Method::Get,
+        OPENROUTER,
+        200,
+        json!({"data": [
+            {
+                "id": "openai/gpt-5.1-sol",
+                "context_length": 128000,
+                "supported_parameters": ["tools"],
+                "architecture": {"input_modalities": ["text", "image"]},
+                "reasoning": {"supported_efforts": ["low", "high"]}
+            },
+            {"id": "openai/gpt-5.2-sol"}
+        ]}),
+    );
     summary(cx.configure(json!({"kind": "SignIn", "connectionId": "or", "action": "Inspect"})));
     let known = cx
         .read(|r| {
@@ -3540,14 +3551,28 @@ fn native_account_identity_service_changes_do_not_alias_rotation_or_removed_conn
         model_id: id("native-model"),
         context_epoch: Counter::new(0).unwrap(),
     };
-    summary(cx.configure(json!({"kind":"Connection","connectionId":"native-identity","expectedRevision":before.revision.to_string(),"name":"Renamed","profile":"CompatibleChat","endpoint":"http://localhost:11434/v1"})));
+    summary(cx.configure(json!({
+        "kind": "Connection",
+        "connectionId": "native-identity",
+        "expectedRevision": before.revision.to_string(),
+        "name": "Renamed",
+        "profile": "CompatibleChat",
+        "endpoint": "http://localhost:11434/v1"
+    })));
     assert_eq!(
         cx.row("native-identity").account_revision,
         before.account_revision
     );
     for endpoint in ["http://localhost:11434/v2", "http://localhost:11434/v1"] {
         let current = cx.row("native-identity");
-        summary(cx.configure(json!({"kind":"Connection","connectionId":"native-identity","expectedRevision":current.revision.to_string(),"name":"Renamed","profile":"CompatibleChat","endpoint":endpoint})));
+        summary(cx.configure(json!({
+            "kind": "Connection",
+            "connectionId": "native-identity",
+            "expectedRevision": current.revision.to_string(),
+            "name": "Renamed",
+            "profile": "CompatibleChat",
+            "endpoint": endpoint
+        })));
         assert_eq!(
             cx.row("native-identity").account_revision,
             current.account_revision + 1
@@ -3555,7 +3580,15 @@ fn native_account_identity_service_changes_do_not_alias_rotation_or_removed_conn
     }
     let current = cx.row("native-identity");
     let key = cx.stage("native-new-key");
-    summary(cx.configure(json!({"kind":"Connection","connectionId":"native-identity","expectedRevision":current.revision.to_string(),"name":"Renamed","profile":"CompatibleChat","endpoint":"http://localhost:11434/v1","credentialRef":key.as_str()})));
+    summary(cx.configure(json!({
+        "kind": "Connection",
+        "connectionId": "native-identity",
+        "expectedRevision": current.revision.to_string(),
+        "name": "Renamed",
+        "profile": "CompatibleChat",
+        "endpoint": "http://localhost:11434/v1",
+        "credentialRef": key.as_str()
+    })));
     assert_eq!(
         cx.row("native-identity").account_revision,
         current.account_revision + 1
@@ -3597,7 +3630,17 @@ fn native_same_account_oauth_refresh_preserves_continuation_but_new_account_fenc
         rotated.account_revision, before.account_revision,
         "ordinary refresh must preserve native replay identity"
     );
-    cx.http.reset(Method::Post,CLAUDE_TOKEN,200,json!({"access_token":"new-account-access","refresh_token":"new-account-refresh","expires_in":3600,"account":{"uuid":"different-account"}}));
+    cx.http.reset(
+        Method::Post,
+        CLAUDE_TOKEN,
+        200,
+        json!({
+            "access_token": "new-account-access",
+            "refresh_token": "new-account-refresh",
+            "expires_in": 3600,
+            "account": {"uuid": "different-account"}
+        }),
+    );
     assert!(matches!(
         cx.svc.refresh(&id("claude")),
         Err(AccessError::Disabled)
@@ -3621,8 +3664,20 @@ fn save_settings_credential(cx: &Cx, credential: Value) -> DomainCommandReply {
     let schema = devworks_core::settings::catalog::descriptor("web.searchCredential")
         .unwrap()
         .schema_ref();
-    cx.command_keyed(&cx.user(), "settings.save_revision", &key,
-        json!({"scope":{"kind":"Workspace"},"expectedRevision":revision.to_string(),"entries":[{"key":"web.searchCredential","value":{"schema":schema,"value":credential}}]}), Some(1))
+    cx.command_keyed(
+        &cx.user(),
+        "settings.save_revision",
+        &key,
+        json!({
+            "scope": {"kind": "Workspace"},
+            "expectedRevision": revision.to_string(),
+            "entries": [{
+                "key": "web.searchCredential",
+                "value": {"schema": schema, "value": credential}
+            }]
+        }),
+        Some(1),
+    )
 }
 
 #[test]
@@ -3814,7 +3869,16 @@ fn settings_secret_pending_and_decided_proposals_hold_values_but_reconciled_away
         .stage_setting_secret(Secret::new("fixture-proposal-old-value"))
         .unwrap();
     let assignment = |reference: &str| -> SettingAssignment {
-        serde_json::from_value(json!({"key":"web.searchCredential","value":{"schema":devworks_core::settings::catalog::descriptor("web.searchCredential").unwrap().schema_ref(),"value":{"secretRef":reference}}})).unwrap()
+        serde_json::from_value(json!({
+            "key": "web.searchCredential",
+            "value": {
+                "schema": devworks_core::settings::catalog::descriptor("web.searchCredential")
+                    .unwrap()
+                    .schema_ref(),
+                "value": {"secretRef": reference}
+            }
+        }))
+        .unwrap()
     };
     let first_entry = assignment(first.as_str());
     let user = cx.user();

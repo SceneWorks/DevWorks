@@ -6,7 +6,10 @@ use devworks_core::ports::storage::*;
 use devworks_core::protocol::{ActorId, Id, ProjectId, RevisionDimension, RootId};
 use rusqlite::{Connection, OptionalExtension, Row, params};
 
-const COLUMNS: &str = "id,project_id,root_id,work_id,kind,queue_key,owner_id,session_id,ingress_namespace,invocation_id,state,parent_feature_id,execution_id,fence,expires_at,revision,work_revision,root_control_revision,queue_revision,created_at,feature_task_set_revision";
+const COLUMNS: &str = "id,project_id,root_id,work_id,kind,queue_key,owner_id,session_id,\
+    ingress_namespace,invocation_id,state,parent_feature_id,execution_id,\
+    fence,expires_at,revision,work_revision,root_control_revision,\
+    queue_revision,created_at,feature_task_set_revision";
 type Raw = (Vec<Option<String>>, [i64; 7], Option<i64>);
 fn row(row: &Row<'_>) -> rusqlite::Result<Raw> {
     Ok((
@@ -215,8 +218,12 @@ fn executing(conn: &Connection, c: &StoredAllocationClaim) -> Result<bool, Stora
     let child = c.work_id != c.root_id.0;
     let execution = if child { None } else { c.execution_id.as_ref() };
     db(conn.query_row(
-        "SELECT EXISTS(SELECT 1 FROM executions WHERE phase<>'Stopped' AND (root_id=?1 OR id=?2)) OR EXISTS(SELECT 1 FROM assignments a LEFT JOIN executions e ON e.id=a.execution_id WHERE a.work_id=?1 AND a.state IN ('Ready','Active','Waiting') AND (?3 OR e.phase<>'Stopped'))",
-        params![c.work_id.as_str(),execution.map(Id::as_str),child],|row|row.get(0),
+        "SELECT EXISTS(SELECT 1 FROM executions WHERE phase<>'Stopped' AND \
+            (root_id=?1 OR id=?2)) OR EXISTS(SELECT 1 FROM assignments a LEFT JOIN \
+            executions e ON e.id=a.execution_id WHERE a.work_id=?1 AND a.state IN \
+            ('Ready','Active','Waiting') AND (?3 OR e.phase<>'Stopped'))",
+        params![c.work_id.as_str(), execution.map(Id::as_str), child],
+        |row| row.get(0),
     ))
 }
 fn duplicate(
@@ -226,10 +233,20 @@ fn duplicate(
 ) -> Result<(), StorageError> {
     let execution_slot = c.queue_key == PROJECT_QUEUE
         && matches!(c.state, ClaimState::Transferred | ClaimState::Yielding);
-    let collision:Option<String>=db(conn.query_row(
-        "SELECT id FROM allocation_claims WHERE id<>?1 AND ((state IN ('Active','Transferred','Yielding') AND work_id=?2) OR (?4 AND project_id=?3 AND queue_key='project' AND state IN ('Transferred','Yielding'))) LIMIT 1",
-        params![exclude.map_or("",Id::as_str),c.work_id.as_str(),c.project_id.0.as_str(),execution_slot],|row|row.get(0),
-    ).optional())?;
+    let collision: Option<String> = db(conn
+        .query_row(
+            "SELECT id FROM allocation_claims WHERE id<>?1 AND ((state IN ('Active',\
+            'Transferred','Yielding') AND work_id=?2) OR (?4 AND project_id=?3 AND \
+            queue_key='project' AND state IN ('Transferred','Yielding'))) LIMIT 1",
+            params![
+                exclude.map_or("", Id::as_str),
+                c.work_id.as_str(),
+                c.project_id.0.as_str(),
+                execution_slot
+            ],
+            |row| row.get(0),
+        )
+        .optional())?;
     if let Some(value) = collision {
         return Err(StorageError::Duplicate {
             kind: "allocation_claim",
@@ -274,7 +291,37 @@ pub(super) fn insert(unit: &mut Unit<'_>, c: &StoredAllocationClaim) -> Result<(
     if c.fence <= previous {
         return Err(invalid("allocation fence must advance prior ownership"));
     }
-    db(unit.conn.execute("INSERT INTO allocation_claims(id,project_id,root_id,work_id,kind,queue_key,owner_id,session_id,ingress_namespace,invocation_id,fence,expires_at,state,revision,work_revision,parent_feature_id,root_control_revision,queue_revision,feature_task_set_revision,created_at,execution_id) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21)",params![c.id.as_str(),c.project_id.0.as_str(),c.root_id.0.as_str(),c.work_id.as_str(),c.kind,c.queue_key,c.owner_id.0.as_str(),c.session_id.as_ref().map(Id::as_str),c.ingress_namespace.as_str(),c.invocation_id.as_str(),c.fence,c.expires_at_ms,c.state.as_str(),c.revision,c.work_revision,c.parent_feature_id.as_ref().map(Id::as_str),c.root_control_revision,c.queue_revision,c.feature_task_set_revision,c.created_at_ms,c.execution_id.as_ref().map(Id::as_str)]))?;
+    db(unit.conn.execute(
+        "INSERT INTO allocation_claims(id,project_id,root_id,work_id,kind,\
+        queue_key,owner_id,session_id,ingress_namespace,invocation_id,fence,\
+        expires_at,state,revision,work_revision,parent_feature_id,\
+        root_control_revision,queue_revision,feature_task_set_revision,\
+        created_at,execution_id) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,\
+        ?13,?14,?15,?16,?17,?18,?19,?20,?21)",
+        params![
+            c.id.as_str(),
+            c.project_id.0.as_str(),
+            c.root_id.0.as_str(),
+            c.work_id.as_str(),
+            c.kind,
+            c.queue_key,
+            c.owner_id.0.as_str(),
+            c.session_id.as_ref().map(Id::as_str),
+            c.ingress_namespace.as_str(),
+            c.invocation_id.as_str(),
+            c.fence,
+            c.expires_at_ms,
+            c.state.as_str(),
+            c.revision,
+            c.work_revision,
+            c.parent_feature_id.as_ref().map(Id::as_str),
+            c.root_control_revision,
+            c.queue_revision,
+            c.feature_task_set_revision,
+            c.created_at_ms,
+            c.execution_id.as_ref().map(Id::as_str)
+        ],
+    ))?;
     Ok(())
 }
 pub(super) fn update(
@@ -388,7 +435,29 @@ pub(super) fn update(
     if c.state.is_live() {
         duplicate(unit.conn, c, Some(&c.id))?;
     }
-    db(unit.conn.execute("UPDATE allocation_claims SET owner_id=?2,session_id=?3,fence=?4,expires_at=?5,state=?6,revision=?7,work_revision=?8,parent_feature_id=?9,root_control_revision=?10,queue_revision=?11,feature_task_set_revision=?12,execution_id=?13 WHERE id=?1 AND revision=?14",params![c.id.as_str(),c.owner_id.0.as_str(),c.session_id.as_ref().map(Id::as_str),c.fence,c.expires_at_ms,c.state.as_str(),c.revision,c.work_revision,c.parent_feature_id.as_ref().map(Id::as_str),c.root_control_revision,c.queue_revision,c.feature_task_set_revision,c.execution_id.as_ref().map(Id::as_str),expected]))?;
+    db(unit.conn.execute(
+        "UPDATE allocation_claims SET owner_id=?2,session_id=?3,fence=?4,\
+        expires_at=?5,state=?6,revision=?7,work_revision=?8,\
+        parent_feature_id=?9,root_control_revision=?10,queue_revision=?11,\
+        feature_task_set_revision=?12,execution_id=?13 WHERE id=?1 AND \
+        revision=?14",
+        params![
+            c.id.as_str(),
+            c.owner_id.0.as_str(),
+            c.session_id.as_ref().map(Id::as_str),
+            c.fence,
+            c.expires_at_ms,
+            c.state.as_str(),
+            c.revision,
+            c.work_revision,
+            c.parent_feature_id.as_ref().map(Id::as_str),
+            c.root_control_revision,
+            c.queue_revision,
+            c.feature_task_set_revision,
+            c.execution_id.as_ref().map(Id::as_str),
+            expected
+        ],
+    ))?;
     Ok(())
 }
 
@@ -451,6 +520,16 @@ pub(super) fn insert_replay(
             return Err(StorageError::ScopeDenied);
         }
     }
-    db(unit.conn.execute("INSERT INTO allocation_replays(key,intent_digest,result_json,claim_id,project_id) VALUES(?1,?2,?3,?4,?5)",params![r.key,r.intent_digest,result,r.claim_id.as_ref().map(Id::as_str),r.project_id.0.as_str()]))?;
+    db(unit.conn.execute(
+        "INSERT INTO allocation_replays(key,intent_digest,result_json,claim_id,\
+        project_id) VALUES(?1,?2,?3,?4,?5)",
+        params![
+            r.key,
+            r.intent_digest,
+            result,
+            r.claim_id.as_ref().map(Id::as_str),
+            r.project_id.0.as_str()
+        ],
+    ))?;
     Ok(())
 }

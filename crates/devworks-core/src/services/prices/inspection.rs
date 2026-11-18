@@ -22,9 +22,20 @@ pub(crate) fn wire<T: DeserializeOwned + Check>(v: Value) -> Result<T, StorageEr
     Ok(value)
 }
 pub(crate) fn tariff(t: &PublishedTariff) -> Result<PriceTariff, StorageError> {
-    wire(
-        json!({"upstreamModelId":t.upstream_model_id,"serviceTier":t.service_tier,"contextLowerExclusive":t.context_lower_exclusive.map(|n|n.to_string()),"contextUpperInclusive":t.context_upper_inclusive.map(|n|n.to_string()),"modality":t.modality,"chargeKind":t.charge_kind,"cacheTtlSeconds":t.cache_ttl_seconds.map(|n|n.to_string()),"unit":t.unit,"units":t.units.to_string(),"amountUsd":t.amount_usd,"region":t.region,"endpointProfile":t.endpoint_profile}),
-    )
+    wire(json!({
+        "upstreamModelId": t.upstream_model_id,
+        "serviceTier": t.service_tier,
+        "contextLowerExclusive": t.context_lower_exclusive.map(|n| n.to_string()),
+        "contextUpperInclusive": t.context_upper_inclusive.map(|n| n.to_string()),
+        "modality": t.modality,
+        "chargeKind": t.charge_kind,
+        "cacheTtlSeconds": t.cache_ttl_seconds.map(|n| n.to_string()),
+        "unit": t.unit,
+        "units": t.units.to_string(),
+        "amountUsd": t.amount_usd,
+        "region": t.region,
+        "endpointProfile": t.endpoint_profile
+    }))
 }
 pub(crate) fn published(t: &PriceTariff) -> Result<PublishedTariff, StorageError> {
     Ok(PublishedTariff {
@@ -124,9 +135,17 @@ pub(crate) fn legacy_price(
     };
     let input = rate("Input")?.ok_or_else(unsupported)?;
     let output = rate("Output")?.ok_or_else(unsupported)?;
-    Ok(wire(
-        json!({"modelId":model.id,"revision":revision.to_string(),"inputUsdPerMillion":input,"outputUsdPerMillion":output,"cacheReadUsdPerMillion":rate("CacheRead")?,"cacheWriteUsdPerMillion":rate("CacheWrite")?,"origin":origin,"observedAtMs":at.to_string(),"sourceUrl":url}),
-    )?)
+    Ok(wire(json!({
+        "modelId": model.id,
+        "revision": revision.to_string(),
+        "inputUsdPerMillion": input,
+        "outputUsdPerMillion": output,
+        "cacheReadUsdPerMillion": rate("CacheRead")?,
+        "cacheWriteUsdPerMillion": rate("CacheWrite")?,
+        "origin": origin,
+        "observedAtMs": at.to_string(),
+        "sourceUrl": url
+    }))?)
 }
 fn connection(
     read: &dyn RouterRead,
@@ -255,7 +274,17 @@ fn facts(s: &dyn ReadSnapshot, m: &StoredRouteModel) -> Result<ModelFacts, Stora
     })
 }
 fn snapshot_value(s: &StoredPriceSnapshot) -> Value {
-    json!({"id":s.id,"providerId":s.provider,"revision":s.revision.to_string(),"sourceUrl":s.source_url,"sourceDigest":s.source_digest,"parserVersion":s.parser_version,"fetchedAtMs":s.fetched_at_ms.to_string(),"verifiedAtMs":s.verified_at_ms.to_string(),"effectiveDate":s.effective_date})
+    json!({
+        "id": s.id,
+        "providerId": s.provider,
+        "revision": s.revision.to_string(),
+        "sourceUrl": s.source_url,
+        "sourceDigest": s.source_digest,
+        "parserVersion": s.parser_version,
+        "fetchedAtMs": s.fetched_at_ms.to_string(),
+        "verifiedAtMs": s.verified_at_ms.to_string(),
+        "effectiveDate": s.effective_date
+    })
 }
 fn provider_value(
     service: &PriceService,
@@ -264,9 +293,31 @@ fn provider_value(
 ) -> Result<Value, StorageError> {
     let status = s.usage().price_status(provider)?;
     let now = service.clock.now_ms().get();
-    Ok(
-        json!({"providerId":provider,"revision":status.as_ref().map_or(1,|v|v.revision).to_string(),"snapshotId":status.as_ref().and_then(|v|v.current_snapshot_id.clone()),"stale":refresh::official(provider).is_some()&&status.as_ref().is_none_or(|v|v.last_success_ms.is_none_or(|at|at.saturating_add(refresh::WEEK_MS)<=now)),"lastCheckedAtMs":status.as_ref().and_then(|v|v.last_attempt_ms).map(|v|v.to_string()),"nextCheckAtMs":status.as_ref().and_then(|v|v.next_refresh_ms).map(|v|v.to_string()),"refreshOperationId":status.as_ref().and_then(|v|v.refresh_operation_id.clone()),"error":status.as_ref().and_then(|v|v.last_error.clone()).or_else(||(!service.source_available && refresh::official(provider).is_some()).then(||"official price source adapter unavailable".into()))}),
-    )
+    Ok(json!({
+        "providerId": provider,
+        "revision": status.as_ref().map_or(1, |v| v.revision).to_string(),
+        "snapshotId": status.as_ref().and_then(|v| v.current_snapshot_id.clone()),
+        "stale": refresh::official(provider).is_some()
+            && status.as_ref().is_none_or(|v| v
+                .last_success_ms
+                .is_none_or(|at| at.saturating_add(refresh::WEEK_MS) <= now)),
+        "lastCheckedAtMs": status
+            .as_ref()
+            .and_then(|v| v.last_attempt_ms)
+            .map(|v| v.to_string()),
+        "nextCheckAtMs": status
+            .as_ref()
+            .and_then(|v| v.next_refresh_ms)
+            .map(|v| v.to_string()),
+        "refreshOperationId": status.as_ref().and_then(|v| v.refresh_operation_id.clone()),
+        "error": status
+            .as_ref()
+            .and_then(|v| v.last_error.clone())
+            .or_else(
+                || (!service.source_available && refresh::official(provider).is_some())
+                    .then(|| "official price source adapter unavailable".into())
+            )
+    }))
 }
 
 struct Slice {
@@ -339,7 +390,16 @@ pub(crate) fn query(
         })
         .into_iter()
         .collect();
-    let normalized = json!({"models":model_filter,"providers":provider_filter,"snapshots":snapshot_filter,"history":input.include_history.unwrap_or(false),"pageLimit":input.page.limit,"schema":schema,"viewSequence":s.stamp().committed_sequence,"embeddingInventory":s.router().embedding_inventory_revision()?});
+    let normalized = json!({
+        "models": model_filter,
+        "providers": provider_filter,
+        "snapshots": snapshot_filter,
+        "history": input.include_history.unwrap_or(false),
+        "pageLimit": input.page.limit,
+        "schema": schema,
+        "viewSequence": s.stamp().committed_sequence,
+        "embeddingInventory": s.router().embedding_inventory_revision()?
+    });
     let serialized = normalized.to_string();
     let binding = CursorBinding::new(ctx, "router.price_status", &[&serialized], revision);
     let offset = input
@@ -452,9 +512,20 @@ pub(crate) fn query(
                 }
             };
             let status = s.usage().price_status(&f.source)?;
-            let row = wire::<ModelPriceStatus>(
-                json!({"modelId":m.id,"priceKind":f.kind,"price":price,"stale":f.override_.is_none()&&refresh::official(&f.source).is_some()&&status.as_ref().is_none_or(|v|v.last_success_ms.is_none_or(|at|at.saturating_add(refresh::WEEK_MS)<=service.clock.now_ms().get())),"nextCheckAtMs":status.and_then(|v|v.next_refresh_ms).map(|v|v.to_string())}),
-            )?;
+            let row = wire::<ModelPriceStatus>(json!({
+                "modelId": m.id,
+                "priceKind": f.kind,
+                "price": price,
+                "stale": f.override_.is_none()
+                    && refresh::official(&f.source).is_some()
+                    && status.as_ref().is_none_or(|v| v
+                        .last_success_ms
+                        .is_none_or(|at| at.saturating_add(refresh::WEEK_MS)
+                            <= service.clock.now_ms().get())),
+                "nextCheckAtMs": status
+                    .and_then(|v| v.next_refresh_ms)
+                    .map(|v| v.to_string())
+            }))?;
             if legacy >= page.skip && legacy < page.skip + page.limit + 1 {
                 page.models
                     .push(serde_json::to_value(&row).expect("record"));
@@ -462,7 +533,16 @@ pub(crate) fn query(
             legacy += 1;
             return Ok(legacy <= page.skip + page.limit);
         }
-        let view = json!({"modelId":m.id,"upstreamModelId":m.upstream_model_id,"endpointProfile":m.endpoint_profile,"revision":s.usage().price_override_revision(&m.id)?.to_string(),"priceKind":f.kind,"snapshotId":f.snapshot.as_ref().map(|s|s.id.clone()),"overrideRevision":s.usage().price_override_revision(&m.id)?.to_string(),"untrackedReason":f.reason});
+        let view = json!({
+            "modelId": m.id,
+            "upstreamModelId": m.upstream_model_id,
+            "endpointProfile": m.endpoint_profile,
+            "revision": s.usage().price_override_revision(&m.id)?.to_string(),
+            "priceKind": f.kind,
+            "snapshotId": f.snapshot.as_ref().map(|s| s.id.clone()),
+            "overrideRevision": s.usage().price_override_revision(&m.id)?.to_string(),
+            "untrackedReason": f.reason
+        });
         if f.kind == "Untracked" {
             if page.gaps.len() < 128 {
                 page.gaps.push(m.id.clone());
@@ -478,7 +558,19 @@ pub(crate) fn query(
             && let Some(o) = f.override_
         {
             for row in o.tariffs {
-                if !page.push(3,json!({"providerId":f.source,"modelId":m.id,"upstreamModelId":m.upstream_model_id,"origin":"UserConfigured","overrideRevision":o.revision.to_string(),"tariff":tariff(&row)?})){return Ok(false);}
+                if !page.push(
+                    3,
+                    json!({
+                        "providerId": f.source,
+                        "modelId": m.id,
+                        "upstreamModelId": m.upstream_model_id,
+                        "origin": "UserConfigured",
+                        "overrideRevision": o.revision.to_string(),
+                        "tariff": tariff(&row)?
+                    }),
+                ) {
+                    return Ok(false);
+                }
             }
         }
         Ok(true)
@@ -528,9 +620,26 @@ pub(crate) fn query(
                 }
                 relevant.insert(CONFIGURED_SOURCE.to_owned());
                 let state = if saved.mode == "Set" {
-                    json!({"kind":"Set","modelId":saved.model_id,"revision":saved.revision.to_string(),"tariffs":saved.tariffs.iter().map(tariff).collect::<Result<Vec<_>,_>>()?,"updatedBy":saved.updated_by,"updatedAtMs":saved.updated_at_ms.to_string()})
+                    json!({
+                        "kind": "Set",
+                        "modelId": saved.model_id,
+                        "revision": saved.revision.to_string(),
+                        "tariffs": saved
+                            .tariffs
+                            .iter()
+                            .map(tariff)
+                            .collect::<Result<Vec<_>, _>>()?,
+                        "updatedBy": saved.updated_by,
+                        "updatedAtMs": saved.updated_at_ms.to_string()
+                    })
                 } else if saved.mode == "Clear" {
-                    json!({"kind":"Cleared","modelId":saved.model_id,"revision":saved.revision.to_string(),"updatedBy":saved.updated_by,"updatedAtMs":saved.updated_at_ms.to_string()})
+                    json!({
+                        "kind": "Cleared",
+                        "modelId": saved.model_id,
+                        "revision": saved.revision.to_string(),
+                        "updatedBy": saved.updated_by,
+                        "updatedAtMs": saved.updated_at_ms.to_string()
+                    })
                 } else {
                     return Err(StorageError::InvalidRecord(
                         "invalid configured price history mode".into(),
@@ -542,7 +651,19 @@ pub(crate) fn query(
                 }
                 if saved.mode == "Set" {
                     for rate in saved.tariffs {
-                        if !page.push(3,json!({"providerId":CONFIGURED_SOURCE,"modelId":saved.model_id,"upstreamModelId":rate.upstream_model_id,"origin":"UserConfigured","overrideRevision":saved.revision.to_string(),"tariff":tariff(&rate)?})){break;}
+                        if !page.push(
+                            3,
+                            json!({
+                                "providerId": CONFIGURED_SOURCE,
+                                "modelId": saved.model_id,
+                                "upstreamModelId": rate.upstream_model_id,
+                                "origin": "UserConfigured",
+                                "overrideRevision": saved.revision.to_string(),
+                                "tariff": tariff(&rate)?
+                            }),
+                        ) {
+                            break;
+                        }
                     }
                 }
                 if page.more {
@@ -630,7 +751,18 @@ pub(crate) fn query(
                     {
                         continue;
                     }
-                    if !page.push(3,json!({"providerId":snapshot.provider,"upstreamModelId":row.upstream_model_id,"origin":"OfficialSnapshot","snapshotId":snapshot.id,"tariff":tariff(&row)?})){break;}
+                    if !page.push(
+                        3,
+                        json!({
+                            "providerId": snapshot.provider,
+                            "upstreamModelId": row.upstream_model_id,
+                            "origin": "OfficialSnapshot",
+                            "snapshotId": snapshot.id,
+                            "tariff": tariff(&row)?
+                        }),
+                    ) {
+                        break;
+                    }
                 }
                 if page.more {
                     break;
@@ -649,7 +781,21 @@ pub(crate) fn query(
         page.gaps
             .push(Id::new("additional-price-pages").expect("static"));
     }
-    let mut body = json!({"catalogRevision":revision.to_string(),"items":page.items,"snapshots":page.snapshots,"providers":page.providers,"models":page.models,"overrideHistory":page.override_history,"nextCursor":next,"hasMore":page.more,"coverage":{"state":if partial{"Partial"}else{"Complete"},"gaps":page.gaps,"moreGaps":page.more||page.gaps_truncated}});
+    let mut body = json!({
+        "catalogRevision": revision.to_string(),
+        "items": page.items,
+        "snapshots": page.snapshots,
+        "providers": page.providers,
+        "models": page.models,
+        "overrideHistory": page.override_history,
+        "nextCursor": next,
+        "hasMore": page.more,
+        "coverage": {
+            "state": if partial { "Partial" } else { "Complete" },
+            "gaps": page.gaps,
+            "moreGaps": page.more || page.gaps_truncated
+        }
+    });
     if !input.include_history.unwrap_or(false) {
         body.as_object_mut()
             .expect("catalog object")

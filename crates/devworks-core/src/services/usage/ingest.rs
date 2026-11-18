@@ -91,11 +91,31 @@ pub fn tool_invocation(
     let source_id = serde_json::to_string(&(source.session_id.as_str(), source.response_sequence))
         .map_err(|e| invalid(e.to_string()))?;
     tx.usage().insert_usage_origin(&StoredUsageOrigin {
-        source_kind:"ToolInvocation".into(),source_id,attempt_id:None,request_id:None,
-        project_id:source.project_id.clone(),feature_id,work_id:source.root_id.as_ref().map(|r|r.0.clone()),
-        session_id:Some(source.session_id.clone()),job_run_id:None,
-        payload:json!({"version":1,"capabilityId":source.capability_id,"outcome":source.outcome,"errorCode":source.error_code,"actorId":source.actor,"calledAtMs":source.called_at_ms,"respondedAtMs":source.responded_at_ms}),
-        recorded_at_ms:source.responded_at_ms,priced_micro_usd:None,classification:CostClassification::Untracked,monetary_complete:false,incomplete:false,unknown_tail:false,committed_sequence:None,
+        source_kind: "ToolInvocation".into(),
+        source_id,
+        attempt_id: None,
+        request_id: None,
+        project_id: source.project_id.clone(),
+        feature_id,
+        work_id: source.root_id.as_ref().map(|r| r.0.clone()),
+        session_id: Some(source.session_id.clone()),
+        job_run_id: None,
+        payload: json!({
+            "version": 1,
+            "capabilityId": source.capability_id,
+            "outcome": source.outcome,
+            "errorCode": source.error_code,
+            "actorId": source.actor,
+            "calledAtMs": source.called_at_ms,
+            "respondedAtMs": source.responded_at_ms
+        }),
+        recorded_at_ms: source.responded_at_ms,
+        priced_micro_usd: None,
+        classification: CostClassification::Untracked,
+        monetary_complete: false,
+        incomplete: false,
+        unknown_tail: false,
+        committed_sequence: None,
     })
 }
 pub fn job_usage(
@@ -109,10 +129,36 @@ pub fn job_usage(
     let source_id = serde_json::to_string(&(source.run_id.as_str(), source.seq))
         .map_err(|e| invalid(e.to_string()))?;
     tx.usage().insert_usage_origin(&StoredUsageOrigin {
-        source_kind:"JobUsage".into(),source_id,attempt_id:None,request_id:Some(source.request_id.clone()),
-        project_id:run.project_id,feature_id:None,work_id:None,session_id:None,job_run_id:Some(source.run_id.clone()),
-        payload:json!({"version":1,"purpose":source.purpose,"modelId":source.model_id,"inputTokens":source.input_tokens,"outputTokens":source.output_tokens,"cacheReadTokens":source.cache_read_tokens,"cacheWriteTokens":source.cache_write_tokens,"amountUsd":source.amount_usd,"priceKind":source.price_kind,"priceOrigin":source.price_origin,"priceRevision":source.price_revision,"incomplete":source.incomplete}),
-        recorded_at_ms:source.recorded_at_ms,priced_micro_usd:raw_amount(source.amount_usd.as_deref()),classification:class(&source.price_kind,&source.price_origin),monetary_complete:false,incomplete:source.incomplete,unknown_tail:source.incomplete,committed_sequence:None,
+        source_kind: "JobUsage".into(),
+        source_id,
+        attempt_id: None,
+        request_id: Some(source.request_id.clone()),
+        project_id: run.project_id,
+        feature_id: None,
+        work_id: None,
+        session_id: None,
+        job_run_id: Some(source.run_id.clone()),
+        payload: json!({
+            "version": 1,
+            "purpose": source.purpose,
+            "modelId": source.model_id,
+            "inputTokens": source.input_tokens,
+            "outputTokens": source.output_tokens,
+            "cacheReadTokens": source.cache_read_tokens,
+            "cacheWriteTokens": source.cache_write_tokens,
+            "amountUsd": source.amount_usd,
+            "priceKind": source.price_kind,
+            "priceOrigin": source.price_origin,
+            "priceRevision": source.price_revision,
+            "incomplete": source.incomplete
+        }),
+        recorded_at_ms: source.recorded_at_ms,
+        priced_micro_usd: raw_amount(source.amount_usd.as_deref()),
+        classification: class(&source.price_kind, &source.price_origin),
+        monetary_complete: false,
+        incomplete: source.incomplete,
+        unknown_tail: source.incomplete,
+        committed_sequence: None,
     })
 }
 pub fn router_request(
@@ -124,10 +170,31 @@ pub fn router_request(
         .operation(&source.operation_id)?
         .ok_or_else(|| invalid("router source operation missing"))?;
     tx.usage().insert_usage_origin(&StoredUsageOrigin {
-        source_kind:"RouterRequest".into(),source_id:source.request_id.as_str().into(),attempt_id:None,request_id:Some(source.request_id.clone()),
-        project_id:source.project_id.clone(),feature_id:None,work_id:operation.root_id.as_ref().map(|r|r.0.clone()),session_id:source.session_id.clone(),job_run_id:None,
-        payload:json!({"version":1,"purpose":source.purpose,"modelId":source.model_id,"connectionId":source.connection_id,"operationId":source.operation_id,"actorId":operation.payload.get("actorId"),"reportCategory":operation.payload.get("reportCategory")}),
-        recorded_at_ms:source.created_at_ms,priced_micro_usd:None,classification:CostClassification::Untracked,monetary_complete:false,incomplete:false,unknown_tail:false,committed_sequence:None,
+        source_kind: "RouterRequest".into(),
+        source_id: source.request_id.as_str().into(),
+        attempt_id: None,
+        request_id: Some(source.request_id.clone()),
+        project_id: source.project_id.clone(),
+        feature_id: None,
+        work_id: operation.root_id.as_ref().map(|r| r.0.clone()),
+        session_id: source.session_id.clone(),
+        job_run_id: None,
+        payload: json!({
+            "version": 1,
+            "purpose": source.purpose,
+            "modelId": source.model_id,
+            "connectionId": source.connection_id,
+            "operationId": source.operation_id,
+            "actorId": operation.payload.get("actorId"),
+            "reportCategory": operation.payload.get("reportCategory")
+        }),
+        recorded_at_ms: source.created_at_ms,
+        priced_micro_usd: None,
+        classification: CostClassification::Untracked,
+        monetary_complete: false,
+        incomplete: false,
+        unknown_tail: false,
+        committed_sequence: None,
     })
 }
 

@@ -175,7 +175,20 @@ fn published_reply(
         return Ok(vec![]);
     };
     type Published = (String, String, String, String);
-    let raw:Option<Published>=db(conn.query_row("SELECT r.command_id,r.artifact_id,r.version_id,r.schema_json FROM receipt_replies r JOIN artifacts a ON a.id=r.artifact_id JOIN artifact_versions v ON v.id=r.version_id AND v.artifact_id=a.id WHERE r.actor_id=?1 AND r.scope_key=?2 AND r.idempotency_key=?3 AND a.retention='Receipt' AND a.owner_actor_id=r.actor_id AND a.current_version_id=r.version_id AND v.version_no=1 AND v.media_type='application/json' AND NOT EXISTS(SELECT 1 FROM artifact_versions other WHERE other.artifact_id=a.id AND other.id<>v.id)",identity,|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?))).optional())?;
+    let raw: Option<Published> = db(conn
+        .query_row(
+            "SELECT r.command_id,r.artifact_id,r.version_id,r.schema_json FROM \
+        receipt_replies r JOIN artifacts a ON a.id=r.artifact_id JOIN \
+        artifact_versions v ON v.id=r.version_id AND v.artifact_id=a.id WHERE \
+        r.actor_id=?1 AND r.scope_key=?2 AND r.idempotency_key=?3 AND \
+        a.retention='Receipt' AND a.owner_actor_id=r.actor_id AND \
+        a.current_version_id=r.version_id AND v.version_no=1 AND \
+        v.media_type='application/json' AND NOT EXISTS(SELECT 1 FROM \
+        artifact_versions other WHERE other.artifact_id=a.id AND other.id<>v.id)",
+            identity,
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+        )
+        .optional())?;
     let Some((command, artifact, version, encoded)) = raw else {
         return Ok(vec![]);
     };
@@ -230,7 +243,20 @@ fn minimal_control_publication(
 ) -> Result<Option<String>, StorageError> {
     let (project, actor) = scope;
     type Minimal = (String, String, String, String);
-    let raw:Option<Minimal>=db(conn.query_row("SELECT a.title,a.provenance_json,v.source_json,v.blob_digest FROM artifacts a JOIN artifact_versions v ON v.artifact_id=a.id WHERE a.id=?1 AND v.id=?2 AND a.state='Live' AND ((a.scope_kind='Project' AND a.current_project_id=?3 AND a.origin_project_id=?3) OR (a.scope_kind='Workspace' AND a.current_project_id IS NULL AND a.origin_project_id IS NULL)) AND a.origin_work_id IS NULL AND v.deleted_at IS NULL AND NOT EXISTS(SELECT 1 FROM artifact_shares WHERE artifact_id=a.id)",[artifact,version,project.0.as_str()],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?))).optional())?;
+    let raw: Option<Minimal> = db(conn
+        .query_row(
+            "SELECT a.title,a.provenance_json,v.source_json,v.blob_digest FROM \
+        artifacts a JOIN artifact_versions v ON v.artifact_id=a.id WHERE \
+        a.id=?1 AND v.id=?2 AND a.state='Live' AND ((a.scope_kind='Project' AND \
+        a.current_project_id=?3 AND a.origin_project_id=?3) OR \
+        (a.scope_kind='Workspace' AND a.current_project_id IS NULL AND \
+        a.origin_project_id IS NULL)) AND a.origin_work_id IS NULL AND \
+        v.deleted_at IS NULL AND NOT EXISTS(SELECT 1 FROM artifact_shares WHERE \
+        artifact_id=a.id)",
+            [artifact, version, project.0.as_str()],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+        )
+        .optional())?;
     let Some((title, provenance, source, blob)) = raw else {
         return Ok(None);
     };
@@ -254,7 +280,14 @@ fn minimal_control_publication(
     if !valid_host
         || title != format!("{op} reply")
         || provenance
-            != serde_json::json!({"producedBy":host,"principalKind":"Host","sourceKind":"ReceiptReply","receiptActor":actor,"commandId":receipt.command_id,"operation":op})
+            != serde_json::json!({
+                "producedBy": host,
+                "principalKind": "Host",
+                "sourceKind": "ReceiptReply",
+                "receiptActor": actor,
+                "commandId": receipt.command_id,
+                "operation": op
+            })
     {
         return Ok(None);
     }
@@ -268,7 +301,15 @@ fn minimal_control_publication(
     ))?;
     if !valid_stage
         || source
-            != serde_json::json!({"source":{"kind":"ReceiptReply","commandId":receipt.command_id},"operationId":operation,"producedBy":host,"principalKind":"Host"})
+            != serde_json::json!({
+                "source": {
+                    "kind": "ReceiptReply",
+                    "commandId": receipt.command_id
+                },
+                "operationId": operation,
+                "producedBy": host,
+                "principalKind": "Host"
+            })
     {
         return Ok(None);
     }
@@ -370,7 +411,14 @@ pub(super) fn partition(
             continue;
         }
         type Event = (i64, String, Option<String>, String);
-        let event:Option<Event>=db(conn.query_row("SELECT seq,actor_id,project_id,payload_json FROM events WHERE aggregate_kind='command' AND kind='CommandDecided' AND aggregate_id=?1",[receipt.command_id.0.as_str()],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?))).optional())?;
+        let event: Option<Event> = db(conn
+            .query_row(
+                "SELECT seq,actor_id,project_id,payload_json FROM events WHERE \
+            aggregate_kind='command' AND kind='CommandDecided' AND aggregate_id=?1",
+                [receipt.command_id.0.as_str()],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+            )
+            .optional())?;
         let Some((sequence, event_actor, event_project, payload)) = event else {
             continue;
         };
@@ -448,7 +496,11 @@ pub(super) fn partition(
             if control {
                 // The gateway's exact minimal publication intent is part of control
                 // bookkeeping too. Other consumers or copied error text remain fenced.
-                let mut queues=db(conn.prepare("SELECT id,payload_json FROM queue_entries WHERE consumer='receipt_replies' AND event_seq=?1 AND root_id IS NULL AND operation_id IS NULL AND partition_key IS NULL AND last_error IS NULL"))?;
+                let mut queues = db(conn.prepare(
+                    "SELECT id,payload_json FROM queue_entries WHERE \
+                    consumer='receipt_replies' AND event_seq=?1 AND root_id IS NULL AND \
+                    operation_id IS NULL AND partition_key IS NULL AND last_error IS NULL",
+                ))?;
                 let intents = db(queues.query_map([sequence], |r| {
                     Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
                 }))?;

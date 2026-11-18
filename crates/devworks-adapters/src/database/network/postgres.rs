@@ -51,7 +51,24 @@ async fn session(
     MetadataFailure,
 > {
     let mut config = Config::new();
-    config.host(&target.host).port(target.port).dbname(database).user(&target.username).password(c.request.password.as_ref().ok_or(MetadataFailure::CredentialsRequired)?.expose()).application_name("DevWorks metadata").connect_timeout(Duration::from_secs(10)).options("-c default_transaction_read_only=on -c statement_timeout=30000 -c lock_timeout=500 -c search_path=pg_catalog");
+    config
+        .host(&target.host)
+        .port(target.port)
+        .dbname(database)
+        .user(&target.username)
+        .password(
+            c.request
+                .password
+                .as_ref()
+                .ok_or(MetadataFailure::CredentialsRequired)?
+                .expose(),
+        )
+        .application_name("DevWorks metadata")
+        .connect_timeout(Duration::from_secs(10))
+        .options(
+            "-c default_transaction_read_only=on -c statement_timeout=30000 -c \
+        lock_timeout=500 -c search_path=pg_catalog",
+        );
     config.ssl_mode(if matches!(target.tls, SchemaTlsMode::LoopbackPlaintext) {
         SslMode::Disable
     } else {
@@ -131,8 +148,10 @@ async fn read_catalog(
         ],
         &["GraphEntity", "GraphEdge"],
         &[
-            "Password authentication; explicit native client configuration, no PGPASS/PGOPTIONS/PGSSL environment.",
-            "Metadata visibility follows source grants; read-only transactions and fixed catalog queries.",
+            "Password authentication; explicit native client configuration, no \
+                PGPASS/PGOPTIONS/PGSSL environment.",
+            "Metadata visibility follows source grants; read-only transactions and \
+                fixed catalog queries.",
         ],
     )?;
     if c.request.test_only && !discovery {
@@ -148,7 +167,16 @@ async fn read_catalog(
             .iter()
             .map(|v| v.0.as_str())
             .collect::<Vec<_>>();
-        let rows=client.query("SELECT datname FROM pg_catalog.pg_database WHERE datallowconn AND NOT datistemplate AND pg_catalog.has_database_privilege(oid,'CONNECT') AND (cardinality($1::text[])=0 OR datname=ANY($1::text[])) ORDER BY datname LIMIT 129",&[&selected]).await.map_err(classify)?;
+        let rows = client
+            .query(
+                "SELECT datname FROM pg_catalog.pg_database WHERE datallowconn AND NOT \
+            datistemplate AND pg_catalog.has_database_privilege(oid,'CONNECT') AND \
+            (cardinality($1::text[])=0 OR datname=ANY($1::text[])) ORDER BY datname \
+            LIMIT 129",
+                &[&selected],
+            )
+            .await
+            .map_err(classify)?;
         let mut c = c;
         for row in rows {
             c.check()?;
@@ -193,7 +221,9 @@ async fn read_catalog(
         // limit. Skipping a parent would strand later columns/indexes and fail publication.
         // PostgreSQL identifiers are bounded; unbounded payload lives in these two fields.
         let bounded = format!(
-            "SELECT CASE WHEN octet_length(document)>131072 THEN ((document::jsonb - 'metadata' - 'definition') || jsonb_build_object('truncated',true))::text ELSE document END FROM ({}) metadata(document)",
+            "SELECT CASE WHEN octet_length(document)>131072 THEN ((document::jsonb - \
+                'metadata' - 'definition') || jsonb_build_object('truncated',\
+                true))::text ELSE document END FROM ({}) metadata(document)",
             query.sql
         );
         let rows = client

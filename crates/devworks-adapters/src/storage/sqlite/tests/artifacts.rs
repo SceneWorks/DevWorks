@@ -5408,8 +5408,22 @@ fn purge_planning_blob_generations_preserve_surviving_versions_and_unproved_pins
     );
     // An unknown legacy source carrying a typed version reference is a hold,
     // never permission to remove its bytes while its owning format is unresolved.
-    let legacy = json!({"configuration_revision":1,"connection":{"id":"legacy-independent-source","revision":"1","config":{"caCertificate":private.artifact}},"owner_id":"user-a"});
-    fx.h.raw().execute("INSERT INTO schema_sources(id,revision,configuration_revision,owner_id,deleted,body_json) VALUES('legacy-independent-source',1,1,'user-a',0,?1)",[legacy.to_string()]).unwrap();
+    let legacy = json!({
+        "configuration_revision": 1,
+        "connection": {
+            "id": "legacy-independent-source",
+            "revision": "1",
+            "config": {"caCertificate": private.artifact}
+        },
+        "owner_id": "user-a"
+    });
+    fx.h.raw()
+        .execute(
+            "INSERT INTO schema_sources(id,revision,configuration_revision,owner_id,\
+        deleted,body_json) VALUES('legacy-independent-source',1,1,'user-a',0,?1)",
+            [legacy.to_string()],
+        )
+        .unwrap();
     let legacy_plan = assess();
     assert!(
         legacy_plan
@@ -5481,8 +5495,32 @@ fn purge_planning_minimal_control_publication_does_not_stale_business_review() {
         .unwrap()
     };
     let before = assess();
-    let manifest=serde_json::from_value(json!({"id":"minimal-control-manifest","projectId":"project-a","revision":"1","projectRevision":"1","digest":"a".repeat(64),"phase":"Prepared","recordCount":"2","managedByteCount":"0","keptRecordCount":"1","keptByteCount":"0","pendingEffects":"0","createdAtMs":T0.to_string()})).unwrap();
-    let frame = json!({"protocol":"1.0-draft.1","mode":"Command","schemaRevision":6,"requestKey":"minimal-control-preview","body":{"kind":"projects.prepare_purge","projectId":"project-a","expectedRevision":"1"}});
+    let manifest = serde_json::from_value(json!({
+        "id": "minimal-control-manifest",
+        "projectId": "project-a",
+        "revision": "1",
+        "projectRevision": "1",
+        "digest": "a".repeat(64),
+        "phase": "Prepared",
+        "recordCount": "2",
+        "managedByteCount": "0",
+        "keptRecordCount": "1",
+        "keptByteCount": "0",
+        "pendingEffects": "0",
+        "createdAtMs": T0.to_string()
+    }))
+    .unwrap();
+    let frame = json!({
+        "protocol": "1.0-draft.1",
+        "mode": "Command",
+        "schemaRevision": 6,
+        "requestKey": "minimal-control-preview",
+        "body": {
+            "kind": "projects.prepare_purge",
+            "projectId": "project-a",
+            "expectedRevision": "1"
+        }
+    });
     let authority = fx.authority();
     let gateway = Gateway {
         authority: &authority,
@@ -5969,17 +6007,41 @@ fn executed_project_purge_removes_lesson_links_across_the_workspace_boundary() {
     let c = fx.h.raw();
     for (lesson, project) in [("lesson-ws", None), ("lesson-a", Some("project-a"))] {
         let scope = project.map_or("workspace".to_owned(), |p| format!("project:{p}"));
-        c.execute("INSERT INTO knowledge_entities(id,scope_key,project_id,revision,label,entity_type,aliases_json,canonical_key,author_id,created_at,updated_at) VALUES(?1,?2,?3,1,?1,'topic','[]',?1,'user-a',1,1)",
-            rusqlite::params![format!("entity-{lesson}"), scope, project]).unwrap();
-        c.execute("INSERT INTO knowledge_claims(id,scope_key,project_id,revision,kind,entry_kind,lifecycle,subject_id,predicate,author_id,created_at,updated_at,body_json,rule_state,lesson_source) VALUES(?1,?2,?3,1,'Lesson','Lesson','Active',?4,'lesson','user-a',1,1,'{}','Candidate','Prompt')",
-            rusqlite::params![lesson, scope, project, format!("entity-{lesson}")]).unwrap();
+        c.execute(
+            "INSERT INTO knowledge_entities(id,scope_key,project_id,revision,label,\
+            entity_type,aliases_json,canonical_key,author_id,created_at,updated_at) \
+            VALUES(?1,?2,?3,1,?1,'topic','[]',?1,'user-a',1,1)",
+            rusqlite::params![format!("entity-{lesson}"), scope, project],
+        )
+        .unwrap();
+        c.execute(
+            "INSERT INTO knowledge_claims(id,scope_key,project_id,revision,kind,\
+            entry_kind,lifecycle,subject_id,predicate,author_id,created_at,\
+            updated_at,body_json,rule_state,lesson_source) VALUES(?1,?2,?3,1,\
+            'Lesson','Lesson','Active',?4,'lesson','user-a',1,1,'{}','Candidate',\
+            'Prompt')",
+            rusqlite::params![lesson, scope, project, format!("entity-{lesson}")],
+        )
+        .unwrap();
     }
     for (skill, project) in [("skill-ws", None), ("skill-a", Some("project-a"))] {
         let scope = project.map_or("workspace".to_owned(), |p| format!("project:{p}"));
-        c.execute("INSERT INTO instructions(id,kind,name,scope_key,project_id,origin,root_path,source_path,latest_revision,active_revision,enabled,present,version,created_at,updated_at,confined_project_id) VALUES(?1,'Skill',?1,?2,?3,'Harness','/r',?4,1,1,1,1,1,0,0,NULL)",
-            rusqlite::params![skill, scope, project, format!("/r/{skill}")]).unwrap();
-        c.execute("INSERT INTO instruction_revisions(instruction_id,revision,content_json,content_digest,state,author,origin_json,resources_json,applicability_json,created_at,confined_project_id) VALUES(?1,1,'{}',?2,'Approved','user-a','{}','[]','[]',0,NULL)",
-            rusqlite::params![skill, "a".repeat(64)]).unwrap();
+        c.execute(
+            "INSERT INTO instructions(id,kind,name,scope_key,project_id,origin,\
+            root_path,source_path,latest_revision,active_revision,enabled,present,\
+            version,created_at,updated_at,confined_project_id) VALUES(?1,'Skill',?1,\
+            ?2,?3,'Harness','/r',?4,1,1,1,1,1,0,0,NULL)",
+            rusqlite::params![skill, scope, project, format!("/r/{skill}")],
+        )
+        .unwrap();
+        c.execute(
+            "INSERT INTO instruction_revisions(instruction_id,revision,content_json,\
+            content_digest,state,author,origin_json,resources_json,\
+            applicability_json,created_at,confined_project_id) VALUES(?1,1,'{}',?2,\
+            'Approved','user-a','{}','[]','[]',0,NULL)",
+            rusqlite::params![skill, "a".repeat(64)],
+        )
+        .unwrap();
     }
     for (skill, lesson) in [("skill-ws", "lesson-a"), ("skill-a", "lesson-ws")] {
         c.execute("INSERT INTO instruction_revision_lessons(instruction_id,revision,lesson_id) VALUES(?1,1,?2)",

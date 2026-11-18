@@ -70,7 +70,15 @@ mod tests {
         let draft = screen.draft.as_mut().unwrap();
         draft.config["name"] = json!("independent unsaved connection");
         draft.config["endpoint"] = json!("independent.sqlite");
-        draft.config["projectAccess"].as_array_mut().unwrap().push(json!({"projectId":"other","metadataEnabled":true,"dataReadEnabled":false,"dataWriteEnabled":false}));
+        draft.config["projectAccess"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!({
+                "projectId": "other",
+                "metadataEnabled": true,
+                "dataReadEnabled": false,
+                "dataWriteEnabled": false
+            }));
         memory.pending.databases = screen.pending_memory();
         assert!(!partition(&mut memory, &super::super::tests::scope()).unwrap());
         let kept = &memory.pending.databases["draft"];

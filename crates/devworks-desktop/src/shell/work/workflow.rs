@@ -262,7 +262,12 @@ impl WorkCtl<'_, '_> {
             self.work
                 .allocation_requests
                 .remove(&(project.into(), feature));
-            self.work.message = Some((Tone::Attention,"The selection was not submitted. Choose Next work again when the runtime is available.".into()));
+            self.work.message = Some((
+                Tone::Attention,
+                "The selection was not submitted. Choose Next work again when the \
+                runtime is available."
+                    .into(),
+            ));
         }
     }
     pub(super) fn inspect_allocation(&mut self, claim: &str) {
@@ -443,7 +448,13 @@ impl WorkCtl<'_, '_> {
                                 .remove(&(project.clone(), feature.clone()))
                             else {
                                 self.work.allocation_busy.remove(&(project, feature));
-                                self.work_failure("Selecting work",Failure::Other("The selection request is no longer available; choose Next work again.".into()));
+                                self.work_failure(
+                                    "Selecting work",
+                                    Failure::Other(
+                                        "The selection request is no longer available; choose Next work again."
+                                            .into(),
+                                    ),
+                                );
                                 return None;
                             };
                             let (operation, input) =
@@ -456,7 +467,8 @@ impl WorkCtl<'_, '_> {
                                 move |b| wops::allocation_command(b, input),
                             ) {
                                 self.work.allocation_busy.remove(&key);
-                                self.work.message = Some((Tone::Attention,"The selection was not submitted. Choose Next work again when the runtime is available.".into()));
+                                self.work.message = Some((Tone::Attention,"The selection was not submitted. Choose Next work again when the \
+                                    runtime is available.".into()));
                             }
                         }
                     }
@@ -485,7 +497,9 @@ impl WorkCtl<'_, '_> {
                         reused,
                     })) => {
                         let mut text = if reused {
-                            "The earlier selection found no eligible work; that result was reused. Change the selection retry key for a fresh selection.".to_owned()
+                            "The earlier selection found no eligible work; that result was reused. \
+                                Change the selection retry key for a fresh selection."
+                                .to_owned()
                         } else if reason.0 == "no_ready_work" {
                             "No eligible work is ready.".to_owned()
                         } else {
@@ -498,7 +512,12 @@ impl WorkCtl<'_, '_> {
                         self.load_work();
                     }
                     Ok(AllocationSelection::Legacy(claim)) => {
-                        self.work.message = Some((Tone::Neutral,"The saved claim was confirmed. Inspecting its current ownership and work.".into()));
+                        self.work.message = Some((
+                            Tone::Neutral,
+                            "The saved claim was confirmed. Inspecting its current ownership and \
+                            work."
+                                .into(),
+                        ));
                         self.inspect_allocation(claim.id.as_str());
                         self.load_work();
                     }
@@ -718,7 +737,8 @@ pub(crate) fn controls(
         widgets::caption(
             ui,
             format!(
-                "Queue revision {} · workflow revision {}. Selecting work does not start execution.",
+                "Queue revision {} · workflow revision {}. Selecting work does not start \
+                    execution.",
                 queue.queue_revision.as_str(),
                 queue.workflow_revision.as_str()
             ),
@@ -758,14 +778,38 @@ pub(crate) fn controls(
         .collect();
     for claim in claims {
         ui.group(|ui| {
-            if let Some(error) = work.allocation_inspect_errors.get(claim.id.as_str()) { chip(ui,format!("Last known claim; {error}"),Tone::Attention); }
+            if let Some(error) = work.allocation_inspect_errors.get(claim.id.as_str()) {
+                chip(ui, format!("Last known claim; {error}"), Tone::Attention);
+            }
             let name = work
                 .freshest(claim.work_id.as_str())
                 .map(|w| w.title.0)
                 .unwrap_or_else(|| claim.work_id.as_str().into());
-            let same_project = claim.project_id.as_ref().map(|p| p.0.as_str()) == Some(project.as_str());
-            ui.label(RichText::new(format!("{}: {name}",if same_project { "Selected" } else { "Inspected claim" })).strong());
-            if !same_project { widgets::caption(ui,format!("Project {} · explicit claim lookup; your current project is unchanged.",claim.project_id.as_ref().map_or("unknown",|p|p.0.as_str()))); }
+            let same_project =
+                claim.project_id.as_ref().map(|p| p.0.as_str()) == Some(project.as_str());
+            ui.label(
+                RichText::new(format!(
+                    "{}: {name}",
+                    if same_project {
+                        "Selected"
+                    } else {
+                        "Inspected claim"
+                    }
+                ))
+                .strong(),
+            );
+            if !same_project {
+                widgets::caption(
+                    ui,
+                    format!(
+                        "Project {} · explicit claim lookup; your current project is unchanged.",
+                        claim
+                            .project_id
+                            .as_ref()
+                            .map_or("unknown", |p| p.0.as_str())
+                    ),
+                );
+            }
             widgets::caption(
                 ui,
                 format!(
@@ -779,7 +823,8 @@ pub(crate) fn controls(
             widgets::caption(
                 ui,
                 format!(
-                    "Work {} · selected kind {} · selection work revision {} · claim fence {} · selection queue revision {}",
+                    "Work {} · selected kind {} · selection work revision {} · claim fence \
+                        {} · selection queue revision {}",
                     claim.work_id.as_str(),
                     claim
                         .work_kind
@@ -843,13 +888,23 @@ pub(crate) fn controls(
                                 ),
                             );
                         }
-                        if let Some(activity) = &recovery.last_activity && let Some(payload) = &activity.payload {
-                            egui::CollapsingHeader::new("Recorded activity details").show(ui,|ui| {
-                                match serde_json::to_string_pretty(&payload.value) {
-                                    Ok(text) => { ui.monospace(text); },
-                                    Err(_) => { widgets::caption(ui,"The recorded activity details could not be displayed."); },
-                                }
-                            });
+                        if let Some(activity) = &recovery.last_activity
+                            && let Some(payload) = &activity.payload
+                        {
+                            egui::CollapsingHeader::new("Recorded activity details").show(
+                                ui,
+                                |ui| match serde_json::to_string_pretty(&payload.value) {
+                                    Ok(text) => {
+                                        ui.monospace(text);
+                                    }
+                                    Err(_) => {
+                                        widgets::caption(
+                                            ui,
+                                            "The recorded activity details could not be displayed.",
+                                        );
+                                    }
+                                },
+                            );
                         }
                         if let Some(activity) = &recovery.last_activity
                             && let Some(why) = &activity.payload_unavailable_reason
@@ -908,7 +963,11 @@ pub(crate) fn controls(
                 }
                 if ui
                     .add_enabled(
-                        runtime_available && !matches!(claim.state,devworks_core::protocol::records::LeaseState::Released),
+                        runtime_available
+                            && !matches!(
+                                claim.state,
+                                devworks_core::protocol::records::LeaseState::Released
+                            ),
                         egui::Button::new(format!("Release claim {}", claim.id.as_str())),
                     )
                     .clicked()
@@ -943,7 +1002,8 @@ pub(crate) fn controls(
 fn editor(ui: &mut Ui, project: &str, workflow: &mut WorkflowUi, actions: &mut Vec<Action>) {
     widgets::caption(
         ui,
-        "Names and order belong to this project. Each column keeps its fixed workflow meaning; execution controls are separate.",
+        "Names and order belong to this project. Each column keeps its fixed \
+            workflow meaning; execution controls are separate.",
     );
     if let Some(error) = &workflow.rows.error {
         chip(ui, error.clone(), Tone::Bad);
@@ -961,105 +1021,289 @@ fn editor(ui: &mut Ui, project: &str, workflow: &mut WorkflowUi, actions: &mut V
         widgets::caption(ui, format!("Workflow revision {revision}"));
     }
     let busy = workflow.busy;
-    ui.add_enabled_ui(!busy,|ui| {
-        for (index,status) in rows.iter().enumerate() {
+    ui.add_enabled_ui(!busy, |ui| {
+        for (index, status) in rows.iter().enumerate() {
             ui.group(|ui| {
                 ui.label(RichText::new(&status.label.0).strong());
-                widgets::caption(ui,format!("Meaning: {} · status revision {}",status.category.0,status.revision.as_str()));
+                widgets::caption(
+                    ui,
+                    format!(
+                        "Meaning: {} · status revision {}",
+                        status.category.0,
+                        status.revision.as_str()
+                    ),
+                );
                 ui.horizontal_wrapped(|ui| {
-                    if ui.button(format!("Rename {}",status.label.0)).clicked() {
-                        workflow.draft = Some(Draft::Rename { snapshot:status.clone(),label:status.label.0.clone() });
+                    if ui.button(format!("Rename {}", status.label.0)).clicked() {
+                        workflow.draft = Some(Draft::Rename {
+                            snapshot: status.clone(),
+                            label: status.label.0.clone(),
+                        });
                     }
-                    for (earlier,neighbor) in [(true,index.checked_sub(1)),(false,(index+1 < rows.len()).then_some(index+1))] {
-                        let name = format!("Move {} column {}",status.label.0,if earlier {"earlier"} else {"later"});
-                        if ui.add_enabled(neighbor.is_some() && revision.is_some(),egui::Button::new(name)).clicked() {
+                    for (earlier, neighbor) in [
+                        (true, index.checked_sub(1)),
+                        (false, (index + 1 < rows.len()).then_some(index + 1)),
+                    ] {
+                        let name = format!(
+                            "Move {} column {}",
+                            status.label.0,
+                            if earlier { "earlier" } else { "later" }
+                        );
+                        if ui
+                            .add_enabled(
+                                neighbor.is_some() && revision.is_some(),
+                                egui::Button::new(name),
+                            )
+                            .clicked()
+                        {
                             let mut ids: Vec<_> = rows.iter().map(|s| s.id.clone()).collect();
-                            ids.swap(index,neighbor.expect("enabled neighbor"));
+                            ids.swap(index, neighbor.expect("enabled neighbor"));
                             actions.push(Action::Workflow(WorkflowAction::Submit {
-                                project:project.into(),operation:"workflows.order",
-                                input:order_status_request(project,&revision,&ids),
+                                project: project.into(),
+                                operation: "workflows.order",
+                                input: order_status_request(project, &revision, &ids),
                             }));
                         }
                     }
-                    if ui.button(format!("Remove {} column",status.label.0)).clicked() {
-                        workflow.draft = Some(Draft::Remove { snapshot:status.clone(),destination:None });
+                    if ui
+                        .button(format!("Remove {} column", status.label.0))
+                        .clicked()
+                    {
+                        workflow.draft = Some(Draft::Remove {
+                            snapshot: status.clone(),
+                            destination: None,
+                        });
                     }
                 });
             });
         }
-        if ui.add_enabled(revision.is_some(),egui::Button::new("New status")).clicked() {
-            workflow.draft = Some(Draft::Create { revision:revision.clone().expect("enabled revision"),label:String::new(),category:"Backlog".into(),after_status_id:None });
+        if ui
+            .add_enabled(revision.is_some(), egui::Button::new("New status"))
+            .clicked()
+        {
+            workflow.draft = Some(Draft::Create {
+                revision: revision.clone().expect("enabled revision"),
+                label: String::new(),
+                category: "Backlog".into(),
+                after_status_id: None,
+            });
         }
         let mut close = false;
-        let Some(draft) = workflow.draft.as_mut() else { return; };
+        let Some(draft) = workflow.draft.as_mut() else {
+            return;
+        };
         ui.separator();
         match draft {
-            Draft::Create { revision:base,label,category,after_status_id } => {
+            Draft::Create {
+                revision: base,
+                label,
+                category,
+                after_status_id,
+            } => {
                 ui.label(RichText::new("New project status").strong());
-                field(ui,"Status name",label);
-                egui::ComboBox::from_label("Status meaning").selected_text(category.as_str()).show_ui(ui,|ui| {
-                    for (_,name,semantic) in devworks_core::protocol::helpers::work::DEFAULT_STATUSES { ui.selectable_value(category,semantic.to_owned(),name); }
-                });
-                let placement = after_status_id.as_ref().map(|id| rows.iter().find(|row|row.id.as_str()==id).map_or(id.as_str(),|row|row.label.0.as_str())).unwrap_or("End of workflow");
-                egui::ComboBox::from_label("Place after").selected_text(placement).show_ui(ui,|ui| {
-                    ui.selectable_value(after_status_id,None,"End of workflow");
-                    for row in &rows { ui.selectable_value(after_status_id,Some(row.id.as_str().into()),&row.label.0); }
-                });
-                if Some(base.as_str()) != revision.as_deref() { stale(ui); }
+                field(ui, "Status name", label);
+                egui::ComboBox::from_label("Status meaning")
+                    .selected_text(category.as_str())
+                    .show_ui(ui, |ui| {
+                        for (_, name, semantic) in
+                            devworks_core::protocol::helpers::work::DEFAULT_STATUSES
+                        {
+                            ui.selectable_value(category, semantic.to_owned(), name);
+                        }
+                    });
+                let placement = after_status_id
+                    .as_ref()
+                    .map(|id| {
+                        rows.iter()
+                            .find(|row| row.id.as_str() == id)
+                            .map_or(id.as_str(), |row| row.label.0.as_str())
+                    })
+                    .unwrap_or("End of workflow");
+                egui::ComboBox::from_label("Place after")
+                    .selected_text(placement)
+                    .show_ui(ui, |ui| {
+                        ui.selectable_value(after_status_id, None, "End of workflow");
+                        for row in &rows {
+                            ui.selectable_value(
+                                after_status_id,
+                                Some(row.id.as_str().into()),
+                                &row.label.0,
+                            );
+                        }
+                    });
+                if Some(base.as_str()) != revision.as_deref() {
+                    stale(ui);
+                }
                 ui.horizontal_wrapped(|ui| {
-                    if ui.add_enabled(!label.trim().is_empty(),egui::Button::new("Create status")).clicked() {
-                        let input = create_status_request(project,base,label,category,after_status_id.as_deref());
-                        actions.push(Action::Workflow(WorkflowAction::Submit { project:project.into(),operation:"workflows.create_status",input }));
+                    if ui
+                        .add_enabled(!label.trim().is_empty(), egui::Button::new("Create status"))
+                        .clicked()
+                    {
+                        let input = create_status_request(
+                            project,
+                            base,
+                            label,
+                            category,
+                            after_status_id.as_deref(),
+                        );
+                        actions.push(Action::Workflow(WorkflowAction::Submit {
+                            project: project.into(),
+                            operation: "workflows.create_status",
+                            input,
+                        }));
                     }
-                    if ui.button("Review current workflow").clicked() && let Some(current) = &revision { *base = current.clone(); }
-                    if ui.button("Cancel status edit").clicked() { close = true; }
+                    if ui.button("Review current workflow").clicked()
+                        && let Some(current) = &revision
+                    {
+                        *base = current.clone();
+                    }
+                    if ui.button("Cancel status edit").clicked() {
+                        close = true;
+                    }
                 });
             }
-            Draft::Rename { snapshot,label } => {
-                ui.label(RichText::new(format!("Rename {}",snapshot.label.0)).strong());
-                widgets::caption(ui,format!("Meaning stays {}",snapshot.category.0));
-                field(ui,"Status name",label);
+            Draft::Rename { snapshot, label } => {
+                ui.label(RichText::new(format!("Rename {}", snapshot.label.0)).strong());
+                widgets::caption(ui, format!("Meaning stays {}", snapshot.category.0));
+                field(ui, "Status name", label);
                 let current = rows.iter().find(|s| s.id == snapshot.id);
-                if current.is_none_or(|s| s.revision != snapshot.revision) { stale(ui); }
+                if current.is_none_or(|s| s.revision != snapshot.revision) {
+                    stale(ui);
+                }
                 ui.horizontal_wrapped(|ui| {
-                    if ui.add_enabled(!label.trim().is_empty(),egui::Button::new("Save status name")).clicked() {
-                        actions.push(Action::Workflow(WorkflowAction::Submit { project:project.into(),operation:"workflows.rename_status",
-                            input:rename_status_request(project,snapshot,label) }));
+                    if ui
+                        .add_enabled(
+                            !label.trim().is_empty(),
+                            egui::Button::new("Save status name"),
+                        )
+                        .clicked()
+                    {
+                        actions.push(Action::Workflow(WorkflowAction::Submit {
+                            project: project.into(),
+                            operation: "workflows.rename_status",
+                            input: rename_status_request(project, snapshot, label),
+                        }));
                     }
-                    if ui.add_enabled(current.is_some(),egui::Button::new("Review current workflow")).clicked() && let Some(current) = current { *snapshot = current.clone(); }
-                    if ui.button("Cancel status edit").clicked() { close = true; }
+                    if ui
+                        .add_enabled(
+                            current.is_some(),
+                            egui::Button::new("Review current workflow"),
+                        )
+                        .clicked()
+                        && let Some(current) = current
+                    {
+                        *snapshot = current.clone();
+                    }
+                    if ui.button("Cancel status edit").clicked() {
+                        close = true;
+                    }
                 });
             }
-            Draft::Remove { snapshot,destination } => {
-                ui.label(RichText::new(format!("Remove {}",snapshot.label.0)).strong());
-                let count = snapshot.affected_work_count.as_ref().map(|n| n.as_str()).unwrap_or("unknown");
-                widgets::caption(ui,format!("{count} work records will move together. Their history is kept. Choose a destination with the same meaning ({}).",snapshot.category.0));
+            Draft::Remove {
+                snapshot,
+                destination,
+            } => {
+                ui.label(RichText::new(format!("Remove {}", snapshot.label.0)).strong());
+                let count = snapshot
+                    .affected_work_count
+                    .as_ref()
+                    .map(|n| n.as_str())
+                    .unwrap_or("unknown");
+                widgets::caption(
+                    ui,
+                    format!(
+                        "{count} work records will move together. Their history is kept. Choose \
+                    a destination with the same meaning ({}).",
+                        snapshot.category.0
+                    ),
+                );
                 let current = rows.iter().find(|s| s.id == snapshot.id);
-                if current.is_none_or(|s| s.workflow_revision != snapshot.workflow_revision || s.affected_work_digest != snapshot.affected_work_digest) { stale(ui); }
-                widgets::caption(ui,format!("Removal snapshot: workflow {} · affected work {}",snapshot.workflow_revision.as_ref().map_or("unknown",|r| r.as_str()),snapshot.affected_work_digest.as_ref().map_or("unknown",|d| d.as_str())));
-                let compatible: Vec<_> = rows.iter().filter(|s| s.id != snapshot.id && s.category.0 == snapshot.category.0).collect();
-                let selected = destination.as_ref().and_then(|id| compatible.iter().find(|s| s.id.as_str() == id)).map_or("Choose a destination",|s| s.label.0.as_str());
-                egui::ComboBox::from_label("Reassign work to").selected_text(selected).show_ui(ui,|ui| {
-                    for status in &compatible { ui.selectable_value(destination,Some(status.id.as_str().into()),&status.label.0); }
-                });
-                if compatible.is_empty() { widgets::caption(ui,"Create another status with this meaning before removing this one."); }
-                let ready = destination.as_ref().is_some_and(|id| compatible.iter().any(|s| s.id.as_str() == id)) && snapshot.workflow_revision.is_some() && snapshot.affected_work_digest.is_some();
+                if current.is_none_or(|s| {
+                    s.workflow_revision != snapshot.workflow_revision
+                        || s.affected_work_digest != snapshot.affected_work_digest
+                }) {
+                    stale(ui);
+                }
+                widgets::caption(
+                    ui,
+                    format!(
+                        "Removal snapshot: workflow {} · affected work {}",
+                        snapshot
+                            .workflow_revision
+                            .as_ref()
+                            .map_or("unknown", |r| r.as_str()),
+                        snapshot
+                            .affected_work_digest
+                            .as_ref()
+                            .map_or("unknown", |d| d.as_str())
+                    ),
+                );
+                let compatible: Vec<_> = rows
+                    .iter()
+                    .filter(|s| s.id != snapshot.id && s.category.0 == snapshot.category.0)
+                    .collect();
+                let selected = destination
+                    .as_ref()
+                    .and_then(|id| compatible.iter().find(|s| s.id.as_str() == id))
+                    .map_or("Choose a destination", |s| s.label.0.as_str());
+                egui::ComboBox::from_label("Reassign work to")
+                    .selected_text(selected)
+                    .show_ui(ui, |ui| {
+                        for status in &compatible {
+                            ui.selectable_value(
+                                destination,
+                                Some(status.id.as_str().into()),
+                                &status.label.0,
+                            );
+                        }
+                    });
+                if compatible.is_empty() {
+                    widgets::caption(
+                        ui,
+                        "Create another status with this meaning before removing this one.",
+                    );
+                }
+                let ready = destination
+                    .as_ref()
+                    .is_some_and(|id| compatible.iter().any(|s| s.id.as_str() == id))
+                    && snapshot.workflow_revision.is_some()
+                    && snapshot.affected_work_digest.is_some();
                 ui.horizontal_wrapped(|ui| {
-                    if ui.add_enabled(ready,egui::Button::new("Reassign work and remove status")).clicked() {
-                        actions.push(Action::Workflow(WorkflowAction::Submit { project:project.into(),operation:"workflows.reassign_and_remove",
-                            input:remove_status_request(project,snapshot,destination) }));
+                    if ui
+                        .add_enabled(ready, egui::Button::new("Reassign work and remove status"))
+                        .clicked()
+                    {
+                        actions.push(Action::Workflow(WorkflowAction::Submit {
+                            project: project.into(),
+                            operation: "workflows.reassign_and_remove",
+                            input: remove_status_request(project, snapshot, destination),
+                        }));
                     }
-                    if ui.add_enabled(current.is_some(),egui::Button::new("Review current workflow")).clicked() && let Some(current) = current { *snapshot = current.clone(); }
-                    if ui.button("Cancel status edit").clicked() { close = true; }
+                    if ui
+                        .add_enabled(
+                            current.is_some(),
+                            egui::Button::new("Review current workflow"),
+                        )
+                        .clicked()
+                        && let Some(current) = current
+                    {
+                        *snapshot = current.clone();
+                    }
+                    if ui.button("Cancel status edit").clicked() {
+                        close = true;
+                    }
                 });
             }
         }
-        if close { workflow.draft = None; }
+        if close {
+            workflow.draft = None;
+        }
     });
     if busy {
         widgets::caption(
             ui,
-            "The workflow change is awaiting confirmation. Its exact request is kept if the outcome is unknown.",
+            "The workflow change is awaiting confirmation. Its exact request is kept \
+                if the outcome is unknown.",
         );
     }
 }

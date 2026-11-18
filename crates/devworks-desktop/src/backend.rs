@@ -1467,7 +1467,19 @@ mod human_dispatch_tests {
     }
     fn purged_backend() -> (NoHuman, Vec<u8>) {
         let b = NoHuman::default();
-        let frame=serde_json::json!({"protocol":"1.0-draft.1","mode":"Command","requestKey":"original-key","body":{"kind":"projects.create","name":"private original name","description":"","repositoryIds":[]}}).to_string().into_bytes();
+        let frame = serde_json::json!({
+            "protocol": "1.0-draft.1",
+            "mode": "Command",
+            "requestKey": "original-key",
+            "body": {
+                "kind": "projects.create",
+                "name": "private original name",
+                "description": "",
+                "repositoryIds": []
+            }
+        })
+        .to_string()
+        .into_bytes();
         let decoded = devworks_core::admission::decode(
             devworks_core::admission::Selection {
                 operation: "projects.create",
@@ -1476,16 +1488,63 @@ mod human_dispatch_tests {
             &frame,
         )
         .unwrap();
-        *b.command_reply.lock().unwrap()=Some(serde_json::from_value(serde_json::json!({"kind":"Rejected","protocol":"1.0-draft.1","requestKey":"original-key","code":"UnsupportedSchema","retry":"ResolveReceipt","correlationId":"correlation-a"})).unwrap());
-        *b.query_reply.lock().unwrap()=Some(serde_json::from_value(serde_json::json!({"kind":"Result","protocol":"1.0-draft.1","queryId":"purged-receipt","stamp":{"storeId":"store-a","restoreEpoch":"0","sequence":"9","policyRevision":"1","scopeRevision":"1"},"result":{"kind":"history.command_receipt","value":{"requestKey":"original-key","commandId":"committed-command","committedSequence":"8","state":"Recorded","purged":{"commandId":"committed-command","committedSequence":"8","acceptedAtMs":"100","requestDigest":decoded.fingerprint.as_str(),"originalDecision":"Applied","purgeId":"purge-a"}}}})).unwrap());
+        *b.command_reply.lock().unwrap() = Some(
+            serde_json::from_value(serde_json::json!({
+                "kind": "Rejected",
+                "protocol": "1.0-draft.1",
+                "requestKey": "original-key",
+                "code": "UnsupportedSchema",
+                "retry": "ResolveReceipt",
+                "correlationId": "correlation-a"
+            }))
+            .unwrap(),
+        );
+        *b.query_reply.lock().unwrap() = Some(
+            serde_json::from_value(serde_json::json!({
+                "kind": "Result",
+                "protocol": "1.0-draft.1",
+                "queryId": "purged-receipt",
+                "stamp": {
+                    "storeId": "store-a",
+                    "restoreEpoch": "0",
+                    "sequence": "9",
+                    "policyRevision": "1",
+                    "scopeRevision": "1"
+                },
+                "result": {
+                    "kind": "history.command_receipt",
+                    "value": {
+                        "requestKey": "original-key",
+                        "commandId": "committed-command",
+                        "committedSequence": "8",
+                        "state": "Recorded",
+                        "purged": {
+                            "commandId": "committed-command",
+                            "committedSequence": "8",
+                            "acceptedAtMs": "100",
+                            "requestDigest": decoded.fingerprint.as_str(),
+                            "originalDecision": "Applied",
+                            "purgeId": "purge-a"
+                        }
+                    }
+                }
+            }))
+            .unwrap(),
+        );
         (b, frame)
     }
     #[test]
     fn purged_legacy_command_resolves_once_without_resubmission_or_new_identity() {
         let (b, frame) = purged_backend();
-        assert!(
-            matches!(resolve_command(&b,"projects.create",&frame),Ok(CommandReply::ReceiptPurged{request_key,outcome,..}) if request_key.0.as_str()=="original-key" && outcome.command_id.0.as_str()=="committed-command")
-        );
+        assert!(matches!(
+            resolve_command(&b, "projects.create", &frame),
+            Ok(CommandReply::ReceiptPurged {
+                request_key,
+                outcome,
+                ..
+            }) if request_key.0.as_str() == "original-key"
+                && outcome.command_id.0.as_str() == "committed-command"
+        ));
         assert_eq!(b.generic.load(Ordering::SeqCst), 1);
         assert_eq!(b.queries.load(Ordering::SeqCst), 1);
         assert_eq!(*b.frames.lock().unwrap(), [frame]);

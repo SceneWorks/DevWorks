@@ -289,7 +289,8 @@ impl HelpScreen {
                                 )
                             ));
                         } else if changed && !initial {
-                            self.notice = Some("Local documentation changed. Refresh Help for current search results; inspected topics keep their exact version references.".into());
+                            self.notice = Some("Local documentation changed. Refresh Help for current search results; \
+                                inspected topics keep their exact version references.".into());
                         }
                         if changed && self.selected.is_some() && !self.reading {
                             self.read_help_passage(cx);
@@ -346,7 +347,12 @@ impl HelpScreen {
                 Err(Failure::Unknown) => {
                     self.generation_unknown = true;
                     self.generating = true;
-                    self.generation_notice = Some((Tone::Attention, "Generation outcome not confirmed. Use Confirm outcomes to check the original request; it will not run twice.".into()));
+                    self.generation_notice = Some((
+                        Tone::Attention,
+                        "Generation outcome not confirmed. Use Confirm outcomes to check the \
+                        original request; it will not run twice."
+                            .into(),
+                    ));
                 }
                 Err(error) => {
                     self.generating = false;

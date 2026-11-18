@@ -112,7 +112,14 @@ mod tests {
     fn connection(writer: bool) -> Connection {
         let c = Connection::open_in_memory().unwrap();
         register(&c, writer).unwrap();
-        c.execute_batch("CREATE TABLE guarded(id TEXT PRIMARY KEY,body TEXT); INSERT INTO guarded VALUES('a','private-a'),('b','private-b'); CREATE TRIGGER immutable_guard BEFORE DELETE ON guarded WHEN NOT project_purge_allowed('guarded',json_array(OLD.id),'Delete') BEGIN SELECT RAISE(ABORT,'immutable'); END;").unwrap();
+        c.execute_batch(
+            "CREATE TABLE guarded(id TEXT PRIMARY KEY,body TEXT); INSERT INTO \
+            guarded VALUES('a','private-a'),('b','private-b'); CREATE TRIGGER \
+            immutable_guard BEFORE DELETE ON guarded WHEN NOT \
+            project_purge_allowed('guarded',json_array(OLD.id),'Delete') BEGIN \
+            SELECT RAISE(ABORT,'immutable'); END;",
+        )
+        .unwrap();
         c
     }
     fn permits() -> BTreeSet<Permit> {
@@ -180,7 +187,12 @@ mod tests {
         let a = "a".repeat(64);
         let b = "b".repeat(64);
         for key in [&a, &b] {
-            c.execute("INSERT INTO allocation_replays(project_id,key,intent_digest,result_json) VALUES('guard-project',?1,?2,'{}')",rusqlite::params![key,"c".repeat(64)]).unwrap();
+            c.execute(
+                "INSERT INTO allocation_replays(project_id,key,intent_digest,\
+                result_json) VALUES('guard-project',?1,?2,'{}')",
+                rusqlite::params![key, "c".repeat(64)],
+            )
+            .unwrap();
         }
         assert!(
             c.execute("DELETE FROM allocation_replays WHERE key=?1", [&a])

@@ -136,21 +136,50 @@ impl Fx {
         fx.store
             .with_writer_connection(move |c| {
                 super::super::conn::db(c.execute_batch(&format!(
-                    "INSERT INTO projects VALUES('project-a','A','Active',1,1,1);
-                     INSERT INTO projects VALUES('project-b','B','Active',1,1,1);
-                     INSERT INTO repositories VALUES('repo-a','/repos/a',1);
-                     INSERT INTO repositories VALUES('repo-b','/repos/b',1);
-                     INSERT INTO project_repositories VALUES('project-a','repo-a');
-                     INSERT INTO project_repositories VALUES('project-b','repo-b');
-                     INSERT INTO work_items VALUES('root-a','project-a','feature',NULL,NULL,NULL,'Feature A',1,0,3,1,1,'{{}}');
-                     INSERT INTO work_items VALUES('task-a','project-a','task','root-a',NULL,NULL,'Task A',1,0,1,1,1,'{{}}');
-                     INSERT INTO work_items VALUES('root-b','project-b','feature',NULL,NULL,NULL,'Feature B',1,0,1,1,1,'{{}}');
-                     INSERT INTO blobs(digest,byte_count,relative_path,state) VALUES('{DIGEST}',2,'artifacts/aa/{DIGEST}','Present');
-                     INSERT INTO artifacts(id,origin_project_id,origin_work_id,title,revision,current_project_id,scope_revision,current_version_id,state,created_at) VALUES('artifact-a','project-a','root-a','Context',1,'project-a',1,NULL,'Live',1);
-                     INSERT INTO artifact_versions VALUES('version-a','artifact-a',1,'{DIGEST}','application/json',1,NULL,'{{}}');
-                     UPDATE artifacts SET current_version_id='version-a' WHERE id='artifact-a';
-                     INSERT INTO artifacts(id,origin_project_id,origin_work_id,title,revision,current_project_id,scope_revision,current_version_id,state,created_at) VALUES('artifact-b','project-b',NULL,'Other',1,'project-b',1,NULL,'Live',1);
-                     INSERT INTO artifact_versions VALUES('version-b','artifact-b',1,'{DIGEST}','application/json',1,NULL,'{{}}');"
+                    "INSERT INTO projects VALUES('project-a','A','Active',1,1,\
+                        1);
+                     INSERT INTO projects VALUES('project-b','B',\
+                        'Active',1,1,1);
+                     INSERT INTO repositories \
+                        VALUES('repo-a','/repos/a',1);
+                     INSERT INTO \
+                        repositories VALUES('repo-b','/repos/b',1);
+                     INSERT \
+                        INTO project_repositories VALUES('project-a',\
+                        'repo-a');
+                     INSERT INTO project_repositories \
+                        VALUES('project-b','repo-b');
+                     INSERT INTO \
+                        work_items VALUES('root-a','project-a','feature',NULL,NULL,NULL,\
+                        'Feature A',1,0,3,1,1,'{{}}');
+                     INSERT INTO \
+                        work_items VALUES('task-a','project-a','task','root-a',NULL,NULL,'Task \
+                        A',1,0,1,1,1,'{{}}');
+                     INSERT INTO work_items \
+                        VALUES('root-b','project-b','feature',NULL,NULL,NULL,'Feature B',1,0,1,\
+                        1,1,'{{}}');
+                     INSERT INTO blobs(digest,byte_count,\
+                        relative_path,state) VALUES('{DIGEST}',2,'artifacts/aa/{DIGEST}',\
+                        'Present');
+                     INSERT INTO artifacts(id,\
+                        origin_project_id,origin_work_id,title,revision,current_project_id,\
+                        scope_revision,current_version_id,state,created_at) VALUES('artifact-a',\
+                        'project-a','root-a','Context',1,'project-a',1,NULL,'Live',\
+                        1);
+                     INSERT INTO artifact_versions \
+                        VALUES('version-a','artifact-a',1,'{DIGEST}','application/json',1,NULL,\
+                        '{{}}');
+                     UPDATE artifacts SET \
+                        current_version_id='version-a' WHERE \
+                        id='artifact-a';
+                     INSERT INTO artifacts(id,\
+                        origin_project_id,origin_work_id,title,revision,current_project_id,\
+                        scope_revision,current_version_id,state,created_at) VALUES('artifact-b',\
+                        'project-b',NULL,'Other',1,'project-b',1,NULL,'Live',\
+                        1);
+                     INSERT INTO artifact_versions \
+                        VALUES('version-b','artifact-b',1,'{DIGEST}','application/json',1,NULL,\
+                        '{{}}');"
                 )))
             })
             .unwrap();
@@ -4162,7 +4191,12 @@ fn migration_9_indexes_the_feeds_and_backfills_invocations() {
     let backfill = &sql[start..start + sql[start..].find(';').unwrap() + 1];
     let rows = |c: &rusqlite::Connection| -> Vec<String> {
         let mut s = c
-            .prepare("SELECT json_array(session_id,response_seq,call_seq,committed_seq,project_id,root_id,call_entry_id,capability_id,outcome,error_code,operation_id,actor_id,called_at,responded_at) FROM tool_invocations ORDER BY session_id,response_seq")
+            .prepare(
+                "SELECT json_array(session_id,response_seq,call_seq,committed_seq,\
+                project_id,root_id,call_entry_id,capability_id,outcome,error_code,\
+                operation_id,actor_id,called_at,responded_at) FROM tool_invocations \
+                ORDER BY session_id,response_seq",
+            )
             .unwrap();
         s.query_map([], |r| r.get(0))
             .unwrap()

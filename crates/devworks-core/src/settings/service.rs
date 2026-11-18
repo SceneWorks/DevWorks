@@ -238,7 +238,12 @@ fn plan_for_write(
                     && row.expires_at_ms <= tx.now_ms()
             });
         if unavailable {
-            planned.issues.push(Issue::blocking(key, "credential.stageUnavailable", "This credential stage expired or was removed. Enter the credential again before saving."));
+            planned.issues.push(Issue::blocking(
+                key,
+                "credential.stageUnavailable",
+                "This credential stage expired or was removed. Enter the credential \
+                again before saving.",
+            ));
         }
     }
     Ok(planned)

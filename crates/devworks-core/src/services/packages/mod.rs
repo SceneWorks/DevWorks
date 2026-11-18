@@ -1178,7 +1178,15 @@ impl PackageService {
         }
         let payload = json!({"digest": removed, "stateGeneration": p.state_generation, "stateRetained": true});
         Self::republish(tx, ctx.principal(), &mut p, "PackageUninstalled", payload)?;
-        self.log_in(tx, &p.package_id, Severity::Info, "PackageUninstalled", "The package was uninstalled; its state and history are retained and its files are removed after its helper is retired", None)?;
+        self.log_in(
+            tx,
+            &p.package_id,
+            Severity::Info,
+            "PackageUninstalled",
+            "The package was uninstalled; its state and history are retained and its \
+            files are removed after its helper is retired",
+            None,
+        )?;
         Ok(DomainDecision::Applied {
             result: self.result(tx, &p, "addons.uninstall")?,
         })
@@ -1506,7 +1514,23 @@ impl PackageService {
             },
             json!({"trust": p.trust}),
         )?;
-        self.log_in(tx, &p.package_id, Severity::Info, if trust { "PublisherTrusted" } else { "PublisherTrustRevoked" }, if trust { "Signed compatible updates from this publisher may now activate automatically within the approved access" } else { "Updates from this publisher need explicit approval again" }, None)?;
+        self.log_in(
+            tx,
+            &p.package_id,
+            Severity::Info,
+            if trust {
+                "PublisherTrusted"
+            } else {
+                "PublisherTrustRevoked"
+            },
+            if trust {
+                "Signed compatible updates from this publisher may now activate \
+            automatically within the approved access"
+            } else {
+                "Updates from this publisher need explicit approval again"
+            },
+            None,
+        )?;
         Ok(DomainDecision::Applied {
             result: self.result(tx, p, "addons.configure")?,
         })
@@ -2018,18 +2042,38 @@ impl PackageService {
                         tx.release(sp)?;
                         // The failed version stays installed with its failure recorded, never
                         // active again by itself (automatic rollback never returns to it).
-                        p.failure = Some(
-                            json!({"code": code, "message": message, "atMs": tx.now_ms(),
-                            "attempts": attempts, "digest": failed, "rolledBack": true}),
-                        );
+                        p.failure = Some(json!({
+                            "code": code,
+                            "message": message,
+                            "atMs": tx.now_ms(),
+                            "attempts": attempts,
+                            "digest": failed,
+                            "rolledBack": true
+                        }));
                         Self::save(tx, &mut p, false)?;
-                        svc.log_in(tx, &package_id, Severity::Warning, "PackageRolledBack", &format!("The new version failed to start ({code}: {message}) before any work was admitted; the previous version {} was restored", v.version), Some(DiagnosticOutcome::Failed))?;
+                        let note = format!(
+                            "The new version failed to start ({code}: {message}) before any work was \
+                             admitted; the previous version {} was restored",
+                            v.version
+                        );
+                        svc.log_in(
+                            tx,
+                            &package_id,
+                            Severity::Warning,
+                            "PackageRolledBack",
+                            &note,
+                            Some(DiagnosticOutcome::Failed),
+                        )?;
                         event(
                             tx,
                             &host,
                             &p,
                             "PackageStartupRolledBack",
-                            json!({"failedDigest": failed, "restoredDigest": pred, "code": code}),
+                            json!({
+                                "failedDigest": failed,
+                                "restoredDigest": pred,
+                                "code": code
+                            }),
                         )?;
                         svc.observe(tx, "StartupRollback")?;
                         return at(tx, true);
@@ -2043,11 +2087,15 @@ impl PackageService {
             }
             // Bound to the instance that failed: a new configuration or state generation is a new
             // instance and starts again.
-            p.failure = Some(
-                json!({"code": code, "message": message, "atMs": tx.now_ms(),
-                "attempts": attempts, "digest": digest, "configRevision": key.config_revision,
-                "stateGeneration": key.state_generation}),
-            );
+            p.failure = Some(json!({
+                "code": code,
+                "message": message,
+                "atMs": tx.now_ms(),
+                "attempts": attempts,
+                "digest": digest,
+                "configRevision": key.config_revision,
+                "stateGeneration": key.state_generation
+            }));
             Self::save(tx, &mut p, false)?;
             event(
                 tx,

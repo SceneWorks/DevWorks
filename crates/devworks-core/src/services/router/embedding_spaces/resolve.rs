@@ -185,7 +185,19 @@ fn authority_witness(
     if let Some(invocation) = source_context["invocationContext"].as_object_mut() {
         invocation.remove("invocation");
     }
-    json!({"sourceContext":source_context,"policy":policy,"principal":principal.map(|p|json!({"actor":p.actor,"kind":p.kind.as_str(),"active":p.active,"revision":p.revision.to_string(),"projectId":p.project_id,"role":p.role.map(|r|r.as_str()),"tools":p.tool_families}))})
+    json!({
+        "sourceContext": source_context,
+        "policy": policy,
+        "principal": principal.map(|p| json!({
+            "actor": p.actor,
+            "kind": p.kind.as_str(),
+            "active": p.active,
+            "revision": p.revision.to_string(),
+            "projectId": p.project_id,
+            "role": p.role.map(|r| r.as_str()),
+            "tools": p.tool_families
+        }))
+    })
 }
 fn resolved(
     selection: Selection,
@@ -194,7 +206,34 @@ fn resolved(
     operation: Option<OperationRecord>,
     evidence_current: bool,
 ) -> Result<ResolvedEmbeddingConfiguration, StorageError> {
-    let source = json!({"version":1,"selectionRevision":selection.selected.revision.to_string(),"candidateId":selection.selected.candidate_id,"spaceId":selection.selected.space_id,"candidate":selection.candidate.as_ref().map(|c|json!({"id":c.id,"configurationDigest":c.configuration_digest})),"qualification":selection.qualification.as_ref().map(|q|json!({"revision":q.revision.to_string(),"state":q.state,"probe":q.probe,"evidence":q.evidence})),"connectionRevision":selection.connection.as_ref().map(|c|c.revision.to_string()),"operation":operation.as_ref().map(|op|json!({"id":op.id,"revision":op.revision.to_string(),"state":op.state})),"evidenceCurrent":evidence_current,"authorityCurrent":authorized,"authority":authority});
+    let source = json!({
+        "version": 1,
+        "selectionRevision": selection.selected.revision.to_string(),
+        "candidateId": selection.selected.candidate_id,
+        "spaceId": selection.selected.space_id,
+        "candidate": selection.candidate.as_ref().map(|c| json!({
+            "id": c.id,
+            "configurationDigest": c.configuration_digest
+        })),
+        "qualification": selection.qualification.as_ref().map(|q| json!({
+            "revision": q.revision.to_string(),
+            "state": q.state,
+            "probe": q.probe,
+            "evidence": q.evidence
+        })),
+        "connectionRevision": selection
+            .connection
+            .as_ref()
+            .map(|c| c.revision.to_string()),
+        "operation": operation.as_ref().map(|op| json!({
+            "id": op.id,
+            "revision": op.revision.to_string(),
+            "state": op.state
+        })),
+        "evidenceCurrent": evidence_current,
+        "authorityCurrent": authorized,
+        "authority": authority
+    });
     let source_digest = sha256_hex(
         crate::jcs::canonicalize(&source)
             .unwrap_or_else(|_| source.to_string())

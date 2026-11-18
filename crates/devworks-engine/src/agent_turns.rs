@@ -352,7 +352,9 @@ async fn run_native_loop(
                     context.messages.push(Message {
                         role: MessageRole::User,
                         content: vec![ContentBlock::Text {
-                            text: "Host notice: The previous assistant response was interrupted before completion. Continue from the last completed step; do not assume the partial response was applied.".into(),
+                            text: "Host notice: The previous assistant response was interrupted before \
+                                completion. Continue from the last completed step; do not assume the \
+                                partial response was applied.".into(),
                             cache: None,
                         }],
                     });
@@ -1390,7 +1392,10 @@ pub fn initial_context(
 
 /// Host guidance after the role text when the selected tools span several windows. It is not
 /// part of the role: adopting a changed role keeps it.
-pub(crate) const TOOL_WINDOW_NOTICE: &str = "Selected tools are presented in successive windows. A completed response may be followed by another turn with the remaining tools before the assignment closes. If a needed tool is absent, state the intended operation and continue when the next window appears.";
+pub(crate) const TOOL_WINDOW_NOTICE: &str = "Selected tools are presented in successive windows. A completed \
+    response may be followed by another turn with the remaining tools \
+    before the assignment closes. If a needed tool is absent, state the \
+    intended operation and continue when the next window appears.";
 
 /// A membership handoff advances the session epoch in the same transaction as its root change.
 /// Rebuild the provider root before the destination child sends another native request.
@@ -1521,7 +1526,9 @@ pub fn ensure_membership_context(
                         context.messages.push(Message {
                             role: MessageRole::User,
                             content: vec![ContentBlock::Text {
-                                text: "Host notice: The previous assistant response was interrupted before completion. Continue from the last completed step; do not assume the partial response was applied.".into(),
+                                text: "Host notice: The previous assistant response was interrupted before \
+                                    completion. Continue from the last completed step; do not assume the \
+                                    partial response was applied.".into(),
                                 cache: None,
                             }],
                         });

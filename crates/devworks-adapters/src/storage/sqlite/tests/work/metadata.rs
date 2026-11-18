@@ -78,13 +78,32 @@ fn authorable_metadata_is_revision_checked_and_survives_membership_and_reopen() 
             json!({"title": "Renamed"}),
         )));
         assert_eq!(metadata(&renamed), metadata(&edited));
-        let linked = work_of(applied(fx.command_at(&fx.user(), "tasks.set_feature", json!({"taskId": renamed.id.as_str(), "expectedRevision": renamed.revision.as_str(), "featureId": f.id.as_str(), "clearFeature": false}), Some(3))));
+        let linked = work_of(applied(fx.command_at(
+            &fx.user(),
+            "tasks.set_feature",
+            json!({
+                "taskId": renamed.id.as_str(),
+                "expectedRevision": renamed.revision.as_str(),
+                "featureId": f.id.as_str(),
+                "clearFeature": false
+            }),
+            Some(3),
+        )));
         assert!(matches!(
             linked.kind,
             devworks_core::protocol::records::WorkKind::Task
         ));
         assert_eq!(metadata(&get3(&fx, &card.id)), metadata(&edited));
-        let unlinked = work_of(applied(fx.command_at(&fx.agent(), "tasks.set_feature", json!({"taskId": linked.id.as_str(), "expectedRevision": linked.revision.as_str(), "clearFeature": true}), Some(3))));
+        let unlinked = work_of(applied(fx.command_at(
+            &fx.agent(),
+            "tasks.set_feature",
+            json!({
+                "taskId": linked.id.as_str(),
+                "expectedRevision": linked.revision.as_str(),
+                "clearFeature": true
+            }),
+            Some(3),
+        )));
         assert!(unlinked.parent_id.is_none());
         assert_eq!(metadata(&get3(&fx, &card.id)), metadata(&edited));
         let history = fx.read(|s| {
@@ -162,7 +181,16 @@ fn invalid_or_stale_metadata_edits_are_atomic_and_explicit_clears_are_idempotent
         json!({"clearTaskType": true, "labels": []}),
     )));
     assert_eq!(same.revision.get(), cleared.revision.get());
-    let _ = refused_metadata(fx.command_at(&fx.user(), "issues.edit", json!({"workId": cleared.id.as_str(), "expectedRevision": cleared.revision.as_str(), "changes": {"labels": ["dup", "DUP"]}}), Some(3)));
+    let _ = refused_metadata(fx.command_at(
+        &fx.user(),
+        "issues.edit",
+        json!({
+            "workId": cleared.id.as_str(),
+            "expectedRevision": cleared.revision.as_str(),
+            "changes": {"labels": ["dup", "DUP"]}
+        }),
+        Some(3),
+    ));
 }
 
 #[test]
@@ -191,7 +219,16 @@ fn legacy_metadata_stays_absent_and_older_wire_edits_preserve_authored_values() 
     )));
     let older = fx.get_at("tasks.get", &typed.id, Some(2)).unwrap();
     assert!(older.task_type.is_none() && older.labels.is_none());
-    let _ = applied(fx.command_at(&fx.user(), "tasks.edit", json!({"workId": typed.id.as_str(), "expectedRevision": typed.revision.as_str(), "changes": {"title": "Older client edit"}}), Some(2)));
+    let _ = applied(fx.command_at(
+        &fx.user(),
+        "tasks.edit",
+        json!({
+            "workId": typed.id.as_str(),
+            "expectedRevision": typed.revision.as_str(),
+            "changes": {"title": "Older client edit"}
+        }),
+        Some(2),
+    ));
     assert_eq!(metadata(&get3(&fx, &typed.id)), metadata(&typed));
 }
 
@@ -199,7 +236,23 @@ fn legacy_metadata_stays_absent_and_older_wire_edits_preserve_authored_values() 
 fn feature_labels_and_plan_entry_metadata_share_authoring_and_projection() {
     let fx = Fx::new();
     let p = fx.project("Planning", &[]);
-    let feature = match applied(fx.command_at(&fx.agent(), "features.create", json!({"projectId": p.0.as_str(), "creation": {"kind": "Single", "title": "Feature", "description": "", "repositoryIds": [], "statusId": Fx::status(&p, "backlog"), "priority": 0, "labels": ["Release"]}}), Some(3))) {
+    let feature = match applied(fx.command_at(
+        &fx.agent(),
+        "features.create",
+        json!({
+            "projectId": p.0.as_str(),
+            "creation": {
+                "kind": "Single",
+                "title": "Feature",
+                "description": "",
+                "repositoryIds": [],
+                "statusId": Fx::status(&p, "backlog"),
+                "priority": 0,
+                "labels": ["Release"]
+            }
+        }),
+        Some(3),
+    )) {
         OperationResult::FeaturesCreate { value } => value.items.0[0].clone(),
         other => panic!("{other:?}"),
     };
@@ -207,7 +260,16 @@ fn feature_labels_and_plan_entry_metadata_share_authoring_and_projection() {
         metadata(&feature),
         json!({"type": null, "labels": ["Release"]})
     );
-    let feature = match applied(fx.command_at(&fx.user(), "features.edit", json!({"workId": feature.id.as_str(), "expectedRevision": feature.revision.as_str(), "changes": {"labels": ["Edited"]}}), Some(3))) {
+    let feature = match applied(fx.command_at(
+        &fx.user(),
+        "features.edit",
+        json!({
+            "workId": feature.id.as_str(),
+            "expectedRevision": feature.revision.as_str(),
+            "changes": {"labels": ["Edited"]}
+        }),
+        Some(3),
+    )) {
         OperationResult::FeaturesEdit { value } => value,
         other => panic!("{other:?}"),
     };
@@ -223,9 +285,28 @@ fn feature_labels_and_plan_entry_metadata_share_authoring_and_projection() {
             .read(|s| s.work().feature_plan(&feature.id))
             .unwrap()
             .revision;
-        fx.command_at(&fx.agent(), "tasks.sync_plan", json!({"featureId": feature.id.as_str(), "expectedPlanRevision": plan_revision.to_string(), "expectedTaskSetRevision": fx.queue(&p, &feature_queue(&feature.id)).to_string(), "tasks": [entry]}), Some(3))
+        fx.command_at(
+            &fx.agent(),
+            "tasks.sync_plan",
+            json!({
+                "featureId": feature.id.as_str(),
+                "expectedPlanRevision": plan_revision.to_string(),
+                "expectedTaskSetRevision": fx.queue(&p, &feature_queue(&feature.id)).to_string(),
+                "tasks": [entry]
+            }),
+            Some(3),
+        )
     };
-    let mut entry = json!({"clientKey": "planned", "title": "Planned", "description": "", "repositoryIds": [], "dependencyKeys": [], "acceptance": [], "taskType": "Story", "labels": ["Plan"]});
+    let mut entry = json!({
+        "clientKey": "planned",
+        "title": "Planned",
+        "description": "",
+        "repositoryIds": [],
+        "dependencyKeys": [],
+        "acceptance": [],
+        "taskType": "Story",
+        "labels": ["Plan"]
+    });
     let first = match applied(sync(entry.clone())) {
         OperationResult::TasksSyncPlan { value } => value.items.0[0].clone(),
         other => panic!("{other:?}"),
@@ -258,11 +339,28 @@ fn staged_inline_and_initial_plans_obey_the_same_metadata_revision() {
     let p = fx.project("Plan metadata", &[]);
     let doc = fx.artifact(&p, 1);
     let make = |suffix: &str| {
-        json!({"callerRef": format!("plan-{suffix}"), "features": [{
-        "callerRef": format!("feature-{suffix}"), "title": "Feature", "description": "", "repositoryIds": [],
-        "labels": ["Feature label"], "plan": draft(&doc, &[("E1", "Scope")], &[]),
-        "tasks": [{"clientKey": format!("task-{suffix}"), "title": "Typed plan task", "description": "", "repositoryIds": [], "dependencyKeys": [], "acceptance": [], "taskType": "Bug", "labels": ["Task label"]}]
-    }], "dependencyEdges": []})
+        json!({
+            "callerRef": format!("plan-{suffix}"),
+            "features": [{
+                "callerRef": format!("feature-{suffix}"),
+                "title": "Feature",
+                "description": "",
+                "repositoryIds": [],
+                "labels": ["Feature label"],
+                "plan": draft(&doc, &[("E1", "Scope")], &[]),
+                "tasks": [{
+                    "clientKey": format!("task-{suffix}"),
+                    "title": "Typed plan task",
+                    "description": "",
+                    "repositoryIds": [],
+                    "dependencyKeys": [],
+                    "acceptance": [],
+                    "taskType": "Bug",
+                    "labels": ["Task label"]
+                }]
+            }],
+            "dependencyEdges": []
+        })
     };
     let plan = make("staged");
     let bytes = serde_json::to_vec(&plan).unwrap();
@@ -281,7 +379,15 @@ fn staged_inline_and_initial_plans_obey_the_same_metadata_revision() {
             .is_empty()
     );
     let _ = applied(fx.command_at(&fx.agent(), "features.create", stage, Some(3)));
-    let _ = applied(fx.command_at(&fx.agent(), "features.create", json!({"projectId": p.0.as_str(), "creation": {"kind": "AtomicPlan", "plan": make("inline")}}), Some(3)));
+    let _ = applied(fx.command_at(
+        &fx.agent(),
+        "features.create",
+        json!({
+            "projectId": p.0.as_str(),
+            "creation": {"kind": "AtomicPlan", "plan": make("inline")}
+        }),
+        Some(3),
+    ));
     let (tasks, _) = fx.list("tasks.list", &p, 50, None, None).unwrap();
     assert_eq!(tasks.len(), 2);
     for task in tasks {
@@ -290,7 +396,17 @@ fn staged_inline_and_initial_plans_obey_the_same_metadata_revision() {
             json!({"type": "Bug", "labels": ["Task label"]})
         );
     }
-    let project = match applied(fx.command_at(&fx.user(), "projects.create", json!({"name": "Initial metadata", "description": "", "repositoryIds": [], "initialPlan": make("initial")}), Some(3))) {
+    let project = match applied(fx.command_at(
+        &fx.user(),
+        "projects.create",
+        json!({
+            "name": "Initial metadata",
+            "description": "",
+            "repositoryIds": [],
+            "initialPlan": make("initial")
+        }),
+        Some(3),
+    )) {
         OperationResult::ProjectsCreate { value } => value,
         other => panic!("{other:?}"),
     };

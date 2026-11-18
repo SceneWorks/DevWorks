@@ -201,7 +201,17 @@ pub(super) fn reparent(
         .revision
         .checked_add(1)
         .ok_or_else(|| invalid("session revision overflow"))?;
-    let conversation_ok:bool=db(unit.conn.query_row("SELECT EXISTS(SELECT 1 FROM conversations WHERE id=?1 AND root_id=?2) AND NOT EXISTS(SELECT 1 FROM sessions WHERE conversation_id=?1 AND id<>?3)",params![session.conversation_id.as_str(),old.root_id.0.as_str(),session.id.as_str()],|row|row.get(0)))?;
+    let conversation_ok: bool = db(unit.conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM conversations WHERE id=?1 AND root_id=?2) \
+        AND NOT EXISTS(SELECT 1 FROM sessions WHERE conversation_id=?1 AND \
+        id<>?3)",
+        params![
+            session.conversation_id.as_str(),
+            old.root_id.0.as_str(),
+            session.id.as_str()
+        ],
+        |row| row.get(0),
+    ))?;
     if !conversation_ok {
         return Err(invalid(
             "handoff conversation belongs only to its source session",
@@ -214,13 +224,51 @@ pub(super) fn reparent(
     // A caller may catch a repository error and continue its write. Keep this multi-row
     // primitive atomic even then (for example if moving a blocker hits a uniqueness guard).
     atomic(unit.conn, || {
-        db(unit.conn.execute("UPDATE assignments SET root_id=?2,parent_id=?3,execution_id=?4,state='Waiting',generation=?5,slot_held=0,revision=?6,checkpoint_json=?7,scope_key=?8,scope_digest=?9,plan_revision=?10,instruction_revision=?11 WHERE id=?1 AND revision=?12",params![a.id.0.as_str(),a.root_id.0.as_str(),a.parent_id.as_ref().map(|p|p.0.as_str()),a.execution_id.as_ref().map(Id::as_str),a.generation,a.revision,a.checkpoint.as_ref().map(serde_json::Value::to_string),a.scope_key,a.scope_digest,a.plan_revision,a.instruction_revision,expected]))?;
-        db(unit.conn.execute("UPDATE sessions SET root_id=?2,context_epoch=?3,revision=?4 WHERE id=?1 AND revision=?5",params![session.id.as_str(),a.root_id.0.as_str(),epoch,session_revision,expected_session]))?;
+        db(unit.conn.execute(
+            "UPDATE assignments SET root_id=?2,parent_id=?3,execution_id=?4,\
+            state='Waiting',generation=?5,slot_held=0,revision=?6,\
+            checkpoint_json=?7,scope_key=?8,scope_digest=?9,plan_revision=?10,\
+            instruction_revision=?11 WHERE id=?1 AND revision=?12",
+            params![
+                a.id.0.as_str(),
+                a.root_id.0.as_str(),
+                a.parent_id.as_ref().map(|p| p.0.as_str()),
+                a.execution_id.as_ref().map(Id::as_str),
+                a.generation,
+                a.revision,
+                a.checkpoint.as_ref().map(serde_json::Value::to_string),
+                a.scope_key,
+                a.scope_digest,
+                a.plan_revision,
+                a.instruction_revision,
+                expected
+            ],
+        ))?;
+        db(unit.conn.execute(
+            "UPDATE sessions SET root_id=?2,context_epoch=?3,revision=?4 WHERE id=?1 \
+            AND revision=?5",
+            params![
+                session.id.as_str(),
+                a.root_id.0.as_str(),
+                epoch,
+                session_revision,
+                expected_session
+            ],
+        ))?;
         db(unit.conn.execute(
             "UPDATE conversations SET root_id=?2 WHERE id=?1",
             params![session.conversation_id.as_str(), a.root_id.0.as_str()],
         ))?;
-        db(unit.conn.execute("UPDATE blockers SET root_id=?2,revision=revision+1 WHERE state='Active' AND (root_id=?3 OR root_id IS NULL) AND (assignment_id=?1 OR operation_id IN (SELECT id FROM operations WHERE assignment_id=?1))",params![a.id.0.as_str(),a.root_id.0.as_str(),old.root_id.0.as_str()]))?;
+        db(unit.conn.execute(
+            "UPDATE blockers SET root_id=?2,revision=revision+1 WHERE state='Active' \
+            AND (root_id=?3 OR root_id IS NULL) AND (assignment_id=?1 OR \
+            operation_id IN (SELECT id FROM operations WHERE assignment_id=?1))",
+            params![
+                a.id.0.as_str(),
+                a.root_id.0.as_str(),
+                old.root_id.0.as_str()
+            ],
+        ))?;
         Ok(())
     })
 }
@@ -242,23 +290,46 @@ pub(super) fn quiescent(
             id: assignment.0.as_str().into(),
         });
     }
-    let unsafe_subtree:bool=db(conn.query_row(
-        "WITH RECURSIVE tree(id,session_id,state,slot_held,root_id,execution_id,work_id) AS (SELECT id,session_id,state,slot_held,root_id,execution_id,work_id FROM assignments WHERE id=?1 UNION SELECT a.id,a.session_id,a.state,a.slot_held,a.root_id,a.execution_id,a.work_id FROM assignments a JOIN tree t ON a.parent_id=t.id)
-         SELECT EXISTS(SELECT 1 FROM tree WHERE state IN ('Ready','Active','Waiting') OR slot_held=1)
-         OR EXISTS(SELECT 1 FROM usage_attempts a LEFT JOIN usage_attempt_balances b ON b.attempt_id=a.attempt_id WHERE a.assignment_id IN (SELECT id FROM tree) AND coalesce(b.local_quiescent,0)=0)
-         OR EXISTS(SELECT 1 FROM tree t JOIN usage_attempts a ON a.execution_root_id=t.root_id AND a.execution_id=t.execution_id AND a.work_id=t.work_id LEFT JOIN usage_attempt_balances b ON b.attempt_id=a.attempt_id WHERE a.assignment_id IS NULL AND coalesce(b.local_quiescent,0)=0)
-         OR EXISTS(SELECT 1 FROM session_turns WHERE session_id IN (SELECT session_id FROM tree))
-         OR EXISTS(SELECT 1 FROM owned_processes WHERE assignment_id IN (SELECT id FROM tree) AND state NOT IN ('Reaped','Failed'))
-         OR EXISTS(SELECT 1 FROM queue_entries q JOIN operations o ON o.id=q.operation_id WHERE o.assignment_id IN (SELECT id FROM tree) AND q.state IN ('Ready','Claimed','Reconciling'))",
-        [assignment.0.as_str()],|row|row.get(0),
+    let unsafe_subtree: bool = db(conn.query_row(
+        "WITH RECURSIVE tree(id,session_id,state,slot_held,root_id,execution_id,\
+            work_id) AS (SELECT id,session_id,state,slot_held,root_id,execution_id,\
+            work_id FROM assignments WHERE id=?1 UNION SELECT a.id,a.session_id,\
+            a.state,a.slot_held,a.root_id,a.execution_id,a.work_id FROM assignments \
+            a JOIN tree t ON a.parent_id=t.id)
+         SELECT EXISTS(SELECT 1 FROM \
+            tree WHERE state IN ('Ready','Active','Waiting') OR \
+            slot_held=1)
+         OR EXISTS(SELECT 1 FROM usage_attempts a LEFT \
+            JOIN usage_attempt_balances b ON b.attempt_id=a.attempt_id WHERE \
+            a.assignment_id IN (SELECT id FROM tree) AND coalesce(b.local_quiescent,\
+            0)=0)
+         OR EXISTS(SELECT 1 FROM tree t JOIN usage_attempts a ON \
+            a.execution_root_id=t.root_id AND a.execution_id=t.execution_id AND \
+            a.work_id=t.work_id LEFT JOIN usage_attempt_balances b ON \
+            b.attempt_id=a.attempt_id WHERE a.assignment_id IS NULL AND \
+            coalesce(b.local_quiescent,0)=0)
+         OR EXISTS(SELECT 1 FROM \
+            session_turns WHERE session_id IN (SELECT session_id FROM \
+            tree))
+         OR EXISTS(SELECT 1 FROM owned_processes WHERE \
+            assignment_id IN (SELECT id FROM tree) AND state NOT IN ('Reaped',\
+            'Failed'))
+         OR EXISTS(SELECT 1 FROM queue_entries q JOIN \
+            operations o ON o.id=q.operation_id WHERE o.assignment_id IN (SELECT id \
+            FROM tree) AND q.state IN ('Ready','Claimed','Reconciling'))",
+        [assignment.0.as_str()],
+        |row| row.get(0),
     ))?;
     if unsafe_subtree {
         return Ok(false);
     }
     // DISTINCT is bounded by the operation-state vocabulary. Parsing and the canonical core
     // predicate keep this check aligned when states are added or their meaning changes.
-    let mut statement=db(conn.prepare_cached(
-        "WITH RECURSIVE tree(id) AS (SELECT id FROM assignments WHERE id=?1 UNION SELECT a.id FROM assignments a JOIN tree t ON a.parent_id=t.id) SELECT DISTINCT state FROM operations WHERE assignment_id IN (SELECT id FROM tree)",
+    let mut statement = db(conn.prepare_cached(
+        "WITH RECURSIVE tree(id) AS (SELECT id FROM assignments WHERE id=?1 \
+            UNION SELECT a.id FROM assignments a JOIN tree t ON a.parent_id=t.id) \
+            SELECT DISTINCT state FROM operations WHERE assignment_id IN (SELECT id \
+            FROM tree)",
     ))?;
     let states = db(db(
         statement.query_map([assignment.0.as_str()], |row| row.get::<_, String>(0))

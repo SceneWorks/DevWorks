@@ -123,7 +123,25 @@ fn request(ctx: &InvocationContext, query: &AdmittedQuery) -> Result<GraphReadRe
                     })
                     .unwrap_or(DataScope::Workspace)
             });
-            let mut value = json!({"protocol":"DevWorks/1","queryId":query.query_id(),"scope":scope,"query":{"kind":"Search","selection":{"mode":"NodeList","text":"","repositoryId":i.repository_id,"nodeKind":i.node_kind}},"limits":{"maxResults":i.page.limit.get(),"maxVisited":100000,"deadlineMs":30000}});
+            let mut value = json!({
+                "protocol": "DevWorks/1",
+                "queryId": query.query_id(),
+                "scope": scope,
+                "query": {
+                    "kind": "Search",
+                    "selection": {
+                        "mode": "NodeList",
+                        "text": "",
+                        "repositoryId": i.repository_id,
+                        "nodeKind": i.node_kind
+                    }
+                },
+                "limits": {
+                    "maxResults": i.page.limit.get(),
+                    "maxVisited": 100000,
+                    "deadlineMs": 30000
+                }
+            });
             if i.node_kind.is_none() {
                 value["query"]["selection"]
                     .as_object_mut()
@@ -806,7 +824,19 @@ impl GraphService {
             reader.next = metadata.next.borrow().clone();
         }
         let available = reader.is_some() && self.indexing.is_some();
-        let mut value = json!({"stamp":metadata.stamp,"coverage":coverage(&[],if available{CoverageState::Complete}else{CoverageState::Unavailable}),"current":current&&available,"repositories":repositories});
+        let mut value = json!({
+            "stamp": metadata.stamp,
+            "coverage": coverage(
+                &[],
+                if available {
+                    CoverageState::Complete
+                } else {
+                    CoverageState::Unavailable
+                }
+            ),
+            "current": current && available,
+            "repositories": repositories
+        });
         if !available {
             value["unavailableReason"] = json!(if self.indexing.is_none() {
                 "IndexerUnavailable"
@@ -1230,7 +1260,25 @@ impl CommandHandler for GraphService {
             };
             tx.graph().put_graph_trust(&graph_scope, &row, revision)?;
             let event = EventId(tx.new_id(IdKind::Event));
-            tx.history().append(NewEvent{id:event,actor:ctx.principal().clone(),project_id:ctx.project_id().cloned(),root_id:None,operation_id:None,aggregate_kind:"graph_trust".into(),aggregate_id:node_id.as_str().into(),aggregate_revision:row.revision,kind:"GraphTrustChanged".into(),payload:json!({"repositoryId":repository_id,"viewId":view_id,"unitKey":node.node.unit_key,"nodeId":node_id,"trusted":trusted,"contentIdentity":node.content_digest})})?;
+            tx.history().append(NewEvent {
+                id: event,
+                actor: ctx.principal().clone(),
+                project_id: ctx.project_id().cloned(),
+                root_id: None,
+                operation_id: None,
+                aggregate_kind: "graph_trust".into(),
+                aggregate_id: node_id.as_str().into(),
+                aggregate_revision: row.revision,
+                kind: "GraphTrustChanged".into(),
+                payload: json!({
+                    "repositoryId": repository_id,
+                    "viewId": view_id,
+                    "unitKey": node.node.unit_key,
+                    "nodeId": node_id,
+                    "trusted": trusted,
+                    "contentIdentity": node.content_digest
+                }),
+            })?;
             Ok(DomainDecision::Applied {
                 result: OperationResult::CodeSetTrust {
                     value: MutationSummary {

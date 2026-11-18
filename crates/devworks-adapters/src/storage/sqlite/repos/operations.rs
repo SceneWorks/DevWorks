@@ -6,7 +6,9 @@ pub(super) const OP_COLUMNS: &str = "id,root_id,assignment_id,capability,schema_
 pub(super) fn attempts(conn: &Connection, op: &str) -> Result<Vec<AttemptRecord>, StorageError> {
     let mut stmt = stmt(
         conn,
-        "SELECT id,attempt_no,boot_id,execution_id,owner_generation,control_revision,policy_revision,state,observations_json FROM operation_attempts WHERE operation_id=?1 ORDER BY attempt_no",
+        "SELECT id,attempt_no,boot_id,execution_id,owner_generation,\
+            control_revision,policy_revision,state,observations_json FROM \
+            operation_attempts WHERE operation_id=?1 ORDER BY attempt_no",
     )?;
     type Raw = (
         String,
@@ -157,7 +159,9 @@ pub(super) fn operations_for_capability(
     let mut query = stmt(
         conn,
         &format!(
-            "SELECT {OP_COLUMNS} FROM operations WHERE capability=?1 AND state IN(SELECT value FROM json_each(?2)) AND (?3 IS NULL OR id>?3) ORDER BY id LIMIT ?4"
+            "SELECT {OP_COLUMNS} FROM operations WHERE capability=?1 AND state \
+                IN(SELECT value FROM json_each(?2)) AND (?3 IS NULL OR id>?3) ORDER BY \
+                id LIMIT ?4"
         ),
     )?;
     let raws: Vec<OpRaw> = db(db(query.query_map(
@@ -214,8 +218,11 @@ impl OperationJournal for Unit<'_> {
                 id: op.id.0.as_str().to_owned(),
             });
         }
-        db(stmt(self.conn,
-            "INSERT INTO operations(id,root_id,assignment_id,capability,schema_version,args_digest,payload_json,state,revision,created_at) VALUES(?1,?2,?3,?4,?5,?6,?7,'IntentRecorded',1,?8)",
+        db(stmt(
+            self.conn,
+            "INSERT INTO operations(id,root_id,assignment_id,capability,\
+                schema_version,args_digest,payload_json,state,revision,created_at) \
+                VALUES(?1,?2,?3,?4,?5,?6,?7,'IntentRecorded',1,?8)",
         )?
         .execute(params![
             op.id.0.as_str(),
@@ -256,8 +263,11 @@ impl OperationJournal for Unit<'_> {
         let boot = self.boot()?.clone();
         let attempt_no = op.attempts.last().map_or(1, |a| a.attempt_no + 1);
         let attempt_id = self.ids.next_id(IdKind::Attempt);
-        db(stmt(self.conn,
-            "INSERT INTO operation_attempts(id,operation_id,attempt_no,boot_id,execution_id,owner_generation,control_revision,policy_revision,state,observations_json) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,'Preflighted','[]')",
+        db(stmt(
+            self.conn,
+            "INSERT INTO operation_attempts(id,operation_id,attempt_no,boot_id,\
+                execution_id,owner_generation,control_revision,policy_revision,state,\
+                observations_json) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,'Preflighted','[]')",
         )?
         .execute(params![
             attempt_id.as_str(),
@@ -351,7 +361,10 @@ impl OperationJournal for Unit<'_> {
         let ids: Vec<String> = {
             let mut s = stmt(
                 self.conn,
-                "SELECT o.id FROM operations o JOIN operation_attempts a ON a.operation_id=o.id AND a.attempt_no=(SELECT max(attempt_no) FROM operation_attempts WHERE operation_id=o.id) WHERE o.state IN ('Preflighted','Dispatching') AND a.boot_id<>?1 ORDER BY o.id LIMIT ?2",
+                "SELECT o.id FROM operations o JOIN operation_attempts a ON \
+                    a.operation_id=o.id AND a.attempt_no=(SELECT max(attempt_no) FROM \
+                    operation_attempts WHERE operation_id=o.id) WHERE o.state IN \
+                    ('Preflighted','Dispatching') AND a.boot_id<>?1 ORDER BY o.id LIMIT ?2",
             )?;
             db(db(s.query_map(params![boot.as_str(), n], |r| r.get(0)))?.collect())?
         };

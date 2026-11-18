@@ -1844,7 +1844,16 @@ impl BrowserService {
         let describe = json!({
             "kind": "Upload",
             "node": input.node.node_id.as_str(),
-            "files": input.files.0.iter().map(|f| json!({"artifactId": f.artifact_id.as_str(), "versionId": f.version_id.as_str(), "sha256": f.sha256.0})).collect::<Vec<_>>(),
+            "files": input
+                .files
+                .0
+                .iter()
+                .map(|f| json!({
+                    "artifactId": f.artifact_id.as_str(),
+                    "versionId": f.version_id.as_str(),
+                    "sha256": f.sha256.0
+                }))
+                .collect::<Vec<_>>()
         });
         self.action_observation(live, i, before, describe, op, bounds)
     }
@@ -2188,7 +2197,11 @@ impl BrowserService {
             out.push(HealthCheck::new(
                 "browser.automation",
                 HealthState::Unavailable,
-                format!("No compatible browser was found on {target}; browser testing is unavailable until Chrome, Chromium or Edge is installed or a browser path is configured."),
+                format!(
+                    "No compatible browser was found on {target}; browser testing is \
+                    unavailable until Chrome, Chromium or Edge is installed or a browser \
+                    path is configured."
+                ),
             ));
         }
         out

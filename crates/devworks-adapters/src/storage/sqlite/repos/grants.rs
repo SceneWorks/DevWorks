@@ -73,8 +73,11 @@ impl GrantLedger for Unit<'_> {
                 id: g.id.as_str().to_owned(),
             });
         }
-        db(stmt(self.conn,
-            "INSERT INTO resume_grants(id,actor_id,root_id,revision,state,authority_source,binding_json,expires_at,uses_remaining) VALUES(?1,?2,?3,1,'Active',?4,?5,?6,?7)",
+        db(stmt(
+            self.conn,
+            "INSERT INTO resume_grants(id,actor_id,root_id,revision,state,\
+                authority_source,binding_json,expires_at,uses_remaining) VALUES(?1,?2,\
+                ?3,1,'Active',?4,?5,?6,?7)",
         )?
         .execute(params![
             g.id.as_str(),

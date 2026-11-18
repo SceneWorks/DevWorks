@@ -1,7 +1,8 @@
 //! The append-only event log and its capability-gated view.
 use super::*;
 
-pub(crate) const EVENT_COLUMNS: &str = "seq,id,actor_id,project_id,root_id,operation_id,aggregate_kind,aggregate_id,aggregate_revision,kind,created_at,payload_json";
+pub(crate) const EVENT_COLUMNS: &str = "seq,id,actor_id,project_id,root_id,operation_id,aggregate_kind,\
+    aggregate_id,aggregate_revision,kind,created_at,payload_json";
 
 pub(crate) fn event_row(r: &Row<'_>) -> rusqlite::Result<[Option<String>; 12]> {
     let mut out: [Option<String>; 12] = Default::default();
@@ -191,8 +192,11 @@ pub(super) fn append_event(conn: &Connection, now: i64, e: NewEvent) -> Result<i
             id: e.id.0.as_str().to_owned(),
         });
     }
-    db(stmt(conn,
-        "INSERT INTO events(id,actor_id,project_id,root_id,operation_id,aggregate_kind,aggregate_id,aggregate_revision,kind,created_at,payload_json) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)",
+    db(stmt(
+        conn,
+        "INSERT INTO events(id,actor_id,project_id,root_id,operation_id,\
+            aggregate_kind,aggregate_id,aggregate_revision,kind,created_at,\
+            payload_json) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)",
     )?
     .execute(params![
         e.id.0.as_str(),

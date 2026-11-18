@@ -19,7 +19,12 @@ use std::sync::Arc;
 /// Provenance kind of the exact context sent with a compaction request.
 pub(crate) const INPUT_KIND: &str = "ProviderCompactionInput";
 
-const REQUEST: &str = "Host notice: Your context is nearly full and will be compacted. Write a summary that replaces the conversation so far in your working context; the full transcript stays stored. Keep the current requirements, the plan and where it stands, every direction from people, unresolved decisions and questions, and the evidence and artifact, operation and work IDs you still need. Reply with the summary only.";
+const REQUEST: &str = "Host notice: Your context is nearly full and will be compacted. Write a \
+    summary that replaces the conversation so far in your working context; \
+    the full transcript stays stored. Keep the current requirements, the \
+    plan and where it stands, every direction from people, unresolved \
+    decisions and questions, and the evidence and artifact, operation and \
+    work IDs you still need. Reply with the summary only.";
 
 /// Starts the text block that carries a compaction summary in a compacted context. The block
 /// names its epoch, so two compacted contexts with the same summary are distinct requests.

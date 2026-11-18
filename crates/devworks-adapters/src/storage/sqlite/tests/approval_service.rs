@@ -105,7 +105,13 @@ impl Fx {
     }
     fn command(&self, ctx: &InvocationContext, op: &str, mut body: Value) -> DomainDecision {
         body["kind"] = json!(op);
-        let frame = json!({"protocol":"1.0-draft.1","mode":"Command","schemaRevision":3,"requestKey":format!("key-{}",self.n.fetch_add(1,Ordering::SeqCst)),"body":body});
+        let frame = json!({
+            "protocol": "1.0-draft.1",
+            "mode": "Command",
+            "schemaRevision": 3,
+            "requestKey": format!("key-{}", self.n.fetch_add(1, Ordering::SeqCst)),
+            "body": body
+        });
         match self
             .cases
             .command(&self.gateway(), ctx, op, frame.to_string().as_bytes())
@@ -167,10 +173,22 @@ fn settings_decision_requires_exact_host_human_witness_and_persists_reviewed_sna
     let p = f.stage();
     let inspected = proposal(f.query("approvals.inspect", json!({"proposalId":p.id})));
     assert!(inspected.reviewed_source.is_some());
-    let input = json!({"proposalId":p.id,"expectedRevision":"1","contentDigest":p.body["contentDigest"],"decision":"Approve","rationale":"Reviewed the exact change"});
-    assert!(
-        matches!(f.command(&f.ctx("user"),"approvals.record_human_decision",input.clone()),DomainDecision::Refused{fault}if fault.code==DomainErrorCode::PermissionDenied)
-    );
+    let input = json!({
+        "proposalId": p.id,
+        "expectedRevision": "1",
+        "contentDigest": p.body["contentDigest"],
+        "decision": "Approve",
+        "rationale": "Reviewed the exact change"
+    });
+    assert!(matches!(
+        f.command(
+            &f.ctx("user"),
+            "approvals.record_human_decision",
+            input.clone(),
+        ),
+        DomainDecision::Refused { fault }
+            if fault.code == DomainErrorCode::PermissionDenied
+    ));
     let typed = serde_json::from_value(input.clone()).unwrap();
     let bound = HostIngress::new(&f.s)
         .human_decision_context(&f.ctx("user"), &typed)
@@ -404,7 +422,20 @@ fn list_has_no_more_when_the_rows_equal_the_limit() {
 #[test]
 fn large_typed_plan_inspection_uses_frozen_snapshot_and_list_stays_compact_across_restart() {
     let f = Fx::new();
-    let plan = json!({"content":{"artifactId":"artifact","versionId":"version","sha256":"a".repeat(64),"byteLength":"1","mediaType":"text/markdown"},"goals":vec!["x".repeat(30000);20],"requirements":[],"acceptance":[],"acceptanceTests":[],"repositoryIds":[]});
+    let plan = json!({
+        "content": {
+            "artifactId": "artifact",
+            "versionId": "version",
+            "sha256": "a".repeat(64),
+            "byteLength": "1",
+            "mediaType": "text/markdown"
+        },
+        "goals": vec!["x".repeat(30000); 20],
+        "requirements": [],
+        "acceptance": [],
+        "acceptanceTests": [],
+        "repositoryIds": []
+    });
     let typed: devworks_core::protocol::records::PlanDraft =
         serde_json::from_value(plan.clone()).unwrap();
     let digest = devworks_core::services::work::plan_digest(&typed);
@@ -594,7 +625,24 @@ fn saved_project_archive_preserves_workspace_agent_scope_and_replays_exact_recei
         devworks_core::services::approvals::requests::decode("projects.archive", 1, &input, true)
             .unwrap();
     let digest = decoded.fingerprint.as_str().to_owned();
-    let DomainDecision::Applied{result}=f.command(&agent,"approvals.propose",json!({"scope":{"kind":"Project","projectId":"project"},"operationKind":"projects.archive","target":{"id":"project","revision":"1"},"contentDigest":digest,"summary":"caller text is not authoritative","payload":{"kind":"SavedOperation","schemaRevision":"1","input":input}}))else{panic!("stage archive failed")};
+    let DomainDecision::Applied { result } = f.command(
+        &agent,
+        "approvals.propose",
+        json!({
+            "scope": {"kind": "Project", "projectId": "project"},
+            "operationKind": "projects.archive",
+            "target": {"id": "project", "revision": "1"},
+            "contentDigest": digest,
+            "summary": "caller text is not authoritative",
+            "payload": {
+                "kind": "SavedOperation",
+                "schemaRevision": "1",
+                "input": input
+            }
+        }),
+    ) else {
+        panic!("stage archive failed")
+    };
     let p = proposal(result);
     assert_ne!(p.summary.0, "caller text is not authoritative");
     let decision = json!({"proposalId":p.id,"expectedRevision":"1","contentDigest":digest,"decision":"Approve","rationale":"Archive this exact project"});

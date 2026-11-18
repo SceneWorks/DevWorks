@@ -21,7 +21,8 @@ fn lost(kind: &'static str, id: &Id) -> StorageError {
 // ---------------------------------------------------------------------------------------------
 // Resources
 
-const RESOURCE_COLUMNS: &str = "id,name,canonical_identity,scope,project_id,physical,capacity,labels_json,revision,fence_seq,queue_seq,created_at,updated_at";
+const RESOURCE_COLUMNS: &str = "id,name,canonical_identity,scope,project_id,physical,capacity,\
+    labels_json,revision,fence_seq,queue_seq,created_at,updated_at";
 type ResourceRaw = (
     String,
     String,
@@ -103,14 +104,17 @@ fn resources(
     let rows = match filter {
         ResourceFilter::All => {
             let mut s = db(conn.prepare_cached(&format!(
-                "SELECT {RESOURCE_COLUMNS} FROM resources WHERE name<>'' AND canonical_identity>?1 ORDER BY canonical_identity LIMIT ?2"
+                "SELECT {RESOURCE_COLUMNS} FROM resources WHERE name<>'' AND \
+                    canonical_identity>?1 ORDER BY canonical_identity LIMIT ?2"
             )))?;
             db(db(s.query_map(params![after, n], resource_row))?
                 .collect::<rusqlite::Result<Vec<_>>>())?
         }
         ResourceFilter::Project(p) => {
             let mut s = db(conn.prepare_cached(&format!(
-                "SELECT {RESOURCE_COLUMNS} FROM resources WHERE name<>'' AND (scope='machine' OR project_id=?1) AND canonical_identity>?2 ORDER BY canonical_identity LIMIT ?3"
+                "SELECT {RESOURCE_COLUMNS} FROM resources WHERE name<>'' AND \
+                    (scope='machine' OR project_id=?1) AND canonical_identity>?2 ORDER BY \
+                    canonical_identity LIMIT ?3"
             )))?;
             db(
                 db(s.query_map(params![p.0.as_str(), after, n], resource_row))?
@@ -124,7 +128,10 @@ fn resources(
 // ---------------------------------------------------------------------------------------------
 // Leases
 
-const LEASE_COLUMNS: &str = "id,resource_id,state,end_reason,owner_id,holder_key,session_id,project_id,root_id,assignment_id,boot_id,purpose,priority,units,lease_ms,queue_seq,fence,requested_at,granted_at,renewed_at,expires_at,ended_at,unreachable_since,revision";
+const LEASE_COLUMNS: &str = "id,resource_id,state,end_reason,owner_id,holder_key,session_id,\
+    project_id,root_id,assignment_id,boot_id,purpose,priority,units,\
+    lease_ms,queue_seq,fence,requested_at,granted_at,renewed_at,expires_at,\
+    ended_at,unreachable_since,revision";
 struct LeaseRaw {
     text: [Option<String>; 12],
     num: [i64; 7],
@@ -301,7 +308,9 @@ fn check_lease(l: &StoredLease) -> Result<(), StorageError> {
 // ---------------------------------------------------------------------------------------------
 // Owned processes
 
-const PROCESS_COLUMNS: &str = "id,boot_id,state,pid,birth,process_group,platform,program,argv_sha256,operation_id,lease_id,actor_id,session_id,project_id,root_id,assignment_id,exit_code,detail,created_at,updated_at,revision";
+const PROCESS_COLUMNS: &str = "id,boot_id,state,pid,birth,process_group,platform,program,argv_sha256,\
+    operation_id,lease_id,actor_id,session_id,project_id,root_id,\
+    assignment_id,exit_code,detail,created_at,updated_at,revision";
 type ProcessRaw = (Vec<Option<String>>, [Option<i64>; 4], [i64; 3]);
 fn process_row(r: &Row<'_>) -> rusqlite::Result<ProcessRaw> {
     let text = [0, 1, 2, 4, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 17]
@@ -374,7 +383,9 @@ fn processes<P: rusqlite::Params>(
 }
 const UNSETTLED: &str = "state NOT IN ('Reaped','Failed')";
 
-const CONTAINER_COLUMNS: &str = "id,engine,state,image,actor_id,owner_kind,session_id,project_id,root_id,assignment_id,create_operation_id,last_operation_id,resource_lease_ids,detail,revision,created_at,updated_at";
+const CONTAINER_COLUMNS: &str = "id,engine,state,image,actor_id,owner_kind,session_id,project_id,root_id,\
+    assignment_id,create_operation_id,last_operation_id,resource_lease_ids,\
+    detail,revision,created_at,updated_at";
 #[allow(clippy::type_complexity)] // Fixed SQLite column tuple, decoded once into StoredContainer.
 type ContainerColumns = (
     String,
@@ -514,7 +525,8 @@ macro_rules! resource_reads {
                 let n = page_limit(n)?;
                 leases(
                     self.conn,
-                    "resource_id=?1 AND state IN ('Held','Releasing','Uncertain') AND fence>?2 ORDER BY fence LIMIT ?3",
+                    "resource_id=?1 AND state IN ('Held','Releasing','Uncertain') AND \
+                        fence>?2 ORDER BY fence LIMIT ?3",
                     params![resource.as_str(), after, n],
                 )
             }
@@ -528,7 +540,8 @@ macro_rules! resource_reads {
                 let (p, q) = after.map_or((i64::MAX, 0), |a| (a.priority, a.queue_seq));
                 leases(
                     self.conn,
-                    "resource_id=?1 AND state='Waiting' AND (priority<?2 OR (priority=?2 AND queue_seq>?3)) ORDER BY priority DESC,queue_seq LIMIT ?4",
+                    "resource_id=?1 AND state='Waiting' AND (priority<?2 OR (priority=?2 AND \
+                        queue_seq>?3)) ORDER BY priority DESC,queue_seq LIMIT ?4",
                     params![resource.as_str(), p, q, n],
                 )
             }
@@ -585,7 +598,8 @@ macro_rules! resource_reads {
             fn container_lease_in_use(&self, lease: &Id) -> Result<bool, StorageError> {
                 db(db(self.conn.prepare_cached(
                     "SELECT 1 FROM owned_containers c, json_each(c.resource_lease_ids) j \
-                     WHERE j.value=?1 AND c.state IN ('Creating','Created','Starting','Running','Stopping','Uncertain') LIMIT 1",
+                        WHERE j.value=?1 AND c.state IN ('Creating','Created','Starting',\
+                        'Running','Stopping','Uncertain') LIMIT 1",
                 ))?.exists([lease.as_str()]))
             }
             fn containers(&self, filter: &ContainerFilter, after: Option<&Id>, n: u16) -> Result<Vec<StoredContainer>, StorageError> {
@@ -593,10 +607,12 @@ macro_rules! resource_reads {
                 let after = after.map_or("", Id::as_str);
                 match filter {
                     ContainerFilter::AgentWorkMayRun => containers(self.conn,
-                        "owner_kind='Agent' AND state IN ('Creating','Starting','Running','Stopping','Uncertain') AND id>?1 ORDER BY id LIMIT ?2",
+                        "owner_kind='Agent' AND state IN ('Creating','Starting','Running',\
+                            'Stopping','Uncertain') AND id>?1 ORDER BY id LIMIT ?2",
                         params![after, n]),
                     ContainerFilter::AgentWorkMayRunForRoot(root) => containers(self.conn,
-                        "owner_kind='Agent' AND state IN ('Creating','Starting','Running','Stopping','Uncertain') AND root_id=?1 AND id>?2 ORDER BY id LIMIT ?3",
+                        "owner_kind='Agent' AND state IN ('Creating','Starting','Running',\
+                            'Stopping','Uncertain') AND root_id=?1 AND id>?2 ORDER BY id LIMIT ?3",
                         params![root.0.as_str(), after, n]),
                     ContainerFilter::Project(project) => containers(self.conn,
                         "project_id=?1 AND id>?2 ORDER BY id LIMIT ?3",
@@ -654,7 +670,9 @@ impl ResourceRepository for Unit<'_> {
         }
         let labels = serde_json::to_string(&r.labels).map_err(|e| invalid(e.to_string()))?;
         db(db(self.conn.prepare_cached(
-            "INSERT INTO resources(id,canonical_identity,capacity,revision,name,scope,project_id,physical,labels_json,fence_seq,queue_seq,created_at,updated_at) VALUES(?1,?2,?3,1,?4,?5,?6,?7,?8,0,0,?9,?9)",
+            "INSERT INTO resources(id,canonical_identity,capacity,revision,name,\
+                scope,project_id,physical,labels_json,fence_seq,queue_seq,created_at,\
+                updated_at) VALUES(?1,?2,?3,1,?4,?5,?6,?7,?8,0,0,?9,?9)",
         ))?
         .execute(params![
             r.id.as_str(),
@@ -699,15 +717,23 @@ impl ResourceRepository for Unit<'_> {
         }
         let labels = serde_json::to_string(labels).map_err(|e| invalid(e.to_string()))?;
         db(db(self.conn.prepare_cached(
-            "UPDATE resources SET capacity=?1,labels_json=?2,physical=?3,revision=revision+1,updated_at=?4 WHERE id=?5",
+            "UPDATE resources SET capacity=?1,labels_json=?2,physical=?3,\
+                revision=revision+1,updated_at=?4 WHERE id=?5",
         ))?
-        .execute(params![capacity, labels, i64::from(physical), self.now, id.as_str()]))?;
+        .execute(params![
+            capacity,
+            labels,
+            i64::from(physical),
+            self.now,
+            id.as_str()
+        ]))?;
         self.resource(id)?
             .ok_or_else(|| corrupt("resource vanished inside its transaction"))
     }
     fn next_fence(&mut self, resource: &Id) -> Result<i64, StorageError> {
         db(db(self.conn.prepare_cached(
-            "UPDATE resources SET fence_seq=fence_seq+1 WHERE id=?1 AND name<>'' RETURNING fence_seq",
+            "UPDATE resources SET fence_seq=fence_seq+1 WHERE id=?1 AND name<>'' \
+                RETURNING fence_seq",
         ))?
         .query_row([resource.as_str()], |r| r.get(0))
         .optional())?
@@ -718,7 +744,8 @@ impl ResourceRepository for Unit<'_> {
     }
     fn next_queue_ticket(&mut self, resource: &Id) -> Result<i64, StorageError> {
         db(db(self.conn.prepare_cached(
-            "UPDATE resources SET queue_seq=queue_seq+1 WHERE id=?1 AND name<>'' RETURNING queue_seq",
+            "UPDATE resources SET queue_seq=queue_seq+1 WHERE id=?1 AND name<>'' \
+                RETURNING queue_seq",
         ))?
         .query_row([resource.as_str()], |r| r.get(0))
         .optional())?
@@ -749,7 +776,12 @@ impl ResourceRepository for Unit<'_> {
         write_lease(
             self.conn,
             l,
-            "INSERT INTO resource_leases(id,resource_id,state,end_reason,owner_id,holder_key,session_id,project_id,root_id,assignment_id,boot_id,purpose,priority,units,lease_ms,queue_seq,fence,requested_at,granted_at,renewed_at,expires_at,ended_at,unreachable_since,revision) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21,?22,?23,?24)",
+            "INSERT INTO resource_leases(id,resource_id,state,end_reason,owner_id,\
+                holder_key,session_id,project_id,root_id,assignment_id,boot_id,purpose,\
+                priority,units,lease_ms,queue_seq,fence,requested_at,granted_at,\
+                renewed_at,expires_at,ended_at,unreachable_since,revision) VALUES(?1,?2,\
+                ?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21,\
+                ?22,?23,?24)",
             None,
         )
     }
@@ -775,7 +807,12 @@ impl ResourceRepository for Unit<'_> {
         write_lease(
             self.conn,
             l,
-            "UPDATE resource_leases SET resource_id=?2,state=?3,end_reason=?4,owner_id=?5,holder_key=?6,session_id=?7,project_id=?8,root_id=?9,assignment_id=?10,boot_id=?11,purpose=?12,priority=?13,units=?14,lease_ms=?15,queue_seq=?16,fence=?17,requested_at=?18,granted_at=?19,renewed_at=?20,expires_at=?21,ended_at=?22,unreachable_since=?23,revision=?24 WHERE id=?1 AND revision=?25",
+            "UPDATE resource_leases SET resource_id=?2,state=?3,end_reason=?4,\
+                owner_id=?5,holder_key=?6,session_id=?7,project_id=?8,root_id=?9,\
+                assignment_id=?10,boot_id=?11,purpose=?12,priority=?13,units=?14,\
+                lease_ms=?15,queue_seq=?16,fence=?17,requested_at=?18,granted_at=?19,\
+                renewed_at=?20,expires_at=?21,ended_at=?22,unreachable_since=?23,\
+                revision=?24 WHERE id=?1 AND revision=?25",
             Some(expected),
         )
     }
@@ -798,7 +835,10 @@ impl ResourceRepository for Unit<'_> {
             });
         }
         db(db(self.conn.prepare_cached(
-            "INSERT INTO owned_processes(id,boot_id,state,platform,program,argv_sha256,operation_id,lease_id,actor_id,session_id,project_id,root_id,assignment_id,created_at,updated_at,revision) VALUES(?1,?2,'Launching',?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?13,1)",
+            "INSERT INTO owned_processes(id,boot_id,state,platform,program,\
+                argv_sha256,operation_id,lease_id,actor_id,session_id,project_id,\
+                root_id,assignment_id,created_at,updated_at,revision) VALUES(?1,?2,\
+                'Launching',?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?13,1)",
         ))?
         .execute(params![
             p.id.as_str(),
@@ -841,7 +881,9 @@ impl ResourceRepository for Unit<'_> {
             return Err(invalid("process detail must be at most 1024 bytes"));
         }
         let n = db(db(self.conn.prepare_cached(
-            "UPDATE owned_processes SET state=?2,pid=?3,birth=?4,process_group=?5,exit_code=?6,detail=?7,updated_at=?8,revision=?9 WHERE id=?1 AND revision=?10",
+            "UPDATE owned_processes SET state=?2,pid=?3,birth=?4,process_group=?5,\
+                exit_code=?6,detail=?7,updated_at=?8,revision=?9 WHERE id=?1 AND \
+                revision=?10",
         ))?
         .execute(params![
             p.id.as_str(),
@@ -895,12 +937,26 @@ impl ResourceRepository for Unit<'_> {
             });
         }
         db(db(self.conn.prepare_cached(
-            "INSERT INTO owned_containers(id,engine,state,image,actor_id,owner_kind,session_id,project_id,root_id,assignment_id,create_operation_id,last_operation_id,resource_lease_ids,detail,revision,created_at,updated_at) VALUES(?1,?2,'Creating',?3,?4,?5,?6,?7,?8,?9,?10,?10,?11,NULL,1,?12,?12)",
-        ))?.execute(params![
-            c.id.as_str(), c.engine, c.image, c.actor.0.as_str(), c.owner_kind,
-            c.session_id.as_ref().map(Id::as_str), c.project_id.0.as_str(),
-            c.root_id.as_ref().map(|x| x.0.as_str()), c.assignment_id.as_ref().map(|x| x.0.as_str()),
-            c.create_operation_id.0.as_str(), serde_json::to_string(&c.resource_lease_ids).map_err(|error| invalid(error.to_string()))?, self.now,
+            "INSERT INTO owned_containers(id,engine,state,image,actor_id,owner_kind,\
+                session_id,project_id,root_id,assignment_id,create_operation_id,\
+                last_operation_id,resource_lease_ids,detail,revision,created_at,\
+                updated_at) VALUES(?1,?2,'Creating',?3,?4,?5,?6,?7,?8,?9,?10,?10,?11,\
+                NULL,1,?12,?12)",
+        ))?
+        .execute(params![
+            c.id.as_str(),
+            c.engine,
+            c.image,
+            c.actor.0.as_str(),
+            c.owner_kind,
+            c.session_id.as_ref().map(Id::as_str),
+            c.project_id.0.as_str(),
+            c.root_id.as_ref().map(|x| x.0.as_str()),
+            c.assignment_id.as_ref().map(|x| x.0.as_str()),
+            c.create_operation_id.0.as_str(),
+            serde_json::to_string(&c.resource_lease_ids)
+                .map_err(|error| invalid(error.to_string()))?,
+            self.now,
         ]))?;
         Ok(())
     }
@@ -934,8 +990,21 @@ impl ResourceRepository for Unit<'_> {
             ));
         }
         let n = db(db(self.conn.prepare_cached(
-            "UPDATE owned_containers SET state=?2,last_operation_id=?3,detail=?4,revision=?5,updated_at=?6,resource_lease_ids=?8 WHERE id=?1 AND revision=?7",
-        ))?.execute(params![c.id.as_str(), c.phase.as_str(), c.last_operation_id.0.as_str(), c.detail, c.revision, self.now, expected, serde_json::to_string(&c.resource_lease_ids).map_err(|error| invalid(error.to_string()))?]))?;
+            "UPDATE owned_containers SET state=?2,last_operation_id=?3,detail=?4,\
+                revision=?5,updated_at=?6,resource_lease_ids=?8 WHERE id=?1 AND \
+                revision=?7",
+        ))?
+        .execute(params![
+            c.id.as_str(),
+            c.phase.as_str(),
+            c.last_operation_id.0.as_str(),
+            c.detail,
+            c.revision,
+            self.now,
+            expected,
+            serde_json::to_string(&c.resource_lease_ids)
+                .map_err(|error| invalid(error.to_string()))?
+        ]))?;
         if n != 1 {
             return Err(lost("owned_container", &c.id));
         }

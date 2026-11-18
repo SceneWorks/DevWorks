@@ -26,9 +26,16 @@ pub(super) fn retain(
 ) -> Result<(), StorageError> {
     for reference in keepers {
         reference.check().map_err(|_| StorageError::ScopeDenied)?;
-        let actual: Option<(String,String,i64,String)> = db(conn.query_row(
-            "SELECT v.artifact_id,v.blob_digest,b.byte_count,v.media_type FROM artifact_versions v JOIN blobs b ON b.digest=v.blob_digest JOIN artifacts a ON a.id=v.artifact_id WHERE v.id=?1 AND v.deleted_at IS NULL AND a.state='Live'",
-            params![reference.version_id.as_str()], |r| Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?))).optional())?;
+        let actual: Option<(String, String, i64, String)> = db(conn
+            .query_row(
+                "SELECT v.artifact_id,v.blob_digest,b.byte_count,v.media_type FROM \
+                artifact_versions v JOIN blobs b ON b.digest=v.blob_digest JOIN \
+                artifacts a ON a.id=v.artifact_id WHERE v.id=?1 AND v.deleted_at IS \
+                NULL AND a.state='Live'",
+                params![reference.version_id.as_str()],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+            )
+            .optional())?;
         if actual
             != Some((
                 reference.artifact_id.as_str().into(),
@@ -82,7 +89,13 @@ pub(in crate::storage::sqlite) fn file_references(
             PurgeFileOwner::Preview { version_id } => (None, Some(version_id.as_str())),
             _ => continue,
         };
-        let mut stmt=db(conn.prepare("SELECT v.id,v.artifact_id,v.blob_digest,b.byte_count,v.media_type FROM artifact_versions v JOIN artifacts a ON a.id=v.artifact_id JOIN blobs b ON b.digest=v.blob_digest WHERE a.state='Live' AND v.deleted_at IS NULL AND ((?1 IS NOT NULL AND v.blob_digest=?1) OR (?2 IS NOT NULL AND v.id=?2)) ORDER BY v.id"))?;
+        let mut stmt = db(conn.prepare(
+            "SELECT v.id,v.artifact_id,v.blob_digest,b.byte_count,v.media_type FROM \
+            artifact_versions v JOIN artifacts a ON a.id=v.artifact_id JOIN blobs b \
+            ON b.digest=v.blob_digest WHERE a.state='Live' AND v.deleted_at IS NULL \
+            AND ((?1 IS NOT NULL AND v.blob_digest=?1) OR (?2 IS NOT NULL AND \
+            v.id=?2)) ORDER BY v.id",
+        ))?;
         let rows = db(stmt.query_map(params![digest, version], |r| {
             Ok((
                 r.get::<_, String>(0)?,
@@ -94,7 +107,14 @@ pub(in crate::storage::sqlite) fn file_references(
         }))?;
         for row in rows {
             let (v, a, d, b, m) = db(row)?;
-            let reference:ArtifactRef=serde_json::from_value(serde_json::json!({"artifactId":a,"versionId":v,"sha256":d,"byteLength":b.to_string(),"mediaType":m})).map_err(|_|StorageError::ScopeDenied)?;
+            let reference: ArtifactRef = serde_json::from_value(serde_json::json!({
+                "artifactId": a,
+                "versionId": v,
+                "sha256": d,
+                "byteLength": b.to_string(),
+                "mediaType": m
+            }))
+            .map_err(|_| StorageError::ScopeDenied)?;
             result.insert(v, reference);
         }
     }

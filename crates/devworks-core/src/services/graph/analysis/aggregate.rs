@@ -141,7 +141,15 @@ impl Aggregate {
                 hotspots.push(json!({"name":name,"qualifiedName":qualified,"fanIn":calls.to_string(),"reason":"High fan-in method"}));
             }
             if *types > 0 {
-                supertypes.push(json!({"name":name,"qualifiedName":qualified,"nodeKind":raw.node.kind,"subtypeCount":types.to_string(),"external":raw.node.kind=="ExternalSymbol" || qualified.starts_with("swift-external:") || yes(&props["scip_external"])}));
+                supertypes.push(json!({
+                    "name": name,
+                    "qualifiedName": qualified,
+                    "nodeKind": raw.node.kind,
+                    "subtypeCount": types.to_string(),
+                    "external": raw.node.kind == "ExternalSymbol"
+                        || qualified.starts_with("swift-external:")
+                        || yes(&props["scip_external"])
+                }));
             }
             if *refs > 0
                 && ["Package", "NuGetPackage"].contains(&raw.node.kind.as_str())
@@ -308,7 +316,18 @@ pub(super) fn rust_semantic(reader: &mut Reader<'_>, scope: &GraphScope) -> Resu
         if group["outcome"] == "semantic" {
             continue;
         }
-        let mut row = json!({"index":group["index"].as_u64().ok_or_else(||crate::services::kernel::Refusal::new(crate::protocol::DomainErrorCode::ViewUnavailable,"recorded_semantic_index",None))?.to_string(),"crates":group.get("crates").cloned().unwrap_or(json!([])),"outcome":group["outcome"]});
+        let mut row = json!({
+            "index": group["index"]
+                .as_u64()
+                .ok_or_else(|| crate::services::kernel::Refusal::new(
+                    crate::protocol::DomainErrorCode::ViewUnavailable,
+                    "recorded_semantic_index",
+                    None
+                ))?
+                .to_string(),
+            "crates": group.get("crates").cloned().unwrap_or(json!([])),
+            "outcome": group["outcome"]
+        });
         for name in ["failureCode", "detailCode"] {
             if let Some(value) = group.get(name).filter(|v| !v.is_null()) {
                 row[name] = value.clone();
@@ -316,7 +335,17 @@ pub(super) fn rust_semantic(reader: &mut Reader<'_>, scope: &GraphScope) -> Resu
         }
         fallback.push(row);
     }
-    let mut value = json!({"status":if fallback.is_empty(){"semantic"}else if fallback.len()==groups.len(){"fallback"}else{"partial"},"groupCount":groups.len().to_string(),"treeSitterGroups":fallback});
+    let mut value = json!({
+        "status": if fallback.is_empty() {
+            "semantic"
+        } else if fallback.len() == groups.len() {
+            "fallback"
+        } else {
+            "partial"
+        },
+        "groupCount": groups.len().to_string(),
+        "treeSitterGroups": fallback
+    });
     if let Some(manifest) = outcomes.get("manifest").filter(|v| !v.is_null()) {
         value["manifest"] = manifest.clone();
     }

@@ -674,8 +674,10 @@ fn only_cargo_configuration_naming_no_program_installs_without_scripts() {
         "[build]\ntarget = [\"x86_64-unknown-linux-gnu\", \"wasm32-unknown-unknown\"]\n",
         "[build]\nrustflags = [\"--cfg\", \"tokio_unstable\", \"-C\", \"target-cpu=native\"]\n",
         "[build]\nrustflags = \"-Dwarnings -Ctarget-feature=+crt-static --cfg=x\"\n",
-        "[build]\nrustflags = [\"--cfg\", \"feature=\\\"serde\\\"\", \"--cap-lints\", \"warn\", \
-             \"-D\", \"clippy::all\", \"--check-cfg\", \"cfg(tokio_unstable, values(\\\"x\\\"))\"]\n",
+        "[build]\nrustflags = [\"--cfg\", \"feature=\\\"serde\\\"\", \
+            \"--cap-lints\", \"warn\", \
+            \"-D\", \"clippy::all\", \"--check-cfg\", \"cfg(tokio_unstable, \
+            values(\\\"x\\\"))\"]\n",
         "[target.'cfg(target_os = \"linux\")']\nrustflags = [\"-W\", \"unused\"]\n",
         "[profile.release]\nlto = true\ncodegen-units = 1\n[term]\nverbose = true\n",
         "[patch.crates-io]\nfoo = { path = \"../foo\" }\n[cargo-new]\nvcs = \"none\"\n",
@@ -778,12 +780,17 @@ fn a_dependency_that_runs_repository_code_needs_install_scripts() {
     ];
     let write = |file: &str, text: &str| std::fs::write(root.join(file), text).expect(file);
     let safe_lock = "__metadata:\n  version: 8\n\n\"exec@npm:^0.2.0\":\n  version: 0.2.0\n  \
-             resolution: \"exec@npm:0.2.0\"\n  dependencies:\n    exec: ^1\n    \"@babel/core\": \"npm:^7\"\n\
-             \"lodash@patch:lodash@npm%3A4.17.21#./p.patch::version=4.17.21&hash=1&locator=app%40workspace%3A.\":\n  \
-             resolution: \"lodash@patch:lodash@npm%3A4.17.21#./p.patch::version=4.17.21&locator=app%40workspace%3A.\"\n  \
-             resolved \"https://registry.yarnpkg.com/@babel/core/-/core-7.0.0.tgz#abc\"\n  \
-             resolved \"https://npm.pkg.github.com/x/-/x-1.0.0.tgz\"\n  \
-             \"link:./local\"\n  \"file:packages/a\"\n";
+        resolution: \"exec@npm:0.2.0\"\n  dependencies:\n    exec: ^1\n    \
+        \"@babel/core\": \"npm:^7\"\n\
+        \"lodash@patch:lodash@npm%3A4.17.21#./p.patch::version=4.17.21&hash=1&lo\
+        cator=app%40workspace%3A.\":\n  \
+        resolution: \
+        \"lodash@patch:lodash@npm%3A4.17.21#./p.patch::version=4.17.21&locator=a\
+        pp%40workspace%3A.\"\n  \
+        resolved \"https://registry.yarnpkg.com/@babel/core/-/core-7.0.0.tgz#abc\
+        \"\n  \
+        resolved \"https://npm.pkg.github.com/x/-/x-1.0.0.tgz\"\n  \
+        \"link:./local\"\n  \"file:packages/a\"\n";
     write(
         "package.json",
         r#"{"name":"x","dependencies":{"lodash":"^4.17.21","a":"npm:b@^1","w":"workspace:*",
@@ -921,12 +928,14 @@ fn a_dependency_that_runs_repository_code_needs_install_scripts() {
         ),
         (
             "pnpm-lock.yaml",
-            "packages:\n  x@1.0.0:\n    resolution: {commit: abc, repo: https://example.invalid/r, type: git}\n",
+            "packages:\n  x@1.0.0:\n    resolution: {commit: abc, repo: \
+                https://example.invalid/r, type: git}\n",
         ),
         ("pnpm-lock.yaml", "    x:\n      version: link:../x\n"),
         (
             "package-lock.json",
-            "{\"packages\":{\"node_modules/x\":{\"resolved\":\"git+ssh://git@github.com/o/r.git#abc\"}}}",
+            "{\"packages\":{\"node_modules/x\":{\"resolved\":\"git+ssh://git@github.c\
+                om/o/r.git#abc\"}}}",
         ),
         (
             "package-lock.json",
@@ -1093,13 +1102,16 @@ fn lockfile_escapes_bare_paths_and_globs_are_checked() {
         "pnpm-lock.yaml",
         &[(
             "pnpm-lock.yaml",
-            "packages:\n  x@file:vendor/x:\n    resolution: {directory: vendor/x, type: directory}\n",
+            "packages:\n  x@file:vendor/x:\n    resolution: {directory: vendor/x, \
+                type: directory}\n",
         )],
     );
     // Sibling links resolve against the importer (pnpm) or workspace (Berry).
     let importers = |link: &str| {
         format!(
-            "importers:\n  .:\n    dependencies:\n      r:\n        version: link:./r\n  packages/a:\n    dependencies:\n      b:\n        specifier: workspace:*\n        version: {link}\n"
+            "importers:\n  .:\n    dependencies:\n      r:\n        version: \
+                link:./r\n  packages/a:\n    dependencies:\n      b:\n        \
+                specifier: workspace:*\n        version: {link}\n"
         )
     };
     allowed(
@@ -1129,7 +1141,9 @@ fn lockfile_escapes_bare_paths_and_globs_are_checked() {
         "yarn.lock",
         &[(
             "yarn.lock",
-            "\"b@portal:../b::locator=a%40workspace%3Apackages/a\":\n  resolution: \"b@portal:../b::locator=a%40workspace%3Apackages/a\"\n\n\"a@workspace:packages/a\":\n  dependencies:\n    b: portal:../b\n",
+            "\"b@portal:../b::locator=a%40workspace%3Apackages/a\":\n  resolution: \
+                \"b@portal:../b::locator=a%40workspace%3Apackages/a\"\n\n\"a@workspace:p\
+                ackages/a\":\n  dependencies:\n    b: portal:../b\n",
         )],
     );
     refused(
@@ -1148,7 +1162,8 @@ fn lockfile_escapes_bare_paths_and_globs_are_checked() {
         "pnpm-lock.yaml",
         &[(
             "pnpm-workspace.yaml",
-            "packages:\n  - packages/*\n  - '!**/test/**'\ncatalog:\n  a: ^1\noverrides:\n  b: npm:c@^1\n",
+            "packages:\n  - packages/*\n  - '!**/test/**'\ncatalog:\n  a: \
+                ^1\noverrides:\n  b: npm:c@^1\n",
         )],
     );
     for text in [

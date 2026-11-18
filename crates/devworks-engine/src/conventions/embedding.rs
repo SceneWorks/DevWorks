@@ -400,10 +400,17 @@ impl NativeEmbeddings {
             match future.as_mut().poll(&mut cx) {
                 Poll::Ready(result) => {
                     let invocation = result?;
+                    use devworks_core::services::usage::host::DriveOutcome;
                     match invocation.accounting {
-                        devworks_core::services::usage::host::DriveOutcome::CancelledBeforeDispatch => return Err(EmbeddingFailure::Cancelled),
-                        devworks_core::services::usage::host::DriveOutcome::Refused(_) => return Err(unavailable("Current inference preflight refused dispatch.")),
-                        _=>{},
+                        DriveOutcome::CancelledBeforeDispatch => {
+                            return Err(EmbeddingFailure::Cancelled);
+                        }
+                        DriveOutcome::Refused(_) => {
+                            return Err(unavailable(
+                                "Current inference preflight refused dispatch.",
+                            ));
+                        }
+                        _ => {}
                     }
                     break;
                 }

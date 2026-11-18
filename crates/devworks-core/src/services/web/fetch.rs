@@ -532,9 +532,28 @@ impl WebService {
             addrs,
             &request,
             &mut |ip, result| match result {
-                Ok(status) => trail.decide(json!({"step": "connect", "url": shown, "address": ip.to_string(), "verdict": "answered", "status": status})),
-                Err(f @ NetFault::NotSent { .. }) if !f.timed_out() => trail.decide(json!({"step": "connect", "url": shown, "address": ip.to_string(), "verdict": "failed", "reason": f.reason()})),
-                Err(f) => trail.decide(json!({"step": "connect", "url": shown, "address": ip.to_string(), "verdict": "failed", "sent": f.dispatched(), "reason": f.reason()})),
+                Ok(status) => trail.decide(json!({
+                    "step": "connect",
+                    "url": shown,
+                    "address": ip.to_string(),
+                    "verdict": "answered",
+                    "status": status
+                })),
+                Err(f @ NetFault::NotSent { .. }) if !f.timed_out() => trail.decide(json!({
+                    "step": "connect",
+                    "url": shown,
+                    "address": ip.to_string(),
+                    "verdict": "failed",
+                    "reason": f.reason()
+                })),
+                Err(f) => trail.decide(json!({
+                    "step": "connect",
+                    "url": shown,
+                    "address": ip.to_string(),
+                    "verdict": "failed",
+                    "sent": f.dispatched(),
+                    "reason": f.reason()
+                })),
             },
         )
         .map_err(|f| Stop::net(&f, shown))
@@ -558,7 +577,12 @@ impl WebService {
             && !enc.trim().eq_ignore_ascii_case("identity")
             && !enc.trim().is_empty()
         {
-            trail.decide(json!({"step": "content", "url": shown, "verdict": "refused", "contentEncoding": enc}));
+            trail.decide(json!({
+                "step": "content",
+                "url": shown,
+                "verdict": "refused",
+                "contentEncoding": enc
+            }));
             return Err(Stop::new(
                 DomainErrorCode::UnsupportedTarget,
                 "web_content_encoding",
@@ -655,7 +679,15 @@ impl WebService {
                 }
             },
         };
-        trail.decide(json!({"step": "content", "url": shown, "verdict": "kept", "status": status, "mediaType": media.essence, "bytes": body.len(), "truncated": truncated}));
+        trail.decide(json!({
+            "step": "content",
+            "url": shown,
+            "verdict": "kept",
+            "status": status,
+            "mediaType": media.essence,
+            "bytes": body.len(),
+            "truncated": truncated
+        }));
         Ok(Fetched {
             final_url: url,
             status,

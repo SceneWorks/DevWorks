@@ -235,7 +235,11 @@ pub(super) fn selection(project: &ProjectId) -> Result<Selection, StorageError> 
     predicates.insert(
         "instruction_revision_lessons".into(),
         Value::String(
-            "lesson_id IN (SELECT id FROM knowledge_claims WHERE project_id=?1) OR (instruction_id, revision) IN (SELECT instruction_id, revision FROM instruction_revisions WHERE confined_project_id=?1 OR instruction_id IN (SELECT id FROM instructions WHERE project_id=?1 OR confined_project_id=?1))"
+            "lesson_id IN (SELECT id FROM knowledge_claims WHERE project_id=?1) OR \
+                (instruction_id, revision) IN (SELECT instruction_id, revision FROM \
+                instruction_revisions WHERE confined_project_id=?1 OR instruction_id IN \
+                (SELECT id FROM instructions WHERE project_id=?1 OR \
+                confined_project_id=?1))"
                 .into(),
         ),
     );
@@ -342,12 +346,24 @@ mod tests {
             c.execute("INSERT INTO projects(id,title,lifecycle,revision,scope_revision,created_at) VALUES(?1,'Fixture','Deleted',1,1,0)",[p]).unwrap();
         }
         let item = |id: &str, confined: Option<&str>| {
-            c.execute("INSERT INTO instructions(id,kind,name,scope_key,project_id,origin,root_path,source_path,latest_revision,active_revision,enabled,present,version,created_at,updated_at,confined_project_id) VALUES(?1,'Skill',?1,'workspace',NULL,'Harness','/r',?2,2,NULL,1,0,1,0,0,?3)",
-                rusqlite::params![id, format!("/r/{id}"), confined]).unwrap();
+            c.execute(
+                "INSERT INTO instructions(id,kind,name,scope_key,project_id,origin,\
+                root_path,source_path,latest_revision,active_revision,enabled,present,\
+                version,created_at,updated_at,confined_project_id) VALUES(?1,'Skill',?1,\
+                'workspace',NULL,'Harness','/r',?2,2,NULL,1,0,1,0,0,?3)",
+                rusqlite::params![id, format!("/r/{id}"), confined],
+            )
+            .unwrap();
         };
         let revision = |item: &str, n: i64, confined: Option<&str>| {
-            c.execute("INSERT INTO instruction_revisions(instruction_id,revision,content_json,content_digest,state,author,origin_json,resources_json,applicability_json,created_at,confined_project_id) VALUES(?1,?2,'{}',?3,'Draft','agent','{}','[]','[]',0,?4)",
-                rusqlite::params![item, n, "a".repeat(64), confined]).unwrap();
+            c.execute(
+                "INSERT INTO instruction_revisions(instruction_id,revision,content_json,\
+                content_digest,state,author,origin_json,resources_json,\
+                applicability_json,created_at,confined_project_id) VALUES(?1,?2,'{}',?3,\
+                'Draft','agent','{}','[]','[]',0,?4)",
+                rusqlite::params![item, n, "a".repeat(64), confined],
+            )
+            .unwrap();
         };
         // An item a project-A agent created, with its confined draft and a later unconfined one.
         item("made-by-a", Some("purge-a"));
@@ -390,10 +406,22 @@ mod tests {
             ("skill-ws", None),
         ] {
             let scope = project.map_or("workspace".to_owned(), |p| format!("project:{p}"));
-            c.execute("INSERT INTO instructions(id,kind,name,scope_key,project_id,origin,root_path,source_path,latest_revision,active_revision,enabled,present,version,created_at,updated_at,confined_project_id) VALUES(?1,'Skill','deploy',?2,?3,'Harness','/r',?4,1,1,1,1,1,0,0,NULL)",
-                rusqlite::params![id, scope, project, format!("/r/{id}")]).unwrap();
-            c.execute("INSERT INTO instruction_revisions(instruction_id,revision,content_json,content_digest,state,author,origin_json,resources_json,applicability_json,created_at) VALUES(?1,1,'{}',?2,'Approved','user','{}','[]','[]',0)",
-                rusqlite::params![id, "a".repeat(64)]).unwrap();
+            c.execute(
+                "INSERT INTO instructions(id,kind,name,scope_key,project_id,origin,\
+                root_path,source_path,latest_revision,active_revision,enabled,present,\
+                version,created_at,updated_at,confined_project_id) VALUES(?1,'Skill',\
+                'deploy',?2,?3,'Harness','/r',?4,1,1,1,1,1,0,0,NULL)",
+                rusqlite::params![id, scope, project, format!("/r/{id}")],
+            )
+            .unwrap();
+            c.execute(
+                "INSERT INTO instruction_revisions(instruction_id,revision,content_json,\
+                content_digest,state,author,origin_json,resources_json,\
+                applicability_json,created_at) VALUES(?1,1,'{}',?2,'Approved','user',\
+                '{}','[]','[]',0)",
+                rusqlite::params![id, "a".repeat(64)],
+            )
+            .unwrap();
         }
         let p = ProjectId(Id::new("purge-a").unwrap());
         let selected = read_snapshot(&store, &ReadOptions::default(), |r| {
@@ -425,10 +453,22 @@ mod tests {
             ("lesson-b", Some("purge-b")),
         ] {
             let scope = project.map_or("workspace".to_owned(), |p| format!("project:{p}"));
-            c.execute("INSERT INTO knowledge_entities(id,scope_key,project_id,revision,label,entity_type,aliases_json,canonical_key,author_id,created_at,updated_at) VALUES(?1,?2,?3,1,?1,'topic','[]',?1,'human-a',1,1)",
-                rusqlite::params![format!("entity-{lesson}"), scope, project]).unwrap();
-            c.execute("INSERT INTO knowledge_claims(id,scope_key,project_id,revision,kind,entry_kind,lifecycle,subject_id,predicate,author_id,created_at,updated_at,body_json,rule_state,lesson_source) VALUES(?1,?2,?3,1,'Lesson','Lesson','Active',?4,'lesson','human-a',1,1,'{}','Candidate','Prompt')",
-                rusqlite::params![lesson, scope, project, format!("entity-{lesson}")]).unwrap();
+            c.execute(
+                "INSERT INTO knowledge_entities(id,scope_key,project_id,revision,label,\
+                entity_type,aliases_json,canonical_key,author_id,created_at,updated_at) \
+                VALUES(?1,?2,?3,1,?1,'topic','[]',?1,'human-a',1,1)",
+                rusqlite::params![format!("entity-{lesson}"), scope, project],
+            )
+            .unwrap();
+            c.execute(
+                "INSERT INTO knowledge_claims(id,scope_key,project_id,revision,kind,\
+                entry_kind,lifecycle,subject_id,predicate,author_id,created_at,\
+                updated_at,body_json,rule_state,lesson_source) VALUES(?1,?2,?3,1,\
+                'Lesson','Lesson','Active',?4,'lesson','human-a',1,1,'{}','Candidate',\
+                'Prompt')",
+                rusqlite::params![lesson, scope, project, format!("entity-{lesson}")],
+            )
+            .unwrap();
         }
         // A workspace skill (its second revision a draft confined to project A), a skill of each project.
         for (id, project) in [
@@ -437,14 +477,26 @@ mod tests {
             ("skill-b", Some("purge-b")),
         ] {
             let scope = project.map_or("workspace".to_owned(), |p| format!("project:{p}"));
-            c.execute("INSERT INTO instructions(id,kind,name,scope_key,project_id,origin,root_path,source_path,latest_revision,active_revision,enabled,present,version,created_at,updated_at,confined_project_id) VALUES(?1,'Skill',?1,?2,?3,'Harness','/r',?4,2,1,1,1,1,0,0,NULL)",
-                rusqlite::params![id, scope, project, format!("/r/{id}")]).unwrap();
+            c.execute(
+                "INSERT INTO instructions(id,kind,name,scope_key,project_id,origin,\
+                root_path,source_path,latest_revision,active_revision,enabled,present,\
+                version,created_at,updated_at,confined_project_id) VALUES(?1,'Skill',?1,\
+                ?2,?3,'Harness','/r',?4,2,1,1,1,1,0,0,NULL)",
+                rusqlite::params![id, scope, project, format!("/r/{id}")],
+            )
+            .unwrap();
             for (revision, confined, state) in [
                 (1, None, "Approved"),
                 (2, (id == "skill-ws").then_some("purge-a"), "Draft"),
             ] {
-                c.execute("INSERT INTO instruction_revisions(instruction_id,revision,content_json,content_digest,state,author,origin_json,resources_json,applicability_json,created_at,confined_project_id) VALUES(?1,?2,'{}',?3,?4,'human-a','{}','[]','[]',0,?5)",
-                    rusqlite::params![id, revision, "a".repeat(64), state, confined]).unwrap();
+                c.execute(
+                    "INSERT INTO instruction_revisions(instruction_id,revision,content_json,\
+                    content_digest,state,author,origin_json,resources_json,\
+                    applicability_json,created_at,confined_project_id) VALUES(?1,?2,'{}',?3,\
+                    ?4,'human-a','{}','[]','[]',0,?5)",
+                    rusqlite::params![id, revision, "a".repeat(64), state, confined],
+                )
+                .unwrap();
             }
         }
         let links = [
@@ -536,7 +588,12 @@ mod tests {
         let c = h.raw();
         c.execute("INSERT INTO projects(id,title,lifecycle,revision,scope_revision,created_at) VALUES('purge-a','Fixture','Deleted',1,1,0)",[]).unwrap();
         let key = "a".repeat(64);
-        c.execute("INSERT INTO allocation_replays(project_id,key,intent_digest,result_json) VALUES('purge-a',?1,?2,'{}')",rusqlite::params![key,"b".repeat(64)]).unwrap();
+        c.execute(
+            "INSERT INTO allocation_replays(project_id,key,intent_digest,\
+            result_json) VALUES('purge-a',?1,?2,'{}')",
+            rusqlite::params![key, "b".repeat(64)],
+        )
+        .unwrap();
         let p = ProjectId(Id::new("purge-a").unwrap());
         let selected = read_snapshot(&store, &ReadOptions::default(), |r| {
             r.projects().purge_candidates(&p)

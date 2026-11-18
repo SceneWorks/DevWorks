@@ -83,7 +83,11 @@ pub(super) fn stage_operations(
                     && fingerprint == *canonical_fingerprint
             });
         if let Some((payload, _)) = payload.filter(|_| valid) {
-            let mut versions = db(conn.prepare("SELECT blob_digest,source_json FROM artifact_versions WHERE json_type(source_json,'$.operationId')='text' AND json_extract(source_json,'$.operationId')=?1"))?;
+            let mut versions = db(conn.prepare(
+                "SELECT blob_digest,source_json FROM artifact_versions WHERE \
+                json_type(source_json,'$.operationId')='text' AND \
+                json_extract(source_json,'$.operationId')=?1",
+            ))?;
             let mut versions = db(versions.query([&id]))?;
             while let Some(version) = db(versions.next())? {
                 let digest: String = db(version.get(0))?;
@@ -290,7 +294,13 @@ pub(super) fn managed_files(
             let Ok(witness) = serde_json::from_value::<PurgeFileWitness>(raw.clone()) else {
                 continue;
             };
-            let owner = matches!((&*kind,&witness.owner),("DiagnosticExport",PurgeFileOwner::DiagnosticExport{file_id})|("ClientPaste",PurgeFileOwner::ClientPaste{file_id})|("ClientStaging",PurgeFileOwner::ClientStaging{file_id}) if file_id.as_str()==id);
+            let owner = matches!(
+                (&*kind, &witness.owner),
+                ("DiagnosticExport", PurgeFileOwner::DiagnosticExport { file_id })
+                | ("ClientPaste", PurgeFileOwner::ClientPaste { file_id })
+                | ("ClientStaging", PurgeFileOwner::ClientStaging { file_id })
+                    if file_id.as_str() == id
+            );
             let normal = std::path::Path::new(&path);
             if !owner
                 || witness.project_id != *project

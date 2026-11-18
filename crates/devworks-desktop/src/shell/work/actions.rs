@@ -214,7 +214,12 @@ impl WorkCtl<'_, '_> {
                         continue;
                     };
                     let Some(digest) = pending.plan_digest.as_ref() else {
-                        self.work.message=Some((Tone::Attention,"Refresh the feature to read its captured pending plan token before requesting approval.".into()));
+                        self.work.message = Some((
+                            Tone::Attention,
+                            "Refresh the feature to read its captured pending plan token before \
+                            requesting approval."
+                                .into(),
+                        ));
                         continue;
                     };
                     let input = approval_request(&w, &pending, digest);

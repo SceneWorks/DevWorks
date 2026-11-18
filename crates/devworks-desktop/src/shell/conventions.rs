@@ -73,11 +73,69 @@ impl Screen for ConventionsScreen {
                 Scope::Workspace => "",
             };
             {
-                let draft = |d: &crate::conventions_screen::Draft| json!({"title":d.title,"slug":d.slug,"base":d.base,"anchor":d.anchor,"markdown":*d.markdown,"raw":*d.raw,"parent":d.parent,"path":d.parent_path,"applicability":d.applicability,"editorState":format!("{d:?}")});
+                let draft = |d: &crate::conventions_screen::Draft| {
+                    json!({
+                        "title": d.title,
+                        "slug": d.slug,
+                        "base": d.base,
+                        "anchor": d.anchor,
+                        "markdown": *d.markdown,
+                        "raw": *d.raw,
+                        "parent": d.parent,
+                        "path": d.parent_path,
+                        "applicability": d.applicability,
+                        "editorState": format!("{d:?}")
+                    })
+                };
                 put(
                     p,
                     "conventions",
-                    json!({"new":state.new_draft.as_ref().map(draft),"drafts":state.drafts.iter().map(|(id,d)|(id,draft(d))).collect::<BTreeMap<_,_>>(),"query":state.text,"slug":state.slug_input,"path":state.path_input,"upload":state.upload.as_ref().map(|d|json!({"base":d.base,"path":d.path.to_string_lossy(),"name":d.name,"mediaType":d.media_type})),"resources":state.resource_drafts.iter().map(|(k,d)|(k,json!({"record":d.resource,"base":d.base,"name":d.name,"mediaType":d.media_type,"retired":d.retired,"replacement":d.replacement.as_ref().map(|p|p.to_string_lossy())}))).collect::<BTreeMap<_,_>>(),"moves":state.move_drafts.iter().map(|(k,d)|(k,json!({"base":d.base,"anchor":d.anchor,"scope":d.scope,"parent":d.parent,"order":d.order}))).collect::<BTreeMap<_,_>>()}),
+                    json!({
+                        "new": state.new_draft.as_ref().map(draft),
+                        "drafts": state
+                            .drafts
+                            .iter()
+                            .map(|(id, d)| (id, draft(d)))
+                            .collect::<BTreeMap<_, _>>(),
+                        "query": state.text,
+                        "slug": state.slug_input,
+                        "path": state.path_input,
+                        "upload": state.upload.as_ref().map(|d| json!({
+                            "base": d.base,
+                            "path": d.path.to_string_lossy(),
+                            "name": d.name,
+                            "mediaType": d.media_type
+                        })),
+                        "resources": state
+                            .resource_drafts
+                            .iter()
+                            .map(|(k, d)| (
+                                k,
+                                json!({
+                                    "record": d.resource,
+                                    "base": d.base,
+                                    "name": d.name,
+                                    "mediaType": d.media_type,
+                                    "retired": d.retired,
+                                    "replacement": d.replacement.as_ref().map(|p| p.to_string_lossy())
+                                })
+                            ))
+                            .collect::<BTreeMap<_, _>>(),
+                        "moves": state
+                            .move_drafts
+                            .iter()
+                            .map(|(k, d)| (
+                                k,
+                                json!({
+                                    "base": d.base,
+                                    "anchor": d.anchor,
+                                    "scope": d.scope,
+                                    "parent": d.parent,
+                                    "order": d.order
+                                })
+                            ))
+                            .collect::<BTreeMap<_, _>>()
+                    }),
                 );
             }
         }
@@ -497,7 +555,8 @@ impl ConventionsCtl<'_, '_> {
                         match applied {
                             Applied::Stale => return None,
                             Applied::Fenced => {
-                                s.list.fail("The convention listing changed while paging. Refresh for a current listing; drafts are kept.");
+                                s.list.fail("The convention listing changed while paging. Refresh for a current \
+                                    listing; drafts are kept.");
                                 return None;
                             }
                             _ => {}
@@ -550,7 +609,8 @@ impl ConventionsCtl<'_, '_> {
                 state.list.apply(
                     generation,
                     Err(format!(
-                        "The search result is not confirmed: {error}. Confirm the original search before retrying."
+                        "The search result is not confirmed: {error}. Confirm the original \
+                            search before retrying."
                     )),
                 );
             }
@@ -571,7 +631,8 @@ impl ConventionsCtl<'_, '_> {
                                 .revision
                                 .is_some_and(|revision| revision != view.convention.revision.get())
                         {
-                            s.reader.error=Some("The source revision changed while reading. Refresh explicitly before combining source passages.".into());
+                            s.reader.error=Some("The source revision changed while reading. Refresh explicitly before \
+                                combining source passages.".into());
                             return None;
                         }
                         target.id = view.convention.id.as_str().into();
@@ -595,7 +656,8 @@ impl ConventionsCtl<'_, '_> {
                     Ok(page) => match s.versions.apply(generation, Ok(page)) {
                         Applied::Stale => return None,
                         Applied::Fenced => {
-                            s.notice=Some((Tone::Attention,"The version listing changed. Load versions again without discarding your draft.".into()));
+                            s.notice=Some((Tone::Attention,"The version listing changed. Load versions again without discarding \
+                                your draft.".into()));
                             return None;
                         }
                         _ => {}
@@ -675,7 +737,8 @@ impl ConventionsCtl<'_, '_> {
                     Ok(page) => match d.choices.apply(generation, Ok(page)) {
                         Applied::Stale => return None,
                         Applied::Fenced => {
-                            s.notice=Some((Tone::Attention,"The destination listing changed. Load parents again; this move draft is kept.".into()));
+                            s.notice=Some((Tone::Attention,"The destination listing changed. Load parents again; this move draft is \
+                                kept.".into()));
                             return None;
                         }
                         _ => {}
@@ -752,7 +815,8 @@ impl ConventionsCtl<'_, '_> {
                             draft.busy = false;
                             draft.error = Some(
                                 if matches!(status.phase, ConventionOperationPhase::Completed) {
-                                    "The import completed. Its published record is available in the refreshed listing; this draft is retained for comparison.".into()
+                                    "The import completed. Its published record is available in the \
+                                        refreshed listing; this draft is retained for comparison.".into()
                                 } else {
                                     "The operation did not complete. This draft is retained.".into()
                                 },
@@ -813,7 +877,13 @@ impl ConventionsCtl<'_, '_> {
             },
             (ConventionsSlot::ConventionArtifact(key, token), Reply::Command(outcome)) => {
                 if is_unknown(&outcome) {
-                    self.fail_convention_pipeline(&key,&token,"The source save outcome is unknown. Confirm outcomes reuses the exact original save request; the draft is kept.".into());
+                    self.fail_convention_pipeline(
+                        &key,
+                        &token,
+                        "The source save outcome is unknown. Confirm outcomes reuses the exact \
+                        original save request; the draft is kept."
+                            .into(),
+                    );
                     if let Some(scope) = self.convention_scope(&key) {
                         let identity = self
                             .conventions
@@ -1062,7 +1132,12 @@ impl ConventionsCtl<'_, '_> {
                     operation,
                     "Accepted; current operation status has not been read yet.".into(),
                 );
-                state.notice=Some((Tone::Good,"The convention operation was accepted. Its owning operation determines completion.".into()));
+                state.notice = Some((
+                    Tone::Good,
+                    "The convention operation was accepted. Its owning operation determines \
+                    completion."
+                        .into(),
+                ));
             }
             Ok(change) => {
                 let record = match change {
@@ -1152,7 +1227,17 @@ impl ConventionsCtl<'_, '_> {
                     Tone::Good,
                     record.as_ref().map_or_else(
                         || {
-                            if submission.as_ref().is_some_and(|c|c.operation=="conventions.retire"&&c.target.is_none()) {"Cancellation request recorded. Inspect the operation for its final state.".into()} else {"Convention change confirmed. Refresh to inspect the current records.".into()}
+                            let retired = submission
+                                .as_ref()
+                                .is_some_and(|c| c.operation == "conventions.retire" && c.target.is_none());
+                            if retired {
+                                "Cancellation request recorded. Inspect the operation for its final \
+                                 state."
+                                    .into()
+                            } else {
+                                "Convention change confirmed. Refresh to inspect the current records."
+                                    .into()
+                            }
                         },
                         |r| {
                             format!(
@@ -1625,8 +1710,12 @@ impl ConventionsCtl<'_, '_> {
     fn import_convention_path(&mut self, path: std::path::PathBuf) {
         use crate::conventions_transfer::{Pipeline, StagedFile};
         if self.conventions.state().is_some_and(|s| s.busy) {
-            self.conventions.state_mut().notice = Some((Tone::Attention,
-                "The current convention change must be confirmed before importing another manifest.".into()));
+            self.conventions.state_mut().notice = Some((
+                Tone::Attention,
+                "The current convention change must be confirmed before importing \
+                    another manifest."
+                    .into(),
+            ));
             return;
         }
         let scope = self.conventions.scope.clone();
@@ -1870,7 +1959,8 @@ impl ConventionsCtl<'_, '_> {
             crate::conventions_transfer::resource_edit(&scope, &base, content, change)
         }) else {
             self.convention_notice(
-                "The resource name or type is outside the convention owner's limits; nothing was changed."
+                "The resource name or type is outside the convention owner's limits; \
+                    nothing was changed."
                     .into(),
             );
             return;
@@ -1996,7 +2086,20 @@ impl ConventionsScreen {
             .filter(|(_, s)| !s.operation_ids.is_empty())
             .map(|(scope, s)| serde_json::json!({"scope":scope,"ids":s.operation_ids}))
             .collect();
-        let searches:Vec<_>=self.states.iter().filter(|(_,s)|s.search_recovery.is_some()||s.last_search.is_some()).map(|(scope,s)|serde_json::json!({"scope":scope,"recovery":s.search_recovery,"last":s.last_search,"preparation":s.search_preparation,"earlier":s.previous_searches})).collect();
+        let searches: Vec<_> = self
+            .states
+            .iter()
+            .filter(|(_, s)| s.search_recovery.is_some() || s.last_search.is_some())
+            .map(|(scope, s)| {
+                serde_json::json!({
+                    "scope": scope,
+                    "recovery": s.search_recovery,
+                    "last": s.last_search,
+                    "preparation": s.search_preparation,
+                    "earlier": s.previous_searches
+                })
+            })
+            .collect();
         if self.pipelines.is_empty()
             && self.submissions.is_empty()
             && operations.is_empty()

@@ -1064,9 +1064,13 @@ fn journaled_first_discovery_selects_read_only_hints() {
             .collect::<Vec<_>>(),
         ["lookup"]
     );
-    assert!(
-        matches!(capabilities(&h, &store, &cases, &server.id, 2), DomainQueryReply::Result { result: OperationResult::McpCapabilities { value }, .. } if value.items.0.len() == 2)
-    );
+    assert!(matches!(
+        capabilities(&h, &store, &cases, &server.id, 2),
+        DomainQueryReply::Result {
+            result: OperationResult::McpCapabilities { value },
+            ..
+        } if value.items.0.len() == 2
+    ));
 }
 
 #[test]

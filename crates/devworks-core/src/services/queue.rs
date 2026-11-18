@@ -11,12 +11,17 @@
 //! a pause. Each command presents the delivery's current `revision` (a stale one is a durable
 //! `RevisionConflict`) and its fencing generation (`expectedFence`; a stale one is `LeaseLost`).
 //!
-//! | Resolution | Accepted from | Effect |
-//! | --- | --- | --- |
-//! | `Retry` | `Failed`, `Reconciling` | Ready now with a fresh retry budget; the failure cause stays visible until it completes. |
-//! | `Reconcile` | `Reconciling` | Re-evaluates the operation journal; once the outcome is established the delivery is redelivered so its handler records it idempotently. |
-//! | `AcknowledgePoison` | `Failed` | `Dismissed` (terminal); its partition continues. |
-//! | `CancelBeforeDispatch` | `Ready`, `Reconciling` | `Cancelled`; an undispatched operation (`IntentRecorded`, `RetryPending`, `Preflighted`) becomes `CancelledBeforeDispatch`. Refused with `Conflict` once the operation has an outcome (`ObservedComplete`, `Failed`, `CancelledBeforeDispatch`): an established outcome is recorded by redelivery, never cancelled away. |
+//! - `Retry`, accepted from `Failed`, `Reconciling`: Ready now with a fresh retry budget; the
+//!   failure cause stays visible until it completes.
+//! - `Reconcile`, accepted from `Reconciling`: Re-evaluates the operation journal; once the
+//!   outcome is established the delivery is redelivered so its handler records it idempotently.
+//! - `AcknowledgePoison`, accepted from `Failed`: `Dismissed` (terminal); its partition
+//!   continues.
+//! - `CancelBeforeDispatch`, accepted from `Ready`, `Reconciling`: `Cancelled`; an undispatched
+//!   operation (`IntentRecorded`, `RetryPending`, `Preflighted`) becomes
+//!   `CancelledBeforeDispatch`. Refused with `Conflict` once the operation has an outcome
+//!   (`ObservedComplete`, `Failed`, `CancelledBeforeDispatch`): an established outcome is
+//!   recorded by redelivery, never cancelled away.
 //!
 //! While the linked operation is possibly dispatched (`Dispatching`, `OutcomeUnknown`,
 //! `NeedsInput`) every resolution is refused with `OutcomeUnknown` and the delivery stays held:

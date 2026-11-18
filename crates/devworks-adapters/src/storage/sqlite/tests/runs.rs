@@ -136,15 +136,30 @@ fn migration_11_adds_run_controls_to_a_version_10_store() {
     let c = h.raw();
     c.execute_batch(
         "INSERT INTO actors VALUES('agent-a','agent','Agent');
-         INSERT INTO projects VALUES('project-a','A','Active',1,1,1);
-         INSERT INTO work_items VALUES('root-a','project-a','feature',NULL,NULL,NULL,'A',1,0,1,1,1,'{}');
-         INSERT INTO work_items VALUES('task-a','project-a','task','root-a',NULL,NULL,'T',1,0,1,1,1,'{}');
-         INSERT INTO work_items VALUES('task-b','project-a','task','root-a',NULL,NULL,'U',1,0,1,1,1,'{}');
-         INSERT INTO root_controls(root_id,desired_state,revision,current_generation) VALUES('root-a','Paused',3,2);
-         INSERT INTO blockers(id,root_id,cause,origin_id,origin_revision,state,revision,clearance_json) VALUES('hold-a','root-a','HumanPause','root-a',3,'Active',1,'{}');
-         INSERT INTO conversations VALUES('conv-a','root-a',0);
-         INSERT INTO sessions(id,conversation_id,agent_id,root_id,context_epoch,revision) VALUES('s-a','conv-a','agent-a','root-a',0,1);
-         INSERT INTO sessions(id,conversation_id,agent_id,root_id,context_epoch,revision) VALUES('s-b','conv-a','agent-a','root-a',0,1);",
+         INSERT \
+            INTO projects VALUES('project-a','A','Active',1,1,1);
+         INSERT \
+            INTO work_items VALUES('root-a','project-a','feature',NULL,NULL,NULL,\
+            'A',1,0,1,1,1,'{}');
+         INSERT INTO work_items VALUES('task-a',\
+            'project-a','task','root-a',NULL,NULL,'T',1,0,1,1,1,'{}');
+         \
+            INSERT INTO work_items VALUES('task-b','project-a','task','root-a',NULL,\
+            NULL,'U',1,0,1,1,1,'{}');
+         INSERT INTO root_controls(root_id,\
+            desired_state,revision,current_generation) VALUES('root-a','Paused',3,\
+            2);
+         INSERT INTO blockers(id,root_id,cause,origin_id,\
+            origin_revision,state,revision,clearance_json) VALUES('hold-a','root-a',\
+            'HumanPause','root-a',3,'Active',1,'{}');
+         INSERT INTO \
+            conversations VALUES('conv-a','root-a',0);
+         INSERT INTO \
+            sessions(id,conversation_id,agent_id,root_id,context_epoch,revision) \
+            VALUES('s-a','conv-a','agent-a','root-a',0,1);
+         INSERT INTO \
+            sessions(id,conversation_id,agent_id,root_id,context_epoch,revision) \
+            VALUES('s-b','conv-a','agent-a','root-a',0,1);",
     )
     .unwrap();
     drop(c);

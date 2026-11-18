@@ -131,8 +131,11 @@ impl CommandLedger for Unit<'_> {
             "schemaRevision": receipt.schema_revision.0,
             "receipt": receipt.receipt,
         });
-        db(stmt(self.conn,
-            "INSERT INTO command_receipts(actor_id,scope_key,idempotency_key,command_kind,payload_digest,operation_id,result_json,created_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?8)",
+        db(stmt(
+            self.conn,
+            "INSERT INTO command_receipts(actor_id,scope_key,idempotency_key,\
+                command_kind,payload_digest,operation_id,result_json,created_at) \
+                VALUES(?1,?2,?3,?4,?5,?6,?7,?8)",
         )?
         .execute(params![
             identity.actor_id().0.as_str(),
@@ -188,8 +191,11 @@ impl CommandLedger for Unit<'_> {
                 id: reply.version_id.as_str().to_owned(),
             });
         }
-        db(stmt(self.conn,
-            "INSERT INTO receipt_replies(actor_id,scope_key,idempotency_key,command_id,artifact_id,version_id,schema_json,published_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?8)",
+        db(stmt(
+            self.conn,
+            "INSERT INTO receipt_replies(actor_id,scope_key,idempotency_key,\
+                command_id,artifact_id,version_id,schema_json,published_at) VALUES(?1,\
+                ?2,?3,?4,?5,?6,?7,?8)",
         )?
         .execute(params![
             identity.actor_id().0.as_str(),

@@ -181,7 +181,20 @@ impl SchemaService {
                     }
                     let owner = lease::owner(&ctx);
                     let scope_digest = lease::scope_digest(&scope);
-                    let intent=crate::fingerprint::sha256_hex(json!({"owner":owner,"store":ctx.store_id(),"restore":ctx.restore_epoch(),"scope":scope_digest,"source":source.connection.id,"configuration":source.configuration_revision,"view":view.id,"digest":view.digest}).to_string().as_bytes());
+                    let intent = crate::fingerprint::sha256_hex(
+                        json!({
+                            "owner": owner,
+                            "store": ctx.store_id(),
+                            "restore": ctx.restore_epoch(),
+                            "scope": scope_digest,
+                            "source": source.connection.id,
+                            "configuration": source.configuration_revision,
+                            "view": view.id,
+                            "digest": view.digest
+                        })
+                        .to_string()
+                        .as_bytes(),
+                    );
                     let pin = if let Some(pin) = tx.schemas().schema_active_pin(&intent, now)? {
                         pin
                     } else {

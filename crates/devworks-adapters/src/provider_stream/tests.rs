@@ -116,7 +116,13 @@ fn http_incremental_chunked_head_status_and_secret_placement() {
     let (sent, captured) = mpsc::channel();
     let server = Server::new(move |mut socket| {
         sent.send(request_bytes(&mut socket)).unwrap();
-        socket.write_all(b"HTTP/1.1 429 Too Many Requests\r\nTransfer-Encoding: chunked\r\nContent-Type: text/event-stream\r\nRetry-After: 2\r\nX-Request-Id: private-id\r\nSet-Cookie: never-store=secret\r\n\r\n").unwrap();
+        socket
+            .write_all(
+                b"HTTP/1.1 429 Too Many Requests\r\nTransfer-Encoding: \
+            chunked\r\nContent-Type: text/event-stream\r\nRetry-After: \
+            2\r\nX-Request-Id: private-id\r\nSet-Cookie: never-store=secret\r\n\r\n",
+            )
+            .unwrap();
         for bytes in [
             b"2\r\nda\r\n".as_slice(),
             b"6\r\nta: x\n\r\n",

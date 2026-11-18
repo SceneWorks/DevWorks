@@ -20,16 +20,36 @@ fn invalid(message: &str) -> StorageError {
     StorageError::InvalidRecord(message.into())
 }
 fn semantic(topic: &StoredHelpTopic) -> Value {
-    json!({"id":topic.id,"version":topic.version,"title":topic.title,"digest":topic.content_digest,
-        "availability":topic.availability,"reason":topic.reason,"provenance":topic.provenance,
-        "operations":topic.related_operations,"screens":topic.screen_ids,"source":topic.source_kind,
-        "package":topic.package_id,"manifest":topic.manifest_digest,"characters":topic.character_count})
+    json!({
+        "id": topic.id,
+        "version": topic.version,
+        "title": topic.title,
+        "digest": topic.content_digest,
+        "availability": topic.availability,
+        "reason": topic.reason,
+        "provenance": topic.provenance,
+        "operations": topic.related_operations,
+        "screens": topic.screen_ids,
+        "source": topic.source_kind,
+        "package": topic.package_id,
+        "manifest": topic.manifest_digest,
+        "characters": topic.character_count
+    })
 }
 fn completion(operation: &OperationId, head: &StoredHelpHead, no_change: bool) -> Value {
-    json!({"result":OperationResult::HelpGenerateCapabilityDocs {value:OperationRef {
-        operation_id:operation.clone(),state:OperationState::ObservedComplete}},
-        "helpRevision":head.revision,"registryRevision":head.registry_revision,"generationId":head.generation_id,
-        "noChange":no_change,"message":"Capability documentation regenerated."})
+    json!({
+        "result": OperationResult::HelpGenerateCapabilityDocs {
+            value: OperationRef {
+                operation_id: operation.clone(),
+                state: OperationState::ObservedComplete
+            }
+        },
+        "helpRevision": head.revision,
+        "registryRevision": head.registry_revision,
+        "generationId": head.generation_id,
+        "noChange": no_change,
+        "message": "Capability documentation regenerated."
+    })
 }
 fn recorded_completion(operation: &OperationRecord) -> Option<Value> {
     operation
@@ -340,10 +360,23 @@ impl HelpService {
                 .content
                 .as_ref()
                 .ok_or_else(|| invalid("Help projection missing"))?;
-            let result=self.artifacts.stage_host_reader(self.store.as_ref(),crate::services::artifacts::host::HostStream {
-                reader:body.reader(),digest:&content.digest,byte_count:content.byte_count,
-                source:json!({"kind":crate::services::artifacts::derivation::DerivedKind::HelpTopic.as_str(),"generationId":job.generation,"topicId":document.topic.id,"helpIndexDigest":content.commitment().map_err(|_|invalid("Help index commitment"))?}),
-            },&mut||control.stopped());
+            let result = self.artifacts.stage_host_reader(
+                self.store.as_ref(),
+                crate::services::artifacts::host::HostStream {
+                    reader: body.reader(),
+                    digest: &content.digest,
+                    byte_count: content.byte_count,
+                    source: json!({
+                        "kind": crate::services::artifacts::derivation::DerivedKind::HelpTopic.as_str(),
+                        "generationId": job.generation,
+                        "topicId": document.topic.id,
+                        "helpIndexDigest": content
+                            .commitment()
+                            .map_err(|_| invalid("Help index commitment"))?
+                    }),
+                },
+                &mut || control.stopped(),
+            );
             Some(
                 control
                     .finish(result)?
@@ -367,8 +400,18 @@ impl HelpService {
                 return Ok((existing, false));
             }
             if let Some(staged) = artifact.as_ref() {
-                let version=service.artifacts.commit_host_bytes(tx,staged,&document.topic.title,"text/markdown",
-                    json!({"kind":crate::services::artifacts::derivation::DerivedKind::HelpTopic.as_str(),"generationId":source.generation,"topicId":document.topic.id,"operationId":op.id}))?;
+                let version = service.artifacts.commit_host_bytes(
+                    tx,
+                    staged,
+                    &document.topic.title,
+                    "text/markdown",
+                    json!({
+                        "kind": crate::services::artifacts::derivation::DerivedKind::HelpTopic.as_str(),
+                        "generationId": source.generation,
+                        "topicId": document.topic.id,
+                        "operationId": op.id
+                    }),
+                )?;
                 document.topic.content_ref = Some(
                     serde_json::to_value(crate::services::artifacts::version_ref(&version))
                         .map_err(|e| invalid(&e.to_string()))?,
@@ -505,7 +548,9 @@ impl HelpService {
                     match self.old_body(&old.generation_id, &old.id) {
                         Ok(body) => metadata::replace_auto(&body, &generated),
                         Err(StorageError::ViewUnavailable) => format!(
-                            "> The previous generated document source is unavailable. Automatic content was rebuilt; any manual material in that source could not be recovered.\n\n{generated}\n\n"
+                            "> The previous generated document source is unavailable. Automatic \
+                                content was rebuilt; any manual material in that source could not be \
+                                recovered.\n\n{generated}\n\n"
                         ),
                         Err(error) => return Err(error),
                     }
@@ -619,9 +664,35 @@ impl HelpService {
                     Err(_) => Err("Unavailable"),
                 };
                 match prepared {
-                    Ok(document)=>stage(document)?,
-                    Err(availability)=>stage(PreparedDocument {document:StoredHelpDocument {topic:StoredHelpTopic {
-                        generation_id:job.generation.clone(),id,version:version.version.clone(),title:format!("{} guide",package.package_id),content_digest:String::new(),content_ref:None,availability:availability.into(),reason:Some("The exact installed guide could not be verified. Repair or reinstall this package version, then regenerate Help.".into()),provenance:Value::Null,related_operations:operations,screen_ids:Vec::new(),source_kind:"Package".into(),package_id:Some(package_id.clone()),manifest_digest:Some(manifest.clone()),character_count:0,topic_revision:1},content:None},body:None})?,
+                    Ok(document) => stage(document)?,
+                    Err(availability) => {
+                        let unverified = "The exact installed guide could not be verified. Repair or reinstall \
+                        this package version, then regenerate Help.";
+                        stage(PreparedDocument {
+                            document: StoredHelpDocument {
+                                topic: StoredHelpTopic {
+                                    generation_id: job.generation.clone(),
+                                    id,
+                                    version: version.version.clone(),
+                                    title: format!("{} guide", package.package_id),
+                                    content_digest: String::new(),
+                                    content_ref: None,
+                                    availability: availability.into(),
+                                    reason: Some(unverified.into()),
+                                    provenance: Value::Null,
+                                    related_operations: operations,
+                                    screen_ids: Vec::new(),
+                                    source_kind: "Package".into(),
+                                    package_id: Some(package_id.clone()),
+                                    manifest_digest: Some(manifest.clone()),
+                                    character_count: 0,
+                                    topic_revision: 1,
+                                },
+                                content: None,
+                            },
+                            body: None,
+                        })?
+                    }
                 }
                 for contribution in inspection.contributions {
                     let id = Id::new(format!(
@@ -634,8 +705,26 @@ impl HelpService {
                     let descriptor = contribution.descriptor.map(|value| {
                         serde_json::to_string_pretty(&value).expect("verified descriptor")
                     });
-                    let body=format!("# Installed contribution contract\n\nPackage: `{}` version `{}`. Manifest digest: `{}`. Contribution: `{}` (`{}`). Contract digest: `{}`.\n\nThis is a verified installed declaration, not proof of activation or executable registration. Current package prerequisites, enablement, runtime availability and brokered authority still apply. Documentation never grants permissions.\n\n{}\n",package.package_id,version.version,manifest,contribution.id,contribution.kind,contribution.contract_digest,
-                        descriptor.map_or("The original descriptor was not retained in this older inspection. Argument and result contract details are unknown.".into(),|descriptor|format!("```json\n{descriptor}\n```")));
+                    let body = format!(
+                        "# Installed contribution contract\n\nPackage: `{}` version `{}`. \
+                        Manifest digest: `{}`. Contribution: `{}` (`{}`). Contract digest: \
+                        `{}`.\n\nThis is a verified installed declaration, not proof of \
+                        activation or executable registration. Current package prerequisites, \
+                        enablement, runtime availability and brokered authority still apply. \
+                        Documentation never grants permissions.\n\n{}\n",
+                        package.package_id,
+                        version.version,
+                        manifest,
+                        contribution.id,
+                        contribution.kind,
+                        contribution.contract_digest,
+                        descriptor.map_or(
+                            "The original descriptor was not retained in this older inspection. \
+                            Argument and result contract details are unknown."
+                                .into(),
+                            |descriptor| format!("```json\n{descriptor}\n```")
+                        )
+                    );
                     let provenance = HelpProvenance::Package {
                         package_id: package_id.clone(),
                         package_version: BoundedText(version.version.clone()),
@@ -697,12 +786,26 @@ impl HelpService {
             tx.operations().observe(
                 &operation.id,
                 attempt.attempt_no,
-                json!({"helpPublication":result}),
+                json!({"helpPublication": result}),
             )?;
             let event = EventId(tx.new_id(crate::ports::IdKind::Event));
-            tx.history().append(NewEvent{id:event,actor:job.actor,project_id:None,root_id:None,operation_id:Some(operation.id.clone()),
-                aggregate_kind:"help".into(),aggregate_id:"catalog".into(),aggregate_revision:head.revision,kind:"HelpGenerationPublished".into(),
-                payload:json!({"helpRevision":head.revision,"registryRevision":head.registry_revision,"topicCount":count,"noChange":head.revision==old.revision})})?;
+            tx.history().append(NewEvent {
+                id: event,
+                actor: job.actor,
+                project_id: None,
+                root_id: None,
+                operation_id: Some(operation.id.clone()),
+                aggregate_kind: "help".into(),
+                aggregate_id: "catalog".into(),
+                aggregate_revision: head.revision,
+                kind: "HelpGenerationPublished".into(),
+                payload: json!({
+                    "helpRevision": head.revision,
+                    "registryRevision": head.registry_revision,
+                    "topicCount": count,
+                    "noChange": head.revision == old.revision
+                }),
+            })?;
             Ok(result)
         })
     }
@@ -733,13 +836,33 @@ impl HelpService {
         if let Some(result) = recorded_completion(&current) {
             return EffectOutcome::Completed(result);
         }
-        match self.build(operation,&job) {
-            Ok(result)=>EffectOutcome::Completed(result),
-            Err(StorageError::Cancelled) if self.is_stopped()=>EffectOutcome::Unknown("Help generation stopped before publication; its immutable draft is recoverable.".into()),
-            Err(StorageError::Cancelled)=>EffectOutcome::Failed("Help generation was cancelled before catalog publication.".into()),
-            Err(StorageError::CommitUnknown | StorageError::Busy | StorageError::StorageUnavailable { .. }) => EffectOutcome::Unknown("Help publication needs durable journal reconciliation; the original draft and operation are retained.".into()),
-            Err(StorageError::LeaseLost {..})=>EffectOutcome::Unknown("Help generation owner changed; no catalog was published.".into()),
-            Err(_)=>EffectOutcome::Failed("Help generation source, authority or local publication became unavailable; no partial catalog was published.".into()),
+        match self.build(operation, &job) {
+            Ok(result) => EffectOutcome::Completed(result),
+            Err(StorageError::Cancelled) if self.is_stopped() => EffectOutcome::Unknown(
+                "Help generation stopped before publication; its immutable draft is \
+                recoverable."
+                    .into(),
+            ),
+            Err(StorageError::Cancelled) => EffectOutcome::Failed(
+                "Help generation was cancelled before catalog publication.".into(),
+            ),
+            Err(
+                StorageError::CommitUnknown
+                | StorageError::Busy
+                | StorageError::StorageUnavailable { .. },
+            ) => EffectOutcome::Unknown(
+                "Help publication needs durable journal reconciliation; the original \
+                draft and operation are retained."
+                    .into(),
+            ),
+            Err(StorageError::LeaseLost { .. }) => EffectOutcome::Unknown(
+                "Help generation owner changed; no catalog was published.".into(),
+            ),
+            Err(_) => EffectOutcome::Failed(
+                "Help generation source, authority or local publication became \
+                unavailable; no partial catalog was published."
+                    .into(),
+            ),
         }
     }
     pub fn observe(&self, operation: &OperationRecord) -> EffectOutcome {

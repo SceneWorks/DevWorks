@@ -957,15 +957,17 @@ fn credential_values_are_refused_and_never_stored() {
         )],
     );
     assert_eq!(target_kind(refused(&d)), "credential_value");
-    let leaked: i64 = f
-        .h
-        .raw()
-        .query_row(
-            "SELECT (SELECT count(*) FROM configuration_revisions WHERE instr(body_json,?1)>0)+(SELECT count(*) FROM events WHERE instr(payload_json,?1)>0)+(SELECT count(*) FROM command_receipts WHERE instr(result_json,?1)>0)",
-            params![token],
-            |r| r.get(0),
-        )
-        .unwrap();
+    let leaked: i64 =
+        f.h.raw()
+            .query_row(
+                "SELECT (SELECT count(*) FROM configuration_revisions WHERE \
+                instr(body_json,?1)>0)+(SELECT count(*) FROM events WHERE \
+                instr(payload_json,?1)>0)+(SELECT count(*) FROM command_receipts WHERE \
+                instr(result_json,?1)>0)",
+                params![token],
+                |r| r.get(0),
+            )
+            .unwrap();
     assert_eq!(leaked, 0, "the credential reached durable storage");
     // An opaque secret-store reference is accepted.
     let saved = f.save(
@@ -990,8 +992,12 @@ fn repository_base_directory_inherits_reports_and_never_moves_repositories() {
     // Registered repositories, one linked to the project, cloned under earlier defaults.
     f.h.raw()
         .execute_batch(
-            "INSERT INTO repositories(id,canonical_location,revision) VALUES('repo-1','/Users/me/Elsewhere/engine',3),('repo-2','/Users/me/DevWorks/Repositories/tools',1);
-             INSERT INTO project_repositories(project_id,repository_id) VALUES('project-a','repo-1');",
+            "INSERT INTO repositories(id,canonical_location,revision) \
+                VALUES('repo-1','/Users/me/Elsewhere/engine',3),('repo-2',\
+                '/Users/me/DevWorks/Repositories/tools',1);
+             INSERT INTO \
+                project_repositories(project_id,repository_id) VALUES('project-a',\
+                'repo-1');",
         )
         .unwrap();
     type Repositories = Vec<(String, String, i64)>;

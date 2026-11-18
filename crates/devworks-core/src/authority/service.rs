@@ -1291,7 +1291,15 @@ pub(crate) fn mint_reviewed_grant(
         .decisions()
         .human_decision(crate::ports::storage::ApprovalSource::Generic, approval_id)?
         .ok_or(AdminError::Invalid("reviewed human audit missing"))?;
-    let decision:crate::operations::approvals::RecordHumanDecisionInput=serde_json::from_value(json!({"proposalId":p.id,"expectedRevision":(p.revision-1).to_string(),"contentDigest":p.content_digest,"decision":"Approve","rationale":a.rationale})).map_err(|_|AdminError::Invalid("reviewed human input"))?;
+    let decision: crate::operations::approvals::RecordHumanDecisionInput =
+        serde_json::from_value(json!({
+            "proposalId": p.id,
+            "expectedRevision": (p.revision - 1).to_string(),
+            "contentDigest": p.content_digest,
+            "decision": "Approve",
+            "rationale": a.rationale
+        }))
+        .map_err(|_| AdminError::Invalid("reviewed human input"))?;
     if p.state != "Approved"
         || a.decision != "Approved"
         || p.author != holder
@@ -1642,7 +1650,23 @@ mod reviewed_scope_tests {
     }
     #[test]
     fn native_workspace_grants_are_exact_scope_policy_and_normalized_request_bindings() {
-        let frame = json!({"mode":"Command","protocol":"1.0-draft.1","requestKey":"request","body":{"kind":"process.execute","spec":{"executableRef":"id-a","args":[],"workingDirectory":{"rootId":"id-a","relative":"src/main.rs"},"environment":[],"profile":"VerifiedRead","timeoutMs":"0","outputLimitBytes":"0"}}});
+        let frame = json!({
+            "mode": "Command",
+            "protocol": "1.0-draft.1",
+            "requestKey": "request",
+            "body": {
+                "kind": "process.execute",
+                "spec": {
+                    "executableRef": "id-a",
+                    "args": [],
+                    "workingDirectory": {"rootId": "id-a", "relative": "src/main.rs"},
+                    "environment": [],
+                    "profile": "VerifiedRead",
+                    "timeoutMs": "0",
+                    "outputLimitBytes": "0"
+                }
+            }
+        });
         let decoded = admission::decode(
             Selection {
                 operation: "process.execute",

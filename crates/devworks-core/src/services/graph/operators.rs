@@ -898,7 +898,20 @@ pub(super) fn lineage(
             .map(|entry| &entry.node)
             .chain(model_node.iter()),
     );
-    let mut value = json!({"modelName":starts.first().map(|n|n.node.name.as_str()).unwrap_or_else(||match selection{CodeNodeSelection::Name{name,..}=>name.0.as_str(),_=>""}),"producers":producers,"consumers":consumers,"crossRepository":links,"relatedNodes":related.into_values().collect::<Vec<_>>(),"lowConfidenceCount":low.to_string()});
+    let mut value = json!({
+        "modelName": starts
+            .first()
+            .map(|n| n.node.name.as_str())
+            .unwrap_or_else(|| match selection {
+                CodeNodeSelection::Name { name, .. } => name.0.as_str(),
+                _ => "",
+            }),
+        "producers": producers,
+        "consumers": consumers,
+        "crossRepository": links,
+        "relatedNodes": related.into_values().collect::<Vec<_>>(),
+        "lowConfidenceCount": low.to_string()
+    });
     if let Some(count) = unmapped {
         value["unmappedInboundEdges"] = json!(count.to_string());
     }

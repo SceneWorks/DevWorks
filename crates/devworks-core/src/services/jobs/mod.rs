@@ -1834,7 +1834,17 @@ fn job_approval_preview(
         target_id: candidate.target,
         target_revision: candidate.revision,
         summary: format!("Review job {}", candidate.title),
-        reviewed: json!({"title":candidate.title,"schedule":candidate.schedule,"definition":candidate.definition,"enabled":candidate.enabled,"prior":before,"artifact":match &candidate.definition {JobDefinition::Inference {prompt,..}=>Some(prompt),_=>None}}),
+        reviewed: json!({
+            "title": candidate.title,
+            "schedule": candidate.schedule,
+            "definition": candidate.definition,
+            "enabled": candidate.enabled,
+            "prior": before,
+            "artifact": match &candidate.definition {
+                JobDefinition::Inference { prompt, .. } => Some(prompt),
+                _ => None,
+            }
+        }),
         binding: json!({"prior":before,"project":project,"prompt":prompt,"route":route}),
     };
     if preview.reviewed["artifact"].is_null() {

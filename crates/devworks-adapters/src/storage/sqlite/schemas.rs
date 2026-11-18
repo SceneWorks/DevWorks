@@ -35,7 +35,16 @@ fn sources(
     after: Option<&Id>,
     n: u16,
 ) -> Result<Vec<StoredSchemaSource>, StorageError> {
-    let sql = "SELECT s.body_json FROM schema_sources s WHERE s.deleted=0 AND ((?2=1 AND (s.owner_id=?1 OR json_extract(s.body_json,'$.connection.config.workspaceExposed')=1)) OR (?3 IS NOT NULL AND EXISTS(SELECT 1 FROM json_each(s.body_json,'$.connection.config.projectAccess') p WHERE json_extract(p.value,'$.projectId')=?3 AND json_extract(p.value,'$.metadataEnabled')=1))) AND (?4=0 OR (coalesce(json_extract(s.body_json,'$.connection.config.enabled'),1)=1 AND coalesce(json_extract(s.body_json,'$.connection.config.exposureMode'),'Hidden')!='Hidden')) AND (?5 IS NULL OR s.id>?5) ORDER BY s.id LIMIT ?6";
+    let sql = "SELECT s.body_json FROM schema_sources s WHERE s.deleted=0 AND ((?2=1 \
+        AND (s.owner_id=?1 OR json_extract(s.body_json,\
+        '$.connection.config.workspaceExposed')=1)) OR (?3 IS NOT NULL AND \
+        EXISTS(SELECT 1 FROM json_each(s.body_json,\
+        '$.connection.config.projectAccess') p WHERE json_extract(p.value,\
+        '$.projectId')=?3 AND json_extract(p.value,'$.metadataEnabled')=1))) \
+        AND (?4=0 OR (coalesce(json_extract(s.body_json,\
+        '$.connection.config.enabled'),1)=1 AND \
+        coalesce(json_extract(s.body_json,'$.connection.config.exposureMode'),\
+        'Hidden')!='Hidden')) AND (?5 IS NULL OR s.id>?5) ORDER BY s.id LIMIT ?6";
     let mut q = db(conn.prepare_cached(sql))?;
     let rows = db(db(q.query_map(
         params![
@@ -52,7 +61,19 @@ fn sources(
     rows.into_iter().map(decode).collect()
 }
 fn view(conn: &Connection, id: &Id) -> Result<Option<StoredSchemaView>, StorageError> {
-    db(conn.query_row("SELECT json_object('id',id,'connection_id',connection_id,'source_revision',source_revision,'configuration_revision',configuration_revision,'coverage',json(coverage_json),'operation_id',operation_id,'digest',digest,'sealed',json('true'),'created_at_ms',created_at) FROM schema_views WHERE id=?1 AND sealed=1",[id.as_str()],|r|r.get::<_,String>(0)).optional())?.map(decode).transpose()
+    db(conn
+        .query_row(
+            "SELECT json_object('id',id,'connection_id',connection_id,\
+        'source_revision',source_revision,'configuration_revision',\
+        configuration_revision,'coverage',json(coverage_json),'operation_id',\
+        operation_id,'digest',digest,'sealed',json('true'),'created_at_ms',\
+        created_at) FROM schema_views WHERE id=?1 AND sealed=1",
+            [id.as_str()],
+            |r| r.get::<_, String>(0),
+        )
+        .optional())?
+    .map(decode)
+    .transpose()
 }
 fn pin(conn: &Connection, id: &Id) -> Result<Option<StoredSchemaReadPin>, StorageError> {
     db(conn
@@ -73,7 +94,15 @@ fn objects(
     n: u16,
 ) -> Result<Vec<SchemaObject>, StorageError> {
     let kinds = encode(&f.kinds)?;
-    let mut q=db(conn.prepare_cached("SELECT o.body_json FROM schema_objects o JOIN schema_views v ON v.id=o.view_id WHERE v.sealed=1 AND o.view_id=?1 AND (json_array_length(?2)=0 OR o.kind IN(SELECT value FROM json_each(?2))) AND (?3 IS NULL OR o.parent_id=?3) AND (?4 IS NULL OR devworks_graph_name_matches(json_extract(o.body_json,'$.metadata.name'),o.qualified_name,?4,1)) AND (?5 IS NULL OR o.id>?5) AND (?7 IS NULL OR o.id=?7) ORDER BY o.id LIMIT ?6"))?;
+    let mut q = db(conn.prepare_cached(
+        "SELECT o.body_json FROM schema_objects o JOIN schema_views v ON \
+        v.id=o.view_id WHERE v.sealed=1 AND o.view_id=?1 AND \
+        (json_array_length(?2)=0 OR o.kind IN(SELECT value FROM json_each(?2))) \
+        AND (?3 IS NULL OR o.parent_id=?3) AND (?4 IS NULL OR \
+        devworks_graph_name_matches(json_extract(o.body_json,'$.metadata.name'),\
+        o.qualified_name,?4,1)) AND (?5 IS NULL OR o.id>?5) AND (?7 IS NULL OR \
+        o.id=?7) ORDER BY o.id LIMIT ?6",
+    ))?;
     let rows = db(db(q.query_map(
         params![
             view.as_str(),
@@ -100,7 +129,13 @@ fn relations(
         return Err(invalid("too many schema relationship endpoints"));
     }
     let ids = encode(&json!(objects.iter().map(Id::as_str).collect::<Vec<_>>()))?;
-    let mut q=db(conn.prepare_cached("SELECT r.body_json FROM schema_relations r JOIN schema_views v ON v.id=r.view_id WHERE v.sealed=1 AND r.view_id=?1 AND (json_array_length(?2)=0 OR r.from_id IN(SELECT value FROM json_each(?2)) OR r.to_id IN(SELECT value FROM json_each(?2))) AND (?3 IS NULL OR r.id>?3) ORDER BY r.id LIMIT ?4"))?;
+    let mut q = db(conn.prepare_cached(
+        "SELECT r.body_json FROM schema_relations r JOIN schema_views v ON \
+        v.id=r.view_id WHERE v.sealed=1 AND r.view_id=?1 AND \
+        (json_array_length(?2)=0 OR r.from_id IN(SELECT value FROM \
+        json_each(?2)) OR r.to_id IN(SELECT value FROM json_each(?2))) AND (?3 \
+        IS NULL OR r.id>?3) ORDER BY r.id LIMIT ?4",
+    ))?;
     let rows = db(db(q.query_map(
         params![view.as_str(), ids, after.map(Id::as_str), page_limit(n)?],
         |r| r.get::<_, String>(0),
@@ -111,17 +146,55 @@ fn relations(
 macro_rules! reads {
     ($t:ty) => {
         impl SchemaRead for $t {
-            fn schema_certificate(&self, connection:&Id)->Result<Option<StoredSchemaCertificate>,StorageError>{
-                let row:Option<(String,Vec<u8>)>=db(self.conn.query_row("SELECT reference_json,pem FROM schema_certificates WHERE connection_id=?1",[connection.as_str()],|r|Ok((r.get(0)?,r.get(1)?))).optional())?;
-                row.map(|(reference,pem)|Ok(StoredSchemaCertificate{reference:decode(reference)?,pem})).transpose()
+            fn schema_certificate(
+                &self,
+                connection: &Id,
+            ) -> Result<Option<StoredSchemaCertificate>, StorageError> {
+                let row: Option<(String, Vec<u8>)> = db(self
+                    .conn
+                    .query_row(
+                        "SELECT reference_json,pem FROM schema_certificates WHERE \
+                    connection_id=?1",
+                        [connection.as_str()],
+                        |r| Ok((r.get(0)?, r.get(1)?)),
+                    )
+                    .optional())?;
+                row.map(|(reference, pem)| {
+                    Ok(StoredSchemaCertificate {
+                        reference: decode(reference)?,
+                        pem,
+                    })
+                })
+                .transpose()
             }
-            fn schema_pin(&self,id:&Id)->Result<Option<StoredSchemaReadPin>,StorageError>{pin(self.conn,id)}
-            fn schema_active_pin(&self,intent:&str,now:i64)->Result<Option<StoredSchemaReadPin>,StorageError>{
-                db(self.conn.query_row("SELECT body_json FROM schema_read_pins WHERE intent_digest=?1 AND expires_at>?2 ORDER BY expires_at DESC,id LIMIT 1",params![intent,now],|r|r.get::<_,String>(0)).optional())?.map(decode).transpose()
+            fn schema_pin(&self, id: &Id) -> Result<Option<StoredSchemaReadPin>, StorageError> {
+                pin(self.conn, id)
+            }
+            fn schema_active_pin(
+                &self,
+                intent: &str,
+                now: i64,
+            ) -> Result<Option<StoredSchemaReadPin>, StorageError> {
+                db(self
+                    .conn
+                    .query_row(
+                        "SELECT body_json FROM schema_read_pins WHERE intent_digest=?1 AND \
+                    expires_at>?2 ORDER BY expires_at DESC,id LIMIT 1",
+                        params![intent, now],
+                        |r| r.get::<_, String>(0),
+                    )
+                    .optional())?
+                .map(decode)
+                .transpose()
             }
 
             fn schema_credential_in_use(&self, handle: &Id) -> Result<bool, StorageError> {
-                db(self.conn.query_row("SELECT EXISTS(SELECT 1 FROM schema_sources WHERE deleted=0 AND json_extract(body_json,'$.connection.credentialRef')=?1)", [handle.as_str()], |r| r.get(0)))
+                db(self.conn.query_row(
+                    "SELECT EXISTS(SELECT 1 FROM schema_sources WHERE deleted=0 AND \
+                    json_extract(body_json,'$.connection.credentialRef')=?1)",
+                    [handle.as_str()],
+                    |r| r.get(0),
+                ))
             }
             fn schema_inventory_revision(&self) -> Result<i64, StorageError> {
                 db(self.conn.query_row(
@@ -212,7 +285,16 @@ impl SchemaRepository for Unit<'_> {
             {
                 return Err(StorageError::ScopeDenied);
             }
-            db(self.conn.execute("INSERT INTO schema_certificates(connection_id,reference_json,pem) VALUES(?1,?2,?3) ON CONFLICT(connection_id) DO UPDATE SET reference_json=excluded.reference_json,pem=excluded.pem",params![connection.as_str(),encode(&material.reference)?,material.pem]))?;
+            db(self.conn.execute(
+                "INSERT INTO schema_certificates(connection_id,reference_json,pem) \
+                VALUES(?1,?2,?3) ON CONFLICT(connection_id) DO UPDATE SET \
+                reference_json=excluded.reference_json,pem=excluded.pem",
+                params![
+                    connection.as_str(),
+                    encode(&material.reference)?,
+                    material.pem
+                ],
+            ))?;
         } else {
             db(self.conn.execute(
                 "DELETE FROM schema_certificates WHERE connection_id=?1",
@@ -244,19 +326,48 @@ impl SchemaRepository for Unit<'_> {
         {
             return Err(StorageError::ViewUnavailable);
         }
-        db(self.conn.execute("INSERT INTO schema_read_pins(id,view_id,intent_digest,expires_at,body_json) VALUES(?1,?2,?3,?4,?5)",params![row.id.as_str(),row.view_id.as_str(),row.intent_digest,row.expires_at_ms,encode(row)?]))?;
+        db(self.conn.execute(
+            "INSERT INTO schema_read_pins(id,view_id,intent_digest,expires_at,\
+            body_json) VALUES(?1,?2,?3,?4,?5)",
+            params![
+                row.id.as_str(),
+                row.view_id.as_str(),
+                row.intent_digest,
+                row.expires_at_ms,
+                encode(row)?
+            ],
+        ))?;
         Ok(())
     }
     fn expire_schema_pins(&mut self, now: i64, n: u16) -> Result<usize, StorageError> {
-        db(self.conn.execute("DELETE FROM schema_read_pins WHERE id IN(SELECT id FROM schema_read_pins WHERE expires_at<=?1 ORDER BY expires_at,id LIMIT ?2)",params![now,page_limit(n)?]))
+        db(self.conn.execute(
+            "DELETE FROM schema_read_pins WHERE id IN(SELECT id FROM \
+            schema_read_pins WHERE expires_at<=?1 ORDER BY expires_at,id LIMIT ?2)",
+            params![now, page_limit(n)?],
+        ))
     }
 
     fn prune_schema_views(&mut self, n: u16) -> Result<usize, StorageError> {
         let budget = page_limit(n)?;
         // Expired lease records are removed separately in bounded pages. Any remaining
         // lease blocks physical deletion, so FK cascades cannot exceed this page budget.
-        let candidate: Option<(String, i64)> = db(self.conn.query_row(
-            "SELECT v.id,v.sealed FROM schema_views v JOIN schema_sources s ON s.id=v.connection_id WHERE v.sealed IN(1,2) AND COALESCE(json_extract(s.body_json,'$.connection.currentViewId'),'')<>v.id AND NOT EXISTS(SELECT 1 FROM schema_read_pins p WHERE p.view_id=v.id) AND (v.sealed=2 OR s.deleted=1 OR s.configuration_revision<>v.configuration_revision OR 2<=(SELECT count(*) FROM (SELECT newer.id FROM schema_views newer WHERE newer.connection_id=v.connection_id AND newer.sealed=1 AND newer.source_revision>v.source_revision LIMIT 2))) ORDER BY v.sealed DESC,v.source_revision,v.id LIMIT 1", [], |r| Ok((r.get(0)?, r.get(1)?))).optional())?;
+        let candidate: Option<(String, i64)> = db(self
+            .conn
+            .query_row(
+                "SELECT v.id,v.sealed FROM schema_views v JOIN schema_sources s ON \
+                s.id=v.connection_id WHERE v.sealed IN(1,2) AND \
+                COALESCE(json_extract(s.body_json,'$.connection.currentViewId'),\
+                '')<>v.id AND NOT EXISTS(SELECT 1 FROM schema_read_pins p WHERE \
+                p.view_id=v.id) AND (v.sealed=2 OR s.deleted=1 OR \
+                s.configuration_revision<>v.configuration_revision OR 2<=(SELECT \
+                count(*) FROM (SELECT newer.id FROM schema_views newer WHERE \
+                newer.connection_id=v.connection_id AND newer.sealed=1 AND \
+                newer.source_revision>v.source_revision LIMIT 2))) ORDER BY v.sealed \
+                DESC,v.source_revision,v.id LIMIT 1",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .optional())?;
         let Some((view, state)) = candidate else {
             return Ok(0);
         };
@@ -274,7 +385,11 @@ impl SchemaRepository for Unit<'_> {
         if hidden == budget as usize {
             return Ok(hidden);
         }
-        let relations=db(self.conn.execute("DELETE FROM schema_relations WHERE rowid IN(SELECT rowid FROM schema_relations WHERE view_id=?1 LIMIT ?2)",params![view,budget-hidden as i64]))?;
+        let relations = db(self.conn.execute(
+            "DELETE FROM schema_relations WHERE rowid IN(SELECT rowid FROM \
+            schema_relations WHERE view_id=?1 LIMIT ?2)",
+            params![view, budget - hidden as i64],
+        ))?;
         let used = hidden + relations;
         let remaining: bool = db(self.conn.query_row(
             "SELECT EXISTS(SELECT 1 FROM schema_relations WHERE view_id=?1)",
@@ -284,12 +399,20 @@ impl SchemaRepository for Unit<'_> {
         if remaining || used == budget as usize {
             return Ok(used);
         }
-        let objects=db(self.conn.execute("DELETE FROM schema_objects WHERE rowid IN(SELECT rowid FROM schema_objects WHERE view_id=?1 LIMIT ?2)",params![view,budget-used as i64]))?;
+        let objects = db(self.conn.execute(
+            "DELETE FROM schema_objects WHERE rowid IN(SELECT rowid FROM \
+            schema_objects WHERE view_id=?1 LIMIT ?2)",
+            params![view, budget - used as i64],
+        ))?;
         let used = used + objects;
         if used == budget as usize {
             return Ok(used);
         }
-        let header=db(self.conn.execute("DELETE FROM schema_views WHERE id=?1 AND sealed=2 AND NOT EXISTS(SELECT 1 FROM schema_objects WHERE view_id=?1)",[view]))?;
+        let header = db(self.conn.execute(
+            "DELETE FROM schema_views WHERE id=?1 AND sealed=2 AND NOT EXISTS(SELECT \
+            1 FROM schema_objects WHERE view_id=?1)",
+            [view],
+        ))?;
         Ok(used + header)
     }
 
@@ -309,7 +432,17 @@ impl SchemaRepository for Unit<'_> {
         if row.connection.revision.get() != 1 {
             return Err(invalid("new schema source revision must be one"));
         }
-        db(self.conn.execute("INSERT INTO schema_sources(id,revision,owner_id,deleted,body_json,configuration_revision) VALUES(?1,1,?2,?3,?4,?5)",params![row.connection.id.as_str(),row.owner_id.0.as_str(),row.deleted,encode(row)?,row.configuration_revision]))?;
+        db(self.conn.execute(
+            "INSERT INTO schema_sources(id,revision,owner_id,deleted,body_json,\
+            configuration_revision) VALUES(?1,1,?2,?3,?4,?5)",
+            params![
+                row.connection.id.as_str(),
+                row.owner_id.0.as_str(),
+                row.deleted,
+                encode(row)?,
+                row.configuration_revision
+            ],
+        ))?;
         Ok(())
     }
     fn revise_schema_source(
@@ -371,7 +504,19 @@ impl SchemaRepository for Unit<'_> {
                 return Err(StorageError::ScopeDenied);
             }
         }
-        let changed=db(self.conn.execute("UPDATE schema_sources SET revision=?1,deleted=?2,body_json=?3,configuration_revision=?7 WHERE id=?4 AND revision=?5 AND owner_id=?6",params![row.connection.revision.get(),row.deleted,encode(row)?,row.connection.id.as_str(),expected,row.owner_id.0.as_str(),row.configuration_revision]))?;
+        let changed = db(self.conn.execute(
+            "UPDATE schema_sources SET revision=?1,deleted=?2,body_json=?3,\
+            configuration_revision=?7 WHERE id=?4 AND revision=?5 AND owner_id=?6",
+            params![
+                row.connection.revision.get(),
+                row.deleted,
+                encode(row)?,
+                row.connection.id.as_str(),
+                expected,
+                row.owner_id.0.as_str(),
+                row.configuration_revision
+            ],
+        ))?;
         if changed != 1 {
             return Err(StorageError::ScopeDenied);
         }
@@ -379,9 +524,25 @@ impl SchemaRepository for Unit<'_> {
     }
     fn discard_schema_staging(&mut self, connection: &Id, n: u16) -> Result<bool, StorageError> {
         let n = page_limit(n)?;
-        let removed=db(self.conn.execute("DELETE FROM schema_relations WHERE rowid IN (SELECT r.rowid FROM schema_relations r JOIN schema_views v ON v.id=r.view_id WHERE v.connection_id=?1 AND v.sealed=0 LIMIT ?2)",params![connection.as_str(),n]))?;
-        db(self.conn.execute("DELETE FROM schema_objects WHERE rowid IN (SELECT o.rowid FROM schema_objects o JOIN schema_views v ON v.id=o.view_id WHERE v.connection_id=?1 AND v.sealed=0 LIMIT ?2)",params![connection.as_str(),n-removed as i64]))?;
-        db(self.conn.execute("DELETE FROM schema_views WHERE id IN (SELECT v.id FROM schema_views v WHERE v.connection_id=?1 AND v.sealed=0 AND NOT EXISTS(SELECT 1 FROM schema_objects o WHERE o.view_id=v.id) AND NOT EXISTS(SELECT 1 FROM schema_relations r WHERE r.view_id=v.id) LIMIT ?2)",params![connection.as_str(),n]))?;
+        let removed = db(self.conn.execute(
+            "DELETE FROM schema_relations WHERE rowid IN (SELECT r.rowid FROM \
+            schema_relations r JOIN schema_views v ON v.id=r.view_id WHERE \
+            v.connection_id=?1 AND v.sealed=0 LIMIT ?2)",
+            params![connection.as_str(), n],
+        ))?;
+        db(self.conn.execute(
+            "DELETE FROM schema_objects WHERE rowid IN (SELECT o.rowid FROM \
+            schema_objects o JOIN schema_views v ON v.id=o.view_id WHERE \
+            v.connection_id=?1 AND v.sealed=0 LIMIT ?2)",
+            params![connection.as_str(), n - removed as i64],
+        ))?;
+        db(self.conn.execute(
+            "DELETE FROM schema_views WHERE id IN (SELECT v.id FROM schema_views v \
+            WHERE v.connection_id=?1 AND v.sealed=0 AND NOT EXISTS(SELECT 1 FROM \
+            schema_objects o WHERE o.view_id=v.id) AND NOT EXISTS(SELECT 1 FROM \
+            schema_relations r WHERE r.view_id=v.id) LIMIT ?2)",
+            params![connection.as_str(), n],
+        ))?;
         db(self.conn.query_row(
             "SELECT NOT EXISTS(SELECT 1 FROM schema_views WHERE connection_id=?1 AND sealed=0)",
             [connection.as_str()],
@@ -392,7 +553,21 @@ impl SchemaRepository for Unit<'_> {
         if row.sealed {
             return Err(invalid("new schema view must be staged"));
         }
-        db(self.conn.execute("INSERT INTO schema_views(id,connection_id,source_revision,operation_id,digest,sealed,created_at,configuration_revision,coverage_json) VALUES(?1,?2,?3,?4,?5,0,?6,?7,?8)",params![row.id.as_str(),row.connection_id.as_str(),row.source_revision,row.operation_id.0.as_str(),row.digest,row.created_at_ms,row.configuration_revision,encode(&row.coverage)?]))?;
+        db(self.conn.execute(
+            "INSERT INTO schema_views(id,connection_id,source_revision,operation_id,\
+            digest,sealed,created_at,configuration_revision,coverage_json) \
+            VALUES(?1,?2,?3,?4,?5,0,?6,?7,?8)",
+            params![
+                row.id.as_str(),
+                row.connection_id.as_str(),
+                row.source_revision,
+                row.operation_id.0.as_str(),
+                row.digest,
+                row.created_at_ms,
+                row.configuration_revision,
+                encode(&row.coverage)?
+            ],
+        ))?;
         Ok(())
     }
     fn append_schema_rows(
@@ -421,19 +596,46 @@ impl SchemaRepository for Unit<'_> {
             let kind = kind
                 .as_str()
                 .ok_or_else(|| invalid("invalid schema kind"))?;
-            db(self.conn.execute("INSERT INTO schema_objects(view_id,id,kind,parent_id,qualified_name,body_json) VALUES(?1,?2,?3,?4,?5,?6)",params![view.as_str(),o.id.as_str(),kind,o.parent_id.as_ref().map(Id::as_str),o.qualified_name.0,encode(o)?]))?;
+            db(self.conn.execute(
+                "INSERT INTO schema_objects(view_id,id,kind,parent_id,qualified_name,\
+                body_json) VALUES(?1,?2,?3,?4,?5,?6)",
+                params![
+                    view.as_str(),
+                    o.id.as_str(),
+                    kind,
+                    o.parent_id.as_ref().map(Id::as_str),
+                    o.qualified_name.0,
+                    encode(o)?
+                ],
+            ))?;
         }
         for r in relations {
             r.check().map_err(|_| invalid("invalid schema relation"))?;
             if &r.view_id != view {
                 return Err(StorageError::ScopeDenied);
             }
-            db(self.conn.execute("INSERT INTO schema_relations(view_id,id,from_id,to_id,body_json) VALUES(?1,?2,?3,?4,?5)",params![view.as_str(),r.id.as_str(),r.from_object_id.as_str(),r.to_object_id.as_str(),encode(r)?]))?;
+            db(self.conn.execute(
+                "INSERT INTO schema_relations(view_id,id,from_id,to_id,body_json) \
+                VALUES(?1,?2,?3,?4,?5)",
+                params![
+                    view.as_str(),
+                    r.id.as_str(),
+                    r.from_object_id.as_str(),
+                    r.to_object_id.as_str(),
+                    encode(r)?
+                ],
+            ))?;
         }
         Ok(())
     }
     fn seal_schema_view(&mut self, view: &Id) -> Result<(), StorageError> {
-        let orphan:bool=db(self.conn.query_row("SELECT EXISTS(SELECT 1 FROM schema_objects o WHERE o.view_id=?1 AND o.parent_id IS NOT NULL AND NOT EXISTS(SELECT 1 FROM schema_objects p WHERE p.view_id=o.view_id AND p.id=o.parent_id))",[view.as_str()],|r|r.get(0)))?;
+        let orphan: bool = db(self.conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM schema_objects o WHERE o.view_id=?1 AND \
+            o.parent_id IS NOT NULL AND NOT EXISTS(SELECT 1 FROM schema_objects p \
+            WHERE p.view_id=o.view_id AND p.id=o.parent_id))",
+            [view.as_str()],
+            |r| r.get(0),
+        ))?;
         if orphan {
             return Err(invalid("schema view has missing parent objects"));
         }
@@ -460,7 +662,15 @@ impl SchemaRepository for Unit<'_> {
         row.result
             .check()
             .map_err(|_| invalid("invalid schema publication"))?;
-        db(self.conn.execute("INSERT INTO schema_publications(operation_id,connection_id,body_json) VALUES(?1,?2,?3)",params![row.operation_id.0.as_str(),row.connection_id.as_str(),encode(row)?]))?;
+        db(self.conn.execute(
+            "INSERT INTO schema_publications(operation_id,connection_id,body_json) \
+            VALUES(?1,?2,?3)",
+            params![
+                row.operation_id.0.as_str(),
+                row.connection_id.as_str(),
+                encode(row)?
+            ],
+        ))?;
         Ok(())
     }
 }

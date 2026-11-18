@@ -33,7 +33,9 @@ pub(super) fn processing(
     type Raw = (String, String, i64, i64, i64, String);
     let raw: Option<Raw> = db(stmt(
         conn,
-        "SELECT receipt_id,payload_digest,state_generation,state_revision,checkpoint,intents_json FROM package_handler_commits WHERE package_id=?1 AND subscription_id=?2 AND event_id=?3",
+        "SELECT receipt_id,payload_digest,state_generation,state_revision,\
+            checkpoint,intents_json FROM package_handler_commits WHERE \
+            package_id=?1 AND subscription_id=?2 AND event_id=?3",
     )?
     .query_row(
         params![package, subscription.as_str(), event.0.as_str()],
@@ -105,10 +107,19 @@ impl PackageHandlerLedger for Unit<'_> {
                 current_revision.max(1),
             ));
         }
-        db(stmt(self.conn,
-            "INSERT INTO package_handler_state(package_id,generation,revision,state_json) VALUES(?1,?2,1,?3) ON CONFLICT(package_id) DO UPDATE SET revision=revision+1,state_json=excluded.state_json WHERE revision=?4 AND generation=?2",
+        db(stmt(
+            self.conn,
+            "INSERT INTO package_handler_state(package_id,generation,revision,\
+                state_json) VALUES(?1,?2,1,?3) ON CONFLICT(package_id) DO UPDATE SET \
+                revision=revision+1,state_json=excluded.state_json WHERE revision=?4 \
+                AND generation=?2",
         )?
-        .execute(params![package_id, generation, text(&state), expected_revision]))?;
+        .execute(params![
+            package_id,
+            generation,
+            text(&state),
+            expected_revision
+        ]))?;
         package_state(self.conn, package_id)?
             .ok_or_else(|| corrupt("package state vanished inside its transaction"))
     }
@@ -135,8 +146,11 @@ impl PackageHandlerLedger for Unit<'_> {
                 ),
             });
         }
-        db(stmt(self.conn,
-            "INSERT INTO package_handler_commits(package_id,subscription_id,event_id,receipt_id,payload_digest,state_generation,state_revision,checkpoint,intents_json) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9)",
+        db(stmt(
+            self.conn,
+            "INSERT INTO package_handler_commits(package_id,subscription_id,event_id,\
+                receipt_id,payload_digest,state_generation,state_revision,checkpoint,\
+                intents_json) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9)",
         )?
         .execute(params![
             r.package_id,

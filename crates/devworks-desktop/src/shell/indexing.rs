@@ -43,7 +43,12 @@ impl Screen for IndexingScreen {
         if let Some(f) = &self.sources
             && let Some(p) = &f.project
         {
-            out.projects.entry(p.clone()).or_insert_with(|| json!({}))["indexSources"] = json!({"languages":f.languages,"packages":f.packages,"excludes":f.excludes,"max":f.max_bytes});
+            out.projects.entry(p.clone()).or_insert_with(|| json!({}))["indexSources"] = json!({
+                "languages": f.languages,
+                "packages": f.packages,
+                "excludes": f.excludes,
+                "max": f.max_bytes
+            });
         }
     }
     fn remove_purged(&mut self, scope: &ProjectPurgeClientScope) {

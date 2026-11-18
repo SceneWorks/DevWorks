@@ -44,13 +44,29 @@ fn connection() -> StoredConnection {
 }
 fn candidate(store: &SqliteStore, name: &str) -> StoredEmbeddingCandidate {
     let c = connection();
-    let model_identity = json!({"version":1,"connectionId":c.id,"endpointProfile":"Embedding","endpoint":c.endpoint,"accountRevision":c.account_revision.to_string(),"accountDigest":c.account_digest,"upstreamModelId":"literal-model"});
+    let model_identity = json!({
+        "version": 1,
+        "connectionId": c.id,
+        "endpointProfile": "Embedding",
+        "endpoint": c.endpoint,
+        "accountRevision": c.account_revision.to_string(),
+        "accountDigest": c.account_digest,
+        "upstreamModelId": "literal-model"
+    });
     let model_digest = sha256_hex(
         devworks_core::jcs::canonicalize(&model_identity)
             .unwrap()
             .as_bytes(),
     );
-    let encoder_config = json!({"version":1,"modelDigest":model_digest,"dimensions":2,"dimensionMode":"Native","metric":"Cosine","elementType":"Float32","encodingFormat":"float"});
+    let encoder_config = json!({
+        "version": 1,
+        "modelDigest": model_digest,
+        "dimensions": 2,
+        "dimensionMode": "Native",
+        "metric": "Cosine",
+        "elementType": "Float32",
+        "encodingFormat": "float"
+    });
     let configuration_digest = sha256_hex(
         devworks_core::jcs::canonicalize(&encoder_config)
             .unwrap()
@@ -227,19 +243,102 @@ fn artifact(
     })
 }
 fn native_facts(s: &SqliteStore) -> StoredEmbeddingEvidence {
-    run_write(s,WriteOptions::fixture(),|tx|{
-        let native=intent(tx,"native-operation")?;
-        let attempt=tx.operations().begin_attempt(&native.id,1,AttemptBinding::default())?;
-        tx.router().record_route_request(&StoredRouteRequest{request_id:id("native-request"),operation_id:native.id.clone(),purpose:"Embedding".into(),session_id:None,project_id:None,model_id:id("candidate"),connection_id:id("embedding-connection"),pin_id:None,created_at_ms:T0})?;
-        let mut usage=StoredInferenceAttempt{attempt_id:attempt.id.0.clone(),request_id:id("native-request"),operation_id:native.id.clone(),attempt_number:1,project_id:None,feature_id:None,work_id:None,assignment_id:None,execution_root_id:None,execution_id:None,session_id:None,job_run_id:None,actor_id:tx.store().host_actor.clone(),role:"EmbeddingProbe".into(),purpose:"Embedding".into(),catalog_model_id:id("candidate"),connection_id:id("embedding-connection"),endpoint_profile:"Embedding".into(),access_mode:"Custom".into(),provider_model_id:Some("literal-model".into()),pricing_snapshot:json!({"admission_key":"native-admission","quote":{"classification":"Untracked","connection_revision":1}}),state:devworks_core::ports::storage::AttemptState::Admitted,revision:1,created_at_ms:T0};
+    run_write(s, WriteOptions::fixture(), |tx| {
+        let native = intent(tx, "native-operation")?;
+        let attempt = tx
+            .operations()
+            .begin_attempt(&native.id, 1, AttemptBinding::default())?;
+        tx.router().record_route_request(&StoredRouteRequest {
+            request_id: id("native-request"),
+            operation_id: native.id.clone(),
+            purpose: "Embedding".into(),
+            session_id: None,
+            project_id: None,
+            model_id: id("candidate"),
+            connection_id: id("embedding-connection"),
+            pin_id: None,
+            created_at_ms: T0,
+        })?;
+        let mut usage = StoredInferenceAttempt {
+            attempt_id: attempt.id.0.clone(),
+            request_id: id("native-request"),
+            operation_id: native.id.clone(),
+            attempt_number: 1,
+            project_id: None,
+            feature_id: None,
+            work_id: None,
+            assignment_id: None,
+            execution_root_id: None,
+            execution_id: None,
+            session_id: None,
+            job_run_id: None,
+            actor_id: tx.store().host_actor.clone(),
+            role: "EmbeddingProbe".into(),
+            purpose: "Embedding".into(),
+            catalog_model_id: id("candidate"),
+            connection_id: id("embedding-connection"),
+            endpoint_profile: "Embedding".into(),
+            access_mode: "Custom".into(),
+            provider_model_id: Some("literal-model".into()),
+            pricing_snapshot: json!({
+                "admission_key": "native-admission",
+                "quote": {
+                    "classification": "Untracked",
+                    "connection_revision": 1
+                }
+            }),
+            state: devworks_core::ports::storage::AttemptState::Admitted,
+            revision: 1,
+            created_at_ms: T0,
+        };
         tx.usage().insert_inference_attempt(&usage)?;
-        usage.state=devworks_core::ports::storage::AttemptState::Dispatched;usage.revision=2;tx.usage().update_inference_attempt(&usage,1)?;
-        usage.state=devworks_core::ports::storage::AttemptState::Settled;usage.revision=3;tx.usage().update_inference_attempt(&usage,2)?;
-        tx.usage().put_attempt_balance(&StoredAttemptBalance{attempt_id:attempt.id.0.clone(),revision:1,priced_micro_usd:None,reserved_micro_usd:None,classification:devworks_core::ports::usage::CostClassification::Untracked,monetary_complete:false,incomplete:false,unknown_tail:false,local_quiescent:true,summary:json!({"outcome":"Completed"})},None)?;
-        tx.operations().transition(&native.id,2,Some(&attempt.fence()),OperationState::Dispatching,None)?;
-        tx.operations().transition(&native.id,3,Some(&attempt.fence()),OperationState::ObservedComplete,None)?;
-        Ok(StoredEmbeddingEvidence{request_id:id("native-request"),native_operation_id:native.id,attempt_id:attempt.id.0,result_artifact:artifact(tx,"native-result",b"recorded manifest")?,vector_artifact:artifact(tx,"native-vector",&[0,0,128,63,0,0,0,64])?,reported_model:Some("literal-model".into()),registration_digest:sha256_hex(b"recorded registration"),connection_revision:1})
-    }).unwrap()
+        usage.state = devworks_core::ports::storage::AttemptState::Dispatched;
+        usage.revision = 2;
+        tx.usage().update_inference_attempt(&usage, 1)?;
+        usage.state = devworks_core::ports::storage::AttemptState::Settled;
+        usage.revision = 3;
+        tx.usage().update_inference_attempt(&usage, 2)?;
+        tx.usage().put_attempt_balance(
+            &StoredAttemptBalance {
+                attempt_id: attempt.id.0.clone(),
+                revision: 1,
+                priced_micro_usd: None,
+                reserved_micro_usd: None,
+                classification: devworks_core::ports::usage::CostClassification::Untracked,
+                monetary_complete: false,
+                incomplete: false,
+                unknown_tail: false,
+                local_quiescent: true,
+                summary: json!({"outcome": "Completed"}),
+            },
+            None,
+        )?;
+        tx.operations().transition(
+            &native.id,
+            2,
+            Some(&attempt.fence()),
+            OperationState::Dispatching,
+            None,
+        )?;
+        tx.operations().transition(
+            &native.id,
+            3,
+            Some(&attempt.fence()),
+            OperationState::ObservedComplete,
+            None,
+        )?;
+        Ok(StoredEmbeddingEvidence {
+            request_id: id("native-request"),
+            native_operation_id: native.id,
+            attempt_id: attempt.id.0,
+            result_artifact: artifact(tx, "native-result", b"recorded manifest")?,
+            vector_artifact: artifact(tx, "native-vector", &[0, 0, 128, 63, 0, 0, 0, 64])?,
+            reported_model: Some("literal-model".into()),
+            registration_digest: sha256_hex(b"recorded registration"),
+            connection_revision: 1,
+        })
+    })
+    .unwrap()
 }
 fn stage(
     s: &SqliteStore,
@@ -717,7 +816,16 @@ fn existing_vector_identity_is_never_relabelled_by_qualification() {
     let evidence = native_facts(&s);
     stage(&s, fence.clone(), evidence);
     let c = candidate(&s, "candidate");
-    h.raw().execute("INSERT INTO embedding_spaces(id,model_digest,dimensions,metric,element_type) VALUES(?1,?2,2,'L2','Float32')",rusqlite::params![c.space_id.as_str(),sha256_hex(b"older incompatible identity")]).unwrap();
+    h.raw()
+        .execute(
+            "INSERT INTO embedding_spaces(id,model_digest,dimensions,metric,\
+        element_type) VALUES(?1,?2,2,'L2','Float32')",
+            rusqlite::params![
+                c.space_id.as_str(),
+                sha256_hex(b"older incompatible identity")
+            ],
+        )
+        .unwrap();
     assert!(
         run_write(&s, WriteOptions::fixture(), move |tx| {
             tx.operations().transition(
@@ -1304,7 +1412,13 @@ fn failed_candidate_cannot_leave_price_subject_even_when_caller_commits() {
         tx.router().put_connection(&connection(), None)
     })
     .unwrap();
-    h.raw().execute_batch("CREATE TRIGGER reject_candidate BEFORE INSERT ON router_embedding_candidates BEGIN SELECT RAISE(ABORT,'native injected candidate failure'); END;").unwrap();
+    h.raw()
+        .execute_batch(
+            "CREATE TRIGGER reject_candidate BEFORE INSERT ON \
+        router_embedding_candidates BEGIN SELECT RAISE(ABORT,'native injected \
+        candidate failure'); END;",
+        )
+        .unwrap();
     let c = candidate(&s, "failure");
     run_write(&s, WriteOptions::fixture(), move |tx| {
         assert!(tx.router().insert_embedding_candidate(&c, 1).is_err());

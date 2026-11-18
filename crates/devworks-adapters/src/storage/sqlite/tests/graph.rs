@@ -631,7 +631,13 @@ fn purge_planning_leases_use_typed_scope_and_validate_exact_graph_children() {
             rusqlite::params![original, owned.id.as_str()],
         )
         .unwrap();
-    f.h.raw().execute("UPDATE index_pins SET lease_until=lease_until+1 WHERE id IN(SELECT index_pin_id FROM graph_read_pin_views WHERE pin_id=?1)",[owned.id.as_str()]).unwrap();
+    f.h.raw()
+        .execute(
+            "UPDATE index_pins SET lease_until=lease_until+1 WHERE id IN(SELECT \
+        index_pin_id FROM graph_read_pin_views WHERE pin_id=?1)",
+            [owned.id.as_str()],
+        )
+        .unwrap();
     assert!(
         assess()
             .unresolved
@@ -1003,7 +1009,15 @@ fn graph31_pin_binding_failures_write_nothing_and_broken_child_is_never_a_valid_
     );
     let record = pin(&f, "valid");
     write(&f.s, move |tx| tx.graph().acquire_graph_pin(&record));
-    f.s.with_writer_connection(|conn|super::super::conn::db(conn.execute("UPDATE index_pins SET lease_until=lease_until+1 WHERE id=(SELECT index_pin_id FROM graph_read_pin_views WHERE pin_id='valid' LIMIT 1)",[])).map(|_|())).unwrap();
+    f.s.with_writer_connection(|conn| {
+        super::super::conn::db(conn.execute(
+            "UPDATE index_pins SET lease_until=lease_until+1 WHERE id=(SELECT \
+        index_pin_id FROM graph_read_pin_views WHERE pin_id='valid' LIMIT 1)",
+            [],
+        ))
+        .map(|_| ())
+    })
+    .unwrap();
     assert!(
         read_snapshot(&*f.s, &ReadOptions::default(), |r| r
             .graph()
@@ -1099,7 +1113,15 @@ fn endless_fixture() -> (Harness, SqliteStore, GraphScope) {
     });
     // A controlled SQL fault fixture creates an actually unbounded statement behind the real
     // GraphRead port. It allocates no source corpus and exposes no raw SQL API to core callers.
-    s.with_writer_connection(|conn|super::super::conn::db(conn.execute_batch("ALTER TABLE graph_nodes RENAME TO graph_nodes_fixture; CREATE VIEW graph_nodes AS WITH RECURSIVE forever(n) AS (VALUES(0) UNION ALL SELECT n+1 FROM forever) SELECT 'g' generation_id,'a.rs' unit_key,CAST(n AS TEXT) node_id,'Function' kind,'n' name,'{}' payload_json FROM forever;"))).unwrap();
+    s.with_writer_connection(|conn| {
+        super::super::conn::db(conn.execute_batch(
+            "ALTER TABLE graph_nodes RENAME TO graph_nodes_fixture; CREATE VIEW \
+        graph_nodes AS WITH RECURSIVE forever(n) AS (VALUES(0) UNION ALL SELECT \
+        n+1 FROM forever) SELECT 'g' generation_id,'a.rs' unit_key,CAST(n AS \
+        TEXT) node_id,'Function' kind,'n' name,'{}' payload_json FROM forever;",
+        ))
+    })
+    .unwrap();
     (h, s, scope)
 }
 fn reader_has_no_leftover_hook(s: &SqliteStore) {

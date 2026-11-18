@@ -25,7 +25,17 @@ fn budget_bound_readiness_uses_exact_pending_and_approved_tokens_independent_of_
     let feature = fx.feature(&project, "Exact readiness binding", &["repo-1"]);
     let doc = fx.artifact(&project, 1);
     let draft = draft(&doc, &[("E1", "ship")], &["repo-1"]);
-    let saved=work_of(applied(fx.command_at(&fx.user(),"features.edit_plan",json!({"featureId":feature.id,"expectedRevision":feature.revision,"plan":draft,"budget":{"kind":"Limit","microUsd":"12500000"}}),Some(3))));
+    let saved = work_of(applied(fx.command_at(
+        &fx.user(),
+        "features.edit_plan",
+        json!({
+            "featureId": feature.id,
+            "expectedRevision": feature.revision,
+            "plan": draft,
+            "budget": {"kind": "Limit", "microUsd": "12500000"}
+        }),
+        Some(3),
+    )));
     let pending = saved.pending_plan.as_ref().unwrap();
     let exact = String::from(pending.plan_digest.clone().unwrap());
     let plain_digest = plan_digest(&serde_json::from_value(draft.clone()).unwrap());
@@ -61,7 +71,17 @@ fn budget_bound_readiness_uses_exact_pending_and_approved_tokens_independent_of_
         exact
     );
 
-    let revised=work_of(applied(fx.command_at(&fx.user(),"features.edit_plan",json!({"featureId":assessed.id,"expectedRevision":assessed.revision,"plan":draft,"budget":{"kind":"Limit","microUsd":"25000000"}}),Some(3))));
+    let revised = work_of(applied(fx.command_at(
+        &fx.user(),
+        "features.edit_plan",
+        json!({
+            "featureId": assessed.id,
+            "expectedRevision": assessed.revision,
+            "plan": draft,
+            "budget": {"kind": "Limit", "microUsd": "25000000"}
+        }),
+        Some(3),
+    )));
     let current = revised.pending_plan.as_ref().unwrap();
     let current_digest = String::from(current.plan_digest.clone().unwrap());
     assert_ne!(current_digest, exact);
@@ -81,9 +101,19 @@ fn budget_bound_readiness_uses_exact_pending_and_approved_tokens_independent_of_
         "assessed replacement budget-bound plan",
     )));
     let pending = assessed.pending_plan.as_ref().unwrap();
-    let proposal=match applied(fx.command_at(&fx.agent(),"features.request_plan_approval",json!({"featureId":assessed.id,"expectedRevision":assessed.revision,"planRevision":pending.revision,"planDigest":current_digest}),Some(1))) {
-        OperationResult::FeaturesRequestPlanApproval{value}=>value,
-        other=>panic!("{other:?}"),
+    let proposal = match applied(fx.command_at(
+        &fx.agent(),
+        "features.request_plan_approval",
+        json!({
+            "featureId": assessed.id,
+            "expectedRevision": assessed.revision,
+            "planRevision": pending.revision,
+            "planDigest": current_digest
+        }),
+        Some(1),
+    )) {
+        OperationResult::FeaturesRequestPlanApproval { value } => value,
+        other => panic!("{other:?}"),
     };
     let human = fx.user();
     let proposal_id = proposal.id;
@@ -113,7 +143,16 @@ fn budget_bound_readiness_uses_exact_pending_and_approved_tokens_independent_of_
     )));
     assert!(active.readiness.as_ref().unwrap().ready);
 
-    let changed=work_of(applied(fx.command_at(&fx.user(),"features.edit",json!({"workId":active.id,"expectedRevision":active.revision,"changes":{"budget":{"kind":"Limit","microUsd":"40000000"}}}),Some(3))));
+    let changed = work_of(applied(fx.command_at(
+        &fx.user(),
+        "features.edit",
+        json!({
+            "workId": active.id,
+            "expectedRevision": active.revision,
+            "changes": {"budget": {"kind": "Limit", "microUsd": "40000000"}}
+        }),
+        Some(3),
+    )));
     assert_eq!(
         changed
             .budget

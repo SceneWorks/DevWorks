@@ -3149,7 +3149,8 @@ impl Runtime {
                         use devworks_core::services::diagnostics::LogEntry;
                         use devworks_core::protocol::records::{Severity,DiagnosticOutcome};
                         let mut entry=LogEntry::new("router.usage","unclosed-inference",Severity::Warning,
-                            format!("{} inference transports were not verified closed before shutdown ({} preparations still settling); custody and reservations remain held.",ids.len(),drain.pending_preparations));
+                            format!("{} inference transports were not verified closed before shutdown ({} \
+                                preparations still settling); custody and reservations remain held.",ids.len(),drain.pending_preparations));
                         entry.operation=Some("runtime.shutdown".into());entry.stage=Some("shutdown".into());entry.outcome=Some(DiagnosticOutcome::Partial);
                         entry.target_kind=Some("inference_attempt".into());entry.target_id=ids.first().cloned();
                         let _=service.log(entry);

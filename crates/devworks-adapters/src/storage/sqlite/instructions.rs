@@ -14,8 +14,12 @@ fn digest(value: &str) -> bool {
     devworks_core::fingerprint::is_sha256_hex(value)
 }
 
-const ITEM_COLUMNS: &str = "id,kind,name,scope_key,origin,root_path,source_path,latest_revision,active_revision,enabled,materialized_digest,observed_digest,present,version,created_at,updated_at,confined_project_id";
-const REVISION_COLUMNS: &str = "instruction_id,revision,content_json,content_digest,state,author,origin_json,resources_json,applicability_json,approval_id,created_at,decided_at,confined_project_id";
+const ITEM_COLUMNS: &str = "id,kind,name,scope_key,origin,root_path,source_path,latest_revision,\
+    active_revision,enabled,materialized_digest,observed_digest,present,\
+    version,created_at,updated_at,confined_project_id";
+const REVISION_COLUMNS: &str = "instruction_id,revision,content_json,content_digest,state,author,\
+    origin_json,resources_json,applicability_json,approval_id,created_at,\
+    decided_at,confined_project_id";
 
 fn item(r: &Row<'_>) -> rusqlite::Result<RawItem> {
     Ok(RawItem {
@@ -243,7 +247,9 @@ fn lesson_revisions(
     page_limit(limit)?;
     let (after_id, after_revision) = after.map_or(("", -1), |(id, n)| (id.as_str(), n));
     let mut statement = db(conn.prepare(
-        "SELECT instruction_id,revision FROM instruction_revision_lessons WHERE lesson_id=?1 AND (instruction_id,revision)>(?2,?3) ORDER BY instruction_id,revision LIMIT ?4",
+        "SELECT instruction_id,revision FROM instruction_revision_lessons WHERE \
+            lesson_id=?1 AND (instruction_id,revision)>(?2,?3) ORDER BY \
+            instruction_id,revision LIMIT ?4",
     ))?;
     db(statement.query_map(
         params![lesson.as_str(), after_id, after_revision, i64::from(limit)],
@@ -408,7 +414,10 @@ impl InstructionRepository for Unit<'_> {
             }
         }
         db(self.conn.execute(
-            "UPDATE instructions SET root_path=?2,source_path=?3,latest_revision=?4,active_revision=?5,enabled=?6,materialized_digest=?7,observed_digest=?8,present=?9,version=?10,updated_at=?11,confined_project_id=?13 WHERE id=?1 AND version=?12",
+            "UPDATE instructions SET root_path=?2,source_path=?3,latest_revision=?4,\
+                active_revision=?5,enabled=?6,materialized_digest=?7,observed_digest=?8,\
+                present=?9,version=?10,updated_at=?11,confined_project_id=?13 WHERE \
+                id=?1 AND version=?12",
             params![
                 item.id.as_str(),
                 item.root_path,
@@ -558,7 +567,9 @@ impl InstructionRepository for Unit<'_> {
             return Err(invalid("instruction revision release"));
         }
         db(self.conn.execute(
-            "UPDATE instruction_revisions SET content_json=?3,confined_project_id=NULL WHERE instruction_id=?1 AND revision=?2 AND confined_project_id IS NOT NULL",
+            "UPDATE instruction_revisions SET content_json=?3,\
+                confined_project_id=NULL WHERE instruction_id=?1 AND revision=?2 AND \
+                confined_project_id IS NOT NULL",
             params![key.as_str(), number, content.to_string()],
         ))?;
         Ok(())

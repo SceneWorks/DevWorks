@@ -881,9 +881,18 @@ fn replay_project_ownership_rejects_cross_project_claims() {
         Ok(())
     })
     .unwrap();
-    s.with_writer_connection(|c|{
-        assert!(c.execute("INSERT INTO allocation_replays(project_id,key,intent_digest,result_json,claim_id) VALUES('other-project',?1,?2,'{}','claim')",rusqlite::params!["c".repeat(64),"b".repeat(64)]).is_err());Ok(())
-    }).unwrap();
+    s.with_writer_connection(|c| {
+        assert!(
+            c.execute(
+                "INSERT INTO allocation_replays(project_id,key,intent_digest,result_json,\
+            claim_id) VALUES('other-project',?1,?2,'{}','claim')",
+                rusqlite::params!["c".repeat(64), "b".repeat(64)]
+            )
+            .is_err()
+        );
+        Ok(())
+    })
+    .unwrap();
 }
 
 #[test]

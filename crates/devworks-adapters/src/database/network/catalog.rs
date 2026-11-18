@@ -236,9 +236,17 @@ pub(super) fn profile(
     unsupported: &[&str],
     limitations: &[&str],
 ) -> Result<SchemaAdapterProfile, MetadataFailure> {
-    typed(
-        json!({"driver":driver,"serverVersion":version,"authentication":"Password","tls":tls,"readOnlyBoundary":"Explicit source credentials and fixed server catalog statements; no caller SQL or source-table SELECT", "supportedMetadata":supported,"unsupportedMetadata":unsupported,"limitations":limitations}),
-    )
+    typed(json!({
+        "driver": driver,
+        "serverVersion": version,
+        "authentication": "Password",
+        "tls": tls,
+        "readOnlyBoundary": "Explicit source credentials and fixed server catalog statements; no \
+        caller SQL or source-table SELECT",
+        "supportedMetadata": supported,
+        "unsupportedMetadata": unsupported,
+        "limitations": limitations
+    }))
 }
 /// Accepts a server only when its leading release (`parts` numeric components, e.g. `17` or
 /// `8.4`) is one the catalog statements are qualified against. Pre-release suffixes such as

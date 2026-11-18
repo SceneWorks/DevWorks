@@ -313,7 +313,8 @@ pub const MIGRATIONS: &[Migration] = &[
     // proposals, retained state generations, index sources and availability observations (seven
     // tables and an index), independent of every table of migrations 11-19 (it references only
     // its own tables). The writer floor stays at 19, the highest so far: applying a migration
-    // overwrites both floors, so a lower writer floor would re-admit the writers migrations 11, 14, 16 and 19 refuse. It need not rise: no earlier build reads or writes these tables, and the
+    // overwrites both floors, so a lower writer floor would re-admit the writers migrations 11, 14,
+    // 16 and 19 refuse. It need not rise: no earlier build reads or writes these tables, and the
     // package handler state rows (migration 1) a generation publication rewrites were never
     // written by an earlier build. The reader floor stays at 8: no earlier build reads these
     // tables, and every query an earlier reader makes is unchanged.
@@ -793,7 +794,8 @@ pub(crate) fn read_meta(conn: &Connection) -> Result<Option<Meta>, StorageError>
     }
     db(conn
         .query_row(
-            "SELECT store_id,schema_version,minimum_reader,minimum_writer,restore_epoch FROM store_meta WHERE singleton=1",
+            "SELECT store_id,schema_version,minimum_reader,minimum_writer,\
+                restore_epoch FROM store_meta WHERE singleton=1",
             [],
             |r| {
                 Ok(Meta {
@@ -879,16 +881,19 @@ fn apply_in_transaction(
         db(conn.execute_batch(m.sql))?;
         match bootstrap_store_id {
             Some(store_id) => db(conn.execute(
-                "INSERT INTO store_meta(singleton,store_id,schema_version,minimum_reader,minimum_writer,restore_epoch) VALUES(1,?1,?2,?3,?4,0)",
+                "INSERT INTO store_meta(singleton,store_id,schema_version,minimum_reader,\
+                    minimum_writer,restore_epoch) VALUES(1,?1,?2,?3,?4,0)",
                 params![store_id, m.version, m.minimum_reader, m.minimum_writer],
             ))?,
             None => db(conn.execute(
-                "UPDATE store_meta SET schema_version=?1,minimum_reader=?2,minimum_writer=?3 WHERE singleton=1",
+                "UPDATE store_meta SET schema_version=?1,minimum_reader=?2,\
+                    minimum_writer=?3 WHERE singleton=1",
                 params![m.version, m.minimum_reader, m.minimum_writer],
             ))?,
         };
         db(conn.execute(
-            "INSERT INTO schema_migrations(version,checksum,applied_at,app_build) VALUES(?1,?2,?3,?4)",
+            "INSERT INTO schema_migrations(version,checksum,applied_at,app_build) \
+                VALUES(?1,?2,?3,?4)",
             params![m.version, m.checksum(), now_ms, app_build],
         ))?;
         db(conn.pragma_update(None, "user_version", m.version))?;
@@ -953,7 +958,8 @@ pub(crate) fn check(
     let access = if meta.minimum_writer > build {
         AccessMode::ReadOnly {
             reason: format!(
-                "store schema {} requires writer version {}; this build is {build} (diagnostics/export only)",
+                "store schema {} requires writer version {}; this build is {build} \
+                    (diagnostics/export only)",
                 meta.schema_version, meta.minimum_writer
             ),
         }

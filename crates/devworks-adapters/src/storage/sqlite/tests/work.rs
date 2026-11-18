@@ -3747,7 +3747,16 @@ fn legacy_plan_approval_can_be_re_requested_with_a_new_exact_snapshot() {
     let feature = fx.plan(&feature, &document, &[("E1", "ship")]);
     let request = |f: &WorkRecord| {
         let pending = f.pending_plan.as_ref().unwrap();
-        fx.command(&fx.agent(),"features.request_plan_approval",json!({"featureId":f.id,"expectedRevision":f.revision,"planRevision":pending.revision,"planDigest":plan_digest(&pending.draft)}))
+        fx.command(
+            &fx.agent(),
+            "features.request_plan_approval",
+            json!({
+                "featureId": f.id,
+                "expectedRevision": f.revision,
+                "planRevision": pending.revision,
+                "planDigest": plan_digest(&pending.draft)
+            }),
+        )
     };
     let OperationResult::FeaturesRequestPlanApproval { value: old } = applied(request(&feature))
     else {

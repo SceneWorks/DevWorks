@@ -188,7 +188,11 @@ impl NativePreparation {
                             == request.admission_key
                     {
                         let captured = devworks_core::services::usage::accounting::snapshot(&row)?;
-                        let expected=match &captured.selection {devworks_core::services::router::accounting::AttemptSelection::NativeGeneration{route,..}=>route.as_ref(),selection=>selection};
+                        use devworks_core::services::router::accounting::AttemptSelection;
+                        let expected = match &captured.selection {
+                            AttemptSelection::NativeGeneration { route, .. } => route.as_ref(),
+                            selection => selection,
+                        };
                         if serde_json::to_value(expected).ok()
                             != serde_json::to_value(&request.selection).ok()
                         {

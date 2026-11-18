@@ -104,7 +104,9 @@ fn main() -> eframe::Result {
                 Ok(engine) => {
                     let r = engine.host().report();
                     eprintln!(
-                        "devworks: runtime booted in {} ms at {} (recovery: {} queue claims requeued, {} held; {} staging operations completed, {} failed; keep-awake {:?})",
+                        "devworks: runtime booted in {} ms at {} (recovery: {} queue claims \
+                            requeued, {} held; {} staging operations completed, {} failed; \
+                            keep-awake {:?})",
                         started.elapsed().as_millis(),
                         root.display(),
                         r.queue.requeued.len(),

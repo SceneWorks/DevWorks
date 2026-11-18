@@ -141,11 +141,16 @@ mod windows;
 
 /// Warning for an unelevated Windows cleanup, which cannot see elevated processes.
 #[cfg(any(windows, test))]
-const NOT_ELEVATED: &str = "Windows: cleanup is not elevated, so it cannot see elevated processes (GitHub runner jobs usually are); a folder such a job uses may be deleted. Run cleanup elevated (scheduled task with highest privileges).";
+const NOT_ELEVATED: &str = "Windows: cleanup is not elevated, so it cannot see elevated processes \
+    (GitHub runner jobs usually are); a folder such a job uses may be \
+    deleted. Run cleanup elevated (scheduled task with highest privileges).";
 
 /// Warning when the elevation check itself failed.
 #[cfg(any(windows, test))]
-const ELEVATION_UNKNOWN: &str = "Windows: could not tell whether cleanup is elevated, so it may not see elevated processes (GitHub runner jobs usually are); a folder such a job uses may be deleted. Run cleanup elevated (scheduled task with highest privileges).";
+const ELEVATION_UNKNOWN: &str = "Windows: could not tell whether cleanup is elevated, so it may not see \
+    elevated processes (GitHub runner jobs usually are); a folder such a \
+    job uses may be deleted. Run cleanup elevated (scheduled task with \
+    highest privileges).";
 
 /// The warning for a Windows elevation check result; none when elevated.
 #[cfg(any(windows, test))]

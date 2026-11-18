@@ -22,7 +22,11 @@ const OWNER_KINDS: [&str; 6] = ["Human", "Agent", "Package", "McpClient", "Sched
 /// Most registered targets one session keeps (the browser service's live bound).
 pub use devworks_core::ports::browser::MAX_TARGETS;
 
-const COLUMNS: &str = "id,boot_id,state,owner_id,owner_kind,agent_session_id,project_id,root_id,assignment_id,asset_id,process_id,create_operation_id,uncertain_operation_id,targets,detail,last_action_operation_id,close_operation_id,tested_repository,source_binding,observation_seq,created_at,updated_at,revision";
+const COLUMNS: &str = "id,boot_id,state,owner_id,owner_kind,agent_session_id,project_id,\
+    root_id,assignment_id,asset_id,process_id,create_operation_id,\
+    uncertain_operation_id,targets,detail,last_action_operation_id,\
+    close_operation_id,tested_repository,source_binding,observation_seq,\
+    created_at,updated_at,revision";
 type Raw = (Vec<Option<String>>, [i64; 4]);
 fn row(r: &Row<'_>) -> rusqlite::Result<Raw> {
     let text = (0..19)
@@ -109,7 +113,9 @@ fn observations(
     n: i64,
 ) -> Result<Vec<StoredBrowserObservation>, StorageError> {
     let mut s = db(conn.prepare_cached(
-        "SELECT sequence,artifact_id,version_id,truncated,recorded_at,tested_repository FROM browser_observations WHERE session_id=?1 AND channel=?2 AND sequence>?3 ORDER BY sequence LIMIT ?4",
+        "SELECT sequence,artifact_id,version_id,truncated,recorded_at,\
+            tested_repository FROM browser_observations WHERE session_id=?1 AND \
+            channel=?2 AND sequence>?3 ORDER BY sequence LIMIT ?4",
     ))?;
     let rows = db(db(
         s.query_map(params![session.as_str(), channel.as_str(), after, n], |r| {
@@ -256,7 +262,12 @@ impl BrowserRepository for Unit<'_> {
             });
         }
         db(db(self.conn.prepare_cached(
-            "INSERT INTO browser_sessions(id,boot_id,state,owner_id,owner_kind,agent_session_id,project_id,root_id,assignment_id,asset_id,process_id,create_operation_id,uncertain_operation_id,targets,detail,observation_seq,created_at,updated_at,revision,tested_repository,source_binding) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?17,1,?18,?19)",
+            "INSERT INTO browser_sessions(id,boot_id,state,owner_id,owner_kind,\
+                agent_session_id,project_id,root_id,assignment_id,asset_id,process_id,\
+                create_operation_id,uncertain_operation_id,targets,detail,\
+                observation_seq,created_at,updated_at,revision,tested_repository,\
+                source_binding) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,\
+                ?15,?16,?17,?17,1,?18,?19)",
         ))?
         .execute(params![
             s.id.as_str(),
@@ -276,8 +287,16 @@ impl BrowserRepository for Unit<'_> {
             s.detail,
             s.observation_sequence,
             self.now,
-            s.tested_repository.as_ref().map(serde_json::to_string).transpose().map_err(|_| invalid("browser source"))?,
-            s.source_binding.as_ref().map(serde_json::to_string).transpose().map_err(|_| invalid("browser binding"))?,
+            s.tested_repository
+                .as_ref()
+                .map(serde_json::to_string)
+                .transpose()
+                .map_err(|_| invalid("browser source"))?,
+            s.source_binding
+                .as_ref()
+                .map(serde_json::to_string)
+                .transpose()
+                .map_err(|_| invalid("browser binding"))?,
         ]))?;
         Ok(())
     }
@@ -318,7 +337,10 @@ impl BrowserRepository for Unit<'_> {
             ));
         }
         let n = db(db(self.conn.prepare_cached(
-            "UPDATE browser_sessions SET state=?2,process_id=?3,uncertain_operation_id=?4,targets=?5,detail=?6,observation_seq=?7,updated_at=?8,revision=?9,close_operation_id=?11 WHERE id=?1 AND revision=?10",
+            "UPDATE browser_sessions SET state=?2,process_id=?3,\
+                uncertain_operation_id=?4,targets=?5,detail=?6,observation_seq=?7,\
+                updated_at=?8,revision=?9,close_operation_id=?11 WHERE id=?1 AND \
+                revision=?10",
         ))?
         .execute(params![
             s.id.as_str(),
@@ -403,7 +425,9 @@ impl BrowserRepository for Unit<'_> {
             });
         }
         db(db(self.conn.prepare_cached(
-            "INSERT INTO browser_observations(session_id,sequence,channel,artifact_id,version_id,truncated,recorded_at,tested_repository) VALUES(?1,?2,?3,?4,?5,?6,?7,?8)",
+            "INSERT INTO browser_observations(session_id,sequence,channel,\
+                artifact_id,version_id,truncated,recorded_at,tested_repository) \
+                VALUES(?1,?2,?3,?4,?5,?6,?7,?8)",
         ))?
         .execute(params![
             o.session_id.as_str(),
@@ -413,7 +437,11 @@ impl BrowserRepository for Unit<'_> {
             o.version_id.as_str(),
             i64::from(o.truncated),
             o.recorded_at_ms,
-            o.tested_repository.as_ref().map(serde_json::to_string).transpose().map_err(|_| invalid("observation source"))?,
+            o.tested_repository
+                .as_ref()
+                .map(serde_json::to_string)
+                .transpose()
+                .map_err(|_| invalid("observation source"))?,
         ]))?;
         Ok(())
     }

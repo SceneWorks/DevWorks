@@ -675,18 +675,96 @@ mod artifact_review_tests {
     use super::*;
     use serde_json::json;
     fn proposal(operation: &str) -> ApprovalViewRecord {
-        let artifact = json!({"artifactId":"source","versionId":"version","sha256":"a".repeat(64),"byteLength":"123","mediaType":"application/vnd.devworks.package"});
-        serde_json::from_value(json!({"id":"review","revision":"1","contentDigest":"b".repeat(64),"state":"Pending","operationKind":operation,"targetId":"pack","targetRevision":"1","summary":"Review exact package","artifact":artifact,"payload":{"kind":"SavedOperation","schemaRevision":"1","input":{}},"reviewedContent":{"operation":operation,"inspection":{},"source":{"bundle":artifact}}})).unwrap()
+        let artifact = json!({
+            "artifactId": "source",
+            "versionId": "version",
+            "sha256": "a".repeat(64),
+            "byteLength": "123",
+            "mediaType": "application/vnd.devworks.package"
+        });
+        serde_json::from_value(json!({
+            "id": "review",
+            "revision": "1",
+            "contentDigest": "b".repeat(64),
+            "state": "Pending",
+            "operationKind": operation,
+            "targetId": "pack",
+            "targetRevision": "1",
+            "summary": "Review exact package",
+            "artifact": artifact,
+            "payload": {
+                "kind": "SavedOperation",
+                "schemaRevision": "1",
+                "input": {}
+            },
+            "reviewedContent": {
+                "operation": operation,
+                "inspection": {},
+                "source": {"bundle": artifact}
+            }
+        }))
+        .unwrap()
     }
     #[test]
     fn container_create_review_lists_mounts_ports_and_image() {
-        let mut p: ApprovalViewRecord = serde_json::from_value(json!({"id":"review","revision":"1","contentDigest":"b".repeat(64),"state":"Pending","operationKind":"containers.create","targetId":"project-a","targetRevision":"1","summary":"Review container","payload":{"kind":"SavedOperation","schemaRevision":"8","input":{}},
-            "reviewedContent":{"operation":"containers.create","engineId":"docker","projectId":"project-a","image":"alpine:3.20","command":["sh","-c","serve"],
-                "mounts":[{"source":{"rootId":"repo","relative":"src"},"hostPath":"/work/repo/src","destination":"/src","readOnly":true},
-                          {"source":{"rootId":"repo","relative":"data"},"hostPath":"/work/repo/data","destination":"/data","readOnly":false}],
-                "ports":[{"hostPort":8080,"containerPort":80,"protocol":"tcp","exposeBeyondLoopback":false,"bindAddress":"127.0.0.1"},
-                         {"hostPort":5353,"containerPort":53,"protocol":"udp","exposeBeyondLoopback":true,"bindAddress":"all host interfaces"}],
-                "environment":[{"name":"MODE","value":"dev"},{"name":"TOKEN","credentialRef":"cred-1"}],"resourceIds":[]}})).unwrap();
+        let mut p: ApprovalViewRecord = serde_json::from_value(json!({
+            "id": "review",
+            "revision": "1",
+            "contentDigest": "b".repeat(64),
+            "state": "Pending",
+            "operationKind": "containers.create",
+            "targetId": "project-a",
+            "targetRevision": "1",
+            "summary": "Review container",
+            "payload": {
+                "kind": "SavedOperation",
+                "schemaRevision": "8",
+                "input": {}
+            },
+            "reviewedContent": {
+                "operation": "containers.create",
+                "engineId": "docker",
+                "projectId": "project-a",
+                "image": "alpine:3.20",
+                "command": ["sh", "-c", "serve"],
+                "mounts": [
+                    {
+                        "source": {"rootId": "repo", "relative": "src"},
+                        "hostPath": "/work/repo/src",
+                        "destination": "/src",
+                        "readOnly": true
+                    },
+                    {
+                        "source": {"rootId": "repo", "relative": "data"},
+                        "hostPath": "/work/repo/data",
+                        "destination": "/data",
+                        "readOnly": false
+                    }
+                ],
+                "ports": [
+                    {
+                        "hostPort": 8080,
+                        "containerPort": 80,
+                        "protocol": "tcp",
+                        "exposeBeyondLoopback": false,
+                        "bindAddress": "127.0.0.1"
+                    },
+                    {
+                        "hostPort": 5353,
+                        "containerPort": 53,
+                        "protocol": "udp",
+                        "exposeBeyondLoopback": true,
+                        "bindAddress": "all host interfaces"
+                    }
+                ],
+                "environment": [
+                    {"name": "MODE", "value": "dev"},
+                    {"name": "TOKEN", "credentialRef": "cred-1"}
+                ],
+                "resourceIds": []
+            }
+        }))
+        .unwrap();
         assert_eq!(
             container_create_review(&p).unwrap(),
             [
@@ -706,7 +784,23 @@ mod artifact_review_tests {
     #[test]
     fn container_build_pull_start_and_exec_reviews_list_their_key_inputs() {
         let review = |operation: &str, reviewed: serde_json::Value| {
-            let p: ApprovalViewRecord = serde_json::from_value(json!({"id":"review","revision":"1","contentDigest":"b".repeat(64),"state":"Pending","operationKind":operation,"targetId":"project-a","targetRevision":"1","summary":"Review container","payload":{"kind":"SavedOperation","schemaRevision":"1","input":{}},"reviewedContent":reviewed})).unwrap();
+            let p: ApprovalViewRecord = serde_json::from_value(json!({
+                "id": "review",
+                "revision": "1",
+                "contentDigest": "b".repeat(64),
+                "state": "Pending",
+                "operationKind": operation,
+                "targetId": "project-a",
+                "targetRevision": "1",
+                "summary": "Review container",
+                "payload": {
+                    "kind": "SavedOperation",
+                    "schemaRevision": "1",
+                    "input": {}
+                },
+                "reviewedContent": reviewed
+            }))
+            .unwrap();
             container_operation_review(&p)
         };
         let container = json!({"containerId":"c-1","revision":"1","engine":"docker","image":"alpine:3.20","phase":"Running",

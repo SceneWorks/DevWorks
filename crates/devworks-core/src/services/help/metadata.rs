@@ -16,18 +16,38 @@ impl HelpService {
             .last()
             .expect("qualified catalog revision");
         let registered = self.registered.read_locked();
-        descriptor.modes.iter().map(|binding| {
-            let input=serde_json::to_vec(&binding.input_schema(revision)).expect("registered schema serializes");
-            let result=serde_json::to_vec(&descriptor.result_schema(revision)).expect("registered schema serializes");
-            let available=registered.contains(&(operation.into(),binding.mode.as_str().into()));
-            HelpCapabilityMetadata {
-                operation:BoundedText(operation.into()),mode:BoundedText(binding.mode.as_str().into()),
-                owner:BoundedText(descriptor.owner.into()),authority:BoundedText(format!("{:?}",binding.authority)),effect:BoundedText(format!("{:?}",binding.effect)),
-                schema_revision:rev(i64::from(revision.0)),input_type:BoundedText(binding.input_type.into()),result_type:BoundedText(descriptor.result_type.into()),
-                input_schema_digest:Digest(sha256_hex(&input)),result_schema_digest:Digest(sha256_hex(&result)),
-                available,unavailable_reason:(!available).then(||BoundedText("This operation and mode have no handler in the current native composition.".into())),
-            }
-        }).collect()
+        descriptor
+            .modes
+            .iter()
+            .map(|binding| {
+                let input = serde_json::to_vec(&binding.input_schema(revision))
+                    .expect("registered schema serializes");
+                let result = serde_json::to_vec(&descriptor.result_schema(revision))
+                    .expect("registered schema serializes");
+                let available =
+                    registered.contains(&(operation.into(), binding.mode.as_str().into()));
+                HelpCapabilityMetadata {
+                    operation: BoundedText(operation.into()),
+                    mode: BoundedText(binding.mode.as_str().into()),
+                    owner: BoundedText(descriptor.owner.into()),
+                    authority: BoundedText(format!("{:?}", binding.authority)),
+                    effect: BoundedText(format!("{:?}", binding.effect)),
+                    schema_revision: rev(i64::from(revision.0)),
+                    input_type: BoundedText(binding.input_type.into()),
+                    result_type: BoundedText(descriptor.result_type.into()),
+                    input_schema_digest: Digest(sha256_hex(&input)),
+                    result_schema_digest: Digest(sha256_hex(&result)),
+                    available,
+                    unavailable_reason: (!available).then(|| {
+                        BoundedText(
+                            "This operation and mode have no handler in the current native \
+                    composition."
+                                .into(),
+                        )
+                    }),
+                }
+            })
+            .collect()
     }
 }
 
@@ -58,7 +78,12 @@ pub(super) fn render(metadata: &HelpCapabilityMetadata) -> String {
     let revision = crate::registry::SchemaRevision(metadata.schema_revision.get() as u32);
     let schema = serde_json::to_value(binding.input_schema(revision)).expect("registered schema");
     let mut body = format!(
-        "{AUTO_START}\n## {} ({})\n\nOwner: `{}`. Authority: `{}`. Effect: `{}`. Schema revision: `{}`.\n\nRegistration describes implementation availability. Every real request still passes current tool selection, scope, policy, target and approval checks; documentation grants no authority.\n\n### Parameters\n\n| Name | Required | Schema | Description |\n|---|---|---|---|\n",
+        "{AUTO_START}\n## {} ({})\n\nOwner: `{}`. Authority: `{}`. Effect: `{}`. \
+            Schema revision: `{}`.\n\nRegistration describes implementation \
+            availability. Every real request still passes current tool selection, \
+            scope, policy, target and approval checks; documentation grants no \
+            authority.\n\n### Parameters\n\n| Name | Required | Schema | \
+            Description |\n|---|---|---|---|\n",
         metadata.operation.0,
         metadata.mode.0,
         metadata.owner.0,
@@ -84,7 +109,12 @@ pub(super) fn render(metadata: &HelpCapabilityMetadata) -> String {
             ));
         }
     }
-    body.push_str(&format!("\n### Exact input contract\n\n```json\n{}\n```\n\n### Exact result contract\n\n```json\n{}\n```\n{AUTO_END}",serde_json::to_string_pretty(&schema).expect("schema"),serde_json::to_string_pretty(&descriptor.result_schema(revision)).expect("schema")));
+    body.push_str(&format!(
+        "\n### Exact input contract\n\n```json\n{}\n```\n\n### Exact result \
+        contract\n\n```json\n{}\n```\n{AUTO_END}",
+        serde_json::to_string_pretty(&schema).expect("schema"),
+        serde_json::to_string_pretty(&descriptor.result_schema(revision)).expect("schema")
+    ));
     body
 }
 

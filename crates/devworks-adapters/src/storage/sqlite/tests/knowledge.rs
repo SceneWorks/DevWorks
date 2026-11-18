@@ -1884,7 +1884,8 @@ fn all_text(fx: &Fx) -> String {
             let mut out = String::new();
             for sql in [
                 "SELECT snapshot_json FROM knowledge_history",
-                "SELECT reason || coalesce(resolution,'') || evidence_json FROM knowledge_challenges",
+                "SELECT reason || coalesce(resolution,'') || evidence_json FROM \
+                    knowledge_challenges",
                 "SELECT name || coalesce(reference,'') FROM knowledge_addresses",
                 "SELECT event_key || coalesce(source_ref,'') FROM knowledge_lesson_events",
                 "SELECT body_json || coalesce(applicability_json,'') FROM knowledge_claims",
@@ -4865,7 +4866,16 @@ fn bulk_source_deletions_share_a_scope_fence_until_the_previous_job_finishes() {
         .unwrap()
         .id
         .as_str();
-    summary(fx.cmd(&user,"knowledge.delete_by_source",json!({"scope": proj("project-b"),"sourceId":"other","expectedScopeRevision":revision.to_string(),"previewDigest":digest})));
+    summary(fx.cmd(
+        &user,
+        "knowledge.delete_by_source",
+        json!({
+            "scope": proj("project-b"),
+            "sourceId": "other",
+            "expectedScopeRevision": revision.to_string(),
+            "previewDigest": digest
+        }),
+    ));
     assert_eq!(
         wire(
             &fx.claim(&user, proj("project-b"), &other)
@@ -5139,9 +5149,19 @@ fn approval_review_queue_is_informational_scoped_and_retains_bounded_open_challe
         v.kind,
         devworks_core::protocol::records::KnowledgeReviewKind::Contradiction
     )));
-    assert!(
-        matches!(fx.q(&user,"approvals.review_queue",json!({"page":{"limit":50}})),DomainQueryReply::Rejected{fault,..} if fault.code==DomainErrorCode::InvalidArgument && fault.target_kind.as_ref().is_some_and(|v|v.0=="project_required"))
-    );
+    assert!(matches!(
+        fx.q(
+            &user,
+            "approvals.review_queue",
+            json!({"page": {"limit": 50}}),
+        ),
+        DomainQueryReply::Rejected { fault, .. }
+            if fault.code == DomainErrorCode::InvalidArgument
+                && fault
+                    .target_kind
+                    .as_ref()
+                    .is_some_and(|v| v.0 == "project_required")
+    ));
     // A project-bound caller's omitted filter resolves its host lineage, while another project
     // is denied before candidate selection or pagination.
     let OperationResult::ApprovalsReviewQueue { value: inferred } =

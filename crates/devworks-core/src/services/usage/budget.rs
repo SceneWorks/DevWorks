@@ -227,7 +227,14 @@ fn reconcile_latch(
             feature,
             &budget,
             "FeatureBudgetWarning",
-            json!({"spentMicroUsd":totals.spent_micro_usd,"limitMicroUsd":limit,"reservedMicroUsd":totals.reserved_micro_usd,"monetaryIncompleteAttempts":totals.monetary_incomplete_attempts,"legacyUsageFacts":totals.legacy_usage_facts,"thresholdPercent":75}),
+            json!({
+                "spentMicroUsd": totals.spent_micro_usd,
+                "limitMicroUsd": limit,
+                "reservedMicroUsd": totals.reserved_micro_usd,
+                "monetaryIncompleteAttempts": totals.monetary_incomplete_attempts,
+                "legacyUsageFacts": totals.legacy_usage_facts,
+                "thresholdPercent": 75
+            }),
         )?;
         warn_coordinator(tx, feature, &totals, limit)?;
     }

@@ -137,7 +137,21 @@ fn witness(
             .filter(|(p, _)| p.as_str() != project)
             .flat_map(|(_, r)| r.clone()),
     );
-    let digest = sha256_hex(&serde_json::to_vec(&serde_json::json!({"memory":digest,"live":state.live.projects.get(project),"references":surviving,"paths":state.live.paths.iter().filter(|(p,_)|p.as_str()!=project).collect::<BTreeMap<_,_>>(),"setAside":set_aside})).map_err(|_| PurgeFileFault::Unattributed)?);
+    let digest = sha256_hex(
+        &serde_json::to_vec(&serde_json::json!({
+            "memory": digest,
+            "live": state.live.projects.get(project),
+            "references": surviving,
+            "paths": state
+                .live
+                .paths
+                .iter()
+                .filter(|(p, _)| p.as_str() != project)
+                .collect::<BTreeMap<_, _>>(),
+            "setAside": set_aside
+        }))
+        .map_err(|_| PurgeFileFault::Unattributed)?,
+    );
     let snapshot = PurgeClientSnapshot {
         digest,
         surviving_artifacts: surviving,
