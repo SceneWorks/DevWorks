@@ -255,4 +255,14 @@ impl Input {
             Self::InspectQueue(_) => Mode::Query,
         }
     }
+    /// The `/body` members of this input, without the `kind` discriminator.
+    pub fn body(&self) -> Result<serde_json::Value, serde_json::Error> {
+        match self {
+            Self::ClaimProjectQueue(i) => serde_json::to_value(i),
+            Self::ClaimFeatureTask(i) => serde_json::to_value(i),
+            Self::InspectClaim(i) => serde_json::to_value(i),
+            Self::ReleaseClaim(i) => serde_json::to_value(i),
+            Self::InspectQueue(i) => serde_json::to_value(i),
+        }
+    }
 }

@@ -8,9 +8,9 @@ fn native_price_more_gesture_survives_same_frame_catalog_hint_without_replacing_
     startup::settled(&engine, &root);
     let b = engine.backend();
     let model = "hint-paged-model";
-    ops::configured(b.command("router.configure",&ops::router_configure(&*b,json!({"kind":"Model","model":{"id":model,"displayName":"Hint paged model","endpointProfile":"CompatibleChat","upstreamModelId":"fixture/hint-paged","enabled":true,"tierMemberships":[],"efforts":[],"imageInput":false,"tools":false,"revision":"1"}})))).unwrap();
+    ops::configured(b.command("router.configure",&ops::router_configure(&*b, serde_json::from_value(json!({"kind":"Model","model":{"id":model,"displayName":"Hint paged model","endpointProfile":"CompatibleChat","upstreamModelId":"fixture/hint-paged","enabled":true,"tierMemberships":[],"efforts":[],"imageInput":false,"tools":false,"revision":"1"}})).unwrap()))).unwrap();
     let tariffs=(0..105).map(|i|json!({"upstreamModelId":"fixture/hint-paged","serviceTier":format!("service-{i:03}"),"modality":"Text","chargeKind":"Input","unit":"Token","units":"1000000","amountUsd":"1"})).collect::<Vec<_>>();
-    uops::overridden(b.command("router.price_override",&uops::command(&*b,"router.price_override",json!({"modelId":model,"expectedRevision":"1","change":{"kind":"Set","tariffs":tariffs}})))).unwrap();
+    uops::overridden(b.command("router.price_override",&uops::command(&*b, command_input("router.price_override", json!({"modelId":model,"expectedRevision":"1","change":{"kind":"Set","tariffs":tariffs}}))))).unwrap();
     let (signal, hints) = tokio::sync::watch::channel(0);
     let hinted = std::sync::Arc::new(Hinted {
         inner: b.clone(),

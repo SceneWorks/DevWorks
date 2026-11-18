@@ -202,7 +202,10 @@ fn setup_qualify_reopen(paid: bool, lose_acks: bool) {
     assert!(retained.qualification_attempt_id.is_some());
     assert!(retained.result_artifact.is_some());
     let usage_body = serde_json::json!({"reportKind":"Attempts","scope":{"kind":"Workspace"},"page":{"limit":100}});
-    let usage_frame = devworks_desktop::usage_ops::query(&*backend, "router.usage", usage_body);
+    let usage_frame = devworks_desktop::usage_ops::query(
+        &*backend,
+        devworks_desktop::frame::fixture::query_input("router.usage", usage_body),
+    );
     let usage =
         devworks_desktop::usage_ops::usage(backend.query("router.usage", &usage_frame)).unwrap();
     let devworks_core::protocol::records::UsageQueryResult::Attempts { page: attempts } = usage
@@ -276,7 +279,7 @@ fn setup_qualify_reopen(paid: bool, lose_acks: bool) {
         };
         let current = records().remove(0);
         let original_endpoint = current.endpoint.as_ref().unwrap().0.clone();
-        ops::configured(backend.command("router.configure", &ops::router_configure(&*backend,serde_json::json!({"kind":"Connection","connectionId":current.id,"expectedRevision":current.revision,"name":"Renamed embeddings","profile":"Embedding","endpoint":original_endpoint})))).unwrap();
+        ops::configured(backend.command("router.configure", &ops::router_configure(&*backend, serde_json::from_value(serde_json::json!({"kind":"Connection","connectionId":current.id,"expectedRevision":current.revision,"name":"Renamed embeddings","profile":"Embedding","endpoint":original_endpoint})).unwrap()))).unwrap();
         let inspect = || {
             ops::embedding_space_page(backend.query(
                 "router.embedding_spaces",
@@ -298,7 +301,7 @@ fn setup_qualify_reopen(paid: bool, lose_acks: bool) {
             restored.items.0[0].qualification_attempt_id
         );
         let current = records().remove(0);
-        ops::configured(backend.command("router.configure", &ops::router_configure(&*backend,serde_json::json!({"kind":"Connection","connectionId":current.id,"expectedRevision":current.revision,"name":"Changed destination","profile":"Embedding","endpoint":"http://localhost:11434/another-endpoint"})))).unwrap();
+        ops::configured(backend.command("router.configure", &ops::router_configure(&*backend, serde_json::from_value(serde_json::json!({"kind":"Connection","connectionId":current.id,"expectedRevision":current.revision,"name":"Changed destination","profile":"Embedding","endpoint":"http://localhost:11434/another-endpoint"})).unwrap()))).unwrap();
         let stale = inspect();
         assert_eq!(
             serde_json::to_value(&stale.items.0[0].status).unwrap(),
@@ -317,9 +320,7 @@ fn setup_qualify_reopen(paid: bool, lose_acks: bool) {
             "old proof remains inspectable"
         );
         let request = ops::router_configure(
-            &*backend,
-            serde_json::json!({"kind":"QualifyEmbeddingSpace","candidateId":stale.items.0[0].id,"expectedRevision":stale.items.0[0].revision}),
-        );
+            &*backend, serde_json::from_value(serde_json::json!({"kind":"QualifyEmbeddingSpace","candidateId":stale.items.0[0].id,"expectedRevision":stale.items.0[0].revision}),).unwrap());
         let Err(ops::Failure::Refused(fault)) =
             ops::command_result(backend.command("router.configure", &request))
         else {
@@ -398,7 +399,7 @@ fn retained_embedding_controls_survive_an_actual_background_read() {
     gate.close();
     // A real committed change emits the normal runtime hint. Hold only the subsequent read
     // reply, so the loading interval covers the entire pointer interaction deterministically.
-    ops::configured(backend.command("router.configure", &ops::router_configure(&*backend,serde_json::json!({"kind":"Connection","connectionId":connection.id,"expectedRevision":connection.revision,"name":"Background renamed connection","profile":"Embedding","endpoint":connection.endpoint.unwrap().0})))).unwrap();
+    ops::configured(backend.command("router.configure", &ops::router_configure(&*backend, serde_json::from_value(serde_json::json!({"kind":"Connection","connectionId":connection.id,"expectedRevision":connection.revision,"name":"Background renamed connection","profile":"Embedding","endpoint":connection.endpoint.unwrap().0})).unwrap()))).unwrap();
     let deadline = std::time::Instant::now() + SETTLE_BOUND;
     while !h.state().settings.connections.embedding_spaces.loading {
         assert!(

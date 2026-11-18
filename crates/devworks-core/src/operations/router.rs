@@ -555,4 +555,23 @@ impl Input {
             Self::EmbeddingSpaces(_) => Mode::Query,
         }
     }
+    /// The `/body` members of this input, without the `kind` discriminator.
+    pub fn body(&self) -> Result<serde_json::Value, serde_json::Error> {
+        match self {
+            Self::Catalog(i) => serde_json::to_value(i),
+            Self::Connections(i) => serde_json::to_value(i),
+            Self::Route(i) => serde_json::to_value(i),
+            Self::Pin(i) => serde_json::to_value(i),
+            Self::Availability(i) => serde_json::to_value(i),
+            Self::Usage(i) => serde_json::to_value(i),
+            Self::RequestStatus(i) => serde_json::to_value(i),
+            Self::PriceStatus(i) => serde_json::to_value(i),
+            Self::PriceRefresh(i) => serde_json::to_value(i),
+            Self::PriceOverride(i) => serde_json::to_value(i),
+            Self::Configure(i) => serde_json::to_value(i),
+            Self::DecisionModels(i) => serde_json::to_value(i),
+            Self::Decide(i) => serde_json::to_value(i),
+            Self::EmbeddingSpaces(i) => serde_json::to_value(i),
+        }
+    }
 }

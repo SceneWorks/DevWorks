@@ -23,6 +23,78 @@ fn project(value: &str) -> ProjectId {
 }
 
 #[test]
+fn an_unknown_stored_delivery_state_is_a_corrupt_store() {
+    use devworks_core::services::agents::retained::{MessageKind, PostSpec, post_message};
+    let h = Harness::new();
+    drop(SqliteStore::open_with(h.config(), &through(40)).unwrap());
+    h.raw().execute_batch(
+        "INSERT INTO actors VALUES('human-a','human','Human'),('agent-a','agent','Agent');
+         INSERT INTO projects VALUES('project-a','A','Active',1,1,1);
+         INSERT INTO repositories VALUES('repo-a','/a',1);
+         INSERT INTO project_repositories VALUES('project-a','repo-a');
+         INSERT INTO work_items VALUES('root-a','project-a','issue',NULL,NULL,NULL,'A',1,0,1,1,1,'{}');
+         INSERT INTO work_repositories VALUES('root-a','repo-a');
+         INSERT INTO conversations VALUES('conv-a','root-a',0);
+         INSERT INTO sessions(id,conversation_id,agent_id,root_id,context_epoch,revision,project_id,created_at)
+           VALUES('session-old','conv-a','agent-a','root-a',0,1,'project-a',1700000000000);"
+    ).unwrap();
+    let s = SqliteStore::open_with(h.config(), MIGRATIONS).unwrap();
+    let human = HostIngress::new(&s).context(
+        ActorId(id("human-a")),
+        PrincipalKind::Human,
+        id("post-direct"),
+        id("test-ingress"),
+        Counter::new(s.info().restore_epoch).unwrap(),
+        Revision::new(1).unwrap(),
+    );
+    let message = run_write(&s, WriteOptions::default(), move |tx| {
+        Ok(post_message(
+            tx,
+            &human,
+            &PostSpec {
+                project: project("project-a"),
+                body: "hello".into(),
+                kind: MessageKind::Info,
+                item: None,
+                feature: None,
+                resource: None,
+                to_session: Some(id("session-old")),
+                to_human: false,
+                blocking: false,
+                in_reply_to: None,
+                resolves: None,
+                idempotency_key: None,
+            },
+        )
+        .map_err(Failure::into_storage)?
+        .message
+        .id)
+    })
+    .unwrap();
+    {
+        let raw = h.raw();
+        raw.pragma_update(None, "ignore_check_constraints", true)
+            .unwrap();
+        raw.execute("UPDATE agent_message_deliveries SET state='Bogus'", [])
+            .unwrap();
+    }
+    let result = read_snapshot(&s, &ReadOptions::default(), |r| {
+        r.runs()
+            .agent_session_delivery(&message, &id("session-old"))
+    });
+    assert!(
+        matches!(
+            result,
+            Err(StorageError::StorageUnavailable {
+                cause: Unavailable::Corrupt,
+                ..
+            })
+        ),
+        "{result:?}"
+    );
+}
+
+#[test]
 fn itemless_direct_messages_pass_once_to_same_repository_successor() {
     use devworks_core::services::agents::retained::{
         AckSelection, MessageKind, PostSpec, Recipient, acknowledge, deliver_inbox,
@@ -186,7 +258,10 @@ fn itemless_direct_messages_pass_once_to_same_repository_successor() {
             .agent_session_delivery(&unread, &id("session-next"))?
             .unwrap();
         assert!(successor.handed_over);
-        assert_eq!(successor.state, "Pending");
+        assert_eq!(
+            successor.state,
+            devworks_core::ports::storage::DeliveryState::Pending
+        );
         Ok(())
     });
     result.unwrap();
@@ -433,7 +508,7 @@ fn message_delivery_replays_after_reopen_and_rejects_cross_project_links() {
             project_id: m.project_id.clone(),
             recipient_assignment_id: m.to_assignment_id.clone(),
             recipient_human: false,
-            state: "Pending".into(),
+            state: devworks_core::ports::storage::DeliveryState::Pending,
             revision: 1,
             delivered_at_ms: None,
             read_at_ms: None,
@@ -480,7 +555,7 @@ fn message_delivery_replays_after_reopen_and_rejects_cross_project_links() {
             recipient_assignment_id: None,
             recipient_session_id: Some(id("session-child")),
             recipient_human: false,
-            state: "Pending".into(),
+            state: devworks_core::ports::storage::DeliveryState::Pending,
             revision: 1,
             delivered_at_ms: None,
             read_at_ms: None,
@@ -506,7 +581,7 @@ fn message_delivery_replays_after_reopen_and_rejects_cross_project_links() {
             recipient_assignment_id: None,
             recipient_session_id: Some(id("session-home")),
             recipient_human: false,
-            state: "Pending".into(),
+            state: devworks_core::ports::storage::DeliveryState::Pending,
             revision: 1,
             delivered_at_ms: None,
             read_at_ms: None,
@@ -659,7 +734,10 @@ fn message_delivery_replays_after_reopen_and_rejects_cross_project_links() {
             .map_err(Failure::into_storage)?;
             assert_eq!(page.items.len(), 1);
             assert_eq!(page.next_sequence, 2);
-            assert_eq!(page.items[0].0.state, "Delivered");
+            assert_eq!(
+                page.items[0].0.state,
+                devworks_core::ports::storage::DeliveryState::Delivered
+            );
             Ok(())
         })
         .unwrap();
@@ -700,7 +778,7 @@ fn message_delivery_replays_after_reopen_and_rejects_cross_project_links() {
                 .agent_session_delivery(&id("message-direct"), &id("session-child"))?
                 .unwrap()
                 .state,
-            "Read"
+            devworks_core::ports::storage::DeliveryState::Read
         );
         Ok(())
     })
@@ -883,7 +961,10 @@ fn message_delivery_replays_after_reopen_and_rejects_cross_project_links() {
             .runs()
             .agent_session_delivery(&reply.message.id, &id("session-child"))?
             .unwrap();
-        assert_eq!(delivery.state, "Pending");
+        assert_eq!(
+            delivery.state,
+            devworks_core::ports::storage::DeliveryState::Pending
+        );
         Ok(())
     })
     .unwrap();
@@ -1021,7 +1102,7 @@ fn message_delivery_replays_after_reopen_and_rejects_cross_project_links() {
             .runs()
             .agent_delivery(&id("message-a"), Some(&assignment("recipient")))?
             .unwrap();
-        delivery.state = "Read".into();
+        delivery.state = devworks_core::ports::storage::DeliveryState::Read;
         delivery.revision += 1;
         delivery.delivered_at_ms = Some(110);
         delivery.read_at_ms = Some(110);
@@ -1061,7 +1142,7 @@ fn message_delivery_replays_after_reopen_and_rejects_cross_project_links() {
             )?[0]
                 .0
                 .state,
-            "Read"
+            devworks_core::ports::storage::DeliveryState::Read
         );
         assert_eq!(
             snap.runs()
@@ -1255,7 +1336,10 @@ fn message_delivery_replays_after_reopen_and_rejects_cross_project_links() {
             10,
         )?;
         assert_eq!(pending_outbound[0].0.id, posted.id);
-        assert_eq!(pending_outbound[0].1.as_ref().unwrap().state, "Pending");
+        assert_eq!(
+            pending_outbound[0].1.as_ref().unwrap().state,
+            devworks_core::ports::storage::DeliveryState::Pending
+        );
         let unread = snap.runs().agent_assignment_thread(
             &project("project-a"),
             &assignment("recipient"),
@@ -1354,7 +1438,10 @@ fn message_delivery_replays_after_reopen_and_rejects_cross_project_links() {
             None,
             10,
         )?;
-        assert_eq!(outbound[0].1.as_ref().unwrap().state, "Read");
+        assert_eq!(
+            outbound[0].1.as_ref().unwrap().state,
+            devworks_core::ports::storage::DeliveryState::Read
+        );
         assert!(
             snap.runs()
                 .agent_assignment_thread(

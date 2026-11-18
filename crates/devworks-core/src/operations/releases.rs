@@ -62,4 +62,13 @@ impl Input {
             Self::Deploy(_) => Mode::Command,
         }
     }
+    /// The `/body` members of this input, without the `kind` discriminator.
+    pub fn body(&self) -> Result<serde_json::Value, serde_json::Error> {
+        match self {
+            Self::Inspect(i) => serde_json::to_value(i),
+            Self::Prepare(i) => serde_json::to_value(i),
+            Self::Publish(i) => serde_json::to_value(i),
+            Self::Deploy(i) => serde_json::to_value(i),
+        }
+    }
 }

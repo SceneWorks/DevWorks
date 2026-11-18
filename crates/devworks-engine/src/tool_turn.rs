@@ -1776,7 +1776,9 @@ pub(crate) fn dispatch_step(
                 .usage()
                 .inference_attempt(&key.attempt_id.0)?
                 .ok_or(StorageError::ScopeDenied)?;
-            if attempt.session_id.as_ref() != Some(session_id) || attempt.state != "Settled" {
+            if attempt.session_id.as_ref() != Some(session_id)
+                || attempt.state != devworks_core::ports::storage::AttemptState::Settled
+            {
                 return Err(StorageError::ScopeDenied);
             }
             let page = read.history().page(

@@ -160,4 +160,14 @@ impl Input {
             Self::ReassignAndRemove(_) => Mode::Command,
         }
     }
+    /// The `/body` members of this input, without the `kind` discriminator.
+    pub fn body(&self) -> Result<serde_json::Value, serde_json::Error> {
+        match self {
+            Self::List(i) => serde_json::to_value(i),
+            Self::CreateStatus(i) => serde_json::to_value(i),
+            Self::RenameStatus(i) => serde_json::to_value(i),
+            Self::Order(i) => serde_json::to_value(i),
+            Self::ReassignAndRemove(i) => serde_json::to_value(i),
+        }
+    }
 }

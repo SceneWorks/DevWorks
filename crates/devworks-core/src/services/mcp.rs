@@ -24,8 +24,8 @@ use crate::protocol::records::{ItemState, McpCapability, McpServer, McpTransport
 use crate::protocol::results::{DomainDecision, OperationResult};
 use crate::protocol::support::{BoundedList, BoundedText, Check, Limit, Page};
 use crate::protocol::{
-    ActorId, CorrelationId, Counter, DomainErrorCode, DomainFault, EventId, Id, OperationId,
-    OperationState, ProjectId, RetryAdvice, Revision, RevisionDimension,
+    CorrelationId, Counter, DomainErrorCode, DomainFault, EventId, Id, OperationId, OperationState,
+    RetryAdvice, Revision, RevisionDimension,
 };
 use crate::services::artifacts::ArtifactService;
 use crate::services::cursor::CursorBinding;
@@ -36,6 +36,11 @@ use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, OnceLock};
 mod content;
+mod effects;
+use effects::{
+    ConnectEffect, DisconnectEffect, QueuedEffect, SamplingEvent, ServerEvent, ToolCaller,
+    ToolEffect, ToolRequestedEvent,
+};
 
 const NAMESPACE: &str = "outgoing_mcp";
 const SCHEMA_VERSION: i64 = 1;
@@ -677,24 +682,49 @@ impl McpClientService {
                 }
                 let event_id = EventId(tx.new_id(IdKind::Event));
                 tx.operations().record_intent(NewOperation {
-                id: operation_for_write.clone(), root_id: ctx.root_id().cloned(), assignment_id: ctx.assignment_id().cloned(),
-                capability: "mcp.tool".into(), schema_version: 1, args_digest: digest_for_write,
-                payload: json!({
-                    "scope":material.server_scope.key(),"serverId":material.server_id,
-                    "serverRevision":material.server_revision.get(),"catalogRevision":material.catalog_revision.get(),
-                    "capabilityId":material.capability_id,"schema":material.alias.input_schema,
-                    "wireName":material.wire_name,"arguments":arguments,
-                    "principal":ctx.principal(),"principalKind":ctx.principal_kind().as_str().to_string(),
-                    "sessionId":ctx.session_id(),"projectId":ctx.project_id(),"fences":fences,"call":call,
-                }),
-            })?;
+                    id: operation_for_write.clone(),
+                    root_id: ctx.root_id().cloned(),
+                    assignment_id: ctx.assignment_id().cloned(),
+                    capability: "mcp.tool".into(),
+                    schema_version: 1,
+                    args_digest: digest_for_write,
+                    payload: ToolEffect {
+                        server_revision: material.server_revision.get(),
+                        capability_id: material.capability_id.clone(),
+                        schema: material.alias.input_schema.clone(),
+                        wire_name: material.wire_name.clone(),
+                        arguments: arguments.clone(),
+                        caller: ToolCaller {
+                            scope: material.server_scope.clone(),
+                            server_id: material.server_id.clone(),
+                            catalog_revision: material.catalog_revision.get(),
+                            principal: ctx.principal().clone(),
+                            principal_kind: ctx.principal_kind(),
+                            session_id: session.id.clone(),
+                            project_id: ctx.project_id().cloned(),
+                            fences: fences.clone(),
+                            call: call.clone(),
+                        },
+                    }
+                    .journal(),
+                })?;
                 tx.history().append(NewEvent {
-                id: event_id.clone(), actor: ctx.principal().clone(), project_id: ctx.project_id().cloned(),
-                root_id: ctx.root_id().cloned(), operation_id: Some(operation_for_write.clone()),
-                aggregate_kind: "mcp_tool_call".into(), aggregate_id: operation_for_write.0.as_str().into(),
-                aggregate_revision: 1, kind: "McpToolRequested".into(),
-                payload: json!({"serverId":material.server_id,"capabilityId":material.capability_id,"call":call}),
-            })?;
+                    id: event_id.clone(),
+                    actor: ctx.principal().clone(),
+                    project_id: ctx.project_id().cloned(),
+                    root_id: ctx.root_id().cloned(),
+                    operation_id: Some(operation_for_write.clone()),
+                    aggregate_kind: "mcp_tool_call".into(),
+                    aggregate_id: operation_for_write.0.as_str().into(),
+                    aggregate_revision: 1,
+                    kind: "McpToolRequested".into(),
+                    payload: ToolRequestedEvent {
+                        server_id: &material.server_id,
+                        capability_id: &material.capability_id,
+                        call: &call,
+                    }
+                    .payload(),
+                })?;
                 let queue_id = tx.new_id(IdKind::QueueEntry);
                 let now = tx.now_ms();
                 tx.queue().enqueue(NewQueueEntry {
@@ -706,7 +736,11 @@ impl McpClientService {
                     partition: None,
                     priority: 0,
                     ready_at_ms: now,
-                    payload: json!({"serverId":material.server_id,"call":call}),
+                    payload: QueuedEffect {
+                        server_id: &material.server_id,
+                        call: Some(&call),
+                    }
+                    .payload(),
                 })?;
                 Ok(operation_for_write)
             },
@@ -732,49 +766,18 @@ impl McpClientService {
         let Some(native) = self.native.get() else {
             return EffectOutcome::NotApplied("native MCP client is unavailable".into());
         };
-        let Some(scope) = op
-            .payload
-            .get("scope")
-            .and_then(Value::as_str)
-            .and_then(ConfigScope::from_key)
+        let Ok(ConnectEffect {
+            scope,
+            server_id,
+            pending_revision,
+            catalog_revision,
+            principal,
+            principal_kind: kind,
+            session_id,
+            fences,
+        }) = ConnectEffect::parse(&op.payload)
         else {
-            return EffectOutcome::Failed("invalid MCP effect scope".into());
-        };
-        let Some(server_id) = op
-            .payload
-            .get("serverId")
-            .cloned()
-            .and_then(|v| serde_json::from_value::<Id>(v).ok())
-        else {
-            return EffectOutcome::Failed("invalid MCP effect server".into());
-        };
-        let Some(pending_revision) = op.payload.get("pendingRevision").and_then(Value::as_i64)
-        else {
-            return EffectOutcome::Failed("invalid MCP effect revision".into());
-        };
-        let Some(principal) = op
-            .payload
-            .get("principal")
-            .cloned()
-            .and_then(|v| serde_json::from_value::<ActorId>(v).ok())
-        else {
-            return EffectOutcome::Failed("invalid MCP effect principal".into());
-        };
-        let Some(kind) = op
-            .payload
-            .get("principalKind")
-            .and_then(Value::as_str)
-            .and_then(PrincipalKind::parse)
-        else {
-            return EffectOutcome::Failed("invalid MCP principal kind".into());
-        };
-        let Some(fences) = op
-            .payload
-            .get("fences")
-            .cloned()
-            .and_then(|v| serde_json::from_value::<Vec<AuthorityFence>>(v).ok())
-        else {
-            return EffectOutcome::Failed("invalid MCP authority fence".into());
+            return EffectOutcome::Failed("invalid MCP effect payload".into());
         };
         let server = match read_snapshot(&*native.store, &ReadOptions::default(), |snapshot| {
             if snapshot.operations().operation(&op.id)?.as_ref() != Some(op) {
@@ -840,18 +843,11 @@ impl McpClientService {
             op.root_id.clone(),
             op.assignment_id.clone(),
         );
-        if let Some(session) = op
-            .payload
-            .get("sessionId")
-            .cloned()
-            .and_then(|v| serde_json::from_value::<Option<Id>>(v).ok())
-            .flatten()
-        {
+        if let Some(session) = session_id {
             context = context.with_session(session);
         }
         if op.capability == "mcp.discover" {
-            let Some(catalog_revision) = op.payload.get("catalogRevision").and_then(Value::as_i64)
-            else {
+            let Some(catalog_revision) = catalog_revision else {
                 return EffectOutcome::Failed("invalid MCP discovery catalog revision".into());
             };
             if server.public.catalog_revision.get() != catalog_revision {
@@ -935,7 +931,7 @@ impl McpClientService {
                         "McpConnectFailed"
                     }
                     .into(),
-                    payload: json!({"serverId":server_for_write,"scope":scope_for_write.key()}),
+                    payload: ServerEvent::new(&server_for_write, &scope_for_write).payload(),
                 })?;
                 Ok(result)
             },
@@ -963,17 +959,13 @@ impl McpClientService {
         let Some(native) = self.native.get() else {
             return EffectOutcome::NotApplied("native MCP client is unavailable".into());
         };
-        let (Some(scope), Some(server_id), Some(server)) = (
-            op.payload
-                .get("scope")
-                .and_then(Value::as_str)
-                .and_then(ConfigScope::from_key),
-            op.payload
-                .get("serverId")
-                .cloned()
-                .and_then(|v| serde_json::from_value::<Id>(v).ok()),
-            op.payload.get("server").cloned(),
-        ) else {
+        let Ok(DisconnectEffect {
+            scope,
+            server_id,
+            server,
+            ..
+        }) = DisconnectEffect::parse(&op.payload)
+        else {
             return EffectOutcome::Failed("invalid MCP disconnect payload".into());
         };
         let removing = op.capability == "mcp.remove";
@@ -1012,91 +1004,31 @@ impl McpClientService {
         let Some(native) = self.native.get() else {
             return EffectOutcome::NotApplied("native MCP client is unavailable".into());
         };
-        let Some(scope) = op
-            .payload
-            .get("scope")
-            .and_then(Value::as_str)
-            .and_then(ConfigScope::from_key)
+        let Ok(ToolEffect {
+            server_revision,
+            capability_id,
+            schema: reference,
+            wire_name,
+            arguments,
+            caller:
+                ToolCaller {
+                    scope,
+                    server_id,
+                    catalog_revision,
+                    principal,
+                    principal_kind,
+                    session_id,
+                    project_id,
+                    fences,
+                    ..
+                },
+        }) = ToolEffect::parse(&op.payload)
         else {
-            return EffectOutcome::Failed("invalid MCP tool scope".into());
+            return EffectOutcome::Failed("invalid MCP tool payload".into());
         };
-        let Some(server_id) = op
-            .payload
-            .get("serverId")
-            .cloned()
-            .and_then(|v| serde_json::from_value::<Id>(v).ok())
-        else {
-            return EffectOutcome::Failed("invalid MCP tool server".into());
-        };
-        let Some(capability_id) = op
-            .payload
-            .get("capabilityId")
-            .cloned()
-            .and_then(|v| serde_json::from_value::<Id>(v).ok())
-        else {
-            return EffectOutcome::Failed("invalid MCP tool capability".into());
-        };
-        let Some(reference) = op
-            .payload
-            .get("schema")
-            .cloned()
-            .and_then(|v| serde_json::from_value::<SchemaRef>(v).ok())
-        else {
-            return EffectOutcome::Failed("invalid MCP tool schema".into());
-        };
-        let Some(wire_name) = op.payload.get("wireName").and_then(Value::as_str) else {
-            return EffectOutcome::Failed("invalid MCP tool name".into());
-        };
-        let Some(arguments @ Value::Object(_)) = op.payload.get("arguments").cloned() else {
-            return EffectOutcome::Failed("invalid MCP tool arguments".into());
-        };
-        let Some(server_revision) = op.payload.get("serverRevision").and_then(Value::as_i64) else {
-            return EffectOutcome::Failed("invalid MCP server revision".into());
-        };
-        let Some(catalog_revision) = op.payload.get("catalogRevision").and_then(Value::as_i64)
-        else {
-            return EffectOutcome::Failed("invalid MCP catalog revision".into());
-        };
-        let Some(principal) = op
-            .payload
-            .get("principal")
-            .cloned()
-            .and_then(|v| serde_json::from_value::<ActorId>(v).ok())
-        else {
-            return EffectOutcome::Failed("invalid MCP tool principal".into());
-        };
-        let Some(principal_kind @ (PrincipalKind::Agent | PrincipalKind::Host)) = op
-            .payload
-            .get("principalKind")
-            .and_then(Value::as_str)
-            .and_then(PrincipalKind::parse)
-        else {
+        if !matches!(principal_kind, PrincipalKind::Agent | PrincipalKind::Host) {
             return EffectOutcome::Failed("invalid MCP tool principal kind".into());
-        };
-        let Some(session_id) = op
-            .payload
-            .get("sessionId")
-            .cloned()
-            .and_then(|v| serde_json::from_value::<Id>(v).ok())
-        else {
-            return EffectOutcome::Failed("invalid MCP tool session".into());
-        };
-        let Some(project_id) = op
-            .payload
-            .get("projectId")
-            .cloned()
-            .and_then(|v| serde_json::from_value::<Option<ProjectId>>(v).ok())
-        else {
-            return EffectOutcome::Failed("invalid MCP tool project".into());
-        };
-        let Some(fences) = op
-            .payload
-            .get("fences")
-            .cloned()
-            .and_then(|v| serde_json::from_value::<Vec<AuthorityFence>>(v).ok())
-        else {
-            return EffectOutcome::Failed("invalid MCP tool authority fences".into());
-        };
+        }
         let info = native.store.info();
         let context = InvocationContext::new(
             principal,
@@ -1166,9 +1098,10 @@ impl McpClientService {
             operation_id: op.id.clone(),
             attempt_id: attempt.id.0.clone(),
         };
-        let mut result = native
-            .remote
-            .call_tool_with_origin(&origin, wire_name, arguments.clone());
+        let mut result =
+            native
+                .remote
+                .call_tool_with_origin(&origin, &wire_name, arguments.clone());
         if matches!(result, Err(McpRemoteFault::Unreachable)) {
             let endpoint =
                 match read_snapshot(&*native.store, &ReadOptions::default(), |snapshot| {
@@ -1233,7 +1166,7 @@ impl McpClientService {
                     }
                     native
                         .remote
-                        .call_tool_with_origin(&origin, wire_name, arguments)
+                        .call_tool_with_origin(&origin, &wire_name, arguments)
                 }
                 Err(fault) => Err(fault),
             };
@@ -1292,12 +1225,9 @@ impl McpClientService {
                 tx.history().append(NewEvent {
                     id: event_id,
                     actor,
-                    project_id: op
-                        .payload
-                        .get("projectId")
-                        .cloned()
-                        .and_then(|v| serde_json::from_value(v).ok())
-                        .flatten(),
+                    project_id: ToolCaller::parse(&op.payload)
+                        .ok()
+                        .and_then(|caller| caller.project_id),
                     root_id: op.root_id.clone(),
                     operation_id: Some(op.id.clone()),
                     aggregate_kind: "mcp_tool_call".into(),
@@ -1309,8 +1239,13 @@ impl McpClientService {
                         "McpSamplingRefused"
                     }
                     .into(),
-                    payload: json!({"serverId":origin.server_id,"attemptId":origin.attempt_id,
-                        "ordinal":ordinal,"reason":decision.as_ref().err()}),
+                    payload: SamplingEvent {
+                        server_id: &origin.server_id,
+                        attempt_id: &origin.attempt_id,
+                        ordinal,
+                        reason: decision.as_ref().err().copied(),
+                    }
+                    .payload(),
                 })?;
                 Ok(decision)
             },
@@ -1395,7 +1330,9 @@ impl McpClientService {
                     aggregate_id: server_for_write.as_str().into(),
                     aggregate_revision: result.revision.get(),
                     kind: "McpCatalogDiscovered".into(),
-                    payload: json!({"serverId":server_for_write,"scope":scope_for_write.key(),"catalogRevision":result.catalog_revision.get()}),
+                    payload: ServerEvent::new(&server_for_write, &scope_for_write)
+                        .catalog(result.catalog_revision.get())
+                        .payload(),
                 })?;
                 Ok(result)
             },
@@ -1488,7 +1425,7 @@ impl McpClientService {
                     aggregate_id: server_id.as_str().into(),
                     aggregate_revision: result_revision,
                     kind: event_kind.into(),
-                    payload: json!({"serverId":server_id,"scope":scope.key()}),
+                    payload: ServerEvent::new(&server_id, &scope).payload(),
                 })?;
                 Ok(())
             },
@@ -2222,15 +2159,17 @@ impl McpClientService {
                 )
                 .as_bytes(),
             ),
-            payload: json!({
-                "scope": scope.key(),
-                "serverId": input.server_id,
-                "pendingRevision": pending_revision,
-                "principal": ctx.principal(),
-                "principalKind": ctx.principal_kind().as_str().to_string(),
-                "sessionId": ctx.session_id(),
-                "fences": command.authorization().fences(),
-            }),
+            payload: ConnectEffect {
+                scope: scope.clone(),
+                server_id: input.server_id.clone(),
+                pending_revision,
+                catalog_revision: None,
+                principal: ctx.principal().clone(),
+                principal_kind: ctx.principal_kind(),
+                session_id: ctx.session_id().cloned(),
+                fences: command.authorization().fences().to_vec(),
+            }
+            .journal(),
         })?;
         tx.history().append(NewEvent {
             id: event.clone(),
@@ -2242,7 +2181,7 @@ impl McpClientService {
             aggregate_id: input.server_id.as_str().into(),
             aggregate_revision: pending_revision,
             kind: "McpConnectRequested".into(),
-            payload: json!({"serverId":input.server_id,"scope":scope.key()}),
+            payload: ServerEvent::new(&input.server_id, &scope).payload(),
         })?;
         let now = tx.now_ms();
         let queue_id = tx.new_id(IdKind::QueueEntry);
@@ -2373,7 +2312,7 @@ impl McpClientService {
                 aggregate_id: server_id.as_str().into(),
                 aggregate_revision: result.revision.get(),
                 kind: kind.into(),
-                payload: json!({"serverId":server_id,"scope":scope.key()}),
+                payload: ServerEvent::new(server_id, &scope).payload(),
             })?;
             return Ok(Decided {
                 decision: DomainDecision::Applied { result: value() },
@@ -2397,13 +2336,14 @@ impl McpClientService {
                 )
                 .as_bytes(),
             ),
-            payload: json!({
-                "scope": scope.key(),
-                "serverId": server_id,
-                "server": result,
-                "principal": ctx.principal(),
-                "fences": command.authorization().fences(),
-            }),
+            payload: DisconnectEffect {
+                scope: scope.clone(),
+                server_id: server_id.clone(),
+                server: serde_json::to_value(&result).expect("an MCP server view serializes"),
+                principal: ctx.principal().clone(),
+                fences: command.authorization().fences().to_vec(),
+            }
+            .journal(),
         })?;
         tx.history().append(NewEvent {
             id: event.clone(),
@@ -2415,7 +2355,7 @@ impl McpClientService {
             aggregate_id: server_id.as_str().into(),
             aggregate_revision: result.revision.get(),
             kind: kind.into(),
-            payload: json!({"serverId":server_id,"scope":scope.key()}),
+            payload: ServerEvent::new(server_id, &scope).payload(),
         })?;
         let now = tx.now_ms();
         let queue_id = tx.new_id(IdKind::QueueEntry);
@@ -2500,12 +2440,17 @@ impl McpClientService {
                 )
                 .as_bytes(),
             ),
-            payload: json!({
-                "scope":scope.key(),"serverId":input.server_id,"pendingRevision":pending_revision,
-                "catalogRevision":input.expected_catalog_revision.get(),
-                "principal":ctx.principal(),"principalKind":ctx.principal_kind().as_str().to_string(),
-                "sessionId":ctx.session_id(),"fences":command.authorization().fences(),
-            }),
+            payload: ConnectEffect {
+                scope: scope.clone(),
+                server_id: input.server_id.clone(),
+                pending_revision,
+                catalog_revision: Some(input.expected_catalog_revision.get()),
+                principal: ctx.principal().clone(),
+                principal_kind: ctx.principal_kind(),
+                session_id: ctx.session_id().cloned(),
+                fences: command.authorization().fences().to_vec(),
+            }
+            .journal(),
         })?;
         tx.history().append(NewEvent {
             id: event.clone(),
@@ -2517,7 +2462,7 @@ impl McpClientService {
             aggregate_id: input.server_id.as_str().into(),
             aggregate_revision: pending_revision,
             kind: "McpDiscoveryRequested".into(),
-            payload: json!({"serverId":input.server_id,"scope":scope.key()}),
+            payload: ServerEvent::new(&input.server_id, &scope).payload(),
         })?;
         let now = tx.now_ms();
         let queue_id = tx.new_id(IdKind::QueueEntry);
@@ -2550,42 +2495,32 @@ fn sampling_decision(
     origin: &McpCallOrigin,
     info: &crate::ports::storage::StoreInfo,
 ) -> Result<Result<SamplingGrant, &'static str>, StorageError> {
-    let payload = &op.payload;
     if op.capability != "mcp.tool"
         || op.state != OperationState::Dispatching
         || op.latest_attempt().map(|attempt| &attempt.id.0) != Some(&origin.attempt_id)
-        || payload.get("serverId") != Some(&json!(origin.server_id))
     {
         return Ok(Err("mcp_sampling_call"));
     }
-    if payload.get("principalKind").and_then(Value::as_str) != Some("Agent") {
-        return Ok(Err("mcp_sampling_principal"));
-    }
-    let field = |name: &str| payload.get(name).cloned().unwrap_or(Value::Null);
-    let parsed = (
-        serde_json::from_value::<ActorId>(field("principal")),
-        serde_json::from_value::<Id>(field("sessionId")),
-        serde_json::from_value::<Option<ProjectId>>(field("projectId")),
-        serde_json::from_value::<Vec<AuthorityFence>>(field("fences")),
-        serde_json::from_value::<ToolCallKey>(field("call")),
-        payload
-            .get("scope")
-            .and_then(Value::as_str)
-            .and_then(ConfigScope::from_key),
-        payload.get("catalogRevision").and_then(Value::as_i64),
-    );
-    let (
-        Ok(principal),
-        Ok(session_id),
-        Ok(project_id),
-        Ok(fences),
-        Ok(call),
-        Some(scope),
-        Some(catalog),
-    ) = parsed
+    let Ok(ToolCaller {
+        server_id,
+        principal,
+        principal_kind,
+        session_id,
+        project_id,
+        fences,
+        call,
+        scope,
+        catalog_revision: catalog,
+    }) = ToolCaller::parse(&op.payload)
     else {
         return Ok(Err("mcp_sampling_call"));
     };
+    if server_id != origin.server_id {
+        return Ok(Err("mcp_sampling_call"));
+    }
+    if principal_kind != PrincipalKind::Agent {
+        return Ok(Err("mcp_sampling_principal"));
+    }
     if tx.actors().actor_kind(&principal)? != Some(PrincipalKind::Agent)
         || !crate::authority::fences_hold(tx, &fences)?
     {

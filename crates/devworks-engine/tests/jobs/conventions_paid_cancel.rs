@@ -78,7 +78,10 @@ fn paid_native_job_cancel_after_send_preserves_unknown_custody_and_never_restart
     assert!(running.inner_operation_id.is_some());
     let rows = attempts(&app, &running.id);
     assert_eq!(rows.len(), 1);
-    assert_eq!(rows[0].state, "Dispatched");
+    assert_eq!(
+        rows[0].state,
+        devworks_core::ports::storage::AttemptState::Dispatched
+    );
     assert_eq!(wire.calls.load(Ordering::SeqCst), baseline + 1);
     let cancel = app.command(
         "jobs.cancel",

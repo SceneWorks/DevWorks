@@ -176,4 +176,14 @@ impl Input {
             Self::ConfigureSensitiveColumns(_) => Mode::Command,
         }
     }
+    /// The `/body` members of this input, without the `kind` discriminator.
+    pub fn body(&self) -> Result<serde_json::Value, serde_json::Error> {
+        match self {
+            Self::Read(i) => serde_json::to_value(i),
+            Self::ExecuteWrite(i) => serde_json::to_value(i),
+            Self::ApplyMigration(i) => serde_json::to_value(i),
+            Self::DirectSchemaChange(i) => serde_json::to_value(i),
+            Self::ConfigureSensitiveColumns(i) => serde_json::to_value(i),
+        }
+    }
 }

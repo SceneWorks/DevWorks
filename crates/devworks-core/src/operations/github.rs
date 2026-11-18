@@ -196,4 +196,16 @@ impl Input {
             Self::Reviews(_) => Mode::Query,
         }
     }
+    /// The `/body` members of this input, without the `kind` discriminator.
+    pub fn body(&self) -> Result<serde_json::Value, serde_json::Error> {
+        match self {
+            Self::AccountQuery(i) => serde_json::to_value(i),
+            Self::AccountCommand(i) => serde_json::to_value(i),
+            Self::Repositories(i) => serde_json::to_value(i),
+            Self::PollStatus(i) => serde_json::to_value(i),
+            Self::IssueSync(i) => serde_json::to_value(i),
+            Self::Checks(i) => serde_json::to_value(i),
+            Self::Reviews(i) => serde_json::to_value(i),
+        }
+    }
 }

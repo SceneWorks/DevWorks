@@ -238,14 +238,7 @@ impl Shell {
             Slot::PurgePrepare,
             "Preparing deletion manifest",
             "projects.prepare_purge",
-            move |b| {
-                purge_frame(
-                    b,
-                    "projects.prepare_purge",
-                    json!({"projectId":project.id,"expectedRevision":project.revision}),
-                    false,
-                )
-            },
+            move |b| ops::purge_prepare(b, &project),
         );
     }
     fn refresh_purge_status(&mut self) {
@@ -256,14 +249,7 @@ impl Shell {
                 Slot::PurgeStatus,
                 "Reading purge status",
                 "projects.purge_status",
-                move |b| {
-                    purge_frame(
-                        b,
-                        "projects.purge_status",
-                        json!({"projectId":m.project_id,"manifestId":m.id}),
-                        true,
-                    )
-                },
+                move |b| ops::purge_status(b, &m),
             );
         }
     }
@@ -273,10 +259,12 @@ impl Shell {
         };
         let next = self.purge.next.clone();
         self.purge.busy = true;
-        self.query(Slot::PurgePage,"Reading deletion manifest","projects.purge_manifest",move|b|{
-            let mut page=json!({"limit":200});if let Some(c)=next{page["cursor"]=json!(c);}
-            purge_frame(b,"projects.purge_manifest",json!({"projectId":m.project_id,"manifestId":m.id,"expectedRevision":m.revision,"page":page}),true)
-        });
+        self.query(
+            Slot::PurgePage,
+            "Reading deletion manifest",
+            "projects.purge_manifest",
+            move |b| ops::purge_manifest_page(b, &m, next.as_deref()),
+        );
     }
     pub(super) fn apply_purge(&mut self, slot: Slot, reply: Reply) -> Option<(Slot, Reply)> {
         use devworks_core::protocol::results::OperationResult;
@@ -368,12 +356,7 @@ impl Shell {
                 return;
             }
             if let (Some(b), Some(m)) = (self.backend(), self.purge.manifest.clone()) {
-                let frame = purge_frame(
-                    &*b,
-                    "projects.purge",
-                    json!({"projectId":m.project_id,"manifestId":m.id,"expectedRevision":m.revision,"expectedDigest":m.digest,"expectedProjectRevision":m.project_revision,"confirm":true}),
-                    false,
-                );
+                let frame = ops::purge_confirm(&*b, &m);
                 self.purge.busy = self.client.as_mut().is_some_and(|c| {
                     c.confirm_project_purge(Slot::PurgeConfirm, "Purging reviewed project", frame)
                 });
@@ -406,14 +389,4 @@ impl Shell {
             self.purge = Default::default();
         }
     }
-}
-fn purge_frame(b: &dyn Backend, op: &str, body: serde_json::Value, query: bool) -> Vec<u8> {
-    let bytes = if query {
-        ops::query_frame(b, op, body)
-    } else {
-        ops::command_frame(b, op, body)
-    };
-    let mut frame: serde_json::Value = serde_json::from_slice(&bytes).expect("native frame");
-    frame["schemaRevision"] = json!(6);
-    serde_json::to_vec(&frame).expect("native frame")
 }

@@ -112,7 +112,7 @@ fn canonical_auto_and_auto_beta_routes_send_registered_upstream_then_record_actu
             let DriveOutcome::Settled(balance)=outcome.accounting else{panic!("not settled")};
             assert_eq!(outcome.result.outcome,Some(AttemptEnd::Completed));
             assert_eq!(balance.priced_micro_usd,Some(1));
-            assert_eq!(balance.classification,"ReportedCharge");
+            assert_eq!(balance.classification,devworks_core::ports::usage::CostClassification::ReportedCharge);
             let stored=read(f.store.as_ref(),|s|s.usage().inference_attempt(&balance.attempt_id)).unwrap();
             let bound=devworks_core::services::usage::accounting::snapshot(&stored).unwrap();
             assert_eq!(bound.query.provider_model_id,None);

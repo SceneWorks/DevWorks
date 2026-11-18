@@ -49,6 +49,16 @@ pub(super) fn id_of(value: String) -> Result<Id, StorageError> {
     Id::new(value).map_err(|e| corrupt(format!("stored identifier: {e}")))
 }
 
+/// Decodes a stored state or classification name with the enum's own `parse`; a name the enum
+/// does not know is a corrupt store, never a silent default.
+pub(super) fn stored_name<T>(
+    what: &str,
+    value: &str,
+    parse: fn(&str) -> Option<T>,
+) -> Result<T, StorageError> {
+    parse(value).ok_or_else(|| corrupt(format!("stored {what} is not a known value")))
+}
+
 /// Decodes a stored revision; zero or negative is a corrupt store.
 pub(super) fn revision(value: i64) -> Result<Revision, StorageError> {
     Revision::new(value).map_err(|_| corrupt("stored revision is not positive"))

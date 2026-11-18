@@ -306,7 +306,10 @@ fn native_attempt_replay_stream_zero_and_late_reported_correction() {
     else {
         panic!("settled admission must retain its existing source receipt")
     };
-    assert_eq!(settled.state, "Settled");
+    assert_eq!(
+        settled.state,
+        devworks_core::ports::storage::AttemptState::Settled
+    );
     assert_eq!(settled.attempt_id, attempt.attempt_id);
     assert!(events.lock().unwrap().is_empty());
     assert_eq!(
@@ -865,7 +868,10 @@ fn actual_configured_quote_stays_immutable_and_reported_cost_replaces_its_estima
         panic!("unsettled source")
     };
     assert_eq!(balance.priced_micro_usd, Some(100));
-    assert_eq!(balance.classification, "ConfiguredEstimate");
+    assert_eq!(
+        balance.classification,
+        devworks_core::ports::usage::CostClassification::ConfiguredEstimate
+    );
     assert!(balance.monetary_complete);
     let c = f.control.clone();
     let id = attempt.attempt_id.clone();
@@ -878,7 +884,10 @@ fn actual_configured_quote_stays_immutable_and_reported_cost_replaces_its_estima
         )
     });
     assert_eq!(corrected.priced_micro_usd, Some(75));
-    assert_eq!(corrected.classification, "ReportedCharge");
+    assert_eq!(
+        corrected.classification,
+        devworks_core::ports::usage::CostClassification::ReportedCharge
+    );
     let retained =
         f.fx.read(|s| s.usage().inference_attempt(&attempt.attempt_id))
             .unwrap();
@@ -1194,7 +1203,10 @@ fn subscription_reported_usd_never_becomes_api_charge_without_a_matching_tariff(
                 priced.then_some(100),
                 "{profile},priced={priced}"
             );
-            assert_ne!(balance.classification, "ReportedCharge");
+            assert_ne!(
+                balance.classification,
+                devworks_core::ports::usage::CostClassification::ReportedCharge
+            );
             assert_eq!(
                 accounting::summary(&balance)
                     .unwrap()
@@ -1447,7 +1459,10 @@ fn reported_usd_cost_with_many_fractional_digits_is_rounded_and_counts_against_t
     };
     assert_eq!(balance.priced_micro_usd, Some(36));
     assert!(balance.monetary_complete);
-    assert_eq!(balance.classification, "ReportedCharge");
+    assert_eq!(
+        balance.classification,
+        devworks_core::ports::usage::CostClassification::ReportedCharge
+    );
     assert_eq!(
         accounting::summary(&balance)
             .unwrap()
@@ -2101,7 +2116,10 @@ fn a_legitimately_admitted_missing_source_quote_remains_immutable_after_publicat
     else {
         panic!("unsettled");
     };
-    assert_eq!(balance.classification, "Untracked");
+    assert_eq!(
+        balance.classification,
+        devworks_core::ports::usage::CostClassification::Untracked
+    );
     assert!(balance.priced_micro_usd.is_none());
     assert_eq!(
         accounting::snapshot(

@@ -223,7 +223,10 @@ fn status_and_membership_changes_fence_unstarted_reservations_and_pause_survives
             .allocation_claim(&id(reserved["id"].as_str().unwrap()))
     })
     .unwrap();
-    assert_eq!(stored.state, "Invalidated");
+    assert_eq!(
+        stored.state,
+        devworks_core::ports::storage::ClaimState::Invalidated
+    );
     f.seed("feature", None, "feature", 1);
     let w = read(&*f.store, |s| s.work().work(&issue)).unwrap();
     applied(f.command("tasks.set_feature",json!({"taskId":issue,"expectedRevision":w.revision.to_string(),"featureId":"feature","clearFeature":false})));
@@ -484,12 +487,18 @@ fn reprioritization_preserves_a_reservation_and_fresh_start_rechecks_its_current
             .allocation_claim(&id(before["id"].as_str().unwrap()))
     })
     .unwrap();
-    assert_eq!(after.state, "Active");
+    assert_eq!(
+        after.state,
+        devworks_core::ports::storage::ClaimState::Active
+    );
     assert_eq!(after.fence.to_string(), before["fence"]);
     assert_eq!(after.owner_id, f.user.principal().clone());
     f.start(&selected);
     let transferred = read(&*f.store, |s| s.work().allocation_claim(&after.id)).unwrap();
-    assert_eq!(transferred.state, "Transferred");
+    assert_eq!(
+        transferred.state,
+        devworks_core::ports::storage::ClaimState::Transferred
+    );
 }
 
 #[test]
@@ -709,7 +718,7 @@ fn restart_quiescence_releases_old_project_ownership_but_keeps_manual_continue_h
             .allocation_claim(&id(reserved["id"].as_str().unwrap())))
         .unwrap()
         .state,
-        "Released"
+        devworks_core::ports::storage::ClaimState::Released
     );
     assert!(
         !read(&*f.store, |s| s.sessions().session(&session))

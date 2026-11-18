@@ -3,16 +3,17 @@
 //! editor are in [`detail`]. They draw [`WorkUi`] state and report what the user did as
 //! actions the shell submits (`shell/work.rs`).
 pub mod detail;
+use crate::frame;
 use crate::shell::Shell;
 use crate::theme;
 use crate::widgets::{self, Tone, ViewState, chip};
 use devworks_core::protocol::Id;
 use devworks_core::protocol::records::{
-    ApprovalState, FindingState, ReadinessFreshness, WorkKind, WorkRecord,
+    ApprovalState, FindingState, QueuePlacement, QueueSide, ReadinessFreshness, WorkKind,
+    WorkRecord,
 };
 use devworks_core::services::work::fold;
 use eframe::egui::{self, RichText, Ui};
-use serde_json::{Value, json};
 use std::collections::BTreeSet;
 
 /// Feature list tabs and Issues tabs.
@@ -252,14 +253,21 @@ pub(crate) fn create_form(ui: &mut Ui, work: &mut WorkUi, busy: bool, actions: &
 
 /// The placement moving `bucket[pos]` one step up (before its predecessor) or down (after its
 /// successor): one bounded request whatever the bucket's size (`None` at the bucket's edge).
-pub fn adjacent_move(bucket: &[&str], pos: usize, up: bool) -> Option<Value> {
+pub fn adjacent_move(bucket: &[&str], pos: usize, up: bool) -> Option<QueuePlacement> {
     let anchor = if up {
         bucket.get(pos.checked_sub(1)?)?
     } else {
         bucket.get(pos + 1)?
     };
-    Some(json!({"workId": bucket.get(pos)?, "anchorId": anchor,
-        "side": if up { "Before" } else { "After" }}))
+    Some(QueuePlacement {
+        work_id: frame::id(bucket.get(pos)?)?,
+        anchor_id: frame::id(anchor)?,
+        side: if up {
+            QueueSide::Before
+        } else {
+            QueueSide::After
+        },
+    })
 }
 
 /// Up/Down controls of one item among `bucket` (the items of its priority in queue order).
@@ -268,7 +276,7 @@ pub(crate) fn order_controls(
     w: &WorkRecord,
     bucket: &[&WorkRecord],
     enabled: bool,
-    action: impl Fn(Value) -> Action,
+    action: impl Fn(QueuePlacement) -> Action,
     actions: &mut Vec<Action>,
 ) {
     let pos = bucket.iter().position(|b| b.id == w.id).unwrap_or(0);

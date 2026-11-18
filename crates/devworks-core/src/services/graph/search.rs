@@ -10,7 +10,6 @@ use crate::protocol::records::{
 };
 use crate::protocol::support::BoundedList;
 use crate::services::sessions::Failure;
-use serde_json::json;
 use std::cmp::Ordering;
 
 pub(super) struct Search<'a> {
@@ -232,7 +231,7 @@ pub(super) fn query(
                 && matches_with(query.text, &repository.name, || reader.budget.visit())
             {
                 let language = if repository.languages.len() == 1 {
-                    Some(model::wire(json!(repository.languages[0]))?)
+                    Some(model::text(&repository.languages[0])?)
                 } else {
                     None
                 };
@@ -247,20 +246,20 @@ pub(super) fn query(
                     .as_ref()
                     .and_then(|properties| properties.get("description"))
                     .and_then(serde_json::Value::as_str)
-                    .map(|value| model::wire(json!(value)))
+                    .map(model::text)
                     .transpose()?;
                 let framework = metadata
                     .as_ref()
                     .and_then(|properties| properties.get("framework"))
                     .and_then(serde_json::Value::as_str)
-                    .map(|value| model::wire(json!(value)))
+                    .map(model::text)
                     .transpose()?;
                 hits.push((
                     repository.name.clone(),
                     true,
                     Hit::Repository(CodeSearchRepository {
                         repository_id: repository.id,
-                        name: model::wire(json!(repository.name))?,
+                        name: model::text(&repository.name)?,
                         description,
                         language,
                         framework,

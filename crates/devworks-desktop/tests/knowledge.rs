@@ -5,12 +5,22 @@
 mod common;
 
 use common::*;
+use devworks_desktop::backend::Backend;
+use devworks_desktop::frame::fixture;
 use devworks_desktop::knowledge_screen::{self, Change};
 use devworks_desktop::ops;
 use devworks_desktop::route::Route;
 use eframe::egui::accesskit::Role;
 use egui_kittest::kittest::{NodeT, Queryable};
-use serde_json::json;
+use serde_json::{Value, json};
+
+/// A Knowledge query of a JSON body, through the typed input the registry decodes it into.
+fn request_query(backend: &dyn Backend, operation: &str, body: Value) -> Vec<u8> {
+    knowledge_screen::query(backend, fixture::query_input(operation, body))
+}
+fn request_command(backend: &dyn Backend, operation: &str, body: Value) -> Vec<u8> {
+    knowledge_screen::command(backend, fixture::command_input(operation, body))
+}
 
 fn type_into(
     h: &mut egui_kittest::Harness<'_, devworks_desktop::shell::Shell>,
@@ -61,7 +71,7 @@ fn the_scope_comes_from_visible_projects_and_follows_the_navigation() {
     assert!(has_text(&h, "Entry recorded."));
     let page = |scope: serde_json::Value| match ops::query_result(backend.query(
         "knowledge.search",
-        &knowledge_screen::query(
+        &request_query(
             &*backend,
             "knowledge.search",
             json!({"scope": scope, "text": "cargo", "tags": [], "kinds": [],
@@ -237,7 +247,7 @@ fn entries_are_created_searched_inspected_and_changed_through_the_shared_operati
     assert!(has_text(&h, "Retract recorded."));
     let page = ops::query_result(backend.query(
         "knowledge.search",
-        &knowledge_screen::query(
+        &request_query(
             &*backend,
             "knowledge.search",
             json!({"scope": {"kind": "Workspace"}, "text": "sqlite", "tags": [], "kinds": [],
@@ -275,7 +285,7 @@ fn entries_are_created_searched_inspected_and_changed_through_the_shared_operati
     // Cleanup by source: previewed exactly, then deleted by the user.
     let recorded = ops::command_result(backend.command(
         "knowledge.record",
-        &knowledge_screen::command(
+        &request_command(
             &*backend,
             "knowledge.record",
             json!({"scope": {"kind": "Workspace"}, "batch": {"entities": [{"clientId": "s",
@@ -388,7 +398,7 @@ fn an_unknown_write_blocks_new_saves_and_is_confirmed_once_at_the_next_launch() 
     );
     let page = ops::query_result(real.query(
         "knowledge.search",
-        &knowledge_screen::query(
+        &request_query(
             &*real,
             "knowledge.search",
             json!({"scope": {"kind": "Workspace"}, "text": "unknown write", "tags": [],
@@ -773,7 +783,7 @@ fn the_lessons_filter_keeps_the_search_text_and_lifecycles() {
     };
     let recorded = ops::command_result(backend.command(
         "knowledge.record",
-        &knowledge_screen::command(
+        &request_command(
             &*backend,
             "knowledge.record",
             json!({"scope": {"kind": "Workspace"}, "batch": {"entities": [{"clientId": "s",
@@ -794,7 +804,7 @@ fn the_lessons_filter_keeps_the_search_text_and_lifecycles() {
     assert!(
         ops::command_result(backend.command(
             "knowledge.delete_selected",
-            &knowledge_screen::command(
+            &request_command(
                 &*backend,
                 "knowledge.delete_selected",
                 json!({"scope": {"kind": "Workspace"},
@@ -839,7 +849,7 @@ fn cleanup_previews_and_deletes_an_exact_source_label_through_the_native_screen(
     let engine = start(&root);
     let backend = engine.backend();
     let source = " résumé\n test-run.json ";
-    let frame = knowledge_screen::command(
+    let frame = request_command(
         &*backend,
         "knowledge.record",
         json!({

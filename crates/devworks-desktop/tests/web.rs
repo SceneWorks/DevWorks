@@ -230,7 +230,7 @@ fn a_search_credential_stored_through_the_secret_store_resolves_for_web_search()
         entry(WEB_SEARCH_CREDENTIAL_KEY, json!({"secretRef": reference}))]});
     ops::settings_saved(backend.command(
         "settings.save_revision",
-        &ops::command_frame(&*backend, "settings.save_revision", body),
+        &devworks_desktop::frame::fixture::command(&*backend, "settings.save_revision", body),
     ))
     .expect("the provider and the credential reference are saved");
     let results = ops::web_results(backend.query(

@@ -195,4 +195,14 @@ impl Input {
             Self::GenerateCapabilityDocs(_) => Mode::Command,
         }
     }
+    /// The `/body` members of this input, without the `kind` discriminator.
+    pub fn body(&self) -> Result<serde_json::Value, serde_json::Error> {
+        match self {
+            Self::Search(i) => serde_json::to_value(i),
+            Self::Read(i) => serde_json::to_value(i),
+            Self::TopicForScreen(i) => serde_json::to_value(i),
+            Self::PackageGuides(i) => serde_json::to_value(i),
+            Self::GenerateCapabilityDocs(i) => serde_json::to_value(i),
+        }
+    }
 }

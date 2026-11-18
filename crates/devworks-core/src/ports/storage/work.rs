@@ -190,6 +190,47 @@ pub struct StoredAllocationReplay {
     pub claim_id: Option<Id>,
 }
 
+/// Where an allocation claim stands. Stored and reported by name.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ClaimState {
+    Active,
+    Transferred,
+    Yielding,
+    Released,
+    Expired,
+    Yielded,
+    Invalidated,
+}
+impl ClaimState {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Active => "Active",
+            Self::Transferred => "Transferred",
+            Self::Yielding => "Yielding",
+            Self::Released => "Released",
+            Self::Expired => "Expired",
+            Self::Yielded => "Yielded",
+            Self::Invalidated => "Invalidated",
+        }
+    }
+    pub fn parse(value: &str) -> Option<Self> {
+        Some(match value {
+            "Active" => Self::Active,
+            "Transferred" => Self::Transferred,
+            "Yielding" => Self::Yielding,
+            "Released" => Self::Released,
+            "Expired" => Self::Expired,
+            "Yielded" => Self::Yielded,
+            "Invalidated" => Self::Invalidated,
+            _ => return None,
+        })
+    }
+    /// Active, Transferred or Yielding: the claim still holds the work.
+    pub fn is_live(self) -> bool {
+        matches!(self, Self::Active | Self::Transferred | Self::Yielding)
+    }
+}
+
 /// Durable allocation ownership, distinct from an execution or coordinator assignment.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct StoredAllocationClaim {
@@ -206,8 +247,7 @@ pub struct StoredAllocationClaim {
     /// Positive ownership generation; advancing ownership fences every prior holder.
     pub fence: i64,
     pub expires_at_ms: i64,
-    /// Active, Transferred, Yielding, Released, Expired, Yielded or Invalidated.
-    pub state: String,
+    pub state: ClaimState,
     pub revision: i64,
     pub work_revision: i64,
     pub parent_feature_id: Option<Id>,

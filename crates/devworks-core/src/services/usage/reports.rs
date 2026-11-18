@@ -6,6 +6,7 @@ use super::{accounting, meter::InputSemantics};
 use crate::context::InvocationContext;
 use crate::operations::router::UsageInput;
 use crate::ports::storage::*;
+use crate::ports::usage::{CostClassification, UNKNOWN_PRICE};
 use crate::protocol::data::{Coverage, CoverageState, DataScope};
 use crate::protocol::records::*;
 use crate::protocol::support::{BoundedList, BoundedText, Check, Cursor};
@@ -431,7 +432,7 @@ fn tariff_json(t: &crate::ports::usage::PublishedTariff) -> Value {
     json!({"upstreamModelId":t.upstream_model_id,"serviceTier":t.service_tier,"contextLowerExclusive":optional(t.context_lower_exclusive),"contextUpperInclusive":optional(t.context_upper_inclusive),"modality":t.modality,"chargeKind":t.charge_kind,"cacheTtlSeconds":optional(t.cache_ttl_seconds),"unit":t.unit,"units":t.units.to_string(),"amountUsd":t.amount_usd,"region":t.region,"endpointProfile":t.endpoint_profile})
 }
 fn cost(
-    classification: &str,
+    classification: Option<CostClassification>,
     amount: Option<i64>,
     complete: bool,
     incomplete: bool,
@@ -448,15 +449,9 @@ fn cost(
             .or_else(|| quote.and_then(|q| q.untracked_reason.clone()))
             .or_else(|| Some("Usage observation is not available or complete".into()))
     };
-    let (kind, origin) = match classification {
-        "ReportedCharge" => ("Reported", "ProviderReported"),
-        "ConfiguredEstimate" => ("Estimated", "UserConfigured"),
-        "OfficialEstimate" | "SubscriptionApiEquivalent" => ("Estimated", "OfficialSnapshot"),
-        "LocalFree" => ("Free", "LocalFree"),
-        "Untracked" => ("Untracked", "Untracked"),
-        _ => ("Unknown", "Untracked"),
-    };
-    json!({"priceKind":kind,"priceOrigin":origin,"amountMicroUsd":optional(amount),"currency":reported.map(|r|r.currency.as_str()).or(quote.map(|q|q.currency.as_str())),"originalAmount":reported.map(|r|r.amount.as_str()),"classification":classification,"priceSnapshotId":quote.and_then(|q|q.snapshot_id.as_ref()),"priceRevision":optional(quote.and_then(|q|q.price_revision)),"overrideRevision":optional(quote.and_then(|q|q.override_revision)),"subscriptionEquivalent":classification=="SubscriptionApiEquivalent","incomplete":incomplete,"untrackedReason":reason,"tariffs":quote.map(|q|q.tariffs.iter().map(tariff_json).collect::<Vec<_>>()).unwrap_or_default(),"monetaryComplete":complete})
+    let (kind, origin) = classification.map_or(UNKNOWN_PRICE, CostClassification::price);
+    let name = classification.map_or("Unknown", CostClassification::as_str);
+    json!({"priceKind":kind,"priceOrigin":origin,"amountMicroUsd":optional(amount),"currency":reported.map(|r|r.currency.as_str()).or(quote.map(|q|q.currency.as_str())),"originalAmount":reported.map(|r|r.amount.as_str()),"classification":name,"priceSnapshotId":quote.and_then(|q|q.snapshot_id.as_ref()),"priceRevision":optional(quote.and_then(|q|q.price_revision)),"overrideRevision":optional(quote.and_then(|q|q.override_revision)),"subscriptionEquivalent":classification==Some(CostClassification::SubscriptionApiEquivalent),"incomplete":incomplete,"untrackedReason":reason,"tariffs":quote.map(|q|q.tariffs.iter().map(tariff_json).collect::<Vec<_>>()).unwrap_or_default(),"monetaryComplete":complete})
 }
 fn attempt(read: &dyn ReadSnapshot, a: StoredInferenceAttempt, gaps: &mut Gaps) -> SResult<Fact> {
     let admitted = accounting::snapshot(&a)?;
@@ -508,9 +503,9 @@ fn attempt(read: &dyn ReadSnapshot, a: StoredInferenceAttempt, gaps: &mut Gaps) 
         gaps.add("remote-outcome-unknown");
     }
     let b = balance.as_ref();
-    let classification = b.map_or("Unknown", |b| b.classification.as_str());
+    let classification = b.map(|b| b.classification);
     let mut row = json!({"id":a.attempt_id,"requestId":a.request_id,"attemptId":a.attempt_id,"attemptNumber":a.attempt_number.to_string(),"sourceKind":"InferenceAttempt","sourceId":a.attempt_id,"actorId":a.actor_id,"projectId":a.project_id,"featureId":a.feature_id,"workId":a.work_id,"assignmentId":a.assignment_id,"sessionId":a.session_id,"jobRunId":a.job_run_id,"operationId":a.operation_id});
-    row.as_object_mut().expect("object").extend(json!({"purpose":a.purpose,"role":a.role,"providerId":provider,"connectionId":a.connection_id,"modelId":a.catalog_model_id,"resolvedModelId":a.provider_model_id,"startedAtMs":a.created_at_ms.to_string(),"finishedAtMs":optional(summary.finished_at_ms),"state":a.state}).as_object().expect("object").clone());
+    row.as_object_mut().expect("object").extend(json!({"purpose":a.purpose,"role":a.role,"providerId":provider,"connectionId":a.connection_id,"modelId":a.catalog_model_id,"resolvedModelId":a.provider_model_id,"startedAtMs":a.created_at_ms.to_string(),"finishedAtMs":optional(summary.finished_at_ms),"state":a.state.as_str()}).as_object().expect("object").clone());
     row.as_object_mut().expect("object").extend(json!({"inputTokens":optional(input),"uncachedInputTokens":optional(uncached),"outputTokens":optional(q.output_tokens),"cacheReadTokens":optional(q.cached_read_tokens),"cacheWriteTokens":optional(q.cache_write_tokens),"cacheReadMicroUsd":optional(cache_read_cost),"cacheWriteMicroUsd":optional(cache_write_cost),"inputSemantics":match admitted.pricing.input_semantics {InputSemantics::Inclusive=>"Inclusive",InputSemantics::Disjoint=>"Disjoint",InputSemantics::Unknown=>"Unknown"},"unknownTail":b.is_some_and(|b|b.unknown_tail),"reasoningTokens":optional(q.reasoning_tokens),"connectionRevision":optional(admitted.quote.connection_revision)}).as_object().expect("object").clone());
     row["cost"] = cost(
         classification,
@@ -575,7 +570,7 @@ fn attempt(read: &dyn ReadSnapshot, a: StoredInferenceAttempt, gaps: &mut Gaps) 
                 }
             })
             .or(summary.outcome)
-            .or(Some(a.state)),
+            .or(Some(a.state.as_str().into())),
         duration: None,
         mcp: false,
         activity: true,
@@ -659,14 +654,8 @@ fn origin(read: &dyn ReadSnapshot, o: StoredUsageOrigin, gaps: &mut Gaps) -> SRe
         if request.is_none() {
             gaps.add("legacy-request-identity-unrecorded");
         }
-        let (kind, origin) = match o.classification.as_str() {
-            "ReportedCharge" => ("Reported", "ProviderReported"),
-            "ConfiguredEstimate" => ("Estimated", "UserConfigured"),
-            "OfficialEstimate" | "SubscriptionApiEquivalent" => ("Estimated", "OfficialSnapshot"),
-            "LocalFree" => ("Free", "LocalFree"),
-            _ => ("Untracked", "Untracked"),
-        };
-        let c = json!({"priceKind":kind,"priceOrigin":origin,"amountMicroUsd":optional(o.priced_micro_usd),"currency":o.priced_micro_usd.map(|_|"USD"),"originalAmount":v.get("amountUsd"),"priceRevision":v.get("priceRevision"),"classification":o.classification,"subscriptionEquivalent":o.classification=="SubscriptionApiEquivalent","incomplete":o.incomplete,"untrackedReason":"Historical observation has no proven attempt identity","tariffs":[],"monetaryComplete":false});
+        let (kind, origin) = o.classification.price();
+        let c = json!({"priceKind":kind,"priceOrigin":origin,"amountMicroUsd":optional(o.priced_micro_usd),"currency":o.priced_micro_usd.map(|_|"USD"),"originalAmount":v.get("amountUsd"),"priceRevision":v.get("priceRevision"),"classification":o.classification.as_str(),"subscriptionEquivalent":o.classification==CostClassification::SubscriptionApiEquivalent,"incomplete":o.incomplete,"untrackedReason":"Historical observation has no proven attempt identity","tariffs":[],"monetaryComplete":false});
         Some(wire(
             json!({"id":reference,"requestId":request,"sourceKind":o.source_kind,"sourceId":reference,"actorId":user,"projectId":o.project_id,"featureId":o.feature_id,"workId":o.work_id,"sessionId":o.session_id,"jobRunId":o.job_run_id,"purpose":purpose.as_deref().unwrap_or("Unknown"),"modelId":model,"startedAtMs":o.recorded_at_ms.to_string(),"state":"HistoricalObservation","inputTokens":optional(input),"outputTokens":optional(output),"cacheReadTokens":optional(number(v,"cacheReadTokens")),"cacheWriteTokens":optional(number(v,"cacheWriteTokens")),"cost":c,"cacheDiagnostics":[],"unknownTail":o.unknown_tail,"unitQuantities":[]}),
         )?)
@@ -887,18 +876,15 @@ fn totals(facts: &[&Fact], gaps: &mut Gaps) -> SResult<UsageTotals> {
         if let Some(b) = &f.balance {
             values[0] = plus(values[0], 1)?;
             values[1] = plus(values[1], b.priced_micro_usd.unwrap_or(0))?;
-            if b.classification == "ReportedCharge" {
+            if b.classification == CostClassification::ReportedCharge {
                 values[2] = plus(values[2], b.priced_micro_usd.unwrap_or(0))?;
-            } else if matches!(
-                b.classification.as_str(),
-                "OfficialEstimate" | "ConfiguredEstimate" | "SubscriptionApiEquivalent"
-            ) {
+            } else if b.classification.is_estimate() {
                 values[3] = plus(values[3], b.priced_micro_usd.unwrap_or(0))?;
             }
             values[4] = plus(values[4], b.reserved_micro_usd.unwrap_or(0))?;
             for (index, test) in [
-                (5, b.classification == "LocalFree"),
-                (6, b.classification == "Untracked"),
+                (5, b.classification == CostClassification::LocalFree),
+                (6, b.classification == CostClassification::Untracked),
                 (7, b.unknown_tail),
                 (8, b.incomplete),
                 (9, !b.monetary_complete),

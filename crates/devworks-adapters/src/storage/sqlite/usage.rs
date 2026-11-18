@@ -1,8 +1,9 @@
 //! Canonical attempt accounting. SQL sums canonical balances; legacy source facts remain separate.
 use super::conn::db;
 use super::repos::{Snapshot, Unit};
-use super::support::{atomic, conflict, corrupt, invalid, page_limit};
+use super::support::{atomic, conflict, corrupt, invalid, page_limit, stored_name};
 use devworks_core::ports::storage::*;
+use devworks_core::ports::usage::CostClassification;
 use devworks_core::protocol::{Id, RevisionDimension};
 use rusqlite::types::Value as Sql;
 use rusqlite::{Connection, Row, params, params_from_iter};
@@ -11,6 +12,10 @@ use serde_json::{Map, Value};
 fn field<T: DeserializeOwned>(v: &Value, k: &str) -> Result<T, StorageError> {
     serde_json::from_value(v[k].clone())
         .map_err(|_| corrupt(format!("invalid stored usage field {k}")))
+}
+fn name_field<T>(v: &Value, k: &str, parse: fn(&str) -> Option<T>) -> Result<T, StorageError> {
+    let name: String = field(v, k)?;
+    stored_name(k, &name, parse)
 }
 fn doc(r: &Row<'_>) -> rusqlite::Result<Value> {
     let mut m = Map::new();
@@ -106,22 +111,6 @@ fn nonnegative(n: Option<i64>) -> Result<(), StorageError> {
         Ok(())
     }
 }
-fn classification(s: &str) -> Result<(), StorageError> {
-    if [
-        "ReportedCharge",
-        "ConfiguredEstimate",
-        "OfficialEstimate",
-        "SubscriptionApiEquivalent",
-        "LocalFree",
-        "Untracked",
-    ]
-    .contains(&s)
-    {
-        Ok(())
-    } else {
-        Err(invalid("invalid usage classification"))
-    }
-}
 fn cas(
     key: &str,
     current: Option<i64>,
@@ -199,7 +188,7 @@ fn decode_attempt(v: &Value) -> Result<StoredInferenceAttempt, StorageError> {
         access_mode: field(v, "access_mode")?,
         provider_model_id: field(v, "provider_model_id")?,
         pricing_snapshot: json(v, "pricing_snapshot_json")?,
-        state: field(v, "state")?,
+        state: name_field(v, "state", AttemptState::parse)?,
         revision: field(v, "revision")?,
         created_at_ms: field(v, "created_at")?,
     })
@@ -235,7 +224,7 @@ fn write_attempt(
             sql(&r.access_mode)?,
             sql(&r.provider_model_id)?,
             sql(&r.pricing_snapshot)?,
-            sql(&r.state)?,
+            sql(&r.state.as_str())?,
             sql(&r.revision)?,
             sql(&r.created_at_ms)?,
         ],
@@ -283,7 +272,7 @@ fn decode_balance(v: &Value) -> Result<StoredAttemptBalance, StorageError> {
         revision: field(v, "revision")?,
         priced_micro_usd: field(v, "priced_micro_usd")?,
         reserved_micro_usd: field(v, "reserved_micro_usd")?,
-        classification: field(v, "classification")?,
+        classification: name_field(v, "classification", CostClassification::parse)?,
         monetary_complete: boolean(v, "monetary_complete")?,
         incomplete: boolean(v, "incomplete")?,
         unknown_tail: boolean(v, "unknown_tail")?,
@@ -305,7 +294,7 @@ fn write_balance(
             sql(&r.revision)?,
             sql(&r.priced_micro_usd)?,
             sql(&r.reserved_micro_usd)?,
-            sql(&r.classification)?,
+            sql(&r.classification.as_str())?,
             sql(&r.monetary_complete)?,
             sql(&r.incomplete)?,
             sql(&r.unknown_tail)?,
@@ -355,7 +344,7 @@ fn decode_origin(v: &Value) -> Result<StoredUsageOrigin, StorageError> {
         payload: json(v, "payload_json")?,
         recorded_at_ms: field(v, "recorded_at")?,
         priced_micro_usd: field(v, "priced_micro_usd")?,
-        classification: field(v, "classification")?,
+        classification: name_field(v, "classification", CostClassification::parse)?,
         monetary_complete: boolean(v, "monetary_complete")?,
         incomplete: boolean(v, "incomplete")?,
         unknown_tail: boolean(v, "unknown_tail")?,
@@ -380,7 +369,7 @@ fn write_origin(c: &Connection, r: &StoredUsageOrigin, update: bool) -> Result<(
             sql(&r.payload)?,
             sql(&r.recorded_at_ms)?,
             sql(&r.priced_micro_usd)?,
-            sql(&r.classification)?,
+            sql(&r.classification.as_str())?,
             sql(&r.monetary_complete)?,
             sql(&r.incomplete)?,
             sql(&r.unknown_tail)?,
@@ -848,21 +837,6 @@ macro_rules! usage_reads{($t:ty)=>{impl UsageRead for $t{
 }};}
 usage_reads!(Unit<'_>);
 usage_reads!(Snapshot<'_>);
-fn state(s: &str) -> Result<(), StorageError> {
-    if [
-        "Admitted",
-        "Dispatched",
-        "Settled",
-        "UnknownTail",
-        "CancelledBeforeDispatch",
-    ]
-    .contains(&s)
-    {
-        Ok(())
-    } else {
-        Err(invalid("invalid inference attempt state"))
-    }
-}
 fn missing(kind: &'static str, id: &Id) -> StorageError {
     StorageError::NotFound {
         kind,
@@ -1002,7 +976,9 @@ fn validate_quote(unit: &Unit<'_>, r: &StoredInferenceAttempt) -> Result<(), Sto
             conn.revision,
         ));
     }
-    if q["classification"] == "LocalFree" && !conn.local_free {
+    let quoted: Option<CostClassification> =
+        serde_json::from_value(q["classification"].clone()).ok();
+    if quoted == Some(CostClassification::LocalFree) && !conn.local_free {
         return Err(invalid(
             "LocalFree requires explicit connection billing policy",
         ));
@@ -1138,7 +1114,7 @@ fn tariffs(r: &[devworks_core::ports::usage::PublishedTariff]) -> Result<(), Sto
 impl UsageRepository for Unit<'_> {
     fn insert_inference_attempt(&mut self, r: &StoredInferenceAttempt) -> Result<(), StorageError> {
         positive(r.attempt_number)?;
-        if r.revision != 1 || r.state != "Admitted" {
+        if r.revision != 1 || r.state != AttemptState::Admitted {
             return Err(invalid("attempt starts admitted at revision1"));
         }
         nonnegative(Some(r.created_at_ms))?;
@@ -1177,9 +1153,8 @@ impl UsageRepository for Unit<'_> {
             Some(expected),
             r.revision,
         )?;
-        state(&r.state)?;
         let mut permitted = old.clone();
-        permitted.state = r.state.clone();
+        permitted.state = r.state;
         permitted.provider_model_id = r.provider_model_id.clone();
         permitted.revision = r.revision;
         if permitted != *r {
@@ -1190,12 +1165,16 @@ impl UsageRepository for Unit<'_> {
         }
         if r.state != old.state
             && !matches!(
-                (old.state.as_str(), r.state.as_str()),
+                (old.state, r.state),
                 (
-                    "Admitted",
-                    "Dispatched" | "CancelledBeforeDispatch" | "UnknownTail"
-                ) | ("Dispatched", "Settled" | "UnknownTail")
-                    | ("UnknownTail", "Settled")
+                    AttemptState::Admitted,
+                    AttemptState::Dispatched
+                        | AttemptState::CancelledBeforeDispatch
+                        | AttemptState::UnknownTail
+                ) | (
+                    AttemptState::Dispatched,
+                    AttemptState::Settled | AttemptState::UnknownTail
+                ) | (AttemptState::UnknownTail, AttemptState::Settled)
             )
         {
             return Err(invalid("invalid attempt state transition"));
@@ -1236,9 +1215,8 @@ impl UsageRepository for Unit<'_> {
         }
         nonnegative(r.priced_micro_usd)?;
         nonnegative(r.reserved_micro_usd)?;
-        classification(&r.classification)?;
         object(&r.summary)?;
-        if r.classification == "LocalFree"
+        if r.classification == CostClassification::LocalFree
             && (r.priced_micro_usd != Some(0) || !r.monetary_complete)
         {
             return Err(invalid(
@@ -1282,7 +1260,6 @@ impl UsageRepository for Unit<'_> {
         }
         bounded(&r.source_id, 512)?;
         object(&r.payload)?;
-        classification(&r.classification)?;
         nonnegative(r.priced_micro_usd)?;
         nonnegative(Some(r.recorded_at_ms))?;
         if (r.source_kind == "SessionUsage") != r.committed_sequence.is_some() {

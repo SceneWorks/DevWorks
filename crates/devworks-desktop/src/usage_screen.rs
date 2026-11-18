@@ -1,12 +1,18 @@
 //! Native usage/price views. Every total, classification, coverage flag and tariff is supplied
 //! by the shared services; drafts retain their inspected revision across refreshes.
 use crate::{
-    theme,
+    frame, theme,
     widgets::{self, Header, Tone, ViewState, chip},
 };
+use devworks_core::operations::{
+    OperationInput as In,
+    router::{self, UsageInput},
+};
 use devworks_core::protocol::{
-    data::{Coverage, CoverageState},
+    ProjectId,
+    data::{Coverage, CoverageState, DataScope},
     records::*,
+    support::SignedCounter,
 };
 use eframe::egui::{self, Ui};
 use serde_json::{Value, json};
@@ -39,40 +45,49 @@ pub struct Filters {
     pub session: String,
     pub job_run: String,
 }
+/// The trimmed filter text, or nothing when it is blank.
+fn given(value: &str) -> Option<&str> {
+    Some(value.trim()).filter(|v| !v.is_empty())
+}
 impl Filters {
-    pub fn body(&self, kind: &str, cursor: Option<&str>) -> Result<Value, String> {
-        let mut page = json!({"limit":100});
-        if let Some(c) = cursor {
-            page["cursor"] = json!(c);
-        }
-        let mut body = json!({"reportKind":kind,"scope":{"kind":"Workspace"},"page":page});
-        if let Some(p) = &self.project {
-            body["projectId"] = json!(p);
-        }
-        for (key, value) in [("startMs", &self.start), ("endMs", &self.end)] {
-            if !value.trim().is_empty() {
-                let timestamp = value.trim().parse::<jiff::Timestamp>().map_err(|_| {
-                    format!("Enter {key} as a UTC date and time, such as 2026-11-05T00:00:00Z.")
-                })?;
-                body[key] = json!(timestamp.as_millisecond().to_string());
+    /// The `router.usage` request for report `kind`, or what to correct in the filters.
+    pub fn body(&self, kind: &str, cursor: Option<&str>) -> Result<In, String> {
+        let millis = |key: &str, value: &str| -> Result<Option<SignedCounter>, String> {
+            let value = value.trim();
+            if value.is_empty() {
+                return Ok(None);
             }
-        }
-        for (key, value) in [
-            ("interval", &self.interval),
-            ("user", &self.user),
-            ("provider", &self.provider),
-            ("model", &self.model),
-            ("tool", &self.tool),
-            ("purpose", &self.purpose),
-            ("rootId", &self.root),
-            ("sessionId", &self.session),
-            ("jobRunId", &self.job_run),
-        ] {
-            if !value.trim().is_empty() {
-                body[key] = json!(value.trim());
-            }
-        }
-        Ok(body)
+            let timestamp = value.parse::<jiff::Timestamp>().map_err(|_| {
+                format!("Enter {key} as a UTC date and time, such as 2026-11-05T00:00:00Z.")
+            })?;
+            frame::number(timestamp.as_millisecond())
+                .map(Some)
+                .ok_or_else(|| format!("Enter {key} as a UTC date and time within range."))
+        };
+        let start_ms = millis("startMs", &self.start)?;
+        let end_ms = millis("endMs", &self.end)?;
+        (|| {
+            Some(In::Router(router::Input::Usage(UsageInput {
+                root_id: frame::lift(given(&self.root).map(frame::text))?,
+                session_id: frame::lift(given(&self.session).map(frame::id))?,
+                job_run_id: frame::lift(given(&self.job_run).map(frame::id))?,
+                page: frame::page(100, cursor)?,
+                report_kind: Some(frame::text(kind)?),
+                scope: Some(DataScope::Workspace),
+                project_id: frame::lift(
+                    self.project.as_deref().map(|p| frame::id(p).map(ProjectId)),
+                )?,
+                start_ms,
+                end_ms,
+                interval: frame::lift(given(&self.interval).map(frame::text))?,
+                user: frame::lift(given(&self.user).map(frame::text))?,
+                provider: frame::lift(given(&self.provider).map(frame::text))?,
+                model: frame::lift(given(&self.model).map(frame::text))?,
+                tool: frame::lift(given(&self.tool).map(frame::text))?,
+                purpose: frame::lift(given(&self.purpose).map(frame::text))?,
+            })))
+        })()
+        .ok_or_else(|| "Check the usage filters.".to_owned())
     }
 }
 #[derive(Clone, Debug, PartialEq)]
@@ -177,7 +192,7 @@ pub struct UsageScreen {
     pub price_models: String,
     pub price_providers: String,
     pub price_snapshots: String,
-    pub price_query: Option<Value>,
+    pub price_query: Option<router::PriceStatusInput>,
     pub price_draft: Option<PriceDraft>,
     pub price_saving: Option<PriceDraft>,
     pub price_busy: bool,
@@ -1264,9 +1279,9 @@ impl BudgetDraft {
             },
         }
     }
-    pub fn input(&self) -> Result<Value, String> {
+    pub fn input(&self) -> Result<FeatureBudgetInput, String> {
         if !self.enabled {
-            return Ok(json!({"kind":"Off"}));
+            return Ok(FeatureBudgetInput::Off {});
         }
         let pieces = self.dollars.trim().split('.').collect::<Vec<_>>();
         if pieces.is_empty()
@@ -1289,7 +1304,10 @@ impl BudgetDraft {
         let micro = whole
             .and_then(|whole| fraction.ok().and_then(|part| whole.checked_add(part)))
             .ok_or("The USD limit is outside the supported range.")?;
-        Ok(json!({"kind":"Limit","microUsd":micro.to_string()}))
+        Ok(FeatureBudgetInput::Limit {
+            micro_usd: crate::frame::number(micro)
+                .ok_or("The USD limit is outside the supported range.")?,
+        })
     }
     pub fn ui(&mut self, ui: &mut Ui) -> bool {
         let mut changed = ui
@@ -1387,17 +1405,12 @@ mod tests {
             enabled: true,
             dollars: "0.000001".into(),
         };
-        assert_eq!(
-            draft.input().unwrap(),
-            json!({"kind":"Limit","microUsd":"1"})
-        );
+        let wire = |d: &BudgetDraft| serde_json::to_value(d.input().unwrap()).unwrap();
+        assert_eq!(wire(&draft), json!({"kind":"Limit","microUsd":"1"}));
         draft.dollars = "0".into();
-        assert_eq!(
-            draft.input().unwrap(),
-            json!({"kind":"Limit","microUsd":"0"})
-        );
+        assert_eq!(wire(&draft), json!({"kind":"Limit","microUsd":"0"}));
         draft.enabled = false;
-        assert_eq!(draft.input().unwrap(), json!({"kind":"Off"}));
+        assert_eq!(wire(&draft), json!({"kind":"Off"}));
         draft.enabled = true;
         draft.dollars = "0.0000001".into();
         assert!(draft.input().is_err());
