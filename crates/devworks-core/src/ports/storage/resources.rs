@@ -386,12 +386,6 @@ impl ContainerPhase {
             _ => return None,
         })
     }
-    pub fn may_run(self) -> bool {
-        matches!(
-            self,
-            Self::Creating | Self::Starting | Self::Running | Self::Stopping | Self::Uncertain
-        )
-    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

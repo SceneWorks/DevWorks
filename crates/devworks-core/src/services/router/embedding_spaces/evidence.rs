@@ -150,17 +150,6 @@ impl EmbeddingSpaceService {
         })
     }
 
-    /// Stashes a verified fact before returning EffectResult::Completed. Dispatcher transaction B
-    /// can then atomically finish qualification from the retained fact, without reading files or
-    /// trusting a caller-authored reconciliation payload.
-    pub fn persist_verified_probe_evidence(
-        &self,
-        verified: VerifiedProbeEvidence,
-    ) -> Result<(), StorageError> {
-        run_write(self.store.as_ref(), WriteOptions::settlement(), move |tx| {
-            persist_verified_in(tx, verified)
-        })
-    }
     /// The native owner checks its atomic close fence inside this writer unit, before calling.
     pub fn persist_verified_probe_evidence_in(
         &self,

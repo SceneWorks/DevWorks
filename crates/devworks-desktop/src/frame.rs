@@ -247,10 +247,12 @@ pub mod fixture {
         .input
     }
     /// [`input`] of a command.
+    #[cfg(any(test, feature = "test-support"))]
     pub fn command_input(operation: &str, body: Value) -> OperationInput {
         input(operation, Mode::Command, body)
     }
     /// [`input`] of a query.
+    #[cfg(any(test, feature = "test-support"))]
     pub fn query_input(operation: &str, body: Value) -> OperationInput {
         input(operation, Mode::Query, body)
     }

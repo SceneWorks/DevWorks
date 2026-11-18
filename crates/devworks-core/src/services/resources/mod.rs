@@ -141,6 +141,7 @@ pub fn desktop() -> MachineResource {
 }
 /// The machine resource a harness-controlled operation must hold a lease on before dispatch.
 /// Desktop input and taking desktop control need the desktop; reading the screen does not.
+#[cfg(any(test, feature = "test-support"))]
 pub fn required_resource(operation: &str) -> Option<&'static str> {
     matches!(operation, "desktop.input" | "desktop.request_control").then_some(DESKTOP)
 }

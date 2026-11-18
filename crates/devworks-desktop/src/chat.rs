@@ -109,9 +109,6 @@ pub struct Attachment {
     pub preview_note: Option<String>,
 }
 impl Attachment {
-    pub fn is_image(&self) -> bool {
-        self.media_type.starts_with("image/")
-    }
 }
 
 #[derive(Default)]

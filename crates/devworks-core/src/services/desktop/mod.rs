@@ -264,12 +264,6 @@ impl DesktopService {
         CorrelationId(self.ids.next_id(crate::ports::IdKind::Correlation))
     }
 
-    /// Native automation can generate ordinary UI events. Trusted confirmation ingress stays
-    /// closed while any desktop holder may inject them, regardless of that holder's project.
-    pub fn automation_may_be_active(&self) -> bool {
-        self.control_epoch().held()
-    }
-
     /// The desktop control state now ([`ControlEpoch`]); unreadable state is held.
     pub fn control_epoch(&self) -> ControlEpoch {
         read_snapshot(&*self.store, &ReadOptions::default(), |snapshot| {

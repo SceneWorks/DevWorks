@@ -93,6 +93,7 @@ pub struct DeclaredEffect {
 }
 
 /// Opaque MCP/package tools with declared destructive intent and unresolved targets are held.
+#[cfg(any(test, feature = "test-support"))]
 pub fn assess_declared(
     effect: &DeclaredEffect,
     working_directory: Option<&str>,

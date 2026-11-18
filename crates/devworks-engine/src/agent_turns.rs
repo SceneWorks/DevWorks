@@ -1905,6 +1905,7 @@ pub fn publish_first_context(
 
 /// Build an attributed native request from the exact published head and routed pin. The driver
 /// rechecks the pin, current owner, price and context before sending anything to a provider.
+#[cfg(any(test, feature = "test-support"))]
 pub fn plan_generation(
     engine: &TurnEngine,
     ctx: &InvocationContext,

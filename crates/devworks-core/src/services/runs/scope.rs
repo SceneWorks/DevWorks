@@ -219,6 +219,7 @@ impl ScriptedScope {
         );
     }
     /// Changes one unit's readiness (`None`: the feature-wide scope) in the scripted plan.
+    #[cfg(any(test, feature = "test-support"))]
     pub fn set_readiness(&self, root: &RootId, key: Option<&str>, readiness: Readiness) {
         let mut plans = self.plans.lock().unwrap_or_else(|p| p.into_inner());
         if let Some(PlanState::Approved { feature, units, .. }) = plans.get_mut(root) {
@@ -232,6 +233,7 @@ impl ScriptedScope {
         }
     }
     /// Records a pending revision beside the active plan (it authorizes nothing).
+    #[cfg(any(test, feature = "test-support"))]
     pub fn set_pending(&self, root: &RootId, pending: Option<i64>) {
         let mut plans = self.plans.lock().unwrap_or_else(|p| p.into_inner());
         match plans.get_mut(root) {

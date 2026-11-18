@@ -511,6 +511,7 @@ impl Shell {
         self.shutdown_summary.as_deref()
     }
     /// The recorded vertical offset of the list `salt`.
+    #[cfg(any(test, feature = "test-support"))]
     pub fn scroll_offset(&self, salt: &str) -> Option<f32> {
         [&self.scrolls, &self.chat.scrolls, &self.settings.scrolls]
             .into_iter()
@@ -1079,6 +1080,7 @@ impl Shell {
 
     /// When a hint-driven refresh is waiting for its interval to end (tests step frames until
     /// then).
+    #[cfg(any(test, feature = "test-support"))]
     pub fn hint_refresh_due_at(&self) -> Option<Instant> {
         self.hint_refresh_due
             .then(|| self.last_poll + HINT_REFRESH_INTERVAL)

@@ -249,6 +249,7 @@ pub struct ShutdownReport {
 impl ShutdownReport {
     /// Every outcome when every record and the reconciliation were written; otherwise the first
     /// failure (the native stops ran regardless).
+    #[cfg(any(test, feature = "test-support"))]
     pub fn into_result(self) -> Result<Vec<(Id, StopOutcome)>, StorageError> {
         let stopped = all_recorded(self.stopped)?;
         if self

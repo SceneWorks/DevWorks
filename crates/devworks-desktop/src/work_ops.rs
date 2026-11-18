@@ -353,6 +353,7 @@ pub fn history_events(
         })))
     })
 }
+#[cfg(any(test, feature = "test-support"))]
 pub fn project_events(backend: &dyn Backend, project: &str, after: Option<&str>) -> Vec<u8> {
     history_events(backend, project, None, after)
 }

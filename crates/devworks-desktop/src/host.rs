@@ -35,7 +35,7 @@ use devworks_core::ports::diagnostics::StorageHealthProbe;
 use devworks_core::ports::http::HttpTransport;
 use devworks_core::ports::packages::{HostPlatform, RuntimeCache};
 use devworks_core::ports::router::ConnectionDirectory;
-use devworks_core::ports::secrets::{Secret, SecretResolver, SecretStore, SwitchableSecrets};
+use devworks_core::ports::secrets::{Secret, SecretStore, SwitchableSecrets};
 use devworks_core::ports::storage::{
     ApplicationStore, ReadOptions, StorageError, WriteOptions, read_snapshot, run_write,
 };
@@ -282,11 +282,6 @@ impl Host {
     /// The human invocation context every UI request is admitted with.
     pub fn user(&self) -> &InvocationContext {
         &self.ctx
-    }
-    /// The production [`SecretResolver`] for settings secret references (the same OS secret
-    /// store the provider connections use).
-    pub fn secret_resolver(&self) -> Arc<dyn SecretResolver> {
-        self.connections.clone()
     }
 }
 

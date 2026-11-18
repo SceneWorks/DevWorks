@@ -1478,6 +1478,7 @@ impl McpClientService {
     /// worker calls this in its own write unit, fenced by the catalog revision it read before
     /// contacting the server. A new read-only hint sets the initial user selection only; it
     /// never marks a tool as a verified native read or grants authority to invoke it.
+    #[cfg(any(test, feature = "test-support"))]
     pub fn publish_catalog(
         &self,
         tx: &mut dyn WriteTransaction,

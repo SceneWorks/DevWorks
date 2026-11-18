@@ -63,6 +63,7 @@ impl ProviderComposition {
     }
     /// Host-composed repository source used by direct native provider owners. Boot installs
     /// its registered indexing source automatically.
+    #[cfg(any(test, feature = "test-support"))]
     pub fn with_repository_source(
         mut self,
         store: Arc<dyn ApplicationStore>,
@@ -365,9 +366,6 @@ impl NativeProviders {
     /// intersects these with the CURRENT registered model/profile/account and current policy.
     pub fn capability_registrations(&self) -> &[Capabilities] {
         &self.composition.capabilities
-    }
-    pub fn embedding_registrations(&self) -> &[EmbeddingRegistration] {
-        &self.composition.embedding_spaces
     }
     /// Trusted native UI read only. The host must authorize the session under its current
     /// user context before serving this preview; generic gateway/tools cannot publish it.

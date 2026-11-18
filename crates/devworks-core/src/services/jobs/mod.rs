@@ -1452,10 +1452,6 @@ impl CommandHandler for JobService {
 pub fn record_of(s: &dyn ReadSnapshot, job: &StoredJob) -> Result<JobRecord, StorageError> {
     build_job(job, job_facts(s.jobs(), job)?)
 }
-/// The record of a run with its first usage page.
-pub fn run_record_of(s: &dyn ReadSnapshot, run: &StoredJobRun) -> Result<JobRun, StorageError> {
-    run_in_snapshot(s, run, None)
-}
 /// The operation journal entry a new run records before anything is dispatched.
 pub(crate) fn run_operation(id: OperationId, job: &StoredJob, run_id: &Id) -> NewOperation {
     NewOperation {

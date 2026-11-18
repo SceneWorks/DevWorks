@@ -939,6 +939,7 @@ impl Dispatcher {
     /// Delivers everything currently eligible: passes until one, made while no delivery was in
     /// flight, claims nothing (a pass made while deliveries ran may have claimed nothing only
     /// because a consumer was at its in-flight cap). Returns the number of claims made.
+    #[cfg(any(test, feature = "test-support"))]
     pub async fn run_until_idle(&self) -> Result<usize, StorageError> {
         let mut total = 0;
         loop {

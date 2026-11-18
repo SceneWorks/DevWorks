@@ -476,6 +476,7 @@ impl ImportService {
             Ok(result)
         })
     }
+    #[cfg(any(test, feature = "test-support"))]
     pub fn recover_pending(&self) -> Result<usize, StorageError> {
         let mut after = None;
         let mut count = 0;

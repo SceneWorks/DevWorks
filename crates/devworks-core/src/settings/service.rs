@@ -30,8 +30,10 @@
 use super::catalog::{Adoption, AgentRole, catalog, descriptor};
 use super::model::{
     self, AdoptedRevisions, Layer, NAMESPACE, Plan, body, chain, current_chain, current_layer,
-    effective_values, layer_at, layers_at, plan, restore_assignments,
+    layer_at, plan, restore_assignments,
 };
+#[cfg(any(test, feature = "test-support"))]
+use super::model::{effective_values, layers_at};
 use super::validate::{Issue, codes};
 use crate::context::{InvocationContext, PrincipalKind};
 use crate::fingerprint::sha256_hex;
@@ -1013,6 +1015,7 @@ pub struct AdoptionNotice {
     pub current: AdoptedRevisions,
     pub changes: Vec<(&'static str, Adoption)>,
 }
+#[cfg(any(test, feature = "test-support"))]
 pub fn adoption_since(
     read: &dyn ConfigurationRead,
     project: Option<&ProjectId>,
@@ -1334,6 +1337,7 @@ impl CommandHandler for SettingsService {
 /// The effective value of `key` for work in `scope` (a repository scope inherits its project,
 /// then the workspace), with the layer it comes from. Delivery uses this with the repository it
 /// delivers in, so a repository's own value applies to that repository only.
+#[cfg(any(test, feature = "test-support"))]
 pub fn effective_setting(
     read: &dyn ConfigurationRead,
     scope: &ConfigScope,

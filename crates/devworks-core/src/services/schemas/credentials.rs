@@ -160,6 +160,7 @@ impl SchemaService {
     }
     /// UI cancellation discards only this human's unsubmitted handle. A submitted source's
     /// credential cannot be erased through this intake seam.
+    #[cfg(any(test, feature = "test-support"))]
     pub fn discard_password(
         &self,
         context: &InvocationContext,

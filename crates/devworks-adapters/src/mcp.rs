@@ -499,6 +499,7 @@ impl NativeMcpClients {
 
     /// Attach a server the host already connected over in-process pipes. The session then serves
     /// that endpoint exactly as a connection opened by `connect` would, sampling included.
+    #[cfg(any(test, feature = "test-support"))]
     pub async fn attach_pipes(
         &self,
         endpoint: &McpEndpoint,

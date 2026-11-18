@@ -140,9 +140,6 @@ fn changed(id: &Id) -> Failure {
 }
 
 impl InstructionService {
-    pub fn supports_approval(&self, operation: &str) -> bool {
-        matches!(operation, "skills.rollback" | "roles.rollback")
-    }
     /// Owner attestation for a saved activation: the actual current target and contents.
     pub fn approval_preview(
         &self,

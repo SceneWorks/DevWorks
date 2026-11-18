@@ -134,7 +134,7 @@ rmcp = { version = "=3.9.0", default-features = false, features = ["server"] }
 tokio = { version = "=1.54.1", default-features = false, features = ["io-std"] }
 # A throwaway certificate authority for the local TLS server the transport tests connect to.
 rcgen = { version = "=0.13.2", default-features = false, features = ["ring", "pem"] }
-devworks-core = { path = "../devworks-core", features = ["contract-suite"] }
+devworks-core = { path = "../devworks-core", features = ["contract-suite", "test-support"] }
 # Civil times in schedule tests (already resolved for core and the desktop).
 jiff = "=0.2.39"
 

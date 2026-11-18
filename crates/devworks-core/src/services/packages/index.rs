@@ -41,7 +41,7 @@ use crate::protocol::EventId;
 use crate::protocol::records::PackageAvailability;
 use crate::settings::catalog::{PACKAGE_INDEX_SOURCES_KEY, descriptor};
 use crate::settings::model::{chain, current_chain};
-use serde_json::{Value, json};
+use serde_json::json;
 use std::collections::BTreeMap;
 
 /// History aggregate of availability announcements.
@@ -367,11 +367,6 @@ impl PackageService {
             tx.packages().retain_indexes(&keys)
         })
     }
-}
-
-/// The index entry fields of an offer (catalog projection).
-pub fn offer_json(o: &Offer) -> Value {
-    json!({"source": o.source, "publisherId": o.publisher_id, "entry": o.entry})
 }
 
 /// Whether `entry` runs on `host_target`.
