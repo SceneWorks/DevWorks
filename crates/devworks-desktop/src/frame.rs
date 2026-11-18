@@ -40,16 +40,26 @@ pub fn latest_revision(operation: &str) -> Option<u32> {
     registry::find(operation)?.revisions.last().map(|r| r.0)
 }
 
-/// The frame for `input`, or no bytes when the input does not form one. Empty bytes are a frame
-/// the gateway rejects, the same way it rejects any other malformed request.
+/// The frame for `input`. `None` input (a caller's own value failed to convert) gives no bytes,
+/// which the gateway rejects like any malformed request. An input that is present but forms no
+/// frame is a programming error: it asserts in debug builds and logs in release builds.
 pub fn build(
     backend: &dyn Backend,
     negotiate: Negotiate,
     input: Option<OperationInput>,
 ) -> Vec<u8> {
-    input
-        .and_then(|input| try_build(backend, negotiate, &input))
-        .unwrap_or_default()
+    let Some(input) = input else {
+        return Vec::new();
+    };
+    try_build(backend, negotiate, &input).unwrap_or_else(|| {
+        // The typed input already proves the operation exists, so reaching here is a programming
+        // error: an unregistered operation, an unsupported mode or pin, or an input that does not
+        // serialize. Debug builds assert; release builds log and send the empty frame the gateway
+        // rejects.
+        eprintln!("frame::build formed no frame: the operation, mode or pin is not registered");
+        debug_assert!(false, "frame::build could not form a frame");
+        Vec::new()
+    })
 }
 
 fn try_build(
@@ -191,6 +201,7 @@ pub fn page(limit: u32, cursor: Option<&str>) -> Option<PageRequest> {
 /// here: the app builds it through [`build`] from a typed input (the guard test below fails the
 /// build when a production source file spells out a request envelope).
 #[doc(hidden)]
+#[cfg(any(test, feature = "test-support"))]
 pub mod fixture {
     use super::*;
     use serde_json::Value;
@@ -247,6 +258,62 @@ pub mod fixture {
 
 #[cfg(test)]
 mod guard {
+    /// `text` without its `#[cfg(test)] mod ... { ... }` blocks (matched by braces). Other
+    /// `#[cfg(test)]` items stay in: only whole test modules are exempt, so production code after
+    /// an early `#[cfg(test)]` item is still scanned. A `#[cfg(test)] mod name;` declaration holds
+    /// no code in this file, and the walk skips `*_tests.rs` files itself.
+    fn strip_test_modules(text: &str) -> String {
+        const MARK: &str = "#[cfg(test)]";
+        let mut out = String::new();
+        let mut rest = text;
+        while let Some(at) = rest.find(MARK) {
+            out.push_str(&rest[..at]);
+            let after = rest[at + MARK.len()..].trim_start();
+            let is_mod = after
+                .strip_prefix("pub ")
+                .unwrap_or(after)
+                .trim_start()
+                .starts_with("mod ");
+            let Some(open) = after.find(['{', ';']).filter(|_| is_mod) else {
+                // Not a test module: keep the attribute and the item it gates.
+                out.push_str(MARK);
+                rest = &rest[at + MARK.len()..];
+                continue;
+            };
+            if after.as_bytes()[open] == b';' {
+                rest = &after[open + 1..];
+                continue;
+            }
+            let mut depth = 0usize;
+            let mut end = after.len();
+            for (i, ch) in after[open..].char_indices() {
+                match ch {
+                    '{' => depth += 1,
+                    '}' => {
+                        depth -= 1;
+                        if depth == 0 {
+                            end = open + i + 1;
+                            break;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            rest = &after[end..];
+        }
+        out.push_str(rest);
+        out
+    }
+
+    #[test]
+    fn test_module_stripping_keeps_code_after_an_early_cfg_test_item() {
+        let text = "fn a() {}\n#[cfg(test)]\nuse x::y;\nfn b() { \"queryId\" }\n#[cfg(test)]\nmod t {\n fn c() { \"requestKey\" { } }\n}\nfn d() {}\n";
+        let kept = strip_test_modules(text);
+        assert!(kept.contains("queryId"));
+        assert!(!kept.contains("requestKey"));
+        assert!(kept.contains("fn d()"));
+    }
+
     /// Every request the app sends is built by [`super::build`]. A production source file that
     /// spells out an envelope member or the old raw builders is a hand-built request.
     #[test]
@@ -276,7 +343,7 @@ mod guard {
                     continue;
                 }
                 let text = std::fs::read_to_string(&path).unwrap();
-                let production = text.split("#[cfg(test)]").next().unwrap_or("");
+                let production = strip_test_modules(&text);
                 for token in FORBIDDEN {
                     if production.contains(token) {
                         out.push(format!("{} spells out {token}", path.display()));

@@ -230,6 +230,21 @@ mod quote_compatibility {
 mod classification_mapping {
     use super::{CostClassification as C, UNKNOWN_PRICE};
 
+    /// The serde form (used in stored quote JSON) is the same name `as_str` stores and reports.
+    #[test]
+    fn serde_name_is_the_stored_name_for_every_classification() {
+        for c in C::ALL {
+            assert_eq!(
+                serde_json::to_value(c).unwrap(),
+                serde_json::json!(c.as_str())
+            );
+            assert_eq!(
+                serde_json::from_value::<C>(serde_json::json!(c.as_str())).unwrap(),
+                c
+            );
+        }
+    }
+
     /// Both usage reports (attempt rows and historical observations) use this one mapping.
     #[test]
     fn each_classification_has_one_stored_name_and_one_price_pair() {

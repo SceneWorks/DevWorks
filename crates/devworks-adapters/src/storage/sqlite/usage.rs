@@ -976,7 +976,9 @@ fn validate_quote(unit: &Unit<'_>, r: &StoredInferenceAttempt) -> Result<(), Sto
             conn.revision,
         ));
     }
-    if q["classification"] == "LocalFree" && !conn.local_free {
+    let quoted: Option<CostClassification> =
+        serde_json::from_value(q["classification"].clone()).ok();
+    if quoted == Some(CostClassification::LocalFree) && !conn.local_free {
         return Err(invalid(
             "LocalFree requires explicit connection billing policy",
         ));
