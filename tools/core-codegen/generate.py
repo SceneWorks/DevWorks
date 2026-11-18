@@ -11,6 +11,7 @@ Outputs (deterministic, rustfmt-formatted, checked for drift in CI):
   crates/devworks-core/src/protocol/results.rs
   crates/devworks-core/src/operations/mod.rs and one module per family
   crates/devworks-core/src/registry/catalog.rs
+  crates/devworks-test-support/src/unmodelled_generated.rs  (test stub of every storage repository port; see stubs.py)
 
 Uses only the Python standard library plus `rustfmt` from the pinned Rust toolchain.
 """
@@ -24,6 +25,8 @@ ROOT = Path(__file__).resolve().parents[2]
 SPEC = json.loads((ROOT / 'tools/contracts-eval/domain-spec.json').read_text(encoding='utf-8'))
 REGISTER = json.loads((ROOT / 'docs/architecture/contracts/family-coverage.json').read_text(encoding='utf-8'))
 sys.path.insert(0, str(ROOT / 'tools/contracts-eval'))
+sys.path.insert(0, str(ROOT / 'tools/core-codegen'))
+import stubs
 from versioned_result import generate as gen_versioned
 from variant_revision import containing as variant_types, extend as variant_extend
 CORE = ROOT / 'crates/devworks-core/src'
@@ -789,6 +792,7 @@ def main():
         write(CORE / 'protocol/results.rs', gen_results(ops)),
         write(CORE / 'operations/mod.rs', gen_operations_mod(REGISTER['families'])),
         write(CORE / 'registry/catalog.rs', gen_catalog(ops)),
+        write(ROOT / 'crates/devworks-test-support/src/unmodelled_generated.rs', stubs.generate(CORE)),
     ]
     family_dir = CORE / 'operations'
     expected = {'mod.rs'} | {f'{f}.rs' for f in by_family}

@@ -319,3 +319,30 @@ class AuthorityAttributeRules(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class StubGeneration(unittest.TestCase):
+    """The repository-port test stub is read from the trait declarations."""
+
+    def setUp(self):
+        import stubs
+        self.stubs = stubs
+
+    def test_required_methods_are_stubbed_and_defaulted_ones_are_not(self):
+        source = '''
+pub trait Sample {
+    /// Doc with a brace { and a semicolon; inside.
+    fn one(&self, id: &Id, n: u16) -> Result<Vec<(String, u8)>, StorageError>;
+    fn two(&mut self, f: &mut dyn FnMut() -> bool) -> Result<(), StorageError> { Ok(()) }
+    fn three<T: Into<u8>>(&mut self, v: T) -> Result<u8, StorageError>;
+}
+'''
+        methods = self.stubs.required_methods(source, 'Sample')
+        self.assertEqual([m[0] for m in methods], ['one', 'three'])
+        self.assertEqual([self.stubs.pattern_free(p) for p in methods[0][2]], ['&self', '_: &Id', '_: u16'])
+        self.assertEqual(methods[1][1], '<T: Into<u8>>')
+
+    def test_the_recorded_ports_generate_a_stub_for_every_repository_trait(self):
+        text = self.stubs.generate(generate.CORE)
+        for name in ('WorkRepository', 'ConventionIndexRead', 'SchemaRepository'):
+            self.assertIn(f'impl {name} for Unmodelled', text)
