@@ -234,7 +234,19 @@ pub enum Direction {
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "kind", rename_all_fields = "camelCase", deny_unknown_fields)]
 pub enum GraphQuery {
-    #[schemars(extend("oneOf" = [{"required": ["kind", "text", "nodeKinds"], "x-until": 3}, {"required": ["kind", "text", "nodeKinds"], "not": {"required": ["selection"]}, "x-since": 3}, {"required": ["kind", "selection"], "not": {"anyOf": [{"required": ["text"]}, {"required": ["nodeKinds"]}]}, "x-since": 3}]))]
+    #[schemars(extend("oneOf" = [
+        {"required": ["kind", "text", "nodeKinds"], "x-until": 3},
+        {
+            "required": ["kind", "text", "nodeKinds"],
+            "not": {"required": ["selection"]},
+            "x-since": 3
+        },
+        {
+            "required": ["kind", "selection"],
+            "not": {"anyOf": [{"required": ["text"]}, {"required": ["nodeKinds"]}]},
+            "x-since": 3
+        }
+    ]))]
     Search {
         #[serde(
             default,
@@ -271,7 +283,19 @@ pub enum GraphQuery {
     Node {
         node_id: Id,
     },
-    #[schemars(extend("oneOf" = [{"required": ["kind", "nodeId", "maxLines"], "x-until": 3}, {"required": ["kind", "nodeId", "maxLines"], "not": {"required": ["selection"]}, "x-since": 3}, {"required": ["kind", "selection"], "not": {"anyOf": [{"required": ["nodeId"]}, {"required": ["maxLines"]}]}, "x-since": 3}]))]
+    #[schemars(extend("oneOf" = [
+        {"required": ["kind", "nodeId", "maxLines"], "x-until": 3},
+        {
+            "required": ["kind", "nodeId", "maxLines"],
+            "not": {"required": ["selection"]},
+            "x-since": 3
+        },
+        {
+            "required": ["kind", "selection"],
+            "not": {"anyOf": [{"required": ["nodeId"]}, {"required": ["maxLines"]}]},
+            "x-since": 3
+        }
+    ]))]
     Source {
         #[serde(
             default,
@@ -304,7 +328,23 @@ pub enum GraphQuery {
         #[schemars(range(min = 0, max = 128))]
         max_depth: u16,
     },
-    #[schemars(extend("oneOf" = [{"required": ["kind", "fromId", "toId", "maxDepth"], "x-until": 3}, {"required": ["kind", "fromId", "toId", "maxDepth"], "not": {"required": ["selection"]}, "x-since": 3}, {"required": ["kind", "selection"], "not": {"anyOf": [{"required": ["fromId"]}, {"required": ["toId"]}, {"required": ["maxDepth"]}]}, "x-since": 3}]))]
+    #[schemars(extend("oneOf" = [
+        {"required": ["kind", "fromId", "toId", "maxDepth"], "x-until": 3},
+        {
+            "required": ["kind", "fromId", "toId", "maxDepth"],
+            "not": {"required": ["selection"]},
+            "x-since": 3
+        },
+        {
+            "required": ["kind", "selection"],
+            "not": {"anyOf": [
+                {"required": ["fromId"]},
+                {"required": ["toId"]},
+                {"required": ["maxDepth"]}
+            ]},
+            "x-since": 3
+        }
+    ]))]
     Path {
         #[serde(
             default,
@@ -335,7 +375,15 @@ pub enum GraphQuery {
         #[schemars(with = "CodeCallSelection", extend("x-since" = 3))]
         selection: Option<CodeCallSelection>,
     },
-    #[schemars(extend("oneOf" = [{"required": ["kind", "nodeId"], "x-until": 3}, {"required": ["kind", "nodeId"], "not": {"required": ["selection"]}, "x-since": 3}, {"required": ["kind", "selection"], "not": {"anyOf": [{"required": ["nodeId"]}]}, "x-since": 3}]))]
+    #[schemars(extend("oneOf" = [
+        {"required": ["kind", "nodeId"], "x-until": 3},
+        {"required": ["kind", "nodeId"], "not": {"required": ["selection"]}, "x-since": 3},
+        {
+            "required": ["kind", "selection"],
+            "not": {"anyOf": [{"required": ["nodeId"]}]},
+            "x-since": 3
+        }
+    ]))]
     NodeImpact {
         #[serde(
             default,
@@ -353,7 +401,19 @@ pub enum GraphQuery {
         selection: Option<CodeImpactSelection>,
     },
 
-    #[schemars(extend("oneOf" = [{"required": ["kind", "repositoryId", "unitKey"], "x-until": 3}, {"required": ["kind", "repositoryId", "unitKey"], "not": {"required": ["selection"]}, "x-since": 3}, {"required": ["kind", "selection"], "not": {"anyOf": [{"required": ["repositoryId"]}, {"required": ["unitKey"]}]}, "x-since": 3}]))]
+    #[schemars(extend("oneOf" = [
+        {"required": ["kind", "repositoryId", "unitKey"], "x-until": 3},
+        {
+            "required": ["kind", "repositoryId", "unitKey"],
+            "not": {"required": ["selection"]},
+            "x-since": 3
+        },
+        {
+            "required": ["kind", "selection"],
+            "not": {"anyOf": [{"required": ["repositoryId"]}, {"required": ["unitKey"]}]},
+            "x-since": 3
+        }
+    ]))]
     FileImpact {
         #[serde(
             default,
@@ -377,7 +437,19 @@ pub enum GraphQuery {
         #[schemars(with = "CodeFileSelection", extend("x-since" = 3))]
         selection: Option<CodeFileSelection>,
     },
-    #[schemars(extend("oneOf" = [{"required": ["kind", "repositoryId", "unitKey"], "x-until": 3}, {"required": ["kind", "repositoryId", "unitKey"], "not": {"required": ["selection"]}, "x-since": 3}, {"required": ["kind", "selection"], "not": {"anyOf": [{"required": ["repositoryId"]}, {"required": ["unitKey"]}]}, "x-since": 3}]))]
+    #[schemars(extend("oneOf" = [
+        {"required": ["kind", "repositoryId", "unitKey"], "x-until": 3},
+        {
+            "required": ["kind", "repositoryId", "unitKey"],
+            "not": {"required": ["selection"]},
+            "x-since": 3
+        },
+        {
+            "required": ["kind", "selection"],
+            "not": {"anyOf": [{"required": ["repositoryId"]}, {"required": ["unitKey"]}]},
+            "x-since": 3
+        }
+    ]))]
     NodesByFile {
         #[serde(
             default,
@@ -404,7 +476,15 @@ pub enum GraphQuery {
     RepositoryDependencies {
         repository_id: Id,
     },
-    #[schemars(extend("oneOf" = [{"required": ["kind", "nodeId"], "x-until": 3}, {"required": ["kind", "nodeId"], "not": {"required": ["selection"]}, "x-since": 3}, {"required": ["kind", "selection"], "not": {"anyOf": [{"required": ["nodeId"]}]}, "x-since": 3}]))]
+    #[schemars(extend("oneOf" = [
+        {"required": ["kind", "nodeId"], "x-until": 3},
+        {"required": ["kind", "nodeId"], "not": {"required": ["selection"]}, "x-since": 3},
+        {
+            "required": ["kind", "selection"],
+            "not": {"anyOf": [{"required": ["nodeId"]}]},
+            "x-since": 3
+        }
+    ]))]
     Consumers {
         #[serde(
             default,
@@ -421,7 +501,15 @@ pub enum GraphQuery {
         #[schemars(with = "CodeNodeSelection", extend("x-since" = 3))]
         selection: Option<CodeNodeSelection>,
     },
-    #[schemars(extend("oneOf" = [{"required": ["kind", "nodeId"], "x-until": 3}, {"required": ["kind", "nodeId"], "not": {"required": ["selection"]}, "x-since": 3}, {"required": ["kind", "selection"], "not": {"anyOf": [{"required": ["nodeId"]}]}, "x-since": 3}]))]
+    #[schemars(extend("oneOf" = [
+        {"required": ["kind", "nodeId"], "x-until": 3},
+        {"required": ["kind", "nodeId"], "not": {"required": ["selection"]}, "x-since": 3},
+        {
+            "required": ["kind", "selection"],
+            "not": {"anyOf": [{"required": ["nodeId"]}]},
+            "x-since": 3
+        }
+    ]))]
     Publishers {
         #[serde(
             default,
@@ -438,7 +526,15 @@ pub enum GraphQuery {
         #[schemars(with = "CodeNodeSelection", extend("x-since" = 3))]
         selection: Option<CodeNodeSelection>,
     },
-    #[schemars(extend("oneOf" = [{"required": ["kind", "nodeId"], "x-until": 3}, {"required": ["kind", "nodeId"], "not": {"required": ["selection"]}, "x-since": 3}, {"required": ["kind", "selection"], "not": {"anyOf": [{"required": ["nodeId"]}]}, "x-since": 3}]))]
+    #[schemars(extend("oneOf" = [
+        {"required": ["kind", "nodeId"], "x-until": 3},
+        {"required": ["kind", "nodeId"], "not": {"required": ["selection"]}, "x-since": 3},
+        {
+            "required": ["kind", "selection"],
+            "not": {"anyOf": [{"required": ["nodeId"]}]},
+            "x-since": 3
+        }
+    ]))]
     DataLineage {
         #[serde(
             default,
@@ -459,7 +555,10 @@ pub enum GraphQuery {
 }
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-#[schemars(extend("oneOf" = [{"required": ["protocol", "queryId", "scope", "view", "query", "limits"]}, {"required": ["protocol", "queryId", "scope", "current", "query", "limits"], "x-since": 3}]))]
+#[schemars(extend("oneOf" = [
+    {"required": ["protocol", "queryId", "scope", "view", "query", "limits"]},
+    {"required": ["protocol", "queryId", "scope", "current", "query", "limits"], "x-since": 3}
+]))]
 pub struct GraphReadRequest {
     pub protocol: Protocol,
     pub query_id: QueryId,
@@ -879,7 +978,16 @@ impl schemars::JsonSchema for GraphCompletion {
         "GraphCompletion".into()
     }
     fn json_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
-        schemars::json_schema!({"x-earlier":{"name":"QueryCompletion","before":3},"oneOf":[{"type":"string","enum":["Complete","ResultLimit","WorkLimit","Deadline","Cancelled"]},{"type":"string","const":"Partial","x-since":3}]})
+        schemars::json_schema!({
+            "x-earlier":{"name":"QueryCompletion","before":3},
+            "oneOf":[
+                {
+                    "type":"string",
+                    "enum":["Complete","ResultLimit","WorkLimit","Deadline","Cancelled"]
+                },
+                {"type":"string","const":"Partial","x-since":3}
+            ]
+        })
     }
 }
 impl From<QueryCompletion> for GraphCompletion {
@@ -946,7 +1054,10 @@ pub enum IndexLayer {
 pub enum IndexCommand {
     // The overlay of exactly one source: a worktree, or from schema revision 2 a ref (a branch,
     // tag or full commit, resolved to its current commit). Revision 1 requires `worktreeId`.
-    #[schemars(extend("oneOf" = [{"required": ["kind", "repositoryId", "worktreeId", "expectedSourceRevision"]}, {"required": ["kind", "repositoryId", "ref", "expectedSourceRevision"], "x-since": 2}]))]
+    #[schemars(extend("oneOf" = [
+        {"required": ["kind", "repositoryId", "worktreeId", "expectedSourceRevision"]},
+        {"required": ["kind", "repositoryId", "ref", "expectedSourceRevision"], "x-since": 2}
+    ]))]
     RefreshOverlay {
         repository_id: Id,
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -966,7 +1077,52 @@ pub enum IndexCommand {
     Cancel {
         operation_id: OperationId,
     },
-    #[schemars(extend("oneOf" = [{"required": ["kind", "repositoryId", "nodeId", "expectedRevision", "viewId", "expectedContentDigest", "trusted"], "x-until": 3}, {"required": ["kind", "repositoryId", "nodeId", "expectedRevision", "viewId", "expectedContentDigest", "trusted", "unitKey", "expectedViewDigest", "scope"], "not": {"required": ["expectedContentIdentity"]}, "x-since": 3}, {"required": ["kind", "repositoryId", "nodeId", "expectedRevision", "viewId", "trusted", "unitKey", "expectedViewDigest", "expectedContentIdentity", "scope"], "not": {"required": ["expectedContentDigest"]}, "x-since": 3}]))]
+    #[schemars(extend("oneOf" = [
+        {
+            "required": [
+                "kind",
+                "repositoryId",
+                "nodeId",
+                "expectedRevision",
+                "viewId",
+                "expectedContentDigest",
+                "trusted"
+            ],
+            "x-until": 3
+        },
+        {
+            "required": [
+                "kind",
+                "repositoryId",
+                "nodeId",
+                "expectedRevision",
+                "viewId",
+                "expectedContentDigest",
+                "trusted",
+                "unitKey",
+                "expectedViewDigest",
+                "scope"
+            ],
+            "not": {"required": ["expectedContentIdentity"]},
+            "x-since": 3
+        },
+        {
+            "required": [
+                "kind",
+                "repositoryId",
+                "nodeId",
+                "expectedRevision",
+                "viewId",
+                "trusted",
+                "unitKey",
+                "expectedViewDigest",
+                "expectedContentIdentity",
+                "scope"
+            ],
+            "not": {"required": ["expectedContentDigest"]},
+            "x-since": 3
+        }
+    ]))]
     SetTrust {
         repository_id: Id,
         node_id: Id,
@@ -1059,7 +1215,8 @@ impl IndexCommandRequest {
                     || expected_content_digest.is_some() == expected_content_identity.is_some()
                 {
                     return Err(
-                        "current trust change requires full view/unit identity and exactly one content witness",
+                        "current trust change requires full view/unit identity and exactly one \
+                            content witness",
                     );
                 }
             } else if expected_content_digest.is_none() {
@@ -1228,7 +1385,29 @@ fn normalize_tags(tags: &mut Option<ArtifactTags>) {
 pub enum ArtifactCommand {
     // A new artifact in exactly one owner scope: `projectId`, or from schema revision 3 the
     // workspace (`workspace: true`). Revisions 1 and 2 require `projectId`.
-    #[schemars(extend("oneOf" = [{"required": ["kind", "projectId", "title", "mediaType", "source", "expectedDigest", "expectedBytes"]}, {"required": ["kind", "workspace", "title", "mediaType", "source", "expectedDigest", "expectedBytes"], "x-since": 3}]))]
+    #[schemars(extend("oneOf" = [
+        {"required": [
+            "kind",
+            "projectId",
+            "title",
+            "mediaType",
+            "source",
+            "expectedDigest",
+            "expectedBytes"
+        ]},
+        {
+            "required": [
+                "kind",
+                "workspace",
+                "title",
+                "mediaType",
+                "source",
+                "expectedDigest",
+                "expectedBytes"
+            ],
+            "x-since": 3
+        }
+    ]))]
     Save {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         #[schemars(with = "ProjectId")]
@@ -1840,7 +2019,52 @@ pub enum GraphResult {
 }
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-#[schemars(extend("oneOf" = [{"required": ["protocol", "queryId", "view", "completion", "result"], "x-until": 3}, {"required": ["protocol", "queryId", "view", "completion", "result", "scopeCoverage"], "x-since": 3}, {"required": ["protocol", "queryId", "completion", "result", "scopeCoverage"], "not": {"required": ["view"]}, "properties": {"result": {"oneOf": [{"properties": {"kind": {"const": "ScopeDetails"}, "value": {"required": ["unavailableReason"]}}, "required": ["kind", "value"]}, {"properties": {"kind": {"const": "SchemaDetails"}, "value": {"required": ["unavailableReason"], "properties": {"origin": {"const": "Declared"}}}}, "required": ["kind", "value"]}, {"properties": {"kind": {"const": "RepositoryOverview"}, "value": {"required": ["unavailableReason"], "properties": {"graphCoverage": {"properties": {"state": {"const": "Unavailable"}}}, "dependencies": {"maxItems": 0}, "internalModules": {"maxItems": 0}}, "not": {"required": ["graphTotals"]}}}, "required": ["kind", "value"]}]}}, "x-since": 3}]))]
+#[schemars(extend("oneOf" = [
+    {"required": ["protocol", "queryId", "view", "completion", "result"], "x-until": 3},
+    {
+        "required": ["protocol", "queryId", "view", "completion", "result", "scopeCoverage"],
+        "x-since": 3
+    },
+    {
+        "required": ["protocol", "queryId", "completion", "result", "scopeCoverage"],
+        "not": {"required": ["view"]},
+        "properties": {"result": {"oneOf": [
+            {
+                "properties": {
+                    "kind": {"const": "ScopeDetails"},
+                    "value": {"required": ["unavailableReason"]}
+                },
+                "required": ["kind", "value"]
+            },
+            {
+                "properties": {
+                    "kind": {"const": "SchemaDetails"},
+                    "value": {
+                        "required": ["unavailableReason"],
+                        "properties": {"origin": {"const": "Declared"}}
+                    }
+                },
+                "required": ["kind", "value"]
+            },
+            {
+                "properties": {
+                    "kind": {"const": "RepositoryOverview"},
+                    "value": {
+                        "required": ["unavailableReason"],
+                        "properties": {
+                            "graphCoverage": {"properties": {"state": {"const": "Unavailable"}}},
+                            "dependencies": {"maxItems": 0},
+                            "internalModules": {"maxItems": 0}
+                        },
+                        "not": {"required": ["graphTotals"]}
+                    }
+                },
+                "required": ["kind", "value"]
+            }
+        ]}},
+        "x-since": 3
+    }
+]))]
 pub struct GraphPage {
     pub protocol: Protocol,
     pub query_id: QueryId,
@@ -2187,8 +2411,17 @@ impl GraphPage {
         }
         if let Some(citation) = &source.legacy_citation {
             citation.validate()?;
-            if !matches!(&citation.source,CitationSource::Repository{snapshot,unit_key,source_digest} if serde_json::to_value(snapshot).unwrap()==serde_json::to_value(&source.snapshot).unwrap()&&unit_key.0==source.unit_key.0&&source_digest==&source.source_digest)
-            {
+            if !matches!(
+                &citation.source,
+                CitationSource::Repository {
+                    snapshot,
+                    unit_key,
+                    source_digest,
+                } if serde_json::to_value(snapshot).unwrap()
+                    == serde_json::to_value(&source.snapshot).unwrap()
+                    && unit_key.0 == source.unit_key.0
+                    && source_digest == &source.source_digest
+            ) {
                 return Err("legacy source witness mismatch");
             }
         }

@@ -77,7 +77,9 @@ fn scope_revision(conn: &Connection, scope: &KnowledgeScope) -> Result<i64, Stor
 // ---------------------------------------------------------------------------------------------
 // Entities
 
-const ENTITY_COLUMNS: &str = "id,scope_key,project_id,revision,label,entity_type,aliases_json,canonical_key,canonical_name,external_id,source,author_id,created_at,updated_at,deleted_at";
+const ENTITY_COLUMNS: &str = "id,scope_key,project_id,revision,label,entity_type,aliases_json,\
+    canonical_key,canonical_name,external_id,source,author_id,created_at,\
+    updated_at,deleted_at";
 
 type RawEntity = (
     String,
@@ -163,7 +165,10 @@ fn entities_where(
 // ---------------------------------------------------------------------------------------------
 // Claims
 
-const CLAIM_COLUMNS: &str = "c.id,c.scope_key,c.project_id,c.revision,c.kind,c.entry_kind,c.lifecycle,c.subject_id,c.predicate,c.object_id,c.source,c.author_id,c.session_id,c.rule_state,c.lesson_source,c.applicability_json,c.effective_at,c.created_at,c.updated_at,c.deleted_at,c.body_json";
+const CLAIM_COLUMNS: &str = "c.id,c.scope_key,c.project_id,c.revision,c.kind,c.entry_kind,\
+    c.lifecycle,c.subject_id,c.predicate,c.object_id,c.source,c.author_id,\
+    c.session_id,c.rule_state,c.lesson_source,c.applicability_json,\
+    c.effective_at,c.created_at,c.updated_at,c.deleted_at,c.body_json";
 
 struct RawClaim {
     id: String,
@@ -456,8 +461,10 @@ fn claims_page(
     }
     if let Some(stale) = q.stale {
         w.push(format!(
-            "{} EXISTS(SELECT 1 FROM knowledge_claim_basis b JOIN knowledge_source_heads h ON \
-             h.source_ref=b.source_ref WHERE b.claim_id=c.id AND h.source_revision<>b.source_revision)",
+            "{} EXISTS(SELECT 1 FROM knowledge_claim_basis b JOIN \
+                knowledge_source_heads h ON \
+                h.source_ref=b.source_ref WHERE b.claim_id=c.id AND \
+                h.source_revision<>b.source_revision)",
             if stale { "" } else { "NOT" }
         ));
     }
@@ -516,7 +523,9 @@ fn claims_page(
 // ---------------------------------------------------------------------------------------------
 // Evidence, relations, history, writes
 
-const EVIDENCE_COLUMNS: &str = "e.id,e.scope_key,e.project_id,e.kind,e.source_ref,e.artifact_json,e.locator,e.snippet,e.metadata_json,e.source_revision,e.author_id,e.recorded_at,e.deleted_at";
+const EVIDENCE_COLUMNS: &str = "e.id,e.scope_key,e.project_id,e.kind,e.source_ref,e.artifact_json,\
+    e.locator,e.snippet,e.metadata_json,e.source_revision,e.author_id,\
+    e.recorded_at,e.deleted_at";
 type RawEvidence = (
     String,
     String,
@@ -685,7 +694,8 @@ type RawWrite = (
     String,
     String,
 );
-const WRITE_COLUMNS: &str = "write_id,operation,scope_key,actor_id,session_id,at,scope_revision,entity_ids_json,claim_ids_json,changes_json,diagnostics_json";
+const WRITE_COLUMNS: &str = "write_id,operation,scope_key,actor_id,session_id,at,scope_revision,\
+    entity_ids_json,claim_ids_json,changes_json,diagnostics_json";
 fn write_row(r: &Row<'_>) -> rusqlite::Result<RawWrite> {
     Ok((
         r.get(0)?,
@@ -852,22 +862,71 @@ fn challenge_of(r: RawChallenge) -> Result<StoredChallenge, StorageError> {
     })
 }
 
-const STALE_SQL: &str = "EXISTS(SELECT 1 FROM knowledge_claim_basis b JOIN knowledge_source_heads \
-     h ON h.source_ref=b.source_ref WHERE b.claim_id=c.id AND h.source_revision<>b.source_revision)";
+const STALE_SQL: &str = "EXISTS(SELECT 1 FROM knowledge_claim_basis b JOIN \
+    knowledge_source_heads \
+    h ON h.source_ref=b.source_ref WHERE b.claim_id=c.id AND \
+    h.source_revision<>b.source_revision)";
 
 macro_rules! knowledge_reads {
     ($t:ty) => {
         impl KnowledgeRead for $t {
-            fn knowledge_review_candidates(&self,scopes:&[String],kind:KnowledgeReviewKind,limit:u16)->Result<Vec<StoredClaim>,StorageError>{
-                let limit=page_limit(limit)?;if scopes.is_empty(){return Ok(Vec::new());}for scope in scopes{KnowledgeScope::parse(scope)?;}
-                let mut p=Vec::new();let scopes=placeholders(&mut p,scopes.iter().cloned());
-                let condition=match kind{KnowledgeReviewKind::Challenge=>"EXISTS(SELECT 1 FROM knowledge_challenges h WHERE h.claim_id=c.id AND h.state='Open')",KnowledgeReviewKind::ProposedRule=>"c.kind='Lesson' AND c.rule_state='Proposed'"};
-                p.push(Sql::Integer(limit));let tail=format!("WHERE c.scope_key IN ({scopes}) AND c.lifecycle='Active' AND {condition} ORDER BY c.id LIMIT ?{}",p.len());claims_where(self.conn,&tail,p)
+            fn knowledge_review_candidates(
+                &self,
+                scopes: &[String],
+                kind: KnowledgeReviewKind,
+                limit: u16,
+            ) -> Result<Vec<StoredClaim>, StorageError> {
+                let limit = page_limit(limit)?;
+                if scopes.is_empty() {
+                    return Ok(Vec::new());
+                }
+                for scope in scopes {
+                    KnowledgeScope::parse(scope)?;
+                }
+                let mut p = Vec::new();
+                let scopes = placeholders(&mut p, scopes.iter().cloned());
+                let condition = match kind {
+                    KnowledgeReviewKind::Challenge => {
+                        "EXISTS(SELECT 1 FROM knowledge_challenges h WHERE h.claim_id=c.id AND \
+                    h.state='Open')"
+                    }
+                    KnowledgeReviewKind::ProposedRule => {
+                        "c.kind='Lesson' AND c.rule_state='Proposed'"
+                    }
+                };
+                p.push(Sql::Integer(limit));
+                let tail = format!(
+                    "WHERE c.scope_key IN ({scopes}) AND c.lifecycle='Active' AND \
+                    {condition} ORDER BY c.id LIMIT ?{}",
+                    p.len()
+                );
+                claims_where(self.conn, &tail, p)
             }
-            fn knowledge_review_contradictions(&self,scopes:&[String],limit:u16)->Result<Vec<StoredRelation>,StorageError>{
-                let limit=page_limit(limit)?;if scopes.is_empty(){return Ok(Vec::new());}for scope in scopes{KnowledgeScope::parse(scope)?;}
-                let mut p=Vec::new();let scopes=placeholders(&mut p,scopes.iter().cloned());p.push(Sql::Integer(limit));
-                rows(self.conn,&format!("SELECT {RELATION_COLUMNS} FROM (SELECT r.*,ROW_NUMBER() OVER (PARTITION BY r.scope_key,min(r.subject_id,r.object_id),max(r.subject_id,r.object_id) ORDER BY r.created_at,r.id) AS pair_rank FROM knowledge_relations r JOIN knowledge_claims a ON a.id=r.subject_id JOIN knowledge_claims b ON b.id=r.object_id WHERE r.scope_key IN ({scopes}) AND r.predicate='contradicts' AND r.removed_at IS NULL AND r.subject_id<>r.object_id AND a.lifecycle='Active' AND b.lifecycle='Active' AND a.scope_key=b.scope_key AND r.scope_key=a.scope_key) WHERE pair_rank=1 ORDER BY created_at,id LIMIT ?{}",p.len()),p,relation_row)?.into_iter().map(relation_of).collect()
+            fn knowledge_review_contradictions(
+                &self,
+                scopes: &[String],
+                limit: u16,
+            ) -> Result<Vec<StoredRelation>, StorageError> {
+                let limit = page_limit(limit)?;
+                if scopes.is_empty() {
+                    return Ok(Vec::new());
+                }
+                for scope in scopes {
+                    KnowledgeScope::parse(scope)?;
+                }
+                let mut p = Vec::new();
+                let scopes = placeholders(&mut p, scopes.iter().cloned());
+                p.push(Sql::Integer(limit));
+                rows(self.conn,&format!("SELECT {RELATION_COLUMNS} FROM (SELECT r.*,ROW_NUMBER() OVER (PARTITION \
+                    BY r.scope_key,min(r.subject_id,r.object_id),max(r.subject_id,\
+                    r.object_id) ORDER BY r.created_at,r.id) AS pair_rank FROM \
+                    knowledge_relations r JOIN knowledge_claims a ON a.id=r.subject_id JOIN \
+                    knowledge_claims b ON b.id=r.object_id WHERE r.scope_key IN ({scopes}) \
+                    AND r.predicate='contradicts' AND r.removed_at IS NULL AND \
+                    r.subject_id<>r.object_id AND a.lifecycle='Active' AND \
+                    b.lifecycle='Active' AND a.scope_key=b.scope_key AND \
+                    r.scope_key=a.scope_key) WHERE pair_rank=1 ORDER BY created_at,id LIMIT \
+                    ?{}",p.len()),p,relation_row)?.into_iter().map(relation_of).collect()
             }
             fn knowledge_scope_revision(
                 &self,
@@ -1005,10 +1064,7 @@ macro_rules! knowledge_reads {
                     ],
                 )
             }
-            fn knowledge_evidence(
-                &self,
-                id: &Id,
-            ) -> Result<Option<StoredEvidence>, StorageError> {
+            fn knowledge_evidence(&self, id: &Id) -> Result<Option<StoredEvidence>, StorageError> {
                 Ok(evidence_where(
                     self.conn,
                     "WHERE e.id=?1",
@@ -1023,16 +1079,16 @@ macro_rules! knowledge_reads {
             ) -> Result<Vec<Id>, StorageError> {
                 let limit = page_limit(limit)?;
                 rows(
-                    self.conn,
-                    "SELECT ce.claim_id FROM knowledge_claim_evidence ce JOIN knowledge_claims c \
+                            self.conn,
+                            "SELECT ce.claim_id FROM knowledge_claim_evidence ce JOIN knowledge_claims c \
                      ON c.id=ce.claim_id WHERE ce.evidence_id=?1 AND c.lifecycle<>'Deleted' \
                      ORDER BY ce.claim_id LIMIT ?2",
-                    vec![Sql::Text(evidence.as_str().into()), Sql::Integer(limit)],
-                    |r| r.get::<_, String>(0),
-                )?
-                .into_iter()
-                .map(id_of)
-                .collect()
+                            vec![Sql::Text(evidence.as_str().into()), Sql::Integer(limit)],
+                            |r| r.get::<_, String>(0),
+                        )?
+                        .into_iter()
+                        .map(id_of)
+                        .collect()
             }
             fn knowledge_relations(
                 &self,
@@ -1156,22 +1212,20 @@ macro_rules! knowledge_reads {
                     return Ok(Vec::new());
                 }
                 let mut p = Vec::new();
-                let list = placeholders(&mut p,
-                    endpoints.iter().map(|i| i.as_str().to_owned()),
-                );
+                let list = placeholders(&mut p, endpoints.iter().map(|i| i.as_str().to_owned()));
                 rows(
-                    self.conn,
-                    &format!(
-                        "SELECT {RELATION_COLUMNS} FROM knowledge_relations WHERE \
+                            self.conn,
+                            &format!(
+                                "SELECT {RELATION_COLUMNS} FROM knowledge_relations WHERE \
                          removed_at IS NULL AND (subject_id IN ({list}) OR object_id IN ({list})) \
                          ORDER BY id"
-                    ),
-                    p,
-                    relation_row,
-                )?
-                .into_iter()
-                .map(relation_of)
-                .collect()
+                            ),
+                            p,
+                            relation_row,
+                        )?
+                        .into_iter()
+                        .map(relation_of)
+                        .collect()
             }
             fn knowledge_running_source_deletion(
                 &self,
@@ -1179,16 +1233,16 @@ macro_rules! knowledge_reads {
                 source: Option<&str>,
             ) -> Result<Option<Id>, StorageError> {
                 db(self
-                    .conn
-                    .query_row(
-                        "SELECT write_id FROM knowledge_source_deletions WHERE scope_key=?1 AND \
+                            .conn
+                            .query_row(
+                                "SELECT write_id FROM knowledge_source_deletions WHERE scope_key=?1 AND \
                          (?2 IS NULL OR source=?2) AND state='Running' ORDER BY write_id LIMIT 1",
-                        params![scope.key(), source],
-                        |r| r.get::<_, String>(0),
-                    )
-                    .optional())?
-                .map(id_of)
-                .transpose()
+                                params![scope.key(), source],
+                                |r| r.get::<_, String>(0),
+                            )
+                            .optional())?
+                        .map(id_of)
+                        .transpose()
             }
             fn knowledge_recent_writes(
                 &self,
@@ -1270,9 +1324,24 @@ macro_rules! knowledge_reads {
                 .map(challenge_of)
                 .collect()
             }
-            fn knowledge_open_challenge_records(&self,claim:&Id,limit:u16)->Result<Vec<StoredChallenge>,StorageError>{
-                let limit=page_limit(limit)?;
-                rows(self.conn,&format!("SELECT {CHALLENGE_COLUMNS} FROM knowledge_challenges WHERE claim_id=?1 AND state='Open' ORDER BY opened_at,id LIMIT ?2"),vec![Sql::Text(claim.as_str().into()),Sql::Integer(limit)],challenge_row)?.into_iter().map(challenge_of).collect()
+            fn knowledge_open_challenge_records(
+                &self,
+                claim: &Id,
+                limit: u16,
+            ) -> Result<Vec<StoredChallenge>, StorageError> {
+                let limit = page_limit(limit)?;
+                rows(
+                    self.conn,
+                    &format!(
+                        "SELECT {CHALLENGE_COLUMNS} FROM knowledge_challenges WHERE claim_id=?1 \
+                    AND state='Open' ORDER BY opened_at,id LIMIT ?2"
+                    ),
+                    vec![Sql::Text(claim.as_str().into()), Sql::Integer(limit)],
+                    challenge_row,
+                )?
+                .into_iter()
+                .map(challenge_of)
+                .collect()
             }
             fn knowledge_challenge(
                 &self,
@@ -1330,28 +1399,28 @@ macro_rules! knowledge_reads {
             fn knowledge_claim_tally(&self, claim: &Id) -> Result<ClaimTally, StorageError> {
                 // Migration 54's triggers maintain the tallies; an absent claim has none.
                 Ok(db(self
-                    .conn
-                    .query_row(
-                        &format!(
-                            "SELECT {STALE_SQL}, c.open_challenges, c.lesson_events, \
+                            .conn
+                            .query_row(
+                                &format!(
+                                    "SELECT {STALE_SQL}, c.open_challenges, c.lesson_events, \
                              c.delivered_sessions, c.last_delivered_at FROM knowledge_claims c \
                              WHERE c.id=?1"
-                        ),
-                        params![claim.as_str()],
-                        |r| {
-                            Ok(ClaimTally {
-                                stale: r.get(0)?,
-                                open_challenges: r.get(1)?,
-                                lesson_events: r.get(2)?,
-                                deliveries: DeliverySummary {
-                                    sessions: r.get(3)?,
-                                    last_at_ms: r.get(4)?,
+                                ),
+                                params![claim.as_str()],
+                                |r| {
+                                    Ok(ClaimTally {
+                                        stale: r.get(0)?,
+                                        open_challenges: r.get(1)?,
+                                        lesson_events: r.get(2)?,
+                                        deliveries: DeliverySummary {
+                                            sessions: r.get(3)?,
+                                            last_at_ms: r.get(4)?,
+                                        },
+                                    })
                                 },
-                            })
-                        },
-                    )
-                    .optional())?
-                .unwrap_or_default())
+                            )
+                            .optional())?
+                        .unwrap_or_default())
             }
             fn knowledge_claim_stale(&self, claim: &Id) -> Result<bool, StorageError> {
                 db(self.conn.query_row(
@@ -1428,15 +1497,15 @@ macro_rules! knowledge_reads {
                     "CASE WHEN r.subject_id=?1 THEN r.object_id ELSE r.subject_id END",
                 );
                 db(self.conn.query_row(
-                    &format!(
-                        "SELECT EXISTS(SELECT 1 FROM knowledge_claims c WHERE \
+                            &format!(
+                                "SELECT EXISTS(SELECT 1 FROM knowledge_claims c WHERE \
                          (c.subject_id=?1 OR c.object_id=?1) AND c.lifecycle<>'Deleted' AND \
                          {outside}) OR EXISTS(SELECT 1 FROM knowledge_relations r WHERE \
                          (r.subject_id=?1 OR r.object_id=?1) AND r.removed_at IS NULL AND {other})"
-                    ),
-                    params_from_iter(p),
-                    |r| r.get(0),
-                ))
+                            ),
+                            params_from_iter(p),
+                            |r| r.get(0),
+                        ))
             }
             fn knowledge_claim_referrer_outside(
                 &self,
@@ -1471,8 +1540,8 @@ macro_rules! knowledge_reads {
                 let subject = kept(deleted, &mut p, "r.subject_id");
                 let object = kept(deleted, &mut p, "r.object_id");
                 db(self.conn.query_row(
-                    &format!(
-                        "SELECT EXISTS(SELECT 1 FROM knowledge_claim_evidence ce JOIN \
+                            &format!(
+                                "SELECT EXISTS(SELECT 1 FROM knowledge_claim_evidence ce JOIN \
                          knowledge_claims c ON c.id=ce.claim_id WHERE ce.evidence_id=?1 AND \
                          c.lifecycle<>'Deleted' AND {cited}) \
                          OR EXISTS(SELECT 1 FROM knowledge_challenges ch JOIN knowledge_claims c \
@@ -1482,10 +1551,10 @@ macro_rules! knowledge_reads {
                          AND (EXISTS(SELECT 1 FROM json_each(r.evidence_json) j WHERE j.value=?1) \
                          OR EXISTS(SELECT 1 FROM json_each(r.added_evidence_json) j \
                          WHERE j.value=?1)) AND {subject} AND {object})"
-                    ),
-                    params_from_iter(p),
-                    |r| r.get(0),
-                ))
+                            ),
+                            params_from_iter(p),
+                            |r| r.get(0),
+                        ))
             }
             fn knowledge_counts(&self, scopes: &[String]) -> Result<KnowledgeCounts, StorageError> {
                 let mut out = KnowledgeCounts::default();
@@ -1778,7 +1847,8 @@ impl KnowledgeRepository for Unit<'_> {
         ))?;
         for e in &c.body.evidence_ids {
             db(self.conn.execute(
-                "INSERT OR IGNORE INTO knowledge_claim_evidence(claim_id,evidence_id) VALUES(?1,?2)",
+                "INSERT OR IGNORE INTO knowledge_claim_evidence(claim_id,evidence_id) \
+                    VALUES(?1,?2)",
                 params![id, e.as_str()],
             ))?;
         }
@@ -2454,9 +2524,11 @@ impl KnowledgeRepository for Unit<'_> {
             rows(
                 conn,
                 &format!(
-                    "SELECT c.id, c.scope_key, c.project_id, {STALE_SQL} FROM knowledge_claims c \
-                     WHERE c.id IN (SELECT claim_id FROM knowledge_claim_basis WHERE source_ref=?1) \
-                     ORDER BY c.id"
+                    "SELECT c.id, c.scope_key, c.project_id, {STALE_SQL} FROM \
+                        knowledge_claims c \
+                        WHERE c.id IN (SELECT claim_id FROM knowledge_claim_basis WHERE \
+                        source_ref=?1) \
+                        ORDER BY c.id"
                 ),
                 vec![Sql::Text(source_ref.into())],
                 |r| {

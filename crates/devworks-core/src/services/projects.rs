@@ -1529,8 +1529,26 @@ pub(crate) fn approval_preview(
                 )
                 .into());
             }
-            let views=read.index_views(&r.id)?.into_iter().map(|v|json!({"id":v.view_id,"sourceRevision":v.source_revision,"coverage":v.coverage,"publishedAtMs":v.published_at_ms})).collect::<Vec<_>>();
-            let binding = json!({"repositoryId":r.id,"revision":r.revision,"location":r.location,"lifecycle":r.lifecycle,"projects":read.repository_projects(&r.id)?,"indexViews":views});
+            let views = read
+                .index_views(&r.id)?
+                .into_iter()
+                .map(|v| {
+                    json!({
+                        "id": v.view_id,
+                        "sourceRevision": v.source_revision,
+                        "coverage": v.coverage,
+                        "publishedAtMs": v.published_at_ms
+                    })
+                })
+                .collect::<Vec<_>>();
+            let binding = json!({
+                "repositoryId": r.id,
+                "revision": r.revision,
+                "location": r.location,
+                "lifecycle": r.lifecycle,
+                "projects": read.repository_projects(&r.id)?,
+                "indexViews": views
+            });
             Ok(OwnerPreview {
                 scope: ctx
                     .project_id()
@@ -1539,7 +1557,8 @@ pub(crate) fn approval_preview(
                 target_id: r.id,
                 target_revision: r.revision,
                 summary: format!("Remove app index of {}", r.name),
-                reviewed: json!({"effect":"Remove app index, overlays and cancel index runs; registered source, memberships and history stay","repository":binding}),
+                reviewed: json!({"effect":"Remove app index, overlays and cancel index runs; registered source, \
+                    memberships and history stay","repository":binding}),
                 binding,
             })
         }
@@ -1571,7 +1590,15 @@ fn project_approval(
     if delete && p.archive_stop_pending {
         return Err(stopping(&p.id));
     }
-    let binding = json!({"projectId":p.id,"revision":p.revision,"scopeRevision":p.scope_revision,"lifecycle":p.lifecycle,"archiveEpoch":p.archive_epoch,"archiveStopPending":p.archive_stop_pending,"repositories":read.members(&p.id)?});
+    let binding = json!({
+        "projectId": p.id,
+        "revision": p.revision,
+        "scopeRevision": p.scope_revision,
+        "lifecycle": p.lifecycle,
+        "archiveEpoch": p.archive_epoch,
+        "archiveStopPending": p.archive_stop_pending,
+        "repositories": read.members(&p.id)?
+    });
     Ok(crate::services::approvals::OwnerPreview {
         scope: ConfigScope::Project(p.id.clone()),
         target_id: p.id.0,
@@ -1585,7 +1612,8 @@ fn project_approval(
             },
             p.name
         ),
-        reviewed: json!({"effect":if delete{"Tombstone project and detach repositories; source files and retained history stay"}else{"Archive project, pause all work and stop owned processes"},"project":binding}),
+        reviewed: json!({"effect":if delete{"Tombstone project and detach repositories; source files and retained \
+            history stay"}else{"Archive project, pause all work and stop owned processes"},"project":binding}),
         binding,
     })
 }

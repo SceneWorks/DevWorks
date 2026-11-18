@@ -1056,7 +1056,8 @@ mod tests {
     fn statements_name_their_tables_and_unambiguous_columns() {
         assert_eq!(
             tables(
-                "SELECT o.id, o.total FROM orders o JOIN customers c ON c.id = o.customer_id WHERE o.id = ?"
+                "SELECT o.id, o.total FROM orders o JOIN customers c ON c.id = \
+                    o.customer_id WHERE o.id = ?"
             ),
             [
                 t("orders"),
@@ -1188,7 +1189,10 @@ mod tests {
         let java = uses(
             "java",
             "Order.java",
-            "import jakarta.persistence.*;\n@Entity\n@Table(schema = \"sales\", name = \"orders\")\nclass Order {\n  @Column(name = \"total_cents\")\n  long total;\n  // @Table(name = \"ghost\")\n  void load() { jdbc.query(\"SELECT id FROM order_lines WHERE order_id = ?\"); }\n}\n",
+            "import jakarta.persistence.*;\n@Entity\n@Table(schema = \"sales\", name \
+                = \"orders\")\nclass Order {\n  @Column(name = \"total_cents\")\n  long \
+                total;\n  // @Table(name = \"ghost\")\n  void load() { \
+                jdbc.query(\"SELECT id FROM order_lines WHERE order_id = ?\"); }\n}\n",
         );
         assert!(
             has(&java, "USES_TABLE", "Order", "sales.orders", "", "orm:jpa"),
@@ -1220,7 +1224,12 @@ mod tests {
         let cs = uses(
             "csharp",
             "Invoice.cs",
-            "[Table(\"Invoices\", Schema = \"billing\")]\npublic class Invoice {\n  [Column(\"due_on\")] public DateTime Due { get; set; }\n}\nclass Db {\n  void OnModelCreating(ModelBuilder b) { b.Entity<Line>().ToTable(\"invoice_lines\"); }\n  void Find(string t) { var a = \"SELECT * FROM invoices WHERE id = @id\"; var b = $\"SELECT * FROM {t}\"; }\n}\n",
+            "[Table(\"Invoices\", Schema = \"billing\")]\npublic class Invoice {\n  \
+                [Column(\"due_on\")] public DateTime Due { get; set; }\n}\nclass Db \
+                {\n  void OnModelCreating(ModelBuilder b) { \
+                b.Entity<Line>().ToTable(\"invoice_lines\"); }\n  void Find(string t) { \
+                var a = \"SELECT * FROM invoices WHERE id = @id\"; var b = $\"SELECT * \
+                FROM {t}\"; }\n}\n",
         );
         assert!(
             has(
@@ -1287,7 +1296,16 @@ mod tests {
         let py = uses(
             "python",
             "models.py",
-            "class User(Base):\n    __tablename__ = \"users\"\n    name = Column(\"user_name\", String)\n\nroles = Table(\"roles\", metadata, Column(\"role_id\", Integer))\n\nteams = Table(\"teams\", Base.metadata, Column(\"team_id\", Integer))\nlogs = db.Table(\"audit_logs\", db.metadata, Column(\"log_id\", Integer))\n\nclass Book(models.Model):\n    title = models.CharField(db_column=\"book_title\")\n    class Meta:\n        db_table = \"library_books\"\n\nclass Shelf(models.Model):\n    pass\n\ndef find(cur, t):\n    cur.execute(\"SELECT id FROM users WHERE id = %s\")\n    cur.execute(f\"SELECT id FROM {t}\")\n",
+            "class User(Base):\n    __tablename__ = \"users\"\n    name = \
+                Column(\"user_name\", String)\n\nroles = Table(\"roles\", metadata, \
+                Column(\"role_id\", Integer))\n\nteams = Table(\"teams\", \
+                Base.metadata, Column(\"team_id\", Integer))\nlogs = \
+                db.Table(\"audit_logs\", db.metadata, Column(\"log_id\", \
+                Integer))\n\nclass Book(models.Model):\n    title = \
+                models.CharField(db_column=\"book_title\")\n    class Meta:\n        \
+                db_table = \"library_books\"\n\nclass Shelf(models.Model):\n    \
+                pass\n\ndef find(cur, t):\n    cur.execute(\"SELECT id FROM users WHERE \
+                id = %s\")\n    cur.execute(f\"SELECT id FROM {t}\")\n",
         );
         assert!(
             has(&py, "USES_TABLE", "User", "users", "", "orm:sqlalchemy"),
@@ -1331,7 +1349,8 @@ mod tests {
         let rb = uses(
             "ruby",
             "account.rb",
-            "class Account < ApplicationRecord\n  self.table_name = \"legacy_accounts\"\nend\nclass Person < ApplicationRecord\nend\n",
+            "class Account < ApplicationRecord\n  self.table_name = \
+                \"legacy_accounts\"\nend\nclass Person < ApplicationRecord\nend\n",
         );
         assert!(
             has(
@@ -1348,7 +1367,11 @@ mod tests {
         let php = uses(
             "php",
             "Flight.php",
-            "<?php\nclass Flight extends Model {\n  protected $table = 'flights';\n  function late() { return DB::select('SELECT * FROM flights WHERE delayed = ?'); }\n}\n#[ORM\\Entity]\n#[ORM\\Table(name: 'products')]\nclass Product {\n  #[ORM\\Column(name: 'sku_code')]\n  private string $sku;\n}\n",
+            "<?php\nclass Flight extends Model {\n  protected $table = 'flights';\n  \
+                function late() { return DB::select('SELECT * FROM flights WHERE \
+                delayed = ?'); }\n}\n#[ORM\\Entity]\n#[ORM\\Table(name: \
+                'products')]\nclass Product {\n  #[ORM\\Column(name: 'sku_code')]\n  \
+                private string $sku;\n}\n",
         );
         assert!(
             has(&php, "USES_TABLE", "Flight", "flights", "", "orm:eloquent"),
@@ -1380,7 +1403,11 @@ mod tests {
         let ts = uses(
             "typescript",
             "photo.ts",
-            "@Entity(\"photos\")\nexport class Photo {\n  @Column({ name: \"file_name\" }) fileName: string;\n}\nCart.init({}, { sequelize, tableName: \"carts\" });\nconst User = sequelize.define(\"User\", {});\nfunction q(t: string) { db.query(`SELECT * FROM ${t}`); db.query(`SELECT * FROM carts WHERE id = $1`); }\n",
+            "@Entity(\"photos\")\nexport class Photo {\n  @Column({ name: \
+                \"file_name\" }) fileName: string;\n}\nCart.init({}, { sequelize, \
+                tableName: \"carts\" });\nconst User = sequelize.define(\"User\", \
+                {});\nfunction q(t: string) { db.query(`SELECT * FROM ${t}`); \
+                db.query(`SELECT * FROM carts WHERE id = $1`); }\n",
         );
         assert!(
             has(&ts, "USES_TABLE", "Photo", "photos", "", "orm:typeorm"),
@@ -1412,7 +1439,10 @@ mod tests {
         let go = uses(
             "go",
             "user.go",
-            "package m\ntype User struct {\n  Name string `gorm:\"column:full_name\"`\n}\nfunc (User) TableName() string { return \"app_users\" }\nfunc Find(db *DB) { db.Raw(\"SELECT * FROM app_users WHERE id = ?\") }\n",
+            "package m\ntype User struct {\n  Name string \
+                `gorm:\"column:full_name\"`\n}\nfunc (User) TableName() string { return \
+                \"app_users\" }\nfunc Find(db *DB) { db.Raw(\"SELECT * FROM app_users \
+                WHERE id = ?\") }\n",
         );
         assert!(
             has(&go, "USES_TABLE", "TableName", "app_users", "", "orm:gorm"),
@@ -1429,7 +1459,11 @@ mod tests {
         let rs = uses(
             "rust",
             "schema.rs",
-            "diesel::table! {\n    posts (id) {\n        id -> Int4,\n        title -> Text,\n    }\n}\n#[derive(Queryable)]\n#[diesel(table_name = crate::schema::posts)]\nstruct Post { id: i32 }\n#[sea_orm(table_name = \"cakes\")]\npub struct Model { id: i32 }\nfn find() { sqlx::query(\"SELECT id FROM posts WHERE id = $1\"); }\n",
+            "diesel::table! {\n    posts (id) {\n        id -> Int4,\n        title \
+                -> Text,\n    }\n}\n#[derive(Queryable)]\n#[diesel(table_name = \
+                crate::schema::posts)]\nstruct Post { id: i32 }\n#[sea_orm(table_name = \
+                \"cakes\")]\npub struct Model { id: i32 }\nfn find() { \
+                sqlx::query(\"SELECT id FROM posts WHERE id = $1\"); }\n",
         );
         assert!(
             rs.iter()

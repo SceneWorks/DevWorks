@@ -52,7 +52,10 @@ fn record(row: &Row<'_>) -> rusqlite::Result<StoredConvention> {
         legacy_approved: row.get(15)?,
     })
 }
-const COLUMNS: &str = "v.convention_id,v.scope_key,v.revision,v.slug,v.title,v.parent_id,v.sort_order,v.lifecycle,v.content_ref_json,v.raw_content_ref_json,v.applicability_json,v.provenance_json,v.author_id,v.created_at,v.updated_at,v.legacy_approved";
+const COLUMNS: &str = "v.convention_id,v.scope_key,v.revision,v.slug,v.title,v.parent_id,\
+    v.sort_order,v.lifecycle,v.content_ref_json,v.raw_content_ref_json,\
+    v.applicability_json,v.provenance_json,v.author_id,v.created_at,\
+    v.updated_at,v.legacy_approved";
 fn scopes(scopes: &[KnowledgeScope]) -> Result<String, StorageError> {
     if scopes.len() > usize::from(MAX_PAGE) {
         return Err(invalid("too many convention scopes"));
@@ -60,7 +63,16 @@ fn scopes(scopes: &[KnowledgeScope]) -> Result<String, StorageError> {
     Ok(json!(scopes.iter().map(KnowledgeScope::key).collect::<Vec<_>>()).to_string())
 }
 fn current(conn: &Connection, id: &Id) -> Result<Option<StoredConvention>, StorageError> {
-    db(conn.query_row(&format!("SELECT {COLUMNS} FROM convention_heads h JOIN convention_versions v ON v.convention_id=h.id AND v.revision=h.revision WHERE h.id=?1"),[id.as_str()],record).optional())
+    db(conn
+        .query_row(
+            &format!(
+                "SELECT {COLUMNS} FROM convention_heads h JOIN convention_versions v ON \
+        v.convention_id=h.id AND v.revision=h.revision WHERE h.id=?1"
+            ),
+            [id.as_str()],
+            record,
+        )
+        .optional())
 }
 fn convention(
     conn: &Connection,
@@ -72,16 +84,50 @@ fn convention(
         return Err(invalid("convention revision must be positive"));
     }
     let allowed = scopes(allowed)?;
-    db(conn.query_row(&format!("SELECT {COLUMNS} FROM convention_heads h JOIN convention_versions c ON c.convention_id=h.id AND c.revision=h.revision JOIN convention_versions v ON v.convention_id=h.id AND v.revision=coalesce(?2,h.revision) WHERE h.id=?1 AND c.scope_key IN(SELECT value FROM json_each(?3)) AND v.scope_key IN(SELECT value FROM json_each(?3))"),params![id.as_str(),revision,allowed],record).optional())
+    db(conn
+        .query_row(
+            &format!(
+                "SELECT {COLUMNS} FROM convention_heads h JOIN convention_versions c ON \
+        c.convention_id=h.id AND c.revision=h.revision JOIN convention_versions \
+        v ON v.convention_id=h.id AND v.revision=coalesce(?2,h.revision) WHERE \
+        h.id=?1 AND c.scope_key IN(SELECT value FROM json_each(?3)) AND \
+        v.scope_key IN(SELECT value FROM json_each(?3))"
+            ),
+            params![id.as_str(), revision, allowed],
+            record,
+        )
+        .optional())
 }
 /// The filter of a [`ConventionQuery`] over `h` (convention_heads) and `v` (its current
 /// version), with ?1 the allowed scopes and ?2 the filter document from [`filter`].
-const FILTER: &str = "v.scope_key IN(SELECT value FROM json_each(?1)) AND (json_array_length(?2,'$.lifecycles')=0 OR v.lifecycle IN(SELECT value FROM json_each(?2,'$.lifecycles'))) AND NOT EXISTS(SELECT 1 FROM json_each(?2,'$.applicability') a WHERE a.value NOT IN(SELECT value FROM json_each(v.applicability_json))) AND (NOT json_extract(?2,'$.filterParent') OR v.parent_id IS json_extract(?2,'$.parent')) AND (json_extract(?2,'$.slug') IS NULL OR v.slug=json_extract(?2,'$.slug')) AND (json_extract(?2,'$.title') IS NULL OR instr(v.title_folded,json_extract(?2,'$.title'))>0) AND (json_extract(?2,'$.name') IS NULL OR convention_like(json_extract(?2,'$.name'),v.slug_folded) OR convention_like(json_extract(?2,'$.name'),v.title_folded))";
+const FILTER: &str = "v.scope_key IN(SELECT value FROM json_each(?1)) AND \
+    (json_array_length(?2,'$.lifecycles')=0 OR v.lifecycle IN(SELECT value \
+    FROM json_each(?2,'$.lifecycles'))) AND NOT EXISTS(SELECT 1 FROM \
+    json_each(?2,'$.applicability') a WHERE a.value NOT IN(SELECT value \
+    FROM json_each(v.applicability_json))) AND (NOT json_extract(?2,\
+    '$.filterParent') OR v.parent_id IS json_extract(?2,'$.parent')) AND \
+    (json_extract(?2,'$.slug') IS NULL OR v.slug=json_extract(?2,'$.slug')) \
+    AND (json_extract(?2,'$.title') IS NULL OR instr(v.title_folded,\
+    json_extract(?2,'$.title'))>0) AND (json_extract(?2,'$.name') IS NULL \
+    OR convention_like(json_extract(?2,'$.name'),v.slug_folded) OR \
+    convention_like(json_extract(?2,'$.name'),v.title_folded))";
 /// The allowed scopes (?1) and filter document (?2) of `q`.
 fn filter(q: &ConventionQuery) -> Result<(String, String), StorageError> {
     states(&q.lifecycles)?;
     let scope = scopes(&q.scopes)?;
-    let filter=json!({"lifecycles":q.lifecycles,"applicability":q.applicability,"filterParent":q.parent_id.is_some(),"parent":q.parent_id.as_ref().and_then(|p|p.as_ref()).map(Id::as_str),"slug":q.slug,"title":q.title.as_ref().map(|s|s.to_lowercase()),"name":q.name_pattern.as_ref().map(|s|s.to_lowercase())}).to_string();
+    let filter = json!({
+        "lifecycles": q.lifecycles,
+        "applicability": q.applicability,
+        "filterParent": q.parent_id.is_some(),
+        "parent": q.parent_id
+            .as_ref()
+            .and_then(|p| p.as_ref())
+            .map(Id::as_str),
+        "slug": q.slug,
+        "title": q.title.as_ref().map(|s| s.to_lowercase()),
+        "name": q.name_pattern.as_ref().map(|s| s.to_lowercase())
+    })
+    .to_string();
     Ok((scope, filter))
 }
 /// The SQL order of `order`, and the keyset condition over ?3 (id), ?5 (sort order), ?6 (title).
@@ -108,7 +154,10 @@ fn conventions(
     let (scope, filter) = filter(q)?;
     let (position, order) = order(&q.order);
     let sql = format!(
-        "SELECT {COLUMNS} FROM convention_heads h JOIN convention_versions v ON v.convention_id=h.id AND v.revision=h.revision WHERE {FILTER} AND (?3 IS NULL OR {position}) AND (?5 IS ?5) AND (?6 IS ?6) ORDER BY {order} LIMIT ?4"
+        "SELECT {COLUMNS} FROM convention_heads h JOIN convention_versions v ON \
+            v.convention_id=h.id AND v.revision=h.revision WHERE {FILTER} AND (?3 \
+            IS NULL OR {position}) AND (?5 IS ?5) AND (?6 IS ?6) ORDER BY {order} \
+            LIMIT ?4"
     );
     let mut stmt = db(conn.prepare_cached(&sql))?;
     db(db(stmt.query_map(
@@ -137,7 +186,13 @@ fn versions(
     }
     let limit = page_limit(limit)?;
     let allowed = scopes(allowed)?;
-    let mut stmt=db(conn.prepare_cached(&format!("SELECT {COLUMNS} FROM convention_heads h JOIN convention_versions c ON c.convention_id=h.id AND c.revision=h.revision JOIN convention_versions v ON v.convention_id=h.id WHERE h.id=?1 AND c.scope_key IN(SELECT value FROM json_each(?2)) AND v.scope_key IN(SELECT value FROM json_each(?2)) AND (?3 IS NULL OR v.revision<?3) ORDER BY v.revision DESC LIMIT ?4")))?;
+    let mut stmt = db(conn.prepare_cached(&format!(
+        "SELECT {COLUMNS} FROM convention_heads h JOIN convention_versions c ON \
+        c.convention_id=h.id AND c.revision=h.revision JOIN convention_versions \
+        v ON v.convention_id=h.id WHERE h.id=?1 AND c.scope_key IN(SELECT value \
+        FROM json_each(?2)) AND v.scope_key IN(SELECT value FROM json_each(?2)) \
+        AND (?3 IS NULL OR v.revision<?3) ORDER BY v.revision DESC LIMIT ?4"
+    )))?;
     db(db(stmt.query_map(params![id.as_str(), allowed, after, limit], record))?.collect())
 }
 fn resource(row: &Row<'_>) -> rusqlite::Result<StoredConventionResource> {
@@ -172,7 +227,26 @@ fn resources(
     states(&q.lifecycles)?;
     let limit = page_limit(limit)?;
     let allowed = scopes(&q.scopes)?;
-    let mut stmt=db(conn.prepare_cached("SELECT r.resource_id,r.convention_id,r.revision,r.convention_revision,r.name,r.content_ref_json,r.author_id,r.created_at,r.deleted_at,r.lifecycle,r.media_type FROM convention_resource_heads rh JOIN convention_heads h ON h.id=rh.convention_id JOIN convention_versions c ON c.convention_id=h.id AND c.revision=h.revision JOIN convention_versions requested ON requested.convention_id=h.id AND requested.revision=coalesce(?2,h.revision) JOIN convention_resource_versions r ON r.resource_id=rh.id AND r.revision=(SELECT max(p.revision) FROM convention_resource_versions p WHERE p.resource_id=rh.id AND p.convention_revision<=requested.revision) JOIN convention_versions origin ON origin.convention_id=r.convention_id AND origin.revision=r.convention_revision WHERE (?1 IS NULL OR h.id=?1) AND c.scope_key IN(SELECT value FROM json_each(?3)) AND requested.scope_key IN(SELECT value FROM json_each(?3)) AND origin.scope_key IN(SELECT value FROM json_each(?3)) AND (json_array_length(?4)=0 OR r.lifecycle IN(SELECT value FROM json_each(?4))) AND (?5 IS NULL OR rh.id>?5) AND (?7 IS NULL OR rh.id=?7) ORDER BY rh.id LIMIT ?6"))?;
+    let mut stmt = db(conn.prepare_cached(
+        "SELECT r.resource_id,r.convention_id,r.revision,r.convention_revision,\
+        r.name,r.content_ref_json,r.author_id,r.created_at,r.deleted_at,\
+        r.lifecycle,r.media_type FROM convention_resource_heads rh JOIN \
+        convention_heads h ON h.id=rh.convention_id JOIN convention_versions c \
+        ON c.convention_id=h.id AND c.revision=h.revision JOIN \
+        convention_versions requested ON requested.convention_id=h.id AND \
+        requested.revision=coalesce(?2,h.revision) JOIN \
+        convention_resource_versions r ON r.resource_id=rh.id AND \
+        r.revision=(SELECT max(p.revision) FROM convention_resource_versions p \
+        WHERE p.resource_id=rh.id AND \
+        p.convention_revision<=requested.revision) JOIN convention_versions \
+        origin ON origin.convention_id=r.convention_id AND \
+        origin.revision=r.convention_revision WHERE (?1 IS NULL OR h.id=?1) AND \
+        c.scope_key IN(SELECT value FROM json_each(?3)) AND requested.scope_key \
+        IN(SELECT value FROM json_each(?3)) AND origin.scope_key IN(SELECT \
+        value FROM json_each(?3)) AND (json_array_length(?4)=0 OR r.lifecycle \
+        IN(SELECT value FROM json_each(?4))) AND (?5 IS NULL OR rh.id>?5) AND \
+        (?7 IS NULL OR rh.id=?7) ORDER BY rh.id LIMIT ?6",
+    ))?;
     db(db(stmt.query_map(
         params![
             q.convention_id.as_ref().map(Id::as_str),
@@ -211,8 +285,12 @@ fn bump_index_source(conn: &Connection, scope: &KnowledgeScope) -> Result<(), St
     let next = index_source_revision(conn, scope)?
         .checked_add(1)
         .ok_or_else(|| invalid("convention index source revision overflow"))?;
-    db(conn.execute("INSERT INTO convention_scope_revisions(scope_key,project_id,revision,index_source_revision) VALUES(?1,?2,1,?3) ON CONFLICT(scope_key) DO UPDATE SET index_source_revision=excluded.index_source_revision",
-        params![scope.key(),scope.project().map(|p|p.0.as_str()),next]))?;
+    db(conn.execute(
+        "INSERT INTO convention_scope_revisions(scope_key,project_id,revision,\
+        index_source_revision) VALUES(?1,?2,1,?3) ON CONFLICT(scope_key) DO \
+        UPDATE SET index_source_revision=excluded.index_source_revision",
+        params![scope.key(), scope.project().map(|p| p.0.as_str()), next],
+    ))?;
     Ok(())
 }
 fn states(states: &[String]) -> Result<(), StorageError> {
@@ -238,7 +316,23 @@ fn backing(
     reference
         .check()
         .map_err(|_| invalid("invalid convention artifact reference"))?;
-    let real:bool=db(conn.query_row("SELECT EXISTS(SELECT 1 FROM artifact_versions v JOIN artifacts a ON a.id=v.artifact_id JOIN blobs b ON b.digest=v.blob_digest WHERE v.id=?1 AND v.artifact_id=?2 AND v.blob_digest=?3 AND v.media_type=?4 AND b.byte_count=?5 AND v.deleted_at IS NULL AND a.state='Live' AND a.current_project_id IS ?6 AND a.scope_kind=CASE WHEN ?6 IS NULL THEN 'Workspace' ELSE 'Project' END AND b.state='Present')",params![reference.version_id.as_str(),reference.artifact_id.as_str(),reference.sha256.as_str(),reference.media_type,reference.byte_length.get(),scope.project().map(|p|p.0.as_str())],|r|r.get(0)))?;
+    let real: bool = db(conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM artifact_versions v JOIN artifacts a ON \
+        a.id=v.artifact_id JOIN blobs b ON b.digest=v.blob_digest WHERE v.id=?1 \
+        AND v.artifact_id=?2 AND v.blob_digest=?3 AND v.media_type=?4 AND \
+        b.byte_count=?5 AND v.deleted_at IS NULL AND a.state='Live' AND \
+        a.current_project_id IS ?6 AND a.scope_kind=CASE WHEN ?6 IS NULL THEN \
+        'Workspace' ELSE 'Project' END AND b.state='Present')",
+        params![
+            reference.version_id.as_str(),
+            reference.artifact_id.as_str(),
+            reference.sha256.as_str(),
+            reference.media_type,
+            reference.byte_length.get(),
+            scope.project().map(|p| p.0.as_str())
+        ],
+        |r| r.get(0),
+    ))?;
     if !real {
         return Err(invalid(
             "convention artifact must be a live committed version in its exact scope",
@@ -262,7 +356,19 @@ fn validate(conn: &Connection, r: &StoredConvention) -> Result<(), StorageError>
     {
         return Err(invalid("invalid convention metadata"));
     }
-    let collision:bool=db(conn.query_row("SELECT EXISTS(SELECT 1 FROM convention_heads h JOIN convention_versions v ON v.convention_id=h.id AND v.revision=h.revision WHERE h.id!=?1 AND v.scope_key=?2 AND v.slug=?3 AND v.parent_id IS ?4 AND v.lifecycle!='Deleted')",params![r.id.as_str(),r.scope.key(),r.slug,r.parent_id.as_ref().map(Id::as_str)],|v|v.get(0)))?;
+    let collision: bool = db(conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM convention_heads h JOIN convention_versions \
+        v ON v.convention_id=h.id AND v.revision=h.revision WHERE h.id!=?1 AND \
+        v.scope_key=?2 AND v.slug=?3 AND v.parent_id IS ?4 AND \
+        v.lifecycle!='Deleted')",
+        params![
+            r.id.as_str(),
+            r.scope.key(),
+            r.slug,
+            r.parent_id.as_ref().map(Id::as_str)
+        ],
+        |v| v.get(0),
+    ))?;
     if r.lifecycle != "Deleted" && collision {
         return Err(invalid(
             "convention slug already belongs to a live scoped identity",
@@ -273,7 +379,15 @@ fn validate(conn: &Connection, r: &StoredConvention) -> Result<(), StorageError>
         if parent == &r.id || p.scope != r.scope || p.lifecycle == "Deleted" {
             return Err(invalid("convention parent must be live in the same scope"));
         }
-        let cycle:bool=db(conn.query_row("WITH RECURSIVE ancestry(id) AS(SELECT ?1 UNION SELECT v.parent_id FROM ancestry a JOIN convention_heads h ON h.id=a.id JOIN convention_versions v ON v.convention_id=h.id AND v.revision=h.revision WHERE v.parent_id IS NOT NULL) SELECT EXISTS(SELECT 1 FROM ancestry WHERE id=?2)",params![parent.as_str(),r.id.as_str()],|r|r.get(0)))?;
+        let cycle: bool = db(conn.query_row(
+            "WITH RECURSIVE ancestry(id) AS(SELECT ?1 UNION SELECT v.parent_id FROM \
+            ancestry a JOIN convention_heads h ON h.id=a.id JOIN \
+            convention_versions v ON v.convention_id=h.id AND v.revision=h.revision \
+            WHERE v.parent_id IS NOT NULL) SELECT EXISTS(SELECT 1 FROM ancestry \
+            WHERE id=?2)",
+            params![parent.as_str(), r.id.as_str()],
+            |r| r.get(0),
+        ))?;
         if cycle {
             return Err(invalid("convention parent cycle"));
         }
@@ -289,11 +403,65 @@ fn insert_snapshot(
     let boot = boot
         .as_ref()
         .ok_or_else(|| invalid("convention writer boot missing"))?;
-    db(conn.execute("INSERT INTO convention_versions(convention_id,revision,scope_key,project_id,slug,title,title_folded,parent_id,sort_order,lifecycle,content_ref_json,raw_content_ref_json,applicability_json,provenance_json,author_id,created_at,updated_at,legacy_approved,content_version_id,raw_content_version_id,write_boot_id,write_transaction,slug_folded) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21,?22,?23)",params![r.id.as_str(),r.revision,r.scope.key(),r.scope.project().map(|p|p.0.as_str()),r.slug,r.title,r.title.to_lowercase(),r.parent_id.as_ref().map(Id::as_str),r.sort_order,r.lifecycle,r.content_ref.as_ref().map(Value::to_string),r.raw_content_ref.as_ref().map(Value::to_string),json!(r.applicability).to_string(),r.provenance.to_string(),r.author_id.0.as_str(),r.created_at_ms,r.updated_at_ms,r.legacy_approved,r.content_ref.as_ref().and_then(|v|v["versionId"].as_str()),r.raw_content_ref.as_ref().and_then(|v|v["versionId"].as_str()),boot.as_str(),transaction.to_string(),r.slug.to_lowercase()]))?;
+    db(conn.execute(
+        "INSERT INTO convention_versions(convention_id,revision,scope_key,\
+        project_id,slug,title,title_folded,parent_id,sort_order,lifecycle,\
+        content_ref_json,raw_content_ref_json,applicability_json,\
+        provenance_json,author_id,created_at,updated_at,legacy_approved,\
+        content_version_id,raw_content_version_id,write_boot_id,\
+        write_transaction,slug_folded) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,\
+        ?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21,?22,?23)",
+        params![
+            r.id.as_str(),
+            r.revision,
+            r.scope.key(),
+            r.scope.project().map(|p| p.0.as_str()),
+            r.slug,
+            r.title,
+            r.title.to_lowercase(),
+            r.parent_id.as_ref().map(Id::as_str),
+            r.sort_order,
+            r.lifecycle,
+            r.content_ref.as_ref().map(Value::to_string),
+            r.raw_content_ref.as_ref().map(Value::to_string),
+            json!(r.applicability).to_string(),
+            r.provenance.to_string(),
+            r.author_id.0.as_str(),
+            r.created_at_ms,
+            r.updated_at_ms,
+            r.legacy_approved,
+            r.content_ref.as_ref().and_then(|v| v["versionId"].as_str()),
+            r.raw_content_ref
+                .as_ref()
+                .and_then(|v| v["versionId"].as_str()),
+            boot.as_str(),
+            transaction.to_string(),
+            r.slug.to_lowercase()
+        ],
+    ))?;
     Ok(())
 }
 fn insert_resource(conn: &Connection, r: &StoredConventionResource) -> Result<(), StorageError> {
-    db(conn.execute("INSERT INTO convention_resource_versions(resource_id,revision,convention_id,convention_revision,name,content_ref_json,author_id,created_at,deleted_at,lifecycle,content_version_id,media_type) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12)",params![r.id.as_str(),r.revision,r.convention_id.as_str(),r.convention_revision,r.name,r.content_ref.to_string(),r.author_id.0.as_str(),r.created_at_ms,r.deleted_at_ms,r.lifecycle,r.content_ref["versionId"].as_str(),r.media_type]))?;
+    db(conn.execute(
+        "INSERT INTO convention_resource_versions(resource_id,revision,\
+        convention_id,convention_revision,name,content_ref_json,author_id,\
+        created_at,deleted_at,lifecycle,content_version_id,media_type) \
+        VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12)",
+        params![
+            r.id.as_str(),
+            r.revision,
+            r.convention_id.as_str(),
+            r.convention_revision,
+            r.name,
+            r.content_ref.to_string(),
+            r.author_id.0.as_str(),
+            r.created_at_ms,
+            r.deleted_at_ms,
+            r.lifecycle,
+            r.content_ref["versionId"].as_str(),
+            r.media_type
+        ],
+    ))?;
     Ok(())
 }
 fn validate_resource(
@@ -329,7 +497,17 @@ fn validate_resource(
     let boot = boot
         .as_ref()
         .ok_or_else(|| invalid("convention writer boot missing"))?;
-    let same_transaction:bool=db(conn.query_row("SELECT write_boot_id=?3 AND write_transaction=?4 FROM convention_versions WHERE convention_id=?1 AND revision=?2",params![r.convention_id.as_str(),expected,boot.as_str(),transaction.to_string()],|r|r.get(0)))?;
+    let same_transaction: bool = db(conn.query_row(
+        "SELECT write_boot_id=?3 AND write_transaction=?4 FROM \
+        convention_versions WHERE convention_id=?1 AND revision=?2",
+        params![
+            r.convention_id.as_str(),
+            expected,
+            boot.as_str(),
+            transaction.to_string()
+        ],
+        |r| r.get(0),
+    ))?;
     if !same_transaction {
         return Err(invalid(
             "resource change must follow a new owner revision in the same transaction",
@@ -341,7 +519,9 @@ macro_rules! reads {
     ($ty:ty) => {
         impl ConventionRead for $ty {
             fn convention_max_sort_order(&self,scope:&KnowledgeScope,parent:Option<&Id>)->Result<Option<i64>,StorageError>{
-                db(self.conn.query_row("SELECT max(v.sort_order) FROM convention_heads h JOIN convention_versions v ON v.convention_id=h.id AND v.revision=h.revision WHERE v.scope_key=?1 AND v.parent_id IS ?2 AND v.lifecycle!='Deleted'",params![scope.key(),parent.map(Id::as_str)],|r|r.get(0)))
+                db(self.conn.query_row("SELECT max(v.sort_order) FROM convention_heads h JOIN \
+                    convention_versions v ON v.convention_id=h.id AND v.revision=h.revision \
+                    WHERE v.scope_key=?1 AND v.parent_id IS ?2 AND v.lifecycle!='Deleted'",params![scope.key(),parent.map(Id::as_str)],|r|r.get(0)))
             }
             fn convention(
                 &self,
@@ -517,7 +697,17 @@ impl ConventionRepository for Unit<'_> {
         expected: i64,
     ) -> Result<(), StorageError> {
         validate_resource(self.conn, r, expected, &self.info.boot_id, self.serial)?;
-        let old:Option<(String,i64,i64,i64,String)>=db(self.conn.query_row("SELECT h.convention_id,h.revision,v.convention_revision,v.created_at,v.content_ref_json FROM convention_resource_heads h JOIN convention_resource_versions v ON v.resource_id=h.id AND v.revision=h.revision WHERE h.id=?1",[r.id.as_str()],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?))).optional())?;
+        let old: Option<(String, i64, i64, i64, String)> = db(self
+            .conn
+            .query_row(
+                "SELECT h.convention_id,h.revision,v.convention_revision,v.created_at,\
+            v.content_ref_json FROM convention_resource_heads h JOIN \
+            convention_resource_versions v ON v.resource_id=h.id AND \
+            v.revision=h.revision WHERE h.id=?1",
+                [r.id.as_str()],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
+            )
+            .optional())?;
         let Some((owner, revision, owner_revision, created, reference)) = old else {
             return Err(invalid("convention resource missing"));
         };
@@ -565,7 +755,12 @@ impl ConventionRepository for Unit<'_> {
         let revision = scope_revision(self.conn, scope)?
             .checked_add(1)
             .ok_or_else(|| invalid("convention scope revision overflow"))?;
-        db(self.conn.execute("INSERT INTO convention_scope_revisions(scope_key,project_id,revision) VALUES(?1,?2,?3) ON CONFLICT(scope_key) DO UPDATE SET revision=excluded.revision",params![scope.key(),scope.project().map(|p|p.0.as_str()),revision]))?;
+        db(self.conn.execute(
+            "INSERT INTO convention_scope_revisions(scope_key,project_id,revision) \
+            VALUES(?1,?2,?3) ON CONFLICT(scope_key) DO UPDATE SET \
+            revision=excluded.revision",
+            params![scope.key(), scope.project().map(|p| p.0.as_str()), revision],
+        ))?;
         Ok(revision)
     }
 }

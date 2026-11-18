@@ -112,9 +112,20 @@ fn fence(
         fenced.generation += 1;
         fenced.slot_held = false;
         if child.id == a.id {
-            fenced.checkpoint = Some(
-                json!({"kind":"DevWorksMembershipHandoff","version":1,"membershipHandoff":{"workId":after.id,"secondaryTaskId":(child.work_id.0 != after.id).then_some(&after.id),"fromRoot":root,"toFeature":after.parent_feature_id,"hadCheckpoint":child.checkpoint.is_some(),"previousCheckpoint":child.checkpoint,"subtree":tree.iter().map(|id|id.0.as_str()).collect::<Vec<_>>(),"guardedTaskIds":guarded.iter().map(|id|id.0.as_str()).collect::<Vec<_>>()}}),
-            );
+            fenced.checkpoint = Some(json!({
+                "kind": "DevWorksMembershipHandoff",
+                "version": 1,
+                "membershipHandoff": {
+                    "workId": after.id,
+                    "secondaryTaskId": (child.work_id.0 != after.id).then_some(&after.id),
+                    "fromRoot": root,
+                    "toFeature": after.parent_feature_id,
+                    "hadCheckpoint": child.checkpoint.is_some(),
+                    "previousCheckpoint": child.checkpoint,
+                    "subtree": tree.iter().map(|id| id.0.as_str()).collect::<Vec<_>>(),
+                    "guardedTaskIds": guarded.iter().map(|id| id.0.as_str()).collect::<Vec<_>>()
+                }
+            }));
         }
         tx.runs().update_assignment(&fenced, child.revision)?;
     }
@@ -368,7 +379,26 @@ pub fn reconcile_project(
                 }
                 clear_handoff_hold(tx, &actor, &RootId(work.id.clone()), &a.id)?;
                 let id = EventId(tx.new_id(crate::ports::IdKind::Event));
-                tx.history().append(NewEvent{id,actor:actor.clone(),project_id:Some(work.project_id.clone()),root_id:Some(a.root_id.clone()),operation_id:None,aggregate_kind:super::WORK_AGGREGATE.into(),aggregate_id:work.id.as_str().into(),aggregate_revision:work.revision,kind:"WorkerMembershipScopeRetired".into(),payload:json!({"assignmentId":a.id.0,"sessionId":a.session_id,"movedSecondaryTask":a.checkpoint.as_ref().and_then(|c| c.get(MARKER)).and_then(|m| m.get("secondaryTaskId")),"checkpointRetained":true})})?;
+                tx.history().append(NewEvent {
+                    id,
+                    actor: actor.clone(),
+                    project_id: Some(work.project_id.clone()),
+                    root_id: Some(a.root_id.clone()),
+                    operation_id: None,
+                    aggregate_kind: super::WORK_AGGREGATE.into(),
+                    aggregate_id: work.id.as_str().into(),
+                    aggregate_revision: work.revision,
+                    kind: "WorkerMembershipScopeRetired".into(),
+                    payload: json!({
+                        "assignmentId": a.id.0,
+                        "sessionId": a.session_id,
+                        "movedSecondaryTask": a.checkpoint
+                            .as_ref()
+                            .and_then(|c| c.get(MARKER))
+                            .and_then(|m| m.get("secondaryTaskId")),
+                        "checkpointRetained": true
+                    }),
+                })?;
                 changed += 1;
                 continue;
             }
@@ -412,7 +442,25 @@ pub fn reconcile_project(
                 } else {
                     "worker session closed"
                 };
-                tx.history().append(NewEvent{id,actor:actor.clone(),project_id:Some(work.project_id.clone()),root_id:Some(target.clone()),operation_id:None,aggregate_kind:super::WORK_AGGREGATE.into(),aggregate_id:work.id.as_str().into(),aggregate_revision:work.revision,kind:"WorkerHandoffRetired".into(),payload:json!({"assignmentId":a.id.0,"sessionId":a.session_id,"fromRoot":a.root_id,"toRoot":target,"reason":reason,"checkpointRetained":true})})?;
+                tx.history().append(NewEvent {
+                    id,
+                    actor: actor.clone(),
+                    project_id: Some(work.project_id.clone()),
+                    root_id: Some(target.clone()),
+                    operation_id: None,
+                    aggregate_kind: super::WORK_AGGREGATE.into(),
+                    aggregate_id: work.id.as_str().into(),
+                    aggregate_revision: work.revision,
+                    kind: "WorkerHandoffRetired".into(),
+                    payload: json!({
+                        "assignmentId": a.id.0,
+                        "sessionId": a.session_id,
+                        "fromRoot": a.root_id,
+                        "toRoot": target,
+                        "reason": reason,
+                        "checkpointRetained": true
+                    }),
+                })?;
                 changed += 1;
                 continue;
             }
@@ -631,7 +679,27 @@ fn record(
     epoch: i64,
 ) -> Result<(), StorageError> {
     let id = EventId(tx.new_id(crate::ports::IdKind::Event));
-    tx.history().append(NewEvent{id,actor:actor.clone(),project_id:Some(work.project_id.clone()),root_id:Some(new.root_id.clone()),operation_id:None,aggregate_kind:super::WORK_AGGREGATE.into(),aggregate_id:work.id.as_str().into(),aggregate_revision:work.revision,kind:"WorkerMembershipHandedOff".into(),payload:json!({"assignmentId":new.id.0,"sessionId":new.session_id,"fromRoot":old.root_id,"fromParent":old.parent_id,"toRoot":new.root_id,"toParent":new.parent_id,"contextEpoch":epoch,"checkpointPreserved":new.checkpoint.is_some()})})?;
+    tx.history().append(NewEvent {
+        id,
+        actor: actor.clone(),
+        project_id: Some(work.project_id.clone()),
+        root_id: Some(new.root_id.clone()),
+        operation_id: None,
+        aggregate_kind: super::WORK_AGGREGATE.into(),
+        aggregate_id: work.id.as_str().into(),
+        aggregate_revision: work.revision,
+        kind: "WorkerMembershipHandedOff".into(),
+        payload: json!({
+            "assignmentId": new.id.0,
+            "sessionId": new.session_id,
+            "fromRoot": old.root_id,
+            "fromParent": old.parent_id,
+            "toRoot": new.root_id,
+            "toParent": new.parent_id,
+            "contextEpoch": epoch,
+            "checkpointPreserved": new.checkpoint.is_some()
+        }),
+    })?;
     Ok(())
 }
 

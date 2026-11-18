@@ -617,13 +617,41 @@ impl IndexService {
         let actual = op.clone();
         let one = matches!(job.target, IndexTarget::One { .. });
         self.index_write(run, move |tx| {
-            if lexical {tx.conventions().set_convention_index_status(&generation,&operation_id,"Indexing","Indexing",Some("Compatible native vectors are unavailable; the full lexical index is published."))?;}
+            if lexical {
+                tx.conventions().set_convention_index_status(
+                    &generation,
+                    &operation_id,
+                    "Indexing",
+                    "Indexing",
+                    Some(
+                        "Compatible native vectors are unavailable; the full lexical index is \
+                published.",
+                    ),
+                )?;
+            }
             // Keep the captured generation and input identity. The repository still checks
             // its exact immutable body/title/scope against this current owner under one UoW.
-            let revision = tx.conventions().convention(&owner_id,None,std::slice::from_ref(&owner_scope))?
-                .ok_or_else(||invalid("convention source changed"))?.revision;
-            tx.conventions().publish_convention_index(&generation, revision, head.as_ref(), count)?;
-            if one {let attempt=actual.latest_attempt().ok_or_else(||invalid("index attempt missing"))?;tx.operations().observe(&actual.id,attempt.attempt_no,json!({"conventionPublication":completion(&actual.id,count as u64,1)}))?;}
+            let revision = tx
+                .conventions()
+                .convention(&owner_id, None, std::slice::from_ref(&owner_scope))?
+                .ok_or_else(|| invalid("convention source changed"))?
+                .revision;
+            tx.conventions().publish_convention_index(
+                &generation,
+                revision,
+                head.as_ref(),
+                count,
+            )?;
+            if one {
+                let attempt = actual
+                    .latest_attempt()
+                    .ok_or_else(|| invalid("index attempt missing"))?;
+                tx.operations().observe(
+                    &actual.id,
+                    attempt.attempt_no,
+                    json!({"conventionPublication":completion(&actual.id,count as u64,1)}),
+                )?;
+            }
             Ok(())
         })?;
         Ok(Ok(count as u64))
@@ -713,7 +741,20 @@ impl IndexService {
             after = owners.last().map(StoredConvention::position);
         }
         let (op, job) = (run.op.clone(), run.job.clone());
-        self.index_write(run,move|tx|{let attempt=op.latest_attempt().ok_or_else(||invalid("index attempt missing"))?;tx.operations().observe(&op.id,attempt.attempt_no,json!({"conventionCapture":{"count":count,"target":job.target,"configurationSourceDigest":job.configuration_source_digest}}))})?;
+        self.index_write(run, move |tx| {
+            let attempt = op
+                .latest_attempt()
+                .ok_or_else(|| invalid("index attempt missing"))?;
+            tx.operations().observe(
+                &op.id,
+                attempt.attempt_no,
+                json!({"conventionCapture": {
+                    "count": count,
+                    "target": job.target,
+                    "configurationSourceDigest": job.configuration_source_digest
+                }}),
+            )
+        })?;
         Ok(count)
     }
     pub fn run_index(

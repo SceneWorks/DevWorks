@@ -170,8 +170,12 @@ fn migration_27_preserves_legacy_absence_and_captures_new_plan_snapshots() {
     let old = SqliteStore::open_with(h.config(), &through(26)).unwrap();
     old.with_writer_connection(|c|{let db=super::super::conn::db;
         db(c.execute("INSERT INTO projects(id,title,lifecycle,revision,scope_revision,created_at) VALUES('project','Project','Active',1,1,?1)",[T0]))?;
-        db(c.execute("INSERT INTO work_items(id,project_id,kind,title,priority,manual_order,revision,scope_revision,created_at,brief_json) VALUES('feature','project','feature','Feature',0,0,1,1,?1,'{}')",[T0]))?;
-        db(c.execute("INSERT INTO plan_proposals(id,feature_id,revision,plan_revision,plan_digest,state,requested_by,requested_at,summary) VALUES('legacy','feature',1,1,?1,'Pending','host',?2,'legacy')",rusqlite::params!["a".repeat(64),T0]))?;Ok(())
+        db(c.execute("INSERT INTO work_items(id,project_id,kind,title,priority,manual_order,\
+            revision,scope_revision,created_at,brief_json) VALUES('feature',\
+            'project','feature','Feature',0,0,1,1,?1,'{}')",[T0]))?;
+        db(c.execute("INSERT INTO plan_proposals(id,feature_id,revision,plan_revision,\
+            plan_digest,state,requested_by,requested_at,summary) VALUES('legacy',\
+            'feature',1,1,?1,'Pending','host',?2,'legacy')",rusqlite::params!["a".repeat(64),T0]))?;Ok(())
     }).unwrap();
     drop(old);
     let s = SqliteStore::open_with(h.config(), &through(27)).unwrap();
@@ -1037,7 +1041,18 @@ fn legal_unicode_notification_text_uses_the_protocol_character_bounds() {
 fn saved_command_outbox_retains_legal_wrapped_dynamic_input_and_refuses_over_one_mib() {
     use devworks_core::operations::addons::ConfigureInput;
     use devworks_core::protocol::support::Check;
-    let input = json!({"packageId":"addon-pkg","expectedRevision":"1","config":{"schema":{"schemaId":"addon/config","revision":"1","sha256":"a".repeat(64)},"value":"x".repeat(524_279)}});
+    let input = json!({
+        "packageId": "addon-pkg",
+        "expectedRevision": "1",
+        "config": {
+            "schema": {
+                "schemaId": "addon/config",
+                "revision": "1",
+                "sha256": "a".repeat(64)
+            },
+            "value": "x".repeat(524_279)
+        }
+    });
     assert_eq!(
         serde_json::to_vec(&input["config"]["value"]).unwrap().len(),
         524_281

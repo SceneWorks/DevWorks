@@ -149,7 +149,8 @@ impl AddonsScreen {
             ui,
             widgets::Header {
                 title: "Add-ons",
-                summary: "Language packs and harness packages: availability, access, approval and logs.",
+                summary: "Language packs and harness packages: availability, access, approval and \
+                    logs.",
                 tabs: &[],
                 tab: 0,
             },
@@ -161,7 +162,10 @@ impl AddonsScreen {
                 }
                 if ui
                     .add_enabled(!st.0.busy, egui::Button::new("Install from file…"))
-                    .on_hover_text("Install a package bundle (.dwpkg). Installing it approves exactly its contents.")
+                    .on_hover_text(
+                        "Install a package bundle (.dwpkg). Installing it approves exactly its \
+                        contents.",
+                    )
                     .clicked()
                 {
                     st.1.push(AddonsAction::InstallFromFile(None));
@@ -184,7 +188,10 @@ impl AddonsScreen {
         }
         widgets::caption(
             ui,
-            "A package helper is a separate process for failure containment, not an OS sandbox: it runs with your user account's rights. Approval and publisher trust record who published which exact contents and that you agreed to run them.",
+            "A package helper is a separate process for failure containment, not an \
+                OS sandbox: it runs with your user account's rights. Approval and \
+                publisher trust record who published which exact contents and that you \
+                agreed to run them.",
         );
         if !self.catalog.loaded {
             ui.label("Loading add-ons…");
@@ -450,7 +457,14 @@ impl AddonsScreen {
                     .color(theme::AMBER),
             );
             if let Some(pr) = &r.pending_proposal_id {
-                ui.label(RichText::new(format!("Proposed by an agent (proposal {}); approval binds to these exact contents.", pr.as_str())).color(theme::MUTED));
+                ui.label(
+                    RichText::new(format!(
+                        "Proposed by an agent (proposal {}); approval binds to these exact \
+                    contents.",
+                        pr.as_str()
+                    ))
+                    .color(theme::MUTED),
+                );
             }
             if let Some(bundle) = &r.pending_bundle
                 && ui.button(format!("Approve and activate {}", p.0)).clicked()
@@ -520,11 +534,22 @@ impl AddonsScreen {
         if r.signer_key.is_some() && r.installed == Some(true) {
             let mut trust = r.publisher_trusted == Some(true);
             if ui
-                .checkbox(&mut trust, "Trust this publisher's compatible signed updates")
-                .on_hover_text("Only newer stable versions of the same major, signed by the same key, needing no access beyond what is approved now, activate automatically. Contents an agent wrote always need your approval.")
+                .checkbox(
+                    &mut trust,
+                    "Trust this publisher's compatible signed updates",
+                )
+                .on_hover_text(
+                    "Only newer stable versions of the same major, signed by the same key, \
+                    needing no access beyond what is approved now, activate automatically. \
+                    Contents an agent wrote always need your approval.",
+                )
                 .changed()
             {
-                actions.push(AddonsAction::TrustPublisher { package: id.clone(), revision, trust });
+                actions.push(AddonsAction::TrustPublisher {
+                    package: id.clone(),
+                    revision,
+                    trust,
+                });
             }
         }
         // Pack configuration against its declared schema (an installed package's only).
@@ -1167,9 +1192,14 @@ mod tests {
         h.run();
         h.get_by_label("Save project enablement").click();
         h.run();
-        assert!(
-            matches!(state.borrow().2.last(), Some(AddonsAction::ProjectEnablement { disabled, revision: 2, .. }) if disabled == &["project-a", "project-b", "project-c"])
-        );
+        assert!(matches!(
+            state.borrow().2.last(),
+            Some(AddonsAction::ProjectEnablement {
+                disabled,
+                revision: 2,
+                ..
+            }) if disabled == &["project-a", "project-b", "project-c"]
+        ));
     }
     #[test]
     fn saved_configuration_initializes_refreshes_and_fences_unsaved_edits() {

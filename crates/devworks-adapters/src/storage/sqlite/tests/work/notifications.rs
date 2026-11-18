@@ -130,7 +130,11 @@ fn read_read_state_and_acknowledgment_are_separate_per_user_and_persist() {
     assert!(
         list(
             &fx,
-            json!({"scope":{"kind":"Workspace"},"page":{"limit":50},"unacknowledgedOnly":true})
+            json!({
+                "scope": {"kind": "Workspace"},
+                "page": {"limit": 50},
+                "unacknowledgedOnly": true
+            })
         )["items"]
             .as_array()
             .unwrap()
@@ -138,7 +142,11 @@ fn read_read_state_and_acknowledgment_are_separate_per_user_and_persist() {
     );
     let all = list(
         &fx,
-        json!({"scope":{"kind":"Workspace"},"page":{"limit":50},"unacknowledgedOnly":false}),
+        json!({
+            "scope": {"kind": "Workspace"},
+            "page": {"limit": 50},
+            "unacknowledgedOnly": false
+        }),
     );
     assert_eq!(all["items"].as_array().unwrap().len(), 1);
     let other = fx.ctx("user-b", PrincipalKind::Human, None);
@@ -147,16 +155,26 @@ fn read_read_state_and_acknowledgment_are_separate_per_user_and_persist() {
             &fx,
             &other,
             "notifications.list",
-            json!({"scope":{"kind":"Workspace"},"page":{"limit":50},"unacknowledgedOnly":false}),
+            json!({
+                "scope": {"kind": "Workspace"},
+                "page": {"limit": 50},
+                "unacknowledgedOnly": false
+            }),
             3
         )["items"]
             .as_array()
             .unwrap()
             .is_empty()
     );
-    assert!(
-        matches!(fx.query_at(&other,"notifications.read",json!({"notificationId":original.id}),Some(3)),DomainQueryReply::Rejected{fault,..}if fault.code==DomainErrorCode::NotFound)
-    );
+    assert!(matches!(
+        fx.query_at(
+            &other,
+            "notifications.read",
+            json!({"notificationId": original.id}),
+            Some(3),
+        ),
+        DomainQueryReply::Rejected { fault, .. } if fault.code == DomainErrorCode::NotFound
+    ));
     let keep = rows(&fx)[0].clone();
     let p2 = p.clone();
     let proposal2 = proposal.clone();
@@ -291,14 +309,36 @@ fn verified_issue_transition_creates_one_card_but_manual_done_and_linked_tasks_d
             &task,
             json!({"acceptance":[{"id":"C1","text":"passes","evidenceIds":[],"state":"Unmet"}]}),
         )));
-        let done=work_of(applied(fx.command(&fx.user(),"tasks.move",json!({"taskId":task.id,"expectedRevision":task.revision,"statusId":Fx::status(&p,"done"),"expectedWorkflowRevision":"1"}))));
+        let done = work_of(applied(fx.command(
+            &fx.user(),
+            "tasks.move",
+            json!({
+                "taskId": task.id,
+                "expectedRevision": task.revision,
+                "statusId": Fx::status(&p, "done"),
+                "expectedWorkflowRevision": "1"
+            }),
+        )));
         assert_eq!(
             completions(&fx).len(),
             index,
             "manual Done did not announce verified completion"
         );
         let evidence = fx.evidence(&done.id);
-        let verified=work_of(applied(fx.command(&fx.agent(),"tasks.acceptance_evidence",json!({"taskId":done.id,"expectedRevision":done.revision,"criteria":[{"id":"C1","text":"passes","evidenceIds":[evidence],"state":"Met"}]}))));
+        let verified = work_of(applied(fx.command(
+            &fx.agent(),
+            "tasks.acceptance_evidence",
+            json!({
+                "taskId": done.id,
+                "expectedRevision": done.revision,
+                "criteria": [{
+                    "id": "C1",
+                    "text": "passes",
+                    "evidenceIds": [evidence],
+                    "state": "Met"
+                }]
+            }),
+        )));
         assert_eq!(
             completions(&fx).len(),
             1,
@@ -351,10 +391,33 @@ fn verified_feature_acceptance_produces_a_completion_card_from_the_shared_work_o
     let doc = fx.artifact(&p, 1);
     let feature = fx.plan(&feature, &doc, &[("E1", "deliver")]);
     let feature = fx.approve(&feature);
-    let done=work_of(applied(fx.command_at(&fx.user(),"features.edit",json!({"workId":feature.id,"expectedRevision":feature.revision,"changes":{"statusId":Fx::status(&p,"done")}}),Some(2))));
+    let done = work_of(applied(fx.command_at(
+        &fx.user(),
+        "features.edit",
+        json!({
+            "workId": feature.id,
+            "expectedRevision": feature.revision,
+            "changes": {"statusId": Fx::status(&p, "done")}
+        }),
+        Some(2),
+    )));
     assert!(completions(&fx).is_empty());
     let evidence = fx.evidence(&done.id);
-    let verified=work_of(applied(fx.command_at(&fx.agent(),"features.edit",json!({"workId":done.id,"expectedRevision":done.revision,"changes":{"acceptanceEvidence":[{"id":"A1","text":"works","evidenceIds":[evidence],"state":"Met"}]}}),Some(2))));
+    let verified = work_of(applied(fx.command_at(
+        &fx.agent(),
+        "features.edit",
+        json!({
+            "workId": done.id,
+            "expectedRevision": done.revision,
+            "changes": {"acceptanceEvidence": [{
+                "id": "A1",
+                "text": "works",
+                "evidenceIds": [evidence],
+                "state": "Met"
+            }]}
+        }),
+        Some(2),
+    )));
     assert_eq!(
         fx.read(|s| s.work().work(&verified.id))
             .unwrap()

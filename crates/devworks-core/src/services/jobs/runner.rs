@@ -558,7 +558,9 @@ pub trait InferenceJobs: Send + Sync {
 #[derive(Clone, Copy, Debug, Default)]
 pub struct NoInferencePipeline;
 /// The visible reason of a scheduled inference run in a build without the pipeline.
-pub const NO_PIPELINE: &str = "Scheduled inference is not available in this build: the coordinator turn pipeline and provider connections are not installed. Nothing was sent to a model.";
+pub const NO_PIPELINE: &str = "Scheduled inference is not available in this build: the coordinator \
+    turn pipeline and provider connections are not installed. Nothing was \
+    sent to a model.";
 impl InferenceJobs for NoInferencePipeline {
     fn availability(&self) -> Result<(), String> {
         Err(NO_PIPELINE.into())

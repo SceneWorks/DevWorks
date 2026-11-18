@@ -891,13 +891,32 @@ mod tests {
         json!({"text":String::from_utf8(bytes.to_vec()).unwrap(),"byteLength":bytes.len().to_string(),"sha256":crate::fingerprint::sha256_hex(bytes)})
     }
     fn manifest() -> serde_json::Value {
-        json!({"format":"devworks-convention","version":1,"slug":"slug\0x","title":"title\0x","parentPath":[],"sortOrder":-2147483648i64,"lifecycle":"Retired","applicability":["one"],"resources":[],"markdown":body("a\0🙂\n".as_bytes())})
+        json!({
+            "format": "devworks-convention",
+            "version": 1,
+            "slug": "slug\0x",
+            "title": "title\0x",
+            "parentPath": [],
+            "sortOrder": -2147483648i64,
+            "lifecycle": "Retired",
+            "applicability": ["one"],
+            "resources": [],
+            "markdown": body("a\0🙂\n".as_bytes())
+        })
     }
     #[test]
     fn arbitrary_field_order_escaped_unicode_and_resumable_payload_ranges() {
         let mut value = manifest();
         value["rawContent"] = body(b"raw\0");
-        value["resources"] = json!([{"base64":"AAECAw==","byteLength":"4","sha256":crate::fingerprint::sha256_hex(&[0,1,2,3]),"key":"foreign-key","name":"resource.bin","mediaType":"","lifecycle":"Active"}]);
+        value["resources"] = json!([{
+            "base64": "AAECAw==",
+            "byteLength": "4",
+            "sha256": crate::fingerprint::sha256_hex(&[0, 1, 2, 3]),
+            "key": "foreign-key",
+            "name": "resource.bin",
+            "mediaType": "",
+            "lifecycle": "Active"
+        }]);
         let mut source = io::Cursor::new(serde_json::to_vec(&value).unwrap());
         let stop = || false;
         let mut checkpoint = Checkpoint::default();
@@ -1130,7 +1149,9 @@ mod tests {
             .create_new(true)
             .open(&path)
             .unwrap();
-        file.write_all(br#"{"format":"devworks-convention","version":1,"slug":"","title":"Exact NUL documents","parentPath":[],"sortOrder":0,"lifecycle":"Active","applicability":[],"resources":[],"#).unwrap();
+        file.write_all(
+            br#"{"format":"devworks-convention","version":1,"slug":"","title":"Exact NUL documents","parentPath":[],"sortOrder":0,"lifecycle":"Active","applicability":[],"resources":[],"#,
+        ).unwrap();
         let escaped = r"\u0000".repeat(4096);
         for (i, key) in ["markdown", "rawContent"].iter().enumerate() {
             if i > 0 {

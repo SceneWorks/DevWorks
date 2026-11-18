@@ -72,9 +72,20 @@ fn event(
 ) -> Result<(), StorageError> {
     let id = EventId(tx.new_id(IdKind::Event));
     tx.history().append(NewEvent {
-        id, actor: ctx.principal().clone(), project_id: ctx.project_id().cloned(), root_id: ctx.root_id().cloned(), operation_id: None,
-        aggregate_kind: "schema_connection".into(), aggregate_id: row.connection.id.as_str().to_owned(), aggregate_revision: row.connection.revision.get(), kind: kind.into(),
-        payload: json!({"connectionId":row.connection.id,"revision":row.connection.revision,"metadataOnly":true}),
+        id,
+        actor: ctx.principal().clone(),
+        project_id: ctx.project_id().cloned(),
+        root_id: ctx.root_id().cloned(),
+        operation_id: None,
+        aggregate_kind: "schema_connection".into(),
+        aggregate_id: row.connection.id.as_str().to_owned(),
+        aggregate_revision: row.connection.revision.get(),
+        kind: kind.into(),
+        payload: json!({
+            "connectionId": row.connection.id,
+            "revision": row.connection.revision,
+            "metadataOnly": true
+        }),
     })?;
     Ok(())
 }

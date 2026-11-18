@@ -228,7 +228,9 @@ pub(super) fn run_case(writer_race: bool) {
             }
             assert!(
                 std::time::Instant::now() < startup_deadline,
-                "independent startup owners did not settle: Help={help:?}; receipts={receipts:?}; bootstrap={bootstrap:?}; drafts={drafts}; accounted={accounted}"
+                "independent startup owners did not settle: Help={help:?}; \
+                    receipts={receipts:?}; bootstrap={bootstrap:?}; drafts={drafts}; \
+                    accounted={accounted}"
             );
             std::thread::sleep(Duration::from_millis(5));
         }

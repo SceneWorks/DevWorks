@@ -39,7 +39,14 @@ pub(in crate::storage::sqlite) fn pending(
     if limit == 0 || limit > 500 {
         return Err(invalid("purge effect page limit"));
     }
-    let mut statement = db(conn.prepare("SELECT e.manifest_id,e.id,e.body_json,e.lease_owner FROM project_purge_effects e JOIN project_purge_manifests m ON m.id=e.manifest_id WHERE e.state IN('Pending','Held') AND m.phase IN('RemovingBytes','Held') ORDER BY CASE json_extract(e.body_json,'$.kind') WHEN 'Client' THEN 0 ELSE 1 END,COALESCE(e.lease_until,0),e.manifest_id,e.id LIMIT ?1"))?;
+    let mut statement = db(conn.prepare(
+        "SELECT e.manifest_id,e.id,e.body_json,e.lease_owner FROM \
+        project_purge_effects e JOIN project_purge_manifests m ON \
+        m.id=e.manifest_id WHERE e.state IN('Pending','Held') AND m.phase \
+        IN('RemovingBytes','Held') ORDER BY CASE json_extract(e.body_json,\
+        '$.kind') WHEN 'Client' THEN 0 ELSE 1 END,COALESCE(e.lease_until,0),\
+        e.manifest_id,e.id LIMIT ?1",
+    ))?;
     db(statement.query_map([limit], |r| {
         Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))
     }))?
@@ -55,7 +62,17 @@ pub(in crate::storage::sqlite) fn reserved(
     generation: &str,
     owner: &str,
 ) -> Result<bool, StorageError> {
-    db(conn.query_row("SELECT EXISTS(SELECT 1 FROM project_purge_effects e JOIN project_purge_manifests m ON m.id=e.manifest_id WHERE m.phase IN('RemovingBytes','Held') AND e.state IN('Pending','Held') AND ?3='project-purge:'||m.id AND json_extract(e.body_json,'$.kind')='File' AND json_extract(e.body_json,'$.witness.owner.kind')='Blob' AND json_extract(e.body_json,'$.witness.owner.digest')=?1 AND json_extract(e.body_json,'$.witness.owner.generation')=?2)", params![digest,generation,owner], |r| r.get(0)))
+    db(conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM project_purge_effects e JOIN \
+        project_purge_manifests m ON m.id=e.manifest_id WHERE m.phase \
+        IN('RemovingBytes','Held') AND e.state IN('Pending','Held') AND \
+        ?3='project-purge:'||m.id AND json_extract(e.body_json,'$.kind')='File' \
+        AND json_extract(e.body_json,'$.witness.owner.kind')='Blob' AND \
+        json_extract(e.body_json,'$.witness.owner.digest')=?1 AND \
+        json_extract(e.body_json,'$.witness.owner.generation')=?2)",
+        params![digest, generation, owner],
+        |r| r.get(0),
+    ))
 }
 pub(in crate::storage::sqlite) fn claim(
     conn: &Connection,
@@ -71,11 +88,34 @@ pub(in crate::storage::sqlite) fn claim(
     if until <= now || until > now.saturating_add(120_000) {
         return Err(invalid("purge effect lease bound"));
     }
-    let n = db(conn.execute("UPDATE project_purge_effects SET lease_owner=?3,lease_boot_id=?4,lease_until=?5 WHERE manifest_id=?1 AND id=?2 AND state IN('Pending','Held') AND ((lease_owner IS NULL AND COALESCE(lease_until,0)<=?6) OR lease_until<=?6 OR lease_boot_id<>?4 OR lease_owner=?3) AND EXISTS(SELECT 1 FROM project_purge_manifests m WHERE m.id=?1 AND m.phase IN('RemovingBytes','Held') AND m.store_id=?7 AND m.restore_epoch=?8)", params![manifest.as_str(),id,owner.as_str(),boot.as_str(),until,now,info.store_id.0.as_str(),info.restore_epoch]))?;
+    let n = db(conn.execute(
+        "UPDATE project_purge_effects SET lease_owner=?3,lease_boot_id=?4,\
+        lease_until=?5 WHERE manifest_id=?1 AND id=?2 AND state IN('Pending',\
+        'Held') AND ((lease_owner IS NULL AND COALESCE(lease_until,0)<=?6) OR \
+        lease_until<=?6 OR lease_boot_id<>?4 OR lease_owner=?3) AND \
+        EXISTS(SELECT 1 FROM project_purge_manifests m WHERE m.id=?1 AND \
+        m.phase IN('RemovingBytes','Held') AND m.store_id=?7 AND \
+        m.restore_epoch=?8)",
+        params![
+            manifest.as_str(),
+            id,
+            owner.as_str(),
+            boot.as_str(),
+            until,
+            now,
+            info.store_id.0.as_str(),
+            info.restore_epoch
+        ],
+    ))?;
     if n == 0 {
         return Ok(None);
     }
-    let (body, bytes, digest): (String,i64,String) = db(conn.query_row("SELECT body_json,byte_count,owner_digest FROM project_purge_effects WHERE manifest_id=?1 AND id=?2", params![manifest.as_str(),id], |r| Ok((r.get(0)?,r.get(1)?,r.get(2)?))))?;
+    let (body, bytes, digest): (String, i64, String) = db(conn.query_row(
+        "SELECT body_json,byte_count,owner_digest FROM project_purge_effects \
+        WHERE manifest_id=?1 AND id=?2",
+        params![manifest.as_str(), id],
+        |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+    ))?;
     let result = effect(
         manifest.as_str().into(),
         id.into(),
@@ -120,9 +160,24 @@ pub(in crate::storage::sqlite) fn claim(
             if let PurgeFileOwner::Blob { digest, generation }
             | PurgeFileOwner::Quarantine { digest, generation } = &witness.owner
             {
-                let blocked: bool = db(conn.query_row("SELECT EXISTS(SELECT 1 FROM blobs WHERE digest=?1 AND generation=?2) AND (EXISTS(SELECT 1 FROM artifact_blob_pins WHERE blob_digest=?1) OR EXISTS(SELECT 1 FROM artifact_versions WHERE blob_digest=?1 AND deleted_at IS NULL) OR EXISTS(SELECT 1 FROM graph_source_captures WHERE blob_digest=?1) OR EXISTS(SELECT 1 FROM convention_import_artifacts a JOIN convention_imports d ON d.operation_id=a.operation_id WHERE a.blob_digest=?1 AND d.phase!='Published'))", params![digest,generation], |r| r.get(0)))?;
+                let blocked: bool = db(conn.query_row(
+                    "SELECT EXISTS(SELECT 1 FROM blobs WHERE digest=?1 AND generation=?2) \
+                    AND (EXISTS(SELECT 1 FROM artifact_blob_pins WHERE blob_digest=?1) OR \
+                    EXISTS(SELECT 1 FROM artifact_versions WHERE blob_digest=?1 AND \
+                    deleted_at IS NULL) OR EXISTS(SELECT 1 FROM graph_source_captures WHERE \
+                    blob_digest=?1) OR EXISTS(SELECT 1 FROM convention_import_artifacts a \
+                    JOIN convention_imports d ON d.operation_id=a.operation_id WHERE \
+                    a.blob_digest=?1 AND d.phase!='Published'))",
+                    params![digest, generation],
+                    |r| r.get(0),
+                ))?;
                 if blocked {
-                    db(conn.execute("UPDATE project_purge_effects SET state='Held',error_code='OwnerInUse',lease_owner=NULL,lease_boot_id=NULL,lease_until=?3 WHERE manifest_id=?1 AND id=?2",params![manifest.as_str(),id,now.saturating_add(1000)]))?;
+                    db(conn.execute(
+                        "UPDATE project_purge_effects SET state='Held',error_code='OwnerInUse',\
+                        lease_owner=NULL,lease_boot_id=NULL,lease_until=?3 WHERE manifest_id=?1 \
+                        AND id=?2",
+                        params![manifest.as_str(), id, now.saturating_add(1000)],
+                    ))?;
                     refresh(conn, manifest)?;
                     return Ok(None);
                 }
@@ -226,7 +281,12 @@ pub(in crate::storage::sqlite) fn client_fence(
     project: &devworks_core::protocol::ProjectId,
     digest: &str,
 ) -> Result<Option<devworks_core::ports::storage::ProjectPurgeClientScope>, StorageError> {
-    let mut query = db(conn.prepare("SELECT e.body_json FROM project_purge_effects e JOIN project_purge_manifests m ON m.id=e.manifest_id WHERE m.project_id=?1 AND m.phase IN('RemovingBytes','Held','Complete') AND json_extract(e.body_json,'$.kind')='Client'"))?;
+    let mut query = db(conn.prepare(
+        "SELECT e.body_json FROM project_purge_effects e JOIN \
+        project_purge_manifests m ON m.id=e.manifest_id WHERE m.project_id=?1 \
+        AND m.phase IN('RemovingBytes','Held','Complete') AND \
+        json_extract(e.body_json,'$.kind')='Client'",
+    ))?;
     let bodies = db(query.query_map([project.0.as_str()], |r| r.get::<_, String>(0)))?;
     for body in bodies {
         let intent: PurgeEffectIntent =
@@ -249,7 +309,14 @@ pub(in crate::storage::sqlite) fn validate_client_fence(
     scope: &devworks_core::ports::storage::ProjectPurgeClientScope,
     digest: &str,
 ) -> Result<bool, StorageError> {
-    let id:Option<String>=db(conn.query_row("SELECT id FROM project_purge_manifests WHERE project_id=?1 AND phase IN('RemovingBytes','Held','Complete')",[scope.project_id.0.as_str()],|r|r.get(0)).optional())?;
+    let id: Option<String> = db(conn
+        .query_row(
+            "SELECT id FROM project_purge_manifests WHERE project_id=?1 AND phase \
+        IN('RemovingBytes','Held','Complete')",
+            [scope.project_id.0.as_str()],
+            |r| r.get(0),
+        )
+        .optional())?;
     let Some(id) = id else {
         return Ok(false);
     };
@@ -281,7 +348,22 @@ pub(in crate::storage::sqlite) fn file_reviewed(
     };
     let body = serde_json::to_string(&intent).map_err(|_| invalid("purge file effect"))?;
     let id = sha256_hex(body.as_bytes());
-    let manifest:Option<String>=db(conn.query_row("SELECT m.id FROM project_purge_effects e JOIN project_purge_manifests m ON m.id=e.manifest_id WHERE e.id=?1 AND e.body_json=?2 AND e.state IN('Pending','Held') AND m.phase IN('RemovingBytes','Held') AND m.project_id=?3 AND m.store_id=?4 AND m.restore_epoch=?5",params![id,body,witness.project_id.0.as_str(),witness.store_id.0.as_str(),witness.restore_epoch],|r|r.get(0)).optional())?;
+    let manifest: Option<String> = db(conn
+        .query_row(
+            "SELECT m.id FROM project_purge_effects e JOIN project_purge_manifests m \
+        ON m.id=e.manifest_id WHERE e.id=?1 AND e.body_json=?2 AND e.state \
+        IN('Pending','Held') AND m.phase IN('RemovingBytes','Held') AND \
+        m.project_id=?3 AND m.store_id=?4 AND m.restore_epoch=?5",
+            params![
+                id,
+                body,
+                witness.project_id.0.as_str(),
+                witness.store_id.0.as_str(),
+                witness.restore_epoch
+            ],
+            |r| r.get(0),
+        )
+        .optional())?;
     let Some(manifest) = manifest else {
         return Ok(false);
     };
@@ -320,7 +402,15 @@ pub(in crate::storage::sqlite) fn settle(
     outcome: Result<(), PurgeFileFault>,
 ) -> Result<(), StorageError> {
     let boot = info.boot_id.as_ref().ok_or(StorageError::ScopeDenied)?;
-    let body: Option<String> = db(conn.query_row("SELECT body_json FROM project_purge_effects WHERE manifest_id=?1 AND id=?2 AND state IN('Pending','Held') AND lease_owner=?3 AND lease_boot_id=?4 AND lease_until>?5", params![manifest.as_str(),id,owner.as_str(),boot.as_str(),now], |r| r.get(0)).optional())?;
+    let body: Option<String> = db(conn
+        .query_row(
+            "SELECT body_json FROM project_purge_effects WHERE manifest_id=?1 AND \
+        id=?2 AND state IN('Pending','Held') AND lease_owner=?3 AND \
+        lease_boot_id=?4 AND lease_until>?5",
+            params![manifest.as_str(), id, owner.as_str(), boot.as_str(), now],
+            |r| r.get(0),
+        )
+        .optional())?;
     let Some(body) = body else {
         return Err(StorageError::ScopeDenied);
     };
@@ -330,19 +420,46 @@ pub(in crate::storage::sqlite) fn settle(
     if let PurgeEffectIntent::File { witness } = &intent
         && let PurgeFileOwner::Blob { digest, generation } = &witness.owner
     {
-        let n = db(conn.execute("UPDATE blobs SET state=CASE WHEN ?4 IS NULL THEN 'Unlinked' ELSE 'Unlinking' END,claim_owner=CASE WHEN ?4 IS NULL THEN NULL ELSE claim_owner END,last_error=?4 WHERE digest=?1 AND generation=?2 AND state='Unlinking' AND claim_owner=?3",params![digest,generation,blob_owner(manifest),code]))?;
+        let n = db(conn.execute(
+            "UPDATE blobs SET state=CASE WHEN ?4 IS NULL THEN 'Unlinked' ELSE \
+            'Unlinking' END,claim_owner=CASE WHEN ?4 IS NULL THEN NULL ELSE \
+            claim_owner END,last_error=?4 WHERE digest=?1 AND generation=?2 AND \
+            state='Unlinking' AND claim_owner=?3",
+            params![digest, generation, blob_owner(manifest), code],
+        ))?;
         if n != 1 {
             return Err(StorageError::ScopeDenied);
         }
     }
-    let n = db(conn.execute("UPDATE project_purge_effects SET state=?6,body_json=CASE WHEN ?7 IS NULL AND kind<>'Client' THEN NULL ELSE body_json END,error_code=?7,lease_owner=NULL,lease_boot_id=NULL,lease_until=?8 WHERE manifest_id=?1 AND id=?2 AND lease_owner=?3 AND lease_boot_id=?4 AND lease_until>?5",params![manifest.as_str(),id,owner.as_str(),boot.as_str(),now,if code.is_none(){"Removed"}else{"Held"},code,code.map(|_|now.saturating_add(1000))]))?;
+    let n = db(conn.execute(
+        "UPDATE project_purge_effects SET state=?6,body_json=CASE WHEN ?7 IS \
+        NULL AND kind<>'Client' THEN NULL ELSE body_json END,error_code=?7,\
+        lease_owner=NULL,lease_boot_id=NULL,lease_until=?8 WHERE manifest_id=?1 \
+        AND id=?2 AND lease_owner=?3 AND lease_boot_id=?4 AND lease_until>?5",
+        params![
+            manifest.as_str(),
+            id,
+            owner.as_str(),
+            boot.as_str(),
+            now,
+            if code.is_none() { "Removed" } else { "Held" },
+            code,
+            code.map(|_| now.saturating_add(1000))
+        ],
+    ))?;
     if n != 1 {
         return Err(StorageError::ScopeDenied);
     }
     refresh(conn, manifest)
 }
 pub(super) fn refresh(conn: &Connection, manifest: &Id) -> Result<(), StorageError> {
-    let (pending, held): (i64,i64) = db(conn.query_row("SELECT count(*),COALESCE(sum(state='Held'),0) FROM project_purge_effects WHERE manifest_id=?1 AND state IN('Pending','Held')",[manifest.as_str()],|r|Ok((r.get(0)?,r.get(1)?))))?;
+    let (pending, held): (i64, i64) = db(conn.query_row(
+        "SELECT count(*),COALESCE(sum(state='Held'),0) FROM \
+        project_purge_effects WHERE manifest_id=?1 AND state IN('Pending',\
+        'Held')",
+        [manifest.as_str()],
+        |r| Ok((r.get(0)?, r.get(1)?)),
+    ))?;
     let raw: String = db(conn.query_row(
         "SELECT body_json FROM project_purge_manifests WHERE id=?1",
         [manifest.as_str()],
@@ -383,7 +500,12 @@ pub(super) fn refresh(conn: &Connection, manifest: &Id) -> Result<(), StorageErr
     if pending == 0
         && let Some(operation) = &m.operation_id
     {
-        db(conn.execute("UPDATE operations SET state='ObservedComplete',revision=revision+1 WHERE id=?1 AND capability='projects.purge' AND state='IntentRecorded' AND json_extract(payload_json,'$.manifestId')=?2",params![operation.0.as_str(),manifest.as_str()]))?;
+        db(conn.execute(
+            "UPDATE operations SET state='ObservedComplete',revision=revision+1 \
+            WHERE id=?1 AND capability='projects.purge' AND state='IntentRecorded' \
+            AND json_extract(payload_json,'$.manifestId')=?2",
+            params![operation.0.as_str(), manifest.as_str()],
+        ))?;
     }
     Ok(())
 }

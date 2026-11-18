@@ -199,7 +199,22 @@ impl EmbeddingSpaceService {
                 tx.router()
                     .insert_embedding_candidate(&candidate, expected_connection_revision.get())?;
                 let event = EventId(tx.new_id(IdKind::Event));
-                tx.history().append(NewEvent{id:event,actor:ctx.principal().clone(),project_id:None,root_id:None,operation_id:None,aggregate_kind:"embedding_space".into(),aggregate_id:id.as_str().into(),aggregate_revision:1,kind:"EmbeddingSpaceCreated".into(),payload:json!({"candidateId":id,"spaceId":candidate.space_id,"configurationDigest":candidate.configuration_digest})})?;
+                tx.history().append(NewEvent {
+                    id: event,
+                    actor: ctx.principal().clone(),
+                    project_id: None,
+                    root_id: None,
+                    operation_id: None,
+                    aggregate_kind: "embedding_space".into(),
+                    aggregate_id: id.as_str().into(),
+                    aggregate_revision: 1,
+                    kind: "EmbeddingSpaceCreated".into(),
+                    payload: json!({
+                        "candidateId": id,
+                        "spaceId": candidate.space_id,
+                        "configurationDigest": candidate.configuration_digest
+                    }),
+                })?;
                 Ok(result(id, 1, true, None))
             }
             RouterConfigAction::QualifyEmbeddingSpace {
@@ -283,9 +298,37 @@ impl EmbeddingSpaceService {
                     source_context: crate::services::approvals::save_source_context(ctx),
                     authority_fences: command.authorization().fences().to_vec(),
                 };
-                tx.operations().record_intent(NewOperation{id:operation.clone(),root_id:None,assignment_id:None,capability:"router.configure".into(),schema_version:1,args_digest:command.fingerprint().as_str().into(),payload:json!({"kind":PROBE_KIND,"candidateId":candidate_id,"configurationDigest":candidate.configuration_digest,"probe":probe})})?;
+                tx.operations().record_intent(NewOperation {
+                    id: operation.clone(),
+                    root_id: None,
+                    assignment_id: None,
+                    capability: "router.configure".into(),
+                    schema_version: 1,
+                    args_digest: command.fingerprint().as_str().into(),
+                    payload: json!({
+                        "kind": PROBE_KIND,
+                        "candidateId": candidate_id,
+                        "configurationDigest": candidate.configuration_digest,
+                        "probe": probe
+                    }),
+                })?;
                 let event = EventId(tx.new_id(IdKind::Event));
-                tx.history().append(NewEvent{id:event.clone(),actor:ctx.principal().clone(),project_id:None,root_id:None,operation_id:Some(operation.clone()),aggregate_kind:"embedding_space".into(),aggregate_id:candidate_id.as_str().into(),aggregate_revision:q.revision+1,kind:"EmbeddingQualificationRequested".into(),payload:json!({"candidateId":candidate_id,"spaceId":candidate.space_id,"requestId":probe.request_id})})?;
+                tx.history().append(NewEvent {
+                    id: event.clone(),
+                    actor: ctx.principal().clone(),
+                    project_id: None,
+                    root_id: None,
+                    operation_id: Some(operation.clone()),
+                    aggregate_kind: "embedding_space".into(),
+                    aggregate_id: candidate_id.as_str().into(),
+                    aggregate_revision: q.revision + 1,
+                    kind: "EmbeddingQualificationRequested".into(),
+                    payload: json!({
+                        "candidateId": candidate_id,
+                        "spaceId": candidate.space_id,
+                        "requestId": probe.request_id
+                    }),
+                })?;
                 let now = tx.now_ms();
                 tx.queue().enqueue(NewQueueEntry {
                     id: delivery,
@@ -373,7 +416,24 @@ impl EmbeddingSpaceService {
         selected: &StoredEmbeddingSelection,
     ) -> Result<(), StorageError> {
         let id = EventId(tx.new_id(IdKind::Event));
-        tx.history().append(NewEvent{id:id.clone(),actor:ctx.principal().clone(),project_id:None,root_id:None,operation_id:None,aggregate_kind:"embedding_selection".into(),aggregate_id:"embedding_selection".into(),aggregate_revision:selected.revision,kind:"EmbeddingSelectionChanged".into(),payload:json!({"candidateId":selected.candidate_id,"spaceId":selected.space_id,"selectionRevision":selected.revision,"scope":{"kind":"Workspace"},"sourceContext":crate::services::approvals::save_source_context(ctx)})})?;
+        tx.history().append(NewEvent {
+            id: id.clone(),
+            actor: ctx.principal().clone(),
+            project_id: None,
+            root_id: None,
+            operation_id: None,
+            aggregate_kind: "embedding_selection".into(),
+            aggregate_id: "embedding_selection".into(),
+            aggregate_revision: selected.revision,
+            kind: "EmbeddingSelectionChanged".into(),
+            payload: json!({
+                "candidateId": selected.candidate_id,
+                "spaceId": selected.space_id,
+                "selectionRevision": selected.revision,
+                "scope": {"kind": "Workspace"},
+                "sourceContext": crate::services::approvals::save_source_context(ctx)
+            }),
+        })?;
         if let Some(indexer) = self
             .selection_indexer
             .get()

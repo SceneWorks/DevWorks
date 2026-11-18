@@ -178,9 +178,20 @@ impl GitService {
             stop: &stop,
         };
         git.version(&root.path).is_ok_and(|version| {
-            let Some(number) = version.strip_prefix("git version ").and_then(|v| v.split_whitespace().next()) else { return false };
+            let Some(number) = version
+                .strip_prefix("git version ")
+                .and_then(|v| v.split_whitespace().next())
+            else {
+                return false;
+            };
             let mut parts = number.split('.');
-            matches!((parts.next().and_then(|v| v.parse::<u64>().ok()), parts.next().and_then(|v| v.parse::<u64>().ok())), (Some(major),Some(minor)) if (major,minor) >= (2,31))
+            matches!(
+                (
+                    parts.next().and_then(|v| v.parse::<u64>().ok()),
+                    parts.next().and_then(|v| v.parse::<u64>().ok()),
+                ),
+                (Some(major), Some(minor)) if (major, minor) >= (2, 31)
+            )
         })
     }
 
@@ -285,7 +296,31 @@ impl GitService {
                 .map(|w| w.project_id),
             _ => None,
         };
-        let metadata = serde_json::json!({"schemaVersion":1,"kind":"GitInspectionMetadata","repositoryId":target.repository.id,"repositoryName":target.repository.name,"primaryCheckout":target.repository.location,"worktree":target.worktree.as_ref().map(|tree| serde_json::json!({"id":tree.id,"workId":tree.work_id,"path":tree.path,"branch":tree.branch,"ownerActorId":tree.owner,"ownershipRevision":tree.ownership_revision,"removed":tree.removed,"pendingOperationId":tree.pending_operation_id})),"registeredRoots":self.config.roots.iter().map(|root| serde_json::json!({"id":root.id,"path":root.path})).collect::<Vec<_>>(),"head":value.head,"branch":value.branch,"dirty":value.dirty});
+        let metadata = serde_json::json!({
+            "schemaVersion": 1,
+            "kind": "GitInspectionMetadata",
+            "repositoryId": target.repository.id,
+            "repositoryName": target.repository.name,
+            "primaryCheckout": target.repository.location,
+            "worktree": target.worktree.as_ref().map(|tree| serde_json::json!({
+                "id": tree.id,
+                "workId": tree.work_id,
+                "path": tree.path,
+                "branch": tree.branch,
+                "ownerActorId": tree.owner,
+                "ownershipRevision": tree.ownership_revision,
+                "removed": tree.removed,
+                "pendingOperationId": tree.pending_operation_id
+            })),
+            "registeredRoots": self.config
+                .roots
+                .iter()
+                .map(|root| serde_json::json!({"id": root.id, "path": root.path}))
+                .collect::<Vec<_>>(),
+            "head": value.head,
+            "branch": value.branch,
+            "dirty": value.dirty
+        });
         let bytes = serde_json::to_vec_pretty(&metadata)
             .map_err(|e| crate::ports::storage::StorageError::InvalidRecord(e.to_string()))?;
         let evidence = Evidence {
@@ -298,7 +333,13 @@ impl GitService {
             title: "Git repository and worktree metadata".into(),
             media_type: "application/json".into(),
             tags: vec!["git".into(), "inspection".into()],
-            source: serde_json::json!({"kind":"GitInspection","repositoryId":target.repository.id,"worktreeId":value.worktree_id,"head":value.head,"dirty":value.dirty}),
+            source: serde_json::json!({
+                "kind": "GitInspection",
+                "repositoryId": target.repository.id,
+                "worktreeId": value.worktree_id,
+                "head": value.head,
+                "dirty": value.dirty
+            }),
         };
         value
             .evidence
@@ -444,7 +485,14 @@ impl GitService {
                 ),
                 media_type: "text/x-diff".into(),
                 tags: vec!["git".into(), "diff".into()],
-                source: serde_json::json!({"kind":"GitDiff","repositoryId":target.repository.id.as_str(),"worktreeId":target.worktree.as_ref().map(|w|w.id.as_str()),"base":input.base,"head":input.head,"paths":paths}),
+                source: serde_json::json!({
+                    "kind": "GitDiff",
+                    "repositoryId": target.repository.id.as_str(),
+                    "worktreeId": target.worktree.as_ref().map(|w| w.id.as_str()),
+                    "base": input.base,
+                    "head": input.head,
+                    "paths": paths
+                }),
             };
             let artifact = self.publish_read(ctx, &target, query, env, evidence, &bytes)?;
             items.push(artifact);
@@ -602,7 +650,21 @@ impl GitService {
                 binding.id(),
             ));
         }
-        let mut value = serde_json::json!({"repositoryId":binding.repository_id(),"worktreeId":binding.id(),"head":{"format":if source.head.len()==64 {"Sha256"} else {"Sha1"},"hex":source.head},"dirty":source.dirty,"ownershipRevision":binding.ownership_revision().to_string(),"observedAtMs":self.clock.now_ms().get().to_string()});
+        let mut value = serde_json::json!({
+            "repositoryId": binding.repository_id(),
+            "worktreeId": binding.id(),
+            "head": {
+                "format": if source.head.len() == 64 {
+                    "Sha256"
+                } else {
+                    "Sha1"
+                },
+                "hex": source.head
+            },
+            "dirty": source.dirty,
+            "ownershipRevision": binding.ownership_revision().to_string(),
+            "observedAtMs": self.clock.now_ms().get().to_string()
+        });
         if let Some(repository) = target
             .repository
             .remote_url

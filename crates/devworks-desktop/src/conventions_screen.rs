@@ -668,10 +668,32 @@ fn browse(
         a.push(Action::NewSearch);
     }
     if !s.previous_searches.is_empty() {
-        egui::CollapsingHeader::new("Earlier unconfirmed searches").show(ui,|ui|{for (index,context) in s.previous_searches.iter().enumerate(){ui.push_id(index,|ui|{
-        if let Some((request,operation))=&context.preparation{widgets::caption(ui,format!("Request {request} · last reported {:?}",operation.state));}else{ui.label("An earlier result was not confirmed; no preparation metadata was observed.");}
-        if ui.add_enabled(online&&s.active_search.is_none(),egui::Button::new("Confirm this earlier search")).clicked(){a.push(Action::ConfirmEarlierSearch(index));}
-    });}});
+        egui::CollapsingHeader::new("Earlier unconfirmed searches").show(ui, |ui| {
+            for (index, context) in s.previous_searches.iter().enumerate() {
+                ui.push_id(index, |ui| {
+                    if let Some((request, operation)) = &context.preparation {
+                        widgets::caption(
+                            ui,
+                            format!("Request {request} · last reported {:?}", operation.state),
+                        );
+                    } else {
+                        ui.label(
+                            "An earlier result was not confirmed; no preparation metadata was \
+            observed.",
+                        );
+                    }
+                    if ui
+                        .add_enabled(
+                            online && s.active_search.is_none(),
+                            egui::Button::new("Confirm this earlier search"),
+                        )
+                        .clicked()
+                    {
+                        a.push(Action::ConfirmEarlierSearch(index));
+                    }
+                });
+            }
+        });
     }
     egui::CollapsingHeader::new("Convention filters").show(ui, |ui| {
         egui::ComboBox::from_label("Browsing lifecycle")

@@ -6,7 +6,14 @@ use devworks_core::ports::storage::*;
 use devworks_core::protocol::{ActorId, Id, OperationId, ProjectId};
 use rusqlite::{Connection, Row, params, params_from_iter};
 
-const WATCHER_COLUMNS: &str = "id,revision,phase,source_kind,project_id,session_id,actor_id,process_operation_id,executable_ref,tail_bytes,outcome_kind,exit_code,signal,outcome_detail,duration_ms,output_tail,output_truncated,stop_requested,created_at,updated_at,settled_at,probe_job_operation_id,probe_interval_ms,probe_exit_code,probe_output_pattern,probe_runs,probe_next_run_at,due_at,expires_at,match_pattern,match_each,match_min_interval_ms,match_scanned,match_pending,match_total,match_last_event_at,file_path";
+const WATCHER_COLUMNS: &str = "id,revision,phase,source_kind,project_id,session_id,actor_id,\
+    process_operation_id,executable_ref,tail_bytes,outcome_kind,exit_code,\
+    signal,outcome_detail,duration_ms,output_tail,output_truncated,\
+    stop_requested,created_at,updated_at,settled_at,probe_job_operation_id,\
+    probe_interval_ms,probe_exit_code,probe_output_pattern,probe_runs,\
+    probe_next_run_at,due_at,expires_at,match_pattern,match_each,\
+    match_min_interval_ms,match_scanned,match_pending,match_total,\
+    match_last_event_at,file_path";
 
 #[allow(clippy::type_complexity)]
 fn watcher_row(row: &Row<'_>) -> rusqlite::Result<WatcherRow> {
@@ -158,7 +165,9 @@ fn watchers_where<P: rusqlite::Params>(
     rows.into_iter().map(WatcherRow::into_stored).collect()
 }
 
-const EVENT_COLUMNS: &str = "id,watcher_id,session_id,project_id,state,payload_json,transcript_sequence,carried_turn_id,created_at,delivered_at,acknowledged_at,match_count";
+const EVENT_COLUMNS: &str = "id,watcher_id,session_id,project_id,state,payload_json,\
+    transcript_sequence,carried_turn_id,created_at,delivered_at,\
+    acknowledged_at,match_count";
 fn events_where<P: rusqlite::Params>(
     conn: &Connection,
     tail: &str,
@@ -450,7 +459,17 @@ impl WatcherRepository for Unit<'_> {
         let mut values = write_params(watcher);
         values.push(rusqlite::types::Value::Integer(watcher.revision - 1));
         let changed = db(self.conn.execute(
-            "UPDATE watchers SET revision=?2,phase=?3,source_kind=?4,project_id=?5,session_id=?6,actor_id=?7,process_operation_id=?8,executable_ref=?9,tail_bytes=?10,outcome_kind=?11,exit_code=?12,signal=?13,outcome_detail=?14,duration_ms=?15,output_tail=?16,output_truncated=?17,stop_requested=?18,created_at=?19,updated_at=?20,settled_at=?21,probe_job_operation_id=?22,probe_interval_ms=?23,probe_exit_code=?24,probe_output_pattern=?25,probe_runs=?26,probe_next_run_at=?27,due_at=?28,expires_at=?29,match_pattern=?30,match_each=?31,match_min_interval_ms=?32,match_scanned=?33,match_pending=?34,match_total=?35,match_last_event_at=?36,file_path=?37 WHERE id=?1 AND revision=?38",
+            "UPDATE watchers SET revision=?2,phase=?3,source_kind=?4,project_id=?5,\
+                session_id=?6,actor_id=?7,process_operation_id=?8,executable_ref=?9,\
+                tail_bytes=?10,outcome_kind=?11,exit_code=?12,signal=?13,\
+                outcome_detail=?14,duration_ms=?15,output_tail=?16,output_truncated=?17,\
+                stop_requested=?18,created_at=?19,updated_at=?20,settled_at=?21,\
+                probe_job_operation_id=?22,probe_interval_ms=?23,probe_exit_code=?24,\
+                probe_output_pattern=?25,probe_runs=?26,probe_next_run_at=?27,\
+                due_at=?28,expires_at=?29,match_pattern=?30,match_each=?31,\
+                match_min_interval_ms=?32,match_scanned=?33,match_pending=?34,\
+                match_total=?35,match_last_event_at=?36,file_path=?37 WHERE id=?1 AND \
+                revision=?38",
             params_from_iter(values),
         ))?;
         if changed != 1 {

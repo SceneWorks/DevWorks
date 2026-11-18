@@ -368,7 +368,24 @@ mod confidence_tests {
     #[test]
     fn repeated_fallback_nodes_count_once_and_analysis_confidence_is_independent() {
         let node = |id: &str, confidence: &str, analysis: &str| -> CodeNode {
-            wire(json!({"nodeId":id,"repositoryId":"repository","viewId":"view","unitKey":"src/lib.rs","nodeKind":"Function","name":id,"qualifiedName":id,"properties":[],"propertiesComplete":true,"doNotTrust":false,"confidence":confidence,"analysisConfidence":analysis,"trustRevision":"1","viewDigest":"a".repeat(64),"contentIdentity":"captured-unit"})).unwrap()
+            wire(json!({
+                "nodeId": id,
+                "repositoryId": "repository",
+                "viewId": "view",
+                "unitKey": "src/lib.rs",
+                "nodeKind": "Function",
+                "name": id,
+                "qualifiedName": id,
+                "properties": [],
+                "propertiesComplete": true,
+                "doNotTrust": false,
+                "confidence": confidence,
+                "analysisConfidence": analysis,
+                "trustRevision": "1",
+                "viewDigest": "a".repeat(64),
+                "contentIdentity": "captured-unit"
+            }))
+            .unwrap()
         };
         let fallback = node("fallback", "low", "high");
         let analyzed = node("analyzed", "high", "low");

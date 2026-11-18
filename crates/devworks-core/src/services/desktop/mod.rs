@@ -522,7 +522,13 @@ impl DesktopService {
             .project_id()
             .cloned()
             .map_or(ConfigScope::Workspace, ConfigScope::Project);
-        let binding = json!({"desktopId":input.desktop_id,"revision":input.expected_revision,"reason":input.reason,"leaseMs":input.lease_ms,"permissionState":record.permission_state});
+        let binding = json!({
+            "desktopId": input.desktop_id,
+            "revision": input.expected_revision,
+            "reason": input.reason,
+            "leaseMs": input.lease_ms,
+            "permissionState": record.permission_state
+        });
         Ok(OwnerPreview {
             scope,
             target_id: input.desktop_id.clone(),
@@ -757,11 +763,21 @@ impl DesktopService {
         })?;
         let event = EventId(tx.new_id(IdKind::Event));
         tx.history().append(NewEvent {
-            id: event.clone(), actor: ctx.principal().clone(), project_id: ctx.project_id().cloned(),
-            root_id: ctx.root_id().cloned(), operation_id: Some(operation.clone()),
-            aggregate_kind: "desktop_input".into(), aggregate_id: operation.0.as_str().into(),
-            aggregate_revision: 1, kind: "DesktopInputRequested".into(),
-            payload: json!({"desktopId":resource.id.as_str(),"leaseId":input.lease_id.as_str(),"consentId":input.consent_id.as_str(),"testedRepository":tested_repository}),
+            id: event.clone(),
+            actor: ctx.principal().clone(),
+            project_id: ctx.project_id().cloned(),
+            root_id: ctx.root_id().cloned(),
+            operation_id: Some(operation.clone()),
+            aggregate_kind: "desktop_input".into(),
+            aggregate_id: operation.0.as_str().into(),
+            aggregate_revision: 1,
+            kind: "DesktopInputRequested".into(),
+            payload: json!({
+                "desktopId": resource.id.as_str(),
+                "leaseId": input.lease_id.as_str(),
+                "consentId": input.consent_id.as_str(),
+                "testedRepository": tested_repository
+            }),
         })?;
         let now = tx.now_ms();
         let entry = tx.new_id(IdKind::QueueEntry);

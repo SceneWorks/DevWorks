@@ -276,7 +276,17 @@ fn owned_git_worktrees_preserve_identity_and_reject_stale_updates() {
         ids: &*h.ids,
     };
     let history = devworks_core::services::history::HistoryService::new(h.ids.clone());
-    let frame = serde_json::json!({"protocol":"1.0-draft.1","schemaRevision":3,"mode":"Query","queryId":"retained-source","body":{"kind":"history.git_links","rootId":"task","page":{"limit":20}}});
+    let frame = serde_json::json!({
+        "protocol": "1.0-draft.1",
+        "schemaRevision": 3,
+        "mode": "Query",
+        "queryId": "retained-source",
+        "body": {
+            "kind": "history.git_links",
+            "rootId": "task",
+            "page": {"limit": 20}
+        }
+    });
     let rows = match gateway
         .query(
             &ctx,

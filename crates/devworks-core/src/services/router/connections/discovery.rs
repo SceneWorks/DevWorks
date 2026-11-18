@@ -561,7 +561,13 @@ mod tests {
         let f = Fixture::new(vec![(
             200,
             json!({"data": [
-                {"id": "a/b", "context_length": 16000, "supported_parameters": ["tools"], "architecture": {"input_modalities": ["text", "image"]}, "reasoning": {"supported_efforts": ["high", "low"]}},
+                {
+                    "id": "a/b",
+                    "context_length": 16000,
+                    "supported_parameters": ["tools"],
+                    "architecture": {"input_modalities": ["text", "image"]},
+                    "reasoning": {"supported_efforts": ["high", "low"]}
+                },
                 {"id": "a/c"}
             ]}),
         )]);
@@ -594,10 +600,23 @@ mod tests {
     fn anthropic_optional_capabilities_are_provider_facts_without_invented_defaults() {
         let f = Fixture::new(vec![(
             200,
-            json!({"data": [
-            {"id": "claude-opus-5-5", "capabilities": {"image_input": {"supported": true}, "effort": {"low": {"supported": true}, "high": {"supported": false}, "max": {"supported": true}}}},
-            {"id": "claude-haiku-5-5"}
-        ], "has_more": false}),
+            json!({
+                "data": [
+                    {
+                        "id": "claude-opus-5-5",
+                        "capabilities": {
+                            "image_input": {"supported": true},
+                            "effort": {
+                                "low": {"supported": true},
+                                "high": {"supported": false},
+                                "max": {"supported": true}
+                            }
+                        }
+                    },
+                    {"id": "claude-haiku-5-5"}
+                ],
+                "has_more": false
+            }),
         )]);
         let d = f.list("AnthropicMessages").unwrap();
         assert_eq!(

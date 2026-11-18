@@ -575,7 +575,15 @@ mod human_decision_tests {
         let ingress = HostIngress {
             store_id: StoreId(id("store-1")),
         };
-        let input: PurgeInput = serde_json::from_value(json!({"projectId":"project-a","manifestId":"manifest-a","expectedRevision":"1","expectedDigest":"a".repeat(64),"expectedProjectRevision":"2","confirm":true})).unwrap();
+        let input: PurgeInput = serde_json::from_value(json!({
+            "projectId": "project-a",
+            "manifestId": "manifest-a",
+            "expectedRevision": "1",
+            "expectedDigest": "a".repeat(64),
+            "expectedProjectRevision": "2",
+            "confirm": true
+        }))
+        .unwrap();
         let generic = context(&ingress, PrincipalKind::Human);
         assert!(!generic.project_purge_matches(&input));
         let bound = ingress.project_purge_context(&generic, &input).unwrap();

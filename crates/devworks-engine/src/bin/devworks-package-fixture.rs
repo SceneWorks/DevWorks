@@ -151,7 +151,18 @@ fn invoke(st: Arc<State>, id: Value, inv: Value, cancel: mpsc::Receiver<()>, pac
             while !marker("cas-go").exists() && std::time::Instant::now() < until {
                 std::thread::sleep(Duration::from_millis(5));
             }
-            let params = json!({"processSessionId": inv["processSessionId"], "invocationId": inv["invocationId"], "invocationToken": inv["invocationToken"], "stateGeneration": inv["stateGeneration"], "actionKey":"queued-cas", "action":{"kind":"CompareAndSet","expectedRevision":"1","proposal":inv["input"]}});
+            let params = json!({
+                "processSessionId": inv["processSessionId"],
+                "invocationId": inv["invocationId"],
+                "invocationToken": inv["invocationToken"],
+                "stateGeneration": inv["stateGeneration"],
+                "actionKey": "queued-cas",
+                "action": {
+                    "kind": "CompareAndSet",
+                    "expectedRevision": "1",
+                    "proposal": inv["input"]
+                }
+            });
             let child = st.clone();
             let result_path = marker("cas-result");
             let worker = std::thread::spawn(move || {

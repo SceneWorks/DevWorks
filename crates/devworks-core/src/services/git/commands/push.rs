@@ -42,7 +42,17 @@ fn local_server(url: &str) -> bool {
 }
 fn server_review(url: &str) -> Value {
     let local = local_server(url);
-    json!({"kind":if local{"LocalGitServer"}else{"RemoteGitServer"},"authority":"TrustedByThisExactPushApproval","processing":"Destination server may run its own hooks and receive-pack configuration","serverHooksConfined":false,"clientPolicy":"IsolatedGitDirectoryWithTrustedHostAuthenticationOnly"})
+    json!({
+        "kind": if local {
+            "LocalGitServer"
+        } else {
+            "RemoteGitServer"
+        },
+        "authority": "TrustedByThisExactPushApproval",
+        "processing": "Destination server may run its own hooks and receive-pack configuration",
+        "serverHooksConfined": false,
+        "clientPolicy": "IsolatedGitDirectoryWithTrustedHostAuthenticationOnly"
+    })
 }
 impl GitService {
     pub(super) fn prepare_push(
@@ -216,8 +226,15 @@ impl GitService {
             }
         };
         if let Some(evidence) = ctx.reviewed_operation() {
-            let current = json!({"tree":destination.tree,"repositoryRevision":destination.repository_revision,
-                "url":destination.url,"head":destination.observed.head,"branch":destination.observed.branch,"transportDigest":destination.transport_digest,"destinationServer":server_review(&destination.url)});
+            let current = json!({
+                "tree": destination.tree,
+                "repositoryRevision": destination.repository_revision,
+                "url": destination.url,
+                "head": destination.observed.head,
+                "branch": destination.observed.branch,
+                "transportDigest": destination.transport_digest,
+                "destinationServer": server_review(&destination.url)
+            });
             if evidence.owner_binding()["native"] != current {
                 return Err(refuse(
                     DomainErrorCode::SourceChanged,

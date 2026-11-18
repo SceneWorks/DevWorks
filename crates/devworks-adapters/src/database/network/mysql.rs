@@ -122,7 +122,8 @@ pub(super) async fn read(
         &["Type", "GraphEntity", "GraphEdge"],
         &[
             "Password authentication; one configured server; fixed INFORMATION_SCHEMA only.",
-            "Server catalog grants determine visibility; grant metadata visibility for full coverage.",
+            "Server catalog grants determine visibility; grant metadata visibility \
+                for full coverage.",
         ],
     )?;
     let mut collector = c;
@@ -139,8 +140,17 @@ pub(super) async fn read(
                 .collect::<Vec<_>>(),
         )
         .map_err(|_| MetadataFailure::InvalidTarget)?;
-        let mut rows=sqlx::query("SELECT SCHEMA_NAME FROM INFORMATION_SCHEMA.SCHEMATA WHERE SCHEMA_NAME NOT IN('information_schema','mysql','performance_schema','sys') AND (?='' OR SCHEMA_NAME=?) AND (?='[]' OR JSON_CONTAINS(?,JSON_QUOTE(SCHEMA_NAME))) ORDER BY SCHEMA_NAME LIMIT 129")
-            .bind(&target.catalog).bind(&target.catalog).bind(&selected).bind(&selected).fetch(&mut conn);
+        let mut rows = sqlx::query(
+            "SELECT SCHEMA_NAME FROM INFORMATION_SCHEMA.SCHEMATA WHERE SCHEMA_NAME \
+            NOT IN('information_schema','mysql','performance_schema','sys') AND \
+            (?='' OR SCHEMA_NAME=?) AND (?='[]' OR JSON_CONTAINS(?,\
+            JSON_QUOTE(SCHEMA_NAME))) ORDER BY SCHEMA_NAME LIMIT 129",
+        )
+        .bind(&target.catalog)
+        .bind(&target.catalog)
+        .bind(&selected)
+        .bind(&selected)
+        .fetch(&mut conn);
         while let Some(row) = rows.try_next().await.map_err(classify)? {
             collector.check()?;
             let name: String = row

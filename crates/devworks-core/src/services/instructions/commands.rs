@@ -979,7 +979,12 @@ impl InstructionService {
                 &item.scope,
                 role,
                 &text,
-                json!({"kind": "RoleInstruction", "instructionId": item.id.as_str(), "revision": target.revision, "approvalId": approval_id.as_ref().map(Id::as_str)}),
+                json!({
+                    "kind": "RoleInstruction",
+                    "instructionId": item.id.as_str(),
+                    "revision": target.revision,
+                    "approvalId": approval_id.as_ref().map(Id::as_str)
+                }),
             )
             .map_err(settings_failure)?;
         }

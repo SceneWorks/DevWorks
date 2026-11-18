@@ -671,8 +671,14 @@ impl ContainerService {
             Ok(id) => id,
             Err(outcome) => return outcome,
         };
-        EffectOutcome::Completed(json!({"result":OperationResult::ContainersBuild {
-            value: ContainerImage { engine_id: input.engine_id.clone(), image: input.tag.clone(), digest: Some(BoundedText(image_id)), state: ItemState::Healthy, owned: true },
+        EffectOutcome::Completed(json!({"result": OperationResult::ContainersBuild {
+            value: ContainerImage {
+                engine_id: input.engine_id.clone(),
+                image: input.tag.clone(),
+                digest: Some(BoundedText(image_id)),
+                state: ItemState::Healthy,
+                owned: true
+            },
         }}))
     }
 
@@ -771,8 +777,14 @@ impl ContainerService {
             Ok(id) => id,
             Err(outcome) => return outcome,
         };
-        EffectOutcome::Completed(json!({"result":OperationResult::ContainersPull {
-            value: ContainerImage { engine_id: input.engine_id.clone(), image: input.image.clone(), digest: Some(BoundedText(image_id)), state: ItemState::Healthy, owned: true },
+        EffectOutcome::Completed(json!({"result": OperationResult::ContainersPull {
+            value: ContainerImage {
+                engine_id: input.engine_id.clone(),
+                image: input.image.clone(),
+                digest: Some(BoundedText(image_id)),
+                state: ItemState::Healthy,
+                owned: true
+            },
         }}))
     }
 

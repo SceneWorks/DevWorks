@@ -243,7 +243,8 @@ impl GraphCtl<'_, '_> {
                                                     != graph_screen::module_scalar(item)
                                         })
                                     }) {
-                                        self.graph.error=Some("Module analysis changed while paging. Refresh the selected graph view before combining more entries.".into());
+                                        self.graph.error=Some("Module analysis changed while paging. Refresh the selected graph view \
+                                            before combining more entries.".into());
                                         return None;
                                     }
                                 }
@@ -300,7 +301,8 @@ impl GraphCtl<'_, '_> {
                     Err(Failure::Unknown) => {
                         self.graph.trust_unknown = true;
                         self.graph.trust_busy = true;
-                        self.graph.notice=Some((Tone::Attention,"Trust change outcome is not confirmed. Confirm outcomes checks the same original request.".into()));
+                        self.graph.notice=Some((Tone::Attention,"Trust change outcome is not confirmed. Confirm outcomes checks the same \
+                            original request.".into()));
                     }
                     Err(error) => {
                         self.graph.trust_unknown = false;

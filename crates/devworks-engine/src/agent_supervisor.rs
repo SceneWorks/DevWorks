@@ -407,17 +407,27 @@ async fn supervise_children(
                         running.remove(&id);
                         let failure = match outcome {
                             ChildLaunch::End(LaunchEnd::Finished { outcome: ActivationOutcome::Completed, .. }) => None,
-                            ChildLaunch::End(LaunchEnd::Finished { outcome: ActivationOutcome::Cancelled | ActivationOutcome::Interrupted, .. }) if *stop.borrow() => None,
+                            ChildLaunch::End(LaunchEnd::Finished {
+                                outcome: ActivationOutcome::Cancelled | ActivationOutcome::Interrupted,
+                                ..
+                            }) if *stop.borrow() => None,
                             ChildLaunch::Fenced(Fenced::Blocked(_) | Fenced::LeaseLost(_) | Fenced::StopRequested) => {
                                 retry_after.insert(id.clone(), tokio::time::Instant::now() + Duration::from_secs(1));
                                 None
                             },
                             ChildLaunch::Fenced(Fenced::NotFound(_)) => None,
-                            ChildLaunch::Fenced(Fenced::Invalid(reason)) if reason.starts_with("the root's subagent allowance") || reason == "the child is not ready under this activation" => {
+                            ChildLaunch::Fenced(Fenced::Invalid(reason))
+                                if reason.starts_with("the root's subagent allowance")
+                                    || reason == "the child is not ready under this activation" =>
+                            {
                                 retry_after.insert(id.clone(), tokio::time::Instant::now() + Duration::from_secs(1));
                                 None
                             },
-                            ChildLaunch::Fenced(other) => Some(LaunchEnd::Failed(ActivationFailure::Deterministic(format!("child activation fenced: {other:?}")))),
+                            ChildLaunch::Fenced(other) => Some(LaunchEnd::Failed(
+                                ActivationFailure::Deterministic(format!(
+                                    "child activation fenced: {other:?}"
+                                )),
+                            )),
                             ChildLaunch::End(end) => Some(end),
                         };
                         if let Some(failure) = failure {

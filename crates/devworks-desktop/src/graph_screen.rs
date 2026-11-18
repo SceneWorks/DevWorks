@@ -595,7 +595,8 @@ impl GraphScreen {
                 state.controls(ui, online, actions);
                 if tab >= 3 {
                     widgets::chip(ui, "Unavailable", Tone::Attention);
-                    ui.label(if tab==3{"Health measurements are not available from the current repository services."}else{"Review history is not available from the current repository services."});
+                    ui.label(if tab==3{"Health measurements are not available from the current repository \
+                        services."}else{"Review history is not available from the current repository services."});
                     return;
                 }
                 if let Some((tone, text)) = &state.notice {
@@ -1158,11 +1159,28 @@ fn node_tree(
     });
 }
 fn properties(ui: &mut Ui, items: &[CodeProperty], complete: bool) {
-    egui::CollapsingHeader::new("Properties").show(ui,|ui|{
-        for property in items {ui.strong(&property.name.0);selectable(ui,&property.json_text.0);
-            if property.next_offset.is_some(){widgets::caption(ui,format!("Property passage at byte {} of {}; more properties are available on the next graph page.",property.offset.as_str(),property.total_bytes.as_str()));}
+    egui::CollapsingHeader::new("Properties").show(ui, |ui| {
+        for property in items {
+            ui.strong(&property.name.0);
+            selectable(ui, &property.json_text.0);
+            if property.next_offset.is_some() {
+                widgets::caption(
+                    ui,
+                    format!(
+                        "Property passage at byte {} of {}; more properties are available on the \
+                next graph page.",
+                        property.offset.as_str(),
+                        property.total_bytes.as_str()
+                    ),
+                );
+            }
         }
-        if !complete {widgets::caption(ui,"Property coverage is partial; empty values do not establish absence.");}
+        if !complete {
+            widgets::caption(
+                ui,
+                "Property coverage is partial; empty values do not establish absence.",
+            );
+        }
     });
 }
 fn edges(
@@ -1323,34 +1341,188 @@ fn modules(
     for parts in groups.values() {
         let item = parts.item;
         egui::CollapsingHeader::new(&item.module.module_name.0)
-            .id_salt((item.module.repository_id.as_str(),&item.module.module_name.0)).default_open(true)
-            .show(ui,|ui|{
-                widgets::caption(ui,format!("Analysis: {:?}",item.state));
-                optional(ui,"Reason",item.reason.as_ref().map(|v|v.0.as_str()));
-                if ui.button(format!("Browse {} module",item.module.module_name.0)).clicked(){actions.push(Action::Filter{
-                    repository:item.module.repository_id.as_str().into(),module:Some(item.module.module_name.0.clone()),kind:None});}
-                if let Some(node)=&item.module.indexed_node
-                    && ui.button(format!("Inspect {} module",item.module.module_name.0)).clicked(){actions.push(Action::Endpoint{id:node.node_id.as_str().into(),repository:node.repository_id.as_str().into()});}
-                if let Some(recorded)=&item.recorded {
-                    selectable(ui,&recorded.summary.0);
-                    widgets::caption(ui,format!("Recorded confidence: {} · recorded at {}",recorded.confidence.0,recorded.updated_at_ms.as_str()));
-                    optional(ui,"Analysis model",recorded.model_used.as_ref().map(|v|v.0.as_str()));
-                    optional(ui,"Source revision",recorded.source_revision.as_ref().map(|v|v.0.as_str()));
-                    optional(ui,"Source identity",recorded.source_hash.as_ref().map(|v|v.0.as_str()));
-                    optional(ui,"Source view",recorded.source_view_id.as_ref().map(|id|id.as_str()));
-                    if let Some(totals)=&recorded.program_totals {widgets::caption(ui,format!("Recorded program totals: {} endpoints · {} services · {} tables",totals.endpoint_count.as_str(),totals.service_count.as_str(),totals.table_count.as_str()));}
-                    else {widgets::caption(ui,"Program totals have not been recorded.");}
-                    for endpoint in parts.recorded.iter().flat_map(|part|&part.endpoints.0) {selectable(ui,format!("{} {} — {}",endpoint.http_method.0,endpoint.route.0,endpoint.description.0));optional(ui,"Request model",endpoint.request_model.as_ref().map(|v|v.0.as_str()));optional(ui,"Response model",endpoint.response_model.as_ref().map(|v|v.0.as_str()));}
-                    for service in parts.recorded.iter().flat_map(|part|&part.services.0) {selectable(ui,format!("{} · {} · {}",service.name.0,service.lifetime.0,service.description.0));optional(ui,"Interface",service.interface_name.as_ref().map(|v|v.0.as_str()));}
-                    for table in parts.recorded.iter().flat_map(|part|&part.database_tables.0) {selectable(ui,format!("Recorded table: {}",table.0));}
-                    for dependency in parts.recorded.iter().flat_map(|part|&part.external_dependencies.0) {selectable(ui,format!("Recorded dependency: {}",dependency.0));}
-                } else {ui.label("No semantic analysis has been recorded for this module. Indexed observations below are not program totals.");}
-                widgets::caption(ui,format!("Observed index coverage: {:?}",item.observed_coverage.state));
-                for count in &item.observed_node_counts.0 {if ui.button(format!("Indexed {} · {}",count.name.0,count.count.as_str())).clicked(){actions.push(Action::Filter{repository:item.module.repository_id.as_str().into(),module:Some(item.module.module_name.0.clone()),kind:Some(count.name.0.clone())});}}
-                for(label,drill)in [("Indexed endpoints",&item.endpoints),("Indexed services",&item.services),("Indexed tables",&item.tables)] {
-                    if ui.button(format!("{label}: {}",drill.count.as_ref().map_or("unknown",|v|v.as_str()))).clicked(){actions.push(Action::Filter{repository:item.module.repository_id.as_str().into(),module:Some(item.module.module_name.0.clone()),kind:Some(drill.node_kind.0.clone())});}
-                    for node in &drill.nodes.0 {if ui.small_button(format!("Inspect {}",node.node_id.as_str())).clicked(){actions.push(Action::Endpoint{id:node.node_id.as_str().into(),repository:node.repository_id.as_str().into()});}}
-                    if drill.has_more {widgets::caption(ui,"More indexed nodes are available through this module's node list.");}
+            .id_salt((
+                item.module.repository_id.as_str(),
+                &item.module.module_name.0,
+            ))
+            .default_open(true)
+            .show(ui, |ui| {
+                widgets::caption(ui, format!("Analysis: {:?}", item.state));
+                optional(ui, "Reason", item.reason.as_ref().map(|v| v.0.as_str()));
+                if ui
+                    .button(format!("Browse {} module", item.module.module_name.0))
+                    .clicked()
+                {
+                    actions.push(Action::Filter {
+                        repository: item.module.repository_id.as_str().into(),
+                        module: Some(item.module.module_name.0.clone()),
+                        kind: None,
+                    });
+                }
+                if let Some(node) = &item.module.indexed_node
+                    && ui
+                        .button(format!("Inspect {} module", item.module.module_name.0))
+                        .clicked()
+                {
+                    actions.push(Action::Endpoint {
+                        id: node.node_id.as_str().into(),
+                        repository: node.repository_id.as_str().into(),
+                    });
+                }
+                if let Some(recorded) = &item.recorded {
+                    selectable(ui, &recorded.summary.0);
+                    widgets::caption(
+                        ui,
+                        format!(
+                            "Recorded confidence: {} · recorded at {}",
+                            recorded.confidence.0,
+                            recorded.updated_at_ms.as_str()
+                        ),
+                    );
+                    optional(
+                        ui,
+                        "Analysis model",
+                        recorded.model_used.as_ref().map(|v| v.0.as_str()),
+                    );
+                    optional(
+                        ui,
+                        "Source revision",
+                        recorded.source_revision.as_ref().map(|v| v.0.as_str()),
+                    );
+                    optional(
+                        ui,
+                        "Source identity",
+                        recorded.source_hash.as_ref().map(|v| v.0.as_str()),
+                    );
+                    optional(
+                        ui,
+                        "Source view",
+                        recorded.source_view_id.as_ref().map(|id| id.as_str()),
+                    );
+                    if let Some(totals) = &recorded.program_totals {
+                        widgets::caption(
+                            ui,
+                            format!(
+                                "Recorded program totals: {} endpoints · {} services · {} tables",
+                                totals.endpoint_count.as_str(),
+                                totals.service_count.as_str(),
+                                totals.table_count.as_str()
+                            ),
+                        );
+                    } else {
+                        widgets::caption(ui, "Program totals have not been recorded.");
+                    }
+                    for endpoint in parts.recorded.iter().flat_map(|part| &part.endpoints.0) {
+                        selectable(
+                            ui,
+                            format!(
+                                "{} {} — {}",
+                                endpoint.http_method.0, endpoint.route.0, endpoint.description.0
+                            ),
+                        );
+                        optional(
+                            ui,
+                            "Request model",
+                            endpoint.request_model.as_ref().map(|v| v.0.as_str()),
+                        );
+                        optional(
+                            ui,
+                            "Response model",
+                            endpoint.response_model.as_ref().map(|v| v.0.as_str()),
+                        );
+                    }
+                    for service in parts.recorded.iter().flat_map(|part| &part.services.0) {
+                        selectable(
+                            ui,
+                            format!(
+                                "{} · {} · {}",
+                                service.name.0, service.lifetime.0, service.description.0
+                            ),
+                        );
+                        optional(
+                            ui,
+                            "Interface",
+                            service.interface_name.as_ref().map(|v| v.0.as_str()),
+                        );
+                    }
+                    for table in parts
+                        .recorded
+                        .iter()
+                        .flat_map(|part| &part.database_tables.0)
+                    {
+                        selectable(ui, format!("Recorded table: {}", table.0));
+                    }
+                    for dependency in parts
+                        .recorded
+                        .iter()
+                        .flat_map(|part| &part.external_dependencies.0)
+                    {
+                        selectable(ui, format!("Recorded dependency: {}", dependency.0));
+                    }
+                } else {
+                    ui.label(
+                        "No semantic analysis has been recorded for this module. Indexed \
+                    observations below are not program totals.",
+                    );
+                }
+                widgets::caption(
+                    ui,
+                    format!(
+                        "Observed index coverage: {:?}",
+                        item.observed_coverage.state
+                    ),
+                );
+                for count in &item.observed_node_counts.0 {
+                    if ui
+                        .button(format!(
+                            "Indexed {} · {}",
+                            count.name.0,
+                            count.count.as_str()
+                        ))
+                        .clicked()
+                    {
+                        actions.push(Action::Filter {
+                            repository: item.module.repository_id.as_str().into(),
+                            module: Some(item.module.module_name.0.clone()),
+                            kind: Some(count.name.0.clone()),
+                        });
+                    }
+                }
+                for (label, drill) in [
+                    ("Indexed endpoints", &item.endpoints),
+                    ("Indexed services", &item.services),
+                    ("Indexed tables", &item.tables),
+                ] {
+                    if ui
+                        .button(format!(
+                            "{label}: {}",
+                            drill.count.as_ref().map_or("unknown", |v| v.as_str())
+                        ))
+                        .clicked()
+                    {
+                        actions.push(Action::Filter {
+                            repository: item.module.repository_id.as_str().into(),
+                            module: Some(item.module.module_name.0.clone()),
+                            kind: Some(drill.node_kind.0.clone()),
+                        });
+                    }
+                    for node in &drill.nodes.0 {
+                        if ui
+                            .small_button(format!("Inspect {}", node.node_id.as_str()))
+                            .clicked()
+                        {
+                            actions.push(Action::Endpoint {
+                                id: node.node_id.as_str().into(),
+                                repository: node.repository_id.as_str().into(),
+                            });
+                        }
+                    }
+                    if drill.has_more {
+                        widgets::caption(
+                            ui,
+                            "More indexed nodes are available through this module's node list.",
+                        );
+                    }
                 }
             });
     }
@@ -1878,7 +2050,10 @@ fn render(
             }
         }
         _ => {
-            ui.label(format!("A current typed graph result is unavailable for repository {repository}. Refresh the view or check compatibility."));
+            ui.label(format!(
+                "A current typed graph result is unavailable for repository \
+                {repository}. Refresh the view or check compatibility."
+            ));
         }
     }
 }

@@ -59,7 +59,20 @@ fn responses_profiles_preserve_native_identity_order_and_release_only_after_succ
             &mut d,
             json!({"type":"response.created","response":{"id":"resp-native","model":"actual-serving-model"}}),
         );
-        observed.extend(event(&mut d,json!({"type":"response.output_item.added","output_index":2,"item":{"type":"function_call","id":"fc-native","call_id":"call-native","name":"search","arguments":""}})));
+        observed.extend(event(
+            &mut d,
+            json!({
+                "type": "response.output_item.added",
+                "output_index": 2,
+                "item": {
+                    "type": "function_call",
+                    "id": "fc-native",
+                    "call_id": "call-native",
+                    "name": "search",
+                    "arguments": ""
+                }
+            }),
+        ));
         observed.extend(event(&mut d,json!({"type":"response.function_call_arguments.delta","output_index":2,"item_id":"fc-native","delta":"{\"query\":"})));
         observed.extend(event(&mut d,json!({"type":"response.function_call_arguments.delta","output_index":2,"item_id":"fc-native","delta":"\"λ\"}"})));
         let tool = json!({"type":"function_call","id":"fc-native","call_id":"call-native","name":"search","arguments":"{\"query\":\"λ\"}"});
@@ -73,7 +86,32 @@ fn responses_profiles_preserve_native_identity_order_and_release_only_after_succ
             json!({"type":"response.output_item.done","output_index":2,"item":tool}),
         ));
         assert!(calls(&observed).is_empty());
-        observed.extend(event(&mut d,json!({"type":"response.completed","response":{"id":"resp-native","model":"actual-serving-model","status":"completed","output":[reasoning,{"type":"message","id":"msg-native","content":[{"type":"output_text","text":"hello"}]},tool],"usage":{"input_tokens":20,"output_tokens":4,"input_tokens_details":{"cached_tokens":8},"output_tokens_details":{"reasoning_tokens":3}}}})));
+        observed.extend(event(
+            &mut d,
+            json!({
+                "type": "response.completed",
+                "response": {
+                    "id": "resp-native",
+                    "model": "actual-serving-model",
+                    "status": "completed",
+                    "output": [
+                        reasoning,
+                        {
+                            "type": "message",
+                            "id": "msg-native",
+                            "content": [{"type": "output_text", "text": "hello"}]
+                        },
+                        tool
+                    ],
+                    "usage": {
+                        "input_tokens": 20,
+                        "output_tokens": 4,
+                        "input_tokens_details": {"cached_tokens": 8},
+                        "output_tokens_details": {"reasoning_tokens": 3}
+                    }
+                }
+            }),
+        ));
         assert!(calls(&observed).is_empty());
         let final_frames = d.finish();
         assert_eq!(outcome(&final_frames), &DecodedOutcome::ToolCallsReady);
@@ -90,7 +128,13 @@ fn responses_profiles_preserve_native_identity_order_and_release_only_after_succ
             })
             .collect::<Vec<_>>();
         assert_eq!(continuation, vec![&reasoning]);
-        assert!(observed.iter().any(|f|matches!(f,DecodedFrame::Identity{model:Some(m),generation_id:Some(id)} if m=="actual-serving-model"&&id=="resp-native")));
+        assert!(observed.iter().any(|f| matches!(
+            f,
+            DecodedFrame::Identity {
+                model: Some(m),
+                generation_id: Some(id),
+            } if m == "actual-serving-model" && id == "resp-native"
+        )));
         assert_eq!(usage(&observed)[0].reasoning_tokens, Some(3));
         assert!(d.finish().is_empty());
     }
@@ -106,7 +150,22 @@ fn incomplete_failed_and_clean_eof_never_release_observed_calls() {
             json!({"type":"response.output_item.done","output_index":0,"item":item}),
         );
         if let Some(kind) = terminal {
-            all.extend(event(&mut d,json!({"type":kind,"response":{"status":if kind.ends_with("failed"){"failed"}else{"incomplete"},"output":[item],"usage":{"output_tokens":7},"incomplete_details":{"reason":"max_output_tokens"}}})));
+            all.extend(event(
+                &mut d,
+                json!({
+                    "type": kind,
+                    "response": {
+                        "status": if kind.ends_with("failed") {
+                            "failed"
+                        } else {
+                            "incomplete"
+                        },
+                        "output": [item],
+                        "usage": {"output_tokens": 7},
+                        "incomplete_details": {"reason": "max_output_tokens"}
+                    }
+                }),
+            ));
         }
         all.extend(d.finish());
         assert!(calls(&all).is_empty());
@@ -127,7 +186,22 @@ fn messages_profiles_accumulate_json_signatures_redaction_and_disjoint_cache_ttl
         let mut d = Decoder::new(profile);
         let mut all = event(
             &mut d,
-            json!({"type":"message_start","message":{"id":"msg-actual","model":"claude-actual","usage":{"input_tokens":7,"cache_read_input_tokens":11,"cache_creation_input_tokens":5,"cache_creation":{"ephemeral_5m_input_tokens":2,"ephemeral_1h_input_tokens":3}}}}),
+            json!({
+                "type": "message_start",
+                "message": {
+                    "id": "msg-actual",
+                    "model": "claude-actual",
+                    "usage": {
+                        "input_tokens": 7,
+                        "cache_read_input_tokens": 11,
+                        "cache_creation_input_tokens": 5,
+                        "cache_creation": {
+                            "ephemeral_5m_input_tokens": 2,
+                            "ephemeral_1h_input_tokens": 3
+                        }
+                    }
+                }
+            }),
         );
         for (i, block) in [
             (0, json!({"type":"thinking","thinking":"","signature":""})),
@@ -207,9 +281,32 @@ fn openrouter_trailing_usage_repeated_finish_is_one_terminal_and_exact_money() {
     let mut d = Decoder::new(EndpointProfile::OpenRouterChat);
     let mut all = event(
         &mut d,
-        json!({"id":"gen-real","model":"upstream/actual","choices":[{"index":0,"delta":{"tool_calls":[{"index":3,"id":"real-call","type":"function","function":{"name":"lookup","arguments":"{\"a\":"}}]},"finish_reason":null}]}),
+        json!({
+            "id": "gen-real",
+            "model": "upstream/actual",
+            "choices": [{
+                "index": 0,
+                "delta": {"tool_calls": [{
+                    "index": 3,
+                    "id": "real-call",
+                    "type": "function",
+                    "function": {"name": "lookup", "arguments": "{\"a\":"}
+                }]},
+                "finish_reason": null
+            }]
+        }),
     );
-    all.extend(event(&mut d,json!({"choices":[{"index":0,"delta":{"tool_calls":[{"index":3,"function":{"arguments":"1}"}}]},"finish_reason":"tool_calls"}]})));
+    all.extend(event(
+        &mut d,
+        json!({"choices": [{
+            "index": 0,
+            "delta": {"tool_calls": [{
+                "index": 3,
+                "function": {"arguments": "1}"}
+            }]},
+            "finish_reason": "tool_calls"
+        }]}),
+    ));
     let raw = r#"{"id":"gen-real","model":"upstream/actual","choices":[{"index":0,"delta":{"content":""},"finish_reason":"tool_calls","native_finish_reason":"tool_use"}],"usage":{"prompt_tokens":42,"completion_tokens":9,"cost":1e-6,"cost_details":{"upstream_inference_cost":9007199254740993}}}"#;
     all.extend(d.consume_data_event(None, raw));
     assert!(calls(&all).is_empty());
@@ -240,7 +337,13 @@ fn openrouter_trailing_usage_repeated_finish_is_one_terminal_and_exact_money() {
 fn chat_native_reasoning_merges_identified_fragments_without_markers_or_lost_metadata() {
     let mut d = Decoder::new(EndpointProfile::OpenRouterChat);
     for details in [
-        json!([{"index":2,"id":"r","type":"reasoning.encrypted","data":"abc","format":"native-v1"}]),
+        json!([{
+            "index": 2,
+            "id": "r",
+            "type": "reasoning.encrypted",
+            "data": "abc",
+            "format": "native-v1"
+        }]),
         json!([{"index":2,"id":"r","type":"reasoning.encrypted","data":"def","signature":"sig"}]),
     ] {
         event(
@@ -284,19 +387,27 @@ fn all_seven_profiles_decode_aggregate_and_do_not_invent_model_or_usage() {
         ),
         (
             EndpointProfile::ClaudeSubscriptionMessages,
-            json!({"content":[],"stop_reason":"end_turn"}),
+            json!({"content": [], "stop_reason": "end_turn"}),
         ),
         (
             EndpointProfile::CompatibleChat,
-            json!({"choices":[{"index":0,"message":{"content":"ok"},"finish_reason":"stop"}]}),
+            json!({"choices": [{
+                "index": 0,
+                "message": {"content": "ok"},
+                "finish_reason": "stop"
+            }]}),
         ),
         (
             EndpointProfile::OpenRouterChat,
-            json!({"choices":[{"index":0,"message":{"content":"ok"},"finish_reason":"stop"}]}),
+            json!({"choices": [{
+                "index": 0,
+                "message": {"content": "ok"},
+                "finish_reason": "stop"
+            }]}),
         ),
         (
             EndpointProfile::Embedding,
-            json!({"data":[{"index":0,"embedding":[0.5,1.0]}]}),
+            json!({"data": [{"index": 0, "embedding": [0.5, 1.0]}]}),
         ),
     ];
     for (profile, body) in bodies {
@@ -314,7 +425,9 @@ fn all_seven_profiles_decode_aggregate_and_do_not_invent_model_or_usage() {
 #[test]
 fn bad_vectors_do_not_erase_valid_usage_or_exact_cost_and_base64_is_little_endian() {
     let mut d = Decoder::new(EndpointProfile::Embedding);
-    let frames=d.consume_aggregate(br#"{"data":[{"index":0,"embedding":"AAAAPw=="},{"index":1,"embedding":"AACAfw=="}],"usage":{"prompt_tokens":3,"cost":0.00000000000001}}"#);
+    let frames=d.consume_aggregate(
+        br#"{"data":[{"index":0,"embedding":"AAAAPw=="},{"index":1,"embedding":"AACAfw=="}],"usage":{"prompt_tokens":3,"cost":0.00000000000001}}"#,
+    );
     assert_eq!(outcome(&frames), &DecodedOutcome::Failed);
     assert!(
         frames
@@ -336,14 +449,34 @@ fn invalid_native_ids_arguments_unknown_blocks_and_refusals_are_never_repaired()
         ("actual", "[]"),
         ("actual", ""),
     ] {
-        let frames=Decoder::new(EndpointProfile::OpenAiResponses).consume_aggregate(&serde_json::to_vec(&json!({"status":"completed","output":[{"type":"function_call","id":"item","call_id":id,"name":"lookup","arguments":args}],"usage":{"input_tokens":5}})).unwrap());
+        let frames = Decoder::new(EndpointProfile::OpenAiResponses).consume_aggregate(
+            &serde_json::to_vec(&json!({
+                "status": "completed",
+                "output": [{
+                    "type": "function_call",
+                    "id": "item",
+                    "call_id": id,
+                    "name": "lookup",
+                    "arguments": args
+                }],
+                "usage": {"input_tokens": 5}
+            }))
+            .unwrap(),
+        );
         assert!(calls(&frames).is_empty());
         assert_eq!(outcome(&frames), &DecodedOutcome::Failed);
         assert_eq!(usage(&frames)[0].input_tokens, Some(5));
     }
-    let frames=Decoder::new(EndpointProfile::AnthropicMessages).consume_aggregate(br#"{"content":[{"type":"future_native","opaque":{"signature":"retain-exact"}}],"stop_reason":"end_turn","usage":{"output_tokens":8}}"#);
+    let frames=Decoder::new(EndpointProfile::AnthropicMessages).consume_aggregate(
+        br#"{"content":[{"type":"future_native","opaque":{"signature":"retain-exact"}}],"stop_reason":"end_turn","usage":{"output_tokens":8}}"#,
+    );
     assert_eq!(outcome(&frames), &DecodedOutcome::Failed);
-    assert!(frames.iter().any(|f|matches!(f,DecodedFrame::Native{observation} if observation.replay==NativeReplay::Unsupported&&observation.value["opaque"]["signature"]=="retain-exact")));
+    assert!(frames.iter().any(|f| matches!(
+        f,
+        DecodedFrame::Native { observation }
+            if observation.replay == NativeReplay::Unsupported
+                && observation.value["opaque"]["signature"] == "retain-exact"
+    )));
     assert_eq!(usage(&frames)[0].output_tokens, Some(8));
 }
 
@@ -363,9 +496,10 @@ fn errors_remain_typed_and_partial_native_facts_survive() {
         ("other", DecodeErrorKind::Provider),
     ] {
         let frames = Decoder::new(EndpointProfile::ClaudeSubscriptionMessages).consume_aggregate(
-            &serde_json::to_vec(
-                &json!({"error":{"type":code,"message":"reported"},"usage":{"output_tokens":4}}),
-            )
+            &serde_json::to_vec(&json!({
+                "error": {"type": code, "message": "reported"},
+                "usage": {"output_tokens": 4}
+            }))
             .unwrap(),
         );
         assert!(
@@ -388,7 +522,9 @@ fn decimal_parser_and_invalid_usage_fields_keep_independent_valid_facts() {
     ] {
         assert_eq!(usage::decimal(raw).as_deref(), Some(expected));
     }
-    let frames=Decoder::new(EndpointProfile::CompatibleChat).consume_aggregate(br#"{"choices":[{"index":0,"message":{"content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":9,"completion_tokens":-1,"cost":-3}}"#);
+    let frames=Decoder::new(EndpointProfile::CompatibleChat).consume_aggregate(
+        br#"{"choices":[{"index":0,"message":{"content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":9,"completion_tokens":-1,"cost":-3}}"#,
+    );
     let u = usage(&frames)[0];
     assert_eq!(u.input_tokens, Some(9));
     assert_eq!(u.output_tokens, None);
@@ -414,7 +550,11 @@ fn response_limits_and_missing_message_stop_refuse_tool_dispatch() {
     let mut d = Decoder::new(EndpointProfile::AnthropicMessages);
     event(
         &mut d,
-        json!({"type":"message_delta","delta":{"stop_reason":"tool_use"},"usage":{"output_tokens":1}}),
+        json!({
+            "type": "message_delta",
+            "delta": {"stop_reason": "tool_use"},
+            "usage": {"output_tokens": 1}
+        }),
     );
     let frames = d.finish();
     assert_eq!(outcome(&frames), &DecodedOutcome::OutcomeUnknown);
@@ -431,7 +571,20 @@ fn interrupted_framing_after_native_success_cannot_release_tools() {
         let mut d = Decoder::new(EndpointProfile::CodexSubscriptionResponses);
         event(
             &mut d,
-            json!({"type":"response.completed","response":{"status":"completed","output":[{"type":"function_call","id":"i","call_id":"native","name":"lookup","arguments":"{}"}],"usage":{"output_tokens":8}}}),
+            json!({
+                "type": "response.completed",
+                "response": {
+                    "status": "completed",
+                    "output": [{
+                        "type": "function_call",
+                        "id": "i",
+                        "call_id": "native",
+                        "name": "lookup",
+                        "arguments": "{}"
+                    }],
+                    "usage": {"output_tokens": 8}
+                }
+            }),
         );
         let frames = d.finish_interrupted(interrupted.clone(), "transport_or_framer_interrupted");
         assert_eq!(outcome(&frames), &interrupted);
@@ -463,13 +616,25 @@ fn extreme_exact_cost_and_bad_native_json_retain_bounded_evidence() {
 
 #[test]
 fn duplicate_native_call_ids_and_incomplete_native_items_never_dispatch() {
-    let call = json!({"type":"function_call","id":"item","call_id":"same-native","name":"lookup","arguments":"{}"});
+    let call = json!({
+        "type": "function_call",
+        "id": "item",
+        "call_id": "same-native",
+        "name": "lookup",
+        "arguments": "{}"
+    });
     let frames = Decoder::new(EndpointProfile::OpenAiResponses).consume_aggregate(
-        &serde_json::to_vec(&json!({"status":"completed","output":[call,call]})).unwrap(),
+        &serde_json::to_vec(&json!({
+            "status": "completed",
+            "output": [call, call]
+        }))
+        .unwrap(),
     );
     assert_eq!(outcome(&frames), &DecodedOutcome::Failed);
     assert!(calls(&frames).is_empty());
-    let frames=Decoder::new(EndpointProfile::OpenAiResponses).consume_aggregate(br#"{"status":"completed","output":[{"type":"function_call","status":"incomplete","id":"i","call_id":"c","name":"lookup","arguments":"{}"}]}"#);
+    let frames=Decoder::new(EndpointProfile::OpenAiResponses).consume_aggregate(
+        br#"{"status":"completed","output":[{"type":"function_call","status":"incomplete","id":"i","call_id":"c","name":"lookup","arguments":"{}"}]}"#,
+    );
     assert_eq!(outcome(&frames), &DecodedOutcome::Failed);
     assert!(calls(&frames).is_empty());
 }
@@ -493,7 +658,16 @@ fn compatible_chat_native_tool_fragments_and_missing_done_are_not_assumed_comple
         let mut d = Decoder::new(EndpointProfile::CompatibleChat);
         event(
             &mut d,
-            json!({"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"actual","type":"function","function":{"name":"lookup","arguments":"{}"}}]},"finish_reason":"tool_calls"}]}),
+            json!({"choices": [{
+                "index": 0,
+                "delta": {"tool_calls": [{
+                    "index": 0,
+                    "id": "actual",
+                    "type": "function",
+                    "function": {"name": "lookup", "arguments": "{}"}
+                }]},
+                "finish_reason": "tool_calls"
+            }]}),
         );
         if done {
             d.consume_data_event(None, "[DONE]");
@@ -509,7 +683,9 @@ fn compatible_chat_native_tool_fragments_and_missing_done_are_not_assumed_comple
             }
         );
     }
-    let frames=Decoder::new(EndpointProfile::CompatibleChat).consume_aggregate(br#"{"choices":[{"index":0,"message":{"refusal":"unsafe"},"finish_reason":"stop"}],"usage":{"completion_tokens":2}}"#);
+    let frames=Decoder::new(EndpointProfile::CompatibleChat).consume_aggregate(
+        br#"{"choices":[{"index":0,"message":{"refusal":"unsafe"},"finish_reason":"stop"}],"usage":{"completion_tokens":2}}"#,
+    );
     assert_eq!(outcome(&frames), &DecodedOutcome::Failed);
     assert_eq!(usage(&frames)[0].output_tokens, Some(2));
     assert!(
@@ -530,16 +706,32 @@ fn messages_arguments_keep_exact_native_numeric_lexemes_and_empty_fragments_are_
     let mut d = Decoder::new(EndpointProfile::ClaudeSubscriptionMessages);
     event(
         &mut d,
-        json!({"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"native","name":"lookup","input":{}}}),
+        json!({
+            "type": "content_block_start",
+            "index": 0,
+            "content_block": {
+                "type": "tool_use",
+                "id": "native",
+                "name": "lookup",
+                "input": {}
+            }
+        }),
     );
     event(
         &mut d,
-        json!({"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":""}}),
+        json!({
+            "type": "content_block_delta",
+            "index": 0,
+            "delta": {"type": "input_json_delta", "partial_json": ""}
+        }),
     );
-    event(&mut d, json!({"type":"content_block_stop","index":0}));
+    event(&mut d, json!({"type": "content_block_stop", "index": 0}));
     event(
         &mut d,
-        json!({"type":"message_delta","delta":{"stop_reason":"tool_use"}}),
+        json!({
+            "type": "message_delta",
+            "delta": {"stop_reason": "tool_use"}
+        }),
     );
     event(&mut d, json!({"type":"message_stop"}));
     let frames = d.finish();
@@ -568,11 +760,24 @@ fn messages_escaped_structural_keys_preserve_exact_block_and_argument_bytes() {
 #[test]
 fn contradictory_native_stop_reasons_are_not_reclassified_as_tool_ready() {
     for reason in ["end_turn", "max_tokens"] {
-        let frames=Decoder::new(EndpointProfile::AnthropicMessages).consume_aggregate(&serde_json::to_vec(&json!({"content":[{"type":"tool_use","id":"native","name":"lookup","input":{}}],"stop_reason":reason})).unwrap());
+        let frames = Decoder::new(EndpointProfile::AnthropicMessages).consume_aggregate(
+            &serde_json::to_vec(&json!({
+                "content": [{
+                    "type": "tool_use",
+                    "id": "native",
+                    "name": "lookup",
+                    "input": {}
+                }],
+                "stop_reason": reason
+            }))
+            .unwrap(),
+        );
         assert!(calls(&frames).is_empty());
         assert_ne!(outcome(&frames), &DecodedOutcome::ToolCallsReady);
     }
-    let frames=Decoder::new(EndpointProfile::CompatibleChat).consume_aggregate(br#"{"choices":[{"index":0,"message":{"tool_calls":[{"id":"native","type":"function","function":{"name":"lookup","arguments":"{}"}}]},"finish_reason":"stop"}]}"#);
+    let frames=Decoder::new(EndpointProfile::CompatibleChat).consume_aggregate(
+        br#"{"choices":[{"index":0,"message":{"tool_calls":[{"id":"native","type":"function","function":{"name":"lookup","arguments":"{}"}}]},"finish_reason":"stop"}]}"#,
+    );
     assert!(calls(&frames).is_empty());
     assert_eq!(outcome(&frames), &DecodedOutcome::Failed);
 }
@@ -586,7 +791,9 @@ fn unknown_opaque_reasoning_and_unsigned_thinking_remain_evidence_not_replay() {
     assert!(!frames.iter().any(
         |f| matches!(f,DecodedFrame::Native{observation} if observation.continuation.is_some())
     ));
-    let frames=Decoder::new(EndpointProfile::OpenRouterChat).consume_aggregate(br#"{"choices":[{"index":0,"message":{"reasoning_details":[{"type":"reasoning.future","opaque":"exact"}]},"finish_reason":"stop"}]}"#);
+    let frames=Decoder::new(EndpointProfile::OpenRouterChat).consume_aggregate(
+        br#"{"choices":[{"index":0,"message":{"reasoning_details":[{"type":"reasoning.future","opaque":"exact"}]},"finish_reason":"stop"}]}"#,
+    );
     assert_eq!(outcome(&frames), &DecodedOutcome::Failed);
     assert!(frames.iter().any(|f|matches!(f,DecodedFrame::Native{observation} if observation.replay==NativeReplay::Unsupported)));
 }
@@ -619,7 +826,14 @@ fn retained_leading_think_tags_split_at_every_boundary_into_native_reasoning_and
         } else {
             "reasoning"
         };
-        let aggregate=Decoder::new(profile.clone()).consume_aggregate(&serde_json::to_vec(&json!({"choices":[{"index":0,"message":{"content":content},"finish_reason":"stop"}]})).unwrap());
+        let aggregate = Decoder::new(profile.clone()).consume_aggregate(
+            &serde_json::to_vec(&json!({"choices": [{
+                "index": 0,
+                "message": {"content": content},
+                "finish_reason": "stop"
+            }]}))
+            .unwrap(),
+        );
         assert_eq!(text(&aggregate), "Answer <think>mention</think>");
         assert_eq!(continuation(&aggregate).unwrap()[field], "secret λ");
         for split in content
@@ -682,7 +896,14 @@ fn retained_think_tag_flush_preserves_nonleading_mentions_partial_tags_and_white
         ("<think>secret</thi", "", Some("secret</thi")),
         ("<think>x</think> \n ", "", Some("x")),
     ] {
-        let frames=Decoder::new(EndpointProfile::CompatibleChat).consume_aggregate(&serde_json::to_vec(&json!({"choices":[{"index":0,"message":{"content":content},"finish_reason":"stop"}]})).unwrap());
+        let frames = Decoder::new(EndpointProfile::CompatibleChat).consume_aggregate(
+            &serde_json::to_vec(&json!({"choices": [{
+                "index": 0,
+                "message": {"content": content},
+                "finish_reason": "stop"
+            }]}))
+            .unwrap(),
+        );
         assert_eq!(text(&frames), visible);
         assert_eq!(
             continuation(&frames)
@@ -692,7 +913,9 @@ fn retained_think_tag_flush_preserves_nonleading_mentions_partial_tags_and_white
         );
     }
     // The retained source qualifies only the Chat families; other profiles preserve literal text.
-    let frames=Decoder::new(EndpointProfile::AnthropicMessages).consume_aggregate(br#"{"content":[{"type":"text","text":"<think>literal</think>"}],"stop_reason":"end_turn"}"#);
+    let frames=Decoder::new(EndpointProfile::AnthropicMessages).consume_aggregate(
+        br#"{"content":[{"type":"text","text":"<think>literal</think>"}],"stop_reason":"end_turn"}"#,
+    );
     assert_eq!(text(&frames), "<think>literal</think>");
     assert!(continuation(&frames).is_none());
 }
@@ -704,21 +927,23 @@ fn explicit_chat_reasoning_and_openrouter_details_suppress_duplicate_tagged_reas
         EndpointProfile::OpenRouterChat,
     ] {
         for field in ["reasoning_content", "reasoning"] {
-            let mut body = json!({"content":"<think>same</think> visible"});
+            let mut body = json!({"content": "<think>same</think> visible"});
             body[field] = json!("same");
             let frames = Decoder::new(profile.clone()).consume_aggregate(
-                &serde_json::to_vec(
-                    &json!({"choices":[{"index":0,"message":body,"finish_reason":"stop"}]}),
-                )
+                &serde_json::to_vec(&json!({"choices": [{
+                    "index": 0,
+                    "message": body,
+                    "finish_reason": "stop"
+                }]}))
                 .unwrap(),
             );
             assert_eq!(text(&frames), "visible");
-            assert_eq!(continuation(&frames).unwrap(), &json!({field:"same"}));
+            assert_eq!(continuation(&frames).unwrap(), &json!({field: "same"}));
             for explicit_first in [true, false] {
                 let mut d = Decoder::new(profile.clone());
                 let mut frames = Vec::new();
-                let explicit = json!({field:"same"});
-                let tagged = json!({"content":"<think>same</think> visible"});
+                let explicit = json!({field: "same"});
+                let tagged = json!({"content": "<think>same</think> visible"});
                 let deltas = if explicit_first {
                     [explicit, tagged]
                 } else {
@@ -742,7 +967,17 @@ fn explicit_chat_reasoning_and_openrouter_details_suppress_duplicate_tagged_reas
         }
     }
     let details = json!([{"type":"reasoning.encrypted","id":"native-r","data":"exact-encrypted"}]);
-    let frames=Decoder::new(EndpointProfile::OpenRouterChat).consume_aggregate(&serde_json::to_vec(&json!({"choices":[{"index":0,"message":{"content":"<think>duplicate</think> visible","reasoning_details":details},"finish_reason":"stop"}]})).unwrap());
+    let frames = Decoder::new(EndpointProfile::OpenRouterChat).consume_aggregate(
+        &serde_json::to_vec(&json!({"choices": [{
+            "index": 0,
+            "message": {
+                "content": "<think>duplicate</think> visible",
+                "reasoning_details": details
+            },
+            "finish_reason": "stop"
+        }]}))
+        .unwrap(),
+    );
     assert_eq!(text(&frames), "visible");
     assert_eq!(
         continuation(&frames).unwrap(),

@@ -228,7 +228,15 @@ pub(super) fn query(reader: &mut Reader<'_>, source: &Source) -> Result<GraphRes
             ..Default::default()
         });
     }
-    let mut value = json!({"source":location,"text":source.text,"startByte":source.start.to_string(),"endByte":source.end.to_string(),"totalBytes":source.total.to_string(),"firstLine":source.first_line.to_string(),"lastLine":source.last_line.to_string()});
+    let mut value = json!({
+        "source": location,
+        "text": source.text,
+        "startByte": source.start.to_string(),
+        "endByte": source.end.to_string(),
+        "totalBytes": source.total.to_string(),
+        "firstLine": source.first_line.to_string(),
+        "lastLine": source.last_line.to_string()
+    });
     if let Some(node) = &source.node {
         value["nodeId"] = json!(node.node.node_id);
         for (key, field) in [("nodeStartLine", "startLine"), ("nodeEndLine", "endLine")] {

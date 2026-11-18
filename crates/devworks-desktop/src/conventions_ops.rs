@@ -416,7 +416,11 @@ pub fn index(scope: &Scope, record: &ConventionRecord) -> Option<In> {
     }))
 }
 fn earlier() -> Failure {
-    Failure::Other("This saved response uses an earlier convention format. Refresh to inspect the current convention without changing the saved request.".into())
+    Failure::Other(
+        "This saved response uses an earlier convention format. Refresh to \
+        inspect the current convention without changing the saved request."
+            .into(),
+    )
 }
 pub fn page(outcome: QueryOutcome) -> Result<ConventionPage, Failure> {
     match ops::query_result(outcome)?.0 {

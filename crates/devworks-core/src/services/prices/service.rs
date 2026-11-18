@@ -162,7 +162,27 @@ impl PriceService {
         };
         tx.usage().put_price_override(&row, current)?;
         let event = EventId(tx.new_id(IdKind::Event));
-        tx.history().append(NewEvent{id:event,actor:ctx.principal().clone(),project_id:None,root_id:None,operation_id:None,aggregate_kind:"price_override".into(),aggregate_id:row.model_id.as_str().into(),aggregate_revision:row.revision,kind:if mode=="Set"{"PriceOverrideSet"}else{"PriceOverrideCleared"}.into(),payload:json!({"modelId":row.model_id,"revision":row.revision.to_string(),"mode":row.mode})})?;
+        tx.history().append(NewEvent {
+            id: event,
+            actor: ctx.principal().clone(),
+            project_id: None,
+            root_id: None,
+            operation_id: None,
+            aggregate_kind: "price_override".into(),
+            aggregate_id: row.model_id.as_str().into(),
+            aggregate_revision: row.revision,
+            kind: if mode == "Set" {
+                "PriceOverrideSet"
+            } else {
+                "PriceOverrideCleared"
+            }
+            .into(),
+            payload: json!({
+                "modelId": row.model_id,
+                "revision": row.revision.to_string(),
+                "mode": row.mode
+            }),
+        })?;
         Ok(DomainDecision::Applied {
             result: OperationResult::RouterPriceOverride { value: result },
         })

@@ -83,8 +83,33 @@ pub(crate) fn query(
             let since = challenges
                 .first()
                 .map_or(c.updated_at_ms, |ch| ch.opened_at_ms);
-            let rows:Vec<Value>=challenges.iter().take(3).map(|ch|json!({"id":ch.id,"state":ch.state,"reason":ch.reason,"evidenceIds":ch.evidence_ids,"authorId":ch.author,"openedAtMs":ch.opened_at_ms.to_string(),"resolvedAtMs":ch.resolved_at_ms.map(|v|v.to_string()),"resolution":ch.resolution})).collect();
-            let mut v = json!({"kind":"Challenge","entry":wire,"priority":priority,"recurrence":events.max(0).to_string(),"sinceMs":since.max(0).to_string(),"challenges":rows,"moreChallenges":(open-rows.len() as i64).max(0).to_string(),"author":c.author,"informational":true});
+            let rows: Vec<Value> = challenges
+                .iter()
+                .take(3)
+                .map(|ch| {
+                    json!({
+                        "id": ch.id,
+                        "state": ch.state,
+                        "reason": ch.reason,
+                        "evidenceIds": ch.evidence_ids,
+                        "authorId": ch.author,
+                        "openedAtMs": ch.opened_at_ms.to_string(),
+                        "resolvedAtMs": ch.resolved_at_ms.map(|v| v.to_string()),
+                        "resolution": ch.resolution
+                    })
+                })
+                .collect();
+            let mut v = json!({
+                "kind": "Challenge",
+                "entry": wire,
+                "priority": priority,
+                "recurrence": events.max(0).to_string(),
+                "sinceMs": since.max(0).to_string(),
+                "challenges": rows,
+                "moreChallenges": (open - rows.len() as i64).max(0).to_string(),
+                "author": c.author,
+                "informational": true
+            });
             if open <= rows.len() as i64 {
                 v.as_object_mut()
                     .expect("review item")
@@ -102,7 +127,22 @@ pub(crate) fn query(
                 threshold,
             );
             if state == "Proposed" && proposed_ids.contains(c.id.as_str()) && np < 500 {
-                items.push((rank,-events,c.updated_at_ms,c.id.as_str().to_owned(),json!({"kind":"ProposedRule","entry":wire,"priority":priority,"recurrence":events.max(0).to_string(),"sinceMs":c.updated_at_ms.max(0).to_string(),"challenges":[],"author":c.author,"informational":true})));
+                items.push((
+                    rank,
+                    -events,
+                    c.updated_at_ms,
+                    c.id.as_str().to_owned(),
+                    json!({
+                        "kind": "ProposedRule",
+                        "entry": wire,
+                        "priority": priority,
+                        "recurrence": events.max(0).to_string(),
+                        "sinceMs": c.updated_at_ms.max(0).to_string(),
+                        "challenges": [],
+                        "author": c.author,
+                        "informational": true
+                    }),
+                ));
                 np += 1;
             }
         }
@@ -139,7 +179,32 @@ pub(crate) fn query(
         };
         let (rank, p) = priority(a);
         let recurrence = a_count.max(b_count);
-        items.push((rank,-recurrence,r.created_at_ms,format!("{}:{}",a.id.as_str(),b.id.as_str()),json!({"kind":"Contradiction","entry":knowledge::with_skills(s,ctx,knowledge::claim_wire(s.knowledge(),a,&thresholds)?)?,"other":knowledge::with_skills(s,ctx,knowledge::claim_wire(s.knowledge(),b,&thresholds)?)?,"priority":p,"recurrence":recurrence.max(0).to_string(),"sinceMs":r.created_at_ms.max(0).to_string(),"challenges":[],"author":a.author,"otherAuthor":b.author,"informational":true})));
+        items.push((
+            rank,
+            -recurrence,
+            r.created_at_ms,
+            format!("{}:{}", a.id.as_str(), b.id.as_str()),
+            json!({
+                "kind": "Contradiction",
+                "entry": knowledge::with_skills(
+                    s,
+                    ctx,
+                    knowledge::claim_wire(s.knowledge(), a, &thresholds)?
+                )?,
+                "other": knowledge::with_skills(
+                    s,
+                    ctx,
+                    knowledge::claim_wire(s.knowledge(), b, &thresholds)?
+                )?,
+                "priority": p,
+                "recurrence": recurrence.max(0).to_string(),
+                "sinceMs": r.created_at_ms.max(0).to_string(),
+                "challenges": [],
+                "author": a.author,
+                "otherAuthor": b.author,
+                "informational": true
+            }),
+        ));
         nr += 1;
     }
     items.sort_by(|a, b| (&a.0, &a.1, &a.2, &a.3).cmp(&(&b.0, &b.1, &b.2, &b.3)));

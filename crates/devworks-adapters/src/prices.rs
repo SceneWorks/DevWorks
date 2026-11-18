@@ -415,7 +415,13 @@ mod tests {
 
     #[test]
     fn context_cache_and_service_dimensions_are_distinct_and_reported_zero_survives() {
-        let source = "# Pricing\nPrices per 1M tokens.\nShort context: ≤272K input tokens. Long context: >272K input tokens.\n### Standard pricing data\n| Model | Short context input | Short context output | Short context cached input | Short context 30m write | Long context input | Long context output |\n| --- | --- | --- | --- | --- | --- | --- |\n| gpt-test | $1.25 | $5 | $0 | $1.5625 | $2.50 | $7.50 |\n### Fast pricing data\n| Model | Input | Output |\n| --- | --- | --- |\n| gpt-test | $4 | $20 |\n";
+        let source = "# Pricing\nPrices per 1M tokens.\nShort context: ≤272K input tokens. \
+            Long context: >272K input tokens.\n### Standard pricing data\n| Model | \
+            Short context input | Short context output | Short context cached input \
+            | Short context 30m write | Long context input | Long context output \
+            |\n| --- | --- | --- | --- | --- | --- | --- |\n| gpt-test | $1.25 | $5 \
+            | $0 | $1.5625 | $2.50 | $7.50 |\n### Fast pricing data\n| Model | \
+            Input | Output |\n| --- | --- | --- |\n| gpt-test | $4 | $20 |\n";
         let parsed = parse_catalog(OfficialPriceProvider::OpenAi, source.as_bytes(), 17).unwrap();
         assert_eq!(parsed.tariffs.len(), 8);
         assert!(
@@ -446,7 +452,14 @@ mod tests {
     }
 
     /// The live Specialized models table: one row per context band, named in the model cell.
-    const BANDED_ROWS: &str = "# Pricing\nPrices per 1M tokens.\nShort context: ≤272K input tokens. Long context: >272K input tokens.\n### Grouped Pricing Table data\n| Category | Model | Input | Output | Cached input | 30m write |\n| --- | --- | --- | --- | --- | --- |\n| Cyber | gpt-unit (short context) | $20.00 | $100.00 | $2.00 | $25.00 |\n| Cyber | gpt-unit (long context) | $40.00 | $150.00 | $4.00 | - |\n| Cyber | gpt-unit-preview (short context) | $12.50 | $75.00 | - | - |\n| Cyber | gpt-unit-preview (long context) | - | - | - | - |\n";
+    const BANDED_ROWS: &str = "# Pricing\nPrices per 1M tokens.\nShort context: ≤272K input tokens. \
+        Long context: >272K input tokens.\n### Grouped Pricing Table data\n| \
+        Category | Model | Input | Output | Cached input | 30m write |\n| --- | \
+        --- | --- | --- | --- | --- |\n| Cyber | gpt-unit (short context) | \
+        $20.00 | $100.00 | $2.00 | $25.00 |\n| Cyber | gpt-unit (long context) \
+        | $40.00 | $150.00 | $4.00 | - |\n| Cyber | gpt-unit-preview (short \
+        context) | $12.50 | $75.00 | - | - |\n| Cyber | gpt-unit-preview (long \
+        context) | - | - | - | - |\n";
     #[test]
     fn model_cell_context_bands_are_distinct_tariffs_and_conflicts_in_a_band_are_refused() {
         let parsed =
@@ -495,7 +508,14 @@ mod tests {
 
     #[test]
     fn audio_sections_after_a_batch_table_are_standard_rates() {
-        let source = "# Pricing\nPrices per 1M tokens.\n| Model | Input | Output |\n| --- | --- | --- |\n| gpt-test | $1 | $2 |\nBatch\n| Model | Input | Output |\n| --- | --- | --- |\n| gpt-test | $0.50 | $1 |\nAudio\nGPT-Live\n| Model | Price per minute |\n| --- | --- |\n| gpt-live-test | $0.05 |\nRealtime & Audio\n| Model | Modality | Input | Output |\n| --- | --- | --- | --- |\n| gpt-realtime-test | Audio | $32.00 | $64.00 |\nTranscription\n| Model | Use case | Input | Output |\n| --- | --- | --- | --- |\n| gpt-transcribe-test | Transcription | $2.50 | $10.00 |\n";
+        let source = "# Pricing\nPrices per 1M tokens.\n| Model | Input | Output |\n| --- | \
+            --- | --- |\n| gpt-test | $1 | $2 |\nBatch\n| Model | Input | Output \
+            |\n| --- | --- | --- |\n| gpt-test | $0.50 | $1 |\nAudio\nGPT-Live\n| \
+            Model | Price per minute |\n| --- | --- |\n| gpt-live-test | $0.05 \
+            |\nRealtime & Audio\n| Model | Modality | Input | Output |\n| --- | --- \
+            | --- | --- |\n| gpt-realtime-test | Audio | $32.00 | $64.00 \
+            |\nTranscription\n| Model | Use case | Input | Output |\n| --- | --- | \
+            --- | --- |\n| gpt-transcribe-test | Transcription | $2.50 | $10.00 |\n";
         let parsed = parse_catalog(OfficialPriceProvider::OpenAi, source.as_bytes(), 0).unwrap();
         for model in ["gpt-live-test", "gpt-realtime-test", "gpt-transcribe-test"] {
             let tiers = parsed
@@ -513,7 +533,13 @@ mod tests {
 
     #[test]
     fn anthropic_uses_exact_model_rows_ttl_rates_and_prompt_thresholds() {
-        let source = "# Pricing\nPrices per 1M tokens.\n## Model pricing\n| Model | Base input tokens | 5m cache writes | 1h cache writes | Cache hits and refreshes | Output tokens |\n| --- | --- | --- | --- | --- | --- |\n| Claude Unit 5.5 (for prompts up to 100,000 tokens) | $0.10 / MTok | $0.125 / MTok | $0.20 / MTok | $0.005 / MTok<sup>1</sup> | $0.50 / MTok |\n| Claude Unit 5.5 (for prompts over 100,000 tokens) | $0.50 / MTok | $0.625 / MTok | $1 / MTok | $0.025 / MTok | $2.50 / MTok |\n";
+        let source = "# Pricing\nPrices per 1M tokens.\n## Model pricing\n| Model | Base \
+            input tokens | 5m cache writes | 1h cache writes | Cache hits and \
+            refreshes | Output tokens |\n| --- | --- | --- | --- | --- | --- |\n| \
+            Claude Unit 5.5 (for prompts up to 100,000 tokens) | $0.10 / MTok | \
+            $0.125 / MTok | $0.20 / MTok | $0.005 / MTok<sup>1</sup> | $0.50 / MTok \
+            |\n| Claude Unit 5.5 (for prompts over 100,000 tokens) | $0.50 / MTok | \
+            $0.625 / MTok | $1 / MTok | $0.025 / MTok | $2.50 / MTok |\n";
         let parsed = parse_catalog(OfficialPriceProvider::Anthropic, source.as_bytes(), 0).unwrap();
         assert_eq!(parsed.tariffs.len(), 10);
         assert!(
@@ -560,7 +586,11 @@ mod tests {
 
     #[test]
     fn runtime_units_and_modality_endpoint_constraints_remain_explicit() {
-        let source = "# Pricing\nPrices per 1M tokens.\n| Model | Input | Output |\n| --- | --- | --- |\n| gpt-test | $1 | $2 |\n| Model | Price per minute |\n| --- | --- |\n| gpt-live-test | $0.05 |\n| Model | Modality | Input | Output | Cached input |\n| --- | --- | --- | --- | --- |\n| gpt-image-2-test | Image | $8 | $30 | $2 |\n";
+        let source = "# Pricing\nPrices per 1M tokens.\n| Model | Input | Output |\n| --- | \
+            --- | --- |\n| gpt-test | $1 | $2 |\n| Model | Price per minute |\n| \
+            --- | --- |\n| gpt-live-test | $0.05 |\n| Model | Modality | Input | \
+            Output | Cached input |\n| --- | --- | --- | --- | --- |\n| \
+            gpt-image-2-test | Image | $8 | $30 | $2 |\n";
         let parsed = parse_catalog(OfficialPriceProvider::OpenAi, source.as_bytes(), 0).unwrap();
         assert!(
             parsed
@@ -603,7 +633,23 @@ mod tests {
         assert!(!changed.modifiers.fast_cache_multipliers_apply);
     }
 
-    const MODIFIED: &str = "# Pricing\n## Model pricing\n| Model | Base input tokens | 5m cache writes | 1h cache writes | Cache hits and refreshes | Output tokens |\n| --- | --- | --- | --- | --- | --- |\n| Claude Unit 5.5 (for prompts up to 100,000 tokens) | $4 / MTok | $5 / MTok | $8 / MTok | $0.20 / MTok | $20 / MTok |\n| Claude Unit 5.5 (for prompts over 100,000 tokens) | $8 / MTok | $10 / MTok | $16 / MTok | $0.40 / MTok | $40 / MTok |\n| Claude Legacy 4.5 | $3 / MTok | $3.75 / MTok | $6 / MTok | $0.30 / MTok | $15 / MTok |\n### Fast mode pricing\n| Model | Input | Output |\n| --- | --- | --- |\n| Claude Unit 5.5 (for prompts up to 100,000 tokens) | $24 USD / MTok | $120 USD / MTok |\nCache multipliers apply on top of fast mode pricing.\n### Batch processing\n| Model | Batch input | Batch output |\n| --- | --- | --- |\n| Claude Unit 5.5 (for prompts up to 100,000 tokens) | $2 / MTok | $10 / MTok |\n| Claude Unit 5.5 (for prompts over 100,000 tokens) | $4 / MTok | $20 / MTok |\n| Claude Legacy 4.5 | $1.50 / MTok | $7.50 / MTok |\nThese multipliers stack with other pricing modifiers.\nUsing inference_geo incurs a 1.1x pricing multiplier.\n";
+    const MODIFIED: &str = "# Pricing\n## Model pricing\n| Model | Base input tokens | 5m cache \
+        writes | 1h cache writes | Cache hits and refreshes | Output tokens \
+        |\n| --- | --- | --- | --- | --- | --- |\n| Claude Unit 5.5 (for \
+        prompts up to 100,000 tokens) | $4 / MTok | $5 / MTok | $8 / MTok | \
+        $0.20 / MTok | $20 / MTok |\n| Claude Unit 5.5 (for prompts over 100,\
+        000 tokens) | $8 / MTok | $10 / MTok | $16 / MTok | $0.40 / MTok | $40 \
+        / MTok |\n| Claude Legacy 4.5 | $3 / MTok | $3.75 / MTok | $6 / MTok | \
+        $0.30 / MTok | $15 / MTok |\n### Fast mode pricing\n| Model | Input | \
+        Output |\n| --- | --- | --- |\n| Claude Unit 5.5 (for prompts up to 100,\
+        000 tokens) | $24 USD / MTok | $120 USD / MTok |\nCache multipliers \
+        apply on top of fast mode pricing.\n### Batch processing\n| Model | \
+        Batch input | Batch output |\n| --- | --- | --- |\n| Claude Unit 5.5 \
+        (for prompts up to 100,000 tokens) | $2 / MTok | $10 / MTok |\n| Claude \
+        Unit 5.5 (for prompts over 100,000 tokens) | $4 / MTok | $20 / MTok \
+        |\n| Claude Legacy 4.5 | $1.50 / MTok | $7.50 / MTok |\nThese \
+        multipliers stack with other pricing modifiers.\nUsing inference_geo \
+        incurs a 1.1x pricing multiplier.\n";
 
     /// Model, tier, context bounds, charge, cache TTL, region and amount of one tariff row.
     type Row = (
@@ -712,7 +758,9 @@ mod tests {
     }
     #[test]
     fn explicit_character_units_and_published_free_rates_are_not_missing_values() {
-        let source = "# Pricing\nPrices per 1M tokens unless noted.\n| Model | Input | Output |\n| --- | --- | --- |\n| unit-free | Free | - |\n| unit-tts | - | $15.00 / 1M characters |\n";
+        let source = "# Pricing\nPrices per 1M tokens unless noted.\n| Model | Input | Output \
+            |\n| --- | --- | --- |\n| unit-free | Free | - |\n| unit-tts | - | \
+            $15.00 / 1M characters |\n";
         let parsed = parse_catalog(OfficialPriceProvider::OpenAi, source.as_bytes(), 0).unwrap();
         assert_eq!(parsed.tariffs.len(), 2);
         assert!(
@@ -743,7 +791,12 @@ mod tests {
             assert!(request.header_value("Authorization").is_none());
             assert!(request.body.is_none());
             self.requests.lock().unwrap().push(request.url.clone());
-            Ok(HttpResponse { status: self.status, body: b"# Pricing\nPrices per 1M tokens.\n| Model | Input | Output |\n| --- | --- | --- |\n| gpt-test | $1 | $2 |\n".to_vec() })
+            Ok(HttpResponse {
+                status: self.status,
+                body: b"# Pricing\nPrices per 1M tokens.\n| Model | Input | Output |\n| --- | \
+                --- | --- |\n| gpt-test | $1 | $2 |\n"
+                    .to_vec(),
+            })
         }
     }
     #[test]

@@ -223,5 +223,14 @@ pub(super) fn package_proposal_summary(
     base: Option<&Inspection>,
     bundle: &ArtifactRef,
 ) -> Value {
-    json!({"requestedAccess":candidate.access,"dependencies":candidate.dependencies,"runtimes":candidate.runtimes,"contributions":candidate.contribution_ids(),"changes":view::changes(base,candidate),"signed":candidate.signer_key.is_some(),"source":bundle,"verificationEvidence":[]})
+    json!({
+        "requestedAccess": candidate.access,
+        "dependencies": candidate.dependencies,
+        "runtimes": candidate.runtimes,
+        "contributions": candidate.contribution_ids(),
+        "changes": view::changes(base, candidate),
+        "signed": candidate.signer_key.is_some(),
+        "source": bundle,
+        "verificationEvidence": []
+    })
 }

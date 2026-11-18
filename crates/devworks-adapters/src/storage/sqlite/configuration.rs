@@ -51,7 +51,9 @@ fn scope_exists(conn: &Connection, scope: &ConfigScope) -> Result<bool, StorageE
             repository,
         } => db(conn
             .prepare_cached(
-                "SELECT 1 FROM project_repositories r JOIN projects p ON p.id=r.project_id WHERE r.project_id=?1 AND r.repository_id=?2 AND p.lifecycle<>'Deleted'",
+                "SELECT 1 FROM project_repositories r JOIN projects p ON \
+                    p.id=r.project_id WHERE r.project_id=?1 AND r.repository_id=?2 AND \
+                    p.lifecycle<>'Deleted'",
             )
             .and_then(|mut s| s.exists([project.0.as_str(), repository.as_str()]))),
     }
@@ -79,9 +81,14 @@ fn current(
 ) -> Result<Option<ConfigRevision>, StorageError> {
     let raw = db(conn
         .prepare_cached(&format!(
-            "SELECT {REVISION_COLUMNS} FROM effective_configuration e JOIN configuration_revisions r USING(scope_key,namespace,revision) WHERE e.scope_key=?1 AND e.namespace=?2"
+            "SELECT {REVISION_COLUMNS} FROM effective_configuration e JOIN \
+                configuration_revisions r USING(scope_key,namespace,revision) WHERE \
+                e.scope_key=?1 AND e.namespace=?2"
         ))
-        .and_then(|mut s| s.query_row(params![scope.key(), ns], revision_row).optional()))?;
+        .and_then(|mut s| {
+            s.query_row(params![scope.key(), ns], revision_row)
+                .optional()
+        }))?;
     raw.map(revision_of).transpose()
 }
 
@@ -243,7 +250,16 @@ fn settings_secret_referenced(conn: &Connection, handle: &Id) -> Result<bool, St
     settings_handle(handle)?;
     // Search the retained documents themselves, without a paging horizon or current-scope
     // restriction. Earlier revisions remain rollback targets; decided proposals also persist.
-    db(conn.query_row("SELECT EXISTS(SELECT 1 FROM configuration_revisions r,json_tree(r.body_json) j WHERE r.namespace='settings' AND j.key='secretRef' AND j.type='text' AND j.atom=?1 UNION ALL SELECT 1 FROM configuration_proposals p,json_tree(p.body_json) j WHERE p.namespace='settings' AND j.key='secretRef' AND j.type='text' AND j.atom=?1)", [handle.as_str()], |r| r.get(0)))
+    db(conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM configuration_revisions r,\
+        json_tree(r.body_json) j WHERE r.namespace='settings' AND \
+        j.key='secretRef' AND j.type='text' AND j.atom=?1 UNION ALL SELECT 1 \
+        FROM configuration_proposals p,json_tree(p.body_json) j WHERE \
+        p.namespace='settings' AND j.key='secretRef' AND j.type='text' AND \
+        j.atom=?1)",
+        [handle.as_str()],
+        |r| r.get(0),
+    ))
 }
 
 macro_rules! configuration_read {
@@ -345,7 +361,11 @@ impl ConfigurationRepository for Unit<'_> {
     }
     fn publish_settings_secret(&mut self, handle: &Id) -> Result<bool, StorageError> {
         settings_handle(handle)?;
-        Ok(db(self.conn.execute("UPDATE settings_secret_handles SET state='Ready' WHERE handle=?1 AND state='Writing' AND expires_at>?2", params![handle.as_str(),self.now]))? == 1)
+        Ok(db(self.conn.execute(
+            "UPDATE settings_secret_handles SET state='Ready' WHERE handle=?1 AND \
+            state='Writing' AND expires_at>?2",
+            params![handle.as_str(), self.now],
+        ))? == 1)
     }
     fn retain_settings_secret(&mut self, handle: &Id) -> Result<(), StorageError> {
         settings_handle(handle)?;
@@ -360,7 +380,11 @@ impl ConfigurationRepository for Unit<'_> {
                 ))?;
             }
             None => {
-                db(self.conn.execute("INSERT INTO settings_secret_handles(handle,state,expires_at) VALUES(?1,'Retained',?2)", params![handle.as_str(),self.now]))?;
+                db(self.conn.execute(
+                    "INSERT INTO settings_secret_handles(handle,state,expires_at) VALUES(?1,\
+                    'Retained',?2)",
+                    params![handle.as_str(), self.now],
+                ))?;
             }
             _ => return Err(StorageError::ScopeDenied),
         }
@@ -382,7 +406,11 @@ impl ConfigurationRepository for Unit<'_> {
                 if legacy_expires_at_ms <= self.now {
                     return Err(invalid("legacy settings stage already expired"));
                 }
-                db(self.conn.execute("INSERT INTO settings_secret_handles(handle,state,expires_at) VALUES(?1,'Ready',?2)", params![handle.as_str(),legacy_expires_at_ms]))?;
+                db(self.conn.execute(
+                    "INSERT INTO settings_secret_handles(handle,state,expires_at) VALUES(?1,\
+                    'Ready',?2)",
+                    params![handle.as_str(), legacy_expires_at_ms],
+                ))?;
                 if !abandon {
                     return Ok(false);
                 }
@@ -407,7 +435,14 @@ impl ConfigurationRepository for Unit<'_> {
     }
     fn finish_settings_secret_deletion(&mut self, handle: &Id) -> Result<(), StorageError> {
         settings_handle(handle)?;
-        if db(self.conn.execute("UPDATE settings_secret_handles SET state='Deleted' WHERE handle=?1 AND state IN('Deleting','Deleted')", [handle.as_str()]))? != 1 { return Err(StorageError::ScopeDenied); }
+        if db(self.conn.execute(
+            "UPDATE settings_secret_handles SET state='Deleted' WHERE handle=?1 AND \
+            state IN('Deleting','Deleted')",
+            [handle.as_str()],
+        ))? != 1
+        {
+            return Err(StorageError::ScopeDenied);
+        }
         Ok(())
     }
 
@@ -446,7 +481,9 @@ impl ConfigurationRepository for Unit<'_> {
             params![key, ns, next, schema_version, body.to_string()],
         ))?;
         db(self.conn.execute(
-            "INSERT INTO effective_configuration(scope_key,namespace,revision) VALUES(?1,?2,?3) ON CONFLICT(scope_key,namespace) DO UPDATE SET revision=excluded.revision",
+            "INSERT INTO effective_configuration(scope_key,namespace,revision) \
+                VALUES(?1,?2,?3) ON CONFLICT(scope_key,namespace) DO UPDATE SET \
+                revision=excluded.revision",
             params![key, ns, next],
         ))?;
         Ok(ConfigRevision {
@@ -473,7 +510,9 @@ impl ConfigurationRepository for Unit<'_> {
             });
         }
         db(self.conn.execute(
-            "INSERT INTO configuration_proposals(id,scope_key,namespace,base_revision,revision,state,author_id,created_at,body_json) VALUES(?1,?2,?3,?4,1,'Pending',?5,?6,?7)",
+            "INSERT INTO configuration_proposals(id,scope_key,namespace,\
+                base_revision,revision,state,author_id,created_at,body_json) VALUES(?1,\
+                ?2,?3,?4,1,'Pending',?5,?6,?7)",
             params![
                 p.id.as_str(),
                 p.scope.key(),
@@ -535,7 +574,8 @@ impl ConfigurationRepository for Unit<'_> {
                 }
                 require_actor(self.conn, &decided_by)?;
                 db(self.conn.execute(
-                    "UPDATE configuration_proposals SET state=?1,decided_by=?2,decided_at=?3,applied_revision=?4,revision=revision+1 WHERE id=?5 AND revision=?6",
+                    "UPDATE configuration_proposals SET state=?1,decided_by=?2,decided_at=?3,\
+                        applied_revision=?4,revision=revision+1 WHERE id=?5 AND revision=?6",
                     params![
                         state_name(state),
                         decided_by.0.as_str(),

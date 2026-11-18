@@ -107,7 +107,21 @@ impl Draft {
             scope: project,
             id: None,
             revision: None,
-            config: json!({"name":"","engine":"Sqlite","endpoint":"","catalogs":[],"schemas":[],"includePatterns":[],"excludePatterns":[],"writesEnabled":false,"enabled":true,"workspaceExposed":false,"projectAccess":access,"exposureMode":"SchemaOnly","authentication":"File"}),
+            config: json!({
+                "name": "",
+                "engine": "Sqlite",
+                "endpoint": "",
+                "catalogs": [],
+                "schemas": [],
+                "includePatterns": [],
+                "excludePatterns": [],
+                "writesEnabled": false,
+                "enabled": true,
+                "workspaceExposed": false,
+                "projectAccess": access,
+                "exposureMode": "SchemaOnly",
+                "authentication": "File"
+            }),
             password: String::new(),
             ca_file: None,
         }
@@ -222,7 +236,10 @@ fn lines(ui: &mut Ui, label: &str, config: &mut Value, key: &str) {
 }
 /// DB-04/DB-05 data tools are not built yet (DW-37 owns them): these switches are saved and
 /// validated, but nothing reads or writes table data, so the form says so beside them.
-pub const DATA_ACCESS_INACTIVE: &str = "Not yet active: DevWorks has no database data tools yet. Data read access, data write access, separately authorized writes and the ReadOnly and ReadWrite tool exposures are saved but change nothing; agents can read indexed schema metadata only.";
+pub const DATA_ACCESS_INACTIVE: &str = "Not yet active: DevWorks has no database data tools yet. Data read \
+    access, data write access, separately authorized writes and the \
+    ReadOnly and ReadWrite tool exposures are saved but change nothing; \
+    agents can read indexed schema metadata only.";
 fn toggle(ui: &mut Ui, label: &str, config: &mut Value, key: &str) {
     let mut b = config[key].as_bool().unwrap_or(false);
     if ui.checkbox(&mut b, label).changed() {
@@ -256,7 +273,14 @@ fn project_access(ui: &mut Ui, config: &mut Value, projects: &[(String, String)]
     ui.label("Project access");
     for (id, title) in all {
         let position = access.iter().position(|a| a["projectId"] == id);
-        let mut row=position.map(|p|access[p].clone()).unwrap_or_else(||json!({"projectId":id,"metadataEnabled":false,"dataReadEnabled":false,"dataWriteEnabled":false}));
+        let mut row = position.map(|p| access[p].clone()).unwrap_or_else(|| {
+            json!({
+                "projectId": id,
+                "metadataEnabled": false,
+                "dataReadEnabled": false,
+                "dataWriteEnabled": false
+            })
+        });
         ui.scope_builder(
             egui::UiBuilder::new().scope_id(ui.make_persistent_id(("database-project", &id))),
             |ui| {
@@ -403,27 +427,128 @@ impl DatabasesScreen {
             } else {
                 "New database source"
             });
-            ui.add_enabled_ui(!self.busy,|ui|{
-                text(ui,"Database source name",&mut draft.config,"name");
-                let old=draft.config["engine"].clone();choice(ui,"Database engine",&mut draft.config,"engine",&["Sqlite","MariaDb","MySql","Postgres","SqlServer"]);
-                if draft.config["engine"]!=old {draft.changed_engine();}
-                text(ui,"Database file or endpoint",&mut draft.config,"endpoint");
-                if draft.config["engine"]=="Sqlite" {if button(ui,"Choose database file").clicked(){actions.push(Action::PickDatabase);}}else{
-                    text(ui,"Database username",&mut draft.config,"username");field(ui,"Database password (blank keeps saved password)",&mut draft.password,true);
-                    if draft.config.get("credentialRef").is_some(){ui.label("A password is stored in the configured credential facility.");if button(ui,"Remove saved database password").clicked(){draft.config.as_object_mut().unwrap().remove("credentialRef");}}
-                    choice(ui,"Database TLS",&mut draft.config,"tls",&["VerifyFull","VerifyCa","LoopbackPlaintext"]);
-                    if button(ui,"Choose database CA certificate").clicked(){actions.push(Action::PickCa);}
-                    if let Some(path)=&draft.ca_file{ui.label(path.file_name().unwrap_or_default().to_string_lossy());}
-                    if draft.config.get("caCertificate").is_some(){ui.label("An exact public CA certificate is copied for this connection.");if button(ui,"Remove database CA certificate").clicked(){draft.config.as_object_mut().unwrap().remove("caCertificate");}}
+            ui.add_enabled_ui(!self.busy, |ui| {
+                text(ui, "Database source name", &mut draft.config, "name");
+                let old = draft.config["engine"].clone();
+                choice(
+                    ui,
+                    "Database engine",
+                    &mut draft.config,
+                    "engine",
+                    &["Sqlite", "MariaDb", "MySql", "Postgres", "SqlServer"],
+                );
+                if draft.config["engine"] != old {
+                    draft.changed_engine();
                 }
-                text(ui,"Database display name",&mut draft.config,"displayName");text(ui,"Database environment",&mut draft.config,"environment");
-                lines(ui,"Database catalogs (one per line)",&mut draft.config,"catalogs");lines(ui,"Database schemas (one per line)",&mut draft.config,"schemas");
-                lines(ui,"Included metadata patterns (one per line)",&mut draft.config,"includePatterns");lines(ui,"Excluded metadata patterns (one per line)",&mut draft.config,"excludePatterns");
-                toggle(ui,"Enable database source",&mut draft.config,"enabled");toggle(ui,"Expose source in workspace",&mut draft.config,"workspaceExposed");choice(ui,"Database tool exposure",&mut draft.config,"exposureMode",&["Hidden","SchemaOnly","ReadOnly","ReadWrite"]);
-                toggle(ui,"Enable separately authorized data writes (not yet active)",&mut draft.config,"writesEnabled");
-                ui.label("Metadata indexing always uses read-only source access. Data operations require their own permissions.");
+                text(
+                    ui,
+                    "Database file or endpoint",
+                    &mut draft.config,
+                    "endpoint",
+                );
+                if draft.config["engine"] == "Sqlite" {
+                    if button(ui, "Choose database file").clicked() {
+                        actions.push(Action::PickDatabase);
+                    }
+                } else {
+                    text(ui, "Database username", &mut draft.config, "username");
+                    field(
+                        ui,
+                        "Database password (blank keeps saved password)",
+                        &mut draft.password,
+                        true,
+                    );
+                    if draft.config.get("credentialRef").is_some() {
+                        ui.label("A password is stored in the configured credential facility.");
+                        if button(ui, "Remove saved database password").clicked() {
+                            draft
+                                .config
+                                .as_object_mut()
+                                .unwrap()
+                                .remove("credentialRef");
+                        }
+                    }
+                    choice(
+                        ui,
+                        "Database TLS",
+                        &mut draft.config,
+                        "tls",
+                        &["VerifyFull", "VerifyCa", "LoopbackPlaintext"],
+                    );
+                    if button(ui, "Choose database CA certificate").clicked() {
+                        actions.push(Action::PickCa);
+                    }
+                    if let Some(path) = &draft.ca_file {
+                        ui.label(path.file_name().unwrap_or_default().to_string_lossy());
+                    }
+                    if draft.config.get("caCertificate").is_some() {
+                        ui.label("An exact public CA certificate is copied for this connection.");
+                        if button(ui, "Remove database CA certificate").clicked() {
+                            draft
+                                .config
+                                .as_object_mut()
+                                .unwrap()
+                                .remove("caCertificate");
+                        }
+                    }
+                }
+                text(
+                    ui,
+                    "Database display name",
+                    &mut draft.config,
+                    "displayName",
+                );
+                text(ui, "Database environment", &mut draft.config, "environment");
+                lines(
+                    ui,
+                    "Database catalogs (one per line)",
+                    &mut draft.config,
+                    "catalogs",
+                );
+                lines(
+                    ui,
+                    "Database schemas (one per line)",
+                    &mut draft.config,
+                    "schemas",
+                );
+                lines(
+                    ui,
+                    "Included metadata patterns (one per line)",
+                    &mut draft.config,
+                    "includePatterns",
+                );
+                lines(
+                    ui,
+                    "Excluded metadata patterns (one per line)",
+                    &mut draft.config,
+                    "excludePatterns",
+                );
+                toggle(ui, "Enable database source", &mut draft.config, "enabled");
+                toggle(
+                    ui,
+                    "Expose source in workspace",
+                    &mut draft.config,
+                    "workspaceExposed",
+                );
+                choice(
+                    ui,
+                    "Database tool exposure",
+                    &mut draft.config,
+                    "exposureMode",
+                    &["Hidden", "SchemaOnly", "ReadOnly", "ReadWrite"],
+                );
+                toggle(
+                    ui,
+                    "Enable separately authorized data writes (not yet active)",
+                    &mut draft.config,
+                    "writesEnabled",
+                );
+                ui.label(
+                    "Metadata indexing always uses read-only source access. Data operations \
+                    require their own permissions.",
+                );
                 crate::widgets::caption(ui, DATA_ACCESS_INACTIVE);
-                project_access(ui,&mut draft.config,projects);
+                project_access(ui, &mut draft.config, projects);
             });
             ui.horizontal(|ui| {
                 if button_enabled(ui, "Save database source", online && !self.busy).clicked() {
@@ -507,7 +632,13 @@ impl DatabasesScreen {
             },
         );
         if let Some(kind) = self.confirm {
-            ui.label(if kind=="source"{"Remove this saved source and its indexed metadata? The source database remains unchanged."}else{"Remove the indexed metadata? The connection and source database remain available."});
+            ui.label(if kind == "source" {
+                "Remove this saved source and its indexed metadata? The source database \
+                remains unchanged."
+            } else {
+                "Remove the indexed metadata? The connection and source database remain \
+                available."
+            });
             ui.scope_builder(
                 egui::UiBuilder::new()
                     .scope_id(ui.make_persistent_id(("database-removal", source.id.as_str()))),
@@ -561,7 +692,10 @@ impl DatabasesScreen {
                     actions.push(Action::Edit(source.id.as_str().into()));
                 }
             } else {
-                ui.label("This source is shared. Its owner controls its saved connection and access settings.");
+                ui.label(
+                    "This source is shared. Its owner controls its saved connection and \
+                    access settings.",
+                );
             }
             return;
         }
@@ -914,7 +1048,16 @@ impl DatabasesScreen {
         {
             return Value::Null;
         }
-        json!({"draft":self.draft,"batchActive":self.batch_active,"batchScanning":self.batch_scanning,"remaining":self.batch_remaining,"batchScope":self.batch_scope,"submitted":self.batch_submitted,"failures":self.batch_failures,"tab":self.tab})
+        json!({
+            "draft": self.draft,
+            "batchActive": self.batch_active,
+            "batchScanning": self.batch_scanning,
+            "remaining": self.batch_remaining,
+            "batchScope": self.batch_scope,
+            "submitted": self.batch_submitted,
+            "failures": self.batch_failures,
+            "tab": self.tab
+        })
     }
     pub fn restore_pending(&mut self, value: &Value) {
         self.batch_active = value["batchActive"].as_bool().unwrap_or(false);

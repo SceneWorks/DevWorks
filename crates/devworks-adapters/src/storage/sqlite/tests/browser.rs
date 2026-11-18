@@ -327,10 +327,18 @@ fn browser_source_migration_keeps_old_evidence_nullable_and_blocks_old_writers()
     let info = legacy.info();
     let boot = info.boot_id.unwrap();
     let actor = info.host_actor;
-    legacy.with_writer_connection(move |connection| {
-        super::super::conn::db(connection.execute("INSERT INTO browser_sessions(id,boot_id,state,owner_id,owner_kind,asset_id,create_operation_id,targets,observation_seq,created_at,updated_at,revision) VALUES('old-browser',?1,'Starting',?2,'Host','chrome','old-browser-create','[]',0,1,1,1)",rusqlite::params![boot.as_str(),actor.0.as_str()]))?;
-        Ok(())
-    }).unwrap();
+    legacy
+        .with_writer_connection(move |connection| {
+            super::super::conn::db(connection.execute(
+                "INSERT INTO browser_sessions(id,boot_id,state,owner_id,owner_kind,\
+            asset_id,create_operation_id,targets,observation_seq,created_at,\
+            updated_at,revision) VALUES('old-browser',?1,'Starting',?2,'Host',\
+            'chrome','old-browser-create','[]',0,1,1,1)",
+                rusqlite::params![boot.as_str(), actor.0.as_str()],
+            ))?;
+            Ok(())
+        })
+        .unwrap();
     drop(legacy);
     let store = SqliteStore::open_with(h.config(), &through(23)).unwrap();
     assert_eq!(store.compatibility().unwrap().minimum_writer, 23);

@@ -622,7 +622,9 @@ fn process_checks(
             "process.owned",
             HealthState::Degraded,
             format!(
-                "The scan stopped after {scanned} unsettled process records; more remain. Of those read, {orphaned} are of earlier boots, {uncertain} could not be verified stopped and {lost} recorded no identity."
+                "The scan stopped after {scanned} unsettled process records; more \
+                    remain. Of those read, {orphaned} are of earlier boots, {uncertain} \
+                    could not be verified stopped and {lost} recorded no identity."
             ),
         )
     } else if orphaned == 0 && uncertain == 0 && lost == 0 {
@@ -636,7 +638,9 @@ fn process_checks(
             "process.owned",
             HealthState::Degraded,
             format!(
-                "{orphaned} process trees of earlier boots are unsettled, {uncertain} could not be verified stopped and {lost} launches recorded no identity; only a person can confirm an unverifiable tree stopped."
+                "{orphaned} process trees of earlier boots are unsettled, {uncertain} \
+                    could not be verified stopped and {lost} launches recorded no identity; \
+                    only a person can confirm an unverifiable tree stopped."
             ),
         )
     };
@@ -901,7 +905,10 @@ fn access_check(ctx: &InvocationContext, out: &mut Vec<HealthCheck>) {
         "access.local",
         HealthState::Healthy,
         format!(
-            "Single-user local workspace: no sign-in, no central account or remote control plane, and no issued MCP server tokens. Agents, packages and MCP clients act through local authority bindings. This request is {} ({:?}).",
+            "Single-user local workspace: no sign-in, no central account or remote \
+                control plane, and no issued MCP server tokens. Agents, packages and \
+                MCP clients act through local authority bindings. This request is {} \
+                ({:?}).",
             ctx.principal().0.as_str(),
             ctx.principal_kind()
         ),

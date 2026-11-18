@@ -125,7 +125,18 @@ mod tests {
     fn exact_frame_scope_ignores_text_and_preserves_another_projects_original_request() {
         let scope = super::super::tests::scope();
         let frame = |project: &str, description: &str| {
-            serde_json::to_vec(&json!({"mode":"Command","protocol":"1.0-draft.1","requestKey":"original","body":{"kind":"projects.edit","projectId":project,"expectedRevision":"1","changes":{"description":description}}})).unwrap()
+            serde_json::to_vec(&json!({
+                "mode": "Command",
+                "protocol": "1.0-draft.1",
+                "requestKey": "original",
+                "body": {
+                    "kind": "projects.edit",
+                    "projectId": project,
+                    "expectedRevision": "1",
+                    "changes": {"description": description}
+                }
+            }))
+            .unwrap()
         };
         assert_eq!(
             affinity(
@@ -147,7 +158,17 @@ mod tests {
             .unwrap(),
             Affinity::Independent
         );
-        let bad = json!({"mode":"Command","protocol":"1.0-draft.1","requestKey":"original","body":{"kind":"projects.edit","projectId":"p","expectedRevision":"1","unknownPrivateField":"data"}});
+        let bad = json!({
+            "mode": "Command",
+            "protocol": "1.0-draft.1",
+            "requestKey": "original",
+            "body": {
+                "kind": "projects.edit",
+                "projectId": "p",
+                "expectedRevision": "1",
+                "unknownPrivateField": "data"
+            }
+        });
         assert!(
             affinity(
                 "projects.edit",

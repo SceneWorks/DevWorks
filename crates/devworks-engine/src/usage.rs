@@ -281,26 +281,55 @@ impl UsageRuntime {
         let preparing = Preparing(runtime.clone());
         owned_thread(move || {
             let _preparing = preparing;
-            if cancellation.as_ref().is_some_and(Cancellation::is_cancelled) { return Err(StorageError::Cancelled); }
-            if let Some(preparation)=preparation {
-                let refreshed=preparation.prepare(&context,&logical,&request)?;
-                if let Some(refreshed)=refreshed {
-                    if let Some(selection)=refreshed.recorded_selection { request.selection=selection; }
-                    if let Some(effort)=refreshed.native_effort {
-                        use devworks_core::services::router::accounting::AttemptSelection;
-                        let route=match request.selection {AttemptSelection::NativeGeneration{route,..}=>*route,other=>other};
-                        if matches!(route, AttemptSelection::Conversation{..}) {
-                            request.selection=AttemptSelection::NativeGeneration {route:Box::new(route),requested_effort:effort.requested.map(|x|x.as_str().into()),effective_effort:effort.effective.map(|x|x.as_str().into())};
-                        }else{return Err(StorageError::ScopeDenied);}
+            if cancellation
+                .as_ref()
+                .is_some_and(Cancellation::is_cancelled)
+            {
+                return Err(StorageError::Cancelled);
+            }
+            if let Some(preparation) = preparation {
+                let refreshed = preparation.prepare(&context, &logical, &request)?;
+                if let Some(refreshed) = refreshed {
+                    if let Some(selection) = refreshed.recorded_selection {
+                        request.selection = selection;
                     }
-                    request.quote=refreshed.quote;
-                    request.price_generation=refreshed.price_generation;
-                    request.override_revision=refreshed.override_revision;
-                    if let devworks_core::services::router::accounting::AttemptSelection::Embedding {connection_revision,..}=&mut request.selection { *connection_revision=refreshed.connection_revision; }
+                    use devworks_core::services::router::accounting::AttemptSelection;
+                    if let Some(effort) = refreshed.native_effort {
+                        let route = match request.selection {
+                            AttemptSelection::NativeGeneration { route, .. } => *route,
+                            other => other,
+                        };
+                        if matches!(route, AttemptSelection::Conversation { .. }) {
+                            request.selection = AttemptSelection::NativeGeneration {
+                                route: Box::new(route),
+                                requested_effort: effort.requested.map(|x| x.as_str().into()),
+                                effective_effort: effort.effective.map(|x| x.as_str().into()),
+                            };
+                        } else {
+                            return Err(StorageError::ScopeDenied);
+                        }
+                    }
+                    request.quote = refreshed.quote;
+                    request.price_generation = refreshed.price_generation;
+                    request.override_revision = refreshed.override_revision;
+                    if let AttemptSelection::Embedding {
+                        connection_revision,
+                        ..
+                    } = &mut request.selection
+                    {
+                        *connection_revision = refreshed.connection_revision;
+                    }
                 }
             }
-            if runtime.ticker.is_stopped() || cancellation.as_ref().is_some_and(Cancellation::is_cancelled) { return Err(StorageError::Cancelled); }
-            let admission = host.admit_fenced(context, logical, category, request, source_fences)?;
+            if runtime.ticker.is_stopped()
+                || cancellation
+                    .as_ref()
+                    .is_some_and(Cancellation::is_cancelled)
+            {
+                return Err(StorageError::Cancelled);
+            }
+            let admission =
+                host.admit_fenced(context, logical, category, request, source_fences)?;
             let attempt = match admission {
                 devworks_core::services::usage::accounting::Admission::Admitted {
                     attempt, ..
@@ -338,7 +367,7 @@ impl UsageRuntime {
             host.drive_with_sink(attempt.attempt_id, source, sink, cancellation)
         })
         .await
-        .unwrap_or_else(|e|Err(e.storage()))
+        .unwrap_or_else(|e| Err(e.storage()))
     }
 
     fn retired(&self, id: &Id) {
@@ -577,7 +606,8 @@ impl OwnedThreadFailure {
             ),
             Self::Lost => StorageError::unavailable(
                 Unavailable::HandlerPanicked,
-                "owned inference worker ended without acknowledgement; accounting remains recoverable",
+                "owned inference worker ended without acknowledgement; accounting \
+                    remains recoverable",
             ),
         }
     }

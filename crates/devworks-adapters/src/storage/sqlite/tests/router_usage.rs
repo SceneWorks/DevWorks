@@ -995,7 +995,20 @@ fn ttl_unrestricted_legacy_price_survives_actual_quote_settlement_and_gateway_re
                 false,
             ),
         ));
-        let decision=recorded(f.fx.command(&f.fx.user(),"router.price_override",json!({"modelId":"accounted","expectedRevision":"1","price":{"inputUsdPerMillion":"1","outputUsdPerMillion":"2","cacheWriteUsdPerMillion":"3"}}))).0;
+        let decision = recorded(f.fx.command(
+            &f.fx.user(),
+            "router.price_override",
+            json!({
+                "modelId": "accounted",
+                "expectedRevision": "1",
+                "price": {
+                    "inputUsdPerMillion": "1",
+                    "outputUsdPerMillion": "2",
+                    "cacheWriteUsdPerMillion": "3"
+                }
+            }),
+        ))
+        .0;
         assert!(
             matches!(decision, DomainDecision::Applied { .. }),
             "{decision:?}"
@@ -1262,7 +1275,18 @@ fn subscription_reported_usd_never_becomes_api_charge_without_a_matching_tariff(
 #[test]
 fn confirmed_cancelled_activity_uses_last_source_outcome_without_masking_later_retries() {
     fn activity(f: &NativeFx) -> Value {
-        let value=result(f.fx.query_at(&f.fx.user(),"router.usage",json!({"sessionId":"s1","reportKind":"AssistantActivity","startMs":(T0-1).to_string(),"endMs":(T0+1).to_string(),"page":{"limit":100}}),Some(3)));
+        let value = result(f.fx.query_at(
+            &f.fx.user(),
+            "router.usage",
+            json!({
+                "sessionId": "s1",
+                "reportKind": "AssistantActivity",
+                "startMs": (T0 - 1).to_string(),
+                "endMs": (T0 + 1).to_string(),
+                "page": {"limit": 100}
+            }),
+            Some(3),
+        ));
         serde_json::to_value(value).unwrap()
     }
     fn metric(value: &Value, key: &str) -> i64 {
@@ -1349,9 +1373,35 @@ fn reported_usd_cost_with_many_fractional_digits_is_rounded_and_counts_against_t
             false,
         ),
     ));
-    let tariffs = [("Input", "0.002"), ("Output", "0.004"), ("CacheRead", "0.0005"), ("CacheWrite", "0.003")]
-        .map(|(kind, amount)| json!({"upstreamModelId":"upstream/accounted","serviceTier":"Standard","modality":"Text","chargeKind":kind,"unit":"Token","units":"1000","amountUsd":amount}));
-    let decision = recorded(f.fx.command_keyed_at(&f.fx.user(), "router.price_override", "non-million-price", json!({"modelId":"accounted","expectedRevision":"1","change":{"kind":"Set","tariffs":tariffs}}), 3)).0;
+    let tariffs = [
+        ("Input", "0.002"),
+        ("Output", "0.004"),
+        ("CacheRead", "0.0005"),
+        ("CacheWrite", "0.003"),
+    ]
+    .map(|(kind, amount)| {
+        json!({
+            "upstreamModelId": "upstream/accounted",
+            "serviceTier": "Standard",
+            "modality": "Text",
+            "chargeKind": kind,
+            "unit": "Token",
+            "units": "1000",
+            "amountUsd": amount
+        })
+    });
+    let decision = recorded(f.fx.command_keyed_at(
+        &f.fx.user(),
+        "router.price_override",
+        "non-million-price",
+        json!({
+            "modelId": "accounted",
+            "expectedRevision": "1",
+            "change": {"kind": "Set", "tariffs": tariffs}
+        }),
+        3,
+    ))
+    .0;
     assert!(
         matches!(decision, DomainDecision::Applied { .. }),
         "{decision:?}"
@@ -1518,9 +1568,35 @@ fn non_million_override_reserves_feature_budget_and_settles_aggregate_tokens_exa
             false,
         ),
     ));
-    let tariffs = [("Input", "0.002"), ("Output", "0.004"), ("CacheRead", "0.0005"), ("CacheWrite", "0.003")]
-        .map(|(kind, amount)| json!({"upstreamModelId":"upstream/accounted","serviceTier":"Standard","modality":"Text","chargeKind":kind,"unit":"Token","units":"1000","amountUsd":amount}));
-    let decision = recorded(f.fx.command_keyed_at(&f.fx.user(), "router.price_override", "non-million-price", json!({"modelId":"accounted","expectedRevision":"1","change":{"kind":"Set","tariffs":tariffs}}), 3)).0;
+    let tariffs = [
+        ("Input", "0.002"),
+        ("Output", "0.004"),
+        ("CacheRead", "0.0005"),
+        ("CacheWrite", "0.003"),
+    ]
+    .map(|(kind, amount)| {
+        json!({
+            "upstreamModelId": "upstream/accounted",
+            "serviceTier": "Standard",
+            "modality": "Text",
+            "chargeKind": kind,
+            "unit": "Token",
+            "units": "1000",
+            "amountUsd": amount
+        })
+    });
+    let decision = recorded(f.fx.command_keyed_at(
+        &f.fx.user(),
+        "router.price_override",
+        "non-million-price",
+        json!({
+            "modelId": "accounted",
+            "expectedRevision": "1",
+            "change": {"kind": "Set", "tariffs": tariffs}
+        }),
+        3,
+    ))
+    .0;
     assert!(
         matches!(decision, DomainDecision::Applied { .. }),
         "{decision:?}"
@@ -1703,13 +1779,44 @@ fn actual_non_million_quotes_preserve_large_units_zero_and_overlapping_rate_unkn
                 false,
             ),
         ));
-        let mut tariffs = ["Input", "Output"].map(|kind|json!({"upstreamModelId":"upstream/accounted","serviceTier":"Standard","modality":"Text","chargeKind":kind,"unit":"Token","units":units.to_string(),"amountUsd":amount})).to_vec();
+        let mut tariffs = ["Input", "Output"]
+            .map(|kind| {
+                json!({
+                    "upstreamModelId": "upstream/accounted",
+                    "serviceTier": "Standard",
+                    "modality": "Text",
+                    "chargeKind": kind,
+                    "unit": "Token",
+                    "units": units.to_string(),
+                    "amountUsd": amount
+                })
+            })
+            .to_vec();
         if overlap {
             // A valid Any row overlaps Text. The resolver's million-only projection contains
             // zero, but it cannot hide the conflicting canonical exact-denominator input row.
-            tariffs.push(json!({"upstreamModelId":"upstream/accounted","serviceTier":"Standard","modality":"Any","chargeKind":"Input","unit":"Token","units":"1000000","amountUsd":"0"}));
+            tariffs.push(json!({
+                "upstreamModelId": "upstream/accounted",
+                "serviceTier": "Standard",
+                "modality": "Any",
+                "chargeKind": "Input",
+                "unit": "Token",
+                "units": "1000000",
+                "amountUsd": "0"
+            }));
         }
-        let decision=recorded(f.fx.command_keyed_at(&f.fx.user(),"router.price_override","exact-units-price",json!({"modelId":"accounted","expectedRevision":"1","change":{"kind":"Set","tariffs":tariffs}}),3)).0;
+        let decision = recorded(f.fx.command_keyed_at(
+            &f.fx.user(),
+            "router.price_override",
+            "exact-units-price",
+            json!({
+                "modelId": "accounted",
+                "expectedRevision": "1",
+                "change": {"kind": "Set", "tariffs": tariffs}
+            }),
+            3,
+        ))
+        .0;
         assert!(
             matches!(decision, DomainDecision::Applied { .. }),
             "{decision:?}"
@@ -1816,11 +1923,46 @@ fn actual_feature_reservation_uses_only_host_possible_cache_reads_and_keeps_miss
                 false,
             ),
         ));
-        let mut tariffs=[("Input","0.002"),("Output","0"),("CacheWrite","0.0015")].map(|(kind,amount)|json!({"upstreamModelId":"upstream/accounted","serviceTier":"Standard","modality":"Text","chargeKind":kind,"unit":"Token","units":"1000","amountUsd":amount})).to_vec();
+        let mut tariffs = [
+            ("Input", "0.002"),
+            ("Output", "0"),
+            ("CacheWrite", "0.0015"),
+        ]
+        .map(|(kind, amount)| {
+            json!({
+                "upstreamModelId": "upstream/accounted",
+                "serviceTier": "Standard",
+                "modality": "Text",
+                "chargeKind": kind,
+                "unit": "Token",
+                "units": "1000",
+                "amountUsd": amount
+            })
+        })
+        .to_vec();
         if read_priced {
-            tariffs.push(json!({"upstreamModelId":"upstream/accounted","serviceTier":"Standard","modality":"Text","chargeKind":"CacheRead","unit":"Token","units":"1000","amountUsd":"0.003"}));
+            tariffs.push(json!({
+                "upstreamModelId": "upstream/accounted",
+                "serviceTier": "Standard",
+                "modality": "Text",
+                "chargeKind": "CacheRead",
+                "unit": "Token",
+                "units": "1000",
+                "amountUsd": "0.003"
+            }));
         }
-        let decision=recorded(f.fx.command_keyed_at(&f.fx.user(),"router.price_override","read-reservation-price",json!({"modelId":"accounted","expectedRevision":"1","change":{"kind":"Set","tariffs":tariffs}}),3)).0;
+        let decision = recorded(f.fx.command_keyed_at(
+            &f.fx.user(),
+            "router.price_override",
+            "read-reservation-price",
+            json!({
+                "modelId": "accounted",
+                "expectedRevision": "1",
+                "change": {"kind": "Set", "tariffs": tariffs}
+            }),
+            3,
+        ))
+        .0;
         assert!(
             matches!(decision, DomainDecision::Applied { .. }),
             "{decision:?}"

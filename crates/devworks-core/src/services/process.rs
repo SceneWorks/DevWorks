@@ -427,7 +427,13 @@ impl ProcessSupervisor {
     ) -> Result<OwnedProcess, LaunchRefusal> {
         let argv = request.spec.argv();
         let verdict = self.preflight(&request.spec, policy);
-        let git_owner_required = matches!(&verdict,CommandVerdict::NeedsInput { held,.. } if held.contains(&crate::authority::destructive::InputNeeded::GitPushOwnerRequired));
+        let git_owner_required = matches!(
+            &verdict,
+            CommandVerdict::NeedsInput { held, .. }
+                if held.contains(
+                    &crate::authority::destructive::InputNeeded::GitPushOwnerRequired,
+                )
+        );
         let owned_git_push = if git_owner_required {
             if let Some(operation) = &request.operation_id {
                 read_snapshot(&*self.store, &ReadOptions::default(), |snapshot| {
@@ -1009,7 +1015,8 @@ impl ProcessSupervisor {
                 match (p.phase, identity_of(&p)) {
                     (ProcessPhase::Lost, _) => {}
                     (ProcessPhase::Launching, _) | (_, None) => {
-                        self.settle(&mut p, ProcessPhase::Lost, None, Some("launched by an earlier boot without a recorded identity; its effects are unknown".into()), "ProcessLost")?;
+                        self.settle(&mut p, ProcessPhase::Lost, None, Some("launched by an earlier boot without a recorded identity; its effects \
+                            are unknown".into()), "ProcessLost")?;
                         report.lost += 1;
                     }
                     (_, Some(_)) if p.platform != self.host.platform() => {

@@ -23,7 +23,10 @@ fn coverage_ok(s: &str) -> bool {
 // ---------------------------------------------------------------------------------------------
 // Projects
 
-const PROJECT_COLUMNS: &str = "p.id,p.title,COALESCE(d.description,''),p.lifecycle,p.revision,p.scope_revision,p.created_at,COALESCE(d.updated_at,p.created_at),d.archived_at,d.deleted_at,COALESCE(d.archive_epoch,0),COALESCE(d.archive_stop_pending,0)";
+const PROJECT_COLUMNS: &str = "p.id,p.title,COALESCE(d.description,''),p.lifecycle,p.revision,\
+    p.scope_revision,p.created_at,COALESCE(d.updated_at,p.created_at),\
+    d.archived_at,d.deleted_at,COALESCE(d.archive_epoch,0),\
+    COALESCE(d.archive_stop_pending,0)";
 const PROJECT_FROM: &str = "projects p LEFT JOIN project_details d ON d.project_id=p.id";
 
 type ProjectRaw = (
@@ -144,7 +147,9 @@ fn ids(conn: &Connection, sql: &str, p: impl rusqlite::Params) -> Result<Vec<Id>
 // ---------------------------------------------------------------------------------------------
 // Repositories
 
-const REPOSITORY_COLUMNS: &str = "r.id,r.canonical_location,d.name,d.remote_url,COALESCE(d.is_primary,1),COALESCE(d.lifecycle,'Active'),COALESCE(d.languages_json,'[]'),r.revision,COALESCE(d.registered_at,0)";
+const REPOSITORY_COLUMNS: &str = "r.id,r.canonical_location,d.name,d.remote_url,COALESCE(d.is_primary,1),\
+    COALESCE(d.lifecycle,'Active'),COALESCE(d.languages_json,'[]'),\
+    r.revision,COALESCE(d.registered_at,0)";
 const REPOSITORY_FROM: &str =
     "repositories r LEFT JOIN repository_details d ON d.repository_id=r.id";
 
@@ -249,7 +254,8 @@ fn list_repositories(
     }
     if let Some(p) = &filter.project {
         sql.push_str(
-            " AND EXISTS(SELECT 1 FROM project_repositories m WHERE m.repository_id=r.id AND m.project_id=?)",
+            " AND EXISTS(SELECT 1 FROM project_repositories m WHERE \
+                m.repository_id=r.id AND m.project_id=?)",
         );
         values.push(Sql::Text(p.0.as_str().to_owned()));
     }
@@ -257,7 +263,8 @@ fn list_repositories(
     // same comparison on both sides.
     for l in &filter.languages {
         sql.push_str(
-            " AND EXISTS(SELECT 1 FROM json_each(COALESCE(d.languages_json,'[]')) j WHERE j.value=?)",
+            " AND EXISTS(SELECT 1 FROM json_each(COALESCE(d.languages_json,'[]')) j \
+                WHERE j.value=?)",
         );
         values.push(Sql::Text(fold(l)));
     }
@@ -346,26 +353,114 @@ fn text_of(raw: TextRaw) -> Result<StoredRepositoryText, StorageError> {
 macro_rules! project_reads {
     ($t:ty) => {
         impl ProjectRead for $t {
-            fn purge_file_effect_reviewed(&self,witness:&devworks_core::ports::project_purge::PurgeFileWitness)->Result<bool,StorageError>{super::project_purge::effects::file_reviewed(self.conn,witness)}
+            fn purge_file_effect_reviewed(
+                &self,
+                witness: &devworks_core::ports::project_purge::PurgeFileWitness,
+            ) -> Result<bool, StorageError> {
+                super::project_purge::effects::file_reviewed(self.conn, witness)
+            }
 
-            fn purge_client_fence(&self,project:&ProjectId,digest:&str)->Result<Option<ProjectPurgeClientScope>,StorageError>{super::project_purge::effects::client_fence(self.conn,project,digest)}
+            fn purge_client_fence(
+                &self,
+                project: &ProjectId,
+                digest: &str,
+            ) -> Result<Option<ProjectPurgeClientScope>, StorageError> {
+                super::project_purge::effects::client_fence(self.conn, project, digest)
+            }
 
-            fn purge_file_artifact_keepers(&self, project:&ProjectId, owners:&[devworks_core::ports::project_purge::PurgeFileOwner])->Result<Vec<devworks_core::protocol::provider::ArtifactRef>,StorageError>{super::project_purge::client_keepers::file_references(self.conn,project,owners)}
-            fn purge_inventory(&self,project:&ProjectId)->Result<Option<ProjectPurgeInventory>,StorageError> {super::project_purge::inventory::read(self.conn,project)}
-            fn purge_fenced(&self,project:&ProjectId)->Result<bool,StorageError> {db(self.conn.query_row("SELECT EXISTS(SELECT 1 FROM project_purge_manifests WHERE project_id=?1 AND phase IN('RemovingBytes','Held','Complete'))",[project.0.as_str()],|r|r.get(0)))}
-            fn purge_pending_effects(&self,limit:u16)->Result<Vec<devworks_core::ports::project_purge::PurgeEffect>,StorageError> {super::project_purge::effects::pending(self.conn,limit)}
-            fn purge_blob_claim_reserved(&self,digest:&str,generation:&str,owner:&str)->Result<bool,StorageError> {super::project_purge::effects::reserved(self.conn,digest,generation,owner)}
-            fn purge_inventory_with_client_keepers(&self,project:&ProjectId,keepers:&[devworks_core::protocol::provider::ArtifactRef])->Result<Option<ProjectPurgeInventory>,StorageError> {super::project_purge::inventory::read_with_client_keepers(self.conn,project,keepers)}
-            fn purge_planning(&self,project:&ProjectId)->Result<Option<ProjectPurgePlanning>,StorageError> {super::project_purge::classification::planning(self.conn,project)}
-            fn purge_candidates(&self,project:&ProjectId)->Result<Option<ProjectPurgeCandidates>,StorageError> {super::project_purge::candidates::snapshot(self.conn,project)}
-            fn managed_file_recovery(&self,kind:&str,after:Option<&Id>,n:u16)->Result<Vec<ProjectManagedFileRecovery>,StorageError> {super::project_purge::managed_recovery(self.conn,kind,after,n)}
+            fn purge_file_artifact_keepers(
+                &self,
+                project: &ProjectId,
+                owners: &[devworks_core::ports::project_purge::PurgeFileOwner],
+            ) -> Result<Vec<devworks_core::protocol::provider::ArtifactRef>, StorageError> {
+                super::project_purge::client_keepers::file_references(self.conn, project, owners)
+            }
+            fn purge_inventory(
+                &self,
+                project: &ProjectId,
+            ) -> Result<Option<ProjectPurgeInventory>, StorageError> {
+                super::project_purge::inventory::read(self.conn, project)
+            }
+            fn purge_fenced(&self, project: &ProjectId) -> Result<bool, StorageError> {
+                db(self.conn.query_row(
+                    "SELECT EXISTS(SELECT 1 FROM project_purge_manifests WHERE project_id=?1 \
+                AND phase IN('RemovingBytes','Held','Complete'))",
+                    [project.0.as_str()],
+                    |r| r.get(0),
+                ))
+            }
+            fn purge_pending_effects(
+                &self,
+                limit: u16,
+            ) -> Result<Vec<devworks_core::ports::project_purge::PurgeEffect>, StorageError> {
+                super::project_purge::effects::pending(self.conn, limit)
+            }
+            fn purge_blob_claim_reserved(
+                &self,
+                digest: &str,
+                generation: &str,
+                owner: &str,
+            ) -> Result<bool, StorageError> {
+                super::project_purge::effects::reserved(self.conn, digest, generation, owner)
+            }
+            fn purge_inventory_with_client_keepers(
+                &self,
+                project: &ProjectId,
+                keepers: &[devworks_core::protocol::provider::ArtifactRef],
+            ) -> Result<Option<ProjectPurgeInventory>, StorageError> {
+                super::project_purge::inventory::read_with_client_keepers(
+                    self.conn, project, keepers,
+                )
+            }
+            fn purge_planning(
+                &self,
+                project: &ProjectId,
+            ) -> Result<Option<ProjectPurgePlanning>, StorageError> {
+                super::project_purge::classification::planning(self.conn, project)
+            }
+            fn purge_candidates(
+                &self,
+                project: &ProjectId,
+            ) -> Result<Option<ProjectPurgeCandidates>, StorageError> {
+                super::project_purge::candidates::snapshot(self.conn, project)
+            }
+            fn managed_file_recovery(
+                &self,
+                kind: &str,
+                after: Option<&Id>,
+                n: u16,
+            ) -> Result<Vec<ProjectManagedFileRecovery>, StorageError> {
+                super::project_purge::managed_recovery(self.conn, kind, after, n)
+            }
 
-            fn pending_project_managed_writes(&self, project:&ProjectId)->Result<bool,StorageError> {super::project_purge::pending_managed_writes(self.conn,project)}
+            fn pending_project_managed_writes(
+                &self,
+                project: &ProjectId,
+            ) -> Result<bool, StorageError> {
+                super::project_purge::pending_managed_writes(self.conn, project)
+            }
 
-            fn project_managed_file(&self, project:&ProjectId, id:&Id) -> Result<Option<StoredProjectManagedFile>,StorageError> { super::project_purge::managed_file(self.conn,project,id) }
-            fn project_managed_files(&self, project:&ProjectId, after:Option<&Id>, n:u16) -> Result<Vec<StoredProjectManagedFile>,StorageError> { super::project_purge::managed_files(self.conn,project,after,n) }
+            fn project_managed_file(
+                &self,
+                project: &ProjectId,
+                id: &Id,
+            ) -> Result<Option<StoredProjectManagedFile>, StorageError> {
+                super::project_purge::managed_file(self.conn, project, id)
+            }
+            fn project_managed_files(
+                &self,
+                project: &ProjectId,
+                after: Option<&Id>,
+                n: u16,
+            ) -> Result<Vec<StoredProjectManagedFile>, StorageError> {
+                super::project_purge::managed_files(self.conn, project, after, n)
+            }
 
-            fn purge_manifest(&self, project: &ProjectId, manifest: &Id) -> Result<Option<StoredProjectPurge>, StorageError> {
+            fn purge_manifest(
+                &self,
+                project: &ProjectId,
+                manifest: &Id,
+            ) -> Result<Option<StoredProjectPurge>, StorageError> {
                 super::project_purge::manifest(self.conn, project, manifest)
             }
 
@@ -383,7 +478,8 @@ macro_rules! project_reads {
             fn members(&self, project: &ProjectId) -> Result<Vec<Id>, StorageError> {
                 ids(
                     self.conn,
-                    "SELECT repository_id FROM project_repositories WHERE project_id=?1 ORDER BY repository_id",
+                    "SELECT repository_id FROM project_repositories WHERE project_id=?1 \
+                        ORDER BY repository_id",
                     [project.0.as_str()],
                 )
             }
@@ -400,23 +496,29 @@ macro_rules! project_reads {
             }
             fn repository_projects(&self, repository: &Id) -> Result<Vec<ProjectId>, StorageError> {
                 Ok(ids(
-                    self.conn,
-                    "SELECT m.project_id FROM project_repositories m JOIN projects p ON p.id=m.project_id WHERE m.repository_id=?1 AND p.lifecycle<>'Deleted' ORDER BY m.project_id",
-                    [repository.as_str()],
-                )?
-                .into_iter()
-                .map(ProjectId)
-                .collect())
+                            self.conn,
+                            "SELECT m.project_id FROM project_repositories m JOIN projects p ON \
+                        p.id=m.project_id WHERE m.repository_id=?1 AND p.lifecycle<>'Deleted' \
+                        ORDER BY m.project_id",
+                            [repository.as_str()],
+                        )?
+                        .into_iter()
+                        .map(ProjectId)
+                        .collect())
             }
             fn index_views(&self, repository: &Id) -> Result<Vec<StoredIndexView>, StorageError> {
                 // A timestamp can cover several publications. Their opaque IDs do not
                 // encode chronology; the immutable baseline captures its real pointer
                 // revision. Legacy metadata without that witness keeps the old fallback.
                 let mut s = db(self.conn.prepare_cached(&format!(
-                    "SELECT {VIEW_COLUMNS} FROM repository_index_views WHERE repository_id=?1 ORDER BY published_at DESC, \
-                     (SELECT CASE WHEN json_type(v.coverage_json,'$.sourceRevision')='integer' THEN json_extract(v.coverage_json,'$.sourceRevision') END \
-                      FROM index_views v WHERE v.id=repository_index_views.view_id) DESC, view_id DESC LIMIT 500"
-                )))?;
+                            "SELECT {VIEW_COLUMNS} FROM repository_index_views WHERE \
+                        repository_id=?1 ORDER BY published_at DESC, \
+                        (SELECT CASE WHEN json_type(v.coverage_json,\
+                        '$.sourceRevision')='integer' THEN json_extract(v.coverage_json,\
+                        '$.sourceRevision') END \
+                        FROM index_views v WHERE v.id=repository_index_views.view_id) DESC, \
+                        view_id DESC LIMIT 500"
+                        )))?;
                 let rows = db(db(s.query_map([repository.as_str()], view_row))?
                     .collect::<rusqlite::Result<Vec<_>>>())?;
                 rows.into_iter().map(view_of).collect()
@@ -435,22 +537,24 @@ macro_rules! project_reads {
                 kind: TextKind,
             ) -> Result<Option<StoredRepositoryText>, StorageError> {
                 let raw = db(db(self.conn.prepare_cached(
-                    "SELECT view_id,repository_id,kind,artifact_id,version_id,sha256,byte_length,media_type,coverage FROM repository_texts WHERE view_id=?1 AND kind=?2",
-                ))?
-                .query_row(params![view.as_str(), kind.as_str()], |r| {
-                    Ok((
-                        r.get(0)?,
-                        r.get(1)?,
-                        r.get(2)?,
-                        r.get(3)?,
-                        r.get(4)?,
-                        r.get(5)?,
-                        r.get(6)?,
-                        r.get(7)?,
-                        r.get(8)?,
-                    ))
-                })
-                .optional())?;
+                            "SELECT view_id,repository_id,kind,artifact_id,version_id,sha256,\
+                        byte_length,media_type,coverage FROM repository_texts WHERE view_id=?1 \
+                        AND kind=?2",
+                        ))?
+                        .query_row(params![view.as_str(), kind.as_str()], |r| {
+                            Ok((
+                                r.get(0)?,
+                                r.get(1)?,
+                                r.get(2)?,
+                                r.get(3)?,
+                                r.get(4)?,
+                                r.get(5)?,
+                                r.get(6)?,
+                                r.get(7)?,
+                                r.get(8)?,
+                            ))
+                        })
+                        .optional())?;
                 raw.map(text_of).transpose()
             }
             fn work_naming_repository(
@@ -459,20 +563,28 @@ macro_rules! project_reads {
                 repository: &Id,
             ) -> Result<i64, StorageError> {
                 db(self.conn.query_row(
-                    "SELECT count(*) FROM work_items w WHERE w.project_id=?1 AND (
-                       EXISTS(SELECT 1 FROM work_repositories wr WHERE wr.work_id=w.id AND wr.repository_id=?2)
-                       OR EXISTS(SELECT 1 FROM json_each(w.brief_json,'$.touches') t WHERE json_extract(t.value,'$.repositoryId')=?2)
-                       OR EXISTS(SELECT 1 FROM feature_plans fp, json_each(fp.pending_plan_json,'$.draft.repositoryIds') r
-                                 WHERE fp.feature_id=w.id AND fp.pending_plan_json IS NOT NULL AND r.value=?2))",
-                    params![project.0.as_str(), repository.as_str()],
-                    |r| r.get(0),
-                ))
+                            "SELECT count(*) FROM work_items w WHERE w.project_id=?1 AND \
+                        (
+                       EXISTS(SELECT 1 FROM work_repositories wr \
+                        WHERE wr.work_id=w.id AND wr.repository_id=?2)
+                       \
+                        OR EXISTS(SELECT 1 FROM json_each(w.brief_json,'$.touches') t WHERE \
+                        json_extract(t.value,'$.repositoryId')=?2)
+                       OR \
+                        EXISTS(SELECT 1 FROM feature_plans fp, json_each(fp.pending_plan_json,\
+                        '$.draft.repositoryIds') r
+                                 WHERE \
+                        fp.feature_id=w.id AND fp.pending_plan_json IS NOT NULL AND r.value=?2))",
+                            params![project.0.as_str(), repository.as_str()],
+                            |r| r.get(0),
+                        ))
             }
             fn pending_archive_stops(&self, n: u16) -> Result<Vec<ProjectId>, StorageError> {
                 let n = page_limit(n)?;
                 Ok(ids(
                     self.conn,
-                    "SELECT project_id FROM project_details WHERE archive_stop_pending=1 ORDER BY project_id LIMIT ?1",
+                    "SELECT project_id FROM project_details WHERE archive_stop_pending=1 \
+                        ORDER BY project_id LIMIT ?1",
                     [n],
                 )?
                 .into_iter()
@@ -506,8 +618,13 @@ fn check_project(p: &StoredProject) -> Result<(), StorageError> {
 }
 fn write_details(conn: &Connection, p: &StoredProject) -> Result<(), StorageError> {
     db(db(conn.prepare_cached(
-        "INSERT INTO project_details(project_id,description,updated_at,archived_at,deleted_at,archive_epoch,archive_stop_pending) VALUES(?1,?2,?3,?4,?5,?6,?7) \
-         ON CONFLICT(project_id) DO UPDATE SET description=excluded.description,updated_at=excluded.updated_at,archived_at=excluded.archived_at,deleted_at=excluded.deleted_at,archive_epoch=excluded.archive_epoch,archive_stop_pending=excluded.archive_stop_pending",
+        "INSERT INTO project_details(project_id,description,updated_at,\
+            archived_at,deleted_at,archive_epoch,archive_stop_pending) VALUES(?1,?2,\
+            ?3,?4,?5,?6,?7) \
+            ON CONFLICT(project_id) DO UPDATE SET description=excluded.description,\
+            updated_at=excluded.updated_at,archived_at=excluded.archived_at,\
+            deleted_at=excluded.deleted_at,archive_epoch=excluded.archive_epoch,\
+            archive_stop_pending=excluded.archive_stop_pending",
     ))?
     .execute(params![
         p.id.0.as_str(),
@@ -601,7 +718,8 @@ impl ProjectRepository for Unit<'_> {
             });
         }
         db(db(self.conn.prepare_cached(
-            "INSERT INTO projects(id,title,lifecycle,revision,scope_revision,created_at) VALUES(?1,?2,?3,1,?4,?5)",
+            "INSERT INTO projects(id,title,lifecycle,revision,scope_revision,\
+                created_at) VALUES(?1,?2,?3,1,?4,?5)",
         ))?
         .execute(params![
             p.id.0.as_str(),
@@ -638,7 +756,8 @@ impl ProjectRepository for Unit<'_> {
             ));
         }
         let n = db(db(self.conn.prepare_cached(
-            "UPDATE projects SET title=?1,lifecycle=?2,revision=?3,scope_revision=?4 WHERE id=?5 AND revision=?6",
+            "UPDATE projects SET title=?1,lifecycle=?2,revision=?3,scope_revision=?4 \
+                WHERE id=?5 AND revision=?6",
         ))?
         .execute(params![
             p.name,
@@ -731,7 +850,8 @@ impl ProjectRepository for Unit<'_> {
         ))?
         .execute(params![r.id.as_str(), r.location]))?;
         db(db(self.conn.prepare_cached(
-            "INSERT INTO repository_details(repository_id,name,remote_url,is_primary,lifecycle,languages_json,registered_at) VALUES(?1,?2,?3,?4,?5,?6,?7)",
+            "INSERT INTO repository_details(repository_id,name,remote_url,is_primary,\
+                lifecycle,languages_json,registered_at) VALUES(?1,?2,?3,?4,?5,?6,?7)",
         ))?
         .execute(params![
             r.id.as_str(),
@@ -806,8 +926,13 @@ impl ProjectRepository for Unit<'_> {
             ));
         }
         db(db(self.conn.prepare_cached(
-            "INSERT INTO repository_texts(view_id,kind,repository_id,artifact_id,version_id,sha256,byte_length,media_type,coverage) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9) \
-             ON CONFLICT(view_id,kind) DO UPDATE SET artifact_id=excluded.artifact_id,version_id=excluded.version_id,sha256=excluded.sha256,byte_length=excluded.byte_length,media_type=excluded.media_type,coverage=excluded.coverage",
+            "INSERT INTO repository_texts(view_id,kind,repository_id,artifact_id,\
+                version_id,sha256,byte_length,media_type,coverage) VALUES(?1,?2,?3,?4,\
+                ?5,?6,?7,?8,?9) \
+                ON CONFLICT(view_id,kind) DO UPDATE SET \
+                artifact_id=excluded.artifact_id,version_id=excluded.version_id,\
+                sha256=excluded.sha256,byte_length=excluded.byte_length,\
+                media_type=excluded.media_type,coverage=excluded.coverage",
         ))?
         .execute(params![
             t.view_id.as_str(),
@@ -828,7 +953,8 @@ impl ProjectRepository for Unit<'_> {
         epoch: i64,
     ) -> Result<bool, StorageError> {
         let n = db(db(self.conn.prepare_cached(
-            "UPDATE project_details SET archive_stop_pending=0 WHERE project_id=?1 AND archive_epoch=?2 AND archive_stop_pending=1",
+            "UPDATE project_details SET archive_stop_pending=0 WHERE project_id=?1 \
+                AND archive_epoch=?2 AND archive_stop_pending=1",
         ))?
         .execute(params![project.0.as_str(), epoch]))?;
         Ok(n == 1)

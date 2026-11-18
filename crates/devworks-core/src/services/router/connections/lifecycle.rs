@@ -105,7 +105,14 @@ impl ConnectionService {
             {
                 return Err(StorageError::Busy);
             }
-            let payload = json!({"connectionId":current.id,"credentialRevision":current.credential_revision,"accountRevision":current.account_revision,"profile":current.profile,"endpointDigest":crate::fingerprint::sha256_hex(current.endpoint.as_bytes()),"allocatedHandle":candidate});
+            let payload = json!({
+                "connectionId": current.id,
+                "credentialRevision": current.credential_revision,
+                "accountRevision": current.account_revision,
+                "profile": current.profile,
+                "endpointDigest": crate::fingerprint::sha256_hex(current.endpoint.as_bytes()),
+                "allocatedHandle": candidate
+            });
             let id = OperationId(tx.new_id(IdKind::Operation));
             let op = tx.operations().record_intent(NewOperation {
                 id: id.clone(),

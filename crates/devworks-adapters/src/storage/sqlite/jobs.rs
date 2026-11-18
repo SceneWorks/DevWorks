@@ -26,7 +26,10 @@ fn json_ok(s: &str, what: &str) -> Result<(), StorageError> {
 // ---------------------------------------------------------------------------------------------
 // Jobs
 
-const JOB_COLUMNS: &str = "id,revision,project_id,title,kind,schedule_json,timezone,definition_json,enabled,authorized,authorized_by,hold,activated_epoch,anchor_at,next_at,interrupted_run_id,created_at,updated_at,deleted_at,project_epoch";
+const JOB_COLUMNS: &str = "id,revision,project_id,title,kind,schedule_json,timezone,\
+    definition_json,enabled,authorized,authorized_by,hold,activated_epoch,\
+    anchor_at,next_at,interrupted_run_id,created_at,updated_at,deleted_at,\
+    project_epoch";
 
 fn job_row(r: &Row<'_>) -> rusqlite::Result<[rusqlite::types::Value; 20]> {
     let mut out: [rusqlite::types::Value; 20] =
@@ -148,14 +151,23 @@ fn title_taken(conn: &Connection, j: &StoredJob) -> Result<bool, StorageError> {
 }
 fn write_job(conn: &Connection, j: &StoredJob, revision: i64) -> Result<(), StorageError> {
     db(conn.execute(
-        "INSERT INTO schedules(id,revision,project_id,title,kind,schedule_json,timezone,definition_json,enabled,authorized,authorized_by,hold,activated_epoch,anchor_at,next_at,interrupted_run_id,created_at,updated_at,deleted_at,project_epoch) \
-         VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20) \
-         ON CONFLICT(id) DO UPDATE SET revision=excluded.revision, title=excluded.title, kind=excluded.kind, \
-         schedule_json=excluded.schedule_json, timezone=excluded.timezone, definition_json=excluded.definition_json, \
-         enabled=excluded.enabled, authorized=excluded.authorized, authorized_by=excluded.authorized_by, hold=excluded.hold, \
-         activated_epoch=excluded.activated_epoch, anchor_at=excluded.anchor_at, next_at=excluded.next_at, \
-         interrupted_run_id=excluded.interrupted_run_id, \
-         updated_at=excluded.updated_at, deleted_at=excluded.deleted_at, project_epoch=excluded.project_epoch",
+        "INSERT INTO schedules(id,revision,project_id,title,kind,schedule_json,\
+            timezone,definition_json,enabled,authorized,authorized_by,hold,\
+            activated_epoch,anchor_at,next_at,interrupted_run_id,created_at,\
+            updated_at,deleted_at,project_epoch) \
+            VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,\
+            ?19,?20) \
+            ON CONFLICT(id) DO UPDATE SET revision=excluded.revision, \
+            title=excluded.title, kind=excluded.kind, \
+            schedule_json=excluded.schedule_json, timezone=excluded.timezone, \
+            definition_json=excluded.definition_json, \
+            enabled=excluded.enabled, authorized=excluded.authorized, \
+            authorized_by=excluded.authorized_by, hold=excluded.hold, \
+            activated_epoch=excluded.activated_epoch, anchor_at=excluded.anchor_at, \
+            next_at=excluded.next_at, \
+            interrupted_run_id=excluded.interrupted_run_id, \
+            updated_at=excluded.updated_at, deleted_at=excluded.deleted_at, \
+            project_epoch=excluded.project_epoch",
         params![
             j.id.as_str(),
             revision,
@@ -185,7 +197,11 @@ fn write_job(conn: &Connection, j: &StoredJob, revision: i64) -> Result<(), Stor
 // ---------------------------------------------------------------------------------------------
 // Runs
 
-const RUN_COLUMNS: &str = "id,schedule_id,seq,project_id,job_revision,definition_json,occurrence_key,occurrence_at,trigger,state,revision,operation_id,inner_operation_id,boot_id,started_at,finished_at,reason,hold,cancel_requested,resumptions,session_id,agent_actor,skipped_for,checkpoint_json,created_at,project_epoch,restore_epoch";
+const RUN_COLUMNS: &str = "id,schedule_id,seq,project_id,job_revision,definition_json,\
+    occurrence_key,occurrence_at,trigger,state,revision,operation_id,\
+    inner_operation_id,boot_id,started_at,finished_at,reason,hold,\
+    cancel_requested,resumptions,session_id,agent_actor,skipped_for,\
+    checkpoint_json,created_at,project_epoch,restore_epoch";
 
 fn run_row(r: &Row<'_>) -> rusqlite::Result<[rusqlite::types::Value; 27]> {
     let mut out: [rusqlite::types::Value; 27] =
@@ -296,13 +312,22 @@ fn write_run(
     revision: i64,
 ) -> Result<(), StorageError> {
     db(conn.execute(
-        "INSERT INTO job_runs(id,schedule_id,seq,project_id,job_revision,definition_json,occurrence_key,occurrence_at,trigger,state,revision,operation_id,inner_operation_id,boot_id,started_at,finished_at,reason,hold,cancel_requested,resumptions,session_id,agent_actor,skipped_for,checkpoint_json,created_at,project_epoch,restore_epoch) \
-         VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21,?22,?23,?24,?25,?26,?27) \
-         ON CONFLICT(id) DO UPDATE SET state=excluded.state, revision=excluded.revision, operation_id=excluded.operation_id, \
-         inner_operation_id=excluded.inner_operation_id, boot_id=excluded.boot_id, started_at=excluded.started_at, \
-         finished_at=excluded.finished_at, reason=excluded.reason, hold=excluded.hold, cancel_requested=excluded.cancel_requested, \
-         resumptions=excluded.resumptions, session_id=excluded.session_id, agent_actor=excluded.agent_actor, \
-         checkpoint_json=excluded.checkpoint_json",
+        "INSERT INTO job_runs(id,schedule_id,seq,project_id,job_revision,\
+            definition_json,occurrence_key,occurrence_at,trigger,state,revision,\
+            operation_id,inner_operation_id,boot_id,started_at,finished_at,reason,\
+            hold,cancel_requested,resumptions,session_id,agent_actor,skipped_for,\
+            checkpoint_json,created_at,project_epoch,restore_epoch) \
+            VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,\
+            ?19,?20,?21,?22,?23,?24,?25,?26,?27) \
+            ON CONFLICT(id) DO UPDATE SET state=excluded.state, \
+            revision=excluded.revision, operation_id=excluded.operation_id, \
+            inner_operation_id=excluded.inner_operation_id, \
+            boot_id=excluded.boot_id, started_at=excluded.started_at, \
+            finished_at=excluded.finished_at, reason=excluded.reason, \
+            hold=excluded.hold, cancel_requested=excluded.cancel_requested, \
+            resumptions=excluded.resumptions, session_id=excluded.session_id, \
+            agent_actor=excluded.agent_actor, \
+            checkpoint_json=excluded.checkpoint_json",
         params![
             r.id.as_str(),
             r.job_id.as_str(),

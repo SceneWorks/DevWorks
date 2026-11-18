@@ -233,7 +233,12 @@ fn one_notification(
     .into_iter()
     .next())
 }
-const SOURCES: &str = "SELECT 'Settings' AS source,id,CASE WHEN scope_key='workspace' THEN NULL ELSE substr(scope_key,9) END AS project_id,created_at,state FROM configuration_proposals WHERE namespace='settings' UNION ALL SELECT 'FeaturePlan',p.id,w.project_id,p.requested_at,p.state FROM plan_proposals p JOIN work_items w ON w.id=p.feature_id UNION ALL SELECT 'Generic',id,project_id,created_at,state FROM decision_approvals";
+const SOURCES: &str = "SELECT 'Settings' AS source,id,CASE WHEN scope_key='workspace' THEN \
+    NULL ELSE substr(scope_key,9) END AS project_id,created_at,state FROM \
+    configuration_proposals WHERE namespace='settings' UNION ALL SELECT \
+    'FeaturePlan',p.id,w.project_id,p.requested_at,p.state FROM \
+    plan_proposals p JOIN work_items w ON w.id=p.feature_id UNION ALL \
+    SELECT 'Generic',id,project_id,created_at,state FROM decision_approvals";
 fn source_ref(v: &Value) -> Result<ApprovalSourceRef, StorageError> {
     Ok(ApprovalSourceRef {
         source: ApprovalSource::parse(&text(v, "source")?)
@@ -263,7 +268,9 @@ fn source_list(
     rows(
         conn,
         &format!(
-            "SELECT * FROM ({SOURCES}) WHERE (?1 IS NULL OR project_id=?1) AND (?2 IS NULL OR state=?2) AND (?3 IS NULL OR (created_at,id,source)<(?3,?4,?5)) ORDER BY created_at DESC,id DESC,source DESC LIMIT ?6"
+            "SELECT * FROM ({SOURCES}) WHERE (?1 IS NULL OR project_id=?1) AND (?2 \
+                IS NULL OR state=?2) AND (?3 IS NULL OR (created_at,id,source)<(?3,?4,\
+                ?5)) ORDER BY created_at DESC,id DESC,source DESC LIMIT ?6"
         ),
         params![project, f.state, at, id, source, n],
         source_ref,
@@ -314,22 +321,101 @@ fn notification_list(
     p.push(Sql::Integer(n));
     rows(conn, &sql, params_from_iter(p), notification)
 }
-macro_rules! decision_reads {($t:ty)=>{impl DecisionRead for $t{
-    fn os_notification_delivery(&self,user:&ActorId,notification:&Id)->Result<Option<StoredOsNotificationDelivery>,StorageError>{super::notification_delivery::read(self.conn,user,notification)}
-    fn notification_users(&self)->Result<Vec<ActorId>,StorageError>{
-        let mut statement=db(self.conn.prepare_cached("SELECT a.id FROM notification_audience n JOIN actors a ON a.id=n.user_id WHERE n.singleton=1 AND a.kind='human'"))?;
-        let values=db(db(statement.query_map([],|r|r.get::<_,String>(0)))?.collect::<rusqlite::Result<Vec<_>>>())?;
-        values.into_iter().map(|v|id_of(v).map(ActorId)).collect()
-    }
-    fn list_approval_sources(&self,f:&ApprovalSourceFilter,a:Option<&ApprovalSourcePosition>,n:u16)->Result<Vec<ApprovalSourceRef>,StorageError>{source_list(self.conn,f,a,n)}
-    fn approval(&self,id:&Id)->Result<Option<StoredApproval>,StorageError>{one_approval(self.conn,id)}
-    fn human_decision(&self,s:ApprovalSource,id:&Id)->Result<Option<StoredHumanDecision>,StorageError>{Ok(rows(self.conn,"SELECT * FROM human_decisions WHERE source=?1 AND proposal_id=?2",params![s.as_str(),id.as_str()],audit)?.into_iter().next())}
-    fn approval_resume(&self,id:&Id)->Result<Option<StoredApprovalResume>,StorageError>{one_resume(self.conn,id)}
-    fn pending_approval_resumes(&self,after:Option<&Id>,n:u16)->Result<Vec<StoredApprovalResume>,StorageError>{rows(self.conn,"SELECT * FROM approval_resumes WHERE state IN ('Pending','Unknown') AND approval_id>?1 ORDER BY approval_id LIMIT ?2",params![after.map_or("",Id::as_str),page_limit(n)?],resume)}
-    fn notification(&self,user:&ActorId,id:&Id)->Result<Option<StoredNotification>,StorageError>{one_notification(self.conn,user,id)}
-    fn notification_by_source(&self,user:&ActorId,source:&str)->Result<Option<StoredNotification>,StorageError>{Ok(rows(self.conn,"SELECT * FROM notifications WHERE user_id=?1 AND source_id=?2",params![user.0.as_str(),source],notification)?.into_iter().next())}
-    fn notifications(&self,f:&NotificationFilter,a:Option<&NotificationPosition>,n:u16)->Result<Vec<StoredNotification>,StorageError>{notification_list(self.conn,f,a,n)}
-}};}
+macro_rules! decision_reads {
+    ($t:ty) => {
+        impl DecisionRead for $t {
+            fn os_notification_delivery(
+                &self,
+                user: &ActorId,
+                notification: &Id,
+            ) -> Result<Option<StoredOsNotificationDelivery>, StorageError> {
+                super::notification_delivery::read(self.conn, user, notification)
+            }
+            fn notification_users(&self) -> Result<Vec<ActorId>, StorageError> {
+                let mut statement = db(self.conn.prepare_cached(
+                    "SELECT a.id FROM notification_audience n JOIN actors a ON \
+            a.id=n.user_id WHERE n.singleton=1 AND a.kind='human'",
+                ))?;
+                let values = db(db(statement.query_map([], |r| r.get::<_, String>(0)))?
+                    .collect::<rusqlite::Result<Vec<_>>>())?;
+                values.into_iter().map(|v| id_of(v).map(ActorId)).collect()
+            }
+            fn list_approval_sources(
+                &self,
+                f: &ApprovalSourceFilter,
+                a: Option<&ApprovalSourcePosition>,
+                n: u16,
+            ) -> Result<Vec<ApprovalSourceRef>, StorageError> {
+                source_list(self.conn, f, a, n)
+            }
+            fn approval(&self, id: &Id) -> Result<Option<StoredApproval>, StorageError> {
+                one_approval(self.conn, id)
+            }
+            fn human_decision(
+                &self,
+                s: ApprovalSource,
+                id: &Id,
+            ) -> Result<Option<StoredHumanDecision>, StorageError> {
+                Ok(rows(
+                    self.conn,
+                    "SELECT * FROM human_decisions WHERE source=?1 AND proposal_id=?2",
+                    params![s.as_str(), id.as_str()],
+                    audit,
+                )?
+                .into_iter()
+                .next())
+            }
+            fn approval_resume(
+                &self,
+                id: &Id,
+            ) -> Result<Option<StoredApprovalResume>, StorageError> {
+                one_resume(self.conn, id)
+            }
+            fn pending_approval_resumes(
+                &self,
+                after: Option<&Id>,
+                n: u16,
+            ) -> Result<Vec<StoredApprovalResume>, StorageError> {
+                rows(
+                    self.conn,
+                    "SELECT * FROM approval_resumes WHERE state IN ('Pending','Unknown') AND \
+        approval_id>?1 ORDER BY approval_id LIMIT ?2",
+                    params![after.map_or("", Id::as_str), page_limit(n)?],
+                    resume,
+                )
+            }
+            fn notification(
+                &self,
+                user: &ActorId,
+                id: &Id,
+            ) -> Result<Option<StoredNotification>, StorageError> {
+                one_notification(self.conn, user, id)
+            }
+            fn notification_by_source(
+                &self,
+                user: &ActorId,
+                source: &str,
+            ) -> Result<Option<StoredNotification>, StorageError> {
+                Ok(rows(
+                    self.conn,
+                    "SELECT * FROM notifications WHERE user_id=?1 AND source_id=?2",
+                    params![user.0.as_str(), source],
+                    notification,
+                )?
+                .into_iter()
+                .next())
+            }
+            fn notifications(
+                &self,
+                f: &NotificationFilter,
+                a: Option<&NotificationPosition>,
+                n: u16,
+            ) -> Result<Vec<StoredNotification>, StorageError> {
+                notification_list(self.conn, f, a, n)
+            }
+        }
+    };
+}
 decision_reads!(Snapshot<'_>);
 decision_reads!(Unit<'_>);
 
@@ -358,7 +444,11 @@ impl DecisionRepository for Unit<'_> {
     }
     fn bind_notification_user(&mut self, user: &ActorId) -> Result<(), StorageError> {
         actor(self.conn, user, PrincipalKind::Human)?;
-        db(self.conn.execute("INSERT INTO notification_audience(singleton,user_id) VALUES(1,?1) ON CONFLICT(singleton) DO UPDATE SET user_id=excluded.user_id",[user.0.as_str()]))?;
+        db(self.conn.execute(
+            "INSERT INTO notification_audience(singleton,user_id) VALUES(1,?1) ON \
+            CONFLICT(singleton) DO UPDATE SET user_id=excluded.user_id",
+            [user.0.as_str()],
+        ))?;
         Ok(())
     }
     fn put_approval(
@@ -410,7 +500,32 @@ impl DecisionRepository for Unit<'_> {
                 {
                     return Err(invalid("a new approval is pending at revision 1"));
                 }
-                db(self.conn.execute("INSERT INTO decision_approvals(id,scope_key,project_id,revision,state,operation_kind,target_id,target_revision,content_digest,scope_digest,summary,artifact_json,payload_json,author_id,author_kind,created_at,decided_by,decided_at,rationale,restore_epoch) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,NULL,NULL,NULL,?17)",params![a.id.as_str(),a.scope.key(),a.scope.project_id().map(|p|p.0.as_str()),a.revision,a.state,a.operation_kind,a.target_id.as_str(),a.target_revision,a.content_digest,a.scope_digest,a.summary,artifact,payload,a.author.0.as_str(),principal_name(a.author_kind),a.created_at_ms,a.restore_epoch]))?;
+                db(self.conn.execute(
+                    "INSERT INTO decision_approvals(id,scope_key,project_id,revision,state,\
+                    operation_kind,target_id,target_revision,content_digest,scope_digest,\
+                    summary,artifact_json,payload_json,author_id,author_kind,created_at,\
+                    decided_by,decided_at,rationale,restore_epoch) VALUES(?1,?2,?3,?4,?5,?6,\
+                    ?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,NULL,NULL,NULL,?17)",
+                    params![
+                        a.id.as_str(),
+                        a.scope.key(),
+                        a.scope.project_id().map(|p| p.0.as_str()),
+                        a.revision,
+                        a.state,
+                        a.operation_kind,
+                        a.target_id.as_str(),
+                        a.target_revision,
+                        a.content_digest,
+                        a.scope_digest,
+                        a.summary,
+                        artifact,
+                        payload,
+                        a.author.0.as_str(),
+                        principal_name(a.author_kind),
+                        a.created_at_ms,
+                        a.restore_epoch
+                    ],
+                ))?;
             }
             (None, Some(_)) => {
                 return Err(StorageError::Duplicate {
@@ -451,7 +566,19 @@ impl DecisionRepository for Unit<'_> {
                         "approval content is immutable and only a pending decision advances once",
                     ));
                 }
-                db(self.conn.execute("UPDATE decision_approvals SET revision=?2,state=?3,decided_by=?4,decided_at=?5,rationale=?6 WHERE id=?1 AND revision=?7",params![a.id.as_str(),a.revision,a.state,a.decided_by.as_ref().map(|h|h.0.as_str()),a.decided_at_ms,a.rationale,e]))?;
+                db(self.conn.execute(
+                    "UPDATE decision_approvals SET revision=?2,state=?3,decided_by=?4,\
+                    decided_at=?5,rationale=?6 WHERE id=?1 AND revision=?7",
+                    params![
+                        a.id.as_str(),
+                        a.revision,
+                        a.state,
+                        a.decided_by.as_ref().map(|h| h.0.as_str()),
+                        a.decided_at_ms,
+                        a.rationale,
+                        e
+                    ],
+                ))?;
             }
         }
         Ok(())
@@ -481,7 +608,9 @@ impl DecisionRepository for Unit<'_> {
                 "SELECT scope_key,revision,state,decided_by,decided_at FROM configuration_proposals WHERE namespace='settings' AND id=?1"
             }
             ApprovalSource::FeaturePlan => {
-                "SELECT 'project:'||w.project_id AS scope_key,p.revision,p.state,p.decided_by,p.decided_at FROM plan_proposals p JOIN work_items w ON w.id=p.feature_id WHERE p.id=?1"
+                "SELECT 'project:'||w.project_id AS scope_key,p.revision,p.state,\
+                    p.decided_by,p.decided_at FROM plan_proposals p JOIN work_items w ON \
+                    w.id=p.feature_id WHERE p.id=?1"
             }
             ApprovalSource::Generic => {
                 "SELECT scope_key,revision,state,decided_by,decided_at FROM decision_approvals WHERE id=?1"
@@ -524,7 +653,25 @@ impl DecisionRepository for Unit<'_> {
         }
         let scope = ConfigScope::from_key(&scope)
             .ok_or_else(|| corrupt("invalid approval source scope"))?;
-        db(self.conn.execute("INSERT INTO human_decisions(source,proposal_id,project_id,reviewed_revision,decision,rationale,actor_id,decided_at,content_digest,scope_digest,reviewed_snapshot_json) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)",params![a.source.as_str(),a.proposal_id.as_str(),scope.project_id().map(|p|p.0.as_str()),a.reviewed_proposal_revision,a.decision,a.rationale,a.actor.0.as_str(),a.at_ms,a.content_digest,a.scope_digest,snapshot]))?;
+        db(self.conn.execute(
+            "INSERT INTO human_decisions(source,proposal_id,project_id,\
+            reviewed_revision,decision,rationale,actor_id,decided_at,content_digest,\
+            scope_digest,reviewed_snapshot_json) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,\
+            ?10,?11)",
+            params![
+                a.source.as_str(),
+                a.proposal_id.as_str(),
+                scope.project_id().map(|p| p.0.as_str()),
+                a.reviewed_proposal_revision,
+                a.decision,
+                a.rationale,
+                a.actor.0.as_str(),
+                a.at_ms,
+                a.content_digest,
+                a.scope_digest,
+                snapshot
+            ],
+        ))?;
         Ok(())
     }
     fn put_approval_resume(
@@ -587,7 +734,29 @@ impl DecisionRepository for Unit<'_> {
                 if r.revision != 1 || r.state != "Pending" || r.result.is_some() {
                     return Err(invalid("new resume starts pending at revision 1"));
                 }
-                db(self.conn.execute("INSERT INTO approval_resumes(approval_id,revision,state,principal_id,principal_kind,invocation_json,operation,schema_revision,input_json,request_key,request_digest,grant_id,created_at,updated_at,result_json) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15)",params![r.approval_id.as_str(),r.revision,r.state,r.principal.0.as_str(),principal_name(r.principal_kind),invocation,r.operation,r.schema_revision,input,r.request_key.as_str(),r.request_digest,r.grant_id.as_ref().map(Id::as_str),r.created_at_ms,r.updated_at_ms,result]))?;
+                db(self.conn.execute(
+                    "INSERT INTO approval_resumes(approval_id,revision,state,principal_id,\
+                    principal_kind,invocation_json,operation,schema_revision,input_json,\
+                    request_key,request_digest,grant_id,created_at,updated_at,result_json) \
+                    VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15)",
+                    params![
+                        r.approval_id.as_str(),
+                        r.revision,
+                        r.state,
+                        r.principal.0.as_str(),
+                        principal_name(r.principal_kind),
+                        invocation,
+                        r.operation,
+                        r.schema_revision,
+                        input,
+                        r.request_key.as_str(),
+                        r.request_digest,
+                        r.grant_id.as_ref().map(Id::as_str),
+                        r.created_at_ms,
+                        r.updated_at_ms,
+                        result
+                    ],
+                ))?;
             }
             (None, Some(_)) => {
                 return Err(StorageError::Duplicate {
@@ -628,7 +797,18 @@ impl DecisionRepository for Unit<'_> {
                         "resume request binding is immutable and a terminal outcome is final",
                     ));
                 }
-                db(self.conn.execute("UPDATE approval_resumes SET revision=?2,state=?3,updated_at=?4,result_json=?5 WHERE approval_id=?1 AND revision=?6",params![r.approval_id.as_str(),r.revision,r.state,r.updated_at_ms,result,e]))?;
+                db(self.conn.execute(
+                    "UPDATE approval_resumes SET revision=?2,state=?3,updated_at=?4,\
+                    result_json=?5 WHERE approval_id=?1 AND revision=?6",
+                    params![
+                        r.approval_id.as_str(),
+                        r.revision,
+                        r.state,
+                        r.updated_at_ms,
+                        result,
+                        e
+                    ],
+                ))?;
             }
         }
         Ok(())
@@ -665,7 +845,12 @@ impl DecisionRepository for Unit<'_> {
         }
         match (expected, one_notification(self.conn, &n.user_id, &n.id)?) {
             (None, None) => {
-                let exists:bool=db(self.conn.query_row("SELECT EXISTS(SELECT 1 FROM notifications WHERE id=?1 OR (user_id=?2 AND source_id=?3))",params![n.id.as_str(),n.user_id.0.as_str(),n.source_id],|r|r.get(0)))?;
+                let exists: bool = db(self.conn.query_row(
+                    "SELECT EXISTS(SELECT 1 FROM notifications WHERE id=?1 OR (user_id=?2 \
+                    AND source_id=?3))",
+                    params![n.id.as_str(), n.user_id.0.as_str(), n.source_id],
+                    |r| r.get(0),
+                ))?;
                 if exists {
                     return Err(StorageError::Duplicate {
                         kind: "notification",
@@ -677,7 +862,31 @@ impl DecisionRepository for Unit<'_> {
                         "a new notification is unread and unacknowledged at revision 1",
                     ));
                 }
-                db(self.conn.execute("INSERT INTO notifications(id,revision,user_id,project_id,root_id,decision_id,category,priority,title,body,source_id,links_json,requires_input,is_read,acknowledged,created_at,updated_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17)",params![n.id.as_str(),n.revision,n.user_id.0.as_str(),n.project_id.as_ref().map(|p|p.0.as_str()),n.root_id.as_ref().map(|r|r.0.as_str()),n.decision_id.as_ref().map(Id::as_str),n.category,n.priority,n.title,n.body,n.source_id,links,n.requires_input,n.read,n.acknowledged,n.created_at_ms,n.updated_at_ms]))?;
+                db(self.conn.execute(
+                    "INSERT INTO notifications(id,revision,user_id,project_id,root_id,\
+                    decision_id,category,priority,title,body,source_id,links_json,\
+                    requires_input,is_read,acknowledged,created_at,updated_at) VALUES(?1,?2,\
+                    ?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17)",
+                    params![
+                        n.id.as_str(),
+                        n.revision,
+                        n.user_id.0.as_str(),
+                        n.project_id.as_ref().map(|p| p.0.as_str()),
+                        n.root_id.as_ref().map(|r| r.0.as_str()),
+                        n.decision_id.as_ref().map(Id::as_str),
+                        n.category,
+                        n.priority,
+                        n.title,
+                        n.body,
+                        n.source_id,
+                        links,
+                        n.requires_input,
+                        n.read,
+                        n.acknowledged,
+                        n.created_at_ms,
+                        n.updated_at_ms
+                    ],
+                ))?;
             }
             (None, Some(_)) => {
                 return Err(StorageError::Duplicate {
@@ -717,7 +926,19 @@ impl DecisionRepository for Unit<'_> {
                         "notification ownership/content are immutable and acknowledgment is persistent",
                     ));
                 }
-                db(self.conn.execute("UPDATE notifications SET revision=?2,is_read=?3,acknowledged=?4,updated_at=?5 WHERE id=?1 AND user_id=?6 AND revision=?7",params![n.id.as_str(),n.revision,n.read,n.acknowledged,n.updated_at_ms,n.user_id.0.as_str(),e]))?;
+                db(self.conn.execute(
+                    "UPDATE notifications SET revision=?2,is_read=?3,acknowledged=?4,\
+                    updated_at=?5 WHERE id=?1 AND user_id=?6 AND revision=?7",
+                    params![
+                        n.id.as_str(),
+                        n.revision,
+                        n.read,
+                        n.acknowledged,
+                        n.updated_at_ms,
+                        n.user_id.0.as_str(),
+                        e
+                    ],
+                ))?;
             }
         }
         Ok(())

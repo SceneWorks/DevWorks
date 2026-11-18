@@ -46,7 +46,15 @@ fn session(a: &StoredAssignment, actor: ActorId) -> StoredSession {
     }
 }
 fn marker(previous: Option<Value>) -> Value {
-    json!({"kind":"DevWorksMembershipHandoff","version":1,"membershipHandoff":{"hadCheckpoint":previous.is_some(),"previousCheckpoint":previous,"subtree":["worker","descendant"]}})
+    json!({
+        "kind": "DevWorksMembershipHandoff",
+        "version": 1,
+        "membershipHandoff": {
+            "hadCheckpoint": previous.is_some(),
+            "previousCheckpoint": previous,
+            "subtree": ["worker", "descendant"]
+        }
+    })
 }
 fn fixture(h: &Harness, previous: Option<Value>) -> (SqliteStore, StoredAssignment) {
     let s = seeded(h);
@@ -369,21 +377,75 @@ fn handoff_refuses_live_descendants_turns_uncertain_effects_and_processes() {
         let h = Harness::new();
         let (s, moved) = fixture(&h, None);
         let info = s.info();
-        s.with_writer_connection(move|c|{
-            let db=super::super::super::conn::db;
+        s.with_writer_connection(move |c| {
+            let db = super::super::super::conn::db;
             match hazard {
-                0=>{db(c.execute("UPDATE assignments SET state='Waiting' WHERE id='descendant'",[]))?;},
-                1=>{db(c.execute("INSERT INTO session_turns(session_id,turn_id,assignment_id,execution_id,owner_epoch,boot_id,started_at) VALUES('session-descendant','turn','descendant','execution-feature',0,?1,?2)",rusqlite::params![info.boot_id.unwrap().as_str(),T0]))?;},
-                2=>{db(c.execute("INSERT INTO operations(id,root_id,assignment_id,capability,schema_version,args_digest,payload_json,state,revision,created_at) VALUES('unsafe','feature','descendant','test',1,'digest','{}','OutcomeUnknown',1,?1)",[T0]))?;},
-                3=>{db(c.execute("INSERT INTO owned_processes(id,boot_id,state,platform,program,argv_sha256,actor_id,session_id,project_id,root_id,assignment_id,created_at,updated_at,revision) VALUES('process',?1,'Uncertain','unix','worker',?2,?3,'session-descendant','project','feature','descendant',?4,?4,1)",rusqlite::params![info.boot_id.unwrap().as_str(),"a".repeat(64),info.host_actor.0.as_str(),T0]))?;},
-                4=>{
-                    db(c.execute("INSERT INTO operations(id,root_id,assignment_id,capability,schema_version,args_digest,payload_json,state,revision,created_at) VALUES('unsafe','feature','worker','test',1,'digest','{}','IntentRecorded',1,?1)",[T0]))?;
-                    db(c.execute("INSERT INTO queue_entries(id,consumer,event_id,root_id,operation_id,priority,ready_at,state,payload_json) VALUES('queued','test','prior-event','feature','unsafe',0,?1,'Ready','{}')",[T0]))?;
+                0 => {
+                    db(c.execute(
+                        "UPDATE assignments SET state='Waiting' WHERE id='descendant'",
+                        [],
+                    ))?;
                 }
-                _=>{db(c.execute("INSERT INTO operations(id,root_id,assignment_id,capability,schema_version,args_digest,payload_json,state,revision,created_at) VALUES('unsafe','feature','worker','test',1,'digest','{}','NeedsInput',1,?1)",[T0]))?;}
+                1 => {
+                    db(c.execute(
+                        "INSERT INTO session_turns(session_id,turn_id,assignment_id,execution_id,\
+                    owner_epoch,boot_id,started_at) VALUES('session-descendant','turn',\
+                    'descendant','execution-feature',0,?1,?2)",
+                        rusqlite::params![info.boot_id.unwrap().as_str(), T0],
+                    ))?;
+                }
+                2 => {
+                    db(c.execute(
+                        "INSERT INTO operations(id,root_id,assignment_id,capability,\
+                    schema_version,args_digest,payload_json,state,revision,created_at) \
+                    VALUES('unsafe','feature','descendant','test',1,'digest','{}',\
+                    'OutcomeUnknown',1,?1)",
+                        [T0],
+                    ))?;
+                }
+                3 => {
+                    db(c.execute(
+                        "INSERT INTO owned_processes(id,boot_id,state,platform,program,\
+                    argv_sha256,actor_id,session_id,project_id,root_id,assignment_id,\
+                    created_at,updated_at,revision) VALUES('process',?1,'Uncertain','unix',\
+                    'worker',?2,?3,'session-descendant','project','feature','descendant',?4,\
+                    ?4,1)",
+                        rusqlite::params![
+                            info.boot_id.unwrap().as_str(),
+                            "a".repeat(64),
+                            info.host_actor.0.as_str(),
+                            T0
+                        ],
+                    ))?;
+                }
+                4 => {
+                    db(c.execute(
+                        "INSERT INTO operations(id,root_id,assignment_id,capability,\
+                        schema_version,args_digest,payload_json,state,revision,created_at) \
+                        VALUES('unsafe','feature','worker','test',1,'digest','{}',\
+                        'IntentRecorded',1,?1)",
+                        [T0],
+                    ))?;
+                    db(c.execute(
+                        "INSERT INTO queue_entries(id,consumer,event_id,root_id,operation_id,\
+                        priority,ready_at,state,payload_json) VALUES('queued','test',\
+                        'prior-event','feature','unsafe',0,?1,'Ready','{}')",
+                        [T0],
+                    ))?;
+                }
+                _ => {
+                    db(c.execute(
+                        "INSERT INTO operations(id,root_id,assignment_id,capability,\
+                    schema_version,args_digest,payload_json,state,revision,created_at) \
+                    VALUES('unsafe','feature','worker','test',1,'digest','{}','NeedsInput',\
+                    1,?1)",
+                        [T0],
+                    ))?;
+                }
             }
             Ok(())
-        }).unwrap();
+        })
+        .unwrap();
         assert!(
             matches!(reparent(&s, moved.clone(), 1, 1), Err(StorageError::Busy)),
             "hazard {hazard}"
@@ -445,12 +507,22 @@ fn handoff_refuses_live_descendants_turns_uncertain_effects_and_processes() {
 fn global_assignment_lookup_finds_worker_under_old_membership_using_existing_index() {
     let h = Harness::new();
     let (s, moved) = fixture(&h, None);
-    s.with_writer_connection(|c|{
-        let db=super::super::super::conn::db;
-        db(c.execute("UPDATE assignments SET state='Waiting' WHERE id='worker'",[]))?;
-        let detail:String=super::super::super::conn::db(c.query_row("EXPLAIN QUERY PLAN SELECT id FROM assignments WHERE work_id='task-a' AND purpose='Primary' AND state IN ('Ready','Active','Waiting') LIMIT 1",[],|row|row.get(3)))?;
-        assert!(detail.contains("one_live_assignment"),"{detail}");Ok(())
-    }).unwrap();
+    s.with_writer_connection(|c| {
+        let db = super::super::super::conn::db;
+        db(c.execute(
+            "UPDATE assignments SET state='Waiting' WHERE id='worker'",
+            [],
+        ))?;
+        let detail: String = super::super::super::conn::db(c.query_row(
+            "EXPLAIN QUERY PLAN SELECT id FROM assignments WHERE work_id='task-a' \
+            AND purpose='Primary' AND state IN ('Ready','Active','Waiting') LIMIT 1",
+            [],
+            |row| row.get(3),
+        ))?;
+        assert!(detail.contains("one_live_assignment"), "{detail}");
+        Ok(())
+    })
+    .unwrap();
     read_snapshot(&s, &ReadOptions::default(), |r| {
         let worker = r
             .runs()
@@ -552,7 +624,16 @@ fn operation_handoff_read_fact_uses_canonical_uncertainty_without_queue_entries(
     ] {
         let h = Harness::new();
         let (s, moved) = fixture(&h, None);
-        s.with_writer_connection(move|c|{super::super::super::conn::db(c.execute("INSERT INTO operations(id,root_id,assignment_id,capability,schema_version,args_digest,payload_json,state,revision,created_at) VALUES('direct','feature','worker','test',1,'digest','{}',?1,1,?2)",rusqlite::params![state,T0]))?;Ok(())}).unwrap();
+        s.with_writer_connection(move |c| {
+            super::super::super::conn::db(c.execute(
+                "INSERT INTO operations(id,root_id,assignment_id,capability,\
+            schema_version,args_digest,payload_json,state,revision,created_at) \
+            VALUES('direct','feature','worker','test',1,'digest','{}',?1,1,?2)",
+                rusqlite::params![state, T0],
+            ))?;
+            Ok(())
+        })
+        .unwrap();
         let quiescent = read_snapshot(&s, &ReadOptions::default(), |r| {
             r.runs().assignment_handoff_quiescent(&moved.id)
         })
@@ -672,10 +753,47 @@ fn coordinator_usage(
     let request = format!("request-{name}");
     let actor = s.info().host_actor;
     let boot = s.info().boot_id.unwrap();
-    raw.execute("INSERT INTO operations(id,root_id,capability,schema_version,args_digest,payload_json,state,revision,created_at) VALUES(?1,?2,'router.request',1,?3,'{}','Dispatching',3,?4)",rusqlite::params![operation,root,"a".repeat(64),T0]).unwrap();
-    raw.execute("INSERT INTO operation_attempts(id,operation_id,attempt_no,boot_id,state,observations_json) VALUES(?1,?2,1,?3,'Dispatching','[]')",rusqlite::params![name,operation,boot.as_str()]).unwrap();
-    raw.execute("INSERT INTO router_requests(request_id,operation_id,purpose,session_id,project_id,model_id,connection_id,created_at) VALUES(?1,?2,'Conversation',?3,'project','sol','connection',?4)",rusqlite::params![request,operation,session,T0]).unwrap();
-    raw.execute("INSERT INTO usage_attempts(attempt_id,request_id,operation_id,attempt_number,project_id,work_id,assignment_id,execution_root_id,execution_id,session_id,actor_id,role,purpose,catalog_model_id,connection_id,endpoint_profile,access_mode,pricing_snapshot_json,state,revision,created_at) VALUES(?1,?2,?3,1,'project',?4,NULL,?5,?6,?7,?8,'Coordinator','Conversation','sol','connection','OpenAiResponses','ApiKey','{}','Dispatched',2,?9)",rusqlite::params![name,request,operation,work,root,execution,session,actor.0.as_str(),T0]).unwrap();
+    raw.execute(
+        "INSERT INTO operations(id,root_id,capability,schema_version,args_digest,\
+        payload_json,state,revision,created_at) VALUES(?1,?2,'router.request',1,\
+        ?3,'{}','Dispatching',3,?4)",
+        rusqlite::params![operation, root, "a".repeat(64), T0],
+    )
+    .unwrap();
+    raw.execute(
+        "INSERT INTO operation_attempts(id,operation_id,attempt_no,boot_id,state,\
+        observations_json) VALUES(?1,?2,1,?3,'Dispatching','[]')",
+        rusqlite::params![name, operation, boot.as_str()],
+    )
+    .unwrap();
+    raw.execute(
+        "INSERT INTO router_requests(request_id,operation_id,purpose,session_id,\
+        project_id,model_id,connection_id,created_at) VALUES(?1,?2,\
+        'Conversation',?3,'project','sol','connection',?4)",
+        rusqlite::params![request, operation, session, T0],
+    )
+    .unwrap();
+    raw.execute(
+        "INSERT INTO usage_attempts(attempt_id,request_id,operation_id,\
+        attempt_number,project_id,work_id,assignment_id,execution_root_id,\
+        execution_id,session_id,actor_id,role,purpose,catalog_model_id,\
+        connection_id,endpoint_profile,access_mode,pricing_snapshot_json,state,\
+        revision,created_at) VALUES(?1,?2,?3,1,'project',?4,NULL,?5,?6,?7,?8,\
+        'Coordinator','Conversation','sol','connection','OpenAiResponses',\
+        'ApiKey','{}','Dispatched',2,?9)",
+        rusqlite::params![
+            name,
+            request,
+            operation,
+            work,
+            root,
+            execution,
+            session,
+            actor.0.as_str(),
+            T0
+        ],
+    )
+    .unwrap();
     run_write(s, WriteOptions::fixture(), {
         let name = name.to_owned();
         move |tx| {

@@ -341,9 +341,15 @@ pub fn frames() -> Vec<(&'static str, Vec<u8>)> {
     ] {
         let content = r.content.clone().expect("content");
         let change = if update {
-            from(
-                json!({"kind":"Update","resourceId":res.id,"expectedRevision":res.revision,"name":"Renamed","mediaType":"image/jpeg","content":res.content,"lifecycle":"Retired"}),
-            )
+            from(json!({
+                "kind": "Update",
+                "resourceId": res.id,
+                "expectedRevision": res.revision,
+                "name": "Renamed",
+                "mediaType": "image/jpeg",
+                "content": res.content,
+                "lifecycle": "Retired"
+            }))
         } else {
             from(json!({"kind":"Attach","name":"Upload","mediaType":"image/png","content":content}))
         };

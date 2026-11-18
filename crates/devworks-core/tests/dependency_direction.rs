@@ -137,6 +137,13 @@ fn is_test_gate(trimmed: &str) -> bool {
 /// brace, or at its `;` when it has no body.
 fn production_text(text: &str) -> Vec<(usize, String)> {
     let stripped = strip_comments(text);
+    // A file gated as a whole (`#![cfg(test)]`) holds no production code.
+    if stripped
+        .lines()
+        .any(|l| l.split_whitespace().collect::<String>() == "#![cfg(test)]")
+    {
+        return Vec::new();
+    }
     let mut out = Vec::new();
     let mut lines = stripped.lines().enumerate();
     while let Some((number, line)) = lines.next() {
@@ -395,15 +402,20 @@ const ALLOWED: &[(&str, [usize; 4], &str)] = &[
          probe); the PATH source is injectable (`from_settings_on`) and tests use it",
     ),
     (
-        "services/process/tools.rs",
-        [16, 3, 2, 0],
+        "services/process/tool_modules/execute.rs",
+        [3, 3, 2, 0],
         "toolchain detection reads the project's manifests and the host PATH, RUSTUP_HOME and \
          HOME to build a tool's environment, and creates the scratch directory it runs in; \
-         the script-free install safety checks read repository manifests and lockfiles \
+         each read is bounded and none writes outside that directory; plus monotonic \
+         deadlines of a tool run",
+    ),
+    (
+        "services/process/tool_modules/install_safety.rs",
+        [13, 0, 0, 0],
+        "the script-free install safety checks read repository manifests and lockfiles \
          (package.json, .yarnrc.yml, lockfiles) and the ancestor directories' rc files, which \
          are filesystem reads of the checked-out repository with no port to go through; each \
-         read is bounded and none writes outside that directory; plus monotonic deadlines of \
-         a tool run",
+         read is bounded and none writes",
     ),
     (
         "services/process.rs",

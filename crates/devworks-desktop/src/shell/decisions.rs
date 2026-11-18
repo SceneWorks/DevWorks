@@ -1024,61 +1024,196 @@ impl DecisionsCtl<'_, '_> {
             })
             .map(|n| n.id.as_str().to_owned())
             .collect();
-        egui::Window::new("Notifications").open(&mut open).collapsible(false).resizable(true).default_width(520.0).max_height((ctx.content_rect().height()-TOOLBAR-40.0).max(180.0)).anchor(egui::Align2::RIGHT_TOP,egui::vec2(-12.0,TOOLBAR+4.0)).show(ctx,|ui|{
-            let d=&mut self.decisions;
-            let old=(d.notification_project.clone(),d.unread_only,d.unacknowledged_only);
-            project_filter(ui,"Notification project filter",&projects,&mut d.notification_project);
-            ui.horizontal(|ui| {ui.checkbox(&mut d.unread_only,"Unread only");ui.checkbox(&mut d.unacknowledged_only,"Unacknowledged only");});
-            ui.horizontal(|ui|{ui.label("Category");ui.add(egui::TextEdit::singleline(&mut d.category).hint_text("All categories").desired_width(160.0));if ui.button("Filter notifications").clicked(){actions.push(Action::ReloadNotifications);}});
-            if old!=(d.notification_project.clone(),d.unread_only,d.unacknowledged_only){actions.push(Action::ReloadNotifications);}
-            ui.label("Reading, acknowledging, and opening links never approve or resume work.");
-            if let Some(e)=&d.notification_error {ui.colored_label(theme::RED,e);}
-            if let Some(e)=&d.completions.error {ui.colored_label(theme::RED,format!("Completion feed: {e}"));}
-            egui::ScrollArea::vertical().id_salt("notification-history").max_height(340.0).show(ui,|ui|{
-                if (d.notifications.loaded||d.notifications.error.is_some())&&d.notifications.items.is_empty(){ui.label("No notifications in this view.");}
-                for n in &d.notifications.items {
-                    ui.push_id(n.id.as_str(),|ui|{ui.group(|ui|{
-                        ui.label(RichText::new(&n.title.0).strong());
-                    if n.requires_input==Some(true){ui.label("Input required");}
-                    ui.label(format!("{} · {} · {}",n.category.as_ref().map_or("Notification",|c|c.0.as_str()),if n.read==Some(true){"Read"}else{"Unread"},if n.acknowledged{"Acknowledged"}else{"Unacknowledged"}));
-                        if ui.button(format!("Read {}",n.title.0)).clicked(){actions.push(Action::Read(n.id.as_str().into()));}
-                        ui.add_enabled_ui(!busy.contains(n.id.as_str()),|ui|{
-                            if ui.button(if n.read==Some(true){"Mark unread"}else{"Mark read"}).clicked(){actions.push(Action::MarkRead(n.clone(),n.read!=Some(true)));}
-                            if !n.acknowledged&&ui.button(format!("Acknowledge {}",n.title.0)).clicked(){actions.push(Action::Acknowledge(n.clone()));}
-                        });
-                    });});
+        egui::Window::new("Notifications")
+            .open(&mut open)
+            .collapsible(false)
+            .resizable(true)
+            .default_width(520.0)
+            .max_height((ctx.content_rect().height() - TOOLBAR - 40.0).max(180.0))
+            .anchor(egui::Align2::RIGHT_TOP, egui::vec2(-12.0, TOOLBAR + 4.0))
+            .show(ctx, |ui| {
+                let d = &mut self.decisions;
+                let old = (
+                    d.notification_project.clone(),
+                    d.unread_only,
+                    d.unacknowledged_only,
+                );
+                project_filter(
+                    ui,
+                    "Notification project filter",
+                    &projects,
+                    &mut d.notification_project,
+                );
+                ui.horizontal(|ui| {
+                    ui.checkbox(&mut d.unread_only, "Unread only");
+                    ui.checkbox(&mut d.unacknowledged_only, "Unacknowledged only");
+                });
+                ui.horizontal(|ui| {
+                    ui.label("Category");
+                    ui.add(
+                        egui::TextEdit::singleline(&mut d.category)
+                            .hint_text("All categories")
+                            .desired_width(160.0),
+                    );
+                    if ui.button("Filter notifications").clicked() {
+                        actions.push(Action::ReloadNotifications);
+                    }
+                });
+                if old
+                    != (
+                        d.notification_project.clone(),
+                        d.unread_only,
+                        d.unacknowledged_only,
+                    )
+                {
+                    actions.push(Action::ReloadNotifications);
                 }
-            });
-            if let Some(n)=&d.notification {
-                ui.separator();ui.heading(&n.title.0);ui.label(&n.body.0);ui.label(format!("Notification {} @ {}",n.id.as_str(),n.revision.as_str()));
-                if let Some(id)=&n.decision_id && ui.button("Open linked decision").clicked() {
-                    actions.push(Action::Approval(id.as_str().into()));
+                ui.label("Reading, acknowledging, and opening links never approve or resume work.");
+                if let Some(e) = &d.notification_error {
+                    ui.colored_label(theme::RED, e);
                 }
-                if let Some(links)=&n.links {
-                    for link in &links.0 {
-                        if let Some(url)=&link.url {ui.hyperlink_to(&link.kind.0,&url.0);}
-                        if (link.target_id.is_some()||link.artifact.is_some()) && ui.button(format!("Open {}",link.kind.0)).clicked() {
-                            actions.push(Action::Link(link.clone()));
+                if let Some(e) = &d.completions.error {
+                    ui.colored_label(theme::RED, format!("Completion feed: {e}"));
+                }
+                egui::ScrollArea::vertical()
+                    .id_salt("notification-history")
+                    .max_height(340.0)
+                    .show(ui, |ui| {
+                        if (d.notifications.loaded || d.notifications.error.is_some())
+                            && d.notifications.items.is_empty()
+                        {
+                            ui.label("No notifications in this view.");
+                        }
+                        for n in &d.notifications.items {
+                            ui.push_id(n.id.as_str(), |ui| {
+                                ui.group(|ui| {
+                                    ui.label(RichText::new(&n.title.0).strong());
+                                    if n.requires_input == Some(true) {
+                                        ui.label("Input required");
+                                    }
+                                    ui.label(format!(
+                                        "{} · {} · {}",
+                                        n.category
+                                            .as_ref()
+                                            .map_or("Notification", |c| c.0.as_str()),
+                                        if n.read == Some(true) {
+                                            "Read"
+                                        } else {
+                                            "Unread"
+                                        },
+                                        if n.acknowledged {
+                                            "Acknowledged"
+                                        } else {
+                                            "Unacknowledged"
+                                        }
+                                    ));
+                                    if ui.button(format!("Read {}", n.title.0)).clicked() {
+                                        actions.push(Action::Read(n.id.as_str().into()));
+                                    }
+                                    ui.add_enabled_ui(!busy.contains(n.id.as_str()), |ui| {
+                                        if ui
+                                            .button(if n.read == Some(true) {
+                                                "Mark unread"
+                                            } else {
+                                                "Mark read"
+                                            })
+                                            .clicked()
+                                        {
+                                            actions.push(Action::MarkRead(
+                                                n.clone(),
+                                                n.read != Some(true),
+                                            ));
+                                        }
+                                        if !n.acknowledged
+                                            && ui
+                                                .button(format!("Acknowledge {}", n.title.0))
+                                                .clicked()
+                                        {
+                                            actions.push(Action::Acknowledge(n.clone()));
+                                        }
+                                    });
+                                });
+                            });
+                        }
+                    });
+                if let Some(n) = &d.notification {
+                    ui.separator();
+                    ui.heading(&n.title.0);
+                    ui.label(&n.body.0);
+                    ui.label(format!(
+                        "Notification {} @ {}",
+                        n.id.as_str(),
+                        n.revision.as_str()
+                    ));
+                    if let Some(id) = &n.decision_id
+                        && ui.button("Open linked decision").clicked()
+                    {
+                        actions.push(Action::Approval(id.as_str().into()));
+                    }
+                    if let Some(links) = &n.links {
+                        for link in &links.0 {
+                            if let Some(url) = &link.url {
+                                ui.hyperlink_to(&link.kind.0, &url.0);
+                            }
+                            if (link.target_id.is_some() || link.artifact.is_some())
+                                && ui.button(format!("Open {}", link.kind.0)).clicked()
+                            {
+                                actions.push(Action::Link(link.clone()));
+                            }
                         }
                     }
                 }
-            }
-            ui.collapsing("Notification preferences",|ui|{
-                if widgets::secondary_button(ui,"Help for Notification preferences").clicked() { help_preferences = true; }
-                if let Some(config)=&mut d.config_draft {
-                    ui.checkbox(&mut config.desktop_enabled,"Desktop notifications");
-                    ui.label("Required-input desktop notifications are attempted only while the app is unfocused and permission allows them. In-app history remains available.");
-                    if let Some(permission)=&d.permission { ui.label(permission_label(permission)); }
-                    if ui.add_enabled(!requesting_permission,egui::Button::new("Request notification permission")).clicked() { actions.push(Action::RequestPermission); }
-                    ui.label("Notification kinds (comma separated)");
-                    let input=ui.text_edit_singleline(&mut d.config_kinds);
-                    input.widget_info(||egui::WidgetInfo::labeled(egui::Role::TextInput,true,"Notification kinds"));
-                    if ui.add_enabled(!preferences_busy,egui::Button::new("Save notification preferences")).clicked(){actions.push(Action::SaveConfig);}
-                    if ui.button("Discard preference draft and reload").clicked(){actions.push(Action::ReloadConfig);}
-                    if let Some((_,revision))=&d.config {ui.label(format!("Preferences revision {revision}"));}
-                }
+                ui.collapsing("Notification preferences", |ui| {
+                    if widgets::secondary_button(ui, "Help for Notification preferences").clicked()
+                    {
+                        help_preferences = true;
+                    }
+                    if let Some(config) = &mut d.config_draft {
+                        ui.checkbox(&mut config.desktop_enabled, "Desktop notifications");
+                        ui.label(
+                            "Required-input desktop notifications are attempted only while the app \
+                        is unfocused and permission allows them. In-app history remains \
+                        available.",
+                        );
+                        if let Some(permission) = &d.permission {
+                            ui.label(permission_label(permission));
+                        }
+                        if ui
+                            .add_enabled(
+                                !requesting_permission,
+                                egui::Button::new("Request notification permission"),
+                            )
+                            .clicked()
+                        {
+                            actions.push(Action::RequestPermission);
+                        }
+                        ui.label("Notification kinds (comma separated)");
+                        let input = ui.text_edit_singleline(&mut d.config_kinds);
+                        input.widget_info(|| {
+                            egui::WidgetInfo::labeled(
+                                egui::Role::TextInput,
+                                true,
+                                "Notification kinds",
+                            )
+                        });
+                        if ui
+                            .add_enabled(
+                                !preferences_busy,
+                                egui::Button::new("Save notification preferences"),
+                            )
+                            .clicked()
+                        {
+                            actions.push(Action::SaveConfig);
+                        }
+                        if ui.button("Discard preference draft and reload").clicked() {
+                            actions.push(Action::ReloadConfig);
+                        }
+                        if let Some((_, revision)) = &d.config {
+                            ui.label(format!("Preferences revision {revision}"));
+                        }
+                    }
+                });
             });
-        });
         self.decisions.notifications_open = open && !help_preferences;
         self.decision_actions(ctx, actions);
         if help_preferences {

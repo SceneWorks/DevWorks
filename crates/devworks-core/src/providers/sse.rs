@@ -226,7 +226,10 @@ mod tests {
     }
     #[test]
     fn sse_every_split_preserves_utf8_crlf_bom_fields_and_multiline_data() {
-        let input = "\u{feff}:heartbeat\r\nid: e1\r\nevent: delta\r\nretry: 25\r\ndata: 世界\r\ndata: second\r\n\r\n:data ignored\ndata:\n\nid: forbidden\0id\ndata: third\n\n".as_bytes();
+        let input = "\u{feff}:heartbeat\r\nid: e1\r\nevent: delta\r\nretry: 25\r\ndata: \
+            世界\r\ndata: second\r\n\r\n:data ignored\ndata:\n\nid: \
+            forbidden\0id\ndata: third\n\n"
+            .as_bytes();
         for split in 0..=input.len() {
             let mut decoder = SseDecoder::new(sse_limits()).unwrap();
             let mut events = decoder.push(&input[..split]).unwrap();

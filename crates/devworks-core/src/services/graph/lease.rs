@@ -18,8 +18,28 @@ pub(super) struct Selected {
 }
 
 pub(crate) fn owner(ctx: &InvocationContext) -> String {
-    let worktree=ctx.worktree().map(|tree|json!({"id":tree.id(),"workId":tree.work_id(),"repositoryId":tree.repository_id(),"ownershipRevision":tree.ownership_revision()}));
-    sha256_hex(json!({"actor":ctx.principal(),"kind":ctx.principal_kind().as_str().to_string(),"project":ctx.project_id(),"root":ctx.root_id(),"assignment":ctx.assignment_id(),"session":ctx.session_id(),"ingress":ctx.ingress_namespace(),"worktree":worktree}).to_string().as_bytes())
+    let worktree = ctx.worktree().map(|tree| {
+        json!({
+            "id": tree.id(),
+            "workId": tree.work_id(),
+            "repositoryId": tree.repository_id(),
+            "ownershipRevision": tree.ownership_revision()
+        })
+    });
+    sha256_hex(
+        json!({
+            "actor": ctx.principal(),
+            "kind": ctx.principal_kind().as_str().to_string(),
+            "project": ctx.project_id(),
+            "root": ctx.root_id(),
+            "assignment": ctx.assignment_id(),
+            "session": ctx.session_id(),
+            "ingress": ctx.ingress_namespace(),
+            "worktree": worktree
+        })
+        .to_string()
+        .as_bytes(),
+    )
 }
 
 pub(crate) fn scope_digest(scope: &DataScope) -> String {
@@ -66,37 +86,94 @@ pub(super) fn select(
     let found = read_snapshot(&**store, options, |read| {
         Ok(match requested {
             Some(ViewSelection::Pinned { pin_id }) => {
-                let pin = read.graph().graph_pin(pin_id)?.ok_or_else(|| scope::unavailable(Some(pin_id.clone())));
+                let pin = read
+                    .graph()
+                    .graph_pin(pin_id)?
+                    .ok_or_else(|| scope::unavailable(Some(pin_id.clone())));
                 match pin {
-                    Ok(pin) => {
-                        (|| {
-                            check_pin(&pin, ctx, data_scope, now)?;
-                            for missing in &pin.unavailable_repositories { scope::authorize(read, ctx, data_scope, &missing.repository_id)?; }
-                            let mut layers = Vec::with_capacity(pin.scope.views.len());
-                            for binding in &pin.scope.views {
-                                let view = scope::retained(read, ctx, data_scope, &pin, binding, now)?;
-                                if view.view.repository_id != binding.repository_id || view.view.view_digest != binding.view_digest {
-                                    return Err(scope::unavailable(Some(pin.id.clone())));
-                                }
-                                layers.push(view);
+                    Ok(pin) => (|| {
+                        check_pin(&pin, ctx, data_scope, now)?;
+                        for missing in &pin.unavailable_repositories {
+                            scope::authorize(read, ctx, data_scope, &missing.repository_id)?;
+                        }
+                        let mut layers = Vec::with_capacity(pin.scope.views.len());
+                        for binding in &pin.scope.views {
+                            let view = scope::retained(read, ctx, data_scope, &pin, binding, now)?;
+                            if view.view.repository_id != binding.repository_id
+                                || view.view.view_digest != binding.view_digest
+                            {
+                                return Err(scope::unavailable(Some(pin.id.clone())));
                             }
-                            Ok(Selected { pin, layers })
-                        })()
-                    }
+                            layers.push(view);
+                        }
+                        Ok(Selected { pin, layers })
+                    })(),
                     Err(e) => Err(e),
                 }
             }
-            _ => scope::resolve(read, ctx, data_scope, requested, now, current_worktree).and_then(|resolved| {
-                let layers = resolved.layers;
-                let unavailable_repositories = resolved.unavailable.into_iter().map(|(repository_id,reason)|GraphUnavailableRepository { repository_id,reason:reason.to_owned() }).collect::<Vec<_>>();
-                let witnesses = layers.iter().map(|v| scope::witness(read, &v.view)).collect::<Result<Vec<_>, _>>()?;
-                let expires = witnesses.iter().filter_map(|w| w.expires_at_ms).fold(now.saturating_add(GRAPH_PIN_TTL_MS), i64::min);
-                let graph_scope = GraphScope { views: layers.iter().map(|v| GraphViewBinding { repository_id: v.view.repository_id.clone(), view_id: v.view.view_id.clone(), view_digest: v.view.view_digest.clone() }).collect() };
-                let namespace = owner(ctx);
-                let scope_hash = scope_digest(data_scope);
-                let intent_digest = sha256_hex(json!({"owner":namespace,"store":ctx.store_id(),"restore":ctx.restore_epoch(),"allowedScope":scope_hash,"views":graph_scope,"witnesses":witnesses,"unavailableRepositories":unavailable_repositories}).to_string().as_bytes());
-                Ok(Selected { pin: StoredGraphReadPin { id:ids.next_id(IdKind::Lease),owner_namespace:namespace,store_id:ctx.store_id().clone(),restore_epoch:ctx.restore_epoch().get(),scope_digest:scope_hash,intent_digest,scope:graph_scope,revision:1,created_at_ms:now,expires_at_ms:expires,view_witnesses:witnesses,unavailable_repositories }, layers })
-            }),
+            _ => scope::resolve(read, ctx, data_scope, requested, now, current_worktree).and_then(
+                |resolved| {
+                    let layers = resolved.layers;
+                    let unavailable_repositories = resolved
+                        .unavailable
+                        .into_iter()
+                        .map(|(repository_id, reason)| GraphUnavailableRepository {
+                            repository_id,
+                            reason: reason.to_owned(),
+                        })
+                        .collect::<Vec<_>>();
+                    let witnesses = layers
+                        .iter()
+                        .map(|v| scope::witness(read, &v.view))
+                        .collect::<Result<Vec<_>, _>>()?;
+                    let expires = witnesses
+                        .iter()
+                        .filter_map(|w| w.expires_at_ms)
+                        .fold(now.saturating_add(GRAPH_PIN_TTL_MS), i64::min);
+                    let graph_scope = GraphScope {
+                        views: layers
+                            .iter()
+                            .map(|v| GraphViewBinding {
+                                repository_id: v.view.repository_id.clone(),
+                                view_id: v.view.view_id.clone(),
+                                view_digest: v.view.view_digest.clone(),
+                            })
+                            .collect(),
+                    };
+                    let namespace = owner(ctx);
+                    let scope_hash = scope_digest(data_scope);
+                    let intent_digest = sha256_hex(
+                        json!({
+                            "owner": namespace,
+                            "store": ctx.store_id(),
+                            "restore": ctx.restore_epoch(),
+                            "allowedScope": scope_hash,
+                            "views": graph_scope,
+                            "witnesses": witnesses,
+                            "unavailableRepositories": unavailable_repositories
+                        })
+                        .to_string()
+                        .as_bytes(),
+                    );
+                    Ok(Selected {
+                        pin: StoredGraphReadPin {
+                            id: ids.next_id(IdKind::Lease),
+                            owner_namespace: namespace,
+                            store_id: ctx.store_id().clone(),
+                            restore_epoch: ctx.restore_epoch().get(),
+                            scope_digest: scope_hash,
+                            intent_digest,
+                            scope: graph_scope,
+                            revision: 1,
+                            created_at_ms: now,
+                            expires_at_ms: expires,
+                            view_witnesses: witnesses,
+                            unavailable_repositories,
+                        },
+                        layers,
+                    })
+                },
+            ),
         })
     })??;
     let authority = query.authorization().clone();

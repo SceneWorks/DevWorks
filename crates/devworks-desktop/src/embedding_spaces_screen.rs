@@ -107,7 +107,10 @@ impl EmbeddingSpacesPanel {
             return;
         }
 
-        ui.label("Choose an exact embedding connection, model and vector shape. Nothing is selected automatically.");
+        ui.label(
+            "Choose an exact embedding connection, model and vector shape. Nothing \
+            is selected automatically.",
+        );
         if let Some(error) = self.error.as_ref().or(self.spaces.error.as_ref()) {
             chip(ui, error, Tone::Bad);
         }
@@ -121,35 +124,92 @@ impl EmbeddingSpacesPanel {
         if widgets::secondary_button(ui, "Reload embedding spaces").clicked() {
             actions.push(ConnectionAction::EmbeddingSpaces { cursor: None });
         }
-        ui.add_enabled_ui(actionable,|ui| {
-            field(ui,"Embedding space name",&mut self.name);
-            let current=self.connection.as_ref().and_then(|(id,_)|connections.iter().find(|c|c.id.as_str()==id));
+        ui.add_enabled_ui(actionable, |ui| {
+            field(ui, "Embedding space name", &mut self.name);
+            let current = self
+                .connection
+                .as_ref()
+                .and_then(|(id, _)| connections.iter().find(|c| c.id.as_str() == id));
             egui::ComboBox::from_label("Embedding connection")
-                .selected_text(current.map_or("Choose an embedding connection",|c|c.name.0.as_str()))
-                .show_ui(ui,|ui| {for c in connections.iter().filter(|c|wire_name(&c.profile)=="Embedding") {
-                    if ui.selectable_label(self.connection.as_ref().is_some_and(|(id,_)|id==c.id.as_str()),&c.name.0).clicked() {self.connection=Some((c.id.as_str().into(),c.revision.as_str().into()));}
-                }});
-            field(ui,"Embedding upstream model",&mut self.model);
-            field(ui,"Embedding dimensions (1–65536)",&mut self.dimensions);
-            ui.checkbox(&mut self.parameter,"Send dimensions parameter");
-            ui.checkbox(&mut self.l2,"Use L2 distance instead of Cosine");
-            if self.l2 {ui.label("Conventions search requires Cosine. With L2, it reports lexical fallback.");}
-            let dimensions=self.dimensions.parse::<u32>().ok().filter(|d|(1..=65536).contains(d));
-            let valid=self.connection.is_some() && !self.name.trim().is_empty() && !self.model.trim().is_empty() && dimensions.is_some();
-            if ui.add_enabled(valid,egui::Button::new("Create embedding space")).clicked()
-                && let (Some((connection,revision)),Some(dimensions))=(&self.connection,dimensions)
+                .selected_text(
+                    current.map_or("Choose an embedding connection", |c| c.name.0.as_str()),
+                )
+                .show_ui(ui, |ui| {
+                    for c in connections
+                        .iter()
+                        .filter(|c| wire_name(&c.profile) == "Embedding")
+                    {
+                        if ui
+                            .selectable_label(
+                                self.connection
+                                    .as_ref()
+                                    .is_some_and(|(id, _)| id == c.id.as_str()),
+                                &c.name.0,
+                            )
+                            .clicked()
+                        {
+                            self.connection =
+                                Some((c.id.as_str().into(), c.revision.as_str().into()));
+                        }
+                    }
+                });
+            field(ui, "Embedding upstream model", &mut self.model);
+            field(ui, "Embedding dimensions (1–65536)", &mut self.dimensions);
+            ui.checkbox(&mut self.parameter, "Send dimensions parameter");
+            ui.checkbox(&mut self.l2, "Use L2 distance instead of Cosine");
+            if self.l2 {
+                ui.label(
+                    "Conventions search requires Cosine. With L2, it reports lexical \
+                fallback.",
+                );
+            }
+            let dimensions = self
+                .dimensions
+                .parse::<u32>()
+                .ok()
+                .filter(|d| (1..=65536).contains(d));
+            let valid = self.connection.is_some()
+                && !self.name.trim().is_empty()
+                && !self.model.trim().is_empty()
+                && dimensions.is_some();
+            if ui
+                .add_enabled(valid, egui::Button::new("Create embedding space"))
+                .clicked()
+                && let (Some((connection, revision)), Some(dimensions)) =
+                    (&self.connection, dimensions)
             {
-                match create_action(&self.name,connection,revision,&self.model,dimensions,self.parameter,self.l2) {
-                    Some(action) => configure(actions,"Create embedding space".into(),action),
-                    None => self.error = Some("The embedding space is not valid: check the name, the connection and the model.".into()),
+                match create_action(
+                    &self.name,
+                    connection,
+                    revision,
+                    &self.model,
+                    dimensions,
+                    self.parameter,
+                    self.l2,
+                ) {
+                    Some(action) => configure(actions, "Create embedding space".into(), action),
+                    None => {
+                        self.error = Some(
+                            "The embedding space is not valid: check the name, the connection and \
+                        the model."
+                                .into(),
+                        )
+                    }
                 }
             }
-            ui.label("Creating a space sends no inference. Qualification sends one fixed probe through that connection and records its usage; it may incur a charge.");
+            ui.label(
+                "Creating a space sends no inference. Qualification sends one fixed \
+                probe through that connection and records its usage; it may incur a \
+                charge.",
+            );
         });
         let Some(page) = self.spaces.items.first() else {
             return;
         };
-        ui.label("A selected space can be used for future indexing and searches. Usage is recorded through its connection.");
+        ui.label(
+            "A selected space can be used for future indexing and searches. Usage is \
+            recorded through its connection.",
+        );
         if let Some(id) = &page.selected_candidate_id {
             ui.label(format!("Selected embedding candidate: {}", id.as_str()));
         } else {

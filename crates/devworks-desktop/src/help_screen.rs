@@ -466,8 +466,14 @@ impl HelpScreen {
                                         capability.effect.0,
                                         capability.owner.0
                                     ));
-                                    widgets::chip(ui, if capability.available { "Registered" } else { "Unavailable" }, if capability.available { Tone::Neutral } else { Tone::Attention });
-                                    widgets::caption(ui, "Each request still checks its target, action, permissions and required approval.");
+                                    let (label, tone) = if capability.available {
+                                        ("Registered", Tone::Neutral)
+                                    } else {
+                                        ("Unavailable", Tone::Attention)
+                                    };
+                                    widgets::chip(ui, label, tone);
+                                    widgets::caption(ui, "Each request still checks its target, action, permissions and required \
+                                        approval.");
                                     if let Some(reason) = &capability.unavailable_reason {
                                         ui.label(&reason.0);
                                     }

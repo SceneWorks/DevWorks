@@ -112,13 +112,21 @@ pub(super) fn query(
         observed = true;
     }
     for ((kind, name), ()) in actual {
-        properties.push(json!({"ownerKind":kind,"name":name,"description":"Property observed in the selected immutable composition; its presence does not establish semantic analysis coverage."}));
+        properties.push(json!({"ownerKind":kind,"name":name,"description":"Property observed in the selected immutable composition; its presence \
+            does not establish semantic analysis coverage."}));
     }
     nodes.sort();
     nodes.dedup();
     edges.sort();
     edges.dedup();
-    let mut value = json!({"nodeKinds":nodes,"edgeKinds":edges,"properties":properties,"notes":[DECLARED],"origin":if observed{"Observed"}else{"Declared"},"stamp":metadata.stamp});
+    let mut value = json!({
+        "nodeKinds": nodes,
+        "edgeKinds": edges,
+        "properties": properties,
+        "notes": [DECLARED],
+        "origin": if observed { "Observed" } else { "Declared" },
+        "stamp": metadata.stamp
+    });
     if !observed {
         value["unavailableReason"] = json!("graph_not_indexed");
     }

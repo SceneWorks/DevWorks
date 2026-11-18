@@ -337,7 +337,25 @@ impl GitService {
             tree.last_result = Some(checkpoint.clone());
             tx.git().update_git_worktree(&tree, prior)?;
             let event = EventId(tx.new_id(IdKind::Event));
-            let sequence = tx.history().append(NewEvent { id: event.clone(), actor: j.actor.clone(), project_id: Some(j.project.clone()), root_id: j.root.clone(), operation_id: Some(op.clone()), aggregate_kind: "git_worktree".into(), aggregate_id: tree.id.as_str().into(), aggregate_revision: tree.revision, kind: "GitPullRequestObserved".into(), payload: json!({"repositoryId":tree.repository_id,"workId":tree.work_id,"worktreeId":tree.id,"branch":tree.branch,"head":tree.head,"pullRequestUrl":pr.url}) })?;
+            let sequence = tx.history().append(NewEvent {
+                id: event.clone(),
+                actor: j.actor.clone(),
+                project_id: Some(j.project.clone()),
+                root_id: j.root.clone(),
+                operation_id: Some(op.clone()),
+                aggregate_kind: "git_worktree".into(),
+                aggregate_id: tree.id.as_str().into(),
+                aggregate_revision: tree.revision,
+                kind: "GitPullRequestObserved".into(),
+                payload: json!({
+                    "repositoryId": tree.repository_id,
+                    "workId": tree.work_id,
+                    "worktreeId": tree.id,
+                    "branch": tree.branch,
+                    "head": tree.head,
+                    "pullRequestUrl": pr.url
+                }),
+            })?;
             let mut roots = match &j.action {
                 Action::PullRequest { covered, .. } => covered
                     .iter()
@@ -356,7 +374,30 @@ impl GitService {
             for root in roots {
                 let link = tx.new_id(IdKind::Link);
                 let now = tx.now_ms();
-                tx.sessions().insert_link(&StoredLink { id: link, project_id: j.project.clone(), root_id: root, kind: "pull_request".into(), target_kind: "pull_request".into(), target_id: pr.url.clone(), parent_id: None, supersedes_id: None, actor: j.actor.clone(), event_id: event.0.clone(), sequence, repository_id: Some(tree.repository_id.clone()), revision: Some(tree.head.hex.clone()), summary: format!("Task PR {}", pr.url), body: json!({"agentSessionId":j.session,"worktreeId":tree.id,"branch":tree.branch,"pullRequestUrl":pr.url,"head":tree.head}), created_at_ms: now })?;
+                tx.sessions().insert_link(&StoredLink {
+                    id: link,
+                    project_id: j.project.clone(),
+                    root_id: root,
+                    kind: "pull_request".into(),
+                    target_kind: "pull_request".into(),
+                    target_id: pr.url.clone(),
+                    parent_id: None,
+                    supersedes_id: None,
+                    actor: j.actor.clone(),
+                    event_id: event.0.clone(),
+                    sequence,
+                    repository_id: Some(tree.repository_id.clone()),
+                    revision: Some(tree.head.hex.clone()),
+                    summary: format!("Task PR {}", pr.url),
+                    body: json!({
+                        "agentSessionId": j.session,
+                        "worktreeId": tree.id,
+                        "branch": tree.branch,
+                        "pullRequestUrl": pr.url,
+                        "head": tree.head
+                    }),
+                    created_at_ms: now,
+                })?;
             }
             Ok(())
         }) {
