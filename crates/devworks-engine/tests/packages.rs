@@ -36,14 +36,10 @@ use devworks_core::protocol::results::{
 };
 use devworks_core::protocol::{ActorId, CommandReply, DomainErrorCode, ProjectId};
 use devworks_core::services::UseCases;
-use devworks_core::services::artifacts::ArtifactService;
-use devworks_core::services::diagnostics::DiagnosticService;
 use devworks_core::services::packages::index::AVAILABILITY_CHANGED;
 use devworks_core::services::packages::{
-    HelperKey, MAX_PACKAGES, PROJECT_ENABLEMENT_SCHEMA, PackageService, UPDATE_POLICY_SCHEMA,
-    host_schema_ref,
+    HelperKey, MAX_PACKAGES, PROJECT_ENABLEMENT_SCHEMA, UPDATE_POLICY_SCHEMA, host_schema_ref,
 };
-use devworks_core::services::resources::ResourceService;
 use devworks_core::settings::catalog::AgentRole;
 use devworks_core::settings::catalog::{PACKAGE_INDEX_SOURCES_KEY, descriptor};
 use devworks_core::settings::model;
@@ -53,7 +49,10 @@ use devworks_engine::package_host::{
     HostConfig, IndexPorts, InstanceStatus, InvocationKind, InvokeOutcome, InvokeRefusal,
     InvokeRequest, LaunchPorts, RuntimePorts,
 };
-use devworks_engine::{Composition, PackageComposition, Runtime, RuntimeConfig, boot};
+use devworks_engine::{
+    ArtifactComposition, Composition, DiagnosticComposition, KnowledgeComposition,
+    PackageComposition, PackageServicePorts, Runtime, RuntimeConfig, boot,
+};
 use devworks_extension_protocol::package::{InvocationOutcome, InvocationScope};
 use devworks_extension_protocol::scalars as wire;
 use ed25519_dalek::SigningKey;
@@ -711,6 +710,7 @@ impl App {
         });
         let sources = h.root.with_extension("sources");
         std::fs::create_dir_all(&sources).unwrap();
+        let log_ids = Arc::<Gate>::default();
         let me = Self {
             h,
             rt,
@@ -735,7 +735,7 @@ impl App {
             retry_backoff: None,
             shutdown_bound: None,
             host_ids: Arc::default(),
-            log_ids: Arc::default(),
+            log_ids,
             model: None,
         };
         if me.probe_path.is_none() {
@@ -760,7 +760,7 @@ impl App {
                 location,
             },
         });
-        let artifacts = Arc::new(ArtifactService::new(
+        let artifacts = ArtifactComposition::new(
             self.artifact_files.clone().unwrap_or_else(|| {
                 Arc::new(NativeArtifactFiles::new(
                     h.root.clone(),
@@ -769,61 +769,36 @@ impl App {
             }),
             src,
             Arc::new(NativeFilesystem::new()),
-            h.clock(),
-            h.ids.clone(),
-        ));
-        let diagnostics = Arc::new(DiagnosticService::new(
-            store.clone(),
-            h.ids.clone(),
-            h.clock(),
-            None,
-        ));
-        // The package service records its logs (in the same store) with gated identifiers.
-        let package_log = Arc::new(DiagnosticService::new(
-            store.clone(),
-            Arc::new(GatedIds(h.ids.clone(), self.log_ids.clone())),
-            h.clock(),
-            None,
-        ));
-        let mut service = PackageService::new(
-            store.clone(),
-            h.ids.clone(),
-            artifacts.clone(),
-            Arc::new(BundleInspector),
-            self.files
+        );
+        let service = PackageServicePorts {
+            inspector: Arc::new(BundleInspector),
+            files: self
+                .files
                 .clone()
                 .unwrap_or_else(|| Arc::new(NativePackageFiles::new(h.root.join("packages")))),
-            self.runtimes.clone(),
-            HostPlatform {
+            runtimes: self.runtimes.clone(),
+            platform: HostPlatform {
                 target_triple: host_target_triple(),
                 host_version: "0.1.0".into(),
                 protocol_major: 1,
                 protocol_minor: 0,
             },
-            package_log,
-            Arc::new(JsonSchemaValidator),
-        );
-        service.quiesce_wait = Duration::from_millis(150);
-        service.set_availability_consumers(vec![CODE_INTELLIGENCE.into()]);
+            validator: Arc::new(JsonSchemaValidator),
+            quiesce_wait: Some(Duration::from_millis(150)),
+            availability_consumers: vec![CODE_INTELLIGENCE.into()],
+            // The package service logs through a gated source of its own.
+            log_ids: Some(Arc::new(GatedIds(h.ids.clone(), self.log_ids.clone()))),
+        };
         let mut config_rt = RuntimeConfig::new(id("dispatcher-1"));
-        let mut use_cases = UseCases::new();
+        let mut application = devworks_engine::ApplicationComposition::default();
         if let Some(model) = &self.model {
-            let connections = Arc::new(
-                devworks_core::services::router::connections::ConnectionService::new(
-                    h.ids.clone(),
-                    h.clock(),
-                    store.clone(),
-                    Arc::new(devworks_core::ports::http::NoNetwork),
-                    Arc::new(devworks_core::ports::secrets::SessionSecrets::new()),
-                    Arc::new(FixedEntropy),
-                ),
-            );
-            let router = Arc::new(devworks_core::services::router::InferenceRouter::new(
-                h.ids.clone(),
-                h.clock(),
-                connections.clone(),
-            ));
-            use_cases = use_cases.with_router(router).with_connections(connections);
+            application.connections = Some(devworks_engine::ConnectionPorts {
+                http: Arc::new(devworks_core::ports::http::NoNetwork),
+                secrets: Arc::new(devworks_core::ports::secrets::SessionSecrets::new()),
+                entropy: Arc::new(FixedEntropy),
+                endpoints: None,
+            });
+            application.router = Some(devworks_engine::RouterPorts::default());
             config_rt.providers =
                 Some(devworks_engine::providers::driver::ProviderComposition::new(model.clone()));
         }
@@ -836,21 +811,22 @@ impl App {
             store: store.clone(),
             clock: h.clock(),
             // The package host allocates its invocation identifiers from these.
+            // The package host and the package service's logs allocate through one gated source.
             ids: Arc::new(GatedIds(h.ids.clone(), self.host_ids.clone())),
             authority: Arc::new(Authority),
             artifacts,
-            resources: Arc::new(ResourceService::new(h.ids.clone(), h.clock())),
             process_host: self
                 .process_host
                 .clone()
                 .unwrap_or_else(|| Arc::new(NativeProcessHost)),
-            runs: devworks_engine::RunComposition::new(Arc::new(
-                devworks_core::services::runs::ControlService::new(h.ids.clone()),
-            )),
+            runs: devworks_engine::RunComposition::default(),
+            knowledge: KnowledgeComposition::default(),
+            application,
+            web: None,
             power: Arc::new(NativePower),
-            diagnostics,
+            diagnostics: DiagnosticComposition::default(),
             packages: Some(PackageComposition {
-                service: Arc::new(service),
+                service,
                 launch: LaunchPorts {
                     fs: Arc::new(NativeFilesystem::new()),
                     roots: ProtectedRoots::new(vec![], vec![], None),
@@ -869,12 +845,18 @@ impl App {
                     cache: self.runtimes.clone(),
                     search_path: Some(p.clone()),
                 }),
-                index: Some(IndexPorts {
-                    transport: self.transport.clone(),
-                    verifier: Arc::new(BundleIndexVerifier),
+                index: Some({
+                    let transport = self.transport.clone();
+                    Arc::new(move |_| {
+                        Ok(IndexPorts {
+                            transport: transport.clone(),
+                            verifier: Arc::new(BundleIndexVerifier),
+                        })
+                    })
                 }),
             }),
-            use_cases,
+            use_cases: UseCases::new(),
+            test_overrides: Default::default(),
             consumers: Vec::new(),
             config: config_rt,
         }
@@ -1292,6 +1274,28 @@ fn a_person_installs_a_signed_pack_whose_helper_handshakes_and_serves_invocation
         DomainErrorCode::Conflict
     );
     assert_eq!(a.registry(), r);
+}
+
+/// A package index that cannot be built from the composed ports (here: it needs web tools that
+/// are not composed) refuses the composition; it must not panic inside the service build.
+#[test]
+fn a_package_index_without_its_web_tools_is_a_composition_error() {
+    let _s = serial();
+    let a = App::unbooted(Harness::new(), None, None);
+    let mut composition = a.composition();
+    composition.packages.as_mut().unwrap().index = Some(Arc::new(|web| {
+        assert!(web.is_none(), "no web tools are composed");
+        Err("the package index needs the web tools' ports".to_owned())
+    }));
+    match a.rt.block_on(boot(composition)) {
+        Err(devworks_engine::BootError::Composition(e)) => assert!(
+            e.to_string()
+                .contains("the package index needs the web tools"),
+            "{e}"
+        ),
+        Err(other) => panic!("{other:?}"),
+        Ok(_) => panic!("boot succeeded without the package index ports"),
+    }
 }
 
 #[test]
@@ -1860,13 +1864,21 @@ fn shutdown_abandons_a_blocked_package_host_stop_at_its_bound_after_the_continue
     a.shutdown_bound = Some(Duration::from_secs(5));
     a.boot();
     // One live issue root, held for manual Continue at shutdown.
-    let c = rusqlite::Connection::open(a.h.root.join("workspace.sqlite")).unwrap();
-    c.busy_timeout(Duration::from_secs(5)).unwrap();
-    c.execute_batch(
-        "INSERT INTO work_items VALUES('root-i','project-a','issue',NULL,NULL,NULL,'root-i',1,0,1,1,1,'{}');",
+    devworks_test_support::seed::work(
+        &*a.store,
+        &[devworks_test_support::seed::WorkSeed::issue(
+            "root-i",
+            "project-a",
+        )],
     )
     .unwrap();
-    drop(c);
+    rusqlite::Connection::open(a.h.root.join("workspace.sqlite"))
+        .unwrap()
+        .execute(
+            "UPDATE work_items SET kind='issue' WHERE id IN ('root-i')",
+            [],
+        )
+        .unwrap();
     let frame = json!({"protocol": "1.0-draft.1", "requestKey": a.key("start"), "command": {"kind": "runs.start",
         "rootId": "root-i", "expectedWorkRevision": "1", "expectedControlRevision": "1"}});
     applied(
@@ -4378,7 +4390,7 @@ fn invocation_deadline_and_handle_do_not_wait_for_a_busy_history_writer() {
     let held = gate.clone();
     a.store
         .submit_write(
-            WriteOptions::default(),
+            WriteOptions::fixture(),
             write_job(
                 move |_| {
                     held.pass(IdKind::Event);
@@ -4645,7 +4657,7 @@ fn queued_package_state_writes_are_refused_after_completion_or_cancellation() {
         let held = gate.clone();
         a.store
             .submit_write(
-                WriteOptions::default(),
+                WriteOptions::fixture(),
                 write_job(
                     move |_| {
                         held.pass(IdKind::Event);

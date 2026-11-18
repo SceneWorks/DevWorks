@@ -90,7 +90,7 @@ use crate::protocol::records::{
 use crate::protocol::support::{BoundedList, RelativePath};
 use crate::protocol::{CorrelationId, DomainErrorCode, DomainFault, Id, ProjectId};
 use crate::services::artifacts::ArtifactService;
-use crate::services::sessions::{Failure, Refusal, decided, label, not_found, query_fault, rev};
+use crate::services::kernel::{Failure, Refusal, decided, label, not_found, query_fault, rev};
 use crate::settings::catalog::AgentRole;
 use crate::settings::service::PrincipalRoles;
 use serde_json::Value;
@@ -266,7 +266,7 @@ pub(crate) fn config_scope(
             if ctx.project_id().is_none() && ctx.principal_kind() != PrincipalKind::Human {
                 return Err(denied_project(project_id).into());
             }
-            crate::services::sessions::require_project(ctx, project_id)?;
+            crate::services::kernel::require_project(ctx, project_id)?;
             Ok(ConfigScope::Project(project_id.clone()))
         }
     }
@@ -325,7 +325,7 @@ pub(crate) fn visible_item(
 /// Whether the invocation may see `confined`'s draft: a draft a project-confined agent wrote is
 /// visible only within that project (and to callers not confined to any project).
 fn confinement_visible(ctx: &InvocationContext, confined: Option<&ProjectId>) -> bool {
-    confined.is_none_or(|p| crate::services::sessions::project_visible(ctx, Some(p)))
+    confined.is_none_or(|p| crate::services::kernel::project_visible(ctx, Some(p)))
 }
 /// Whether the invocation may see the item: its scope and any draft confinement.
 pub(crate) fn item_visible(ctx: &InvocationContext, item: &StoredInstructionItem) -> bool {

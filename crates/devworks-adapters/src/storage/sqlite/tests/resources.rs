@@ -132,7 +132,7 @@ fn owned_container_intent_survives_restart_and_stop_listing_is_agent_scoped() {
             .any(|row| row.table == "owned_containers"
                 && row.reason == ProjectPurgeUnresolvedReason::ActiveContainer)
     );
-    let stale = run_write(&*fx.store, WriteOptions::default(), move |tx| {
+    let stale = run_write(&*fx.store, WriteOptions::fixture(), move |tx| {
         tx.resources().update_container(&running, 1)
     });
     assert!(matches!(stale, Err(StorageError::LeaseLost { .. })));
@@ -299,16 +299,21 @@ struct Fx {
 impl Fx {
     fn new() -> Self {
         let fx = Self::open(Harness::new(), Arc::new(AtomicU64::new(0)));
-        fx.store
-            .with_writer_connection(|c| {
-                super::super::conn::db(c.execute_batch(
-                    "INSERT INTO projects VALUES('project-a','A','Active',1,1,1);
-                     INSERT INTO projects VALUES('project-b','B','Active',1,1,1);
-                     INSERT INTO work_items VALUES('root-a','project-a','feature',NULL,NULL,NULL,'Feature A',1,0,1,1,1,'{}');
-                     INSERT INTO work_items VALUES('root-b','project-b','feature',NULL,NULL,NULL,'Feature B',1,0,1,1,1,'{}');",
-                ))
-            })
+        {
+            use devworks_test_support::seed::{ProjectSeed, WorkSeed};
+            devworks_test_support::seed::rows(
+                &*fx.store,
+                &[
+                    ProjectSeed::new("project-a").name("A"),
+                    ProjectSeed::new("project-b").name("B"),
+                ],
+                &[
+                    WorkSeed::feature("root-a", "project-a").title("Feature A"),
+                    WorkSeed::feature("root-b", "project-b").title("Feature B"),
+                ],
+            )
             .unwrap();
+        }
         fx.write(|tx| {
             for (a, k) in [
                 ("user-a", PrincipalKind::Human),
@@ -390,7 +395,7 @@ impl Fx {
         &self,
         f: impl FnOnce(&mut dyn WriteTransaction) -> Result<T, StorageError> + Send + 'static,
     ) -> T {
-        run_write(&*self.store, WriteOptions::default(), f).expect("write")
+        run_write(&*self.store, WriteOptions::fixture(), f).expect("write")
     }
     fn read<T>(&self, f: impl FnOnce(&dyn ReadSnapshot) -> Result<T, StorageError>) -> T {
         read_snapshot(&*self.store, &ReadOptions::default(), f).expect("read")
@@ -1385,7 +1390,7 @@ fn migration_10_adds_reservations_and_processes_to_a_version_9_store() {
         ),
         (10, 8, 9)
     );
-    let created = run_write(&s, WriteOptions::default(), |tx| {
+    let created = run_write(&s, WriteOptions::fixture(), |tx| {
         tx.resources().insert_resource(NewResource {
             id: Id::new("res-1").unwrap(),
             name: "gpu".into(),
@@ -1431,25 +1436,25 @@ fn migration_10_adds_reservations_and_processes_to_a_version_9_store() {
         lease("l-2", "h-1", 0, LeasePhase::Waiting),
         lease("l-3", "h-2", 1, LeasePhase::Held),
     );
-    run_write(&s, WriteOptions::default(), move |tx| {
+    run_write(&s, WriteOptions::fixture(), move |tx| {
         tx.resources().insert_lease(&l1)
     })
     .unwrap();
     assert!(matches!(
-        run_write(&s, WriteOptions::default(), move |tx| tx
+        run_write(&s, WriteOptions::fixture(), move |tx| tx
             .resources()
             .insert_lease(&l2)),
         Err(StorageError::Duplicate { .. })
     ));
     assert!(
-        run_write(&s, WriteOptions::default(), move |tx| tx
+        run_write(&s, WriteOptions::fixture(), move |tx| tx
             .resources()
             .insert_lease(&l3))
         .is_err(),
         "fence reuse"
     );
     assert!(
-        run_write(&s, WriteOptions::default(), |tx| tx
+        run_write(&s, WriteOptions::fixture(), |tx| tx
             .resources()
             .insert_resource(NewResource {
                 id: Id::new("res-2").unwrap(),
@@ -1466,7 +1471,7 @@ fn migration_10_adds_reservations_and_processes_to_a_version_9_store() {
     let mut stale = lease("l-1", "h-1", 1, LeasePhase::Held);
     stale.revision = 3;
     assert!(matches!(
-        run_write(&s, WriteOptions::default(), move |tx| tx
+        run_write(&s, WriteOptions::fixture(), move |tx| tx
             .resources()
             .update_lease(&stale, 2)),
         Err(StorageError::LeaseLost { .. })

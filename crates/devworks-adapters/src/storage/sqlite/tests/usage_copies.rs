@@ -123,7 +123,7 @@ fn job_usage(row: &(i64, Option<&str>, &str, &str, bool)) -> StoredJobUsage {
 /// each batch's committed sequence.
 fn seed(s: &SqliteStore) -> Vec<(String, i64)> {
     let actor = s.info().host_actor;
-    run_write(s, WriteOptions::default(), move |tx| {
+    run_write(s, WriteOptions::fixture(), move |tx| {
         tx.projects().insert_project(&StoredProject {
             id: ProjectId(id("project")),
             name: "Project".into(),
@@ -410,7 +410,7 @@ fn upgrade_moves_session_and_job_usage_into_origins_with_the_same_reads_and_tota
         .map(|row| stored_usage(row, &batches))
         .collect();
     let ingested = rows.clone();
-    run_write(&r, WriteOptions::default(), move |tx| {
+    run_write(&r, WriteOptions::fixture(), move |tx| {
         for u in &ingested {
             ingest::session_usage(tx, u)?;
         }
@@ -495,7 +495,7 @@ fn upgrade_moves_session_and_job_usage_into_origins_with_the_same_reads_and_tota
                 o.payload.to_string(),
                 o.recorded_at_ms,
                 o.priced_micro_usd,
-                o.classification,
+                o.classification.as_str(),
                 o.incomplete,
                 o.unknown_tail
             ],
@@ -602,7 +602,7 @@ fn job_usage_is_recorded_once_per_request_with_the_next_sequence() {
     let s = SqliteStore::open_with(h.config(), MIGRATIONS).unwrap();
     seed(&s);
     let first = job_usage(&JOB_ROWS[0]);
-    run_write(&s, WriteOptions::default(), move |tx| {
+    run_write(&s, WriteOptions::fixture(), move |tx| {
         let mut u = first.clone();
         u.seq = 0;
         let prepared = tx.jobs().prepare_usage(&u)?;

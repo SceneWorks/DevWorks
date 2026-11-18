@@ -8,7 +8,7 @@ use devworks_core::protocol::DomainErrorCode;
 use devworks_core::protocol::records::MessageClass;
 use devworks_core::protocol::support::{BoundedList, BoundedText};
 use devworks_core::protocol::{ActorId, AssignmentId, Counter, Id, ProjectId, Revision, RootId};
-use devworks_core::services::sessions::{Failure, Refusal};
+use devworks_core::services::kernel::{Failure, Refusal};
 use serde_json::json;
 use std::sync::Arc;
 
@@ -20,6 +20,78 @@ fn assignment(value: &str) -> AssignmentId {
 }
 fn project(value: &str) -> ProjectId {
     ProjectId(id(value))
+}
+
+#[test]
+fn an_unknown_stored_delivery_state_is_a_corrupt_store() {
+    use devworks_core::services::agents::retained::{MessageKind, PostSpec, post_message};
+    let h = Harness::new();
+    drop(SqliteStore::open_with(h.config(), &through(40)).unwrap());
+    h.raw().execute_batch(
+        "INSERT INTO actors VALUES('human-a','human','Human'),('agent-a','agent','Agent');
+         INSERT INTO projects VALUES('project-a','A','Active',1,1,1);
+         INSERT INTO repositories VALUES('repo-a','/a',1);
+         INSERT INTO project_repositories VALUES('project-a','repo-a');
+         INSERT INTO work_items VALUES('root-a','project-a','issue',NULL,NULL,NULL,'A',1,0,1,1,1,'{}');
+         INSERT INTO work_repositories VALUES('root-a','repo-a');
+         INSERT INTO conversations VALUES('conv-a','root-a',0);
+         INSERT INTO sessions(id,conversation_id,agent_id,root_id,context_epoch,revision,project_id,created_at)
+           VALUES('session-old','conv-a','agent-a','root-a',0,1,'project-a',1700000000000);"
+    ).unwrap();
+    let s = SqliteStore::open_with(h.config(), MIGRATIONS).unwrap();
+    let human = HostIngress::new(&s).context(
+        ActorId(id("human-a")),
+        PrincipalKind::Human,
+        id("post-direct"),
+        id("test-ingress"),
+        Counter::new(s.info().restore_epoch).unwrap(),
+        Revision::new(1).unwrap(),
+    );
+    let message = run_write(&s, WriteOptions::fixture(), move |tx| {
+        Ok(post_message(
+            tx,
+            &human,
+            &PostSpec {
+                project: project("project-a"),
+                body: "hello".into(),
+                kind: MessageKind::Info,
+                item: None,
+                feature: None,
+                resource: None,
+                to_session: Some(id("session-old")),
+                to_human: false,
+                blocking: false,
+                in_reply_to: None,
+                resolves: None,
+                idempotency_key: None,
+            },
+        )
+        .map_err(Failure::into_storage)?
+        .message
+        .id)
+    })
+    .unwrap();
+    {
+        let raw = h.raw();
+        raw.pragma_update(None, "ignore_check_constraints", true)
+            .unwrap();
+        raw.execute("UPDATE agent_message_deliveries SET state='Bogus'", [])
+            .unwrap();
+    }
+    let result = read_snapshot(&s, &ReadOptions::default(), |r| {
+        r.runs()
+            .agent_session_delivery(&message, &id("session-old"))
+    });
+    assert!(
+        matches!(
+            result,
+            Err(StorageError::StorageUnavailable {
+                cause: Unavailable::Corrupt,
+                ..
+            })
+        ),
+        "{result:?}"
+    );
 }
 
 #[test]
@@ -52,7 +124,7 @@ fn itemless_direct_messages_pass_once_to_same_repository_successor() {
         Counter::new(s.info().restore_epoch).unwrap(),
         Revision::new(1).unwrap(),
     );
-    let (unread, read) = run_write(&s, WriteOptions::default(), move |tx| {
+    let (unread, read) = run_write(&s, WriteOptions::fixture(), move |tx| {
         let spec = |body: &str| PostSpec {
             project: project("project-a"),
             body: body.into(),
@@ -93,7 +165,7 @@ fn itemless_direct_messages_pass_once_to_same_repository_successor() {
         agent
             .clone()
             .with_lineage(Some(project("project-a")), Some(RootId(id("root-a"))), None);
-    run_write(&s, WriteOptions::default(), move |tx| {
+    run_write(&s, WriteOptions::fixture(), move |tx| {
         let result = post_message(
             tx,
             &cross_root,
@@ -122,7 +194,7 @@ fn itemless_direct_messages_pass_once_to_same_repository_successor() {
         Ok(())
     })
     .unwrap();
-    run_write(&s, WriteOptions::default(), move |tx| {
+    run_write(&s, WriteOptions::fixture(), move |tx| {
         acknowledge(
             tx,
             &agent,
@@ -149,7 +221,7 @@ fn itemless_direct_messages_pass_once_to_same_repository_successor() {
         )
         .unwrap();
     let inherited_id = unread.clone();
-    let result = run_write(&s, WriteOptions::default(), move |tx| {
+    let result = run_write(&s, WriteOptions::fixture(), move |tx| {
         assert_eq!(
             tx.sessions().session_repository_scope(&id("session-old"))?,
             vec![id("repo-a")]
@@ -186,7 +258,10 @@ fn itemless_direct_messages_pass_once_to_same_repository_successor() {
             .agent_session_delivery(&unread, &id("session-next"))?
             .unwrap();
         assert!(successor.handed_over);
-        assert_eq!(successor.state, "Pending");
+        assert_eq!(
+            successor.state,
+            devworks_core::ports::storage::DeliveryState::Pending
+        );
         Ok(())
     });
     result.unwrap();
@@ -201,7 +276,7 @@ fn itemless_direct_messages_pass_once_to_same_repository_successor() {
             Revision::new(1).unwrap(),
         )
         .with_session(id("session-next"));
-    run_write(&s, WriteOptions::default(), move |tx| {
+    run_write(&s, WriteOptions::fixture(), move |tx| {
         post_message(
             tx,
             &active,
@@ -228,7 +303,7 @@ fn itemless_direct_messages_pass_once_to_same_repository_successor() {
         r#"INSERT INTO sessions(id,conversation_id,agent_id,root_id,context_epoch,revision,project_id,created_at,repository_ids_json)
            VALUES('session-later','conv-a','agent-a','root-a',0,1,'project-a',1700000960000,'["repo-a"]');"#
     ).unwrap();
-    run_write(&s, WriteOptions::default(), |tx| {
+    run_write(&s, WriteOptions::fixture(), |tx| {
         assert_eq!(
             handover_direct(tx, &id("session-later")).map_err(Failure::into_storage)?,
             0
@@ -247,7 +322,7 @@ fn itemless_direct_messages_pass_once_to_same_repository_successor() {
             Revision::new(1).unwrap(),
         )
         .with_session(id("session-next"));
-    run_write(&s, WriteOptions::default(), move |tx| {
+    run_write(&s, WriteOptions::fixture(), move |tx| {
         let head = tx.runs().agent_delivery_head()?;
         let page = deliver_inbox(
             tx,
@@ -272,7 +347,7 @@ fn itemless_direct_messages_pass_once_to_same_repository_successor() {
         r#"INSERT INTO sessions(id,conversation_id,agent_id,root_id,context_epoch,revision,project_id,created_at,repository_ids_json)
            VALUES('session-after-silence','conv-a','agent-a','root-a',0,1,'project-a',1700001920000,'["repo-a"]');"#
     ).unwrap();
-    run_write(&s, WriteOptions::default(), move |tx| {
+    run_write(&s, WriteOptions::fixture(), move |tx| {
         assert_eq!(
             handover_direct(tx, &id("session-after-silence")).map_err(Failure::into_storage)?,
             0
@@ -285,7 +360,7 @@ fn itemless_direct_messages_pass_once_to_same_repository_successor() {
         r#"INSERT INTO sessions(id,conversation_id,agent_id,root_id,context_epoch,revision,project_id,created_at,repository_ids_json)
            VALUES('session-inherits-silent','conv-a','agent-a','root-a',0,1,'project-a',1700002820000,'["repo-a"]');"#
     ).unwrap();
-    run_write(&s, WriteOptions::default(), move |tx| {
+    run_write(&s, WriteOptions::fixture(), move |tx| {
         assert_eq!(
             handover_direct(tx, &id("session-inherits-silent")).map_err(Failure::into_storage)?,
             1
@@ -308,7 +383,7 @@ fn itemless_direct_messages_pass_once_to_same_repository_successor() {
         Counter::new(s.info().restore_epoch).unwrap(),
         Revision::new(1).unwrap(),
     );
-    run_write(&s, WriteOptions::default(), move |tx| {
+    run_write(&s, WriteOptions::fixture(), move |tx| {
         post_message(
             tx,
             &human,
@@ -336,7 +411,7 @@ fn itemless_direct_messages_pass_once_to_same_repository_successor() {
         r#"INSERT INTO sessions(id,conversation_id,agent_id,root_id,context_epoch,revision,project_id,created_at,repository_ids_json)
            VALUES('session-expired','conv-a','agent-a','root-a',0,1,'project-a',1700691200000,'["repo-a"]');"#
     ).unwrap();
-    run_write(&s, WriteOptions::default(), |tx| {
+    run_write(&s, WriteOptions::fixture(), |tx| {
         assert_eq!(
             handover_direct(tx, &id("session-expired")).map_err(Failure::into_storage)?,
             0
@@ -381,7 +456,7 @@ fn message_delivery_replays_after_reopen_and_rejects_cross_project_links() {
         created_at_ms: 100,
     };
     let saved_context = context.clone();
-    run_write(&s, WriteOptions::default(), move |tx| {
+    run_write(&s, WriteOptions::fixture(), move |tx| {
         tx.runs().insert_agent_assignment_context(&saved_context)?;
         let mut foreign = context.clone();
         foreign.project_id = project("project-b");
@@ -424,7 +499,7 @@ fn message_delivery_replays_after_reopen_and_rejects_cross_project_links() {
         resolved_by_session_id: None,
     };
     let m = message.clone();
-    run_write(&s, WriteOptions::default(), move |tx| {
+    run_write(&s, WriteOptions::fixture(), move |tx| {
         tx.runs().insert_agent_message(&m)?;
         let delivery_sequence = tx.runs().agent_delivery_head()? + 1;
         tx.runs().insert_agent_delivery(&StoredAgentDelivery {
@@ -433,7 +508,7 @@ fn message_delivery_replays_after_reopen_and_rejects_cross_project_links() {
             project_id: m.project_id.clone(),
             recipient_assignment_id: m.to_assignment_id.clone(),
             recipient_human: false,
-            state: "Pending".into(),
+            state: devworks_core::ports::storage::DeliveryState::Pending,
             revision: 1,
             delivered_at_ms: None,
             read_at_ms: None,
@@ -480,7 +555,7 @@ fn message_delivery_replays_after_reopen_and_rejects_cross_project_links() {
             recipient_assignment_id: None,
             recipient_session_id: Some(id("session-child")),
             recipient_human: false,
-            state: "Pending".into(),
+            state: devworks_core::ports::storage::DeliveryState::Pending,
             revision: 1,
             delivered_at_ms: None,
             read_at_ms: None,
@@ -506,7 +581,7 @@ fn message_delivery_replays_after_reopen_and_rejects_cross_project_links() {
             recipient_assignment_id: None,
             recipient_session_id: Some(id("session-home")),
             recipient_human: false,
-            state: "Pending".into(),
+            state: devworks_core::ports::storage::DeliveryState::Pending,
             revision: 1,
             delivered_at_ms: None,
             read_at_ms: None,
@@ -646,7 +721,7 @@ fn message_delivery_replays_after_reopen_and_rejects_cross_project_links() {
         );
     for _ in 0..2 {
         let context = child_context.clone();
-        run_write(&s, WriteOptions::default(), move |tx| {
+        run_write(&s, WriteOptions::fixture(), move |tx| {
             let page = devworks_core::services::agents::retained::deliver_inbox(
                 tx,
                 &context,
@@ -659,7 +734,10 @@ fn message_delivery_replays_after_reopen_and_rejects_cross_project_links() {
             .map_err(Failure::into_storage)?;
             assert_eq!(page.items.len(), 1);
             assert_eq!(page.next_sequence, 2);
-            assert_eq!(page.items[0].0.state, "Delivered");
+            assert_eq!(
+                page.items[0].0.state,
+                devworks_core::ports::storage::DeliveryState::Delivered
+            );
             Ok(())
         })
         .unwrap();
@@ -677,7 +755,7 @@ fn message_delivery_replays_after_reopen_and_rejects_cross_project_links() {
     .unwrap();
     for expected in [1, 0] {
         let context = child_context.clone();
-        run_write(&s, WriteOptions::default(), move |tx| {
+        run_write(&s, WriteOptions::fixture(), move |tx| {
             let result = devworks_core::services::agents::retained::acknowledge(
                 tx,
                 &context,
@@ -700,7 +778,7 @@ fn message_delivery_replays_after_reopen_and_rejects_cross_project_links() {
                 .agent_session_delivery(&id("message-direct"), &id("session-child"))?
                 .unwrap()
                 .state,
-            "Read"
+            devworks_core::ports::storage::DeliveryState::Read
         );
         Ok(())
     })
@@ -717,7 +795,7 @@ fn message_delivery_replays_after_reopen_and_rejects_cross_project_links() {
         .with_session(id("session-home"))
         .with_lineage(Some(project("project-a")), None, None);
     let context = home_context.clone();
-    run_write(&s, WriteOptions::default(), move |tx| {
+    run_write(&s, WriteOptions::fixture(), move |tx| {
         let result = devworks_core::services::agents::retained::acknowledge(
             tx,
             &context,
@@ -734,7 +812,7 @@ fn message_delivery_replays_after_reopen_and_rejects_cross_project_links() {
     .unwrap();
     for expected in [1, 0] {
         let context = home_context.clone();
-        run_write(&s, WriteOptions::default(), move |tx| {
+        run_write(&s, WriteOptions::fixture(), move |tx| {
             let result = devworks_core::services::agents::retained::acknowledge(
                 tx,
                 &context,
@@ -769,7 +847,7 @@ fn message_delivery_replays_after_reopen_and_rejects_cross_project_links() {
         idempotency_key: Some("review-request".into()),
     };
     let context = child_context.clone();
-    let (new_message, replay) = run_write(&s, WriteOptions::default(), move |tx| {
+    let (new_message, replay) = run_write(&s, WriteOptions::fixture(), move |tx| {
         let created = devworks_core::services::agents::retained::post_message(tx, &context, &spec)
             .map_err(Failure::into_storage)?;
         let repeated = devworks_core::services::agents::retained::post_message(tx, &context, &spec)
@@ -811,7 +889,7 @@ fn message_delivery_replays_after_reopen_and_rejects_cross_project_links() {
     let spoofed_parent = parent_id.clone();
     let spoofing_agent = child_context.clone();
     assert!(matches!(
-        run_write(&s, WriteOptions::default(), move |tx| {
+        run_write(&s, WriteOptions::fixture(), move |tx| {
             devworks_core::services::agents::retained::post_message(
                 tx,
                 &spoofing_agent,
@@ -844,7 +922,7 @@ fn message_delivery_replays_after_reopen_and_rejects_cross_project_links() {
         Ok(())
     })
     .unwrap();
-    let reply = run_write(&s, WriteOptions::default(), move |tx| {
+    let reply = run_write(&s, WriteOptions::fixture(), move |tx| {
         let reply = devworks_core::services::agents::retained::post_message(
             tx,
             &human_context,
@@ -883,7 +961,10 @@ fn message_delivery_replays_after_reopen_and_rejects_cross_project_links() {
             .runs()
             .agent_session_delivery(&reply.message.id, &id("session-child"))?
             .unwrap();
-        assert_eq!(delivery.state, "Pending");
+        assert_eq!(
+            delivery.state,
+            devworks_core::ports::storage::DeliveryState::Pending
+        );
         Ok(())
     })
     .unwrap();
@@ -895,7 +976,7 @@ fn message_delivery_replays_after_reopen_and_rejects_cross_project_links() {
         Counter::new(s.info().restore_epoch).unwrap(),
         Revision::new(1).unwrap(),
     );
-    let direct = run_write(&s, WriteOptions::default(), move |tx| {
+    let direct = run_write(&s, WriteOptions::fixture(), move |tx| {
         let posted = devworks_core::services::agents::retained::post_message(
             tx,
             &human_context,
@@ -1016,12 +1097,12 @@ fn message_delivery_replays_after_reopen_and_rejects_cross_project_links() {
         Ok(())
     })
     .unwrap();
-    run_write(&s, WriteOptions::default(), move |tx| {
+    run_write(&s, WriteOptions::fixture(), move |tx| {
         let mut delivery = tx
             .runs()
             .agent_delivery(&id("message-a"), Some(&assignment("recipient")))?
             .unwrap();
-        delivery.state = "Read".into();
+        delivery.state = devworks_core::ports::storage::DeliveryState::Read;
         delivery.revision += 1;
         delivery.delivered_at_ms = Some(110);
         delivery.read_at_ms = Some(110);
@@ -1061,7 +1142,7 @@ fn message_delivery_replays_after_reopen_and_rejects_cross_project_links() {
             )?[0]
                 .0
                 .state,
-            "Read"
+            devworks_core::ports::storage::DeliveryState::Read
         );
         assert_eq!(
             snap.runs()
@@ -1096,7 +1177,7 @@ fn message_delivery_replays_after_reopen_and_rejects_cross_project_links() {
     };
     let stale_sender = context("sender", "session-a", "root-a");
     assert!(matches!(
-        run_write(&s, WriteOptions::default(), move |tx| {
+        run_write(&s, WriteOptions::fixture(), move |tx| {
             Ok(devworks_core::services::agents::post_assignment(
                 tx,
                 &stale_sender,
@@ -1114,7 +1195,7 @@ fn message_delivery_replays_after_reopen_and_rejects_cross_project_links() {
         })))
     ));
     let boot = s.info().boot_id.clone().unwrap();
-    run_write(&s, WriteOptions::default(), move |tx| {
+    run_write(&s, WriteOptions::fixture(), move |tx| {
         let stale = tx.runs().assignment(&assignment("sender"))?.unwrap();
         assert_eq!(stale.state, AssignmentState::Ready);
         tx.runs().insert_activation(&StoredActivation {
@@ -1149,7 +1230,7 @@ fn message_delivery_replays_after_reopen_and_rejects_cross_project_links() {
     let stale_epoch_sender =
         context("sender", "session-a", "root-a").with_activation(id("sender-execution"), 0);
     assert!(matches!(
-        run_write(&s, WriteOptions::default(), move |tx| {
+        run_write(&s, WriteOptions::fixture(), move |tx| {
             Ok(devworks_core::services::agents::post_assignment(
                 tx,
                 &stale_epoch_sender,
@@ -1167,14 +1248,13 @@ fn message_delivery_replays_after_reopen_and_rejects_cross_project_links() {
         })))
     ));
     let sender_context = context("sender", "session-a", "root-a");
-    let recipient_context = context("recipient", "session-child", "root-a");
     let input = ops::MessagesInput {
         recipient_assignment_id: assignment("recipient"),
         message_class: MessageClass::Status,
         content: BoundedText("Native service message".into()),
         attachments: BoundedList(vec![]),
     };
-    let posted = run_write(&s, WriteOptions::default(), move |tx| {
+    let posted = run_write(&s, WriteOptions::fixture(), move |tx| {
         let sender = tx.runs().assignment(&assignment("sender"))?.unwrap();
         let activation = tx.runs().activation(&id("sender-execution"))?.unwrap();
         assert_eq!(sender.state, AssignmentState::Active);
@@ -1187,6 +1267,47 @@ fn message_delivery_replays_after_reopen_and_rejects_cross_project_links() {
     .unwrap();
     assert_eq!(posted.to_assignment_id, assignment("recipient"));
     assert!(!posted.acknowledged);
+    // The assignment inbox read applies the same active-assignment rule as the commands: a
+    // caller whose activation lease has lapsed is refused, and is served again once it renews.
+    let inbox_input = ops::InboxInput {
+        assignment_id: assignment("sender"),
+        page: devworks_core::protocol::records::PageRequest {
+            limit: devworks_core::protocol::support::Limit::new(10).unwrap(),
+            cursor: None,
+        },
+        unacknowledged_only: false,
+        direction: devworks_core::protocol::records::MessageDirection::Outbound,
+    };
+    let read_inbox = || {
+        read_snapshot(&s, &ReadOptions::default(), |snap| {
+            Ok(devworks_core::services::agents::inbox_assignment(
+                snap,
+                &context("sender", "session-a", "root-a"),
+                &inbox_input,
+            ))
+        })
+        .unwrap()
+    };
+    let set_lease = |until: i64, expected: i64| {
+        run_write(&s, WriteOptions::fixture(), move |tx| {
+            let mut activation = tx.runs().activation(&id("sender-execution"))?.unwrap();
+            activation.lease_until_ms = Some(until);
+            activation.revision += 1;
+            tx.runs().update_activation(&activation, expected)
+        })
+        .unwrap();
+    };
+    assert_eq!(read_inbox().unwrap().0.items.0.len(), 2);
+    set_lease(0, 1);
+    assert!(matches!(
+        read_inbox(),
+        Err(Failure::Refused(Refusal {
+            code: DomainErrorCode::PermissionDenied,
+            ..
+        }))
+    ));
+    set_lease(i64::MAX, 2);
+    assert_eq!(read_inbox().unwrap().0.items.0.len(), 2);
     read_snapshot(&s, &ReadOptions::default(), |snap| {
         let inbox = snap.runs().agent_inbox(
             &project("project-a"),
@@ -1215,7 +1336,10 @@ fn message_delivery_replays_after_reopen_and_rejects_cross_project_links() {
             10,
         )?;
         assert_eq!(pending_outbound[0].0.id, posted.id);
-        assert_eq!(pending_outbound[0].1.as_ref().unwrap().state, "Pending");
+        assert_eq!(
+            pending_outbound[0].1.as_ref().unwrap().state,
+            devworks_core::ports::storage::DeliveryState::Pending
+        );
         let unread = snap.runs().agent_assignment_thread(
             &project("project-a"),
             &assignment("recipient"),
@@ -1229,12 +1353,64 @@ fn message_delivery_replays_after_reopen_and_rejects_cross_project_links() {
         Ok(())
     })
     .unwrap();
+    // The recipient runs on the root's activation. Acknowledging and checkpointing apply the
+    // same active-assignment rule as posting: a lapsed lease is refused for both.
+    run_write(&s, WriteOptions::fixture(), move |tx| {
+        let ready = tx.runs().assignment(&assignment("recipient"))?.unwrap();
+        let mut running = ready.clone();
+        running.state = AssignmentState::Active;
+        running.execution_id = Some(id("sender-execution"));
+        running.revision += 1;
+        tx.runs().update_assignment(&running, ready.revision)
+    })
+    .unwrap();
+    let recipient_context =
+        context("recipient", "session-child", "root-a").with_activation(id("sender-execution"), 1);
     let ack = ops::AcknowledgeInput {
         assignment_id: assignment("recipient"),
         message_id: posted.id.clone(),
         expected_revision: Revision::new(1).unwrap(),
     };
-    let acknowledged = run_write(&s, WriteOptions::default(), move |tx| {
+    let checkpoint = ops::CheckpointInput {
+        assignment_id: assignment("recipient"),
+        expected_revision: Revision::new(2).unwrap(),
+        transcript_sequence: Counter::new(1).unwrap(),
+        content: devworks_core::protocol::provider::ArtifactRef {
+            artifact_id: id("artifact-a"),
+            version_id: id("version-a"),
+            sha256: devworks_core::protocol::provider::Digest::try_from("0".repeat(64)).unwrap(),
+            byte_length: Counter::new(1).unwrap(),
+            media_type: "text/plain".into(),
+        },
+    };
+    set_lease(0, 3);
+    let (lapsed_ctx, lapsed_ack, lapsed_checkpoint) =
+        (recipient_context.clone(), ack.clone(), checkpoint.clone());
+    let refused = run_write(&s, WriteOptions::fixture(), move |tx| {
+        Ok((
+            devworks_core::services::agents::acknowledge_assignment(tx, &lapsed_ctx, &lapsed_ack),
+            devworks_core::services::agents::checkpoint_assignment(
+                tx,
+                &lapsed_ctx,
+                &lapsed_checkpoint,
+            ),
+        ))
+    })
+    .unwrap();
+    for outcome in [refused.0.map(|_| ()), refused.1.map(|_| ())] {
+        assert!(
+            matches!(
+                outcome,
+                Err(Failure::Refused(Refusal {
+                    code: DomainErrorCode::PermissionDenied,
+                    ..
+                }))
+            ),
+            "a lapsed lease is refused"
+        );
+    }
+    set_lease(i64::MAX, 4);
+    let acknowledged = run_write(&s, WriteOptions::fixture(), move |tx| {
         devworks_core::services::agents::acknowledge_assignment(tx, &recipient_context, &ack)
             .map_err(|error| StorageError::InvalidRecord(format!("ack refused: {error:?}")))
     })
@@ -1262,7 +1438,10 @@ fn message_delivery_replays_after_reopen_and_rejects_cross_project_links() {
             None,
             10,
         )?;
-        assert_eq!(outbound[0].1.as_ref().unwrap().state, "Read");
+        assert_eq!(
+            outbound[0].1.as_ref().unwrap().state,
+            devworks_core::ports::storage::DeliveryState::Read
+        );
         assert!(
             snap.runs()
                 .agent_assignment_thread(
@@ -1278,7 +1457,7 @@ fn message_delivery_replays_after_reopen_and_rejects_cross_project_links() {
         Ok(())
     })
     .unwrap();
-    run_write(&s, WriteOptions::default(), |tx| {
+    run_write(&s, WriteOptions::fixture(), |tx| {
         let mut assignment = tx.runs().assignment(&assignment("recipient"))?.unwrap();
         let expected = assignment.revision;
         assignment.state = AssignmentState::Completed;
@@ -1294,7 +1473,7 @@ fn message_delivery_replays_after_reopen_and_rejects_cross_project_links() {
         expected_revision: Revision::new(2).unwrap(),
     };
     assert!(matches!(
-        run_write(&s, WriteOptions::default(), move |tx| {
+        run_write(&s, WriteOptions::fixture(), move |tx| {
             Ok(devworks_core::services::agents::acknowledge_assignment(
                 tx,
                 &closed_recipient,
@@ -1330,7 +1509,7 @@ fn message_delivery_replays_after_reopen_and_rejects_cross_project_links() {
         )),
     );
     let rejected_context = coordinator.clone();
-    let rejected = run_write(&s, WriteOptions::default(), move |tx| {
+    let rejected = run_write(&s, WriteOptions::fixture(), move |tx| {
         rejected_service
             .delegate(tx, &rejected_context, &foreign_task)
             .map(|_| ())
@@ -1348,7 +1527,7 @@ fn message_delivery_replays_after_reopen_and_rejects_cross_project_links() {
         instruction: BoundedText("Investigate the root issue".into()),
         source_checkpoint_id: None,
     };
-    let child = run_write(&s, WriteOptions::default(), move |tx| {
+    let child = run_write(&s, WriteOptions::fixture(), move |tx| {
         service
             .delegate(tx, &coordinator, &request)
             .map_err(|error| StorageError::InvalidRecord(format!("delegation refused: {error:?}")))
@@ -1398,7 +1577,7 @@ fn message_delivery_replays_after_reopen_and_rejects_cross_project_links() {
         )
         .with_lineage(Some(project("project-a")), None, None);
     let child_id = child.assignment_id.clone();
-    let actor = run_write(&s, WriteOptions::default(), move |tx| {
+    let actor = run_write(&s, WriteOptions::fixture(), move |tx| {
         devworks_core::services::agents::bind_child_authority(tx, &host, &child_id).map_err(
             |error| StorageError::InvalidRecord(format!("host binding refused: {error:?}")),
         )
@@ -1415,7 +1594,7 @@ fn message_delivery_replays_after_reopen_and_rejects_cross_project_links() {
         Ok(())
     })
     .unwrap();
-    run_write(&s, WriteOptions::default(), |tx| {
+    run_write(&s, WriteOptions::fixture(), |tx| {
         let mut activation = tx.runs().activation(&id("sender-execution"))?.unwrap();
         let expected = activation.revision;
         activation.lease_until_ms = Some(tx.now_ms());
@@ -1425,7 +1604,7 @@ fn message_delivery_replays_after_reopen_and_rejects_cross_project_links() {
     .unwrap();
     let expired_sender = context("sender", "session-a", "root-a");
     assert!(matches!(
-        run_write(&s, WriteOptions::default(), move |tx| {
+        run_write(&s, WriteOptions::fixture(), move |tx| {
             Ok(devworks_core::services::agents::post_assignment(
                 tx,
                 &expired_sender,
@@ -1445,8 +1624,8 @@ fn message_delivery_replays_after_reopen_and_rejects_cross_project_links() {
 
     let artifacts = Arc::new(devworks_core::services::artifacts::ArtifactService::new(
         Arc::new(crate::fs::artifacts::NativeArtifactFiles::new(
-            h.root.0.clone(),
-            h.root.0.join("cache"),
+            h.root.path().to_path_buf(),
+            h.root.join("cache"),
         )),
         Arc::new(crate::fs::sources::HostArtifactSources::new(
             h.clock.clone(),
@@ -1549,7 +1728,7 @@ fn message_delivery_replays_after_reopen_and_rejects_cross_project_links() {
             Revision::new(1).unwrap(),
         )
         .with_session(id("session-home"));
-    let outcome = run_write(&s, WriteOptions::default(), move |tx| {
+    let outcome = run_write(&s, WriteOptions::fixture(), move |tx| {
         let batch = devworks_core::services::sessions::turn::batch_of(
             &id("session-home"),
             tx.new_id(devworks_core::ports::IdKind::TranscriptBatch),

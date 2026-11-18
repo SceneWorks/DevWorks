@@ -12,7 +12,7 @@ use crate::{
     services::{
         artifacts::ConventionSourceSelection,
         cursor::CursorBinding,
-        sessions::{Failure, Refusal, counter},
+        kernel::{Failure, Refusal, counter},
     },
 };
 use base64::Engine;

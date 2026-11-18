@@ -5,7 +5,7 @@ pub mod build_context;
 mod commands;
 mod effects;
 pub use commands::{CONSUMER as EFFECT_CONSUMER, STOP_CONSUMER};
-pub use effects::EffectOutcome;
+pub use effects::ContainerEffects;
 pub mod execution;
 pub mod inspection;
 pub mod intent;

@@ -31,7 +31,7 @@ fn register(engine: &devworks_desktop::host::Engine, id: &str, name: &str) {
     };
     run_write(
         &**engine.host().runtime().store(),
-        WriteOptions::default(),
+        WriteOptions::fixture(),
         move |tx| tx.projects().insert_repository(&r),
     )
     .unwrap();
@@ -475,7 +475,7 @@ fn publish_text(engine: &devworks_desktop::host::Engine, readme: bool) {
     use devworks_core::ports::storage::{StoredIndexView, StoredRepositoryText, TextKind};
     run_write(
         &**engine.host().runtime().store(),
-        WriteOptions::default(),
+        WriteOptions::fixture(),
         move |tx| {
             let view = Id::new("view-1").unwrap();
             if tx.projects().index_view(&view)?.is_none() {
@@ -548,7 +548,7 @@ fn seed_browser(engine: &devworks_desktop::host::Engine, session: &str, project:
     let store = engine.host().runtime().store().clone();
     let boot = store.info().boot_id.unwrap();
     let (session, project) = (session.to_owned(), project.clone());
-    run_write(&*store, WriteOptions::default(), move |tx| {
+    run_write(&*store, WriteOptions::fixture(), move |tx| {
         let op = OperationId(Id::new(format!("op-{session}")).unwrap());
         tx.operations().record_intent(NewOperation {
             id: op.clone(),
@@ -898,7 +898,7 @@ fn set_access_profile(backend: &dyn Backend, project: &str, profile: &str) {
         {"key": key, "value": {"schema": d.schema_ref(), "value": profile}}]});
     ops::settings_saved(backend.command(
         "settings.save_revision",
-        &ops::command_frame(backend, "settings.save_revision", body),
+        &devworks_desktop::frame::fixture::command(backend, "settings.save_revision", body),
     ))
     .expect("the access profile is saved");
 }
@@ -1142,7 +1142,7 @@ fn a_person_reviews_and_confirms_a_repository_folder_deletion() {
     };
     run_write(
         &**engine.host().runtime().store(),
-        WriteOptions::default(),
+        WriteOptions::fixture(),
         move |tx| tx.projects().insert_repository(&r),
     )
     .unwrap();
@@ -1239,7 +1239,7 @@ fn register_checkout(
     };
     run_write(
         &**engine.host().runtime().store(),
-        WriteOptions::default(),
+        WriteOptions::fixture(),
         move |tx| tx.projects().insert_repository(&r),
     )
     .unwrap();

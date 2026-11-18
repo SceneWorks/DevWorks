@@ -5,7 +5,7 @@ use crate::operations::{OperationInput, containers as ops};
 use crate::ports::storage::ApplicationStore;
 use crate::protocol::{ActorId, AssignmentId, Id, OperationId, ProjectId, RootId};
 use crate::services::git::context::SourceBinding;
-use crate::services::sessions::{counter, rev};
+use crate::services::kernel::{counter, rev};
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

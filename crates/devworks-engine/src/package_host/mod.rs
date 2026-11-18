@@ -1119,14 +1119,14 @@ impl PackageHost {
     fn attribute(&self, key: &(String, Value), kind: &str, payload: Value) {
         let _ = run_write(
             &*self.store,
-            WriteOptions::default(),
+            WriteOptions::observed(),
             attribution_work(key.clone(), kind.to_owned(), payload),
         );
     }
 
     fn enqueue_attribute(&self, key: &(String, Value), kind: &str, payload: Value) {
         let _ = self.store.submit_write(
-            WriteOptions::default(),
+            WriteOptions::observed(),
             write_job(
                 attribution_work(key.clone(), kind.to_owned(), payload),
                 |_| {},
@@ -2321,7 +2321,7 @@ impl Broker for HostBroker {
                     contribution_id: slot.contribution_id.clone(),
                     manifest_digest: ctx.manifest_digest.clone(),
                 };
-                let outcome = run_write(&*self.host.store, WriteOptions::default(), move |tx| {
+                let outcome = run_write(&*self.host.store, WriteOptions::host_state(), move |tx| {
                     let _guard = slot.state.lock().unwrap_or_else(|p| p.into_inner());
                     if slot.revoked.load(Ordering::SeqCst) {
                         return Ok(CommitOutcome::Refused(CommitRefusal::StaleInvocation));
@@ -2383,7 +2383,7 @@ impl HostBroker {
     ) -> Result<RpcResult, devworks_extension_protocol::package::RpcError> {
         let pkg = package.to_owned();
         let value = json!({"artifact": proposal});
-        let written = run_write(&*self.host.store, WriteOptions::default(), move |tx| {
+        let written = run_write(&*self.host.store, WriteOptions::host_state(), move |tx| {
             let _guard = slot.state.lock().unwrap_or_else(|p| p.into_inner());
             if slot.revoked.load(Ordering::SeqCst) {
                 return Err(StorageError::LeaseLost {

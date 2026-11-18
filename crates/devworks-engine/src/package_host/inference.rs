@@ -315,7 +315,7 @@ fn open_grant(
     let (opened_for, opened_project, opened_root) = (person.clone(), project.clone(), root.clone());
     let opened = session_id.clone();
     let approval = approval.map(|(package, digest)| (package.to_owned(), digest.to_owned()));
-    run_write(store, WriteOptions::default(), move |tx| {
+    run_write(store, WriteOptions::host_state(), move |tx| {
         if tx.actors().actor_kind(&opened_for)? != Some(PrincipalKind::Human) {
             return Err(StorageError::ScopeDenied);
         }
@@ -559,7 +559,7 @@ pub(super) fn call(
         .cloned()
         .map_or(ArtifactScope::Workspace, ArtifactScope::Project);
     let (operation, live) = (ctx.operation_id.clone(), slot.clone());
-    let committed = run_write(&*host.store, WriteOptions::default(), move |tx| {
+    let committed = run_write(&*host.store, WriteOptions::observed(), move |tx| {
         // Serialized with revocation: a cancelled or expired invocation publishes nothing.
         let _guard = live.state.lock().unwrap_or_else(|p| p.into_inner());
         if live.revoked.load(std::sync::atomic::Ordering::SeqCst) {

@@ -3,87 +3,9 @@
 use super::accounting::{self, Admission, AttemptEnd, LocalQuiescence, Observation};
 use crate::ports::storage::*;
 use crate::protocol::Id;
+pub use crate::services::write_fence::WriteFence;
 use crate::services::{router::InferenceRouter, runs::ControlService};
-use std::collections::HashSet;
-use std::sync::{Arc, Mutex, RwLock};
-
-/// Closing the fence drains any admitted accounting unit through its commit acknowledgment.
-/// A transport callback after closure cannot mutate the ledger, even if local close is stuck.
-#[derive(Default)]
-pub struct AccountingWriteFence {
-    closed: RwLock<bool>,
-    admitted: Mutex<HashSet<Id>>,
-}
-impl AccountingWriteFence {
-    pub fn close(&self) {
-        *self.closed.write().unwrap_or_else(|p| p.into_inner()) = true;
-    }
-    /// Volatile host previews must disappear when shutdown fences the owned producer, even
-    /// when an unclosed transport still holds its sink alive.
-    pub fn is_closed(&self) -> bool {
-        *self.closed.read().unwrap_or_else(|p| p.into_inner())
-    }
-    /// Registered before releasing the admission unit's fence, including the gap before a
-    /// producer installs its cancellation token. Shutdown never scans settled history.
-    pub fn admitted(&self) -> HashSet<Id> {
-        self.admitted
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .clone()
-    }
-    pub fn forget_closed(&self, id: &Id) {
-        self.admitted
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .remove(id);
-    }
-    /// Trusted host publication preparation may stage bounded local artifacts under this fence.
-    /// Never call a provider, network transport or package process inside this closure.
-    pub fn publication<T>(
-        &self,
-        work: impl FnOnce() -> Result<T, StorageError>,
-    ) -> Result<T, StorageError> {
-        let closed = self.closed.read().unwrap_or_else(|p| p.into_inner());
-        if *closed {
-            return Err(StorageError::Cancelled);
-        }
-        let result = work();
-        drop(closed);
-        result
-    }
-    fn admit<F>(&self, store: &dyn ApplicationStore, work: F) -> Result<Admission, StorageError>
-    where
-        F: FnOnce(&mut dyn WriteTransaction) -> Result<Admission, StorageError> + Send + 'static,
-    {
-        let closed = self.closed.read().unwrap_or_else(|p| p.into_inner());
-        if *closed {
-            return Err(StorageError::Cancelled);
-        }
-        let result = run_write(store, WriteOptions::default(), work);
-        if let Ok(Admission::Admitted { attempt, .. }) = &result {
-            self.admitted
-                .lock()
-                .unwrap_or_else(|p| p.into_inner())
-                .insert(attempt.attempt_id.clone());
-        }
-        drop(closed);
-        result
-    }
-
-    pub fn write<T, F>(&self, store: &dyn ApplicationStore, work: F) -> Result<T, StorageError>
-    where
-        T: Send + 'static,
-        F: FnOnce(&mut dyn WriteTransaction) -> Result<T, StorageError> + Send + 'static,
-    {
-        let closed = self.closed.read().unwrap_or_else(|p| p.into_inner());
-        if *closed {
-            return Err(StorageError::Cancelled);
-        }
-        let result = run_write(store, WriteOptions::default(), work);
-        drop(closed);
-        result
-    }
-}
+use std::sync::Arc;
 
 /// A prepared transport, exclusively owned by one invocation of `AttemptHost::drive`.
 /// `next` must observe cancellation while waiting. `close` returns only after all local
@@ -124,7 +46,7 @@ pub trait OwnedInferenceSink: Send {
         &mut self,
         _attempt: &StoredInferenceAttempt,
         _head: crate::providers::ProviderResponseHead,
-        _fence: &AccountingWriteFence,
+        _fence: &WriteFence,
     ) -> Result<(), StorageError> {
         Ok(())
     }
@@ -133,14 +55,14 @@ pub trait OwnedInferenceSink: Send {
         &mut self,
         attempt: &StoredInferenceAttempt,
         frame: crate::providers::decode::DecodedFrame,
-        fence: &AccountingWriteFence,
+        fence: &WriteFence,
     ) -> Result<(), StorageError>;
     /// Called only after physical source closure, including an interrupted/error tail.
     fn finish(
         &mut self,
         attempt: &StoredInferenceAttempt,
         outcome: AttemptEnd,
-        fence: &AccountingWriteFence,
+        fence: &WriteFence,
     ) -> Result<(), StorageError>;
 }
 #[derive(Clone, Debug)]
@@ -156,7 +78,7 @@ pub struct AttemptHost {
     store: Arc<dyn ApplicationStore>,
     control: Arc<ControlService>,
     router: Arc<InferenceRouter>,
-    fence: Arc<AccountingWriteFence>,
+    fence: Arc<WriteFence>,
     process: Option<accounting::HostProcessIdentity>,
 }
 impl AttemptHost {
@@ -169,7 +91,7 @@ impl AttemptHost {
             store,
             control,
             router,
-            fence: Arc::new(AccountingWriteFence::default()),
+            fence: Arc::new(WriteFence::default()),
             process: None,
         }
     }
@@ -182,7 +104,7 @@ impl AttemptHost {
             });
         self
     }
-    pub fn with_write_fence(mut self, fence: Arc<AccountingWriteFence>) -> Self {
+    pub fn with_write_fence(mut self, fence: Arc<WriteFence>) -> Self {
         self.fence = fence;
         self
     }
@@ -220,7 +142,7 @@ impl AttemptHost {
         let router = self.router.clone();
         let control = self.control.clone();
         let process = self.process.clone();
-        self.fence.admit(self.store.as_ref(), move |tx| {
+        let work = move |tx: &mut dyn WriteTransaction| {
             if !crate::authority::fences_hold(tx, &source_fences)? {
                 return Err(StorageError::ScopeDenied);
             }
@@ -244,7 +166,12 @@ impl AttemptHost {
                 router.admit_owned_request(tx, &context, &logical, category)?;
             }
             router.admit_attempt_with_process(tx, &control, &context, &request, process.as_ref())
-        })
+        };
+        self.fence
+            .admit(self.store.as_ref(), work, |admission| match admission {
+                Admission::Admitted { attempt, .. } => Some(attempt.attempt_id.clone()),
+                _ => None,
+            })
     }
 
     /// Blocking host worker entry point. The caller retains the cancellation handle for
@@ -641,13 +568,16 @@ pub fn apply_recovery(
             result.unclosed.push(current.attempt_id.clone());
             continue;
         }
-        if current.state == "Admitted" {
+        if current.state == AttemptState::Admitted {
             accounting::cancel_admitted(
                 tx,
                 &current.attempt_id,
                 "the admitted host process is verified gone before dispatch",
             )?;
-        } else if matches!(current.state.as_str(), "Dispatched" | "UnknownTail") {
+        } else if matches!(
+            current.state,
+            AttemptState::Dispatched | AttemptState::UnknownTail
+        ) {
             accounting::settle(
                 tx,
                 control,

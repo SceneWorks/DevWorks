@@ -148,7 +148,7 @@ use crate::protocol::{
 use crate::services::artifacts::ArtifactService;
 use crate::services::artifacts::lifecycle::ExactReadRefusal;
 use crate::services::diagnostics::{DiagnosticService, LogEntry};
-use crate::services::sessions::{Failure, Refusal, decided, query_fault, rev};
+use crate::services::kernel::{Failure, Refusal, decided, query_fault, rev};
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, Mutex, RwLock};
@@ -1875,7 +1875,7 @@ impl PackageService {
     pub fn retry_pending(&self, package_id: &str) -> Result<bool, StorageError> {
         let svc = self.clone_ports();
         let package_id = package_id.to_owned();
-        run_write(&*self.store, WriteOptions::default(), move |tx| {
+        run_write(&*self.store, WriteOptions::recovery(), move |tx| {
             let Some(mut p) = tx.packages().package(&package_id)? else {
                 return Ok(false);
             };
@@ -1992,7 +1992,7 @@ impl PackageService {
             code.to_owned(),
             message.to_owned(),
         );
-        run_write(&*self.store, WriteOptions::default(), move |tx| {
+        run_write(&*self.store, WriteOptions::settlement(), move |tx| {
             let at = |tx: &mut dyn WriteTransaction,
                       rolled_back|
              -> Result<StartupFailure, StorageError> {
@@ -2088,7 +2088,7 @@ impl PackageService {
         let key = key.clone();
         let (package_id, digest, process) =
             (key.package_id.clone(), key.digest.clone(), process.clone());
-        run_write(&*self.store, WriteOptions::default(), move |tx| {
+        run_write(&*self.store, WriteOptions::settlement(), move |tx| {
             let Some(mut p) = tx.packages().package(&package_id)? else {
                 return Ok(());
             };
@@ -2167,7 +2167,7 @@ impl PackageService {
         );
         let candidates = on_disk.clone();
         let removable: Vec<(String, String, bool)> =
-            run_write(&*self.store, WriteOptions::default(), move |tx| {
+            run_write(&*self.store, WriteOptions::housekeeping(), move |tx| {
                 let mut out = Vec::new();
                 for (pkg, digest) in candidates {
                     if keep.contains(&(pkg.clone(), digest.clone())) {
@@ -2270,7 +2270,7 @@ impl PackageService {
             rationale.chars().take(4096).collect::<String>(),
         );
         let svc = self.clone_ports();
-        run_write(&*self.store, WriteOptions::default(), move |tx| {
+        run_write(&*self.store, WriteOptions::host_state(), move |tx| {
             svc.decide_package_proposal_in(
                 tx,
                 &ctx,

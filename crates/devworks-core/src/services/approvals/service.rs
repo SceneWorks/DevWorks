@@ -15,7 +15,7 @@ use crate::protocol::{CorrelationId, DomainErrorCode, DomainFault, Id};
 use crate::services::{
     UseCases,
     cursor::{self, CursorBinding},
-    sessions::{Failure, Refusal, not_found, project_visible, query_fault, rev},
+    kernel::{Failure, Refusal, not_found, project_visible, query_fault, rev},
 };
 use crate::settings::service::PrincipalRoles;
 use serde_json::Value;
@@ -185,7 +185,7 @@ impl ApprovalService {
                 .decisions()
                 .human_decision(ApprovalSource::Settings, id)?
                 .and_then(|a| a.rationale)
-                .map(|v| crate::services::sessions::content(&v));
+                .map(|v| crate::services::kernel::content(&v));
             return Ok(view);
         }
         if let Some(p) = s.work().proposal(id)? {
@@ -204,7 +204,7 @@ impl ApprovalService {
                 .decisions()
                 .human_decision(ApprovalSource::FeaturePlan, id)?
                 .and_then(|a| a.rationale)
-                .map(|v| crate::services::sessions::content(&v));
+                .map(|v| crate::services::kernel::content(&v));
             return Ok(view);
         }
         let p = s
@@ -448,7 +448,7 @@ impl CommandHandler for ApprovalService {
         tx: &mut dyn WriteTransaction,
     ) -> Result<Decided, HandlerFailure> {
         if let Some(refusal) = c.prepared::<PreparedOwnerRefusal>() {
-            return crate::services::sessions::decided(tx, Err(refusal.0.clone().into()));
+            return crate::services::kernel::decided(tx, Err(refusal.0.clone().into()));
         }
         let out = match c.input() {
             OperationInput::Approvals(ops::Input::Propose(i)) => self.propose(tx, ctx, c, i),
@@ -457,7 +457,7 @@ impl CommandHandler for ApprovalService {
             }
             _ => Err(unsupported()),
         };
-        crate::services::sessions::decided(tx, out.map(|result| DomainDecision::Applied { result }))
+        crate::services::kernel::decided(tx, out.map(|result| DomainDecision::Applied { result }))
     }
 }
 

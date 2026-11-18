@@ -17,7 +17,7 @@ fn claim(s: &SqliteStore, name: &str, revision: i64, registry: i64) -> Operation
     let op = OperationId(id(name));
     let saved = op.clone();
     let generation = format!("generation-{name}");
-    run_write(s, WriteOptions::default(), move |tx| {
+    run_write(s, WriteOptions::fixture(), move |tx| {
         tx.operations().record_intent(NewOperation {
             id: saved.clone(),
             root_id: None,
@@ -195,7 +195,7 @@ fn publication(
 fn seed(s: &SqliteStore) -> StoredHelpHead {
     let op = claim(s, "initial-op", 1, 1);
     let new = publication("initial-generation", &op, 2, 1, "initial-source");
-    run_write(s, WriteOptions::default(), move |tx| {
+    run_write(s, WriteOptions::fixture(), move |tx| {
         let doc = document(tx, "initial-generation", "intro", "Original guide")?;
         tx.help().stage_help_document(&doc)?;
         tx.help().publish_help_generation(1, 1, Some(&op), &new, 1)
@@ -236,7 +236,7 @@ fn help_drafts_are_invisible_and_published_unicode_pages_filter_and_reopen() {
     let op = claim(&s, "publish-op", 1, 1);
     let body = format!("A🦀é\n100%_literal\n{}", "x".repeat(1_048_577));
     let expected = body.clone();
-    run_write(&s,WriteOptions::default(),move|tx|{
+    run_write(&s,WriteOptions::fixture(),move|tx|{
         let a=document(tx,"large-generation","a-guide",&body)?;assert_eq!(tx.help().stage_help_document(&a)?,a.topic);assert_eq!(tx.help().stage_help_document(&a)?,a.topic);
         let mut b=document(tx,"large-generation","b-guide","Other package guide")?;b.topic.source_kind="Package".into();b.topic.package_id=Some(id("package-a"));b.topic.manifest_digest=Some("f".repeat(64));b.topic.screen_ids=vec!["packages".into()];b.topic.provenance=json!({"kind":"Package","packageId":"package-a","packageVersion":"1.0.0","manifestDigest":"f".repeat(64),"contentDigest":b.topic.content_digest});tx.help().stage_help_document(&b)?;
         tx.help().stage_help_document(&missing("large-generation","c-missing"))?;
@@ -251,7 +251,7 @@ fn help_drafts_are_invisible_and_published_unicode_pages_filter_and_reopen() {
     );
     let new = publication("large-generation", &op, 2, 1, "large-source");
     let saved = new.clone();
-    run_write(&s, WriteOptions::default(), move |tx| {
+    run_write(&s, WriteOptions::fixture(), move |tx| {
         tx.help().publish_help_generation(1, 1, Some(&op), &new, 3)
     })
     .unwrap();
@@ -374,7 +374,7 @@ fn help_publication_and_artifact_metadata_roll_back_together_and_history_stays_r
     let op = claim(&s, "rollback-op", 2, 1);
     let prior = read(&s, |r| r.help().help_head());
     let new = publication("rollback-generation", &op, 3, 1, "new-source");
-    let result: Result<(), StorageError> = run_write(&s, WriteOptions::default(), move |tx| {
+    let result: Result<(), StorageError> = run_write(&s, WriteOptions::fixture(), move |tx| {
         let doc = document(tx, "rollback-generation", "replacement", "Replacement")?;
         tx.help().stage_help_document(&doc)?;
         tx.help()
@@ -400,7 +400,7 @@ fn help_publication_and_artifact_metadata_roll_back_together_and_history_stays_r
     });
     let op = claim(&s, "replacement-op", 2, 1);
     let new = publication("replacement-generation", &op, 3, 1, "replacement-source");
-    run_write(&s, WriteOptions::default(), move |tx| {
+    run_write(&s, WriteOptions::fixture(), move |tx| {
         let doc = document(tx, "replacement-generation", "intro", "New guide")?;
         tx.help().stage_help_document(&doc)?;
         tx.help().publish_help_generation(2, 1, Some(&op), &new, 1)
@@ -435,23 +435,23 @@ fn help_head_registry_claim_and_complete_count_are_all_publication_fences() {
     let op = claim(&s, "fenced-op", 1, 1);
     let new = publication("fenced-generation", &op, 2, 1, "source");
     let save = new.clone();
-    run_write(&s, WriteOptions::default(), |tx| {
+    run_write(&s, WriteOptions::fixture(), |tx| {
         let doc = document(tx, "fenced-generation", "guide", "Guide")?;
         tx.help().stage_help_document(&doc)?;
         Ok(())
     })
     .unwrap();
-    let incomplete = run_write(&s, WriteOptions::default(), {
+    let incomplete = run_write(&s, WriteOptions::fixture(), {
         let op = op.clone();
         move |tx| tx.help().publish_help_generation(1, 1, Some(&op), &new, 2)
     });
     assert!(matches!(incomplete, Err(StorageError::InvalidRecord(_))));
     assert_eq!(read(&s, |r| r.help().help_head()).revision, 1);
-    run_write(&s, WriteOptions::default(), |tx| {
+    run_write(&s, WriteOptions::fixture(), |tx| {
         tx.packages().advance_registry(1)
     })
     .unwrap();
-    let stale = run_write(&s, WriteOptions::default(), {
+    let stale = run_write(&s, WriteOptions::fixture(), {
         let op = op.clone();
         let new = save.clone();
         move |tx| tx.help().publish_help_generation(1, 1, Some(&op), &new, 1)
@@ -460,20 +460,20 @@ fn help_head_registry_claim_and_complete_count_are_all_publication_fences() {
     let other = claim(&s, "other-op", 1, 2);
     let mut updated = save;
     updated.registry_revision = 2;
-    let stale = run_write(&s, WriteOptions::default(), move |tx| {
+    let stale = run_write(&s, WriteOptions::fixture(), move |tx| {
         tx.help()
             .publish_help_generation(1, 2, Some(&op), &updated, 1)
     });
     assert!(matches!(stale, Err(StorageError::InvalidRecord(_))));
     let genhead = publication("other-generation", &other, 2, 2, "other");
-    run_write(&s, WriteOptions::default(), move |tx| {
+    run_write(&s, WriteOptions::fixture(), move |tx| {
         let doc = document(tx, "other-generation", "guide", "Other guide")?;
         tx.help().stage_help_document(&doc)?;
         tx.help()
             .publish_help_generation(1, 2, Some(&other), &genhead, 1)
     })
     .unwrap();
-    let stale = run_write(&s, WriteOptions::default(), |tx| {
+    let stale = run_write(&s, WriteOptions::fixture(), |tx| {
         tx.help()
             .set_help_generation_operation(1, 2, &OperationId(id("other-op")))
     });
@@ -496,7 +496,7 @@ fn help_noop_retains_content_revision_but_verifies_actual_staged_identity_and_cl
     let mut same = initial.clone();
     same.generation_operation_id = Some(op.clone());
     same.revision = 3;
-    let got = run_write(&s, WriteOptions::default(), {
+    let got = run_write(&s, WriteOptions::fixture(), {
         let op = op.clone();
         move |tx| tx.help().publish_help_generation(2, 1, Some(&op), &same, 1)
     })
@@ -519,7 +519,7 @@ fn help_noop_retains_content_revision_but_verifies_actual_staged_identity_and_cl
     let mut staged_same = publication("same-generation", &op, 3, 1, "initial-source");
     staged_same.source_digest = initial.source_digest.clone();
     let same_op = op.clone();
-    let identical = run_write(&s, WriteOptions::default(), move |tx| {
+    let identical = run_write(&s, WriteOptions::fixture(), move |tx| {
         let mut doc = document(tx, "same-generation", "intro", "Original guide")?;
         doc.topic.topic_revision = 2;
         tx.help().stage_help_document(&doc)?;
@@ -539,7 +539,7 @@ fn help_noop_retains_content_revision_but_verifies_actual_staged_identity_and_cl
     );
     let mut changed = publication("failed-generation", &op, 3, 1, "initial-source");
     changed.source_digest = initial.source_digest;
-    run_write(&s, WriteOptions::default(), |tx| {
+    run_write(&s, WriteOptions::fixture(), |tx| {
         for name in ["a", "b", "c"] {
             let doc = document(tx, "failed-generation", name, "Different guide")?;
             tx.help().stage_help_document(&doc)?;
@@ -547,7 +547,7 @@ fn help_noop_retains_content_revision_but_verifies_actual_staged_identity_and_cl
         Ok(())
     })
     .unwrap();
-    let refused = run_write(&s, WriteOptions::default(), {
+    let refused = run_write(&s, WriteOptions::fixture(), {
         let op = op.clone();
         move |tx| {
             tx.help()
@@ -557,7 +557,7 @@ fn help_noop_retains_content_revision_but_verifies_actual_staged_identity_and_cl
     assert!(matches!(refused, Err(StorageError::InvalidRecord(_))));
     assert_eq!(read(&s, |r| r.help().help_head()).revision, 2);
     assert_eq!(read(&s, |r| r.help().help_drafts(None, 1)).len(), 1);
-    let busy = run_write(&s, WriteOptions::default(), {
+    let busy = run_write(&s, WriteOptions::fixture(), {
         let op = op.clone();
         move |tx| {
             tx.help()
@@ -566,7 +566,7 @@ fn help_noop_retains_content_revision_but_verifies_actual_staged_identity_and_cl
     });
     assert!(matches!(busy, Err(StorageError::Busy)));
     let saved = op.clone();
-    run_write(&s, WriteOptions::default(), move |tx| {
+    run_write(&s, WriteOptions::fixture(), move |tx| {
         tx.operations().transition(
             &saved,
             1,
@@ -595,7 +595,7 @@ fn help_noop_retains_content_revision_but_verifies_actual_staged_identity_and_cl
     .unwrap();
     drop(s);
     let s = h.store();
-    run_write(&s, WriteOptions::default(), move |tx| {
+    run_write(&s, WriteOptions::fixture(), move |tx| {
         assert!(
             tx.help()
                 .discard_help_draft(&id("failed-generation"), &op, 2)?
@@ -625,7 +625,7 @@ fn help_native_concurrent_publish_has_one_cas_winner() {
     let h = Harness::new();
     let s = Arc::new(h.store());
     let op = claim(&s, "race-op", 1, 1);
-    run_write(&*s, WriteOptions::default(), |tx| {
+    run_write(&*s, WriteOptions::fixture(), |tx| {
         for generation in ["race-a", "race-b"] {
             let doc = document(tx, generation, "guide", generation)?;
             tx.help().stage_help_document(&doc)?;
@@ -639,7 +639,7 @@ fn help_native_concurrent_publish_has_one_cas_winner() {
             let op = op.clone();
             scope.spawn(move || {
                 let new = publication(generation, &op, 2, 1, generation);
-                run_write(&*s, WriteOptions::default(), move |tx| {
+                run_write(&*s, WriteOptions::fixture(), move |tx| {
                     tx.help().publish_help_generation(1, 1, Some(&op), &new, 1)
                 })
             })
@@ -664,7 +664,7 @@ fn help_stage_requires_real_artifact_identity_and_immutable_document_bytes() {
     let h = Harness::new();
     let s = h.store();
     claim(&s, "identity-op", 1, 1);
-    let doc = run_write(&s, WriteOptions::default(), |tx| {
+    let doc = run_write(&s, WriteOptions::fixture(), |tx| {
         document(tx, "identity-generation", "guide", "Verified 🦀 guide")
     })
     .unwrap();
@@ -692,7 +692,7 @@ fn help_stage_requires_real_artifact_identity_and_immutable_document_bytes() {
     invalid.push(wrong);
     for wrong in invalid {
         assert!(matches!(
-            run_write(&s, WriteOptions::default(), move |tx| {
+            run_write(&s, WriteOptions::fixture(), move |tx| {
                 tx.help().stage_help_document(&wrong)
             }),
             Err(StorageError::InvalidRecord(_))
@@ -700,7 +700,7 @@ fn help_stage_requires_real_artifact_identity_and_immutable_document_bytes() {
         assert!(read(&s, |r| r.help().help_drafts(None, 500)).is_empty());
     }
     let saved = doc.clone();
-    run_write(&s, WriteOptions::default(), move |tx| {
+    run_write(&s, WriteOptions::fixture(), move |tx| {
         tx.help().stage_help_document(&saved)
     })
     .unwrap();
@@ -712,7 +712,7 @@ fn help_stage_requires_real_artifact_identity_and_immutable_document_bytes() {
         .search_text
         .push_str(" changed");
     assert!(matches!(
-        run_write(&s, WriteOptions::default(), move |tx| {
+        run_write(&s, WriteOptions::fixture(), move |tx| {
             tx.help().stage_help_document(&changed)
         }),
         Err(StorageError::InvalidRecord(_))
@@ -720,7 +720,7 @@ fn help_stage_requires_real_artifact_identity_and_immutable_document_bytes() {
     let mut changed = doc;
     changed.topic.title.push_str(" renamed");
     assert!(matches!(
-        run_write(&s, WriteOptions::default(), move |tx| tx
+        run_write(&s, WriteOptions::fixture(), move |tx| tx
             .help()
             .stage_help_document(&changed)),
         Err(StorageError::Duplicate { .. })
@@ -747,7 +747,7 @@ fn help_same_source_repairs_deleted_backing_instead_of_retaining_a_dead_referenc
             // Model lost artifact backing, independently of the normal public mutation guard.
             h.raw().execute("UPDATE artifacts SET state='Deleted' WHERE id='artifact-initial-generation-intro'", []).unwrap();
         } else {
-            run_write(&s, WriteOptions::default(), |tx| {
+            run_write(&s, WriteOptions::fixture(), |tx| {
                 tx.artifacts()
                     .tombstone_version(&id("version-initial-generation-intro"), T0 + 1)
             })
@@ -756,7 +756,7 @@ fn help_same_source_repairs_deleted_backing_instead_of_retaining_a_dead_referenc
         let op = claim(&s, "repair-op", 2, 1);
         let mut replacement = publication("repair-generation", &op, 3, 1, "unused");
         replacement.source_digest = initial.source_digest;
-        let repaired = run_write(&s, WriteOptions::default(), move |tx| {
+        let repaired = run_write(&s, WriteOptions::fixture(), move |tx| {
             let doc = document(tx, "repair-generation", "intro", "Original guide")?;
             tx.help().stage_help_document(&doc)?;
             tx.help()
@@ -802,7 +802,7 @@ fn help_publication_rechecks_live_artifacts_and_present_blobs_after_staging() {
         seed(&s);
         let op = claim(&s, "backing-op", 2, 1);
         let prior = read(&s, |r| r.help().help_head());
-        run_write(&s, WriteOptions::default(), move |tx| {
+        run_write(&s, WriteOptions::fixture(), move |tx| {
             let doc = document(tx, "lost-backing-generation", "intro", "New guide")?;
             tx.help().stage_help_document(&doc)?;
             if missing_blob {
@@ -821,7 +821,7 @@ fn help_publication_rechecks_live_artifacts_and_present_blobs_after_staging() {
         .unwrap();
         let new = publication("lost-backing-generation", &op, 3, 1, "new-source");
         assert!(matches!(
-            run_write(&s, WriteOptions::default(), move |tx| {
+            run_write(&s, WriteOptions::fixture(), move |tx| {
                 tx.help().publish_help_generation(2, 1, Some(&op), &new, 1)
             }),
             Err(StorageError::InvalidRecord(_))

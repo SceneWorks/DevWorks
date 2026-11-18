@@ -1,5 +1,6 @@
 //! The native manager submits only the convention owner's scoped commands and reads.
 use super::*;
+use crate::frame;
 use crate::{
     conventions_ops::{self as cop, ConventionsSlot},
     conventions_screen::{self as cv, ConventionsScreen, Scope, Target},
@@ -37,6 +38,13 @@ impl Screen for ConventionsScreen {
     }
     fn hosted(&self, route: Route, mem: &RouteMemory) -> bool {
         route == Route::Knowledge && mem.tab == 2
+    }
+    fn help_topic(&self, _route: Route, _mem: &RouteMemory) -> Option<&'static str> {
+        Some("knowledge-conventions")
+    }
+    /// Searches in flight stop with the window.
+    fn closing(&mut self) {
+        self.cancel_queries();
     }
     fn pending_memory(&self, _unresolved: &[&Unresolved]) -> Option<serde_json::Value> {
         Some(self.conventions_pending_memory()).filter(|v| !v.is_null())
@@ -133,7 +141,7 @@ impl ConventionsCtl<'_, '_> {
     fn load_conventions(&mut self, append: bool, search: bool) {
         let scope = self.conventions.scope.clone();
         let key = scope.key();
-        let (generation, body, operation) = {
+        let (generation, input, operation) = {
             let state = self.conventions.states.entry(scope.clone()).or_default();
             if state.listing || (append && state.next.is_none()) {
                 return;
@@ -147,48 +155,33 @@ impl ConventionsCtl<'_, '_> {
             }
             state.list_generation = state.list_generation.wrapping_add(1);
             state.listing = true;
-            let lifecycle = match state.lifecycle {
-                0 => vec!["Active"],
-                1 => vec!["Retired"],
-                2 => vec!["Active", "Retired"],
-                _ => vec!["Deleted"],
-            };
-            let mut body = serde_json::json!({"scope":scope.wire(),"page":{"limit":cop::PAGE},"applicability":state.applicability,"lifecycles":lifecycle});
-            if append {
+            let input = if append {
                 let Some(snapshot) = &state.query_snapshot else {
                     state.listing = false;
                     return;
                 };
-                body = snapshot.clone();
-                body["page"]["cursor"] = serde_json::json!(state.next);
+                state
+                    .next
+                    .as_deref()
+                    .and_then(|cursor| cop::at_cursor(snapshot, cursor))
+            } else if search {
+                cop::search_input(&scope, &state.applicability, &state.text, &state.top_k)
+            } else {
+                cop::list(&scope, &state.applicability, state.lifecycle, state.order)
+            };
+            if !append && let Some(input) = &input {
+                state.pending_listing = Some((state.list_generation, input.clone()));
             }
             let operation = if search {
-                body.as_object_mut().expect("query").remove("lifecycles");
-                if !append {
-                    body["text"] = serde_json::json!(state.text);
-                    if !state.top_k.is_empty() {
-                        body["topK"] = serde_json::json!(state.top_k);
-                    }
-                }
                 "conventions.search"
             } else {
-                if !append {
-                    body["order"] = serde_json::json!(if state.order == 0 {
-                        "Title"
-                    } else {
-                        "Organization"
-                    });
-                }
                 "conventions.list"
             };
-            if !append {
-                state.pending_listing = Some((state.list_generation, body.clone()));
-            }
-            (state.list_generation, body, operation)
+            (state.list_generation, input, operation)
         };
         let submitted = if search {
             if let Some(b) = self.backend() {
-                let frame = cop::query(&*b, operation, body);
+                let frame = cop::query(&*b, input);
                 self.dispatch_convention_search(scope.clone(), generation, append, frame)
             } else {
                 false
@@ -198,7 +191,7 @@ impl ConventionsCtl<'_, '_> {
                 ConventionsSlot::ConventionsList(key, generation, append, false),
                 "Reading conventions",
                 operation,
-                move |b| cop::query(b, operation, body),
+                move |b| cop::query(b, input),
             )
         };
         if !submitted {
@@ -234,7 +227,7 @@ impl ConventionsCtl<'_, '_> {
     fn load_convention_passage(&mut self) {
         let scope = self.conventions.scope.clone();
         let key = scope.key();
-        let (generation, body) = {
+        let (generation, input) = {
             let state = self.conventions.states.entry(scope.clone()).or_default();
             let Some(target) = &state.reader.target else {
                 return;
@@ -242,41 +235,26 @@ impl ConventionsCtl<'_, '_> {
             state.reader.generation = state.reader.generation.wrapping_add(1);
             state.reader.loading = true;
             state.reader.error = None;
-            let mut body = serde_json::json!({"scope":scope.wire(),"format":(["Markdown","Raw","Manifest","SectionPath"][target.format]),"maxChars":cop::PASSAGE_CHARS.to_string()});
-            if let Some(path) = &target.path {
-                body["path"] = serde_json::json!(path);
-            } else {
-                body[if target.by_slug {
-                    "slug"
-                } else {
-                    "conventionId"
-                }] = serde_json::json!(target.id);
-            }
-            if let Some(revision) = target.revision {
-                body["revision"] = serde_json::json!(revision.to_string());
-            }
-            if let Some(section) = &target.section {
-                body["sectionPath"] = serde_json::json!(section);
-            }
-            if let Some(cursor) = state.reader.cursors.last().cloned().flatten() {
+            let first = cop::read(&scope, target);
+            let input = if let Some(cursor) = state.reader.cursors.last().cloned().flatten() {
                 let Some(intent) = &state.reader.intent else {
                     state.reader.loading = false;
                     state.reader.error =
                         Some("Refresh the source before continuing its passages.".into());
                     return;
                 };
-                body = intent.clone();
-                body["cursor"] = serde_json::json!(cursor);
+                cop::at_cursor(intent, &cursor)
             } else {
-                state.reader.intent = Some(body.clone());
-            }
-            (state.reader.generation, body)
+                state.reader.intent = first.clone();
+                first
+            };
+            (state.reader.generation, input)
         };
         if !self.query(
             ConventionsSlot::ConventionRead(key, generation),
             "Reading convention source",
             "conventions.read",
-            move |b| cop::query(b, "conventions.read", body),
+            move |b| cop::query(b, input),
         ) {
             let state = self.conventions.states.get_mut(&scope).expect("scope");
             state.reader.loading = false;
@@ -287,7 +265,7 @@ impl ConventionsCtl<'_, '_> {
     fn load_convention_versions(&mut self, append: bool) {
         let scope = self.conventions.scope.clone();
         let key = scope.key();
-        let (generation, body) = {
+        let (generation, input) = {
             let s = self.conventions.states.entry(scope.clone()).or_default();
             let Some(record) = s.record().cloned() else {
                 return;
@@ -297,17 +275,17 @@ impl ConventionsCtl<'_, '_> {
             }
             s.version_loading = true;
             s.version_generation = s.version_generation.wrapping_add(1);
-            let mut body = serde_json::json!({"scope":scope.wire(),"conventionId":record.id,"page":{"limit":cop::PAGE}});
-            if append {
-                body["page"]["cursor"] = serde_json::json!(s.version_next);
-            }
-            (s.version_generation, body)
+            let cursor = s.version_next.as_deref().filter(|_| append);
+            (
+                s.version_generation,
+                cop::versions(&scope, &record.id, cursor),
+            )
         };
         if !self.query(
             ConventionsSlot::ConventionVersions(key, generation, append),
             "Reading convention versions",
             "conventions.version",
-            move |b| cop::query(b, "conventions.version", body),
+            move |b| cop::query(b, input),
         ) {
             self.conventions
                 .states
@@ -319,7 +297,7 @@ impl ConventionsCtl<'_, '_> {
     fn load_convention_resources(&mut self, append: bool) {
         let scope = self.conventions.scope.clone();
         let key = scope.key();
-        let (generation, body) = {
+        let (generation, input) = {
             let s = self.conventions.states.entry(scope.clone()).or_default();
             let record = s.record().cloned();
             if s.resource_loading
@@ -338,47 +316,34 @@ impl ConventionsCtl<'_, '_> {
             }
             s.resource_loading = true;
             s.resource_generation = s.resource_generation.wrapping_add(1);
-            let mut body = serde_json::json!({"scope":scope.wire(),"page":{"limit":cop::PAGE},"applicability":if s.resource_mode==1 {s.applicability.clone()}else{Vec::new()}});
-            body["selection"] = match s.resource_mode {
-                1 => serde_json::json!({"kind":"Catalog"}),
-                2 => {
-                    let mut selection = serde_json::json!({"kind":"Document","rootSlug":s.resource_root_slug,"maxChars":cop::PASSAGE_CHARS.to_string()});
-                    if append
-                        && let Some(cursor) = s.resource_document_cursors.last().cloned().flatten()
-                    {
-                        selection["cursor"] = serde_json::json!(cursor);
-                    }
-                    selection
-                }
-                _ => {
-                    let record = record.expect("attachment owner");
-                    serde_json::json!({"kind":"Attachments","conventionId":record.id,"conventionRevision":record.revision,"lifecycles":["Active","Retired","Deleted"]})
-                }
-            };
-            if append {
-                body = s.resource_query_snapshot.clone().expect("captured query");
+            let input = if append {
+                let snapshot = s.resource_query_snapshot.clone().expect("captured query");
                 if s.resource_mode == 2 {
-                    if let Some(cursor) = s.resource_document_cursors.last().cloned().flatten() {
-                        body["selection"]["cursor"] = serde_json::json!(cursor);
-                    } else {
-                        body["selection"]
-                            .as_object_mut()
-                            .expect("selection")
-                            .remove("cursor");
-                    }
+                    let cursor = s.resource_document_cursors.last().cloned().flatten();
+                    cop::at_document_cursor(&snapshot, cursor.as_deref())
                 } else {
-                    body["page"]["cursor"] = serde_json::json!(s.resource_next);
+                    s.resource_next
+                        .as_deref()
+                        .and_then(|cursor| cop::at_cursor(&snapshot, cursor))
                 }
             } else {
-                s.resource_query_snapshot = Some(body.clone());
-            }
-            (s.resource_generation, body)
+                let input = cop::resources_input(
+                    &scope,
+                    s.resource_mode,
+                    &s.applicability,
+                    record.as_ref(),
+                    &s.resource_root_slug,
+                );
+                s.resource_query_snapshot = input.clone();
+                input
+            };
+            (s.resource_generation, input)
         };
         if !self.query(
             ConventionsSlot::ConventionResources(key, generation, append),
             "Reading convention resources",
             "conventions.resources",
-            move |b| cop::query(b, "conventions.resources", body),
+            move |b| cop::query(b, input),
         ) {
             self.conventions
                 .states
@@ -390,7 +355,7 @@ impl ConventionsCtl<'_, '_> {
     fn load_convention_parents(&mut self, append: bool) {
         let source = self.conventions.scope.clone();
         let key = source.key();
-        let (target, generation, body) = {
+        let (target, generation, input) = {
             let s = self.conventions.states.entry(source).or_default();
             let Some(record) = s.record().cloned() else {
                 return;
@@ -402,17 +367,14 @@ impl ConventionsCtl<'_, '_> {
                 return;
             }
             d.generation = d.generation.wrapping_add(1);
-            let mut body = serde_json::json!({"scope":d.scope.wire(),"page":{"limit":cop::PAGE},"applicability":[],"lifecycles":["Active","Retired"]});
-            if append {
-                body["page"]["cursor"] = serde_json::json!(d.next);
-            }
-            (record.id.as_str().to_owned(), d.generation, body)
+            let input = cop::parents(&d.scope, d.next.as_deref().filter(|_| append));
+            (record.id.as_str().to_owned(), d.generation, input)
         };
         self.query(
             ConventionsSlot::ConventionParents(key, target, generation, append),
             "Reading destination conventions",
             "conventions.list",
-            move |b| cop::query(b, "conventions.list", body),
+            move |b| cop::query(b, input),
         );
     }
     fn apply_conventions(
@@ -900,7 +862,7 @@ impl ConventionsCtl<'_, '_> {
     fn submit_convention(
         &mut self,
         operation: &'static str,
-        body: serde_json::Value,
+        input: Option<devworks_core::operations::OperationInput>,
         target: Option<String>,
         draft: Option<(u64, u64)>,
     ) {
@@ -926,7 +888,7 @@ impl ConventionsCtl<'_, '_> {
             ConventionsSlot::ConventionCommand(key, token.clone()),
             "Saving convention change",
             operation,
-            move |b| cop::command(b, operation, body),
+            move |b| cop::command(b, input),
         ) {
             let state = self.conventions.states.get_mut(&scope).expect("scope");
             state.busy = true;
@@ -950,10 +912,10 @@ impl ConventionsCtl<'_, '_> {
         let Some(base) = draft.target() else {
             return;
         };
-        let body = serde_json::json!({"scope":scope.wire(),"conventionId":base.id,"expectedRevision":base.revision,"applicability":draft.applicability,"lifecycle":if draft.retired{"Retired"}else{"Active"}});
+        let input = cop::applicability(&scope, base, &draft.applicability, draft.retired);
         self.submit_convention(
             "conventions.applicability",
-            body,
+            input,
             Some(base.id.as_str().into()),
             Some((draft.identity, draft.generation)),
         );
@@ -963,15 +925,8 @@ impl ConventionsCtl<'_, '_> {
         let Some(record) = self.conventions.state().and_then(|s| s.record()).cloned() else {
             return;
         };
-        let mut body = serde_json::json!({"scope":scope.wire(),"conventionId":record.id,"expectedRevision":record.revision});
-        let operation = if matches!(record.lifecycle, ConventionLifecycle::Retired) {
-            body["applicability"] = serde_json::json!(record.applicability);
-            body["lifecycle"] = serde_json::json!("Active");
-            "conventions.applicability"
-        } else {
-            "conventions.retire"
-        };
-        self.submit_convention(operation, body, Some(record.id.as_str().into()), None);
+        let (operation, input) = cop::retire(&scope, &record);
+        self.submit_convention(operation, input, Some(record.id.as_str().into()), None);
     }
     fn delete_convention_target(&mut self) {
         let scope = self.conventions.scope.clone();
@@ -982,19 +937,19 @@ impl ConventionsCtl<'_, '_> {
         else {
             return;
         };
-        let (operation, body, target) = match delete {
+        let (operation, input, target) = match delete {
             cv::Delete::Convention(record) => (
                 "conventions.delete",
-                serde_json::json!({"scope":scope.wire(),"conventionId":record.id,"expectedRevision":record.revision}),
+                cop::delete(&scope, &record),
                 record.id.as_str().to_owned(),
             ),
             cv::Delete::Resource(resource) => (
                 "conventions.delete_resource",
-                serde_json::json!({"scope":scope.wire(),"conventionId":resource.convention_id,"expectedRevision":resource.convention_revision,"resourceId":resource.id}),
+                cop::delete_resource(&scope, &resource),
                 resource.convention_id.as_str().to_owned(),
             ),
         };
-        self.submit_convention(operation, body, Some(target), None);
+        self.submit_convention(operation, input, Some(target), None);
     }
     fn move_convention(&mut self) {
         let scope = self.conventions.scope.clone();
@@ -1014,15 +969,11 @@ impl ConventionsCtl<'_, '_> {
             ));
             return;
         };
-        let parent = draft.parent.as_ref().map_or(
-            serde_json::json!({"kind":"Root"}),
-            |id| serde_json::json!({"kind":"Child","parentId":id}),
-        );
         let base = draft.anchor.as_ref().unwrap_or(&draft.base);
-        let body = serde_json::json!({"scope":scope.wire(),"conventionId":base.id,"expectedRevision":base.revision,"destination":draft.scope.wire(),"parent":parent,"sortOrder":order.to_string()});
+        let input = cop::move_to(&scope, base, &draft.scope, draft.parent.as_deref(), order);
         self.submit_convention(
             "conventions.move",
-            body,
+            input,
             Some(draft.base.id.as_str().into()),
             None,
         );
@@ -1032,24 +983,18 @@ impl ConventionsCtl<'_, '_> {
         let Some(state) = self.conventions.state() else {
             return;
         };
-        let (body, target) = if all {
+        let (input, target) = if all {
             let Some(revision) = state.source_scope_revision else {
                 return;
             };
-            (
-                serde_json::json!({"allScope":scope.wire(),"expectedRevision":revision.to_string()}),
-                None,
-            )
+            (cop::index_scope(&scope, revision), None)
         } else {
             let Some(record) = state.record() else {
                 return;
             };
-            (
-                serde_json::json!({"scope":scope.wire(),"conventionId":record.id,"expectedRevision":record.revision}),
-                Some(record.id.as_str().into()),
-            )
+            (cop::index(&scope, record), Some(record.id.as_str().into()))
         };
-        self.submit_convention("conventions.index", body, target, None);
+        self.submit_convention("conventions.index", input, target, None);
     }
     fn finish_convention_change(
         &mut self,
@@ -1486,7 +1431,8 @@ impl ConventionsCtl<'_, '_> {
                     .filter(|s| s.can_cancel && !s.cancel_requested)
                     .map(|s| s.revision.get());
                 if let Some(revision) = revision {
-                    self.submit_convention("conventions.retire",serde_json::json!({"scope":scope.wire(),"operationId":id,"expectedRevision":revision.to_string()}),None,None);
+                    let input = cop::cancel_operation(&scope, id, revision);
+                    self.submit_convention("conventions.retire", input, None, None);
                 }
             }
             cv::Action::ResourceDocumentPage(next) => {
@@ -1519,13 +1465,7 @@ impl ConventionsCtl<'_, '_> {
             ConventionsSlot::ConventionOperation(key, id.clone()),
             "Reading convention operation",
             "conventions.read",
-            move |b| {
-                cop::query(
-                    b,
-                    "conventions.read",
-                    serde_json::json!({"scope":scope.wire(),"operationId":id}),
-                )
-            },
+            move |b| cop::query(b, cop::operation_status(&scope, &id)),
         );
     }
 }
@@ -1616,13 +1556,13 @@ impl ConventionsCtl<'_, '_> {
                 "conventions.import" => "conventions.import",
                 _ => "conventions.edit",
             };
-            let body = p.body.clone();
+            let input = p.body.input();
             let scopekey = p.scope.key();
             if self.command(
                 ConventionsSlot::ConventionCommand(scopekey, token.clone()),
                 "Saving convention",
                 operation,
-                move |b| cop::command(b, operation, body),
+                move |b| cop::command(b, input),
             ) {
                 self.conventions.submissions.insert(token, p.submission);
             }
@@ -1682,12 +1622,27 @@ impl ConventionsCtl<'_, '_> {
         };
         let token = b.token("convention-import");
         let submission = self.convention_submission("conventions.import", None, None);
-        self.begin_convention_pipeline(token, Pipeline {
-            scope: scope.clone(), operation: "conventions.import".into(),
-            body: serde_json::json!({"scope":scope.wire(),"schema":devworks_core::services::conventions::model::manifest_schema()}),
-            files: vec![StagedFile { path, name:"Convention portable manifest".into(), media_type:"application/json".into(), pointer:"/source".into(), owned:false }],
-            at: 0, submission,
-        });
+        let Some(body) = crate::conventions_transfer::Prepared::import(&scope) else {
+            self.convention_notice("The project ID is invalid; nothing was imported.".into());
+            return;
+        };
+        self.begin_convention_pipeline(
+            token,
+            Pipeline {
+                scope: scope.clone(),
+                operation: "conventions.import".into(),
+                body,
+                files: vec![StagedFile {
+                    path,
+                    name: "Convention portable manifest".into(),
+                    media_type: "application/json".into(),
+                    pointer: "/source".into(),
+                    owned: false,
+                }],
+                at: 0,
+                submission,
+            },
+        );
     }
     fn convention_artifact_action(&mut self, action: cv::Action) {
         match action {
@@ -1848,10 +1803,17 @@ impl ConventionsCtl<'_, '_> {
             let Some(d) = &s.upload else {
                 return;
             };
-            let placeholder = d.base.content.clone();
+            // The opening content stands in until the uploaded file replaces it.
+            let attach = || {
+                Some(ConventionResourceChange::Attach {
+                    name: frame::text(&d.name)?,
+                    content: d.base.content.clone()?,
+                    media_type: Some(frame::text(&d.media_type)?),
+                })
+            };
             (
                 d.base.clone(),
-                serde_json::json!({"kind":"Attach","name":d.name,"mediaType":d.media_type,"content":placeholder}),
+                attach(),
                 Some((d.path.clone(), d.name.clone())),
             )
         } else {
@@ -1865,9 +1827,23 @@ impl ConventionsCtl<'_, '_> {
             let Some(base) = &d.base else {
                 return;
             };
+            let update = || {
+                Some(ConventionResourceChange::Update {
+                    resource_id: d.resource.id.clone(),
+                    expected_revision: d.resource.revision.clone(),
+                    name: Some(frame::text(&d.name)?),
+                    content: Some(d.resource.content.clone()),
+                    lifecycle: Some(if d.retired {
+                        ConventionLifecycle::Retired
+                    } else {
+                        ConventionLifecycle::Active
+                    }),
+                    media_type: Some(frame::text(&d.media_type)?),
+                })
+            };
             (
                 base.clone(),
-                serde_json::json!({"kind":"Update","resourceId":d.resource.id,"expectedRevision":d.resource.revision,"name":d.name,"mediaType":d.media_type,"content":d.resource.content,"lifecycle":if d.retired{"Retired"}else{"Active"}}),
+                update(),
                 d.replacement.as_ref().map(|p| (p.clone(), d.name.clone())),
             )
         };
@@ -1877,7 +1853,15 @@ impl ConventionsCtl<'_, '_> {
             );
             return;
         };
-        let body = serde_json::json!({"scope":scope.wire(),"conventionId":base.id,"expectedRevision":base.revision,"content":content,"resources":[change]});
+        let Some(body) = change.and_then(|change| {
+            crate::conventions_transfer::resource_edit(&scope, &base, content, change)
+        }) else {
+            self.convention_notice(
+                "The resource name or type is outside the convention owner's limits; nothing was changed."
+                    .into(),
+            );
+            return;
+        };
         let files = stage
             .map(|(path, name)| StagedFile {
                 media_type: crate::attachments::media_type(&path).into(),
@@ -2120,34 +2104,25 @@ impl ConventionsCtl<'_, '_> {
         else {
             return;
         };
-        let Ok(value) = serde_json::from_slice::<serde_json::Value>(&recovery.frame) else {
+        // The saved frame is the exact request; read it back as the typed search it was.
+        let Ok(decoded) = devworks_core::admission::decode(
+            devworks_core::admission::Selection {
+                operation: "conventions.search",
+                mode: devworks_core::registry::Mode::Query,
+            },
+            &recovery.frame,
+        ) else {
             state.list_error =
                 Some("The saved search frame is unreadable; no new search was sent.".into());
             return;
         };
-        let mut body = value["body"].clone();
-        let Some(object) = body.as_object_mut() else {
-            return;
-        };
-        object.remove("kind");
-        let mut old = state.query_snapshot.clone().unwrap_or_default();
-        if let Some(page) = old
-            .get_mut("page")
-            .and_then(serde_json::Value::as_object_mut)
-        {
-            page.remove("cursor");
-        }
-        let mut filter = body.clone();
-        if let Some(page) = filter
-            .get_mut("page")
-            .and_then(serde_json::Value::as_object_mut)
-        {
-            page.remove("cursor");
-        }
-        let append = recovery.append && state.searched && old == filter;
+        let input = decoded.input;
+        let old = state.query_snapshot.as_ref().and_then(cop::first_page);
+        let append =
+            recovery.append && state.searched && old.is_some() && old == cop::first_page(&input);
         state.list_generation = state.list_generation.wrapping_add(1);
         let generation = state.list_generation;
-        state.pending_listing = Some((generation, body));
+        state.pending_listing = Some((generation, input));
         state.listing = true;
         state.list_error = None;
         if !self.dispatch_convention_search(scope.clone(), generation, append, recovery.frame) {

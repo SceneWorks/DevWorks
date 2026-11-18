@@ -1,27 +1,11 @@
 //! Narrow membership handoff: a superseded worker changes scope only at a quiescent boundary.
 use super::conn::db;
 use super::repos::Unit;
+use super::support::{atomic, conflict_strict, invalid};
 use devworks_core::ports::storage::*;
-use devworks_core::protocol::{AssignmentId, Id, Revision, RevisionDimension};
+use devworks_core::protocol::{AssignmentId, Id, RevisionDimension};
 use rusqlite::{Connection, params};
 
-fn invalid(message: &str) -> StorageError {
-    StorageError::InvalidRecord(message.into())
-}
-fn conflict(
-    kind: &'static str,
-    id: &Id,
-    expected: i64,
-    current: i64,
-) -> Result<StorageError, StorageError> {
-    Ok(StorageError::conflict(
-        RevisionDimension::Work,
-        kind,
-        id.clone(),
-        Revision::new(expected).map_err(|_| invalid("expected revision is positive"))?,
-        Revision::new(current).map_err(|_| invalid("stored revision is positive"))?,
-    ))
-}
 fn preserved_checkpoint(old: &StoredAssignment) -> Result<Option<serde_json::Value>, StorageError> {
     let value = old
         .checkpoint
@@ -61,12 +45,13 @@ pub(super) fn retire(
             id: assignment.0.as_str().into(),
         })?;
     if old.revision != expected {
-        return Err(conflict(
+        return Err(conflict_strict(
+            RevisionDimension::Work,
             "assignment",
-            &assignment.0,
+            assignment.0.as_str(),
             expected,
             old.revision,
-        )?);
+        ));
     }
     if old.state != AssignmentState::Superseded || old.slot_held {
         return Err(invalid(
@@ -102,7 +87,13 @@ pub(super) fn reparent(
             id: a.id.0.as_str().into(),
         })?;
     if old.revision != expected {
-        return Err(conflict("assignment", &a.id.0, expected, old.revision)?);
+        return Err(conflict_strict(
+            RevisionDimension::Work,
+            "assignment",
+            a.id.0.as_str(),
+            expected,
+            old.revision,
+        ));
     }
     if old.state != AssignmentState::Superseded
         || old.slot_held
@@ -186,12 +177,13 @@ pub(super) fn reparent(
             id: a.session_id.as_str().into(),
         })?;
     if session.revision != expected_session {
-        return Err(conflict(
+        return Err(conflict_strict(
+            RevisionDimension::Work,
             "session",
-            &session.id,
+            session.id.as_str(),
             expected_session,
             session.revision,
-        )?);
+        ));
     }
     if session.closed()
         || session.root_id.as_ref() != Some(&old.root_id)
@@ -221,8 +213,7 @@ pub(super) fn reparent(
     }
     // A caller may catch a repository error and continue its write. Keep this multi-row
     // primitive atomic even then (for example if moving a blocker hits a uniqueness guard).
-    let savepoint = unit.savepoint()?;
-    let result = (|| {
+    atomic(unit.conn, || {
         db(unit.conn.execute("UPDATE assignments SET root_id=?2,parent_id=?3,execution_id=?4,state='Waiting',generation=?5,slot_held=0,revision=?6,checkpoint_json=?7,scope_key=?8,scope_digest=?9,plan_revision=?10,instruction_revision=?11 WHERE id=?1 AND revision=?12",params![a.id.0.as_str(),a.root_id.0.as_str(),a.parent_id.as_ref().map(|p|p.0.as_str()),a.execution_id.as_ref().map(Id::as_str),a.generation,a.revision,a.checkpoint.as_ref().map(serde_json::Value::to_string),a.scope_key,a.scope_digest,a.plan_revision,a.instruction_revision,expected]))?;
         db(unit.conn.execute("UPDATE sessions SET root_id=?2,context_epoch=?3,revision=?4 WHERE id=?1 AND revision=?5",params![session.id.as_str(),a.root_id.0.as_str(),epoch,session_revision,expected_session]))?;
         db(unit.conn.execute(
@@ -231,14 +222,7 @@ pub(super) fn reparent(
         ))?;
         db(unit.conn.execute("UPDATE blockers SET root_id=?2,revision=revision+1 WHERE state='Active' AND (root_id=?3 OR root_id IS NULL) AND (assignment_id=?1 OR operation_id IN (SELECT id FROM operations WHERE assignment_id=?1))",params![a.id.0.as_str(),a.root_id.0.as_str(),old.root_id.0.as_str()]))?;
         Ok(())
-    })();
-    match result {
-        Ok(()) => unit.release(savepoint),
-        Err(error) => {
-            unit.rollback_to(savepoint)?;
-            Err(error)
-        }
-    }
+    })
 }
 
 /// Shared by read snapshots and the mutation: callers may retire an abandoned handoff only

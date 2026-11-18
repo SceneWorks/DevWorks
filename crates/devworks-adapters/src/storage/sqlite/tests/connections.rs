@@ -347,7 +347,7 @@ impl Cx {
         &self,
         f: impl FnOnce(&mut dyn WriteTransaction) -> Result<T, StorageError> + Send + 'static,
     ) -> T {
-        run_write(&*self.store, WriteOptions::default(), f).expect("write")
+        run_write(&*self.store, WriteOptions::fixture(), f).expect("write")
     }
     fn read<T>(&self, f: impl FnOnce(&dyn ReadSnapshot) -> Result<T, StorageError>) -> T {
         read_snapshot(&*self.store, &ReadOptions::default(), f).expect("read")
@@ -1921,7 +1921,7 @@ fn a_periodic_check_sends_each_credential_only_to_the_endpoint_read_with_it() {
     let store = cx.store.clone();
     let moved = b_new.clone();
     cx.http.during("https://a.openrouter.test", move || {
-        run_write(&*store, WriteOptions::default(), move |tx| {
+        run_write(&*store, WriteOptions::fixture(), move |tx| {
             let mut a = tx.router().connection(&id("a-or"))?.unwrap();
             let expected = a.revision;
             a.credential_ref = Some(a_new);
@@ -2155,7 +2155,7 @@ fn a_credential_replaced_while_it_is_read_is_read_again_not_reported_lost() {
     let (store, secrets, ns2) = (cx.store.clone(), cx.secrets.clone(), ns.clone());
     let (old, new) = (first.clone(), second.clone());
     cx.hooked.during_get(&first, move || {
-        run_write(&*store, WriteOptions::default(), move |tx| {
+        run_write(&*store, WriteOptions::fixture(), move |tx| {
             let mut c = tx.router().connection(&id("or"))?.unwrap();
             let expected = c.revision;
             c.credential_ref = Some(new);
@@ -2295,7 +2295,7 @@ fn a_refresh_overtaken_by_a_new_sign_in_uses_the_new_credential() {
         "refresh_token": "rt-rotated", "expires_in": 3600}),
     );
     cx.http.during(CLAUDE_TOKEN, move || {
-        run_write(&*store, WriteOptions::default(), move |tx| {
+        run_write(&*store, WriteOptions::fixture(), move |tx| {
             let mut c = tx.router().connection(&id("claude"))?.unwrap();
             let expected = c.revision;
             c.credential_ref = Some(fresh);
@@ -3371,7 +3371,7 @@ fn account_identity_generation_is_explicit_cas_guarded_and_survives_reopen() {
         invalid.account_revision = account_revision;
         let expected = replaced.revision;
         assert!(matches!(
-            run_write(&*cx.store, WriteOptions::default(), move |tx| {
+            run_write(&*cx.store, WriteOptions::fixture(), move |tx| {
                 tx.router().put_connection(&invalid, Some(expected))
             }),
             Err(StorageError::InvalidRecord(_))
@@ -3381,7 +3381,7 @@ fn account_identity_generation_is_explicit_cas_guarded_and_survives_reopen() {
     let mut stale = replaced.clone();
     stale.account_revision = 3;
     assert!(matches!(
-        run_write(&*cx.store, WriteOptions::default(), move |tx| {
+        run_write(&*cx.store, WriteOptions::fixture(), move |tx| {
             tx.router().put_connection(&stale, Some(1))
         }),
         Err(StorageError::RevisionConflict(_))
@@ -3462,7 +3462,7 @@ fn account_identity_removed_generation_is_retained_and_recreation_cannot_revive_
     let cx = cx.restart();
     let same_identity = original.clone();
     assert!(matches!(
-        run_write(&*cx.store, WriteOptions::default(), move |tx| {
+        run_write(&*cx.store, WriteOptions::fixture(), move |tx| {
             tx.router().put_connection(&same_identity, None)
         }),
         Err(StorageError::InvalidRecord(_))
@@ -3487,7 +3487,7 @@ fn account_identity_removed_generation_is_retained_and_recreation_cannot_revive_
     let mut racing_recreation = fresh.clone();
     racing_recreation.account_revision = 3;
     assert!(matches!(
-        run_write(&*cx.store, WriteOptions::default(), move |tx| {
+        run_write(&*cx.store, WriteOptions::fixture(), move |tx| {
             tx.router().put_connection(&racing_recreation, None)
         }),
         Err(StorageError::Duplicate { .. })
@@ -3504,7 +3504,7 @@ fn account_identity_removed_generation_is_retained_and_recreation_cannot_revive_
     let mut overflow = fresh;
     overflow.account_revision = i64::MAX;
     assert!(matches!(
-        run_write(&*cx.store, WriteOptions::default(), move |tx| {
+        run_write(&*cx.store, WriteOptions::fixture(), move |tx| {
             tx.router().put_connection(&overflow, None)
         }),
         Err(StorageError::InvalidRecord(_))

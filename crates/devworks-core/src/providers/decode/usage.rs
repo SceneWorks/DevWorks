@@ -1,5 +1,5 @@
 use super::*;
-pub use crate::services::usage::meter::InputSemantics;
+pub use crate::providers::meter::InputSemantics;
 use serde_json::value::RawValue;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -16,7 +16,7 @@ pub struct ReportedCost {
 }
 #[derive(Clone, Debug, PartialEq)]
 pub struct DecodedUsage {
-    pub semantics: crate::services::usage::meter::ObservationSemantics,
+    pub semantics: crate::providers::meter::ObservationSemantics,
     pub service_tier: Option<String>,
     pub processing_region: Option<String>,
     pub input_tokens: Option<u64>,
@@ -241,7 +241,7 @@ impl Decoder {
         };
         out.push(DecodedFrame::Usage {
             observation: DecodedUsage {
-                semantics: crate::services::usage::meter::ObservationSemantics::Cumulative,
+                semantics: crate::providers::meter::ObservationSemantics::Cumulative,
                 service_tier,
                 processing_region,
                 input_tokens,

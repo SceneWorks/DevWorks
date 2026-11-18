@@ -24,3 +24,4 @@ crates/devworks-core/src/protocol/results.rs linguist-generated
 crates/devworks-core/src/operations/*.rs linguist-generated
 crates/devworks-core/src/registry/catalog.rs linguist-generated
 tools/contracts-eval/src/domain_generated.rs linguist-generated
+crates/devworks-test-support/src/unmodelled_generated.rs linguist-generated

@@ -24,7 +24,7 @@ use crate::protocol::records::{InstructionRecord, ProposalRecord};
 use crate::protocol::results::{DomainCommandReply, DomainDecision, OperationResult};
 use crate::protocol::support::Label;
 use crate::protocol::{DomainErrorCode, Id, Revision};
-use crate::services::sessions::{Failure, Refusal};
+use crate::services::kernel::{Failure, Refusal};
 use crate::settings::catalog::AgentRole;
 use serde_json::{Value, json};
 use std::sync::Arc;
@@ -1200,7 +1200,7 @@ fn draft_lessons(
             .knowledge_claim(id)?
             .is_some_and(|claim| crate::services::knowledge::lesson_visible(ctx, &reach, &claim));
         if !seen {
-            return Err(crate::services::sessions::not_found("lesson", id).into());
+            return Err(crate::services::kernel::not_found("lesson", id).into());
         }
         lessons.push(id.clone());
     }

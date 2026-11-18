@@ -2,6 +2,8 @@ use super::*;
 use devworks_core::protocol::CommandReply;
 use devworks_core::protocol::results::DomainDecision;
 use devworks_desktop::backend::Slot;
+use devworks_desktop::decision_ops::DecisionsSlot;
+use devworks_desktop::frame::fixture::command_input;
 
 struct Release(Gate);
 impl Drop for Release {
@@ -50,11 +52,7 @@ fn late_decision(stale: bool) {
         draft["goals"] = json!(["A revised after its exact inspection"]);
         wops::work_changed(real.command(
             "features.edit_plan",
-            &wops::work_command(
-                &*real,
-                "features.edit_plan",
-                json!({"featureId":feature_a.id,"expectedRevision":current.revision,"plan":draft}),
-            ),
+            &wops::work_command(&*real, command_input("features.edit_plan", json!({"featureId":feature_a.id,"expectedRevision":current.revision,"plan":draft}))),
         ))
         .unwrap();
     }
@@ -65,7 +63,9 @@ fn late_decision(stale: bool) {
     step_until(&mut h, "A's decision is in flight", |s| {
         s.client()
             .unwrap()
-            .is_pending(&Slot::ApprovalDecision(a.id.as_str().into()))
+            .is_pending(&Slot::Decisions(DecisionsSlot::ApprovalDecision(
+                a.id.as_str().into(),
+            )))
     });
     let frame = h
         .state()
@@ -73,7 +73,7 @@ fn late_decision(stale: bool) {
         .unwrap()
         .unconfirmed()
         .into_iter()
-        .find(|c| c.slot == Slot::ApprovalDecision(a.id.as_str().into()))
+        .find(|c| c.slot == Slot::Decisions(DecisionsSlot::ApprovalDecision(a.id.as_str().into())))
         .unwrap()
         .frame()
         .to_vec();
@@ -88,12 +88,9 @@ fn late_decision(stale: bool) {
     rationale(&mut h, draft);
     let inspected = serde_json::to_value(&h.state().decisions.selected).unwrap();
     assert_eq!(h.state().decisions.rationale, draft);
-    assert!(
-        h.state()
-            .client()
-            .unwrap()
-            .is_pending(&Slot::ApprovalDecision(a.id.as_str().into()))
-    );
+    assert!(h.state().client().unwrap().is_pending(&Slot::Decisions(
+        DecisionsSlot::ApprovalDecision(a.id.as_str().into())
+    )));
     assert!(
         h.state().decisions.approvals.iter().any(|p| p.id == a.id),
         "the held response has not refreshed A's inbox row"
@@ -117,12 +114,9 @@ fn late_decision(stale: bool) {
             .as_deref(),
         Some(draft)
     );
-    assert!(
-        !h.state()
-            .client()
-            .unwrap()
-            .is_pending(&Slot::ApprovalDecision(a.id.as_str().into()))
-    );
+    assert!(!h.state().client().unwrap().is_pending(&Slot::Decisions(
+        DecisionsSlot::ApprovalDecision(a.id.as_str().into())
+    )));
     assert!(
         get(&*real, &feature_b).approval.is_none(),
         "B was only inspected, never decided"

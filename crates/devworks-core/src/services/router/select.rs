@@ -20,7 +20,7 @@ pub const CONTEXT_PREFIX: &str = "context:";
 /// The provider's own default effort (never an eligibility constraint).
 pub const DEFAULT_EFFORT: &str = "Default";
 /// Upstream identity of OpenRouter's ordinary automatic route.
-pub const OPEN_ROUTER_AUTO_UPSTREAM: &str = "openrouter/auto";
+pub use crate::providers::openrouter::OPEN_ROUTER_AUTO_UPSTREAM;
 /// The endpoint profile Open Router Auto is served by.
 pub const OPEN_ROUTER_PROFILE: &str = "OpenRouterChat";
 

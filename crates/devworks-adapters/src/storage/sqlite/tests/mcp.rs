@@ -23,7 +23,8 @@ use devworks_core::protocol::{
 };
 use devworks_core::services::UseCases;
 use devworks_core::services::artifacts::ArtifactService;
-use devworks_core::services::mcp::{McpClientService, McpEffectOutcome};
+use devworks_core::services::effect::EffectOutcome;
+use devworks_core::services::mcp::McpClientService;
 use serde_json::{Value, json};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
@@ -109,8 +110,8 @@ fn id(value: &str) -> Id {
 fn artifacts(h: &Harness) -> Arc<ArtifactService> {
     Arc::new(ArtifactService::new(
         Arc::new(NativeArtifactFiles::new(
-            h.root.0.clone(),
-            h.root.0.with_extension("cache"),
+            h.root.path().to_path_buf(),
+            h.root.path().with_extension("cache"),
         )),
         Arc::new(HostArtifactSources::new(h.clock.clone(), h.ids.clone())),
         Arc::new(NativeFilesystem::new()),
@@ -121,7 +122,7 @@ fn artifacts(h: &Harness) -> Arc<ArtifactService> {
 
 fn dispatched(store: &SqliteStore, id: &OperationId) -> OperationRecord {
     let id = id.clone();
-    run_write(store, WriteOptions::default(), move |tx| {
+    run_write(store, WriteOptions::fixture(), move |tx| {
         let current = tx.operations().operation(&id)?.expect("operation intent");
         let attempt =
             tx.operations()
@@ -257,7 +258,7 @@ fn project_scoped_server_can_be_managed_from_workspace_context() {
     let store = Arc::new(h.store());
     let project = ProjectId(id("mcp-project"));
     let project_for_write = project.clone();
-    run_write(&*store, WriteOptions::default(), move |tx| {
+    run_write(&*store, WriteOptions::fixture(), move |tx| {
         tx.actors()
             .register(&ActorId(id("mcp-user")), PrincipalKind::Human, "MCP user")?;
         tx.projects().insert_project(&StoredProject {
@@ -334,7 +335,7 @@ fn project_scoped_server_can_be_managed_from_workspace_context() {
         }
     ));
     let project_for_write = project.clone();
-    run_write(&*store, WriteOptions::default(), move |tx| {
+    run_write(&*store, WriteOptions::fixture(), move |tx| {
         let mut row = tx
             .projects()
             .project(&project_for_write)?
@@ -363,7 +364,7 @@ fn project_scoped_server_can_be_managed_from_workspace_context() {
 fn configuration_is_durable_and_selection_rejects_unknown_tools() {
     let h = Harness::new();
     let store = Arc::new(h.store());
-    run_write(&*store, WriteOptions::default(), |tx| {
+    run_write(&*store, WriteOptions::fixture(), |tx| {
         tx.actors()
             .register(&ActorId(id("mcp-user")), PrincipalKind::Human, "MCP user")?;
         Ok(())
@@ -429,7 +430,7 @@ fn configuration_is_durable_and_selection_rejects_unknown_tools() {
     let unchanged_write = write.clone();
     let service_for_write = service.clone();
     let server_id = server.id.clone();
-    let published = run_write(&*store, WriteOptions::default(), move |tx| {
+    let published = run_write(&*store, WriteOptions::fixture(), move |tx| {
         service_for_write.publish_catalog(
             tx,
             &ConfigScope::Workspace,
@@ -467,7 +468,7 @@ fn configuration_is_durable_and_selection_rejects_unknown_tools() {
     ));
     let service_for_write = service.clone();
     let server_id = server.id.clone();
-    let changed = run_write(&*store, WriteOptions::default(), move |tx| {
+    let changed = run_write(&*store, WriteOptions::fixture(), move |tx| {
         service_for_write.publish_catalog(
             tx,
             &ConfigScope::Workspace,
@@ -493,7 +494,7 @@ fn configuration_is_durable_and_selection_rejects_unknown_tools() {
 fn first_discovery_selects_read_only_hints_up_to_the_selection_bound() {
     let h = Harness::new();
     let store = h.store();
-    run_write(&store, WriteOptions::default(), |tx| {
+    run_write(&store, WriteOptions::fixture(), |tx| {
         tx.actors()
             .register(&ActorId(id("mcp-user")), PrincipalKind::Human, "MCP user")?;
         Ok(())
@@ -536,7 +537,7 @@ fn first_discovery_selects_read_only_hints_up_to_the_selection_bound() {
         .collect();
     let service_for_write = service.clone();
     let server_id = server.id.clone();
-    let result = run_write(&store, WriteOptions::default(), move |tx| {
+    let result = run_write(&store, WriteOptions::fixture(), move |tx| {
         service_for_write.publish_catalog(
             tx,
             &ConfigScope::Workspace,
@@ -556,7 +557,7 @@ fn first_discovery_selects_read_only_hints_up_to_the_selection_bound() {
 fn journaled_connect_rechecks_configuration_before_native_io() {
     let h = Harness::new();
     let store = Arc::new(h.store());
-    run_write(&*store, WriteOptions::default(), |tx| {
+    run_write(&*store, WriteOptions::fixture(), |tx| {
         tx.actors()
             .register(&ActorId(id("mcp-user")), PrincipalKind::Human, "MCP user")?;
         Ok(())
@@ -604,7 +605,7 @@ fn journaled_connect_rechecks_configuration_before_native_io() {
     let operation = dispatched(&store, &operation_id);
     assert!(matches!(
         service.execute(&operation),
-        McpEffectOutcome::Completed(_)
+        EffectOutcome::Completed(_)
     ));
     assert_eq!(remote.0.load(Ordering::SeqCst), 1);
     assert_eq!(servers(&h, &store, &cases)[0].revision.get(), 3);
@@ -634,7 +635,7 @@ fn journaled_connect_rechecks_configuration_before_native_io() {
     let operation = dispatched(&store, &operation_id);
     assert!(matches!(
         service.execute(&operation),
-        McpEffectOutcome::Failed(_)
+        EffectOutcome::Failed(_)
     ));
     assert_eq!(remote.0.load(Ordering::SeqCst), 1);
 }
@@ -643,7 +644,7 @@ fn journaled_connect_rechecks_configuration_before_native_io() {
 fn failed_connection_persists_a_safe_diagnostic_for_settings() {
     let h = Harness::new();
     let store = Arc::new(h.store());
-    run_write(&*store, WriteOptions::default(), |tx| {
+    run_write(&*store, WriteOptions::fixture(), |tx| {
         tx.actors()
             .register(&ActorId(id("mcp-user")), PrincipalKind::Human, "MCP user")
     })
@@ -696,7 +697,7 @@ fn failed_connection_persists_a_safe_diagnostic_for_settings() {
     let operation = dispatched(&store, &operation_id);
     assert!(matches!(
         service.execute(&operation),
-        McpEffectOutcome::Failed(_)
+        EffectOutcome::Failed(_)
     ));
     let server = servers(&h, &store, &cases).remove(0);
     assert!(matches!(
@@ -722,7 +723,7 @@ fn failed_connection_persists_a_safe_diagnostic_for_settings() {
     let operation = dispatched(&store, &operation_id);
     assert!(matches!(
         service.observe(&operation),
-        McpEffectOutcome::Unknown(_)
+        EffectOutcome::Unknown(_)
     ));
     let server = servers(&h, &store, &cases).remove(0);
     assert!(matches!(
@@ -742,7 +743,7 @@ fn failed_connection_persists_a_safe_diagnostic_for_settings() {
 fn remote_catalog_keeps_stable_schema_ids_and_invalidates_changed_selection() {
     let h = Harness::new();
     let store = Arc::new(h.store());
-    run_write(&*store, WriteOptions::default(), |tx| {
+    run_write(&*store, WriteOptions::fixture(), |tx| {
         tx.actors()
             .register(&ActorId(id("mcp-user")), PrincipalKind::Human, "MCP user")?;
         Ok(())
@@ -782,7 +783,7 @@ fn remote_catalog_keeps_stable_schema_ids_and_invalidates_changed_selection() {
     let first = {
         let service = service.clone();
         let server_id = server.id.clone();
-        run_write(&*store, WriteOptions::default(), move |tx| {
+        run_write(&*store, WriteOptions::fixture(), move |tx| {
             service.publish_remote_catalog(
                 tx,
                 &ConfigScope::Workspace,
@@ -838,7 +839,7 @@ fn remote_catalog_keeps_stable_schema_ids_and_invalidates_changed_selection() {
     let second = {
         let service = service.clone();
         let server_id = server.id.clone();
-        run_write(&*store, WriteOptions::default(), move |tx| {
+        run_write(&*store, WriteOptions::fixture(), move |tx| {
             service.publish_remote_catalog(
                 tx,
                 &ConfigScope::Workspace,
@@ -875,7 +876,7 @@ fn remote_catalog_keeps_stable_schema_ids_and_invalidates_changed_selection() {
     let changed = {
         let service = service.clone();
         let server_id = server.id.clone();
-        run_write(&*store, WriteOptions::default(), move |tx| {
+        run_write(&*store, WriteOptions::fixture(), move |tx| {
             service.publish_remote_catalog(
                 tx,
                 &ConfigScope::Workspace,
@@ -890,7 +891,7 @@ fn remote_catalog_keeps_stable_schema_ids_and_invalidates_changed_selection() {
     let oversized = {
         let service = service.clone();
         let server_id = server.id.clone();
-        run_write(&*store, WriteOptions::default(), move |tx| {
+        run_write(&*store, WriteOptions::fixture(), move |tx| {
             service.publish_remote_catalog(
                 tx,
                 &ConfigScope::Workspace,
@@ -934,7 +935,7 @@ fn remote_catalog_keeps_stable_schema_ids_and_invalidates_changed_selection() {
     for (count, accepted) in [(501, false), (500, true)] {
         let service = service.clone();
         let server_id = server.id.clone();
-        let published = run_write(&*store, WriteOptions::default(), move |tx| {
+        let published = run_write(&*store, WriteOptions::fixture(), move |tx| {
             service.publish_remote_catalog(
                 tx,
                 &ConfigScope::Workspace,
@@ -951,7 +952,7 @@ fn remote_catalog_keeps_stable_schema_ids_and_invalidates_changed_selection() {
 fn journaled_first_discovery_selects_read_only_hints() {
     let h = Harness::new();
     let store = Arc::new(h.store());
-    run_write(&*store, WriteOptions::default(), |tx| {
+    run_write(&*store, WriteOptions::fixture(), |tx| {
         tx.actors()
             .register(&ActorId(id("mcp-user")), PrincipalKind::Human, "MCP user")?;
         Ok(())
@@ -997,7 +998,7 @@ fn journaled_first_discovery_selects_read_only_hints() {
     let operation = dispatched(&store, &operation_id);
     assert!(matches!(
         service.execute(&operation),
-        McpEffectOutcome::Completed(_)
+        EffectOutcome::Completed(_)
     ));
     let DomainDecision::Accepted { operation_id } = command(
         &h,
@@ -1012,7 +1013,7 @@ fn journaled_first_discovery_selects_read_only_hints() {
     let operation = dispatched(&store, &operation_id);
     assert!(matches!(
         service.execute(&operation),
-        McpEffectOutcome::Completed(_)
+        EffectOutcome::Completed(_)
     ));
     let published = servers(&h, &store, &cases).pop().unwrap();
     assert_eq!(published.catalog_revision.get(), 2);
@@ -1038,7 +1039,7 @@ fn journaled_first_discovery_selects_read_only_hints() {
     let operation = dispatched(&store, &operation_id);
     assert!(matches!(
         service.execute(&operation),
-        McpEffectOutcome::Completed(_)
+        EffectOutcome::Completed(_)
     ));
     let after = read_snapshot(&*store, &ReadOptions::default(), |snapshot| {
         Ok(snapshot
@@ -1072,7 +1073,7 @@ fn journaled_first_discovery_selects_read_only_hints() {
 fn resource_and_prompt_queries_publish_bounded_untrusted_content() {
     let h = Harness::new();
     let store = Arc::new(h.store());
-    run_write(&*store, WriteOptions::default(), |tx| {
+    run_write(&*store, WriteOptions::fixture(), |tx| {
         tx.actors()
             .register(&ActorId(id("mcp-user")), PrincipalKind::Human, "MCP user")?;
         Ok(())
@@ -1104,7 +1105,7 @@ fn resource_and_prompt_queries_publish_bounded_untrusted_content() {
     };
     let server_id = server.id.clone();
     let service_for_write = service.clone();
-    run_write(&*store, WriteOptions::default(), move |tx| {
+    run_write(&*store, WriteOptions::fixture(), move |tx| {
         service_for_write.publish_remote_catalog(
             tx,
             &ConfigScope::Workspace,
@@ -1227,7 +1228,7 @@ fn resource_and_prompt_queries_publish_bounded_untrusted_content() {
 fn resource_query_stops_when_deadline_expires_during_a_remote_read() {
     let h = Harness::new();
     let store = Arc::new(h.store());
-    run_write(&*store, WriteOptions::default(), |tx| {
+    run_write(&*store, WriteOptions::fixture(), |tx| {
         tx.actors()
             .register(&ActorId(id("mcp-user")), PrincipalKind::Human, "MCP user")?;
         Ok(())
@@ -1267,7 +1268,7 @@ fn resource_query_stops_when_deadline_expires_during_a_remote_read() {
     };
     let server_id = server.id.clone();
     let service_for_write = service.clone();
-    run_write(&*store, WriteOptions::default(), move |tx| {
+    run_write(&*store, WriteOptions::fixture(), move |tx| {
         service_for_write.publish_remote_catalog(
             tx,
             &ConfigScope::Workspace,
@@ -1381,7 +1382,7 @@ fn discovered_server(
         };
         assert!(matches!(
             service.execute(&dispatched(store, &operation_id)),
-            McpEffectOutcome::Completed(_)
+            EffectOutcome::Completed(_)
         ));
     }
     let current = servers(h, store, cases).remove(0);
@@ -1419,7 +1420,7 @@ fn select(
 fn sampling_selection_is_advertised_survives_rediscovery_and_clears_on_transport_change() {
     let h = Harness::new();
     let store = Arc::new(h.store());
-    run_write(&*store, WriteOptions::default(), |tx| {
+    run_write(&*store, WriteOptions::fixture(), |tx| {
         tx.actors()
             .register(&ActorId(id("mcp-user")), PrincipalKind::Human, "MCP user")
     })
@@ -1507,7 +1508,7 @@ fn sampling_selection_is_advertised_survives_rediscovery_and_clears_on_transport
 
 fn agent_session(store: &SqliteStore, session: &str, closed: bool) {
     let session = id(session);
-    run_write(store, WriteOptions::default(), move |tx| {
+    run_write(store, WriteOptions::fixture(), move |tx| {
         tx.sessions()
             .insert_session(&devworks_core::ports::storage::StoredSession {
                 id: session.clone(),
@@ -1531,7 +1532,7 @@ fn agent_session(store: &SqliteStore, session: &str, closed: bool) {
 
 fn bind_agent(store: &SqliteStore, expected: Option<i64>) -> i64 {
     let by = context(store);
-    run_write(store, WriteOptions::default(), move |tx| {
+    run_write(store, WriteOptions::fixture(), move |tx| {
         devworks_core::authority::service::bind_principal(
             tx,
             &by,
@@ -1577,7 +1578,7 @@ fn tool_call(
     edit(&mut payload);
     let operation = OperationId(id(name));
     let intent = operation.clone();
-    run_write(store, WriteOptions::default(), move |tx| {
+    run_write(store, WriteOptions::fixture(), move |tx| {
         tx.operations()
             .record_intent(devworks_core::ports::storage::NewOperation {
                 id: intent,
@@ -1613,7 +1614,7 @@ fn sampling_is_authorized_only_for_the_dispatching_agent_call_with_current_selec
     use devworks_core::ports::mcp::SamplingRefusal::Unauthorized;
     let h = Harness::new();
     let store = Arc::new(h.store());
-    run_write(&*store, WriteOptions::default(), |tx| {
+    run_write(&*store, WriteOptions::fixture(), |tx| {
         tx.actors()
             .register(&ActorId(id("mcp-user")), PrincipalKind::Human, "MCP user")?;
         tx.actors()
@@ -1749,7 +1750,7 @@ fn sampling_is_authorized_only_for_the_dispatching_agent_call_with_current_selec
 fn a_vanished_selected_tool_stays_unavailable_and_returns_selected() {
     let h = Harness::new();
     let store = Arc::new(h.store());
-    run_write(&*store, WriteOptions::default(), |tx| {
+    run_write(&*store, WriteOptions::fixture(), |tx| {
         tx.actors()
             .register(&ActorId(id("mcp-user")), PrincipalKind::Human, "MCP user")
     })
@@ -1781,7 +1782,7 @@ fn a_vanished_selected_tool_stays_unavailable_and_returns_selected() {
     };
     let publish = |expected: i64, tools: Vec<RemoteTool>| {
         let (service, server_id) = (service.clone(), server.id.clone());
-        run_write(&*store, WriteOptions::default(), move |tx| {
+        run_write(&*store, WriteOptions::fixture(), move |tx| {
             service.publish_remote_catalog(
                 tx,
                 &ConfigScope::Workspace,
@@ -1873,7 +1874,7 @@ fn a_reviewer_is_offered_no_default_selected_mcp_tool() {
     use devworks_core::settings::{catalog, catalog::AgentRole, model};
     let h = Harness::new();
     let store = Arc::new(h.store());
-    run_write(&*store, WriteOptions::default(), |tx| {
+    run_write(&*store, WriteOptions::fixture(), |tx| {
         tx.actors()
             .register(&ActorId(id("mcp-user")), PrincipalKind::Human, "MCP user")?;
         for agent in ["mcp-worker", "mcp-reviewer"] {
@@ -1889,7 +1890,7 @@ fn a_reviewer_is_offered_no_default_selected_mcp_tool() {
         ("mcp-reviewer", AgentRole::CodeReviewer),
     ] {
         let human = human.clone();
-        run_write(&*store, WriteOptions::default(), move |tx| {
+        run_write(&*store, WriteOptions::fixture(), move |tx| {
             bind_principal(
                 tx,
                 &human,
@@ -1926,7 +1927,7 @@ fn a_reviewer_is_offered_no_default_selected_mcp_tool() {
         panic!("server configuration failed");
     };
     let (service_for_write, server_id) = (service.clone(), server.id.clone());
-    let published = run_write(&*store, WriteOptions::default(), move |tx| {
+    let published = run_write(&*store, WriteOptions::fixture(), move |tx| {
         service_for_write.publish_remote_catalog(
             tx,
             &ConfigScope::Workspace,
@@ -1951,7 +1952,7 @@ fn a_reviewer_is_offered_no_default_selected_mcp_tool() {
     let tool = published.selected_tool_ids.0[0].clone();
     // Both agents' tool settings allow the tool, so only the role decides.
     let capability = format!("mcp/{}", tool.as_str().strip_prefix("mcp-").unwrap());
-    run_write(&*store, WriteOptions::default(), move |tx| {
+    run_write(&*store, WriteOptions::fixture(), move |tx| {
         let current = model::current_layer(tx.configuration(), &ConfigScope::Workspace)?;
         let descriptor = catalog::descriptor(catalog::TOOL_OVERRIDES_KEY).unwrap();
         let assignment = serde_json::from_value(json!({"key": descriptor.key,
@@ -1996,7 +1997,7 @@ fn a_reviewer_is_offered_no_default_selected_mcp_tool() {
 fn two_servers_with_the_same_tool_name_get_distinct_agent_aliases() {
     let h = Harness::new();
     let store = Arc::new(h.store());
-    run_write(&*store, WriteOptions::default(), |tx| {
+    run_write(&*store, WriteOptions::fixture(), |tx| {
         tx.actors()
             .register(&ActorId(id("mcp-user")), PrincipalKind::Human, "MCP user")
     })
@@ -2021,7 +2022,7 @@ fn two_servers_with_the_same_tool_name_get_distinct_agent_aliases() {
             panic!("server configuration failed");
         };
         let (service_for_write, server_id) = (service.clone(), server.id.clone());
-        run_write(&*store, WriteOptions::default(), move |tx| {
+        run_write(&*store, WriteOptions::fixture(), move |tx| {
             service_for_write.publish_remote_catalog(
                 tx,
                 &ConfigScope::Workspace,
@@ -2107,7 +2108,7 @@ fn saved_configuration_is_shown_to_humans_at_revision_eight_and_a_new_token_keep
     use devworks_core::settings::catalog::AgentRole;
     let h = Harness::new();
     let store = Arc::new(h.store());
-    run_write(&*store, WriteOptions::default(), |tx| {
+    run_write(&*store, WriteOptions::fixture(), |tx| {
         tx.actors()
             .register(&ActorId(id("mcp-user")), PrincipalKind::Human, "MCP user")?;
         tx.actors().register(
@@ -2119,7 +2120,7 @@ fn saved_configuration_is_shown_to_humans_at_revision_eight_and_a_new_token_keep
     .unwrap();
     let human = context(&store);
     let binder = human.clone();
-    run_write(&*store, WriteOptions::default(), move |tx| {
+    run_write(&*store, WriteOptions::fixture(), move |tx| {
         bind_principal(
             tx,
             &binder,
@@ -2162,7 +2163,7 @@ fn saved_configuration_is_shown_to_humans_at_revision_eight_and_a_new_token_keep
         panic!("server configuration failed");
     };
     let (service_for_write, server_id) = (service.clone(), server.id.clone());
-    run_write(&*store, WriteOptions::default(), move |tx| {
+    run_write(&*store, WriteOptions::fixture(), move |tx| {
         service_for_write.publish_remote_catalog(
             tx,
             &ConfigScope::Workspace,
@@ -2300,7 +2301,7 @@ fn saved_configuration_is_shown_to_humans_at_revision_eight_and_a_new_token_keep
 fn a_disabled_server_stops_serving_until_a_human_enables_it_and_a_removed_one_is_gone() {
     let h = Harness::new();
     let store = Arc::new(h.store());
-    run_write(&*store, WriteOptions::default(), |tx| {
+    run_write(&*store, WriteOptions::fixture(), |tx| {
         tx.actors()
             .register(&ActorId(id("mcp-user")), PrincipalKind::Human, "MCP user")?;
         tx.actors()
@@ -2355,7 +2356,7 @@ fn a_disabled_server_stops_serving_until_a_human_enables_it_and_a_removed_one_is
     assert_eq!(disabled.selected_tool_ids.0, selection);
     assert!(offered().is_empty());
     assert_eq!(remote.5.load(Ordering::SeqCst), 0);
-    let McpEffectOutcome::Completed(record) = service.execute(&dispatched(&store, &operation_id))
+    let EffectOutcome::Completed(record) = service.execute(&dispatched(&store, &operation_id))
     else {
         panic!("disconnect did not complete");
     };
@@ -2458,7 +2459,7 @@ fn a_disabled_server_stops_serving_until_a_human_enables_it_and_a_removed_one_is
     let connects = remote.0.load(Ordering::SeqCst);
     assert!(matches!(
         service.execute(&dispatched(&store, &operation_id)),
-        McpEffectOutcome::Completed(_)
+        EffectOutcome::Completed(_)
     ));
     assert_eq!(remote.0.load(Ordering::SeqCst), connects + 1);
     let enabled = servers(&h, &store, &cases).remove(0);
@@ -2492,12 +2493,12 @@ fn a_disabled_server_stops_serving_until_a_human_enables_it_and_a_removed_one_is
     let disconnects = remote.5.load(Ordering::SeqCst);
     assert!(matches!(
         service.execute(&dispatched(&store, &late)),
-        McpEffectOutcome::Completed(_)
+        EffectOutcome::Completed(_)
     ));
     assert_eq!(remote.5.load(Ordering::SeqCst), disconnects);
     assert!(matches!(
         service.execute(&dispatched(&store, &reenable)),
-        McpEffectOutcome::Completed(_)
+        EffectOutcome::Completed(_)
     ));
     assert_eq!(offered(), ["lookup"]);
 
@@ -2515,7 +2516,7 @@ fn a_disabled_server_stops_serving_until_a_human_enables_it_and_a_removed_one_is
     assert!(servers(&h, &store, &cases).is_empty());
     assert!(offered().is_empty());
     let disconnects = remote.5.load(Ordering::SeqCst);
-    let McpEffectOutcome::Completed(record) = service.execute(&dispatched(&store, &operation_id))
+    let EffectOutcome::Completed(record) = service.execute(&dispatched(&store, &operation_id))
     else {
         panic!("removal disconnect did not complete");
     };
@@ -2543,7 +2544,7 @@ fn a_disabled_server_stops_serving_until_a_human_enables_it_and_a_removed_one_is
 fn a_resource_saved_before_capabilities_carried_uris_still_names_its_uri() {
     let h = Harness::new();
     let store = Arc::new(h.store());
-    run_write(&*store, WriteOptions::default(), |tx| {
+    run_write(&*store, WriteOptions::fixture(), |tx| {
         tx.actors()
             .register(&ActorId(id("mcp-user")), PrincipalKind::Human, "MCP user")?;
         Ok(())
@@ -2576,7 +2577,7 @@ fn a_resource_saved_before_capabilities_carried_uris_still_names_its_uri() {
     let server_id = server.id.clone();
     let catalog = format!("outgoing_mcp/{}", server.id.as_str());
     let service_for_write = service.clone();
-    run_write(&*store, WriteOptions::default(), move |tx| {
+    run_write(&*store, WriteOptions::fixture(), move |tx| {
         service_for_write.publish_remote_catalog(
             tx,
             &ConfigScope::Workspace,
@@ -2655,7 +2656,7 @@ fn annotated_catalog(titled: bool) -> RemoteCatalog {
 fn a_human_read_only_classification_survives_rediscovery_and_decides_the_default_selection() {
     let h = Harness::new();
     let store = Arc::new(h.store());
-    run_write(&*store, WriteOptions::default(), |tx| {
+    run_write(&*store, WriteOptions::fixture(), |tx| {
         tx.actors()
             .register(&ActorId(id("mcp-user")), PrincipalKind::Human, "MCP user")?;
         tx.actors()
@@ -2693,7 +2694,7 @@ fn a_human_read_only_classification_survives_rediscovery_and_decides_the_default
             .find(|record| record.id == server.id)
             .unwrap();
         let (service, server_id) = (service.clone(), server.id.clone());
-        run_write(&*store, WriteOptions::default(), move |tx| {
+        run_write(&*store, WriteOptions::fixture(), move |tx| {
             service.publish_remote_catalog(
                 tx,
                 &ConfigScope::Workspace,
@@ -2924,7 +2925,7 @@ impl McpRemote for NoNodeRemote {
 fn a_stdio_server_without_its_runtime_is_flagged_before_connecting_and_does_not_stop_others() {
     let h = Harness::new();
     let store = Arc::new(h.store());
-    run_write(&*store, WriteOptions::default(), |tx| {
+    run_write(&*store, WriteOptions::fixture(), |tx| {
         tx.actors()
             .register(&ActorId(id("mcp-user")), PrincipalKind::Human, "MCP user")?;
         tx.actors()
@@ -3011,7 +3012,7 @@ fn a_stdio_server_without_its_runtime_is_flagged_before_connecting_and_does_not_
     };
     assert!(matches!(
         service.execute(&dispatched(&store, &operation_id)),
-        McpEffectOutcome::Failed(_)
+        EffectOutcome::Failed(_)
     ));
     let failed = servers(&h, &store, &cases)
         .into_iter()

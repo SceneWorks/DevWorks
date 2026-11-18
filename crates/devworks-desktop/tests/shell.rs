@@ -126,12 +126,13 @@ fn the_composition_root_reports_storage_health_through_workspace_diagnostics() {
     let root = Root::new("diagnostics");
     let engine = start(&root);
     let backend = engine.backend();
-    let mut frame: serde_json::Value = serde_json::from_slice(&ops::query_frame(
-        &*backend,
-        "workspace.diagnostics",
-        json!({"page": {"limit": 200}}),
-    ))
-    .unwrap();
+    let mut frame: serde_json::Value =
+        serde_json::from_slice(&devworks_desktop::frame::fixture::query(
+            &*backend,
+            "workspace.diagnostics",
+            json!({"page": {"limit": 200}}),
+        ))
+        .unwrap();
     frame["schemaRevision"] = json!(2);
     let (result, _) =
         ops::query_result(backend.query("workspace.diagnostics", frame.to_string().as_bytes()))
@@ -598,7 +599,7 @@ fn a_pasted_image_refused_by_the_artifact_quota_keeps_its_file() {
         {"key": d.key, "value": {"schema": d.schema_ref(), "value": 1}}]});
     ops::settings_saved(backend.command(
         "settings.save_revision",
-        &ops::command_frame(&*backend, "settings.save_revision", body),
+        &devworks_desktop::frame::fixture::command(&*backend, "settings.save_revision", body),
     ))
     .expect("a one-byte quota");
     let mut h = harness(shell(&engine, &root, Script::default()), 1440.0, 900.0);
@@ -816,7 +817,7 @@ fn settings_are_categorized_searchable_validated_saved_and_keep_unsaved_changes(
         {"key": d.key, "value": {"schema": d.schema_ref(), "value": 5}}]});
     ops::settings_saved(backend.command(
         "settings.save_revision",
-        &ops::command_frame(&*backend, "settings.save_revision", body),
+        &devworks_desktop::frame::fixture::command(&*backend, "settings.save_revision", body),
     ))
     .expect("another surface saves");
     click(&mut h, Role::Button, "Save changes");
@@ -1197,15 +1198,22 @@ fn closing_the_window_keeps_a_live_root_or_its_existing_policy_hold() {
     let root = Root::new("close-holds-runs");
     let engine = start(&root);
     // A standalone issue root (work items arrive with later items; seeded here directly).
-    let db = rusqlite::Connection::open(root.0.join("workspace.sqlite")).unwrap();
-    db.busy_timeout(Duration::from_secs(5)).unwrap();
-    db.execute_batch(
-        "INSERT INTO projects(id,title,lifecycle,revision,scope_revision,created_at) \
-         VALUES('project-a','A','Active',1,1,0); \
-         INSERT INTO work_items VALUES('root-i','project-a','issue',NULL,NULL,NULL,'root-i',1,0,1,1,1,'{}');",
-    )
-    .unwrap();
-    drop(db);
+    {
+        use devworks_test_support::seed::{ProjectSeed, WorkSeed};
+        devworks_test_support::seed::rows(
+            &**engine.host().runtime().store(),
+            &[ProjectSeed::new("project-a").name("A").created_at(0)],
+            &[WorkSeed::issue("root-i", "project-a")],
+        )
+        .unwrap();
+        rusqlite::Connection::open(root.0.join("workspace.sqlite"))
+            .unwrap()
+            .execute(
+                "UPDATE work_items SET kind='issue' WHERE id IN ('root-i')",
+                [],
+            )
+            .unwrap();
+    }
     let backend = engine.backend();
     // `runs.*` frames use the specialized command and query envelopes.
     let start_frame = |key: &str, control: &str| {
@@ -1478,7 +1486,7 @@ fn the_add_ons_screen_follows_every_log_page_to_the_requested_field_errors() {
     });
     // More refusals than one log page holds, before the one the form waits for.
     let rec = h.state().addons.items[0].clone();
-    let schema_ref = serde_json::to_value(rec.configuration_schema.clone().unwrap()).unwrap();
+    let schema_ref = rec.configuration_schema.clone().unwrap();
     for _ in 0..(devworks_desktop::ops::PAGE_LIMIT as usize + 5) {
         let frame = devworks_desktop::addons::configure_frame(
             &*backend,
@@ -1547,7 +1555,7 @@ fn the_add_ons_catalog_follows_every_page() {
         {"key": d.key, "value": {"schema": d.schema_ref(), "value": [{"location": dir.display().to_string(), "publicKey": hex}]}}]});
     ops::settings_saved(backend.command(
         "settings.save_revision",
-        &ops::command_frame(&*backend, "settings.save_revision", body),
+        &devworks_desktop::frame::fixture::command(&*backend, "settings.save_revision", body),
     ))
     .expect("an index source");
     let mut h = harness(shell(&engine, &root, Script::default()), 1440.0, 900.0);
@@ -1602,7 +1610,7 @@ fn prepare_offered_pack(root: &Root, backend: &dyn Backend) -> String {
         {"key": d.key, "value": {"schema": d.schema_ref(), "value": [{"location": dir.display().to_string(), "publicKey": hex}]}}]});
     ops::settings_saved(backend.command(
         "settings.save_revision",
-        &ops::command_frame(backend, "settings.save_revision", body),
+        &devworks_desktop::frame::fixture::command(backend, "settings.save_revision", body),
     ))
     .expect("an index source");
     inspected.version.to_string()
@@ -1682,10 +1690,12 @@ fn offered_download_survives_lost_save_requests_and_relaunch() {
     assert!(frames.iter().all(|f| f == &frames[0]));
     h.state_mut().on_exit();
     let saved = devworks_desktop::memory::Memory::load(&root.memory());
-    let devworks_desktop::backend::Slot::AddonsSave {
-        download: Some(path),
-        ..
-    } = &saved.pending.commands[0].slot
+    let devworks_desktop::backend::Slot::AddOns(
+        devworks_desktop::addons_ops::AddonsSlot::AddonsSave {
+            download: Some(path),
+            ..
+        },
+    ) = &saved.pending.commands[0].slot
     else {
         panic!("download ownership persisted")
     };
@@ -1721,10 +1731,12 @@ fn offered_download_held_past_close_is_cleaned_after_confirmation() {
         matches!(s.lifecycle(), Lifecycle::Closed)
     });
     let saved = devworks_desktop::memory::Memory::load(&root.memory());
-    let devworks_desktop::backend::Slot::AddonsSave {
-        download: Some(path),
-        ..
-    } = &saved.pending.commands[0].slot
+    let devworks_desktop::backend::Slot::AddOns(
+        devworks_desktop::addons_ops::AddonsSlot::AddonsSave {
+            download: Some(path),
+            ..
+        },
+    ) = &saved.pending.commands[0].slot
     else {
         panic!("download ownership persisted")
     };

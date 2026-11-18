@@ -211,4 +211,17 @@ impl Input {
             Self::End(_) => Mode::Command,
         }
     }
+    /// The `/body` members of this input, without the `kind` discriminator.
+    pub fn body(&self) -> Result<serde_json::Value, serde_json::Error> {
+        match self {
+            Self::List(i) => serde_json::to_value(i),
+            Self::Get(i) => serde_json::to_value(i),
+            Self::Transcript(i) => serde_json::to_value(i),
+            Self::Briefing(i) => serde_json::to_value(i),
+            Self::AppendMessage(i) => serde_json::to_value(i),
+            Self::ContextSources(i) => serde_json::to_value(i),
+            Self::Start(i) => serde_json::to_value(i),
+            Self::End(i) => serde_json::to_value(i),
+        }
+    }
 }

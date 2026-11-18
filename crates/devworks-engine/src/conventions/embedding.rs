@@ -212,7 +212,10 @@ impl NativeEmbeddings {
         let Some((attempt, balance, state)) = row else {
             return Ok(None);
         };
-        if attempt.state != "Settled" || !balance.local_quiescent || balance.unknown_tail {
+        if attempt.state != devworks_core::ports::storage::AttemptState::Settled
+            || !balance.local_quiescent
+            || balance.unknown_tail
+        {
             return Err(EmbeddingFailure::Unknown {
                 request_id: request.clone(),
                 reason: "The exact native embedding outcome is not closed and complete.".into(),
@@ -454,7 +457,7 @@ impl NativeEmbeddings {
         let result = self.publication(|| {
             run_write(
                 self.inner.store.as_ref(),
-                WriteOptions::default(),
+                WriteOptions::host_state(),
                 move |tx| {
                     if let Some(inputs) = spaces.probe_inputs_in(tx, &prepared)? {
                         return Ok((inputs, false));
@@ -511,7 +514,7 @@ impl NativeEmbeddings {
         };
         self.publication(|| {
             let inner = self.inner.clone();
-            run_write(self.inner.store.as_ref(), WriteOptions::default(), move |tx| {
+            run_write(self.inner.store.as_ref(), WriteOptions::recovery(), move |tx| {
                 if inner.closed.is_closed() { return Err(StorageError::Cancelled); }
                 for row in rows {
                     devworks_core::services::conventions::indexing::preparation::settle_native_preparation(tx, &row.id)?;
@@ -524,7 +527,7 @@ impl NativeEmbeddings {
     fn settle_preparation(&self, operation: OperationId) -> Result<(), StorageError> {
         self.publication(|| {
             let inner = self.inner.clone();
-            run_write(self.inner.store.as_ref(), WriteOptions::default(), move |tx| {
+            run_write(self.inner.store.as_ref(), WriteOptions::settlement(), move |tx| {
                 if inner.closed.is_closed() { return Err(StorageError::Cancelled); }
                 devworks_core::services::conventions::indexing::preparation::settle_native_preparation(tx, &operation)?;
                 Ok(())
@@ -620,7 +623,7 @@ impl NativeEmbeddings {
             let inner = self.inner.clone();
             run_write(
                 self.inner.store.as_ref(),
-                WriteOptions::default(),
+                WriteOptions::settlement(),
                 move |tx| {
                     if inner.closed.is_closed() {
                         return Err(StorageError::Cancelled);

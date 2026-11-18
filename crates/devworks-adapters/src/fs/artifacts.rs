@@ -402,21 +402,25 @@ impl NativeArtifactFiles {
             .remove(&(digest.to_owned(), generation.to_owned()));
     }
 
-    /// Reuses a settled proof only for the same open handle identity and timestamps. Unknown
-    /// or changed generations are hashed in controlled chunks before any range is served.
-    fn open_controlled_file(
+    /// The one verify-then-serve path: opens the generation and proves, on that same handle,
+    /// that it holds exactly `byte_count` bytes hashing to `digest`, then returns the handle
+    /// rewound to the start. With `remember`, a proof is reused only for the same open handle
+    /// identity and timestamps (the racy-timestamp rule: the verification time precedes the
+    /// stamp, and both native modification and change times must have settled before reuse);
+    /// without it every open hashes the whole file. Hashing runs in chunks and `stopped` is
+    /// polled between them, so an unknown or changed generation is never served after a stop.
+    fn open_proved(
         &self,
         digest: &str,
         generation: &str,
         byte_count: u64,
+        remember: bool,
         stopped: &mut dyn FnMut() -> bool,
     ) -> Result<File, FileFault> {
         let interrupted = || FileFault::Source("blob verification interrupted".into());
         if stopped() {
             return Err(interrupted());
         }
-        // Match open_verified's racy-timestamp rule: verification time precedes the stamp,
-        // and both native modification/change times must have settled before reuse.
         let verified_at = SystemTime::now();
         let mut file = File::open(self.blob_path(digest, generation)?).map_err(fault)?;
         let before = stamp(&file).map_err(fault)?;
@@ -425,12 +429,15 @@ impl NativeArtifactFiles {
             return Err(corrupt(digest));
         }
         let key = (digest.to_owned(), generation.to_owned());
-        let known = self
-            .verified
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .get(&key)
-            .copied();
+        let known = remember
+            .then(|| {
+                self.verified
+                    .lock()
+                    .unwrap_or_else(|p| p.into_inner())
+                    .get(&key)
+                    .copied()
+            })
+            .flatten();
         if known != Some(before) {
             let mut hash = Sha256::new();
             let mut bytes = 0u64;
@@ -459,8 +466,9 @@ impl NativeArtifactFiles {
                 self.forget(digest, generation);
                 return Err(corrupt(digest));
             }
+            // Remember it only if the handle did not change while it was hashed.
             let after = stamp(&file).map_err(fault)?;
-            if after == before && before.settled(verified_at) {
+            if remember && after == before && before.settled(verified_at) {
                 self.verified
                     .lock()
                     .unwrap_or_else(|p| p.into_inner())
@@ -472,47 +480,6 @@ impl NativeArtifactFiles {
             return Err(interrupted());
         }
         Ok(file)
-    }
-
-    fn open_verified(
-        &self,
-        digest: &str,
-        generation: &str,
-        byte_count: u64,
-    ) -> Result<File, FileFault> {
-        // The verification time is taken before the stamp: however long hashing takes, a
-        // timestamp close to the stamp is never treated as settled.
-        let verified_at = SystemTime::now();
-        let mut f = File::open(self.blob_path(digest, generation)?).map_err(fault)?;
-        let before = stamp(&f).map_err(fault)?;
-        if before.len != byte_count {
-            return Err(corrupt(digest));
-        }
-        let key = (digest.to_owned(), generation.to_owned());
-        let known = self
-            .verified
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .get(&key)
-            .copied();
-        if known != Some(before) {
-            let (d, n) = hash_reader(&mut f).map_err(fault)?;
-            if d != digest || n != byte_count {
-                self.forget(digest, generation);
-                return Err(corrupt(digest));
-            }
-            // Remember it only if the handle did not change while it was hashed and its
-            // timestamps are settled (racy-timestamp rule).
-            let after = stamp(&f).map_err(fault)?;
-            if after == before && before.settled(verified_at) {
-                self.verified
-                    .lock()
-                    .unwrap_or_else(|p| p.into_inner())
-                    .insert(key, before);
-            }
-            f.seek(SeekFrom::Start(0)).map_err(fault)?;
-        }
-        Ok(f)
     }
 
     /// Streams at most `expected_bytes + 1` bytes of `source` into `staged`, returning its
@@ -574,7 +541,7 @@ impl NativeArtifactFiles {
         #[cfg(test)]
         self.step(Step::Flushed);
         if let Some(existing) = reuse {
-            match self.open_verified(digest, existing, expected_bytes) {
+            match self.open_proved(digest, existing, expected_bytes, true, &mut || false) {
                 Ok(_) => {
                     std::fs::remove_file(staged).map_err(fault)?;
                     return Ok(PublishedBlob {
@@ -682,7 +649,7 @@ impl ArtifactFiles for NativeArtifactFiles {
         offset: u64,
         max: usize,
     ) -> Result<Vec<u8>, FileFault> {
-        let mut f = self.open_verified(digest, generation, byte_count)?;
+        let mut f = self.open_proved(digest, generation, byte_count, true, &mut || false)?;
         f.seek(SeekFrom::Start(offset)).map_err(fault)?;
         let mut out = Vec::with_capacity(max.min(byte_count.saturating_sub(offset) as usize));
         f.take(max as u64).read_to_end(&mut out).map_err(fault)?;
@@ -695,14 +662,8 @@ impl ArtifactFiles for NativeArtifactFiles {
         generation: &str,
         byte_count: u64,
     ) -> Result<Box<dyn Read + Send>, FileFault> {
-        // Verified on, and served from, the same handle.
-        let mut f = File::open(self.blob_path(digest, generation)?).map_err(fault)?;
-        let (d, n) = hash_reader(&mut f).map_err(fault)?;
-        if d != digest || n != byte_count {
-            self.forget(digest, generation);
-            return Err(corrupt(digest));
-        }
-        f.seek(SeekFrom::Start(0)).map_err(fault)?;
+        // Verified on, and served from, the same handle; never from a remembered proof.
+        let f = self.open_proved(digest, generation, byte_count, false, &mut || false)?;
         Ok(Box::new(f.take(byte_count)))
     }
 
@@ -713,7 +674,7 @@ impl ArtifactFiles for NativeArtifactFiles {
         byte_count: u64,
         stopped: &mut dyn FnMut() -> bool,
     ) -> Result<Box<dyn Read + Send>, FileFault> {
-        let file = self.open_controlled_file(digest, generation, byte_count, stopped)?;
+        let file = self.open_proved(digest, generation, byte_count, true, stopped)?;
         Ok(Box::new(file.take(byte_count)))
     }
 
@@ -726,7 +687,7 @@ impl ArtifactFiles for NativeArtifactFiles {
         max: usize,
         stopped: &mut dyn FnMut() -> bool,
     ) -> Result<Vec<u8>, FileFault> {
-        let mut file = self.open_controlled_file(digest, generation, byte_count, stopped)?;
+        let mut file = self.open_proved(digest, generation, byte_count, true, stopped)?;
         file.seek(SeekFrom::Start(offset)).map_err(fault)?;
         let count = max.min(byte_count.saturating_sub(offset) as usize);
         let mut bytes = Vec::with_capacity(count);

@@ -18,7 +18,6 @@ use devworks_core::ports::indexing::{
     ExtractFault, FileExtract, LanguageInfo, SourceTree, StructuralParser,
 };
 use devworks_core::ports::storage::*;
-use devworks_core::ports::{Clock, IdKind, IdSource};
 use devworks_core::protocol::records::{
     IndexFreshnessState, IndexRunRecord, LanguageCoverageMode, OverlayState, RepositoryIndexStatus,
     RepositoryRecord,
@@ -32,8 +31,8 @@ use devworks_core::protocol::{
 };
 use devworks_core::services::UseCases;
 use devworks_core::services::artifacts::ArtifactService;
+use devworks_core::services::git::helper::SupervisedHelpers;
 use devworks_core::services::indexing::discover::{self, worktree_id};
-use devworks_core::services::indexing::helper::SupervisedHelpers;
 use devworks_core::services::indexing::paths::location_identity;
 use devworks_core::services::indexing::worker::IndexWorker;
 use devworks_core::services::indexing::{IndexCoordinator, IndexEnv, IndexSettings, views};
@@ -51,51 +50,30 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
 const T0: i64 = 1_800_000_000_000;
+use devworks_test_support::{TempRoot, TestClock, TestIds};
 
 fn serial() -> MutexGuard<'static, ()> {
     static SERIAL: Mutex<()> = Mutex::new(());
     SERIAL.lock().unwrap_or_else(|p| p.into_inner())
-}
-struct TestClock(AtomicI64);
-impl Clock for TestClock {
-    fn now_ms(&self) -> Counter {
-        Counter::new(self.0.load(Ordering::SeqCst)).unwrap()
-    }
-}
-struct TestIds(AtomicU64);
-impl IdSource for TestIds {
-    fn next_id(&self, kind: IdKind) -> Id {
-        let n = self.0.fetch_add(1, Ordering::SeqCst) + 1;
-        Id::new(format!("{kind:?}-{n}").to_lowercase()).unwrap()
-    }
 }
 fn id(s: &str) -> Id {
     Id::new(s).unwrap()
 }
 
 /// A removed-on-drop temporary directory.
-struct Temp(PathBuf);
+struct Temp(TempRoot);
 impl Temp {
     fn new(tag: &str) -> Self {
-        static NEXT: AtomicU64 = AtomicU64::new(0);
-        let dir = std::env::temp_dir().join(format!(
-            "devworks-index-{tag}-{}-{}",
-            std::process::id(),
-            NEXT.fetch_add(1, Ordering::SeqCst)
-        ));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
         // In the identity form discovery records (macOS /private/var; on Windows without the
         // verbatim prefix `canonicalize` adds, which Git also refuses in `worktree add`).
-        Self(NativeSourceTree::new().canonical_dir(&dir).unwrap())
+        Self(
+            TempRoot::new(&format!("devworks-index-{tag}"))
+                .created()
+                .respelled(|dir| NativeSourceTree::new().canonical_dir(dir).unwrap()),
+        )
     }
     fn join(&self, p: &str) -> PathBuf {
         self.0.join(p)
-    }
-}
-impl Drop for Temp {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.0);
     }
 }
 
@@ -246,7 +224,7 @@ impl Fx {
     fn new(tweak: impl FnOnce(&mut IndexSettings)) -> Self {
         let root = Temp::new("store");
         let clock = Arc::new(TestClock(AtomicI64::new(T0)));
-        let ids = Arc::new(TestIds(AtomicU64::new(0)));
+        let ids = Arc::new(TestIds::new());
         let mut settings = IndexSettings {
             retry_base_ms: 1_000,
             ..IndexSettings::default()
@@ -374,7 +352,7 @@ impl Fx {
         &self,
         f: impl FnOnce(&mut dyn WriteTransaction) -> Result<T, StorageError> + Send + 'static,
     ) -> T {
-        run_write(&*self.store, WriteOptions::default(), f).expect("write")
+        run_write(&*self.store, WriteOptions::fixture(), f).expect("write")
     }
     fn read<T>(&self, f: impl FnOnce(&dyn ReadSnapshot) -> Result<T, StorageError>) -> T {
         read_snapshot(&*self.store, &ReadOptions::default(), f).expect("read")
@@ -1115,7 +1093,7 @@ fn a_cancel_recorded_without_a_local_signal_stops_the_run_at_its_next_checkpoint
         3,
         Box::new(move || {
             let run_id = run_id.clone();
-            run_write(&*store, WriteOptions::default(), move |tx| {
+            run_write(&*store, WriteOptions::fixture(), move |tx| {
                 let cur = tx.indexing().run(&run_id)?.expect("run");
                 let mut next = cur.clone();
                 next.revision += 1;
@@ -1285,7 +1263,7 @@ fn a_slower_builder_never_overwrites_a_newer_publication() {
         3,
         Box::new(move || {
             let (r, v) = (r2.clone(), v2.clone());
-            run_write(&*store, WriteOptions::default(), move |tx| {
+            run_write(&*store, WriteOptions::fixture(), move |tx| {
                 let current = tx.indexing().published(&r)?.unwrap().revision;
                 let mut other = v.clone();
                 other.view_id = Id::new("view-concurrent").unwrap();
@@ -1322,7 +1300,7 @@ fn a_slower_builder_never_overwrites_a_newer_publication() {
     assert_eq!(published.revision, 3);
     // The repository refuses a publication from a stale pointer revision.
     let r3 = repo_id.clone();
-    let stale = run_write(&*fx.store, WriteOptions::default(), move |tx| {
+    let stale = run_write(&*fx.store, WriteOptions::fixture(), move |tx| {
         tx.indexing()
             .publish(&r3, &Id::new("view-concurrent").unwrap(), 1)
     });

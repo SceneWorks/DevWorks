@@ -60,10 +60,23 @@ pub struct SettingsScreen {
     pub container_error: Option<String>,
     /// Roles and skills (DW-34).
     pub instructions: crate::instructions_screen::InstructionsPanel,
+    /// The drafts the pending `settings.validate` checked; a report for other drafts is stale.
+    pub(crate) validated_drafts: Option<BTreeMap<String, Value>>,
+    /// The settings revision each pending `settings.explain_source` was asked at; a chain read
+    /// before the view moved to another revision is stale.
+    pub(crate) explained_at: BTreeMap<String, Option<i64>>,
+}
+
+/// A section Settings shows that another screen owns: it draws it in the space Settings gives.
+pub enum HostSection<'a> {
+    /// The repository indexing sources, with the repository paths (General).
+    Indexing,
+    /// Roles and skills.
+    Instructions(&'a mut crate::instructions_screen::InstructionsPanel),
 }
 
 /// What the screen asks the shell to do.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug)]
 pub enum SettingsAction {
     Reload,
     RefreshContainers,
@@ -86,8 +99,6 @@ pub enum SettingsAction {
     Connection(ConnectionAction),
     /// A web search, fetch or activity load from the Agent tools section.
     Web(WebAction),
-    /// Roles and skills (DW-34).
-    Instructions(crate::instructions_screen::InstructionAction),
     Mcp(McpAction),
 }
 
@@ -197,14 +208,14 @@ impl SettingsScreen {
     }
 
     /// The whole screen: categories and search on the left, the selected category on the right.
-    /// `general` renders host sections that belong with the repository paths (repository
-    /// indexing sources) after the General settings, in the same scrolled list.
+    /// `host` draws the sections other screens own, in the same scrolled list: the repository
+    /// indexing sources after the General settings, and Roles and skills.
     pub fn ui(
         &mut self,
         ui: &mut Ui,
         online: Result<(), &str>,
         actions: &mut Vec<SettingsAction>,
-        general: &mut dyn FnMut(&mut Ui),
+        host: &mut dyn FnMut(&mut Ui, HostSection<'_>),
     ) {
         let full = ui.available_rect_before_wrap();
         let nav_width = 230.0_f32.min(full.width() * 0.35);
@@ -284,7 +295,7 @@ impl SettingsScreen {
                         st.1.push(SettingsAction::OpenJobs);
                     }
                 },
-                |ui, st, _| st.0.body(ui, online, st.1, general),
+                |ui, st, _| st.0.body(ui, online, st.1, host),
             );
         });
         ui.allocate_rect(full, egui::Sense::hover());
@@ -358,7 +369,7 @@ impl SettingsScreen {
         ui: &mut Ui,
         online: Result<(), &str>,
         actions: &mut Vec<SettingsAction>,
-        general: &mut dyn FnMut(&mut Ui),
+        host: &mut dyn FnMut(&mut Ui, HostSection<'_>),
     ) {
         if let Err(reason) = online {
             widgets::state_block(
@@ -419,14 +430,7 @@ impl SettingsScreen {
                 );
             }
             if self.category == Some(Category::Instructions) || self.category.is_none() {
-                let mut instruction_actions = Vec::new();
-                self.instructions
-                    .ui(ui, online.is_ok(), &mut instruction_actions);
-                actions.extend(
-                    instruction_actions
-                        .into_iter()
-                        .map(SettingsAction::Instructions),
-                );
+                host(ui, HostSection::Instructions(&mut self.instructions));
             }
             for key in keys {
                 self.item_ui(ui, key, actions);
@@ -442,7 +446,7 @@ impl SettingsScreen {
                 if widgets::secondary_button(ui, "Notification preferences").clicked() {
                     actions.push(SettingsAction::OpenNotifications);
                 }
-                general(ui);
+                host(ui, HostSection::Indexing);
             }
             if self.category == Some(Category::Tools) {
                 let settings = self.web_settings();

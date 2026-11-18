@@ -710,10 +710,7 @@ fn schema_ref_digest_and_limits_are_enforced_before_prepared_bytes() {
 #[test]
 fn openrouter_auto_beta_uses_its_distinct_retained_plugin_and_provider_constraints() {
     let o:crate::protocol::records::OpenRouterConstraints=serde_json::from_value(json!({"allowedModels":["vendor/*"],"excludedModels":["vendor/old"],"costTier":"low","provider":{"order":["preferred"],"allowFallbacks":false,"requireParameters":true,"dataCollection":"deny","maxPrice":{"prompt":"1.5","completion":"3"}}})).unwrap();
-    let map = crate::services::router::connections::open_router_request_fields(
-        &o,
-        "openrouter/auto-beta",
-    );
+    let map = crate::providers::openrouter::open_router_request_fields(&o, "openrouter/auto-beta");
     assert_eq!(map["plugins"][0]["id"], "auto-beta-router");
     assert_eq!(map["plugins"][0]["allowed_models"], json!(["vendor/*"]));
     assert_eq!(map["provider"]["allow_fallbacks"], false);

@@ -41,7 +41,7 @@ fn seeded(h: &Harness) -> SqliteStore {
 }
 fn seeded_with(h: &Harness, migrations: &[crate::storage::sqlite::Migration]) -> SqliteStore {
     let s = SqliteStore::open_with(h.config(), migrations).unwrap();
-    run_write(&s, WriteOptions::default(), |tx| {
+    run_write(&s, WriteOptions::fixture(), |tx| {
         tx.projects().insert_project(&StoredProject {
             id: project(),
             name: "Project".into(),
@@ -96,7 +96,7 @@ fn claim(s: &SqliteStore, name: &str, work_id: &str, feature: bool) -> StoredAll
         invocation_id: id(name),
         fence: 1,
         expires_at_ms: T0 + 60_000,
-        state: "Active".into(),
+        state: devworks_core::ports::storage::ClaimState::Active,
         revision: 1,
         work_revision: 1,
         parent_feature_id: is_task.then(|| id("feature")),
@@ -108,12 +108,12 @@ fn claim(s: &SqliteStore, name: &str, work_id: &str, feature: bool) -> StoredAll
     }
 }
 fn insert(s: &SqliteStore, c: StoredAllocationClaim) -> Result<(), StorageError> {
-    run_write(s, WriteOptions::default(), move |tx| {
+    run_write(s, WriteOptions::fixture(), move |tx| {
         tx.work().insert_allocation_claim(&c)
     })
 }
 fn update(s: &SqliteStore, c: StoredAllocationClaim, expected: i64) -> Result<(), StorageError> {
-    run_write(s, WriteOptions::default(), move |tx| {
+    run_write(s, WriteOptions::fixture(), move |tx| {
         tx.work().update_allocation_claim(&c, expected)
     })
 }
@@ -202,7 +202,7 @@ fn leases_expire_explicitly_and_old_owner_cannot_overwrite_new_claim() {
     let original = claim(&s, "old", "issue", false);
     insert(&s, original.clone()).unwrap();
     let mut expired = original.clone();
-    expired.state = "Expired".into();
+    expired.state = devworks_core::ports::storage::ClaimState::Expired;
     expired.revision = 2;
     assert!(matches!(
         update(&s, expired.clone(), 1),
@@ -216,13 +216,13 @@ fn leases_expire_explicitly_and_old_owner_cannot_overwrite_new_claim() {
     insert(&s, fresh).unwrap();
     let mut stale = original;
     stale.revision = 2;
-    stale.state = "Released".into();
+    stale.state = devworks_core::ports::storage::ClaimState::Released;
     assert!(matches!(
         update(&s, stale, 1),
         Err(StorageError::RevisionConflict(_))
     ));
     expired.revision = 3;
-    expired.state = "Active".into();
+    expired.state = devworks_core::ports::storage::ClaimState::Active;
     expired.expires_at_ms = T0 + 120_000;
     assert!(matches!(
         update(&s, expired, 2),
@@ -248,7 +248,7 @@ fn claim_admission_binds_queue_work_task_set_association_and_control() {
             Err(StorageError::InvalidRecord(_))
         ));
     }
-    run_write(&s, WriteOptions::default(), |tx| {
+    run_write(&s, WriteOptions::fixture(), |tx| {
         let mut control = StoredRootControl::initial(RootId(id("issue")));
         control.desired = DesiredExecution::Paused;
         tx.runs().insert_root_control(&control)
@@ -258,6 +258,33 @@ fn claim_admission_binds_queue_work_task_set_association_and_control() {
         insert(&s, claim(&s, "paused", "issue", false)),
         Err(StorageError::InvalidRecord(_))
     ));
+}
+
+#[test]
+fn an_unknown_stored_claim_state_is_a_corrupt_store() {
+    let h = Harness::new();
+    let s = seeded(&h);
+    insert(&s, claim(&s, "claim", "issue", false)).unwrap();
+    {
+        let raw = h.raw();
+        raw.pragma_update(None, "ignore_check_constraints", true)
+            .unwrap();
+        raw.execute("UPDATE allocation_claims SET state='Bogus'", [])
+            .unwrap();
+    }
+    let result = read_snapshot(&s, &ReadOptions::default(), |r| {
+        r.work().allocation_claim(&id("claim"))
+    });
+    assert!(
+        matches!(
+            result,
+            Err(StorageError::StorageUnavailable {
+                cause: Unavailable::Corrupt,
+                ..
+            })
+        ),
+        "{result:?}"
+    );
 }
 
 #[test]
@@ -271,11 +298,11 @@ fn membership_writes_invalidate_unstarted_claims_and_preserve_prior_snapshot() {
         w.revision += 1;
         tx.work().update_work(&w, 1)
     };
-    run_write(&s, WriteOptions::default(), change).unwrap();
+    run_write(&s, WriteOptions::fixture(), change).unwrap();
     let invalidated = get(&s, "claim");
     assert_eq!(
-        (&*invalidated.state, invalidated.revision),
-        ("Invalidated", 2)
+        (invalidated.state, invalidated.revision),
+        (devworks_core::ports::storage::ClaimState::Invalidated, 2)
     );
     assert_eq!(invalidated.parent_feature_id, None);
     let mut next = claim(&s, "linked", "task-a", false);
@@ -306,7 +333,7 @@ fn independent_child_claims_page_exclusively_and_reordering_does_not_preempt() {
         Ok(())
     })
     .unwrap();
-    run_write(&s, WriteOptions::default(), |tx| {
+    run_write(&s, WriteOptions::fixture(), |tx| {
         tx.work()
             .bump_queue(&project(), &feature_queue(&id("feature")))
     })
@@ -315,14 +342,17 @@ fn independent_child_claims_page_exclusively_and_reordering_does_not_preempt() {
     kept.revision += 1;
     kept.expires_at_ms += 1000;
     update(&s, kept, 1).unwrap();
-    assert_eq!(get(&s, "claim-a").state, "Active");
+    assert_eq!(
+        get(&s, "claim-a").state,
+        devworks_core::ports::storage::ClaimState::Active
+    );
 }
 
 #[test]
 fn workflow_rename_order_and_occupied_removal_share_the_write_transaction() {
     let h = Harness::new();
     let s = seeded(&h);
-    run_write(&s, WriteOptions::default(), |tx| {
+    run_write(&s, WriteOptions::fixture(), |tx| {
         let mut status = tx
             .work()
             .statuses(&project())?
@@ -354,7 +384,7 @@ fn workflow_rename_order_and_occupied_removal_share_the_write_transaction() {
         }
         tx.work().delete_status(&project(), &id("ready"), 2)
     };
-    run_write(&s, WriteOptions::default(), move |tx| {
+    run_write(&s, WriteOptions::fixture(), move |tx| {
         reassign(tx)?;
         Err::<(), _>(StorageError::Cancelled)
     })
@@ -368,7 +398,7 @@ fn workflow_rename_order_and_occupied_removal_share_the_write_transaction() {
         Ok(())
     })
     .unwrap();
-    run_write(&s, WriteOptions::default(), reassign).unwrap();
+    run_write(&s, WriteOptions::fixture(), reassign).unwrap();
     read_snapshot(&s, &ReadOptions::default(), |r| {
         assert_eq!(r.work().statuses(&project())?.len(), 1);
         assert_eq!(
@@ -404,7 +434,7 @@ fn activate(s: &SqliteStore, root: &str) -> StoredActivation {
         plan_revision: None,
     };
     let saved = activation.clone();
-    run_write(s, WriteOptions::default(), move |tx| {
+    run_write(s, WriteOptions::fixture(), move |tx| {
         tx.runs().insert_activation(&saved)
     })
     .unwrap();
@@ -417,18 +447,21 @@ fn transferred_execution_survives_expiry_membership_and_restart_without_duplicat
     insert(&s, claim(&s, "claim", "issue", false)).unwrap();
     let mut activation = activate(&s, "issue");
     let mut transferred = get(&s, "claim");
-    transferred.state = "Transferred".into();
+    transferred.state = devworks_core::ports::storage::ClaimState::Transferred;
     transferred.execution_id = Some(activation.id.clone());
     transferred.revision = 2;
     update(&s, transferred, 1).unwrap();
-    run_write(&s, WriteOptions::default(), |tx| {
+    run_write(&s, WriteOptions::fixture(), |tx| {
         let mut w = tx.work().work(&id("issue"))?.unwrap();
         w.parent_feature_id = Some(id("feature"));
         w.revision = 2;
         tx.work().update_work(&w, 1)
     })
     .unwrap();
-    assert_eq!(get(&s, "claim").state, "Transferred");
+    assert_eq!(
+        get(&s, "claim").state,
+        devworks_core::ports::storage::ClaimState::Transferred
+    );
     let mut rebound = get(&s, "claim");
     rebound.parent_feature_id = Some(id("feature"));
     rebound.work_revision = 2;
@@ -441,7 +474,7 @@ fn transferred_execution_survives_expiry_membership_and_restart_without_duplicat
     );
     h.set_now(T0 + 60_001);
     let mut expired = rebound.clone();
-    expired.state = "Expired".into();
+    expired.state = devworks_core::ports::storage::ClaimState::Expired;
     expired.revision = 4;
     assert!(matches!(
         update(&s, expired, 3),
@@ -467,12 +500,12 @@ fn transferred_execution_survives_expiry_membership_and_restart_without_duplicat
     activation.outcome = Some(ActivationOutcome::Interrupted);
     activation.stopped_at_ms = Some(T0 + 60_001);
     activation.revision = 2;
-    run_write(&s, WriteOptions::default(), move |tx| {
+    run_write(&s, WriteOptions::fixture(), move |tx| {
         tx.runs().update_activation(&activation, 1)
     })
     .unwrap();
     let mut release = get(&s, "claim");
-    release.state = "Released".into();
+    release.state = devworks_core::ports::storage::ClaimState::Released;
     release.revision = 4;
     update(&s, release, 3).unwrap();
 }
@@ -484,18 +517,18 @@ fn yielding_keeps_project_slot_until_stopped_then_allows_prerequisite_allocation
     insert(&s, claim(&s, "claim", "feature", true)).unwrap();
     let mut activation = activate(&s, "feature");
     let mut transferred = get(&s, "claim");
-    transferred.state = "Transferred".into();
+    transferred.state = devworks_core::ports::storage::ClaimState::Transferred;
     transferred.execution_id = Some(activation.id.clone());
     transferred.revision = 2;
     update(&s, transferred, 1).unwrap();
     let mut yielding = get(&s, "claim");
-    yielding.state = "Yielding".into();
+    yielding.state = devworks_core::ports::storage::ClaimState::Yielding;
     yielding.revision = 3;
     update(&s, yielding, 2).unwrap();
     // Reserving another root is distinct from transferring its execution slot.
     insert(&s, claim(&s, "prerequisite", "issue", false)).unwrap();
     let mut yielded = get(&s, "claim");
-    yielded.state = "Yielded".into();
+    yielded.state = devworks_core::ports::storage::ClaimState::Yielded;
     yielded.revision = 4;
     assert!(matches!(
         update(&s, yielded.clone(), 3),
@@ -505,7 +538,7 @@ fn yielding_keeps_project_slot_until_stopped_then_allows_prerequisite_allocation
     activation.outcome = Some(ActivationOutcome::Prevented);
     activation.stopped_at_ms = Some(T0);
     activation.revision = 2;
-    run_write(&s, WriteOptions::default(), move |tx| {
+    run_write(&s, WriteOptions::fixture(), move |tx| {
         tx.runs().update_activation(&activation, 1)
     })
     .unwrap();
@@ -522,7 +555,7 @@ fn ownership_transfer_fences_the_previous_actor_and_immutable_request_identity()
     let h = Harness::new();
     let s = seeded(&h);
     insert(&s, claim(&s, "claim", "issue", false)).unwrap();
-    run_write(&s, WriteOptions::default(), |tx| {
+    run_write(&s, WriteOptions::fixture(), |tx| {
         tx.actors().register(
             &devworks_core::protocol::ActorId(id("new-owner")),
             devworks_core::context::PrincipalKind::Host,
@@ -589,29 +622,32 @@ fn multiple_reserved_roots_cannot_transfer_two_project_execution_slots() {
     let mut first_execution = activate(&s, "feature");
     let second_execution = activate(&s, "issue");
     let mut first = get(&s, "feature-claim");
-    first.state = "Transferred".into();
+    first.state = devworks_core::ports::storage::ClaimState::Transferred;
     first.execution_id = Some(first_execution.id.clone());
     first.revision = 2;
     update(&s, first, 1).unwrap();
     let mut second = get(&s, "issue-claim");
-    second.state = "Transferred".into();
+    second.state = devworks_core::ports::storage::ClaimState::Transferred;
     second.execution_id = Some(second_execution.id.clone());
     second.revision = 2;
     assert!(matches!(
         update(&s, second.clone(), 1),
         Err(StorageError::Duplicate { .. })
     ));
-    assert_eq!(get(&s, "issue-claim").state, "Active");
+    assert_eq!(
+        get(&s, "issue-claim").state,
+        devworks_core::ports::storage::ClaimState::Active
+    );
     first_execution.phase = ActivationPhase::Stopped;
     first_execution.outcome = Some(ActivationOutcome::Prevented);
     first_execution.stopped_at_ms = Some(T0);
     first_execution.revision = 2;
-    run_write(&s, WriteOptions::default(), move |tx| {
+    run_write(&s, WriteOptions::fixture(), move |tx| {
         tx.runs().update_activation(&first_execution, 1)
     })
     .unwrap();
     let mut release = get(&s, "feature-claim");
-    release.state = "Released".into();
+    release.state = devworks_core::ports::storage::ClaimState::Released;
     release.revision = 3;
     update(&s, release, 2).unwrap();
     update(&s, second, 1).unwrap();
@@ -624,13 +660,13 @@ fn completed_child_claim_releases_while_feature_coordinator_remains_live() {
     let activation = activate(&s, "feature");
     insert(&s, claim(&s, "child", "task-a", false)).unwrap();
     let mut transferred = get(&s, "child");
-    transferred.state = "Transferred".into();
+    transferred.state = devworks_core::ports::storage::ClaimState::Transferred;
     transferred.execution_id = Some(activation.id.clone());
     transferred.revision = 2;
     update(&s, transferred, 1).unwrap();
     let actor = s.info().host_actor;
     let execution = activation.id.clone();
-    run_write(&s, WriteOptions::default(), move |tx| {
+    run_write(&s, WriteOptions::fixture(), move |tx| {
         tx.sessions().insert_session(&StoredSession {
             id: id("worker-session"),
             conversation_id: id("worker-conversation"),
@@ -669,13 +705,13 @@ fn completed_child_claim_releases_while_feature_coordinator_remains_live() {
     })
     .unwrap();
     let mut release = get(&s, "child");
-    release.state = "Released".into();
+    release.state = devworks_core::ports::storage::ClaimState::Released;
     release.revision = 3;
     assert!(matches!(
         update(&s, release.clone(), 2),
         Err(StorageError::InvalidRecord(_))
     ));
-    run_write(&s, WriteOptions::default(), |tx| {
+    run_write(&s, WriteOptions::fixture(), |tx| {
         let mut assignment = tx
             .runs()
             .assignment(&devworks_core::protocol::AssignmentId(id(
@@ -712,7 +748,7 @@ fn replay(key: char, claim: Option<&str>) -> StoredAllocationReplay {
     }
 }
 fn insert_replay(s: &SqliteStore, row: StoredAllocationReplay) -> Result<(), StorageError> {
-    run_write(s, WriteOptions::default(), move |tx| {
+    run_write(s, WriteOptions::fixture(), move |tx| {
         tx.work().insert_allocation_replay(&row)
     })
 }
@@ -802,7 +838,7 @@ fn explicit_key_first_response_wins_concurrently_and_rolls_back_with_its_claim()
         1
     );
     let c = claim(&s, "rolled-back", "issue", false);
-    let outcome = run_write(s.as_ref(), WriteOptions::default(), move |tx| {
+    let outcome = run_write(s.as_ref(), WriteOptions::fixture(), move |tx| {
         tx.work().insert_allocation_claim(&c)?;
         tx.work()
             .insert_allocation_replay(&replay('b', Some("rolled-back")))?;
@@ -822,7 +858,7 @@ fn replay_project_ownership_rejects_cross_project_claims() {
     let h = Harness::new();
     let s = seeded(&h);
     insert(&s, claim(&s, "claim", "issue", false)).unwrap();
-    run_write(&s, WriteOptions::default(), |tx| {
+    run_write(&s, WriteOptions::fixture(), |tx| {
         let mut other = tx.projects().project(&project())?.unwrap();
         other.id = ProjectId(id("other-project"));
         tx.projects().insert_project(&other)
@@ -872,12 +908,12 @@ fn archive_and_deleted_tombstone_preserve_allocation_and_replay_records() {
         registered_at_ms: T0,
     };
     let saved = repository.clone();
-    run_write(&s, WriteOptions::default(), move |tx| {
+    run_write(&s, WriteOptions::fixture(), move |tx| {
         tx.projects().insert_repository(&saved)
     })
     .unwrap();
     for (lifecycle, expected) in [("Archived", 1), ("Deleted", 2)] {
-        run_write(&s, WriteOptions::default(), move |tx| {
+        run_write(&s, WriteOptions::fixture(), move |tx| {
             let mut p = tx.projects().project(&project())?.unwrap();
             p.lifecycle = lifecycle.into();
             p.revision = expected + 1;

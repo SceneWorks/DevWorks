@@ -16,7 +16,6 @@ use devworks_core::context::{HostIngress, InvocationContext, PrincipalKind};
 use devworks_core::fingerprint::sha256_hex;
 use devworks_core::gateway::Gateway;
 use devworks_core::ports::files::{ArtifactSources, ResolvedSource, SourceOrigin, SourceRefusal};
-use devworks_core::ports::retrieval::NoVectorIndex;
 use devworks_core::ports::storage::*;
 use devworks_core::protocol::data::ArtifactSource;
 use devworks_core::protocol::records::{
@@ -97,7 +96,7 @@ impl Fx {
     /// Two projects, the user, an agent confined to each project and an unconfined agent.
     fn new() -> Self {
         let h = Harness::new();
-        let src = h.root.0.with_extension("sources");
+        let src = h.root.path().with_extension("sources");
         let _ = std::fs::remove_dir_all(&src);
         std::fs::create_dir_all(&src).unwrap();
         let sources = Arc::new(Sources {
@@ -109,8 +108,8 @@ impl Fx {
         });
         let store = Arc::new(h.store());
         let files = Arc::new(NativeArtifactFiles::new(
-            h.root.0.clone(),
-            h.root.0.with_extension("cache"),
+            h.root.path().to_path_buf(),
+            h.root.path().with_extension("cache"),
         ));
         let artifacts = Arc::new(ArtifactService::new(
             files.clone(),
@@ -120,13 +119,8 @@ impl Fx {
             h.ids.clone(),
         ));
         let knowledge = Arc::new(
-            KnowledgeService::new(
-                h.ids.clone(),
-                h.clock.clone(),
-                Some(files),
-                Arc::new(NoVectorIndex),
-            )
-            .with_summaries(store.clone(), artifacts.clone()),
+            KnowledgeService::new(h.ids.clone(), h.clock.clone(), Some(files))
+                .with_summaries(store.clone(), artifacts.clone()),
         );
         let cases = UseCases::new()
             .with_artifacts(artifacts)
@@ -202,7 +196,7 @@ impl Fx {
         &self,
         f: impl FnOnce(&mut dyn WriteTransaction) -> Result<T, StorageError> + Send + 'static,
     ) -> T {
-        run_write(&*self.store, WriteOptions::default(), f).expect("write")
+        run_write(&*self.store, WriteOptions::fixture(), f).expect("write")
     }
     fn read<T>(&self, f: impl FnOnce(&dyn ReadSnapshot) -> Result<T, StorageError>) -> T {
         read_snapshot(&*self.store, &ReadOptions::default(), f).expect("read")
@@ -1233,7 +1227,7 @@ fn lesson_views_addresses_and_delivery_are_inspectable() {
         let (k, rule) = (fx.knowledge.clone(), rule.clone());
         move |tx| k.record_delivery(tx, &id("s1"), &[(rule, rev)])
     });
-    let unknown = run_write(&*fx.store, WriteOptions::default(), {
+    let unknown = run_write(&*fx.store, WriteOptions::fixture(), {
         let (k, rule) = (fx.knowledge.clone(), rule.clone());
         move |tx| k.record_delivery(tx, &id("no-session"), &[(rule, 1)])
     });
@@ -1257,7 +1251,7 @@ fn lesson_views_addresses_and_delivery_are_inspectable() {
             checkpoint_sequence: 0,
         })
     });
-    let leaked = run_write(&*fx.store, WriteOptions::default(), {
+    let leaked = run_write(&*fx.store, WriteOptions::fixture(), {
         let (k, rule) = (fx.knowledge.clone(), rule.clone());
         move |tx| k.record_delivery(tx, &id("s2"), &[(rule, rev)])
     });
@@ -6179,7 +6173,7 @@ fn seeded_traversals_continue_past_their_edge_bound_and_long_chains_report_trunc
             .expect("one is omitted");
         assert!(g.frontier.0.contains(hidden), "{op}: {:?}", g.frontier);
     }
-    // Six predecessors, five shown: the chain says it is incomplete.
+    // Six predecessors: the chain shows all of them, and a claim read lists the same ones.
     let mut latest = fx.claim_id(
         &user,
         proj("project-a"),
@@ -6198,8 +6192,154 @@ fn seeded_traversals_continue_past_their_edge_bound_and_long_chains_report_trunc
         "knowledge.subgraph",
         json!({"claimIds": [latest], "maxDepth": 0}),
     );
-    assert_eq!(chained.supersession_ids.0.len(), 5);
-    assert!(chained.truncated);
+    assert_eq!(chained.supersession_ids.0.len(), 6);
+    assert!(!chained.truncated);
+    let read = fx.read_claim(&user, proj("project-a"), &latest);
+    assert_eq!(chained.supersession_ids.0, read.supersession_ids.0);
+}
+
+#[test]
+fn a_supersession_chain_goes_on_through_a_deleted_link() {
+    let fx = Fx::new();
+    let user = fx.user();
+    let a = fx.claim_id(&user, proj("project-a"), "Same", draft("Fact", "state a"));
+    let subject = fx.claim(&user, proj("project-a"), &a).subject_id;
+    let next = |value: &str, from: &Id| {
+        receipt(fx.record(&user, proj("project-a"), json!({"entities": [], "evidence": [],
+            "claims": [with(draft("Fact", value), json!({"subjectId": subject, "supersedes": from}))]})))
+            .claim_ids
+            .0[0]
+            .clone()
+    };
+    let b = next("state b", &a);
+    let c = next("state c", &b);
+    let rev = fx.revision(&b);
+    summary(fx.cmd(
+        &user,
+        "knowledge.delete_selected",
+        json!({"scope": proj("project-a"),
+        "claims": [{"id": b, "revision": rev.to_string()}]}),
+    ));
+    let read = fx.read_claim(&user, proj("project-a"), &c);
+    assert_eq!(read.supersession_ids.0, vec![a.clone()]);
+    let sub = bundle_of_reply(fx.q(
+        &user,
+        "knowledge.subgraph",
+        json!({"scope": proj("project-a"),
+        "query": graph_query(json!({"claimIds": [c], "maxDepth": 0}))}),
+    ));
+    assert_eq!(sub.supersession_ids.0, vec![a]);
+}
+
+#[test]
+fn a_group_of_claims_that_state_one_predicate_differently_makes_one_conflict() {
+    let fx = Fx::new();
+    let user = fx.user();
+    let a = fx.claim_id(&user, proj("project-a"), "Same", draft("Fact", "agreed"));
+    let subject = fx.claim(&user, proj("project-a"), &a).subject_id;
+    let add = |value: &str| {
+        receipt(fx.record(
+            &user,
+            proj("project-a"),
+            json!({"entities": [], "evidence": [],
+            "claims": [with(draft("Fact", value), json!({"subjectId": subject}))]}),
+        ))
+        .claim_ids
+        .0[0]
+            .clone()
+    };
+    let b = add("agreed");
+    let c = add("different");
+    let sub = bundle_of_reply(fx.q(
+        &user,
+        "knowledge.subgraph",
+        json!({"scope": proj("project-a"),
+        "query": graph_query(json!({"claimIds": [a, b, c], "maxDepth": 0}))}),
+    ));
+    assert_eq!(sub.conflicts.0.len(), 1, "{:?}", sub.conflicts);
+    let mut members = sub.conflicts.0[0].claim_ids.0.clone();
+    members.sort_by(|x, y| x.as_str().cmp(y.as_str()));
+    let mut expected = vec![a.clone(), b.clone(), c.clone()];
+    expected.sort_by(|x, y| x.as_str().cmp(y.as_str()));
+    assert_eq!(members, expected);
+    // A read of any claim of the group reports that same conflict.
+    for id in [&a, &b, &c] {
+        let read = fx.read_claim(&user, proj("project-a"), id);
+        assert_eq!(read.conflicts.0.len(), 1);
+        assert_eq!(read.conflicts.0[0].id, sub.conflicts.0[0].id);
+        assert_eq!(read.conflicts.0[0].claim_ids.0, members);
+    }
+}
+
+#[test]
+fn a_claim_read_and_a_subgraph_of_that_claim_report_the_same_conflicts_and_chain() {
+    let fx = Fx::new();
+    let user = fx.user();
+    // A chain longer than the old subgraph bound of five, ending in a claim that conflicts
+    // with another active claim about the same subject and with a recorded contradiction.
+    let mut latest = fx.claim_id(&user, proj("project-a"), "Same", draft("Fact", "state 0"));
+    let subject = fx.claim(&user, proj("project-a"), &latest).subject_id;
+    for i in 1..=8 {
+        latest = receipt(fx.record(&user, proj("project-a"), json!({"entities": [], "evidence": [],
+            "claims": [with(draft("Fact", &format!("state {i}")), json!({"subjectId": subject, "supersedes": latest}))]})))
+            .claim_ids
+            .0[0]
+            .clone();
+    }
+    let rival = receipt(fx.record(
+        &user,
+        proj("project-a"),
+        json!({"entities": [], "evidence": [],
+        "claims": [with(draft("Fact", "rival state"), json!({"subjectId": subject}))]}),
+    ))
+    .claim_ids
+    .0[0]
+        .clone();
+    let foe = fx.claim_id(
+        &user,
+        proj("project-a"),
+        "Foe",
+        draft("Fact", "never state 8"),
+    );
+    receipt(fx.cmd(
+        &user,
+        "knowledge.relate",
+        json!({"scope": proj("project-a"),
+        "subjectId": latest, "predicate": "contradicts", "objectId": foe, "evidenceIds": []}),
+    ));
+    let read = fx.read_claim(&user, proj("project-a"), &latest);
+    let sub = bundle_of_reply(fx.q(
+        &user,
+        "knowledge.subgraph",
+        json!({"scope": proj("project-a"),
+        "query": graph_query(json!({"claimIds": [latest], "maxDepth": 0}))}),
+    ));
+    assert_eq!(read.supersession_ids.0.len(), 8);
+    assert_eq!(sub.supersession_ids.0, read.supersession_ids.0);
+    assert_eq!(read.conflicts.0.len(), 2);
+    let key = |b: &KnowledgeBundle| {
+        let mut v: Vec<_> = b
+            .conflicts
+            .0
+            .iter()
+            .map(|c| (c.id.clone(), c.claim_ids.0.clone()))
+            .collect();
+        v.sort_by(|a, b| a.0.as_str().cmp(b.0.as_str()));
+        v
+    };
+    assert_eq!(key(&sub), key(&read));
+    assert!(read.claims.0.iter().any(|c| c.id == rival));
+    let ids = |b: &KnowledgeBundle| {
+        let mut v: Vec<String> = b
+            .claims
+            .0
+            .iter()
+            .map(|c| c.id.as_str().to_owned())
+            .collect();
+        v.sort();
+        v
+    };
+    assert_eq!(ids(&sub), ids(&read));
 }
 
 #[test]

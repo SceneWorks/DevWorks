@@ -1,9 +1,11 @@
 //! Native Git use cases. All process work is prepared outside store snapshots; the answer
 //! rechecks repository/worktree ownership against the snapshot the gateway returns.
 mod approval;
+pub mod client;
 mod commands;
 pub mod context;
 pub mod github;
+pub mod helper;
 mod location;
 mod transport;
 use crate::context::InvocationContext;
@@ -18,10 +20,10 @@ use crate::protocol::results::OperationResult;
 use crate::protocol::{CorrelationId, DomainErrorCode, DomainFault, Id, OperationState};
 use crate::services::artifacts::evidence::{Evidence, EvidenceFailure};
 use crate::services::artifacts::{ArtifactService, AuthorizedScope};
-use crate::services::indexing::git::{Git, GitFault};
-use crate::services::indexing::helper::{HelperFault, HelperRunner};
-use crate::services::sessions::{Failure, Refusal, query_fault, rev};
-pub use commands::{EFFECT_CONSUMER, EffectOutcome, RegisteredGitRoot};
+use crate::services::git::client::{Git, GitFault};
+use crate::services::git::helper::{HelperFault, HelperRunner};
+use crate::services::kernel::{Failure, Refusal, query_fault, rev};
+pub use commands::{EFFECT_CONSUMER, RegisteredGitRoot};
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
@@ -166,7 +168,7 @@ impl GitService {
             crate::context::PrincipalKind::Host,
             self.ids.next_id(IdKind::Command),
             Id::new("git-qualification").expect("namespace"),
-            crate::services::sessions::counter(info.restore_epoch),
+            crate::services::kernel::counter(info.restore_epoch),
             rev(1),
         );
         let stop = || self.is_stopped();
@@ -322,49 +324,56 @@ impl GitService {
         let deadline = env.deadline_ms;
         let (artifact, ()) = self
             .artifacts
-            .publish_evidence(&*self.store, evidence, bytes, move |tx, _| {
-                if cancellation.as_ref().is_some_and(|c| c.is_cancelled())
-                    || deadline.is_some_and(|d| tx.now_ms() >= d)
-                {
-                    return Err(crate::ports::storage::StorageError::Cancelled);
-                }
-                if !crate::authority::authorization_holds_in(tx, &context, &auth)? {
-                    return Err(crate::ports::storage::StorageError::ScopeDenied);
-                }
-                if let Some(project) = context.project_id()
-                    && !tx
-                        .projects()
-                        .repository_projects(&old.repository.id)?
-                        .contains(project)
-                {
-                    return Err(crate::ports::storage::StorageError::ScopeDenied);
-                }
-                let repo = tx.projects().repository(&old.repository.id)?;
-                if repo.as_ref().map(|r| r.revision) != Some(old.repository.revision) {
-                    return Err(crate::ports::storage::StorageError::ScopeDenied);
-                }
-                if let Some(tree) = &old.worktree {
-                    if tx.git().git_worktree(&tree.id)?.as_ref() != Some(tree) {
+            .publish_evidence_as(
+                &*self.store,
+                ctx,
+                query.authorization(),
+                evidence,
+                bytes,
+                move |tx, _| {
+                    if cancellation.as_ref().is_some_and(|c| c.is_cancelled())
+                        || deadline.is_some_and(|d| tx.now_ms() >= d)
+                    {
+                        return Err(crate::ports::storage::StorageError::Cancelled);
+                    }
+                    if !crate::authority::authorization_holds_in(tx, &context, &auth)? {
                         return Err(crate::ports::storage::StorageError::ScopeDenied);
                     }
-                    let work = tx
-                        .work()
-                        .work(&tree.work_id)?
-                        .ok_or(crate::ports::storage::StorageError::ScopeDenied)?;
-                    if !tx
-                        .work()
-                        .work_repositories(&work.id)?
-                        .contains(&old.repository.id)
-                        || !tx
+                    if let Some(project) = context.project_id()
+                        && !tx
                             .projects()
                             .repository_projects(&old.repository.id)?
-                            .contains(&work.project_id)
+                            .contains(project)
                     {
                         return Err(crate::ports::storage::StorageError::ScopeDenied);
                     }
-                }
-                Ok(())
-            })
+                    let repo = tx.projects().repository(&old.repository.id)?;
+                    if repo.as_ref().map(|r| r.revision) != Some(old.repository.revision) {
+                        return Err(crate::ports::storage::StorageError::ScopeDenied);
+                    }
+                    if let Some(tree) = &old.worktree {
+                        if tx.git().git_worktree(&tree.id)?.as_ref() != Some(tree) {
+                            return Err(crate::ports::storage::StorageError::ScopeDenied);
+                        }
+                        let work = tx
+                            .work()
+                            .work(&tree.work_id)?
+                            .ok_or(crate::ports::storage::StorageError::ScopeDenied)?;
+                        if !tx
+                            .work()
+                            .work_repositories(&work.id)?
+                            .contains(&old.repository.id)
+                            || !tx
+                                .projects()
+                                .repository_projects(&old.repository.id)?
+                                .contains(&work.project_id)
+                        {
+                            return Err(crate::ports::storage::StorageError::ScopeDenied);
+                        }
+                    }
+                    Ok(())
+                },
+            )
             .map_err(|e| match e {
                 EvidenceFailure::Refused(r) => {
                     Refusal::new(r.code, r.target_kind, r.target_id).into()

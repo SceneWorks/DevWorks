@@ -125,6 +125,8 @@ x11rb = { version = "=0.13.2", default-features = false }
 atspi = { version = "=0.29.0", default-features = false }
 
 [dev-dependencies]
+# Shared test doubles and seeding helpers (no production crate depends on it).
+devworks-test-support = { path = "../devworks-test-support" }
 # An in-memory server proves the outgoing stdio protocol handshake without requiring Node,
 # Python or an installed external MCP runtime in the test suite.
 rmcp = { version = "=3.9.0", default-features = false, features = ["server"] }

@@ -8,7 +8,7 @@
 //! the transaction-scoped functions here, so proposals have one store and one set of rules.
 //!
 //! Every surface reaches the four operations through the gateway with [`SettingsService`] as the
-//! handler registered in [`crate::services::UseCases::with_settings`]; the proposal and rollback
+//! handler registered in `UseCases::with_settings`; the proposal and rollback
 //! functions are transaction-scoped so the owning decision operations
 //! (`approvals.record_human_decision`, `roles.rollback`) run them inside their own gateway unit
 //! of work. There is no second implementation of any rule.
@@ -107,7 +107,7 @@ pub trait PathProbe: Send + Sync {
     fn probe(&self, path: &str) -> PathHealth;
 }
 
-pub use crate::services::failure::{Failure, Refusal};
+pub use crate::kernel::failure::{Failure, Refusal};
 
 fn denied(kind: &'static str) -> Failure {
     Refusal::new(DomainErrorCode::PermissionDenied, kind, None).into()
@@ -696,7 +696,7 @@ fn stage(
             "contentDigest": record.body["contentDigest"],
         }),
     )?;
-    crate::services::notifications::notify_approval(
+    crate::kernel::notice::notify_approval(
         tx,
         crate::ports::storage::ApprovalSource::Settings,
         &record.id,

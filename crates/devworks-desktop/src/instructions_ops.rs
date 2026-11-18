@@ -4,6 +4,7 @@
 //! anything the instruction service decides.
 use crate::{
     backend::{Backend, TaskOutput, screen_slot},
+    frame::{self, Negotiate},
     ops::{self, Failure},
 };
 
@@ -31,17 +32,20 @@ pub enum InstructionsSlot {
 screen_slot!(InstructionsSlot, Instructions);
 use devworks_core::{
     gateway::{CommandOutcome, QueryOutcome},
+    operations::{OperationInput as In, roles, skills},
     protocol::{
         DomainErrorCode,
         data::DataScope,
         provider::ArtifactRef,
-        records::{ApprovalState, InstructionRecord, SkillResource, SkillResourcePageResult},
+        records::{
+            ApprovalState, InstructionRecord, PageRequest, SkillResource, SkillResourcePageResult,
+        },
         results::OperationResult,
+        support::BoundedList,
     },
     services::instructions::{HARNESS_ROOT_ID, MAX_TEXT_BYTES, SHARED_ROOT_ID, role_item_id},
     settings::catalog::AgentRole,
 };
-use serde_json::{Value, json};
 use std::path::PathBuf;
 
 /// Rows one discovery or history page asks for.
@@ -272,12 +276,8 @@ pub fn role_title(role: AgentRole) -> &'static str {
 // ---------------------------------------------------------------------------------------------
 // Frames
 
-fn workspace() -> Value {
-    json!({"kind": "Workspace"})
-}
-/// The scope of a skill: one project's, or the workspace's (`None`).
-fn scope(project: Option<&str>) -> Value {
-    project.map_or_else(workspace, |p| json!({"kind": "Project", "projectId": p}))
+fn page(cursor: Option<&str>) -> Option<PageRequest> {
+    frame::page(u32::from(PAGE), cursor)
 }
 /// The project a record is scoped to (`None`: the workspace).
 pub fn record_project(record: &InstructionRecord) -> Option<String> {
@@ -286,60 +286,123 @@ pub fn record_project(record: &InstructionRecord) -> Option<String> {
         _ => None,
     }
 }
-fn page(cursor: Option<&str>) -> Value {
-    let mut p = json!({"limit": PAGE});
-    if let Some(c) = cursor {
-        p["cursor"] = json!(c);
-    }
-    p
-}
 /// A discovery page: the workspace's skills, or (`project`) that project's own with them.
-pub fn discover_body(project: Option<&str>, cursor: Option<&str>) -> Value {
-    json!({"scope": scope(project), "rootIds": [], "page": page(cursor)})
+pub fn discover(project: Option<&str>, cursor: Option<&str>) -> Option<In> {
+    Some(In::Skills(skills::Input::Discover(skills::DiscoverInput {
+        scope: frame::scope(project)?,
+        root_ids: BoundedList(Vec::new()),
+        page: page(cursor)?,
+    })))
 }
-pub fn read_body(id: &str, revision: Option<i64>) -> Value {
-    let mut body = json!({"instructionId": id});
-    if let Some(r) = revision {
-        body["revision"] = json!(r.to_string());
-    }
-    body
+pub fn read(kind: Kind, id: &str, revision: Option<i64>) -> Option<In> {
+    let instruction_id = frame::id(id)?;
+    let revision = frame::lift(revision.map(frame::number))?;
+    Some(match kind {
+        Kind::Skill => In::Skills(skills::Input::Read(skills::ReadInput {
+            instruction_id,
+            revision,
+        })),
+        Kind::Role => In::Roles(roles::Input::Read(roles::ReadInput {
+            instruction_id,
+            revision,
+        })),
+    })
 }
-pub fn history_body(id: &str, cursor: Option<&str>) -> Value {
-    json!({"instructionId": id, "page": page(cursor)})
+pub fn history(kind: Kind, id: &str, cursor: Option<&str>) -> Option<In> {
+    let (instruction_id, page) = (frame::id(id)?, page(cursor)?);
+    Some(match kind {
+        Kind::Skill => In::Skills(skills::Input::History(skills::HistoryInput {
+            instruction_id,
+            page,
+        })),
+        Kind::Role => In::Roles(roles::Input::History(roles::HistoryInput {
+            instruction_id,
+            page,
+        })),
+    })
 }
-pub fn resources_body(id: &str, revision: i64, cursor: Option<&str>) -> Value {
-    json!({"instructionId": id, "revision": revision.to_string(), "page": page(cursor)})
+pub fn read_resources(id: &str, revision: i64, cursor: Option<&str>) -> Option<In> {
+    Some(In::Skills(skills::Input::Resources(
+        skills::ResourcesInput {
+            instruction_id: frame::id(id)?,
+            revision: frame::number(revision)?,
+            page: page(cursor)?,
+        },
+    )))
 }
 /// A human draft. `target` is `(instructionId, latest revision)`; `None` creates a new
 /// harness skill named `name`, in `project`'s own store when one is given.
-pub fn draft_body(
+pub fn draft(
+    kind: Kind,
     project: Option<&str>,
     target: Option<(&str, i64)>,
     name: &str,
     content: &ArtifactRef,
-) -> Value {
-    let mut body = json!({"scope": scope(project), "name": name, "content": content});
-    if let Some((id, expected)) = target {
-        body["instructionId"] = json!(id);
-        body["expectedRevision"] = json!(expected.to_string());
-    }
-    body
+) -> Option<In> {
+    let (instruction_id, expected_revision) = match target {
+        Some((id, expected)) => (Some(frame::id(id)?), Some(frame::number(expected)?)),
+        None => (None, None),
+    };
+    let (name, content) = (frame::text(name)?, content.clone());
+    let scope = frame::scope(project)?;
+    Some(match kind {
+        Kind::Skill => In::Skills(skills::Input::Draft(skills::DraftInput {
+            scope,
+            instruction_id,
+            expected_revision,
+            name,
+            content,
+            rationale: None,
+            lesson_ids: None,
+        })),
+        Kind::Role => In::Roles(roles::Input::Draft(roles::DraftInput {
+            scope,
+            instruction_id,
+            expected_revision,
+            name,
+            content,
+            rationale: None,
+            lesson_ids: None,
+        })),
+    })
 }
-pub fn rollback_body(id: &str, expected: i64, target: i64) -> Value {
-    json!({"instructionId": id, "expectedRevision": expected.to_string(),
-        "targetRevision": target.to_string()})
+pub fn set_enabled(id: &str, expected: i64, enabled: bool) -> Option<In> {
+    Some(In::Skills(skills::Input::SetEnabled(
+        skills::SetEnabledInput {
+            instruction_id: frame::id(id)?,
+            expected_revision: frame::number(expected)?,
+            enabled,
+        },
+    )))
 }
-pub fn set_enabled_body(id: &str, expected: i64, enabled: bool) -> Value {
-    json!({"instructionId": id, "expectedRevision": expected.to_string(), "enabled": enabled})
+pub fn rollback(kind: Kind, id: &str, expected: i64, target: i64) -> Option<In> {
+    let instruction_id = frame::id(id)?;
+    let (expected_revision, target_revision) = (frame::number(expected)?, frame::number(target)?);
+    Some(match kind {
+        Kind::Skill => In::Skills(skills::Input::Rollback(skills::RollbackInput {
+            instruction_id,
+            expected_revision,
+            target_revision,
+            proposal_id: None,
+        })),
+        Kind::Role => In::Roles(roles::Input::Rollback(roles::RollbackInput {
+            instruction_id,
+            expected_revision,
+            target_revision,
+            proposal_id: None,
+        })),
+    })
 }
-pub fn query(b: &dyn Backend, operation: &str, body: Value) -> Vec<u8> {
-    ops::query_frame(b, operation, body)
+/// A request that did not convert (`None`) is sent as no bytes, which the gateway rejects like
+/// any malformed request. Every instruction operation is sent at its newest schema revision
+/// (`skills.resources` at 3 carries each resource's skill-relative path).
+pub fn query(b: &dyn Backend, input: impl Into<Option<In>>) -> Vec<u8> {
+    frame::build(b, Negotiate::Latest, input.into())
 }
-/// A history frame at schema revision 8, whose records say who made each revision, in which
-/// session, why, and the outcome of its approval.
-pub fn history_query(b: &dyn Backend, operation: &str, body: Value) -> Vec<u8> {
-    ops::at_revision(ops::query_frame(b, operation, body), 8)
+pub fn command(b: &dyn Backend, input: impl Into<Option<In>>) -> Vec<u8> {
+    frame::build(b, Negotiate::Latest, input.into())
 }
+
 /// Who made a revision and in which session, as a history row shows it (`None` when the
 /// reply carries no author, as at an earlier revision).
 pub fn made_by(record: &InstructionRecord) -> Option<String> {
@@ -378,18 +441,6 @@ pub fn approval_outcome(record: &InstructionRecord) -> Option<&'static str> {
         ApprovalState::Superseded => "approval superseded",
         ApprovalState::Expired => "approval expired",
     })
-}
-/// The `skills.resources` frame at schema revision 3, whose items carry each resource's
-/// skill-relative path beside its artifact.
-pub fn resources_query(b: &dyn Backend, body: Value) -> Vec<u8> {
-    ops::at_revision(ops::query_frame(b, "skills.resources", body), 3)
-}
-pub fn command(b: &dyn Backend, operation: &str, body: Value) -> Vec<u8> {
-    ops::command_frame(b, operation, body)
-}
-/// The `skills.set_enabled` frame, which begins at schema revision 8.
-pub fn set_enabled_command(b: &dyn Backend, body: Value) -> Vec<u8> {
-    ops::at_revision(ops::command_frame(b, "skills.set_enabled", body), 8)
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -516,6 +567,7 @@ pub fn prepare_save(b: &dyn Backend, title: &str, text: &str) -> Result<TaskOutp
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
 
     fn rec(revision: i64, approved: bool, labels: &[&str]) -> InstructionRecord {
         serde_json::from_value(json!({
@@ -527,27 +579,6 @@ mod tests {
             "approved": approved, "applicability": labels,
         }))
         .expect("record")
-    }
-
-    #[test]
-    fn a_history_row_says_who_made_it_and_how_its_approval_ended() {
-        let mut row = serde_json::to_value(rec(2, false, &["state:proposed"])).unwrap();
-        assert_eq!(made_by(&rec(2, false, &[])), None);
-        row["author"] = json!("agent-a");
-        row["sessionId"] = json!("session-a");
-        row["approvalOutcome"] = json!("Pending");
-        let row: InstructionRecord = serde_json::from_value(row).unwrap();
-        assert_eq!(
-            made_by(&row).unwrap(),
-            "Made by agent-a in session session-a"
-        );
-        assert_eq!(approval_outcome(&row), Some("approval pending"));
-        assert_eq!(learned_from(&row), None);
-        let mut row = serde_json::to_value(&row).unwrap();
-        row["lessonIds"] = json!(["claim-a", "claim-b"]);
-        let row: InstructionRecord = serde_json::from_value(row).unwrap();
-        assert_eq!(learned_from(&row).unwrap(), "From lessons claim-a, claim-b");
-        assert_eq!(approval_outcome(&rec(1, true, &[])), None);
     }
 
     #[test]
@@ -630,37 +661,74 @@ mod tests {
     }
 
     #[test]
+    fn a_history_row_says_who_made_it_and_how_its_approval_ended() {
+        let mut row = serde_json::to_value(rec(2, false, &["state:proposed"])).unwrap();
+        assert_eq!(made_by(&rec(2, false, &[])), None);
+        row["author"] = json!("agent-a");
+        row["sessionId"] = json!("session-a");
+        row["approvalOutcome"] = json!("Pending");
+        let row: InstructionRecord = serde_json::from_value(row).unwrap();
+        assert_eq!(
+            made_by(&row).unwrap(),
+            "Made by agent-a in session session-a"
+        );
+        assert_eq!(approval_outcome(&row), Some("approval pending"));
+        assert_eq!(learned_from(&row), None);
+        let mut row = serde_json::to_value(&row).unwrap();
+        row["lessonIds"] = json!(["claim-a", "claim-b"]);
+        let row: InstructionRecord = serde_json::from_value(row).unwrap();
+        assert_eq!(learned_from(&row).unwrap(), "From lessons claim-a, claim-b");
+        assert_eq!(approval_outcome(&rec(1, true, &[])), None);
+    }
+
+    #[test]
     fn bodies_use_camel_case_and_decimal_revisions() {
+        let body = |input: Option<In>| input.expect("a typed input").body().expect("a body");
         let content: ArtifactRef = rec(1, true, &[]).content;
-        let b = draft_body(None, Some(("skill-1", 7)), "lint", &content);
+        let b = body(draft(
+            Kind::Skill,
+            None,
+            Some(("skill-1", 7)),
+            "lint",
+            &content,
+        ));
         assert_eq!(b["instructionId"], "skill-1");
         assert_eq!(b["expectedRevision"], "7");
         assert_eq!(b["scope"]["kind"], "Workspace");
         assert_eq!(b["content"]["artifactId"], "art-1");
-        let new = draft_body(None, None, "fresh", &content);
-        let scoped = draft_body(Some("project-a"), None, "fresh", &content);
+        let new = body(draft(Kind::Role, None, None, "fresh", &content));
+        assert!(new.get("instructionId").is_none() && new.get("expectedRevision").is_none());
+        let scoped = body(draft(
+            Kind::Skill,
+            Some("project-a"),
+            None,
+            "fresh",
+            &content,
+        ));
         assert_eq!(
             scoped["scope"],
             json!({"kind": "Project", "projectId": "project-a"})
         );
-        assert!(new.get("instructionId").is_none() && new.get("expectedRevision").is_none());
-        let r = rollback_body("role-worker", 4, 1);
+        let r = body(rollback(Kind::Role, "role-worker", 4, 1));
         assert_eq!(r["expectedRevision"], "4");
         assert_eq!(r["targetRevision"], "1");
-        let d = discover_body(None, Some("c1"));
-        assert_eq!(d["scope"]["kind"], "Workspace");
-        assert_eq!(
-            discover_body(Some("project-a"), None)["scope"]["projectId"],
-            "project-a"
-        );
+        let d = body(discover(None, Some("c1")));
         assert_eq!(d["page"]["limit"], json!(PAGE));
         assert!(d["page"]["limit"].is_u64(), "page limit is a JSON integer");
         assert_eq!(d["page"]["cursor"], "c1");
         assert_eq!(d["rootIds"], json!([]));
-        assert_eq!(read_body("x", Some(2))["revision"], "2");
-        assert!(read_body("x", None).get("revision").is_none());
-        assert_eq!(resources_body("x", 3, None)["revision"], "3");
-        assert_eq!(history_body("x", None)["page"]["limit"], json!(PAGE));
+        assert_eq!(d["scope"]["kind"], "Workspace");
+        assert_eq!(
+            body(discover(Some("project-a"), None))["scope"]["projectId"],
+            "project-a"
+        );
+        assert_eq!(body(read(Kind::Skill, "x", Some(2)))["revision"], "2");
+        assert!(body(read(Kind::Role, "x", None)).get("revision").is_none());
+        assert_eq!(body(read_resources("x", 3, None))["revision"], "3");
+        assert_eq!(
+            body(history(Kind::Skill, "x", None))["page"]["limit"],
+            json!(PAGE)
+        );
     }
 
     #[test]

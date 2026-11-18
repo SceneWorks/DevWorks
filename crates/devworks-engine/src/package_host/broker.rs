@@ -511,7 +511,7 @@ fn application(
     );
     match ended {
         Ended::Failed(error, state, detail) => {
-            let _ = run_write(&*host.store, WriteOptions::default(), {
+            let _ = run_write(&*host.store, WriteOptions::observed(), {
                 let operation = operation.clone();
                 move |tx| settle(tx, &operation, state, json!({"failed": detail}))
             });
@@ -648,7 +648,7 @@ pub(super) fn journal(
         slot.contribution_id.clone(),
     );
     let (slot, invocation_id) = (slot.clone(), slot.invocation_id.clone());
-    let written = run_write(&*host.store, WriteOptions::default(), move |tx| {
+    let written = run_write(&*host.store, WriteOptions::observed(), move |tx| {
         // Serialized with revocation: a cancelled invocation journals nothing new.
         let _guard = slot.state.lock().unwrap_or_else(|p| p.into_inner());
         if slot.revoked.load(std::sync::atomic::Ordering::SeqCst) {
@@ -790,7 +790,7 @@ pub(super) fn publish(
         .project_id()
         .cloned()
         .map_or(ArtifactScope::Workspace, ArtifactScope::Project);
-    let committed = run_write(&*host.store, WriteOptions::default(), move |tx| {
+    let committed = run_write(&*host.store, WriteOptions::observed(), move |tx| {
         let version = artifacts_w.commit_host_bytes_in_scope(
             tx,
             &staged_w,

@@ -1,19 +1,14 @@
 //! Decision inbox references, immutable human review evidence and the private resume outbox.
 use super::conn::db;
 use super::repos::{Snapshot, Unit, parse_principal, principal_name};
+use super::support::{conflict_strict, corrupt, id_of, invalid, page_limit};
 use devworks_core::context::PrincipalKind;
 use devworks_core::ports::storage::*;
-use devworks_core::protocol::{ActorId, Id, ProjectId, Revision, RevisionDimension, RootId};
+use devworks_core::protocol::{ActorId, Id, ProjectId, RevisionDimension, RootId};
 use rusqlite::types::Value as Sql;
 use rusqlite::{Connection, OptionalExtension, Row, params, params_from_iter};
 use serde_json::{Map, Value};
 
-fn invalid(s: &str) -> StorageError {
-    StorageError::InvalidRecord(s.into())
-}
-fn corrupt(s: &str) -> StorageError {
-    StorageError::unavailable(Unavailable::Corrupt, s)
-}
 fn text(v: &Value, k: &str) -> Result<String, StorageError> {
     v.get(k)
         .and_then(Value::as_str)
@@ -39,14 +34,11 @@ fn optional_num(v: &Value, k: &str) -> Result<Option<i64>, StorageError> {
         num(v, k).map(Some)
     }
 }
-fn id(v: String) -> Result<Id, StorageError> {
-    Id::new(v).map_err(|_| corrupt("invalid stored decision identifier"))
-}
 fn field_id(v: &Value, k: &str) -> Result<Id, StorageError> {
-    id(text(v, k)?)
+    id_of(text(v, k)?)
 }
 fn optional_id(v: &Value, k: &str) -> Result<Option<Id>, StorageError> {
-    optional_text(v, k)?.map(id).transpose()
+    optional_text(v, k)?.map(id_of).transpose()
 }
 fn json(v: &Value, k: &str) -> Result<Value, StorageError> {
     serde_json::from_str(&text(v, k)?).map_err(|_| corrupt("invalid stored decision JSON"))
@@ -87,13 +79,6 @@ fn rows<P: rusqlite::Params, T>(
         .map(decode)
         .collect()
 }
-fn limit(n: u16) -> Result<i64, StorageError> {
-    if n == 0 || n > MAX_PAGE {
-        Err(invalid("decision page limit must be 1..=MAX_PAGE"))
-    } else {
-        Ok(i64::from(n))
-    }
-}
 fn bounded(s: &str, max: usize, empty: bool) -> Result<(), StorageError> {
     let count = s.chars().count();
     if count > max || s.contains('\0') || (!empty && count == 0) {
@@ -119,20 +104,6 @@ fn encoded(v: &Value, max: usize, object: bool) -> Result<String, StorageError> 
         return Err(invalid("decision JSON exceeds size bound"));
     }
     Ok(value)
-}
-fn revision(
-    kind: &'static str,
-    id: Id,
-    expected: i64,
-    current: i64,
-) -> Result<StorageError, StorageError> {
-    Ok(StorageError::conflict(
-        RevisionDimension::Review,
-        kind,
-        id,
-        Revision::new(expected).map_err(|_| invalid("expected revision is positive"))?,
-        Revision::new(current).map_err(|_| corrupt("stored revision is positive"))?,
-    ))
 }
 fn scope(v: &Value) -> Result<ConfigScope, StorageError> {
     ConfigScope::from_key(&text(v, "scope_key")?).ok_or_else(|| corrupt("invalid decision scope"))
@@ -278,7 +249,7 @@ fn source_list(
     after: Option<&ApprovalSourcePosition>,
     n: u16,
 ) -> Result<Vec<ApprovalSourceRef>, StorageError> {
-    let n = limit(n)?;
+    let n = page_limit(n)?;
     if f.state
         .as_deref()
         .is_some_and(|s| !PROPOSAL_STATES.contains(&s))
@@ -304,7 +275,7 @@ fn notification_list(
     after: Option<&NotificationPosition>,
     n: u16,
 ) -> Result<Vec<StoredNotification>, StorageError> {
-    let n = limit(n)?;
+    let n = page_limit(n)?;
     if f.categories.len() > 128 {
         return Err(invalid("too many notification categories"));
     }
@@ -348,13 +319,13 @@ macro_rules! decision_reads {($t:ty)=>{impl DecisionRead for $t{
     fn notification_users(&self)->Result<Vec<ActorId>,StorageError>{
         let mut statement=db(self.conn.prepare_cached("SELECT a.id FROM notification_audience n JOIN actors a ON a.id=n.user_id WHERE n.singleton=1 AND a.kind='human'"))?;
         let values=db(db(statement.query_map([],|r|r.get::<_,String>(0)))?.collect::<rusqlite::Result<Vec<_>>>())?;
-        values.into_iter().map(|v|id(v).map(ActorId)).collect()
+        values.into_iter().map(|v|id_of(v).map(ActorId)).collect()
     }
     fn list_approval_sources(&self,f:&ApprovalSourceFilter,a:Option<&ApprovalSourcePosition>,n:u16)->Result<Vec<ApprovalSourceRef>,StorageError>{source_list(self.conn,f,a,n)}
     fn approval(&self,id:&Id)->Result<Option<StoredApproval>,StorageError>{one_approval(self.conn,id)}
     fn human_decision(&self,s:ApprovalSource,id:&Id)->Result<Option<StoredHumanDecision>,StorageError>{Ok(rows(self.conn,"SELECT * FROM human_decisions WHERE source=?1 AND proposal_id=?2",params![s.as_str(),id.as_str()],audit)?.into_iter().next())}
     fn approval_resume(&self,id:&Id)->Result<Option<StoredApprovalResume>,StorageError>{one_resume(self.conn,id)}
-    fn pending_approval_resumes(&self,after:Option<&Id>,n:u16)->Result<Vec<StoredApprovalResume>,StorageError>{rows(self.conn,"SELECT * FROM approval_resumes WHERE state IN ('Pending','Unknown') AND approval_id>?1 ORDER BY approval_id LIMIT ?2",params![after.map_or("",Id::as_str),limit(n)?],resume)}
+    fn pending_approval_resumes(&self,after:Option<&Id>,n:u16)->Result<Vec<StoredApprovalResume>,StorageError>{rows(self.conn,"SELECT * FROM approval_resumes WHERE state IN ('Pending','Unknown') AND approval_id>?1 ORDER BY approval_id LIMIT ?2",params![after.map_or("",Id::as_str),page_limit(n)?],resume)}
     fn notification(&self,user:&ActorId,id:&Id)->Result<Option<StoredNotification>,StorageError>{one_notification(self.conn,user,id)}
     fn notification_by_source(&self,user:&ActorId,source:&str)->Result<Option<StoredNotification>,StorageError>{Ok(rows(self.conn,"SELECT * FROM notifications WHERE user_id=?1 AND source_id=?2",params![user.0.as_str(),source],notification)?.into_iter().next())}
     fn notifications(&self,f:&NotificationFilter,a:Option<&NotificationPosition>,n:u16)->Result<Vec<StoredNotification>,StorageError>{notification_list(self.conn,f,a,n)}
@@ -455,7 +426,13 @@ impl DecisionRepository for Unit<'_> {
             }
             (Some(e), Some(old)) => {
                 if old.revision != e {
-                    return Err(revision("approval", a.id.clone(), e, old.revision)?);
+                    return Err(conflict_strict(
+                        RevisionDimension::Review,
+                        "approval",
+                        a.id.as_str(),
+                        e,
+                        old.revision,
+                    ));
                 }
                 let mut content = a.clone();
                 content.revision = old.revision;
@@ -626,12 +603,13 @@ impl DecisionRepository for Unit<'_> {
             }
             (Some(e), Some(old)) => {
                 if old.revision != e {
-                    return Err(revision(
+                    return Err(conflict_strict(
+                        RevisionDimension::Review,
                         "approval_resume",
-                        r.approval_id.clone(),
+                        r.approval_id.as_str(),
                         e,
                         old.revision,
-                    )?);
+                    ));
                 }
                 let mut content = r.clone();
                 content.revision = old.revision;
@@ -715,7 +693,13 @@ impl DecisionRepository for Unit<'_> {
             }
             (Some(e), Some(old)) => {
                 if old.revision != e {
-                    return Err(revision("notification", n.id.clone(), e, old.revision)?);
+                    return Err(conflict_strict(
+                        RevisionDimension::Review,
+                        "notification",
+                        n.id.as_str(),
+                        e,
+                        old.revision,
+                    ));
                 }
                 let mut content = n.clone();
                 content.revision = old.revision;

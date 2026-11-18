@@ -5,22 +5,14 @@
 use super::agent_messages;
 use super::conn::db;
 use super::repos::{Snapshot, Unit};
+use super::support::{conflict, corrupt, id_of, invalid, page_limit};
 use devworks_core::ports::storage::*;
 use devworks_core::protocol::{
-    ActorId, AssignmentId, Id, OperationId, ProjectId, Revision, RevisionDimension, RootId,
+    ActorId, AssignmentId, Id, OperationId, ProjectId, RevisionDimension, RootId,
 };
 use rusqlite::{Connection, OptionalExtension, Row, params};
 use serde_json::Value;
 
-fn invalid(m: impl Into<String>) -> StorageError {
-    StorageError::InvalidRecord(m.into())
-}
-fn corrupt(m: impl Into<String>) -> StorageError {
-    StorageError::unavailable(Unavailable::Corrupt, m)
-}
-fn id_of(s: String) -> Result<Id, StorageError> {
-    Id::new(s).map_err(|e| corrupt(format!("stored identifier: {e}")))
-}
 fn opt_id(s: Option<String>) -> Result<Option<Id>, StorageError> {
     s.map(id_of).transpose()
 }
@@ -29,27 +21,6 @@ fn json_of(s: &str) -> Result<Value, StorageError> {
 }
 fn text(v: &Value) -> String {
     v.to_string()
-}
-fn limit(l: u16) -> Result<i64, StorageError> {
-    if l == 0 || l > MAX_PAGE {
-        return Err(invalid(format!("limit must be 1..={MAX_PAGE}")));
-    }
-    Ok(i64::from(l))
-}
-fn rev(n: i64) -> Result<Revision, StorageError> {
-    Revision::new(n.max(1)).map_err(|_| invalid("revision out of range"))
-}
-fn conflict(
-    dimension: RevisionDimension,
-    kind: &'static str,
-    id: &Id,
-    expected: i64,
-    current: i64,
-) -> StorageError {
-    match (rev(expected), rev(current)) {
-        (Ok(e), Ok(c)) => StorageError::conflict(dimension, kind, id.clone(), e, c),
-        _ => invalid("revision out of range"),
-    }
 }
 fn duplicate(kind: &'static str, id: &str) -> StorageError {
     StorageError::Duplicate {
@@ -708,7 +679,7 @@ macro_rules! run_reads {
                 after: Option<&RootId>,
                 n: u16,
             ) -> Result<Vec<StoredRootControl>, StorageError> {
-                let n = limit(n)?;
+                let n = page_limit(n)?;
                 controls(
                     self.conn,
                     "stop_operation_id IS NOT NULL AND root_id>?1 AND EXISTS(SELECT 1 FROM operations o WHERE o.id=stop_operation_id AND o.state NOT IN ('ObservedComplete','Failed','CancelledBeforeDispatch')) ORDER BY root_id LIMIT ?2",
@@ -738,7 +709,7 @@ macro_rules! run_reads {
                 after: Option<&Id>,
                 n: u16,
             ) -> Result<Vec<StoredActivation>, StorageError> {
-                let n = limit(n)?;
+                let n = page_limit(n)?;
                 let after = after.map_or("", Id::as_str);
                 match filter {
                     // Newest first: `after` is the generation-ordered keyset by ID only when
@@ -774,7 +745,7 @@ macro_rules! run_reads {
                 after: Option<&Id>,
                 n: u16,
             ) -> Result<Vec<StoredBlocker>, StorageError> {
-                let n = limit(n)?;
+                let n = page_limit(n)?;
                 let after = after.map_or("", Id::as_str);
                 let (cond, subject) = match filter {
                     BlockerFilter::Root(r) => ("root_id=?1", r.0.as_str()),
@@ -822,7 +793,7 @@ macro_rules! run_reads {
                 after: Option<&AssignmentId>,
                 n: u16,
             ) -> Result<Vec<StoredAssignment>, StorageError> {
-                let n = limit(n)?;
+                let n = page_limit(n)?;
                 let live = if live_only { LIVE_ASSIGNMENT } else { "1=1" };
                 assignments(
                     self.conn,
@@ -841,7 +812,7 @@ macro_rules! run_reads {
                 after_seq: i64,
                 n: u16,
             ) -> Result<Vec<StoredInstruction>, StorageError> {
-                let n = limit(n)?;
+                let n = page_limit(n)?;
                 instructions(
                     self.conn,
                     "root_id=?1 AND seq>?2 ORDER BY seq LIMIT ?3",
@@ -858,7 +829,7 @@ macro_rules! run_reads {
                 boot: &Id,
                 n: u16,
             ) -> Result<Vec<StoredTurn>, StorageError> {
-                let n = limit(n)?;
+                let n = page_limit(n)?;
                 turns(
                     self.conn,
                     "boot_id<>?1 ORDER BY session_id LIMIT ?2",
@@ -947,7 +918,7 @@ macro_rules! run_reads {
                 after: Option<&RootId>,
                 n: u16,
             ) -> Result<Vec<RootId>, StorageError> {
-                let n = limit(n)?;
+                let n = page_limit(n)?;
                 Ok(ids(
                     self.conn,
                     "SELECT id FROM work_items WHERE project_id=?1 AND (kind='feature' OR parent_feature_id IS NULL OR EXISTS(SELECT 1 FROM root_controls rc WHERE rc.root_id=work_items.id)) AND id>?2 ORDER BY id LIMIT ?3",
@@ -963,7 +934,7 @@ macro_rules! run_reads {
                 after: Option<&Id>,
                 n: u16,
             ) -> Result<Vec<Id>, StorageError> {
-                let n = limit(n)?;
+                let n = page_limit(n)?;
                 ids(
                     self.conn,
                     "SELECT id FROM queue_entries WHERE root_id=?1 AND state IN ('Ready','Claimed','Reconciling','Failed') AND id>?2 ORDER BY id LIMIT ?3",
@@ -980,7 +951,7 @@ macro_rules! run_reads {
                     self.conn,
                     op,
                     after.map_or("", |r| r.0.as_str()),
-                    limit(n)?,
+                    page_limit(n)?,
                 )
             }
         }
@@ -1109,7 +1080,7 @@ impl RunRepository for Unit<'_> {
             return Err(conflict(
                 RevisionDimension::Control,
                 "root_control",
-                &c.root_id.0,
+                c.root_id.0.as_str(),
                 expected,
                 current.revision,
             ));
@@ -1169,7 +1140,7 @@ impl RunRepository for Unit<'_> {
             return Err(conflict(
                 RevisionDimension::Control,
                 "activation",
-                &a.id,
+                a.id.as_str(),
                 expected,
                 current.revision,
             ));
@@ -1236,7 +1207,7 @@ impl RunRepository for Unit<'_> {
             return Err(conflict(
                 RevisionDimension::Blocker,
                 "blocker",
-                &b.id,
+                b.id.as_str(),
                 expected,
                 current.revision,
             ));
@@ -1318,7 +1289,7 @@ impl RunRepository for Unit<'_> {
             return Err(conflict(
                 RevisionDimension::Work,
                 "assignment",
-                &a.id.0,
+                a.id.0.as_str(),
                 expected,
                 current.revision,
             ));
@@ -1417,7 +1388,7 @@ impl RunRepository for Unit<'_> {
             return Err(conflict(
                 RevisionDimension::Control,
                 "instruction",
-                &i.id,
+                i.id.as_str(),
                 expected,
                 current.revision,
             ));

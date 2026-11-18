@@ -8,7 +8,7 @@ use super::{
 use crate::ports::storage::*;
 use crate::protocol::data::Direction;
 use crate::services::indexing::views::ViewLayers;
-use crate::services::sessions::Failure;
+use crate::services::kernel::Failure;
 use std::collections::BTreeMap;
 
 const READ_PAGE: u16 = 128;

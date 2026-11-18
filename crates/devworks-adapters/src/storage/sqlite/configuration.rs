@@ -2,22 +2,14 @@
 //! revision chain per scope and namespace) and `configuration_proposals` (migration 4).
 use super::conn::db;
 use super::repos::{Snapshot, Unit};
+use super::support::{conflict, corrupt, id_of, invalid, page_limit};
 use devworks_core::ports::storage::*;
 use devworks_core::protocol::{ActorId, Id, Revision, RevisionDimension};
 use rusqlite::{Connection, OptionalExtension, Row, params};
 use serde_json::Value;
 
-fn invalid(m: impl Into<String>) -> StorageError {
-    StorageError::InvalidRecord(m.into())
-}
-fn corrupt(m: impl Into<String>) -> StorageError {
-    StorageError::unavailable(Unavailable::Corrupt, m)
-}
 fn json_of(s: &str) -> Result<Value, StorageError> {
     serde_json::from_str(s).map_err(|e| corrupt(format!("stored configuration JSON: {e}")))
-}
-fn id_of(s: String) -> Result<Id, StorageError> {
-    Id::new(s).map_err(|e| corrupt(format!("stored identifier: {e}")))
 }
 fn scope_of(key: &str) -> Result<ConfigScope, StorageError> {
     ConfigScope::from_key(key).ok_or_else(|| corrupt(format!("stored scope key {key}")))
@@ -27,12 +19,6 @@ fn namespace_ok(ns: &str) -> Result<(), StorageError> {
         return Err(invalid("configuration namespace must be 1..=128 bytes"));
     }
     Ok(())
-}
-fn limit(l: u16) -> Result<i64, StorageError> {
-    if l == 0 || l > MAX_PAGE {
-        return Err(invalid(format!("limit must be 1..={MAX_PAGE}")));
-    }
-    Ok(i64::from(l))
 }
 fn rev(v: i64) -> Result<Revision, StorageError> {
     Revision::new(v).map_err(|_| invalid("revision must be positive"))
@@ -123,7 +109,7 @@ fn history(
     before: Option<i64>,
     max: u16,
 ) -> Result<Vec<ConfigRevision>, StorageError> {
-    let n = limit(max)?;
+    let n = page_limit(max)?;
     let mut stmt = db(conn.prepare_cached(&format!(
         "SELECT {REVISION_COLUMNS} FROM configuration_revisions r WHERE r.scope_key=?1 AND r.namespace=?2 AND r.revision<?3 ORDER BY r.revision DESC LIMIT ?4"
     )))?;
@@ -199,7 +185,7 @@ fn proposals(
     after: Option<&Id>,
     max: u16,
 ) -> Result<Vec<ProposalRecord>, StorageError> {
-    let n = limit(max)?;
+    let n = page_limit(max)?;
     let mut stmt = db(conn.prepare_cached(&format!(
         "SELECT {PROPOSAL_COLUMNS} FROM configuration_proposals WHERE scope_key=?1 AND namespace=?2 AND (?3 IS NULL OR state=?3) AND id>?4 ORDER BY id LIMIT ?5"
     )))?;
@@ -443,12 +429,12 @@ impl ConfigurationRepository for Unit<'_> {
         require_scope(self.conn, scope)?;
         let now = current(self.conn, scope, ns)?.map_or(1, |r| r.revision);
         if now != expected {
-            return Err(StorageError::conflict(
+            return Err(conflict(
                 RevisionDimension::Configuration,
                 "configuration_scope",
-                scope.target_id(),
-                rev(expected)?,
-                rev(now)?,
+                scope.target_id().as_str(),
+                expected,
+                now,
             ));
         }
         let next = now
@@ -513,12 +499,12 @@ impl ConfigurationRepository for Unit<'_> {
             id: id.as_str().to_owned(),
         })?;
         if p.revision != expected_revision {
-            return Err(StorageError::conflict(
+            return Err(conflict(
                 RevisionDimension::Configuration,
                 "configuration_proposal",
-                id.clone(),
-                rev(expected_revision)?,
-                rev(p.revision)?,
+                id.as_str(),
+                expected_revision,
+                p.revision,
             ));
         }
         if p.state != ProposalState::Pending {

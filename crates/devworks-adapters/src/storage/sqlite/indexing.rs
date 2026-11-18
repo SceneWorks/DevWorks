@@ -9,32 +9,15 @@
 //! only from the revision the publisher read.
 use super::conn::db;
 use super::repos::{Snapshot, Unit};
+use super::support::{conflict, corrupt, id_of, invalid, page_limit};
 use devworks_core::fingerprint::sha256_hex;
 use devworks_core::ports::storage::*;
-use devworks_core::protocol::{ActorId, Id, ProjectId, Revision, RevisionDimension};
+use devworks_core::protocol::{ActorId, Id, ProjectId, RevisionDimension};
 use rusqlite::{Connection, OptionalExtension, Row, params};
 use serde_json::{Value, json};
 
-fn invalid(m: impl Into<String>) -> StorageError {
-    StorageError::InvalidRecord(m.into())
-}
-fn corrupt(m: impl Into<String>) -> StorageError {
-    StorageError::unavailable(Unavailable::Corrupt, m)
-}
-fn id_of(s: String) -> Result<Id, StorageError> {
-    Id::new(s).map_err(|e| corrupt(format!("stored identifier: {e}")))
-}
 fn opt_id(s: Option<String>) -> Result<Option<Id>, StorageError> {
     s.map(id_of).transpose()
-}
-fn limit(l: u16) -> Result<i64, StorageError> {
-    if l == 0 || l > MAX_PAGE {
-        return Err(invalid(format!("limit must be 1..={MAX_PAGE}")));
-    }
-    Ok(i64::from(l))
-}
-fn rev(n: i64) -> Result<Revision, StorageError> {
-    Revision::new(n.max(1)).map_err(|_| invalid("revision is not positive"))
 }
 fn parse(json: &str) -> Result<Value, StorageError> {
     serde_json::from_str(json).map_err(|e| corrupt(format!("stored JSON: {e}")))
@@ -54,7 +37,7 @@ fn strings(v: &Value, key: &str) -> Vec<String> {
 }
 fn oid_ok(o: &Option<String>) -> bool {
     o.as_deref()
-        .is_none_or(devworks_core::services::indexing::git::oid_ok)
+        .is_none_or(devworks_core::services::git::client::oid_ok)
 }
 fn repository_exists(conn: &Connection, id: &Id) -> Result<bool, StorageError> {
     db(db(conn.prepare_cached("SELECT 1 FROM repositories WHERE id=?1"))?.exists([id.as_str()]))
@@ -554,7 +537,7 @@ macro_rules! index_reads {
                 after: Option<&RunPosition>,
                 n: u16,
             ) -> Result<Vec<StoredIndexRun>, StorageError> {
-                let n = limit(n)?;
+                let n = page_limit(n)?;
                 let mut sql = format!("SELECT {RUN_COLUMNS} FROM index_runs WHERE 1=1");
                 let mut values: Vec<rusqlite::types::Value> = Vec::new();
                 if let Some(r) = &filter.repository {
@@ -652,7 +635,7 @@ macro_rules! index_reads {
                 now_ms: i64,
                 n: u16,
             ) -> Result<Vec<StoredIndexRun>, StorageError> {
-                let n = limit(n)?;
+                let n = page_limit(n)?;
                 let mut s = db(self.conn.prepare_cached(&format!(
                     "SELECT {RUN_COLUMNS} FROM index_runs r WHERE ((state='Queued' AND next_attempt_at<=?1) OR (state='Running' AND lease_until<?1)) AND NOT EXISTS (SELECT 1 FROM index_runs b WHERE b.repository_id=r.repository_id AND b.state='Running' AND b.lease_until>=?1) ORDER BY created_at, id LIMIT ?2"
                 )))?;
@@ -661,7 +644,7 @@ macro_rules! index_reads {
                 rows.into_iter().map(run_from).collect()
             }
             fn running_runs(&self, n: u16) -> Result<Vec<StoredIndexRun>, StorageError> {
-                let n = limit(n)?;
+                let n = page_limit(n)?;
                 let mut s = db(self.conn.prepare_cached(&format!(
                     "SELECT {RUN_COLUMNS} FROM index_runs WHERE state='Running' ORDER BY id LIMIT ?1"
                 )))?;
@@ -699,7 +682,7 @@ macro_rules! index_reads {
                 state: &str,
                 n: u16,
             ) -> Result<Vec<StoredGeneration>, StorageError> {
-                let n = limit(n)?;
+                let n = page_limit(n)?;
                 let mut s = db(self.conn.prepare_cached(&format!(
                     "SELECT {GEN_COLUMNS} FROM index_generations WHERE state=?1 ORDER BY id LIMIT ?2"
                 )))?;
@@ -713,7 +696,7 @@ macro_rules! index_reads {
                 after: Option<&str>,
                 n: u16,
             ) -> Result<Vec<StoredUnit>, StorageError> {
-                let n = limit(n)?;
+                let n = page_limit(n)?;
                 let mut s = db(self.conn.prepare_cached(
                     "SELECT generation_id,unit_key,content_digest,action,payload_json FROM source_units WHERE generation_id=?1 AND unit_key>?2 ORDER BY unit_key LIMIT ?3",
                 ))?;
@@ -767,7 +750,7 @@ macro_rules! index_reads {
                 name: &str,
                 n: u16,
             ) -> Result<Vec<StoredNode>, StorageError> {
-                let n = limit(n)?;
+                let n = page_limit(n)?;
                 let mut s = db(self.conn.prepare_cached(
                     "SELECT unit_key,node_id,kind,name,payload_json FROM graph_nodes WHERE generation_id=?1 AND name=?2 ORDER BY unit_key,node_id LIMIT ?3",
                 ))?;
@@ -781,7 +764,7 @@ macro_rules! index_reads {
                 qualified_name: &str,
                 n: u16,
             ) -> Result<Vec<StoredNode>, StorageError> {
-                let n = limit(n)?;
+                let n = page_limit(n)?;
                 let mut s = db(self.conn.prepare_cached(
                     "SELECT unit_key,node_id,kind,name,payload_json FROM graph_nodes WHERE generation_id=?1 AND json_extract(payload_json, '$.qualifiedName')=?2 ORDER BY unit_key,node_id LIMIT ?3",
                 ))?;
@@ -796,7 +779,7 @@ macro_rules! index_reads {
                 after: Option<(&str, &str)>,
                 n: u16,
             ) -> Result<Vec<StoredNode>, StorageError> {
-                let n = limit(n)?;
+                let n = page_limit(n)?;
                 let (unit, node) = after.unwrap_or(("", ""));
                 let mut s = db(self.conn.prepare_cached(
                     "SELECT unit_key,node_id,kind,name,payload_json FROM graph_nodes WHERE generation_id=?1 AND json_extract(payload_json, '$.qualifiedName')=?2 AND (unit_key,node_id)>(?3,?4) ORDER BY unit_key,node_id LIMIT ?5",
@@ -882,7 +865,7 @@ macro_rules! index_reads {
                 now_ms: i64,
                 n: u16,
             ) -> Result<Vec<StoredOverlay>, StorageError> {
-                let n = limit(n)?;
+                let n = page_limit(n)?;
                 let mut s = db(self.conn.prepare_cached(&format!(
                     "SELECT {OVERLAY_COLUMNS} FROM index_overlays WHERE state NOT IN ('Expired','Unavailable') AND expires_at<=?1 ORDER BY expires_at, id LIMIT ?2"
                 )))?;
@@ -896,7 +879,7 @@ macro_rules! index_reads {
                 keep: u32,
                 n: u16,
             ) -> Result<Vec<StoredOverlay>, StorageError> {
-                let n = limit(n)?;
+                let n = page_limit(n)?;
                 let mut s = db(self.conn.prepare_cached(&format!(
                     "SELECT {OVERLAY_COLUMNS} FROM (SELECT *, ROW_NUMBER() OVER (PARTITION BY repository_id ORDER BY updated_at DESC, id DESC) AS rank FROM index_overlays WHERE worktree_id IS NULL AND state IN ('Expired','Unavailable','Failed')) AS ended WHERE rank>?2 AND updated_at<=?1 AND view_id IS NULL AND NOT EXISTS (SELECT 1 FROM index_runs r WHERE r.overlay_id=ended.id AND r.state IN ('Queued','Running')) ORDER BY updated_at, id LIMIT ?3"
                 )))?;
@@ -939,12 +922,12 @@ impl IndexRepository for Unit<'_> {
                 || Id::new(WORKSPACE_SCOPE_KEY).expect("valid"),
                 |p| p.0.clone(),
             );
-            return Err(StorageError::conflict(
+            return Err(conflict(
                 RevisionDimension::Configuration,
                 "index_source_config",
-                target,
-                rev(expected)?,
-                rev(current)?,
+                target.as_str(),
+                expected,
+                current,
             ));
         }
         if c.revision != expected + 1 {
@@ -1070,12 +1053,12 @@ impl IndexRepository for Unit<'_> {
             });
         };
         if current.revision != expected {
-            return Err(StorageError::conflict(
+            return Err(conflict(
                 RevisionDimension::Operation,
                 "index_run",
-                run.id.clone(),
-                rev(expected)?,
-                rev(current.revision)?,
+                run.id.as_str(),
+                expected,
+                current.revision,
             ));
         }
         if run_terminal(&current.state) {
@@ -1480,12 +1463,12 @@ impl IndexRepository for Unit<'_> {
         }
         let current = self.published(repository)?.map_or(0, |p| p.revision);
         if current != expected {
-            return Err(StorageError::conflict(
+            return Err(conflict(
                 RevisionDimension::Source,
                 "published_view",
-                repository.clone(),
-                rev(expected.max(1))?,
-                rev(current.max(1))?,
+                repository.as_str(),
+                expected.max(1),
+                current.max(1),
             ));
         }
         let next = expected + 1;
@@ -1529,12 +1512,12 @@ impl IndexRepository for Unit<'_> {
             });
         };
         if current.revision != expected {
-            return Err(StorageError::conflict(
+            return Err(conflict(
                 RevisionDimension::Source,
                 "index_overlay",
-                overlay.clone(),
-                rev(expected)?,
-                rev(current.revision)?,
+                overlay.as_str(),
+                expected,
+                current.revision,
             ));
         }
         if current.worktree_id.is_some()
@@ -1594,12 +1577,12 @@ impl IndexRepository for Unit<'_> {
             }
             (Some(e), Some(c)) => {
                 if c.revision != e {
-                    return Err(StorageError::conflict(
+                    return Err(conflict(
                         RevisionDimension::Source,
                         "index_overlay",
-                        o.id.clone(),
-                        rev(e)?,
-                        rev(c.revision)?,
+                        o.id.as_str(),
+                        e,
+                        c.revision,
                     ));
                 }
                 if o.revision != e + 1

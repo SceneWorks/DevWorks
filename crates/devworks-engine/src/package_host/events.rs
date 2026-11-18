@@ -510,7 +510,7 @@ fn stage_input(
         delivery.as_str().to_owned(),
     );
     let provenance = json!({"kind": "PackageEvent", "deliveryId": delivery});
-    let committed = run_write(&*host.store, WriteOptions::default(), move |tx| {
+    let committed = run_write(&*host.store, WriteOptions::observed(), move |tx| {
         let version = service.commit_host_bytes_in_scope(
             tx,
             &pending,

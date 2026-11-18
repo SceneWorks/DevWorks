@@ -27,7 +27,6 @@
 //! owner, so cancellation kills its tree; parsing polls the stop signal and has a per-file
 //! budget.
 use super::config::{EXTRACTOR_VERSION, EffectiveConfig, dependency_directory};
-use super::git::{Change, Git, GitFault, TreeEntry};
 use super::linking::{CallTarget, SwiftImport, SwiftModule, SwiftScopes, call_target_allowed};
 use super::paths::{edge_id, fold, node_id, parent, symbol_id};
 use super::{IndexEnv, RUN_AGGREGATE, digest, effective_config, history};
@@ -40,6 +39,7 @@ use crate::ports::indexing::{
 use crate::ports::storage::*;
 use crate::protocol::Id;
 use crate::protocol::records::{DiagnosticErrorClass, DiagnosticOutcome, Severity};
+use crate::services::git::client::{Change, Git, GitFault, TreeEntry};
 use serde_json::{Map, Value, json};
 use std::cell::Cell;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
@@ -868,7 +868,7 @@ impl IndexWorker {
     /// now instead of after its lease, so it resumes from its checkpoint. Returns how many.
     pub fn recover(&self) -> Result<usize, StorageError> {
         let owner = self.owner.clone();
-        run_write(&*self.env.store, WriteOptions::default(), move |tx| {
+        run_write(&*self.env.store, WriteOptions::recovery(), move |tx| {
             let mut n = 0;
             for mut r in tx.indexing().running_runs(MAX_PAGE)? {
                 if r.owner.as_deref() == Some(owner.as_str()) {
@@ -926,7 +926,7 @@ impl IndexWorker {
             .keys()
             .cloned()
             .collect();
-        let claimed = run_write(&*self.env.store, WriteOptions::default(), move |tx| {
+        let claimed = run_write(&*self.env.store, WriteOptions::host_state(), move |tx| {
             let now = tx.now_ms();
             let busy: BTreeSet<String> = tx
                 .indexing()
@@ -1080,7 +1080,7 @@ impl IndexWorker {
             if stop() {
                 return Ok(report);
             }
-            let removed = run_write(&*self.env.store, WriteOptions::default(), move |tx| {
+            let removed = run_write(&*self.env.store, WriteOptions::housekeeping(), move |tx| {
                 let Some(current) = tx.graph().graph_pin(&pin.id)? else {
                     return Ok(false);
                 };
@@ -1103,7 +1103,7 @@ impl IndexWorker {
             if stop() {
                 return Ok(report);
             }
-            let removed = run_write(&*self.env.store, WriteOptions::default(), move |tx| {
+            let removed = run_write(&*self.env.store, WriteOptions::housekeeping(), move |tx| {
                 let Some(current) = tx.indexing().view(&view.view_id)? else {
                     return Ok(false);
                 };
@@ -1163,7 +1163,7 @@ impl IndexWorker {
             let links = read_snapshot(&*self.env.store, &ReadOptions::default(), |s| {
                 view_links(s.indexing(), &repository, &layers)
             })?;
-            let linked = run_write(&*self.env.store, WriteOptions::default(), move |tx| {
+            let linked = run_write(&*self.env.store, WriteOptions::housekeeping(), move |tx| {
                 // The view may have been retired meanwhile.
                 if tx.indexing().view(&view.view_id)?.as_ref() != Some(&view) {
                     return Ok(false);
@@ -1177,17 +1177,18 @@ impl IndexWorker {
             s.indexing().overlays_due(self.env.now(), 64)
         })?;
         for o in due {
-            let expired = run_write(
-                &*self.env.store,
-                WriteOptions::default(),
-                move |tx| match tx.indexing().overlay(&o.id)? {
-                    Some(cur) if cur.revision == o.revision => {
-                        super::overlay::expire_overlay(tx, &cur)?;
-                        Ok(true)
-                    }
-                    _ => Ok(false),
-                },
-            )?;
+            let expired =
+                run_write(
+                    &*self.env.store,
+                    WriteOptions::housekeeping(),
+                    move |tx| match tx.indexing().overlay(&o.id)? {
+                        Some(cur) if cur.revision == o.revision => {
+                            super::overlay::expire_overlay(tx, &cur)?;
+                            Ok(true)
+                        }
+                        _ => Ok(false),
+                    },
+                )?;
             report.expired_overlays += usize::from(expired);
         }
         report.pruned_overlays = super::overlay::prune_ref_overlays(&self.env, stop)?;
@@ -1209,7 +1210,7 @@ impl IndexWorker {
                 &*self.env.store,
                 WriteOptions {
                     priority: WritePriority::Bulk,
-                    ..WriteOptions::default()
+                    ..WriteOptions::housekeeping()
                 },
                 move |tx| tx.indexing().reclaim_generation(&id, 5_000),
             )?;
@@ -1432,7 +1433,7 @@ impl Exec<'_> {
             &*self.w.env.store,
             WriteOptions {
                 priority,
-                ..WriteOptions::default()
+                ..WriteOptions::host_state()
             },
             move |tx| {
                 let Some(cur) = tx.indexing().run(&id)? else {
@@ -1494,7 +1495,7 @@ impl Exec<'_> {
         // A stop of the worker itself (shutdown) is not a cancellation of the run: unless one was
         // requested, the run keeps its claim and checkpoint and resumes at the next boot.
         let shutting_down = self.w.stopping() && !self.stop.load(Ordering::SeqCst);
-        let written = run_write(&*self.w.env.store, WriteOptions::default(), move |tx| {
+        let written = run_write(&*self.w.env.store, WriteOptions::settlement(), move |tx| {
             let Some(cur) = tx.indexing().run(&id)? else {
                 return Ok(None);
             };
@@ -1733,7 +1734,7 @@ impl Exec<'_> {
         let mut renamed: BTreeMap<String, String> = BTreeMap::new();
         if let Some(p) = &parent
             && p.source_digest != head
-            && super::git::oid_ok(&p.source_digest)
+            && crate::services::git::client::oid_ok(&p.source_digest)
         {
             match git.diff(&dir, &p.source_digest, &head) {
                 Ok((changes, _)) => {

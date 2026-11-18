@@ -14,7 +14,7 @@ use crate::ports::{CommandHandler, Decided, HandlerFailure, IdKind, Preparation,
 use crate::protocol::results::DomainDecision;
 use crate::protocol::{DomainErrorCode, EventId, Id, OperationId, ProjectId, RevisionDimension};
 use crate::services::git::context::SourceBinding;
-use crate::services::sessions::{Failure, Refusal, decided, rev};
+use crate::services::kernel::{Failure, Refusal, decided, rev};
 use serde_json::json;
 use std::collections::BTreeSet;
 

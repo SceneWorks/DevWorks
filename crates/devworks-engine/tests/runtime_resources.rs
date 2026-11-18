@@ -22,16 +22,15 @@ use devworks_core::protocol::results::{DomainDecision, OperationResult};
 use devworks_core::protocol::support::DomainErrorCode;
 use devworks_core::protocol::{ActorId, CommandReply};
 use devworks_core::services::UseCases;
-use devworks_core::services::artifacts::ArtifactService;
 use devworks_core::services::power::{KEEP_AWAKE_KEY, KeepAwakeStatus};
 use devworks_core::services::process::{LaunchPolicy, LaunchRequest, StopOutcome};
-use devworks_core::services::resources::{
-    MachineResource, ResourceService, desktop, register_machine,
-};
+use devworks_core::services::resources::{MachineResource, desktop, register_machine};
 use devworks_core::settings::catalog::descriptor;
 use devworks_core::settings::model;
-use devworks_core::settings::service::SettingsService;
 use devworks_core::settings::view::Health;
+use devworks_engine::{
+    ArtifactComposition, DiagnosticComposition, KnowledgeComposition, RunComposition,
+};
 use devworks_engine::{Composition, Runtime, RuntimeConfig, boot};
 use serde_json::json;
 use std::sync::Arc;
@@ -140,16 +139,14 @@ fn composition(
     store: Arc<dyn ApplicationStore>,
     power: Arc<FakePower>,
 ) -> Composition {
-    let artifacts = Arc::new(ArtifactService::new(
+    let artifacts = ArtifactComposition::new(
         Arc::new(NativeArtifactFiles::new(
             h.root.clone(),
             h.root.with_extension("cache"),
         )),
         Arc::new(HostArtifactSources::new(h.clock(), h.ids.clone())),
         Arc::new(NativeFilesystem::new()),
-        h.clock(),
-        h.ids.clone(),
-    ));
+    );
     let mut config = RuntimeConfig::new(id("dispatcher-1"));
     config.collect_interval = Duration::from_secs(3600);
     config.machine_resources = vec![desktop(), gpu()];
@@ -161,28 +158,24 @@ fn composition(
         ids: h.ids.clone(),
         authority: Arc::new(Authority),
         artifacts,
-        resources: Arc::new(ResourceService::new(h.ids.clone(), h.clock())),
         process_host: Arc::new(NativeProcessHost),
-        runs: devworks_engine::RunComposition::new(Arc::new(
-            devworks_core::services::runs::ControlService::new(h.ids.clone()),
-        )),
+        runs: RunComposition::default(),
         power,
-        diagnostics: Arc::new(
-            devworks_core::services::diagnostics::DiagnosticService::new(
-                store.clone(),
-                h.ids.clone(),
-                h.clock(),
-                None,
-            ),
-        ),
+        knowledge: KnowledgeComposition::default(),
+        application: devworks_engine::ApplicationComposition {
+            settings: Some(devworks_engine::SettingsPorts {
+                roles: Arc::new(HostRoles { store }),
+                paths: Arc::new(FsPathProbe),
+            }),
+            ..Default::default()
+        },
+        web: None,
+        diagnostics: DiagnosticComposition::default(),
         git: None,
         browser: None,
         packages: None,
-        use_cases: UseCases::new().with_settings(Arc::new(SettingsService {
-            roles: Arc::new(HostRoles { store }),
-            paths: Arc::new(FsPathProbe),
-            ids: h.ids.clone(),
-        })),
+        use_cases: UseCases::new(),
+        test_overrides: Default::default(),
         consumers: Vec::new(),
         indexing: None,
         config,

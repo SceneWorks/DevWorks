@@ -34,7 +34,7 @@ use crate::protocol::results::{DomainDecision, OperationResult};
 use crate::protocol::support::{BoundedList, BoundedText};
 use crate::protocol::{DomainErrorCode, EventId, OperationId, OperationState};
 use crate::services::artifacts::lifecycle::ExactReadRefusal;
-use crate::services::sessions::{Failure, Refusal};
+use crate::services::kernel::{Failure, Refusal};
 use serde_json::json;
 
 /// The journal capability of one package tool invocation.

@@ -13,6 +13,7 @@ use devworks_engine::{
     Outcome,
 };
 use devworks_extension_protocol::package::{EventCommit, RpcResult};
+use devworks_test_support::LoseAcks;
 use serde_json::json;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
@@ -197,78 +198,22 @@ fn a_crash_before_commit_leaves_nothing_and_replays_once() {
     assert_eq!(String::from(state_revision), "2");
 }
 
-/// Reports one confirmed commit as `CommitUnknown`: the reply is lost after the commit. `lose`
-/// counts down confirmed commits; the one that brings it from 1 to 0 loses its reply.
-struct LossyStore {
-    inner: Arc<dyn ApplicationStore>,
-    lose: Arc<AtomicUsize>,
-}
-struct LossyJob {
-    inner: Box<dyn WriteJob>,
-    lose: Arc<AtomicUsize>,
-}
-impl WriteJob for LossyJob {
-    fn run(&mut self, tx: &mut dyn WriteTransaction) -> Result<(), StorageError> {
-        self.inner.run(tx)
-    }
-    fn finish(self: Box<Self>, outcome: Result<(), StorageError>) {
-        let lost = outcome.is_ok()
-            && self
-                .lose
-                .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| n.checked_sub(1))
-                == Ok(1);
-        self.inner.finish(if lost {
-            Err(StorageError::CommitUnknown)
-        } else {
-            outcome
-        });
-    }
-}
-impl ApplicationStore for LossyStore {
-    fn info(&self) -> StoreInfo {
-        self.inner.info()
-    }
-    fn submit_write(
-        &self,
-        options: WriteOptions,
-        job: Box<dyn WriteJob>,
-    ) -> Result<(), StorageError> {
-        self.inner.submit_write(
-            options,
-            Box::new(LossyJob {
-                inner: job,
-                lose: self.lose.clone(),
-            }),
-        )
-    }
-    fn read(
-        &self,
-        options: &ReadOptions,
-        work: &mut dyn FnMut(&dyn ReadSnapshot) -> Result<(), StorageError>,
-    ) -> Result<(), StorageError> {
-        self.inner.read(options, work)
-    }
-}
-
 #[test]
 fn a_crash_after_commit_before_ack_replays_as_a_no_op() {
     let h = Harness::new();
     let s = h.open();
     activate(&*s);
     let e = enqueue(&*s, CONSUMER, Some("acme"), json!({}));
-    let lose = Arc::new(AtomicUsize::new(0));
-    let lossy: Arc<dyn ApplicationStore> = Arc::new(LossyStore {
-        inner: s.clone(),
-        lose: lose.clone(),
-    });
+    // Reports one confirmed commit as `CommitUnknown`: the reply is lost after the commit.
+    let lossy = LoseAcks::over(s.clone());
     let pkg = DemoPackage::new("session-1", false);
     let d = dispatcher(&h, lossy.clone(), vec![consumer(CONSUMER, pkg.clone())]);
     let rt = runtime();
     // A pass commits expired-claim recovery, then the claim, then the delivery: lose the third.
     rt.block_on(d.recover()).unwrap();
-    lose.store(3, Ordering::SeqCst);
+    lossy.lose_nth_commit(3);
     rt.block_on(d.run_until_idle()).unwrap();
-    assert_eq!(lose.load(Ordering::SeqCst), 0, "the reply was lost");
+    assert_eq!(lossy.lost(), 1, "the reply was lost");
     assert!(
         pkg.commits.lock().unwrap().len() == 1,
         "the handler committed exactly once"

@@ -32,7 +32,7 @@ use crate::protocol::records::{
 use crate::protocol::support::BoundedList;
 use crate::protocol::{DomainErrorCode, Id};
 use crate::services::cursor::{self, CursorBinding};
-use crate::services::sessions::{Failure, Refusal, content, counter, label, not_found, rev};
+use crate::services::kernel::{Failure, Refusal, content, counter, label, not_found, rev};
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 
 /// The empty answer CodeGraph returned for a query that matched nothing.
@@ -40,7 +40,6 @@ pub const NO_MEMORIES: &str = "No relevant memories found.";
 /// Claims listed per entity in a rendered summary.
 const PER_ENTITY: usize = 8;
 const MAX_HOPS: u32 = 5;
-const MAX_CHAIN: usize = 5;
 /// The store's page maximum.
 const MAX_ROWS: u16 = crate::ports::storage::KNOWLEDGE_PAGE_MAX;
 
@@ -509,79 +508,54 @@ fn select(
     })
 }
 
-/// Conflicts among `claims`: the same subject and predicate with different values, and
-/// recorded `contradicts` relations between returned claims.
-/// The open conflicts among `claims`; the flag is set when a group or a relation read was cut.
+/// The open conflicts of `claims`, built by the same functions a claim read uses: for each active
+/// claim, the claims that state its subject and predicate differently and its recorded
+/// `contradicts` relations. A conflict two claims both report appears once. `admit` decides
+/// whether a claim outside `claims` may be named (and carried). The flag is set when a read was
+/// cut.
 fn conflicts(
     c: &Ctx<'_>,
     claims: &[(StoredClaim, KnowledgeClaim, i64)],
+    admit: &mut dyn FnMut(&StoredClaim) -> Result<bool, StorageError>,
 ) -> Result<(Vec<KnowledgeConflict>, bool), StorageError> {
-    let mut out = Vec::new();
+    let mut out: Vec<KnowledgeConflict> = Vec::new();
     let mut cut = false;
-    let mut groups: BTreeMap<(String, String), Vec<&StoredClaim>> = BTreeMap::new();
-    for (claim, _, _) in claims.iter().filter(|(c, _, _)| c.lifecycle == "Active") {
-        groups
-            .entry((
-                claim.subject_id.as_str().to_owned(),
-                claim.predicate.clone(),
-            ))
-            .or_default()
-            .push(claim);
-    }
-    for ((_, predicate), group) in &groups {
-        let first = group[0];
-        if group.iter().any(|o| {
-            o.body.value != first.body.value
-                || o.body.value_json != first.body.value_json
-                || o.object_id != first.object_id
-        }) {
-            cut |= group.len() > 128;
-            out.push(KnowledgeConflict {
-                id: Id::new(
-                    format!("conflict-{}", first.id.as_str())
-                        .chars()
-                        .take(128)
-                        .collect::<String>(),
-                )
-                .map_err(|_| StorageError::InvalidRecord("conflict id".into()))?,
-                claim_ids: BoundedList(group.iter().take(128).map(|c| c.id.clone()).collect()),
-                state: label("Open", "Open"),
-                explanation: content(&format!(
-                    "{} active claims about the same subject state {predicate} differently.",
-                    group.len()
-                )),
-            });
-        }
-    }
-    // A recorded contradiction is open only while both of its claims are active.
-    let active: HashSet<&Id> = claims
-        .iter()
-        .filter(|(c, _, _)| c.lifecycle == "Active")
-        .map(|(c, _, _)| &c.id)
-        .collect();
+    let mut keys: HashSet<Vec<String>> = HashSet::new();
     let mut recorded = HashSet::new();
-    for (claim, _, _) in claims {
+    let mut lookups = super::ConflictLookups::default();
+    for (claim, _, _) in claims.iter().filter(|(c, _, _)| c.lifecycle == "Active") {
+        let (found, more) = super::value_conflict(c.k, c.scoped, claim, &mut lookups, admit)?;
+        cut |= more;
+        if let Some((conflict, _)) = found {
+            let mut key: Vec<String> = conflict
+                .claim_ids
+                .0
+                .iter()
+                .map(|i| i.as_str().to_owned())
+                .collect();
+            key.sort();
+            if keys.insert(key) {
+                out.push(conflict);
+            }
+        }
         let found = c.k.knowledge_relations(&claim.id, &c.keys, 129)?;
         cut |= found.len() > 128;
-        for r in found {
-            if r.predicate == model::CONTRADICTS
-                && active.contains(&r.subject_id)
-                && active.contains(&r.object_id)
-                && recorded.insert(r.id.clone())
+        for r in found.iter().take(128) {
+            if recorded.contains(&r.id) {
+                continue;
+            }
+            if let Some((conflict, other)) = super::contradiction(c.k, c.scoped, claim, r)?
+                && admit(&other)?
             {
-                out.push(KnowledgeConflict {
-                    id: r.id.clone(),
-                    claim_ids: BoundedList(vec![r.subject_id.clone(), r.object_id.clone()]),
-                    state: label("Open", "Open"),
-                    explanation: content("Recorded as contradicting each other."),
-                });
+                recorded.insert(r.id.clone());
+                out.push(conflict);
             }
         }
     }
     Ok((out, cut))
 }
 
-/// The supersession chains of `claims` (both directions, at most five steps each).
+/// The supersession chains of `claims`, walked by the function a claim read uses.
 fn chains(
     c: &Ctx<'_>,
     claims: &[(StoredClaim, KnowledgeClaim, i64)],
@@ -589,32 +563,14 @@ fn chains(
     let mut out: Vec<Id> = Vec::new();
     let mut cut = false;
     for (claim, _, _) in claims {
-        for backward in [true, false] {
-            let mut next = if backward {
-                claim.body.supersedes.clone()
-            } else {
-                claim.body.superseded_by.clone()
-            };
-            let mut steps = 0;
-            while let Some(id) = next.take() {
-                if steps >= MAX_CHAIN {
-                    // Visible links remain past the step bound.
-                    cut |= c.claim(&id)?.is_some();
-                    break;
-                }
-                if out.contains(&id) || id == claim.id {
-                    break;
-                }
-                let Some(found) = c.claim(&id)? else { break };
-                next = if backward {
-                    found.body.supersedes.clone()
-                } else {
-                    found.body.superseded_by.clone()
-                };
-                out.push(id);
-                steps += 1;
-            }
-        }
+        cut |= super::supersession_chain(
+            c.k,
+            c.scoped,
+            &claim.id,
+            claim.body.supersedes.clone(),
+            claim.body.superseded_by.clone(),
+            &mut out,
+        )?;
     }
     Ok((out, cut))
 }
@@ -624,12 +580,31 @@ fn bundle(
     c: &Ctx<'_>,
     q: &KnowledgeQuery,
     s: &Selection,
-    include_conflicts: bool,
+    conflicts_within: Option<(&ClaimFilter, usize)>,
 ) -> Result<KnowledgeBundle, StorageError> {
     let mut truncated = s.truncated;
-    let conflicts = if include_conflicts {
-        let (found, cut) = conflicts(c, &s.claims)?;
-        truncated |= cut;
+    let mut claims = s.claims.clone();
+    // Conflicts name only claims the bundle carries, so a conflicting claim joins the bundle when
+    // the request's filter admits it and the claim budget has room.
+    let conflicts = if let Some((filter, budget)) = conflicts_within {
+        let mut over = false;
+        let mut admit = |o: &StoredClaim| -> Result<bool, StorageError> {
+            if claims.iter().any(|(x, _, _)| x.id == o.id) {
+                return Ok(true);
+            }
+            let wire = claim_wire(c.k, o, c.th)?;
+            if !filter.admits(o, &wire) {
+                return Ok(false);
+            }
+            if claims.len() >= budget {
+                over = true;
+                return Ok(false);
+            }
+            claims.push((o.clone(), wire, 0));
+            Ok(true)
+        };
+        let (found, cut) = conflicts(c, &s.claims, &mut admit)?;
+        truncated |= cut | over;
         found
     } else {
         Vec::new()
@@ -642,10 +617,10 @@ fn bundle(
         Vec::new()
     };
     truncated |= supersession.len() > 128 || s.frontier.len() > 128;
-    let claim_ids: HashSet<&Id> = s.claims.iter().map(|(c, _, _)| &c.id).collect();
+    let claim_ids: HashSet<&Id> = claims.iter().map(|(c, _, _)| &c.id).collect();
     let mut relations = Vec::new();
     let mut seen = HashSet::new();
-    for (claim, _, _) in &s.claims {
+    for (claim, _, _) in &claims {
         let found = c.k.knowledge_relations(&claim.id, &c.keys, 129)?;
         truncated |= found.len() > 128;
         for r in found {
@@ -714,7 +689,7 @@ fn bundle(
     }
     Ok(KnowledgeBundle {
         entities: BoundedList(s.entities.iter().map(|(e, _, _)| entity_wire(e)).collect()),
-        claims: BoundedList(s.claims.iter().map(|(_, w, _)| w.clone()).collect()),
+        claims: BoundedList(claims.iter().map(|(_, w, _)| w.clone()).collect()),
         evidence: BoundedList(evidence),
         frontier: BoundedList(s.frontier.iter().take(128).cloned().collect()),
         next_cursor: None,
@@ -896,7 +871,12 @@ impl KnowledgeService {
                 };
                 let mut s = select(&c, &e, &cl, bounds, &filter)?;
                 s.truncated |= more;
-                Read::Bundle(bundle(&c, q, &s, q.include_conflicts)?)
+                Read::Bundle(bundle(
+                    &c,
+                    q,
+                    &s,
+                    q.include_conflicts.then_some((&filter, bounds.claims)),
+                )?)
             }
             "knowledge.query" => {
                 let max_e = clamp(q.entity_limit.get(), 1, 50);
@@ -915,7 +895,12 @@ impl KnowledgeService {
                     };
                     let mut s = select(&c, &e, &cl, bounds, &filter)?;
                     s.truncated |= more;
-                    let mut b = bundle(&c, q, &s, q.include_conflicts)?;
+                    let mut b = bundle(
+                        &c,
+                        q,
+                        &s,
+                        q.include_conflicts.then_some((&filter, bounds.claims)),
+                    )?;
                     let text = render(&s, &b.conflicts.0);
                     b.truncated |= text.chars().count() > 65_536;
                     b.summary = Some(content(&text));
@@ -936,7 +921,12 @@ impl KnowledgeService {
                 };
                 let s = select(&c, &e, &cl, bounds, &filter)?;
                 let s = additions(s, &e, &cl, limit);
-                Read::Bundle(bundle(&c, q, &s, q.include_conflicts)?)
+                Read::Bundle(bundle(
+                    &c,
+                    q,
+                    &s,
+                    q.include_conflicts.then_some((&filter, bounds.claims)),
+                )?)
             }
             "knowledge.render_summary" => {
                 if q.entity_ids.0.is_empty() && q.claim_ids.0.is_empty() {
@@ -955,7 +945,9 @@ impl KnowledgeService {
                     ..filter
                 };
                 let s = select(&c, &e, &cl, bounds, &summary_filter)?;
-                let (found, _) = conflicts(&c, &s.claims)?;
+                let (found, _) = conflicts(&c, &s.claims, &mut |o| {
+                    Ok(s.claims.iter().any(|(x, _, _)| x.id == o.id))
+                })?;
                 Read::Summary(if s.entities.is_empty() && s.claims.is_empty() {
                     NO_MEMORIES.to_owned()
                 } else {
@@ -1042,7 +1034,12 @@ impl KnowledgeService {
                     frontier,
                     truncated,
                 };
-                Read::Bundle(bundle(&c, q, &s, q.include_conflicts)?)
+                Read::Bundle(bundle(
+                    &c,
+                    q,
+                    &s,
+                    q.include_conflicts.then_some((&filter, 500)),
+                )?)
             }
             "knowledge.entity_graph" => match q.entity_ids.0.as_slice() {
                 [id] => {
@@ -1094,7 +1091,7 @@ impl KnowledgeService {
                         },
                         truncated: more,
                     };
-                    Read::Bundle(bundle(&c, q, &s, false)?)
+                    Read::Bundle(bundle(&c, q, &s, None)?)
                 }
                 // Admission requires exactly one entity.
                 _ => return Err(invalid("entity_id")),
@@ -1265,7 +1262,7 @@ fn full_graph(
         frontier,
         truncated,
     };
-    let mut b = bundle(c, q, &s, false)?;
+    let mut b = bundle(c, q, &s, None)?;
     b.next_cursor = next;
     Ok(b)
 }

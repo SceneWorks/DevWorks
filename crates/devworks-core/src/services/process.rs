@@ -161,6 +161,67 @@ pub enum StopOutcome {
     Uncertain(String),
 }
 
+/// Receives each chunk read from one output pipe.
+pub type CaptureChunk = Box<dyn FnMut(&[u8]) + Send>;
+
+/// Where one captured output stream goes: every chunk, then once at end of stream.
+pub struct CaptureStream {
+    pub on_chunk: CaptureChunk,
+    pub on_end: Option<Box<dyn FnOnce() + Send>>,
+}
+
+/// A bound on a wait inside [`ProcessSupervisor::run_captured`].
+#[derive(Clone, Copy)]
+pub enum CaptureWait {
+    For(Duration),
+    Until(Instant),
+}
+impl CaptureWait {
+    fn remaining(self, now: Instant) -> Duration {
+        match self {
+            Self::For(duration) => duration,
+            Self::Until(deadline) => deadline.saturating_duration_since(now),
+        }
+    }
+}
+
+/// When [`ProcessSupervisor::run_captured`] stops the tree and how long each wait may take.
+#[derive(Clone, Copy)]
+pub struct CapturePolicy {
+    /// The tree is stopped once this instant passes without an exit.
+    pub stop_at: Instant,
+    /// Grace between the polite stop and the forced kill of that timeout stop.
+    pub term_grace: Duration,
+    /// How long the timeout stop may take to verify the tree gone.
+    pub stop_wait: CaptureWait,
+    /// How long each of the two drain threads may take to finish after the exit.
+    pub drain_wait: CaptureWait,
+    /// How long the stop issued after a drain timeout may take.
+    pub drain_stop_wait: Duration,
+}
+
+/// A captured tree that exited and was drained.
+#[derive(Clone, Copy, Debug)]
+pub struct CapturedExit {
+    pub exit_code: Option<i32>,
+    pub signal: Option<i32>,
+    /// The tree outlived `stop_at` and was stopped.
+    pub timed_out: bool,
+    /// When the exit was verified, before the drain wait.
+    pub exited_at: Instant,
+}
+
+/// Why a captured run has no exit to report.
+#[derive(Debug)]
+pub enum CaptureFault {
+    /// The timeout stop ran but its record could not be written.
+    StopNotRecorded(StorageError),
+    /// The tree could not be verified stopped (recorded `Uncertain`).
+    StopUnverified(String),
+    /// An output pipe stayed open past the drain wait; the tree was stopped.
+    DrainTimedOut,
+}
+
 /// A stop whose native part ran but whose record (or reconciliation) could not be written.
 #[derive(Clone, Debug)]
 pub struct StopFailure {
@@ -402,7 +463,7 @@ impl ProcessSupervisor {
         };
         if let Some(refusal) = refusal {
             let (c, a, v) = (ctx.clone(), argv.clone(), verdict.clone());
-            run_write(&*self.store, WriteOptions::default(), move |tx| {
+            run_write(&*self.store, WriteOptions::settlement(), move |tx| {
                 record_verdict(tx, &c, "process.launch", &a, &v)
             })?;
             return Err(refusal);
@@ -421,7 +482,7 @@ impl ProcessSupervisor {
         let resources = self.resources.clone();
         let (c, claim) = (ctx.clone(), request.lease.clone());
         let operation_id = request.operation_id.clone();
-        let intent = run_write(&*self.store, WriteOptions::default(), move |tx| {
+        let intent = run_write(&*self.store, WriteOptions::settlement(), move |tx| {
             // An archived (or deleted) project's work is fenced from the archival's commit: no
             // tree is launched for it, whatever path asks. The archival epoch this intent was
             // recorded under is rechecked once the tree is registered (see below).
@@ -568,6 +629,82 @@ impl ProcessSupervisor {
         let entry = self.entry(&p.id)?;
         let mut live = entry.lock().unwrap_or_else(|e| e.into_inner());
         live.tree.take_output()
+    }
+
+    /// Drains both output pipes of `p` into `streams` (stdout first), waits for the tree to
+    /// exit, stops it when `policy.stop_at` passes, then waits for the drain threads. The one
+    /// capture loop behind process tools and the container CLI; callers keep their own launch,
+    /// output sinks and messages.
+    pub fn run_captured(
+        &self,
+        p: &OwnedProcess,
+        pipes: (Box<dyn Read + Send>, Box<dyn Read + Send>),
+        streams: [CaptureStream; 2],
+        policy: CapturePolicy,
+    ) -> Result<CapturedExit, CaptureFault> {
+        let (drained_tx, drained_rx) = std::sync::mpsc::channel();
+        let [stdout, stderr] = streams;
+        for (mut pipe, mut stream) in [(pipes.0, stdout), (pipes.1, stderr)] {
+            let drained_tx = drained_tx.clone();
+            std::thread::spawn(move || {
+                let mut chunk = [0u8; 8192];
+                loop {
+                    match pipe.read(&mut chunk) {
+                        Ok(0) | Err(_) => break,
+                        Ok(n) => (stream.on_chunk)(&chunk[..n]),
+                    }
+                }
+                if let Some(end) = stream.on_end.take() {
+                    end();
+                }
+                let _ = drained_tx.send(());
+            });
+        }
+        drop(drained_tx);
+        let mut timed_out = false;
+        let outcome = loop {
+            // A native poll or its record write can fail transiently. Keep ownership and the
+            // timeout guard active; a later poll may still verify the exit.
+            if let Ok(Some(outcome)) = self.poll(p) {
+                break outcome;
+            }
+            if Instant::now() >= policy.stop_at {
+                timed_out = true;
+                match self.cancel(
+                    p,
+                    policy.term_grace,
+                    policy.stop_wait.remaining(Instant::now()),
+                ) {
+                    Ok(outcome) => break outcome,
+                    Err(failure) => return Err(CaptureFault::StopNotRecorded(failure.error)),
+                }
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        };
+        let exited_at = Instant::now();
+        let (exit_code, signal) = match outcome {
+            StopOutcome::Reaped {
+                exit_code, signal, ..
+            } => (exit_code, signal),
+            StopOutcome::Uncertain(reason) => return Err(CaptureFault::StopUnverified(reason)),
+        };
+        // A descendant can inherit a pipe after the observed parent exits. Do not let that keep
+        // a worker blocked forever; its tree remains under the process owner.
+        for _ in 0..2 {
+            if drained_rx
+                .recv_timeout(policy.drain_wait.remaining(Instant::now()))
+                .is_err()
+            {
+                let _ = self.cancel(p, Duration::ZERO, policy.drain_stop_wait);
+                return Err(CaptureFault::DrainTimedOut);
+            }
+        }
+        Ok(CapturedExit {
+            exit_code,
+            signal,
+            timed_out,
+            exited_at,
+        })
     }
 
     /// The control channel of a tree launched with a control pipe, once.
@@ -857,7 +994,7 @@ impl ProcessSupervisor {
     pub fn shutdown(&self, grace: Duration, bound: Duration) -> ShutdownReport {
         let stopped = self.stop(&StopScope::All, grace, bound);
         let resources = self.resources.clone();
-        let reconciliation = run_write(&*self.store, WriteOptions::default(), move |tx| {
+        let reconciliation = run_write(&*self.store, WriteOptions::settlement(), move |tx| {
             resources.reconcile(tx, ReconcileCause::Shutdown)
         });
         ShutdownReport {
@@ -957,7 +1094,7 @@ impl ProcessSupervisor {
             }
         }
         let resources = self.resources.clone();
-        report.resources = run_write(&*self.store, WriteOptions::default(), move |tx| {
+        report.resources = run_write(&*self.store, WriteOptions::recovery(), move |tx| {
             resources.reconcile(tx, ReconcileCause::Boot)
         })?;
         Ok(report)
@@ -977,7 +1114,7 @@ impl ProcessSupervisor {
             return Err(ConfirmRefusal::StillOwned);
         }
         let (p, c, resources) = (process.clone(), ctx.clone(), self.resources.clone());
-        run_write(&*self.store, WriteOptions::default(), move |tx| {
+        run_write(&*self.store, WriteOptions::settlement(), move |tx| {
             let Some(mut record) = tx.resources().process(&p)? else {
                 return Ok(Err(ConfirmRefusal::NotFound));
             };
@@ -1028,7 +1165,7 @@ impl ProcessSupervisor {
     ) -> Result<(), StorageError> {
         let mut next = record.clone();
         let host = self.store.info().host_actor;
-        let updated = run_write(&*self.store, WriteOptions::default(), move |tx| {
+        let updated = run_write(&*self.store, WriteOptions::settlement(), move |tx| {
             apply(tx, &host, &mut next, phase, kind, payload)?;
             Ok(next)
         })?;
@@ -1047,7 +1184,7 @@ impl ProcessSupervisor {
     ) -> Result<(), StorageError> {
         let mut next = record.clone();
         let (host, resources) = (self.store.info().host_actor, self.resources.clone());
-        let updated = run_write(&*self.store, WriteOptions::default(), move |tx| {
+        let updated = run_write(&*self.store, WriteOptions::settlement(), move |tx| {
             settle_in(
                 tx, &host, &resources, &mut next, phase, exit_code, detail, kind,
             )?;

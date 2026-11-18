@@ -179,7 +179,7 @@ fn purge_preparation_and_permit_bind_native_rows_client_and_exact_human_confirma
     let sources =
         crate::fs::sources::HostArtifactSources::new(fx.h.clock.clone(), fx.h.ids.clone())
             .with_project_fence(Arc::new(ManagedFileCustody::new(fx.store.clone())));
-    let picked = fx.h.root.0.join("independent-picked-input.txt");
+    let picked = fx.h.root.join("independent-picked-input.txt");
     std::fs::write(&picked, b"user input stays byte exact").unwrap();
     let owner_context = user
         .clone()
@@ -199,7 +199,7 @@ fn purge_preparation_and_permit_bind_native_rows_client_and_exact_human_confirma
     let sealed = ingress.project_purge_context(&user, &input).unwrap();
     let (s, ctx, i) = (service.clone(), user.clone(), input.clone());
     assert!(
-        run_write(&*fx.store, WriteOptions::default(), move |tx| s
+        run_write(&*fx.store, WriteOptions::fixture(), move |tx| s
             .authorize(tx, &ctx, &i)
             .map(|_| ())
             .map_err(|e| StorageError::InvalidRecord(format!("{e:?}"))))
@@ -241,7 +241,7 @@ fn purge_preparation_and_permit_bind_native_rows_client_and_exact_human_confirma
     owners.0.lock().unwrap().0 = "b".repeat(64);
     let (s, ctx, i) = (service.clone(), sealed.clone(), input.clone());
     assert!(
-        run_write(&*fx.store, WriteOptions::default(), move |tx| s
+        run_write(&*fx.store, WriteOptions::fixture(), move |tx| s
             .authorize(tx, &ctx, &i)
             .map(|_| ())
             .map_err(|e| StorageError::InvalidRecord(format!("{e:?}"))))
@@ -255,7 +255,7 @@ fn purge_preparation_and_permit_bind_native_rows_client_and_exact_human_confirma
     let repository = serde_json::to_value(fx.repo(&user, "repo-1").unwrap()).unwrap();
     let (s, ctx, i) = (service.clone(), sealed.clone(), input.clone());
     let rolled_back: Result<(), StorageError> =
-        run_write(&*fx.store, WriteOptions::default(), move |tx| {
+        run_write(&*fx.store, WriteOptions::fixture(), move |tx| {
             let permit = s
                 .authorize(tx, &ctx, &i)
                 .map_err(|e| StorageError::InvalidRecord(format!("{e:?}")))?;
@@ -490,7 +490,7 @@ impl Fx {
         &self,
         f: impl FnOnce(&mut dyn WriteTransaction) -> Result<T, StorageError> + Send + 'static,
     ) -> T {
-        run_write(&*self.store, WriteOptions::default(), f).expect("write")
+        run_write(&*self.store, WriteOptions::fixture(), f).expect("write")
     }
     fn read<T>(&self, f: impl FnOnce(&dyn ReadSnapshot) -> Result<T, StorageError>) -> T {
         read_snapshot(&*self.store, &ReadOptions::default(), f).expect("read")
@@ -598,16 +598,17 @@ impl Fx {
     }
     /// Seeds work roots of `p` (as the work-planning item would record them).
     fn seed_roots(&self, p: &ProjectId, roots: &[&str]) {
-        let mut sql = String::new();
+        let work: Vec<_> = roots
+            .iter()
+            .map(|r| devworks_test_support::seed::WorkSeed::issue(r, p.0.as_str()))
+            .collect();
+        devworks_test_support::seed::work(&*self.store, &work).unwrap();
+        // The legacy stored kind: the ports create only `feature` and `task` rows.
+        let raw = self.h.raw();
         for r in roots {
-            sql.push_str(&format!(
-                "INSERT INTO work_items VALUES('{r}','{}','issue',NULL,NULL,NULL,'{r}',1,0,1,1,1,'{{}}');",
-                p.0.as_str()
-            ));
+            raw.execute("UPDATE work_items SET kind='issue' WHERE id=?1", [r])
+                .unwrap();
         }
-        self.store
-            .with_writer_connection(move |c| super::super::conn::db(c.execute_batch(&sql)))
-            .unwrap();
     }
     fn eligible(&self, root: &str) -> bool {
         let (runs, root) = (self.runs.clone(), RootId(id(root)));
@@ -1710,7 +1711,7 @@ fn repository_listing_and_search_filter_page_and_never_show_credentials() {
         registered_at_ms: T0,
     };
     assert!(matches!(
-        run_write(&*fx.store, WriteOptions::default(), move |tx| tx
+        run_write(&*fx.store, WriteOptions::fixture(), move |tx| tx
             .projects()
             .insert_repository(&leaky)),
         Err(StorageError::InvalidRecord(_))
@@ -1785,7 +1786,7 @@ fn repository_listing_and_search_filter_page_and_never_show_credentials() {
         registered_at_ms: T0,
     };
     assert!(matches!(
-        run_write(&*fx.store, WriteOptions::default(), move |tx| tx
+        run_write(&*fx.store, WriteOptions::fixture(), move |tx| tx
             .projects()
             .insert_repository(&pathless)),
         Err(StorageError::InvalidRecord(_))
@@ -1991,14 +1992,27 @@ fn migration_14_is_additive_and_closes_older_writers_out() {
         ..p.clone()
     };
     assert!(
-        run_write(&*s, WriteOptions::default(), move |tx| tx
+        run_write(&*s, WriteOptions::fixture(), move |tx| tx
             .projects()
             .update_project(&bad, 3))
         .is_err()
     );
     let stale = StoredProject { revision: 3, ..p };
+    // A non-positive expected revision is the caller's error, not a conflict.
+    for expected in [0, -1] {
+        let zero = stale.clone();
+        assert!(
+            matches!(
+                run_write(&*s, WriteOptions::fixture(), move |tx| tx
+                    .projects()
+                    .update_project(&zero, expected)),
+                Err(StorageError::InvalidRecord(_))
+            ),
+            "expected {expected}"
+        );
+    }
     assert!(matches!(
-        run_write(&*s, WriteOptions::default(), move |tx| tx
+        run_write(&*s, WriteOptions::fixture(), move |tx| tx
             .projects()
             .update_project(&stale, 2)),
         Err(StorageError::RevisionConflict(_))
@@ -2248,7 +2262,7 @@ fn purged_receipt_revision6_preserves_an_original_refusal_as_a_terminal_outcome(
 
 fn purge_storage_fixture(store: &SqliteStore) -> StoredProjectPurge {
     let info = store.info();
-    run_write(store, WriteOptions::default(), |tx| {
+    run_write(store, WriteOptions::fixture(), |tx| {
         tx.actors()
             .register(&actor("purge-human"), PrincipalKind::Human, "Human")?;
         for name in ["purge-a", "purge-b"] {
@@ -2309,7 +2323,7 @@ fn purge_effect_leases_survive_restart_reject_stale_owners_and_retain_only_clien
     prepared.entries.push(serde_json::from_value(json!({"id":devworks_core::ports::project_purge::reviewed_effect_entry(&intent),"kind":"RecordClass","recordClass":"client_state","disposition":"Remove","recordCount":"0","byteCount":"0","reason":"OwnedClientState"})).unwrap());
     prepared.manifest.digest = project_purge_digest(&prepared).try_into().unwrap();
     let copy = prepared.clone();
-    run_write(&store, WriteOptions::default(), move |tx| {
+    run_write(&store, WriteOptions::fixture(), move |tx| {
         tx.projects().insert_purge_manifest(&copy)
     })
     .unwrap();
@@ -2318,7 +2332,7 @@ fn purge_effect_leases_survive_restart_reject_stale_owners_and_retain_only_clien
     prepared.manifest.phase = devworks_core::protocol::records::PurgePhase::RemovingBytes;
     let operation = devworks_core::protocol::OperationId(id("purge-operation"));
     let op = operation.clone();
-    run_write(&store, WriteOptions::default(), move |tx| {
+    run_write(&store, WriteOptions::fixture(), move |tx| {
         tx.operations()
             .record_intent(NewOperation {
                 id: op,
@@ -2355,7 +2369,7 @@ fn purge_effect_leases_survive_restart_reject_stale_owners_and_retain_only_clien
         .unwrap();
     let attempted = forged_id.clone();
     assert!(
-        run_write(&store, WriteOptions::default(), move |tx| {
+        run_write(&store, WriteOptions::fixture(), move |tx| {
             let until = tx.now_ms() + 1000;
             tx.projects().claim_purge_effect(
                 &id("purge-manifest"),
@@ -2376,7 +2390,7 @@ fn purge_effect_leases_survive_restart_reject_stale_owners_and_retain_only_clien
     let claim = |store: &SqliteStore, owner: &str| {
         let effect = effect.clone();
         let owner = id(owner);
-        run_write(store, WriteOptions::default(), move |tx| {
+        run_write(store, WriteOptions::fixture(), move |tx| {
             let until = tx.now_ms() + 10_000;
             tx.projects()
                 .claim_purge_effect(&id("purge-manifest"), &effect, &owner, until)
@@ -2387,7 +2401,7 @@ fn purge_effect_leases_survive_restart_reject_stale_owners_and_retain_only_clien
     assert!(claim(&store, "owner-b").is_none());
     let stale = effect.clone();
     assert!(
-        run_write(&store, WriteOptions::default(), move |tx| tx
+        run_write(&store, WriteOptions::fixture(), move |tx| tx
             .projects()
             .settle_purge_effect(
                 &id("purge-manifest"),
@@ -2398,7 +2412,7 @@ fn purge_effect_leases_survive_restart_reject_stale_owners_and_retain_only_clien
         .is_err()
     );
     let failed = effect.clone();
-    run_write(&store, WriteOptions::default(), move |tx| {
+    run_write(&store, WriteOptions::fixture(), move |tx| {
         tx.projects().settle_purge_effect(
             &id("purge-manifest"),
             &failed,
@@ -2432,7 +2446,7 @@ fn purge_effect_leases_survive_restart_reject_stale_owners_and_retain_only_clien
     );
     let stale = effect.clone();
     assert!(
-        run_write(&reopened, WriteOptions::default(), move |tx| tx
+        run_write(&reopened, WriteOptions::fixture(), move |tx| tx
             .projects()
             .settle_purge_effect(
                 &id("purge-manifest"),
@@ -2443,7 +2457,7 @@ fn purge_effect_leases_survive_restart_reject_stale_owners_and_retain_only_clien
         .is_err()
     );
     let done = effect.clone();
-    run_write(&reopened, WriteOptions::default(), move |tx| {
+    run_write(&reopened, WriteOptions::fixture(), move |tx| {
         tx.projects()
             .settle_purge_effect(&id("purge-manifest"), &done, &id("owner-c"), Ok(()))
     })
@@ -2492,13 +2506,169 @@ fn purge_effect_leases_survive_restart_reject_stale_owners_and_retain_only_clien
     );
 }
 
+/// A client that reports `InUse` until the host acknowledges it, as the desktop client does while
+/// the UI still holds the project's editors; the acknowledgement itself commits nothing.
+struct AckClient(std::sync::atomic::AtomicBool);
+impl devworks_core::ports::project_purge::ProjectPurgeClient for AckClient {
+    fn inspect(
+        &self,
+        _: &ProjectPurgeClientScope,
+    ) -> Result<
+        devworks_core::ports::project_purge::PurgeClientSnapshot,
+        devworks_core::ports::project_purge::PurgeFileFault,
+    > {
+        Err(devworks_core::ports::project_purge::PurgeFileFault::Unsupported)
+    }
+    fn remove_reviewed(
+        &self,
+        _: &ProjectPurgeClientScope,
+        _: &str,
+    ) -> Result<(), devworks_core::ports::project_purge::PurgeFileFault> {
+        if self.0.load(Ordering::SeqCst) {
+            Ok(())
+        } else {
+            Err(devworks_core::ports::project_purge::PurgeFileFault::InUse)
+        }
+    }
+}
+
+#[test]
+fn a_purge_step_asks_for_a_retry_while_the_client_is_unacknowledged_then_completes() {
+    use devworks_core::ports::project_purge::PurgeEffectIntent;
+    use devworks_core::services::projects::purge::{PURGE_RETRY_WINDOW, PurgeWorker};
+    let h = Harness::new();
+    let store = Arc::new(h.store());
+    let mut prepared = purge_storage_fixture(&store);
+    let scope = ProjectPurgeClientScope {
+        project_id: project("purge-a"),
+        session_ids: vec![],
+        conversation_ids: vec![],
+        work_ids: vec![],
+        operation_ids: vec![],
+        deleted_artifact_ids: vec![],
+        record_ids: Default::default(),
+    };
+    let owner_digest = devworks_core::fingerprint::sha256_hex(&serde_json::to_vec(&scope).unwrap());
+    let intent = PurgeEffectIntent::Client {
+        scope,
+        digest: "a".repeat(64),
+    };
+    prepared.entries.push(serde_json::from_value(json!({"id":devworks_core::ports::project_purge::reviewed_effect_entry(&intent),"kind":"RecordClass","recordClass":"client_state","disposition":"Remove","recordCount":"0","byteCount":"0","reason":"OwnedClientState"})).unwrap());
+    prepared.manifest.digest = project_purge_digest(&prepared).try_into().unwrap();
+    let copy = prepared.clone();
+    run_write(&*store, WriteOptions::fixture(), move |tx| {
+        tx.projects().insert_purge_manifest(&copy)
+    })
+    .unwrap();
+    let body = serde_json::to_string(&intent).unwrap();
+    let effect = devworks_core::fingerprint::sha256_hex(body.as_bytes());
+    prepared.manifest.phase = devworks_core::protocol::records::PurgePhase::RemovingBytes;
+    let operation = devworks_core::protocol::OperationId(id("purge-operation"));
+    let op = operation.clone();
+    run_write(&*store, WriteOptions::fixture(), move |tx| {
+        tx.operations()
+            .record_intent(NewOperation {
+                id: op,
+                root_id: None,
+                assignment_id: None,
+                capability: "projects.purge".into(),
+                schema_version: 1,
+                args_digest: "a".repeat(64),
+                payload: json!({"manifestId":"purge-manifest"}),
+            })
+            .map(|_| ())
+    })
+    .unwrap();
+    prepared.manifest.operation_id = Some(operation);
+    prepared.manifest.pending_effects = Counter::new(1).unwrap();
+    h.raw()
+        .execute(
+            "UPDATE project_purge_manifests SET phase='RemovingBytes',operation_id='purge-operation',body_json=?1",
+            [serde_json::to_string(&prepared.manifest).unwrap()],
+        )
+        .unwrap();
+    h.raw().execute("INSERT INTO project_purge_effects(manifest_id,id,kind,owner_digest,body_json,byte_count,state) VALUES('purge-manifest',?1,'Client',?2,?3,0,'Pending')",rusqlite::params![effect,owner_digest,body]).unwrap();
+    let client = Arc::new(AckClient(Default::default()));
+    let owners = Arc::new(PurgeOwners(std::sync::Mutex::new(("a".repeat(64), false))));
+    let worker = PurgeWorker::new(store.clone(), h.ids.clone(), owners, client.clone());
+    // Unacknowledged: the effect is claimed, fails InUse and is held; the pass asks for a retry
+    // when the storage retry window ends.
+    let first = worker.step_pass(&mut || false).unwrap();
+    assert_eq!(
+        (first.settled, first.retry_after),
+        (1, Some(PURGE_RETRY_WINDOW))
+    );
+    // Within the window the effect is not claimable, and the pass still asks to come back.
+    let again = worker.step_pass(&mut || false).unwrap();
+    assert_eq!(
+        (again.settled, again.retry_after),
+        (0, Some(PURGE_RETRY_WINDOW))
+    );
+    // The acknowledgement commits nothing; the retry at the window's end completes the purge.
+    client.0.store(true, Ordering::SeqCst);
+    h.clock.0.fetch_add(1000, Ordering::SeqCst);
+    let done = worker.step_pass(&mut || false).unwrap();
+    assert_eq!((done.settled, done.retry_after), (1, None));
+    let complete = read_snapshot(&*store, &ReadOptions::default(), |s| {
+        s.projects()
+            .purge_manifest(&project("purge-a"), &id("purge-manifest"))
+    })
+    .unwrap()
+    .unwrap();
+    assert!(matches!(
+        complete.manifest.phase,
+        devworks_core::protocol::records::PurgePhase::Complete
+    ));
+}
+
+#[test]
+fn the_commit_signal_counts_commits_that_change_rows_and_ignores_empty_writes() {
+    let h = Harness::new();
+    let store = h.store();
+    let signal = store
+        .commit_signal()
+        .expect("the SQLite store publishes one");
+    let heard = Arc::new(AtomicU64::new(0));
+    let sink = heard.clone();
+    signal.subscribe(move |generation| sink.store(generation, Ordering::SeqCst));
+    let before = signal.generation();
+    run_write(&store, WriteOptions::fixture(), |_tx| Ok(())).unwrap();
+    assert_eq!(
+        signal.generation(),
+        before,
+        "an empty unit of work is not a commit"
+    );
+    run_write(&store, WriteOptions::fixture(), |tx| {
+        tx.actors()
+            .register(&actor("signal-human"), PrincipalKind::Human, "Human")
+    })
+    .unwrap();
+    assert_eq!(signal.generation(), before + 1);
+    assert_eq!(
+        heard.load(Ordering::SeqCst),
+        before + 1,
+        "listeners hear the new generation"
+    );
+    let failed: Result<(), StorageError> = run_write(&store, WriteOptions::fixture(), |tx| {
+        tx.actors()
+            .register(&actor("signal-rolled-back"), PrincipalKind::Human, "Human")?;
+        Err(StorageError::Cancelled)
+    });
+    assert!(failed.is_err());
+    assert_eq!(
+        signal.generation(),
+        before + 1,
+        "a rolled-back unit is not a commit"
+    );
+}
+
 #[test]
 fn purge_manifest_storage_survives_restart_and_requires_its_exact_project() {
     let h = Harness::new();
     let store = h.store();
     let prepared = purge_storage_fixture(&store);
     let expected = prepared.clone();
-    run_write(&store, WriteOptions::default(), move |tx| {
+    run_write(&store, WriteOptions::fixture(), move |tx| {
         tx.projects().insert_purge_manifest(&prepared)
     })
     .unwrap();
@@ -2530,7 +2700,7 @@ fn purge_manifest_storage_survives_restart_and_requires_its_exact_project() {
     assert_eq!(found.actor_id, expected.actor_id);
     assert_eq!(found.store_id, expected.store_id);
     assert!(
-        run_write(&store, WriteOptions::default(), move |tx| tx
+        run_write(&store, WriteOptions::fixture(), move |tx| tx
             .projects()
             .insert_purge_manifest(&expected))
         .is_err(),
@@ -2565,7 +2735,7 @@ fn purge_row_witnesses_survive_restart_bind_the_review_and_refuse_duplicates_ato
     duplicate.rows.push(duplicate.rows[0].clone());
     duplicate.manifest.digest = project_purge_digest(&duplicate).try_into().unwrap();
     assert!(
-        run_write(&store, WriteOptions::default(), move |tx| tx
+        run_write(&store, WriteOptions::fixture(), move |tx| tx
             .projects()
             .insert_purge_manifest(&duplicate))
         .is_err()
@@ -2578,7 +2748,7 @@ fn purge_row_witnesses_survive_restart_bind_the_review_and_refuse_duplicates_ato
         0
     );
     let expected = prepared.clone();
-    run_write(&store, WriteOptions::default(), move |tx| {
+    run_write(&store, WriteOptions::fixture(), move |tx| {
         tx.projects().insert_purge_manifest(&prepared)
     })
     .unwrap();
@@ -3242,7 +3412,7 @@ fn purge_manifest_storage_refuses_stale_store_project_and_entry_fences_atomicall
             invalid.manifest.digest = "e".repeat(64).try_into().unwrap();
         }
         assert!(
-            run_write(&store, WriteOptions::default(), move |tx| tx
+            run_write(&store, WriteOptions::fixture(), move |tx| tx
                 .projects()
                 .insert_purge_manifest(&invalid))
             .is_err(),
@@ -3256,7 +3426,7 @@ fn purge_manifest_storage_refuses_stale_store_project_and_entry_fences_atomicall
             .is_none()
         );
     }
-    run_write(&store, WriteOptions::default(), move |tx| {
+    run_write(&store, WriteOptions::fixture(), move |tx| {
         tx.projects().insert_purge_manifest(&prepared)
     })
     .unwrap();
@@ -3333,7 +3503,7 @@ fn client_paste_custody_uses_stored_session_scope_and_preserves_independent_file
         }
         Ok(())
     });
-    let root = fx.h.root.0.join("staging-ui");
+    let root = fx.h.root.join("staging-ui");
     let files = Staging::new(root.clone(), fx.store.clone());
     let path = files
         .write(
@@ -3433,7 +3603,7 @@ fn client_paste_refuses_ambiguous_legacy_session_scope_before_creating_bytes() {
             checkpoint_sequence: 0,
         })
     });
-    let root = fx.h.root.0.join("staging-ui");
+    let root = fx.h.root.join("staging-ui");
     let files = Staging::new(root.clone(), fx.store.clone());
     assert!(
         files
@@ -3460,13 +3630,13 @@ fn client_paste_recovers_only_previous_boot_incomplete_identity_bound_writes() {
     let h = Harness::new();
     let store = Arc::new(h.store());
     purge_storage_fixture(store.as_ref());
-    let root = h.root.0.join("staging-ui");
+    let root = h.root.join("staging-ui");
     std::fs::create_dir_all(&root).unwrap();
     let mut reservation = managed_reservation(store.as_ref(), "interrupted-paste");
     reservation.kind = "ClientPaste".into();
     reservation.relative_path = "interrupted-paste.png".into();
     reservation.root = crate::fs::identity_at(&root, &std::fs::metadata(&root).unwrap()).unwrap();
-    run_write(store.as_ref(), WriteOptions::default(), move |tx| {
+    run_write(store.as_ref(), WriteOptions::fixture(), move |tx| {
         tx.projects().reserve_project_managed_file(&reservation)
     })
     .unwrap();
@@ -3477,7 +3647,7 @@ fn client_paste_recovers_only_previous_boot_incomplete_identity_bound_writes() {
         .open(&path)
         .unwrap();
     let identity = crate::fs::identity_for_file(&file).unwrap();
-    run_write(store.as_ref(), WriteOptions::default(), move |tx| {
+    run_write(store.as_ref(), WriteOptions::fixture(), move |tx| {
         tx.projects().begin_project_managed_file_write(
             &project("purge-a"),
             &id("interrupted-paste"),
@@ -3519,20 +3689,20 @@ fn client_paste_recovery_holds_a_replaced_file_without_deleting_either_identity(
     let h = Harness::new();
     let store = Arc::new(h.store());
     purge_storage_fixture(store.as_ref());
-    let root = h.root.0.join("staging-ui");
+    let root = h.root.join("staging-ui");
     std::fs::create_dir_all(&root).unwrap();
     let mut reserved = managed_reservation(store.as_ref(), "replaced-paste");
     reserved.kind = "ClientPaste".into();
     reserved.relative_path = "replaced-paste.png".into();
     reserved.root = crate::fs::identity_at(&root, &std::fs::metadata(&root).unwrap()).unwrap();
-    run_write(store.as_ref(), WriteOptions::default(), move |tx| {
+    run_write(store.as_ref(), WriteOptions::fixture(), move |tx| {
         tx.projects().reserve_project_managed_file(&reserved)
     })
     .unwrap();
     let path = root.join("replaced-paste.png");
     std::fs::write(&path, b"original private bytes").unwrap();
     let identity = crate::fs::identity_at(&path, &std::fs::metadata(&path).unwrap()).unwrap();
-    run_write(store.as_ref(), WriteOptions::default(), move |tx| {
+    run_write(store.as_ref(), WriteOptions::fixture(), move |tx| {
         tx.projects().begin_project_managed_file_write(
             &project("purge-a"),
             &id("replaced-paste"),
@@ -3540,7 +3710,7 @@ fn client_paste_recovery_holds_a_replaced_file_without_deleting_either_identity(
         )
     })
     .unwrap();
-    let moved = h.root.0.join("retained-original");
+    let moved = h.root.join("retained-original");
     std::fs::rename(&path, &moved).unwrap();
     std::fs::write(&path, b"independent replacement").unwrap();
     drop(store);
@@ -3564,7 +3734,7 @@ fn client_staging_custody_covers_plan_and_convention_sources_without_claiming_wo
     use devworks_core::ports::project_purge::{PurgeFileOwner, PurgeFileSelection};
     let fx = Fx::new();
     let p = fx.create("text staging project", &[]);
-    let root = fx.h.root.0.join("staging-ui");
+    let root = fx.h.root.join("staging-ui");
     let files = Staging::new(root.clone(), fx.store.clone());
     let mut owners = Vec::new();
     let mut paths = Vec::new();
@@ -3591,7 +3761,7 @@ fn client_staging_custody_covers_plan_and_convention_sources_without_claiming_wo
     };
     let physical = Recorded::new(
         fx.store.clone(),
-        NativeProjectPurgeFiles::new(fx.h.root.0.clone(), fx.h.root.0.join("cache"))
+        NativeProjectPurgeFiles::new(fx.h.root.path().to_path_buf(), fx.h.root.join("cache"))
             .with_paste_root(root),
     );
     let snapshot = physical.inventory(&selection, &mut || false).unwrap();
@@ -3617,7 +3787,7 @@ fn client_staging_migration_preserves_existing_custody_and_fences_older_builds()
     purge_storage_fixture(&store);
     let reserved = managed_reservation(&store, "prior-custody");
     let expected = reserved.clone();
-    run_write(&store, WriteOptions::default(), move |tx| {
+    run_write(&store, WriteOptions::fixture(), move |tx| {
         tx.projects().reserve_project_managed_file(&reserved)
     })
     .unwrap();
@@ -3675,7 +3845,7 @@ fn managed_purge_file_reservations_survive_restart_block_preview_and_publish_onl
     let prepared = purge_storage_fixture(&store);
     let reservation = managed_reservation(&store, "managed-export");
     let saved = reservation.clone();
-    run_write(&store, WriteOptions::default(), move |tx| {
+    run_write(&store, WriteOptions::fixture(), move |tx| {
         tx.projects().reserve_project_managed_file(&saved)
     })
     .unwrap();
@@ -3686,7 +3856,7 @@ fn managed_purge_file_reservations_survive_restart_block_preview_and_publish_onl
         .unwrap()
     );
     assert!(matches!(
-        run_write(&store, WriteOptions::default(), move |tx| tx
+        run_write(&store, WriteOptions::fixture(), move |tx| tx
             .projects()
             .insert_purge_manifest(&prepared)),
         Err(StorageError::Busy)
@@ -3702,21 +3872,21 @@ fn managed_purge_file_reservations_survive_restart_block_preview_and_publish_onl
     let old = managed_publication(&reservation);
     assert!(
         matches!(
-            run_write(&store, WriteOptions::default(), move |tx| tx
+            run_write(&store, WriteOptions::fixture(), move |tx| tx
                 .projects()
                 .register_project_managed_file(&old)),
             Err(StorageError::ScopeDenied)
         ),
         "a restarted host cannot publish a previous boot's unfinished write"
     );
-    run_write(&store, WriteOptions::default(), move |tx| {
+    run_write(&store, WriteOptions::fixture(), move |tx| {
         tx.projects()
             .finish_project_managed_file(&project("purge-a"), &reservation.id)
     })
     .unwrap();
     let reservation = managed_reservation(&store, "managed-recovered-export");
     let saved = reservation.clone();
-    run_write(&store, WriteOptions::default(), move |tx| {
+    run_write(&store, WriteOptions::fixture(), move |tx| {
         tx.projects().reserve_project_managed_file(&saved)
     })
     .unwrap();
@@ -3724,13 +3894,13 @@ fn managed_purge_file_reservations_survive_restart_block_preview_and_publish_onl
     let mut wrong = published.clone();
     wrong.witness.root.file += 1;
     assert!(
-        run_write(&store, WriteOptions::default(), move |tx| tx
+        run_write(&store, WriteOptions::fixture(), move |tx| tx
             .projects()
             .register_project_managed_file(&wrong))
         .is_err()
     );
     let saved = published.clone();
-    run_write(&store, WriteOptions::default(), move |tx| {
+    run_write(&store, WriteOptions::fixture(), move |tx| {
         tx.projects().register_project_managed_file(&saved)
     })
     .unwrap();
@@ -3757,14 +3927,14 @@ fn managed_purge_file_reservations_survive_restart_block_preview_and_publish_onl
     .unwrap()
     .unwrap();
     assert_eq!(found.witness, published.witness);
-    run_write(&store, WriteOptions::default(), |tx| {
+    run_write(&store, WriteOptions::fixture(), |tx| {
         tx.projects()
             .finish_project_managed_file(&project("purge-a"), &id("managed-recovered-export"))
     })
     .unwrap();
     let saved = published;
     assert!(
-        run_write(&store, WriteOptions::default(), move |tx| tx
+        run_write(&store, WriteOptions::fixture(), move |tx| tx
             .projects()
             .register_project_managed_file(&saved))
         .is_err(),
@@ -3789,8 +3959,10 @@ fn project_preview_writes_refuse_a_logically_purged_project_and_leave_workspace_
     let h = Harness::new();
     let store = Arc::new(h.store());
     let prepared = purge_storage_fixture(store.as_ref());
-    let files =
-        crate::fs::artifacts::NativeArtifactFiles::new(h.root.0.clone(), h.root.0.join("cache"));
+    let files = crate::fs::artifacts::NativeArtifactFiles::new(
+        h.root.path().to_path_buf(),
+        h.root.join("cache"),
+    );
     let custody = ManagedFileCustody::new(store.clone());
     let key = devworks_core::services::artifacts::preview::preview_id("before-purge");
     custody
@@ -3807,7 +3979,7 @@ fn project_preview_writes_refuse_a_logically_purged_project_and_leave_workspace_
         .unwrap()
     );
     let mut manifest = prepared.manifest.clone();
-    run_write(store.as_ref(), WriteOptions::default(), move |tx| {
+    run_write(store.as_ref(), WriteOptions::fixture(), move |tx| {
         tx.projects().insert_purge_manifest(&prepared)?;
         tx.operations().record_intent(NewOperation {
             id: devworks_core::protocol::OperationId(id("purge-preview-fence")),
@@ -3849,17 +4021,19 @@ fn project_preview_recovery_discards_only_the_interrupted_native_key_after_resta
     let h = Harness::new();
     let store = Arc::new(h.store());
     let _ = purge_storage_fixture(store.as_ref());
-    let files =
-        crate::fs::artifacts::NativeArtifactFiles::new(h.root.0.clone(), h.root.0.join("cache"));
+    let files = crate::fs::artifacts::NativeArtifactFiles::new(
+        h.root.path().to_path_buf(),
+        h.root.join("cache"),
+    );
     let workspace = devworks_core::services::artifacts::preview::preview_id("workspace-kept");
     files.write_derived(&workspace, b"workspace cache").unwrap();
     let key = devworks_core::services::artifacts::preview::preview_id("interrupted-key");
-    let dir = h.root.0.join("cache").join("artifact-previews");
+    let dir = h.root.join("cache").join("artifact-previews");
     let mut reserved = managed_reservation(store.as_ref(), "interrupted-preview");
     reserved.kind = "Preview".into();
     reserved.relative_path = key.clone();
     reserved.root = crate::fs::identity_at(&dir, &std::fs::metadata(&dir).unwrap()).unwrap();
-    run_write(store.as_ref(), WriteOptions::default(), move |tx| {
+    run_write(store.as_ref(), WriteOptions::fixture(), move |tx| {
         tx.projects().reserve_project_managed_file(&reserved)
     })
     .unwrap();
@@ -3874,8 +4048,10 @@ fn project_preview_recovery_discards_only_the_interrupted_native_key_after_resta
             .pending_project_managed_writes(&project("purge-a")))
         .unwrap()
     );
-    let files =
-        crate::fs::artifacts::NativeArtifactFiles::new(h.root.0.clone(), h.root.0.join("cache"));
+    let files = crate::fs::artifacts::NativeArtifactFiles::new(
+        h.root.path().to_path_buf(),
+        h.root.join("cache"),
+    );
     ManagedFileCustody::new(store.clone())
         .recover_project_previews(&files)
         .unwrap();
@@ -3906,7 +4082,7 @@ fn native_managed_file(
     reservation.relative_path = name.into();
     reservation.root = crate::fs::identity_at(root, &std::fs::metadata(root).unwrap()).unwrap();
     let saved = reservation.clone();
-    run_write(store, WriteOptions::default(), move |tx| {
+    run_write(store, WriteOptions::fixture(), move |tx| {
         tx.projects().reserve_project_managed_file(&saved)
     })
     .unwrap();
@@ -3921,7 +4097,7 @@ fn native_managed_file(
         created_at_ms: T0,
         witness,
     };
-    run_write(store, WriteOptions::default(), move |tx| {
+    run_write(store, WriteOptions::fixture(), move |tx| {
         tx.projects().register_project_managed_file(&live)
     })
     .unwrap();
@@ -3933,7 +4109,7 @@ fn native_purge_files_cover_all_owned_classes_and_preserve_sources_and_other_gen
     let h = Harness::new();
     let store = Arc::new(h.store());
     let _ = purge_storage_fixture(store.as_ref());
-    let data = &h.root.0;
+    let data = h.root.path();
     let cache = data.join("cache");
     let paste = data.join("paste");
     let digest = devworks_core::fingerprint::sha256_hex(b"owned blob");
@@ -4047,7 +4223,7 @@ fn native_purge_files_cover_all_owned_classes_and_preserve_sources_and_other_gen
     }
     let files = Recorded::new(
         store,
-        crate::fs::purge::NativeProjectPurgeFiles::new(data.clone(), cache)
+        crate::fs::purge::NativeProjectPurgeFiles::new(data.to_path_buf(), cache)
             .with_paste_root(paste)
             .with_read_fence(Arc::new(
                 devworks_core::services::artifacts::lifecycle::Readers::default(),
@@ -4111,7 +4287,7 @@ fn native_purge_files_refuse_replacements_new_entries_wrong_bindings_and_forged_
     let h = Harness::new();
     let store = Arc::new(h.store());
     let _ = purge_storage_fixture(store.as_ref());
-    let root = h.root.0.join("browser/sessions/purge-session");
+    let root = h.root.join("browser/sessions/purge-session");
     std::fs::create_dir_all(&root).unwrap();
     std::fs::write(root.join("profile"), b"original").unwrap();
     let info = store.info();
@@ -4125,7 +4301,10 @@ fn native_purge_files_refuse_replacements_new_entries_wrong_bindings_and_forged_
     };
     let files = Recorded::new(
         store,
-        crate::fs::purge::NativeProjectPurgeFiles::new(h.root.0.clone(), h.root.0.join("cache")),
+        crate::fs::purge::NativeProjectPurgeFiles::new(
+            h.root.path().to_path_buf(),
+            h.root.join("cache"),
+        ),
     );
     let snapshot = files.inventory(&selection, &mut || false).unwrap();
     let profile = snapshot.files.iter().find(|w| !w.directory).unwrap();
@@ -4181,7 +4360,7 @@ fn native_purge_files_require_the_published_transient_file_identity_and_content(
     let h = Harness::new();
     let store = Arc::new(h.store());
     let _ = purge_storage_fixture(store.as_ref());
-    let root = h.root.0.join("diagnostics/exports");
+    let root = h.root.join("diagnostics/exports");
     let info = store.info();
     let selection = PurgeFileSelection {
         project_id: project("purge-a"),
@@ -4201,7 +4380,10 @@ fn native_purge_files_require_the_published_transient_file_identity_and_content(
     );
     let files = Recorded::new(
         store,
-        crate::fs::purge::NativeProjectPurgeFiles::new(h.root.0.clone(), h.root.0.join("cache")),
+        crate::fs::purge::NativeProjectPurgeFiles::new(
+            h.root.path().to_path_buf(),
+            h.root.join("cache"),
+        ),
     );
     let snapshot = files.inventory(&selection, &mut || false).unwrap();
     let original = &snapshot.files[0];
@@ -4237,7 +4419,7 @@ fn purge_preparation_refuses_unreviewed_tables_columns_indexes_and_triggers_with
         h.raw().execute_batch(change).unwrap();
         assert!(
             matches!(
-                run_write(&store, WriteOptions::default(), move |tx| tx
+                run_write(&store, WriteOptions::fixture(), move |tx| tx
                     .projects()
                     .insert_purge_manifest(&prepared)),
                 Err(StorageError::IncompatibleSchema(_))
@@ -4407,7 +4589,7 @@ fn purge_planning_managed_metadata_holds_writing_and_forged_owners_before_native
     let _ = purge_storage_fixture(&store);
     let reservation = managed_reservation(&store, "private-managed-export");
     let saved = reservation.clone();
-    run_write(&store, WriteOptions::default(), move |tx| {
+    run_write(&store, WriteOptions::fixture(), move |tx| {
         tx.projects().reserve_project_managed_file(&saved)
     })
     .unwrap();
@@ -4426,7 +4608,7 @@ fn purge_planning_managed_metadata_holds_writing_and_forged_owners_before_native
                 && r.reason == ProjectPurgeUnresolvedReason::ManagedBytes)
     );
     let publication = managed_publication(&reservation);
-    run_write(&store, WriteOptions::default(), move |tx| {
+    run_write(&store, WriteOptions::fixture(), move |tx| {
         tx.projects().register_project_managed_file(&publication)
     })
     .unwrap();
@@ -4461,7 +4643,7 @@ fn purge_planning_managed_metadata_holds_writing_and_forged_owners_before_native
             rusqlite::params![original, reservation.id.as_str()],
         )
         .unwrap();
-    run_write(&store, WriteOptions::default(), move |tx| {
+    run_write(&store, WriteOptions::fixture(), move |tx| {
         tx.projects()
             .finish_project_managed_file(&reservation.project_id, &reservation.id)
     })
@@ -4481,13 +4663,13 @@ fn managed_created_identity_is_single_bind_current_boot_and_survives_restart_bef
     let _ = purge_storage_fixture(&store);
     let reservation = managed_reservation(&store, "bound-before-private-bytes");
     let saved = reservation.clone();
-    run_write(&store, WriteOptions::default(), move |tx| {
+    run_write(&store, WriteOptions::fixture(), move |tx| {
         tx.projects().reserve_project_managed_file(&saved)
     })
     .unwrap();
     let identity = FileIdentity { volume: 1, file: 3 };
     for _ in 0..2 {
-        run_write(&store, WriteOptions::default(), move |tx| {
+        run_write(&store, WriteOptions::fixture(), move |tx| {
             tx.projects().begin_project_managed_file_write(
                 &project("purge-a"),
                 &id("bound-before-private-bytes"),
@@ -4497,7 +4679,7 @@ fn managed_created_identity_is_single_bind_current_boot_and_survives_restart_bef
         .unwrap();
     }
     assert!(matches!(
-        run_write(&store, WriteOptions::default(), |tx| tx
+        run_write(&store, WriteOptions::fixture(), |tx| tx
             .projects()
             .begin_project_managed_file_write(
                 &project("purge-a"),
@@ -4509,7 +4691,7 @@ fn managed_created_identity_is_single_bind_current_boot_and_survives_restart_bef
     let mut wrong = managed_publication(&reservation);
     wrong.witness.identity = FileIdentity { volume: 1, file: 4 };
     assert!(matches!(
-        run_write(&store, WriteOptions::default(), move |tx| tx
+        run_write(&store, WriteOptions::fixture(), move |tx| tx
             .projects()
             .register_project_managed_file(&wrong)),
         Err(StorageError::ScopeDenied)
@@ -4536,7 +4718,7 @@ fn managed_created_identity_is_single_bind_current_boot_and_survives_restart_bef
     );
     assert!(
         matches!(
-            run_write(&reopened, WriteOptions::default(), move |tx| tx
+            run_write(&reopened, WriteOptions::fixture(), move |tx| tx
                 .projects()
                 .begin_project_managed_file_write(
                     &project("purge-a"),

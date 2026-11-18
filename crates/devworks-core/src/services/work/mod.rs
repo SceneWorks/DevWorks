@@ -85,10 +85,10 @@ use crate::protocol::provider::ArtifactRef;
 use crate::protocol::{
     CorrelationId, DomainErrorCode, DomainFault, EventId, Id, ProjectId, RevisionDimension,
 };
-use crate::services::runs::ControlService;
-use crate::services::sessions::{
+use crate::services::kernel::{
     Failure, Refusal, decided, not_found, project_visible, query_fault, rev,
 };
+use crate::services::runs::ControlService;
 use serde_json::{Value, json};
 use std::collections::BTreeSet;
 use std::sync::Arc;
@@ -155,6 +155,10 @@ pub const PLAN_LINKS: usize = 500;
 pub const MAX_NOTES: usize = 10_000;
 /// Largest staged atomic plan read.
 pub const MAX_STAGED_PLAN: usize = 8 << 20;
+/// Largest plan document a draft may name: its text is shown exactly in the plan approval, so it
+/// is read once when the draft is saved and checked for secrets. The same bound as a staged
+/// plan: far above any prose plan, while keeping the read and the redaction check in memory.
+pub const MAX_PLAN_DOCUMENT: usize = 8 << 20;
 
 pub(crate) type R<T> = Result<T, Failure>;
 
@@ -358,6 +362,8 @@ pub struct WorkService {
     ids: Arc<dyn IdSource>,
     runs: Arc<ControlService>,
     staged: Option<Arc<dyn plans::StagedPlans>>,
+    /// Reads the plan document a saved draft names, to refuse one holding a secret.
+    documents: Option<Arc<dyn plans::StagedPlans>>,
     clock: Option<Arc<dyn crate::ports::Clock>>,
 }
 
@@ -368,8 +374,16 @@ impl WorkService {
             ids,
             runs,
             staged: None,
+            documents: None,
             clock: None,
         }
+    }
+    /// Reads each plan document a saved draft names (artifact content) through `documents`, so
+    /// one whose text the shared redaction would change is refused at save. Without it the
+    /// document's text is not checked.
+    pub fn with_plan_documents(mut self, documents: Arc<dyn plans::StagedPlans>) -> Self {
+        self.documents = Some(documents);
+        self
     }
     /// Reads staged atomic plans (artifact content) through `staged`.
     pub fn with_staged_plans(mut self, staged: Arc<dyn plans::StagedPlans>) -> Self {

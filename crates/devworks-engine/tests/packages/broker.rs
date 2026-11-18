@@ -233,18 +233,10 @@ fn a_mutating_tool_runs_commands_as_its_invoking_principal() {
     );
 }
 
-/// A booted app whose use cases include the agent inbox (`agents.receive`, `agents.post`).
+/// A booted app whose use cases include the agent inbox (`agents.receive`, `agents.post`), which
+/// the engine registers with every composition.
 fn with_inbox() -> App {
-    let mut a = App::unbooted(Harness::new(), None, None);
-    let mut composition = a.composition();
-    let runs = Arc::new(devworks_core::services::runs::ControlService::new(
-        a.h.ids.clone(),
-    ));
-    composition.use_cases = UseCases::new().with_agents(Arc::new(
-        devworks_core::services::agents::AgentService::new(a.h.ids.clone(), runs),
-    ));
-    a.app = Some(a.rt.block_on(boot(composition)).expect("boot"));
-    a
+    App::new()
 }
 
 /// The journaled brokered calls in `states`.

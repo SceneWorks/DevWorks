@@ -219,7 +219,7 @@ fn press(h: &mut egui_kittest::Harness<'_, Panel>, label: &str) -> serde_json::V
         [
             ConnectionAction::Configure { action, .. }
             | ConnectionAction::ConfigureEdit { action, .. },
-        ] => action.clone(),
+        ] => serde_json::to_value(action).unwrap(),
         other => panic!("{label}: {other:?}"),
     }
 }
@@ -420,6 +420,7 @@ fn a_key_hidden_by_another_kind_is_never_sent_to_the_secret_store() {
     type_in(&mut h, Role::TextInput, NEW_NAME_LABEL, "Claude");
     match press_any(&mut h, ADD_LABEL) {
         ConnectionAction::Configure { action, key, .. } => {
+            let action = serde_json::to_value(action).unwrap();
             assert_eq!(action["profile"], "ClaudeSubscriptionMessages");
             assert!(key.is_none(), "the hidden key is never staged");
         }
@@ -457,8 +458,16 @@ fn a_model_binding_hidden_by_another_profile_is_not_sent() {
     // Another profile: the LM Studio binding is not offered for it, so it is not sent.
     choose(&mut h, "New model profile", "OpenRouter");
     type_in(&mut h, Role::TextInput, "New model ID", "m1");
+    type_in(&mut h, Role::TextInput, "New model name", "M1");
+    type_in(
+        &mut h,
+        Role::TextInput,
+        "New model upstream ID",
+        "vendor/m1",
+    );
     match press_any(&mut h, "Add model") {
         ConnectionAction::Configure { action, .. } => {
+            let action = serde_json::to_value(action).unwrap();
             assert_eq!(action["model"]["endpointProfile"], "OpenRouterChat");
             assert!(action["model"].get("connectionId").is_none(), "{action}");
         }

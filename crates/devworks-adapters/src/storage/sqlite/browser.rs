@@ -2,27 +2,13 @@
 //! `browser_observations` (migration 16).
 use super::conn::db;
 use super::repos::{Snapshot, Unit};
+use super::support::{corrupt, id_of, invalid, page_limit};
 use devworks_core::ports::storage::*;
 use devworks_core::protocol::{ActorId, AssignmentId, Id, OperationId, ProjectId, RootId};
 use rusqlite::{Connection, Row, params};
 
-fn invalid(m: impl Into<String>) -> StorageError {
-    StorageError::InvalidRecord(m.into())
-}
-fn corrupt(m: impl Into<String>) -> StorageError {
-    StorageError::unavailable(Unavailable::Corrupt, m)
-}
-fn id_of(s: String) -> Result<Id, StorageError> {
-    Id::new(s).map_err(|e| corrupt(format!("stored identifier: {e}")))
-}
 fn opt_id(s: Option<String>) -> Result<Option<Id>, StorageError> {
     s.map(id_of).transpose()
-}
-fn limit(l: u16) -> Result<i64, StorageError> {
-    if l == 0 || l > MAX_PAGE {
-        return Err(invalid(format!("limit must be 1..={MAX_PAGE}")));
-    }
-    Ok(i64::from(l))
 }
 fn lost(id: &Id) -> StorageError {
     StorageError::LeaseLost {
@@ -175,7 +161,7 @@ macro_rules! browser_reads {
                 after: Option<&Id>,
                 n: u16,
             ) -> Result<Vec<StoredBrowserSession>, StorageError> {
-                let n = limit(n)?;
+                let n = page_limit(n)?;
                 let after = after.map_or("", Id::as_str);
                 match filter {
                     BrowserFilter::Scope(Some(p)) => sessions(
@@ -202,7 +188,7 @@ macro_rules! browser_reads {
                 after: i64,
                 n: u16,
             ) -> Result<Vec<StoredBrowserObservation>, StorageError> {
-                observations(self.conn, session, channel, after, limit(n)?)
+                observations(self.conn, session, channel, after, page_limit(n)?)
             }
         }
     };

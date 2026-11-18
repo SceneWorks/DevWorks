@@ -503,49 +503,37 @@ fn native_graph_pin_keeps_selection_gaps_and_rechecks_authority_for_every_member
 /// A deterministic interruption trigger around the real native verified file reader. It does
 /// not provide bytes, alter hashes, or replace the filesystem/storage/backend.
 struct ControlledFiles {
-    inner: NativeArtifactFiles,
-    mode: std::sync::atomic::AtomicU8,
-    cancel: Cancellation,
-    checks: std::sync::atomic::AtomicUsize,
+    /// The store to compose: the native one, with the interruption trigger on controlled opens.
+    files: Arc<devworks_test_support::FaultFiles>,
+    mode: Arc<std::sync::atomic::AtomicU8>,
+    checks: Arc<std::sync::atomic::AtomicUsize>,
 }
-macro_rules! forward_files {($($name:ident($($arg:ident:$ty:ty),*)->$out:ty;)*)=>{$(fn $name(&self,$($arg:$ty),*)->Result<$out,devworks_core::ports::files::FileFault>{devworks_core::ports::files::ArtifactFiles::$name(&self.inner,$($arg),*)})*};}
-impl devworks_core::ports::files::ArtifactFiles for ControlledFiles {
-    forward_files! {
-     publish(staging_name:&str,source:&mut dyn std::io::Read,digest:&str,bytes:u64,reuse:Option<&str>,generation:&str)->devworks_core::ports::files::PublishedBlob;
-     managed_path(digest:&str,generation:&str)->String;
-     present(digest:&str,generation:&str,bytes:u64)->bool;
-     inspect(digest:&str,generation:&str)->Option<u64>;
-     read_range(digest:&str,generation:&str,bytes:u64,offset:u64,max:usize)->Vec<u8>;
-     open(digest:&str,generation:&str,bytes:u64)->Box<dyn std::io::Read+Send>;
-     unlink(digest:&str,generation:&str)->();
-     quarantine(digest:&str,generation:&str)->();
-     staged()->Vec<String>;
-     remove_staged(name:&str)->();
-     stored_files()->Vec<(String,String)>;
-     write_derived(key:&str,bytes:&[u8])->();
-     read_derived(key:&str,max:usize)->Option<Vec<u8>>;
-     collect_derived()->u64;
-     export(digest:&str,generation:&str,bytes:u64,destination:&Path,overwrite:bool)->();
-    }
-    fn open_controlled(
-        &self,
-        digest: &str,
-        generation: &str,
-        bytes: u64,
-        stopped: &mut dyn FnMut() -> bool,
-    ) -> Result<Box<dyn std::io::Read + Send>, devworks_core::ports::files::FileFault> {
-        self.inner
-            .open_controlled(digest, generation, bytes, &mut || {
-                let check = self
-                    .checks
-                    .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-                match self.mode.load(std::sync::atomic::Ordering::SeqCst) {
-                    1 if check == 2 => self.cancel.cancel(),
-                    2 if check == 2 => std::thread::sleep(Duration::from_millis(1100)),
-                    _ => {}
-                }
-                stopped()
-            })
+impl ControlledFiles {
+    /// Mode 1 cancels at the third control check, mode 2 stalls there past the deadline.
+    fn new(inner: Arc<NativeArtifactFiles>, cancel: Cancellation) -> Self {
+        use std::sync::atomic::{AtomicU8, AtomicUsize, Ordering};
+        let files = devworks_test_support::FaultFiles::over(inner);
+        // Only the open reaches the controlled reader; ranges and project-cache custody stay refused.
+        files.refuse_defaults(&[
+            devworks_test_support::FileOp::ReadRangeControlled,
+            devworks_test_support::FileOp::DerivedRoot,
+            devworks_test_support::FileOp::RemoveDerivedRemnants,
+        ]);
+        let (mode, checks) = (Arc::new(AtomicU8::new(0)), Arc::new(AtomicUsize::new(0)));
+        let (m, c) = (mode.clone(), checks.clone());
+        files.on_stop_check(devworks_test_support::FileOp::OpenControlled, move |_| {
+            let check = c.fetch_add(1, Ordering::SeqCst);
+            match m.load(Ordering::SeqCst) {
+                1 if check == 2 => cancel.cancel(),
+                2 if check == 2 => std::thread::sleep(Duration::from_millis(1100)),
+                _ => {}
+            }
+        });
+        Self {
+            files,
+            mode,
+            checks,
+        }
     }
 }
 #[test]
@@ -563,22 +551,21 @@ fn native_source_verification_obeys_cancel_deadline_and_work_bounds_without_pois
     git(&repo, &["add", "-A"]);
     git(&repo, &["commit", "-q", "-m", "bounded source"]);
     let cancellation = Cancellation::new();
-    let files = Arc::new(ControlledFiles {
-        inner: NativeArtifactFiles::new(h.root.clone(), h.root.with_extension("cache")),
-        mode: std::sync::atomic::AtomicU8::new(0),
-        cancel: cancellation.clone(),
-        checks: std::sync::atomic::AtomicUsize::new(0),
-    });
-    let artifacts = Arc::new(ArtifactService::new(
-        files.clone(),
+    let files = ControlledFiles::new(
+        Arc::new(NativeArtifactFiles::new(
+            h.root.clone(),
+            h.root.with_extension("cache"),
+        )),
+        cancellation.clone(),
+    );
+    let mut composed = composition(&h, store.clone(), "git");
+    composed.artifacts = ArtifactComposition::new(
+        files.files.clone(),
         Arc::new(HostArtifactSources::new(h.clock(), h.ids.clone())),
         Arc::new(NativeFilesystem::new()),
-        h.clock(),
-        h.ids.clone(),
-    ));
-    let mut composed = composition(&h, store.clone(), "git");
-    composed.artifacts = artifacts.clone();
+    );
     let app = executor.block_on(boot(composed)).unwrap();
+    let artifacts = app.artifacts().clone();
     let ctx = principal(&*store, "user", PrincipalKind::Human);
     base_directory(&store, &ctx, &src);
     let repository = discovered(&app, &ctx).remove(0);
@@ -1816,7 +1803,7 @@ fn neighbour_work(files: usize, calls: usize) -> (Vec<(&'static str, StoreWork)>
             store.clone(),
             h.clock(),
             h.ids.clone(),
-            composition(&h, store.clone(), "git").artifacts,
+            app.artifacts().clone(),
         ),
     ));
     let gateway = devworks_core::gateway::Gateway {

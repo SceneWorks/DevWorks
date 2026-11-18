@@ -1,6 +1,7 @@
 //! Scoped row materialization for the ownership classifier, never deletion authority.
 use super::super::conn::db;
 use super::references::ColumnReference;
+use crate::storage::sqlite::support::invalid;
 use devworks_core::fingerprint::sha256_hex;
 use devworks_core::ports::storage::{ProjectPurgeCandidate, ProjectPurgeCandidates, StorageError};
 use devworks_core::protocol::{ProjectId, data::DataScope};
@@ -12,9 +13,6 @@ const POLICY: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/../../docs/architecture/validation/project-purge/native-row-selectors.json"
 ));
-fn invalid(message: &str) -> StorageError {
-    StorageError::InvalidRecord(message.into())
-}
 pub(super) fn quote(name: &str) -> String {
     format!("\"{}\"", name.replace('"', "\"\""))
 }

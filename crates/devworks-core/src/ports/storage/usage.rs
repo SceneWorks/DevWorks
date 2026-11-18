@@ -1,9 +1,40 @@
 //! Canonical inference accounting and immutable price provenance (DW-21). An attempt retains
 //! host-resolved ownership at admission; later association edits never rewrite incurred usage.
 use super::{SequenceKey, StorageError};
-use crate::ports::usage::PublishedTariff;
+use crate::ports::usage::{CostClassification, PublishedTariff};
 use crate::protocol::{ActorId, AssignmentId, Id, OperationId, ProjectId, RootId};
 use serde_json::Value;
+
+/// Where an inference attempt stands. Stored and reported by name.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AttemptState {
+    Admitted,
+    Dispatched,
+    Settled,
+    UnknownTail,
+    CancelledBeforeDispatch,
+}
+impl AttemptState {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Admitted => "Admitted",
+            Self::Dispatched => "Dispatched",
+            Self::Settled => "Settled",
+            Self::UnknownTail => "UnknownTail",
+            Self::CancelledBeforeDispatch => "CancelledBeforeDispatch",
+        }
+    }
+    pub fn parse(value: &str) -> Option<Self> {
+        Some(match value {
+            "Admitted" => Self::Admitted,
+            "Dispatched" => Self::Dispatched,
+            "Settled" => Self::Settled,
+            "UnknownTail" => Self::UnknownTail,
+            "CancelledBeforeDispatch" => Self::CancelledBeforeDispatch,
+            _ => return None,
+        })
+    }
+}
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct StoredInferenceAttempt {
@@ -29,8 +60,7 @@ pub struct StoredInferenceAttempt {
     pub access_mode: String,
     pub provider_model_id: Option<String>,
     pub pricing_snapshot: Value,
-    /// Admitted, Dispatched, Settled, UnknownTail or CancelledBeforeDispatch.
-    pub state: String,
+    pub state: AttemptState,
     pub revision: i64,
     pub created_at_ms: i64,
 }
@@ -49,7 +79,7 @@ pub struct StoredAttemptBalance {
     pub revision: i64,
     pub priced_micro_usd: Option<i64>,
     pub reserved_micro_usd: Option<i64>,
-    pub classification: String,
+    pub classification: CostClassification,
     pub monetary_complete: bool,
     pub incomplete: bool,
     pub unknown_tail: bool,
@@ -106,7 +136,7 @@ pub struct StoredUsageOrigin {
     pub payload: Value,
     pub recorded_at_ms: i64,
     pub priced_micro_usd: Option<i64>,
-    pub classification: String,
+    pub classification: CostClassification,
     pub monetary_complete: bool,
     pub incomplete: bool,
     pub unknown_tail: bool,

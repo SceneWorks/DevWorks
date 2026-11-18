@@ -10,17 +10,18 @@ use devworks_core::ports::storage::{
 use devworks_core::protocol::{Id, OperationId, OperationState};
 use std::sync::Arc;
 
-/// Runs `work` on the write owner and awaits its outcome without blocking the runtime. A lost
-/// reply after admission is `CommitUnknown`, never a rollback.
+/// Runs `work` on the write owner and awaits its outcome without blocking the runtime. `options`
+/// names the write's class. A lost reply after admission is `CommitUnknown`, never a rollback.
 pub(crate) async fn write<T, F>(
     store: &Arc<dyn ApplicationStore>,
+    options: WriteOptions,
     work: F,
 ) -> Result<T, StorageError>
 where
     T: Send + 'static,
     F: FnOnce(&mut dyn WriteTransaction) -> Result<T, StorageError> + Send + 'static,
 {
-    write_with(store, WriteOptions::default(), work).await
+    write_with(store, options, work).await
 }
 
 pub(crate) async fn write_with<T, F>(

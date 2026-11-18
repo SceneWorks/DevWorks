@@ -60,7 +60,7 @@ fn registry_records_are_compare_and_set_and_versions_keep_their_identity() {
     let h = Harness::new();
     let s = h.store();
     let d = "a".repeat(64);
-    run_write(&s, WriteOptions::default(), {
+    run_write(&s, WriteOptions::fixture(), {
         let d = d.clone();
         move |tx| {
             assert_eq!(tx.packages().registry_revision()?, 1);
@@ -130,7 +130,7 @@ fn proposals_record_one_decision_and_generations_fence_and_retain_state() {
     let h = Harness::new();
     let s = h.store();
     let d = "a".repeat(64);
-    run_write(&s, WriteOptions::default(), {
+    run_write(&s, WriteOptions::fixture(), {
         let d = d.clone();
         move |tx| {
             tx.packages().insert_package(&package("demo"))?;
@@ -232,7 +232,7 @@ fn migration_20_adds_the_package_registry_to_a_version_19_store() {
     let h = Harness::new();
     drop(SqliteStore::open_with(h.config(), &through(19)).unwrap());
     let s = h.store();
-    let head = run_write(&s, WriteOptions::default(), |tx| {
+    let head = run_write(&s, WriteOptions::fixture(), |tx| {
         tx.packages().registry_revision()
     })
     .unwrap();
@@ -243,7 +243,7 @@ fn migration_20_adds_the_package_registry_to_a_version_19_store() {
 fn a_packages_version_list_always_includes_its_newest_version() {
     let h = Harness::new();
     let s = h.store();
-    run_write(&s, WriteOptions::default(), |tx| {
+    run_write(&s, WriteOptions::fixture(), |tx| {
         tx.packages().insert_package(&package("many"))?;
         for n in 0..520i64 {
             let mut v = version("many", &format!("{n:064x}"));
@@ -254,7 +254,7 @@ fn a_packages_version_list_always_includes_its_newest_version() {
         Ok(())
     })
     .unwrap();
-    let all = run_write(&s, WriteOptions::default(), |tx| {
+    let all = run_write(&s, WriteOptions::fixture(), |tx| {
         tx.packages().package_versions("many")
     })
     .unwrap();
@@ -262,4 +262,59 @@ fn a_packages_version_list_always_includes_its_newest_version() {
     // The bound keeps the newest, oldest first: the last one is the newest version.
     assert_eq!(all.last().unwrap().manifest_digest, format!("{:064x}", 519));
     assert_eq!(all[0].manifest_digest, format!("{:064x}", 8));
+}
+
+fn is_corrupt<T>(result: &Result<T, StorageError>) -> bool {
+    matches!(
+        result,
+        Err(StorageError::StorageUnavailable {
+            cause: Unavailable::Corrupt,
+            ..
+        })
+    )
+}
+
+#[test]
+fn a_stored_revision_of_zero_is_a_corrupt_store_not_a_panic() {
+    let h = Harness::new();
+    let s = h.store();
+    run_write(&s, WriteOptions::fixture(), |tx| {
+        tx.packages().insert_package(&package("demo"))?;
+        Ok(())
+    })
+    .unwrap();
+    {
+        let raw = h.raw();
+        raw.pragma_update(None, "ignore_check_constraints", true)
+            .unwrap();
+        raw.execute("UPDATE package_registry SET revision=0", [])
+            .unwrap();
+        raw.execute("UPDATE packages SET revision=0", []).unwrap();
+    }
+    let registry = run_write(&s, WriteOptions::fixture(), |tx| {
+        Ok(tx.packages().advance_registry(1))
+    })
+    .unwrap();
+    assert!(is_corrupt(&registry), "{registry:?}");
+    let package_update = run_write(&s, WriteOptions::fixture(), |tx| {
+        Ok(tx.packages().update_package(&package("demo"), 1))
+    })
+    .unwrap();
+    assert!(is_corrupt(&package_update), "{package_update:?}");
+}
+
+#[test]
+fn a_stale_handler_state_expectation_with_no_row_is_a_conflict() {
+    let h = Harness::new();
+    let s = h.store();
+    let result = run_write(&s, WriteOptions::fixture(), |tx| {
+        Ok(tx
+            .packages()
+            .compare_and_set_state("absent", 1, 3, json!({})))
+    })
+    .unwrap();
+    assert!(
+        matches!(result, Err(StorageError::RevisionConflict(_))),
+        "{result:?}"
+    );
 }

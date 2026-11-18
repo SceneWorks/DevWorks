@@ -14,8 +14,10 @@ pub mod conventions;
 pub mod cursor;
 pub mod desktop;
 pub mod diagnostics;
+pub mod effect;
+pub(crate) mod effect_job;
 pub mod evals;
-pub mod failure;
+pub use crate::kernel::failure;
 pub mod git;
 pub mod github;
 pub mod graph;
@@ -24,6 +26,7 @@ pub mod history;
 pub mod indexing;
 pub mod instructions;
 pub mod jobs;
+pub mod kernel;
 pub mod knowledge;
 pub mod mcp;
 pub mod notifications;
@@ -42,13 +45,15 @@ pub mod usage;
 pub mod watch;
 pub mod web;
 pub mod work;
+pub mod write_fence;
 
 use crate::context::InvocationContext;
 use crate::gateway::{CommandOutcome, Gateway, GatewayFailure, PreparedReceive, QueryOutcome};
 use crate::ports::storage::{ReadOptions, WriteOptions};
 use crate::ports::{CommandHandler, QueryHandler};
+use crate::protocol::results::DomainDecision;
 use crate::protocol::support::BoundedList;
-use crate::protocol::{CorrelationId, DomainErrorCode, DomainFault, RetryAdvice};
+use crate::protocol::{CommandReply, CorrelationId, DomainErrorCode, DomainFault, RetryAdvice};
 use crate::registry::{self, Mode};
 use crate::settings;
 use std::collections::BTreeMap;
@@ -83,7 +88,24 @@ pub struct UseCases {
     inference_router: Option<Arc<router::InferenceRouter>>,
     connection_service: Option<Arc<router::connections::ConnectionService>>,
     mcp_service: Option<Arc<mcp::McpClientService>>,
+    /// Signalled when a command commits, so a waiting `agents.receive` looks again at once.
+    delivery_wake: Option<Arc<crate::ports::storage::Wake>>,
 }
+
+/// The operations of the agents family (`AgentService`).
+pub const AGENT_OPERATIONS: [&str; 11] = [
+    "agents.inspect",
+    "agents.delegate",
+    "agents.messages",
+    "agents.post",
+    "agents.receive",
+    "agents.ack",
+    "agents.history",
+    "agents.events",
+    "agents.inbox",
+    "agents.acknowledge",
+    "agents.checkpoint",
+];
 
 impl UseCases {
     /// Outgoing MCP configuration and selected capabilities share the gateway with UI and tools.
@@ -221,19 +243,8 @@ impl UseCases {
 
     /// One agent-coordination owner for the selected UI and tool operations.
     pub fn with_agents(mut self, service: Arc<agents::AgentService>) -> Self {
-        for op in [
-            "agents.inspect",
-            "agents.delegate",
-            "agents.messages",
-            "agents.post",
-            "agents.receive",
-            "agents.ack",
-            "agents.history",
-            "agents.events",
-            "agents.inbox",
-            "agents.acknowledge",
-            "agents.checkpoint",
-        ] {
+        self.delivery_wake = Some(service.delivery_wake().clone());
+        for op in AGENT_OPERATIONS {
             self.register(op, Some(service.clone()), Some(service.clone()));
         }
         self
@@ -490,6 +501,20 @@ impl UseCases {
         self
     }
 
+    /// Registers every operation of `other` over this set, so `other`'s handler replaces the one
+    /// already registered for the same operation. Services `other` carries replace this set's.
+    pub fn overlay(mut self, other: UseCases) -> Self {
+        self.queries.extend(other.queries);
+        self.commands.extend(other.commands);
+        self.inference_router = other.inference_router.or(self.inference_router);
+        self.connection_service = other.connection_service.or(self.connection_service);
+        self.mcp_service = other.mcp_service.or(self.mcp_service);
+        self
+    }
+    /// The name of every registered operation.
+    pub fn operations(&self) -> impl Iterator<Item = &'static str> + '_ {
+        self.queries.keys().chain(self.commands.keys()).copied()
+    }
     pub fn has_query(&self, operation: &str) -> bool {
         self.queries.contains_key(operation)
     }
@@ -529,7 +554,7 @@ impl UseCases {
         operation: &str,
         raw: &[u8],
     ) -> CommandOutcome {
-        self.command_with(gateway, ctx, operation, raw, WriteOptions::default())
+        self.command_with(gateway, ctx, operation, raw, WriteOptions::command())
     }
 
     pub fn command_with(
@@ -541,8 +566,28 @@ impl UseCases {
         options: WriteOptions,
     ) -> CommandOutcome {
         match self.commands.get(operation) {
-            Some(handler) => gateway.command_with(ctx, operation, raw, handler.clone(), options),
+            Some(handler) => {
+                let outcome = gateway.command_with(ctx, operation, raw, handler.clone(), options);
+                self.signal_commit(&outcome);
+                outcome
+            }
             None => Err(GatewayFailure::NoUseCase(operation.to_owned())),
+        }
+    }
+
+    /// A new receipt may have delivered a message; a replay or a refusal committed nothing new.
+    fn signal_commit(&self, outcome: &CommandOutcome) {
+        if let (
+            Some(wake),
+            Ok(CommandReply::Recorded {
+                receipt,
+                replayed: false,
+                ..
+            }),
+        ) = (&self.delivery_wake, outcome)
+            && !matches!(receipt.decision, DomainDecision::Refused { .. })
+        {
+            wake.notify();
         }
     }
 
@@ -557,6 +602,30 @@ impl UseCases {
             Some(handler) => gateway.prepare_receive(ctx, raw, handler.clone(), options),
             None => Err(Err(GatewayFailure::NoUseCase("agents.receive".into()))),
         }
+    }
+
+    /// Phase one of a receive that holds no thread (see [`Gateway::start_receive`]).
+    pub fn start_receive(
+        &self,
+        gateway: &Gateway<'_>,
+        ctx: &InvocationContext,
+        raw: &[u8],
+        options: WriteOptions,
+    ) -> Result<PreparedReceive, CommandOutcome> {
+        match self.commands.get("agents.receive") {
+            Some(handler) => gateway.start_receive(ctx, raw, handler.clone(), options),
+            None => Err(Err(GatewayFailure::NoUseCase("agents.receive".into()))),
+        }
+    }
+
+    /// Looks again at a receive that waited (see [`Gateway::recheck_receive`]).
+    pub fn recheck_receive(
+        &self,
+        gateway: &Gateway<'_>,
+        ctx: &InvocationContext,
+        prepared: &mut PreparedReceive,
+    ) -> Result<(), CommandOutcome> {
+        gateway.recheck_receive(ctx, prepared)
     }
 
     pub fn finish_receive(

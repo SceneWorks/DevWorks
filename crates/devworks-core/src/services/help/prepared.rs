@@ -8,7 +8,7 @@ use crate::{
     protocol::{DomainErrorCode, Id, records::HelpAvailability},
     services::{
         artifacts::host::HelpFile,
-        sessions::{Failure, Refusal},
+        kernel::{Failure, Refusal},
     },
 };
 use std::collections::BTreeSet;

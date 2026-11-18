@@ -445,32 +445,22 @@ fn near_limit_guide_is_bounded_full_tail_unicode_and_reused_across_registry_chur
     // Exercise both actual Gateway preparation controls while the native first hash is in
     // progress. The test clock changes only after several bounded file callbacks, so neither
     // case is a pre-admission refusal or a prefix-only successful result.
-    struct StopClock {
-        calls: AtomicUsize,
-        cancel: Cancellation,
-        now: i64,
-        deadline: bool,
-    }
-    impl Clock for StopClock {
-        fn now_ms(&self) -> devworks_core::protocol::Counter {
-            let call = self.calls.fetch_add(1, Ordering::SeqCst);
-            if call >= 7 {
-                if self.deadline {
-                    return devworks_core::protocol::Counter::new(self.now + 1_000).unwrap();
-                }
-                self.cancel.cancel();
-            }
-            devworks_core::protocol::Counter::new(self.now).unwrap()
-        }
-    }
     for deadline in [false, true] {
         let cancellation = Cancellation::default();
-        let clock = Arc::new(StopClock {
-            calls: AtomicUsize::new(0),
-            cancel: cancellation.clone(),
-            now: app.h.now(),
-            deadline,
-        });
+        let now = app.h.now();
+        let cancel = cancellation.clone();
+        let clock = Arc::new(devworks_test_support::HookedClock::over(
+            Arc::new(devworks_test_support::TestClock::new(now)),
+            move |time, call| {
+                if call >= 7 {
+                    if deadline {
+                        time.set(now + 1_000);
+                    } else {
+                        cancel.cancel();
+                    }
+                }
+            },
+        ));
         let service = Arc::new(devworks_core::services::help::HelpService::new(
             app.store.clone(),
             app.app().artifacts().clone(),
@@ -506,7 +496,7 @@ fn near_limit_guide_is_bounded_full_tail_unicode_and_reused_across_registry_chur
             matches!(&reply,DomainQueryReply::Rejected{fault,..} if fault.code == DomainErrorCode::Cancelled),
             "{reply:?}"
         );
-        assert!(clock.calls.load(Ordering::SeqCst) >= 8);
+        assert!(clock.reads() >= 8);
         assert_eq!(
             read(&*app.store, |r| Ok(r.stamp().committed_sequence)),
             before,

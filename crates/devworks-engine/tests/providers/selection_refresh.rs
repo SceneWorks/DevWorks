@@ -13,6 +13,7 @@ use devworks_core::{
         router::embedding_spaces::EmbeddingSpaceService,
     },
 };
+use devworks_test_support::LoseAcks;
 fn project(f: &Fx, name: &str) {
     let name = name.to_owned();
     write(&*f.store, move |tx| {
@@ -122,65 +123,6 @@ pub(super) fn clear(f: &Fx, index: Arc<IndexService>, ctx: &InvocationContext) -
     assert!(children(f).is_empty());
     parents[0].id.clone()
 }
-struct LostPage {
-    inner: Arc<dyn ApplicationStore>,
-    target: Arc<Mutex<Option<OperationId>>>,
-    armed: Arc<AtomicBool>,
-}
-struct PageJob {
-    inner: Box<dyn WriteJob>,
-    target: Arc<Mutex<Option<OperationId>>>,
-    armed: Arc<AtomicBool>,
-    hide: bool,
-}
-impl WriteJob for PageJob {
-    fn run(&mut self, tx: &mut dyn WriteTransaction) -> Result<(), StorageError> {
-        self.inner.run(tx)?;
-        let key = self.target.lock().unwrap().clone();
-        if let Some(key) = key
-            && tx.operations().operation(&key)?.is_some_and(|op| {
-                op.attempts
-                    .iter()
-                    .flat_map(|a| &a.observations)
-                    .any(|v| v.get("selectionFanoutPage").is_some())
-            })
-            && self.armed.swap(false, Ordering::SeqCst)
-        {
-            self.hide = true;
-        }
-        Ok(())
-    }
-    fn finish(self: Box<Self>, outcome: Result<(), StorageError>) {
-        self.inner.finish(if self.hide && outcome.is_ok() {
-            Err(StorageError::CommitUnknown)
-        } else {
-            outcome
-        });
-    }
-}
-impl ApplicationStore for LostPage {
-    fn info(&self) -> StoreInfo {
-        self.inner.info()
-    }
-    fn read(
-        &self,
-        o: &ReadOptions,
-        w: &mut dyn FnMut(&dyn ReadSnapshot) -> Result<(), StorageError>,
-    ) -> Result<(), StorageError> {
-        self.inner.read(o, w)
-    }
-    fn submit_write(&self, o: WriteOptions, j: Box<dyn WriteJob>) -> Result<(), StorageError> {
-        self.inner.submit_write(
-            o,
-            Box::new(PageJob {
-                inner: j,
-                target: self.target.clone(),
-                armed: self.armed.clone(),
-                hide: false,
-            }),
-        )
-    }
-}
 #[test]
 fn real_selection_clear_queues_one_parent_then_recovers_all_65_project_pages_without_duplicate_children()
  {
@@ -193,12 +135,24 @@ fn real_selection_clear_queues_one_parent_then_recovers_all_65_project_pages_wit
     for n in 0..65 {
         project(&f, &format!("project-{n:03}"));
     }
-    let target = Arc::new(Mutex::new(None));
-    let wrapped: Arc<dyn ApplicationStore> = Arc::new(LostPage {
-        inner: f.store.clone(),
-        target: target.clone(),
-        armed: Arc::new(AtomicBool::new(true)),
-    });
+    // Loses the acknowledgment of the write that records the selection fan-out page of `target`.
+    let target: Arc<Mutex<Option<OperationId>>> = Arc::new(Mutex::new(None));
+    let wrapped = LoseAcks::over(f.store.clone());
+    {
+        let target = target.clone();
+        wrapped.lose_when(move |tx| {
+            let key = target.lock().unwrap().clone();
+            Ok(match key {
+                Some(key) => tx.operations().operation(&key)?.is_some_and(|op| {
+                    op.attempts
+                        .iter()
+                        .flat_map(|a| &a.observations)
+                        .any(|v| v.get("selectionFanoutPage").is_some())
+                }),
+                None => false,
+            })
+        });
+    }
     let index = Arc::new(IndexService::new(
         wrapped,
         f.artifacts.clone(),

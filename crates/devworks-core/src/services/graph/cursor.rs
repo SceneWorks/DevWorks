@@ -3,7 +3,7 @@ use super::read::Position;
 use crate::ports::storage::StorageError;
 use crate::protocol::Id;
 use crate::services::cursor::CursorBinding;
-use crate::services::sessions::Failure;
+use crate::services::kernel::Failure;
 
 pub(super) struct Cursors {
     binding: CursorBinding,

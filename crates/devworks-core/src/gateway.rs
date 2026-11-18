@@ -33,19 +33,20 @@ use crate::admission::{self, AdmissionError, CallerKey, Refusal, Selection};
 use crate::authority::AuthorityCapability;
 use crate::context::{InvocationContext, PrincipalKind, ReceiptIdentity};
 use crate::fingerprint::{self, Fingerprint};
+use crate::kernel::failure::storage_fault;
 use crate::operations::OperationInput;
 use crate::ports::storage::{
     ActorRegistry, ArtifactRepository, AuthorityGrant, AuthorityLedger, AuthorityRead,
     CommandLedger, CommandLedgerRead, ConfigurationRepository, DurableQueue, EventFilter,
     EventPage, EventRecord, GrantLedger, GrantRead, GrantRecord, HistoryLog, HistoryRead,
-    LedgerEntry, NewAuthorityGrant, NewEvent, NewGrant, NewPrincipalBinding, OperationJournal,
-    PackageHandlerLedger, PrincipalBinding, ReadOptions, ReceiptReply, RegisteredRepository,
-    RevisionConflict, Savepoint, SessionRepository, StorageError, StoreInfo, WriteOptions,
-    WriteTransaction, read_snapshot, run_write,
+    LedgerEntry, NewEvent, OperationJournal, PackageHandlerLedger, PrincipalBinding, ReadOptions,
+    ReceiptReply, RegisteredRepository, RevisionConflict, Savepoint, SessionRepository,
+    StorageError, StoreInfo, WriteOptions, WriteTransaction, read_snapshot, run_write,
 };
 use crate::ports::{
     AuthorityDenial, AuthorityPort, AuthorityRequest, Authorization, CommandHandler, Decided,
     GrantUse, HandlerFailure, IdKind, IdSource, Preparation, Prepared, QueryHandler, StoredReceipt,
+    WaitTicket,
 };
 use crate::protocol::results::{
     DomainCommandReply, DomainDecision, DomainQueryReply, validate_command_reply,
@@ -57,7 +58,6 @@ use crate::protocol::{
     EventId, Id, Protocol, QueryId, Receipt, Rejection, RequestKey, RetryAdvice, Revision,
 };
 use crate::registry::{EffectClass, Mode, ModeBinding, OperationDescriptor, SchemaRevision};
-use crate::services::failure::storage_fault;
 use serde_json::json;
 use std::cell::RefCell;
 use std::fmt;
@@ -218,6 +218,15 @@ pub struct Gateway<'p> {
     pub ids: &'p dyn IdSource,
 }
 
+/// How preparation treats a retained receive's wait.
+#[derive(Clone, Copy, PartialEq)]
+enum Waiting {
+    /// `prepare` may block the calling thread until the wait ends.
+    Block,
+    /// `poll_wait` looks once and reports what to wait on; nothing blocks.
+    Report,
+}
+
 struct CommandPreparation {
     admitted: AdmittedCommand,
     authorization: Authorization,
@@ -227,7 +236,15 @@ struct CommandPreparation {
 }
 
 /// Opaque, read-only preparation for a retained inbox wait. It carries no staged effect.
-pub struct PreparedReceive(CommandPreparation);
+pub struct PreparedReceive(CommandPreparation, Option<WaitTicket>);
+
+impl PreparedReceive {
+    /// What the receive is waiting on, if anything. A receive without a ticket is ready to be
+    /// decided.
+    pub fn ticket(&self) -> Option<&WaitTicket> {
+        self.1.as_ref()
+    }
+}
 
 impl Gateway<'_> {
     fn correlation(&self) -> CorrelationId {
@@ -441,7 +458,7 @@ impl Gateway<'_> {
         raw: &[u8],
         handler: Arc<dyn CommandHandler>,
     ) -> CommandOutcome {
-        self.command_with(ctx, operation, raw, handler, WriteOptions::default())
+        self.command_with(ctx, operation, raw, handler, WriteOptions::command())
     }
 
     /// [`Gateway::command`] with explicit write admission options (cancellation, deadline).
@@ -453,10 +470,11 @@ impl Gateway<'_> {
         handler: Arc<dyn CommandHandler>,
         options: WriteOptions,
     ) -> CommandOutcome {
-        let prepared = match self.prepare_command(ctx, operation, raw, handler, options) {
-            Ok(prepared) => prepared,
-            Err(outcome) => return outcome,
-        };
+        let prepared =
+            match self.prepare_command(ctx, operation, raw, handler, options, Waiting::Block) {
+                Ok((prepared, _)) => prepared,
+                Err(outcome) => return outcome,
+            };
         self.finish_command(ctx, prepared)
     }
 
@@ -469,7 +487,8 @@ impl Gateway<'_> {
         handler: Arc<dyn CommandHandler>,
         options: WriteOptions,
     ) -> Result<PreparedReceive, CommandOutcome> {
-        let prepared = self.prepare_command(ctx, "agents.receive", raw, handler, options)?;
+        let (prepared, _) =
+            self.prepare_command(ctx, "agents.receive", raw, handler, options, Waiting::Block)?;
         if prepared.admitted.prepared.is_some() {
             let env = Preparation::new(
                 self.store,
@@ -483,7 +502,58 @@ impl Gateway<'_> {
                 "retained receive preparation cannot stage an effect".into(),
             )));
         }
-        Ok(PreparedReceive(prepared))
+        Ok(PreparedReceive(prepared, None))
+    }
+
+    /// Phase one of a retained receive that holds no thread: admits and authorizes it, looks
+    /// once and returns at once. The receive carries a [`WaitTicket`] when it has nothing to
+    /// read yet; the caller waits (asynchronously) and calls [`Gateway::recheck_receive`].
+    pub fn start_receive(
+        &self,
+        ctx: &InvocationContext,
+        raw: &[u8],
+        handler: Arc<dyn CommandHandler>,
+        options: WriteOptions,
+    ) -> Result<PreparedReceive, CommandOutcome> {
+        let (prepared, ticket) = self.prepare_command(
+            ctx,
+            "agents.receive",
+            raw,
+            handler,
+            options,
+            Waiting::Report,
+        )?;
+        Ok(PreparedReceive(prepared, ticket))
+    }
+
+    /// Looks again at a receive that waited, once its signal fired or its recheck interval
+    /// passed. Short and non-blocking; replaces the receive's ticket.
+    pub fn recheck_receive(
+        &self,
+        ctx: &InvocationContext,
+        prepared: &mut PreparedReceive,
+    ) -> Result<(), CommandOutcome> {
+        let command = &prepared.0;
+        let env = Preparation::new(
+            self.store,
+            command.options.cancellation.as_ref(),
+            command.options.deadline_ms,
+        );
+        let deadline = prepared.1.as_ref().map(|ticket| ticket.deadline);
+        match command
+            .handler
+            .poll_wait(ctx, &command.admitted, &env, deadline)
+        {
+            Ok(ticket) => {
+                prepared.1 = ticket;
+                Ok(())
+            }
+            Err(e) => Err(Ok(self.rejected(
+                command.request_key.clone(),
+                Rejection::StorageUnavailable,
+                command_retry(&e),
+            ))),
+        }
     }
 
     /// Decide a prepared receive while the runtime holds its short admission fence.
@@ -502,7 +572,8 @@ impl Gateway<'_> {
         raw: &[u8],
         handler: Arc<dyn CommandHandler>,
         options: WriteOptions,
-    ) -> Result<CommandPreparation, CommandOutcome> {
+        waiting: Waiting,
+    ) -> Result<(CommandPreparation, Option<WaitTicket>), CommandOutcome> {
         let decoded = match admission::decode(
             Selection {
                 operation,
@@ -572,7 +643,7 @@ impl Gateway<'_> {
         let cancellation = options.cancellation.clone();
         let env = Preparation::new(self.store, cancellation.as_ref(), options.deadline_ms);
         let preparing = if authorization.is_replay_only() {
-            Ok(None)
+            Ok((None, None))
         } else {
             // Removed content is a committed terminal outcome, never a reason to recreate
             // files or reopen source arguments before the transactional replay fence.
@@ -584,14 +655,23 @@ impl Gateway<'_> {
             })
             .and_then(|purged| {
                 if purged {
-                    Ok(None)
+                    Ok((None, None))
+                } else if waiting == Waiting::Report {
+                    handler
+                        .poll_wait(ctx, &admitted, &env, None)
+                        .map(|ticket| (None, ticket))
                 } else {
-                    handler.prepare(ctx, &admitted, &env)
+                    handler
+                        .prepare(ctx, &admitted, &env)
+                        .map(|prepared| (prepared, None))
                 }
             })
         };
-        match preparing {
-            Ok(prepared) => admitted.prepared = prepared,
+        let ticket = match preparing {
+            Ok((prepared, waiting_on)) => {
+                admitted.prepared = prepared;
+                waiting_on
+            }
             Err(e) => {
                 // Same mapping as a write that was not admitted: nothing durable decided.
                 return Err(Ok(self.rejected(
@@ -600,14 +680,17 @@ impl Gateway<'_> {
                     command_retry(&e),
                 )));
             }
-        }
-        Ok(CommandPreparation {
-            admitted,
-            authorization,
-            handler,
-            options,
-            request_key,
-        })
+        };
+        Ok((
+            CommandPreparation {
+                admitted,
+                authorization,
+                handler,
+                options,
+                request_key,
+            },
+            ticket,
+        ))
     }
 
     fn finish_command(
@@ -798,7 +881,7 @@ impl Gateway<'_> {
         correlation_id: &CorrelationId,
     ) {
         let (ctx, correlation) = (ctx.clone(), correlation_id.0.as_str().to_owned());
-        let _ = run_write(self.store, WriteOptions::default(), move |tx| {
+        let _ = run_write(self.store, WriteOptions::authority(), move |tx| {
             if &tx.store().store_id != ctx.store_id()
                 || tx.actors().actor_kind(ctx.principal())?.is_none()
             {
@@ -990,11 +1073,10 @@ fn unit_of_work(
                 let host = authorization.authority_grants().iter().map(|g| (true, g));
                 for (authority, grant) in resume.chain(host) {
                     let spent = if authority {
-                        tx.authority()
-                            .consume_grant(grant, ctx.principal())
-                            .map(|_| ())
+                        crate::authority::consume_host_grant(tx, grant, ctx.principal()).map(|_| ())
                     } else {
-                        tx.grants().consume(grant, ctx.principal()).map(|_| ())
+                        crate::authority::consume_resume_grant(tx, grant, ctx.principal())
+                            .map(|_| ())
                     };
                     match spent {
                         Ok(_) => {}
@@ -1083,7 +1165,7 @@ fn unit_of_work(
         },
     )?;
     // The receipt's durable typed reply is published after commit; its intent commits here.
-    crate::services::artifacts::replies::record_intent(
+    crate::kernel::reply_intent::record_intent(
         tx,
         &command.identity,
         &receipt.command_id,
@@ -1181,33 +1263,17 @@ fn decision_scope(
 /// records (written through [`WriteTransaction::authority_history`]), and receipt reply
 /// publication (written by the reply publisher on its own transaction).
 fn gateway_owned(event: &NewEvent) -> bool {
-    use crate::authority::deletion::DELETION_AGGREGATE;
-    use crate::authority::service::{DENIAL_AGGREGATE, GRANT_AGGREGATE, PRINCIPAL_AGGREGATE};
-    use crate::services::artifacts::replies::REPLY_AGGREGATE;
-    matches!(
-        event.aggregate_kind.as_str(),
-        "command"
-            | "command_receipt"
-            | DENIAL_AGGREGATE
-            | PRINCIPAL_AGGREGATE
-            | GRANT_AGGREGATE
-            | DELETION_AGGREGATE
-            | REPLY_AGGREGATE
-    ) || matches!(
-        event.kind.as_str(),
-        "CommandDecided"
-            | "ReceiptIncompatible"
-            | "AuthorityDenied"
-            | "PrincipalAuthorityBound"
-            | "PrincipalAuthorityRevoked"
-            | "AuthorityGrantIssued"
-            | "AuthorityGrantRevoked"
-            | "RepositoryDeletionConfirmed"
-            | "RepositoryDeletionAuthorized"
-            | "RepositoryDeletionCompleted"
-            | "RepositoryDeletionPartial"
-            | "ReceiptReplyPublished"
-    )
+    use crate::authority::service::DENIAL_AGGREGATE;
+    use crate::kernel::reply_intent::REPLY_AGGREGATE;
+    crate::authority::is_authority_history(event)
+        || matches!(
+            event.aggregate_kind.as_str(),
+            "command" | "command_receipt" | DENIAL_AGGREGATE | REPLY_AGGREGATE
+        )
+        || matches!(
+            event.kind.as_str(),
+            "CommandDecided" | "ReceiptIncompatible" | "AuthorityDenied" | "ReceiptReplyPublished"
+        )
 }
 
 /// The transaction a use case decides against: every repository of the unit of work except the
@@ -1242,17 +1308,6 @@ impl GrantRead for HandlerTx<'_> {
         self.inner.borrow_mut().grants().grant(id)
     }
 }
-impl GrantLedger for HandlerTx<'_> {
-    fn issue(&mut self, _: NewGrant) -> Result<GrantRecord, StorageError> {
-        Err(authority_owned())
-    }
-    fn consume(&mut self, _: &GrantUse, _: &ActorId) -> Result<GrantRecord, StorageError> {
-        Err(authority_owned())
-    }
-    fn revoke(&mut self, _: &Id, _: i64) -> Result<GrantRecord, StorageError> {
-        Err(authority_owned())
-    }
-}
 impl AuthorityRead for HandlerTx<'_> {
     fn principal(&self, actor: &ActorId) -> Result<Option<PrincipalBinding>, StorageError> {
         self.inner.borrow_mut().authority().principal(actor)
@@ -1265,32 +1320,6 @@ impl AuthorityRead for HandlerTx<'_> {
             .borrow_mut()
             .authority()
             .registered_repositories()
-    }
-}
-impl AuthorityLedger for HandlerTx<'_> {
-    fn bind_principal(
-        &mut self,
-        _: NewPrincipalBinding,
-        _: Option<i64>,
-    ) -> Result<PrincipalBinding, StorageError> {
-        Err(authority_owned())
-    }
-    fn revoke_principal(&mut self, _: &ActorId, _: i64) -> Result<PrincipalBinding, StorageError> {
-        Err(authority_owned())
-    }
-    fn issue_grant(&mut self, _: NewAuthorityGrant) -> Result<AuthorityGrant, StorageError> {
-        Err(authority_owned())
-    }
-    fn revoke_grant(
-        &mut self,
-        _: &Id,
-        _: i64,
-        _: &ActorId,
-    ) -> Result<AuthorityGrant, StorageError> {
-        Err(authority_owned())
-    }
-    fn consume_grant(&mut self, _: &GrantUse, _: &ActorId) -> Result<AuthorityGrant, StorageError> {
-        Err(authority_owned())
     }
 }
 impl CommandLedgerRead for HandlerTx<'_> {
@@ -1657,7 +1686,7 @@ impl QueueRead for HandlerTx<'_> {
 }
 impl DurableQueue for HandlerTx<'_> {
     fn enqueue(&mut self, entry: NewQueueEntry) -> Result<QueueEntry, StorageError> {
-        if entry.consumer == crate::services::artifacts::replies::REPLY_CONSUMER {
+        if entry.consumer == crate::kernel::reply_intent::REPLY_CONSUMER {
             return Err(StorageError::InvalidRecord(
                 "receipt reply intents are recorded only by the gateway".into(),
             ));
@@ -1783,7 +1812,7 @@ impl WriteTransaction for HandlerTx<'_> {
     // Grant and authority reads pass through; their writes are refused here and reach the
     // store only through the authority seams (which hold the capability) or the gateway's own
     // consumption step, which runs on the unwrapped transaction.
-    fn grants(&mut self) -> &mut dyn GrantLedger {
+    fn grants(&mut self) -> &mut dyn GrantRead {
         self
     }
     fn grant_writes(
@@ -1802,7 +1831,7 @@ impl WriteTransaction for HandlerTx<'_> {
     fn configuration(&mut self) -> &mut dyn ConfigurationRepository {
         self.inner.get_mut().configuration()
     }
-    fn authority(&mut self) -> &mut dyn AuthorityLedger {
+    fn authority(&mut self) -> &mut dyn AuthorityRead {
         self
     }
     fn authority_writes(

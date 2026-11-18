@@ -1195,7 +1195,7 @@ impl devworks_engine::RootEligibility for Roots {
 fn root_scoped_work_of_an_earlier_boot_waits_for_root_eligibility() {
     let h = Harness::new();
     let s = h.open();
-    seed_root(&h, "root-a");
+    seed_root(&*s, "root-a");
     let (rooted, free) = write(&*s, |tx| {
         let event_id = event(tx, "Changed")?;
         let rid = tx.new_id(IdKind::QueueEntry);
@@ -1365,12 +1365,11 @@ fn a_cancel_requested_before_a_crash_is_honoured_by_recovery() {
 /// Root-scoped claim of a dead process, for consumer `work`, optionally behind an operation that
 /// was dispatched and whose cancellation was requested before the crash.
 fn stranded_root_work(
-    h: &Harness,
     s: &Arc<dyn ApplicationStore>,
     root: &str,
     dispatched_and_cancelled: bool,
 ) -> QueueEntry {
-    seed_root(h, root);
+    seed_root(&**s, root);
     let root = root.to_owned();
     let e = write(&**s, move |tx| {
         let op = if dispatched_and_cancelled {
@@ -1435,8 +1434,8 @@ fn stranded_root_work(
 fn resumed_counts_only_work_that_became_ready() {
     let h = Harness::new();
     let s = h.open();
-    let plain = stranded_root_work(&h, &s, "root-a", false);
-    let cancelled = stranded_root_work(&h, &s, "root-b", true);
+    let plain = stranded_root_work(&s, "root-a", false);
+    let cancelled = stranded_root_work(&s, "root-b", true);
     drop(s);
     let s = h.open();
     let roots = Roots::new(&[]);

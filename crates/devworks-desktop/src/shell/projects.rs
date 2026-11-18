@@ -2,13 +2,13 @@
 //! `repositories.*` or `settings.*` command an agent tool submits; nothing here decides what a
 //! use case decides. A command whose outcome is not known keeps its exact frame (Confirm
 //! outcomes, and the next launch, resubmit it).
-use crate::backend::{Reply, Slot, Unresolved};
+use crate::backend::{Reply, Unresolved};
 use crate::memory::RouteMemory;
-use crate::ops::{self, Failure};
+use crate::ops::{self, Failure, LifecycleChange};
 use crate::project_purge::Live;
 use crate::projects_ops::ProjectsSlot;
 use crate::projects_screen::{
-    ARCHIVE, Action, DELETE, PortfolioView, RESTORE, RepositoriesView, confirm_window, same_access,
+    Action, PortfolioView, RepositoriesView, confirm_window, same_access,
 };
 pub use crate::projects_screen::{
     BASE_DIRECTORY, BaseDirectory, CONTAINER_RUNTIME, Confirm, CreateForm, EditForm, GitView,
@@ -72,7 +72,8 @@ impl Screen for ProjectsScreen {
         }
     }
     fn refresh(&mut self, cx: &mut Cx, route: Route) {
-        if !cx.pending(&Slot::ProjectsList) && !cx.pending(&Slot::RepositoriesList) {
+        if !cx.pending(&ProjectsSlot::ProjectsList) && !cx.pending(&ProjectsSlot::RepositoriesList)
+        {
             Screen::load(self, cx, route);
         }
     }
@@ -202,19 +203,17 @@ impl ProjectsCtl<'_, '_> {
                 continue;
             }
             self.projects.texts.insert(key, TextState::Loading);
-            let (r, op) = (
-                repository.to_owned(),
-                if readme {
-                    "repositories.readme"
-                } else {
-                    "repositories.summary"
-                },
-            );
+            let r = repository.to_owned();
+            let op = if readme {
+                "repositories.readme"
+            } else {
+                "repositories.summary"
+            };
             self.query(
                 ProjectsSlot::RepositoryText(repository.to_owned(), readme),
                 "Reading repository texts",
                 op,
-                move |b| ops::repository_text(b, op, &r),
+                move |b| ops::repository_text(b, &r, readme),
             );
         }
     }
@@ -287,14 +286,16 @@ impl ProjectsCtl<'_, '_> {
                         move |b| ops::project_membership(b, &p, &repos),
                     );
                 }
-                Action::Lifecycle(op, p) => {
+                Action::Lifecycle(change, p) => {
                     let slot = ProjectsSlot::ProjectCommand(p.id.0.as_str().to_owned());
-                    let label = match op {
-                        ARCHIVE => "Archiving the project",
-                        RESTORE => "Restoring the project",
-                        _ => "Deleting the project",
+                    let label = match change {
+                        LifecycleChange::Archive => "Archiving the project",
+                        LifecycleChange::Restore => "Restoring the project",
+                        LifecycleChange::Delete => "Deleting the project",
                     };
-                    self.command(slot, label, op, move |b| ops::project_lifecycle(b, op, &p));
+                    self.command(slot, label, change.operation(), move |b| {
+                        ops::project_lifecycle(b, change, &p)
+                    });
                 }
                 Action::OpenGraph(id, name) => self.effects.push(Effect::OpenGraph(id, name)),
                 Action::Open(id) => {
@@ -445,6 +446,19 @@ impl ProjectsCtl<'_, '_> {
         reply: Reply,
     ) -> Option<(ProjectsSlot, Reply)> {
         match (slot, reply) {
+            // The lists the shell keeps for every screen: it reads them from these results.
+            (ProjectsSlot::ProjectsList, Reply::Query(q)) => {
+                let result = ops::projects(q).map_err(|e| e.describe());
+                self.effects.push(Effect::ProjectList(result));
+            }
+            (ProjectsSlot::RepositoriesList, Reply::Query(q)) => {
+                let result = ops::repositories(q).map_err(|e| e.describe());
+                self.effects.push(Effect::RepositoryList(result));
+            }
+            (ProjectsSlot::ProjectRepositories(p), Reply::Query(q)) => {
+                let result = ops::repositories(q).map_err(|e| e.describe());
+                self.effects.push(Effect::ProjectMembers(p, result));
+            }
             (ProjectsSlot::DeletedProjects, Reply::Query(q)) => match ops::projects(q) {
                 Ok((items, more)) => {
                     self.projects.deleted = ListState {
@@ -992,7 +1006,7 @@ impl ProjectsCtl<'_, '_> {
         // The selected project's scheduled jobs (their run status), once per selection.
         if let Some(p) = selection
             && !self.job_status.contains_key(&p)
-            && !self.pending(&Slot::ProjectJobs(p.clone()))
+            && !self.pending(&crate::jobs_ops::JobsSlot::ProjectJobs(p.clone()))
             && online.is_ok()
         {
             self.effects.push(Effect::LoadProjectJobs(p));
@@ -1024,8 +1038,8 @@ impl ProjectsCtl<'_, '_> {
             Some(true) => {
                 self.projects.confirm = None;
                 actions.push(match confirm {
-                    Confirm::Archive(p) => Action::Lifecycle(ARCHIVE, p),
-                    Confirm::Delete(p) => Action::Lifecycle(DELETE, p),
+                    Confirm::Archive(p) => Action::Lifecycle(LifecycleChange::Archive, p),
+                    Confirm::Delete(p) => Action::Lifecycle(LifecycleChange::Delete, p),
                     Confirm::RemoveIndex(r) => Action::RemoveIndex(r),
                 });
             }

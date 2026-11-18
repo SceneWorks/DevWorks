@@ -224,7 +224,7 @@ fn a_person_creates_and_edits_a_skill_for_one_project() {
     let for_write = project.clone();
     run_write(
         &**engine.host().runtime().store(),
-        WriteOptions::default(),
+        WriteOptions::fixture(),
         move |tx| {
             tx.projects().insert_project(&StoredProject {
                 id: for_write,

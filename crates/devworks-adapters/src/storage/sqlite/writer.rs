@@ -8,7 +8,8 @@
 use super::conn::db;
 use super::repos::Unit;
 use devworks_core::ports::storage::{
-    Cancellation, StorageError, StoreInfo, Unavailable, WriteJob, WriteOptions, WritePriority,
+    Cancellation, CommitSignal, StorageError, StoreInfo, Unavailable, WriteJob, WriteOptions,
+    WritePriority,
 };
 use devworks_core::ports::{Clock, IdSource};
 use rusqlite::Connection;
@@ -56,6 +57,7 @@ pub(crate) struct WriterHandle {
     stopping: Arc<AtomicBool>,
     #[cfg_attr(not(test), allow(dead_code))]
     pub faults: Arc<Faults>,
+    signal: CommitSignal,
     thread: Option<JoinHandle<()>>,
 }
 
@@ -80,6 +82,7 @@ impl WriterHandle {
         let doorbell = Arc::new(Doorbell::default());
         let stopping = Arc::new(AtomicBool::new(false));
         let faults = Arc::new(Faults::default());
+        let signal = CommitSignal::default();
         let worker = Worker {
             conn,
             authoritative: a_rx,
@@ -87,6 +90,7 @@ impl WriterHandle {
             doorbell: doorbell.clone(),
             stopping: stopping.clone(),
             faults: faults.clone(),
+            signal: signal.clone(),
             streak: 0,
             serial: 0,
             cfg,
@@ -107,8 +111,14 @@ impl WriterHandle {
             doorbell,
             stopping,
             faults,
+            signal,
             thread: Some(thread),
         })
+    }
+
+    /// Bumped after each commit that changed a row.
+    pub fn signal(&self) -> CommitSignal {
+        self.signal.clone()
     }
 
     pub fn submit(
@@ -175,6 +185,7 @@ struct Worker {
     doorbell: Arc<Doorbell>,
     stopping: Arc<AtomicBool>,
     faults: Arc<Faults>,
+    signal: CommitSignal,
     streak: u32,
     /// Serial of the current unit of work (savepoint ownership).
     serial: u64,
@@ -317,6 +328,7 @@ impl Worker {
             }
         };
         self.serial += 1;
+        let changes_before = self.conn.total_changes();
         let (ran, open_savepoints) = {
             let mut unit = Unit {
                 conn: &self.conn,
@@ -325,6 +337,7 @@ impl Worker {
                 info: &self.cfg.info,
                 savepoints: 0,
                 serial: self.serial,
+                authority_log: None,
             };
             let ran = catch_unwind(AssertUnwindSafe(|| job.run(&mut unit)));
             (ran, unit.savepoints)
@@ -345,6 +358,15 @@ impl Worker {
                 Err(StorageError::Cancelled)
             }
             Ok(Ok(())) => match tx.commit() {
+                Ok(()) if self.conn.total_changes() != changes_before => {
+                    // After the commit is durable and before the submitter hears of it.
+                    self.signal.bump();
+                    if cfg!(test) && self.faults.lose_next_ack.swap(false, Ordering::SeqCst) {
+                        Err(StorageError::CommitUnknown)
+                    } else {
+                        Ok(())
+                    }
+                }
                 Ok(()) if cfg!(test) && self.faults.lose_next_ack.swap(false, Ordering::SeqCst) => {
                     Err(StorageError::CommitUnknown)
                 }

@@ -58,6 +58,7 @@
 //! recorded against the operation's attempt fence, and the effect is never re-executed.
 use crate::store;
 use devworks_core::ports::Clock;
+use devworks_core::ports::storage::WriteOptions;
 use devworks_core::ports::storage::{
     ApplicationStore, AttemptBinding, DeliveryFilter, DeliveryKey, EventRecord, OperationRecord,
     QueueEntry, QueueFence, QueueState, RecoveryOutcome, Settlement, StorageError,
@@ -567,7 +568,7 @@ impl Dispatcher {
         let limit = self.inner.cfg.recovery_batch;
         let mut report = RecoveryReport::default();
         loop {
-            let batch = store::write(&self.inner.store, move |tx| {
+            let batch = store::write(&self.inner.store, WriteOptions::recovery(), move |tx| {
                 store::classify_interrupted(tx, limit)
             })
             .await?;
@@ -578,7 +579,7 @@ impl Dispatcher {
             }
         }
         loop {
-            let out = store::write(&self.inner.store, move |tx| {
+            let out = store::write(&self.inner.store, WriteOptions::recovery(), move |tx| {
                 store::recover_prior_boots(tx, limit)
             })
             .await?;
@@ -631,7 +632,7 @@ impl Dispatcher {
                 .map(|(k, v)| (k.clone(), v.clone()))
                 .collect();
             let lease = inner.cfg.lease_ms;
-            report.reasserted = store::write(&inner.store, move |tx| {
+            report.reasserted = store::write(&inner.store, WriteOptions::recovery(), move |tx| {
                 let mut n = 0;
                 for (id, fence) in &mine {
                     match tx.queue().reassert(id, fence, lease) {
@@ -645,8 +646,10 @@ impl Dispatcher {
             .await?;
         }
         let limit = inner.cfg.recovery_batch;
-        report.recovered =
-            store::write(&inner.store, move |tx| store::recover_expired(tx, limit)).await?;
+        report.recovered = store::write(&inner.store, WriteOptions::recovery(), move |tx| {
+            store::recover_expired(tx, limit)
+        })
+        .await?;
         report.resumed = self.resume_eligible().await?;
 
         // Claim only within free worker capacity.
@@ -684,7 +687,7 @@ impl Dispatcher {
         };
         let reserved: Vec<(usize, usize)> = order.iter().map(|(i, _, r)| (*i, *r)).collect();
         let (owner, lease) = (inner.cfg.owner.clone(), inner.cfg.lease_ms);
-        let claiming = store::write(&inner.store, move |tx| {
+        let claiming = store::write(&inner.store, WriteOptions::host_state(), move |tx| {
             let mut out = Vec::new();
             for (idx, name, room) in &order {
                 let left = budget - out.len();
@@ -774,30 +777,31 @@ impl Dispatcher {
                 continue;
             };
             let (name, from) = (consumer.name.clone(), cursors.get(&consumer.name).cloned());
-            let (n, last, more) = store::write(&self.inner.store, move |tx| {
-                let page = tx
-                    .queue()
-                    .awaiting_eligibility(&name, from.as_ref(), batch)?;
-                let more = page.len() == usize::from(batch);
-                let mut n = 0;
-                for e in &page {
-                    if let Some(op) = &e.operation_id
-                        && tx
-                            .operations()
-                            .operation(op)?
-                            .is_some_and(|o| possibly_dispatched(o.state))
-                    {
-                        continue;
+            let (n, last, more) =
+                store::write(&self.inner.store, WriteOptions::recovery(), move |tx| {
+                    let page = tx
+                        .queue()
+                        .awaiting_eligibility(&name, from.as_ref(), batch)?;
+                    let more = page.len() == usize::from(batch);
+                    let mut n = 0;
+                    for e in &page {
+                        if let Some(op) = &e.operation_id
+                            && tx
+                                .operations()
+                                .operation(op)?
+                                .is_some_and(|o| possibly_dispatched(o.state))
+                        {
+                            continue;
+                        }
+                        if port.may_resume(tx, e)?
+                            && tx.queue().requeue(&e.id, 0)?.state == QueueState::Ready
+                        {
+                            n += 1;
+                        }
                     }
-                    if port.may_resume(tx, e)?
-                        && tx.queue().requeue(&e.id, 0)?.state == QueueState::Ready
-                    {
-                        n += 1;
-                    }
-                }
-                Ok((n, page.last().map(|e| e.id.clone()), more))
-            })
-            .await?;
+                    Ok((n, page.last().map(|e| e.id.clone()), more))
+                })
+                .await?;
             resumed += n;
             match (more, last) {
                 (true, Some(last)) => {
@@ -914,10 +918,11 @@ impl Dispatcher {
                         continue;
                     }
                     let (id, f) = (entry.id.clone(), fence.clone());
-                    let renewed = store::write(&self.inner.store, move |tx| {
-                        tx.queue().renew(&id, &f, lease)
-                    })
-                    .await;
+                    let renewed =
+                        store::write(&self.inner.store, WriteOptions::settlement(), move |tx| {
+                            tx.queue().renew(&id, &f, lease)
+                        })
+                        .await;
                     if renewed.is_err() {
                         proceed = false;
                         break;
@@ -1029,40 +1034,41 @@ impl Dispatcher {
                     .await?;
                 for op in held {
                     let observed = executor.observe(op.clone()).await;
-                    let established = store::write(&self.inner.store, move |tx| {
-                        let Some(current) = tx.operations().operation(&op.id)? else {
-                            return Ok(false);
-                        };
-                        if current.state != OperationState::OutcomeUnknown
-                            || current.revision != op.revision
-                        {
-                            return Ok(false);
-                        }
-                        let (to, note) = observation(&observed);
-                        match to {
-                            Some(to) => {
-                                tx.operations().transition(
-                                    &op.id,
-                                    current.revision,
-                                    None,
-                                    to,
-                                    Some(json!({"reconciliation": note})),
-                                )?;
-                                Ok(true)
+                    let established =
+                        store::write(&self.inner.store, WriteOptions::settlement(), move |tx| {
+                            let Some(current) = tx.operations().operation(&op.id)? else {
+                                return Ok(false);
+                            };
+                            if current.state != OperationState::OutcomeUnknown
+                                || current.revision != op.revision
+                            {
+                                return Ok(false);
                             }
-                            None => {
-                                if let Some(a) = current.latest_attempt() {
-                                    tx.operations().observe(
+                            let (to, note) = observation(&observed);
+                            match to {
+                                Some(to) => {
+                                    tx.operations().transition(
                                         &op.id,
-                                        a.attempt_no,
-                                        json!({"reconciliation": note}),
+                                        current.revision,
+                                        None,
+                                        to,
+                                        Some(json!({"reconciliation": note})),
                                     )?;
+                                    Ok(true)
                                 }
-                                Ok(false)
+                                None => {
+                                    if let Some(a) = current.latest_attempt() {
+                                        tx.operations().observe(
+                                            &op.id,
+                                            a.attempt_no,
+                                            json!({"reconciliation": note}),
+                                        )?;
+                                    }
+                                    Ok(false)
+                                }
                             }
-                        }
-                    })
-                    .await?;
+                        })
+                        .await?;
                     if established {
                         resolved += 1;
                     }
@@ -1114,7 +1120,7 @@ impl Dispatcher {
         let handler = consumer.handler.clone();
         let policy = consumer.retry;
         let gate = consumer.eligibility.clone();
-        store::write(&self.inner.store, move |tx| {
+        store::write(&self.inner.store, WriteOptions::settlement(), move |tx| {
             let Some(e) = current(tx, &claimed)? else {
                 return Ok(Step::Lost);
             };
@@ -1139,7 +1145,7 @@ impl Dispatcher {
     ) -> Result<Step, StorageError> {
         let c = claimed.clone();
         let gate = consumer.eligibility.clone();
-        let begin = store::write(&self.inner.store, move |tx| {
+        let begin = store::write(&self.inner.store, WriteOptions::settlement(), move |tx| {
             let Some(e) = current(tx, &c)? else {
                 return Ok(Err(Step::Lost));
             };
@@ -1224,11 +1230,12 @@ impl Dispatcher {
                 break None;
             }
             let (id, f) = (claimed.id.clone(), fence.clone());
-            let cancel_requested = store::write(&self.inner.store, move |tx| {
-                let e = tx.queue().renew(&id, &f, lease)?;
-                Ok(e.cancellation_epoch != epoch || e.cancel_requested)
-            })
-            .await;
+            let cancel_requested =
+                store::write(&self.inner.store, WriteOptions::settlement(), move |tx| {
+                    let e = tx.queue().renew(&id, &f, lease)?;
+                    Ok(e.cancellation_epoch != epoch || e.cancel_requested)
+                })
+                .await;
             // A lost lease needs no signal: the handler's commit is refused as stale.
             let stopping = self.inner.stopping.load(Ordering::SeqCst);
             if asked_at.is_none() && (stopping || matches!(cancel_requested, Ok(true))) {
@@ -1242,7 +1249,7 @@ impl Dispatcher {
             return Ok(Step::Lost);
         };
         let policy = consumer.retry;
-        store::write(&self.inner.store, move |tx| {
+        store::write(&self.inner.store, WriteOptions::settlement(), move |tx| {
             let Some(e) = current(tx, &claimed)? else {
                 // Settled by the handler's commit path (or recovered).
                 return Ok(Step::Lost);
@@ -1289,7 +1296,7 @@ impl Dispatcher {
         let owner = self.inner.cfg.owner.clone();
         let c = claimed.clone();
         let gate = consumer.eligibility.clone();
-        let begin = store::write(&self.inner.store, move |tx| {
+        let begin = store::write(&self.inner.store, WriteOptions::settlement(), move |tx| {
             let Some(e) = current(tx, &c)? else {
                 return Ok(Begin::Done(Step::Lost));
             };
@@ -1367,16 +1374,17 @@ impl Dispatcher {
                     let (id, f) = (claimed.id.clone(), fence.clone());
                     // A lost lease does not stop recording the outcome: the attempt fence still
                     // binds the operation, and the delivery is then reconciled, not replayed.
-                    let _ = store::write(&self.inner.store, move |tx| {
-                        tx.queue().renew(&id, &f, lease)
-                    })
-                    .await;
+                    let _ =
+                        store::write(&self.inner.store, WriteOptions::settlement(), move |tx| {
+                            tx.queue().renew(&id, &f, lease)
+                        })
+                        .await;
                 }
             }
         };
 
         let handler = consumer.handler.clone();
-        store::write(&self.inner.store, move |tx| {
+        store::write(&self.inner.store, WriteOptions::settlement(), move |tx| {
             let op = tx
                 .operations()
                 .operation(&operation.id)?
@@ -1444,7 +1452,7 @@ impl Dispatcher {
         let cause = format!("delivery failed: {cause}");
         // Unrecorded, the claim stays until its lease expires and recovery reclaims it; the
         // health check shows why.
-        let recorded = store::write(&self.inner.store, move |tx| {
+        let recorded = store::write(&self.inner.store, WriteOptions::settlement(), move |tx| {
             let Some(e) = current(tx, &claimed)? else {
                 return Ok(());
             };

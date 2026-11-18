@@ -2,11 +2,12 @@
 
 ## Pull requests
 
-- Group related CodeGraph items into one PR instead of opening a PR per item. Items are related when a reviewer would read them together: the same subsystem or files, the same kind of change (for example several flaky-test fixes, or several hardening fixes in one service), or follow-ups to the same feature. Keep unrelated items in separate PRs, and name every item the PR carries in its body. Every grouped item still needs its own tests and acceptance report.
-- Do not merge one open PR's branch into another; if work depends on an unmerged PR, add it to that PR's branch while it is open, wait for it to merge, or put both on a feature integration branch.
-- Keep each PR at or under 5000 hand-written changed lines. The `PR size` workflow enforces this (`tools/pr-size/check.py`); files marked `linguist-generated` in `.gitattributes` are not counted.
-- Merge each slice as soon as its CI passes. Land incomplete capabilities unwired (not reachable from the UI or agent tools) rather than holding a long-lived draft PR.
-- Automated review runs for at most 3 rounds. After the third round, file each remaining finding as a CodeGraph bug, link it in the thread reply, and merge on passing CI.
+- **Feature work.** Each CodeGraph feature gets one pushed branch, `feature/<feature-key>` (for example `feature/dw-f16`). Each item of the feature is built on its own local branch and worktree, gets exactly one independent review, has its valid findings fixed, and is merged locally into the feature branch, which is then pushed. Items do not get their own PRs, and nobody waits for CI between items.
+- **Feature PRs.** When every item of a feature is integrated and the feature's acceptance passes, open one PR per repository from the feature branch to `main`, naming every item it carries. It needs passing CI. Automated review runs for at most 5 rounds, and every valid finding is fixed within them. After the fifth, request no more reviews: fix only blocker and major findings, file every other remaining finding as a CodeGraph bug, link it in the thread reply, and merge on passing CI.
+- **Other work** (a standalone item outside a feature, a hotfix): group related CodeGraph items into one PR. Items are related when a reviewer would read them together: the same subsystem or files, the same kind of change, or follow-ups to the same feature. Keep unrelated items in separate PRs, and name every item in the PR body. Automated review runs for at most 3 rounds; after the third, file each remaining finding as a CodeGraph bug, link it in the thread reply, and merge on passing CI.
+- Do not merge one open PR's branch into another; if work depends on an unmerged PR, add it to that PR's branch while it is open, wait for it to merge, or put both on a feature branch.
+- Keep each non-feature PR at or under 5000 hand-written changed lines. The `PR size` workflow enforces this (`tools/pr-size/check.py`); files marked `linguist-generated` in `.gitattributes` are not counted, and PRs from `feature/*` branches are not checked.
+- Every item still needs its own tests and acceptance report. Land incomplete capabilities unwired (not reachable from the UI or agent tools) rather than holding a long-lived draft PR.
 
 ## Review guidelines
 

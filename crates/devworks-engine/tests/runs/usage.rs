@@ -378,7 +378,12 @@ fn actual_coordinator_and_worker_transports_hold_quiescence_until_owned_close() 
                         Arc::new(Authority),
                         Arc::new(devworks_adapters::process::NativeProcessHost),
                     );
-                    composed.use_cases = UseCases::new().with_router(selected_router.clone());
+                    composed.application = devworks_engine::ApplicationComposition {
+                        router: Some(devworks_engine::RouterPorts {
+                            directory: Some(Arc::new(Directory)),
+                        }),
+                        ..Default::default()
+                    };
                     composed.config.shutdown_bound = Duration::from_millis(100);
                     Some(boot(composed).await.unwrap())
                 } else {
@@ -1083,9 +1088,7 @@ fn recovery_retains_live_native_owner_and_retires_only_after_verified_process_ex
             tokio::time::sleep(Duration::from_millis(5)).await;
         };
         let original_cleanup = original.clone();
-        struct ChildFiles(std::path::PathBuf);
-        impl Drop for ChildFiles { fn drop(&mut self) { let _=std::fs::remove_dir_all(&self.0); } }
-        let _files = ChildFiles(original_cleanup);
+        let _files = devworks_test_support::TempRoot::adopt(original_cleanup);
         let connection = rusqlite::Connection::open(original.join("workspace.sqlite")).unwrap();
         connection.execute("VACUUM INTO ?1", [h.root.join("workspace.sqlite").to_string_lossy().as_ref()]).unwrap();
         drop(connection);

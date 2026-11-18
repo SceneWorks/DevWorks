@@ -6,6 +6,7 @@ mod commands;
 mod credentials;
 pub mod indexing;
 mod pins;
+pub use pins::RetentionPass;
 mod queries;
 pub(crate) mod scheduled;
 

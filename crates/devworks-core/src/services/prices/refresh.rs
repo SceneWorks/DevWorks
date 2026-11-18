@@ -7,42 +7,12 @@ use crate::ports::IdKind;
 use crate::ports::storage::*;
 use crate::ports::usage::*;
 use crate::protocol::{DomainErrorCode, EventId, Id, OperationId};
-use crate::services::sessions::{Failure, Refusal};
+use crate::services::kernel::{Failure, Refusal};
+use crate::services::write_fence::WriteFence;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
-
-/// Drains only admitted database units. No read, parser or external source fetch holds this
-/// fence; after closure a late source result cannot publish or settle its journal.
-#[derive(Default)]
-pub struct RefreshWriteFence {
-    stopping: std::sync::atomic::AtomicBool,
-    units: std::sync::RwLock<()>,
-}
-impl RefreshWriteFence {
-    pub fn stop(&self) {
-        self.stopping
-            .store(true, std::sync::atomic::Ordering::SeqCst);
-    }
-    pub fn close(&self) {
-        self.stop();
-        drop(self.units.write().unwrap_or_else(|p| p.into_inner()));
-    }
-    pub fn write<T, F>(&self, store: &dyn ApplicationStore, work: F) -> Result<T, StorageError>
-    where
-        T: Send + 'static,
-        F: FnOnce(&mut dyn WriteTransaction) -> Result<T, StorageError> + Send + 'static,
-    {
-        let admitted = self.units.read().unwrap_or_else(|p| p.into_inner());
-        if self.stopping.load(std::sync::atomic::Ordering::SeqCst) {
-            return Err(StorageError::Cancelled);
-        }
-        let result = run_write(store, WriteOptions::default(), work);
-        drop(admitted);
-        result
-    }
-}
 
 pub const CONSUMER: &str = "price_refresh";
 pub const CAPABILITY: &str = "router.price_refresh";
@@ -66,8 +36,8 @@ pub(crate) fn conflict(kind: &'static str, id: &Id, expected: i64, current: i64)
         crate::protocol::RevisionDimension::Configuration,
         kind,
         id.clone(),
-        crate::services::sessions::rev(expected),
-        crate::services::sessions::rev(current),
+        crate::services::kernel::rev(expected),
+        crate::services::kernel::rev(current),
     )
     .into()
 }
@@ -432,7 +402,7 @@ impl PriceService {
         source: &dyn PriceSource,
         operation: &OperationRecord,
         stop: &dyn Fn() -> bool,
-        writes: &RefreshWriteFence,
+        writes: &WriteFence,
     ) -> RefreshOutcome {
         if operation.capability != CAPABILITY
             || operation.schema_version != 1
@@ -635,7 +605,7 @@ impl PriceService {
         store: &dyn ApplicationStore,
         source: &dyn PriceSource,
         stop: &dyn Fn() -> bool,
-        writes: &RefreshWriteFence,
+        writes: &WriteFence,
     ) -> Result<usize, StorageError> {
         let mut seen = BTreeSet::new();
         let mut resolved = 0;

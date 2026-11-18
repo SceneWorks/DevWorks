@@ -7,7 +7,6 @@ use common::*;
 use devworks_core::authority::HostAuthority;
 use devworks_core::context::{HostIngress, InvocationContext, PrincipalKind};
 use devworks_core::gateway::Gateway;
-use devworks_core::ports::retrieval::NoVectorIndex;
 use devworks_core::ports::storage::*;
 use devworks_core::protocol::records::KnowledgeWriteReceipt;
 use devworks_core::protocol::results::{
@@ -33,12 +32,7 @@ struct App<'h> {
 impl<'h> App<'h> {
     fn boot(h: &'h Harness) -> Self {
         let store = h.open();
-        let knowledge = Arc::new(KnowledgeService::new(
-            h.ids.clone(),
-            h.clock(),
-            None,
-            Arc::new(NoVectorIndex),
-        ));
+        let knowledge = Arc::new(KnowledgeService::new(h.ids.clone(), h.clock(), None));
         Self {
             h,
             store,

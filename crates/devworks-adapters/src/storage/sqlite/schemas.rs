@@ -1,4 +1,5 @@
 //! Dedicated metadata repositories. Source rows and native driver types never enter this store.
+use super::support::{conflict_strict, invalid, page_limit};
 use super::{
     conn::db,
     repos::{Snapshot, Unit},
@@ -11,21 +12,11 @@ use devworks_core::protocol::{
 use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Serialize, de::DeserializeOwned};
 use serde_json::json;
-fn invalid(message: &str) -> StorageError {
-    StorageError::InvalidRecord(message.into())
-}
 fn encode<T: Serialize>(v: &T) -> Result<String, StorageError> {
     serde_json::to_string(v).map_err(|_| invalid("invalid metadata record"))
 }
 fn decode<T: DeserializeOwned>(v: String) -> Result<T, StorageError> {
     serde_json::from_str(&v).map_err(|_| invalid("invalid stored metadata record"))
-}
-fn limit(v: u16) -> Result<i64, StorageError> {
-    if v == 0 || v > MAX_PAGE {
-        Err(invalid("metadata page needs 1..=500"))
-    } else {
-        Ok(i64::from(v))
-    }
 }
 fn source(conn: &Connection, id: &Id) -> Result<Option<StoredSchemaSource>, StorageError> {
     db(conn
@@ -53,7 +44,7 @@ fn sources(
             v.project_id.as_ref().map(Id::as_str),
             v.exposed_only,
             after.map(Id::as_str),
-            limit(n)?
+            page_limit(n)?
         ],
         |r| r.get::<_, String>(0),
     ))?
@@ -90,7 +81,7 @@ fn objects(
             f.parent_id.as_ref().map(Id::as_str),
             f.text,
             after.map(Id::as_str),
-            limit(n)?,
+            page_limit(n)?,
             f.object_id.as_ref().map(Id::as_str)
         ],
         |r| r.get::<_, String>(0),
@@ -111,7 +102,7 @@ fn relations(
     let ids = encode(&json!(objects.iter().map(Id::as_str).collect::<Vec<_>>()))?;
     let mut q=db(conn.prepare_cached("SELECT r.body_json FROM schema_relations r JOIN schema_views v ON v.id=r.view_id WHERE v.sealed=1 AND r.view_id=?1 AND (json_array_length(?2)=0 OR r.from_id IN(SELECT value FROM json_each(?2)) OR r.to_id IN(SELECT value FROM json_each(?2))) AND (?3 IS NULL OR r.id>?3) ORDER BY r.id LIMIT ?4"))?;
     let rows = db(db(q.query_map(
-        params![view.as_str(), ids, after.map(Id::as_str), limit(n)?],
+        params![view.as_str(), ids, after.map(Id::as_str), page_limit(n)?],
         |r| r.get::<_, String>(0),
     ))?
     .collect::<rusqlite::Result<Vec<_>>>())?;
@@ -170,6 +161,13 @@ macro_rules! reads {
                 n: u16,
             ) -> Result<Vec<SchemaRelation>, StorageError> {
                 relations(self.conn, v, ids, after, n)
+            }
+            fn next_schema_pin_expiry(&self) -> Result<Option<i64>, StorageError> {
+                db(self
+                    .conn
+                    .query_row("SELECT MIN(expires_at) FROM schema_read_pins", [], |r| {
+                        r.get::<_, Option<i64>>(0)
+                    }))
             }
             fn schema_publication(
                 &self,
@@ -250,11 +248,11 @@ impl SchemaRepository for Unit<'_> {
         Ok(())
     }
     fn expire_schema_pins(&mut self, now: i64, n: u16) -> Result<usize, StorageError> {
-        db(self.conn.execute("DELETE FROM schema_read_pins WHERE id IN(SELECT id FROM schema_read_pins WHERE expires_at<=?1 ORDER BY expires_at,id LIMIT ?2)",params![now,limit(n)?]))
+        db(self.conn.execute("DELETE FROM schema_read_pins WHERE id IN(SELECT id FROM schema_read_pins WHERE expires_at<=?1 ORDER BY expires_at,id LIMIT ?2)",params![now,page_limit(n)?]))
     }
 
     fn prune_schema_views(&mut self, n: u16) -> Result<usize, StorageError> {
-        let budget = limit(n)?;
+        let budget = page_limit(n)?;
         // Expired lease records are removed separately in bounded pages. Any remaining
         // lease blocks physical deletion, so FK cascades cannot exceed this page budget.
         let candidate: Option<(String, i64)> = db(self.conn.query_row(
@@ -325,13 +323,12 @@ impl SchemaRepository for Unit<'_> {
         let old = source(self.conn, &row.connection.id)?
             .ok_or_else(|| invalid("schema source missing"))?;
         if old.connection.revision.get() != expected {
-            return Err(StorageError::conflict(
+            return Err(conflict_strict(
                 devworks_core::protocol::RevisionDimension::Connection,
                 "schema_source",
-                row.connection.id.clone(),
-                devworks_core::protocol::Revision::new(expected)
-                    .map_err(|_| invalid("invalid expected schema revision"))?,
-                old.connection.revision,
+                row.connection.id.as_str(),
+                expected,
+                old.connection.revision.get(),
             ));
         }
         if row.owner_id != old.owner_id
@@ -381,7 +378,7 @@ impl SchemaRepository for Unit<'_> {
         Ok(())
     }
     fn discard_schema_staging(&mut self, connection: &Id, n: u16) -> Result<bool, StorageError> {
-        let n = limit(n)?;
+        let n = page_limit(n)?;
         let removed=db(self.conn.execute("DELETE FROM schema_relations WHERE rowid IN (SELECT r.rowid FROM schema_relations r JOIN schema_views v ON v.id=r.view_id WHERE v.connection_id=?1 AND v.sealed=0 LIMIT ?2)",params![connection.as_str(),n]))?;
         db(self.conn.execute("DELETE FROM schema_objects WHERE rowid IN (SELECT o.rowid FROM schema_objects o JOIN schema_views v ON v.id=o.view_id WHERE v.connection_id=?1 AND v.sealed=0 LIMIT ?2)",params![connection.as_str(),n-removed as i64]))?;
         db(self.conn.execute("DELETE FROM schema_views WHERE id IN (SELECT v.id FROM schema_views v WHERE v.connection_id=?1 AND v.sealed=0 AND NOT EXISTS(SELECT 1 FROM schema_objects o WHERE o.view_id=v.id) AND NOT EXISTS(SELECT 1 FROM schema_relations r WHERE r.view_id=v.id) LIMIT ?2)",params![connection.as_str(),n]))?;

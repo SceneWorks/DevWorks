@@ -14,9 +14,9 @@ use crate::{
     ports::storage::*,
     protocol::{Id, OperationState, provider::ArtifactRef},
     services::{
-        approvals,
         artifacts::ConventionSourceSelection,
         conventions::{access, model},
+        effect_job,
         router::embedding_spaces,
     },
 };
@@ -78,28 +78,7 @@ fn current(
     job: &IndexJob,
     available: bool,
 ) -> Result<InvocationContext, StorageError> {
-    if tx.store().store_id != job.store_id
-        || tx.store().restore_epoch != job.restore_epoch
-        || !crate::authority::fences_hold(tx, &job.fences)?
-    {
-        return Err(StorageError::ScopeDenied);
-    }
-    let kind = tx
-        .actors()
-        .actor_kind(&job.actor)?
-        .ok_or(StorageError::ScopeDenied)?;
-    if kind.as_str() != job.actor_kind {
-        return Err(StorageError::ScopeDenied);
-    }
-    let context =
-        approvals::restore_source_context(tx.store(), &job.actor, kind, &job.source_context)?;
-    crate::services::conventions::control::check(
-        tx,
-        &context,
-        &operation.id,
-        &job.control_roots,
-        job.assignment_generation,
-    )?;
+    let (_, context) = effect_job::restore(tx, &job.binding(), &operation.id)?;
     super::selection::validate_child(tx, job, &context)?;
     let scoped = access::scope_in(tx, &context, Some(&job.scope), true)
         .map_err(|_| StorageError::ScopeDenied)?;
@@ -156,33 +135,8 @@ fn current(
             }
         }
     }
-    let actual = tx
-        .operations()
-        .operation(&operation.id)?
-        .ok_or_else(|| invalid("index journal missing"))?;
-    if actual.payload != operation.payload
-        || actual.latest_attempt().map(|a| a.fence())
-            != operation.latest_attempt().map(|a| a.fence())
-        || !matches!(
-            actual.state,
-            OperationState::Dispatching | OperationState::OutcomeUnknown
-        )
-    {
-        return Err(StorageError::LeaseLost {
-            kind: "convention_index",
-            id: operation.id.0.as_str().into(),
-        });
-    }
-    let entry = tx
-        .queue()
-        .entry(&job.delivery_id)?
-        .ok_or_else(|| invalid("index delivery missing"))?;
-    if entry.operation_id.as_ref() != Some(&operation.id) || entry.consumer != EFFECT_CONSUMER {
-        return Err(invalid("index delivery changed"));
-    }
-    if entry.cancel_requested {
-        return Err(StorageError::Cancelled);
-    }
+    effect_job::attempt_holds(tx, operation, "convention_index")?;
+    effect_job::delivery_holds(tx, &job.delivery_id, EFFECT_CONSUMER, &operation.id)?;
     Ok(context)
 }
 struct Publish<'a> {
@@ -275,28 +229,22 @@ impl IndexService {
         work: impl FnOnce(&mut dyn WriteTransaction) -> Result<T, StorageError> + Send + 'static,
     ) -> Result<T, StorageError> {
         self.index_bounded(run.cancel, run.deadline)?;
-        let _phase = self.closed.enter()?;
-        let (op, job, available, closed, clock, cancel, deadline) = (
+        let (op, job, available, clock, deadline) = (
             run.op.clone(),
             run.job.clone(),
             self.native_available(),
-            self.closed.clone(),
             self.clock.clone(),
-            run.cancel.clone(),
             run.deadline,
         );
-        run_write(
+        self.closed.write(
             &*self.store,
             WriteOptions {
-                cancellation: Some(cancel.clone()),
+                cancellation: Some(run.cancel.clone()),
                 deadline_ms: deadline,
-                ..Default::default()
+                ..WriteOptions::host_state()
             },
             move |tx| {
-                if closed.is_closed()
-                    || cancel.is_cancelled()
-                    || deadline.is_some_and(|d| clock.now_ms().get() >= d)
-                {
+                if deadline.is_some_and(|d| clock.now_ms().get() >= d) {
                     return Err(StorageError::Cancelled);
                 }
                 current(tx, &op, &job, available)?;

@@ -202,7 +202,7 @@ impl Fx {
         &self,
         f: impl FnOnce(&mut dyn WriteTransaction) -> Result<T, StorageError> + Send + 'static,
     ) -> T {
-        run_write(&*self.store, WriteOptions::default(), f).expect("write")
+        run_write(&*self.store, WriteOptions::fixture(), f).expect("write")
     }
     fn read<T>(&self, f: impl FnOnce(&dyn ReadSnapshot) -> Result<T, StorageError>) -> T {
         read_snapshot(&*self.store, &ReadOptions::default(), f).expect("read")
@@ -1234,14 +1234,14 @@ fn migration_12_adds_the_diagnostic_log_to_a_version_11_store() {
         ..first.clone()
     };
     assert!(
-        run_write(&*s, WriteOptions::default(), move |tx| tx
+        run_write(&*s, WriteOptions::fixture(), move |tx| tx
             .diagnostics()
             .append_diagnostic(&bad))
         .is_err()
     );
     let dup = first.clone();
     assert!(matches!(
-        run_write(&*s, WriteOptions::default(), move |tx| tx
+        run_write(&*s, WriteOptions::fixture(), move |tx| tx
             .diagnostics()
             .append_diagnostic(&dup)),
         Err(StorageError::Duplicate { .. })
@@ -1310,7 +1310,7 @@ fn components_are_canonical_so_no_case_variant_passes_for_a_host_channel() {
     raw.id = id("raw-upper");
     raw.component = "INDEXING.repository".into();
     assert!(
-        run_write(&*fx.store, WriteOptions::default(), move |tx| tx
+        run_write(&*fx.store, WriteOptions::fixture(), move |tx| tx
             .diagnostics()
             .append_diagnostic(&raw))
         .is_err()

@@ -77,8 +77,6 @@
 //! dropped.
 pub mod config;
 pub mod discover;
-pub mod git;
-pub mod helper;
 pub(crate) mod linking;
 pub mod overlay;
 pub mod paths;
@@ -109,11 +107,11 @@ use crate::protocol::{
 use crate::services::artifacts::ArtifactService;
 use crate::services::cursor::{self, CursorBinding};
 use crate::services::diagnostics::DiagnosticService;
+use crate::services::git::helper::HelperRunner;
+use crate::services::kernel::{Failure, Refusal, decided, not_found, query_fault, rev};
 use crate::services::projects::{repository_record, visible_project, visible_repository};
 use crate::services::runs::closed_to_work;
-use crate::services::sessions::{Failure, Refusal, decided, not_found, query_fault, rev};
 use config::{EffectiveConfig, default_config, parse_exclusion};
-use helper::HelperRunner;
 use serde_json::{Value, json};
 use std::collections::BTreeSet;
 use std::sync::{Arc, RwLock};

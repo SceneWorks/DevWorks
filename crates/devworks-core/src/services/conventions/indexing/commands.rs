@@ -12,7 +12,7 @@ use crate::{
     services::{
         approvals,
         conventions::access,
-        sessions::{Failure, Refusal},
+        kernel::{Failure, Refusal},
     },
 };
 use serde::{Deserialize, Serialize};
@@ -56,6 +56,20 @@ pub struct IndexJob {
     #[serde(default)]
     pub index_source_revision: Option<i64>,
 }
+impl IndexJob {
+    pub(super) fn binding(&self) -> crate::services::effect_job::JobBinding<'_> {
+        crate::services::effect_job::JobBinding {
+            store_id: &self.store_id,
+            restore_epoch: self.restore_epoch,
+            fences: &self.fences,
+            actor: &self.actor,
+            actor_kind: &self.actor_kind,
+            source_context: &self.source_context,
+            control_roots: &self.control_roots,
+            assignment_generation: self.assignment_generation,
+        }
+    }
+}
 impl IndexService {
     pub fn decide_index(
         &self,
@@ -98,7 +112,7 @@ impl IndexService {
                     "convention",
                     id.clone(),
                     input.expected_revision.clone(),
-                    crate::services::sessions::rev(row.revision),
+                    crate::services::kernel::rev(row.revision),
                 )
                 .into());
             }
@@ -124,7 +138,7 @@ impl IndexService {
                         KnowledgeScope::Project(project) => project.0.clone(),
                     },
                     input.expected_revision.clone(),
-                    crate::services::sessions::rev(revision),
+                    crate::services::kernel::rev(revision),
                 )
                 .into());
             }

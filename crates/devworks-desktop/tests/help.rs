@@ -312,7 +312,7 @@ fn help_only(engine: &devworks_desktop::host::Engine) -> Arc<HelpOnly> {
     let user = engine.host().user().clone();
     let actor = ActorId(Id::new("help-only-reviewer").unwrap());
     let who = actor.clone();
-    run_write(&*store, WriteOptions::default(), move |tx| {
+    run_write(&*store, WriteOptions::fixture(), move |tx| {
         tx.actors()
             .register(&who, PrincipalKind::Agent, "Help reviewer")?;
         devworks_core::authority::service::bind_principal(
@@ -802,7 +802,14 @@ fn install_named_guide(
     if installed.enabled {
         let (_, registry, _) =
             addons::catalog(b.query("addons.catalog", &addons::catalog_frame(&*b, None))).unwrap();
-        ops::command_result(b.command("addons.disable", &addons::lifecycle_frame(&*b,json!({"kind":"Disable","packageId":installed.id,"expectedRegistryRevision":registry.to_string()})))).unwrap();
+        ops::command_result(b.command(
+            "addons.disable",
+            &addons::lifecycle_frame(
+                &*b,
+                addons::disable_command(installed.id.as_str(), registry).unwrap(),
+            ),
+        ))
+        .unwrap();
     }
     assert_eq!(installed.digest.as_str(), manifest_digest);
     // Installation changes the registry, not its published documentation. Await the real

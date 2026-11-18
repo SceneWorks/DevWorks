@@ -10,3 +10,10 @@ serde = { version = "=1.0.229", features = ["derive"] }
 serde_json = "=1.0.154"
 schemars = "=1.2.3"
 semver = "=1.0.28"
+
+# Only tests/core_schema_parity.rs: core's protocol types (and the package protocol's), which the
+# product decodes, held to the same root schemas as this probe's DTOs, which emit the committed
+# contracts. A test-only dependency: the probe itself stays independent of core.
+[dev-dependencies]
+devworks-core = { path = "../../crates/devworks-core" }
+devworks-extension-protocol = { path = "../../crates/devworks-extension-protocol" }

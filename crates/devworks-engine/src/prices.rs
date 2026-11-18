@@ -4,16 +4,18 @@ use crate::dispatch::{
     Consumer, Delivery, DeliveryHandler, EffectExecutor, EffectFuture, EffectResult, Outcome,
     RetryPolicy,
 };
+use crate::workers::Ticker;
 use devworks_core::ports::storage::{
     ApplicationStore, OperationRecord, StorageError, WriteTransaction,
 };
 use devworks_core::ports::usage::PriceSource;
 use devworks_core::services::prices::{
     PriceService,
-    refresh::{self, RefreshOutcome, RefreshWriteFence},
+    refresh::{self, RefreshOutcome},
 };
+use devworks_core::services::write_fence::WriteFence;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 use tokio::sync::{Notify, watch};
 /// Public-source HTTP transport is injected by the native host; no provider credentials or
@@ -47,13 +49,12 @@ pub struct PriceSupervisor {
     store: Arc<dyn ApplicationStore>,
     service: Arc<PriceService>,
     source: Arc<dyn PriceSource>,
-    stopping: Arc<AtomicBool>,
-    fence: Arc<RefreshWriteFence>,
+    ticker: Ticker,
+    fence: Arc<WriteFence>,
     stop_signal: watch::Sender<bool>,
     active: Arc<AtomicUsize>,
     finished: Arc<Notify>,
     ticking: tokio::sync::Mutex<()>,
-    wake: Notify,
     status: watch::Sender<Option<PricePass>>,
 }
 impl PriceSupervisor {
@@ -68,27 +69,25 @@ impl PriceSupervisor {
             store,
             service,
             source,
-            stopping: Arc::new(AtomicBool::new(false)),
-            fence: Arc::new(RefreshWriteFence::default()),
+            ticker: Ticker::new(),
+            fence: Arc::new(WriteFence::default()),
             stop_signal,
             active: Arc::new(AtomicUsize::new(0)),
             finished: Arc::new(Notify::new()),
             ticking: tokio::sync::Mutex::new(()),
-            wake: Notify::new(),
             status,
         })
     }
     pub fn notify(&self) {
-        self.wake.notify_one();
+        self.ticker.notify();
     }
     pub fn watch(&self) -> watch::Receiver<Option<PricePass>> {
         self.status.subscribe()
     }
     pub fn stop(&self) {
-        self.stopping.store(true, Ordering::SeqCst);
+        self.ticker.stop();
         self.fence.stop();
         self.stop_signal.send_replace(true);
-        self.notify();
     }
     pub(crate) fn close(&self) {
         self.stop();
@@ -120,13 +119,13 @@ impl PriceSupervisor {
     }
     pub async fn tick(&self) -> Result<usize, StorageError> {
         let _one = self.ticking.lock().await;
-        if self.stopping.load(Ordering::SeqCst) {
+        if self.ticker.is_stopped() {
             return Ok(0);
         }
         let (store, service, stopping, fence, source) = (
             self.store.clone(),
             self.service.clone(),
-            self.stopping.clone(),
+            self.ticker.flag(),
             self.fence.clone(),
             self.source.clone(),
         );
@@ -152,21 +151,15 @@ impl PriceSupervisor {
         .map_err(|_| StorageError::InvalidRecord("price schedule task panicked".into()))?
     }
     pub async fn run(self: Arc<Self>, every: Duration, wakeup: crate::dispatch::Wakeup) {
-        while !self.stopping.load(Ordering::SeqCst) {
-            let result = self.tick().await;
-            if result.as_ref().is_ok_and(|n| *n > 0) {
-                wakeup.wake();
-            }
-            self.status.send_replace(Some(PricePass { result }));
-            if self.stopping.load(Ordering::SeqCst) {
-                break;
-            }
-            let _ = crate::dispatch::first(
-                self.wake.notified(),
-                tokio::time::sleep(every.max(Duration::from_millis(1))),
-            )
+        self.ticker
+            .run(every, || async {
+                let result = self.tick().await;
+                if result.as_ref().is_ok_and(|n| *n > 0) {
+                    wakeup.wake();
+                }
+                self.status.send_replace(Some(PricePass { result }));
+            })
             .await;
-        }
     }
     pub fn consumer(self: &Arc<Self>) -> Consumer {
         Consumer {
@@ -244,14 +237,14 @@ impl Effects {
             }
             let flight = Flight::new(worker.active.clone(), worker.finished.clone());
             let fetching = source_work(flight, move || {
-                if worker.stopping.load(Ordering::SeqCst) {
+                if worker.ticker.is_stopped() {
                     return EffectResult::NotApplied("price maintenance is stopping".into());
                 }
                 match worker.service.execute_refresh(
                     &*worker.store,
                     &*worker.source,
                     &operation,
-                    &|| worker.stopping.load(Ordering::SeqCst),
+                    &|| worker.ticker.is_stopped(),
                     &worker.fence,
                 ) {
                     RefreshOutcome::Completed(v) => EffectResult::Completed(v),

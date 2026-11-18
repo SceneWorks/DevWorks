@@ -2,7 +2,7 @@
 use super::budget::Budget;
 use crate::ports::storage::*;
 use crate::services::indexing::views::ViewLayers;
-use crate::services::sessions::Failure;
+use crate::services::kernel::Failure;
 
 const READ_PAGE: u16 = 32;
 

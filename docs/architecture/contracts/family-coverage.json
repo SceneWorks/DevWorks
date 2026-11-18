@@ -3670,6 +3670,14 @@
               "queryReplySchema": "domain-query-reply.schema.json",
               "commandReplySchema": null,
               "completionSchema": null
+            },
+            {
+              "revision": 8,
+              "inputSchema": "session-query-request.schema.json",
+              "resultSchema": "operation-result.r8.schema.json",
+              "queryReplySchema": "domain-query-reply.r8.schema.json",
+              "commandReplySchema": null,
+              "completionSchema": null
             }
           ],
           "authority": "Existing host authority contract",

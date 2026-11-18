@@ -14,8 +14,7 @@ use crate::protocol::records::{
     CodeAffectedNode, CodeImpact, CodeImpactSummary, CodeNodeSelection, CodeRepositoryLink,
     CodeRisk,
 };
-use crate::services::sessions::Failure;
-use serde_json::json;
+use crate::services::kernel::Failure;
 use std::collections::{BTreeMap, BTreeSet};
 
 const DEPENDENCIES: &[&str] = &[
@@ -555,9 +554,19 @@ fn assess(
             if n.depth == 0 && dataset::low_node(&n.raw) {
                 factors.push(LOW_CONFIDENCE.into());
             }
-            let value: CodeAffectedNode = model::wire(
-                json!({"node":node,"depth":n.depth.to_string(),"edgeKind":n.edge,"risk":kind(n.risk),"riskFactors":factors,"lowConfidence":dataset::low_node(&n.raw)}),
-            )?;
+            let value = CodeAffectedNode {
+                node,
+                depth: model::count(n.depth as u64)?,
+                edge_kind: model::text(&n.edge)?,
+                risk: kind(n.risk),
+                risk_factors: model::list(
+                    factors
+                        .iter()
+                        .map(|factor| model::text(factor))
+                        .collect::<Result<_, _>>()?,
+                )?,
+                low_confidence: dataset::low_node(&n.raw),
+            };
             if !reader.retain_wire(&value)? {
                 reader.next = Some(Position {
                     offset,
@@ -590,9 +599,13 @@ fn assess(
                 });
                 break;
             }
-            let value: CodeRepositoryLink = model::wire(
-                json!({"sourceRepositoryId":source,"targetRepositoryId":target,"edgeKind":edge,"count":count.to_string()}),
-            )?;
+            let value = CodeRepositoryLink {
+                source_repository_id: model::text(source)?,
+                target_repository_id: model::text(target)?,
+                edge_kind: model::text(edge)?,
+                count: model::count(*count)?,
+                confidence_band: None,
+            };
             if !reader.retain_wire(&value)? {
                 reader.next = Some(Position {
                     offset,
@@ -619,7 +632,7 @@ fn assess(
         Some((_, path)) => {
             let (language, indexed) = reader.file_language(path);
             (
-                language.map(|v| model::wire(json!(v))).transpose()?,
+                language.map(|v| model::text(&v)).transpose()?,
                 Some(indexed),
             )
         }
@@ -628,7 +641,7 @@ fn assess(
     Ok(Some(GraphResult::Impact {
         value: CodeImpact {
             found,
-            path: file.map(|(_, p)| model::wire(json!(p))).transpose()?,
+            path: file.map(|(_, p)| model::text(p)).transpose()?,
             language,
             language_indexed,
             blast_radius: counts
@@ -636,9 +649,9 @@ fn assess(
                 .position(|n| *n > 0)
                 .map(kind)
                 .unwrap_or(CodeRisk::None),
-            changed: model::wire(json!(changed))?,
-            affected: model::wire(json!(affected))?,
-            cross_repository: model::wire(json!(cross_repository))?,
+            changed: model::list(changed)?,
+            affected: model::list(affected)?,
+            cross_repository: model::list(cross_repository)?,
             summary: CodeImpactSummary {
                 total_affected: model::count(counts.iter().sum())?,
                 cross_repository_count: model::count(cross_count as u64)?,
@@ -646,7 +659,12 @@ fn assess(
                 high_count: model::count(counts[1])?,
                 medium_count: model::count(counts[2])?,
                 low_count: model::count(counts[3])?,
-                affected_repository_ids: model::wire(json!(repositories))?,
+                affected_repository_ids: model::list(
+                    repositories
+                        .iter()
+                        .map(|id| model::text(id))
+                        .collect::<Result<_, _>>()?,
+                )?,
                 low_confidence_count: model::count(low)?,
             },
             unmapped_inbound_edges: reader
@@ -879,6 +897,7 @@ fn unmapped_count(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
     fn raw(repository: &str, path: &str, kind: &str) -> GraphNode {
         GraphNode {
             repository_id: Id::new(repository).unwrap(),

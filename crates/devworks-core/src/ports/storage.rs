@@ -18,7 +18,7 @@
 //!   ```
 //!   use devworks_core::ports::storage::*;
 //!   fn owned(store: &dyn ApplicationStore) -> Result<i64, StorageError> {
-//!       run_write(store, WriteOptions::default(), |tx| tx.history().page(&EventFilter::All, 0, 1).map(|p| p.watermark))
+//!       run_write(store, WriteOptions::host_state(), |tx| tx.history().page(&EventFilter::All, 0, 1).map(|p| p.watermark))
 //!   }
 //!   ```
 //!
@@ -28,9 +28,16 @@
 //!   use devworks_core::ports::storage::*;
 //!   fn escape(store: &dyn ApplicationStore) {
 //!       // A repository handle cannot be returned out of its transaction.
-//!       let _ = run_write(store, WriteOptions::default(), |tx| Ok(tx.history()));
+//!       let _ = run_write(store, WriteOptions::host_state(), |tx| Ok(tx.history()));
 //!   }
 //!   ```
+//! * **Every write names its class.** [`WriteOptions`] has no `Default`: each `run_write` or
+//!   `submit_write` site builds its options with a [`WriteClass`] constructor
+//!   (`WriteOptions::recovery()`, `::housekeeping()`, ...), so the allowed kinds of write outside
+//!   a gateway command are listed on [`WriteClass`] and greppable at every call. Authority
+//!   records are separate: [`WriteTransaction::authority`] and [`WriteTransaction::grants`] only
+//!   read, and their writes need the [`AuthorityCapability`] that only `crate::authority` can
+//!   build, whatever the class.
 //! * **No callbacks with effects inside a write.** Jobs must not await, call the network, run
 //!   inference, invoke package/UI callbacks or traverse unboundedly; preparation and observation
 //!   happen before or after the job (ARCH-03).
@@ -66,9 +73,11 @@ use crate::protocol::{
 use crate::registry::SchemaRevision;
 use serde_json::Value;
 use std::fmt;
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::future::Future;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc;
+use std::sync::{Arc, Mutex, Weak};
+use std::task::{Context, Poll, Waker};
 
 mod agents;
 mod artifacts;
@@ -262,18 +271,203 @@ fn redacted(text: &str) -> String {
 // ---------------------------------------------------------------------------------------------
 // Admission options and the transaction owner
 
-/// Cooperative cancellation shared between a caller and the write/read owner.
+/// Cooperative cancellation shared between a caller and the write/read owner. A waiter on a
+/// [`Wake`] registers it, so cancelling ends the wait at once instead of at the next poll.
 #[derive(Clone, Debug, Default)]
-pub struct Cancellation(Arc<AtomicBool>);
+pub struct Cancellation(Arc<CancelState>);
+#[derive(Debug, Default)]
+struct CancelState {
+    flag: AtomicBool,
+    wakes: Mutex<Vec<Weak<Wake>>>,
+}
 impl Cancellation {
     pub fn new() -> Self {
         Self::default()
     }
     pub fn cancel(&self) {
-        self.0.store(true, Ordering::SeqCst);
+        self.0.flag.store(true, Ordering::SeqCst);
+        let wakes: Vec<_> = {
+            let mut wakes = self.0.wakes.lock().unwrap_or_else(|p| p.into_inner());
+            wakes.retain(|wake| wake.strong_count() > 0);
+            wakes.iter().filter_map(Weak::upgrade).collect()
+        };
+        for wake in wakes {
+            wake.notify();
+        }
     }
     pub fn is_cancelled(&self) -> bool {
-        self.0.load(Ordering::SeqCst)
+        self.0.flag.load(Ordering::SeqCst)
+    }
+    /// Notifies `wake` when this token is cancelled. Registering after the cancellation has
+    /// already happened leaves the caller to see [`Self::is_cancelled`] on its next check, so a
+    /// waiter registers first and checks the flag second.
+    pub fn wake_on_cancel(&self, wake: &Arc<Wake>) {
+        let mut wakes = self.0.wakes.lock().unwrap_or_else(|p| p.into_inner());
+        wakes.retain(|other| other.strong_count() > 0);
+        if !wakes
+            .iter()
+            .any(|other| std::ptr::eq(other.as_ptr(), Arc::as_ptr(wake)))
+        {
+            wakes.push(Arc::downgrade(wake));
+        }
+    }
+}
+
+/// A signal that something a waiter is waiting for may have changed. A waiter reads
+/// [`Wake::generation`] before it checks its condition and then waits for a change after that
+/// value ([`Wake::changed_after`], or [`Wake::wait_after`] for a caller that cannot await), so a
+/// signal sent between the check and the wait is never lost. An awaiting waiter holds no thread:
+/// the signal wakes its task. The signal depends on no async runtime.
+#[derive(Debug, Default)]
+pub struct Wake {
+    state: Mutex<WakeState>,
+}
+#[derive(Debug, Default)]
+struct WakeState {
+    generation: u64,
+    next_slot: u64,
+    wakers: Vec<(u64, Waker)>,
+}
+impl Wake {
+    pub fn new() -> Arc<Self> {
+        Arc::new(Self::default())
+    }
+    fn lock(&self) -> std::sync::MutexGuard<'_, WakeState> {
+        self.state.lock().unwrap_or_else(|p| p.into_inner())
+    }
+    /// Signals every waiter.
+    pub fn notify(&self) {
+        let wakers = {
+            let mut state = self.lock();
+            state.generation += 1;
+            std::mem::take(&mut state.wakers)
+        };
+        for (_, waker) in wakers {
+            waker.wake();
+        }
+    }
+    /// The number of signals so far.
+    pub fn generation(&self) -> u64 {
+        self.lock().generation
+    }
+    /// Resolves once a signal arrives after `seen`. Dropping it ends the wait.
+    pub fn changed_after(self: &Arc<Self>, seen: u64) -> Changed {
+        Changed {
+            wake: self.clone(),
+            seen,
+            slot: None,
+        }
+    }
+    /// Parks the calling thread until a signal arrives after `seen` or `timeout` passes,
+    /// whichever is first. For a caller that cannot await; an awaiting caller uses
+    /// [`Wake::changed_after`] and holds no thread.
+    pub fn wait_after(self: &Arc<Self>, seen: u64, timeout: std::time::Duration) {
+        struct Unpark(std::thread::Thread);
+        impl std::task::Wake for Unpark {
+            fn wake(self: Arc<Self>) {
+                self.0.unpark();
+            }
+        }
+        let deadline = std::time::Instant::now() + timeout;
+        let waker = Waker::from(Arc::new(Unpark(std::thread::current())));
+        let mut cx = Context::from_waker(&waker);
+        let mut changed = std::pin::pin!(self.changed_after(seen));
+        loop {
+            if changed.as_mut().poll(&mut cx).is_ready() {
+                return;
+            }
+            let now = std::time::Instant::now();
+            if now >= deadline {
+                return;
+            }
+            std::thread::park_timeout(deadline - now);
+        }
+    }
+}
+
+/// The future of [`Wake::changed_after`].
+#[derive(Debug)]
+pub struct Changed {
+    wake: Arc<Wake>,
+    seen: u64,
+    slot: Option<u64>,
+}
+impl Future for Changed {
+    type Output = ();
+    fn poll(mut self: std::pin::Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<()> {
+        let wake = self.wake.clone();
+        let mut state = wake.lock();
+        if state.generation != self.seen {
+            if let Some(slot) = self.slot.take() {
+                state.wakers.retain(|(id, _)| *id != slot);
+            }
+            return Poll::Ready(());
+        }
+        let slot = match self.slot {
+            Some(slot) => slot,
+            None => {
+                state.next_slot += 1;
+                self.slot = Some(state.next_slot);
+                state.next_slot
+            }
+        };
+        match state.wakers.iter_mut().find(|(id, _)| *id == slot) {
+            Some((_, waker)) => waker.clone_from(cx.waker()),
+            None => state.wakers.push((slot, cx.waker().clone())),
+        }
+        Poll::Pending
+    }
+}
+impl Drop for Changed {
+    fn drop(&mut self) {
+        if let Some(slot) = self.slot {
+            self.wake.lock().wakers.retain(|(id, _)| *id != slot);
+        }
+    }
+}
+
+/// A count of store commits that changed data, with listeners that run after each one. The write
+/// owner bumps it once per committed unit of work that modified a row, whoever submitted that
+/// work, so a background loop can wait on it instead of a timer. A unit that changed nothing
+/// (an empty cleanup pass) does not bump it, which keeps a loop's own idle pass from waking it.
+#[derive(Clone, Default)]
+pub struct CommitSignal(Arc<CommitSignalState>);
+type CommitListener = Box<dyn Fn(u64) + Send + Sync>;
+#[derive(Default)]
+struct CommitSignalState {
+    generation: AtomicU64,
+    listeners: Mutex<Vec<CommitListener>>,
+}
+impl CommitSignal {
+    /// Records one data-changing commit and tells every listener the new generation. Runs on the
+    /// write owner after the commit is durable; listeners must not block.
+    pub fn bump(&self) {
+        let generation = self
+            .0
+            .generation
+            .fetch_add(1, Ordering::SeqCst)
+            .wrapping_add(1);
+        for listener in self
+            .0
+            .listeners
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .iter()
+        {
+            listener(generation);
+        }
+    }
+    /// Commits recorded so far.
+    pub fn generation(&self) -> u64 {
+        self.0.generation.load(Ordering::SeqCst)
+    }
+    /// Calls `listener` with the new generation after each later commit.
+    pub fn subscribe(&self, listener: impl Fn(u64) + Send + Sync + 'static) {
+        self.0
+            .listeners
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .push(Box::new(listener));
     }
 }
 
@@ -286,14 +480,102 @@ pub enum WritePriority {
     Bulk,
 }
 
-#[derive(Clone, Debug, Default)]
+/// Why a write runs outside a use case's receipt. Every [`WriteOptions`] names exactly one class,
+/// so each `run_write` and `submit_write` site states its class at the call (search for
+/// `WriteOptions::` plus the constructor name). The store applies no different rules per class:
+/// the class is a contract for reviewers and a hook for tests, and it never grants authority.
+///
+/// A class never excuses a write that changes authority records. Binding or revoking a
+/// principal, or issuing, revoking or spending a host grant, needs the authority capability
+/// ([`WriteTransaction::authority_writes`]) whichever class the write has, and the matching
+/// history records (principal, grant, repository deletion) can only be appended through
+/// [`WriteTransaction::authority_history`]: `history().append` refuses them in every class. So
+/// the code outside `crate::authority` can neither change nor record authority.
+///
+/// Choosing a class. When two fit, the purpose decides. A write whose purpose is to repair or
+/// expire stale state is [`Self::Recovery`] (after a restart or a lost owner) or
+/// [`Self::Housekeeping`] (age or retention sweeps), whatever repository it touches.
+/// [`Self::HostState`] is only for the live control ticks of a resource that is healthy.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum WriteClass {
+    /// A user or host command executed by the gateway, which records its receipt and history in
+    /// the same transaction. Constructor: [`WriteOptions::command`].
+    Command,
+    /// A write by the authority seams or the gateway's own bookkeeping of a refusal (denial
+    /// history, the dedicated repository-deletion confirmation). Constructor:
+    /// [`WriteOptions::authority`].
+    Authority,
+    /// A record of something the host observed or produced outside any command: diagnostics,
+    /// transcript and context publication, observed artifacts, usage, notifications, watcher and
+    /// package observations. Constructor: [`WriteOptions::observed`].
+    HostObserved,
+    /// A host-owned resource moving through its own lifecycle under its own fences and
+    /// idempotency (queue claims and delivery, leases, staging, reservations, phase changes of
+    /// watchers, packages, connections and indexes, run and job control ticks). Constructor:
+    /// [`WriteOptions::host_state`].
+    HostState,
+    /// Recording the outcome of an external effect (process, container, git, MCP, tool call,
+    /// approval resume) that already happened or was refused. Constructor:
+    /// [`WriteOptions::settlement`].
+    EffectSettlement,
+    /// Boot or restart reconciliation of state a previous process left uncertain. Constructor:
+    /// [`WriteOptions::recovery`].
+    Recovery,
+    /// Pruning, garbage collection and retention sweeps of derived or expired records.
+    /// Constructor: [`WriteOptions::housekeeping`].
+    Housekeeping,
+    /// Seeding or inspecting a store in tests and in the contract suite. Production code does not
+    /// use it. Constructor: [`WriteOptions::fixture`].
+    Fixture,
+}
+
+#[derive(Clone, Debug)]
 pub struct WriteOptions {
+    /// Required: there is no default. Struct-update syntax copies it from a class constructor
+    /// (`..WriteOptions::recovery()`).
+    pub class: WriteClass,
     pub priority: WritePriority,
     pub cancellation: Option<Cancellation>,
     /// UTC milliseconds by the store clock. It bounds admission and commit only: past it, an
     /// undispatched job is not started and an admitted job is rolled back instead of committed.
     /// It does not bound how long the caller waits for the reply, and it never revokes a commit.
     pub deadline_ms: Option<i64>,
+}
+impl WriteOptions {
+    /// Options of `class` with the default priority, no cancellation and no deadline. There is
+    /// no `Default`: a write must name its class.
+    pub fn new(class: WriteClass) -> Self {
+        Self {
+            class,
+            priority: WritePriority::default(),
+            cancellation: None,
+            deadline_ms: None,
+        }
+    }
+    pub fn command() -> Self {
+        Self::new(WriteClass::Command)
+    }
+    pub fn authority() -> Self {
+        Self::new(WriteClass::Authority)
+    }
+    pub fn observed() -> Self {
+        Self::new(WriteClass::HostObserved)
+    }
+    pub fn host_state() -> Self {
+        Self::new(WriteClass::HostState)
+    }
+    pub fn settlement() -> Self {
+        Self::new(WriteClass::EffectSettlement)
+    }
+    pub fn recovery() -> Self {
+        Self::new(WriteClass::Recovery)
+    }
+    pub fn housekeeping() -> Self {
+        Self::new(WriteClass::Housekeeping)
+    }
+    pub fn fixture() -> Self {
+        Self::new(WriteClass::Fixture)
+    }
 }
 #[derive(Clone, Debug, Default)]
 pub struct ReadOptions {
@@ -334,6 +616,11 @@ pub trait WriteJob: Send {
 /// The store: one write owner and bounded read snapshots.
 pub trait ApplicationStore: Send + Sync {
     fn info(&self) -> StoreInfo;
+    /// The signal bumped after every commit that changed data, or `None` for a store that does
+    /// not publish one (callers then rely on their own fallback interval).
+    fn commit_signal(&self) -> Option<CommitSignal> {
+        None
+    }
     /// Admits `job` to the bounded mailbox for its priority. `Err` means it was not admitted
     /// (Busy, Cancelled, read-only, stopped) and `finish` will not be called.
     fn submit_write(
@@ -474,43 +761,41 @@ pub trait WriteTransaction {
     fn history(&mut self) -> &mut dyn HistoryLog;
     fn operations(&mut self) -> &mut dyn OperationJournal;
     fn queue(&mut self) -> &mut dyn DurableQueue;
-    fn grants(&mut self) -> &mut dyn GrantLedger;
+    /// Resume grants, read-only; their writes need [`Self::grant_writes`].
+    fn grants(&mut self) -> &mut dyn GrantRead;
     fn packages(&mut self) -> &mut dyn PackageHandlerLedger;
     fn configuration(&mut self) -> &mut dyn ConfigurationRepository;
-    /// The authority ledger. Inside a use case (the gateway's handler view) only its reads are
-    /// served; its writes are refused there and happen through [`Self::authority_writes`].
-    fn authority(&mut self) -> &mut dyn AuthorityLedger;
-    /// Authority-ledger writes for the `crate::authority` seams, which alone can present the
-    /// capability, on behalf of `actor`. On the store's own transaction (host code holding the
-    /// store) this is the ledger. The gateway's handler view allows it only for the principal of
-    /// a user- or host-ingress command, so a use case running for an agent, package, MCP client
-    /// or schedule can never write authority, whatever context it constructs or wraps.
+    /// Authority records, read-only. Writes are not reachable from here: a transaction cannot
+    /// bind or revoke a principal, or issue, revoke or spend a host grant, without the
+    /// [`AuthorityCapability`] that [`Self::authority_writes`] requires.
+    fn authority(&mut self) -> &mut dyn AuthorityRead;
+    /// The authority ledger with its writes, for the `crate::authority` seams, which alone can
+    /// present the capability, on behalf of `actor`. On the store's own transaction (host code
+    /// holding the store) this is the ledger. The gateway's handler view allows it only for the
+    /// principal of a user- or host-ingress command, so a use case running for an agent, package,
+    /// MCP client or schedule can never write authority, whatever context it constructs or wraps.
     fn authority_writes(
         &mut self,
         _: &AuthorityCapability,
         _actor: &ActorId,
-    ) -> Result<&mut dyn AuthorityLedger, StorageError> {
-        Ok(self.authority())
-    }
+    ) -> Result<&mut dyn AuthorityLedger, StorageError>;
     /// Resume-grant ledger writes for the `crate::authority` seams, under the same rule as
-    /// [`Self::authority_writes`]; the handler view of [`Self::grants`] refuses writes.
+    /// [`Self::authority_writes`]; [`Self::grants`] is read-only.
     fn grant_writes(
         &mut self,
         _: &AuthorityCapability,
         _actor: &ActorId,
-    ) -> Result<&mut dyn GrantLedger, StorageError> {
-        Ok(self.grants())
-    }
+    ) -> Result<&mut dyn GrantLedger, StorageError>;
     /// History appends of the `crate::authority` seams (principal, grant and repository-deletion
-    /// records), under the same rule as [`Self::authority_writes`]. The gateway's handler view of
-    /// [`Self::history`] refuses those records, so a use case cannot forge them.
+    /// records), under the same rule as [`Self::authority_writes`]. This is the only history log
+    /// that takes them: [`Self::history`] refuses authority-history records (see
+    /// [`crate::authority::is_authority_history`]) on every implementation, so neither a raw
+    /// write nor a use case can forge them. Implementations have no default for this method.
     fn authority_history(
         &mut self,
         _: &AuthorityCapability,
         _actor: &ActorId,
-    ) -> Result<&mut dyn HistoryLog, StorageError> {
-        Ok(self.history())
-    }
+    ) -> Result<&mut dyn HistoryLog, StorageError>;
     /// The artifact repository. Inside a use case (the gateway's handler view) backup pins,
     /// physical-removal claims and receipt reply records are refused.
     fn artifacts(&mut self) -> &mut dyn ArtifactRepository;
@@ -545,6 +830,10 @@ pub struct SnapshotStamp {
     pub restore_epoch: i64,
     /// Highest committed event sequence visible in this snapshot (0 for an empty history).
     pub committed_sequence: i64,
+    /// The store clock (UTC ms) when the snapshot was taken; a lease is unexpired against it.
+    pub now_ms: i64,
+    /// This process's boot epoch; absent in read-only mode.
+    pub boot_id: Option<Id>,
 }
 impl SnapshotStamp {
     /// The wire freshness stamp for this snapshot under host-resolved policy/scope revisions.
@@ -1379,3 +1668,76 @@ pub trait StorageMaintenance {
 
 #[cfg(feature = "contract-suite")]
 pub mod contract;
+
+#[cfg(test)]
+mod wake_tests {
+    use super::*;
+    use std::time::{Duration, Instant};
+
+    fn poll_once(future: &mut Changed) -> Poll<()> {
+        let mut cx = Context::from_waker(Waker::noop());
+        std::pin::Pin::new(future).poll(&mut cx)
+    }
+
+    #[test]
+    fn a_signal_after_the_count_is_read_is_not_lost() {
+        let wake = Wake::new();
+        let seen = wake.generation();
+        wake.notify();
+        assert!(poll_once(&mut wake.changed_after(seen)).is_ready());
+    }
+
+    #[test]
+    fn a_waiting_future_is_woken_once_and_dropping_it_removes_its_waker() {
+        struct Count(std::sync::atomic::AtomicUsize);
+        impl std::task::Wake for Count {
+            fn wake(self: Arc<Self>) {
+                self.0.fetch_add(1, Ordering::SeqCst);
+            }
+        }
+        let wake = Wake::new();
+        let count = Arc::new(Count(Default::default()));
+        let waker = Waker::from(count.clone());
+        let mut cx = Context::from_waker(&waker);
+        let mut changed = wake.changed_after(wake.generation());
+        assert!(std::pin::Pin::new(&mut changed).poll(&mut cx).is_pending());
+        // Polling again replaces its waker rather than adding one.
+        assert!(std::pin::Pin::new(&mut changed).poll(&mut cx).is_pending());
+        wake.notify();
+        assert_eq!(count.0.load(Ordering::SeqCst), 1);
+        assert!(std::pin::Pin::new(&mut changed).poll(&mut cx).is_ready());
+        let mut dropped = wake.changed_after(wake.generation());
+        assert!(poll_once(&mut dropped).is_pending());
+        drop(dropped);
+        assert!(wake.lock().wakers.is_empty());
+    }
+
+    #[test]
+    fn a_blocking_wait_ends_on_a_signal_or_its_timeout() {
+        let wake = Wake::new();
+        let started = Instant::now();
+        wake.wait_after(wake.generation(), Duration::from_millis(50));
+        assert!(started.elapsed() >= Duration::from_millis(50));
+        let seen = wake.generation();
+        let signal = wake.clone();
+        let sender = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(20));
+            signal.notify();
+        });
+        let started = Instant::now();
+        wake.wait_after(seen, Duration::from_secs(30));
+        assert!(started.elapsed() < Duration::from_secs(10));
+        sender.join().unwrap();
+    }
+
+    #[test]
+    fn cancelling_wakes_a_registered_wait() {
+        let wake = Wake::new();
+        let token = Cancellation::new();
+        token.wake_on_cancel(&wake);
+        let seen = wake.generation();
+        token.cancel();
+        assert!(poll_once(&mut wake.changed_after(seen)).is_ready());
+        assert!(token.is_cancelled());
+    }
+}

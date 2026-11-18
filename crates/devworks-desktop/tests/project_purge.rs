@@ -19,9 +19,9 @@ use serde_json::{Value, json};
 use std::{process::Command, time::Instant};
 fn frame(b: &dyn Backend, operation: &str, body: Value, query: bool) -> Vec<u8> {
     let raw = if query {
-        ops::query_frame(b, operation, body)
+        devworks_desktop::frame::fixture::query(b, operation, body)
     } else {
-        ops::command_frame(b, operation, body)
+        devworks_desktop::frame::fixture::command(b, operation, body)
     };
     let mut v: Value = serde_json::from_slice(&raw).unwrap();
     v["schemaRevision"] = json!(6);
@@ -168,7 +168,7 @@ fn native_review_purge_preserves_shared_git_and_other_drafts_and_recovers_after_
     let inserted = repository.clone();
     run_write(
         &**engine.host().runtime().store(),
-        WriteOptions::default(),
+        WriteOptions::fixture(),
         move |tx| tx.projects().insert_repository(&inserted),
     )
     .unwrap();
@@ -239,7 +239,7 @@ fn native_review_purge_preserves_shared_git_and_other_drafts_and_recovers_after_
     );
     let archived = ops::project_changed(b.command(
         "projects.archive",
-        &ops::project_lifecycle(&*b, "projects.archive", &p),
+        &ops::project_lifecycle(&*b, ops::LifecycleChange::Archive, &p),
     ))
     .unwrap();
     let deadline = Instant::now() + SETTLE_BOUND;
@@ -258,7 +258,7 @@ fn native_review_purge_preserves_shared_git_and_other_drafts_and_recovers_after_
     }
     let deleted = ops::project_changed(b.command(
         "projects.delete",
-        &ops::project_lifecycle(&*b, "projects.delete", &archived),
+        &ops::project_lifecycle(&*b, ops::LifecycleChange::Delete, &archived),
     ))
     .unwrap();
     let mut memory = Memory::default();
@@ -544,7 +544,7 @@ fn native_confirmation_ui_removes_owned_session_drafts_and_paste_keeps_home_and_
     let paste = b.stage_pasted_image(Some(&session.id), &png()).unwrap();
     let archived = ops::project_changed(b.command(
         "projects.archive",
-        &ops::project_lifecycle(&*b, "projects.archive", &p),
+        &ops::project_lifecycle(&*b, ops::LifecycleChange::Archive, &p),
     ))
     .unwrap();
     let deadline = Instant::now() + SETTLE_BOUND;
@@ -564,7 +564,7 @@ fn native_confirmation_ui_removes_owned_session_drafts_and_paste_keeps_home_and_
     }
     ops::project_changed(b.command(
         "projects.delete",
-        &ops::project_lifecycle(&*b, "projects.delete", &archived),
+        &ops::project_lifecycle(&*b, ops::LifecycleChange::Delete, &archived),
     ))
     .unwrap();
     let mut memory = Memory::default();

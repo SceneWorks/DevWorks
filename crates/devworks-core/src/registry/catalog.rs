@@ -1872,7 +1872,7 @@ pub(super) static CATALOG: [OperationDescriptor; 380] = [
         result_type: "TranscriptPage",
         result_schema: schema_of::<TranscriptPage>,
         completion: false,
-        revisions: &[SchemaRevision(1)],
+        revisions: &[SchemaRevision(1), SchemaRevision(8)],
         native_execution: false,
         approval_required: false,
         human_only: false,

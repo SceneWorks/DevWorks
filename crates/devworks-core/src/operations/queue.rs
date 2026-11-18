@@ -160,4 +160,14 @@ impl Input {
             Self::Reconcile(_) => Mode::Command,
         }
     }
+    /// The `/body` members of this input, without the `kind` discriminator.
+    pub fn body(&self) -> Result<serde_json::Value, serde_json::Error> {
+        match self {
+            Self::Inspect(i) => serde_json::to_value(i),
+            Self::Resolve(i) => serde_json::to_value(i),
+            Self::Retry(i) => serde_json::to_value(i),
+            Self::ConsumerStatus(i) => serde_json::to_value(i),
+            Self::Reconcile(i) => serde_json::to_value(i),
+        }
+    }
 }

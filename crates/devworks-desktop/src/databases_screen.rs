@@ -52,6 +52,10 @@ pub enum ReadIntent {
     CodeReferences { id: String, append: bool },
 }
 impl DatabasesScreen {
+    /// The user navigated away: a generated key is shown once and not kept.
+    pub(crate) fn left(&mut self) {
+        self.generated_key = None;
+    }
     pub fn clear_explorer(&mut self) {
         self.view = None;
         self.read_pin = None;
@@ -272,9 +276,6 @@ fn project_access(ui: &mut Ui, config: &mut Value, projects: &[(String, String)]
     config["projectAccess"] = json!(access);
 }
 impl DatabasesScreen {
-    pub fn scope(&self) -> Value {
-        scope(self.project.as_deref())
-    }
     pub fn source(&self) -> Option<&SchemaConnection> {
         self.selected
             .as_deref()
@@ -887,13 +888,6 @@ impl DatabasesScreen {
             actions.push(Action::More);
         }
     }
-}
-
-pub fn scope(project: Option<&str>) -> Value {
-    project.map_or_else(
-        || json!({"kind":"Workspace"}),
-        |p| json!({"kind":"Project","projectId":p}),
-    )
 }
 
 impl DatabasesScreen {

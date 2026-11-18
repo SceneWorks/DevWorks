@@ -237,4 +237,18 @@ impl Input {
             Self::Network(_) => Mode::Query,
         }
     }
+    /// The `/body` members of this input, without the `kind` discriminator.
+    pub fn body(&self) -> Result<serde_json::Value, serde_json::Error> {
+        match self {
+            Self::SessionsQuery(i) => serde_json::to_value(i),
+            Self::SessionsCommand(i) => serde_json::to_value(i),
+            Self::Inspect(i) => serde_json::to_value(i),
+            Self::Navigate(i) => serde_json::to_value(i),
+            Self::Input(i) => serde_json::to_value(i),
+            Self::Upload(i) => serde_json::to_value(i),
+            Self::Screenshot(i) => serde_json::to_value(i),
+            Self::Console(i) => serde_json::to_value(i),
+            Self::Network(i) => serde_json::to_value(i),
+        }
+    }
 }

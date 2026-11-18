@@ -15,7 +15,7 @@ use devworks_core::{
         },
         usage::{
             accounting::{self, AttemptEnd},
-            host::{AccountingWriteFence, OwnedInferenceSink},
+            host::{OwnedInferenceSink, WriteFence},
         },
     },
 };
@@ -166,7 +166,7 @@ impl ProviderSink {
         &mut self,
         attempt: &StoredInferenceAttempt,
         value: Value,
-        fence: &AccountingWriteFence,
+        fence: &WriteFence,
     ) -> Result<(), StorageError> {
         self.evidence_bytes = self.evidence_bytes.saturating_add(value.to_string().len());
         self.evidence.push(value);
@@ -178,7 +178,7 @@ impl ProviderSink {
     fn flush_evidence(
         &mut self,
         attempt: &StoredInferenceAttempt,
-        fence: &AccountingWriteFence,
+        fence: &WriteFence,
     ) -> Result<(), StorageError> {
         if self.evidence.is_empty() {
             return Ok(());
@@ -234,7 +234,7 @@ impl ProviderSink {
         &mut self,
         attempt: &StoredInferenceAttempt,
         body: ProviderBody,
-        fence: &AccountingWriteFence,
+        fence: &WriteFence,
     ) -> Result<(), StorageError> {
         let sequence = self.sequence + 1;
         self.assembler
@@ -259,7 +259,7 @@ impl ProviderSink {
         &self,
         attempt: &StoredInferenceAttempt,
         bodies: Vec<TranscriptBody>,
-        fence: &AccountingWriteFence,
+        fence: &WriteFence,
     ) -> Result<Option<(i64, i64)>, StorageError> {
         if bodies.is_empty() {
             return Ok(None);
@@ -316,7 +316,7 @@ impl ProviderSink {
         title: &str,
         media_type: &str,
         kind: ArtifactKind,
-        fence: &AccountingWriteFence,
+        fence: &WriteFence,
     ) -> Result<ArtifactRef, StorageError> {
         let service = self.artifacts.clone();
         let store = self.store.clone();
@@ -337,7 +337,7 @@ impl ProviderSink {
             let staged=service.stage_host_bytes(store.as_ref(),bytes,json!({"kind":"ProviderOutput","requestId":attempt.request_id,"attemptId":attempt.attempt_id}))?
                 .map_err(|_|invalid("provider artifact staging failed"))?;
             let pending=staged.clone(); let service_in=service.clone();
-            let committed=run_write(store.as_ref(),WriteOptions::default(),move|tx| {
+            let committed=run_write(store.as_ref(),WriteOptions::observed(),move|tx| {
                 validate(tx,&context,&attempt)?;
                 validate_binding(tx,&binding)?;
                 let scope=attempt.project_id.clone().map_or(ArtifactScope::Workspace,ArtifactScope::Project);
@@ -357,7 +357,7 @@ impl ProviderSink {
         &mut self,
         attempt: &StoredInferenceAttempt,
         call: DecodedToolCall,
-        fence: &AccountingWriteFence,
+        fence: &WriteFence,
     ) -> Result<(), StorageError> {
         if self.detached != Detached::No {
             return Err(invalid("detached generation cannot emit tool calls"));
@@ -457,7 +457,7 @@ pub(crate) fn validate(
         .usage()
         .inference_attempt(&attempt.attempt_id)?
         .ok_or(StorageError::ScopeDenied)?;
-    if current.state != "Dispatched"
+    if current.state != devworks_core::ports::storage::AttemptState::Dispatched
         || current.request_id != attempt.request_id
         || current.actor_id != attempt.actor_id
         || current.pricing_snapshot != attempt.pricing_snapshot
@@ -538,7 +538,7 @@ impl OwnedInferenceSink for ProviderSink {
         &mut self,
         attempt: &StoredInferenceAttempt,
         head: devworks_core::providers::ProviderResponseHead,
-        fence: &AccountingWriteFence,
+        fence: &WriteFence,
     ) -> Result<(), StorageError> {
         let store = self.store.clone();
         let current = attempt.clone();
@@ -568,7 +568,7 @@ impl OwnedInferenceSink for ProviderSink {
         &mut self,
         attempt: &StoredInferenceAttempt,
         frame: DecodedFrame,
-        fence: &AccountingWriteFence,
+        fence: &WriteFence,
     ) -> Result<(), StorageError> {
         match frame {
             DecodedFrame::TextDelta {
@@ -602,7 +602,7 @@ impl OwnedInferenceSink for ProviderSink {
                     let binding = self.prepared.identity.binding.clone();
                     let epoch = binding.context_epoch.get();
                     fence.publication(|| {
-                        run_write(store.as_ref(), WriteOptions::default(), move |tx| {
+                        run_write(store.as_ref(), WriteOptions::observed(), move |tx| {
                             validate(tx, &context, &current)?;
                             validate_binding(tx, &binding)?;
                             Ok(())
@@ -722,7 +722,7 @@ impl OwnedInferenceSink for ProviderSink {
         &mut self,
         attempt: &StoredInferenceAttempt,
         outcome: AttemptEnd,
-        fence: &AccountingWriteFence,
+        fence: &WriteFence,
     ) -> Result<(), StorageError> {
         self.finish_output(attempt, outcome, fence)?;
         let result = {
@@ -752,7 +752,7 @@ impl ProviderSink {
         &mut self,
         attempt: &StoredInferenceAttempt,
         outcome: AttemptEnd,
-        fence: &AccountingWriteFence,
+        fence: &WriteFence,
     ) -> Result<(), StorageError> {
         if let Some(access) = self.access.as_ref().filter(|a| {
             !self.entitlement_refused
@@ -835,7 +835,7 @@ impl ProviderSink {
                         }
                     }
                     let pending=staged.clone();let native=service.clone();
-                    let committed=run_write(store.as_ref(),WriteOptions::default(),move|tx| {
+                    let committed=run_write(store.as_ref(),WriteOptions::settlement(),move|tx| {
                         validate(tx,&context,&current)?;
                         validate_binding(tx,&binding)?;
                         let mut references=Vec::new();

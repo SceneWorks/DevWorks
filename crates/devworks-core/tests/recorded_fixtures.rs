@@ -370,7 +370,7 @@ fn data_delivery_fixtures_match_recorded_outcomes() {
 #[test]
 fn provider_and_package_fixtures_match_recorded_outcomes() {
     // 66 package/codec cases are asserted by devworks-extension-protocol's tests.
-    assert_eq!(run("provider-package-fixtures.json", 120), 54);
+    assert_eq!(run("provider-package-fixtures.json", 121), 55);
 }
 
 /// Every (operation, mode, schema revision) binding is admitted for at least one recorded message.
@@ -451,14 +451,15 @@ fn every_catalog_input_has_a_positive_recorded_fixture_admitted_natively() {
     // and mcp.remove arrive at revision 8, and so does mcp.classify_tool; containers.create adds
     // revision 8 for the explicit wider port bind, and process.install_project_dependencies
     // adds revision 8 for the explicit allowScripts. history.work_lineage revision 3 (actor
-    // attribution) adds one; skills.set_enabled arrives at revision 8; the four settings operations
+    // attribution) adds one; sessions.transcript revision 8 (the dispatch fence) adds one;
+    // skills.set_enabled arrives at revision 8; the four settings operations
     // add revision 8 for the repository scope (repositoryId, sourceRepositoryId); the ten
     // skill and role history operations add revision 8 for the draft rationale and the record's
     // author, session, rationale, state and approval outcome; ten operations that return lessons
     // add revision 8 for the skills that name a lesson (knowledge.search, .read, .subgraph,
     // .entity_bundle, .entity_graph, .claim_bundle, .expand_frontier, .query, .tagged_lessons and
     // approvals.review_queue); addons.invoke and addons.invocation arrive at revision 8.
-    assert_eq!(admitted.len(), 660);
+    assert_eq!(admitted.len(), 661);
 }
 
 #[test]

@@ -267,7 +267,7 @@ pub(super) fn assert_reviewed_create(
         let branch = tree.branch.strip_prefix("refs/heads/").unwrap();
         git(source, &["branch", "--", branch, &tree.head.hex]);
         let checkout_argument =
-            devworks_core::services::indexing::git::path_argument(Path::new(&tree.path))
+            devworks_core::services::git::client::path_argument(Path::new(&tree.path))
                 .expect("stored native worktree path is representable by Git");
         git(
             source,
@@ -282,7 +282,7 @@ pub(super) fn assert_reviewed_create(
         );
         assert!(matches!(
             service.observe(&record),
-            devworks_core::services::git::EffectOutcome::Unknown(_)
+            devworks_core::services::effect::EffectOutcome::Unknown(_)
         ));
         assert!(
             !Path::new(&tree.path).join("a.txt").exists(),
@@ -305,13 +305,13 @@ pub(super) fn assert_reviewed_create(
     if matches!(case, CreateCase::ChangedHookNames) {
         assert!(!matches!(
             outcome,
-            devworks_core::services::git::EffectOutcome::Completed(_)
+            devworks_core::services::effect::EffectOutcome::Completed(_)
         ));
     } else {
         assert!(
             matches!(
                 outcome,
-                devworks_core::services::git::EffectOutcome::Completed(_)
+                devworks_core::services::effect::EffectOutcome::Completed(_)
             ),
             "{outcome:?}"
         );

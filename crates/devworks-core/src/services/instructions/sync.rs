@@ -409,7 +409,7 @@ impl InstructionService {
             return Ok(());
         }
         next.version += 1;
-        run_write(&*self.store, WriteOptions::default(), move |tx| {
+        run_write(&*self.store, WriteOptions::observed(), move |tx| {
             next.updated_at_ms = tx.now_ms();
             match tx.instructions().update_instruction_item(&next) {
                 // A concurrent writer changed the item; the next sync observes it again.
@@ -439,7 +439,7 @@ impl InstructionService {
         let scope = scope.clone();
         let staged = Arc::new(staged);
         let staged_in = staged.clone();
-        let result = run_write(&*self.store, WriteOptions::default(), move |tx| {
+        let result = run_write(&*self.store, WriteOptions::observed(), move |tx| {
             let now = tx.now_ms();
             let mut item = match &base {
                 Some(item) => {
@@ -643,7 +643,7 @@ impl InstructionService {
         let artifacts = self.artifacts.clone();
         let base = item.cloned();
         let scope = scope.clone();
-        let result = run_write(&*self.store, WriteOptions::default(), move |tx| {
+        let result = run_write(&*self.store, WriteOptions::observed(), move |tx| {
             let now = tx.now_ms();
             let (mut item, first) = match &base {
                 Some(item) => {
@@ -758,7 +758,7 @@ impl InstructionService {
             next.observed_digest = Some(revision.content_digest);
             next.present = true;
             next.version += 1;
-            let recorded = run_write(&*self.store, WriteOptions::default(), move |tx| {
+            let recorded = run_write(&*self.store, WriteOptions::settlement(), move |tx| {
                 let current = tx
                     .instructions()
                     .instruction_item(&next.id)?

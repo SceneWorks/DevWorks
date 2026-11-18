@@ -2,17 +2,23 @@
 //! Kanban board and its accessible ordering controls. Feature and card detail and the plan
 //! editor are in [`detail`]. They draw [`WorkUi`] state and report what the user did as
 //! actions the shell submits (`shell/work.rs`).
+pub mod activity;
 pub mod detail;
-use crate::shell::Shell;
+pub mod features;
+pub mod issues;
+pub mod messages;
+pub mod overview;
+use crate::frame;
+use crate::shell::ListState;
 use crate::theme;
 use crate::widgets::{self, Tone, ViewState, chip};
 use devworks_core::protocol::Id;
 use devworks_core::protocol::records::{
-    ApprovalState, FindingState, ReadinessFreshness, WorkKind, WorkRecord,
+    ApprovalState, FindingState, QueuePlacement, QueueSide, ReadinessFreshness, WorkKind,
+    WorkRecord,
 };
 use devworks_core::services::work::fold;
 use eframe::egui::{self, RichText, Ui};
-use serde_json::{Value, json};
 use std::collections::BTreeSet;
 
 /// Feature list tabs and Issues tabs.
@@ -252,14 +258,21 @@ pub(crate) fn create_form(ui: &mut Ui, work: &mut WorkUi, busy: bool, actions: &
 
 /// The placement moving `bucket[pos]` one step up (before its predecessor) or down (after its
 /// successor): one bounded request whatever the bucket's size (`None` at the bucket's edge).
-pub fn adjacent_move(bucket: &[&str], pos: usize, up: bool) -> Option<Value> {
+pub fn adjacent_move(bucket: &[&str], pos: usize, up: bool) -> Option<QueuePlacement> {
     let anchor = if up {
         bucket.get(pos.checked_sub(1)?)?
     } else {
         bucket.get(pos + 1)?
     };
-    Some(json!({"workId": bucket.get(pos)?, "anchorId": anchor,
-        "side": if up { "Before" } else { "After" }}))
+    Some(QueuePlacement {
+        work_id: frame::id(bucket.get(pos)?)?,
+        anchor_id: frame::id(anchor)?,
+        side: if up {
+            QueueSide::Before
+        } else {
+            QueueSide::After
+        },
+    })
 }
 
 /// Up/Down controls of one item among `bucket` (the items of its priority in queue order).
@@ -268,7 +281,7 @@ pub(crate) fn order_controls(
     w: &WorkRecord,
     bucket: &[&WorkRecord],
     enabled: bool,
-    action: impl Fn(Value) -> Action,
+    action: impl Fn(QueuePlacement) -> Action,
     actions: &mut Vec<Action>,
 ) {
     let pos = bucket.iter().position(|b| b.id == w.id).unwrap_or(0);
@@ -330,7 +343,7 @@ pub(crate) fn feature_list(
             .response
             .widget_info(|| egui::WidgetInfo::labeled(egui::Role::ComboBox, true, "Status filter"));
     });
-    if !Shell::list_state(ui, &work.features, "features") {
+    if !list_state(ui, &work.features, "features") {
         return;
     }
     let all = &work.features.items;
@@ -420,7 +433,7 @@ pub(crate) fn issue_list(
             .desired_width(240.0),
     );
     r.widget_info(|| egui::WidgetInfo::labeled(egui::Role::TextInput, true, "Search issues"));
-    if !Shell::list_state(ui, &work.cards, "issues") {
+    if !list_state(ui, &work.cards, "issues") {
         return;
     }
     let standalone: Vec<&WorkRecord> = work
@@ -514,9 +527,7 @@ pub(crate) fn board(
     waiting: &BTreeSet<String>,
     actions: &mut Vec<Action>,
 ) {
-    if !Shell::list_state(ui, &work.features, "features")
-        || !Shell::list_state(ui, &work.cards, "cards")
-    {
+    if !list_state(ui, &work.features, "features") || !list_state(ui, &work.cards, "cards") {
         return;
     }
     let label = work
@@ -704,4 +715,40 @@ pub(crate) fn board(
     if let Some((c, to)) = dropped {
         actions.push(Action::Move(c, to));
     }
+}
+
+pub(crate) fn no_project(ui: &mut Ui, online: &Result<(), String>) {
+    let state = match online {
+        Err(reason) => ViewState::Offline {
+            reason: reason.clone(),
+        },
+        Ok(()) => ViewState::Empty {
+            title: "No project selected".into(),
+            body: "Select a project in the navigation to see its work.".into(),
+        },
+    };
+    widgets::state_block(ui, &state);
+}
+pub(crate) fn list_state(ui: &mut Ui, list: &ListState<WorkRecord>, what: &str) -> bool {
+    if let Some(e) = &list.error {
+        widgets::state_block(
+            ui,
+            &if list.loaded {
+                ViewState::Stale { what: what.into() }
+            } else {
+                ViewState::Failed {
+                    what: what.into(),
+                    error: e.clone(),
+                }
+            },
+        );
+        if !list.loaded {
+            return false;
+        }
+    }
+    if !list.loaded {
+        widgets::state_block(ui, &ViewState::Loading { what: what.into() });
+        return false;
+    }
+    true
 }

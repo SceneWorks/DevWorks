@@ -14,7 +14,7 @@ use crate::{
         records::*,
         results::{DomainDecision, OperationResult},
     },
-    services::sessions::{Failure, Refusal, rev},
+    services::kernel::{Failure, Refusal, rev},
 };
 use serde_json::{Value, json};
 fn invalid(kind: &'static str) -> Failure {
@@ -34,7 +34,7 @@ fn owner(
     let row = tx
         .conventions()
         .convention(id, None, &scoped.readable)?
-        .ok_or_else(|| crate::services::sessions::not_found("convention", id))?;
+        .ok_or_else(|| crate::services::kernel::not_found("convention", id))?;
     access::writable(tx, ctx, &row.scope)?;
     if row.revision != expected.get() {
         return Err(StorageError::conflict(
@@ -85,7 +85,7 @@ fn resource(
             Some(row.revision),
             std::slice::from_ref(&row.scope),
         )?
-        .ok_or_else(|| crate::services::sessions::not_found("convention_resource", id).into())
+        .ok_or_else(|| crate::services::kernel::not_found("convention_resource", id).into())
 }
 impl ConventionService {
     fn retain(

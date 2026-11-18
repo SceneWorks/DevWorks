@@ -3,6 +3,7 @@ use super::*;
 use devworks_core::authority::service::bind_principal;
 use devworks_core::protocol::results::DomainQueryReply;
 use devworks_core::settings::catalog::AgentRole;
+use devworks_test_support::LoseAcks;
 
 fn query(
     app: &HelpApp,
@@ -825,25 +826,18 @@ fn missing_or_corrupt_generated_source_can_be_rebuilt_without_losing_other_help(
     }
 }
 
-struct PublicationAckLoss {
-    stage_after: Option<u16>,
-    fail_read: Arc<AtomicBool>,
+/// Loses the acknowledgment of the write that publishes the Help catalog head (`stage_after`
+/// `None`) or of the one that first stages `count` topics of the open draft (`Some(count)`).
+/// `fail_next_read` fails the read after it.
+fn lose_publication_ack(
     inner: Arc<dyn ApplicationStore>,
-    armed: Arc<AtomicBool>,
-    lost: Arc<AtomicUsize>,
-}
-struct PublicationJob {
     stage_after: Option<u16>,
-    inner: Box<dyn WriteJob>,
-    armed: Arc<AtomicBool>,
-    lost: Arc<AtomicUsize>,
-    hide: bool,
-}
-impl WriteJob for PublicationJob {
-    fn run(&mut self, tx: &mut dyn WriteTransaction) -> Result<(), StorageError> {
+) -> Arc<LoseAcks> {
+    let loss = LoseAcks::over(inner);
+    loss.lose_when_around(move |tx, run| {
         let before = tx.help().help_head()?.revision;
-        self.inner.run(tx)?;
-        let hit = match self.stage_after {
+        run(tx)?;
+        Ok(match stage_after {
             None => tx.help().help_head()?.revision > before,
             Some(count) => tx
                 .help()
@@ -856,67 +850,19 @@ impl WriteJob for PublicationJob {
                 })
                 .transpose()?
                 .unwrap_or(false),
-        };
-        if hit && self.armed.swap(false, Ordering::SeqCst) {
-            self.hide = true;
-        }
-        Ok(())
-    }
-    fn finish(self: Box<Self>, outcome: Result<(), StorageError>) {
-        if self.hide && outcome.is_ok() {
-            self.lost.fetch_add(1, Ordering::SeqCst);
-            self.inner.finish(Err(StorageError::CommitUnknown));
-        } else {
-            self.inner.finish(outcome);
-        }
-    }
+        })
+    });
+    loss
 }
-impl ApplicationStore for PublicationAckLoss {
-    fn info(&self) -> StoreInfo {
-        self.inner.info()
-    }
-    fn read(
-        &self,
-        options: &ReadOptions,
-        work: &mut dyn FnMut(&dyn ReadSnapshot) -> Result<(), StorageError>,
-    ) -> Result<(), StorageError> {
-        if self.fail_read.swap(false, Ordering::SeqCst) {
-            return Err(StorageError::unavailable(
-                Unavailable::Io,
-                "injected read interruption",
-            ));
-        }
-        self.inner.read(options, work)
-    }
-    fn submit_write(
-        &self,
-        options: WriteOptions,
-        job: Box<dyn WriteJob>,
-    ) -> Result<(), StorageError> {
-        self.inner.submit_write(
-            options,
-            Box::new(PublicationJob {
-                stage_after: self.stage_after,
-                inner: job,
-                armed: self.armed.clone(),
-                lost: self.lost.clone(),
-                hide: false,
-            }),
-        )
-    }
+fn injected_read_interruption() -> StorageError {
+    StorageError::unavailable(Unavailable::Io, "injected read interruption")
 }
 #[test]
 fn lost_catalog_publication_ack_recovers_from_one_exact_durable_observation() {
     let _native_case = crate::common::native_runtime_case();
     let rt = runtime();
     let h = Harness::new();
-    let loss = Arc::new(PublicationAckLoss {
-        stage_after: None,
-        fail_read: Arc::new(AtomicBool::new(false)),
-        inner: h.open(),
-        armed: Arc::new(AtomicBool::new(true)),
-        lost: Arc::new(AtomicUsize::new(0)),
-    });
+    let loss = lose_publication_ack(h.open(), None);
     let store: Arc<dyn ApplicationStore> = loss.clone();
     let artifacts = Arc::new(ArtifactService::new(
         Arc::new(NativeArtifactFiles::new(
@@ -967,7 +913,7 @@ fn lost_catalog_publication_ack_recovers_from_one_exact_durable_observation() {
     );
     rt.block_on(dispatcher.run_until_idle()).unwrap();
     assert_eq!(
-        loss.lost.load(Ordering::SeqCst),
+        loss.lost(),
         1,
         "only the actual head publication acknowledgment was lost"
     );
@@ -998,11 +944,11 @@ fn lost_catalog_publication_ack_recovers_from_one_exact_durable_observation() {
             .count(),
         1
     );
-    loss.fail_read.store(true, Ordering::SeqCst);
+    loss.fail_next_read(injected_read_interruption());
     assert!(
         matches!(
             service.observe(&operation),
-            devworks_core::services::help::GenerationOutcome::Unknown(_)
+            devworks_core::services::effect::EffectOutcome::Unknown(_)
         ),
         "an unreadable journal cannot be replaced by a new build"
     );
@@ -1082,13 +1028,7 @@ fn a_restart_resumes_only_the_original_invisible_draft_and_preserves_prepared_re
     let rt = runtime();
     let h = Harness::new();
     let (operation_id, generation, prepared) = {
-        let store: Arc<dyn ApplicationStore> = Arc::new(PublicationAckLoss {
-            stage_after: Some(2),
-            fail_read: Arc::new(AtomicBool::new(false)),
-            inner: h.open(),
-            armed: Arc::new(AtomicBool::new(true)),
-            lost: Arc::new(AtomicUsize::new(0)),
-        });
+        let store: Arc<dyn ApplicationStore> = lose_publication_ack(h.open(), Some(2));
         let (service, cases, dispatcher) = core_help(&h, store.clone());
         let authority = HostAuth {
             store: store.clone(),
@@ -1230,13 +1170,7 @@ fn cancelled_unpublished_drafts_are_cleaned_in_bounded_pages_without_touching_pu
     let _native_case = crate::common::native_runtime_case();
     let rt = runtime();
     let h = Harness::new();
-    let store: Arc<dyn ApplicationStore> = Arc::new(PublicationAckLoss {
-        stage_after: Some(2),
-        fail_read: Arc::new(AtomicBool::new(false)),
-        inner: h.open(),
-        armed: Arc::new(AtomicBool::new(true)),
-        lost: Arc::new(AtomicUsize::new(0)),
-    });
+    let store: Arc<dyn ApplicationStore> = lose_publication_ack(h.open(), Some(2));
     let (service, cases, dispatcher) = core_help(&h, store.clone());
     let authority = HostAuth {
         store: store.clone(),

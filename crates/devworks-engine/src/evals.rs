@@ -1,17 +1,17 @@
 //! Automatic recorded grading over host-authorized immutable suites. The durable session and
 //! activation state is the queue: boot and periodic keyset sweeps repair lost wakeups. No
 //! provider or inference port is available here. Suite selection/activation belongs to DW-72.
-use crate::dispatch::{Either, first};
 use crate::store;
+use crate::workers::Ticker;
 use devworks_core::ports::storage::{
     ApplicationStore, SessionPosition, SessionScope, StorageError,
 };
 use devworks_core::protocol::records::EvalSuiteSnapshot;
 use devworks_core::services::evals::EvalService;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
+use std::sync::atomic::Ordering;
 use std::time::Duration;
-use tokio::sync::{Notify, watch};
+use tokio::sync::watch;
 
 const PAGE: u16 = 64;
 
@@ -29,9 +29,7 @@ pub struct EvalSupervisor {
     store: Arc<dyn ApplicationStore>,
     service: Arc<EvalService>,
     suites: Vec<EvalSuiteSnapshot>,
-    stopping: Arc<AtomicBool>,
-    fence: Arc<RwLock<bool>>,
-    wake: Notify,
+    ticker: Ticker,
     ticking: tokio::sync::Mutex<()>,
     status: watch::Sender<Option<EvalPass>>,
 }
@@ -48,9 +46,7 @@ impl EvalSupervisor {
             store,
             service,
             suites,
-            stopping: Arc::new(AtomicBool::new(false)),
-            fence: Arc::new(RwLock::new(false)),
-            wake: Notify::new(),
+            ticker: Ticker::new(),
             ticking: tokio::sync::Mutex::new(()),
             status,
         })
@@ -59,11 +55,10 @@ impl EvalSupervisor {
         self.status.subscribe()
     }
     pub fn notify(&self) {
-        self.wake.notify_one();
+        self.ticker.notify();
     }
     pub fn stop(&self) {
-        self.stopping.store(true, Ordering::SeqCst);
-        self.notify();
+        self.ticker.stop();
     }
 
     /// Stops admission and synchronously drains the one local grading transaction. Blocking
@@ -71,46 +66,33 @@ impl EvalSupervisor {
     /// after it closes no orphaned blocking job can persist a report.
     pub async fn drain(&self) {
         self.stop();
-        let fence = self.fence.clone();
-        let _ = tokio::task::spawn_blocking(move || {
-            *fence.write().unwrap_or_else(|p| p.into_inner()) = true;
-        })
-        .await;
+        self.ticker.drain().await;
     }
     /// Drop's synchronous equivalent, also fencing jobs that have not begun yet.
     pub(crate) fn close(&self) {
         self.stop();
-        *self.fence.write().unwrap_or_else(|p| p.into_inner()) = true;
+        self.ticker.close();
     }
     pub async fn run(self: Arc<Self>, every: Duration) {
-        while !self.stopping.load(Ordering::SeqCst) {
-            let result = self.tick().await;
-            self.status.send_replace(Some(EvalPass { result }));
-            if self.stopping.load(Ordering::SeqCst) {
-                break;
-            }
-            match first(
-                self.wake.notified(),
-                tokio::time::sleep(every.max(Duration::from_millis(1))),
-            )
-            .await
-            {
-                Either::Left(()) | Either::Right(()) => {}
-            }
-        }
+        self.ticker
+            .run(every, || async {
+                let result = self.tick().await;
+                self.status.send_replace(Some(EvalPass { result }));
+            })
+            .await;
     }
     /// A complete catch-up sweep, serialized with the background loop. Failed sessions do not
     /// starve later ones: the first error is returned after the rest of the sweep is attempted.
     pub async fn tick(&self) -> Result<usize, StorageError> {
         let _one = self.ticking.lock().await;
-        if self.suites.is_empty() || self.stopping.load(Ordering::SeqCst) {
+        if self.suites.is_empty() || self.ticker.is_stopped() {
             return Ok(0);
         }
         let mut after = None;
         let mut graded = 0;
         let mut failure = None;
         loop {
-            if self.stopping.load(Ordering::SeqCst) {
+            if self.ticker.is_stopped() {
                 break;
             }
             let cursor = after.clone();
@@ -125,7 +107,7 @@ impl EvalSupervisor {
                 id: s.id.clone(),
             });
             for session in page {
-                if self.stopping.load(Ordering::SeqCst) {
+                if self.ticker.is_stopped() {
                     break;
                 }
                 let candidate = session.clone();
@@ -140,7 +122,7 @@ impl EvalSupervisor {
                     continue;
                 }
                 for suite in &self.suites {
-                    if self.stopping.load(Ordering::SeqCst) {
+                    if self.ticker.is_stopped() {
                         break;
                     }
                     let (store, service, suite, session_id, fence, stopping) = (
@@ -148,8 +130,8 @@ impl EvalSupervisor {
                         self.service.clone(),
                         suite.clone(),
                         session.id.clone(),
-                        self.fence.clone(),
-                        self.stopping.clone(),
+                        self.ticker.fence(),
+                        self.ticker.flag(),
                     );
                     let result = tokio::task::spawn_blocking(move || {
                         let closed = fence.read().unwrap_or_else(|p| p.into_inner());
@@ -169,7 +151,7 @@ impl EvalSupervisor {
                     match result {
                         Ok(true) => graded += 1,
                         Ok(false) => {}
-                        Err(StorageError::Cancelled) if self.stopping.load(Ordering::SeqCst) => {}
+                        Err(StorageError::Cancelled) if self.ticker.is_stopped() => {}
                         Err(StorageError::InvalidRecord(reason))
                             if reason == "eval session is no longer terminal"
                                 || reason == "automatic grading stopped" => {}

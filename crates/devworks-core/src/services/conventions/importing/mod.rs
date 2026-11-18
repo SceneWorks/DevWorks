@@ -12,7 +12,6 @@ use crate::{
 pub use commands::{EFFECT_CONSUMER, PreparedImport};
 pub use maintenance::ImportCleanup;
 use std::sync::Arc;
-pub use worker::ImportOutcome;
 pub struct ImportService {
     store: Arc<dyn ApplicationStore>,
     artifacts: Arc<ArtifactService>,
@@ -50,13 +49,7 @@ impl ImportService {
         &self,
         work: impl FnOnce(&mut dyn WriteTransaction) -> Result<T, StorageError> + Send + 'static,
     ) -> Result<T, StorageError> {
-        let _phase = self.closed.enter()?;
-        let closed = self.closed.clone();
-        run_write(self.store.as_ref(), WriteOptions::default(), move |tx| {
-            if closed.is_closed() {
-                return Err(StorageError::Cancelled);
-            }
-            work(tx)
-        })
+        self.closed
+            .write(self.store.as_ref(), WriteOptions::host_state(), work)
     }
 }

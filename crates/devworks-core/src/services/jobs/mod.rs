@@ -83,7 +83,7 @@ use crate::protocol::{
 use crate::registry::{self, Envelope, Mode, SchemaRevision};
 use crate::services::UseCases;
 use crate::services::cursor::{self, CursorBinding};
-use crate::services::sessions::{Failure, Refusal, not_found, project_visible, query_fault, rev};
+use crate::services::kernel::{Failure, Refusal, not_found, project_visible, query_fault, rev};
 use occurrence::Plan;
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
@@ -773,7 +773,7 @@ impl JobService {
                 Ok(None)
             }
             DataScope::Project { project_id } => {
-                crate::services::sessions::require_project(ctx, project_id)?;
+                crate::services::kernel::require_project(ctx, project_id)?;
                 match tx.runs().project_lifecycle(project_id)? {
                     None => Err(not_found("project", &project_id.0).into()),
                     Some(l) if project_closed(Some(&l)) => Err(refuse(
@@ -1256,7 +1256,7 @@ impl JobService {
                 (JobScope::App, "workspace".to_owned())
             }
             DataScope::Project { project_id } => {
-                crate::services::sessions::require_project(ctx, project_id)?;
+                crate::services::kernel::require_project(ctx, project_id)?;
                 (
                     JobScope::Project(project_id.clone()),
                     format!("project:{}", project_id.0.as_str()),
@@ -1412,7 +1412,7 @@ impl CommandHandler for JobService {
         tx: &mut dyn WriteTransaction,
     ) -> Result<Decided, HandlerFailure> {
         let OperationInput::Jobs(input) = command.input() else {
-            return crate::services::sessions::decided(
+            return crate::services::kernel::decided(
                 tx,
                 Err(Refusal::new(DomainErrorCode::UnsupportedCapability, "operation", None).into()),
             );
@@ -1420,7 +1420,7 @@ impl CommandHandler for JobService {
         if ctx.reviewed_operation().is_some()
             && let Err(f) = self.validate_reviewed_consent(tx, ctx, command)
         {
-            return crate::services::sessions::decided(tx, Err(f));
+            return crate::services::kernel::decided(tx, Err(f));
         }
         let outcome = match input {
             ops::Input::Create(i) => self.create(tx, ctx, i).map(|d| (d, None)),
@@ -1440,7 +1440,7 @@ impl CommandHandler for JobService {
                 operation_id,
             }),
             Err(f) => {
-                let mut d = crate::services::sessions::decided(tx, Err(f))?;
+                let mut d = crate::services::kernel::decided(tx, Err(f))?;
                 d.operation_id = None;
                 Ok(d)
             }
@@ -1862,7 +1862,7 @@ impl JobService {
             let result = (|| {
                 let candidate = job_approval_candidate(snapshot.jobs(), ctx, &request.input)?;
                 match candidate.scope.project_id() {
-                    Some(p) => crate::services::sessions::require_project(ctx, p)?,
+                    Some(p) => crate::services::kernel::require_project(ctx, p)?,
                     None if ctx.project_id().is_some() => {
                         return Err(refuse(DomainErrorCode::PermissionDenied, "scope", None));
                     }

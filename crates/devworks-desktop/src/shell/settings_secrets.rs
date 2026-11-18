@@ -1,10 +1,15 @@
 //! Native password input is staged off the frame thread; only its reference reaches admission.
-use super::*;
+use super::settings::SettingsCtl;
+use crate::backend::TaskOutput;
+use crate::ops;
+use crate::settings_ops::SettingsSlot;
+use crate::widgets::Tone;
 use devworks_core::ports::secrets::Secret;
 use devworks_core::settings::catalog::ValueKind;
 use serde_json::{Value, json};
+use std::collections::BTreeMap;
 
-impl Shell {
+impl SettingsCtl<'_, '_> {
     pub(super) fn store_setting_secret(&mut self, key: &str, value: Option<Secret>) {
         if self.settings.saving || self.online().is_err() {
             return;
@@ -22,9 +27,9 @@ impl Shell {
         // This gesture saves only this key, with the revision captured before native intake.
         // Other settings drafts stay local and are preserved by the normal save/read path.
         captured.discard_all();
-        let submitted = self.client.as_mut().is_some_and(|client| {
+        let submitted = self.client.as_deref_mut().is_some_and(|client| {
             client.task(
-                Slot::SettingsSecret(key.into()),
+                SettingsSlot::SettingsSecret(key.into()).into(),
                 "Saving credential",
                 move |backend| {
                     let value = match value {
@@ -74,10 +79,10 @@ impl Shell {
                     let _ = view.edit(&key, value.clone());
                 }
                 self.settings.submitted = BTreeMap::from([(key, value)]);
-                if let Some(client) = &mut self.client {
+                if let Some(client) = self.client.as_deref_mut() {
                     // The client owns exact prepared frames even during close/recovery.
                     client.command(
-                        Slot::SettingsSave,
+                        SettingsSlot::SettingsSave.into(),
                         "Saving credential setting",
                         "settings.save_revision",
                         frame,

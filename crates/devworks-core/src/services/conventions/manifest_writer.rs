@@ -1,5 +1,14 @@
-//! A portable, streamed manifest. No output contains host authority, foreign author IDs or
-//! nonportable artifact references. The actual staging owner enforces its artifact quota.
+//! The convention manifest format, written in one place. No output contains host authority,
+//! foreign author IDs or nonportable artifact references. The actual staging owner enforces its
+//! artifact quota.
+//!
+//! [`write_editor_manifest`] streams a whole manifest to a writer; the resumable transport in
+//! `manifest.rs` emits the same bytes a page at a time. Both build every literal piece (the
+//! header, a source's opening and closing, a resource's opening, the escaping of one text
+//! scalar) with the functions of the [`format`] section below, so the two cannot drift. The
+//! hand-written reader of this format is `importing/parser.rs`; it is incremental and
+//! checkpointed, which a general JSON decoder is not, and `portable_manifest_round_trips` pins the
+//! writer and the reader together.
 use super::MAX_MARKDOWN_BYTES;
 use sha2::{Digest, Sha256};
 use std::io::{self, BufReader, Read, Write};
@@ -26,23 +35,86 @@ pub struct EditorConvention<'a> {
     pub markdown: EditorText<'a>,
     pub raw_content: Option<EditorText<'a>>,
 }
+// ---------------------------------------------------------------------------------------------
+// format: the literal pieces of a manifest
+
+fn quoted(value: &impl serde::Serialize) -> io::Result<String> {
+    serde_json::to_string(value).map_err(io::Error::other)
+}
+/// The manifest up to and including `"markdown":`. `sort_order` is omitted when `None`.
+pub(in crate::services::conventions) fn header(
+    slug: &str,
+    title: &str,
+    parent_path: &[String],
+    sort_order: Option<i64>,
+    lifecycle: &str,
+    applicability: &[String],
+) -> io::Result<String> {
+    let order = sort_order.map_or_else(String::new, |order| format!(",\"sortOrder\":{order}"));
+    Ok(format!(
+        "{{\"format\":\"devworks-convention\",\"version\":1,\"slug\":{},\"title\":{},\"parentPath\":{}{order},\"lifecycle\":{},\"applicability\":{},\"markdown\":",
+        quoted(&slug)?,
+        quoted(&title)?,
+        quoted(&parent_path)?,
+        quoted(&lifecycle)?,
+        quoted(&applicability)?,
+    ))
+}
+/// The opening of a text source, through the opening quote of its `text`.
+pub(in crate::services::conventions) fn source_prefix(
+    sha256: &str,
+    byte_length: u64,
+) -> io::Result<String> {
+    Ok(format!(
+        "{{\"sha256\":{},\"byteLength\":\"{byte_length}\",\"text\":\"",
+        quoted(&sha256)?
+    ))
+}
+/// The key that opens the optional raw content, before its source.
+pub(in crate::services::conventions) const RAW_CONTENT_KEY: &str = ",\"rawContent\":";
+/// The closing of a text source or a resource, after its payload.
+pub(in crate::services::conventions) const PAYLOAD_END: &str = "\"}";
+/// The opening of the resource list.
+pub(in crate::services::conventions) const RESOURCES_OPEN: &str = ",\"resources\":[";
+/// The closing of the resource list and the manifest.
+pub(in crate::services::conventions) const MANIFEST_END: &str = "]}";
+/// The opening of one resource, through the opening quote of its `base64`.
+pub(in crate::services::conventions) fn resource_prefix(
+    first: bool,
+    key: &str,
+    name: &str,
+    media_type: &str,
+    lifecycle: &str,
+    sha256: &str,
+    byte_length: u64,
+) -> io::Result<String> {
+    Ok(format!(
+        "{}{{\"key\":{},\"name\":{},\"mediaType\":{},\"lifecycle\":{},\"sha256\":{},\"byteLength\":\"{byte_length}\",\"base64\":\"",
+        if first { "" } else { "," },
+        quoted(&key)?,
+        quoted(&name)?,
+        quoted(&media_type)?,
+        quoted(&lifecycle)?,
+        quoted(&sha256)?,
+    ))
+}
+/// One text scalar as it appears inside a JSON string of a manifest.
+pub(in crate::services::conventions) fn escape_scalar(ch: char) -> String {
+    match ch {
+        '"' => "\\\"".into(),
+        '\\' => "\\\\".into(),
+        c if (c as u32) < 32 => format!("\\u{:04x}", c as u32),
+        c => c.to_string(),
+    }
+}
 fn invalid(message: &str) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, message)
-}
-fn json(writer: &mut dyn Write, value: &impl serde::Serialize) -> io::Result<()> {
-    serde_json::to_writer(writer, value).map_err(io::Error::other)
 }
 fn text(writer: &mut dyn Write, source: &mut EditorText<'_>, required: bool) -> io::Result<()> {
     if source.byte_length > MAX_MARKDOWN_BYTES {
         return Err(invalid("convention text exceeds its retained UTF-8 bound"));
     }
-    write!(writer, "{{\"sha256\":")?;
-    json(writer, &source.sha256)?;
-    write!(
-        writer,
-        ",\"byteLength\":\"{}\",\"text\":\"",
-        source.byte_length
-    )?;
+    writer.write_all(source_prefix(source.sha256, source.byte_length)?.as_bytes())?;
     let mut input = BufReader::new(&mut source.reader);
     let mut hash = Sha256::new();
     let mut bytes = 0_u64;
@@ -57,9 +129,8 @@ fn text(writer: &mut dyn Write, source: &mut EditorText<'_>, required: bool) -> 
         }
         hash.update(&raw[..count]);
         match ch {
-            '"' => writer.write_all(b"\\\"")?,
-            '\\' => writer.write_all(b"\\\\")?,
-            c if (c as u32) < 32 => write!(writer, "\\u{:04x}", c as u32)?,
+            '"' | '\\' => writer.write_all(escape_scalar(ch).as_bytes())?,
+            c if (c as u32) < 32 => writer.write_all(escape_scalar(c).as_bytes())?,
             _ => writer.write_all(&raw[..count])?,
         }
     }
@@ -67,7 +138,7 @@ fn text(writer: &mut dyn Write, source: &mut EditorText<'_>, required: bool) -> 
     if required && !nonblank {
         return Err(invalid("Markdown content is required"));
     }
-    writer.write_all(b"\"}")
+    writer.write_all(PAYLOAD_END.as_bytes())
 }
 fn verify(source: &EditorText<'_>, bytes: u64, hash: Sha256) -> io::Result<()> {
     if bytes != source.byte_length
@@ -121,26 +192,24 @@ pub fn write_editor_manifest<'a>(
     {
         return Err(invalid("invalid portable convention metadata"));
     }
-    writer.write_all(b"{\"format\":\"devworks-convention\",\"version\":1,\"slug\":")?;
-    json(writer, &document.slug)?;
-    writer.write_all(b",\"title\":")?;
-    json(writer, &document.title)?;
-    writer.write_all(b",\"parentPath\":")?;
-    json(writer, &document.parent_path)?;
-    if let Some(order) = document.sort_order {
-        write!(writer, ",\"sortOrder\":{order}")?;
-    }
-    writer.write_all(b",\"lifecycle\":")?;
-    json(writer, &document.lifecycle)?;
-    writer.write_all(b",\"applicability\":")?;
-    json(writer, &document.applicability)?;
-    writer.write_all(b",\"markdown\":")?;
+    let sort_order = document.sort_order.map(i64::from);
+    writer.write_all(
+        header(
+            document.slug,
+            document.title,
+            document.parent_path,
+            sort_order,
+            document.lifecycle,
+            document.applicability,
+        )?
+        .as_bytes(),
+    )?;
     text(writer, &mut document.markdown, true)?;
     if let Some(mut raw) = document.raw_content {
-        writer.write_all(b",\"rawContent\":")?;
+        writer.write_all(RAW_CONTENT_KEY.as_bytes())?;
         text(writer, &mut raw, false)?;
     }
-    writer.write_all(b",\"resources\":[")?;
+    writer.write_all(RESOURCES_OPEN.as_bytes())?;
     let mut first = true;
     for resource in resources {
         if resource.key.is_empty()
@@ -155,25 +224,19 @@ pub fn write_editor_manifest<'a>(
         {
             return Err(invalid("invalid portable resource metadata"));
         }
-        if !first {
-            writer.write_all(b",")?;
-        }
-        first = false;
-        writer.write_all(b"{\"key\":")?;
-        json(writer, &resource.key)?;
-        writer.write_all(b",\"name\":")?;
-        json(writer, &resource.name)?;
-        writer.write_all(b",\"mediaType\":")?;
-        json(writer, &resource.media_type)?;
-        writer.write_all(b",\"lifecycle\":")?;
-        json(writer, &resource.lifecycle)?;
-        writer.write_all(b",\"sha256\":")?;
-        json(writer, &resource.source.sha256)?;
-        write!(
-            writer,
-            ",\"byteLength\":\"{}\",\"base64\":\"",
-            resource.source.byte_length
+        writer.write_all(
+            resource_prefix(
+                first,
+                resource.key,
+                resource.name,
+                resource.media_type,
+                resource.lifecycle,
+                resource.source.sha256,
+                resource.source.byte_length,
+            )?
+            .as_bytes(),
         )?;
+        first = false;
         let mut hash = Sha256::new();
         let mut count = 0_u64;
         {
@@ -199,9 +262,9 @@ pub fn write_editor_manifest<'a>(
             encoder.finish()?;
         }
         verify(&resource.source, count, hash)?;
-        writer.write_all(b"\"}")?;
+        writer.write_all(PAYLOAD_END.as_bytes())?;
     }
-    writer.write_all(b"]}")
+    writer.write_all(MANIFEST_END.as_bytes())
 }
 
 #[cfg(test)]
@@ -210,6 +273,49 @@ mod tests {
     use crate::fingerprint::sha256_hex;
     use base64::Engine;
     use std::io::Cursor;
+    #[test]
+    fn the_on_disk_format_is_byte_stable() {
+        let body = "a\"b\\c\n";
+        let digest = sha256_hex(body.as_bytes());
+        let data = [1_u8, 2];
+        let data_digest = sha256_hex(&data);
+        let (mut m, mut d) = (Cursor::new(body.as_bytes()), Cursor::new(data));
+        let mut out = Vec::new();
+        write_editor_manifest(
+            &mut out,
+            EditorConvention {
+                slug: "s",
+                title: "T",
+                parent_path: &["p".to_owned()],
+                sort_order: Some(3),
+                lifecycle: "Active",
+                applicability: &["rust".to_owned()],
+                markdown: EditorText {
+                    sha256: &digest,
+                    byte_length: body.len() as u64,
+                    reader: &mut m,
+                },
+                raw_content: None,
+            },
+            [EditorResource {
+                key: "k",
+                name: "n.bin",
+                media_type: "x/y",
+                lifecycle: "Retired",
+                source: EditorText {
+                    sha256: &data_digest,
+                    byte_length: 2,
+                    reader: &mut d,
+                },
+            }],
+        )
+        .unwrap();
+        let expected = format!(
+            "{{\"format\":\"devworks-convention\",\"version\":1,\"slug\":\"s\",\"title\":\"T\",\"parentPath\":[\"p\"],\"sortOrder\":3,\"lifecycle\":\"Active\",\"applicability\":[\"rust\"],\"markdown\":{{\"sha256\":\"{digest}\",\"byteLength\":\"{}\",\"text\":\"a\\\"b\\\\c\\u000a\"}},\"resources\":[{{\"key\":\"k\",\"name\":\"n.bin\",\"mediaType\":\"x/y\",\"lifecycle\":\"Retired\",\"sha256\":\"{data_digest}\",\"byteLength\":\"2\",\"base64\":\"AQI=\"}}]}}",
+            body.len()
+        );
+        assert_eq!(String::from_utf8(out).unwrap(), expected);
+    }
     #[test]
     fn portable_writer_keeps_verbatim_text_and_exact_binary_without_foreign_identity() {
         let markdown = "Title\0 λ\r\n\"literal\"";

@@ -121,7 +121,7 @@ impl Fx {
         let user = engine.host().user().clone();
         run_write(
             &**engine.host().runtime().store(),
-            WriteOptions::default(),
+            WriteOptions::fixture(),
             move |tx| {
                 devworks_core::settings::service::apply_human_assignments(
                     tx,
@@ -631,7 +631,7 @@ fn native_recorded_module_pages_are_retained_without_inventing_source_or_program
     let engine = start(&root);
     // A sealed SQLite index payload represents a previously recorded analysis. This tests
     // the actual read projection and native reader, without pretending to run its producer.
-    run_write(&**engine.host().runtime().store(),WriteOptions::default(),|tx|{
+    run_write(&**engine.host().runtime().store(),WriteOptions::fixture(),|tx|{
         let id=|s:&str|devworks_core::protocol::Id::try_from(s.to_owned()).unwrap();
         let repository=id("recorded-repository");let generation=id("recorded-generation");let view=id("recorded-view");
         tx.projects().insert_repository(&StoredRepository{id:repository.clone(),location:"/captured/recorded".into(),name:"Recorded".into(),remote_url:None,primary:true,lifecycle:"Active".into(),languages:vec!["csharp".into()],revision:1,registered_at_ms:1})?;
@@ -775,12 +775,49 @@ fn native_recorded_module_pages_are_retained_without_inventing_source_or_program
     );
 }
 
-/// A schema read of `op` at revision 5, answered.
+/// The typed input of `op` read from a JSON `body` at the operation's newest revision.
+fn typed(
+    op: &str,
+    mode: devworks_core::registry::Mode,
+    body: serde_json::Value,
+) -> devworks_core::operations::OperationInput {
+    let revision = devworks_core::registry::find(op)
+        .and_then(|d| d.revisions.last().map(|r| r.0))
+        .expect("a registered operation");
+    let mut body = body;
+    body["kind"] = json!(op);
+    let key = match mode {
+        devworks_core::registry::Mode::Query => "queryId",
+        devworks_core::registry::Mode::Command => "requestKey",
+    };
+    let mode_name = match mode {
+        devworks_core::registry::Mode::Query => "Query",
+        devworks_core::registry::Mode::Command => "Command",
+    };
+    let frame = json!({"mode": mode_name, "protocol": "1.0-draft.1", key: "t",
+        "schemaRevision": revision, "body": body});
+    devworks_core::admission::decode(
+        devworks_core::admission::Selection {
+            operation: op,
+            mode,
+        },
+        frame.to_string().as_bytes(),
+    )
+    .unwrap_or_else(|e| panic!("{op} input: {e:?}"))
+    .input
+}
+/// A schema read of `op` at its newest revision, answered.
 fn schema_read(engine: &Engine, op: &str, body: serde_json::Value) -> serde_json::Value {
     use devworks_core::protocol::results::DomainQueryReply;
     let b = engine.backend();
     match b
-        .query(op, &devworks_desktop::databases_ops::query(&*b, op, body))
+        .query(
+            op,
+            &devworks_desktop::databases_ops::query(
+                &*b,
+                typed(op, devworks_core::registry::Mode::Query, body),
+            ),
+        )
         .unwrap()
     {
         DomainQueryReply::Result { result, .. } => {
@@ -789,12 +826,18 @@ fn schema_read(engine: &Engine, op: &str, body: serde_json::Value) -> serde_json
         other => panic!("{op}: {other:?}"),
     }
 }
-/// A schema command of `op` at revision 5, applied.
+/// A schema command of `op` at its newest revision, applied.
 fn schema_command(engine: &Engine, op: &str, body: serde_json::Value) -> serde_json::Value {
     use devworks_core::protocol::{CommandReply, results::DomainDecision};
     let b = engine.backend();
     let CommandReply::Recorded { receipt, .. } = b
-        .command(op, &devworks_desktop::databases_ops::command(&*b, op, body))
+        .command(
+            op,
+            &devworks_desktop::databases_ops::command(
+                &*b,
+                typed(op, devworks_core::registry::Mode::Command, body),
+            ),
+        )
         .unwrap()
     else {
         panic!("{op}: no receipt")

@@ -3,8 +3,8 @@ use crate::context::InvocationContext;
 use crate::ports::storage::{AuthorityRead, KnowledgeScope, ReadSnapshot, WriteTransaction};
 use crate::protocol::Id;
 use crate::protocol::data::DataScope;
+use crate::services::kernel::{Failure, Refusal, not_found};
 use crate::services::knowledge::{self, Scoped};
-use crate::services::sessions::{Failure, Refusal, not_found};
 
 pub(crate) fn requested(
     authority: &dyn AuthorityRead,

@@ -86,7 +86,7 @@ impl CommandHandler for DocsHandler {
             },
             Docs::Refused => Decided {
                 decision: DomainDecision::Refused {
-                    fault: devworks_core::services::sessions::Refusal::new(
+                    fault: devworks_core::services::kernel::Refusal::new(
                         DomainErrorCode::Conflict,
                         "help_revision",
                         None,
@@ -246,7 +246,7 @@ impl Fx {
         &self,
         f: impl FnOnce(&mut dyn WriteTransaction) -> Result<T, StorageError> + Send + 'static,
     ) -> T {
-        run_write(&*self.store, WriteOptions::default(), f).expect("write")
+        run_write(&*self.store, WriteOptions::fixture(), f).expect("write")
     }
     fn read<T>(&self, f: impl FnOnce(&dyn ReadSnapshot) -> Result<T, StorageError>) -> T {
         read_snapshot(&*self.store, &ReadOptions::default(), f).expect("read")
@@ -1344,7 +1344,7 @@ fn scheduled_inference_fails_truthfully_without_a_pipeline_and_acts_as_a_bound_a
     );
     let svc = fx.jobs.clone();
     let (rid, stale) = (running.id.clone(), running.revision);
-    let late = run_write(&*fx.store, WriteOptions::default(), move |tx| {
+    let late = run_write(&*fx.store, WriteOptions::fixture(), move |tx| {
         svc.finish_inference(tx, &rid, stale, &InferenceOutcome::Succeeded)
     });
     assert!(
@@ -1517,13 +1517,11 @@ fn a_scheduled_agent_starts_work_only_under_ordinary_controls_and_budgets() {
     let start = pipeline.started.lock().unwrap().pop().unwrap();
     // A feature root of the project, paused by a person: the scheduled agent may select it, but
     // Start leaves the pause effective (ContinueRequired) — scheduling grants no bypass.
-    let sql = format!(
-        "INSERT INTO work_items VALUES('feature-1','{}','feature',NULL,NULL,NULL,'F',1,0,1,1,1,'{{}}');",
-        p.id.0.as_str()
-    );
-    fx.store
-        .with_writer_connection(move |c| super::super::conn::db(c.execute_batch(&sql)))
-        .unwrap();
+    devworks_test_support::seed::work(
+        &*fx.store,
+        &[devworks_test_support::seed::WorkSeed::feature("feature-1", p.id.0.as_str()).title("F")],
+    )
+    .unwrap();
     let root = RootId(id("feature-1"));
     let control = |fx: &Fx| {
         let r = root.clone();
@@ -1622,7 +1620,7 @@ fn repeated_scans_and_retries_never_repeat_an_action() {
     assert!(matches!(again[1].1, ActionClaim::NeedsReconciliation(_)));
     // A stale checkpoint revision claims nothing and moves nothing.
     let (r, k) = (run_id.clone(), vec!["github:org/repo#43:triage".to_owned()]);
-    let stale = run_write(&*fx.store, WriteOptions::default(), move |tx| {
+    let stale = run_write(&*fx.store, WriteOptions::fixture(), move |tx| {
         discovery::scan(
             tx,
             &r,
@@ -1689,7 +1687,7 @@ fn repeated_scans_and_retries_never_repeat_an_action() {
     let rev = fx.run(run_id.as_str()).revision;
     fx.write(move |tx| svc.finish_inference(tx, &r, rev, &InferenceOutcome::Succeeded));
     let r = run_id.clone();
-    let late = run_write(&*fx.store, WriteOptions::default(), move |tx| {
+    let late = run_write(&*fx.store, WriteOptions::fixture(), move |tx| {
         discovery::claim_action(tx, &r, "x")
     });
     assert!(matches!(late, Err(StorageError::LeaseLost { .. })));
@@ -1951,7 +1949,7 @@ fn migration_17_is_additive_and_enforces_one_active_run() {
     let mut second = fx.run(&s(&run, "id"));
     second.id = id("run-other");
     second.occurrence_key = "manual-other".into();
-    let dup = run_write(&*fx.store, WriteOptions::default(), move |tx| {
+    let dup = run_write(&*fx.store, WriteOptions::fixture(), move |tx| {
         tx.jobs().insert_run(&second)
     });
     assert!(
@@ -1969,7 +1967,7 @@ fn migration_17_is_additive_and_enforces_one_active_run() {
     repeat.status = "Skipped".into();
     repeat.operation_id = None;
     repeat.finished_at_ms = Some(T0);
-    let dup = run_write(&*fx.store, WriteOptions::default(), move |tx| {
+    let dup = run_write(&*fx.store, WriteOptions::fixture(), move |tx| {
         tx.jobs().insert_run(&repeat)
     });
     assert!(
@@ -1993,7 +1991,7 @@ fn migration_17_is_additive_and_enforces_one_active_run() {
     back.status = "Queued".into();
     back.finished_at_ms = None;
     let rev = back.revision;
-    let err = run_write(&*fx.store, WriteOptions::default(), move |tx| {
+    let err = run_write(&*fx.store, WriteOptions::fixture(), move |tx| {
         tx.jobs().update_run(&back, rev)
     });
     assert!(
@@ -2463,15 +2461,13 @@ fn an_archival_of_the_targeted_project_fences_an_app_level_task() {
     // Its agent acts in P, not across the workspace.
     // Work it links is P's, never another project's.
     let q = fx.project("Q");
-    let sql = format!(
-        "INSERT INTO work_items VALUES('feature-q','{}','feature',NULL,NULL,NULL,'F',1,0,1,1,1,'{{}}');",
-        q.id.0.as_str()
-    );
-    fx.store
-        .with_writer_connection(move |c| super::super::conn::db(c.execute_batch(&sql)))
-        .unwrap();
+    devworks_test_support::seed::work(
+        &*fx.store,
+        &[devworks_test_support::seed::WorkSeed::feature("feature-q", q.id.0.as_str()).title("F")],
+    )
+    .unwrap();
     let (r, root) = (id(&rid), RootId(id("feature-q")));
-    let linked = run_write(&*fx.store, WriteOptions::default(), move |tx| {
+    let linked = run_write(&*fx.store, WriteOptions::fixture(), move |tx| {
         discovery::link_root(tx, &r, &root)
     });
     assert!(

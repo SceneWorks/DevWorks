@@ -24,7 +24,7 @@ fn id(s: &str) -> Id {
 fn seed_prompt(engine: &devworks_desktop::host::Engine) {
     run_write(
         &**engine.host().runtime().store(),
-        WriteOptions::default(),
+        WriteOptions::fixture(),
         |tx| {
             let digest = "a".repeat(64);
             tx.artifacts()
@@ -68,6 +68,15 @@ fn inference() -> Value {
         "route": {"kind": "Tier", "tier": "High"}, "effort": "Default"})
 }
 
+/// A typed value from its JSON form.
+fn typed<T: serde::de::DeserializeOwned>(value: Value) -> T {
+    serde_json::from_value(value).unwrap()
+}
+/// What a form built, in its JSON form.
+fn wire(value: &impl serde::Serialize) -> Value {
+    serde_json::to_value(value).unwrap()
+}
+
 fn jobs(backend: &dyn Backend) -> Vec<JobRecord> {
     ops::jobs(backend.query("jobs.list", &ops::jobs_list(backend, None)))
         .unwrap()
@@ -86,8 +95,8 @@ fn a_job_is_run_disabled_enabled_and_deleted_from_the_schedules_screen() {
             &*backend,
             None,
             "Issue triage",
-            &json!({"kind": "Calendar", "expression": "0 3 * * *", "timezone": "UTC"}),
-            &inference(),
+            &typed(json!({"kind": "Calendar", "expression": "0 3 * * *", "timezone": "UTC"})),
+            &typed(inference()),
             true,
         ),
     ));
@@ -184,10 +193,8 @@ fn the_project_sidebar_shows_its_scheduled_jobs() {
             &*backend,
             Some(&p),
             "Nightly docs",
-            &json!({"kind": "Interval", "seconds": "3600"}),
-            &json!({"kind": "Inference", "prompt": {"artifactId": "prompt-1", "versionId": "prompt-v1",
-                "sha256": "a".repeat(64), "byteLength": "12", "mediaType": "text/markdown"},
-                "route": {"kind": "Tier", "tier": "High"}, "effort": "Default"}),
+            &typed(json!({"kind": "Interval", "seconds": "3600"})),
+            &typed(inference()),
             false,
         ),
     ));
@@ -250,11 +257,12 @@ fn editing_an_inference_job_keeps_every_member_the_user_did_not_change() {
     let form = JobForm::edit(&job);
     let (schedule, definition) = form_values(&form, &[], &artifacts).unwrap();
     assert_eq!(
-        definition, original,
+        wire(&definition),
+        original,
         "an untouched edit submits the definition unchanged"
     );
     assert_eq!(
-        schedule,
+        wire(&schedule),
         json!({"kind": "Calendar", "expression": "0 3 * * *", "timezone": "Europe/Paris"})
     );
 
@@ -266,7 +274,7 @@ fn editing_an_inference_job_keeps_every_member_the_user_did_not_change() {
         o["route"] = route;
         o["effort"] = json!("Minimal");
         let (_, d) = form_values(&JobForm::edit(&record(o.clone())), &[], &artifacts).unwrap();
-        assert_eq!(d, o, "every route and effort round-trips");
+        assert_eq!(wire(&d), o, "every route and effort round-trips");
     }
 
     // Changing one member changes only that member.
@@ -275,7 +283,7 @@ fn editing_an_inference_job_keeps_every_member_the_user_did_not_change() {
     let (_, d) = form_values(&changed, &[], &artifacts).unwrap();
     let mut expected = original.clone();
     expected["effort"] = json!("Default");
-    assert_eq!(d, expected);
+    assert_eq!(wire(&d), expected);
 
     // Clearing the target removes it; another prompt is taken at its current version.
     let mut cleared = JobForm::edit(&job);
@@ -283,6 +291,7 @@ fn editing_an_inference_job_keeps_every_member_the_user_did_not_change() {
     cleared.feature.clear();
     cleared.prompt = Some("prompt-1".into());
     let (_, d) = form_values(&cleared, &[], &artifacts).unwrap();
+    let d = wire(&d);
     assert!(d.get("projectId").is_none() && d.get("featureId").is_none());
     assert_eq!(
         d["prompt"]["versionId"], "prompt-v1",
@@ -294,6 +303,7 @@ fn editing_an_inference_job_keeps_every_member_the_user_did_not_change() {
         ..JobForm::default()
     };
     let (_, d) = form_values(&fresh, &[], &artifacts).unwrap();
+    let d = wire(&d);
     assert_eq!(
         d["prompt"]["versionId"], "prompt-v2",
         "a new job takes the current version"
@@ -315,7 +325,8 @@ fn editing_a_native_job_keeps_its_capability_when_the_build_no_longer_offers_it(
     let form = JobForm::edit(&record(original.clone()));
     let (_, d) = form_values(&form, &[], &[]).unwrap();
     assert_eq!(
-        d, original,
+        wire(&d),
+        original,
         "never replaced by another (or the first) capability"
     );
 }
@@ -335,8 +346,8 @@ fn the_active_run_stays_shown_when_a_skipped_occurrence_is_the_latest_run() {
             &*backend,
             None,
             "Issue triage",
-            &json!({"kind": "Manual"}),
-            &inference(),
+            &typed(json!({"kind": "Manual"})),
+            &typed(inference()),
             true,
         ),
     )) else {
@@ -346,7 +357,7 @@ fn the_active_run_stays_shown_when_a_skipped_occurrence_is_the_latest_run() {
     let jid = job.id.clone();
     let (active, skipped) = run_write(
         &**engine.host().runtime().store(),
-        WriteOptions::default(),
+        WriteOptions::fixture(),
         move |tx| {
             use devworks_core::services::jobs::runner::{Occurrence, queue_run};
             let stored = tx.jobs().job(&jid)?.expect("job");
@@ -393,7 +404,7 @@ fn seed_runs(engine: &devworks_desktop::host::Engine, job: &Id, at: Vec<i64>) {
     let job = job.clone();
     run_write(
         &**engine.host().runtime().store(),
-        WriteOptions::default(),
+        WriteOptions::fixture(),
         move |tx| {
             use devworks_core::services::jobs::runner::{Occurrence, queue_run};
             let stored = tx.jobs().job(&job)?.expect("job");
@@ -430,8 +441,8 @@ fn a_refreshed_first_history_page_keeps_the_run_at_its_boundary() {
             &*backend,
             None,
             "Issue triage",
-            &json!({"kind": "Manual"}),
-            &inference(),
+            &typed(json!({"kind": "Manual"})),
+            &typed(inference()),
             true,
         ),
     )) else {
@@ -485,7 +496,7 @@ fn a_project_jobs_prompt_picker_offers_the_projects_prompts() {
     let pid = project.id.clone();
     run_write(
         &**engine.host().runtime().store(),
-        WriteOptions::default(),
+        WriteOptions::fixture(),
         move |tx| {
             let digest = "b".repeat(64);
             tx.artifacts()
@@ -564,7 +575,7 @@ fn creating_a_job_selects_it_without_the_previous_jobs_history() {
     // Listed (so the form offers it) once it has a current version.
     run_write(
         &**engine.host().runtime().store(),
-        WriteOptions::default(),
+        WriteOptions::fixture(),
         |tx| {
             let mut a = tx.artifacts().artifact(&id("prompt-1"))?.expect("artifact");
             a.current_version_id = Some(id("prompt-v1"));
@@ -579,8 +590,8 @@ fn creating_a_job_selects_it_without_the_previous_jobs_history() {
             &*backend,
             None,
             "Issue triage",
-            &json!({"kind": "Manual"}),
-            &inference(),
+            &typed(json!({"kind": "Manual"})),
+            &typed(inference()),
             true,
         ),
     )) else {
@@ -671,8 +682,8 @@ fn create_job(backend: &dyn Backend, title: &str) {
             backend,
             None,
             title,
-            &json!({"kind": "Manual"}),
-            &inference(),
+            &typed(json!({"kind": "Manual"})),
+            &typed(inference()),
             false,
         ),
     ));
@@ -848,7 +859,7 @@ fn prompt_picker_loads_and_selects_beyond_the_first_page_in_each_scope() {
         let scope = project.clone();
         run_write(
             &**engine.host().runtime().store(),
-            WriteOptions::default(),
+            WriteOptions::fixture(),
             move |tx| {
                 let digest = "c".repeat(64);
                 tx.artifacts()

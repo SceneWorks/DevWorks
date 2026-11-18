@@ -3,7 +3,10 @@
 //! `artifacts.save` — the artifact service hashes, verifies and publishes the bytes. Previews are
 //! decoded off the UI thread; content is never claimed to be analyzed.
 use crate::backend::{Backend, TaskOutput, resolve_command};
+use crate::frame::{self, Negotiate};
 use crate::ops;
+use devworks_core::operations::{OperationInput as In, settings};
+use devworks_core::protocol::data::DataScope;
 use eframe::egui::ColorImage;
 use std::path::{Path, PathBuf};
 
@@ -56,17 +59,27 @@ fn sha256_file(path: &Path, max: u64) -> Result<(String, u64), String> {
     })
 }
 
+/// The `settings.read_effective` query for the configured largest artifact file.
+pub(crate) fn max_bytes_query(backend: &dyn Backend) -> Vec<u8> {
+    use devworks_core::settings::catalog::ARTIFACT_MAX_FILE_KEY;
+    frame::with(backend, Negotiate::Initial, || {
+        Some(In::Settings(settings::Input::ReadEffective(
+            settings::ReadEffectiveInput {
+                scope: DataScope::Workspace,
+                repository_id: None,
+                keys: frame::texts(&[ARTIFACT_MAX_FILE_KEY.to_owned()])?,
+                page: frame::page(1, None)?,
+            },
+        )))
+    })
+}
+
 /// The configured largest artifact file (`storage.artifactMaxFileBytes`), read through
 /// `settings.read_effective`; the catalog default when it cannot be read. The artifact service
 /// enforces the same limit again at save.
 pub fn max_attachment_bytes(backend: &dyn Backend) -> u64 {
     use devworks_core::settings::catalog::{ARTIFACT_MAX_FILE_KEY, descriptor};
-    let frame = ops::query_frame(
-        backend,
-        "settings.read_effective",
-        serde_json::json!({"scope": {"kind": "Workspace"}, "keys": [ARTIFACT_MAX_FILE_KEY],
-            "page": {"limit": 1}}),
-    );
+    let frame = max_bytes_query(backend);
     ops::settings_entries(backend.query("settings.read_effective", &frame))
         .ok()
         .and_then(|(_, e)| e.into_iter().next()?.value.value.0.as_u64())

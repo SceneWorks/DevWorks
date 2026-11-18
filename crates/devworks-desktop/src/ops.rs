@@ -2,27 +2,50 @@
 //! results or a [`Failure`] the views can present honestly (UI-06). Frames are the same wire
 //! envelopes an agent tool submits; nothing here decides anything a use case decides.
 use crate::backend::Backend;
+use crate::frame::{self, Negotiate};
 use devworks_core::gateway::{CommandOutcome, GatewayFailure, QueryOutcome};
-use devworks_core::protocol::provider::{ArtifactRef, TranscriptPage};
+use devworks_core::operations::{
+    OperationInput as In, artifacts, browser, containers, git, indexing, jobs, mcp, projects,
+    repositories, resources, router, sessions, settings, web, workspace,
+};
+use devworks_core::protocol::OperationId;
+use devworks_core::protocol::ProjectId;
+use devworks_core::protocol::data::{
+    ArtifactCommand, ArtifactCommandRequest, ArtifactDeletion, ArtifactDeletionRequest,
+    ArtifactQuery, ArtifactQueryRequest, ArtifactSource, ArtifactTags, IndexCommand,
+    IndexCommandRequest,
+};
+use devworks_core::protocol::data::{DataScope, GitOid, ObjectFormat, ViewSelection};
+use devworks_core::protocol::provider::{
+    ArtifactRef, SessionCommandRequest, SessionQueryRequest, TranscriptPage, UserContent,
+};
 use devworks_core::protocol::records::{
     AccessMode, ArtifactRecord, BrowserSession, ConnectionRecord, ContainerCapability,
-    DiagnosticEntry, EffortName, JobInspection, JobRecord, JobRun, MutationSummary, ProjectRecord,
-    RepositoryRecord, RepositoryText, ResourceRecord, RouteAvailability, RouteCatalogModel,
-    RouteChoice, RouteIntent, SessionRecord, SettingEntry, ValidationReport, WebDocument,
-    WebResult,
+    DiagnosticEntry, EffortName, JobDefinition, JobInspection, JobRecord, JobRun, MutationSummary,
+    ProjectRecord, RepositoryRecord, RepositoryText, ResourceRecord, RouteAvailability,
+    RouteCatalogModel, RouteChoice, RouteIntent, Schedule, SessionRecord, SettingEntry,
+    ValidationReport, WebDocument, WebResult,
+};
+use devworks_core::protocol::records::{
+    BrowserSessionAction, IndexSourceConfig, ProjectPatch, ProjectPurgeManifest,
+    RouterConfigAction, SchemaValue, SettingAssignment, SortDirection,
 };
 use devworks_core::protocol::results::{DomainDecision, DomainQueryReply, OperationResult};
+use devworks_core::protocol::support::{BoundedList, BoundedText, DynamicJson};
 use devworks_core::protocol::{CommandReply, DomainFault};
 use devworks_core::settings::view::SettingsView;
-use serde_json::{Value, json};
+use serde_json::Value;
 
 pub const PROTOCOL: &str = "1.0-draft.1";
-/// Workspace artifacts (attachments without a project) need artifact schema revision 3.
-pub const WORKSPACE_ARTIFACT_REVISION: u64 = 3;
+/// Workspace artifacts (attachments without a project) need artifact schema revision 3. The
+/// registry lists a newer one for `artifacts.save`; the desktop keeps sending the revision its
+/// workspace saves were written against.
+const WORKSPACE_ARTIFACT_NEGOTIATION: Negotiate = Negotiate::pinned(
+    3,
+    "workspace artifact saves are written against schema revision 3",
+);
 /// Most rows one page request asks for.
 pub const PAGE_LIMIT: u16 = 200;
-/// Session records carry their start and last-activity times from session schema revision 2.
-pub const SESSION_REVISION: u64 = 2;
 
 /// Why a request produced no usable result. Never rendered as success or as zero values.
 #[derive(Clone, Debug)]
@@ -105,48 +128,18 @@ pub(crate) fn unexpected(op: &str, r: &OperationResult) -> Failure {
     Failure::Other(format!("{op} returned {}", r.operation()))
 }
 
-pub fn query_frame(backend: &dyn Backend, operation: &str, mut body: Value) -> Vec<u8> {
-    body["kind"] = json!(operation);
-    json!({"mode": "Query", "protocol": PROTOCOL, "queryId": backend.token("q"), "body": body})
-        .to_string()
-        .into_bytes()
-}
-/// A frame negotiating schema `revision` (the envelope member `schemaRevision`).
-pub(crate) fn at_revision(frame: Vec<u8>, revision: u64) -> Vec<u8> {
-    let mut v: Value = serde_json::from_slice(&frame).expect("frames are JSON");
-    v["schemaRevision"] = json!(revision);
-    v.to_string().into_bytes()
-}
-pub fn command_frame(backend: &dyn Backend, operation: &str, mut body: Value) -> Vec<u8> {
-    body["kind"] = json!(operation);
-    json!({"mode": "Command", "protocol": PROTOCOL, "requestKey": backend.token("rk"),
-        "body": body})
-    .to_string()
-    .into_bytes()
-}
-
 pub fn mcp_servers(
     backend: &dyn Backend,
     scope: Option<&devworks_core::protocol::ProjectId>,
     cursor: Option<&str>,
 ) -> Vec<u8> {
-    let mut page = json!({"limit": 100});
-    if let Some(cursor) = cursor {
-        page["cursor"] = json!(cursor);
-    }
-    at_revision(
-        query_frame(
-            backend,
-            "mcp.servers",
-            json!({"scope":mcp_scope(scope),"page":page}),
-        ),
-        MCP_REVISION,
-    )
+    frame::with(backend, Negotiate::Latest, || {
+        Some(In::Mcp(mcp::Input::Servers(mcp::ServersInput {
+            scope: mcp_data_scope(scope),
+            page: frame::page(100, cursor)?,
+        })))
+    })
 }
-
-/// Revision 8 of the outgoing MCP operations carries each server-targeted input's scope and
-/// each server's last failure and saved transport.
-pub const MCP_REVISION: u64 = 8;
 
 pub fn mcp_server_page(
     outcome: QueryOutcome,
@@ -172,25 +165,27 @@ pub fn mcp_capabilities(
     revision: i64,
     cursor: Option<&str>,
 ) -> Vec<u8> {
-    let mut page = json!({"limit": 100});
-    if let Some(cursor) = cursor {
-        page["cursor"] = json!(cursor);
-    }
-    at_revision(
-        query_frame(
-            backend,
-            "mcp.capabilities",
-            json!({"scope":mcp_scope(scope),"serverId":server,"catalogRevision":revision.to_string(),"page":page}),
-        ),
-        MCP_REVISION,
-    )
+    frame::with(backend, Negotiate::Latest, || {
+        Some(In::Mcp(mcp::Input::Capabilities(mcp::CapabilitiesInput {
+            scope: Some(mcp_data_scope(scope)),
+            server_id: server.clone(),
+            catalog_revision: frame::number(revision)?,
+            page: frame::page(100, cursor)?,
+        })))
+    })
 }
 
-pub fn mcp_scope(project: Option<&devworks_core::protocol::ProjectId>) -> Value {
-    project.map_or_else(
-        || json!({"kind":"Workspace"}),
-        |id| json!({"kind":"Project","projectId":id}),
-    )
+/// The saved scope an outgoing MCP input names: the workspace, or one project.
+pub fn mcp_data_scope(project: Option<&devworks_core::protocol::ProjectId>) -> DataScope {
+    project.map_or(DataScope::Workspace, |id| DataScope::Project {
+        project_id: id.clone(),
+    })
+}
+fn router_catalog_input(cursor: Option<&str>) -> Option<In> {
+    Some(In::Router(router::Input::Catalog(router::CatalogInput {
+        page: frame::page(PAGE_LIMIT.into(), cursor)?,
+        include_disabled: true,
+    })))
 }
 
 pub fn mcp_capability_page(
@@ -214,16 +209,51 @@ pub fn mcp_capability_page(
 pub const MCP_CONTENT_VIEW_BYTES: u64 = 1024 * 1024;
 
 /// One resource or prompt a person asked to open from Settings.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug)]
 pub enum McpContentRequest {
     Resource {
         uri: String,
     },
-    /// `arguments` is the prompt's `{schema, value}` pair when the person filled any in.
+    /// `arguments` is the prompt's schema and value when the person filled any in.
     Prompt {
         name: String,
-        arguments: Option<Value>,
+        arguments: Option<SchemaValue>,
     },
+}
+
+/// The `mcp.resources` or `mcp.prompts` request for one resource or prompt.
+pub(crate) fn mcp_content_frame(
+    backend: &dyn Backend,
+    scope: Option<&devworks_core::protocol::ProjectId>,
+    server: &devworks_core::protocol::Id,
+    catalog_revision: i64,
+    request: &McpContentRequest,
+) -> Vec<u8> {
+    frame::with(backend, Negotiate::Latest, || {
+        let scope = Some(mcp_data_scope(scope));
+        let server_id = server.clone();
+        let catalog_revision = frame::number(catalog_revision)?;
+        let page = frame::page(1, None)?;
+        Some(In::Mcp(match request {
+            McpContentRequest::Resource { uri } => mcp::Input::Resources(mcp::ResourcesInput {
+                scope,
+                server_id,
+                catalog_revision,
+                uri: Some(frame::text(uri)?),
+                page,
+            }),
+            McpContentRequest::Prompt { name, arguments } => {
+                mcp::Input::Prompts(mcp::PromptsInput {
+                    scope,
+                    server_id,
+                    catalog_revision,
+                    name: Some(frame::text(name)?),
+                    arguments: arguments.clone(),
+                    page,
+                })
+            }
+        }))
+    })
 }
 
 /// Reads one MCP resource or prompt through `mcp.resources` or `mcp.prompts` and returns its
@@ -235,22 +265,11 @@ pub fn mcp_content(
     catalog_revision: i64,
     request: &McpContentRequest,
 ) -> Result<String, String> {
-    let mut body = json!({"scope":mcp_scope(scope),"serverId":server,
-        "catalogRevision":catalog_revision.to_string(),"page":{"limit":1}});
     let operation = match request {
-        McpContentRequest::Resource { uri } => {
-            body["uri"] = json!(uri);
-            "mcp.resources"
-        }
-        McpContentRequest::Prompt { name, arguments } => {
-            body["name"] = json!(name);
-            if let Some(arguments) = arguments {
-                body["arguments"] = arguments.clone();
-            }
-            "mcp.prompts"
-        }
+        McpContentRequest::Resource { .. } => "mcp.resources",
+        McpContentRequest::Prompt { .. } => "mcp.prompts",
     };
-    let frame = at_revision(query_frame(backend, operation, body), MCP_REVISION);
+    let frame = mcp_content_frame(backend, scope, server, catalog_revision, request);
     let artifact =
         match query_result(backend.query(operation, &frame)).map_err(|e| e.describe())? {
             (OperationResult::McpResources { value }, _) => {
@@ -276,8 +295,9 @@ pub fn mcp_content(
     })
 }
 
-pub fn mcp_command(backend: &dyn Backend, operation: &str, body: Value) -> Vec<u8> {
-    at_revision(command_frame(backend, operation, body), MCP_REVISION)
+/// An `mcp.*` command at the newest schema revision.
+pub fn mcp_command(backend: &dyn Backend, input: In) -> Vec<u8> {
+    frame::build(backend, Negotiate::Latest, Some(input))
 }
 
 /// The message, any accepted operation, and the configured or reselected server.
@@ -324,14 +344,23 @@ pub fn mcp_command_status(
 // Settings (SET-01/02/07/08)
 
 pub fn settings_read(backend: &dyn Backend) -> Vec<u8> {
-    query_frame(
-        backend,
-        "settings.read_effective",
-        json!({"scope": {"kind": "Workspace"}, "keys": [], "page": {"limit": 500}}),
-    )
+    frame::with(backend, Negotiate::Initial, || {
+        Some(In::Settings(settings::Input::ReadEffective(
+            settings::ReadEffectiveInput {
+                scope: DataScope::Workspace,
+                repository_id: None,
+                keys: BoundedList(Vec::new()),
+                page: frame::page(500, None)?,
+            },
+        )))
+    })
 }
 pub fn container_capabilities(backend: &dyn Backend) -> Vec<u8> {
-    query_frame(backend, "containers.capabilities", json!({}))
+    frame::with(backend, Negotiate::Initial, || {
+        Some(In::Containers(containers::Input::Capabilities(
+            containers::CapabilitiesInput { engine_id: None },
+        )))
+    })
 }
 pub fn container_capability_entries(
     outcome: QueryOutcome,
@@ -350,11 +379,15 @@ pub fn settings_entries(outcome: QueryOutcome) -> Result<(i64, Vec<SettingEntry>
     }
 }
 pub fn settings_explain(backend: &dyn Backend, key: &str) -> Vec<u8> {
-    query_frame(
-        backend,
-        "settings.explain_source",
-        json!({"scope": {"kind": "Workspace"}, "key": key}),
-    )
+    frame::with(backend, Negotiate::Initial, || {
+        Some(In::Settings(settings::Input::ExplainSource(
+            settings::ExplainSourceInput {
+                scope: DataScope::Workspace,
+                repository_id: None,
+                key: frame::text(key)?,
+            },
+        )))
+    })
 }
 pub fn settings_chain(outcome: QueryOutcome) -> Result<Vec<SettingEntry>, Failure> {
     match query_result(outcome)? {
@@ -369,19 +402,26 @@ pub fn settings_submit(
     validate: bool,
 ) -> Option<Vec<u8>> {
     let input = view.save_input()?;
-    let repository = input.repository_id.is_some();
-    let body = serde_json::to_value(input).ok()?;
-    let frame = if validate {
-        query_frame(backend, "settings.validate", body)
-    } else {
-        command_frame(backend, "settings.save_revision", body)
-    };
     // A repository scope exists from schema revision 8; earlier revisions refuse the member.
-    Some(if repository {
-        at_revision(frame, SETTINGS_REPOSITORY_REVISION)
+    let negotiate = if input.repository_id.is_some() {
+        Negotiate::Latest
     } else {
-        frame
-    })
+        Negotiate::Initial
+    };
+    Some(frame::build(
+        backend,
+        negotiate,
+        Some(In::Settings(if validate {
+            settings::Input::Validate(settings::ValidateInput {
+                scope: input.scope,
+                repository_id: input.repository_id,
+                expected_revision: input.expected_revision,
+                entries: input.entries,
+            })
+        } else {
+            settings::Input::SaveRevision(input)
+        })),
+    ))
 }
 /// `settings.validate` for explicit values (directory health checks without drafts).
 pub fn settings_validate_values(
@@ -389,19 +429,38 @@ pub fn settings_validate_values(
     revision: i64,
     entries: &[(&str, Value)],
 ) -> Vec<u8> {
-    let entries: Vec<Value> = entries
-        .iter()
-        .filter_map(|(k, v)| {
-            let d = devworks_core::settings::catalog::descriptor(k)?;
-            Some(json!({"key": k, "value": {"schema": d.schema_ref(), "value": v}}))
-        })
-        .collect();
-    query_frame(
-        backend,
-        "settings.validate",
-        json!({"scope": {"kind": "Workspace"}, "expectedRevision": revision.to_string(),
-            "entries": entries}),
-    )
+    settings_validate(backend, DataScope::Workspace, revision, entries)
+}
+/// `settings.validate` of explicit values in `scope`; a key the catalog does not know is left out.
+fn settings_validate(
+    backend: &dyn Backend,
+    scope: DataScope,
+    revision: i64,
+    entries: &[(&str, Value)],
+) -> Vec<u8> {
+    frame::with(backend, Negotiate::Initial, || {
+        let entries: Vec<SettingAssignment> = entries
+            .iter()
+            .filter_map(|(key, value)| {
+                let descriptor = devworks_core::settings::catalog::descriptor(key)?;
+                Some(SettingAssignment {
+                    key: BoundedText((*key).to_owned()),
+                    value: SchemaValue {
+                        schema: descriptor.schema_ref(),
+                        value: DynamicJson(value.clone()),
+                    },
+                })
+            })
+            .collect();
+        Some(In::Settings(settings::Input::Validate(
+            settings::ValidateInput {
+                scope,
+                repository_id: None,
+                expected_revision: frame::number(revision)?,
+                entries: frame::bounded(entries)?,
+            },
+        )))
+    })
 }
 pub fn settings_report(outcome: QueryOutcome) -> Result<ValidationReport, Failure> {
     match query_result(outcome)? {
@@ -420,14 +479,13 @@ pub fn settings_saved(outcome: CommandOutcome) -> Result<(), Failure> {
 // Sessions (UI-01..04, UI-11..13)
 
 pub fn sessions_list(backend: &dyn Backend) -> Vec<u8> {
-    at_revision(
-        query_frame(
-            backend,
-            "sessions.list",
-            json!({"scope": {"kind": "Workspace"}, "page": {"limit": PAGE_LIMIT}}),
-        ),
-        SESSION_REVISION,
-    )
+    frame::with(backend, Negotiate::Latest, || {
+        Some(In::Sessions(sessions::Input::List(sessions::ListInput {
+            scope: DataScope::Workspace,
+            page: frame::page(PAGE_LIMIT.into(), None)?,
+            closed: None,
+        })))
+    })
 }
 pub fn sessions(outcome: QueryOutcome) -> Result<(Vec<SessionRecord>, bool), Failure> {
     match query_result(outcome)? {
@@ -436,14 +494,13 @@ pub fn sessions(outcome: QueryOutcome) -> Result<(Vec<SessionRecord>, bool), Fai
     }
 }
 pub fn session_start(backend: &dyn Backend, title: &str) -> Vec<u8> {
-    at_revision(
-        command_frame(
-            backend,
-            "sessions.start",
-            json!({"scope": {"kind": "Workspace"}, "title": title}),
-        ),
-        SESSION_REVISION,
-    )
+    frame::with(backend, Negotiate::Latest, || {
+        Some(In::Sessions(sessions::Input::Start(sessions::StartInput {
+            scope: DataScope::Workspace,
+            root_id: None,
+            title: frame::text(title)?,
+        })))
+    })
 }
 pub fn started(outcome: CommandOutcome) -> Result<SessionRecord, Failure> {
     match command_result(outcome)? {
@@ -453,12 +510,17 @@ pub fn started(outcome: CommandOutcome) -> Result<SessionRecord, Failure> {
 }
 /// One transcript page after `after` (the projection's tail cursor).
 pub fn transcript(backend: &dyn Backend, session: &str, after: Option<&str>) -> Vec<u8> {
-    let mut frame = json!({"protocol": PROTOCOL, "queryId": backend.token("q"),
-        "sessionId": session, "limit": 200});
-    if let Some(a) = after {
-        frame["after"] = json!(a);
-    }
-    frame.to_string().into_bytes()
+    frame::with(backend, Negotiate::Latest, || {
+        Some(In::Sessions(sessions::Input::Transcript(
+            SessionQueryRequest {
+                protocol: frame::protocol(),
+                query_id: frame::query_id(backend)?,
+                session_id: frame::id(session)?,
+                after: after.map(str::to_owned),
+                limit: 200,
+            },
+        )))
+    })
 }
 pub fn transcript_page(outcome: QueryOutcome) -> Result<TranscriptPage, Failure> {
     match query_result(outcome)? {
@@ -474,18 +536,26 @@ pub fn append_message(
     text: &str,
     attachments: &[ArtifactRef],
 ) -> Vec<u8> {
-    let mut content = Vec::new();
-    if !text.trim().is_empty() {
-        content.push(json!({"kind": "Text", "text": text}));
-    }
-    for a in attachments {
-        content.push(json!({"kind": "Attachment", "artifact": a}));
-    }
-    json!({"protocol": PROTOCOL, "requestKey": backend.token("rk"), "sessionId": session,
-        "expectedSessionRevision": revision.to_string(), "content": content,
-        "schemaRevision": SESSION_REVISION})
-    .to_string()
-    .into_bytes()
+    frame::with(backend, Negotiate::Latest, || {
+        let mut content = Vec::new();
+        if !text.trim().is_empty() {
+            content.push(UserContent::Text {
+                text: text.to_owned(),
+            });
+        }
+        content.extend(attachments.iter().map(|artifact| UserContent::Attachment {
+            artifact: artifact.clone(),
+        }));
+        Some(In::Sessions(sessions::Input::AppendMessage(
+            SessionCommandRequest {
+                protocol: frame::protocol(),
+                request_key: frame::request_key(backend)?,
+                session_id: frame::id(session)?,
+                expected_session_revision: frame::text(&revision.to_string())?,
+                content,
+            },
+        )))
+    })
 }
 pub fn appended(outcome: CommandOutcome) -> Result<SessionRecord, Failure> {
     match command_result(outcome)? {
@@ -514,16 +584,37 @@ pub fn save_workspace_artifact(
     bytes: u64,
     tags: &[String],
 ) -> Vec<u8> {
-    let mut command = json!({"kind": "Save", "workspace": true, "title": title,
-        "mediaType": media_type, "source": {"kind": "Upload", "ticketId": ticket},
-        "expectedDigest": digest, "expectedBytes": bytes.to_string()});
-    if !tags.is_empty() {
-        command["tags"] = json!(tags);
-    }
-    json!({"protocol": PROTOCOL, "requestKey": backend.token("rk"),
-        "schemaRevision": WORKSPACE_ARTIFACT_REVISION, "command": command})
-    .to_string()
-    .into_bytes()
+    frame::with(backend, WORKSPACE_ARTIFACT_NEGOTIATION, || {
+        artifact_save(
+            backend,
+            ArtifactCommand::Save {
+                project_id: None,
+                workspace: Some(true),
+                title: title.to_owned(),
+                media_type: media_type.to_owned(),
+                source: ArtifactSource::Upload {
+                    ticket_id: frame::id(ticket)?,
+                },
+                expected_digest: frame::text(digest)?,
+                expected_bytes: frame::text(&bytes.to_string())?,
+                tags: if tags.is_empty() {
+                    None
+                } else {
+                    Some(ArtifactTags::new(tags.to_vec()).ok()?)
+                },
+            },
+        )
+    })
+}
+/// The `artifacts.save` input of one save command.
+fn artifact_save(backend: &dyn Backend, command: ArtifactCommand) -> Option<In> {
+    Some(In::Artifacts(artifacts::Input::Save(
+        ArtifactCommandRequest {
+            protocol: frame::protocol(),
+            request_key: frame::request_key(backend)?,
+            command,
+        },
+    )))
 }
 /// An `artifacts.save` frame storing an upload into `project` (ticket from
 /// `mint_project_upload`).
@@ -536,12 +627,23 @@ pub fn save_project_artifact(
     digest: &str,
     bytes: u64,
 ) -> Vec<u8> {
-    json!({"protocol": PROTOCOL, "requestKey": backend.token("rk"),
-        "command": {"kind": "Save", "projectId": project, "title": title,
-            "mediaType": media_type, "source": {"kind": "Upload", "ticketId": ticket},
-            "expectedDigest": digest, "expectedBytes": bytes.to_string()}})
-    .to_string()
-    .into_bytes()
+    frame::with(backend, Negotiate::Initial, || {
+        artifact_save(
+            backend,
+            ArtifactCommand::Save {
+                project_id: Some(ProjectId(frame::id(project)?)),
+                workspace: None,
+                title: title.to_owned(),
+                media_type: media_type.to_owned(),
+                source: ArtifactSource::Upload {
+                    ticket_id: frame::id(ticket)?,
+                },
+                expected_digest: frame::text(digest)?,
+                expected_bytes: frame::text(&bytes.to_string())?,
+                tags: None,
+            },
+        )
+    })
 }
 pub fn saved_artifact(outcome: CommandOutcome) -> Result<ArtifactRecord, Failure> {
     match command_result(outcome)? {
@@ -551,11 +653,28 @@ pub fn saved_artifact(outcome: CommandOutcome) -> Result<ArtifactRecord, Failure
 }
 /// `artifacts.read` of one version (binary content comes back as a stream handle).
 pub fn artifact_read(backend: &dyn Backend, artifact: &ArtifactRef) -> Vec<u8> {
-    json!({"protocol": PROTOCOL, "queryId": backend.token("q"),
-        "query": {"kind": "Read", "artifactId": artifact.artifact_id,
-            "versionId": artifact.version_id}, "limit": 1})
-    .to_string()
-    .into_bytes()
+    artifact_read_after(backend, artifact, None)
+}
+/// [`artifact_read`] continuing at the byte cursor of the previous page.
+pub fn artifact_read_after(
+    backend: &dyn Backend,
+    artifact: &ArtifactRef,
+    cursor: Option<&str>,
+) -> Vec<u8> {
+    frame::with(backend, Negotiate::Initial, || {
+        Some(In::Artifacts(artifacts::Input::Read(
+            ArtifactQueryRequest {
+                protocol: frame::protocol(),
+                query_id: frame::query_id(backend)?,
+                query: ArtifactQuery::Read {
+                    artifact_id: artifact.artifact_id.clone(),
+                    version_id: artifact.version_id.clone(),
+                },
+                limit: 1,
+                cursor: cursor.map(str::to_owned),
+            },
+        )))
+    })
 }
 /// The complete bytes of `artifact` through `artifacts.read` (paged by byte cursor, or a
 /// verified stream for non-text bytes), checked against the reference's length and digest.
@@ -565,12 +684,7 @@ pub fn read_artifact_bytes(b: &dyn Backend, artifact: &ArtifactRef) -> Result<Ve
     let mut bytes: Vec<u8> = Vec::with_capacity(expected as usize);
     let mut cursor: Option<String> = None;
     loop {
-        let mut frame: Value =
-            serde_json::from_slice(&artifact_read(b, artifact)).map_err(|e| e.to_string())?;
-        if let Some(c) = &cursor {
-            frame["cursor"] = json!(c);
-        }
-        let frame = frame.to_string().into_bytes();
+        let frame = artifact_read_after(b, artifact, cursor.as_deref());
         match read_content(b.query("artifacts.read", &frame)).map_err(|e| e.describe())? {
             devworks_core::protocol::records::ArtifactReadContent::Text {
                 content,
@@ -617,12 +731,20 @@ pub fn read_content(
 /// `artifacts.delete` of the one version of an attachment saved for a draft and removed from it
 /// before it was ever sent (revision and reference revision 1: nothing referenced it).
 pub fn delete_unsent_attachment(backend: &dyn Backend, artifact: &ArtifactRef) -> Vec<u8> {
-    json!({"protocol": PROTOCOL, "requestKey": backend.token("rk"), "deletion": {
-        "kind": "DeleteVersion", "artifactId": artifact.artifact_id,
-        "versionId": artifact.version_id, "expectedRevision": "1",
-        "expectedReferenceRevision": "1"}})
-    .to_string()
-    .into_bytes()
+    frame::with(backend, Negotiate::Initial, || {
+        Some(In::Artifacts(artifacts::Input::Delete(
+            ArtifactDeletionRequest {
+                protocol: frame::protocol(),
+                request_key: frame::request_key(backend)?,
+                deletion: ArtifactDeletion::DeleteVersion {
+                    artifact_id: artifact.artifact_id.clone(),
+                    version_id: artifact.version_id.clone(),
+                    expected_revision: frame::text("1")?,
+                    expected_reference_revision: frame::text("1")?,
+                },
+            },
+        )))
+    })
 }
 pub fn deleted(outcome: CommandOutcome) -> Result<(), Failure> {
     match command_result(outcome)? {
@@ -631,19 +753,34 @@ pub fn deleted(outcome: CommandOutcome) -> Result<(), Failure> {
     }
 }
 pub fn workspace_artifacts(backend: &dyn Backend) -> Vec<u8> {
-    json!({"protocol": PROTOCOL, "queryId": backend.token("q"),
-        "schemaRevision": 4,
-        "query": {"kind": "List", "workspace": true}, "limit": PAGE_LIMIT})
-    .to_string()
-    .into_bytes()
+    artifact_list(backend, None, true, None)
+}
+/// One page of `artifacts.list` of the workspace (`workspace`) or of `project`.
+fn artifact_list(
+    backend: &dyn Backend,
+    project: Option<&str>,
+    workspace: bool,
+    cursor: Option<&str>,
+) -> Vec<u8> {
+    frame::with(backend, Negotiate::Latest, || {
+        Some(In::Artifacts(artifacts::Input::List(
+            ArtifactQueryRequest {
+                protocol: frame::protocol(),
+                query_id: frame::query_id(backend)?,
+                query: ArtifactQuery::List {
+                    project_id: frame::lift(project.map(|p| frame::id(p).map(ProjectId)))?,
+                    workspace: workspace.then_some(true),
+                    tags: None,
+                },
+                limit: PAGE_LIMIT,
+                cursor: cursor.map(str::to_owned),
+            },
+        )))
+    })
 }
 /// `artifacts.list` of one project's artifacts.
 pub fn project_artifacts(backend: &dyn Backend, project: &str) -> Vec<u8> {
-    json!({"protocol": PROTOCOL, "queryId": backend.token("q"),
-        "schemaRevision": 4,
-        "query": {"kind": "List", "projectId": project}, "limit": PAGE_LIMIT})
-    .to_string()
-    .into_bytes()
+    artifact_list(backend, Some(project), false, None)
 }
 /// A bounded prompt-picker page, independent of the artifacts screen's current page.
 pub fn prompt_artifacts(
@@ -651,16 +788,7 @@ pub fn prompt_artifacts(
     project: Option<&str>,
     cursor: Option<&str>,
 ) -> Vec<u8> {
-    let query = project.map_or_else(
-        || json!({"kind":"List","workspace":true}),
-        |project| json!({"kind":"List","projectId":project}),
-    );
-    let mut frame = json!({"protocol":PROTOCOL,"queryId":backend.token("q"),
-        "schemaRevision":4,"query":query,"limit":PAGE_LIMIT});
-    if let Some(cursor) = cursor {
-        frame["cursor"] = json!(cursor);
-    }
-    serde_json::to_vec(&frame).expect("prompt list frame")
+    artifact_list(backend, project, project.is_none(), cursor)
 }
 pub fn prompt_artifact_page(
     outcome: QueryOutcome,
@@ -680,26 +808,25 @@ pub fn artifacts(outcome: QueryOutcome) -> Result<(Vec<ArtifactRecord>, bool), F
     }
 }
 pub fn resources_list(backend: &dyn Backend) -> Vec<u8> {
-    query_frame(
-        backend,
-        "resources.list",
-        json!({"scope": {"kind": "Workspace"}, "page": {"limit": PAGE_LIMIT}}),
-    )
+    frame::with(backend, Negotiate::Initial, || {
+        Some(In::Resources(resources::Input::List(
+            resources::ListInput {
+                scope: DataScope::Workspace,
+                page: frame::page(PAGE_LIMIT.into(), None)?,
+            },
+        )))
+    })
 }
 /// The owned browser sessions (`browser.sessions`) of `project`, or of the workspace.
 pub fn browser_sessions_list(backend: &dyn Backend, project: Option<&str>) -> Vec<u8> {
-    let scope = match project {
-        Some(p) => json!({"kind": "Project", "projectId": p}),
-        None => json!({"kind": "Workspace"}),
-    };
-    at_revision(
-        query_frame(
-            backend,
-            "browser.sessions",
-            json!({"scope": scope, "page": {"limit": PAGE_LIMIT}}),
-        ),
-        3,
-    )
+    frame::with(backend, Negotiate::Latest, || {
+        Some(In::Browser(browser::Input::SessionsQuery(
+            browser::SessionsQueryInput {
+                scope: frame::scope(project)?,
+                page: frame::page(PAGE_LIMIT.into(), None)?,
+            },
+        )))
+    })
 }
 pub fn browser_sessions(outcome: QueryOutcome) -> Result<(Vec<BrowserSession>, bool), Failure> {
     match query_result(outcome)? {
@@ -709,11 +836,16 @@ pub fn browser_sessions(outcome: QueryOutcome) -> Result<(Vec<BrowserSession>, b
 }
 /// Closes (interrupts) a browser session at its current revision.
 pub fn browser_close(backend: &dyn Backend, session: &str, revision: &str) -> Vec<u8> {
-    command_frame(
-        backend,
-        "browser.sessions",
-        json!({"action": {"kind": "Close", "sessionId": session, "expectedRevision": revision}}),
-    )
+    frame::with(backend, Negotiate::Initial, || {
+        Some(In::Browser(browser::Input::SessionsCommand(
+            browser::SessionsCommandInput {
+                action: BrowserSessionAction::Close {
+                    session_id: frame::id(session)?,
+                    expected_revision: frame::text(revision)?,
+                },
+            },
+        )))
+    })
 }
 /// `true` when the close was accepted (the browser is being stopped through the process
 /// owner), `false` when the session had already stopped.
@@ -739,23 +871,14 @@ pub fn resources(outcome: QueryOutcome) -> Result<(Vec<ResourceRecord>, bool), F
 // ---------------------------------------------------------------------------------------------
 // Router (UI-10, ROUTE-19, ROUTE-20)
 
-/// Revision 3 includes the retained concrete identity of a session pin.
-pub const ROUTER_AVAILABILITY_REVISION: u64 = 3;
-
 /// One page of the catalog, after `cursor` (the first page without one).
 pub fn router_catalog(backend: &dyn Backend, cursor: Option<&str>) -> Vec<u8> {
-    let mut page = json!({"limit": PAGE_LIMIT});
-    if let Some(c) = cursor {
-        page["cursor"] = json!(c);
-    }
-    at_revision(
-        query_frame(
-            backend,
-            "router.catalog",
-            json!({"page": page, "includeDisabled": true}),
-        ),
-        3,
-    )
+    frame::with(backend, Negotiate::Latest, || {
+        Some(In::Router(router::Input::Catalog(router::CatalogInput {
+            page: frame::page(PAGE_LIMIT.into(), cursor)?,
+            include_disabled: true,
+        })))
+    })
 }
 /// A catalog page and the cursor of the next one (`None` on the last page).
 pub fn route_models(
@@ -775,10 +898,11 @@ pub fn route_models(
     }
 }
 pub fn session_get(backend: &dyn Backend, session: &str) -> Vec<u8> {
-    at_revision(
-        query_frame(backend, "sessions.get", json!({"sessionId": session})),
-        SESSION_REVISION,
-    )
+    frame::with(backend, Negotiate::Latest, || {
+        Some(In::Sessions(sessions::Input::Get(sessions::GetInput {
+            session_id: frame::id(session)?,
+        })))
+    })
 }
 pub fn session_record(outcome: QueryOutcome) -> Result<SessionRecord, Failure> {
     match query_result(outcome)? {
@@ -792,14 +916,16 @@ pub fn router_availability(
     effort: &EffortName,
     session: Option<&str>,
 ) -> Vec<u8> {
-    let mut body = json!({"intent": intent, "effort": effort, "requiredCapabilities": []});
-    if let Some(s) = session {
-        body["sessionId"] = json!(s);
-    }
-    at_revision(
-        query_frame(backend, "router.availability", body),
-        ROUTER_AVAILABILITY_REVISION,
-    )
+    frame::with(backend, Negotiate::Latest, || {
+        Some(In::Router(router::Input::Availability(
+            router::AvailabilityInput {
+                intent: intent.clone(),
+                effort: effort.clone(),
+                required_capabilities: BoundedList(Vec::new()),
+                session_id: frame::lift(session.map(frame::id))?,
+            },
+        )))
+    })
 }
 pub fn availability(outcome: QueryOutcome) -> Result<RouteAvailability, Failure> {
     match query_result(outcome)? {
@@ -814,15 +940,14 @@ pub fn router_pin(
     intent: &RouteIntent,
     effort: &EffortName,
 ) -> Vec<u8> {
-    at_revision(
-        command_frame(
-            backend,
-            "router.pin",
-            json!({"sessionId": session, "expectedPinRevision": expected_pin_revision.to_string(),
-            "intent": intent, "effort": effort}),
-        ),
-        3,
-    )
+    frame::with(backend, Negotiate::Latest, || {
+        Some(In::Router(router::Input::Pin(router::PinInput {
+            session_id: frame::id(session)?,
+            expected_pin_revision: frame::number(expected_pin_revision)?,
+            intent: intent.clone(),
+            effort: effort.clone(),
+        })))
+    })
 }
 pub fn router_route(
     backend: &dyn Backend,
@@ -831,15 +956,15 @@ pub fn router_route(
     intent: &RouteIntent,
     effort: &EffortName,
 ) -> Vec<u8> {
-    at_revision(
-        command_frame(
-            backend,
-            "router.route",
-            json!({"sessionId": session, "expectedContextEpoch": context_epoch.to_string(),
-            "intent": intent, "effort": effort, "requiredCapabilities": []}),
-        ),
-        3,
-    )
+    frame::with(backend, Negotiate::Latest, || {
+        Some(In::Router(router::Input::Route(router::RouteInput {
+            session_id: frame::id(session)?,
+            expected_context_epoch: frame::number(context_epoch)?,
+            intent: intent.clone(),
+            effort: effort.clone(),
+            required_capabilities: BoundedList(Vec::new()),
+        })))
+    })
 }
 pub fn routed(outcome: CommandOutcome) -> Result<RouteChoice, Failure> {
     match command_result(outcome)? {
@@ -857,8 +982,6 @@ pub fn pinned(outcome: CommandOutcome) -> Result<RouteChoice, Failure> {
 // ---------------------------------------------------------------------------------------------
 // Web search and fetch (DW-51)
 
-/// The web tools' results carry trust and provenance from schema revision 2.
-pub const WEB_REVISION: u64 = 2;
 /// The most a page fetched from the UI keeps (the contract's bound).
 pub const WEB_FETCH_BYTES: u32 = 1_048_576;
 /// The time the UI asks for; the `web.timeoutMs` setting caps it.
@@ -870,15 +993,14 @@ pub const WEB_ACTIVITY_LIMIT: u16 = 20;
 
 /// `web.fetch` of `url` into the workspace, as the user.
 pub fn web_fetch(backend: &dyn Backend, url: &str) -> Vec<u8> {
-    at_revision(
-        query_frame(
-            backend,
-            "web.fetch",
-            json!({"scope": {"kind": "Workspace"}, "url": url, "maxBytes": WEB_FETCH_BYTES,
-                "timeoutMs": WEB_FETCH_TIMEOUT_MS.to_string()}),
-        ),
-        WEB_REVISION,
-    )
+    frame::with(backend, Negotiate::Latest, || {
+        Some(In::Web(web::Input::Fetch(web::FetchInput {
+            scope: DataScope::Workspace,
+            url: frame::text(url)?,
+            max_bytes: frame::integer(WEB_FETCH_BYTES.into())?,
+            timeout_ms: frame::number(WEB_FETCH_TIMEOUT_MS as i64)?,
+        })))
+    })
 }
 pub fn web_document(outcome: QueryOutcome) -> Result<WebDocument, Failure> {
     match query_result(outcome)? {
@@ -888,15 +1010,14 @@ pub fn web_document(outcome: QueryOutcome) -> Result<WebDocument, Failure> {
 }
 /// `web.search` of `query` with the configured `provider`, as the user.
 pub fn web_search(backend: &dyn Backend, query: &str, provider: &str) -> Vec<u8> {
-    at_revision(
-        query_frame(
-            backend,
-            "web.search",
-            json!({"scope": {"kind": "Workspace"}, "query": query, "providerId": provider,
-                "page": {"limit": WEB_SEARCH_LIMIT}}),
-        ),
-        WEB_REVISION,
-    )
+    frame::with(backend, Negotiate::Latest, || {
+        Some(In::Web(web::Input::Search(web::SearchInput {
+            scope: DataScope::Workspace,
+            query: frame::text(query)?,
+            provider_id: frame::id(provider)?,
+            page: frame::page(WEB_SEARCH_LIMIT.into(), None)?,
+        })))
+    })
 }
 pub fn web_results(outcome: QueryOutcome) -> Result<Vec<WebResult>, Failure> {
     match query_result(outcome)? {
@@ -906,15 +1027,27 @@ pub fn web_results(outcome: QueryOutcome) -> Result<Vec<WebResult>, Failure> {
 }
 /// The newest web activity records (`workspace.logs` of the `web` components).
 pub fn web_activity(backend: &dyn Backend) -> Vec<u8> {
-    at_revision(
-        query_frame(
-            backend,
-            "workspace.logs",
-            json!({"page": {"limit": WEB_ACTIVITY_LIMIT}, "component": "web",
-                "afterSequence": "0", "order": "Descending"}),
-        ),
-        2,
-    )
+    frame::with(backend, Negotiate::Latest, || {
+        Some(In::Workspace(workspace::Input::Logs(
+            workspace::LogsInput {
+                page: frame::page(WEB_ACTIVITY_LIMIT.into(), None)?,
+                component: Some(frame::text("web")?),
+                after_sequence: frame::number(0)?,
+                severity: None,
+                outcome: None,
+                operation: None,
+                operation_id: None,
+                correlation_id: None,
+                target_id: None,
+                stage: None,
+                project_id: None,
+                search: None,
+                since_ms: None,
+                until_ms: None,
+                order: Some(SortDirection::Descending),
+            },
+        )))
+    })
 }
 pub fn web_entries(outcome: QueryOutcome) -> Result<Vec<DiagnosticEntry>, Failure> {
     match query_result(outcome)? {
@@ -928,11 +1061,13 @@ pub fn web_entries(outcome: QueryOutcome) -> Result<Vec<DiagnosticEntry>, Failur
 
 /// The lifecycle a projects listing shows (`None`: active and archived).
 pub fn projects_list(backend: &dyn Backend, lifecycle: Option<&str>) -> Vec<u8> {
-    let mut body = json!({"scope": {"kind": "Workspace"}, "page": {"limit": PAGE_LIMIT}});
-    if let Some(l) = lifecycle {
-        body["lifecycle"] = json!(l);
-    }
-    query_frame(backend, "projects.list", body)
+    frame::with(backend, Negotiate::Initial, || {
+        Some(In::Projects(projects::Input::List(projects::ListInput {
+            scope: DataScope::Workspace,
+            page: frame::page(PAGE_LIMIT.into(), None)?,
+            lifecycle: frame::lift(lifecycle.map(frame::text))?,
+        })))
+    })
 }
 pub fn projects(outcome: QueryOutcome) -> Result<(Vec<ProjectRecord>, bool), Failure> {
     match query_result(outcome)? {
@@ -946,11 +1081,16 @@ pub fn project_create(
     description: &str,
     repositories: &[String],
 ) -> Vec<u8> {
-    command_frame(
-        backend,
-        "projects.create",
-        json!({"name": name, "description": description, "repositoryIds": repositories}),
-    )
+    frame::with(backend, Negotiate::Initial, || {
+        Some(In::Projects(projects::Input::Create(
+            projects::CreateInput {
+                name: frame::text(name)?,
+                description: frame::text(description)?,
+                repository_ids: frame::ids(repositories)?,
+                initial_plan: None,
+            },
+        )))
+    })
 }
 /// `projects.edit` of the changed members only (an unchanged member is left out).
 pub fn project_edit(
@@ -960,46 +1100,128 @@ pub fn project_edit(
     description: Option<&str>,
     access_mode: Option<&AccessMode>,
 ) -> Vec<u8> {
-    let mut changes = json!({});
-    if let Some(n) = name {
-        changes["name"] = json!(n);
-    }
-    if let Some(d) = description {
-        changes["description"] = json!(d);
-    }
-    if let Some(a) = access_mode {
-        changes["accessMode"] = json!(a);
-    }
-    command_frame(
-        backend,
-        "projects.edit",
-        json!({"projectId": project.id, "expectedRevision": project.revision,
-            "changes": changes}),
-    )
+    frame::with(backend, Negotiate::Initial, || {
+        Some(In::Projects(projects::Input::Edit(projects::EditInput {
+            project_id: project.id.clone(),
+            expected_revision: project.revision.clone(),
+            changes: ProjectPatch {
+                name: frame::lift(name.map(frame::text))?,
+                description: frame::lift(description.map(frame::text))?,
+                access_mode: access_mode.cloned(),
+            },
+        })))
+    })
 }
 pub fn project_membership(
     backend: &dyn Backend,
     project: &ProjectRecord,
     repositories: &[String],
 ) -> Vec<u8> {
-    command_frame(
-        backend,
-        "projects.membership",
-        json!({"projectId": project.id, "expectedRevision": project.revision,
-            "repositoryIds": repositories}),
-    )
+    frame::with(backend, Negotiate::Initial, || {
+        Some(In::Projects(projects::Input::Membership(
+            projects::MembershipInput {
+                project_id: project.id.clone(),
+                expected_revision: project.revision.clone(),
+                repository_ids: frame::ids(repositories)?,
+            },
+        )))
+    })
+}
+/// A project lifecycle change.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LifecycleChange {
+    Archive,
+    Restore,
+    Delete,
+}
+impl LifecycleChange {
+    /// The operation the change runs.
+    pub const fn operation(self) -> &'static str {
+        match self {
+            Self::Archive => "projects.archive",
+            Self::Restore => "projects.restore",
+            Self::Delete => "projects.delete",
+        }
+    }
 }
 /// `projects.archive`, `.restore` or `.delete` of `project` at its revision.
 pub fn project_lifecycle(
     backend: &dyn Backend,
-    operation: &str,
+    change: LifecycleChange,
     project: &ProjectRecord,
 ) -> Vec<u8> {
-    command_frame(
-        backend,
-        operation,
-        json!({"projectId": project.id, "expectedRevision": project.revision}),
-    )
+    frame::with(backend, Negotiate::Initial, || {
+        let (project_id, expected_revision) = (project.id.clone(), project.revision.clone());
+        Some(In::Projects(match change {
+            LifecycleChange::Archive => projects::Input::Archive(projects::ArchiveInput {
+                project_id,
+                expected_revision,
+                proposal_id: None,
+            }),
+            LifecycleChange::Restore => projects::Input::Restore(projects::RestoreInput {
+                project_id,
+                expected_revision,
+                proposal_id: None,
+            }),
+            LifecycleChange::Delete => projects::Input::Delete(projects::DeleteInput {
+                project_id,
+                expected_revision,
+                proposal_id: None,
+            }),
+        }))
+    })
+}
+/// `projects.prepare_purge` of a project at its revision.
+pub fn purge_prepare(b: &dyn Backend, project: &ProjectRecord) -> Vec<u8> {
+    frame::with(b, Negotiate::Latest, || {
+        Some(In::Projects(projects::Input::PreparePurge(
+            projects::PreparePurgeInput {
+                project_id: project.id.clone(),
+                expected_revision: project.revision.clone(),
+            },
+        )))
+    })
+}
+/// `projects.purge_status` of a prepared manifest.
+pub fn purge_status(b: &dyn Backend, m: &ProjectPurgeManifest) -> Vec<u8> {
+    frame::with(b, Negotiate::Latest, || {
+        Some(In::Projects(projects::Input::PurgeStatus(
+            projects::PurgeStatusInput {
+                project_id: m.project_id.clone(),
+                manifest_id: m.id.clone(),
+            },
+        )))
+    })
+}
+/// `projects.purge_manifest`: one page of a manifest's entries.
+pub fn purge_manifest_page(
+    b: &dyn Backend,
+    m: &ProjectPurgeManifest,
+    cursor: Option<&str>,
+) -> Vec<u8> {
+    frame::with(b, Negotiate::Latest, || {
+        Some(In::Projects(projects::Input::PurgeManifest(
+            projects::PurgeManifestInput {
+                project_id: m.project_id.clone(),
+                manifest_id: m.id.clone(),
+                expected_revision: m.revision.clone(),
+                page: frame::page(200, cursor)?,
+            },
+        )))
+    })
+}
+/// `projects.purge` of the reviewed manifest.
+pub fn purge_confirm(b: &dyn Backend, m: &ProjectPurgeManifest) -> Vec<u8> {
+    frame::with(b, Negotiate::Latest, || {
+        Some(In::Projects(projects::Input::Purge(projects::PurgeInput {
+            project_id: m.project_id.clone(),
+            manifest_id: m.id.clone(),
+            expected_revision: m.revision.clone(),
+            expected_digest: m.digest.clone(),
+            expected_project_revision: m.project_revision.clone(),
+            confirm: true,
+        })))
+    })
 }
 /// The project a projects command applied (or left unchanged).
 pub fn project_changed(outcome: CommandOutcome) -> Result<ProjectRecord, Failure> {
@@ -1015,15 +1237,15 @@ pub fn project_changed(outcome: CommandOutcome) -> Result<ProjectRecord, Failure
 }
 /// Registered repositories: a project's members, or every registration (`None`).
 pub fn repositories_list(backend: &dyn Backend, project: Option<&str>) -> Vec<u8> {
-    let scope = match project {
-        Some(p) => json!({"kind": "Project", "projectId": p}),
-        None => json!({"kind": "Workspace"}),
-    };
-    query_frame(
-        backend,
-        "repositories.list",
-        json!({"scope": scope, "page": {"limit": PAGE_LIMIT}}),
-    )
+    frame::with(backend, Negotiate::Initial, || {
+        Some(In::Repositories(repositories::Input::List(
+            repositories::ListInput {
+                scope: frame::scope(project)?,
+                page: frame::page(PAGE_LIMIT.into(), None)?,
+                text: None,
+            },
+        )))
+    })
 }
 pub fn repositories(outcome: QueryOutcome) -> Result<(Vec<RepositoryRecord>, bool), Failure> {
     match query_result(outcome)? {
@@ -1031,14 +1253,25 @@ pub fn repositories(outcome: QueryOutcome) -> Result<(Vec<RepositoryRecord>, boo
         (other, _) => Err(unexpected("repositories.list", &other)),
     }
 }
-/// `repositories.readme` or `.summary` of the repository's latest published view.
-pub fn repository_text(backend: &dyn Backend, operation: &str, repository: &str) -> Vec<u8> {
-    query_frame(
-        backend,
-        operation,
-        json!({"repositoryId": repository,
-            "views": {"kind": "Published", "repositoryIds": [repository]}}),
-    )
+/// `repositories.readme` (or `.summary`) of the repository's latest published view.
+pub fn repository_text(backend: &dyn Backend, repository: &str, readme: bool) -> Vec<u8> {
+    frame::with(backend, Negotiate::Initial, || {
+        let repository_id = frame::id(repository)?;
+        let views = ViewSelection::Published {
+            repository_ids: vec![repository_id.clone()],
+        };
+        Some(In::Repositories(if readme {
+            repositories::Input::Readme(repositories::ReadmeInput {
+                repository_id,
+                views,
+            })
+        } else {
+            repositories::Input::Summary(repositories::SummaryInput {
+                repository_id,
+                views,
+            })
+        }))
+    })
 }
 pub fn repository_text_result(outcome: QueryOutcome) -> Result<RepositoryText, Failure> {
     match query_result(outcome)? {
@@ -1048,11 +1281,14 @@ pub fn repository_text_result(outcome: QueryOutcome) -> Result<RepositoryText, F
     }
 }
 pub fn remove_index(backend: &dyn Backend, repository: &RepositoryRecord) -> Vec<u8> {
-    command_frame(
-        backend,
-        "repositories.remove_index",
-        json!({"repositoryId": repository.id, "expectedRevision": repository.revision}),
-    )
+    frame::with(backend, Negotiate::Initial, || {
+        Some(In::Repositories(repositories::Input::RemoveIndex(
+            repositories::RemoveIndexInput {
+                repository_id: repository.id.clone(),
+                expected_revision: repository.revision.clone(),
+            },
+        )))
+    })
 }
 pub fn index_removed(outcome: CommandOutcome) -> Result<MutationSummary, Failure> {
     match command_result(outcome)? {
@@ -1062,32 +1298,44 @@ pub fn index_removed(outcome: CommandOutcome) -> Result<MutationSummary, Failure
 }
 /// `settings.read_effective` of `keys` at a project's scope (its overrides and inheritance).
 pub fn project_settings_read(backend: &dyn Backend, project: &str, keys: &[&str]) -> Vec<u8> {
-    query_frame(
-        backend,
-        "settings.read_effective",
-        json!({"scope": {"kind": "Project", "projectId": project}, "keys": keys,
-            "page": {"limit": 500}}),
-    )
+    frame::with(backend, Negotiate::Initial, || {
+        Some(In::Settings(settings::Input::ReadEffective(
+            settings::ReadEffectiveInput {
+                scope: frame::scope(Some(project))?,
+                repository_id: None,
+                keys: BoundedList(
+                    keys.iter()
+                        .map(|key| frame::text(key))
+                        .collect::<Option<Vec<_>>>()?,
+                ),
+                page: frame::page(500, None)?,
+            },
+        )))
+    })
 }
-/// The schema revision that introduced a repository scope for `settings.*` (`repositoryId`).
-pub const SETTINGS_REPOSITORY_REVISION: u64 = 8;
 /// `settings.read_effective` of `keys` at one repository of a project: the repository's own
 /// values over the project's, over the workspace's, each entry naming the layer it came from.
+/// A repository scope exists from schema revision 8.
 pub fn repository_settings_read(
     backend: &dyn Backend,
     project: &str,
     repository: &str,
     keys: &[&str],
 ) -> Vec<u8> {
-    at_revision(
-        query_frame(
-            backend,
-            "settings.read_effective",
-            json!({"scope": {"kind": "Project", "projectId": project},
-                "repositoryId": repository, "keys": keys, "page": {"limit": 500}}),
-        ),
-        SETTINGS_REPOSITORY_REVISION,
-    )
+    frame::with(backend, Negotiate::Latest, || {
+        Some(In::Settings(settings::Input::ReadEffective(
+            settings::ReadEffectiveInput {
+                scope: frame::scope(Some(project))?,
+                repository_id: Some(frame::id(repository)?),
+                keys: BoundedList(
+                    keys.iter()
+                        .map(|key| frame::text(key))
+                        .collect::<Option<Vec<_>>>()?,
+                ),
+                page: frame::page(500, None)?,
+            },
+        )))
+    })
 }
 /// `settings.validate` of explicit values at a project's scope (directory health).
 pub fn project_settings_validate(
@@ -1096,19 +1344,10 @@ pub fn project_settings_validate(
     revision: i64,
     entries: &[(&str, Value)],
 ) -> Vec<u8> {
-    let entries: Vec<Value> = entries
-        .iter()
-        .filter_map(|(k, v)| {
-            let d = devworks_core::settings::catalog::descriptor(k)?;
-            Some(json!({"key": k, "value": {"schema": d.schema_ref(), "value": v}}))
-        })
-        .collect();
-    query_frame(
-        backend,
-        "settings.validate",
-        json!({"scope": {"kind": "Project", "projectId": project},
-            "expectedRevision": revision.to_string(), "entries": entries}),
-    )
+    match frame::scope(Some(project)) {
+        Some(scope) => settings_validate(backend, scope, revision, entries),
+        None => Vec::new(),
+    }
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1117,14 +1356,14 @@ pub fn project_settings_validate(
 /// `indexing.status` of one repository at schema revision 2 (freshness, languages, packs,
 /// overlays).
 pub fn index_status(backend: &dyn Backend, repository: &str) -> Vec<u8> {
-    at_revision(
-        query_frame(
-            backend,
-            "indexing.status",
-            json!({"repositoryId": repository}),
-        ),
-        2,
-    )
+    frame::with(backend, Negotiate::Latest, || {
+        Some(In::Indexing(indexing::Input::Status(
+            indexing::StatusInput {
+                repository_id: Some(frame::id(repository)?),
+                overlay_id: None,
+            },
+        )))
+    })
 }
 pub fn index_status_result(
     outcome: QueryOutcome,
@@ -1140,15 +1379,15 @@ pub fn index_runs(
     project: Option<&str>,
     repository: Option<&str>,
 ) -> Vec<u8> {
-    let scope = match project {
-        Some(p) => json!({"kind": "Project", "projectId": p}),
-        None => json!({"kind": "Workspace"}),
-    };
-    let mut body = json!({"scope": scope, "page": {"limit": 50}});
-    if let Some(r) = repository {
-        body["repositoryId"] = json!(r);
-    }
-    query_frame(backend, "indexing.runs", body)
+    frame::with(backend, Negotiate::Initial, || {
+        Some(In::Indexing(indexing::Input::Runs(indexing::RunsInput {
+            scope: frame::scope(project)?,
+            repository_id: frame::lift(repository.map(frame::id))?,
+            states: None,
+            kinds: None,
+            page: frame::page(50, None)?,
+        })))
+    })
 }
 pub fn index_runs_result(
     outcome: QueryOutcome,
@@ -1166,24 +1405,52 @@ pub fn index_repository(
     rebuild: bool,
     section_revision: i64,
 ) -> Vec<u8> {
-    command_frame(
-        backend,
-        if rebuild {
-            "indexing.reindex"
+    frame::with(backend, Negotiate::Initial, || {
+        let repository_id = frame::id(repository)?;
+        let repository_ids = BoundedList(vec![repository_id.clone()]);
+        let expected_source_revision = frame::number(section_revision.max(1))?;
+        let views = ViewSelection::Published {
+            repository_ids: vec![repository_id],
+        };
+        Some(In::Indexing(if rebuild {
+            indexing::Input::Reindex(indexing::ReindexInput {
+                scope: DataScope::Workspace,
+                repository_ids,
+                expected_source_revision,
+                views,
+            })
         } else {
-            "indexing.index"
-        },
-        json!({"scope": {"kind": "Workspace"}, "repositoryIds": [repository],
-            "expectedSourceRevision": section_revision.max(1).to_string(),
-            "views": {"kind": "Published", "repositoryIds": [repository]}}),
-    )
+            indexing::Input::Index(indexing::IndexInput {
+                scope: DataScope::Workspace,
+                repository_ids,
+                expected_source_revision,
+                views,
+            })
+        }))
+    })
 }
 /// `indexing.cancel` of a run (or of every run of the request batch it opened).
 pub fn cancel_index_run(backend: &dyn Backend, run: &str) -> Vec<u8> {
-    json!({"protocol": PROTOCOL, "requestKey": backend.token("rk"),
-        "command": {"kind": "Cancel", "operationId": run}})
-    .to_string()
-    .into_bytes()
+    frame::with(backend, Negotiate::Initial, || {
+        index_command(
+            backend,
+            IndexCommand::Cancel {
+                operation_id: OperationId(frame::id(run)?),
+            },
+        )
+    })
+}
+/// The `indexing.cancel` or `indexing.refresh_overlay` input of one index command.
+fn index_command(backend: &dyn Backend, command: IndexCommand) -> Option<In> {
+    let request = IndexCommandRequest {
+        protocol: frame::protocol(),
+        request_key: frame::request_key(backend)?,
+        command,
+    };
+    Some(In::Indexing(match request.command {
+        IndexCommand::Cancel { .. } => indexing::Input::Cancel(request),
+        _ => indexing::Input::RefreshOverlay(request),
+    }))
 }
 /// `indexing.refresh_overlay` of one worktree.
 pub fn refresh_overlay(
@@ -1192,19 +1459,28 @@ pub fn refresh_overlay(
     worktree: &str,
     section_revision: i64,
 ) -> Vec<u8> {
-    json!({"protocol": PROTOCOL, "requestKey": backend.token("rk"),
-        "command": {"kind": "RefreshOverlay", "repositoryId": repository, "worktreeId": worktree,
-            "expectedSourceRevision": section_revision.max(1).to_string()}})
-    .to_string()
-    .into_bytes()
+    frame::with(backend, Negotiate::Initial, || {
+        index_command(
+            backend,
+            IndexCommand::RefreshOverlay {
+                repository_id: frame::id(repository)?,
+                worktree_id: Some(frame::id(worktree)?),
+                git_ref: None,
+                expected_source_revision: frame::number(section_revision.max(1))?,
+            },
+        )
+    })
 }
 /// `indexing.retire_view` of an overlay at its revision.
 pub fn retire_view(backend: &dyn Backend, view: &str, revision: &str) -> Vec<u8> {
-    command_frame(
-        backend,
-        "indexing.retire_view",
-        json!({"viewId": view, "expectedRevision": revision}),
-    )
+    frame::with(backend, Negotiate::Initial, || {
+        Some(In::Indexing(indexing::Input::RetireView(
+            indexing::RetireViewInput {
+                view_id: frame::id(view)?,
+                expected_revision: frame::text(revision)?,
+            },
+        )))
+    })
 }
 pub fn index_run_result(
     outcome: CommandOutcome,
@@ -1235,25 +1511,32 @@ pub fn configure_sources(
     excludes: &[String],
     max_file_bytes: i64,
 ) -> Vec<u8> {
-    let scope = match project {
-        Some(p) => json!({"kind": "Project", "projectId": p}),
-        None => json!({"kind": "Workspace"}),
-    };
-    command_frame(
-        backend,
-        "indexing.configure_sources",
-        json!({"scope": scope, "expectedRevision": expected_revision.max(1).to_string(), "config": {
-            "structuralLanguages": languages, "semanticPackageIds": packages,
-            "excludePatterns": excludes, "maxFileBytes": max_file_bytes.max(1).to_string()}}),
-    )
+    frame::with(backend, Negotiate::Initial, || {
+        Some(In::Indexing(indexing::Input::ConfigureSources(
+            indexing::ConfigureSourcesInput {
+                scope: frame::scope(project)?,
+                expected_revision: frame::number(expected_revision.max(1))?,
+                config: IndexSourceConfig {
+                    structural_languages: frame::texts(languages)?,
+                    semantic_package_ids: frame::ids(packages)?,
+                    exclude_patterns: frame::texts(excludes)?,
+                    max_file_bytes: frame::number(max_file_bytes.max(1))?,
+                },
+            },
+        )))
+    })
 }
 /// `indexing.discover` of every visible section (the runtime scans before answering).
 pub fn discover(backend: &dyn Backend) -> Vec<u8> {
-    query_frame(
-        backend,
-        "indexing.discover",
-        json!({"scope": {"kind": "Workspace"}, "roots": [], "page": {"limit": PAGE_LIMIT}}),
-    )
+    frame::with(backend, Negotiate::Initial, || {
+        Some(In::Indexing(indexing::Input::Discover(
+            indexing::DiscoverInput {
+                scope: DataScope::Workspace,
+                roots: BoundedList(Vec::new()),
+                page: frame::page(PAGE_LIMIT.into(), None)?,
+            },
+        )))
+    })
 }
 pub fn discover_result(outcome: QueryOutcome) -> Result<(Vec<RepositoryRecord>, bool), Failure> {
     match query_result(outcome)? {
@@ -1265,18 +1548,9 @@ pub fn discover_result(outcome: QueryOutcome) -> Result<(Vec<RepositoryRecord>, 
 // ---------------------------------------------------------------------------------------------
 // Scheduled jobs (JOB-01/02)
 
-/// Jobs records carry their scope, next and last run, status, hold and authorization (and runs
-/// their status, times and reason) from schema revision 2.
-pub const JOBS_REVISION: u64 = 2;
 /// Runs one history page of the Scheduled jobs screen shows.
 pub const RUN_HISTORY_PAGE: u16 = 25;
 
-fn job_scope(project: Option<&str>) -> Value {
-    match project {
-        Some(p) => json!({"kind": "Project", "projectId": p}),
-        None => json!({"kind": "Workspace"}),
-    }
-}
 /// The jobs of one scope (app-level for `None`), at the jobs revision.
 pub fn jobs_list(backend: &dyn Backend, project: Option<&str>) -> Vec<u8> {
     jobs_list_after(backend, project, None)
@@ -1287,18 +1561,13 @@ pub fn jobs_list_after(
     project: Option<&str>,
     cursor: Option<&str>,
 ) -> Vec<u8> {
-    let mut page = json!({"limit": PAGE_LIMIT});
-    if let Some(c) = cursor {
-        page["cursor"] = json!(c);
-    }
-    at_revision(
-        query_frame(
-            backend,
-            "jobs.list",
-            json!({"scope": job_scope(project), "page": page}),
-        ),
-        JOBS_REVISION,
-    )
+    frame::with(backend, Negotiate::Latest, || {
+        Some(In::Jobs(jobs::Input::List(jobs::ListInput {
+            scope: frame::scope(project)?,
+            page: frame::page(PAGE_LIMIT.into(), cursor)?,
+            enabled: None,
+        })))
+    })
 }
 /// A page of jobs with the cursor of the next one.
 pub fn jobs_page(outcome: QueryOutcome) -> Result<(Vec<JobRecord>, Option<String>), Failure> {
@@ -1317,25 +1586,25 @@ pub fn jobs(outcome: QueryOutcome) -> Result<(Vec<JobRecord>, bool), Failure> {
 }
 /// A job with its latest run and a page of its run history (after `cursor`).
 pub fn jobs_inspect(backend: &dyn Backend, job: &str, cursor: Option<&str>) -> Vec<u8> {
-    let mut history = json!({"limit": RUN_HISTORY_PAGE});
-    if let Some(c) = cursor {
-        history["cursor"] = json!(c);
-    }
-    at_revision(
-        query_frame(
-            backend,
-            "jobs.inspect",
-            json!({"jobId": job, "history": history}),
-        ),
-        JOBS_REVISION,
-    )
+    frame::with(backend, Negotiate::Latest, || {
+        Some(In::Jobs(jobs::Input::Inspect(jobs::InspectInput {
+            job_id: frame::id(job)?,
+            run_id: None,
+            history: Some(frame::page(RUN_HISTORY_PAGE.into(), cursor)?),
+            usage: None,
+        })))
+    })
 }
 /// `jobs.inspect` of one named run of `job` (no history page).
 pub fn jobs_inspect_run(backend: &dyn Backend, job: &str, run: &str) -> Vec<u8> {
-    at_revision(
-        query_frame(backend, "jobs.inspect", json!({"jobId": job, "runId": run})),
-        JOBS_REVISION,
-    )
+    frame::with(backend, Negotiate::Latest, || {
+        Some(In::Jobs(jobs::Input::Inspect(jobs::InspectInput {
+            job_id: frame::id(job)?,
+            run_id: Some(frame::id(run)?),
+            history: None,
+            usage: None,
+        })))
+    })
 }
 pub fn job_inspection(outcome: QueryOutcome) -> Result<JobInspection, Failure> {
     match query_result(outcome)? {
@@ -1348,59 +1617,79 @@ pub fn job_create(
     backend: &dyn Backend,
     project: Option<&str>,
     title: &str,
-    schedule: &Value,
-    definition: &Value,
+    schedule: &Schedule,
+    definition: &JobDefinition,
     enabled: bool,
 ) -> Vec<u8> {
-    at_revision(
-        command_frame(
-            backend,
-            "jobs.create",
-            json!({"scope": job_scope(project), "title": title, "schedule": schedule,
-                "definition": definition, "enabled": enabled}),
-        ),
-        JOBS_REVISION,
-    )
+    frame::with(backend, Negotiate::Latest, || {
+        Some(In::Jobs(jobs::Input::Create(jobs::CreateInput {
+            scope: frame::scope(project)?,
+            title: frame::text(title)?,
+            schedule: schedule.clone(),
+            definition: definition.clone(),
+            enabled,
+        })))
+    })
 }
 /// `jobs.edit` at the record's revision (a concurrent change is a revision conflict).
 pub fn job_edit(
     backend: &dyn Backend,
     job: &JobRecord,
     title: &str,
-    schedule: &Value,
-    definition: &Value,
+    schedule: &Schedule,
+    definition: &JobDefinition,
 ) -> Vec<u8> {
-    at_revision(
-        command_frame(
-            backend,
-            "jobs.edit",
-            json!({"jobId": job.id, "expectedRevision": job.revision, "title": title,
-                "schedule": schedule, "definition": definition}),
-        ),
-        JOBS_REVISION,
-    )
+    frame::with(backend, Negotiate::Latest, || {
+        Some(In::Jobs(jobs::Input::Edit(jobs::EditInput {
+            job_id: job.id.clone(),
+            expected_revision: job.revision.clone(),
+            title: frame::text(title)?,
+            schedule: schedule.clone(),
+            definition: definition.clone(),
+        })))
+    })
+}
+/// A command on one job that takes only the job and its revision.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum JobCommand {
+    Enable,
+    Disable,
+    Delete,
+    RunNow,
 }
 /// `jobs.enable`, `.disable`, `.delete` or `.run_now` of a job at its record's revision.
-pub fn job_command(backend: &dyn Backend, operation: &str, job: &JobRecord) -> Vec<u8> {
-    at_revision(
-        command_frame(
-            backend,
-            operation,
-            json!({"jobId": job.id, "expectedRevision": job.revision}),
-        ),
-        JOBS_REVISION,
-    )
+pub fn job_command(backend: &dyn Backend, command: JobCommand, job: &JobRecord) -> Vec<u8> {
+    frame::with(backend, Negotiate::Latest, || {
+        let (job_id, expected_revision) = (job.id.clone(), job.revision.clone());
+        Some(In::Jobs(match command {
+            JobCommand::Enable => jobs::Input::Enable(jobs::EnableInput {
+                job_id,
+                expected_revision,
+            }),
+            JobCommand::Disable => jobs::Input::Disable(jobs::DisableInput {
+                job_id,
+                expected_revision,
+            }),
+            JobCommand::Delete => jobs::Input::Delete(jobs::DeleteInput {
+                job_id,
+                expected_revision,
+            }),
+            JobCommand::RunNow => jobs::Input::RunNow(jobs::RunNowInput {
+                job_id,
+                expected_revision,
+            }),
+        }))
+    })
 }
 /// `jobs.cancel` of one run at the run's revision.
 pub fn job_cancel(backend: &dyn Backend, run: &JobRun) -> Vec<u8> {
-    at_revision(
-        command_frame(
-            backend,
-            "jobs.cancel",
-            json!({"jobId": run.job_id, "runId": run.id, "expectedRevision": run.revision}),
-        ),
-        JOBS_REVISION,
-    )
+    frame::with(backend, Negotiate::Latest, || {
+        Some(In::Jobs(jobs::Input::Cancel(jobs::CancelInput {
+            job_id: run.job_id.clone(),
+            run_id: run.id.clone(),
+            expected_revision: run.revision.clone(),
+        })))
+    })
 }
 /// What a jobs command did, or that a cancellation was accepted (it settles asynchronously).
 pub enum JobChange {
@@ -1431,19 +1720,14 @@ pub fn job_changed(outcome: CommandOutcome) -> Result<JobChange, Failure> {
 // ---------------------------------------------------------------------------------------------
 // Provider connections (DW-18)
 
-/// Current connection/configure revision 3 includes explicit local/free billing policy.
-/// Earlier saved command frames keep their original schema and exact bytes.
-pub const ROUTER_CONNECTIONS_REVISION: u64 = 3;
-
 pub fn router_connections(backend: &dyn Backend, cursor: Option<&str>) -> Vec<u8> {
-    let mut page = json!({"limit": PAGE_LIMIT});
-    if let Some(c) = cursor {
-        page["cursor"] = json!(c);
-    }
-    at_revision(
-        query_frame(backend, "router.connections", json!({"page": page})),
-        ROUTER_CONNECTIONS_REVISION,
-    )
+    frame::with(backend, Negotiate::Latest, || {
+        Some(In::Router(router::Input::Connections(
+            router::ConnectionsInput {
+                page: frame::page(PAGE_LIMIT.into(), cursor)?,
+            },
+        )))
+    })
 }
 /// A page of connections and the cursor of the next one.
 pub fn connection_records(
@@ -1464,14 +1748,13 @@ pub fn connection_records(
 }
 /// The whole query catalog, including availability and logical family targets (revision 3).
 pub fn router_embedding_spaces(backend: &dyn Backend, cursor: Option<&str>) -> Vec<u8> {
-    let mut page = json!({"limit":100});
-    if let Some(cursor) = cursor {
-        page["cursor"] = json!(cursor);
-    }
-    at_revision(
-        query_frame(backend, "router.embedding_spaces", json!({"page":page})),
-        3,
-    )
+    frame::with(backend, Negotiate::Latest, || {
+        Some(In::Router(router::Input::EmbeddingSpaces(
+            router::EmbeddingSpacesInput {
+                page: frame::page(100, cursor)?,
+            },
+        )))
+    })
 }
 pub fn embedding_space_page(
     outcome: QueryOutcome,
@@ -1489,23 +1772,16 @@ pub fn embedding_space_page(
     }
 }
 pub fn router_catalog_all(backend: &dyn Backend, cursor: Option<&str>) -> Vec<u8> {
-    let mut page = json!({"limit": PAGE_LIMIT});
-    if let Some(c) = cursor {
-        page["cursor"] = json!(c);
-    }
-    at_revision(
-        query_frame(
-            backend,
-            "router.catalog",
-            json!({"page": page, "includeDisabled": true}),
-        ),
-        3,
-    )
+    frame::with(backend, Negotiate::Latest, || router_catalog_input(cursor))
 }
-pub fn router_configure(backend: &dyn Backend, action: Value) -> Vec<u8> {
-    at_revision(
-        command_frame(backend, "router.configure", json!({"action": action})),
-        ROUTER_CONNECTIONS_REVISION,
+/// A `router.configure` command at the newest schema revision.
+pub fn router_configure(backend: &dyn Backend, action: RouterConfigAction) -> Vec<u8> {
+    frame::build(
+        backend,
+        Negotiate::Latest,
+        Some(In::Router(router::Input::Configure(
+            router::ConfigureInput { action },
+        ))),
     )
 }
 /// Whether `router.configure` changed something (`Applied`) or found it as asked (`NoChange`).
@@ -1541,11 +1817,12 @@ pub fn git_inspect_worktree(
     repository: &str,
     worktree: Option<&str>,
 ) -> Vec<u8> {
-    let mut frame = json!({"mode":"Query","protocol":PROTOCOL,"queryId":backend.token("q"),"body":{"kind":"git.inspect","repositoryId":repository}});
-    if let Some(worktree) = worktree {
-        frame["body"]["worktreeId"] = json!(worktree);
-    }
-    frame.to_string().into_bytes()
+    frame::with(backend, Negotiate::Initial, || {
+        Some(In::Git(git::Input::Inspect(git::InspectInput {
+            repository_id: frame::id(repository)?,
+            worktree_id: frame::lift(worktree.map(frame::id))?,
+        })))
+    })
 }
 pub fn git_inspected(
     outcome: QueryOutcome,
@@ -1556,8 +1833,24 @@ pub fn git_inspected(
     }
 }
 pub fn git_diff(backend: &dyn Backend, repository: &str, base: &str, head: &str) -> Vec<u8> {
-    let oid = |hex: &str| json!({"format":if hex.len()==64 {"Sha256"} else {"Sha1"},"hex":hex});
-    json!({"mode":"Query","protocol":PROTOCOL,"queryId":backend.token("q"),"body":{"kind":"git.diff","repositoryId":repository,"base":oid(base),"head":oid(head),"paths":[],"page":{"limit":1}}}).to_string().into_bytes()
+    frame::with(backend, Negotiate::Initial, || {
+        let oid = |hex: &str| GitOid {
+            format: if hex.len() == 64 {
+                ObjectFormat::Sha256
+            } else {
+                ObjectFormat::Sha1
+            },
+            hex: hex.into(),
+        };
+        Some(In::Git(git::Input::Diff(git::DiffInput {
+            repository_id: frame::id(repository)?,
+            worktree_id: None,
+            base: oid(base),
+            head: oid(head),
+            paths: BoundedList(Vec::new()),
+            page: frame::page(1, None)?,
+        })))
+    })
 }
 pub fn git_patch(outcome: QueryOutcome) -> Result<Option<ArtifactRef>, Failure> {
     match query_result(outcome)? {

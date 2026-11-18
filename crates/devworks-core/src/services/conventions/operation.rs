@@ -12,10 +12,10 @@ use crate::{
         records::*,
         results::{DomainDecision, OperationResult},
     },
-    services::sessions::{Failure, counter, rev},
+    services::kernel::{Failure, counter, rev},
 };
 fn missing(id: &OperationId) -> Failure {
-    crate::services::sessions::not_found("convention_operation", &id.0).into()
+    crate::services::kernel::not_found("convention_operation", &id.0).into()
 }
 fn private(ctx: &InvocationContext, job: &IndexJob) -> bool {
     ctx.principal() == &job.actor

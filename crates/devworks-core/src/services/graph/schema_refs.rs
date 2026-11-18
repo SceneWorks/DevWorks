@@ -8,7 +8,7 @@ use crate::ports::storage::*;
 use crate::protocol::Id;
 use crate::protocol::data::DataScope;
 use crate::services::indexing::views;
-use crate::services::sessions::Failure;
+use crate::services::kernel::Failure;
 
 /// One use of a table (or one of its columns) by a code definition, with its evidence.
 #[derive(Clone, Debug, PartialEq)]

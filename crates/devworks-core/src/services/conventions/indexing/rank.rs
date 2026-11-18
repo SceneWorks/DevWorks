@@ -3,6 +3,12 @@
 use std::collections::BTreeMap;
 
 /// CodeGraph's [a-z0-9][a-z0-9_-]* tokenizer, independently of SQLite unicode61 rules.
+///
+/// One of three tokenizers that differ on purpose. This one is ASCII-only and keeps `_` and `-`
+/// inside a token because the Conventions BM25 statistics are retained to match CodeGraph's; it
+/// must not follow Unicode word rules. Knowledge search uses `knowledge::model::words`, which
+/// splits exactly where SQLite's FTS5 `unicode61` tokenizer does because Knowledge matches
+/// through FTS5. The SQL code index lexes SQL source (`index::domain::sql::tokenize`).
 pub fn tokens(text: &str) -> impl Iterator<Item = String> + '_ {
     let mut chars = text.chars().flat_map(char::to_lowercase).peekable();
     std::iter::from_fn(move || {

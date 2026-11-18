@@ -1,11 +1,17 @@
 //! Repository graph presentation. Scope, source, ranking and eligibility come from the owner.
 use crate::{
+    frame,
+    graph_ops::Query,
     theme,
     widgets::{self, Tone},
 };
 use devworks_core::protocol::{
-    data::{GraphPage, GraphResult, ResolvedViewSet},
+    Id,
+    data::{
+        DataScope, Direction, GraphPage, GraphQuery, GraphResult, ResolvedViewSet, ViewSelection,
+    },
     records::*,
+    support::{Depth, RelativePath},
 };
 use eframe::egui::{self, RichText, Ui};
 use serde_json::{Value, json};
@@ -15,7 +21,8 @@ use std::collections::{BTreeMap, BTreeSet};
 pub struct Read {
     pub operation: &'static str,
     pub title: String,
-    pub query: Value,
+    /// What the read asks for; `None` when the screen's input did not convert into a request.
+    pub query: Option<Query>,
     pub cursors: Vec<Option<String>>,
     pub page: Option<GraphPage>,
     pub module_pages: Vec<(Option<String>, GraphPage)>,
@@ -29,7 +36,7 @@ pub struct Breadcrumb {
     pub tab: usize,
 }
 impl Read {
-    pub fn new(operation: &'static str, title: impl Into<String>, query: Value) -> Self {
+    pub fn new(operation: &'static str, title: impl Into<String>, query: Option<Query>) -> Self {
         Self {
             operation,
             title: title.into(),
@@ -39,6 +46,77 @@ impl Read {
             module_pages: Vec::new(),
         }
     }
+    /// A `code.*` read of `query`.
+    fn code(operation: &'static str, title: &str, query: Option<GraphQuery>) -> Self {
+        Self::new(operation, title, query.map(Query::Code))
+    }
+    /// A repository's overview.
+    pub fn overview(repository: &str) -> Self {
+        Self::code("code.overview", "Overview", overview(Some(repository)))
+    }
+    /// A repository's dependencies.
+    pub fn dependencies(repository: &str) -> Self {
+        Self::code(
+            "code.repository_dependencies",
+            "Dependencies",
+            dependencies(repository),
+        )
+    }
+    /// One node's details.
+    pub fn node(title: &str, node_id: &str) -> Self {
+        Self::code(
+            "code.node_detail",
+            title,
+            frame::id(node_id).map(|node_id| GraphQuery::Node { node_id }),
+        )
+    }
+    /// A repository's nodes, narrowed by module and kind.
+    pub fn nodes(repository: &str, module: Option<&str>, kind: Option<&str>) -> Self {
+        let query = (|| {
+            Some(Query::Nodes {
+                repository_id: frame::id(repository)?,
+                node_kind: frame::lift(kind.map(frame::text))?,
+                internal_module: frame::lift(module.map(frame::text))?,
+            })
+        })();
+        Self::new("repositories.nodes", "Nodes", query)
+    }
+    /// The captured README file of a repository.
+    pub fn readme(repository_id: &Id, unit_key: &RelativePath) -> Self {
+        Self::code(
+            "code.source",
+            "README",
+            file_source(repository_id.clone(), unit_key.clone(), 0, 0),
+        )
+    }
+}
+
+/// The trimmed text, unless it is empty.
+fn present(text: &str) -> Option<&str> {
+    Some(text.trim()).filter(|t| !t.is_empty())
+}
+fn overview(repository: Option<&str>) -> Option<GraphQuery> {
+    Some(GraphQuery::Overview {
+        repository_id: frame::lift(repository.map(frame::id))?,
+    })
+}
+fn dependencies(repository: &str) -> Option<GraphQuery> {
+    Some(GraphQuery::RepositoryDependencies {
+        repository_id: frame::id(repository)?,
+    })
+}
+/// A read of lines `start..=end` of one file (`0..=0` reads the whole file).
+fn file_source(repository_id: Id, path: RelativePath, start: i64, end: i64) -> Option<GraphQuery> {
+    Some(GraphQuery::Source {
+        node_id: None,
+        max_lines: None,
+        selection: Some(CodeSourceSelection::File {
+            repository_id,
+            path,
+            start_line: frame::number(start)?,
+            end_line: frame::number(end)?,
+        }),
+    })
 }
 #[derive(Default)]
 pub struct GraphScreen {
@@ -177,48 +255,309 @@ fn optional(ui: &mut Ui, label: &str, text: Option<&str>) {
 }
 
 impl GraphScreen {
-    pub fn view(&self) -> Option<Value> {
+    /// The navigation's project changed: the open graph belongs to the old one.
+    pub(crate) fn project_changed(&mut self) {
+        self.opened = false;
+        self.sequence = self.sequence.wrapping_add(1);
+        self.loading = false;
+    }
+    /// The view the reads name: `Some(None)` is the current view, and `None` is a selection
+    /// that does not convert into a request.
+    pub fn view(&self) -> Option<Option<ViewSelection>> {
+        let ids = |set: &BTreeSet<String>| {
+            set.iter()
+                .map(|id| frame::id(id))
+                .collect::<Option<Vec<_>>>()
+        };
         if let Some(pin) = &self.pin {
-            return Some(json!({"kind":"Pinned","pinId":pin.pin_id}));
+            return Some(Some(ViewSelection::Pinned {
+                pin_id: pin.pin_id.clone(),
+            }));
         }
         match self.view_mode {
-            1 => Some(json!({"kind":"Published","repositoryIds":self.published_repositories})),
-            2 => Some(json!({"kind":"Exact","viewIds":self.exact_views})),
-            _ => None,
+            1 => Some(Some(ViewSelection::Published {
+                repository_ids: ids(&self.published_repositories)?,
+            })),
+            2 => Some(Some(ViewSelection::Exact {
+                view_ids: ids(&self.exact_views)?,
+            })),
+            _ => Some(None),
         }
     }
-    pub fn scope(&self) -> Value {
-        self.project.as_ref().map_or(
-            json!({"kind":"Workspace"}),
-            |id| json!({"kind":"Project","projectId":id}),
-        )
+    /// The scope the reads name; `None` when the project does not convert into a request.
+    pub fn scope(&self) -> Option<DataScope> {
+        frame::scope(self.project.as_deref())
     }
     pub fn nodes(&self) -> Read {
-        let mut query = json!({"repositoryId":self.repository});
-        if !self.node_kind.trim().is_empty() {
-            query["nodeKind"] = json!(self.node_kind.trim());
-        }
-        if !self.module.trim().is_empty() {
-            query["internalModule"] = json!(self.module.trim());
-        }
-        Read::new("repositories.nodes", "Nodes", query)
+        Read::nodes(
+            &self.repository,
+            present(&self.module),
+            present(&self.node_kind),
+        )
     }
-    fn target(&self) -> Option<Value> {
+    /// Whether a target is chosen: a typed name, or else the selected node.
+    fn has_target(&self) -> bool {
+        !self.target_name.trim().is_empty() || self.selected.is_some()
+    }
+    fn target(&self) -> Option<CodeNodeSelection> {
         if !self.target_name.trim().is_empty() {
-            let mut target = json!({"kind":"Name","name":self.target_name.trim()});
-            if !self.target_all {
-                target["repositoryId"] = json!(self.repository);
-            }
-            Some(target)
+            Some(CodeNodeSelection::Name {
+                name: frame::text(self.target_name.trim())?,
+                repository_id: if self.target_all {
+                    None
+                } else {
+                    Some(frame::id(&self.repository)?)
+                },
+            })
         } else {
-            self.selected
-                .as_ref()
-                .map(|n| json!({"kind":"Node","nodeId":n.node_id}))
+            self.selected.as_ref().map(|n| CodeNodeSelection::Node {
+                node_id: n.node_id.clone(),
+            })
         }
     }
     fn source(&self, whole: bool) -> Option<Read> {
-        self.selected.as_ref().filter(|node|node.source.is_some()).map(|node|
-            Read::new("code.source",if whole{"Whole file"}else{"Source"},json!({"kind":"Source","selection":{"kind":"Node","nodeId":node.node_id,"mode":if whole{"WholeFile"}else{"NodeWindow"}}})))
+        self.selected
+            .as_ref()
+            .filter(|node| node.source.is_some())
+            .map(|node| {
+                Read::code(
+                    "code.source",
+                    if whole { "Whole file" } else { "Source" },
+                    Some(GraphQuery::Source {
+                        node_id: None,
+                        max_lines: None,
+                        selection: Some(CodeSourceSelection::Node {
+                            node_id: node.node_id.clone(),
+                            mode: if whole {
+                                CodeSourceMode::WholeFile
+                            } else {
+                                CodeSourceMode::NodeWindow
+                            },
+                        }),
+                    }),
+                )
+            })
+    }
+    /// The Search graph button's read.
+    pub fn search_read(&self) -> Read {
+        let selection = (|| {
+            let text = self.filter.trim();
+            Some(CodeSearchSelection {
+                mode: [
+                    CodeSearchMode::RankedNodes,
+                    CodeSearchMode::NodeList,
+                    CodeSearchMode::Unified,
+                ][self.search_mode]
+                    .clone(),
+                text: frame::text(if text.is_empty() { "*" } else { text })?,
+                repository_id: if self.search_all {
+                    None
+                } else {
+                    Some(frame::id(&self.repository)?)
+                },
+                node_kind: frame::lift(present(&self.node_kind).map(frame::text))?,
+                internal_module: frame::lift(present(&self.module).map(frame::text))?,
+            })
+        })();
+        Read::code(
+            "code.search",
+            "Search results",
+            selection.map(|selection| GraphQuery::Search {
+                text: None,
+                node_kinds: None,
+                selection: Some(selection),
+            }),
+        )
+    }
+    /// The scope-wide read buttons.
+    pub fn scope_reads(&self) -> Vec<Read> {
+        vec![
+            Read::code("code.overview", "Captured scope overview", overview(None)),
+            Read::code(
+                "code.architecture",
+                "Repository architecture",
+                overview(Some(&self.repository)),
+            ),
+            Read::code(
+                "code.repository_dependencies",
+                "Dependencies",
+                dependencies(&self.repository),
+            ),
+            Read::code(
+                "code.graph_schema",
+                "Graph schema",
+                Some(GraphQuery::Schema),
+            ),
+            Read::code(
+                "code.graph_scope_status",
+                "Index coverage",
+                Some(GraphQuery::ScopeStatus),
+            ),
+        ]
+    }
+    /// The call, impact and data flow reads of the chosen target.
+    pub fn target_reads(&self) -> Vec<Read> {
+        let target = self.target();
+        let depth = Depth::new(u32::from(self.depth));
+        let direction = [
+            CodeTraceDirection::Inbound,
+            CodeTraceDirection::Outbound,
+            CodeTraceDirection::Both,
+        ][self.direction]
+            .clone();
+        let query =
+            |make: &dyn Fn(CodeNodeSelection) -> Option<GraphQuery>| target.clone().and_then(make);
+        vec![
+            Read::code(
+                "code.call_path",
+                "Calls",
+                query(&|target| {
+                    Some(GraphQuery::Path {
+                        from_id: None,
+                        to_id: None,
+                        max_depth: None,
+                        selection: Some(CodeCallSelection {
+                            target,
+                            direction: direction.clone(),
+                            depth: depth.clone()?,
+                        }),
+                    })
+                }),
+            ),
+            Read::code(
+                "code.impact",
+                "Impact",
+                query(&|target| {
+                    Some(GraphQuery::NodeImpact {
+                        node_id: None,
+                        selection: Some(CodeImpactSelection {
+                            target,
+                            depth: depth.clone()?,
+                        }),
+                    })
+                }),
+            ),
+            Read::code(
+                "code.data_lineage",
+                "Data lineage",
+                query(&|selection| {
+                    Some(GraphQuery::DataLineage {
+                        node_id: None,
+                        selection: Some(selection),
+                    })
+                }),
+            ),
+            Read::code(
+                "code.consumers",
+                "Consumers",
+                query(&|selection| {
+                    Some(GraphQuery::Consumers {
+                        node_id: None,
+                        selection: Some(selection),
+                    })
+                }),
+            ),
+            Read::code(
+                "code.publishers",
+                "Publishers",
+                query(&|selection| {
+                    Some(GraphQuery::Publishers {
+                        node_id: None,
+                        selection: Some(selection),
+                    })
+                }),
+            ),
+        ]
+    }
+    /// The relationship read (`code.traverse` or `code.dependency`) from the selected node.
+    pub fn traverse_read(&self, operation: &'static str, label: &str, node: &CodeNode) -> Read {
+        let query = (|| {
+            Some(GraphQuery::Traverse {
+                start_ids: vec![node.node_id.clone()],
+                direction: [Direction::Reverse, Direction::Forward, Direction::Both]
+                    [self.direction]
+                    .clone(),
+                edge_kinds: self
+                    .edge_kind
+                    .split(',')
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                    .map(frame::id)
+                    .collect::<Option<Vec<_>>>()?,
+                max_depth: self.relationship_depth,
+            })
+        })();
+        Read::code(operation, label, query)
+    }
+    fn line_window(&self) -> Option<(u64, u64)> {
+        let (a, b) = (
+            self.line_start.parse::<u64>().ok()?,
+            self.line_end.parse::<u64>().ok()?,
+        );
+        (a > 0 && b >= a).then_some((a, b))
+    }
+    fn node_line(&self) -> Option<u64> {
+        self.file_node_line.parse::<u64>().ok()
+    }
+    fn node_line_valid(&self) -> bool {
+        self.file_node_line.trim().is_empty() || self.node_line().is_some_and(|line| line > 0)
+    }
+    /// The source file reads, each with whether the entered lines allow it.
+    pub fn file_reads(&self) -> Vec<(Read, bool)> {
+        let (start, end) = self.line_window().unwrap_or((0, 0));
+        let source = |start: u64, end: u64| {
+            let (start, end) = (i64::try_from(start).ok()?, i64::try_from(end).ok()?);
+            file_source(
+                frame::id(&self.repository)?,
+                frame::text(&self.file)?,
+                start,
+                end,
+            )
+        };
+        let selection = |line: Option<u64>, depth: Option<u32>| {
+            Some(CodeFileSelection {
+                repository_id: frame::id(&self.repository)?,
+                path: frame::text(&self.file)?,
+                line: frame::lift(line.map(|line| frame::text(&line.to_string())))?,
+                depth: frame::lift(depth.map(Depth::new))?,
+            })
+        };
+        vec![
+            (
+                Read::code("code.source", "Read whole source file", source(0, 0)),
+                true,
+            ),
+            (
+                Read::code("code.source", "Read line window", source(start, end)),
+                self.line_window().is_some(),
+            ),
+            (
+                Read::code(
+                    "code.nodes_by_file",
+                    "Nodes in file",
+                    selection(self.node_line(), None).map(|selection| GraphQuery::NodesByFile {
+                        repository_id: None,
+                        unit_key: None,
+                        selection: Some(selection),
+                    }),
+                ),
+                self.node_line_valid(),
+            ),
+            (
+                Read::code(
+                    "code.file_impact",
+                    "File impact",
+                    selection(None, Some(u32::from(self.depth))).map(|selection| {
+                        GraphQuery::FileImpact {
+                            repository_id: None,
+                            unit_key: None,
+                            selection: Some(selection),
+                        }
+                    }),
+                ),
+                true,
+            ),
+        ]
     }
     pub fn ui(&mut self, ui: &mut Ui, online: bool, actions: &mut Vec<Action>) {
         let title = self.name.clone();
@@ -247,9 +586,9 @@ impl GraphScreen {
                 if tab != state.tab {
                     state.tab = tab;
                     match tab {
-                        0=>actions.push(Action::Read(Read::new("code.overview","Overview",json!({"kind":"Overview","repositoryId":state.repository})))),
+                        0=>actions.push(Action::Read(Read::overview(&state.repository))),
                         1=>actions.push(Action::Read(state.nodes())),
-                        2=>actions.push(Action::Read(Read::new("code.repository_dependencies","Dependencies",json!({"kind":"RepositoryDependencies","repositoryId":state.repository})))),
+                        2=>actions.push(Action::Read(Read::dependencies(&state.repository))),
                         _=>{}
                     }
                 }
@@ -443,56 +782,46 @@ impl GraphScreen {
                 }
             });
         }
-        ui.horizontal_wrapped(|ui|{
-            field(ui,"Find code",&mut self.filter,"Name or symbol");
-            egui::ComboBox::from_label("Search format").selected_text(["Ranked nodes","Node list","Repositories and nodes"][self.search_mode]).show_ui(ui,|ui|{
-                for(i,label)in["Ranked nodes","Node list","Repositories and nodes"].iter().enumerate(){ui.selectable_value(&mut self.search_mode,i,*label);}
-            });
-            ui.checkbox(&mut self.search_all,"Search the captured scope");
-            field(ui,"Node kind",&mut self.node_kind,"All kinds");
-            field(ui,"Internal module",&mut self.module,"All modules");
-            if ui.add_enabled(online&&!self.loading,egui::Button::new("Search graph")).clicked(){
-                let mut selection=json!({"mode":(["RankedNodes","NodeList","Unified"][self.search_mode]),"text":if self.filter.trim().is_empty(){"*"}else{self.filter.trim()}});
-                if !self.search_all {selection["repositoryId"]=json!(self.repository);}
-                if !self.node_kind.trim().is_empty(){selection["nodeKind"]=json!(self.node_kind.trim());}
-                if !self.module.trim().is_empty(){selection["internalModule"]=json!(self.module.trim());}
-                actions.push(Action::Read(Read::new("code.search","Search results",json!({"kind":"Search","selection":selection}))));
+        ui.horizontal_wrapped(|ui| {
+            field(ui, "Find code", &mut self.filter, "Name or symbol");
+            egui::ComboBox::from_label("Search format")
+                .selected_text(
+                    ["Ranked nodes", "Node list", "Repositories and nodes"][self.search_mode],
+                )
+                .show_ui(ui, |ui| {
+                    for (i, label) in ["Ranked nodes", "Node list", "Repositories and nodes"]
+                        .iter()
+                        .enumerate()
+                    {
+                        ui.selectable_value(&mut self.search_mode, i, *label);
+                    }
+                });
+            ui.checkbox(&mut self.search_all, "Search the captured scope");
+            field(ui, "Node kind", &mut self.node_kind, "All kinds");
+            field(ui, "Internal module", &mut self.module, "All modules");
+            if ui
+                .add_enabled(online && !self.loading, egui::Button::new("Search graph"))
+                .clicked()
+            {
+                actions.push(Action::Read(self.search_read()));
             }
-            if ui.add_enabled(online&&!self.loading,egui::Button::new("Browse nodes")).clicked(){actions.push(Action::Read(self.nodes()));}
+            if ui
+                .add_enabled(online && !self.loading, egui::Button::new("Browse nodes"))
+                .clicked()
+            {
+                actions.push(Action::Read(self.nodes()));
+            }
         });
         ui.horizontal_wrapped(|ui| {
-            for (label, op, query) in [
-                (
-                    "Captured scope overview",
-                    "code.overview",
-                    json!({"kind":"Overview"}),
-                ),
-                (
-                    "Repository architecture",
-                    "code.architecture",
-                    json!({"kind":"Overview","repositoryId":self.repository}),
-                ),
-                (
-                    "Dependencies",
-                    "code.repository_dependencies",
-                    json!({"kind":"RepositoryDependencies","repositoryId":self.repository}),
-                ),
-                (
-                    "Graph schema",
-                    "code.graph_schema",
-                    json!({"kind":"Schema"}),
-                ),
-                (
-                    "Index coverage",
-                    "code.graph_scope_status",
-                    json!({"kind":"ScopeStatus"}),
-                ),
-            ] {
+            for read in self.scope_reads() {
                 if ui
-                    .add_enabled(online && !self.loading, egui::Button::new(label))
+                    .add_enabled(
+                        online && !self.loading,
+                        egui::Button::new(read.title.clone()),
+                    )
                     .clicked()
                 {
-                    actions.push(Action::Read(Read::new(op, label, query)));
+                    actions.push(Action::Read(read));
                 }
             }
         });
@@ -539,58 +868,106 @@ impl GraphScreen {
                 }
             });
         }
-        egui::CollapsingHeader::new("Explore calls, impact and data flow").show(ui,|ui|{
-            ui.horizontal_wrapped(|ui|{
-                field(ui,"Target name",&mut self.target_name,"Use selected node when empty");
-                ui.checkbox(&mut self.target_all,"Find target in captured scope");
-                let depth_label=ui.label("Call and impact depth");
-                ui.add(egui::DragValue::new(&mut self.depth).range(0..=32)).labelled_by(depth_label.id);
-                let relationship_label=ui.label("Relationship depth");
-                ui.add(egui::DragValue::new(&mut self.relationship_depth).range(0..=128)).labelled_by(relationship_label.id);
-                egui::ComboBox::from_label("Call direction").selected_text(["Callers","Callees","Both directions"][self.direction]).show_ui(ui,|ui|{
-                    for(i,label)in ["Callers","Callees","Both directions"].iter().enumerate(){ui.selectable_value(&mut self.direction,i,*label);}
-                });
-                field(ui,"Relationship kind",&mut self.edge_kind,"All relationships");
+        egui::CollapsingHeader::new("Explore calls, impact and data flow").show(ui, |ui| {
+            ui.horizontal_wrapped(|ui| {
+                field(
+                    ui,
+                    "Target name",
+                    &mut self.target_name,
+                    "Use selected node when empty",
+                );
+                ui.checkbox(&mut self.target_all, "Find target in captured scope");
+                let depth_label = ui.label("Call and impact depth");
+                ui.add(egui::DragValue::new(&mut self.depth).range(0..=32))
+                    .labelled_by(depth_label.id);
+                let relationship_label = ui.label("Relationship depth");
+                ui.add(egui::DragValue::new(&mut self.relationship_depth).range(0..=128))
+                    .labelled_by(relationship_label.id);
+                egui::ComboBox::from_label("Call direction")
+                    .selected_text(["Callers", "Callees", "Both directions"][self.direction])
+                    .show_ui(ui, |ui| {
+                        for (i, label) in
+                            ["Callers", "Callees", "Both directions"].iter().enumerate()
+                        {
+                            ui.selectable_value(&mut self.direction, i, *label);
+                        }
+                    });
+                field(
+                    ui,
+                    "Relationship kind",
+                    &mut self.edge_kind,
+                    "All relationships",
+                );
             });
-            let target=self.target();
-            ui.horizontal_wrapped(|ui|{
-                for (label,op,query) in [
-                    ("Calls","code.call_path",json!({"kind":"Path","selection":{"target":target,"direction":(["Inbound","Outbound","Both"][self.direction]),"depth":self.depth}})),
-                    ("Impact","code.impact",json!({"kind":"NodeImpact","selection":{"target":target,"depth":self.depth}})),
-                    ("Data lineage","code.data_lineage",json!({"kind":"DataLineage","selection":target})),
-                    ("Consumers","code.consumers",json!({"kind":"Consumers","selection":target})),
-                    ("Publishers","code.publishers",json!({"kind":"Publishers","selection":target})),
-                ]{if ui.add_enabled(online&&!self.loading&&target.is_some(),egui::Button::new(label)).clicked(){actions.push(Action::Read(Read::new(op,label,query)));}}
-                for(label,op)in [("Relationships","code.traverse"),("Node dependencies","code.dependency")] {
-                    if ui.add_enabled(online&&!self.loading&&self.selected.is_some(),egui::Button::new(label)).clicked(){
-                        let node=self.selected.as_ref().expect("enabled selected node");
-                        let kinds:Vec<&str>=self.edge_kind.split(',').map(str::trim).filter(|s|!s.is_empty()).collect();
-                        actions.push(Action::Read(Read::new(op,label,json!({"kind":"Traverse","startIds":[node.node_id],"direction":(["Reverse","Forward","Both"][self.direction]),"edgeKinds":kinds,"maxDepth":self.relationship_depth}))));
+            let target_ready = self.has_target();
+            ui.horizontal_wrapped(|ui| {
+                for read in self.target_reads() {
+                    if ui
+                        .add_enabled(
+                            online && !self.loading && target_ready,
+                            egui::Button::new(read.title.clone()),
+                        )
+                        .clicked()
+                    {
+                        actions.push(Action::Read(read));
+                    }
+                }
+                for (label, op) in [
+                    ("Relationships", "code.traverse"),
+                    ("Node dependencies", "code.dependency"),
+                ] {
+                    if ui
+                        .add_enabled(
+                            online && !self.loading && self.selected.is_some(),
+                            egui::Button::new(label),
+                        )
+                        .clicked()
+                    {
+                        let node = self.selected.as_ref().expect("enabled selected node");
+                        actions.push(Action::Read(self.traverse_read(op, label, node)));
                     }
                 }
             });
         });
-        egui::CollapsingHeader::new("Explore a source file").show(ui,|ui|{
-            ui.horizontal_wrapped(|ui|{
-                field(ui,"Source file",&mut self.file,"Repository-relative path");
-                field(ui,"First source line",&mut self.line_start,"1");
-                field(ui,"Last source line",&mut self.line_end,"200");
-                field(ui,"Node at line",&mut self.file_node_line,"Optional: all nodes when empty");
-                let start=self.line_start.parse::<u64>().ok();let end=self.line_end.parse::<u64>().ok();
-                let valid=matches!((start,end),(Some(a),Some(b))if a>0&&b>=a);
-                if !valid {widgets::caption(ui,"Enter a positive first line and a last line at or after it.");}
-                let(start,end)=(start.unwrap_or(0),end.unwrap_or(0));
-                let node_line=self.file_node_line.parse::<u64>().ok();
-                let mut file_selection=json!({"repositoryId":self.repository,"path":self.file});
-                if let Some(line)=node_line {file_selection["line"]=json!(line.to_string());}
-                let valid_node_line=self.file_node_line.trim().is_empty()||node_line.is_some_and(|line|line>0);
-                if !valid_node_line {widgets::caption(ui,"Enter a positive node line, or leave it empty to list the file's nodes.");}
-                for(label,op,query,valid)in [
-                    ("Read whole source file","code.source",json!({"kind":"Source","selection":{"kind":"File","repositoryId":self.repository,"path":self.file,"startLine":"0","endLine":"0"}}),true),
-                    ("Read line window","code.source",json!({"kind":"Source","selection":{"kind":"File","repositoryId":self.repository,"path":self.file,"startLine":start.to_string(),"endLine":end.to_string()}}),valid),
-                    ("Nodes in file","code.nodes_by_file",json!({"kind":"NodesByFile","selection":file_selection}),valid_node_line),
-                    ("File impact","code.file_impact",json!({"kind":"FileImpact","selection":{"repositoryId":self.repository,"path":self.file,"depth":self.depth}}),true),
-                ]{if ui.add_enabled(online&&!self.loading&&!self.file.trim().is_empty()&&valid,egui::Button::new(label)).clicked(){actions.push(Action::Read(Read::new(op,label,query)));}}
+        egui::CollapsingHeader::new("Explore a source file").show(ui, |ui| {
+            ui.horizontal_wrapped(|ui| {
+                field(
+                    ui,
+                    "Source file",
+                    &mut self.file,
+                    "Repository-relative path",
+                );
+                field(ui, "First source line", &mut self.line_start, "1");
+                field(ui, "Last source line", &mut self.line_end, "200");
+                field(
+                    ui,
+                    "Node at line",
+                    &mut self.file_node_line,
+                    "Optional: all nodes when empty",
+                );
+                if self.line_window().is_none() {
+                    widgets::caption(
+                        ui,
+                        "Enter a positive first line and a last line at or after it.",
+                    );
+                }
+                if !self.node_line_valid() {
+                    widgets::caption(
+                        ui,
+                        "Enter a positive node line, or leave it empty to list the file's nodes.",
+                    );
+                }
+                for (read, valid) in self.file_reads() {
+                    if ui
+                        .add_enabled(
+                            online && !self.loading && !self.file.trim().is_empty() && valid,
+                            egui::Button::new(read.title.clone()),
+                        )
+                        .clicked()
+                    {
+                        actions.push(Action::Read(read));
+                    }
+                }
             });
         });
         ui.separator();
@@ -1253,7 +1630,10 @@ fn render(
                 ui.heading(&repo.name.0);
                 if let Some(source) = &repo.readme_source {
                     if ui.button("Read captured README").clicked() {
-                        actions.push(Action::Read(Read::new("code.source","README",json!({"kind":"Source","selection":{"kind":"File","repositoryId":repo.repository_id,"path":source.unit_key,"startLine":"0","endLine":"0"}}))));
+                        actions.push(Action::Read(Read::readme(
+                            &repo.repository_id,
+                            &source.unit_key,
+                        )));
                     }
                 } else {
                     widgets::caption(ui, "No README was captured in this repository view.");

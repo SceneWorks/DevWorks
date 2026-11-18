@@ -12,7 +12,7 @@ use super::{
 };
 use crate::ports::storage::*;
 use crate::protocol::{Id, data::GraphResult};
-use crate::services::sessions::Failure;
+use crate::services::kernel::Failure;
 use serde_json::{Value, json};
 
 /// Only actual captured metadata from the selected repository view is returned.

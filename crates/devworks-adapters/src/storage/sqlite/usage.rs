@@ -1,30 +1,21 @@
 //! Canonical attempt accounting. SQL sums canonical balances; legacy source facts remain separate.
 use super::conn::db;
 use super::repos::{Snapshot, Unit};
+use super::support::{atomic, conflict, corrupt, invalid, page_limit, stored_name};
 use devworks_core::ports::storage::*;
-use devworks_core::protocol::{Id, Revision, RevisionDimension};
+use devworks_core::ports::usage::CostClassification;
+use devworks_core::protocol::{Id, RevisionDimension};
 use rusqlite::types::Value as Sql;
 use rusqlite::{Connection, Row, params, params_from_iter};
 use serde::{Serialize, de::DeserializeOwned};
 use serde_json::{Map, Value};
-fn invalid(s: impl Into<String>) -> StorageError {
-    StorageError::InvalidRecord(s.into())
-}
-fn corrupt(s: impl Into<String>) -> StorageError {
-    StorageError::unavailable(Unavailable::Corrupt, s)
-}
-fn conflict(key: &str, e: i64, c: i64) -> StorageError {
-    StorageError::conflict(
-        RevisionDimension::Configuration,
-        "usage",
-        Id::new(key).unwrap_or_else(|_| Id::new("usage").expect("literal")),
-        Revision::new(e.max(1)).expect("positive"),
-        Revision::new(c.max(1)).expect("positive"),
-    )
-}
 fn field<T: DeserializeOwned>(v: &Value, k: &str) -> Result<T, StorageError> {
     serde_json::from_value(v[k].clone())
         .map_err(|_| corrupt(format!("invalid stored usage field {k}")))
+}
+fn name_field<T>(v: &Value, k: &str, parse: fn(&str) -> Option<T>) -> Result<T, StorageError> {
+    let name: String = field(v, k)?;
+    stored_name(k, &name, parse)
 }
 fn doc(r: &Row<'_>) -> rusqlite::Result<Value> {
     let mut m = Map::new();
@@ -79,13 +70,6 @@ fn sql<T: Serialize>(v: &T) -> Result<Sql, StorageError> {
         v => Ok(Sql::Text(v.to_string())),
     }
 }
-fn page(n: u16) -> Result<i64, StorageError> {
-    if n == 0 || n > MAX_PAGE {
-        Err(invalid("usage page limit must be 1..=MAX_PAGE"))
-    } else {
-        Ok(i64::from(n))
-    }
-}
 fn bounded(s: &str, max: usize) -> Result<(), StorageError> {
     if s.is_empty() || s.chars().count() > max || s.contains('\0') {
         Err(invalid("usage text exceeds bound"))
@@ -127,22 +111,6 @@ fn nonnegative(n: Option<i64>) -> Result<(), StorageError> {
         Ok(())
     }
 }
-fn classification(s: &str) -> Result<(), StorageError> {
-    if [
-        "ReportedCharge",
-        "ConfiguredEstimate",
-        "OfficialEstimate",
-        "SubscriptionApiEquivalent",
-        "LocalFree",
-        "Untracked",
-    ]
-    .contains(&s)
-    {
-        Ok(())
-    } else {
-        Err(invalid("invalid usage classification"))
-    }
-}
 fn cas(
     key: &str,
     current: Option<i64>,
@@ -152,7 +120,13 @@ fn cas(
     match (current, expected) {
         (None, None) if next == 1 => Ok(()),
         (Some(c), Some(e)) if c == e && e.checked_add(1) == Some(next) => Ok(()),
-        (Some(c), Some(e)) => Err(conflict(key, e, c)),
+        (Some(c), Some(e)) => Err(conflict(
+            RevisionDimension::Configuration,
+            "usage",
+            key,
+            e,
+            c,
+        )),
         (None, Some(_)) => Err(StorageError::NotFound {
             kind: "usage",
             id: key.into(),
@@ -214,7 +188,7 @@ fn decode_attempt(v: &Value) -> Result<StoredInferenceAttempt, StorageError> {
         access_mode: field(v, "access_mode")?,
         provider_model_id: field(v, "provider_model_id")?,
         pricing_snapshot: json(v, "pricing_snapshot_json")?,
-        state: field(v, "state")?,
+        state: name_field(v, "state", AttemptState::parse)?,
         revision: field(v, "revision")?,
         created_at_ms: field(v, "created_at")?,
     })
@@ -250,7 +224,7 @@ fn write_attempt(
             sql(&r.access_mode)?,
             sql(&r.provider_model_id)?,
             sql(&r.pricing_snapshot)?,
-            sql(&r.state)?,
+            sql(&r.state.as_str())?,
             sql(&r.revision)?,
             sql(&r.created_at_ms)?,
         ],
@@ -298,7 +272,7 @@ fn decode_balance(v: &Value) -> Result<StoredAttemptBalance, StorageError> {
         revision: field(v, "revision")?,
         priced_micro_usd: field(v, "priced_micro_usd")?,
         reserved_micro_usd: field(v, "reserved_micro_usd")?,
-        classification: field(v, "classification")?,
+        classification: name_field(v, "classification", CostClassification::parse)?,
         monetary_complete: boolean(v, "monetary_complete")?,
         incomplete: boolean(v, "incomplete")?,
         unknown_tail: boolean(v, "unknown_tail")?,
@@ -320,7 +294,7 @@ fn write_balance(
             sql(&r.revision)?,
             sql(&r.priced_micro_usd)?,
             sql(&r.reserved_micro_usd)?,
-            sql(&r.classification)?,
+            sql(&r.classification.as_str())?,
             sql(&r.monetary_complete)?,
             sql(&r.incomplete)?,
             sql(&r.unknown_tail)?,
@@ -370,7 +344,7 @@ fn decode_origin(v: &Value) -> Result<StoredUsageOrigin, StorageError> {
         payload: json(v, "payload_json")?,
         recorded_at_ms: field(v, "recorded_at")?,
         priced_micro_usd: field(v, "priced_micro_usd")?,
-        classification: field(v, "classification")?,
+        classification: name_field(v, "classification", CostClassification::parse)?,
         monetary_complete: boolean(v, "monetary_complete")?,
         incomplete: boolean(v, "incomplete")?,
         unknown_tail: boolean(v, "unknown_tail")?,
@@ -395,7 +369,7 @@ fn write_origin(c: &Connection, r: &StoredUsageOrigin, update: bool) -> Result<(
             sql(&r.payload)?,
             sql(&r.recorded_at_ms)?,
             sql(&r.priced_micro_usd)?,
-            sql(&r.classification)?,
+            sql(&r.classification.as_str())?,
             sql(&r.monetary_complete)?,
             sql(&r.incomplete)?,
             sql(&r.unknown_tail)?,
@@ -614,7 +588,7 @@ fn override_history(
     after: Option<&PriceOverridePosition>,
     limit: u16,
 ) -> Result<Vec<StoredPriceOverride>, StorageError> {
-    let limit = page(limit)?;
+    let limit = page_limit(limit)?;
     if let Some(position) = after {
         positive(position.revision)?;
     }
@@ -761,7 +735,7 @@ fn attempts_between(
             f.model_id.as_ref().map(Id::as_str),
             f.connection_id.as_ref().map(Id::as_str),
             f.purpose,
-            page(limit)?
+            page_limit(limit)?
         ],
         decode_attempt,
     )
@@ -802,7 +776,7 @@ fn late_attempts(
             f.model_id.as_ref().map(Id::as_str),
             f.connection_id.as_ref().map(Id::as_str),
             f.purpose,
-            page(limit)?,
+            page_limit(limit)?,
             request
         ],
         decode_late,
@@ -831,7 +805,7 @@ fn origins_between(
             f.project_id.as_ref().map(|v| v.0.as_str()),
             f.feature_id.as_ref().map(Id::as_str),
             f.kind,
-            page(limit)?
+            page_limit(limit)?
         ],
         decode_origin,
     )
@@ -841,19 +815,19 @@ macro_rules! usage_reads{($t:ty)=>{impl UsageRead for $t{
  fn late_inference_attempts(&self,f:&UsageAttemptFilter,after:Option<&(i64,Id,Id)>,limit:u16)->Result<Vec<(i64,StoredInferenceAttempt)>,StorageError>{late_attempts(self.conn,f,after,limit)}
  fn usage_origins_between(&self,f:&UsageOriginFilter,after:Option<&(i64,String,String)>,limit:u16)->Result<Vec<StoredUsageOrigin>,StorageError>{origins_between(self.conn,f,after,limit)}
  fn inference_attempt(&self,id:&Id)->Result<Option<StoredInferenceAttempt>,StorageError>{attempt(self.conn,id)}
- fn inference_attempts(&self,f:&UsageAttemptFilter,after:Option<&Id>,limit:u16)->Result<Vec<StoredInferenceAttempt>,StorageError>{range(f.start_ms,f.end_ms)?;rows(self.conn,&format!("SELECT {ATTEMPT_COLS} FROM usage_attempts WHERE attempt_id>?1 AND (?2 IS NULL OR project_id=?2) AND (?3 IS NULL OR feature_id=?3) AND (?4 IS NULL OR work_id=?4) AND (?5 IS NULL OR assignment_id=?5) AND (?6 IS NULL OR session_id=?6) AND (?7 IS NULL OR job_run_id=?7) AND (?8 IS NULL OR created_at>=?8) AND (?9 IS NULL OR created_at<?9) AND (?10 IS NULL OR actor_id=?10) AND (?11 IS NULL OR catalog_model_id=?11) AND (?12 IS NULL OR connection_id=?12) AND (?13 IS NULL OR purpose=?13) ORDER BY attempt_id LIMIT ?14"),params![after.map_or("",Id::as_str),f.project_id.as_ref().map(|v|v.0.as_str()),f.feature_id.as_ref().map(Id::as_str),f.work_id.as_ref().map(Id::as_str),f.assignment_id.as_ref().map(|v|v.0.as_str()),f.session_id.as_ref().map(Id::as_str),f.job_run_id.as_ref().map(Id::as_str),f.start_ms,f.end_ms,f.actor_id.as_ref().map(|v|v.0.as_str()),f.model_id.as_ref().map(Id::as_str),f.connection_id.as_ref().map(Id::as_str),f.purpose,page(limit)?],decode_attempt)}
- fn unquiesced_attempts(&self,after:Option<&Id>,limit:u16)->Result<Vec<StoredInferenceAttempt>,StorageError>{let cols=attempt_columns();rows(self.conn,&format!("SELECT {cols} FROM usage_attempt_balances b JOIN usage_attempts a ON a.attempt_id=b.attempt_id WHERE b.local_quiescent=0 AND b.attempt_id>?1 ORDER BY b.attempt_id LIMIT ?2"),params![after.map_or("",Id::as_str),page(limit)?],decode_attempt)}
+ fn inference_attempts(&self,f:&UsageAttemptFilter,after:Option<&Id>,limit:u16)->Result<Vec<StoredInferenceAttempt>,StorageError>{range(f.start_ms,f.end_ms)?;rows(self.conn,&format!("SELECT {ATTEMPT_COLS} FROM usage_attempts WHERE attempt_id>?1 AND (?2 IS NULL OR project_id=?2) AND (?3 IS NULL OR feature_id=?3) AND (?4 IS NULL OR work_id=?4) AND (?5 IS NULL OR assignment_id=?5) AND (?6 IS NULL OR session_id=?6) AND (?7 IS NULL OR job_run_id=?7) AND (?8 IS NULL OR created_at>=?8) AND (?9 IS NULL OR created_at<?9) AND (?10 IS NULL OR actor_id=?10) AND (?11 IS NULL OR catalog_model_id=?11) AND (?12 IS NULL OR connection_id=?12) AND (?13 IS NULL OR purpose=?13) ORDER BY attempt_id LIMIT ?14"),params![after.map_or("",Id::as_str),f.project_id.as_ref().map(|v|v.0.as_str()),f.feature_id.as_ref().map(Id::as_str),f.work_id.as_ref().map(Id::as_str),f.assignment_id.as_ref().map(|v|v.0.as_str()),f.session_id.as_ref().map(Id::as_str),f.job_run_id.as_ref().map(Id::as_str),f.start_ms,f.end_ms,f.actor_id.as_ref().map(|v|v.0.as_str()),f.model_id.as_ref().map(Id::as_str),f.connection_id.as_ref().map(Id::as_str),f.purpose,page_limit(limit)?],decode_attempt)}
+ fn unquiesced_attempts(&self,after:Option<&Id>,limit:u16)->Result<Vec<StoredInferenceAttempt>,StorageError>{let cols=attempt_columns();rows(self.conn,&format!("SELECT {cols} FROM usage_attempt_balances b JOIN usage_attempts a ON a.attempt_id=b.attempt_id WHERE b.local_quiescent=0 AND b.attempt_id>?1 ORDER BY b.attempt_id LIMIT ?2"),params![after.map_or("",Id::as_str),page_limit(limit)?],decode_attempt)}
  fn usage_observation(&self,id:&Id,key:&str)->Result<Option<StoredUsageObservation>,StorageError>{observation(self.conn,id,key)}
- fn usage_observations(&self,id:&Id,after:Option<i64>,limit:u16)->Result<Vec<StoredUsageObservation>,StorageError>{nonnegative(after)?;rows(self.conn,&format!("SELECT {OBSERVATION_COLS} FROM usage_observations WHERE attempt_id=?1 AND sequence>?2 ORDER BY sequence LIMIT ?3"),params![id.as_str(),after.unwrap_or(0),page(limit)?],decode_observation)}
+ fn usage_observations(&self,id:&Id,after:Option<i64>,limit:u16)->Result<Vec<StoredUsageObservation>,StorageError>{nonnegative(after)?;rows(self.conn,&format!("SELECT {OBSERVATION_COLS} FROM usage_observations WHERE attempt_id=?1 AND sequence>?2 ORDER BY sequence LIMIT ?3"),params![id.as_str(),after.unwrap_or(0),page_limit(limit)?],decode_observation)}
  fn attempt_balance(&self,id:&Id)->Result<Option<StoredAttemptBalance>,StorageError>{balance(self.conn,id)}
  fn feature_budget(&self,id:&Id)->Result<Option<StoredFeatureBudget>,StorageError>{budget(self.conn,id)}
  fn feature_usage_totals(&self,id:&Id)->Result<StoredFeatureUsageTotals,StorageError>{feature_totals(self.conn,id)}
- fn usage_origins(&self,f:&UsageOriginFilter,after:Option<&str>,limit:u16)->Result<Vec<StoredUsageOrigin>,StorageError>{range(f.start_ms,f.end_ms)?;let key:Option<(String,String)>=after.map(|s|serde_json::from_str(s).map_err(|_|invalid("invalid usage origin cursor"))).transpose()?;let(k,i)=key.as_ref().map_or(("",""),|(k,i)|(k.as_str(),i.as_str()));rows(self.conn,&format!("SELECT {ORIGIN_COLS} FROM usage_origins WHERE (source_kind,source_id)>(?1,?2) AND (?3 IS NULL OR project_id=?3) AND (?4 IS NULL OR feature_id=?4) AND (?5 IS NULL OR recorded_at>=?5) AND (?6 IS NULL OR recorded_at<?6) AND (?7 IS NULL OR source_kind=?7) ORDER BY source_kind,source_id LIMIT ?8"),params![k,i,f.project_id.as_ref().map(|v|v.0.as_str()),f.feature_id.as_ref().map(Id::as_str),f.start_ms,f.end_ms,f.kind,page(limit)?],decode_origin)}
+ fn usage_origins(&self,f:&UsageOriginFilter,after:Option<&str>,limit:u16)->Result<Vec<StoredUsageOrigin>,StorageError>{range(f.start_ms,f.end_ms)?;let key:Option<(String,String)>=after.map(|s|serde_json::from_str(s).map_err(|_|invalid("invalid usage origin cursor"))).transpose()?;let(k,i)=key.as_ref().map_or(("",""),|(k,i)|(k.as_str(),i.as_str()));rows(self.conn,&format!("SELECT {ORIGIN_COLS} FROM usage_origins WHERE (source_kind,source_id)>(?1,?2) AND (?3 IS NULL OR project_id=?3) AND (?4 IS NULL OR feature_id=?4) AND (?5 IS NULL OR recorded_at>=?5) AND (?6 IS NULL OR recorded_at<?6) AND (?7 IS NULL OR source_kind=?7) ORDER BY source_kind,source_id LIMIT ?8"),params![k,i,f.project_id.as_ref().map(|v|v.0.as_str()),f.feature_id.as_ref().map(Id::as_str),f.start_ms,f.end_ms,f.kind,page_limit(limit)?],decode_origin)}
  fn usage_origin(&self,kind:&str,id:&str)->Result<Option<StoredUsageOrigin>,StorageError>{origin(self.conn,kind,id)}
- fn usage_changes(&self,feature:Option<&Id>,after:Option<&Id>,limit:u16)->Result<Vec<StoredUsageChange>,StorageError>{rows(self.conn,&format!("SELECT {CHANGE_COLS} FROM usage_changes WHERE event_id>?1 AND (?2 IS NULL OR feature_id=?2) ORDER BY event_id LIMIT ?3"),params![after.map_or("",Id::as_str),feature.map(Id::as_str),page(limit)?],decode_change)}
+ fn usage_changes(&self,feature:Option<&Id>,after:Option<&Id>,limit:u16)->Result<Vec<StoredUsageChange>,StorageError>{rows(self.conn,&format!("SELECT {CHANGE_COLS} FROM usage_changes WHERE event_id>?1 AND (?2 IS NULL OR feature_id=?2) ORDER BY event_id LIMIT ?3"),params![after.map_or("",Id::as_str),feature.map(Id::as_str),page_limit(limit)?],decode_change)}
  fn usage_bootstrap(&self)->Result<StoredUsageBootstrap,StorageError>{bootstrap(self.conn)}
  fn price_revision(&self)->Result<i64,StorageError>{price_revision(self.conn)}
- fn price_snapshots(&self,provider:Option<&str>,after:Option<&Id>,limit:u16)->Result<Vec<StoredPriceSnapshot>,StorageError>{if let Some(p)=provider{bounded(p,128)?;}rows(self.conn,&format!("SELECT {SNAPSHOT_COLS} FROM usage_price_snapshots WHERE id>?1 AND (?2 IS NULL OR provider=?2) ORDER BY id LIMIT ?3"),params![after.map_or("",Id::as_str),provider,page(limit)?],decode_snapshot)}
+ fn price_snapshots(&self,provider:Option<&str>,after:Option<&Id>,limit:u16)->Result<Vec<StoredPriceSnapshot>,StorageError>{if let Some(p)=provider{bounded(p,128)?;}rows(self.conn,&format!("SELECT {SNAPSHOT_COLS} FROM usage_price_snapshots WHERE id>?1 AND (?2 IS NULL OR provider=?2) ORDER BY id LIMIT ?3"),params![after.map_or("",Id::as_str),provider,page_limit(limit)?],decode_snapshot)}
  fn price_snapshot(&self,id:&Id)->Result<Option<StoredPriceSnapshot>,StorageError>{snapshot(self.conn,id)}
  fn current_price_snapshot(&self,p:&str)->Result<Option<StoredPriceSnapshot>,StorageError>{status(self.conn,p)?.and_then(|s|s.current_snapshot_id).map(|id|snapshot(self.conn,&id)).transpose().map(Option::flatten)}
  fn price_status(&self,p:&str)->Result<Option<StoredPriceStatus>,StorageError>{status(self.conn,p)}
@@ -863,21 +837,6 @@ macro_rules! usage_reads{($t:ty)=>{impl UsageRead for $t{
 }};}
 usage_reads!(Unit<'_>);
 usage_reads!(Snapshot<'_>);
-fn state(s: &str) -> Result<(), StorageError> {
-    if [
-        "Admitted",
-        "Dispatched",
-        "Settled",
-        "UnknownTail",
-        "CancelledBeforeDispatch",
-    ]
-    .contains(&s)
-    {
-        Ok(())
-    } else {
-        Err(invalid("invalid inference attempt state"))
-    }
-}
 fn missing(kind: &'static str, id: &Id) -> StorageError {
     StorageError::NotFound {
         kind,
@@ -1010,12 +969,16 @@ fn validate_quote(unit: &Unit<'_>, r: &StoredInferenceAttempt) -> Result<(), Sto
     let q = &r.pricing_snapshot["quote"];
     if q["connection_revision"].as_i64() != Some(conn.revision) {
         return Err(conflict(
+            RevisionDimension::Configuration,
+            "usage",
             r.connection_id.as_str(),
             q["connection_revision"].as_i64().unwrap_or(1),
             conn.revision,
         ));
     }
-    if q["classification"] == "LocalFree" && !conn.local_free {
+    let quoted: Option<CostClassification> =
+        serde_json::from_value(q["classification"].clone()).ok();
+    if quoted == Some(CostClassification::LocalFree) && !conn.local_free {
         return Err(invalid(
             "LocalFree requires explicit connection billing policy",
         ));
@@ -1023,6 +986,8 @@ fn validate_quote(unit: &Unit<'_>, r: &StoredInferenceAttempt) -> Result<(), Sto
     let current = price_override(unit.conn, &r.catalog_model_id)?.map_or(1, |v| v.revision);
     if q["override_revision"].as_i64().unwrap_or(1) != current {
         return Err(conflict(
+            RevisionDimension::Configuration,
+            "usage",
             r.catalog_model_id.as_str(),
             q["override_revision"].as_i64().unwrap_or(1),
             current,
@@ -1101,26 +1066,16 @@ fn validate_origin_binding(
     }
     Ok(())
 }
-fn atomic<T>(
-    c: &Connection,
-    f: impl FnOnce() -> Result<T, StorageError>,
-) -> Result<T, StorageError> {
-    db(c.execute_batch("SAVEPOINT usage_mutation"))?;
-    match f() {
-        Ok(v) => {
-            db(c.execute_batch("RELEASE usage_mutation"))?;
-            Ok(v)
-        }
-        Err(e) => {
-            db(c.execute_batch("ROLLBACK TO usage_mutation; RELEASE usage_mutation"))?;
-            Err(e)
-        }
-    }
-}
 fn advance(c: &Connection, expected: i64) -> Result<i64, StorageError> {
     let current = price_revision(c)?;
     if current != expected {
-        return Err(conflict("prices", expected, current));
+        return Err(conflict(
+            RevisionDimension::Configuration,
+            "usage",
+            "prices",
+            expected,
+            current,
+        ));
     }
     let next = current
         .checked_add(1)
@@ -1159,7 +1114,7 @@ fn tariffs(r: &[devworks_core::ports::usage::PublishedTariff]) -> Result<(), Sto
 impl UsageRepository for Unit<'_> {
     fn insert_inference_attempt(&mut self, r: &StoredInferenceAttempt) -> Result<(), StorageError> {
         positive(r.attempt_number)?;
-        if r.revision != 1 || r.state != "Admitted" {
+        if r.revision != 1 || r.state != AttemptState::Admitted {
             return Err(invalid("attempt starts admitted at revision1"));
         }
         nonnegative(Some(r.created_at_ms))?;
@@ -1198,9 +1153,8 @@ impl UsageRepository for Unit<'_> {
             Some(expected),
             r.revision,
         )?;
-        state(&r.state)?;
         let mut permitted = old.clone();
-        permitted.state = r.state.clone();
+        permitted.state = r.state;
         permitted.provider_model_id = r.provider_model_id.clone();
         permitted.revision = r.revision;
         if permitted != *r {
@@ -1211,12 +1165,16 @@ impl UsageRepository for Unit<'_> {
         }
         if r.state != old.state
             && !matches!(
-                (old.state.as_str(), r.state.as_str()),
+                (old.state, r.state),
                 (
-                    "Admitted",
-                    "Dispatched" | "CancelledBeforeDispatch" | "UnknownTail"
-                ) | ("Dispatched", "Settled" | "UnknownTail")
-                    | ("UnknownTail", "Settled")
+                    AttemptState::Admitted,
+                    AttemptState::Dispatched
+                        | AttemptState::CancelledBeforeDispatch
+                        | AttemptState::UnknownTail
+                ) | (
+                    AttemptState::Dispatched,
+                    AttemptState::Settled | AttemptState::UnknownTail
+                ) | (AttemptState::UnknownTail, AttemptState::Settled)
             )
         {
             return Err(invalid("invalid attempt state transition"));
@@ -1257,9 +1215,8 @@ impl UsageRepository for Unit<'_> {
         }
         nonnegative(r.priced_micro_usd)?;
         nonnegative(r.reserved_micro_usd)?;
-        classification(&r.classification)?;
         object(&r.summary)?;
-        if r.classification == "LocalFree"
+        if r.classification == CostClassification::LocalFree
             && (r.priced_micro_usd != Some(0) || !r.monetary_complete)
         {
             return Err(invalid(
@@ -1303,7 +1260,6 @@ impl UsageRepository for Unit<'_> {
         }
         bounded(&r.source_id, 512)?;
         object(&r.payload)?;
-        classification(&r.classification)?;
         nonnegative(r.priced_micro_usd)?;
         nonnegative(Some(r.recorded_at_ms))?;
         if (r.source_kind == "SessionUsage") != r.committed_sequence.is_some() {
@@ -1483,7 +1439,13 @@ impl UsageRepository for Unit<'_> {
         let old = status(self.conn, &r.provider)?
             .ok_or_else(|| invalid("price publication requires an owned refresh"))?;
         if old.revision != expected {
-            return Err(conflict(&r.provider, expected, old.revision));
+            return Err(conflict(
+                RevisionDimension::Configuration,
+                "usage",
+                &r.provider,
+                expected,
+                old.revision,
+            ));
         }
         if !old.refresh_pending {
             return Err(invalid("price publication requires pending refresh"));
@@ -1526,7 +1488,13 @@ impl UsageRepository for Unit<'_> {
     ) -> Result<(), StorageError> {
         let current = price_override(self.conn, &r.model_id)?.map_or(1, |v| v.revision);
         if expected != current {
-            return Err(conflict(r.model_id.as_str(), expected, current));
+            return Err(conflict(
+                RevisionDimension::Configuration,
+                "usage",
+                r.model_id.as_str(),
+                expected,
+                current,
+            ));
         }
         if expected.checked_add(1) != Some(r.revision) {
             return Err(invalid("override revision must advance"));

@@ -276,182 +276,33 @@ pub struct SecretStoreStatus {
     pub unavailable: Option<String>,
 }
 
-/// Who is waiting for a reply. Equal slots supersede each other.
+/// Who is waiting for a reply. Equal slots supersede each other. Each variant holds one
+/// screen's slot type and serializes as that value alone, so a persisted slot is the bare
+/// variant name (or `{"Name": value}`) its screen's enum declares; those names stay unique
+/// across every screen's slot type and never change.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[serde(untagged)]
 pub enum Slot {
-    PurgePrepare,
-    PurgePage,
-    PurgeConfirm,
-    PurgeStatus,
-    ApprovalsList,
-    ApprovalInspect(String),
-    ApprovalRefresh(String),
-    ApprovalContent(String),
-    ApprovalDecision(String),
-    ReviewQueue,
-    NotificationsList,
-    CompletionList,
-    NotificationRead(String),
-    NotificationChange(String),
-    NotificationSettings,
-    NotificationSettingsSave,
-    OsNotificationPermission,
-    SettingsRead,
-    ContainerCapabilities,
-    SettingsValidate,
-    SettingsHealth,
-    SettingsSave,
-    /// Transient native credential intake; no raw value is serialized with this slot.
-    SettingsSecret(String),
-    SettingsExplain(String),
-    /// The Add-ons catalog.
-    AddonsList,
-    /// One package's logs.
-    AddonsLogs(String),
-    /// The Add-ons screen's one lifecycle command (or install-from-file task) at a time.
-    AddonsCommand,
-    /// Bundle artifact save before the exact install/update command; retained at close.
-    AddonsSave {
-        update: Option<String>,
-        registry: i64,
-        #[serde(default)]
-        download: Option<PathBuf>,
-    },
-    /// The runtime probe and index refresh behind the Add-ons screen.
-    AddonsDiscovery,
-    /// A page fetch from Settings > Agent tools.
-    WebFetch,
-    /// A search from Settings > Agent tools.
-    WebSearch,
-    /// The recent web activity record.
-    WebActivity,
-    McpServers(String, Option<String>),
-    McpOperation(String),
-    McpCapabilities(String, String, Option<String>),
-    /// A resource or prompt read from Settings (scope key, server ID).
-    McpContent(String, String),
-    McpCommand,
-    /// Deletes MCP secrets a configuration change left unreferenced.
-    McpRelease,
-    /// Active and archived projects.
-    ProjectsList,
-    /// Deleted projects (their tombstones).
-    /// Every registered repository.
-    RepositoriesList,
-    /// The repositories of one project.
-    ProjectRepositories(String),
-    KnowledgeList(u64),
-    /// One Knowledge entry with its evidence and history (claim ID).
-    KnowledgeRead(String),
-    /// Knowledge counts and retrieval mode.
-    KnowledgeDiagnostics,
-    /// The preview of a delete by source (the source).
-    KnowledgePreview(String),
-    /// Storing an import file as the user's artifact.
-    KnowledgeImportSave,
-    /// The exact preview of an import.
-    KnowledgeImportPreview,
-    /// The confirmed import.
-    KnowledgeImport,
-    /// A Knowledge write (record, revise, tag, lifecycle change, deletion).
-    KnowledgeWrite,
-    /// The jobs of the selected scope, and a further page of them.
-    JobsList,
-    /// A further page of the shown jobs list (that list's generation).
-    JobsMore(u64),
-    /// A further page re-read by a refresh of the shown jobs list (the refresh's generation).
-    JobsRefresh(u64),
-    /// The jobs of one project, for its run status on All projects.
-    ProjectJobs(String),
-    /// One job's inspection (its first run-history page) and an older history page (job ID).
-    JobInspect(String),
-    JobHistory(String),
-    /// The job's active run, inspected by its ID (job ID): the latest occurrence may be a
-    /// skipped one while the active run continues.
-    JobActiveRun(String),
-    /// A scoped prompt page of one form generation (None is workspace).
-    JobPrompts(u64, Option<String>),
-    JobCreate,
-    /// A command of one job or its run (one at a time per job).
-    JobCommand(String),
-    /// Every feature of a project (all pages, read in order).
-    WorkFeatures(String),
-    /// The complete authoritative workflow, fenced by load generation.
-    WorkWorkflow(String, u64),
-    WorkWorkflowCommand(String),
-    /// A queue snapshot; a lease requests a claim after the read completes.
-    AllocationQueue(String, Option<String>, Option<u64>),
-    AllocationClaim(String, Option<String>),
-    AllocationInspect(String),
-    AllocationRelease(String),
-    /// Every card (feature task or standalone issue) of a project.
-    WorkCards(String),
-    /// The project change feed (Activity) of a project.
-    WorkActivity(String, Option<String>, u64),
-    WorkMessagesHistory(String),
-    WorkMessagesInbox(String),
-    WorkMessagesEvents(String),
-    WorkMessagePost(String),
-    WorkMessageAck(String, String),
-    /// One work item's current record (readiness included).
-    WorkDetail(String),
-    WorkGit(String),
-    WorkGitInspect(String, String),
-    /// A change of one work item (one at a time per item).
-    WorkCommand(String),
-    /// A new feature, task or issue in a project.
-    WorkCreate(String),
-    /// A prioritization of one queue (`<project>/<queue>`).
-    WorkOrder(String),
-    /// A plan text stored as an artifact for a feature's pending plan.
-    WorkPlanText(String),
-    /// Project-owned decisions for requirements dropped by a plan save.
-    WorkPlanDrop(String),
-    /// A feature's plan draft save (`features.edit_plan`).
-    WorkPlan(String),
-    /// A root's run controls (inspect) and one Start/Pause/Continue.
-    WorkInspect(String),
-    WorkRun(String),
-    /// The roots and running work of a project an archival would stop (features, issues).
-    ArchiveCount(String, bool),
-    /// Work opened from elsewhere (a completion card): read as a card (`false`) or a feature.
-    WorkOpen(String, bool),
-    /// A page of `router.connections` for Settings → Provider connections (load generation).
-    Connections(u64),
-    /// A page of the full catalog (disabled models included) for the connections panel.
-    ConnectionCatalog(u64),
-    /// One bounded persistent embedding-space status page.
-    EmbeddingSpaces(u64),
-    /// One `router.configure` submission from the connections panel (its sequence number).
-    Configure(u64),
-    // Migrated screens' slots, after every tagged variant: each serializes as its inner value
-    // alone, so persisted commands keep the JSON they had in the single enum.
-    #[serde(untagged)]
     Help(crate::help_ops::HelpSlot),
-    #[serde(untagged)]
     Usage(crate::usage_ops::UsageSlot),
-    #[serde(untagged)]
     Graph(crate::graph_ops::GraphSlot),
-    #[serde(untagged)]
     Databases(crate::databases_ops::DatabasesSlot),
-    #[serde(untagged)]
     Instructions(crate::instructions_ops::InstructionsSlot),
-    #[serde(untagged)]
     Conventions(crate::conventions_ops::ConventionsSlot),
-    #[serde(untagged)]
     Artifacts(crate::artifacts_screen::ArtifactsSlot),
-    #[serde(untagged)]
     Resources(crate::artifacts_screen::ResourcesSlot),
-    #[serde(untagged)]
     Browser(crate::artifacts_screen::BrowserSlot),
-    #[serde(untagged)]
     Projects(crate::projects_ops::ProjectsSlot),
-    #[serde(untagged)]
     Indexing(crate::indexing_ops::IndexingSlot),
-    #[serde(untagged)]
     Watch(crate::watch_ops::WatchSlot),
-    #[serde(untagged)]
     Chat(crate::chat::ChatSlot),
+    Jobs(crate::jobs_ops::JobsSlot),
+    Decisions(crate::decision_ops::DecisionsSlot),
+    Work(crate::work_ops::WorkSlot),
+    Settings(crate::settings_ops::SettingsSlot),
+    AddOns(crate::addons_ops::AddonsSlot),
+    Knowledge(crate::knowledge_ops::KnowledgeSlot),
+    Purge(crate::purge_ops::PurgeSlot),
 }
 impl Slot {
     /// The screen whose replies this slot waits for.
@@ -471,7 +322,13 @@ impl Slot {
             Self::Indexing(_) => ScreenId::Indexing,
             Self::Watch(_) => ScreenId::Watchers,
             Self::Chat(_) => ScreenId::Chat,
-            _ => ScreenId::Legacy,
+            Self::Jobs(_) => ScreenId::Jobs,
+            Self::Decisions(_) => ScreenId::Decisions,
+            Self::Work(_) => ScreenId::Work,
+            Self::Settings(_) => ScreenId::Settings,
+            Self::AddOns(_) => ScreenId::AddOns,
+            Self::Knowledge(_) => ScreenId::Knowledge,
+            Self::Purge(_) => ScreenId::Purge,
         }
     }
 }
@@ -609,7 +466,7 @@ fn resolve_dispatched(
         frame,
     ) && let devworks_core::admission::CallerKey::Command(request_key) = decoded.key
     {
-        let lookup = serde_json::json!({"protocol":"1.0-draft.1","schemaRevision":6,"queryId":backend.token("purged-receipt"),"query":{"kind":"history.command_receipt","requestKey":request_key}}).to_string().into_bytes();
+        let lookup = receipt_lookup(backend, &request_key);
         if let Ok(devworks_core::protocol::results::DomainQueryReply::Result {
             result:
                 devworks_core::protocol::results::OperationResult::HistoryCommandReceipt { value },
@@ -628,6 +485,27 @@ fn resolve_dispatched(
     }
 
     outcome
+}
+
+/// The `history.command_receipt` query that resolves the receipt held for `request_key`.
+pub(crate) fn receipt_lookup(
+    backend: &dyn Backend,
+    request_key: &devworks_core::protocol::RequestKey,
+) -> Vec<u8> {
+    use crate::frame::{self, Negotiate};
+    use devworks_core::operations::{OperationInput, history};
+    use devworks_core::protocol::{Query, QueryRequest};
+    frame::with(backend, Negotiate::Latest, || {
+        Some(OperationInput::History(history::Input::CommandReceipt(
+            QueryRequest {
+                protocol: frame::protocol(),
+                query_id: frame::text(&backend.token("purged-receipt"))?,
+                query: Query::Receipt {
+                    request_key: request_key.clone(),
+                },
+            },
+        )))
+    })
 }
 
 /// The host ingress chosen by the native interaction, retained with exact retry frames.
@@ -1119,7 +997,7 @@ impl Client {
     /// Explicit native permission interaction, off the GUI frame loop.
     pub fn request_notification_permission(&mut self) -> bool {
         self.submit(
-            Slot::OsNotificationPermission,
+            crate::decision_ops::DecisionsSlot::OsNotificationPermission.into(),
             "Requesting native notification permission",
             Box::new(|b| Reply::OsNotificationPermission(b.request_os_notification_permission())),
             None,
@@ -1341,7 +1219,12 @@ mod tests {
                 .modes
                 .iter()
                 .any(|m| m.mode == devworks_core::registry::Mode::Command);
-            let restored = Unresolved::restored(Slot::SettingsSave, "l".into(), d.name, Vec::new());
+            let restored = Unresolved::restored(
+                Slot::Settings(crate::settings_ops::SettingsSlot::SettingsSave),
+                "l".into(),
+                d.name,
+                Vec::new(),
+            );
             assert_eq!(
                 restored.is_some(),
                 is_command,
@@ -1364,13 +1247,19 @@ mod tests {
             "schemas.remove_index",
         ] {
             assert!(
-                Unresolved::restored(Slot::SettingsSave, "l".into(), op, Vec::new()).is_some(),
+                Unresolved::restored(
+                    Slot::Settings(crate::settings_ops::SettingsSlot::SettingsSave),
+                    "l".into(),
+                    op,
+                    Vec::new()
+                )
+                .is_some(),
                 "{op}"
             );
         }
         assert!(
             Unresolved::restored(
-                Slot::SettingsSave,
+                Slot::Settings(crate::settings_ops::SettingsSlot::SettingsSave),
                 "l".into(),
                 "no.such_operation",
                 Vec::new()
@@ -1447,7 +1336,11 @@ mod human_dispatch_tests {
         let gate = Arc::new((Mutex::new(false), Condvar::new()));
         let started = Arc::new(AtomicUsize::new(0));
         let mut client = Client::new(Arc::new(NoHuman::default()));
-        for slot in [Slot::AddonsDiscovery, Slot::McpRelease, Slot::McpCommand] {
+        for slot in [
+            Slot::AddOns(crate::addons_ops::AddonsSlot::AddonsDiscovery),
+            Slot::Settings(crate::settings_ops::SettingsSlot::McpRelease),
+            Slot::Settings(crate::settings_ops::SettingsSlot::McpCommand),
+        ] {
             let (gate, started) = (gate.clone(), started.clone());
             assert!(client.network_task(slot, "Slow network call", move |_| {
                 started.fetch_add(1, Ordering::SeqCst);
@@ -1526,7 +1419,7 @@ mod human_dispatch_tests {
         assert_eq!(restored.frame(), b"original exact frame");
         assert!(
             Unresolved::restored_dispatch(
-                Slot::SettingsSave,
+                Slot::Settings(crate::settings_ops::SettingsSlot::SettingsSave),
                 "wrong purpose".into(),
                 "settings.save_revision",
                 vec![],
@@ -1551,7 +1444,7 @@ mod human_dispatch_tests {
     #[test]
     fn restart_keeps_the_explicit_dispatch_and_never_upgrades_old_generic_frames() {
         let legacy = Unresolved::restored(
-            Slot::ApprovalDecision("p".into()),
+            crate::decision_ops::DecisionsSlot::ApprovalDecision("p".into()).into(),
             "old".into(),
             "approvals.record_human_decision",
             b"original".to_vec(),
@@ -1559,7 +1452,7 @@ mod human_dispatch_tests {
         .unwrap();
         assert_eq!(legacy.dispatch, CommandDispatch::Generic);
         let native = Unresolved::restored_dispatch(
-            Slot::ApprovalDecision("p".into()),
+            crate::decision_ops::DecisionsSlot::ApprovalDecision("p".into()).into(),
             "native".into(),
             "approvals.record_human_decision",
             b"original".to_vec(),
@@ -1570,7 +1463,7 @@ mod human_dispatch_tests {
         assert_eq!(native.frame(), b"original");
         assert!(
             Unresolved::restored_dispatch(
-                Slot::SettingsSave,
+                Slot::Settings(crate::settings_ops::SettingsSlot::SettingsSave),
                 "invalid".into(),
                 "settings.save_revision",
                 vec![],

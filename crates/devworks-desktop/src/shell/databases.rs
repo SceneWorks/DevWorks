@@ -1,7 +1,7 @@
 //! Native database ingress: exact shared frames, purpose-bound password intake and paging.
 use crate::{
     backend::{Reply, TaskOutput, Unresolved},
-    databases_ops::{DatabasesSlot, command, query},
+    databases_ops::{self, DatabasesSlot, ObjectsRead, command, query},
     databases_screen::{Action, DatabasesScreen, Draft, ReadIntent},
     memory::RouteMemory,
     ops::{self, Failure},
@@ -9,6 +9,7 @@ use crate::{
     screen::{Cx, Effect, Screen, ScreenContext, ScreenId, controller},
 };
 use devworks_core::{
+    operations::OperationInput as In,
     ports::{secrets::Secret, storage::ProjectPurgeClientScope},
     protocol::{
         CommandReply,
@@ -137,17 +138,23 @@ impl DatabasesCtl<'_, '_> {
         }
         self.databases.sequence = self.databases.sequence.wrapping_add(1);
         let n = self.databases.sequence;
-        let body = json!({"scope":if self.databases.batch_scanning{crate::databases_screen::scope(self.databases.batch_scope.as_deref())}else{self.databases.scope()},"page":{"limit":100,"cursor":self.databases.next.clone().filter(|_|append)}});
-        let mut body = body;
-        if !append || self.databases.next.is_none() {
-            body["page"].as_object_mut().unwrap().remove("cursor");
-        }
+        let project = if self.databases.batch_scanning {
+            self.databases.batch_scope.clone()
+        } else {
+            self.databases.project.clone()
+        };
+        let cursor = self.databases.next.clone().filter(|_| append);
         self.databases.loading = true;
         if !self.query(
             DatabasesSlot::DatabaseList(n, append),
             "Loading database sources",
             "schemas.connections",
-            move |b| query(b, "schemas.connections", body),
+            move |b| {
+                query(
+                    b,
+                    databases_ops::connections(project.as_deref(), cursor.as_deref()),
+                )
+            },
         ) {
             self.databases.loading = false;
         }
@@ -205,25 +212,22 @@ impl DatabasesCtl<'_, '_> {
             self.databases.objects.clear();
             self.databases.object_next = None;
         }
-        let mut body = json!({"scope":self.databases.scope(),"views":{"kind":"Pinned","pinId":pin},"connectionId":source.id,"kinds":if self.databases.kind.is_empty(){vec![]}else{vec![self.databases.kind.clone()]},"page":{"limit":100}});
-        if let Some(cursor) = self.databases.object_next.clone().filter(|_| append) {
-            body["page"]["cursor"] = json!(cursor);
-        }
-        if !self.databases.filter.is_empty() {
-            body["text"] = json!(self.databases.filter);
-        }
-        if let Some(id) = &self.databases.object_id {
-            body["objectId"] = json!(id);
-        }
-        if let Some(parent) = &self.databases.parent {
-            body["parentId"] = json!(parent);
-        }
+        let read = ObjectsRead {
+            project: self.databases.project.clone(),
+            pin,
+            connection: source.id.clone(),
+            kind: self.databases.kind.clone(),
+            text: self.databases.filter.clone(),
+            object: self.databases.object_id.clone(),
+            parent: self.databases.parent.clone(),
+            cursor: self.databases.object_next.clone().filter(|_| append),
+        };
         self.databases.read_loading = true;
         if !self.query(
             DatabasesSlot::DatabaseObjects(n, append),
             "Reading schema objects",
             "schemas.objects",
-            move |b| query(b, "schemas.objects", body),
+            move |b| query(b, read.input()),
         ) {
             self.databases.read_loading = false;
         }
@@ -284,16 +288,25 @@ impl DatabasesCtl<'_, '_> {
             self.databases.relation_next = None;
             self.databases.relation_ids = ids.clone();
         }
-        let mut body = json!({"scope":self.databases.scope(),"views":{"kind":"Pinned","pinId":pin},"connectionId":source.id,"objectIds":ids,"page":{"limit":100}});
-        if let Some(cursor) = self.databases.relation_next.clone().filter(|_| append) {
-            body["page"]["cursor"] = json!(cursor);
-        }
+        let project = self.databases.project.clone();
+        let cursor = self.databases.relation_next.clone().filter(|_| append);
         self.databases.read_loading = true;
         if !self.query(
             DatabasesSlot::DatabaseRelations(n, append),
             "Reading schema relationships",
             "schemas.relationships",
-            move |b| query(b, "schemas.relationships", body),
+            move |b| {
+                query(
+                    b,
+                    databases_ops::relationships(
+                        project.as_deref(),
+                        &pin,
+                        &source.id,
+                        &ids,
+                        cursor.as_deref(),
+                    ),
+                )
+            },
         ) {
             self.databases.read_loading = false;
         }
@@ -318,27 +331,42 @@ impl DatabasesCtl<'_, '_> {
             self.databases.code_next = None;
             self.databases.code_object = Some(id.clone());
         }
-        let mut body = json!({"scope":self.databases.scope(),"views":{"kind":"Pinned","pinId":pin},"connectionId":source.id,"objectId":id,"page":{"limit":100}});
-        if let Some(cursor) = self.databases.code_next.clone().filter(|_| append) {
-            body["page"]["cursor"] = json!(cursor);
-        }
+        let project = self.databases.project.clone();
+        let connection = source.id.clone();
+        let cursor = self.databases.code_next.clone().filter(|_| append);
         self.databases.read_loading = true;
         if !self.query(
             DatabasesSlot::DatabaseCodeReferences(n, append),
             "Reading the code that uses a schema object",
             "schemas.code_references",
-            move |b| query(b, "schemas.code_references", body),
+            move |b| {
+                query(
+                    b,
+                    databases_ops::code_references(
+                        project.as_deref(),
+                        &pin,
+                        &connection,
+                        &id,
+                        cursor.as_deref(),
+                    ),
+                )
+            },
         ) {
             self.databases.read_loading = false;
         }
     }
-    fn database_command(&mut self, operation: &'static str, body: Value) {
+    fn database_command(&mut self, input: Option<In>) {
+        let Some(input) = input else {
+            self.databases.error = Some("The database request could not be formed.".into());
+            return;
+        };
+        let operation = input.operation();
         self.databases.busy = true;
         if !self.command(
             DatabasesSlot::DatabaseCommand(operation.into()),
             "Updating database source",
             operation,
-            move |b| command(b, operation, body),
+            move |b| command(b, input),
         ) {
             self.databases.busy = false;
         }
@@ -378,10 +406,23 @@ impl DatabasesCtl<'_, '_> {
             }
             return;
         }
-        let mut body = json!({"scope":crate::databases_screen::scope(draft.scope.as_deref()),"action":"Save","config":draft.config});
-        if let Some(id) = &draft.id {
-            body["connectionId"] = json!(id);
-            body["expectedRevision"] = json!(draft.revision.unwrap_or(1).to_string());
+        let project = draft.scope.clone();
+        let existing = draft.id.clone().map(|id| (id, draft.revision.unwrap_or(1)));
+        let mut config = draft.config.clone();
+        if databases_ops::save(
+            project.as_deref(),
+            existing
+                .as_ref()
+                .map(|(id, revision)| (id.as_str(), *revision)),
+            &config,
+        )
+        .is_none()
+        {
+            self.databases.error = Some(
+                "Check the source settings: the name, endpoint and other values must be filled in and within their allowed length."
+                    .into(),
+            );
+            return;
         }
         let password = Secret::new(std::mem::take(&mut draft.password));
         self.databases.busy = true;
@@ -391,11 +432,16 @@ impl DatabasesCtl<'_, '_> {
                 "Preparing database source",
                 move |b| {
                     if !password.is_empty() {
-                        body["config"]["credentialRef"] =
-                            json!(b.stage_database_password(password)?);
+                        config["credentialRef"] = json!(b.stage_database_password(password)?);
                     }
+                    let existing = existing
+                        .as_ref()
+                        .map(|(id, revision)| (id.as_str(), *revision));
                     Ok(TaskOutput::Prepared {
-                        frame: command(b, "schemas.configure", body),
+                        frame: command(
+                            b,
+                            databases_ops::save(project.as_deref(), existing, &config),
+                        ),
                     })
                 },
             )
@@ -511,8 +557,13 @@ impl DatabasesCtl<'_, '_> {
                     .iter()
                     .find(|s| s.id.as_str() == id)
                 {
-                    let body = json!({"connectionId":s.id,"expectedRevision":s.revision,"scope":self.databases.scope(),"testOnly":test});
-                    self.database_command("schemas.refresh", body);
+                    let input = databases_ops::refresh(
+                        s.id.as_str(),
+                        s.revision.as_str(),
+                        self.databases.project.as_deref(),
+                        Some(test),
+                    );
+                    self.database_command(input);
                 }
             }
             Action::SyncAll => self.begin_database_sync_all(),
@@ -524,12 +575,12 @@ impl DatabasesCtl<'_, '_> {
                 if let Some(source) = self.databases.source().cloned() {
                     let kind = self.databases.confirm.take();
                     if kind == Some("source") {
-                        self.database_command("schemas.configure",json!({"scope":self.databases.scope(),"connectionId":source.id,"expectedRevision":source.revision,"action":"Remove","config":source.config}));
+                        self.database_command(databases_ops::remove_source(
+                            self.databases.project.as_deref(),
+                            &source,
+                        ));
                     } else {
-                        self.database_command(
-                            "schemas.remove_index",
-                            json!({"connectionId":source.id,"expectedRevision":source.revision}),
-                        );
+                        self.database_command(Some(databases_ops::remove_index(&source)));
                     }
                 }
             }
@@ -859,8 +910,13 @@ impl DatabasesCtl<'_, '_> {
     fn next_database_batch(&mut self) {
         if let Some((id, revision)) = self.databases.batch_remaining.pop_front() {
             self.databases.batch_submitted += 1;
-            let body = json!({"connectionId":id,"expectedRevision":revision.to_string(),"scope":crate::databases_screen::scope(self.databases.batch_scope.as_deref())});
-            self.database_command("schemas.refresh", body);
+            let input = databases_ops::refresh(
+                &id,
+                &revision.to_string(),
+                self.databases.batch_scope.as_deref(),
+                None,
+            );
+            self.database_command(input);
         } else {
             self.databases.busy = false;
             self.databases.batch_active = false;

@@ -73,7 +73,7 @@ fn sources_discovery_indexing_and_status_through_the_shared_commands() {
     let user = engine.host().user().clone();
     run_write(
         &**engine.host().runtime().store(),
-        WriteOptions::default(),
+        WriteOptions::fixture(),
         move |tx| {
             devworks_core::settings::service::apply_human_assignments(
                 tx,

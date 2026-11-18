@@ -3,7 +3,7 @@ use crate::ports::storage::{
     StoredProposal,
 };
 use crate::protocol::records::ApprovalViewRecord;
-use crate::services::sessions::{content, counter, label, rev};
+use crate::services::kernel::{content, counter, label, rev};
 use serde_json::{Value, json};
 
 pub(crate) fn hash(value: &Value) -> String {

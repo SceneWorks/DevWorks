@@ -123,6 +123,14 @@ pub struct ChatPendingMemory {
     pub removed: Vec<RemovedMemory>,
 }
 
+/// What the work screens keep for their running plan saves (`Screen::pending_memory` of
+/// Work). Its field is saved as the [`PendingMemory`] field of the same name, which it was
+/// before the work screens had their own screen.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct WorkPendingMemory {
+    pub plans: Vec<Value>,
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct PendingMemory {
     #[serde(default)]

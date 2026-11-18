@@ -33,8 +33,7 @@ use devworks_core::services::UseCases;
 use devworks_core::services::artifacts::ArtifactService;
 use devworks_core::services::jobs::argument_schema;
 use devworks_core::services::process::{LaunchPolicy, LaunchRequest};
-use devworks_core::services::resources::ResourceService;
-use devworks_core::services::runs::ControlService;
+use devworks_engine::{ArtifactComposition, DiagnosticComposition, KnowledgeComposition};
 use devworks_engine::{Composition, RunComposition, Runtime, RuntimeConfig, boot};
 use serde_json::{Value, json};
 use std::sync::Arc;
@@ -232,14 +231,30 @@ impl PowerPort for NoPower {
     }
 }
 
+/// Seeds project `project-a`, the issue root `root-i` and the human `user-a` into a closed data root.
 fn seed(h: &Harness) {
-    let c = rusqlite::Connection::open(h.root.join("workspace.sqlite")).unwrap();
-    c.busy_timeout(Duration::from_secs(5)).unwrap();
-    c.execute_batch(
-        "INSERT INTO projects(id,title,lifecycle,revision,scope_revision,created_at) VALUES('project-a','A','Active',1,1,0);
-         INSERT INTO work_items VALUES('root-i','project-a','issue',NULL,NULL,NULL,'root-i',1,0,1,1,1,'{}');
-         INSERT INTO actors VALUES('user-a','human','User');",
+    use devworks_test_support::seed::{ProjectSeed, WorkSeed};
+    let store = h.open();
+    devworks_test_support::seed::rows(
+        &*store,
+        &[ProjectSeed::new("project-a").name("A").created_at(0)],
+        &[WorkSeed::issue("root-i", "project-a")],
     )
+    .unwrap();
+    rusqlite::Connection::open(h.root.join("workspace.sqlite"))
+        .unwrap()
+        .execute(
+            "UPDATE work_items SET kind='issue' WHERE id IN ('root-i')",
+            [],
+        )
+        .unwrap();
+    write(&*store, |tx| {
+        tx.actors().register(
+            &devworks_core::protocol::ActorId(id("user-a")),
+            PrincipalKind::Human,
+            "User",
+        )
+    })
     .unwrap();
 }
 
@@ -280,16 +295,14 @@ fn boot_over(
     config.housekeeping_interval = Duration::from_secs(3600);
     config.shutdown_grace = Duration::from_millis(50);
     config.shutdown_bound = Duration::from_secs(5);
-    let artifacts = Arc::new(ArtifactService::new(
+    let artifacts = ArtifactComposition::new(
         Arc::new(NativeArtifactFiles::new(
             h.root.clone(),
             h.root.with_extension("cache"),
         )),
         Arc::new(HostArtifactSources::new(h.clock(), h.ids.clone())),
         Arc::new(NativeFilesystem::new()),
-        h.clock(),
-        h.ids.clone(),
-    ));
+    );
     let mut use_cases = UseCases::new().with_queue();
     use_cases.register(DOCS, None, Some(docs.clone()));
     let composition = Composition {
@@ -304,22 +317,18 @@ fn boot_over(
             clock: h.clock(),
         }),
         artifacts,
-        resources: Arc::new(ResourceService::new(h.ids.clone(), h.clock())),
         process_host: host.clone(),
         runs: RunComposition {
             inference,
-            ..RunComposition::new(Arc::new(ControlService::new(h.ids.clone())))
+            ..RunComposition::default()
         },
+        knowledge: KnowledgeComposition::default(),
+        application: Default::default(),
+        web: None,
         power: Arc::new(NoPower),
-        diagnostics: Arc::new(
-            devworks_core::services::diagnostics::DiagnosticService::new(
-                store.clone(),
-                h.ids.clone(),
-                h.clock(),
-                None,
-            ),
-        ),
+        diagnostics: DiagnosticComposition::default(),
         use_cases,
+        test_overrides: Default::default(),
         consumers: Vec::new(),
         indexing: None,
         config,

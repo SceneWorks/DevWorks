@@ -17,8 +17,10 @@
 //! * [`RunGate`] is the root-control [`RootEligibility`] every consumer gets at boot.
 use crate::dispatch::{Either, RootEligibility, Wakeup, first};
 use crate::store;
+use crate::workers::Ticker;
 use devworks_core::ports::Clock;
 use devworks_core::ports::process::NativeIdentity;
+use devworks_core::ports::storage::WriteOptions;
 use devworks_core::ports::storage::{
     ActivationOutcome, ActivationPhase, ApplicationStore, QueueEntry, StorageError,
     StoredActivation, WriteTransaction, is_terminal,
@@ -34,10 +36,9 @@ use devworks_core::services::runs::substrate::ActivationFailure;
 use std::collections::HashMap;
 use std::future::Future;
 use std::pin::Pin;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, Weak};
 use std::time::Duration;
-use tokio::sync::{Notify, watch};
+use tokio::sync::watch;
 use tokio::task::JoinHandle;
 use tokio::time::Instant;
 
@@ -181,8 +182,7 @@ pub struct RunSupervisor {
     /// of root work held awaiting eligibility.
     dispatcher: Mutex<Option<Wakeup>>,
     last: Mutex<Option<(Instant, i64)>>,
-    stopping: AtomicBool,
-    wake: Notify,
+    ticker: Ticker,
     running: Mutex<HashMap<String, Running>>,
     /// One archival stop at a time per project (keyed by project ID).
     archive_stops: Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
@@ -260,8 +260,7 @@ impl RunSupervisor {
             stop_cursor: Mutex::new(None),
             dispatcher: Mutex::new(settings.dispatcher),
             last: Mutex::new(None),
-            stopping: AtomicBool::new(false),
-            wake: Notify::new(),
+            ticker: Ticker::new(),
             running: Mutex::new(HashMap::new()),
             archive_stops: Mutex::new(HashMap::new()),
         })
@@ -277,7 +276,7 @@ impl RunSupervisor {
         &self,
         launcher: Arc<dyn ActivationLauncher>,
     ) -> Result<(), StorageError> {
-        if self.stopping.load(Ordering::SeqCst) {
+        if self.ticker.is_stopped() {
             return Err(StorageError::ScopeDenied);
         }
         let mut slot = self.launcher.lock().unwrap_or_else(|p| p.into_inner());
@@ -325,7 +324,10 @@ impl RunSupervisor {
     /// Boot recovery of run roots (before any delivery, claim or command).
     pub async fn boot(&self) -> Result<BootRecovery, StorageError> {
         let (service, hooks) = (self.service.clone(), self.hooks.clone());
-        store::write(&self.store, move |tx| service.recover_boot(tx, &*hooks)).await
+        store::write(&self.store, WriteOptions::recovery(), move |tx| {
+            service.recover_boot(tx, &*hooks)
+        })
+        .await
     }
 
     /// Connects the dispatcher whose held root work supervision commits may make eligible.
@@ -345,7 +347,7 @@ impl RunSupervisor {
 
     /// Requests a tick now (a committed stop, pause or continue).
     pub fn notify(&self) {
-        self.wake.notify_one();
+        self.ticker.notify();
     }
 
     /// One supervision pass (see the module documentation).
@@ -365,15 +367,23 @@ impl RunSupervisor {
         };
         if report.woke {
             let (service, owner) = (self.service.clone(), self.owner.clone());
-            report.reasserted =
-                store::write(&self.store, move |tx| service.reassert_leases(tx, &owner)).await?;
+            report.reasserted = store::write(&self.store, WriteOptions::recovery(), move |tx| {
+                service.reassert_leases(tx, &owner)
+            })
+            .await?;
         }
         let service = self.service.clone();
-        report.expired = store::write(&self.store, move |tx| service.recover_expired(tx)).await?;
+        report.expired = store::write(&self.store, WriteOptions::recovery(), move |tx| {
+            service.recover_expired(tx)
+        })
+        .await?;
         let service = self.service.clone();
-        report.swept = store::write(&self.store, move |tx| service.sweep_expired_waits(tx)).await?;
+        report.swept = store::write(&self.store, WriteOptions::housekeeping(), move |tx| {
+            service.sweep_expired_waits(tx)
+        })
+        .await?;
         let service = self.service.clone();
-        store::write(&self.store, move |tx| {
+        store::write(&self.store, WriteOptions::recovery(), move |tx| {
             devworks_core::services::work::allocation::reconcile(tx, &service)
         })
         .await?;
@@ -394,15 +404,15 @@ impl RunSupervisor {
             .lock()
             .unwrap_or_else(|p| p.into_inner())
             .is_some();
-        if has_launcher && !self.stopping.load(Ordering::SeqCst) {
+        if has_launcher && !self.ticker.is_stopped() {
             loop {
                 // Shutdown (or drop) may begin while this tick runs: no further claim, and a
                 // claim committed meanwhile is not launched (shutdown records it interrupted).
-                if self.stopping.load(Ordering::SeqCst) {
+                if self.ticker.is_stopped() {
                     break;
                 }
                 let (service, owner) = (self.service.clone(), self.owner.clone());
-                let claimed = store::write(&self.store, move |tx| {
+                let claimed = store::write(&self.store, WriteOptions::host_state(), move |tx| {
                     let Some(a) = service.claim_activation(tx, &owner)? else {
                         return Ok(None);
                     };
@@ -414,7 +424,7 @@ impl RunSupervisor {
                 let Some(running) = claimed else {
                     break;
                 };
-                if self.stopping.load(Ordering::SeqCst) {
+                if self.ticker.is_stopped() {
                     break;
                 }
                 report.launched.push(running.id.clone());
@@ -458,7 +468,7 @@ impl RunSupervisor {
         for c in pending {
             // Shutdown stops admitting root stops: the remaining trees are stopped by the shared
             // bounded shutdown of owned trees, and the stops settle at the next boot.
-            if self.stopping.load(Ordering::SeqCst) {
+            if self.ticker.is_stopped() {
                 break;
             }
             let Some(op) = c.stop_operation_id.clone() else {
@@ -494,35 +504,36 @@ impl RunSupervisor {
         grace: Duration,
     ) -> Result<OperationState, StorageError> {
         let (o, r) = (op.clone(), root.clone());
-        let (control, targets, linked, moved_targets) = store::write(&self.store, move |tx| {
-            dispatch_stop_operation(tx, &o)?;
-            let control = devworks_core::services::runs::control_of(tx.runs(), &r)?;
-            let targets = stop_reconciliation_targets(tx.runs(), &r, &o)?;
-            // A feature's stop also covers its linked cards' retained launches and trees, each
-            // only at the generation it covered: a card that moved past it (unlinked and
-            // continued) keeps its newer work, but trees this stop holds for reconciliation
-            // are still stopped by identity.
-            let mut linked = Vec::new();
-            let mut moved_targets = Vec::new();
-            for card in devworks_core::services::runs::stop_linked_roots(tx, &o)? {
-                let current = devworks_core::services::runs::control_of(tx.runs(), &card.root)?;
-                let moved = card.superseded(&current);
-                if moved {
-                    for t in &targets {
-                        if tx
-                            .resources()
-                            .process(t)?
-                            .is_some_and(|p| p.root_id.as_ref() == Some(&card.root))
-                        {
-                            moved_targets.push(t.clone());
+        let (control, targets, linked, moved_targets) =
+            store::write(&self.store, WriteOptions::settlement(), move |tx| {
+                dispatch_stop_operation(tx, &o)?;
+                let control = devworks_core::services::runs::control_of(tx.runs(), &r)?;
+                let targets = stop_reconciliation_targets(tx.runs(), &r, &o)?;
+                // A feature's stop also covers its linked cards' retained launches and trees, each
+                // only at the generation it covered: a card that moved past it (unlinked and
+                // continued) keeps its newer work, but trees this stop holds for reconciliation
+                // are still stopped by identity.
+                let mut linked = Vec::new();
+                let mut moved_targets = Vec::new();
+                for card in devworks_core::services::runs::stop_linked_roots(tx, &o)? {
+                    let current = devworks_core::services::runs::control_of(tx.runs(), &card.root)?;
+                    let moved = card.superseded(&current);
+                    if moved {
+                        for t in &targets {
+                            if tx
+                                .resources()
+                                .process(t)?
+                                .is_some_and(|p| p.root_id.as_ref() == Some(&card.root))
+                            {
+                                moved_targets.push(t.clone());
+                            }
                         }
                     }
+                    linked.push((card, moved));
                 }
-                linked.push((card, moved));
-            }
-            Ok((control, targets, linked, moved_targets))
-        })
-        .await?;
+                Ok((control, targets, linked, moved_targets))
+            })
+            .await?;
         let superseded = stop_superseded(&control);
         self.signal_covered(root, control.stop_generation);
         for (card, _) in &linked {
@@ -581,7 +592,7 @@ impl RunSupervisor {
         }
         let (service, root, op) = (self.service.clone(), root.clone(), op.clone());
         // Settlement adds the trees it covers that are still unsettled.
-        store::write(&self.store, move |tx| {
+        store::write(&self.store, WriteOptions::settlement(), move |tx| {
             service.settle_stop(tx, &root, &op, &uncertain)
         })
         .await
@@ -675,7 +686,7 @@ impl RunSupervisor {
                         let Some(me) = weak.upgrade() else {
                             break None;
                         };
-                        if me.stopping.load(Ordering::SeqCst) {
+                        if me.ticker.is_stopped() {
                             // Shutting down or dropped: no renewal; the launch was asked to stop.
                             let _ = signal.send(true);
                             continue;
@@ -684,7 +695,7 @@ impl RunSupervisor {
                             continue;
                         }
                         let (service, x) = (me.service.clone(), id.clone());
-                        match store::write(&me.store, move |tx| {
+                        match store::write(&me.store, WriteOptions::settlement(), move |tx| {
                             service.renew_activation(tx, &x, epoch)
                         })
                         .await
@@ -712,7 +723,7 @@ impl RunSupervisor {
             // to expire, and the next pass records it as a transient failure.
             for attempt in (1..=END_WRITE_ATTEMPTS).filter(|_| owned) {
                 let (service, x, end) = (me.service.clone(), id.clone(), end.clone());
-                let written = store::write(&me.store, move |tx| {
+                let written = store::write(&me.store, WriteOptions::settlement(), move |tx| {
                     let stopping = tx
                         .runs()
                         .activation(&x)?
@@ -742,7 +753,7 @@ impl RunSupervisor {
                 .lock()
                 .unwrap_or_else(|p| p.into_inner())
                 .remove(&task_key);
-            me.wake.notify_one();
+            me.ticker.notify();
         });
         map.insert(
             key,
@@ -760,21 +771,18 @@ impl RunSupervisor {
     /// Ticks every `every` (or sooner when notified) until [`Self::stop`]. Transient storage
     /// failures are retried on the next tick.
     pub async fn run(self: Arc<Self>, every: Duration) {
-        while !self.stopping.load(Ordering::SeqCst) {
-            let _ = self.tick().await;
-            // Backstop: a periodic restart of the dispatcher's eligibility scan, in case a
-            // change outside supervision made a root eligible without a wakeup.
-            self.wake_dispatcher();
-            if self.stopping.load(Ordering::SeqCst) {
-                break;
-            }
-            let _ = first(self.wake.notified(), tokio::time::sleep(every)).await;
-        }
+        self.ticker
+            .run(every, || async {
+                let _ = self.tick().await;
+                // Backstop: a periodic restart of the dispatcher's eligibility scan, in case a
+                // change outside supervision made a root eligible without a wakeup.
+                self.wake_dispatcher();
+            })
+            .await;
     }
 
     pub fn stop(&self) {
-        self.stopping.store(true, Ordering::SeqCst);
-        self.wake.notify_one();
+        self.ticker.stop();
     }
 }
 
@@ -833,7 +841,7 @@ impl RunSupervisor {
     pub async fn quiesce(&self, grace: Duration) -> Result<Vec<RootId>, StorageError> {
         self.stop();
         let (service, hooks) = (self.service.clone(), self.hooks.clone());
-        let held = store::write(&self.store, move |tx| {
+        let held = store::write(&self.store, WriteOptions::settlement(), move |tx| {
             service.quiesce_for_shutdown(tx, &*hooks)
         })
         .await;
@@ -858,7 +866,10 @@ impl RunSupervisor {
     /// Shutdown step 4: every activation of this boot still live is recorded `Interrupted`.
     pub async fn finish(&self) -> Result<usize, StorageError> {
         let service = self.service.clone();
-        store::write(&self.store, move |tx| service.finish_shutdown(tx)).await
+        store::write(&self.store, WriteOptions::settlement(), move |tx| {
+            service.finish_shutdown(tx)
+        })
+        .await
     }
 
     /// The immediate stop of a confirmed project archival: every root is stopped under a new
@@ -868,7 +879,7 @@ impl RunSupervisor {
         project: &ProjectId,
     ) -> Result<Vec<(RootId, OperationState)>, StorageError> {
         let (service, p) = (self.service.clone(), project.clone());
-        let stopped = store::write(&self.store, move |tx| {
+        let stopped = store::write(&self.store, WriteOptions::settlement(), move |tx| {
             let host = tx.store().host_actor.clone();
             service.stop_project(tx, &host, &p)
         })
@@ -954,7 +965,7 @@ impl RunSupervisor {
         // committed just before it, or a supervision pass in flight): its blocking stop would
         // hold the trees shutdown stops within its one bound. The stop stays pending for the next
         // boot, whose recovery reaps this boot's trees.
-        if self.stopping.load(Ordering::SeqCst) {
+        if self.ticker.is_stopped() {
             return Ok(Vec::new());
         }
         let out = self.kill_project(project, Some(epoch), stops).await?;
@@ -962,7 +973,7 @@ impl RunSupervisor {
         // or deleted. A launch of an earlier epoch that registers after that kill is killed by its
         // own epoch recheck; the clear is bound to `epoch`, so it never ends a later archival.
         let p = project.clone();
-        store::write(&self.store, move |tx| {
+        store::write(&self.store, WriteOptions::settlement(), move |tx| {
             tx.projects().finish_archive_stop(&p, epoch)
         })
         .await?;
@@ -974,13 +985,13 @@ impl RunSupervisor {
     async fn finish_archive_stops(&self) -> Result<Vec<ProjectId>, StorageError> {
         // Shutdown stops every owned tree itself, within its one bound; a pending archival stop
         // left here is finished by the next boot's first pass (its trees are reaped at boot).
-        if self.stopping.load(Ordering::SeqCst) {
+        if self.ticker.is_stopped() {
             return Ok(Vec::new());
         }
         let pending = store::read(&self.store, |s| s.projects().pending_archive_stops(100)).await?;
         let mut done = Vec::new();
         for p in pending {
-            if self.stopping.load(Ordering::SeqCst) {
+            if self.ticker.is_stopped() {
                 break;
             }
             if self.stop_archived_project(&p).await.is_ok() {

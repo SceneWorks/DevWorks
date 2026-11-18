@@ -9,7 +9,7 @@ use crate::protocol::records::{
     ConventionIndexPhase, ConventionIndexStatus, ConventionRecord, ConventionResourceRecord,
 };
 use crate::protocol::support::{BoundedList, BoundedText, Check, GraphText, SignedCounter};
-use crate::services::sessions::counter;
+use crate::services::kernel::counter;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
 
@@ -113,5 +113,5 @@ pub fn resource(
 }
 
 #[path = "manifest_writer.rs"]
-mod manifest_writer;
+pub(super) mod manifest_writer;
 pub use manifest_writer::{EditorConvention, EditorResource, EditorText, write_editor_manifest};

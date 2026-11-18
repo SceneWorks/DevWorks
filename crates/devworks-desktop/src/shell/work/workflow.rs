@@ -39,23 +39,139 @@ pub struct AllocationFilters {
     pub another: bool,
     pub idempotency_key: String,
 }
+/// The `workflows.order` command listing `ids` in order.
+pub(crate) fn order_status_request(
+    project: &str,
+    revision: &Option<String>,
+    ids: &[Id],
+) -> Option<In> {
+    Some(In::Workflows(workflows::Input::Order(
+        workflows::OrderInput {
+            project_id: ProjectId(frame::id(project)?),
+            expected_workflow_revision: frame::text(revision.as_deref()?)?,
+            ordered_status_ids: frame::bounded(ids.to_vec())?,
+        },
+    )))
+}
+/// The `workflows.create_status` command.
+pub(crate) fn create_status_request(
+    project: &str,
+    base: &str,
+    label: &str,
+    category: &str,
+    after: Option<&str>,
+) -> Option<In> {
+    Some(In::Workflows(workflows::Input::CreateStatus(
+        workflows::CreateStatusInput {
+            project_id: ProjectId(frame::id(project)?),
+            expected_workflow_revision: frame::text(base)?,
+            label: frame::text(label)?,
+            category: frame::text(category)?,
+            after_status_id: frame::lift(after.map(frame::id))?,
+        },
+    )))
+}
+/// The `workflows.rename_status` command.
+pub(crate) fn rename_status_request(
+    project: &str,
+    snapshot: &StatusRecord,
+    label: &str,
+) -> Option<In> {
+    Some(In::Workflows(workflows::Input::RenameStatus(
+        workflows::RenameStatusInput {
+            project_id: ProjectId(frame::id(project)?),
+            status_id: snapshot.id.clone(),
+            expected_revision: snapshot.revision.clone(),
+            label: frame::text(label)?,
+        },
+    )))
+}
+/// The `workflows.reassign_and_remove` command.
+pub(crate) fn remove_status_request(
+    project: &str,
+    snapshot: &StatusRecord,
+    destination: &Option<String>,
+) -> Option<In> {
+    Some(In::Workflows(workflows::Input::ReassignAndRemove(
+        workflows::ReassignAndRemoveInput {
+            project_id: ProjectId(frame::id(project)?),
+            expected_workflow_revision: snapshot.workflow_revision.clone()?,
+            remove_status_id: snapshot.id.clone(),
+            destination_status_id: frame::id(destination.as_deref()?)?,
+            expected_affected_work_digest: snapshot.affected_work_digest.clone()?,
+        },
+    )))
+}
+/// The `next_work.release_claim` command.
+pub(crate) fn release_request(claim: &AllocationClaimRecord) -> In {
+    In::NextWork(next_work::Input::ReleaseClaim(
+        next_work::ReleaseClaimInput {
+            claim_id: claim.id.clone(),
+            expected_fence: claim.fence.clone(),
+        },
+    ))
+}
 impl AllocationFilters {
-    fn apply(&self, body: &mut Value) {
-        if let Some(repository) = &self.repository_id {
-            body["repositoryId"] = json!(repository);
-        }
-        if let Some(kind) = &self.task_type {
-            body["taskType"] = json!(kind);
-        }
-        if !self.label.is_empty() {
-            body["label"] = json!(self.label);
-        }
-        if self.another {
-            body["another"] = json!(true);
-        }
-        if !self.idempotency_key.is_empty() {
-            body["idempotencyKey"] = json!(self.idempotency_key);
-        }
+    /// The claim command of a project queue (or of one feature's tasks) at `snapshot`, with
+    /// these filters: its operation, and the input (none when a value is outside its contract).
+    pub(crate) fn claim(
+        &self,
+        project: &str,
+        feature: Option<&str>,
+        snapshot: &AllocationQueueSnapshot,
+        lease: u64,
+    ) -> (&'static str, Option<In>) {
+        let input = || {
+            let lease_ms = frame::text(&lease.to_string())?;
+            let repository_id = frame::lift(self.repository_id.as_deref().map(frame::id))?;
+            let task_type = frame::lift(self.task_type.as_deref().map(frame::text))?;
+            let label = frame::lift(
+                Some(self.label.as_str())
+                    .filter(|l| !l.is_empty())
+                    .map(frame::text),
+            )?;
+            let another = self.another.then_some(true);
+            let idempotency_key = frame::lift(
+                Some(self.idempotency_key.as_str())
+                    .filter(|k| !k.is_empty())
+                    .map(frame::text),
+            )?;
+            let expected_revision: Revision = snapshot.queue_revision.clone();
+            Some(match feature {
+                None => In::NextWork(next_work::Input::ClaimProjectQueue(
+                    next_work::ClaimProjectQueueInput {
+                        project_id: ProjectId(frame::id(project)?),
+                        expected_queue_revision: expected_revision,
+                        lease_ms,
+                        repository_id,
+                        task_type,
+                        label,
+                        another,
+                        idempotency_key,
+                    },
+                )),
+                Some(feature) => In::NextWork(next_work::Input::ClaimFeatureTask(
+                    next_work::ClaimFeatureTaskInput {
+                        root_id: frame::text(feature)?,
+                        expected_task_set_revision: expected_revision,
+                        lease_ms,
+                        repository_id,
+                        task_type,
+                        label,
+                        another,
+                        idempotency_key,
+                    },
+                )),
+            })
+        };
+        (
+            if feature.is_none() {
+                "next_work.claim_project_queue"
+            } else {
+                "next_work.claim_feature_task"
+            },
+            input(),
+        )
     }
 }
 impl WorkflowUi {
@@ -69,15 +185,17 @@ impl WorkflowUi {
 }
 #[derive(Clone, Debug)]
 pub enum WorkflowAction {
+    /// A workflow command: its operation, and the input (none when a value is outside its
+    /// contract, which the gateway then rejects as a malformed request).
     Submit {
         project: String,
         operation: &'static str,
-        body: Value,
+        input: Option<In>,
     },
     Reload(String),
 }
 
-impl Shell {
+impl WorkCtl<'_, '_> {
     pub(super) fn load_workflow(&mut self, project: &str, replace: bool) {
         let generation = self
             .work
@@ -85,7 +203,7 @@ impl Shell {
             .entry(project.into())
             .or_default()
             .generation;
-        if !replace && self.pending(&Slot::WorkWorkflow(project.into(), generation)) {
+        if !replace && self.pending(&WorkSlot::WorkWorkflow(project.into(), generation)) {
             return;
         }
         let state = self.work.workflows.entry(project.into()).or_default();
@@ -94,7 +212,7 @@ impl Shell {
         let generation = state.generation;
         let p = project.to_owned();
         self.query(
-            Slot::WorkWorkflow(p.clone(), generation),
+            WorkSlot::WorkWorkflow(p.clone(), generation),
             "Loading project workflow",
             "workflows.list",
             move |b| wops::workflow_list(b, &p, None),
@@ -109,11 +227,11 @@ impl Shell {
         let key = (project.to_owned(), feature.clone());
         if lease.is_some()
             && (self.work.allocation_busy.contains(&key)
-                || self.waiting(&Slot::AllocationClaim(project.into(), feature.clone())))
+                || self.waiting(&WorkSlot::AllocationClaim(project.into(), feature.clone())))
         {
             return;
         }
-        let slot = Slot::AllocationQueue(project.into(), feature.clone(), lease);
+        let slot = WorkSlot::AllocationQueue(project.into(), feature.clone(), lease);
         if self.waiting(&slot) {
             return;
         }
@@ -147,13 +265,13 @@ impl Shell {
         }
     }
     pub(super) fn inspect_allocation(&mut self, claim: &str) {
-        if self.pending(&Slot::AllocationInspect(claim.into())) {
+        if self.pending(&WorkSlot::AllocationInspect(claim.into())) {
             return;
         }
         let id = claim.to_owned();
         self.work.allocation_inspect_errors.remove(claim);
         self.query(
-            Slot::AllocationInspect(id.clone()),
+            WorkSlot::AllocationInspect(id.clone()),
             "Inspecting work claim",
             "next_work.inspect_claim",
             move |b| wops::allocation_inspect(b, &id),
@@ -180,18 +298,18 @@ impl Shell {
         }
     }
     pub(super) fn release_allocation(&mut self, id: &str) {
-        if self.waiting(&Slot::AllocationRelease(id.into())) {
+        if self.waiting(&WorkSlot::AllocationRelease(id.into())) {
             return;
         }
         let Some(claim) = self.work.allocation_claims.get(id) else {
             return;
         };
-        let body = json!({"claimId":claim.id,"expectedFence":claim.fence});
+        let input = release_request(claim);
         self.command(
-            Slot::AllocationRelease(id.into()),
+            WorkSlot::AllocationRelease(id.into()),
             "Releasing work claim",
             "next_work.release_claim",
-            move |b| wops::allocation_command(b, "next_work.release_claim", body),
+            move |b| wops::allocation_command(b, input),
         );
     }
     pub(super) fn workflow_action(&mut self, action: WorkflowAction) {
@@ -200,16 +318,16 @@ impl Shell {
             WorkflowAction::Submit {
                 project,
                 operation,
-                body,
+                input,
             } => {
-                if self.waiting(&Slot::WorkWorkflowCommand(project.clone())) {
+                if self.waiting(&WorkSlot::WorkWorkflowCommand(project.clone())) {
                     return;
                 }
                 if self.command(
-                    Slot::WorkWorkflowCommand(project.clone()),
+                    WorkSlot::WorkWorkflowCommand(project.clone()),
                     "Changing project workflow",
                     operation,
-                    move |b| wops::workflow_command(b, operation, body),
+                    move |b| wops::workflow_command(b, input),
                 ) {
                     self.work.workflows.entry(project).or_default().busy = true;
                 } else {
@@ -221,8 +339,13 @@ impl Shell {
             }
         }
     }
-    pub(super) fn apply_workflow(&mut self, slot: Slot, reply: Reply) -> Option<(Slot, Reply)> {
-        if let (Slot::AllocationClaim(project, feature), Reply::Command(outcome)) = (&slot, &reply)
+    pub(super) fn apply_workflow(
+        &mut self,
+        slot: WorkSlot,
+        reply: Reply,
+    ) -> Option<(WorkSlot, Reply)> {
+        if let (WorkSlot::AllocationClaim(project, feature), Reply::Command(outcome)) =
+            (&slot, &reply)
             && !is_unknown(outcome)
         {
             self.work
@@ -230,7 +353,7 @@ impl Shell {
                 .remove(&(project.clone(), feature.clone()));
         }
         match (slot, reply) {
-            (Slot::WorkWorkflow(project, generation), Reply::Query(query)) => {
+            (WorkSlot::WorkWorkflow(project, generation), Reply::Query(query)) => {
                 let state = self.work.workflows.entry(project.clone()).or_default();
                 if generation != state.generation {
                     return None;
@@ -240,7 +363,7 @@ impl Shell {
                         state.gathering.extend(rows);
                         if let Some(cursor) = next {
                             self.query(
-                                Slot::WorkWorkflow(project.clone(), generation),
+                                WorkSlot::WorkWorkflow(project.clone(), generation),
                                 "Loading project workflow",
                                 "workflows.list",
                                 move |b| wops::workflow_list(b, &project, Some(&cursor)),
@@ -281,7 +404,7 @@ impl Shell {
                     }
                 }
             }
-            (Slot::WorkWorkflowCommand(project), Reply::Command(outcome)) => {
+            (WorkSlot::WorkWorkflowCommand(project), Reply::Command(outcome)) => {
                 let unknown = is_unknown(&outcome);
                 if !unknown {
                     self.work.workflows.entry(project.clone()).or_default().busy = false;
@@ -305,23 +428,13 @@ impl Shell {
                     }
                 }
             }
-            (Slot::AllocationQueue(project, feature, lease), Reply::Query(query)) => {
+            (WorkSlot::AllocationQueue(project, feature, lease), Reply::Query(query)) => {
                 match wops::queue_snapshot(query) {
                     Ok(snapshot) => {
                         self.work
                             .allocation_queues
                             .insert((project.clone(), feature.clone()), snapshot.clone());
                         if let Some(lease) = lease {
-                            let (operation, mut body) = match &feature {
-                                None => (
-                                    "next_work.claim_project_queue",
-                                    json!({"projectId":project,"expectedQueueRevision":snapshot.queue_revision,"leaseMs":lease.to_string()}),
-                                ),
-                                Some(feature) => (
-                                    "next_work.claim_feature_task",
-                                    json!({"rootId":feature,"expectedTaskSetRevision":snapshot.queue_revision,"leaseMs":lease.to_string()}),
-                                ),
-                            };
                             let Some(filters) = self
                                 .work
                                 .allocation_requests
@@ -331,13 +444,14 @@ impl Shell {
                                 self.work_failure("Selecting work",Failure::Other("The selection request is no longer available; choose Next work again.".into()));
                                 return None;
                             };
-                            filters.apply(&mut body);
+                            let (operation, input) =
+                                filters.claim(&project, feature.as_deref(), &snapshot, lease);
                             let key = (project.clone(), feature.clone());
                             if !self.command(
-                                Slot::AllocationClaim(project, feature),
+                                WorkSlot::AllocationClaim(project, feature),
                                 "Selecting work",
                                 operation,
-                                move |b| wops::allocation_command(b, operation, body),
+                                move |b| wops::allocation_command(b, input),
                             ) {
                                 self.work.allocation_busy.remove(&key);
                                 self.work.message = Some((Tone::Attention,"The selection was not submitted. Choose Next work again when the runtime is available.".into()));
@@ -350,7 +464,7 @@ impl Shell {
                     }
                 }
             }
-            (Slot::AllocationClaim(_, _), Reply::Command(outcome)) => {
+            (WorkSlot::AllocationClaim(_, _), Reply::Command(outcome)) => {
                 match wops::allocation_selection(outcome) {
                     Ok(AllocationSelection::Current(AllocationOutcome::Claimed {
                         claim,
@@ -389,7 +503,7 @@ impl Shell {
                     Err(error) => self.work_failure("Selecting work", error),
                 }
             }
-            (Slot::AllocationRelease(_), Reply::Command(outcome)) => {
+            (WorkSlot::AllocationRelease(_), Reply::Command(outcome)) => {
                 match wops::allocation_released(outcome) {
                     Ok(claim) => {
                         self.work.message = Some((
@@ -404,7 +518,7 @@ impl Shell {
                     Err(error) => self.work_failure("Releasing work", error),
                 }
             }
-            (Slot::AllocationInspect(id), Reply::Query(query)) => {
+            (WorkSlot::AllocationInspect(id), Reply::Query(query)) => {
                 match wops::inspected_claim(query) {
                     Ok(claim) => {
                         self.work.allocation_claims.insert(id, claim);
@@ -449,11 +563,11 @@ impl Shell {
         ));
         self.load_work();
     }
-    pub(super) fn workflow_dialog(&mut self, ctx: &egui::Context, actions: &mut Vec<Action>) {
+    pub(crate) fn workflow_dialog(&mut self, ctx: &egui::Context, actions: &mut Vec<Action>) {
         let Some(project) = self.work.of.clone() else {
             return;
         };
-        let waiting = self.waiting(&Slot::WorkWorkflowCommand(project.clone()));
+        let waiting = self.waiting(&WorkSlot::WorkWorkflowCommand(project.clone()));
         let Some(workflow) = self.work.workflows.get_mut(&project) else {
             return;
         };
@@ -520,7 +634,7 @@ pub(crate) fn next_task(
         ));
     }
 }
-pub(super) fn controls(
+pub(crate) fn controls(
     ui: &mut Ui,
     work: &mut WorkUi,
     enabled: bool,
@@ -870,7 +984,7 @@ fn editor(ui: &mut Ui, project: &str, workflow: &mut WorkflowUi, actions: &mut V
                             ids.swap(index,neighbor.expect("enabled neighbor"));
                             actions.push(Action::Workflow(WorkflowAction::Submit {
                                 project:project.into(),operation:"workflows.order",
-                                body:json!({"projectId":project,"expectedWorkflowRevision":revision,"orderedStatusIds":ids}),
+                                input:order_status_request(project,&revision,&ids),
                             }));
                         }
                     }
@@ -901,9 +1015,8 @@ fn editor(ui: &mut Ui, project: &str, workflow: &mut WorkflowUi, actions: &mut V
                 if Some(base.as_str()) != revision.as_deref() { stale(ui); }
                 ui.horizontal_wrapped(|ui| {
                     if ui.add_enabled(!label.trim().is_empty(),egui::Button::new("Create status")).clicked() {
-                        let mut body = json!({"projectId":project,"expectedWorkflowRevision":base,"label":label,"category":category});
-                        if let Some(after) = after_status_id { body["afterStatusId"] = json!(after); }
-                        actions.push(Action::Workflow(WorkflowAction::Submit { project:project.into(),operation:"workflows.create_status",body }));
+                        let input = create_status_request(project,base,label,category,after_status_id.as_deref());
+                        actions.push(Action::Workflow(WorkflowAction::Submit { project:project.into(),operation:"workflows.create_status",input }));
                     }
                     if ui.button("Review current workflow").clicked() && let Some(current) = &revision { *base = current.clone(); }
                     if ui.button("Cancel status edit").clicked() { close = true; }
@@ -918,7 +1031,7 @@ fn editor(ui: &mut Ui, project: &str, workflow: &mut WorkflowUi, actions: &mut V
                 ui.horizontal_wrapped(|ui| {
                     if ui.add_enabled(!label.trim().is_empty(),egui::Button::new("Save status name")).clicked() {
                         actions.push(Action::Workflow(WorkflowAction::Submit { project:project.into(),operation:"workflows.rename_status",
-                            body:json!({"projectId":project,"statusId":snapshot.id,"expectedRevision":snapshot.revision,"label":label}) }));
+                            input:rename_status_request(project,snapshot,label) }));
                     }
                     if ui.add_enabled(current.is_some(),egui::Button::new("Review current workflow")).clicked() && let Some(current) = current { *snapshot = current.clone(); }
                     if ui.button("Cancel status edit").clicked() { close = true; }
@@ -941,7 +1054,7 @@ fn editor(ui: &mut Ui, project: &str, workflow: &mut WorkflowUi, actions: &mut V
                 ui.horizontal_wrapped(|ui| {
                     if ui.add_enabled(ready,egui::Button::new("Reassign work and remove status")).clicked() {
                         actions.push(Action::Workflow(WorkflowAction::Submit { project:project.into(),operation:"workflows.reassign_and_remove",
-                            body:json!({"projectId":project,"expectedWorkflowRevision":snapshot.workflow_revision,"removeStatusId":snapshot.id,"destinationStatusId":destination,"expectedAffectedWorkDigest":snapshot.affected_work_digest}) }));
+                            input:remove_status_request(project,snapshot,destination) }));
                     }
                     if ui.add_enabled(current.is_some(),egui::Button::new("Review current workflow")).clicked() && let Some(current) = current { *snapshot = current.clone(); }
                     if ui.button("Cancel status edit").clicked() { close = true; }

@@ -24,17 +24,13 @@ use crate::protocol::results::OperationResult;
 use crate::protocol::support::BoundedText;
 use crate::registry::Mode;
 use crate::services::artifacts::observed::Observed;
-use crate::services::sessions::rev;
+use crate::services::effect::{EffectOutcome, JournaledEffect};
+use crate::services::kernel::rev;
 use base64::Engine as _;
-use serde_json::{Value, json};
+use serde_json::json;
 use std::collections::BTreeSet;
+use std::sync::Arc;
 use std::time::Duration;
-
-pub enum EffectOutcome {
-    Completed(Value),
-    Failed(String),
-    Unknown(String),
-}
 
 struct ExecutionPlan<'a> {
     backend: Backend,
@@ -228,7 +224,7 @@ impl ContainerService {
         terminal: ContainerPhase,
     ) -> Result<StoredContainer, EffectOutcome> {
         let resources = self.resources.clone();
-        run_write(&*self.store, WriteOptions::default(), move |tx| {
+        run_write(&*self.store, WriteOptions::settlement(), move |tx| {
             let row = tx
                 .resources()
                 .container(&id)?
@@ -375,7 +371,7 @@ impl ContainerService {
         let lease_ids = row.resource_lease_ids.clone();
         let project = row.project_id.clone();
         let holder = format!("session:{}", row.id.as_str());
-        let leases_valid = run_write(&*self.store, WriteOptions::default(), move |tx| {
+        let leases_valid = run_write(&*self.store, WriteOptions::settlement(), move |tx| {
             if lease_ids.len() != expected_resources.len() {
                 return Ok(false);
             }
@@ -991,7 +987,7 @@ impl ContainerService {
             let lease_ids = row.resource_lease_ids.clone();
             let project = row.project_id.clone();
             let holder = format!("session:{}", row.id.as_str());
-            let valid = run_write(&*self.store, WriteOptions::default(), move |tx| {
+            let valid = run_write(&*self.store, WriteOptions::settlement(), move |tx| {
                 for id in &lease_ids {
                     let Some(lease) = tx.resources().lease(id)? else {
                         return Ok(false);
@@ -1305,6 +1301,20 @@ impl ContainerService {
             }
             _ => EffectOutcome::Unknown("container effect requires owner reconciliation".into()),
         }
+    }
+}
+
+/// A container service bound to the authority its effects recheck.
+pub struct ContainerEffects {
+    pub service: Arc<ContainerService>,
+    pub authority: Arc<dyn AuthorityPort>,
+}
+impl JournaledEffect for ContainerEffects {
+    fn execute(&self, operation: &OperationRecord) -> EffectOutcome {
+        self.service.execute_effect(operation, &*self.authority)
+    }
+    fn observe(&self, operation: &OperationRecord) -> EffectOutcome {
+        self.service.observe_effect(operation, &*self.authority)
     }
 }
 

@@ -25,8 +25,7 @@ use devworks_core::{
         usage::{
             accounting::{AttemptEnd, AttemptRequest},
             host::{
-                AccountingWriteFence, DriveOutcome, InferenceFrame, OwnedInferenceSink,
-                OwnedInferenceSource,
+                DriveOutcome, InferenceFrame, OwnedInferenceSink, OwnedInferenceSource, WriteFence,
             },
         },
     },
@@ -395,9 +394,12 @@ impl NativeProviders {
                         && current.context_epoch == preview.context_epoch
                         && attempt.session_id.as_ref() == Some(session)
                         && if preview.finalized_through.is_some() {
-                            matches!(attempt.state.as_str(), "Dispatched" | "Settled")
+                            matches!(
+                                attempt.state,
+                                AttemptState::Dispatched | AttemptState::Settled
+                            )
                         } else {
-                            attempt.state == "Dispatched"
+                            attempt.state == AttemptState::Dispatched
                         })
                 })
                 .unwrap_or(false);
@@ -1414,7 +1416,7 @@ impl OwnedInferenceSink for LazySink {
         &mut self,
         a: &StoredInferenceAttempt,
         h: devworks_core::providers::ProviderResponseHead,
-        w: &AccountingWriteFence,
+        w: &WriteFence,
     ) -> Result<(), StorageError> {
         self.get()?
             .ok_or(StorageError::ScopeDenied)?
@@ -1425,7 +1427,7 @@ impl OwnedInferenceSink for LazySink {
         &mut self,
         a: &StoredInferenceAttempt,
         f: devworks_core::providers::decode::DecodedFrame,
-        w: &AccountingWriteFence,
+        w: &WriteFence,
     ) -> Result<(), StorageError> {
         self.get()?
             .ok_or(StorageError::ScopeDenied)?
@@ -1435,7 +1437,7 @@ impl OwnedInferenceSink for LazySink {
         &mut self,
         a: &StoredInferenceAttempt,
         o: AttemptEnd,
-        w: &AccountingWriteFence,
+        w: &WriteFence,
     ) -> Result<(), StorageError> {
         match self.get()? {
             Some(s) => s.finish(a, o, w),

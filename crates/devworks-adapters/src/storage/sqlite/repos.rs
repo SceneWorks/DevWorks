@@ -3,6 +3,7 @@
 //! and the write unit; write operations exist only on [`Unit`], which borrows the writer's open
 //! transaction.
 use super::conn::db;
+use super::support::{conflict, conflict_strict, corrupt, id_of, invalid, page_limit};
 use devworks_core::context::{PrincipalKind, ReceiptIdentity};
 use devworks_core::fingerprint::Fingerprint;
 use devworks_core::ports::storage::*;
@@ -10,7 +11,7 @@ use devworks_core::ports::{GrantUse, IdKind, IdSource, StoredReceipt};
 use devworks_core::protocol::results::DomainDecision;
 use devworks_core::protocol::{
     ActorId, AssignmentId, AttemptId, CONTRACT, CommandId, EventId, ExecutionId, Id, OperationId,
-    OperationState, ProjectId, Receipt, Revision, RevisionDimension, RootId, StoreId,
+    OperationState, ProjectId, Receipt, RevisionDimension, RootId, StoreId,
 };
 use devworks_core::registry::SchemaRevision;
 use rusqlite::{CachedStatement, Connection, OptionalExtension, Row, params};
@@ -19,15 +20,6 @@ use serde_json::{Value, json};
 // ---------------------------------------------------------------------------------------------
 // Value helpers
 
-fn invalid(m: impl Into<String>) -> StorageError {
-    StorageError::InvalidRecord(m.into())
-}
-fn corrupt(m: impl Into<String>) -> StorageError {
-    StorageError::unavailable(Unavailable::Corrupt, m)
-}
-fn id_of(s: String) -> Result<Id, StorageError> {
-    Id::new(s).map_err(|e| corrupt(format!("stored identifier: {e}")))
-}
 fn opt_id(s: Option<String>) -> Result<Option<Id>, StorageError> {
     s.map(id_of).transpose()
 }
@@ -48,15 +40,6 @@ fn object(field: &str, v: &Value) -> Result<(), StorageError> {
         return Err(invalid(format!("{field} must be a JSON object")));
     }
     Ok(())
-}
-fn limit(l: u16) -> Result<i64, StorageError> {
-    if l == 0 || l > MAX_PAGE {
-        return Err(invalid(format!("limit must be 1..={MAX_PAGE}")));
-    }
-    Ok(i64::from(l))
-}
-fn revision(v: i64) -> Result<Revision, StorageError> {
-    Revision::new(v).map_err(|_| corrupt("non-positive stored revision"))
 }
 fn stmt<'c>(conn: &'c Connection, sql: &str) -> Result<CachedStatement<'c>, StorageError> {
     db(conn.prepare_cached(sql))
@@ -152,7 +135,11 @@ pub(crate) fn committed_sequence(conn: &Connection) -> Result<i64, StorageError>
     db(stmt(conn, "SELECT coalesce(max(seq),0) FROM events")?.query_row([], |r| r.get(0)))
 }
 
-pub(crate) fn stamp(conn: &Connection) -> Result<SnapshotStamp, StorageError> {
+pub(crate) fn stamp(
+    conn: &Connection,
+    now_ms: i64,
+    boot_id: Option<Id>,
+) -> Result<SnapshotStamp, StorageError> {
     let (store_id, restore_epoch): (String, i64) = db(stmt(
         conn,
         "SELECT store_id,restore_epoch FROM store_meta WHERE singleton=1",
@@ -162,6 +149,8 @@ pub(crate) fn stamp(conn: &Connection) -> Result<SnapshotStamp, StorageError> {
         store_id: StoreId(id_of(store_id)?),
         restore_epoch,
         committed_sequence: committed_sequence(conn)?,
+        now_ms,
+        boot_id,
     })
 }
 
@@ -364,7 +353,7 @@ fn page(
     after: i64,
     max: u16,
 ) -> Result<EventPage, StorageError> {
-    let n = limit(max)?;
+    let n = page_limit(max)?;
     if after < 0 {
         return Err(invalid("after must be non-negative"));
     }
@@ -531,7 +520,7 @@ fn operation(conn: &Connection, id: &OperationId) -> Result<Option<OperationReco
     raw.map(|r| op_of(conn, r)).transpose()
 }
 fn unresolved(conn: &Connection, max: u16) -> Result<Vec<OperationRecord>, StorageError> {
-    let n = limit(max)?;
+    let n = page_limit(max)?;
     let mut s = stmt(
         conn,
         &format!(
@@ -549,7 +538,7 @@ fn operations_for_capability(
     after: Option<&OperationId>,
     max: u16,
 ) -> Result<Vec<OperationRecord>, StorageError> {
-    let n = limit(max)?;
+    let n = page_limit(max)?;
     bounded("capability", capability, 256)?;
     if states.is_empty() {
         return Ok(Vec::new());
@@ -724,7 +713,7 @@ fn deliveries(
     after: Option<&DeliveryKey>,
     max: u16,
 ) -> Result<DeliveryPage, StorageError> {
-    let n = limit(max)?;
+    let n = page_limit(max)?;
     // One extra row tells whether more follow. Ranks are read in order, each with its own
     // keyset predicate, so the combined order is total and stable across pages.
     let mut entries = Vec::new();
@@ -824,7 +813,7 @@ fn awaiting_eligibility(
     after: Option<&Id>,
     max: u16,
 ) -> Result<Vec<QueueEntry>, StorageError> {
-    let n = limit(max)?;
+    let n = page_limit(max)?;
     let mut s = stmt(
         conn,
         &format!(
@@ -1200,6 +1189,8 @@ pub(crate) struct Unit<'c> {
     pub savepoints: u32,
     /// Serial of this unit of work; a savepoint issued by another unit is refused.
     pub serial: u64,
+    /// The capability-gated history view, built on first use.
+    pub authority_log: Option<AuthorityHistory<'c>>,
 }
 read_impls!(Unit<'_>);
 
@@ -1265,13 +1256,12 @@ impl Unit<'_> {
     }
     fn op_cas(&self, op: &OperationRecord, expected: i64) -> Result<(), StorageError> {
         if op.revision != expected {
-            return Err(StorageError::conflict(
+            return Err(conflict_strict(
                 RevisionDimension::Operation,
                 "operation",
-                op.id.0.clone(),
-                Revision::new(expected)
-                    .map_err(|_| invalid("expected revision must be positive"))?,
-                revision(op.revision)?,
+                op.id.0.as_str(),
+                expected,
+                op.revision,
             ));
         }
         Ok(())
@@ -1368,8 +1358,15 @@ impl WriteTransaction for Unit<'_> {
     fn queue(&mut self) -> &mut dyn DurableQueue {
         self
     }
-    fn grants(&mut self) -> &mut dyn GrantLedger {
+    fn grants(&mut self) -> &mut dyn GrantRead {
         self
+    }
+    fn grant_writes(
+        &mut self,
+        _: &devworks_core::authority::AuthorityCapability,
+        _: &ActorId,
+    ) -> Result<&mut dyn GrantLedger, StorageError> {
+        Ok(self)
     }
     fn packages(&mut self) -> &mut dyn PackageHandlerLedger {
         self
@@ -1377,8 +1374,23 @@ impl WriteTransaction for Unit<'_> {
     fn configuration(&mut self) -> &mut dyn ConfigurationRepository {
         self
     }
-    fn authority(&mut self) -> &mut dyn AuthorityLedger {
+    fn authority(&mut self) -> &mut dyn AuthorityRead {
         self
+    }
+    fn authority_writes(
+        &mut self,
+        _: &devworks_core::authority::AuthorityCapability,
+        _: &ActorId,
+    ) -> Result<&mut dyn AuthorityLedger, StorageError> {
+        Ok(self)
+    }
+    fn authority_history(
+        &mut self,
+        _: &devworks_core::authority::AuthorityCapability,
+        _: &ActorId,
+    ) -> Result<&mut dyn HistoryLog, StorageError> {
+        let (conn, now) = (self.conn, self.now);
+        Ok(self.authority_log.insert(AuthorityHistory { conn, now }))
     }
     fn artifacts(&mut self) -> &mut dyn ArtifactRepository {
         self
@@ -1576,67 +1588,95 @@ impl CommandLedger for Unit<'_> {
 
 impl HistoryLog for Unit<'_> {
     fn append(&mut self, e: NewEvent) -> Result<i64, StorageError> {
-        bounded("aggregate kind", &e.aggregate_kind, 128)?;
-        bounded("aggregate id", &e.aggregate_id, 256)?;
-        bounded("event kind", &e.kind, 128)?;
-        object("event payload", &e.payload)?;
-        if e.aggregate_revision <= 0 {
-            return Err(invalid("aggregate revision must be positive"));
+        if devworks_core::authority::is_authority_history(&e) {
+            return Err(devworks_core::authority::authority_history_refused());
         }
-        if actor_kind(self.conn, &e.actor)?.is_none() {
-            return Err(StorageError::NotFound {
-                kind: "actor",
-                id: e.actor.0.as_str().to_owned(),
-            });
-        }
-        require(
-            self.conn,
-            "projects",
-            "project",
-            e.project_id.as_ref().map(|p| p.0.as_str()),
-        )?;
-        require(
-            self.conn,
-            "work_items",
-            "root",
-            e.root_id.as_ref().map(|r| r.0.as_str()),
-        )?;
-        require(
-            self.conn,
-            "operations",
-            "operation",
-            e.operation_id.as_ref().map(|o| o.0.as_str()),
-        )?;
-        if exists(
-            self.conn,
-            "SELECT 1 FROM events WHERE id=?1",
-            e.id.0.as_str(),
-        )? {
-            return Err(StorageError::Duplicate {
-                kind: "event",
-                id: e.id.0.as_str().to_owned(),
-            });
-        }
-        db(stmt(self.conn,
-            "INSERT INTO events(id,actor_id,project_id,root_id,operation_id,aggregate_kind,aggregate_id,aggregate_revision,kind,created_at,payload_json) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)",
-        )?
-        .execute(params![
-            e.id.0.as_str(),
-            e.actor.0.as_str(),
-            e.project_id.as_ref().map(|p| p.0.as_str()),
-            e.root_id.as_ref().map(|r| r.0.as_str()),
-            e.operation_id.as_ref().map(|o| o.0.as_str()),
-            e.aggregate_kind,
-            e.aggregate_id,
-            e.aggregate_revision,
-            e.kind,
-            self.now,
-            // History is persisted and exported: credential-shaped content in free text is
-            // redacted before it is written.
-            text(&devworks_core::authority::redact::Redactor::new().redact_json(&e.payload))
-        ]))?;
-        Ok(self.conn.last_insert_rowid())
+        append_event(self.conn, self.now, e)
     }
+}
+
+/// The history view `authority_history` hands out: the same appends without the refusal of
+/// authority-history records. Only a caller holding the capability gets one.
+pub(crate) struct AuthorityHistory<'c> {
+    conn: &'c Connection,
+    now: i64,
+}
+impl HistoryRead for AuthorityHistory<'_> {
+    fn event(&self, id: &EventId) -> Result<Option<EventRecord>, StorageError> {
+        event(self.conn, id)
+    }
+    fn page(
+        &self,
+        filter: &EventFilter,
+        after: i64,
+        limit: u16,
+    ) -> Result<EventPage, StorageError> {
+        page(self.conn, filter, after, limit)
+    }
+}
+impl HistoryLog for AuthorityHistory<'_> {
+    fn append(&mut self, e: NewEvent) -> Result<i64, StorageError> {
+        append_event(self.conn, self.now, e)
+    }
+}
+
+fn append_event(conn: &Connection, now: i64, e: NewEvent) -> Result<i64, StorageError> {
+    bounded("aggregate kind", &e.aggregate_kind, 128)?;
+    bounded("aggregate id", &e.aggregate_id, 256)?;
+    bounded("event kind", &e.kind, 128)?;
+    object("event payload", &e.payload)?;
+    if e.aggregate_revision <= 0 {
+        return Err(invalid("aggregate revision must be positive"));
+    }
+    if actor_kind(conn, &e.actor)?.is_none() {
+        return Err(StorageError::NotFound {
+            kind: "actor",
+            id: e.actor.0.as_str().to_owned(),
+        });
+    }
+    require(
+        conn,
+        "projects",
+        "project",
+        e.project_id.as_ref().map(|p| p.0.as_str()),
+    )?;
+    require(
+        conn,
+        "work_items",
+        "root",
+        e.root_id.as_ref().map(|r| r.0.as_str()),
+    )?;
+    require(
+        conn,
+        "operations",
+        "operation",
+        e.operation_id.as_ref().map(|o| o.0.as_str()),
+    )?;
+    if exists(conn, "SELECT 1 FROM events WHERE id=?1", e.id.0.as_str())? {
+        return Err(StorageError::Duplicate {
+            kind: "event",
+            id: e.id.0.as_str().to_owned(),
+        });
+    }
+    db(stmt(conn,
+        "INSERT INTO events(id,actor_id,project_id,root_id,operation_id,aggregate_kind,aggregate_id,aggregate_revision,kind,created_at,payload_json) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)",
+    )?
+    .execute(params![
+        e.id.0.as_str(),
+        e.actor.0.as_str(),
+        e.project_id.as_ref().map(|p| p.0.as_str()),
+        e.root_id.as_ref().map(|r| r.0.as_str()),
+        e.operation_id.as_ref().map(|o| o.0.as_str()),
+        e.aggregate_kind,
+        e.aggregate_id,
+        e.aggregate_revision,
+        e.kind,
+        now,
+        // History is persisted and exported: credential-shaped content in free text is
+        // redacted before it is written.
+        text(&devworks_core::authority::redact::Redactor::new().redact_json(&e.payload))
+    ]))?;
+    Ok(conn.last_insert_rowid())
 }
 
 impl OperationJournal for Unit<'_> {
@@ -1797,7 +1837,7 @@ impl OperationJournal for Unit<'_> {
         &mut self,
         max: u16,
     ) -> Result<Vec<(OperationId, OperationState)>, StorageError> {
-        let n = limit(max)?;
+        let n = page_limit(max)?;
         let boot = self.boot()?.clone();
         let ids: Vec<String> = {
             let mut s = stmt(
@@ -2009,7 +2049,7 @@ impl DurableQueue for Unit<'_> {
     }
 
     fn claim_ready(&mut self, req: &ClaimRequest) -> Result<Vec<QueueEntry>, StorageError> {
-        let n = limit(req.limit)?;
+        let n = page_limit(req.limit)?;
         bounded("consumer", &req.consumer, 128)?;
         if req.lease_ms <= 0 {
             return Err(invalid("lease must be positive"));
@@ -2226,7 +2266,7 @@ impl DurableQueue for Unit<'_> {
         mode: ClaimRecovery,
         max: u16,
     ) -> Result<RecoveryOutcome, StorageError> {
-        let n = limit(max)?;
+        let n = page_limit(max)?;
         let stale: Vec<String> = {
             let sql = match mode {
                 ClaimRecovery::Expired => {
@@ -2467,13 +2507,14 @@ impl PackageHandlerLedger for Unit<'_> {
         }
         let current_revision = current.as_ref().map_or(0, |c| c.revision);
         if current_revision != expected_revision {
-            return Err(StorageError::conflict(
+            return Err(conflict(
                 RevisionDimension::Registry,
                 "package_state",
-                Id::new(sha256_id(package_id)).map_err(|_| invalid("package id"))?,
-                Revision::new(expected_revision.max(1))
-                    .map_err(|_| invalid("expected revision"))?,
-                Revision::new(current_revision.max(1)).map_err(|_| invalid("current revision"))?,
+                Id::new(sha256_id(package_id))
+                    .map_err(|_| invalid("package id"))?
+                    .as_str(),
+                expected_revision.max(1),
+                current_revision.max(1),
             ));
         }
         db(stmt(self.conn,
@@ -2577,13 +2618,12 @@ impl GrantLedger for Unit<'_> {
             return Err(StorageError::ScopeDenied);
         }
         if g.revision != use_.expected_revision {
-            return Err(StorageError::conflict(
+            return Err(conflict_strict(
                 RevisionDimension::Authority,
                 "grant",
-                g.id.clone(),
-                Revision::new(use_.expected_revision)
-                    .map_err(|_| invalid("expected revision must be positive"))?,
-                revision(g.revision)?,
+                g.id.as_str(),
+                use_.expected_revision,
+                g.revision,
             ));
         }
         let remaining = g.uses_remaining.map(|u| u - 1);
@@ -2608,13 +2648,12 @@ impl GrantLedger for Unit<'_> {
             id: id.as_str().to_owned(),
         })?;
         if g.revision != expected_revision {
-            return Err(StorageError::conflict(
+            return Err(conflict_strict(
                 RevisionDimension::Authority,
                 "grant",
-                g.id.clone(),
-                Revision::new(expected_revision)
-                    .map_err(|_| invalid("expected revision must be positive"))?,
-                revision(g.revision)?,
+                g.id.as_str(),
+                expected_revision,
+                g.revision,
             ));
         }
         let n = db(stmt(

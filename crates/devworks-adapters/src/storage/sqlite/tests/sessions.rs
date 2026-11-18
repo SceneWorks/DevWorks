@@ -12,7 +12,6 @@ use devworks_core::authority::HostAuthority;
 use devworks_core::authority::service as auth;
 use devworks_core::context::{HostIngress, InvocationContext, PrincipalKind};
 use devworks_core::gateway::Gateway;
-use devworks_core::ports::retrieval::NoVectorIndex;
 use devworks_core::ports::storage::contract::StoreHarness;
 use devworks_core::ports::storage::*;
 use devworks_core::protocol::provider::{
@@ -249,7 +248,6 @@ impl Fx {
                 h.ids.clone(),
                 h.clock.clone(),
                 None,
-                Arc::new(NoVectorIndex),
             )));
         Self { h, store, cases, n }
     }
@@ -286,7 +284,7 @@ impl Fx {
         &self,
         f: impl FnOnce(&mut dyn WriteTransaction) -> Result<T, StorageError> + Send + 'static,
     ) -> T {
-        run_write(&*self.store, WriteOptions::default(), f).expect("write")
+        run_write(&*self.store, WriteOptions::fixture(), f).expect("write")
     }
     fn read<T>(&self, f: impl FnOnce(&dyn ReadSnapshot) -> Result<T, StorageError>) -> T {
         read_snapshot(&*self.store, &ReadOptions::default(), f).expect("read")
@@ -392,7 +390,7 @@ impl Fx {
         SessionWriter {
             store: &*self.store,
         }
-        .append(ctx, batch, WriteOptions::default())
+        .append(ctx, batch, WriteOptions::fixture())
         .expect("append")
     }
     fn session(&self, s: &str) -> StoredSession {
@@ -757,6 +755,115 @@ fn append_message_saves_one_user_message_with_resolved_attachments() {
 // ---------------------------------------------------------------------------------------------
 // The session writer
 
+// A transcript read at revision 1 has the frozen revision-1 shape: the dispatch fence is left
+// out and an accepted operation reads as an unknown outcome of the same operation, while every
+// call keeps its response. A revision-8 read carries both entries as recorded (DW-315).
+#[test]
+fn a_revision_1_transcript_read_keeps_the_frozen_shape_and_revision_8_carries_the_new_entries() {
+    let fx = Fx::new();
+    fx.seed_session("session-a", "agent-a", Some("root-a"));
+    let worker = fx.worker("agent-a", "session-a");
+    accepted(fx.append(
+        &worker,
+        SessionBatch::entries(tbatch(
+            "batch-fence",
+            "session-a",
+            0,
+            1,
+            vec![
+                entry(
+                    "c-a",
+                    1,
+                    json!({"kind": "ToolCallRecorded", "toolCall": call("call:a", 0)}),
+                ),
+                entry(
+                    "d-a",
+                    2,
+                    json!({"kind": "ToolDispatchStarted", "call": key("call:a", 0)}),
+                ),
+                entry(
+                    "r-a",
+                    3,
+                    json!({"kind": "ToolResponseRecorded", "call": key("call:a", 0),
+                        "outcome": {"kind": "OperationAccepted", "operationId": "op-c",
+                            "artifacts": []}}),
+                ),
+            ],
+        )),
+    ));
+    let user = fx.user();
+    let read = |revision: Option<u32>| -> Value {
+        let mut frame = json!({"protocol": "1.0-draft.1", "queryId": "q-t",
+            "sessionId": "session-a", "limit": 50});
+        if let Some(r) = revision {
+            frame["schemaRevision"] = json!(r);
+        }
+        match result(fx.raw_query(&user, "sessions.transcript", frame)) {
+            OperationResult::SessionsTranscript { value } => serde_json::to_value(value).unwrap(),
+            other => panic!("{other:?}"),
+        }
+    };
+    let contract = |file: &str| -> Value {
+        serde_json::from_str(
+            &std::fs::read_to_string(
+                std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                    .join("../../docs/architecture/contracts")
+                    .join(file),
+            )
+            .unwrap(),
+        )
+        .unwrap()
+    };
+    let bodies = |page: &Value| -> Vec<Value> {
+        page["entries"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|e| e["body"].clone())
+            .collect()
+    };
+    let frozen = jsonschema::validator_for(&contract("transcript-page.schema.json")).unwrap();
+    let current = jsonschema::validator_for(&contract("transcript-page.r8.schema.json")).unwrap();
+    // Revision 1 (the frame names none): no fence; the response reads as an unknown outcome.
+    let old = read(None);
+    let old_bodies = bodies(&old);
+    assert_eq!(
+        old_bodies
+            .iter()
+            .map(|b| b["kind"].as_str().unwrap())
+            .collect::<Vec<_>>(),
+        ["ToolCallRecorded", "ToolResponseRecorded"]
+    );
+    assert_eq!(
+        old_bodies[1]["outcome"],
+        json!({"kind": "OutcomeUnknown", "operationId": "op-c"})
+    );
+    assert!(
+        frozen.is_valid(&old),
+        "the revision-1 read fits the frozen schema"
+    );
+    // Revision 8: both entries as recorded, valid at revision 8 and not at revision 1.
+    let new = read(Some(8));
+    let new_bodies = bodies(&new);
+    assert_eq!(
+        new_bodies
+            .iter()
+            .map(|b| b["kind"].as_str().unwrap())
+            .collect::<Vec<_>>(),
+        [
+            "ToolCallRecorded",
+            "ToolDispatchStarted",
+            "ToolResponseRecorded"
+        ]
+    );
+    assert_eq!(new_bodies[2]["outcome"]["kind"], "OperationAccepted");
+    assert!(current.is_valid(&new));
+    assert!(
+        !frozen.is_valid(&new),
+        "the new entries are outside the frozen revision-1 schema"
+    );
+}
+
 #[test]
 fn a_batch_commits_entries_calls_responses_checkpoint_and_usage_together() {
     let fx = Fx::new();
@@ -901,7 +1008,7 @@ fn crash_before_and_after_commit() {
     let batch = SessionBatch::entries(calls_and_response("session-a"));
     // Crash before commit: the unit of work dies after appending; nothing remains.
     let (ctx, b) = (worker.clone(), batch.clone());
-    let crashed = run_write(&*fx.store, WriteOptions::default(), move |tx| {
+    let crashed = run_write(&*fx.store, WriteOptions::fixture(), move |tx| {
         accepted(append_session_batch(
             tx,
             &ctx,
@@ -1440,11 +1547,14 @@ fn operation_status_and_command_receipts_are_scoped() {
 #[test]
 fn bound_agent_session_reads_stay_within_its_work_root() {
     let fx = Fx::new();
-    fx.store.with_writer_connection(|conn| {
-        super::super::conn::db(conn.execute_batch(
-            "INSERT INTO work_items VALUES('root-c','project-a','feature',NULL,NULL,NULL,'Feature C',1,0,1,1,1,'{}');",
-        ))
-    }).unwrap();
+    devworks_test_support::seed::work(
+        &*fx.store,
+        &[
+            devworks_test_support::seed::WorkSeed::feature("root-c", "project-a")
+                .title("Feature C"),
+        ],
+    )
+    .unwrap();
     fx.seed_session("session-a", "agent-a", Some("root-a"));
     fx.seed_session("session-shared", "agent-p", Some("root-a"));
     fx.seed_session("session-foreign", "agent-p", Some("root-c"));
@@ -1747,7 +1857,7 @@ fn provider_context_head_is_durable_and_rejects_a_stale_revision() {
     head.artifact = art_b();
     let mut stale = head.clone();
     stale.revision = 1;
-    let refused = run_write(&*fx.store, WriteOptions::default(), move |tx| {
+    let refused = run_write(&*fx.store, WriteOptions::fixture(), move |tx| {
         tx.sessions().put_provider_context_head(&stale, Some(0))
     });
     assert!(refused.is_err());
@@ -2801,13 +2911,14 @@ fn lineage_keys_are_stable_and_a_hierarchy_change_expires_the_cursor() {
     // than skipping it, and a fresh listing shows it once.
     let page = lineage_page(fx.lineage(&user, "root-a", 1, None));
     let cursor = page.next_cursor.expect("more").0;
-    fx.store
-        .with_writer_connection(|c| {
-            super::super::conn::db(c.execute_batch(
-                "INSERT INTO work_items VALUES('task-late','project-a','task','root-a',NULL,NULL,'Late',1,0,1,1,1,'{}');",
-            ))
-        })
-        .unwrap();
+    devworks_test_support::seed::work(
+        &*fx.store,
+        &[
+            devworks_test_support::seed::WorkSeed::task("task-late", "project-a", "root-a")
+                .title("Late"),
+        ],
+    )
+    .unwrap();
     assert_eq!(
         fault(fx.lineage(&user, "root-a", 1, Some(&cursor))).code,
         DomainErrorCode::CursorExpired

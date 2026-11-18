@@ -157,7 +157,7 @@ fn a_submitted_attachment_removed_during_a_send_that_fails_is_deleted() {
     let revision = h.state().chat.session(&session).unwrap().revision.get();
     ops::command_result(real.command(
         "sessions.end",
-        &ops::command_frame(
+        &devworks_desktop::frame::fixture::command(
             &*real,
             "sessions.end",
             json!({"sessionId": session, "expectedRevision": revision.to_string()}),

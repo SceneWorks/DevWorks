@@ -7,10 +7,10 @@ use devworks_core::{
         provider_http::*,
         secrets::{Secret, SecretKey, SecretStore, SessionSecrets},
     },
-    services::router::{
-        InferenceRouter,
-        connections::{ConnectionService, auth::Credential},
-    },
+    services::router::connections::auth::Credential,
+};
+use devworks_engine::{
+    ArtifactComposition, DiagnosticComposition, KnowledgeComposition, RunComposition,
 };
 use std::io::{Cursor, Read};
 struct EntropyFixture;
@@ -145,19 +145,6 @@ fn boot_paid(rt: &tokio::runtime::Runtime, h: &Harness, wire: Arc<Wire>) -> Help
             .map(|_| ())
     })
     .unwrap();
-    let connections = Arc::new(ConnectionService::new(
-        h.ids.clone(),
-        h.clock(),
-        store.clone(),
-        Arc::new(NoNetwork),
-        secrets,
-        Arc::new(EntropyFixture),
-    ));
-    let router = Arc::new(InferenceRouter::new(
-        h.ids.clone(),
-        h.clock(),
-        connections.clone(),
-    ));
     let mut config = RuntimeConfig::new(id("paid-convention-dispatcher"));
     config.scheduler_interval = Duration::from_secs(3600);
     config.collect_interval = Duration::from_secs(3600);
@@ -165,16 +152,14 @@ fn boot_paid(rt: &tokio::runtime::Runtime, h: &Harness, wire: Arc<Wire>) -> Help
     config.shutdown_grace = Duration::from_millis(50);
     config.shutdown_bound = Duration::from_secs(5);
     config.providers = Some(devworks_engine::providers::driver::ProviderComposition::new(wire));
-    let artifacts = Arc::new(ArtifactService::new(
+    let artifacts = ArtifactComposition::new(
         Arc::new(NativeArtifactFiles::new(
             h.root.clone(),
             h.root.with_extension("cache"),
         )),
         Arc::new(HostArtifactSources::new(h.clock(), h.ids.clone())),
         Arc::new(NativeFilesystem::new()),
-        h.clock(),
-        h.ids.clone(),
-    ));
+    );
     let composition = Composition {
         git: None,
         browser: None,
@@ -187,22 +172,24 @@ fn boot_paid(rt: &tokio::runtime::Runtime, h: &Harness, wire: Arc<Wire>) -> Help
             clock: h.clock(),
         }),
         artifacts,
-        resources: Arc::new(ResourceService::new(h.ids.clone(), h.clock())),
         process_host: Arc::new(FakeHost::default()),
-        runs: RunComposition::new(Arc::new(ControlService::new(h.ids.clone()))),
+        runs: RunComposition::default(),
+        knowledge: KnowledgeComposition::default(),
+        application: devworks_engine::ApplicationComposition {
+            connections: Some(devworks_engine::ConnectionPorts {
+                http: Arc::new(NoNetwork),
+                secrets,
+                entropy: Arc::new(EntropyFixture),
+                endpoints: None,
+            }),
+            router: Some(Default::default()),
+            ..Default::default()
+        },
+        web: None,
         power: Arc::new(NoPower),
-        diagnostics: Arc::new(
-            devworks_core::services::diagnostics::DiagnosticService::new(
-                store.clone(),
-                h.ids.clone(),
-                h.clock(),
-                None,
-            ),
-        ),
-        use_cases: UseCases::new()
-            .with_queue()
-            .with_connections(connections)
-            .with_router(router),
+        diagnostics: DiagnosticComposition::default(),
+        use_cases: UseCases::new().with_queue(),
+        test_overrides: Default::default(),
         consumers: vec![],
         indexing: None,
         config,

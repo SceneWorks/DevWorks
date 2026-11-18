@@ -1,13 +1,14 @@
 //! Resolve push destination before reserving it, then use an explicit server-side lease.
 use super::*;
 use crate::protocol::data::PushMode;
+use crate::services::effect::EffectOutcome;
 
 pub(super) struct StagedPush(Result<Destination, Failure>);
 struct Destination {
     tree: StoredGitWorktree,
     repository_revision: i64,
     url: String,
-    observed: crate::services::indexing::git::RevisionObservation,
+    observed: crate::services::git::client::RevisionObservation,
     transport_digest: String,
 }
 

@@ -1,14 +1,18 @@
 //! Host-owned framing of provider tool arguments. A provider chooses arguments only; the
 //! selected operation, mode, request identity and contract envelope come from the host.
+use crate::runtime::{ReceiveStart, ReceiveWait};
 use crate::turn_error::artifact_read_fault;
-use crate::{providers::schemas::RegisteredSchemas, runtime::Runtime};
+use crate::{providers::schemas::RegisteredSchemas, turn_engine::TurnEngine};
+use devworks_core::services::approvals::ApprovalService;
 use devworks_core::{
     admission::{self, Selection},
     context::{InvocationContext, PrincipalKind},
     fingerprint::sha256_hex,
+    gateway::CommandOutcome,
     ports::{IdKind, storage::*},
     protocol::{
-        AttemptId, CONTRACT, CommandReply, Id, OperationId, OperationState, RetryAdvice, Revision,
+        ActorId, AttemptId, CONTRACT, CommandReply, Id, OperationId, OperationState, RetryAdvice,
+        Revision, StoreId,
         provider::{
             ArtifactRef, CompleteToolCall, NativeBinding, ToolCallKey, ToolOutcome, TranscriptBody,
         },
@@ -73,32 +77,89 @@ impl ContextHeadFence {
     }
 }
 
+/// The records the session gate reads, from a read snapshot or from a write transaction, so
+/// one rule serves both.
+trait SessionGate {
+    fn session(&mut self, id: &Id) -> Result<Option<StoredSession>, StorageError>;
+    fn store_and_epoch(&self) -> (StoreId, i64);
+    fn actor_kind(&mut self, actor: &ActorId) -> Result<Option<PrincipalKind>, StorageError>;
+    fn binding(&mut self, actor: &ActorId) -> Result<Option<PrincipalBinding>, StorageError>;
+}
+
+impl SessionGate for &(dyn ReadSnapshot + '_) {
+    fn session(&mut self, id: &Id) -> Result<Option<StoredSession>, StorageError> {
+        self.sessions().session(id)
+    }
+    fn store_and_epoch(&self) -> (StoreId, i64) {
+        let stamp = self.stamp();
+        (stamp.store_id.clone(), stamp.restore_epoch)
+    }
+    fn actor_kind(&mut self, actor: &ActorId) -> Result<Option<PrincipalKind>, StorageError> {
+        self.actors().actor_kind(actor)
+    }
+    fn binding(&mut self, actor: &ActorId) -> Result<Option<PrincipalBinding>, StorageError> {
+        self.authority().principal(actor)
+    }
+}
+
+impl SessionGate for &mut (dyn WriteTransaction + '_) {
+    fn session(&mut self, id: &Id) -> Result<Option<StoredSession>, StorageError> {
+        self.sessions().session(id)
+    }
+    fn store_and_epoch(&self) -> (StoreId, i64) {
+        let store = self.store();
+        (store.store_id.clone(), store.restore_epoch)
+    }
+    fn actor_kind(&mut self, actor: &ActorId) -> Result<Option<PrincipalKind>, StorageError> {
+        self.actors().actor_kind(actor)
+    }
+    fn binding(&mut self, actor: &ActorId) -> Result<Option<PrincipalBinding>, StorageError> {
+        self.authority().principal(actor)
+    }
+}
+
+/// Which principals may pass the session gate.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum SessionActors {
+    /// Turn work: only an Agent or Host principal that agrees with the actor registry, and an
+    /// agent also needs an active binding scoped to the session's project.
+    AgentsAndHosts,
+    /// Skill adoption: also a person acting in their own chat session. A Human skips the
+    /// registry and binding checks, which describe agents.
+    AnyOwner,
+}
+
+/// The one gate for acting on a session. It holds when the session exists and is open, the
+/// invocation is bound to it and its owner, and the store and restore epoch match. For
+/// `AgentsAndHosts` the principal's kind must also be Agent or Host and agree with the actor
+/// registry, and an agent's binding must be present, active and scoped to the session's
+/// project. Every refusal is `ScopeDenied`.
 fn authorized_session(
-    read: &dyn ReadSnapshot,
+    mut gate: impl SessionGate,
     ctx: &InvocationContext,
     session_id: &Id,
+    actors: SessionActors,
 ) -> Result<StoredSession, StorageError> {
-    let session = read
-        .sessions()
-        .session(session_id)?
-        .ok_or(StorageError::ScopeDenied)?;
+    let agentic = matches!(
+        ctx.principal_kind(),
+        PrincipalKind::Agent | PrincipalKind::Host
+    );
+    let checks_registry = actors == SessionActors::AgentsAndHosts || agentic;
+    let session = gate.session(session_id)?.ok_or(StorageError::ScopeDenied)?;
+    let (store_id, restore_epoch) = gate.store_and_epoch();
     if ctx.session_id() != Some(session_id)
         || session.closed()
         || session.agent_id != *ctx.principal()
-        || read.stamp().store_id != *ctx.store_id()
-        || read.stamp().restore_epoch != ctx.restore_epoch().get()
-        || !matches!(
-            ctx.principal_kind(),
-            PrincipalKind::Agent | PrincipalKind::Host
-        )
-        || read.actors().actor_kind(ctx.principal())? != Some(ctx.principal_kind())
+        || store_id != *ctx.store_id()
+        || restore_epoch != ctx.restore_epoch().get()
+        || (actors == SessionActors::AgentsAndHosts && !agentic)
+        || (checks_registry && gate.actor_kind(ctx.principal())? != Some(ctx.principal_kind()))
     {
         return Err(StorageError::ScopeDenied);
     }
     if ctx.principal_kind() == PrincipalKind::Agent {
-        let binding = read
-            .authority()
-            .principal(ctx.principal())?
+        let binding = gate
+            .binding(ctx.principal())?
             .ok_or(StorageError::ScopeDenied)?;
         if !binding.active
             || binding
@@ -112,6 +173,49 @@ fn authorized_session(
     Ok(session)
 }
 
+/// Appends the `SkillRevisionsAdopted` event of a skill-set change to a session's history. This
+/// is a host-observed write: the host saw its skill sources change, so no command, operation or
+/// receipt exists and the event goes through the history port like the host's other recorded
+/// observations (package, notification and provider results). Callers authorize the session
+/// first, in the transaction that appends it.
+pub(crate) fn append_skill_adoption(
+    tx: &mut dyn WriteTransaction,
+    actor: &ActorId,
+    session: &StoredSession,
+    payload: Value,
+) -> Result<(), StorageError> {
+    let id = devworks_core::protocol::EventId(tx.new_id(IdKind::Event));
+    tx.history().append(NewEvent {
+        id,
+        actor: actor.clone(),
+        project_id: session.project_id.clone(),
+        root_id: session.root_id.clone(),
+        operation_id: None,
+        aggregate_kind: devworks_core::services::sessions::transcript::SESSION_AGGREGATE.into(),
+        aggregate_id: session.id.as_str().to_owned(),
+        aggregate_revision: session.revision,
+        kind: "SkillRevisionsAdopted".into(),
+        payload,
+    })?;
+    Ok(())
+}
+
+/// Records a skill-set change for a session that has no epoch change to carry it, after the
+/// same session gate every other turn write passes.
+pub(crate) fn record_skill_adoption(
+    store: &dyn ApplicationStore,
+    ctx: &InvocationContext,
+    session_id: &Id,
+    payload: Value,
+) -> Result<(), StorageError> {
+    let ctx = ctx.clone();
+    let session_id = session_id.clone();
+    run_write(store, WriteOptions::observed(), move |tx| {
+        let session = authorized_session(&mut *tx, &ctx, &session_id, SessionActors::AnyOwner)?;
+        append_skill_adoption(tx, ctx.principal(), &session, payload)
+    })
+}
+
 /// Enumerate unanswered calls only after checking the current session and principal binding.
 /// The dispatcher must not expose even call identities from a foreign session.
 pub(crate) fn pending_calls(
@@ -120,7 +224,7 @@ pub(crate) fn pending_calls(
     session_id: &Id,
 ) -> Result<Vec<ToolCallKey>, StorageError> {
     read_snapshot(store, &ReadOptions::default(), |read| {
-        authorized_session(read, ctx, session_id)?;
+        authorized_session(read, ctx, session_id, SessionActors::AgentsAndHosts)?;
         let pending = read.sessions().pending_calls(session_id, 500)?;
         if pending.len() == 500 {
             return Err(invalid("pending tool calls exceed dispatch scan bound"));
@@ -182,7 +286,7 @@ pub(crate) fn publish_initial_context(
     let ctx = ctx.clone();
     let session_id = session_id.clone();
     let binding = binding.clone();
-    let committed = run_write(store, WriteOptions::default(), move |tx| {
+    let committed = run_write(store, WriteOptions::observed(), move |tx| {
         let session = tx
             .sessions()
             .session(&session_id)?
@@ -280,7 +384,7 @@ pub(crate) fn require_current_head_for_new_request(
     source: &ArtifactRef,
 ) -> Result<ContextHeadFence, StorageError> {
     read_snapshot(store, &ReadOptions::default(), |read| {
-        let session = authorized_session(read, ctx, session_id)?;
+        let session = authorized_session(read, ctx, session_id, SessionActors::AgentsAndHosts)?;
         if read.router().route_request(request_id)?.is_some() {
             return Ok(ContextHeadFence {
                 session_id: session_id.clone(),
@@ -315,7 +419,7 @@ pub(crate) fn native_head_became_stale(
     source: &ArtifactRef,
 ) -> Result<bool, StorageError> {
     read_snapshot(store, &ReadOptions::default(), |read| {
-        let session = authorized_session(read, ctx, session_id)?;
+        let session = authorized_session(read, ctx, session_id, SessionActors::AgentsAndHosts)?;
         let head = read.sessions().provider_context_head(session_id)?;
         Ok(head.as_ref().is_none_or(|head| {
             head.artifact != json!(source)
@@ -334,7 +438,7 @@ pub(crate) fn recover_context_head(
     session_id: &Id,
 ) -> Result<Option<(ArtifactRef, NativeBinding, i64)>, StorageError> {
     let source = read_snapshot(store, &ReadOptions::default(), |read| {
-        let session = authorized_session(read, ctx, session_id)?;
+        let session = authorized_session(read, ctx, session_id, SessionActors::AgentsAndHosts)?;
         let head = read.sessions().provider_context_head(session_id)?;
         if let Some(head) = head
             && head.context_epoch == session.context_epoch
@@ -435,7 +539,7 @@ pub(crate) fn linked_operations(
     session_id: &Id,
 ) -> Result<Vec<StoredToolCall>, StorageError> {
     read_snapshot(store, &ReadOptions::default(), |read| {
-        authorized_session(read, ctx, session_id)?;
+        authorized_session(read, ctx, session_id, SessionActors::AgentsAndHosts)?;
         let linked = read.sessions().linked_operations(session_id, 500)?;
         if linked.len() == 500 {
             return Err(invalid("linked tool operations exceed scan bound"));
@@ -957,7 +1061,7 @@ pub(crate) fn publish_continuation(
     let session_id = session_id.clone();
     let attempt_id = attempt_id.clone();
     let binding = binding.clone();
-    let committed = run_write(store, WriteOptions::default(), move |tx| {
+    let committed = run_write(store, WriteOptions::observed(), move |tx| {
         let session = tx
             .sessions()
             .session(&session_id)?
@@ -1289,7 +1393,7 @@ pub(crate) fn append_operation_updates(
         .validate()
         .map_err(|error| invalid(format!("{error:?}")))?;
     let (updates, observed) = read_snapshot(store, &ReadOptions::default(), |read| {
-        let session = authorized_session(read, ctx, session_id)?;
+        let session = authorized_session(read, ctx, session_id, SessionActors::AgentsAndHosts)?;
         let version = read
             .artifacts()
             .version(&source.version_id)?
@@ -1449,7 +1553,7 @@ pub(crate) fn append_operation_updates(
     let session_for_write = session_id.clone();
     let binding_for_write = binding.clone();
     let source_for_write = source.clone();
-    let committed = run_write(store, WriteOptions::default(), move |tx| {
+    let committed = run_write(store, WriteOptions::observed(), move |tx| {
         let session = tx
             .sessions()
             .session(&session_for_write)?
@@ -1625,12 +1729,70 @@ pub(crate) fn frame_as(
     Ok(bytes)
 }
 
+/// Where a dispatch stands after its synchronous part.
+pub(crate) enum DispatchStep {
+    Answered(BatchOutcome),
+    /// An `agents.receive` with nothing to read yet: it holds no thread while it waits.
+    Parked(Box<ParkedReceive>),
+}
+
+/// A dispatched `agents.receive` waiting for a message, with what the call needs to record its
+/// response once the wait ends.
+pub(crate) struct ParkedReceive {
+    pub(crate) wait: Box<ReceiveWait>,
+    descriptor: &'static OperationDescriptor,
+    raw: Vec<u8>,
+    ctx: InvocationContext,
+    session_id: Id,
+    pub(crate) key: ToolCallKey,
+}
+impl ParkedReceive {
+    /// Waits without holding a thread, then records the call's response. Store reads, the
+    /// decision and the recording run on blocking threads; only the wake is awaited here.
+    pub(crate) async fn finish(self, engine: &TurnEngine) -> Result<BatchOutcome, StorageError> {
+        let Self {
+            wait,
+            descriptor,
+            raw,
+            ctx,
+            session_id,
+            key,
+        } = self;
+        let reply = engine.finish_receive(wait).await;
+        let (store, artifacts, approvals) = (
+            engine.store().clone(),
+            engine.artifacts().clone(),
+            engine.approvals().clone(),
+        );
+        match tokio::task::spawn_blocking(move || {
+            let (outcome, bytes) =
+                command_response(&approvals, store.as_ref(), &ctx, descriptor, &raw, reply)?;
+            record_response(
+                store.as_ref(),
+                &artifacts,
+                &ctx,
+                &session_id,
+                &key,
+                outcome,
+                bytes,
+            )
+        })
+        .await
+        {
+            Ok(result) => result,
+            Err(error) => std::panic::resume_unwind(error.into_panic()),
+        }
+    }
+}
+
 /// Execute one durable, unanswered provider call through the same gateway used by UI and agent
 /// tools. The call's recorded schema chooses the operation; provider arguments never choose it.
 /// Command retries reuse the host key, so a lost reply cannot repeat the effect.
+/// With `defer_receive`, a waiting `agents.receive` comes back parked instead of blocking the
+/// calling thread.
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn dispatch_one(
-    runtime: &Runtime,
+pub(crate) fn dispatch_step(
+    engine: &TurnEngine,
     store: &dyn ApplicationStore,
     artifacts: &Arc<ArtifactService>,
     schemas: &RegisteredSchemas,
@@ -1638,40 +1800,11 @@ pub(crate) fn dispatch_one(
     session_id: &Id,
     key: &ToolCallKey,
     cancellation: Option<&Cancellation>,
-) -> Result<BatchOutcome, StorageError> {
+    defer_receive: bool,
+) -> Result<DispatchStep, StorageError> {
     let (call, started, call_sequence, context_epoch) =
         read_snapshot(store, &ReadOptions::default(), |read| {
-            let session = read
-                .sessions()
-                .session(session_id)?
-                .ok_or(StorageError::ScopeDenied)?;
-            if ctx.session_id() != Some(session_id)
-                || session.closed()
-                || session.agent_id != *ctx.principal()
-                || read.stamp().store_id != *ctx.store_id()
-                || read.stamp().restore_epoch != ctx.restore_epoch().get()
-                || !matches!(
-                    ctx.principal_kind(),
-                    PrincipalKind::Agent | PrincipalKind::Host
-                )
-                || read.actors().actor_kind(ctx.principal())? != Some(ctx.principal_kind())
-            {
-                return Err(StorageError::ScopeDenied);
-            }
-            if ctx.principal_kind() == PrincipalKind::Agent {
-                let binding = read
-                    .authority()
-                    .principal(ctx.principal())?
-                    .ok_or(StorageError::ScopeDenied)?;
-                if !binding.active
-                    || binding
-                        .project_id
-                        .as_ref()
-                        .is_some_and(|p| session.project_id.as_ref() != Some(p))
-                {
-                    return Err(StorageError::ScopeDenied);
-                }
-            }
+            let session = authorized_session(read, ctx, session_id, SessionActors::AgentsAndHosts)?;
             let row = read
                 .sessions()
                 .tool_call(session_id, &key.attempt_id.0, &key.native_call_id)?
@@ -1714,7 +1847,9 @@ pub(crate) fn dispatch_one(
                 .usage()
                 .inference_attempt(&key.attempt_id.0)?
                 .ok_or(StorageError::ScopeDenied)?;
-            if attempt.session_id.as_ref() != Some(session_id) || attempt.state != "Settled" {
+            if attempt.session_id.as_ref() != Some(session_id)
+                || attempt.state != devworks_core::ports::storage::AttemptState::Settled
+            {
                 return Err(StorageError::ScopeDenied);
             }
             let page = read.history().page(
@@ -1761,7 +1896,7 @@ pub(crate) fn dispatch_one(
                     .map_err(|_| StorageError::ScopeDenied)?;
             Ok((source, targets))
         })?;
-        let providers = runtime.providers().ok_or_else(|| {
+        let providers = engine.providers().ok_or_else(|| {
             StorageError::unavailable(
                 Unavailable::UnsupportedRuntime,
                 "native provider unavailable",
@@ -1799,7 +1934,7 @@ pub(crate) fn dispatch_one(
         if cancellation.is_some_and(Cancellation::is_cancelled) {
             return Err(StorageError::Cancelled);
         }
-        let service = runtime.mcp_service().ok_or_else(|| {
+        let service = engine.mcp_service().ok_or_else(|| {
             StorageError::unavailable(
                 Unavailable::UnsupportedRuntime,
                 "native MCP client unavailable",
@@ -1813,7 +1948,7 @@ pub(crate) fn dispatch_one(
             Err(StorageError::InvalidRecord(_)) => failed("tool_invalid_arguments"),
             Err(error) => return Err(error),
         }
-    } else if runtime.packages().is_some()
+    } else if engine.packages().is_some()
         && crate::package_tools::is_package_tool(store, call.capability_id.as_str())
     {
         // A package tool runs as its own durable operation; the response records it accepted.
@@ -1865,7 +2000,7 @@ pub(crate) fn dispatch_one(
             }
         }
         match result {
-            Ok((descriptor, Mode::Query, raw)) => match runtime.query_with(
+            Ok((descriptor, Mode::Query, raw)) => match engine.query_with(
                 ctx,
                 descriptor.name,
                 &raw,
@@ -1909,44 +2044,49 @@ pub(crate) fn dispatch_one(
                 }
             },
             Ok((descriptor, Mode::Command, raw)) => {
-                match runtime.command(ctx, descriptor.name, &raw) {
-                    Ok(CommandReply::CommandStatusUnknown { .. }) => {
-                        // Same host key is retried on recovery until the gateway returns its receipt.
-                        return Err(StorageError::unavailable(
-                            Unavailable::UnsupportedRuntime,
-                            "tool command status unknown",
-                        ));
-                    }
-                    Ok(CommandReply::ReceiptPurged { .. }) => {
-                        return Err(StorageError::unavailable(
-                            Unavailable::UnsupportedRuntime,
-                            "tool command receipt purged before outcome reconciliation",
-                        ));
-                    }
-                    Ok(reply @ CommandReply::Recorded { .. }) if approval_refusal(&reply) => {
-                        held_approval(runtime, store, ctx, descriptor, &raw)?
-                    }
-                    Ok(reply @ CommandReply::Recorded { .. }) => recorded_command(&reply)?,
-                    Ok(CommandReply::Rejected { code, retry, .. }) => {
-                        if needs_recovery(retry) {
-                            return Err(StorageError::unavailable(
-                                Unavailable::UnsupportedRuntime,
-                                "tool command rejection requires reconciliation",
-                            ));
+                let reply = if defer_receive && descriptor.name == "agents.receive" {
+                    match engine.begin_receive(
+                        ctx,
+                        &raw,
+                        WriteOptions {
+                            cancellation: cancellation.cloned(),
+                            ..WriteOptions::command()
+                        },
+                    ) {
+                        ReceiveStart::Answered(reply) => reply,
+                        ReceiveStart::Waiting(wait) => {
+                            return Ok(DispatchStep::Parked(Box::new(ParkedReceive {
+                                wait,
+                                descriptor,
+                                raw,
+                                ctx: ctx.clone(),
+                                session_id: session_id.clone(),
+                                key: key.clone(),
+                            })));
                         }
-                        failed(&format!("command_{code:?}"))
                     }
-                    Err(_) => {
-                        return Err(StorageError::unavailable(
-                            Unavailable::UnsupportedRuntime,
-                            "tool command gateway failed before receipt reconciliation",
-                        ));
-                    }
-                }
+                } else {
+                    engine.command(ctx, descriptor.name, &raw)
+                };
+                command_response(engine.approvals(), store, ctx, descriptor, &raw, reply)?
             }
             Err(_) => failed("tool_invalid_arguments"),
         }
     };
+    record_response(store, artifacts, ctx, session_id, key, outcome, bytes)
+        .map(DispatchStep::Answered)
+}
+
+/// Records the one response of a dispatched call (staging its result bytes as an artifact).
+fn record_response(
+    store: &dyn ApplicationStore,
+    artifacts: &Arc<ArtifactService>,
+    ctx: &InvocationContext,
+    session_id: &Id,
+    key: &ToolCallKey,
+    outcome: ToolOutcome,
+    bytes: Option<Vec<u8>>,
+) -> Result<BatchOutcome, StorageError> {
     let staged =
         if let Some(bytes) = &bytes {
             Some(artifacts.stage_host_bytes(store, bytes,
@@ -1961,7 +2101,7 @@ pub(crate) fn dispatch_one(
     let ctx_for_write = ctx.clone();
     let session_for_write = session_id.clone();
     let key_for_write = key.clone();
-    let committed = run_write(store, WriteOptions::default(), move |tx| {
+    let committed = run_write(store, WriteOptions::settlement(), move |tx| {
         let mut outcome = outcome.clone();
         if let Some(staged) = &staged_for_write {
             let session = tx
@@ -2021,44 +2161,15 @@ fn mark_dispatch_started(
     let session_id = session_id.clone();
     let key = key.clone();
     let cancellation = cancellation.cloned();
-    run_write(store, WriteOptions::default(), move |tx| {
+    run_write(store, WriteOptions::settlement(), move |tx| {
         if cancellation
             .as_ref()
             .is_some_and(Cancellation::is_cancelled)
         {
             return Err(StorageError::Cancelled);
         }
-        let session = tx
-            .sessions()
-            .session(&session_id)?
-            .ok_or(StorageError::ScopeDenied)?;
-        if session.closed()
-            || ctx.session_id() != Some(&session_id)
-            || session.agent_id != *ctx.principal()
-            || tx.store().store_id != *ctx.store_id()
-            || tx.store().restore_epoch != ctx.restore_epoch().get()
-            || !matches!(
-                ctx.principal_kind(),
-                PrincipalKind::Agent | PrincipalKind::Host
-            )
-            || tx.actors().actor_kind(ctx.principal())? != Some(ctx.principal_kind())
-        {
-            return Err(StorageError::ScopeDenied);
-        }
-        if ctx.principal_kind() == PrincipalKind::Agent {
-            let binding = tx
-                .authority()
-                .principal(ctx.principal())?
-                .ok_or(StorageError::ScopeDenied)?;
-            if !binding.active
-                || binding
-                    .project_id
-                    .as_ref()
-                    .is_some_and(|project| session.project_id.as_ref() != Some(project))
-            {
-                return Err(StorageError::ScopeDenied);
-            }
-        }
+        let session =
+            authorized_session(&mut *tx, &ctx, &session_id, SessionActors::AgentsAndHosts)?;
         let row = tx
             .sessions()
             .tool_call(&session_id, &key.attempt_id.0, &key.native_call_id)?
@@ -2102,17 +2213,9 @@ pub(crate) fn cancel_before_dispatch(
     let ctx = ctx.clone();
     let session_id = session_id.clone();
     let key = key.clone();
-    run_write(store, WriteOptions::default(), move |tx| {
-        let session = tx
-            .sessions()
-            .session(&session_id)?
-            .ok_or(StorageError::ScopeDenied)?;
-        if session.closed()
-            || ctx.session_id() != Some(&session_id)
-            || session.agent_id != *ctx.principal()
-        {
-            return Err(StorageError::ScopeDenied);
-        }
+    run_write(store, WriteOptions::settlement(), move |tx| {
+        let session =
+            authorized_session(&mut *tx, &ctx, &session_id, SessionActors::AgentsAndHosts)?;
         let batch = turn::batch_of(
             &session_id,
             tx.new_id(IdKind::TranscriptBatch),
@@ -2193,7 +2296,7 @@ fn record_observed_operation_update(
     // Apply the same current session gate even when the requested revision was already
     // published and this call will return without appending a batch.
     let observed = read_snapshot(store, &ReadOptions::default(), |read| {
-        authorized_session(read, ctx, session_id)?;
+        authorized_session(read, ctx, session_id, SessionActors::AgentsAndHosts)?;
         let linked = read.sessions().linked_operations(session_id, 500)?;
         if linked.len() == 500 {
             return Err(invalid("linked tool operations exceed scan bound"));
@@ -2268,7 +2371,7 @@ fn record_observed_operation_update(
     let ctx_for_write = ctx.clone();
     let session_for_write = session_id.clone();
     let operation_for_write = operation_id.clone();
-    let committed = run_write(store, WriteOptions::default(), move |tx| {
+    let committed = run_write(store, WriteOptions::observed(), move |tx| {
         let session = tx
             .sessions()
             .session(&session_for_write)?
@@ -2453,6 +2556,52 @@ fn recorded_command(
     })
 }
 
+/// Turns a command's gateway outcome into the response a tool call records. An outcome that
+/// leaves the call unanswered is an error: the same host key is retried on recovery.
+fn command_response(
+    approvals: &Arc<ApprovalService>,
+    store: &dyn ApplicationStore,
+    ctx: &InvocationContext,
+    descriptor: &'static OperationDescriptor,
+    raw: &[u8],
+    reply: CommandOutcome,
+) -> Result<(ToolOutcome, Option<Vec<u8>>), StorageError> {
+    Ok(match reply {
+        Ok(CommandReply::CommandStatusUnknown { .. }) => {
+            // Same host key is retried on recovery until the gateway returns its receipt.
+            return Err(StorageError::unavailable(
+                Unavailable::UnsupportedRuntime,
+                "tool command status unknown",
+            ));
+        }
+        Ok(CommandReply::ReceiptPurged { .. }) => {
+            return Err(StorageError::unavailable(
+                Unavailable::UnsupportedRuntime,
+                "tool command receipt purged before outcome reconciliation",
+            ));
+        }
+        Ok(reply @ CommandReply::Recorded { .. }) if approval_refusal(&reply) => {
+            held_approval(approvals, store, ctx, descriptor, raw)?
+        }
+        Ok(reply @ CommandReply::Recorded { .. }) => recorded_command(&reply)?,
+        Ok(CommandReply::Rejected { code, retry, .. }) => {
+            if needs_recovery(retry) {
+                return Err(StorageError::unavailable(
+                    Unavailable::UnsupportedRuntime,
+                    "tool command rejection requires reconciliation",
+                ));
+            }
+            failed(&format!("command_{code:?}"))
+        }
+        Err(_) => {
+            return Err(StorageError::unavailable(
+                Unavailable::UnsupportedRuntime,
+                "tool command gateway failed before receipt reconciliation",
+            ));
+        }
+    })
+}
+
 /// Whether a domain command refused the call because a person must approve it.
 fn approval_refusal(reply: &DomainCommandReply) -> bool {
     matches!(reply, CommandReply::Recorded { receipt, .. }
@@ -2464,7 +2613,7 @@ fn approval_refusal(reply: &DomainCommandReply) -> bool {
 /// it, so the turn goes on; the decision reaches the agent later as an update of the operation.
 /// A request no approval can carry is answered as failed rather than held.
 fn held_approval(
-    runtime: &Runtime,
+    approvals: &Arc<ApprovalService>,
     store: &dyn ApplicationStore,
     ctx: &InvocationContext,
     descriptor: &'static OperationDescriptor,
@@ -2499,7 +2648,7 @@ fn held_approval(
             frame
         }
     };
-    match runtime.approvals().stage_held(
+    match approvals.stage_held(
         store,
         ctx,
         descriptor.name,
@@ -2514,10 +2663,10 @@ fn held_approval(
             },
             None,
         )),
-        Err(devworks_core::services::sessions::Failure::Refused(_)) => {
+        Err(devworks_core::services::kernel::Failure::Refused(_)) => {
             Ok(failed("domain_ApprovalRequired"))
         }
-        Err(devworks_core::services::sessions::Failure::Storage(error)) => Err(error),
+        Err(devworks_core::services::kernel::Failure::Storage(error)) => Err(error),
     }
 }
 
@@ -2671,7 +2820,7 @@ mod tests {
     #[test]
     fn unknown_command_effect_keeps_operation_identity() {
         let operation_id = OperationId(Id::new("operation").unwrap());
-        let fault = devworks_core::services::sessions::Refusal::new(
+        let fault = devworks_core::services::kernel::Refusal::new(
             DomainErrorCode::OutcomeUnknown,
             "operation",
             Some(operation_id.0.clone()),
@@ -2700,7 +2849,7 @@ mod tests {
     #[test]
     fn blocked_command_keeps_actual_hold_identity() {
         let hold = HoldId(Id::new("blocked-hold").unwrap());
-        let mut fault = devworks_core::services::sessions::Refusal::new(
+        let mut fault = devworks_core::services::kernel::Refusal::new(
             DomainErrorCode::DependencyBlocked,
             "root",
             None,
@@ -2729,7 +2878,7 @@ mod tests {
 
     #[test]
     fn approval_fault_cannot_be_recorded_as_failed_without_approval_identity() {
-        let fault = devworks_core::services::sessions::Refusal::new(
+        let fault = devworks_core::services::kernel::Refusal::new(
             DomainErrorCode::ApprovalRequired,
             "operation",
             None,
@@ -2755,7 +2904,7 @@ mod tests {
 
     #[test]
     fn retryable_recorded_command_does_not_become_final_failed() {
-        let fault = devworks_core::services::sessions::Refusal::new(
+        let fault = devworks_core::services::kernel::Refusal::new(
             DomainErrorCode::StorageUnavailable,
             "operation",
             None,

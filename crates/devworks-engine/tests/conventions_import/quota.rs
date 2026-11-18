@@ -94,17 +94,12 @@ fn command(f: &Fx, key: &str, body: serde_json::Value) -> DomainDecision {
 }
 
 fn publication_after_head_change(move_scope: bool) {
-    use devworks_core::services::conventions::importing::ImportOutcome;
+    use devworks_core::services::effect::EffectOutcome;
     let mut f = Fx::new();
     let destination = project(&f, "publication-destination");
     let source = f.source(&serde_json::to_vec(&manifest(1)).unwrap());
     let op = f.admit(&source, "publication-before-head-change");
-    f.store = Arc::new(LostAckStore {
-        inner: f.store.clone(),
-        target: op.clone(),
-        phase: "Published",
-        armed: Arc::new(std::sync::atomic::AtomicBool::new(true)),
-    });
+    f.store = lose_ack_after_phase(f.store.clone(), &op, "Published");
     let index = Arc::new(IndexService::new(
         f.store.clone(),
         f.artifacts.clone(),
@@ -122,7 +117,7 @@ fn publication_after_head_change(move_scope: bool) {
     );
     let record = f.dispatch(&op);
     assert_eq!(record.state, OperationState::OutcomeUnknown);
-    let ImportOutcome::Completed(original) = f.service.observe(&record) else {
+    let EffectOutcome::Completed(original) = f.service.observe(&record) else {
         panic!("original published result")
     };
     let draft = read(&*f.store, |r| r.conventions().convention_import(&op)).unwrap();
@@ -141,7 +136,7 @@ fn publication_after_head_change(move_scope: bool) {
         DomainDecision::Applied { .. }
     ));
     let observed = f.service.observe(&record);
-    let ImportOutcome::Completed(recovered) = observed else {
+    let EffectOutcome::Completed(recovered) = observed else {
         panic!("published import still completes after head change: {observed:?}")
     };
     assert_eq!(

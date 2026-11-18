@@ -1,8 +1,14 @@
 //! Native preparation and exact confirmation fences. A permit is opaque, cannot be
 //! deserialized, and is minted only after the ingress-bound Human decision and fresh owners.
 use super::*;
+pub use crate::ports::project_purge::PurgePermit;
+
+/// The only value that can issue a `PurgePermit`; its field is private to this file.
+struct ConfirmationToken(());
+impl PurgeConfirmation for ConfirmationToken {}
 use crate::ports::project_purge::{
-    ProjectPurgeClient, ProjectPurgeFiles, PurgeClientSnapshot, PurgeFileFault, PurgeFileSnapshot,
+    ProjectPurgeClient, ProjectPurgeFiles, PurgeClientSnapshot, PurgeConfirmation, PurgeFileFault,
+    PurgeFileSnapshot,
 };
 use crate::ports::storage::{
     ProjectPurgeInventory, ProjectPurgeRowAction, ProjectPurgeRowReason, StoredProjectPurge,
@@ -45,6 +51,10 @@ impl PurgeWorker {
         }
     }
     pub fn step(&self, stopped: &mut dyn FnMut() -> bool) -> Result<usize, StorageError> {
+        self.step_pass(stopped).map(|pass| pass.settled)
+    }
+    /// [`Self::step`], also reporting whether a held or leased effect needs another look.
+    pub fn step_pass(&self, stopped: &mut dyn FnMut() -> bool) -> Result<PurgeStep, StorageError> {
         use crate::ports::storage::{ReadOptions, WriteOptions, read_snapshot, run_write};
         let mut pending = read_snapshot(&*self.store, &ReadOptions::default(), |read| {
             read.projects().purge_pending_effects(32)
@@ -59,6 +69,7 @@ impl PurgeWorker {
             }
         });
         let mut settled = 0;
+        let mut retry_after = None;
         for effect in pending {
             if stopped() {
                 break;
@@ -66,7 +77,7 @@ impl PurgeWorker {
             let owner = self.ids.next_id(IdKind::Operation);
             let (manifest, id, claim) =
                 (effect.manifest_id.clone(), effect.id.clone(), owner.clone());
-            let admitted = run_write(&*self.store, WriteOptions::default(), move |tx| {
+            let admitted = run_write(&*self.store, WriteOptions::host_state(), move |tx| {
                 let until = tx
                     .now_ms()
                     .checked_add(30_000)
@@ -75,6 +86,8 @@ impl PurgeWorker {
                     .claim_purge_effect(&manifest, &id, &claim, until)
             })?;
             let Some(admitted) = admitted else {
+                // Held with a retry window, or leased by another owner: look again after it.
+                retry_after = Some(PURGE_RETRY_WINDOW);
                 continue;
             };
             let outcome = if stopped() {
@@ -89,43 +102,35 @@ impl PurgeWorker {
                     }
                 }
             };
+            if outcome.is_err() {
+                retry_after = Some(PURGE_RETRY_WINDOW);
+            }
             let manifest = admitted.manifest_id;
             let id = admitted.id;
-            run_write(&*self.store, WriteOptions::default(), move |tx| {
+            run_write(&*self.store, WriteOptions::settlement(), move |tx| {
                 tx.projects()
                     .settle_purge_effect(&manifest, &id, &owner, outcome)
             })?;
             settled += 1;
         }
-        Ok(settled)
+        Ok(PurgeStep {
+            settled,
+            retry_after,
+        })
     }
 }
 
-/// Its fields and constructor are private to this confirmation owner. A generic authority
-/// grant or a wire input can never construct this storage capability.
-pub struct PurgePermit {
-    reviewed: StoredProjectPurge,
-    files: PurgeFileSnapshot,
-    client: PurgeClientSnapshot,
-    scope: crate::ports::storage::ProjectPurgeClientScope,
-    confirmed_by: ActorId,
-}
-impl PurgePermit {
-    pub fn reviewed(&self) -> &StoredProjectPurge {
-        &self.reviewed
-    }
-    pub fn files(&self) -> &PurgeFileSnapshot {
-        &self.files
-    }
-    pub fn client(&self) -> &PurgeClientSnapshot {
-        &self.client
-    }
-    pub fn client_scope(&self) -> &crate::ports::storage::ProjectPurgeClientScope {
-        &self.scope
-    }
-    pub fn confirmed_by(&self) -> &ActorId {
-        &self.confirmed_by
-    }
+/// How long a failed purge effect stays held before its next attempt (the storage retry window).
+pub const PURGE_RETRY_WINDOW: std::time::Duration = std::time::Duration::from_secs(1);
+
+/// The result of one [`PurgeWorker::step_pass`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PurgeStep {
+    /// Effects this pass claimed and settled.
+    pub settled: usize,
+    /// Set when an effect is held (an owner still in use, such as the client waiting on its UI
+    /// acknowledgement, which commits nothing) or leased: the time to look again.
+    pub retry_after: Option<std::time::Duration>,
 }
 
 fn invalid() -> Failure {
@@ -337,13 +342,14 @@ impl PurgeCoordinator {
             };
             return Err(refuse(DomainErrorCode::Conflict, reason, None));
         }
-        Ok(PurgePermit {
-            reviewed: stored,
-            files: snapshot.removing,
-            client: snapshot.client,
-            scope: snapshot.inventory.client,
-            confirmed_by: ctx.principal().clone(),
-        })
+        Ok(PurgePermit::issue(
+            &ConfirmationToken(()),
+            stored,
+            snapshot.removing,
+            snapshot.client,
+            snapshot.inventory.client,
+            ctx.principal().clone(),
+        ))
     }
 
     pub fn manifest_page(

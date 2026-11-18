@@ -832,7 +832,9 @@ fn a_replayed_settings_save_answered_before_the_first_read_still_finishes_saving
         900.0,
     );
     let deadline = std::time::Instant::now() + SETTLE_BOUND;
-    while h.state().client().unwrap().is_pending(&Slot::SettingsSave) {
+    while h.state().client().unwrap().is_pending(&Slot::Settings(
+        devworks_desktop::settings_ops::SettingsSlot::SettingsSave,
+    )) {
         assert!(std::time::Instant::now() < deadline, "the save is answered");
         h.step();
     }
@@ -1222,7 +1224,7 @@ fn a_refused_paste_survives_close_as_failed_and_is_stored_on_retry() {
             {"key": d.key, "value": {"schema": d.schema_ref(), "value": bytes}}]});
         ops::settings_saved(real.command(
             "settings.save_revision",
-            &ops::command_frame(&*real, "settings.save_revision", body),
+            &devworks_desktop::frame::fixture::command(&*real, "settings.save_revision", body),
         ))
         .expect("the quota is saved");
     };

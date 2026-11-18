@@ -102,6 +102,10 @@ impl Screen for ArtifactsScreen {
 }
 
 impl ArtifactsScreen {
+    /// An artifact was stored or deleted: the next list read supersedes any started before.
+    pub(crate) fn changed(&mut self) {
+        self.mutations += 1;
+    }
     fn load(&mut self, cx: &mut Cx) {
         self.list_at = self.mutations;
         cx.query(
@@ -291,7 +295,9 @@ impl BrowserScreen {
         let projects: Vec<String> = match &cx.selected_project {
             Some(p) => vec![p.clone()],
             None => {
-                if !cx.projects.list.loaded && !cx.pending(&crate::backend::Slot::ProjectsList) {
+                if !cx.projects.list.loaded
+                    && !cx.pending(&crate::projects_ops::ProjectsSlot::ProjectsList)
+                {
                     cx.load_projects();
                 }
                 cx.projects

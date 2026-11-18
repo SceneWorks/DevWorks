@@ -14,7 +14,6 @@
 //! credentials), `HEAD` commit and branch, object format and worktrees; an identity change
 //! advances the source revision. Registration never adds project membership: that is the
 //! user's `projects.membership` decision.
-use super::git::Git;
 use super::paths::{location_identity, native_location};
 use super::{IndexEnv, section_config};
 use crate::context::InvocationContext;
@@ -24,6 +23,7 @@ use crate::ports::indexing::{EntryKind, GitMarker};
 use crate::ports::storage::*;
 use crate::protocol::records::Severity;
 use crate::protocol::{Id, ProjectId};
+use crate::services::git::client::Git;
 use crate::services::indexing::config::EffectiveConfig;
 use crate::services::projects::carries_credentials;
 use crate::settings::catalog::descriptor;
@@ -376,7 +376,7 @@ pub fn scan(
                 };
                 if src.state != missing {
                     let now = env.now();
-                    run_write(&*env.store, WriteOptions::default(), move |tx| {
+                    run_write(&*env.store, WriteOptions::observed(), move |tx| {
                         // Only the identity this scan read: a concurrent observation wins.
                         let current = tx.indexing().repository_source(&src.repository_id)?;
                         if current.as_ref() != Some(&src) {
@@ -483,7 +483,7 @@ fn reconcile(
     let name: String = name.chars().take(256).collect();
     let now = env.now();
     let new_id = env.ids.next_id(IdKind::Repository);
-    run_write(&*env.store, WriteOptions::default(), move |tx| {
+    run_write(&*env.store, WriteOptions::recovery(), move |tx| {
         let existing = tx.indexing().repository_at(&location)?;
         let (id, new) = match existing {
             Some(id) => (id, false),

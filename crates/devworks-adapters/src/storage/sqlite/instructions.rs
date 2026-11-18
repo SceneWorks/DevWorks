@@ -1,29 +1,14 @@
 //! Versioned skill and role instruction items with immutable revisions (DW-034).
 use super::conn::db;
 use super::repos::{Snapshot, Unit};
+use super::support::{atomic, conflict, corrupt, id_of, invalid, page_limit};
 use devworks_core::ports::storage::*;
-use devworks_core::protocol::{ActorId, Id, ProjectId, Revision, RevisionDimension};
+use devworks_core::protocol::{ActorId, Id, ProjectId, RevisionDimension};
 use rusqlite::{Connection, OptionalExtension, Row, params};
 use serde_json::Value;
 
-fn corrupt(message: &str) -> StorageError {
-    StorageError::unavailable(Unavailable::Corrupt, message)
-}
-fn invalid(message: &str) -> StorageError {
-    StorageError::InvalidRecord(message.into())
-}
-fn id(value: String) -> Result<Id, StorageError> {
-    Id::new(value).map_err(|_| corrupt("invalid instruction identifier"))
-}
 fn json(value: &str) -> Result<Value, StorageError> {
     serde_json::from_str(value).map_err(|_| corrupt("invalid instruction JSON"))
-}
-fn page(limit: u16) -> Result<(), StorageError> {
-    if limit == 0 || limit > MAX_PAGE {
-        Err(invalid("instruction page limit out of bounds"))
-    } else {
-        Ok(())
-    }
 }
 fn digest(value: &str) -> bool {
     devworks_core::fingerprint::is_sha256_hex(value)
@@ -75,7 +60,7 @@ struct RawItem {
 impl RawItem {
     fn decode(self) -> Result<StoredInstructionItem, StorageError> {
         Ok(StoredInstructionItem {
-            id: id(self.id)?,
+            id: id_of(self.id)?,
             kind: InstructionKind::parse(&self.kind).ok_or_else(|| corrupt("instruction kind"))?,
             name: self.name,
             scope: ConfigScope::from_key(&self.scope)
@@ -93,7 +78,7 @@ impl RawItem {
             version: self.version,
             created_at_ms: self.created_at,
             updated_at_ms: self.updated_at,
-            confined_project: self.confined.map(id).transpose()?.map(ProjectId),
+            confined_project: self.confined.map(id_of).transpose()?.map(ProjectId),
         })
     }
 }
@@ -133,21 +118,21 @@ fn revision(r: &Row<'_>) -> rusqlite::Result<RawRevision> {
 impl RawRevision {
     fn decode(self) -> Result<StoredInstructionRevision, StorageError> {
         Ok(StoredInstructionRevision {
-            instruction_id: id(self.instruction_id)?,
+            instruction_id: id_of(self.instruction_id)?,
             revision: self.revision,
             content: json(&self.content)?,
             content_digest: self.content_digest,
             state: InstructionRevisionState::parse(&self.state)
                 .ok_or_else(|| corrupt("instruction revision state"))?,
-            author: ActorId(id(self.author)?),
+            author: ActorId(id_of(self.author)?),
             origin: json(&self.origin)?,
             resources: json(&self.resources)?,
             applicability: serde_json::from_str(&self.applicability)
                 .map_err(|_| corrupt("instruction applicability"))?,
-            approval_id: self.approval_id.map(id).transpose()?,
+            approval_id: self.approval_id.map(id_of).transpose()?,
             created_at_ms: self.created_at,
             decided_at_ms: self.decided_at,
-            confined_project: self.confined.map(id).transpose()?.map(ProjectId),
+            confined_project: self.confined.map(id_of).transpose()?.map(ProjectId),
         })
     }
 }
@@ -186,7 +171,7 @@ fn list_items(
     after: Option<&Id>,
     limit: u16,
 ) -> Result<Vec<StoredInstructionItem>, StorageError> {
-    page(limit)?;
+    page_limit(limit)?;
     let scopes: Vec<String> = filter.scopes.iter().map(ConfigScope::key).collect();
     let scopes = serde_json::to_string(&scopes).expect("scope keys");
     let mut statement = db(conn.prepare(&format!(
@@ -216,7 +201,7 @@ fn list_revisions(
     before: Option<i64>,
     limit: u16,
 ) -> Result<Vec<StoredInstructionRevision>, StorageError> {
-    page(limit)?;
+    page_limit(limit)?;
     let mut statement = db(conn.prepare(&format!(
         "SELECT {REVISION_COLUMNS} FROM instruction_revisions
          WHERE instruction_id=?1 AND (?2 IS NULL OR revision < ?2)
@@ -246,7 +231,7 @@ fn revision_lessons(conn: &Connection, key: &Id, number: i64) -> Result<Vec<Id>,
         "SELECT lesson_id FROM instruction_revision_lessons WHERE instruction_id=?1 AND revision=?2 ORDER BY lesson_id",
     ))?;
     db(statement.query_map(params![key.as_str(), number], |r| r.get::<_, String>(0)))?
-        .map(|r| db(r).and_then(id))
+        .map(|r| db(r).and_then(id_of))
         .collect()
 }
 fn lesson_revisions(
@@ -255,7 +240,7 @@ fn lesson_revisions(
     after: Option<(&Id, i64)>,
     limit: u16,
 ) -> Result<Vec<(Id, i64)>, StorageError> {
-    page(limit)?;
+    page_limit(limit)?;
     let (after_id, after_revision) = after.map_or(("", -1), |(id, n)| (id.as_str(), n));
     let mut statement = db(conn.prepare(
         "SELECT instruction_id,revision FROM instruction_revision_lessons WHERE lesson_id=?1 AND (instruction_id,revision)>(?2,?3) ORDER BY instruction_id,revision LIMIT ?4",
@@ -264,7 +249,7 @@ fn lesson_revisions(
         params![lesson.as_str(), after_id, after_revision, i64::from(limit)],
         |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)),
     ))?
-    .map(|r| db(r).and_then(|(key, number)| Ok((id(key)?, number))))
+    .map(|r| db(r).and_then(|(key, number)| Ok((id_of(key)?, number))))
     .collect()
 }
 
@@ -397,12 +382,12 @@ impl InstructionRepository for Unit<'_> {
             id: item.id.as_str().into(),
         })?;
         if current.version != item.version - 1 {
-            return Err(StorageError::conflict(
+            return Err(conflict(
                 RevisionDimension::Source,
                 "instruction",
-                item.id.clone(),
-                Revision::new((item.version - 1).max(1)).expect("positive"),
-                Revision::new(current.version.max(1)).expect("positive"),
+                item.id.as_str(),
+                (item.version - 1).max(1),
+                current.version,
             ));
         }
         if current.kind != item.kind
@@ -491,6 +476,9 @@ impl InstructionRepository for Unit<'_> {
         approval_id: Option<&Id>,
         decided_at_ms: Option<i64>,
     ) -> Result<(), StorageError> {
+        if number <= 0 {
+            return Err(invalid("instruction revision number is positive"));
+        }
         let allowed = matches!(
             (from, to),
             (
@@ -525,12 +513,12 @@ impl InstructionRepository for Unit<'_> {
             ],
         ))?;
         if changed != 1 {
-            return Err(StorageError::conflict(
+            return Err(conflict(
                 RevisionDimension::Source,
                 "instruction_revision",
-                key.clone(),
-                Revision::new(number.max(1)).expect("positive"),
-                Revision::new(number.max(1)).expect("positive"),
+                key.as_str(),
+                number.max(1),
+                number,
             ));
         }
         Ok(())
@@ -541,13 +529,15 @@ impl InstructionRepository for Unit<'_> {
         number: i64,
         lessons: &[Id],
     ) -> Result<(), StorageError> {
-        for lesson in lessons {
-            db(self.conn.execute(
-                "INSERT INTO instruction_revision_lessons(instruction_id,revision,lesson_id) VALUES(?1,?2,?3)",
-                params![key.as_str(), number, lesson.as_str()],
-            ))?;
-        }
-        Ok(())
+        atomic(self.conn, || {
+            for lesson in lessons {
+                db(self.conn.execute(
+                    "INSERT INTO instruction_revision_lessons(instruction_id,revision,lesson_id) VALUES(?1,?2,?3)",
+                    params![key.as_str(), number, lesson.as_str()],
+                ))?;
+            }
+            Ok(())
+        })
     }
     fn release_instruction_revision(
         &mut self,

@@ -30,7 +30,7 @@ fn official_tariff_edit(profile: &str, endpoint: &str, upstream: &str) {
     config.connection_tick = None;
     let engine = devworks_desktop::host::Engine::start(config).unwrap();
     let b = engine.backend();
-    ops::configured(b.command("router.configure", &ops::router_configure(&*b,json!({"kind":"Connection","name":"Official quote connection","profile":profile,"endpoint":endpoint})))).unwrap();
+    ops::configured(b.command("router.configure", &ops::router_configure(&*b, serde_json::from_value(json!({"kind":"Connection","name":"Official quote connection","profile":profile,"endpoint":endpoint})).unwrap()))).unwrap();
     let connection =
         ops::connection_records(b.query("router.connections", &ops::router_connections(&*b, None)))
             .unwrap()
@@ -39,7 +39,7 @@ fn official_tariff_edit(profile: &str, endpoint: &str, upstream: &str) {
             .find(|c| c.name.0 == "Official quote connection")
             .unwrap();
     let model = "native-official-edit-model";
-    ops::configured(b.command("router.configure", &ops::router_configure(&*b,json!({"kind":"Model","model":{"id":model,"displayName":"Official edit model","endpointProfile":profile,"connectionId":connection.id,"upstreamModelId":upstream,"enabled":true,"tierMemberships":[],"efforts":[],"imageInput":false,"tools":false,"revision":"1"}})))).unwrap();
+    ops::configured(b.command("router.configure", &ops::router_configure(&*b, serde_json::from_value(json!({"kind":"Model","model":{"id":model,"displayName":"Official edit model","endpointProfile":profile,"connectionId":connection.id,"upstreamModelId":upstream,"enabled":true,"tierMemberships":[],"efforts":[],"imageInput":false,"tools":false,"revision":"1"}})).unwrap()))).unwrap();
     let base = PublishedTariff {
         upstream_model_id: "gpt-test".into(),
         service_tier: "Standard".into(),
@@ -83,7 +83,7 @@ fn official_tariff_edit(profile: &str, endpoint: &str, upstream: &str) {
     unrelated.amount_usd = "999".into();
     tariffs.push(unrelated);
     let store = engine.host().runtime().store();
-    run_write(&**store, WriteOptions::default(), move |tx| {
+    run_write(&**store, WriteOptions::fixture(), move |tx| {
         for (number, id) in [(1, "official-old"), (2, "official-selected")] {
             let previous = tx.usage().price_status("openai")?;
             let status = StoredPriceStatus {

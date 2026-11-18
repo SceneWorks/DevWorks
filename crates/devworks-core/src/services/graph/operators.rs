@@ -10,7 +10,7 @@ use crate::protocol::{
     data::{Direction, GraphResult},
     records::*,
 };
-use crate::services::sessions::Failure;
+use crate::services::kernel::Failure;
 use serde_json::json;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
@@ -28,7 +28,7 @@ pub(super) fn detail(
 ) -> Result<GraphResult, Failure> {
     let target = reader
         .find_id(id)?
-        .ok_or_else(|| crate::services::sessions::not_found("node", id))?;
+        .ok_or_else(|| crate::services::kernel::not_found("node", id))?;
     let (node, property) = reader.node(&target, reader.position.property.clone().as_ref())?;
     if let Some(property) = property {
         reader.next = Some(Position {
@@ -41,9 +41,14 @@ pub(super) fn detail(
         && reader.position.offset == 0
     {
         return Ok(GraphResult::NodeDetail {
-            value: model::wire(
-                json!({"node":node,"neighbors":[],"incoming":[],"outgoing":[],"crossRepository":[],"relationshipsComplete":false}),
-            )?,
+            value: CodeNodeDetail {
+                node,
+                neighbors: model::list(Vec::new())?,
+                incoming: model::list(Vec::new())?,
+                outgoing: model::list(Vec::new())?,
+                cross_repository: model::list(Vec::new())?,
+                relationships_complete: false,
+            },
         });
     }
     if reader.position.edge_property.is_some() || reader.position.offset > 0 {
@@ -123,9 +128,18 @@ pub(super) fn detail(
         }
     }
     Ok(GraphResult::NodeDetail {
-        value: model::wire(
-            json!({"node":node,"neighbors":neighbors.into_values().collect::<Vec<_>>(),"incoming":incoming,"outgoing":outgoing,"crossRepository":cross,"relationshipsComplete":reader.next.is_none()&&reader.budget.exhausted.is_none()&&!reader.gaps.contains(&"graph_visited_limit")&&reader.selected.pin.unavailable_repositories.is_empty()&&unmapped.is_none_or(|count|count==0)}),
-        )?,
+        value: CodeNodeDetail {
+            node,
+            neighbors: model::list(neighbors.into_values().collect())?,
+            incoming: model::list(incoming)?,
+            outgoing: model::list(outgoing)?,
+            cross_repository: model::list(cross)?,
+            relationships_complete: reader.next.is_none()
+                && reader.budget.exhausted.is_none()
+                && !reader.gaps.contains(&"graph_visited_limit")
+                && reader.selected.pin.unavailable_repositories.is_empty()
+                && unmapped.is_none_or(|count| count == 0),
+        },
     })
 }
 
@@ -219,7 +233,7 @@ pub(super) fn by_file(
             nodes: crate::protocol::support::BoundedList(nodes),
             total,
             low_confidence_count: model::count(low as u64)?,
-            selected_node_id: selected.map(|id| model::wire(json!(id))).transpose()?,
+            selected_node_id: selected.map(|id| model::text(id.as_str())).transpose()?,
         },
     })
 }
@@ -232,6 +246,20 @@ pub(super) struct Walk<'a> {
     /// The caller reads the walk's complete edge set (unmapped inbound counts, cross-repository
     /// links), which only the scan has.
     pub complete: bool,
+}
+/// One traversal row: the node reached, its depth and the edge that led to it.
+fn traversal_entry(
+    reader: &mut Reader<'_>,
+    node: &GraphNode,
+    step: &Step,
+) -> Result<CodeTraversalEntry, Failure> {
+    Ok(CodeTraversalEntry {
+        node: reader.node(node, None)?.0,
+        depth: model::count(u64::from(step.depth))?,
+        parent_id: Some(model::text(&step.parent.node_id)?),
+        edge_kind: Some(model::text(&step.edge.raw.edge.kind)?),
+        edge_id: Some(model::text(&step.edge.raw.edge.edge_id)?),
+    })
 }
 struct Step {
     identity: GraphNodeIdentity,
@@ -393,9 +421,7 @@ fn entries(reader: &mut Reader<'_>, steps: &[Step]) -> Result<Vec<CodeTraversalE
             break;
         }
         let node = raw(reader, &step.identity)?;
-        let entry = model::wire(
-            json!({"node":reader.node(&node,None)?.0,"depth":step.depth.to_string(),"parentId":step.parent.node_id,"edgeKind":step.edge.raw.edge.kind,"edgeId":step.edge.raw.edge.edge_id}),
-        )?;
+        let entry = traversal_entry(reader, &node, step)?;
         if !reader.retain_wire(&entry)? {
             reader.next = Some(Position {
                 offset: index,
@@ -574,7 +600,12 @@ pub(super) fn shortest(
 ) -> Result<GraphResult, Failure> {
     let Some(start) = reader.find_id(from)? else {
         return Ok(GraphResult::CodeGraph {
-            value: model::wire(json!({"nodes":[],"edges":[],"lowConfidenceCount":"0"}))?,
+            value: CodeGraphResult {
+                nodes: model::list(Vec::new())?,
+                edges: model::list(Vec::new())?,
+                low_confidence_count: model::count(0)?,
+                unmapped_inbound_edges: None,
+            },
         });
     };
     let target = reader.find_id(to)?;
@@ -702,9 +733,11 @@ pub(super) fn related(
             break;
         }
         let node = raw(reader, &edge.source)?;
-        let item = model::wire(
-            json!({"node":reader.node(&node,None)?.0,"edgeKind":edge.raw.edge.kind,"lowConfidence":dataset::low_node(&node)}),
-        )?;
+        let item = CodeRelatedNode {
+            node: reader.node(&node, None)?.0,
+            edge_kind: model::text(&edge.raw.edge.kind)?,
+            low_confidence: dataset::low_node(&node),
+        };
         if !reader.retain_wire(&item)? {
             reader.next = Some(Position {
                 offset: index,
@@ -807,9 +840,7 @@ pub(super) fn lineage(
                 (&outbound[index - inbound.len()], false)
             };
             let node = raw(reader, &step.identity)?;
-            let value: CodeTraversalEntry = model::wire(
-                json!({"node":reader.node(&node,None)?.0,"depth":step.depth.to_string(),"parentId":step.parent.node_id,"edgeKind":step.edge.raw.edge.kind,"edgeId":step.edge.raw.edge.edge_id}),
-            )?;
+            let value = traversal_entry(reader, &node, step)?;
             if !reader.retain_wire(&value)? {
                 reader.next = Some(Position {
                     offset: index,

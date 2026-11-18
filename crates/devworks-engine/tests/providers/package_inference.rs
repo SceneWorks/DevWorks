@@ -146,7 +146,10 @@ fn package_inference_runs_in_the_invoking_agents_session_as_other_usage() {
         assert_eq!(route_purpose, "Enrichment");
         assert_eq!(attempt.session_id, Some(id("agent-session")));
         assert_eq!(attempt.actor_id, ActorId(id("sampling-agent")));
-        assert_eq!(attempt.state, "Settled");
+        assert_eq!(
+            attempt.state,
+            devworks_core::ports::storage::AttemptState::Settled
+        );
         assert!(attempt.request_id.as_str().starts_with("pkgi-"));
 
         // A retried call under the same action key returns the recorded answer, never sending
@@ -316,7 +319,10 @@ fn a_person_started_invocation_infers_as_that_person_in_their_package_session() 
         assert_eq!(purpose, "Enrichment");
         assert_eq!(attempt.actor_id, ActorId(id("package-person")));
         assert_eq!(attempt.session_id, Some(session.clone()));
-        assert_eq!(attempt.state, "Settled");
+        assert_eq!(
+            attempt.state,
+            devworks_core::ports::storage::AttemptState::Settled
+        );
         assert!(attempt.request_id.as_str().starts_with("pkgi-"));
         let session = read(f.store.as_ref(), |s| s.sessions().session(&session));
         assert!(session.is_some_and(|s| is_person_session(&s, &ActorId(id("package-person")))));
@@ -439,7 +445,10 @@ fn an_event_handler_infers_as_the_person_who_approved_its_exact_version() {
                 None
             ))
         );
-        assert_eq!(attempt.state, "Settled");
+        assert_eq!(
+            attempt.state,
+            devworks_core::ports::storage::AttemptState::Settled
+        );
     });
 }
 

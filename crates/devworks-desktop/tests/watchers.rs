@@ -13,6 +13,7 @@ use devworks_core::ports::storage::{
 use devworks_core::protocol::{ActorId, Id, ProjectId, RootId};
 use devworks_core::services::work::workflow::default_status_id;
 
+use devworks_desktop::frame::fixture::command_input;
 use devworks_desktop::ops;
 use devworks_desktop::route::Route;
 use devworks_desktop::shell::Shell;
@@ -77,7 +78,7 @@ fn seed(
 ) {
     run_write(
         &**engine.host().runtime().store(),
-        WriteOptions::default(),
+        WriteOptions::fixture(),
         f,
     )
     .expect("seeded rows");
@@ -136,9 +137,11 @@ fn watchers_are_listed_attributed_cancelled_and_reported_in_their_conversation()
         "features.create",
         &wops::work_command(
             &*backend,
-            "features.create",
-            json!({"projectId": pid, "creation": {"kind": "Single", "title": "Checkout",
+            command_input(
+                "features.create",
+                json!({"projectId": pid, "creation": {"kind": "Single", "title": "Checkout",
                 "description": "", "repositoryIds": [], "statusId": backlog, "priority": 1}}),
+            ),
         ),
     ))
     .unwrap();

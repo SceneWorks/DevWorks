@@ -16,7 +16,7 @@ fn digest(
     work_member: bool,
     project_member: bool,
 ) -> Result<Option<String>, StorageError> {
-    let brief = crate::services::work::model::WorkBrief::of(work)?;
+    let brief = crate::kernel::work_brief::WorkBrief::of(work)?;
     if brief
         .assigned_agent_id
         .as_ref()
@@ -125,7 +125,7 @@ fn force_belongs(
     let GitCommand::Push { target_ref, .. } = &request.command else {
         return Ok(false);
     };
-    let brief = crate::services::work::model::WorkBrief::of(work)?;
+    let brief = crate::kernel::work_brief::WorkBrief::of(work)?;
     Ok(!brief
         .assignment_id
         .as_ref()

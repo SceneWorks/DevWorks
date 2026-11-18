@@ -11,7 +11,7 @@ fn null_config() -> &'static str {
 }
 fn shell_word(path: &Path) -> String {
     let path =
-        devworks_core::services::indexing::git::path_argument(path).expect("fixture helper path");
+        devworks_core::services::git::client::path_argument(path).expect("fixture helper path");
     format!("'{}'", path.replace('\'', "'\\''"))
 }
 fn config_value(value: &str) -> String {
@@ -269,7 +269,7 @@ impl State {
         &self,
         verb: &str,
         flags: &str,
-        result: &Result<Vec<u8>, devworks_core::services::indexing::helper::HelperFault>,
+        result: &Result<Vec<u8>, devworks_core::services::git::helper::HelperFault>,
     ) {
         if self.https.is_some()
             && matches!(verb, "ls-remote" | "push")
@@ -561,7 +561,7 @@ pub(super) fn exercise(f: Fixture<'_>) {
     assert!(
         matches!(
             outcome,
-            devworks_core::services::git::EffectOutcome::Unknown(_)
+            devworks_core::services::effect::EffectOutcome::Unknown(_)
         ),
         "{outcome:?}\n{}",
         f.state.diagnostics()
@@ -577,7 +577,7 @@ pub(super) fn exercise(f: Fixture<'_>) {
     assert!(
         matches!(
             observed,
-            devworks_core::services::git::EffectOutcome::Unknown(_)
+            devworks_core::services::effect::EffectOutcome::Unknown(_)
         ),
         "{observed:?}"
     );
@@ -645,7 +645,7 @@ pub(super) fn exercise(f: Fixture<'_>) {
     assert!(
         matches!(
             recovered,
-            devworks_core::services::git::EffectOutcome::Completed(_)
+            devworks_core::services::effect::EffectOutcome::Completed(_)
         ),
         "{recovered:?}\n{}",
         f.state.diagnostics()

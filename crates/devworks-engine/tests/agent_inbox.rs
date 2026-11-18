@@ -26,7 +26,7 @@ use std::time::Duration;
 async fn waiting_inbox_cancels_without_a_held_writer() {
     let harness = Harness::new();
     let store = harness.open();
-    seed_root(&harness, "root-a");
+    seed_root(&*store, "root-a");
     let user = principal(store.as_ref(), "waiting-human", PrincipalKind::Human);
     let driver = RetainedInboxDriver::new(store.clone());
     let cancellation = Cancellation::new();
@@ -80,7 +80,7 @@ async fn waiting_inbox_cancels_without_a_held_writer() {
 fn agent_rules_refuse_with_their_target_and_a_corrupt_message_row_is_a_storage_fault() {
     let harness = Harness::new();
     let store = harness.open();
-    seed_root(&harness, "root-a");
+    seed_root(&*store, "root-a");
     let user = principal(store.as_ref(), "rules-user", PrincipalKind::Human);
     let runs = Arc::new(ControlService::with_scope(
         harness.ids.clone(),
@@ -132,6 +132,30 @@ fn agent_rules_refuse_with_their_target_and_a_corrupt_message_row_is_a_storage_f
         (DomainErrorCode::InvalidArgument, Some("limit".into()))
     );
     // The retained-message helpers name the rule a request breaks, not one target per use case.
+    // A cursor this inbox did not issue restarts the read; one ahead of the head is invalid.
+    assert_eq!(
+        refusal(command(
+            "agents.ack",
+            "rules-malformed-cursor",
+            json!({"projectId":"project-a","upTo":"Zm9v"}),
+        )),
+        (
+            DomainErrorCode::CursorExpired,
+            Some("agent_inbox_cursor".into())
+        )
+    );
+    let head = common::read(store.as_ref(), |snapshot| {
+        snapshot.runs().agent_delivery_head()
+    });
+    let binding = inbox_binding(&user, &ProjectId(id("project-a")), &Recipient::Human);
+    assert_eq!(
+        refusal(command(
+            "agents.ack",
+            "rules-ahead-cursor",
+            json!({"projectId":"project-a","upTo":inbox_cursor(&binding, head + 1).unwrap()}),
+        )),
+        (DomainErrorCode::InvalidArgument, Some("up_to".into()))
+    );
     assert_eq!(
         refusal(command(
             "agents.post",
@@ -191,10 +215,18 @@ fn agent_rules_refuse_with_their_target_and_a_corrupt_message_row_is_a_storage_f
 fn selected_retained_post_uses_the_native_gateway_and_replays_its_receipt() {
     let harness = Harness::new();
     let store = harness.open();
-    seed_root(&harness, "root-a");
+    seed_root(&*store, "root-a");
+    devworks_test_support::seed::work(
+        &*store,
+        &[devworks_test_support::seed::WorkSeed::issue("issue-a", "project-a").title("Issue")],
+    )
+    .unwrap();
     rusqlite::Connection::open(harness.root.join("workspace.sqlite"))
         .unwrap()
-        .execute_batch("INSERT INTO work_items VALUES('issue-a','project-a','issue',NULL,NULL,NULL,'Issue',1,0,1,1,1,'{}');")
+        .execute(
+            "UPDATE work_items SET kind='issue' WHERE id IN ('issue-a')",
+            [],
+        )
         .unwrap();
     let user = principal(store.as_ref(), "post-user", PrincipalKind::Human);
     let runs = Arc::new(ControlService::with_scope(
@@ -560,7 +592,7 @@ fn selected_retained_post_uses_the_native_gateway_and_replays_its_receipt() {
 fn selected_receive_waits_replays_and_acknowledges_through_the_native_gateway() {
     let harness = Harness::new();
     let store = harness.open();
-    seed_root(&harness, "root-a");
+    seed_root(&*store, "root-a");
     let user = principal(store.as_ref(), "receive-user", PrincipalKind::Human);
     let runs = Arc::new(ControlService::with_scope(
         harness.ids.clone(),
@@ -713,7 +745,7 @@ fn selected_receive_waits_replays_and_acknowledges_through_the_native_gateway() 
 fn selected_receive_cancellation_keeps_the_request_key_retryable() {
     let harness = Harness::new();
     let store = harness.open();
-    seed_root(&harness, "root-a");
+    seed_root(&*store, "root-a");
     let user = principal(store.as_ref(), "receive-cancel-user", PrincipalKind::Human);
     let runs = Arc::new(ControlService::with_scope(
         harness.ids.clone(),
@@ -753,7 +785,7 @@ fn selected_receive_cancellation_keeps_the_request_key_retryable() {
                     raw_ref,
                     WriteOptions {
                         cancellation: Some(stop),
-                        ..WriteOptions::default()
+                        ..WriteOptions::fixture()
                     },
                 )
                 .unwrap()
@@ -781,7 +813,7 @@ fn selected_receive_cancellation_keeps_the_request_key_retryable() {
                 &raw,
                 WriteOptions {
                     deadline_ms: Some(harness.now() - 1),
-                    ..WriteOptions::default()
+                    ..WriteOptions::fixture()
                 },
             )
             .unwrap(),
@@ -812,7 +844,7 @@ fn selected_receive_cancellation_keeps_the_request_key_retryable() {
 async fn delivered_message_replays_until_read_acknowledgment() {
     let harness = Harness::new();
     let store = harness.open();
-    seed_root(&harness, "root-a");
+    seed_root(&*store, "root-a");
     let user = principal(store.as_ref(), "inbox-user", PrincipalKind::Human);
     let project = ProjectId(id("project-a"));
     let send_context = user.clone();
@@ -854,7 +886,10 @@ async fn delivered_message_replays_until_read_acknowledgment() {
         .await
         .unwrap();
     assert_eq!(first.items.len(), 1);
-    assert_eq!(first.items[0].0.state, "Delivered");
+    assert_eq!(
+        first.items[0].0.state,
+        devworks_core::ports::storage::DeliveryState::Delivered
+    );
     assert_eq!(first.items[0].1.id, posted.message.id);
     let delivered_revision = first.items[0].0.revision;
 
@@ -863,7 +898,10 @@ async fn delivered_message_replays_until_read_acknowledgment() {
         .await
         .unwrap();
     assert_eq!(replay.items.len(), 1);
-    assert_eq!(replay.items[0].0.state, "Delivered");
+    assert_eq!(
+        replay.items[0].0.state,
+        devworks_core::ports::storage::DeliveryState::Delivered
+    );
     assert_eq!(replay.items[0].0.revision, delivered_revision);
 
     let acknowledged = driver
@@ -877,7 +915,10 @@ async fn delivered_message_replays_until_read_acknowledgment() {
         .await
         .unwrap();
     assert_eq!(acknowledged.changed.len(), 1);
-    assert_eq!(acknowledged.changed[0].0.state, "Read");
+    assert_eq!(
+        acknowledged.changed[0].0.state,
+        devworks_core::ports::storage::DeliveryState::Read
+    );
     assert!(
         driver
             .receive(user.clone(), project.clone(), receive(false))
@@ -891,7 +932,10 @@ async fn delivered_message_replays_until_read_acknowledgment() {
         .await
         .unwrap();
     assert_eq!(read.items.len(), 1);
-    assert_eq!(read.items[0].0.state, "Read");
+    assert_eq!(
+        read.items[0].0.state,
+        devworks_core::ports::storage::DeliveryState::Read
+    );
 
     let resumed = driver
         .wait_events(user.clone(), project.clone(), Some(0), 0)
@@ -916,9 +960,17 @@ async fn delivered_message_replays_until_read_acknowledgment() {
             .items
             .is_empty()
     );
+    devworks_test_support::seed::work(
+        &*store,
+        &[devworks_test_support::seed::WorkSeed::issue("issue-b", "project-a").title("Issue")],
+    )
+    .unwrap();
     rusqlite::Connection::open(harness.root.join("workspace.sqlite"))
         .unwrap()
-        .execute_batch("INSERT INTO work_items VALUES('issue-b','project-a','issue',NULL,NULL,NULL,'Issue',1,0,1,1,1,'{}');")
+        .execute(
+            "UPDATE work_items SET kind='issue' WHERE id IN ('issue-b')",
+            [],
+        )
         .unwrap();
     let blocking_context = user.clone();
     let blocking_project = project.clone();
@@ -968,5 +1020,122 @@ async fn delivered_message_replays_until_read_acknowledgment() {
             .unwrap()
             .items
             .is_empty()
+    );
+}
+
+/// Sixteen receives park on the delivery signal with the 55 second cap. One post wakes them all
+/// well before the old half-second polling would have mattered, and a cancellation wakes a parked
+/// receive at once; none of them waits out its cap.
+#[test]
+fn parked_receives_wake_on_a_delivery_and_on_cancellation() {
+    let harness = Harness::new();
+    let store = harness.open();
+    seed_root(&*store, "root-a");
+    let user = principal(store.as_ref(), "wake-user", PrincipalKind::Human);
+    let runs = Arc::new(ControlService::with_scope(
+        harness.ids.clone(),
+        Arc::new(ScriptedScope::new()),
+    ));
+    let agents = Arc::new(AgentService::new(harness.ids.clone(), runs));
+    let cases = UseCases::new().with_agents(agents.clone());
+    let authority = HostAuthority {
+        store: store.as_ref(),
+        clock: harness.clock.as_ref(),
+        protected_branches: &[],
+    };
+    let gateway = Gateway {
+        authority: &authority,
+        store: store.as_ref(),
+        ids: harness.ids.as_ref(),
+    };
+    let frame = |key: &str, body: serde_json::Value| {
+        serde_json::to_vec(&json!({
+            "protocol":"1.0-draft.1", "mode":"Command", "schemaRevision":7,
+            "requestKey":key, "body":body
+        }))
+        .unwrap()
+    };
+    const WAITERS: usize = 16;
+    let receive = json!({"kind":"agents.receive","projectId":"project-a","waitSeconds":55});
+    let cancellation = Cancellation::new();
+    let started = std::time::Instant::now();
+    std::thread::scope(|scope| {
+        let waiting: Vec<_> = (0..WAITERS)
+            .map(|n| {
+                let raw = frame(&format!("wake-receive-{n}"), receive.clone());
+                let (cases, gateway, user) = (&cases, &gateway, &user);
+                scope.spawn(move || {
+                    cases
+                        .command_with(
+                            gateway,
+                            user,
+                            "agents.receive",
+                            &raw,
+                            WriteOptions::fixture(),
+                        )
+                        .unwrap()
+                })
+            })
+            .collect();
+        let cancelled = {
+            let raw = frame("wake-cancelled", receive.clone());
+            let (cases, gateway, user) = (&cases, &gateway, &user);
+            let stop = cancellation.clone();
+            scope.spawn(move || {
+                cases
+                    .command_with(
+                        gateway,
+                        user,
+                        "agents.receive",
+                        &raw,
+                        WriteOptions {
+                            cancellation: Some(stop),
+                            ..WriteOptions::fixture()
+                        },
+                    )
+                    .unwrap()
+            })
+        };
+        // Every receive reaches its first park: the pause counter moves once per park.
+        while agents.receive_waits() < (WAITERS + 1) as u64 {
+            assert!(
+                started.elapsed() < Duration::from_secs(10),
+                "receives never parked"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        cancellation.cancel();
+        assert!(matches!(
+            cancelled.join().unwrap(),
+            CommandReply::Rejected { .. }
+        ));
+        assert!(
+            started.elapsed() < Duration::from_secs(10),
+            "a cancel waited out the cap"
+        );
+        let post = frame(
+            "wake-post",
+            json!({"kind":"agents.post","projectId":"project-a","body":"Wake up","toHuman":true}),
+        );
+        assert!(matches!(
+            cases
+                .command(&gateway, &user, "agents.post", &post)
+                .unwrap(),
+            CommandReply::Recorded { .. }
+        ));
+        for receive in waiting {
+            assert!(matches!(
+                receive.join().unwrap(),
+                CommandReply::Recorded { receipt, .. }
+                if matches!(&receipt.decision, DomainDecision::Applied {
+                    result: OperationResult::AgentsReceive { value }
+                } if value.items.0.len() == 1 && value.items.0[0].body.0 == "Wake up")
+            ));
+        }
+    });
+    assert!(
+        started.elapsed() < Duration::from_secs(10),
+        "a delivery woke the parked receives: {:?}",
+        started.elapsed()
     );
 }

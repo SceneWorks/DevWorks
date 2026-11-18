@@ -24,17 +24,23 @@ use crate::protocol::records::{ItemState, McpCapability, McpServer, McpTransport
 use crate::protocol::results::{DomainDecision, OperationResult};
 use crate::protocol::support::{BoundedList, BoundedText, Check, Limit, Page};
 use crate::protocol::{
-    ActorId, CorrelationId, Counter, DomainErrorCode, DomainFault, EventId, Id, OperationId,
-    OperationState, ProjectId, RetryAdvice, Revision, RevisionDimension,
+    CorrelationId, Counter, DomainErrorCode, DomainFault, EventId, Id, OperationId, OperationState,
+    RetryAdvice, Revision, RevisionDimension,
 };
 use crate::services::artifacts::ArtifactService;
 use crate::services::cursor::CursorBinding;
-use crate::services::sessions::{Failure, Refusal, decided, query_fault, rev};
+use crate::services::effect::{EffectOutcome, JournaledEffect};
+use crate::services::kernel::{Failure, Refusal, decided, query_fault, rev};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, OnceLock};
 mod content;
+mod effects;
+use effects::{
+    ConnectEffect, DisconnectEffect, QueuedEffect, SamplingEvent, ServerEvent, ToolCaller,
+    ToolEffect, ToolRequestedEvent,
+};
 
 const NAMESPACE: &str = "outgoing_mcp";
 const SCHEMA_VERSION: i64 = 1;
@@ -624,7 +630,7 @@ impl McpClientService {
         let digest_for_write = digest.clone();
         crate::ports::storage::run_write(
             &*native.store,
-            crate::ports::storage::WriteOptions::default(),
+            crate::ports::storage::WriteOptions::host_state(),
             move |tx| {
                 if let Some(existing) = tx.operations().operation(&operation_for_write)? {
                     return if existing.capability == "mcp.tool"
@@ -676,24 +682,49 @@ impl McpClientService {
                 }
                 let event_id = EventId(tx.new_id(IdKind::Event));
                 tx.operations().record_intent(NewOperation {
-                id: operation_for_write.clone(), root_id: ctx.root_id().cloned(), assignment_id: ctx.assignment_id().cloned(),
-                capability: "mcp.tool".into(), schema_version: 1, args_digest: digest_for_write,
-                payload: json!({
-                    "scope":material.server_scope.key(),"serverId":material.server_id,
-                    "serverRevision":material.server_revision.get(),"catalogRevision":material.catalog_revision.get(),
-                    "capabilityId":material.capability_id,"schema":material.alias.input_schema,
-                    "wireName":material.wire_name,"arguments":arguments,
-                    "principal":ctx.principal(),"principalKind":ctx.principal_kind().as_str().to_string(),
-                    "sessionId":ctx.session_id(),"projectId":ctx.project_id(),"fences":fences,"call":call,
-                }),
-            })?;
+                    id: operation_for_write.clone(),
+                    root_id: ctx.root_id().cloned(),
+                    assignment_id: ctx.assignment_id().cloned(),
+                    capability: "mcp.tool".into(),
+                    schema_version: 1,
+                    args_digest: digest_for_write,
+                    payload: ToolEffect {
+                        server_revision: material.server_revision.get(),
+                        capability_id: material.capability_id.clone(),
+                        schema: material.alias.input_schema.clone(),
+                        wire_name: material.wire_name.clone(),
+                        arguments: arguments.clone(),
+                        caller: ToolCaller {
+                            scope: material.server_scope.clone(),
+                            server_id: material.server_id.clone(),
+                            catalog_revision: material.catalog_revision.get(),
+                            principal: ctx.principal().clone(),
+                            principal_kind: ctx.principal_kind(),
+                            session_id: session.id.clone(),
+                            project_id: ctx.project_id().cloned(),
+                            fences: fences.clone(),
+                            call: call.clone(),
+                        },
+                    }
+                    .journal(),
+                })?;
                 tx.history().append(NewEvent {
-                id: event_id.clone(), actor: ctx.principal().clone(), project_id: ctx.project_id().cloned(),
-                root_id: ctx.root_id().cloned(), operation_id: Some(operation_for_write.clone()),
-                aggregate_kind: "mcp_tool_call".into(), aggregate_id: operation_for_write.0.as_str().into(),
-                aggregate_revision: 1, kind: "McpToolRequested".into(),
-                payload: json!({"serverId":material.server_id,"capabilityId":material.capability_id,"call":call}),
-            })?;
+                    id: event_id.clone(),
+                    actor: ctx.principal().clone(),
+                    project_id: ctx.project_id().cloned(),
+                    root_id: ctx.root_id().cloned(),
+                    operation_id: Some(operation_for_write.clone()),
+                    aggregate_kind: "mcp_tool_call".into(),
+                    aggregate_id: operation_for_write.0.as_str().into(),
+                    aggregate_revision: 1,
+                    kind: "McpToolRequested".into(),
+                    payload: ToolRequestedEvent {
+                        server_id: &material.server_id,
+                        capability_id: &material.capability_id,
+                        call: &call,
+                    }
+                    .payload(),
+                })?;
                 let queue_id = tx.new_id(IdKind::QueueEntry);
                 let now = tx.now_ms();
                 tx.queue().enqueue(NewQueueEntry {
@@ -705,7 +736,11 @@ impl McpClientService {
                     partition: None,
                     priority: 0,
                     ready_at_ms: now,
-                    payload: json!({"serverId":material.server_id,"call":call}),
+                    payload: QueuedEffect {
+                        server_id: &material.server_id,
+                        call: Some(&call),
+                    }
+                    .payload(),
                 })?;
                 Ok(operation_for_write)
             },
@@ -715,9 +750,9 @@ impl McpClientService {
     /// Run only after the dispatch journal has committed `Dispatching`. The saved scope and
     /// revision fence prevent a queued connect from starting a server after its configuration
     /// changes; authority fences are checked again immediately before the native call.
-    pub fn execute(self: &Arc<Self>, op: &OperationRecord) -> McpEffectOutcome {
+    pub fn execute(self: &Arc<Self>, op: &OperationRecord) -> EffectOutcome {
         if op.state != OperationState::Dispatching {
-            return McpEffectOutcome::Failed("MCP effect was not dispatched".into());
+            return EffectOutcome::Failed("MCP effect was not dispatched".into());
         }
         if op.capability == "mcp.tool" {
             return self.execute_tool(op);
@@ -726,54 +761,23 @@ impl McpClientService {
             return self.execute_disconnect(op);
         }
         if !matches!(op.capability.as_str(), "mcp.connect" | "mcp.discover") {
-            return McpEffectOutcome::Failed("unsupported MCP effect".into());
+            return EffectOutcome::Failed("unsupported MCP effect".into());
         }
         let Some(native) = self.native.get() else {
-            return McpEffectOutcome::NotApplied("native MCP client is unavailable".into());
+            return EffectOutcome::NotApplied("native MCP client is unavailable".into());
         };
-        let Some(scope) = op
-            .payload
-            .get("scope")
-            .and_then(Value::as_str)
-            .and_then(ConfigScope::from_key)
+        let Ok(ConnectEffect {
+            scope,
+            server_id,
+            pending_revision,
+            catalog_revision,
+            principal,
+            principal_kind: kind,
+            session_id,
+            fences,
+        }) = ConnectEffect::parse(&op.payload)
         else {
-            return McpEffectOutcome::Failed("invalid MCP effect scope".into());
-        };
-        let Some(server_id) = op
-            .payload
-            .get("serverId")
-            .cloned()
-            .and_then(|v| serde_json::from_value::<Id>(v).ok())
-        else {
-            return McpEffectOutcome::Failed("invalid MCP effect server".into());
-        };
-        let Some(pending_revision) = op.payload.get("pendingRevision").and_then(Value::as_i64)
-        else {
-            return McpEffectOutcome::Failed("invalid MCP effect revision".into());
-        };
-        let Some(principal) = op
-            .payload
-            .get("principal")
-            .cloned()
-            .and_then(|v| serde_json::from_value::<ActorId>(v).ok())
-        else {
-            return McpEffectOutcome::Failed("invalid MCP effect principal".into());
-        };
-        let Some(kind) = op
-            .payload
-            .get("principalKind")
-            .and_then(Value::as_str)
-            .and_then(PrincipalKind::parse)
-        else {
-            return McpEffectOutcome::Failed("invalid MCP principal kind".into());
-        };
-        let Some(fences) = op
-            .payload
-            .get("fences")
-            .cloned()
-            .and_then(|v| serde_json::from_value::<Vec<AuthorityFence>>(v).ok())
-        else {
-            return McpEffectOutcome::Failed("invalid MCP authority fence".into());
+            return EffectOutcome::Failed("invalid MCP effect payload".into());
         };
         let server = match read_snapshot(&*native.store, &ReadOptions::default(), |snapshot| {
             if snapshot.operations().operation(&op.id)?.as_ref() != Some(op) {
@@ -821,7 +825,7 @@ impl McpClientService {
                     "MCP authority or configuration changed before dispatch".into(),
                     "McpDispatchRefused",
                 );
-                return McpEffectOutcome::Failed(e.to_string());
+                return EffectOutcome::Failed(e.to_string());
             }
         };
         let info = native.store.info();
@@ -839,22 +843,15 @@ impl McpClientService {
             op.root_id.clone(),
             op.assignment_id.clone(),
         );
-        if let Some(session) = op
-            .payload
-            .get("sessionId")
-            .cloned()
-            .and_then(|v| serde_json::from_value::<Option<Id>>(v).ok())
-            .flatten()
-        {
+        if let Some(session) = session_id {
             context = context.with_session(session);
         }
         if op.capability == "mcp.discover" {
-            let Some(catalog_revision) = op.payload.get("catalogRevision").and_then(Value::as_i64)
-            else {
-                return McpEffectOutcome::Failed("invalid MCP discovery catalog revision".into());
+            let Some(catalog_revision) = catalog_revision else {
+                return EffectOutcome::Failed("invalid MCP discovery catalog revision".into());
             };
             if server.public.catalog_revision.get() != catalog_revision {
-                return McpEffectOutcome::Failed("MCP catalog changed before discovery".into());
+                return EffectOutcome::Failed("MCP catalog changed before discovery".into());
             }
             return self.execute_discover(
                 native,
@@ -888,7 +885,7 @@ impl McpClientService {
         let operation_for_write = op.id.clone();
         let settled = crate::ports::storage::run_write(
             &*native.store,
-            crate::ports::storage::WriteOptions::default(),
+            crate::ports::storage::WriteOptions::settlement(),
             move |tx| {
                 let (version, mut state) = current(tx.configuration(), &scope_for_write)?;
                 let server = state
@@ -934,7 +931,7 @@ impl McpClientService {
                         "McpConnectFailed"
                     }
                     .into(),
-                    payload: json!({"serverId":server_for_write,"scope":scope_for_write.key()}),
+                    payload: ServerEvent::new(&server_for_write, &scope_for_write).payload(),
                 })?;
                 Ok(result)
             },
@@ -942,17 +939,15 @@ impl McpClientService {
         match settled {
             Ok(server) => match outcome {
                 Ok(()) => {
-                    McpEffectOutcome::Completed(serde_json::to_value(server).unwrap_or(Value::Null))
+                    EffectOutcome::Completed(serde_json::to_value(server).unwrap_or(Value::Null))
                 }
-                Err(fault) => McpEffectOutcome::Failed(format!("MCP connection failed: {fault:?}")),
+                Err(fault) => EffectOutcome::Failed(format!("MCP connection failed: {fault:?}")),
             },
             Err(e) => {
                 if outcome.is_ok() {
                     let _ = native.remote.disconnect(&server_id);
                 }
-                McpEffectOutcome::Unknown(format!(
-                    "MCP connection outcome could not be recorded: {e}"
-                ))
+                EffectOutcome::Unknown(format!("MCP connection outcome could not be recorded: {e}"))
             }
         }
     }
@@ -960,22 +955,18 @@ impl McpClientService {
     /// Close the live session of a server a human disabled or removed. The disconnect happens
     /// only while the server is still disabled or still gone, so a reconnect the human asked for
     /// after this operation keeps its session. Repeating it is harmless.
-    fn execute_disconnect(&self, op: &OperationRecord) -> McpEffectOutcome {
+    fn execute_disconnect(&self, op: &OperationRecord) -> EffectOutcome {
         let Some(native) = self.native.get() else {
-            return McpEffectOutcome::NotApplied("native MCP client is unavailable".into());
+            return EffectOutcome::NotApplied("native MCP client is unavailable".into());
         };
-        let (Some(scope), Some(server_id), Some(server)) = (
-            op.payload
-                .get("scope")
-                .and_then(Value::as_str)
-                .and_then(ConfigScope::from_key),
-            op.payload
-                .get("serverId")
-                .cloned()
-                .and_then(|v| serde_json::from_value::<Id>(v).ok()),
-            op.payload.get("server").cloned(),
-        ) else {
-            return McpEffectOutcome::Failed("invalid MCP disconnect payload".into());
+        let Ok(DisconnectEffect {
+            scope,
+            server_id,
+            server,
+            ..
+        }) = DisconnectEffect::parse(&op.payload)
+        else {
+            return EffectOutcome::Failed("invalid MCP disconnect payload".into());
         };
         let removing = op.capability == "mcp.remove";
         // The check runs while the remote holds the server's session lock, so an enable that
@@ -999,107 +990,45 @@ impl McpClientService {
             };
         let closed = native.remote.disconnect_if(&server_id, &mut still_off);
         if let Some(error) = read_error {
-            return McpEffectOutcome::NotApplied(format!(
+            return EffectOutcome::NotApplied(format!(
                 "MCP configuration could not be read before disconnect: {error}"
             ));
         }
         match closed {
-            Ok(()) => McpEffectOutcome::Completed(server),
-            Err(fault) => {
-                McpEffectOutcome::Unknown(format!("MCP session did not close: {fault:?}"))
-            }
+            Ok(()) => EffectOutcome::Completed(server),
+            Err(fault) => EffectOutcome::Unknown(format!("MCP session did not close: {fault:?}")),
         }
     }
 
-    fn execute_tool(&self, op: &OperationRecord) -> McpEffectOutcome {
+    fn execute_tool(&self, op: &OperationRecord) -> EffectOutcome {
         let Some(native) = self.native.get() else {
-            return McpEffectOutcome::NotApplied("native MCP client is unavailable".into());
+            return EffectOutcome::NotApplied("native MCP client is unavailable".into());
         };
-        let Some(scope) = op
-            .payload
-            .get("scope")
-            .and_then(Value::as_str)
-            .and_then(ConfigScope::from_key)
+        let Ok(ToolEffect {
+            server_revision,
+            capability_id,
+            schema: reference,
+            wire_name,
+            arguments,
+            caller:
+                ToolCaller {
+                    scope,
+                    server_id,
+                    catalog_revision,
+                    principal,
+                    principal_kind,
+                    session_id,
+                    project_id,
+                    fences,
+                    ..
+                },
+        }) = ToolEffect::parse(&op.payload)
         else {
-            return McpEffectOutcome::Failed("invalid MCP tool scope".into());
+            return EffectOutcome::Failed("invalid MCP tool payload".into());
         };
-        let Some(server_id) = op
-            .payload
-            .get("serverId")
-            .cloned()
-            .and_then(|v| serde_json::from_value::<Id>(v).ok())
-        else {
-            return McpEffectOutcome::Failed("invalid MCP tool server".into());
-        };
-        let Some(capability_id) = op
-            .payload
-            .get("capabilityId")
-            .cloned()
-            .and_then(|v| serde_json::from_value::<Id>(v).ok())
-        else {
-            return McpEffectOutcome::Failed("invalid MCP tool capability".into());
-        };
-        let Some(reference) = op
-            .payload
-            .get("schema")
-            .cloned()
-            .and_then(|v| serde_json::from_value::<SchemaRef>(v).ok())
-        else {
-            return McpEffectOutcome::Failed("invalid MCP tool schema".into());
-        };
-        let Some(wire_name) = op.payload.get("wireName").and_then(Value::as_str) else {
-            return McpEffectOutcome::Failed("invalid MCP tool name".into());
-        };
-        let Some(arguments @ Value::Object(_)) = op.payload.get("arguments").cloned() else {
-            return McpEffectOutcome::Failed("invalid MCP tool arguments".into());
-        };
-        let Some(server_revision) = op.payload.get("serverRevision").and_then(Value::as_i64) else {
-            return McpEffectOutcome::Failed("invalid MCP server revision".into());
-        };
-        let Some(catalog_revision) = op.payload.get("catalogRevision").and_then(Value::as_i64)
-        else {
-            return McpEffectOutcome::Failed("invalid MCP catalog revision".into());
-        };
-        let Some(principal) = op
-            .payload
-            .get("principal")
-            .cloned()
-            .and_then(|v| serde_json::from_value::<ActorId>(v).ok())
-        else {
-            return McpEffectOutcome::Failed("invalid MCP tool principal".into());
-        };
-        let Some(principal_kind @ (PrincipalKind::Agent | PrincipalKind::Host)) = op
-            .payload
-            .get("principalKind")
-            .and_then(Value::as_str)
-            .and_then(PrincipalKind::parse)
-        else {
-            return McpEffectOutcome::Failed("invalid MCP tool principal kind".into());
-        };
-        let Some(session_id) = op
-            .payload
-            .get("sessionId")
-            .cloned()
-            .and_then(|v| serde_json::from_value::<Id>(v).ok())
-        else {
-            return McpEffectOutcome::Failed("invalid MCP tool session".into());
-        };
-        let Some(project_id) = op
-            .payload
-            .get("projectId")
-            .cloned()
-            .and_then(|v| serde_json::from_value::<Option<ProjectId>>(v).ok())
-        else {
-            return McpEffectOutcome::Failed("invalid MCP tool project".into());
-        };
-        let Some(fences) = op
-            .payload
-            .get("fences")
-            .cloned()
-            .and_then(|v| serde_json::from_value::<Vec<AuthorityFence>>(v).ok())
-        else {
-            return McpEffectOutcome::Failed("invalid MCP tool authority fences".into());
-        };
+        if !matches!(principal_kind, PrincipalKind::Agent | PrincipalKind::Host) {
+            return EffectOutcome::Failed("invalid MCP tool principal kind".into());
+        }
         let info = native.store.info();
         let context = InvocationContext::new(
             principal,
@@ -1149,7 +1078,7 @@ impl McpClientService {
         let material = match selected {
             Ok(material) => material,
             Err(error) => {
-                return McpEffectOutcome::Failed(format!("MCP tool authority changed: {error}"));
+                return EffectOutcome::Failed(format!("MCP tool authority changed: {error}"));
             }
         };
         if native
@@ -1157,21 +1086,22 @@ impl McpClientService {
             .validate(&material.schema, &arguments)
             .is_err()
         {
-            return McpEffectOutcome::Failed(
+            return EffectOutcome::Failed(
                 "MCP tool arguments no longer match the selected schema".into(),
             );
         }
         let Some(attempt) = op.latest_attempt() else {
-            return McpEffectOutcome::Failed("MCP tool was not dispatched".into());
+            return EffectOutcome::Failed("MCP tool was not dispatched".into());
         };
         let origin = McpCallOrigin {
             server_id: server_id.clone(),
             operation_id: op.id.clone(),
             attempt_id: attempt.id.0.clone(),
         };
-        let mut result = native
-            .remote
-            .call_tool_with_origin(&origin, wire_name, arguments.clone());
+        let mut result =
+            native
+                .remote
+                .call_tool_with_origin(&origin, &wire_name, arguments.clone());
         if matches!(result, Err(McpRemoteFault::Unreachable)) {
             let endpoint =
                 match read_snapshot(&*native.store, &ReadOptions::default(), |snapshot| {
@@ -1188,7 +1118,7 @@ impl McpClientService {
                 }) {
                     Ok(endpoint) => endpoint,
                     Err(error) => {
-                        return McpEffectOutcome::Failed(format!(
+                        return EffectOutcome::Failed(format!(
                             "MCP server changed before reconnect: {error}"
                         ));
                     }
@@ -1230,31 +1160,31 @@ impl McpClientService {
                         if !matches!(serving, Ok(true)) {
                             let _ = native.remote.disconnect(&server_id);
                         }
-                        return McpEffectOutcome::Failed(
+                        return EffectOutcome::Failed(
                             "MCP tool authority changed during reconnect".into(),
                         );
                     }
                     native
                         .remote
-                        .call_tool_with_origin(&origin, wire_name, arguments)
+                        .call_tool_with_origin(&origin, &wire_name, arguments)
                 }
                 Err(fault) => Err(fault),
             };
         }
         match result {
-            Ok(value) => McpEffectOutcome::Completed(value),
+            Ok(value) => EffectOutcome::Completed(value),
             Err(
                 McpRemoteFault::Deadline
                 | McpRemoteFault::Protocol
                 | McpRemoteFault::TooLarge
                 | McpRemoteFault::InputRequired,
-            ) => McpEffectOutcome::Unknown(
+            ) => EffectOutcome::Unknown(
                 "MCP tool may have run; reconcile its result before retry".into(),
             ),
             Err(McpRemoteFault::Rejected) => {
-                McpEffectOutcome::Failed("MCP server answered the tool call with an error".into())
+                EffectOutcome::Failed("MCP server answered the tool call with an error".into())
             }
-            Err(fault) => McpEffectOutcome::Failed(format!("MCP tool was not sent: {fault:?}")),
+            Err(fault) => EffectOutcome::Failed(format!("MCP tool was not sent: {fault:?}")),
         }
     }
 
@@ -1284,7 +1214,7 @@ impl McpClientService {
         let origin = origin.clone();
         let decided = crate::ports::storage::run_write(
             &*native.store,
-            crate::ports::storage::WriteOptions::default(),
+            crate::ports::storage::WriteOptions::host_state(),
             move |tx| {
                 let Some(op) = tx.operations().operation(&origin.operation_id)? else {
                     return Ok(Err("mcp_sampling_call"));
@@ -1295,12 +1225,9 @@ impl McpClientService {
                 tx.history().append(NewEvent {
                     id: event_id,
                     actor,
-                    project_id: op
-                        .payload
-                        .get("projectId")
-                        .cloned()
-                        .and_then(|v| serde_json::from_value(v).ok())
-                        .flatten(),
+                    project_id: ToolCaller::parse(&op.payload)
+                        .ok()
+                        .and_then(|caller| caller.project_id),
                     root_id: op.root_id.clone(),
                     operation_id: Some(op.id.clone()),
                     aggregate_kind: "mcp_tool_call".into(),
@@ -1312,8 +1239,13 @@ impl McpClientService {
                         "McpSamplingRefused"
                     }
                     .into(),
-                    payload: json!({"serverId":origin.server_id,"attemptId":origin.attempt_id,
-                        "ordinal":ordinal,"reason":decision.as_ref().err()}),
+                    payload: SamplingEvent {
+                        server_id: &origin.server_id,
+                        attempt_id: &origin.attempt_id,
+                        ordinal,
+                        reason: decision.as_ref().err().copied(),
+                    }
+                    .payload(),
                 })?;
                 Ok(decision)
             },
@@ -1335,7 +1267,7 @@ impl McpClientService {
         pending_revision: i64,
         server: StoredServer,
         context: InvocationContext,
-    ) -> McpEffectOutcome {
+    ) -> EffectOutcome {
         // A saved transport may have changed while the native session stayed alive. Reconnect
         // under the current revision fence before reading a catalog from that server ID.
         let endpoint = server.endpoint(&scope);
@@ -1355,7 +1287,7 @@ impl McpClientService {
                     format!("Discovery failed: {fault:?}"),
                     "McpDiscoveryFailed",
                 );
-                return McpEffectOutcome::Failed(format!("MCP discovery failed: {fault:?}"));
+                return EffectOutcome::Failed(format!("MCP discovery failed: {fault:?}"));
             }
         };
         let service = self.clone();
@@ -1366,7 +1298,7 @@ impl McpClientService {
         let expected_catalog = server.public.catalog_revision;
         let published = crate::ports::storage::run_write(
             &*native.store,
-            crate::ports::storage::WriteOptions::default(),
+            crate::ports::storage::WriteOptions::settlement(),
             move |tx| {
                 let (_, state) = current(tx.configuration(), &scope_for_write)?;
                 if !state.servers.iter().any(|server| {
@@ -1398,14 +1330,16 @@ impl McpClientService {
                     aggregate_id: server_for_write.as_str().into(),
                     aggregate_revision: result.revision.get(),
                     kind: "McpCatalogDiscovered".into(),
-                    payload: json!({"serverId":server_for_write,"scope":scope_for_write.key(),"catalogRevision":result.catalog_revision.get()}),
+                    payload: ServerEvent::new(&server_for_write, &scope_for_write)
+                        .catalog(result.catalog_revision.get())
+                        .payload(),
                 })?;
                 Ok(result)
             },
         );
         match published {
             Ok(server) => {
-                McpEffectOutcome::Completed(serde_json::to_value(server).unwrap_or(Value::Null))
+                EffectOutcome::Completed(serde_json::to_value(server).unwrap_or(Value::Null))
             }
             Err(error) => {
                 self.settle_server_failure(
@@ -1417,7 +1351,7 @@ impl McpClientService {
                     "Discovery could not publish its catalog".into(),
                     "McpDiscoveryFailed",
                 );
-                McpEffectOutcome::Unknown(format!(
+                EffectOutcome::Unknown(format!(
                     "MCP discovery publication could not be confirmed: {error}"
                 ))
             }
@@ -1441,7 +1375,7 @@ impl McpClientService {
         let operation = op.id.clone();
         let _ = crate::ports::storage::run_write(
             &*native.store,
-            crate::ports::storage::WriteOptions::default(),
+            crate::ports::storage::WriteOptions::settlement(),
             move |tx| {
                 let (version, mut state) = current(tx.configuration(), &scope)?;
                 let server = state
@@ -1491,14 +1425,14 @@ impl McpClientService {
                     aggregate_id: server_id.as_str().into(),
                     aggregate_revision: result_revision,
                     kind: event_kind.into(),
-                    payload: json!({"serverId":server_id,"scope":scope.key()}),
+                    payload: ServerEvent::new(&server_id, &scope).payload(),
                 })?;
                 Ok(())
             },
         );
     }
 
-    pub fn observe(&self, op: &OperationRecord) -> McpEffectOutcome {
+    pub fn observe(&self, op: &OperationRecord) -> EffectOutcome {
         if matches!(op.capability.as_str(), "mcp.disable" | "mcp.remove") {
             return self.execute_disconnect(op);
         }
@@ -1527,7 +1461,7 @@ impl McpClientService {
                 "McpOutcomeUnconfirmed",
             );
         }
-        McpEffectOutcome::Unknown(
+        EffectOutcome::Unknown(
             "MCP connection outcome cannot be established after interruption".into(),
         )
     }
@@ -2225,15 +2159,17 @@ impl McpClientService {
                 )
                 .as_bytes(),
             ),
-            payload: json!({
-                "scope": scope.key(),
-                "serverId": input.server_id,
-                "pendingRevision": pending_revision,
-                "principal": ctx.principal(),
-                "principalKind": ctx.principal_kind().as_str().to_string(),
-                "sessionId": ctx.session_id(),
-                "fences": command.authorization().fences(),
-            }),
+            payload: ConnectEffect {
+                scope: scope.clone(),
+                server_id: input.server_id.clone(),
+                pending_revision,
+                catalog_revision: None,
+                principal: ctx.principal().clone(),
+                principal_kind: ctx.principal_kind(),
+                session_id: ctx.session_id().cloned(),
+                fences: command.authorization().fences().to_vec(),
+            }
+            .journal(),
         })?;
         tx.history().append(NewEvent {
             id: event.clone(),
@@ -2245,7 +2181,7 @@ impl McpClientService {
             aggregate_id: input.server_id.as_str().into(),
             aggregate_revision: pending_revision,
             kind: "McpConnectRequested".into(),
-            payload: json!({"serverId":input.server_id,"scope":scope.key()}),
+            payload: ServerEvent::new(&input.server_id, &scope).payload(),
         })?;
         let now = tx.now_ms();
         let queue_id = tx.new_id(IdKind::QueueEntry);
@@ -2376,7 +2312,7 @@ impl McpClientService {
                 aggregate_id: server_id.as_str().into(),
                 aggregate_revision: result.revision.get(),
                 kind: kind.into(),
-                payload: json!({"serverId":server_id,"scope":scope.key()}),
+                payload: ServerEvent::new(server_id, &scope).payload(),
             })?;
             return Ok(Decided {
                 decision: DomainDecision::Applied { result: value() },
@@ -2400,13 +2336,14 @@ impl McpClientService {
                 )
                 .as_bytes(),
             ),
-            payload: json!({
-                "scope": scope.key(),
-                "serverId": server_id,
-                "server": result,
-                "principal": ctx.principal(),
-                "fences": command.authorization().fences(),
-            }),
+            payload: DisconnectEffect {
+                scope: scope.clone(),
+                server_id: server_id.clone(),
+                server: serde_json::to_value(&result).expect("an MCP server view serializes"),
+                principal: ctx.principal().clone(),
+                fences: command.authorization().fences().to_vec(),
+            }
+            .journal(),
         })?;
         tx.history().append(NewEvent {
             id: event.clone(),
@@ -2418,7 +2355,7 @@ impl McpClientService {
             aggregate_id: server_id.as_str().into(),
             aggregate_revision: result.revision.get(),
             kind: kind.into(),
-            payload: json!({"serverId":server_id,"scope":scope.key()}),
+            payload: ServerEvent::new(server_id, &scope).payload(),
         })?;
         let now = tx.now_ms();
         let queue_id = tx.new_id(IdKind::QueueEntry);
@@ -2503,12 +2440,17 @@ impl McpClientService {
                 )
                 .as_bytes(),
             ),
-            payload: json!({
-                "scope":scope.key(),"serverId":input.server_id,"pendingRevision":pending_revision,
-                "catalogRevision":input.expected_catalog_revision.get(),
-                "principal":ctx.principal(),"principalKind":ctx.principal_kind().as_str().to_string(),
-                "sessionId":ctx.session_id(),"fences":command.authorization().fences(),
-            }),
+            payload: ConnectEffect {
+                scope: scope.clone(),
+                server_id: input.server_id.clone(),
+                pending_revision,
+                catalog_revision: Some(input.expected_catalog_revision.get()),
+                principal: ctx.principal().clone(),
+                principal_kind: ctx.principal_kind(),
+                session_id: ctx.session_id().cloned(),
+                fences: command.authorization().fences().to_vec(),
+            }
+            .journal(),
         })?;
         tx.history().append(NewEvent {
             id: event.clone(),
@@ -2520,7 +2462,7 @@ impl McpClientService {
             aggregate_id: input.server_id.as_str().into(),
             aggregate_revision: pending_revision,
             kind: "McpDiscoveryRequested".into(),
-            payload: json!({"serverId":input.server_id,"scope":scope.key()}),
+            payload: ServerEvent::new(&input.server_id, &scope).payload(),
         })?;
         let now = tx.now_ms();
         let queue_id = tx.new_id(IdKind::QueueEntry);
@@ -2553,42 +2495,32 @@ fn sampling_decision(
     origin: &McpCallOrigin,
     info: &crate::ports::storage::StoreInfo,
 ) -> Result<Result<SamplingGrant, &'static str>, StorageError> {
-    let payload = &op.payload;
     if op.capability != "mcp.tool"
         || op.state != OperationState::Dispatching
         || op.latest_attempt().map(|attempt| &attempt.id.0) != Some(&origin.attempt_id)
-        || payload.get("serverId") != Some(&json!(origin.server_id))
     {
         return Ok(Err("mcp_sampling_call"));
     }
-    if payload.get("principalKind").and_then(Value::as_str) != Some("Agent") {
-        return Ok(Err("mcp_sampling_principal"));
-    }
-    let field = |name: &str| payload.get(name).cloned().unwrap_or(Value::Null);
-    let parsed = (
-        serde_json::from_value::<ActorId>(field("principal")),
-        serde_json::from_value::<Id>(field("sessionId")),
-        serde_json::from_value::<Option<ProjectId>>(field("projectId")),
-        serde_json::from_value::<Vec<AuthorityFence>>(field("fences")),
-        serde_json::from_value::<ToolCallKey>(field("call")),
-        payload
-            .get("scope")
-            .and_then(Value::as_str)
-            .and_then(ConfigScope::from_key),
-        payload.get("catalogRevision").and_then(Value::as_i64),
-    );
-    let (
-        Ok(principal),
-        Ok(session_id),
-        Ok(project_id),
-        Ok(fences),
-        Ok(call),
-        Some(scope),
-        Some(catalog),
-    ) = parsed
+    let Ok(ToolCaller {
+        server_id,
+        principal,
+        principal_kind,
+        session_id,
+        project_id,
+        fences,
+        call,
+        scope,
+        catalog_revision: catalog,
+    }) = ToolCaller::parse(&op.payload)
     else {
         return Ok(Err("mcp_sampling_call"));
     };
+    if server_id != origin.server_id {
+        return Ok(Err("mcp_sampling_call"));
+    }
+    if principal_kind != PrincipalKind::Agent {
+        return Ok(Err("mcp_sampling_principal"));
+    }
     if tx.actors().actor_kind(&principal)? != Some(PrincipalKind::Agent)
         || !crate::authority::fences_hold(tx, &fences)?
     {
@@ -2780,13 +2712,6 @@ fn capability(
     Ok(cap)
 }
 
-pub enum McpEffectOutcome {
-    Completed(Value),
-    Failed(String),
-    NotApplied(String),
-    Unknown(String),
-}
-
 impl QueryHandler for McpClientService {
     fn prepare(
         &self,
@@ -2942,7 +2867,7 @@ impl CommandHandler for McpClientService {
             }
             _ => decided(
                 tx,
-                Err(crate::services::sessions::Refusal::new(
+                Err(crate::services::kernel::Refusal::new(
                     DomainErrorCode::UnsupportedCapability,
                     "operation",
                     None,
@@ -3044,5 +2969,14 @@ mod cursor_binding_tests {
             ),
             Err(StorageError::CursorExpired)
         ));
+    }
+}
+
+impl JournaledEffect for Arc<McpClientService> {
+    fn execute(&self, operation: &OperationRecord) -> EffectOutcome {
+        McpClientService::execute(self, operation)
+    }
+    fn observe(&self, operation: &OperationRecord) -> EffectOutcome {
+        McpClientService::observe(self, operation)
     }
 }

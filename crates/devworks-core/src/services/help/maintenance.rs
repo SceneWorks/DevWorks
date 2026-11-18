@@ -53,7 +53,7 @@ impl HelpService {
     /// produced by this exact draft's trusted host publication may be retired.
     pub fn cleanup(&self) -> Result<usize, StorageError> {
         let service = self.clone();
-        run_write(&*self.store, WriteOptions::default(), move |tx| {
+        run_write(&*self.store, WriteOptions::housekeeping(), move |tx| {
             if service.is_stopped() {
                 return Ok(0);
             }

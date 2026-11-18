@@ -4,11 +4,15 @@ use crate::{
     backend::Backend,
     conventions_ops as cop,
     conventions_screen::{Draft, Scope},
-    ops,
+    frame, ops,
 };
-use devworks_core::protocol::{provider::ArtifactRef, records::*};
+use devworks_core::operations::{OperationInput as In, conventions};
+use devworks_core::protocol::{
+    data::DataScope,
+    provider::{ArtifactRef, SchemaRef},
+    records::*,
+};
 use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::{
     fs::OpenOptions,
@@ -24,15 +28,85 @@ pub struct StagedFile {
     pub pointer: String,
     pub owned: bool,
 }
+/// The portable manifest import before its manifest file is stored: everything but the source.
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PortableImport {
+    pub scope: DataScope,
+    pub schema: SchemaRef,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<ArtifactRef>,
+}
+/// The command a pipeline submits once every staged file is stored and put in place. Each
+/// staged file's pointer names the member its stored artifact replaces (a placeholder until then).
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum Prepared {
+    Edit(conventions::EditInput),
+    Import(PortableImport),
+}
+impl Prepared {
+    /// A manifest import into `scope`, whose source is stored next.
+    pub fn import(scope: &Scope) -> Option<Self> {
+        Some(Self::Import(PortableImport {
+            scope: scope.data()?,
+            schema: devworks_core::services::conventions::model::manifest_schema(),
+            source: None,
+        }))
+    }
+    /// The request to submit, when every staged file is in place.
+    pub fn input(&self) -> Option<In> {
+        Some(In::Conventions(match self {
+            Self::Edit(edit) => conventions::Input::Edit(edit.clone()),
+            Self::Import(import) => conventions::Input::Import(conventions::ImportInput {
+                scope: import.scope.clone(),
+                source: import.source.clone()?,
+                schema: import.schema.clone(),
+            }),
+        }))
+    }
+}
+/// A `conventions.edit` of `base` that changes only its attached resources, with `change`'s
+/// uploaded content still to be put in place.
+pub fn resource_edit(
+    scope: &Scope,
+    base: &ConventionRecord,
+    content: &ArtifactRef,
+    change: ConventionResourceChange,
+) -> Option<Prepared> {
+    Some(Prepared::Edit(conventions::EditInput {
+        resources: Some(frame::bounded(vec![change])?),
+        ..edit_of(scope, base, content)?
+    }))
+}
+fn edit_of(
+    scope: &Scope,
+    base: &ConventionRecord,
+    content: &ArtifactRef,
+) -> Option<conventions::EditInput> {
+    Some(conventions::EditInput {
+        convention_id: base.id.clone(),
+        expected_revision: base.revision.clone(),
+        content: content.clone(),
+        title: None,
+        slug: None,
+        parent: None,
+        sort_order: None,
+        raw_content: None,
+        resources: None,
+        scope: Some(scope.data()?),
+    })
+}
 #[derive(Clone, Serialize, Deserialize)]
 pub struct Pipeline {
     pub scope: Scope,
     pub operation: String,
-    pub body: Value,
+    pub body: Prepared,
     pub files: Vec<StagedFile>,
     pub at: usize,
     pub submission: cop::Submission,
 }
+const OUTSIDE_LIMITS: &str = "A title or slug is outside the convention owner's limits.";
 fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
@@ -115,7 +189,11 @@ fn prepare_edit_inner(
             .content
             .as_ref()
             .ok_or("The opening Markdown artifact is unavailable.")?;
-        let mut body = json!({"scope":scope.wire(),"conventionId":record.id,"expectedRevision":record.revision,"content":content,"title":d.title,"slug":d.slug});
+        let mut body = conventions::EditInput {
+            title: Some(frame::text(&d.title).ok_or(OUTSIDE_LIMITS)?),
+            slug: Some(frame::text(&d.slug).ok_or(OUTSIDE_LIMITS)?),
+            ..edit_of(&scope, record, content).ok_or(OUTSIDE_LIMITS)?
+        };
         if d.markdown_changed {
             files.push(stage_text(
                 b,
@@ -129,7 +207,9 @@ fn prepare_edit_inner(
         match d.raw_mode {
             1 => {
                 if d.raw_changed || original.raw_content.is_none() {
-                    body["rawContent"] = json!({"kind":"Set","content":content});
+                    body.raw_content = Some(ConventionRawChange::Set {
+                        content: content.clone(),
+                    });
                     files.push(stage_text(
                         b,
                         &scope,
@@ -139,25 +219,27 @@ fn prepare_edit_inner(
                         owned,
                     )?);
                 } else if let Some(raw) = &original.raw_content {
-                    body["rawContent"] = json!({"kind":"Set","content":raw});
+                    body.raw_content = Some(ConventionRawChange::Set {
+                        content: raw.clone(),
+                    });
                 }
             }
             2 => {
-                body["rawContent"] = json!({"kind":"Remove"});
+                body.raw_content = Some(ConventionRawChange::Remove {});
             }
             _ => {}
         }
         Ok(Pipeline {
             scope,
             operation: "conventions.edit".into(),
-            body,
+            body: Prepared::Edit(body),
             files,
             at: 0,
             submission,
         })
     } else {
         use devworks_core::services::conventions::model::{
-            EditorConvention, EditorResource, EditorText, manifest_schema, write_editor_manifest,
+            EditorConvention, EditorResource, EditorText, write_editor_manifest,
         };
         let md_hash = hash(d.markdown.as_bytes());
         let raw_hash = hash(d.raw.as_bytes());
@@ -196,7 +278,7 @@ fn prepare_edit_inner(
         Ok(Pipeline {
             scope: scope.clone(),
             operation: "conventions.import".into(),
-            body: json!({"scope":scope.wire(),"schema":manifest_schema()}),
+            body: Prepared::import(&scope).ok_or(OUTSIDE_LIMITS)?,
             files: vec![StagedFile {
                 path,
                 name: "Convention portable manifest".into(),
@@ -251,7 +333,9 @@ pub fn prepare_artifact(b: &dyn Backend, pipeline: &Pipeline) -> Result<Vec<u8>,
             ))
         }
         Scope::Project(id) => {
-            let project = serde_json::from_value(json!(id)).map_err(|e| e.to_string())?;
+            let project = frame::id(id)
+                .map(devworks_core::protocol::ProjectId)
+                .ok_or("The project ID is invalid.")?;
             let ticket = b.mint_project_upload(&project, &stage.path)?;
             Ok(ops::save_project_artifact(
                 b,
@@ -271,14 +355,22 @@ pub fn apply_artifact(p: &mut Pipeline, artifact: ArtifactRef) -> Result<(), Str
         .get(p.at)
         .ok_or("The saved source has no matching stage.")?;
     // All insertion paths are editor-owned constants. No result or imported key chooses a path.
-    if stage.pointer == "/source" {
-        p.body["source"] = json!(artifact);
-    } else {
-        let field = p
-            .body
-            .pointer_mut(&stage.pointer)
-            .ok_or("The prepared source target is missing.")?;
-        *field = json!(artifact);
+    let missing = "The prepared source target is missing.";
+    match (&mut p.body, stage.pointer.as_str()) {
+        (Prepared::Import(import), "/source") => import.source = Some(artifact),
+        (Prepared::Edit(edit), "/content") => edit.content = artifact,
+        (Prepared::Edit(edit), "/rawContent/content") => match &mut edit.raw_content {
+            Some(ConventionRawChange::Set { content }) => *content = artifact,
+            _ => return Err(missing.into()),
+        },
+        (Prepared::Edit(edit), "/resources/0/content") => {
+            match edit.resources.as_mut().and_then(|r| r.0.first_mut()) {
+                Some(ConventionResourceChange::Attach { content, .. }) => *content = artifact,
+                Some(ConventionResourceChange::Update { content, .. }) => *content = Some(artifact),
+                None => return Err(missing.into()),
+            }
+        }
+        _ => return Err(missing.into()),
     }
     p.at += 1;
     Ok(())
@@ -303,14 +395,16 @@ pub fn export(
         let mut digest = Sha256::new();
         let mut length = 0u64;
         loop {
-            let mut body = json!({"scope":scope.wire(),"conventionId":record.id,"revision":record.revision,"format":(["Markdown","Raw","Manifest"][format]),"maxChars":"65536"});
-            if let Some(cursor) = &cursor {
-                body["cursor"] = json!(cursor);
-            }
-            let view = cop::document(
-                b.query("conventions.read", &cop::query(b, "conventions.read", body)),
-            )
-            .map_err(|e| e.describe())?;
+            let input = cop::read_source(
+                scope,
+                &record.id,
+                &record.revision,
+                None,
+                ["Markdown", "Raw", "Manifest"][format],
+                cursor.as_deref(),
+            );
+            let view = cop::document(b.query("conventions.read", &cop::query(b, input)))
+                .map_err(|e| e.describe())?;
             if view.convention.id != record.id
                 || view.convention.revision.get() != record.revision.get()
             {
@@ -381,15 +475,17 @@ pub fn download(
         let mut digest = Sha256::new();
         let mut length = 0u64;
         loop {
-            let mut body = json!({"scope":scope.wire(),"conventionId":resource.convention_id,"revision":resource.convention_revision,"resourceId":resource.id,"format":"Resource","maxBytes":"49152"});
-            if let Some(cursor) = &cursor {
-                body["cursor"] = json!(cursor);
-            }
-            let out = ops::query_result(
-                b.query("conventions.read", &cop::query(b, "conventions.read", body)),
-            )
-            .map_err(|e| e.describe())?
-            .0;
+            let input = cop::read_source(
+                scope,
+                &resource.convention_id,
+                &resource.convention_revision,
+                Some(&resource.id),
+                "Resource",
+                cursor.as_deref(),
+            );
+            let out = ops::query_result(b.query("conventions.read", &cop::query(b, input)))
+                .map_err(|e| e.describe())?
+                .0;
             let crate::conventions_ops::ReadResource {
                 resource: actual,
                 passage,

@@ -77,7 +77,7 @@ fn settings_can_select_and_configure_a_project_scoped_server() {
     let project_for_write = project.clone();
     run_write(
         &**engine.host().runtime().store(),
-        WriteOptions::default(),
+        WriteOptions::fixture(),
         move |tx| {
             tx.projects().insert_project(&StoredProject {
                 id: project_for_write,
@@ -170,7 +170,7 @@ fn settings_sampling_toggle_saves_the_selection_then_reconnects() {
     let service = engine.host().runtime().mcp_service().expect("MCP service");
     let store = engine.host().runtime().store().clone();
     let discovered = server.clone();
-    run_write(&*store, WriteOptions::default(), move |tx| {
+    run_write(&*store, WriteOptions::fixture(), move |tx| {
         service.publish_remote_catalog(
             tx,
             &ConfigScope::Workspace,
@@ -477,7 +477,7 @@ fn settings_opens_a_servers_resources_and_prompts_as_untrusted_content() {
     let service = engine.host().runtime().mcp_service().expect("MCP service");
     let store = engine.host().runtime().store().clone();
     let discovered = server.clone();
-    run_write(&*store, WriteOptions::default(), move |tx| {
+    run_write(&*store, WriteOptions::fixture(), move |tx| {
         service.publish_remote_catalog(
             tx,
             &ConfigScope::Workspace,
@@ -650,7 +650,7 @@ fn settings_shows_tool_annotations_and_saves_a_read_only_classification() {
     let service = engine.host().runtime().mcp_service().expect("MCP service");
     let store = engine.host().runtime().store().clone();
     let discovered = server.clone();
-    run_write(&*store, WriteOptions::default(), move |tx| {
+    run_write(&*store, WriteOptions::fixture(), move |tx| {
         service.publish_remote_catalog(
             tx,
             &ConfigScope::Workspace,

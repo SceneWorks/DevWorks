@@ -1,7 +1,6 @@
 //! One desktop screen behind one trait. A screen owns its view state, its slot type (the
 //! requests it waits for) and the reply, refresh, restore and purge handling of those slots;
 //! the shell reaches it through [`DynScreen`] by the [`ScreenId`] a route or slot names.
-//! Screens not migrated yet are [`ScreenId::Legacy`] and keep their code in the shell.
 use crate::backend::{Backend, Client, Reply, Slot, Unresolved};
 use crate::memory::RouteMemory;
 use crate::project_purge::Live;
@@ -11,7 +10,7 @@ use crate::shell::Dialogs;
 use crate::shell::indexing::IndexAction;
 use crate::virtual_list::Scrolls;
 use devworks_core::ports::storage::ProjectPurgeClientScope;
-use devworks_core::protocol::records::{ProjectRecord, RouteCatalogModel};
+use devworks_core::protocol::records::{ProjectRecord, RepositoryRecord, RouteCatalogModel};
 use eframe::egui::Ui;
 use serde_json::Value;
 use std::any::Any;
@@ -22,8 +21,6 @@ use std::sync::Arc;
 /// The screen that owns a route or a slot.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ScreenId {
-    /// Still handled inside the shell.
-    Legacy,
     Help,
     Usage,
     Graph,
@@ -39,12 +36,25 @@ pub enum ScreenId {
     Watchers,
     /// Home and the coordinator sidebar: one conversation.
     Chat,
+    /// Scheduled jobs.
+    Jobs,
+    /// Approvals, the notification center and completion cards.
+    Decisions,
+    /// Overview, Features and Issues.
+    Work,
+    /// Settings: categories, Provider connections, Agent tools and MCP servers.
+    Settings,
+    AddOns,
+    Knowledge,
+    /// The permanent project purge review (a window over every screen).
+    Purge,
+    /// Routes whose content belongs to a later item: a designed unavailable state.
+    Placeholder,
 }
 impl ScreenId {
     /// The screen's key in persisted pending state (`PendingMemory::screens`).
     pub fn key(self) -> &'static str {
         match self {
-            Self::Legacy => "legacy",
             Self::Help => "help",
             Self::Usage => "usage",
             Self::Graph => "graph",
@@ -58,6 +68,14 @@ impl ScreenId {
             Self::Indexing => "indexing",
             Self::Watchers => "watchers",
             Self::Chat => "chat",
+            Self::Jobs => "jobs",
+            Self::Decisions => "decisions",
+            Self::Work => "work",
+            Self::Settings => "settings",
+            Self::AddOns => "addons",
+            Self::Knowledge => "knowledge",
+            Self::Purge => "purge",
+            Self::Placeholder => "placeholder",
         }
     }
 }
@@ -104,10 +122,37 @@ pub enum Effect {
     OpenEmbeddingSetup,
     /// Opens Settings on the Instructions category.
     OpenInstructions,
+    /// Opens Settings on Provider connections.
+    OpenConnections,
+    /// Opens Help on the topics of a screen or settings category (its ID).
+    OpenHelp(String),
+    /// Inspects an approval (its ID), after any navigation asked for before it.
+    InspectApproval(String),
+    /// Selects a Knowledge entry, after any navigation asked for before it.
+    SelectKnowledge(devworks_core::protocol::Id),
     /// An artifact was stored or deleted: the Artifacts screen re-reads its list.
     ArtifactsChanged,
     /// Work for the watcher lists (a watcher section drawn by another screen).
     Watch(Vec<crate::watchers_screen::WatchAction>),
+    /// Shows a source-control link's conversation (its session ID) on Home, with no earlier
+    /// notice of that conversation.
+    OpenGitSession(String),
+    /// Settings or a connection changed: the router's selectors and availability are read again.
+    InvalidateRouting,
+    /// Shows a route without loading it (the screen has asked for what it needs itself).
+    SetRoute(Route),
+    /// Opens Usage on the prices of a model list (the model IDs the embedding setup priced).
+    OpenPrices(String),
+    /// Opens the notification center.
+    OpenNotifications,
+    /// The navigation's project list reply, read.
+    ProjectList(Result<(Vec<ProjectRecord>, bool), String>),
+    /// The repository list reply, read.
+    RepositoryList(Result<(Vec<RepositoryRecord>, bool), String>),
+    /// A reply with the repositories of a project (its ID).
+    ProjectMembers(String, Result<(Vec<RepositoryRecord>, bool), String>),
+    /// Publishes the client state the purge reviews, then submits the confirmed purge.
+    ConfirmPurge,
 }
 
 /// What the coordinator is told about the visible screen.
@@ -141,6 +186,10 @@ pub struct Cx<'a> {
     pub(crate) ctx: Option<eframe::egui::Context>,
     /// The watcher lists, for a screen that shows a watcher section (Chat's sidebar).
     pub(crate) watchers: Option<&'a crate::watchers_screen::WatchersScreen>,
+    /// The completion cards the shell shows, for the screen that keeps them current.
+    pub(crate) completions: Option<&'a mut crate::notifications::Completions>,
+    /// The Indexing screen's state, for the screen that draws its sources section (Settings).
+    pub(crate) indexing: Option<&'a mut crate::indexing_screen::IndexingScreen>,
     pub(crate) effects: Vec<Effect>,
 }
 impl Cx<'_> {
@@ -171,6 +220,9 @@ impl Cx<'_> {
     }
     pub fn load_projects(&mut self) {
         self.effects.push(Effect::LoadProjects);
+    }
+    pub fn invalidate_routing(&mut self) {
+        self.effects.push(Effect::InvalidateRouting);
     }
     pub fn load_router_catalog(&mut self) {
         self.effects.push(Effect::LoadRouterCatalog);
@@ -351,6 +403,21 @@ macro_rules! controller {
 }
 pub(crate) use controller;
 
+/// The slot type of a screen that makes no requests: no slot of it exists.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum NoSlot {}
+impl From<NoSlot> for Slot {
+    fn from(slot: NoSlot) -> Self {
+        match slot {}
+    }
+}
+impl TryFrom<Slot> for NoSlot {
+    type Error = Slot;
+    fn try_from(slot: Slot) -> Result<Self, Slot> {
+        Err(slot)
+    }
+}
+
 /// One screen. `Slot` variant names are persisted in `ui-state.json`: they stay unique across
 /// every screen's slot type and never change.
 pub trait Screen: 'static {
@@ -362,6 +429,21 @@ pub trait Screen: 'static {
     fn refresh(&mut self, cx: &mut Cx, route: Route);
     fn apply(&mut self, cx: &mut Cx, slot: Self::Slot, reply: Reply);
     fn ui(&mut self, cx: &mut Cx, route: Route, ui: &mut Ui);
+    /// The window is closing or has closed: stop work the screen runs itself.
+    fn closing(&mut self) {}
+    /// Requests of the screen whose outcome is not confirmed beyond the client's own commands
+    /// (Confirm outcomes resubmits them).
+    fn unconfirmed_count(&self) -> usize {
+        0
+    }
+    /// The scope its content shows (Knowledge's project), told to the coordinator beside it.
+    fn scope(&self) -> Option<String> {
+        None
+    }
+    /// The Help topic of the content it shows on `route`, when that is not the route's own.
+    fn help_topic(&self, _route: Route, _mem: &RouteMemory) -> Option<&'static str> {
+        None
+    }
     /// What the screen keeps for its unconfirmed commands (`unresolved`) across a restart.
     fn pending_memory(&self, _unresolved: &[&Unresolved]) -> Option<Value> {
         None
@@ -399,6 +481,10 @@ pub trait DynScreen {
     fn purge_live(&self, out: &mut Live);
     fn remove_purged(&mut self, scope: &ProjectPurgeClientScope);
     fn context(&self, route: Route, mem: &RouteMemory) -> ScreenContext;
+    fn closing(&mut self);
+    fn scope(&self) -> Option<String>;
+    fn unconfirmed_count(&self) -> usize;
+    fn help_topic(&self, route: Route, mem: &RouteMemory) -> Option<&'static str>;
     fn as_any_mut(&mut self) -> &mut dyn Any;
 }
 impl<S: Screen> DynScreen for S {
@@ -445,6 +531,18 @@ impl<S: Screen> DynScreen for S {
     }
     fn context(&self, route: Route, mem: &RouteMemory) -> ScreenContext {
         Screen::context(self, route, mem)
+    }
+    fn closing(&mut self) {
+        Screen::closing(self);
+    }
+    fn scope(&self) -> Option<String> {
+        Screen::scope(self)
+    }
+    fn unconfirmed_count(&self) -> usize {
+        Screen::unconfirmed_count(self)
+    }
+    fn help_topic(&self, route: Route, mem: &RouteMemory) -> Option<&'static str> {
+        Screen::help_topic(self, route, mem)
     }
     fn as_any_mut(&mut self) -> &mut dyn Any {
         self

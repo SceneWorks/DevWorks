@@ -53,7 +53,7 @@
 //! is untrusted data: results carry `trust: Untrusted` (schema revision 2), artifacts the
 //! `untrusted` tag and provenance, and [`untrusted_operation`] tells context assembly to treat
 //! them as evidence, never instructions or authority.
-pub mod egress;
+pub use crate::kernel::egress;
 pub mod extract;
 mod fetch;
 mod search;

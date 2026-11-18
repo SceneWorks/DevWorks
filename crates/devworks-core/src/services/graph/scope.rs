@@ -4,8 +4,8 @@ use crate::ports::storage::*;
 use crate::protocol::data::{DataScope, ViewSelection};
 use crate::protocol::{DomainErrorCode, Id};
 use crate::services::indexing::{self, status, views};
+use crate::services::kernel::{Failure, Refusal};
 use crate::services::projects::{visible_project, visible_repository};
-use crate::services::sessions::{Failure, Refusal};
 use std::collections::BTreeSet;
 
 pub(super) fn unavailable(id: Option<Id>) -> Failure {

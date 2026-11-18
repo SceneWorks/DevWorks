@@ -16,45 +16,11 @@ use devworks_core::protocol::{
     CommandReply, Counter, EventId, OperationId, Rejection, Revision, RootId,
 };
 use serde_json::json;
-use std::sync::atomic::{AtomicI64, AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc;
 use std::task::{Context, Poll, Wake, Waker};
 
-const T0: i64 = 1_700_000_000_000;
-
-struct TestClock(AtomicI64);
-impl Clock for TestClock {
-    fn now_ms(&self) -> Counter {
-        Counter::new(self.0.load(Ordering::SeqCst)).unwrap()
-    }
-}
-struct TestIds(AtomicU64);
-impl IdSource for TestIds {
-    fn next_id(&self, kind: IdKind) -> Id {
-        let n = self.0.fetch_add(1, Ordering::SeqCst) + 1;
-        Id::new(format!("{kind:?}-{n}").to_lowercase()).unwrap()
-    }
-}
-
-/// A uniquely named temporary data root, removed on drop.
-struct TempRoot(PathBuf);
-impl TempRoot {
-    fn new() -> Self {
-        static NEXT: AtomicU64 = AtomicU64::new(0);
-        let dir = std::env::temp_dir().join(format!(
-            "devworks-store-test-{}-{}",
-            std::process::id(),
-            NEXT.fetch_add(1, Ordering::SeqCst)
-        ));
-        let _ = std::fs::remove_dir_all(&dir);
-        Self(dir)
-    }
-}
-impl Drop for TempRoot {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.0);
-    }
-}
+use devworks_test_support::{NumberedIds, T0, TempRoot, TestClock, TestIds};
 
 pub(super) struct Harness {
     root: TempRoot,
@@ -68,15 +34,15 @@ impl Harness {
     }
     fn tuned(tune: fn(&mut SqliteConfig)) -> Self {
         Self {
-            root: TempRoot::new(),
-            clock: Arc::new(TestClock(AtomicI64::new(T0))),
-            ids: Arc::new(TestIds(AtomicU64::new(0))),
+            root: TempRoot::new("devworks-store-test"),
+            clock: Arc::new(TestClock::new(T0)),
+            ids: Arc::new(TestIds::new()),
             tune,
         }
     }
     fn config(&self) -> SqliteConfig {
         let mut c = SqliteConfig::new(
-            self.root.0.clone(),
+            self.root.path().to_path_buf(),
             self.clock.clone(),
             self.ids.clone(),
             ActorId(Id::new("host").unwrap()),
@@ -103,7 +69,7 @@ impl Harness {
         SqliteStore::open(self.config()).expect("open store")
     }
     pub(super) fn raw(&self) -> Connection {
-        let c = Connection::open(self.root.0.join(DATABASE_FILE)).unwrap();
+        let c = Connection::open(self.root.join(DATABASE_FILE)).unwrap();
         c.pragma_update(None, "foreign_keys", true).unwrap();
         super::project_purge::guard::register(&c, false).unwrap();
         c
@@ -137,6 +103,7 @@ mod github;
 mod graph;
 mod help;
 mod indexing;
+mod instructions;
 mod jobs;
 mod knowledge;
 mod mcp;
@@ -164,7 +131,7 @@ fn write<T: Send + 'static>(
     s: &dyn ApplicationStore,
     f: impl FnOnce(&mut dyn WriteTransaction) -> Result<T, StorageError> + Send + 'static,
 ) -> Result<T, StorageError> {
-    run_write(s, WriteOptions::default(), f)
+    run_write(s, WriteOptions::fixture(), f)
 }
 fn append(
     tx: &mut dyn WriteTransaction,
@@ -245,8 +212,8 @@ fn seeded_store_matches_a_fresh_bootstrap() {
     drop(fresh.bootstrapped_store());
     drop(seeded.store());
     assert_eq!(
-        fresh.ids.0.load(Ordering::SeqCst),
-        seeded.ids.0.load(Ordering::SeqCst),
+        fresh.ids.issued(),
+        seeded.ids.issued(),
         "the same identities were drawn in the same order"
     );
     let (fresh, seeded) = (full_dump(&fresh.raw()), full_dump(&seeded.raw()));
@@ -1010,7 +977,7 @@ fn live_statements(c: &Connection) -> usize {
 fn writer_and_reader_connections_keep_hundreds_of_cached_statements() {
     let h = Harness::new();
     drop(h.store());
-    let path = h.root.0.join(DATABASE_FILE);
+    let path = h.root.join(DATABASE_FILE);
     for role in [conn::Role::Writer, conn::Role::Reader] {
         let c = conn::open(&path, role, Duration::from_secs(1)).unwrap();
         let before = live_statements(&c);
@@ -1178,7 +1145,7 @@ fn migrations_apply_in_order_and_an_interrupted_one_leaves_nothing() {
 }
 
 fn file_digest(h: &Harness) -> String {
-    devworks_core::fingerprint::sha256_hex(&std::fs::read(h.root.0.join(DATABASE_FILE)).unwrap())
+    devworks_core::fingerprint::sha256_hex(&std::fs::read(h.root.join(DATABASE_FILE)).unwrap())
 }
 
 fn boots(h: &Harness) -> i64 {
@@ -1265,7 +1232,7 @@ fn incompatible_stores_are_refused_before_any_write() {
 
     // Not a DevWorks store.
     let h = Harness::new();
-    std::fs::create_dir_all(&h.root.0).unwrap();
+    std::fs::create_dir_all(h.root.path()).unwrap();
     h.raw().execute_batch("CREATE TABLE unrelated(x)").unwrap();
     let digest = file_digest(&h);
     assert!(matches!(
@@ -1349,7 +1316,7 @@ fn spawn_blocker(s: &SqliteStore) -> (mpsc::Sender<()>, mpsc::Receiver<()>) {
     let (started_tx, started_rx) = mpsc::channel::<()>();
     let release_rx = Mutex::new(release_rx);
     s.submit_write(
-        WriteOptions::default(),
+        WriteOptions::fixture(),
         write_job(
             move |_| {
                 started_tx.send(()).unwrap();
@@ -1381,7 +1348,7 @@ fn authoritative_work_has_precedence_with_a_reserved_bulk_share_and_bounded_mail
         s.submit_write(
             WriteOptions {
                 priority,
-                ..Default::default()
+                ..WriteOptions::fixture()
             },
             write_job(
                 move |_| {
@@ -1455,13 +1422,13 @@ fn block_on<F: Future>(f: F) -> F::Output {
 fn async_facade_resolves_after_commit_and_dropping_it_never_rolls_back() {
     let h = Harness::new();
     let s = h.store();
-    let seq = block_on(write_async(&s, WriteOptions::default(), |tx| {
+    let seq = block_on(write_async(&s, WriteOptions::fixture(), |tx| {
         append(tx, "Async", json!({}))
     }))
     .unwrap();
     assert_eq!(sequence(&s), seq);
     // The caller stops waiting immediately; the admitted job still commits.
-    drop(write_async(&s, WriteOptions::default(), |tx| {
+    drop(write_async(&s, WriteOptions::fixture(), |tx| {
         append(tx, "Abandoned", json!({}))
     }));
     write(&s, |_| Ok(())).unwrap(); // FIFO barrier on the same mailbox
@@ -1480,11 +1447,9 @@ impl AuthorityPort for Granting {
         Ok(self.0.lock().unwrap().clone())
     }
 }
-struct Seq(AtomicU64);
-impl IdSource for Seq {
-    fn next_id(&self, _: IdKind) -> Id {
-        Id::new(format!("corr-{}", self.0.fetch_add(1, Ordering::SeqCst))).unwrap()
-    }
+/// Correlation ids of the gateway tests.
+fn seq() -> NumberedIds {
+    NumberedIds::new("corr")
 }
 struct Accept {
     calls: AtomicUsize,
@@ -1541,12 +1506,14 @@ fn ctx(s: &SqliteStore) -> InvocationContext {
 /// Host fixture rows the command path references (owned by later work repositories).
 fn seed(s: &SqliteStore) {
     s.with_writer_connection(|c| {
-        db(c.execute_batch(
-            "INSERT INTO actors VALUES('user-a','human','User A');
-             INSERT INTO projects VALUES('project-a','Fixture','Active',1,1,1);
-             INSERT INTO work_items VALUES('root-a','project-a','feature',NULL,NULL,NULL,'Fixture',1,0,1,1,1,'{}');",
-        ))
+        db(c.execute_batch("INSERT INTO actors VALUES('user-a','human','User A');"))
     })
+    .unwrap();
+    devworks_test_support::seed::rows(
+        s,
+        &[devworks_test_support::seed::ProjectSeed::new("project-a").name("Fixture")],
+        &[devworks_test_support::seed::WorkSeed::feature("root-a", "project-a").title("Fixture")],
+    )
     .unwrap();
 }
 fn grant_state(s: &SqliteStore) -> GrantRecord {
@@ -1562,7 +1529,7 @@ fn a_lost_acknowledgment_is_resolved_by_the_receipt() {
     let h = Harness::new();
     let s = h.store();
     seed(&s);
-    let ids = Seq(AtomicU64::new(0));
+    let ids = seq();
     let authority = Granting(Mutex::new(Authorization::direct()));
     let g = Gateway {
         authority: &authority,
@@ -1604,7 +1571,7 @@ fn grant_use_is_consumed_atomically_with_the_receipt() {
     let s = h.store();
     seed(&s);
     write(&s, |tx| {
-        tx.grants().issue(NewGrant {
+        devworks_core::authority::fixture_grants(tx)?.issue(NewGrant {
             id: Id::new("grant-1").unwrap(),
             actor: ActorId(Id::new("user-a").unwrap()),
             root_id: RootId(Id::new("root-a").unwrap()),
@@ -1615,7 +1582,7 @@ fn grant_use_is_consumed_atomically_with_the_receipt() {
         })
     })
     .unwrap();
-    let ids = Seq(AtomicU64::new(0));
+    let ids = seq();
     let authority = Granting(Mutex::new(Authorization::with_grants(vec![GrantUse {
         grant_id: Id::new("grant-1").unwrap(),
         expected_revision: 1,
@@ -1719,7 +1686,7 @@ fn a_panicking_responder_never_stops_the_write_owner() {
     let h = Harness::new();
     let s = h.store();
     s.submit_write(
-        WriteOptions::default(),
+        WriteOptions::fixture(),
         write_job(
             |tx| append(tx, "Committed", json!({})),
             |_| panic!("responder panicked"),
@@ -1738,7 +1705,7 @@ fn queued_jobs_are_finished_when_the_owner_stops() {
     let (release, _) = spawn_blocker(&s);
     let (tx, rx) = mpsc::channel();
     s.submit_write(
-        WriteOptions::default(),
+        WriteOptions::fixture(),
         write_job(
             |tx| append(tx, "Queued", json!({})),
             move |r| {
@@ -1781,7 +1748,7 @@ fn a_store_dropped_by_its_own_write_job_commits_stops_cleanly_and_frees_the_data
     let held = s.clone();
     let (tx, rx) = mpsc::channel();
     s.submit_write(
-        WriteOptions::default(),
+        WriteOptions::fixture(),
         write_job(
             move |tx| {
                 let committed = append(tx, "Last", json!({}))?;

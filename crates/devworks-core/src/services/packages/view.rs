@@ -21,7 +21,7 @@ use crate::protocol::records::{
 use crate::protocol::results::OperationResult;
 use crate::protocol::support::{BoundedList, BoundedText, Page};
 use crate::services::cursor::{self, CursorBinding};
-use crate::services::sessions::{Failure, content, counter, label, rev};
+use crate::services::kernel::{Failure, content, counter, label, rev};
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
 

@@ -48,7 +48,7 @@ pub fn append_screen_context(
     let session_id = session_id.clone();
     let host = host.clone().with_session(session_id.clone());
     let screen = screen.to_owned();
-    let committed = run_write(store, WriteOptions::default(), move |tx| {
+    let committed = run_write(store, WriteOptions::observed(), move |tx| {
         let session =
             tx.sessions()
                 .session(&session_id)?

@@ -1,7 +1,7 @@
 //! Host authority end to end on the real SQLite store: role/tool/profile restrictions, scoped
 //! grants, revocation races at the commit and publication points, destructive refusals in
 //! history and the dedicated primary repository deletion. Deterministic; no inference.
-use super::{Accept, Harness, Seq, T0, start};
+use super::{Accept, Harness, T0, seq, start};
 use crate::fs::NativeFilesystem;
 use crate::paths::FsPathProbe;
 use crate::storage::sqlite::SqliteStore;
@@ -50,7 +50,7 @@ struct Fx {
     settings: Arc<SettingsService>,
     /// The production operation registry: settings reach the gateway through it.
     cases: UseCases,
-    ids: Seq,
+    ids: devworks_test_support::NumberedIds,
     n: AtomicU64,
 }
 
@@ -74,17 +74,20 @@ impl Fx {
     /// distinct stores.
     fn with_id_offset(offset: u64) -> Self {
         let h = Harness::new();
-        h.ids.0.store(offset, Ordering::SeqCst);
+        h.ids.set(offset);
         let store = Arc::new(h.store());
-        store
-            .with_writer_connection(|c| {
-                super::super::conn::db(c.execute_batch(
-                    "INSERT INTO projects VALUES('project-a','A','Active',1,1,1);
-                     INSERT INTO projects VALUES('project-b','B','Active',1,1,1);
-                     INSERT INTO work_items VALUES('root-a','project-a','feature',NULL,NULL,NULL,'Fixture',1,0,1,1,1,'{}');",
-                ))
-            })
-            .unwrap();
+        devworks_test_support::seed::rows(
+            &*store,
+            &[
+                devworks_test_support::seed::ProjectSeed::new("project-a").name("A"),
+                devworks_test_support::seed::ProjectSeed::new("project-b").name("B"),
+            ],
+            &[
+                devworks_test_support::seed::WorkSeed::feature("root-a", "project-a")
+                    .title("Fixture"),
+            ],
+        )
+        .unwrap();
         let settings = Arc::new(SettingsService {
             roles: Arc::new(HostRoles {
                 store: store.clone(),
@@ -97,7 +100,7 @@ impl Fx {
             store,
             cases: UseCases::new().with_settings(settings.clone()),
             settings,
-            ids: Seq(AtomicU64::new(0)),
+            ids: seq(),
             n: AtomicU64::new(0),
         };
         fx.write(|tx| {
@@ -172,7 +175,7 @@ impl Fx {
         &self,
         f: impl FnOnce(&mut dyn WriteTransaction) -> Result<T, StorageError> + Send + 'static,
     ) -> T {
-        run_write(&*self.store, WriteOptions::default(), f).expect("write")
+        run_write(&*self.store, WriteOptions::fixture(), f).expect("write")
     }
     fn bind(
         &self,
@@ -1045,7 +1048,7 @@ fn claimed_authority_in_text_json_or_package_metadata_is_ignored() {
     let forged = id("grant-forged");
     let f = forged.clone();
     fx.write(move |tx| {
-        tx.authority().issue_grant(NewAuthorityGrant {
+        devworks_core::authority::fixture_writes(tx)?.issue_grant(NewAuthorityGrant {
             id: f,
             actor: actor("pkg-a"),
             kind: GrantKind::Operation,
@@ -1280,7 +1283,7 @@ fn a_grant_revoked_between_authorize_and_commit_is_never_consumed() {
         inner: fx.authority(),
         between: Box::new(move || {
             let (u, gid) = (u.clone(), gid.clone());
-            run_write(&*store, WriteOptions::default(), move |tx| {
+            run_write(&*store, WriteOptions::fixture(), move |tx| {
                 let rev = tx.authority().authority_grant(&gid)?.unwrap().revision;
                 auth::revoke_grant(tx, &u, &gid, rev).map_err(|_| StorageError::ScopeDenied)
             })
@@ -1335,7 +1338,7 @@ fn a_principal_or_policy_change_between_authorize_and_commit_fences_the_command(
         inner: fx.authority(),
         between: Box::new(move || {
             let u = u.clone();
-            run_write(&*store, WriteOptions::default(), move |tx| {
+            run_write(&*store, WriteOptions::fixture(), move |tx| {
                 let rev = tx
                     .authority()
                     .principal(&actor("agent-r"))?
@@ -1379,7 +1382,7 @@ fn a_principal_or_policy_change_between_authorize_and_commit_fences_the_command(
         inner: fx.authority(),
         between: Box::new(move || {
             let schema = schema.clone();
-            run_write(&*store, WriteOptions::default(), move |tx| {
+            run_write(&*store, WriteOptions::fixture(), move |tx| {
                 let current = tx
                     .configuration()
                     .current(&ConfigScope::Workspace, "settings")?;
@@ -1567,26 +1570,13 @@ fn a_read_revoked_before_publication_is_not_published() {
 }
 
 /// A uniquely named disposable directory, removed on drop.
-pub(crate) struct Scratch(pub std::path::PathBuf);
+pub(crate) struct Scratch(pub devworks_test_support::TempRoot);
 impl Scratch {
     pub(crate) fn new(tag: &str) -> Self {
-        static NEXT: AtomicU64 = AtomicU64::new(0);
-        let dir = std::env::temp_dir().join(format!(
-            "devworks-authority-{tag}-{}-{}",
-            std::process::id(),
-            NEXT.fetch_add(1, Ordering::SeqCst)
-        ));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        Self(dir)
+        Self(devworks_test_support::TempRoot::new(&format!("devworks-authority-{tag}")).created())
     }
     pub(crate) fn path(&self, rel: &str) -> String {
-        self.0.join(rel).to_string_lossy().into_owned()
-    }
-}
-impl Drop for Scratch {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.0);
+        self.0.text(rel)
     }
 }
 
@@ -2307,6 +2297,8 @@ impl CommandHandler for RawWriter {
         _: &AdmittedCommand,
         tx: &mut dyn WriteTransaction,
     ) -> Result<Decided, HandlerFailure> {
+        let cap = devworks_core::authority::AuthorityCapability::fixture();
+        let who = actor("pkg-a");
         let mut out = self.outcomes.lock().unwrap();
         let grant = tx.authority().authority_grant(&id("grant-pkg"))?.unwrap();
         out.push((
@@ -2320,39 +2312,46 @@ impl CommandHandler for RawWriter {
         ));
         out.push((
             "bind",
-            refused(tx.authority().bind_principal(
-                NewPrincipalBinding {
-                    actor: actor("agent-x"),
-                    kind: PrincipalKind::Agent,
-                    role: Some(AgentRole::Worker),
-                    project_id: None,
-                    tool_families: None,
-                    bound_by: actor("user-a"),
-                },
-                None,
-            )),
+            refused(tx.authority_writes(&cap, &who).and_then(|l| {
+                l.bind_principal(
+                    NewPrincipalBinding {
+                        actor: actor("agent-x"),
+                        kind: PrincipalKind::Agent,
+                        role: Some(AgentRole::Worker),
+                        project_id: None,
+                        tool_families: None,
+                        bound_by: actor("user-a"),
+                    },
+                    None,
+                )
+            })),
         ));
         out.push((
             "revoke principal",
-            refused(tx.authority().revoke_principal(&actor("agent-a"), 1)),
+            refused(
+                tx.authority_writes(&cap, &who)
+                    .and_then(|l| l.revoke_principal(&actor("agent-a"), 1)),
+            ),
         ));
         out.push((
             "issue",
-            refused(tx.authority().issue_grant(NewAuthorityGrant {
-                id: id("grant-self"),
-                actor: actor("pkg-a"),
-                kind: GrantKind::Operation,
-                issued_by: actor("user-a"),
-                binding: json!({"operation": "runs.start"}),
-                expires_at_ms: None,
-                uses: None,
+            refused(tx.authority_writes(&cap, &who).and_then(|l| {
+                l.issue_grant(NewAuthorityGrant {
+                    id: id("grant-self"),
+                    actor: actor("pkg-a"),
+                    kind: GrantKind::Operation,
+                    issued_by: actor("user-a"),
+                    binding: json!({"operation": "runs.start"}),
+                    expires_at_ms: None,
+                    uses: None,
+                })
             })),
         ));
         out.push((
             "revoke grant",
             refused(
-                tx.authority()
-                    .revoke_grant(&grant.id, grant.revision, &actor("user-a")),
+                tx.authority_writes(&cap, &who)
+                    .and_then(|l| l.revoke_grant(&grant.id, grant.revision, &actor("user-a"))),
             ),
         ));
         let spend = GrantUse {
@@ -2361,18 +2360,23 @@ impl CommandHandler for RawWriter {
         };
         out.push((
             "consume",
-            refused(tx.authority().consume_grant(&spend, &actor("pkg-a"))),
+            refused(
+                tx.authority_writes(&cap, &who)
+                    .and_then(|l| l.consume_grant(&spend, &actor("pkg-a"))),
+            ),
         ));
         out.push((
             "issue resume",
-            refused(tx.grants().issue(NewGrant {
-                id: id("resume-2"),
-                actor: actor("pkg-a"),
-                root_id: RootId(id("root-a")),
-                authority_source: "handler".into(),
-                binding: json!({}),
-                expires_at_ms: None,
-                uses: None,
+            refused(tx.grant_writes(&cap, &who).and_then(|l| {
+                l.issue(NewGrant {
+                    id: id("resume-2"),
+                    actor: actor("pkg-a"),
+                    root_id: RootId(id("root-a")),
+                    authority_source: "handler".into(),
+                    binding: json!({}),
+                    expires_at_ms: None,
+                    uses: None,
+                })
             })),
         ));
         let resume = GrantUse {
@@ -2381,7 +2385,10 @@ impl CommandHandler for RawWriter {
         };
         out.push((
             "consume resume",
-            refused(tx.grants().consume(&resume, &actor("user-a"))),
+            refused(
+                tx.grant_writes(&cap, &who)
+                    .and_then(|l| l.consume(&resume, &actor("user-a"))),
+            ),
         ));
         drop(out);
         accept_in(tx)
@@ -2420,7 +2427,7 @@ fn a_use_case_cannot_write_authority_or_grant_records_directly() {
         })
         .unwrap();
     fx.write(|tx| {
-        tx.grants().issue(NewGrant {
+        devworks_core::authority::fixture_grants(tx)?.issue(NewGrant {
             id: id("resume-1"),
             actor: actor("user-a"),
             root_id: RootId(id("root-a")),
@@ -2697,7 +2704,7 @@ impl WriteTransaction for Lying<'_> {
     fn queue(&mut self) -> &mut dyn DurableQueue {
         self.inner.queue()
     }
-    fn grants(&mut self) -> &mut dyn GrantLedger {
+    fn grants(&mut self) -> &mut dyn GrantRead {
         self.inner.grants()
     }
     fn packages(&mut self) -> &mut dyn PackageHandlerLedger {
@@ -2706,7 +2713,7 @@ impl WriteTransaction for Lying<'_> {
     fn configuration(&mut self) -> &mut dyn ConfigurationRepository {
         self.inner.configuration()
     }
-    fn authority(&mut self) -> &mut dyn AuthorityLedger {
+    fn authority(&mut self) -> &mut dyn AuthorityRead {
         self.inner.authority()
     }
     fn authority_writes(
@@ -2722,6 +2729,13 @@ impl WriteTransaction for Lying<'_> {
         _: &ActorId,
     ) -> Result<&mut dyn GrantLedger, StorageError> {
         self.inner.grant_writes(capability, &actor("user-a"))
+    }
+    fn authority_history(
+        &mut self,
+        capability: &devworks_core::authority::AuthorityCapability,
+        _: &ActorId,
+    ) -> Result<&mut dyn HistoryLog, StorageError> {
+        self.inner.authority_history(capability, &actor("user-a"))
     }
     fn artifacts(&mut self) -> &mut dyn ArtifactRepository {
         self.inner.artifacts()

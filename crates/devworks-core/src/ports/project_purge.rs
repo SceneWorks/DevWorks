@@ -3,7 +3,8 @@
 //! managed locations and refuses unknown identities, links escaping a managed root,
 //! changed contents, unsupported identity guarantees, or incomplete enumeration.
 use crate::authority::destructive::FileIdentity;
-use crate::protocol::{Id, ProjectId, StoreId};
+use crate::ports::storage::{ProjectPurgeClientScope, StoredProjectPurge};
+use crate::protocol::{ActorId, Id, ProjectId, StoreId};
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -190,4 +191,54 @@ pub struct PurgeEffect {
     pub id: String,
     pub intent: PurgeEffectIntent,
     pub lease_owner: Option<Id>,
+}
+
+/// Its fields and constructor are private to this confirmation owner. A generic authority
+/// grant or a wire input can never construct this storage capability.
+pub struct PurgePermit {
+    reviewed: StoredProjectPurge,
+    files: PurgeFileSnapshot,
+    client: PurgeClientSnapshot,
+    scope: ProjectPurgeClientScope,
+    confirmed_by: ActorId,
+}
+/// Implemented only by the sealed confirmation token that `services::projects::purge`
+/// defines with a private field. `PurgePermit::issue` takes one, so no other module can
+/// mint a permit; `tests/dependency_direction.rs` checks the trait and `issue` appear
+/// nowhere else.
+pub(crate) trait PurgeConfirmation {}
+impl PurgePermit {
+    /// Only the purge confirmation owner in `services::projects::purge` can call this: it
+    /// alone can construct a `PurgeConfirmation`.
+    pub(crate) fn issue(
+        _confirmation: &impl PurgeConfirmation,
+        reviewed: StoredProjectPurge,
+        files: PurgeFileSnapshot,
+        client: PurgeClientSnapshot,
+        scope: ProjectPurgeClientScope,
+        confirmed_by: ActorId,
+    ) -> Self {
+        Self {
+            reviewed,
+            files,
+            client,
+            scope,
+            confirmed_by,
+        }
+    }
+    pub fn reviewed(&self) -> &StoredProjectPurge {
+        &self.reviewed
+    }
+    pub fn files(&self) -> &PurgeFileSnapshot {
+        &self.files
+    }
+    pub fn client(&self) -> &PurgeClientSnapshot {
+        &self.client
+    }
+    pub fn client_scope(&self) -> &ProjectPurgeClientScope {
+        &self.scope
+    }
+    pub fn confirmed_by(&self) -> &ActorId {
+        &self.confirmed_by
+    }
 }

@@ -3,11 +3,12 @@
 //! command. Commands keep their exact frames; an unknown outcome is settled by Confirm outcomes.
 use crate::{
     attachments,
-    backend::{Reply, Slot, TaskOutput, is_unknown},
+    backend::{Reply, TaskOutput, is_unknown},
     instructions_ops::{self as iop, InstructionsSlot, Kind, TaskResult},
     instructions_screen::{InstructionAction, InstructionsPanel, Pending, Stage},
     memory::RouteMemory,
     ops,
+    projects_ops::ProjectsSlot,
     route::Route,
     screen::{Cx, Screen, ScreenContext, ScreenId, controller},
     widgets::Tone,
@@ -21,7 +22,8 @@ const UNKNOWN: &str = "The outcome is not confirmed yet. Use Confirm outcomes; t
 
 controller!(InstructionsCtl, instructions: InstructionsPanel);
 
-/// Settings draws the panel among its items and hands its actions to [`InstructionsPanel::act`].
+/// Settings draws the panel among its items by calling [`Screen::ui`] with its own context; the
+/// panel runs its own actions.
 impl Screen for InstructionsPanel {
     type Slot = InstructionsSlot;
     const ID: ScreenId = ScreenId::Instructions;
@@ -37,8 +39,22 @@ impl Screen for InstructionsPanel {
             cx.unhandled(&slot, reply);
         }
     }
-    /// The panel on its own.
     fn ui(&mut self, cx: &mut Cx, _route: Route, ui: &mut Ui) {
+        // The projects a skill can be scoped to are the active ones the shell has read.
+        self.projects_loaded = cx.projects.list.loaded;
+        self.projects = cx
+            .projects
+            .list
+            .items
+            .iter()
+            .filter(|p| {
+                matches!(
+                    p.lifecycle,
+                    devworks_core::protocol::records::LifeState::Active
+                )
+            })
+            .map(|p| (p.id.0.as_str().to_owned(), p.name.0.clone()))
+            .collect();
         let mut actions = Vec::new();
         InstructionsPanel::ui(self, ui, cx.online().is_ok(), &mut actions);
         for action in actions {
@@ -114,7 +130,7 @@ impl InstructionsCtl<'_, '_> {
         // The workspace's skills are read first, then each active project's own, one after
         // another. A load before the project list is read reloads once it is.
         let loaded = self.projects.list.loaded;
-        if !loaded && !self.pending(&Slot::ProjectsList) {
+        if !loaded && !self.pending(&ProjectsSlot::ProjectsList) {
             self.load_projects();
         }
         let projects: Vec<String> = self
@@ -139,7 +155,7 @@ impl InstructionsCtl<'_, '_> {
                 "roles.read",
                 {
                     let id = id.clone();
-                    move |b| iop::query(b, "roles.read", iop::read_body(&id, None))
+                    move |b| iop::query(b, iop::read(Kind::Role, &id, None))
                 },
             );
             if !submitted {
@@ -169,13 +185,7 @@ impl InstructionsCtl<'_, '_> {
             InstructionsSlot::InstructionSkills(generation),
             "Discovering skills",
             "skills.discover",
-            move |b| {
-                iop::query(
-                    b,
-                    "skills.discover",
-                    iop::discover_body(project.as_deref(), cursor.as_deref()),
-                )
-            },
+            move |b| iop::query(b, iop::discover(project.as_deref(), cursor.as_deref())),
         ) {
             self.panel().skills = Some(Err("Not requested: DevWorks is offline.".into()));
         }
@@ -243,7 +253,7 @@ impl InstructionsCtl<'_, '_> {
             InstructionsSlot::InstructionHistory(generation),
             "Reading instruction history",
             op,
-            move |b| iop::history_query(b, op, iop::history_body(&id, cursor.as_deref())),
+            move |b| iop::query(b, iop::history(kind, &id, cursor.as_deref())),
         ) {
             self.panel().detail.history = Some(Err("Not requested: DevWorks is offline.".into()));
         }
@@ -260,7 +270,7 @@ impl InstructionsCtl<'_, '_> {
             InstructionsSlot::InstructionResources(generation),
             "Reading skill resources",
             "skills.resources",
-            move |b| iop::resources_query(b, iop::resources_body(&id, revision, cursor.as_deref())),
+            move |b| iop::query(b, iop::read_resources(&id, revision, cursor.as_deref())),
         ) {
             self.panel().detail.resources = Some(Err("Not requested: DevWorks is offline.".into()));
         }
@@ -366,7 +376,7 @@ impl InstructionsCtl<'_, '_> {
             InstructionsSlot::InstructionCommand(token),
             "Restoring an instruction revision",
             op,
-            move |b| iop::command(b, op, iop::rollback_body(&id, expected, target)),
+            move |b| iop::command(b, iop::rollback(kind, &id, expected, target)),
         );
         let p = self.panel();
         if submitted {
@@ -398,7 +408,7 @@ impl InstructionsCtl<'_, '_> {
                 "Disabling a skill"
             },
             "skills.set_enabled",
-            move |b| iop::set_enabled_command(b, iop::set_enabled_body(&id, expected, enabled)),
+            move |b| iop::command(b, iop::set_enabled(&id, expected, enabled)),
         );
         let p = self.panel();
         if submitted {
@@ -638,7 +648,8 @@ impl InstructionsCtl<'_, '_> {
                             self.fail_instruction(token, "No draft to save.".into());
                             return None;
                         };
-                        let op = pending.kind.draft_op();
+                        let draft_kind = pending.kind;
+                        let op = draft_kind.draft_op();
                         let project = pending.project.clone();
                         let content = record.artifact;
                         if let Some(p) = &mut self.panel().pending {
@@ -652,8 +663,13 @@ impl InstructionsCtl<'_, '_> {
                                 let target = target.as_ref().map(|(id, r)| (id.as_str(), *r));
                                 iop::command(
                                     b,
-                                    op,
-                                    iop::draft_body(project.as_deref(), target, &name, &content),
+                                    iop::draft(
+                                        draft_kind,
+                                        project.as_deref(),
+                                        target,
+                                        &name,
+                                        &content,
+                                    ),
                                 )
                             },
                         ) {

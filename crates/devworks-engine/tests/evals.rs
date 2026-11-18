@@ -10,13 +10,12 @@ use devworks_adapters::process::NativeProcessHost;
 use devworks_core::ports::storage::*;
 use devworks_core::protocol::records::EvalSuiteSnapshot;
 use devworks_core::protocol::{ActorId, AssignmentId, ProjectId, RootId};
-use devworks_core::services::artifacts::ArtifactService;
-use devworks_core::services::diagnostics::DiagnosticService;
-use devworks_core::services::resources::ResourceService;
-use devworks_core::services::runs::ControlService;
 use devworks_core::services::{UseCases, evals::EvalService};
 use devworks_engine::evals::EvalSupervisor;
-use devworks_engine::{Composition, RunComposition, RuntimeConfig, boot};
+use devworks_engine::{
+    ArtifactComposition, Composition, DiagnosticComposition, KnowledgeComposition, RunComposition,
+    RuntimeConfig, boot,
+};
 use serde_json::json;
 use std::sync::Arc;
 use std::time::Duration;
@@ -43,32 +42,29 @@ fn composition(
         clock: h.clock(),
         ids: h.ids.clone(),
         authority: Arc::new(Authority),
-        artifacts: Arc::new(ArtifactService::new(
+        artifacts: ArtifactComposition::new(
             Arc::new(NativeArtifactFiles::new(
                 h.root.clone(),
                 h.root.with_extension("cache"),
             )),
             Arc::new(HostArtifactSources::new(h.clock(), h.ids.clone())),
             Arc::new(NativeFilesystem::new()),
-            h.clock(),
-            h.ids.clone(),
-        )),
-        resources: Arc::new(ResourceService::new(h.ids.clone(), h.clock())),
+        ),
         process_host: Arc::new(NativeProcessHost),
-        runs: RunComposition::new(Arc::new(ControlService::new(h.ids.clone()))),
+        runs: RunComposition::default(),
+        knowledge: KnowledgeComposition::default(),
+        application: devworks_engine::ApplicationComposition {
+            sessions: Some(Default::default()),
+            ..Default::default()
+        },
+        web: None,
         power: Arc::new(NativePower),
-        diagnostics: Arc::new(DiagnosticService::new(
-            store.clone(),
-            h.ids.clone(),
-            h.clock(),
-            None,
-        )),
+        diagnostics: DiagnosticComposition::default(),
         browser: None,
         git: None,
         packages: None,
-        use_cases: UseCases::new().with_sessions(Arc::new(
-            devworks_core::services::sessions::SessionService::new(h.ids.clone(), store.clone()),
-        )),
+        use_cases: UseCases::new(),
+        test_overrides: Default::default(),
         consumers: vec![],
         indexing: None,
         config,
@@ -124,11 +120,17 @@ fn supervisor(h: &Harness, store: Arc<dyn ApplicationStore>) -> Arc<EvalSupervis
         vec![suite()],
     )
 }
-fn seed_work(h: &Harness) {
-    let db = rusqlite::Connection::open(h.root.join("workspace.sqlite")).unwrap();
-    db.execute_batch("INSERT INTO projects(id,title,lifecycle,revision,scope_revision,created_at) VALUES('project','P','Active',1,1,0);
-        INSERT INTO work_items VALUES('root','project','feature',NULL,NULL,NULL,'Root',1,0,1,1,1,'{}');
-        INSERT INTO work_items VALUES('worker','project','task','root',NULL,NULL,'Worker',1,0,1,1,1,'{}');").unwrap();
+fn seed_work(store: &dyn ApplicationStore) {
+    use devworks_test_support::seed::{ProjectSeed, WorkSeed};
+    devworks_test_support::seed::rows(
+        store,
+        &[ProjectSeed::new("project").name("P").created_at(0)],
+        &[
+            WorkSeed::feature("root", "project").title("Root"),
+            WorkSeed::task("worker", "project", "root").title("Worker"),
+        ],
+    )
+    .unwrap();
 }
 fn activation(store: &dyn ApplicationStore, phase: ActivationPhase) -> StoredActivation {
     write(store, move |tx| {
@@ -236,7 +238,7 @@ fn stopped_activation_grades_open_coordinator_and_worker_and_live_activation_doe
     let h = Harness::new();
     runtime().block_on(async {
         let store = h.open();
-        seed_work(&h);
+        seed_work(&*store);
         session(&*store, "coordinator", false, Some("root"));
         session(&*store, "worker-session", false, Some("root"));
         let a = activation(&*store, ActivationPhase::Running);
@@ -359,7 +361,7 @@ fn boot_grades_open_sessions_after_recovering_their_interrupted_activation() {
     let h = Harness::new();
     {
         let store = h.open();
-        seed_work(&h);
+        seed_work(&*store);
         session(&*store, "coordinator", false, Some("root"));
         session(&*store, "worker-session", false, Some("root"));
         activation(&*store, ActivationPhase::Running);

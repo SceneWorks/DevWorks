@@ -25,10 +25,11 @@ use devworks_core::providers::context::{
     ContentBlock, GenerationParameters, Message, MessageRole, ProviderContext, TextBlock,
 };
 use devworks_core::services::UseCases;
-use devworks_core::services::artifacts::ArtifactService;
 use devworks_core::services::indexing::IndexSettings;
-use devworks_core::services::resources::ResourceService;
 use devworks_core::settings::catalog::descriptor;
+use devworks_engine::{
+    ArtifactComposition, DiagnosticComposition, KnowledgeComposition, RunComposition,
+};
 use devworks_engine::{
     Composition, IndexComposition, IndexingConfig, Runtime, RuntimeConfig, boot,
 };
@@ -96,16 +97,14 @@ fn id_counter() -> u64 {
 }
 
 fn composition(h: &Harness, store: Arc<dyn ApplicationStore>, git_program: &str) -> Composition {
-    let artifacts = Arc::new(ArtifactService::new(
+    let artifacts = ArtifactComposition::new(
         Arc::new(NativeArtifactFiles::new(
             h.root.clone(),
             h.root.with_extension("cache"),
         )),
         Arc::new(HostArtifactSources::new(h.clock(), h.ids.clone())),
         Arc::new(NativeFilesystem::new()),
-        h.clock(),
-        h.ids.clone(),
-    ));
+    );
     let mut config = RuntimeConfig::new(id("dispatcher-1"));
     config.collect_interval = Duration::from_secs(3600);
     config.shutdown_grace = Duration::from_millis(200);
@@ -123,21 +122,15 @@ fn composition(h: &Harness, store: Arc<dyn ApplicationStore>, git_program: &str)
         ids: h.ids.clone(),
         authority: Arc::new(Authority),
         artifacts,
-        resources: Arc::new(ResourceService::new(h.ids.clone(), h.clock())),
         process_host: Arc::new(NativeProcessHost),
-        runs: devworks_engine::RunComposition::new(Arc::new(
-            devworks_core::services::runs::ControlService::new(h.ids.clone()),
-        )),
+        runs: RunComposition::default(),
+        knowledge: KnowledgeComposition::default(),
+        application: Default::default(),
+        web: None,
         power: Arc::new(NoPower),
-        diagnostics: Arc::new(
-            devworks_core::services::diagnostics::DiagnosticService::new(
-                store.clone(),
-                h.ids.clone(),
-                h.clock(),
-                None,
-            ),
-        ),
+        diagnostics: DiagnosticComposition::default(),
         use_cases: UseCases::new(),
+        test_overrides: Default::default(),
         consumers: Vec::new(),
         indexing: Some(IndexComposition {
             parser: Arc::new(TreeSitterParser::new()),
