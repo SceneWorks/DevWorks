@@ -707,9 +707,10 @@ fn attachments_from_the_dialog_a_drop_and_a_paste_are_stored_with_their_conversa
     assert_eq!(h.state().chat.draft().unwrap().attachments.len(), 3);
 
     // Durable copies: workspace artifacts tagged with the conversation.
-    let (listed, _) =
-        ops::artifacts(backend.query("artifacts.list", &ops::workspace_artifacts(&*backend)))
-            .unwrap();
+    let listed =
+        ops::artifacts(backend.query("artifacts.list", &ops::workspace_artifacts(&*backend, None)))
+            .unwrap()
+            .items;
     let tag = ops::conversation_tag(&session).unwrap();
     let tagged = listed
         .iter()

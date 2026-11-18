@@ -1,6 +1,5 @@
 //! Repository indexing requests and replies: index status, runs, the section's sources and
 //! discovery. Every change is the same `indexing.*` command an agent submits.
-use super::ListState;
 use crate::backend::Reply;
 use crate::indexing_ops::IndexingSlot;
 pub use crate::indexing_screen::{
@@ -75,6 +74,17 @@ impl IndexingScreen {
 }
 
 impl IndexingCtl<'_, '_> {
+    fn send_runs(&mut self, fetch: crate::paged::Fetch, label: &str) {
+        let project = self.selected_project().map(str::to_owned);
+        self.cx.paged(
+            &mut self.indexing.runs,
+            fetch,
+            IndexingSlot::IndexRuns("*".into()),
+            label,
+            "indexing.runs",
+            move |b, cursor| ops::index_runs(b, project.as_deref(), None, cursor),
+        );
+    }
     fn act(&mut self, actions: Vec<IndexAction>) {
         for a in actions {
             match a {
@@ -88,13 +98,13 @@ impl IndexingCtl<'_, '_> {
                     );
                 }
                 IndexAction::Runs => {
-                    let project = self.selected_project().map(str::to_owned);
-                    self.query(
-                        IndexingSlot::IndexRuns("*".into()),
-                        "Loading index runs",
-                        "indexing.runs",
-                        move |b| ops::index_runs(b, project.as_deref(), None),
-                    );
+                    let fetch = self.indexing.runs.reload();
+                    self.send_runs(fetch, "Loading index runs");
+                }
+                IndexAction::MoreRuns => {
+                    if let Some(fetch) = self.indexing.runs.more_page() {
+                        self.send_runs(fetch, "Loading more index runs");
+                    }
                 }
                 IndexAction::Index {
                     repository,
@@ -228,20 +238,10 @@ impl IndexingCtl<'_, '_> {
                 };
                 ix.status.insert(r, state);
             }
-            (IndexingSlot::IndexRuns(_), Reply::Query(q)) => match ops::index_runs_result(q) {
-                Ok((items, more)) => {
-                    ix.runs = ListState {
-                        items,
-                        loaded: true,
-                        error: None,
-                        more,
-                    }
-                }
-                Err(e) => {
-                    ix.runs.loaded = true;
-                    ix.runs.error = Some(failure_text(e));
-                }
-            },
+            (IndexingSlot::IndexRuns(_), Reply::Query(q)) => {
+                ix.runs
+                    .apply_current(ops::index_runs_result(q).map_err(failure_text));
+            }
             (IndexingSlot::IndexCommand(r), Reply::Command(c)) => {
                 match ops::index_run_result(c) {
                     Ok(run) => {

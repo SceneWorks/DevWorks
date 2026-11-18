@@ -455,9 +455,9 @@ fn native_review_purge_preserves_shared_git_and_other_drafts_and_recovers_after_
     .unwrap()
     .unwrap();
     assert_eq!(actual, repository);
-    let projects = ops::projects(b.query("projects.list", &ops::projects_list(&*b, None)))
+    let projects = ops::projects(b.query("projects.list", &ops::projects_list(&*b, None, None)))
         .unwrap()
-        .0;
+        .items;
     assert!(
         projects
             .iter()

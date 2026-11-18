@@ -7,11 +7,12 @@ use crate::{
     backend::{Reply, Unresolved},
     memory::RouteMemory,
     ops::Failure,
+    paged::{self, Applied, Fetch, Page, Paged},
     route::Route,
     screen::{Cx, Screen, ScreenContext, ScreenId},
     theme,
     watch_ops::{self, WatchScope, WatchSlot, WatchView},
-    widgets::{self, StateAction, Tone, ViewState},
+    widgets::{self, Tone, ViewState},
 };
 use devworks_core::protocol::DomainErrorCode;
 use devworks_core::protocol::records::{
@@ -30,12 +31,8 @@ const TAIL_LINES: usize = 8;
 #[derive(Default)]
 pub struct WatchList {
     pub scope: Option<WatchScope>,
-    pub items: Vec<WatcherRecord>,
-    pub next_cursor: Option<String>,
-    pub loading: bool,
-    pub loaded: bool,
-    pub error: Option<String>,
-    pub generation: u64,
+    /// The rows: a refresh reads again every page shown, so polling keeps loaded pages.
+    pub rows: Paged<WatcherRecord>,
     pub loaded_at: Option<Instant>,
 }
 
@@ -86,16 +83,14 @@ impl WatchersScreen {
                     let list = self.list_mut(view);
                     if list.scope.as_ref() != Some(&scope) {
                         // Another conversation or feature: its rows replace the shown ones.
-                        *list = WatchList {
-                            scope: Some(scope),
-                            generation: list.generation,
-                            ..WatchList::default()
-                        };
+                        list.rows.reset();
+                        list.loaded_at = None;
+                        list.scope = Some(scope);
                         self.load(cx, view, false);
                     }
                 }
                 WatchAction::Refresh(view) => {
-                    if !self.list(view).loading {
+                    if !self.list(view).rows.loading() {
                         self.load(cx, view, false);
                     }
                 }
@@ -118,32 +113,36 @@ impl WatchersScreen {
 
     fn load(&mut self, cx: &mut Cx, view: WatchView, append: bool) {
         let list = self.list_mut(view);
+        if list.scope.is_none() {
+            return;
+        }
+        // A refresh reads again every page already shown, so polling keeps loaded pages.
+        let fetch = if append {
+            let Some(fetch) = list.rows.more_page() else {
+                return;
+            };
+            fetch
+        } else {
+            list.rows.refresh()
+        };
+        self.send(cx, view, fetch);
+    }
+
+    fn send(&mut self, cx: &mut Cx, view: WatchView, fetch: Fetch) {
+        let list = self.list_mut(view);
         let Some(scope) = list.scope.clone() else {
             return;
         };
-        // A refresh reads again every row already shown, so polling keeps loaded pages.
-        let (cursor, limit) = if append {
-            let Some(cursor) = list.next_cursor.clone() else {
-                return;
-            };
-            (Some(cursor), usize::from(watch_ops::WATCH_PAGE))
-        } else {
-            (
-                None,
-                list.items.len().max(usize::from(watch_ops::WATCH_PAGE)),
-            )
-        };
-        list.generation = list.generation.wrapping_add(1);
-        let generation = list.generation;
+        let slot = WatchSlot::WatcherList(view, fetch.generation, fetch.append());
         // The shown rows stay until the reply replaces them.
-        if cx.query(
-            WatchSlot::WatcherList(view, generation, append),
+        if !cx.paged(
+            &mut list.rows,
+            fetch,
+            slot,
             "Loading watchers",
             "watch.list",
-            move |b| watch_ops::list(b, &scope, cursor.as_deref(), limit),
+            move |b, cursor| watch_ops::list(b, &scope, cursor, usize::from(watch_ops::WATCH_PAGE)),
         ) {
-            list.loading = true;
-        } else {
             list.loaded_at = Some(Instant::now());
         }
     }
@@ -158,25 +157,18 @@ impl WatchersScreen {
 
     fn apply_reply(&mut self, cx: &mut Cx, slot: WatchSlot, reply: Reply) {
         match (slot, reply) {
-            (WatchSlot::WatcherList(view, generation, append), Reply::Query(outcome)) => {
+            (WatchSlot::WatcherList(view, generation, _), Reply::Query(outcome)) => {
+                let page = watch_ops::page(outcome)
+                    .map(|page| Page {
+                        items: page.items.0,
+                        next: page.next_cursor.map(|c| c.0),
+                    })
+                    .map_err(|e| e.describe());
                 let list = self.list_mut(view);
-                if generation != list.generation {
-                    return;
-                }
-                list.loading = false;
-                list.loaded_at = Some(Instant::now());
-                match watch_ops::page(outcome) {
-                    Ok(page) => {
-                        if append {
-                            list.items.extend(page.items.0);
-                        } else {
-                            list.items = page.items.0;
-                        }
-                        list.next_cursor = page.next_cursor.map(|c| c.0);
-                        list.loaded = true;
-                        list.error = None;
-                    }
-                    Err(e) => list.error = Some(e.describe()),
+                match list.rows.apply(generation, page) {
+                    Applied::Stale => {}
+                    Applied::Continue(fetch) => self.send(cx, view, fetch),
+                    _ => list.loaded_at = Some(Instant::now()),
                 }
             }
             (WatchSlot::WatcherCancel(id), Reply::Command(outcome)) => {
@@ -219,7 +211,7 @@ impl WatchersScreen {
         if list.scope.as_ref() != Some(&scope) {
             actions.push(WatchAction::Show(view, scope));
         } else if online.is_ok()
-            && !list.loading
+            && !list.rows.loading()
             && list.loaded_at.is_none_or(|at| at.elapsed() >= WATCH_POLL)
         {
             actions.push(WatchAction::Refresh(view));
@@ -230,35 +222,19 @@ impl WatchersScreen {
         {
             widgets::chip(ui, text.clone(), *tone);
         }
-        if let Err(reason) = online {
-            widgets::state_block(
-                ui,
-                &ViewState::Offline {
-                    reason: reason.to_owned(),
-                },
-            );
+        let (mut reload, mut more) = (false, false);
+        let online = online.map_err(str::to_owned);
+        let ready = paged::gate(ui, &online, &list.rows, "watchers", &mut reload, &mut more);
+        if reload {
+            actions.push(WatchAction::Refresh(view));
+        }
+        if more {
+            actions.push(WatchAction::More(view));
+        }
+        if !ready {
             return;
         }
-        if let Some(error) = &list.error {
-            let state = ViewState::Failed {
-                what: "watchers".into(),
-                error: error.clone(),
-            };
-            if widgets::state_block(ui, &state) == StateAction::Retry {
-                actions.push(WatchAction::Refresh(view));
-            }
-            return;
-        }
-        if !list.loaded {
-            widgets::state_block(
-                ui,
-                &ViewState::Loading {
-                    what: "watchers".into(),
-                },
-            );
-            return;
-        }
-        if list.items.is_empty() {
+        if list.rows.items.is_empty() {
             widgets::state_block(
                 ui,
                 &ViewState::Empty {
@@ -273,15 +249,13 @@ impl WatchersScreen {
             );
             return;
         }
-        for watcher in &list.items {
+        for watcher in &list.rows.items {
             self.row(ui, view, watcher, actions);
             ui.add_space(6.0);
         }
-        if list.next_cursor.is_some()
-            && ui
-                .add_enabled(!list.loading, egui::Button::new("More watchers"))
-                .clicked()
-        {
+        let mut more = false;
+        paged::load_more_control(ui, &list.rows, &mut more);
+        if more {
             actions.push(WatchAction::More(view));
         }
     }

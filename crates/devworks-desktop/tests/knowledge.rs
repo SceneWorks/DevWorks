@@ -137,13 +137,13 @@ fn a_file_is_imported_by_dialog_or_drop_after_an_exact_preview() {
     assert!(has_text(&h, "would store") && has_text(&h, "personal"));
     assert!(has_text(&h, "stores 1 of 2 candidates"));
     assert!(
-        h.state().knowledge.items.is_empty(),
+        h.state().knowledge.claims.items.is_empty(),
         "nothing is imported before Confirm"
     );
     click(&mut h, Role::Button, "Confirm import");
     assert!(has_text(&h, "Imported 1 entries from memory.json"));
     assert!(has_text(&h, "stored"));
-    assert_eq!(h.state().knowledge.items.len(), 1);
+    assert_eq!(h.state().knowledge.claims.items.len(), 1);
     click(&mut h, Role::Button, "Close import");
     // Dropping the same file on the screen stores a new copy and previews it: the entry it
     // imported is now an active duplicate, so nothing would be imported twice.
@@ -192,7 +192,7 @@ fn entries_are_created_searched_inspected_and_changed_through_the_shared_operati
         "{:?}",
         h.state().knowledge.message
     );
-    assert_eq!(h.state().knowledge.items.len(), 1);
+    assert_eq!(h.state().knowledge.claims.items.len(), 1);
     assert!(
         h.state().knowledge.draft.is_none(),
         "the draft is cleared once recorded"
@@ -201,16 +201,16 @@ fn entries_are_created_searched_inspected_and_changed_through_the_shared_operati
     // Word search (case-insensitive) and tag filter reach the same claim.
     type_into(&mut h, "Search Knowledge", "fts5 KNOWLEDGE");
     click(&mut h, Role::Button, "Search");
-    assert_eq!(h.state().knowledge.items.len(), 1);
+    assert_eq!(h.state().knowledge.claims.items.len(), 1);
     type_into(&mut h, "Filter by tags", "missing-tag");
     click(&mut h, Role::Button, "Search");
-    assert!(h.state().knowledge.items.is_empty());
+    assert!(h.state().knowledge.claims.items.is_empty());
     h.state_mut().knowledge.tags.clear();
     h.state_mut().knowledge.text.clear();
     click(&mut h, Role::Button, "Search");
 
     // Detail: provenance, evidence and revision history.
-    let label = h.state().knowledge.items[0]
+    let label = h.state().knowledge.claims.items[0]
         .value
         .as_ref()
         .unwrap()
@@ -220,7 +220,7 @@ fn entries_are_created_searched_inspected_and_changed_through_the_shared_operati
     settle(&mut h);
     assert_eq!(
         h.state().knowledge.selected.as_ref(),
-        Some(&h.state().knowledge.items[0].id)
+        Some(&h.state().knowledge.claims.items[0].id)
     );
     assert!(has_text(&h, "Origin User"), "the user is the origin");
     assert!(has_text(&h, "Revisions"));
@@ -277,7 +277,7 @@ fn entries_are_created_searched_inspected_and_changed_through_the_shared_operati
     assert!(has_text(&h, "Entry recorded."));
     h.state_mut().knowledge.lessons_only = true;
     click(&mut h, Role::Button, "Search");
-    let items = &h.state().knowledge.items;
+    let items = &h.state().knowledge.claims.items;
     assert_eq!(items.len(), 1);
     let lesson = items[0].lesson.as_ref().unwrap();
     assert_eq!(format!("{:?}", lesson.rule_state), "Effective");
@@ -446,7 +446,7 @@ fn a_completed_write_clears_only_the_form_it_submitted_and_only_if_unchanged() {
     );
 
     // An unrelated change leaves an open draft, a typed reason and typed tags alone.
-    let label = h.state().knowledge.items[0]
+    let label = h.state().knowledge.claims.items[0]
         .value
         .as_ref()
         .unwrap()
@@ -523,6 +523,7 @@ fn listed(
     let c = h
         .state()
         .knowledge
+        .claims
         .items
         .iter()
         .find(|c| c.id == *id)
@@ -592,7 +593,7 @@ fn an_entry_edited_while_saving_saves_again_onto_the_stored_revision() {
         .clone()
         .unwrap()
         .0;
-    assert_eq!(h.state().knowledge.items.len(), 1);
+    assert_eq!(h.state().knowledge.claims.items.len(), 1);
     // The tags were not edited after the save submitted them: they are the stored ones now
     // (as the store folded them), the text keeps the later edit.
     let stored_tags = listed(&h, &id).1.join(", ");
@@ -608,7 +609,11 @@ fn an_entry_edited_while_saving_saves_again_onto_the_stored_revision() {
         h.state().knowledge.message
     );
     assert!(h.state().knowledge.draft.is_none());
-    assert_eq!(h.state().knowledge.items.len(), 1, "never a second entry");
+    assert_eq!(
+        h.state().knowledge.claims.items.len(),
+        1,
+        "never a second entry"
+    );
     assert_eq!(listed(&h, &id).0, "First entry, revised");
 
     // An edit of it, changed again while its own save runs, then saved again: the second save
@@ -650,9 +655,9 @@ fn an_entry_edited_while_saving_saves_again_onto_the_stored_revision() {
 }
 
 fn import_artifacts(backend: &dyn devworks_desktop::backend::Backend) -> usize {
-    ops::artifacts(backend.query("artifacts.list", &ops::workspace_artifacts(backend)))
+    ops::artifacts(backend.query("artifacts.list", &ops::workspace_artifacts(backend, None)))
         .unwrap()
-        .0
+        .items
         .into_iter()
         .filter(|a| a.name.0 == "memory.json")
         .count()
@@ -824,6 +829,7 @@ fn the_lessons_filter_keeps_the_search_text_and_lifecycles() {
     let listed: Vec<_> = h
         .state()
         .knowledge
+        .claims
         .items
         .iter()
         .map(|c| c.id.clone())
@@ -836,6 +842,7 @@ fn the_lessons_filter_keeps_the_search_text_and_lifecycles() {
     let listed: Vec<_> = h
         .state()
         .knowledge
+        .claims
         .items
         .iter()
         .map(|c| c.id.clone())
@@ -863,7 +870,7 @@ fn cleanup_previews_and_deletes_an_exact_source_label_through_the_native_screen(
     settle(&mut h);
     h.state_mut().navigate(Route::Knowledge);
     settle(&mut h);
-    assert_eq!(h.state().knowledge.items.len(), 1);
+    assert_eq!(h.state().knowledge.claims.items.len(), 1);
     h.get_by_label("Clean up by source").click();
     settle(&mut h);
     h.get_by_role_and_label(Role::TextInput, "Cleanup source")
@@ -879,7 +886,7 @@ fn cleanup_previews_and_deletes_an_exact_source_label_through_the_native_screen(
         source
     );
     click(&mut h, Role::Button, "Delete previewed entries");
-    assert!(h.state().knowledge.items.is_empty());
+    assert!(h.state().knowledge.claims.items.is_empty());
 }
 
 #[test]
@@ -929,10 +936,11 @@ fn a_replacement_draft_during_creation_is_never_rebound_or_cleared() {
         if replacement != "First entry" {
             click(&mut h, Role::Button, "Save entry");
             assert!(h.state().knowledge.draft.is_none());
-            assert_eq!(h.state().knowledge.items.len(), 2);
+            assert_eq!(h.state().knowledge.claims.items.len(), 2);
             let first = h
                 .state()
                 .knowledge
+                .claims
                 .items
                 .iter()
                 .find(|c| c.value.as_ref().is_some_and(|v| v.0 == "First entry"))
@@ -940,6 +948,7 @@ fn a_replacement_draft_during_creation_is_never_rebound_or_cleared() {
             let second = h
                 .state()
                 .knowledge
+                .claims
                 .items
                 .iter()
                 .find(|c| c.value.as_ref().is_some_and(|v| v.0 == replacement))

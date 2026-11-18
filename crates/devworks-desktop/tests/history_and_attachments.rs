@@ -83,8 +83,8 @@ fn chat_history_groups_conversations_by_last_activity_newest_first() {
     let days = |n: i64| ms(&now.checked_sub(jiff::Span::new().days(n)).unwrap());
     let mut chat = Chat::new();
     chat.tab = SidebarTab::History;
-    chat.sessions_loaded = true;
-    chat.sessions = vec![
+    chat.sessions.loaded = true;
+    chat.sessions.items = vec![
         record("s-old", "Old plan", Some(days(120))),
         record("s-today", "Morning triage", Some(ms(&now))),
         record("s-yesterday", "Release notes", Some(days(1))),
@@ -179,9 +179,9 @@ fn a_restored_image_attachment_gets_its_preview_back_from_the_stored_artifact() 
 // Removal while a save is in flight
 
 fn workspace_artifacts(backend: &dyn Backend) -> Vec<String> {
-    ops::artifacts(backend.query("artifacts.list", &ops::workspace_artifacts(backend)))
+    ops::artifacts(backend.query("artifacts.list", &ops::workspace_artifacts(backend, None)))
         .unwrap()
-        .0
+        .items
         .into_iter()
         .map(|a| a.name.0)
         .collect()

@@ -3,6 +3,7 @@
 //! the shell reaches it through [`DynScreen`] by the [`ScreenId`] a route or slot names.
 use crate::backend::{Backend, Client, Reply, Slot, Unresolved};
 use crate::memory::RouteMemory;
+use crate::paged::{Fetch, Page, Paged};
 use crate::project_purge::Live;
 use crate::projects_screen::ProjectLists;
 use crate::route::Route;
@@ -90,6 +91,11 @@ pub enum Effect {
     OpenSession(String),
     LoadProjects,
     LoadRepositories,
+    /// Reads the next page of the navigation's project list, of every registration, or of the
+    /// selected project's repositories.
+    LoadMoreProjects,
+    LoadMoreRepositories,
+    LoadMoreMembers,
     /// A project command succeeded with this record: the project lists, the navigation's
     /// selection and the work screens follow it.
     ProjectChanged(ProjectRecord),
@@ -146,11 +152,11 @@ pub enum Effect {
     /// Opens the notification center.
     OpenNotifications,
     /// The navigation's project list reply, read.
-    ProjectList(Result<(Vec<ProjectRecord>, bool), String>),
+    ProjectList(Result<Page<ProjectRecord>, String>),
     /// The repository list reply, read.
-    RepositoryList(Result<(Vec<RepositoryRecord>, bool), String>),
+    RepositoryList(Result<Page<RepositoryRecord>, String>),
     /// A reply with the repositories of a project (its ID).
-    ProjectMembers(String, Result<(Vec<RepositoryRecord>, bool), String>),
+    ProjectMembers(String, Result<Page<RepositoryRecord>, String>),
     /// Publishes the client state the purge reviews, then submits the confirmed purge.
     ConfirmPurge,
 }
@@ -275,6 +281,24 @@ impl Cx<'_> {
             op,
             frame,
         )
+    }
+    /// Submits the request `fetch` names for `list`, building the frame after its cursor; a
+    /// request nothing took (offline, or closing) is abandoned so the list never waits for it.
+    pub fn paged<T>(
+        &mut self,
+        list: &mut Paged<T>,
+        fetch: Fetch,
+        slot: impl Into<Slot>,
+        label: &str,
+        op: &'static str,
+        frame: impl FnOnce(&dyn Backend, Option<&str>) -> Vec<u8>,
+    ) -> bool {
+        let cursor = fetch.cursor.clone();
+        let sent = self.query(slot, label, op, move |b| frame(b, cursor.as_deref()));
+        if !sent {
+            list.abandon(fetch.generation);
+        }
+        sent
     }
     /// Submits a command; `false` when it was not submitted now.
     pub fn command(

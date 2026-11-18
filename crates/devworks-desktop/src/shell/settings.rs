@@ -9,6 +9,7 @@ use crate::indexing_screen::{self as indexing, IndexAction};
 use crate::mcp_panel::McpAction;
 use crate::memory::RouteMemory;
 use crate::ops::{self, Failure};
+use crate::paged::Applied;
 use crate::projects_ops::ProjectsSlot;
 use crate::route::Route;
 use crate::screen::{Cx, Effect, Screen, ScreenContext, ScreenId, controller};
@@ -40,7 +41,7 @@ impl Screen for SettingsScreen {
     /// inventory is read on normal hints and periodic repair. Loading keeps unsaved model edits
     /// and leaves unknown configure outcomes untouched.
     fn refresh(&mut self, cx: &mut Cx, _route: Route) {
-        if self.show_connections && !self.connections.loading {
+        if self.show_connections && !self.connections.connections.loading() {
             SettingsCtl { settings: self, cx }.load_connections();
         }
     }
@@ -539,29 +540,37 @@ impl SettingsCtl<'_, '_> {
         if let Some(b) = self.backend() {
             self.settings.connections.secret_store = Some(b.secret_store());
         }
+        // Each list reads every page before it replaces what is shown.
         let p = &mut self.settings.connections;
-        p.generation += 1;
-        p.gathering.clear();
-        p.loading = true;
         p.last_load = Some(Instant::now());
-        p.catalog_generation += 1;
-        p.catalog_gathering.clear();
-        let (g, cg) = (p.generation, p.catalog_generation);
-        if !self.query(
-            SettingsSlot::Connections(g),
+        let fetch = p.connections.reload_all();
+        self.send_connections(fetch);
+        let fetch = self.settings.connections.catalog.reload_all();
+        self.send_connection_catalog(fetch);
+        self.load_embedding_spaces(None);
+    }
+
+    fn send_connections(&mut self, fetch: crate::paged::Fetch) {
+        let slot = SettingsSlot::Connections(fetch.generation);
+        self.cx.paged(
+            &mut self.settings.connections.connections,
+            fetch,
+            slot,
             "Loading provider connections",
             "router.connections",
-            |b| ops::router_connections(b, None),
-        ) {
-            self.settings.connections.loading = false;
-        }
-        self.query(
-            SettingsSlot::ConnectionCatalog(cg),
+            ops::router_connections,
+        );
+    }
+    fn send_connection_catalog(&mut self, fetch: crate::paged::Fetch) {
+        let slot = SettingsSlot::ConnectionCatalog(fetch.generation);
+        self.cx.paged(
+            &mut self.settings.connections.catalog,
+            fetch,
+            slot,
             "Loading models",
             "router.catalog",
-            |b| ops::router_catalog_all(b, None),
+            ops::router_catalog_all,
         );
-        self.load_embedding_spaces(None);
     }
 
     fn load_embedding_spaces(&mut self, cursor: Option<String>) {
@@ -666,7 +675,7 @@ impl SettingsCtl<'_, '_> {
     /// background), at most every few seconds.
     fn poll_connections(&mut self, ctx: &egui::Context) {
         let p = &self.settings.connections;
-        let signing_in = p.records.iter().any(|r| {
+        let signing_in = p.connections.items.iter().any(|r| {
             r.lifecycle.as_ref().is_some_and(|l| {
                 matches!(
                     l,
@@ -678,7 +687,8 @@ impl SettingsCtl<'_, '_> {
         if !self.settings.show_connections || (!signing_in && !qualifying) {
             return;
         }
-        let due = !p.loading && p.last_load.is_none_or(|t| t.elapsed() >= CONNECTION_POLL);
+        let due =
+            !p.connections.loading() && p.last_load.is_none_or(|t| t.elapsed() >= CONNECTION_POLL);
         if due {
             self.load_connections();
         }
@@ -1051,60 +1061,27 @@ impl SettingsCtl<'_, '_> {
                 }
             }
             (SettingsSlot::Connections(g), Reply::Query(q)) => {
-                if g != self.settings.connections.generation {
-                    return None;
-                }
-                match ops::connection_records(q) {
-                    Ok((items, next)) => {
-                        self.settings.connections.gathering.extend(items);
-                        match next {
-                            Some(cursor) => {
-                                if !self.query(
-                                    SettingsSlot::Connections(g),
-                                    "Loading provider connections",
-                                    "router.connections",
-                                    move |b| ops::router_connections(b, Some(&cursor)),
-                                ) {
-                                    self.settings.connections.loading = false;
-                                }
-                            }
-                            None => {
-                                let all = std::mem::take(&mut self.settings.connections.gathering);
-                                self.settings.connections.loaded(all);
-                            }
-                        }
-                    }
-                    Err(e) => {
-                        self.settings.connections.loading = false;
-                        self.settings.connections.error = Some(e.describe());
-                    }
+                let page = ops::connection_records(q)
+                    .map(|(items, next)| crate::paged::Page { items, next })
+                    .map_err(|e| e.describe());
+                let panel = &mut self.settings.connections;
+                match panel.connections.apply(g, page) {
+                    Applied::Continue(fetch) => self.send_connections(fetch),
+                    Applied::Replaced => panel.adopt_connections(),
+                    Applied::Stale => return None,
+                    Applied::Failed | Applied::Appended => {}
                 }
             }
             (SettingsSlot::ConnectionCatalog(g), Reply::Query(q)) => {
-                if g != self.settings.connections.catalog_generation {
-                    return None;
-                }
-                match ops::route_models(q) {
-                    Ok((items, next)) => {
-                        self.settings.connections.catalog_gathering.extend(items);
-                        match next {
-                            Some(cursor) => {
-                                self.query(
-                                    SettingsSlot::ConnectionCatalog(g),
-                                    "Loading models",
-                                    "router.catalog",
-                                    move |b| ops::router_catalog_all(b, Some(&cursor)),
-                                );
-                            }
-                            None => {
-                                let all = std::mem::take(
-                                    &mut self.settings.connections.catalog_gathering,
-                                );
-                                self.settings.connections.catalog_loaded(all);
-                            }
-                        }
-                    }
-                    Err(e) => self.settings.connections.catalog_error = Some(e.describe()),
+                let page = ops::route_models(q)
+                    .map(|(items, next)| crate::paged::Page { items, next })
+                    .map_err(|e| e.describe());
+                let panel = &mut self.settings.connections;
+                match panel.catalog.apply(g, page) {
+                    Applied::Continue(fetch) => self.send_connection_catalog(fetch),
+                    Applied::Replaced => panel.adopt_catalog(),
+                    Applied::Stale => return None,
+                    Applied::Failed | Applied::Appended => {}
                 }
             }
             (SettingsSlot::Configure(n), Reply::Task(Ok(TaskOutput::Prepared { frame }))) => {

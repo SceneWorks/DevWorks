@@ -11,6 +11,7 @@
 //! be enabled by accepting it.
 use crate::backend::SecretStoreStatus;
 use crate::frame;
+use crate::paged::Paged;
 use crate::widgets::{self, Tone, chip};
 use devworks_core::ports::secrets::Secret;
 use devworks_core::protocol::helpers::profiles::{
@@ -108,21 +109,15 @@ pub(crate) struct ModelEdit {
 #[derive(Default)]
 pub struct ConnectionsPanel {
     pub embedding_spaces: crate::embedding_spaces_screen::EmbeddingSpacesPanel,
-    pub records: Vec<ConnectionRecord>,
-    pub loaded: bool,
-    pub loading: bool,
-    pub error: Option<String>,
-    pub catalog: Vec<RouteCatalogModel>,
-    pub catalog_error: Option<String>,
+    /// The provider connections and the model catalog: each load gathers every page before it
+    /// replaces what is shown.
+    pub connections: Paged<ConnectionRecord>,
+    pub catalog: Paged<RouteCatalogModel>,
     pub message: Option<(Tone, String)>,
     /// Commands submitted and not answered yet (their labels).
     pub busy: Vec<(u64, String)>,
-    /// The latest load of each list, the pages gathered so far, when it started, and the next
-    /// configure sequence number (owned by the shell).
-    pub generation: u64,
-    pub gathering: Vec<ConnectionRecord>,
-    pub catalog_generation: u64,
-    pub catalog_gathering: Vec<RouteCatalogModel>,
+    /// When the latest load started, and the next configure sequence number (owned by the
+    /// shell).
     pub last_load: Option<std::time::Instant>,
     pub sequence: u64,
     /// The secret facility, whether it is session-only and whether it is refusing requests
@@ -191,7 +186,13 @@ fn ago(now_ms: i64, at: i64) -> String {
 impl ConnectionsPanel {
     /// Replaces the listed connections (a complete load).
     pub fn loaded(&mut self, records: Vec<ConnectionRecord>) {
-        for r in &records {
+        self.connections.replace(records);
+        self.adopt_connections();
+    }
+    /// Takes the connections now shown into the drafts: an untouched draft follows its record.
+    pub fn adopt_connections(&mut self) {
+        let records = &self.connections.items;
+        for r in records {
             let e = self.edits.entry(r.id.as_str().to_owned()).or_default();
             if e.open && !e.local_free_changed {
                 e.local_free = r.local_free.unwrap_or(false);
@@ -218,10 +219,6 @@ impl ConnectionsPanel {
         }
         self.edits
             .retain(|k, e| e.open || records.iter().any(|r| r.id.as_str() == k));
-        self.records = records;
-        self.loaded = true;
-        self.loading = false;
-        self.error = None;
     }
     pub fn preparing_edit(&mut self, sequence: u64, action: &RouterConfigAction) {
         let RouterConfigAction::Connection {
@@ -324,7 +321,13 @@ impl ConnectionsPanel {
     }
     /// Replaces the catalog (a complete load), keeping unsaved row edits.
     pub fn catalog_loaded(&mut self, models: Vec<RouteCatalogModel>) {
-        for m in &models {
+        self.catalog.replace(models);
+        self.adopt_catalog();
+    }
+    /// Takes the catalog now shown into the row drafts, keeping unsaved edits.
+    pub fn adopt_catalog(&mut self) {
+        let models = &self.catalog.items;
+        for m in models {
             let stored = ModelEdit {
                 context: m
                     .context_tokens
@@ -354,8 +357,6 @@ impl ConnectionsPanel {
             .retain(|k, _| models.iter().any(|m| m.id.as_str() == k));
         self.model_bases
             .retain(|k, _| models.iter().any(|m| m.id.as_str() == k));
-        self.catalog = models;
-        self.catalog_error = None;
     }
 
     pub fn ui(&mut self, ui: &mut Ui, now_ms: i64, actions: &mut Vec<ConnectionAction>) {
@@ -405,7 +406,7 @@ impl ConnectionsPanel {
                 actions.push(ConnectionAction::UseSessionOnly);
             }
         }
-        if let Some(e) = &self.error {
+        if let Some(e) = &self.connections.error {
             chip(
                 ui,
                 format!("Connections could not be loaded: {e}"),
@@ -417,23 +418,24 @@ impl ConnectionsPanel {
             .id_salt("connections-scroll")
             .auto_shrink([false, false])
             .show(ui, |ui| {
-                if !self.loaded {
+                if !self.connections.loaded {
                     widgets::caption(ui, "Loading provider connections…");
-                } else if self.records.is_empty() {
+                } else if self.connections.items.is_empty() {
                     widgets::caption(
                         ui,
                         "No provider is connected. Add a subscription, an API key or a local \
                          OpenAI-compatible endpoint below; until then no route is available.",
                     );
                 }
-                let records = self.records.clone();
+                let records = self.connections.items.clone();
                 for r in &records {
                     self.connection_ui(ui, r, now_ms, &mut scroll_actions);
                     ui.add_space(10.0);
                 }
-                if self.loaded {
+                if self.connections.loaded {
                     for (id, edit) in &mut self.edits {
-                        if edit.open && !self.records.iter().any(|r| r.id.as_str() == id) {
+                        if edit.open && !self.connections.items.iter().any(|r| r.id.as_str() == id)
+                        {
                             ui.push_id(("missing-connection-edit", id), |ui| {
                                 ui.group(|ui| {
                                     ui.strong("Captured edit for a connection no longer listed");
@@ -1081,11 +1083,12 @@ impl ConnectionsPanel {
             "Context windows and the connection that serves each model. An unknown window never \
              satisfies a context requirement; discovery fills it when the provider reports one.",
         );
-        if let Some(e) = &self.catalog_error {
+        if let Some(e) = &self.catalog.error {
             chip(ui, e.clone(), Tone::Bad);
         }
         let connections: Vec<(String, String, String)> = self
-            .records
+            .connections
+            .items
             .iter()
             .map(|r| {
                 (
@@ -1095,7 +1098,7 @@ impl ConnectionsPanel {
                 )
             })
             .collect();
-        let catalog = self.catalog.clone();
+        let catalog = self.catalog.items.clone();
         egui::Grid::new("catalog-grid")
             .striped(true)
             .show(ui, |ui| {

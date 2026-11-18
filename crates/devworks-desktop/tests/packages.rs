@@ -46,9 +46,9 @@ fn confirm_after_relaunch(
     assert!(!h.state().addons.busy);
     assert_eq!(again.frames.lock().unwrap().as_slice(), &[frame.to_vec()]);
     assert_eq!(
-        ops::artifacts(real.query("artifacts.list", &ops::workspace_artifacts(&*real)))
+        ops::artifacts(real.query("artifacts.list", &ops::workspace_artifacts(&*real, None)))
             .unwrap()
-            .0
+            .items
             .len(),
         1,
         "upload is stored once even when installation is refused"
@@ -126,9 +126,9 @@ fn unused_download_preparation_cleans_its_owned_scratch_file() {
         devworks_desktop::addons::prepare_downloaded_install(&*backend, path.clone()).unwrap();
     assert!(path.is_file());
     assert!(
-        ops::artifacts(backend.query("artifacts.list", &ops::workspace_artifacts(&*backend)))
+        ops::artifacts(backend.query("artifacts.list", &ops::workspace_artifacts(&*backend, None)))
             .unwrap()
-            .0
+            .items
             .is_empty()
     );
     drop(prepared);

@@ -8,8 +8,8 @@
 //! exact frame (Confirm outcomes, and the next launch, resubmit it).
 use crate::frame;
 use crate::ops::JobCommand;
-use crate::shell::ListState;
-use crate::widgets::{self, Tone, ViewState, chip};
+use crate::paged::{self, Paged};
+use crate::widgets::{self, Tone, chip};
 use devworks_core::protocol::helpers::NativeCapability;
 use devworks_core::protocol::records::SchemaValue;
 use devworks_core::protocol::records::{
@@ -308,14 +308,6 @@ pub fn reconcile_history(before: &[JobRun], now: &[JobRun], older: &mut Vec<JobR
 }
 
 /// Appends a page in title order; a job already listed (renamed meanwhile) is kept once.
-pub(crate) fn append_jobs(list: &mut Vec<JobRecord>, page: Vec<JobRecord>) {
-    for j in page {
-        if !list.iter().any(|k| k.id == j.id) {
-            list.push(j);
-        }
-    }
-}
-
 /// The schedule in words.
 pub fn describe_schedule(s: &Schedule) -> String {
     match s {
@@ -364,20 +356,8 @@ pub(crate) fn is_active(r: &JobRun) -> bool {
 /// Scheduled jobs state.
 #[derive(Default)]
 pub struct JobsUi {
-    pub list: ListState<JobRecord>,
-    /// Where the next page of the list starts (`None`: every job is listed).
-    pub list_cursor: Option<String>,
-    /// How many pages the shown list holds (the first and each More jobs page).
-    pub list_pages: usize,
-    /// Furthest page requested, including a More jobs request still in flight. A refresh must
-    /// preserve that request even if it replaces the list before the later page replies.
-    pub list_requested_pages: usize,
-    /// The shown list's identity: a More jobs page continues only the list it was asked for.
-    pub list_generation: u64,
-    /// The last list or refresh identity handed out.
-    pub generations: u64,
-    /// A refresh re-reading every shown or requested page, replacing the list once all are read.
-    pub list_refresh: Option<ListRefresh>,
+    /// The scope's jobs: a refresh re-reads every page shown, so an expanded list stays expanded.
+    pub list: Paged<JobRecord>,
     /// The listed scope: a project's jobs, or the app-level ones (`None`).
     pub scope: Option<String>,
     pub selected: Option<String>,
@@ -454,44 +434,8 @@ impl JobsUi {
     pub fn set_scope(&mut self, scope: Option<String>) {
         self.scope = scope;
         self.select(None);
-        self.list = ListState::default();
-        self.list_cursor = None;
-        self.list_pages = 0;
-        self.list_requested_pages = 0;
-        self.list_refresh = None;
-        self.list_generation = self.generation();
+        self.list.reset();
     }
-    /// A new list or refresh identity.
-    pub(crate) fn generation(&mut self) -> u64 {
-        self.generations += 1;
-        self.generations
-    }
-    /// Shows `items` (`pages` pages, the next one after `cursor`) as a new list.
-    pub(crate) fn show_list(
-        &mut self,
-        items: Vec<JobRecord>,
-        cursor: Option<String>,
-        pages: usize,
-    ) {
-        self.list = ListState {
-            items,
-            loaded: true,
-            error: None,
-            more: cursor.is_some(),
-        };
-        self.list_cursor = cursor;
-        self.list_pages = pages;
-        self.list_requested_pages = pages;
-        self.list_refresh = None;
-        self.list_generation = self.generation();
-    }
-}
-
-/// A refresh of the jobs list in progress: the pages read so far, from the first, deduplicated.
-pub struct ListRefresh {
-    pub generation: u64,
-    pub pages: usize,
-    pub items: Vec<JobRecord>,
 }
 
 /// The run status of a scope's jobs in one line.
@@ -589,28 +533,15 @@ pub(crate) fn scope_row(
 
 pub(crate) fn schedules(ui: &mut Ui, jobs: &JobsUi, actions: &mut Vec<JobAction>) {
     let list = &jobs.list;
-    if let Some(e) = &list.error {
-        let state = if list.loaded {
-            ViewState::Stale {
-                what: "scheduled jobs".into(),
-            }
-        } else {
-            ViewState::Failed {
-                what: "scheduled jobs".into(),
-                error: e.clone(),
-            }
-        };
-        if widgets::state_block(ui, &state) == widgets::StateAction::Retry {
-            actions.push(JobAction::Reload);
-        }
+    let (mut reload, mut more) = (false, false);
+    let ready = paged::gate(ui, &Ok(()), list, "scheduled jobs", &mut reload, &mut more);
+    if reload {
+        actions.push(JobAction::Reload);
     }
-    if !list.loaded {
-        widgets::state_block(
-            ui,
-            &ViewState::Loading {
-                what: "scheduled jobs".into(),
-            },
-        );
+    if more {
+        actions.push(JobAction::MoreJobs);
+    }
+    if !ready {
         return;
     }
     if list.items.is_empty() {
@@ -647,7 +578,9 @@ pub(crate) fn schedules(ui: &mut Ui, jobs: &JobsUi, actions: &mut Vec<JobAction>
                     actions.push(JobAction::Select(j.id.as_str().to_owned()));
                 }
             }
-            if list.more && widgets::secondary_button(ui, "More jobs").clicked() {
+            let mut more = false;
+            paged::load_more_control(ui, list, &mut more);
+            if more {
                 actions.push(JobAction::MoreJobs);
             }
         });

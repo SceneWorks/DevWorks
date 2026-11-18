@@ -10,6 +10,7 @@
 use crate::backend::Backend;
 use crate::frame::{self, Negotiate};
 use crate::ops::{self, Failure};
+use crate::paged::{self, Page, Paged};
 use crate::theme;
 use crate::widgets::{self, Tone, ViewState, chip};
 use devworks_core::gateway::{CommandOutcome, QueryOutcome};
@@ -385,13 +386,6 @@ pub struct SourcePreview {
     pub message: String,
 }
 
-/// The listing request in flight: its generation and whether it continues the list.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Listing {
-    pub generation: u64,
-    pub append: bool,
-}
-
 #[derive(Default)]
 pub struct KnowledgeScreen {
     /// `None`: general (workspace) Knowledge; otherwise one of [`Self::projects`].
@@ -406,12 +400,8 @@ pub struct KnowledgeScreen {
     pub entry_kind: Option<&'static str>,
     pub lifecycles: [bool; 4],
     pub lessons_only: bool,
-    pub items: Vec<KnowledgeClaim>,
-    pub cursor: Option<String>,
-    pub loaded: bool,
-    pub error: Option<String>,
-    pub generation: u64,
-    pub listing: Option<Listing>,
+    /// The listed entries: a listing reads the first page and each Load more the next.
+    pub claims: Paged<KnowledgeClaim>,
     pub selected: Option<Id>,
     pub detail: Option<KnowledgeBundle>,
     pub detail_error: Option<String>,
@@ -522,17 +512,17 @@ impl KnowledgeScreen {
                 if self.draft.as_ref().is_some_and(|d| d.revises.is_some()) {
                     self.draft = None;
                 }
-                self.cursor = None;
+                self.claims.reset();
                 self.source_preview = None;
             }
             self.listed_scope = Some(scope);
         }
-        self.generation += 1;
-        self.listing = Some(Listing {
-            generation: self.generation,
-            append,
-        });
-        let cursor = self.cursor.clone().filter(|_| append);
+        let cursor = if append {
+            self.claims.more_page().and_then(|f| f.cursor)
+        } else {
+            self.claims.reload();
+            None
+        };
         let states: Vec<String> = LIFECYCLES
             .iter()
             .zip(self.lifecycles)
@@ -593,7 +583,7 @@ impl KnowledgeScreen {
         self.detail
             .as_ref()
             .and_then(|b| b.claims.0.iter().find(|c| c.id == *id))
-            .or_else(|| self.items.iter().find(|c| c.id == *id))
+            .or_else(|| self.claims.items.iter().find(|c| c.id == *id))
     }
 
     /// The command a draft submits: a new entry (with its subject entity) or a revision.
@@ -823,31 +813,28 @@ impl KnowledgeScreen {
     /// Applies a listing reply of `generation`; returns `true` when the listing must restart
     /// (its continuation expired because the scope changed).
     pub fn listed(&mut self, generation: u64, outcome: QueryOutcome) -> bool {
-        let Some(listing) = self.listing.filter(|l| l.generation == generation) else {
-            return false; // superseded by a newer listing
-        };
-        self.listing = None;
         match ops::query_result(outcome) {
             Ok((
                 OperationResult::KnowledgeSearch { value }
                 | OperationResult::KnowledgeTaggedLessons { value },
                 _,
             )) => {
-                if listing.append {
-                    self.items.extend(value.items.0);
-                } else {
-                    self.items = value.items.0;
-                }
-                self.cursor = value.next_cursor.map(|c| c.0);
-                self.loaded = true;
-                self.error = None;
+                let page = Page {
+                    items: value.items.0,
+                    next: value.next_cursor.map(|c| c.0),
+                };
+                self.claims.apply(generation, Ok(page));
                 false
             }
             Ok((other, _)) => {
-                self.error = Some(format!("Unexpected reply {}", other.operation()));
+                let error = format!("Unexpected reply {}", other.operation());
+                self.claims.apply(generation, Err(error));
                 false
             }
             Err(Failure::Refused(f)) if f.code == DomainErrorCode::CursorExpired => {
+                if !self.claims.abandon(generation) {
+                    return false; // superseded by a newer listing
+                }
                 self.message = Some((
                     Tone::Attention,
                     "Knowledge changed while paging; the list was reloaded from the start.".into(),
@@ -855,7 +842,7 @@ impl KnowledgeScreen {
                 true
             }
             Err(e) => {
-                self.error = Some(e.describe());
+                self.claims.apply(generation, Err(e.describe()));
                 false
             }
         }
@@ -1628,33 +1615,25 @@ impl KnowledgeScreen {
             self.editor(ui, d, actions);
         }
         ui.add_space(6.0);
-        if let Some(e) = &self.error {
-            let state = if self.loaded {
-                ViewState::Stale {
-                    what: "Knowledge".into(),
-                }
-            } else {
-                ViewState::Failed {
-                    what: "Knowledge".into(),
-                    error: e.clone(),
-                }
-            };
-            if widgets::state_block(ui, &state) == widgets::StateAction::Retry {
-                actions.push(KnowledgeAction::Search);
-            }
+        let (mut reload, mut more) = (false, false);
+        let ready = paged::gate(
+            ui,
+            &Ok(()),
+            &self.claims,
+            "Knowledge",
+            &mut reload,
+            &mut more,
+        );
+        if reload {
+            actions.push(KnowledgeAction::Search);
         }
-        if !self.loaded {
-            if self.error.is_none() {
-                widgets::state_block(
-                    ui,
-                    &ViewState::Loading {
-                        what: "Knowledge".into(),
-                    },
-                );
-            }
+        if more {
+            actions.push(KnowledgeAction::More);
+        }
+        if !ready {
             return;
         }
-        if self.items.is_empty() {
+        if self.claims.items.is_empty() {
             widgets::state_block(
                 ui,
                 &ViewState::Empty {
@@ -1668,7 +1647,7 @@ impl KnowledgeScreen {
             .id_salt("knowledge-list")
             .max_height((ui.available_height() - 40.0).max(120.0))
             .show(ui, |ui| {
-                for c in &self.items {
+                for c in &self.claims.items {
                     let selected = self.selected.as_ref() == Some(&c.id);
                     let kind = c
                         .entry_kind
@@ -1695,14 +1674,10 @@ impl KnowledgeScreen {
                     }
                 }
             });
-        if self.cursor.is_some() {
-            let busy = self.listing.is_some();
-            if ui
-                .add_enabled(!busy, egui::Button::new("Load more"))
-                .clicked()
-            {
-                actions.push(KnowledgeAction::More);
-            }
+        let mut more = false;
+        paged::load_more_control(ui, &self.claims, &mut more);
+        if more {
+            actions.push(KnowledgeAction::More);
         }
     }
 
@@ -1949,7 +1924,14 @@ mod tests {
             json!({"kind": "Project", "projectId": "project-x"})
         );
         // A continuation stays in the listed scope even if the field changes again.
-        s.cursor = Some("c".into());
+        let first = s.claims.reload();
+        s.claims.apply(
+            first.generation,
+            Ok(Page {
+                items: Vec::new(),
+                next: Some("c".into()),
+            }),
+        );
         s.project = None;
         let (_, input) = s.begin_listing(true);
         let body = body_of(input);
@@ -1983,7 +1965,7 @@ mod tests {
         s.project = Some("project-x".into());
         s.begin_listing(false);
         s.selected = Some(claim.id.clone());
-        s.items = vec![claim];
+        s.claims.items = vec![claim];
         s
     }
 
@@ -2063,7 +2045,7 @@ mod tests {
     fn a_reply_of_a_superseded_listing_is_ignored() {
         let mut s = KnowledgeScreen::new();
         s.begin_listing(false);
-        let old = s.generation;
+        let old = s.claims.generation();
         s.begin_listing(false);
         let restart = s.listed(
             old,
@@ -2072,7 +2054,10 @@ mod tests {
             )),
         );
         assert!(!restart);
-        assert!(s.listing.is_some(), "the newer listing is still awaited");
-        assert!(s.error.is_none(), "a stale reply never overwrites state");
+        assert!(s.claims.loading(), "the newer listing is still awaited");
+        assert!(
+            s.claims.error.is_none(),
+            "a stale reply never overwrites state"
+        );
     }
 }

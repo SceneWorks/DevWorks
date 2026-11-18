@@ -38,7 +38,7 @@ fn showing(project: Option<&str>, claim: KnowledgeClaim) -> KnowledgeScreen {
     let mut s = screen(project);
     s.begin_listing(false);
     s.selected = Some(claim.id.clone());
-    s.items = vec![claim];
+    s.claims.items = vec![claim];
     s.reason = "checked".into();
     s.tag_edit = "lesson, edited".into();
     s
@@ -60,7 +60,14 @@ pub fn frames() -> Vec<(&'static str, Vec<u8>)> {
     s.lessons_only = true;
     let (_, body) = s.begin_listing(false);
     out.push(("knowledge_search_project_filtered", ks::query(b, body)));
-    s.cursor = Some("cursor-1".into());
+    let first = s.claims.reload();
+    s.claims.apply(
+        first.generation,
+        Ok(crate::paged::Page {
+            items: Vec::new(),
+            next: Some("cursor-1".into()),
+        }),
+    );
     s.project = None;
     let (_, body) = s.begin_listing(true);
     out.push(("knowledge_search_more", ks::query(b, body)));
@@ -91,7 +98,7 @@ pub fn frames() -> Vec<(&'static str, Vec<u8>)> {
     d.activities = "implementing, testing".into();
     let (_, body) = s.save_input(&d).unwrap();
     out.push(("knowledge_save_lesson", ks::command(b, body)));
-    let mut d = Draft::of(&s.items[0]);
+    let mut d = Draft::of(&s.claims.items[0]);
     d.value = "New text".into();
     d.tags = "lesson, edited".into();
     d.activities = "implementing".into();
@@ -102,9 +109,9 @@ pub fn frames() -> Vec<(&'static str, Vec<u8>)> {
         "predicate": "fact", "value": "Plain", "confidence": 0.8, "state": "Active",
         "evidenceIds": [], "tags": [], "scope": {"kind": "Project", "projectId": "project-x"},
         "entryKind": "Gotcha", "lifecycle": "Active"}));
-    s.items = vec![plain];
+    s.claims.items = vec![plain];
     s.selected = Some(from(json!("claim-h")));
-    let d = Draft::of(&s.items[0]);
+    let d = Draft::of(&s.claims.items[0]);
     let (_, body) = s.save_input(&d).unwrap();
     out.push(("knowledge_revise_plain", ks::command(b, body)));
 

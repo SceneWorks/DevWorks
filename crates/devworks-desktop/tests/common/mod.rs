@@ -853,10 +853,10 @@ pub fn step_until_progressing(
 pub fn listed_sessions(backend: &dyn Backend) -> Vec<String> {
     devworks_desktop::ops::sessions(backend.query(
         "sessions.list",
-        &devworks_desktop::ops::sessions_list(backend),
+        &devworks_desktop::ops::sessions_list(backend, None),
     ))
     .unwrap()
-    .0
+    .items
     .into_iter()
     .map(|s| s.id.as_str().to_owned())
     .collect()

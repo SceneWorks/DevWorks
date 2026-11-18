@@ -17,9 +17,9 @@ use egui_kittest::kittest::Queryable;
 use serde_json::json;
 
 fn live_workspace_artifacts(backend: &dyn Backend) -> Vec<String> {
-    ops::artifacts(backend.query("artifacts.list", &ops::workspace_artifacts(backend)))
+    ops::artifacts(backend.query("artifacts.list", &ops::workspace_artifacts(backend, None)))
         .unwrap()
-        .0
+        .items
         .into_iter()
         .map(|a| a.name.0)
         .collect()
@@ -73,9 +73,10 @@ fn deleting_an_artifact_referenced_by_an_appended_message_is_refused() {
         }
         other => panic!("{other:?}"),
     }
-    let listed = ops::artifacts(real.query("artifacts.list", &ops::workspace_artifacts(&*real)))
-        .unwrap()
-        .0;
+    let listed =
+        ops::artifacts(real.query("artifacts.list", &ops::workspace_artifacts(&*real, None)))
+            .unwrap()
+            .items;
     assert_eq!(listed.len(), 1);
     assert_eq!(
         listed[0].reference_count.get(),

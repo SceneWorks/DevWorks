@@ -9,7 +9,7 @@ pub mod issues;
 pub mod messages;
 pub mod overview;
 use crate::frame;
-use crate::shell::ListState;
+use crate::paged::{self, Paged};
 use crate::theme;
 use crate::widgets::{self, Tone, ViewState, chip};
 use devworks_core::protocol::Id;
@@ -729,26 +729,6 @@ pub(crate) fn no_project(ui: &mut Ui, online: &Result<(), String>) {
     };
     widgets::state_block(ui, &state);
 }
-pub(crate) fn list_state(ui: &mut Ui, list: &ListState<WorkRecord>, what: &str) -> bool {
-    if let Some(e) = &list.error {
-        widgets::state_block(
-            ui,
-            &if list.loaded {
-                ViewState::Stale { what: what.into() }
-            } else {
-                ViewState::Failed {
-                    what: what.into(),
-                    error: e.clone(),
-                }
-            },
-        );
-        if !list.loaded {
-            return false;
-        }
-    }
-    if !list.loaded {
-        widgets::state_block(ui, &ViewState::Loading { what: what.into() });
-        return false;
-    }
-    true
+pub(crate) fn list_state(ui: &mut Ui, list: &Paged<WorkRecord>, what: &str) -> bool {
+    paged::gate(ui, &Ok(()), list, what, &mut false, &mut false)
 }
