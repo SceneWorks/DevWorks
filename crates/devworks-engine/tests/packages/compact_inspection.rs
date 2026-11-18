@@ -2,7 +2,9 @@
 //! gets its tools' command grants from the bundle its record retains, only while that bundle
 //! still hashes to the recorded bundle digest.
 use super::broker::{application, input_schema, run_calls};
+use super::person_and_event_dispatch::{finished_invocation, invocation_of, invoke_frame};
 use super::*;
+use devworks_core::protocol::OperationState;
 use devworks_core::registry::Mode;
 use devworks_engine::package_host::InstanceStatus;
 
@@ -135,4 +137,35 @@ fn refusal_messages(a: &App, name: &str) -> Vec<String> {
             .collect(),
         other => panic!("{other:?}"),
     }
+}
+
+#[test]
+fn a_person_runs_a_tool_of_a_compact_install_from_its_verified_bundle() {
+    let _s = serial();
+    let a = App::new();
+    let mut spec = Spec::new("old-run-pack", "1.0.0");
+    spec.contributions = vec!["echo"];
+    package(a.install(&a.user, &spec));
+    a.ready("old-run-pack");
+    store_compact(&a, "old-run-pack", None);
+    let input = a.save(&a.user, br#"{"text":"hello"}"#);
+    let invoke = || {
+        a.app().command(
+            &a.user,
+            "addons.invoke",
+            &invoke_frame(&a, "old-run-pack", "echo", &input),
+        )
+    };
+
+    // The descriptor and input schema come from the retained, digest-verified bundle.
+    let started = invocation_of(invoke().unwrap());
+    let done = finished_invocation(&a, &a.user, &started.operation_id.0);
+    assert_eq!(done.state, OperationState::ObservedComplete, "{done:?}");
+
+    // A retained bundle that is not the recorded one is refused: the tool stays unavailable.
+    let mut other = Spec::new("old-run-pack", "1.0.1");
+    other.contributions = vec!["echo"];
+    let substitute = a.save(&a.user, &bundle(&other).0);
+    store_compact(&a, "old-run-pack", Some(&substitute));
+    assert_eq!(refused(invoke().unwrap()).0, DomainErrorCode::NotFound);
 }

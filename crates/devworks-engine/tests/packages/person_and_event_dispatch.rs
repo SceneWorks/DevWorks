@@ -12,7 +12,7 @@ use devworks_engine::package_host::inference::{
     REQUEST_SCHEMA_ID, person_session_id, request_schema,
 };
 
-fn invoke_frame(a: &App, package: &str, contribution: &str, input: &Value) -> Vec<u8> {
+pub(super) fn invoke_frame(a: &App, package: &str, contribution: &str, input: &Value) -> Vec<u8> {
     json!({"mode": "Command", "protocol": "1.0-draft.1", "requestKey": a.key("invoke"),
         "schemaRevision": 8, "body": {"kind": "addons.invoke", "packageId": package,
             "contributionId": format!("{package}/{contribution}"), "input": input}})
@@ -20,7 +20,7 @@ fn invoke_frame(a: &App, package: &str, contribution: &str, input: &Value) -> Ve
     .into_bytes()
 }
 
-fn invocation_of(reply: DomainCommandReply) -> PackageInvocation {
+pub(super) fn invocation_of(reply: DomainCommandReply) -> PackageInvocation {
     match applied(reply) {
         OperationResult::AddonsInvoke { value } => value,
         other => panic!("{other:?}"),
@@ -49,7 +49,11 @@ fn status(
 }
 
 /// Waits until the person's invocation `operation` is no longer queued or running.
-fn finished_invocation(a: &App, ctx: &InvocationContext, operation: &Id) -> PackageInvocation {
+pub(super) fn finished_invocation(
+    a: &App,
+    ctx: &InvocationContext,
+    operation: &Id,
+) -> PackageInvocation {
     let until = Instant::now() + PATIENCE;
     loop {
         let now = status(a, ctx, operation).expect("the person's own invocation");
