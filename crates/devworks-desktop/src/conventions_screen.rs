@@ -244,6 +244,10 @@ pub struct ScopeState {
     pub resource_mode: usize,
     /// The document catalog (mode Document catalog), fenced by its scope revision.
     pub resource_catalog: Paged<ConventionRecord>,
+    /// The exact root document read (mode Exact root document): one document, so it has no
+    /// rows, only the request in flight. Its request generations are kept apart from the
+    /// lists' (`separate`), so the one slot can tell whose reply it is.
+    pub resource_read: Paged<()>,
     pub resource_root_slug: String,
     pub resource_document: Option<ConventionReadView>,
     pub resource_document_cursors: Vec<Option<String>>,
@@ -255,6 +259,10 @@ pub struct ScopeState {
     pub confirm_delete: Option<Delete>,
 }
 impl ScopeState {
+    /// A resource, catalog or document read is in flight.
+    pub fn resources_loading(&self) -> bool {
+        self.resources.loading() || self.resource_catalog.loading() || self.resource_read.loading()
+    }
     pub fn draft(&self) -> Option<&Draft> {
         match self.editor.as_ref()? {
             Editor::New => self.new_draft.as_ref(),
@@ -1397,6 +1405,7 @@ fn resources(ui: &mut Ui, s: &mut ScopeState, online: bool, a: &mut Vec<Action>)
     if previous_mode != s.resource_mode {
         s.resources.reset();
         s.resource_catalog.reset();
+        s.resource_read.reset();
         s.resource_document = None;
         s.resource_query_snapshot = None;
     }
@@ -1406,9 +1415,7 @@ fn resources(ui: &mut Ui, s: &mut ScopeState, online: bool, a: &mut Vec<Action>)
     ui.horizontal_wrapped(|ui| {
         if ui
             .add_enabled(
-                online
-                    && !(s.resources.loading() || s.resource_catalog.loading())
-                    && (s.resource_mode != 0 || s.record().is_some()),
+                online && !s.resources_loading() && (s.resource_mode != 0 || s.record().is_some()),
                 egui::Button::new("Load convention resources"),
             )
             .clicked()
@@ -1425,7 +1432,7 @@ fn resources(ui: &mut Ui, s: &mut ScopeState, online: bool, a: &mut Vec<Action>)
             a.push(Action::Upload);
         }
     });
-    if s.resources.loading() || s.resource_catalog.loading() {
+    if s.resources_loading() {
         ui.spinner();
     }
     if s.resource_mode == 1 {
@@ -1483,9 +1490,7 @@ fn resources(ui: &mut Ui, s: &mut ScopeState, online: bool, a: &mut Vec<Action>)
         if s.resource_mode == 1
             && ui
                 .add_enabled(
-                    online
-                        && !(s.resources.loading() || s.resource_catalog.loading())
-                        && s.resource_catalog.more(),
+                    online && !s.resources_loading() && s.resource_catalog.more(),
                     egui::Button::new("More document resources"),
                 )
                 .clicked()
@@ -1639,9 +1644,7 @@ fn resources(ui: &mut Ui, s: &mut ScopeState, online: bool, a: &mut Vec<Action>)
     }
     if ui
         .add_enabled(
-            online
-                && !(s.resources.loading() || s.resource_catalog.loading())
-                && s.resources.more(),
+            online && !s.resources_loading() && s.resources.more(),
             egui::Button::new("More convention resources"),
         )
         .clicked()

@@ -30,6 +30,9 @@ pub enum InstructionsSlot {
     InstructionCommand(u64),
 }
 screen_slot!(InstructionsSlot, Instructions);
+use devworks_core::protocol::helpers::instructions::{
+    HARNESS_ROOT_ID, MAX_TEXT_BYTES, SHARED_ROOT_ID, role_item_id,
+};
 use devworks_core::{
     gateway::{CommandOutcome, QueryOutcome},
     operations::{OperationInput as In, roles, skills},
@@ -43,7 +46,6 @@ use devworks_core::{
         results::OperationResult,
         support::BoundedList,
     },
-    services::instructions::{HARNESS_ROOT_ID, MAX_TEXT_BYTES, SHARED_ROOT_ID, role_item_id},
     settings::catalog::AgentRole,
 };
 use std::path::PathBuf;

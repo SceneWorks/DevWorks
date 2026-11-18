@@ -520,26 +520,24 @@ impl ChatCtl<'_, '_> {
 
     fn load_sessions(&mut self) {
         self.chat.sessions_list_at = self.chat.session_mutations;
-        let fetch = self.chat.sessions.reload();
+        // A re-read covers every page already shown (or asked for), so loaded older
+        // conversations, and a selection among them, survive it.
+        let fetch = self.chat.sessions.refresh();
+        self.send_sessions(fetch, "Loading conversations");
+    }
+    fn send_sessions(&mut self, fetch: crate::paged::Fetch, label: &str) {
         self.cx.paged(
             &mut self.chat.sessions,
             fetch,
             ChatSlot::SessionsList,
-            "Loading conversations",
+            label,
             "sessions.list",
             ops::sessions_list,
         );
     }
     fn load_more_sessions(&mut self) {
         if let Some(fetch) = self.chat.sessions.more_page() {
-            self.cx.paged(
-                &mut self.chat.sessions,
-                fetch,
-                ChatSlot::SessionsList,
-                "Loading older conversations",
-                "sessions.list",
-                ops::sessions_list,
-            );
+            self.send_sessions(fetch, "Loading older conversations");
         }
     }
 
@@ -1476,8 +1474,12 @@ impl ChatCtl<'_, '_> {
             (ChatSlot::SessionsList, Reply::Query(q)) => match self
                 .chat
                 .sessions
-                .apply_current(ops::sessions(q).map_err(|e| e.describe()))
-            {
+                .apply_current_unique(ops::sessions(q).map_err(|e| e.describe()), |s| {
+                    s.id.as_str().to_owned()
+                }) {
+                // Recency order moves between reads, so pages can overlap: a conversation
+                // listed twice shows once.
+                Applied::Continue(fetch) => self.send_sessions(fetch, "Loading conversations"),
                 Applied::Replaced | Applied::Appended => {
                     self.reconcile_selection();
                     // A waiting first route needs its session's record (its context epoch).

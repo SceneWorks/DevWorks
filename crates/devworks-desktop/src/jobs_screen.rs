@@ -307,7 +307,6 @@ pub fn reconcile_history(before: &[JobRun], now: &[JobRun], older: &mut Vec<JobR
     *older = merged;
 }
 
-/// Appends a page in title order; a job already listed (renamed meanwhile) is kept once.
 /// The schedule in words.
 pub fn describe_schedule(s: &Schedule) -> String {
     match s {

@@ -325,7 +325,7 @@ pub struct Chat {
     /// Applied session mutations (start, message). A list query started before the latest
     /// mutation may miss it: its reply is dropped and the list re-queried, so it never
     /// overwrites newer records.
-    pub(crate) session_mutations: u64,
+    pub session_mutations: u64,
     pub(crate) sessions_list_at: u64,
     /// What the last close kept for unconfirmed commands, until they are restored.
     pub(crate) restoring: Option<crate::memory::ChatPendingMemory>,

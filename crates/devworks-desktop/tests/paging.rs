@@ -285,7 +285,7 @@ fn projects_beyond_the_first_page_are_reached_with_load_more() {
 }
 
 #[test]
-fn a_page_from_another_snapshot_is_refused_with_its_reason_and_retries_that_page() {
+fn a_page_from_another_snapshot_is_refused_with_its_reason_and_retries_from_the_start() {
     let mut list = Paged::default();
     let first = list.reload();
     list.apply(
@@ -309,5 +309,62 @@ fn a_page_from_another_snapshot_is_refused_with_its_reason_and_retries_that_page
     assert!(has(&h, "The catalog changed while paging"));
     h.get_by_role_and_label(Role::Button, "Retry").click();
     h.run_steps(2);
-    assert!(h.state().more && !h.state().reload);
+    assert!(
+        h.state().reload && !h.state().more,
+        "a refused cursor is not retried: the list is read again from the first page"
+    );
+}
+
+#[test]
+fn a_session_change_after_load_more_keeps_the_older_pages_and_the_selection() {
+    let root = Root::new("paging-sessions-mutation");
+    let engine = start(&root);
+    let backend = engine.backend();
+    let page = usize::from(ops::PAGE_LIMIT);
+    for n in 0..page + 5 {
+        let started = ops::started(backend.command(
+            "sessions.start",
+            &ops::session_start(&*backend, &format!("Chat {n:03}")),
+        ));
+        assert!(started.is_ok(), "{n}");
+    }
+    let mut h = harness(shell(&engine, &root, Script::default()), 1440.0, 900.0);
+    settle(&mut h);
+    h.state_mut().chat.tab = SidebarTab::History;
+    settle(&mut h);
+    click(&mut h, Role::Button, "Load more");
+    step_until(&mut h, "the next page", |s| !s.chat.sessions.more());
+    assert_eq!(h.state().chat.sessions.items.len(), page + 5);
+    // An old conversation, listed only on the second page, is the selection.
+    let old = h
+        .state()
+        .chat
+        .sessions
+        .items
+        .last()
+        .unwrap()
+        .id
+        .as_str()
+        .to_owned();
+    h.state_mut().chat.selected = Some(old.clone());
+    // A session change makes the list read again, as every started or appended message does.
+    h.state_mut().chat.session_mutations += 1;
+    h.state_mut().load_sessions();
+    settle(&mut h);
+    assert_eq!(h.state().chat.selected.as_deref(), Some(old.as_str()));
+    let ids: std::collections::BTreeSet<_> = h
+        .state()
+        .chat
+        .sessions
+        .items
+        .iter()
+        .map(|s| s.id.as_str().to_owned())
+        .collect();
+    assert_eq!(
+        h.state().chat.sessions.items.len(),
+        page + 5,
+        "every page stays"
+    );
+    assert_eq!(ids.len(), page + 5, "no conversation is listed twice");
+    assert!(ids.contains(&old));
 }

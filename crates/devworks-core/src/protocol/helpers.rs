@@ -53,3 +53,10 @@ pub mod work {
 pub mod router {
     pub use crate::services::router::latest::alias_family;
 }
+
+/// Instruction (skill and role) roots and limits.
+pub mod instructions {
+    pub use crate::services::instructions::{
+        HARNESS_ROOT_ID, MAX_TEXT_BYTES, SHARED_ROOT_ID, role_item_id,
+    };
+}

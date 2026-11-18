@@ -325,7 +325,12 @@ pub fn status_line(
     let wait = a
         .retry_at_ms
         .as_ref()
-        .map(|t| format!("; rechecked at {}", crate::widgets::local_time(t.get())))
+        .map(|t| {
+            format!(
+                "; rechecked at {}",
+                crate::widgets::local_time_seconds(t.get())
+            )
+        })
         .unwrap_or_default();
     format!(
         "{pinned}{route} · {effort} · no eligible model: {}{wait}",

@@ -224,6 +224,7 @@ impl ConventionsCtl<'_, '_> {
         state.versions.reset();
         state.resources.reset();
         state.resource_catalog.reset();
+        state.resource_read.reset();
         self.load_convention_passage();
     }
     fn load_convention_passage(&mut self) {
@@ -301,8 +302,7 @@ impl ConventionsCtl<'_, '_> {
         let (generation, input, mode) = {
             let s = self.conventions.states.entry(scope.clone()).or_default();
             let record = s.record().cloned();
-            if s.resources.loading()
-                || s.resource_catalog.loading()
+            if s.resources_loading()
                 || (append && s.resource_query_snapshot.is_none())
                 || (append
                     && s.resource_mode != 2
@@ -321,12 +321,14 @@ impl ConventionsCtl<'_, '_> {
             }
             // The attachments and the document catalog are two lists read by one request;
             // a document read has no list.
+            s.resource_catalog.separate(1);
+            s.resource_read.separate(2);
             let fetch = match (s.resource_mode, append) {
                 (1, true) => s.resource_catalog.more_page(),
                 (1, false) => Some(s.resource_catalog.reload()),
                 (0, true) => s.resources.more_page(),
                 (0, false) => Some(s.resources.reload()),
-                (_, _) => Some(s.resources.resume(false)),
+                (_, _) => Some(s.resource_read.reload()),
             };
             let Some(fetch) = fetch else {
                 return;
@@ -365,6 +367,7 @@ impl ConventionsCtl<'_, '_> {
             let s = self.conventions.states.get_mut(&scope).expect("scope");
             match mode {
                 1 => s.resource_catalog.abandon(generation),
+                2 => s.resource_read.abandon(generation),
                 _ => s.resources.abandon(generation),
             };
         }
@@ -642,15 +645,18 @@ impl ConventionsCtl<'_, '_> {
                     }
                     Ok(ConventionResourcesView::Document { view }) => {
                         // A document read has no list; it ends the request that asked for it.
-                        if s.resources.end(generation) {
+                        if s.resource_read.end(generation) {
                             s.resource_document = Some(view);
                         }
                     }
                     Err(error) => {
-                        let stale = s.resources.apply(generation, Err(error.describe()))
+                        // The lists' generations are apart, so only the read that asked fails.
+                        let message = error.describe();
+                        let stale = s.resources.apply(generation, Err(message.clone()))
                             == Applied::Stale
-                            && s.resource_catalog.apply(generation, Err(error.describe()))
-                                == Applied::Stale;
+                            && s.resource_catalog.apply(generation, Err(message.clone()))
+                                == Applied::Stale
+                            && !s.resource_read.end(generation);
                         if !stale {
                             s.notice = Some((Tone::Attention, error.describe()));
                         }

@@ -205,8 +205,10 @@ impl UsageCtl<'_, '_> {
                 .is_none_or(|page| !page.has_more)
         {
             self.reload_applied_prices();
-        } else if !self.pending(&UsageSlot::PriceProbe(self.usage.prices.generation())) {
-            let generation = self.usage.prices.generation();
+        } else if !self.pending(&UsageSlot::PriceProbe(
+            self.usage.prices.reload_generation(),
+        )) {
+            let generation = self.usage.prices.reload_generation();
             self.query(
                 UsageSlot::PriceProbe(generation),
                 "Checking for updated price catalog",
@@ -527,7 +529,7 @@ impl UsageCtl<'_, '_> {
             },
             // A probe belongs to the catalog request that was current when it was asked.
             (UsageSlot::PriceProbe(generation), _)
-                if generation != self.usage.prices.generation() => {}
+                if generation != self.usage.prices.reload_generation() => {}
             (UsageSlot::PriceProbe(_), Reply::Query(q)) => match uops::prices(q) {
                 Ok(current) => {
                     self.usage.price_update_available =

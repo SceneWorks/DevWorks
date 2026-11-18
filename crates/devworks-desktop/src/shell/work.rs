@@ -1066,7 +1066,8 @@ impl WorkCtl<'_, '_> {
         let Some(project) = self.selected_project.clone() else {
             return;
         };
-        if reset || self.work.messages.project.as_deref() != Some(project.as_str()) {
+        let explicit = reset || self.work.messages.project.as_deref() != Some(project.as_str());
+        if explicit {
             let same_project = self.work.messages.project.as_deref() == Some(project.as_str());
             let inbox_refresh_pending =
                 same_project && self.pending(&WorkSlot::WorkMessagesInbox(project.clone()));
@@ -1121,9 +1122,14 @@ impl WorkCtl<'_, '_> {
             }
             return;
         }
-        // A refresh asks again; a read still in flight is superseded by it.
-        let fetch = self.work.messages.history.reload();
-        self.send_history(project.clone(), fetch);
+        // An explicit refresh asks again, superseding a read in flight. The events poll and the
+        // inbox reply only start the first read: asking again while it is under way would
+        // supersede it every second on a slow backend, and it would never finish.
+        let history = &mut self.work.messages.history;
+        if explicit || (!history.loaded && !history.loading()) {
+            let fetch = history.reload();
+            self.send_history(project.clone(), fetch);
+        }
         if !self.pending(&WorkSlot::WorkMessagesInbox(project.clone())) {
             let p = project.clone();
             self.command(

@@ -83,7 +83,8 @@ impl AddonsCtl<'_, '_> {
             .addons
             .logs
             .entry(package.clone())
-            .or_default()
+            // Only the newest entries are kept, as each page arrives.
+            .or_insert_with(|| crate::paged::Paged::default().keeping_last(a::LOGS_KEPT))
             .reload_all();
         self.send_logs(package, fetch);
     }
@@ -271,13 +272,6 @@ impl AddonsCtl<'_, '_> {
                     let log = self.addons.logs.get_mut(&id)?;
                     match log.apply_current(Ok(Page::new(entries, next))) {
                         Applied::Continue(fetch) => self.send_logs(id, fetch),
-                        Applied::Replaced => {
-                            // Only the newest entries are kept once the log is read to its end.
-                            let kept = a::LOGS_KEPT;
-                            if log.items.len() > kept {
-                                log.items.drain(..log.items.len() - kept);
-                            }
-                        }
                         _ => {}
                     }
                 }

@@ -358,25 +358,31 @@ impl WorkCtl<'_, '_> {
                 let state = self.work.workflows.entry(project.clone()).or_default();
                 match wops::workflow_page(query) {
                     Ok((rows, next)) => {
-                        match state.rows.apply(generation, Ok(Page::new(rows, next))) {
+                        // Every page must carry one workflow revision, the same as the pages
+                        // before it; otherwise the snapshot is incomplete and the rows shown
+                        // stay as they were.
+                        const INCOMPLETE: &str =
+                            "The workflow snapshot is incomplete; refresh it before editing.";
+                        let revision = rows
+                            .first()
+                            .and_then(|s| s.workflow_revision.as_ref())
+                            .map(|r| r.as_str().to_owned());
+                        let uniform = revision.is_some()
+                            && rows.iter().all(|s| {
+                                s.workflow_revision.as_ref().map(|r| r.as_str())
+                                    == revision.as_deref()
+                            });
+                        if !uniform {
+                            state.rows.apply(generation, Err(INCOMPLETE.into()));
+                            return None;
+                        }
+                        let page = Page::new(rows, next).fenced(revision.unwrap_or_default());
+                        match state.rows.apply(generation, Ok(page)) {
                             Applied::Stale => return None,
                             Applied::Continue(fetch) => self.send_workflow(&project, fetch),
+                            Applied::Fenced => state.rows.error = Some(INCOMPLETE.into()),
                             Applied::Replaced => {
-                                let revision = state
-                                    .rows
-                                    .items
-                                    .first()
-                                    .and_then(|s| s.workflow_revision.as_ref());
-                                if revision.is_none()
-                                    || state
-                                        .rows
-                                        .items
-                                        .iter()
-                                        .any(|s| s.workflow_revision.as_ref() != revision)
-                                {
-                                    state.rows.reset();
-                                    state.rows.error = Some("The workflow snapshot is incomplete; refresh it before editing.".into());
-                                } else if self.work.of.as_deref() == Some(project.as_str())
+                                if self.work.of.as_deref() == Some(project.as_str())
                                     && self.work.status_filter.as_ref().is_some_and(|id| {
                                         !state
                                             .rows

@@ -98,6 +98,10 @@ pub struct Paged<T> {
     /// How many pages the rows shown came from.
     pages: usize,
     staged_fence: Option<String>,
+    /// Keep only this many rows, the newest (last) ones, as pages join (a long log).
+    keep_last: Option<usize>,
+    /// The generation of the newest read of the list from its first page.
+    reload_generation: u64,
 }
 impl<T> Default for Paged<T> {
     fn default() -> Self {
@@ -114,6 +118,8 @@ impl<T> Default for Paged<T> {
             staged_pages: 0,
             pages: 0,
             staged_fence: None,
+            keep_last: None,
+            reload_generation: 0,
         }
     }
 }
@@ -141,6 +147,20 @@ impl<T> Paged<T> {
     /// A request is in flight.
     pub fn loading(&self) -> bool {
         self.inflight.is_some()
+    }
+    /// Puts this list's request generations in their own space (`space` times 2^40 and up), so
+    /// that a reply meant for another list read by the same slot can never match one of its
+    /// requests. Idempotent; call before the first request.
+    pub fn separate(&mut self, space: u32) {
+        let floor = u64::from(space) << 40;
+        if self.generation < floor {
+            self.generation = floor;
+        }
+    }
+    /// The generation of the newest read from the first page: further pages do not move it, so
+    /// work tied to the rows shown (rather than to one request) can name it.
+    pub fn reload_generation(&self) -> u64 {
+        self.reload_generation
     }
     /// The newest request's generation.
     pub fn generation(&self) -> u64 {
@@ -201,6 +221,9 @@ impl<T> Paged<T> {
     }
     fn start(&mut self, cursor: Option<String>, append: bool, gather: Option<usize>) -> Fetch {
         self.generation += 1;
+        if !append {
+            self.reload_generation = self.generation;
+        }
         self.inflight = Some(Inflight {
             generation: self.generation,
             append,
@@ -295,6 +318,7 @@ impl<T> Paged<T> {
                     .is_some_and(|limit| page.next.is_some() && self.staged_pages + 1 < limit) =>
             {
                 Self::join(&mut self.staged, page.items, key);
+                Self::trim(&mut self.staged, self.keep_last);
                 if self.staged_pages == 0 {
                     self.staged_fence = page.fence.clone();
                 }
@@ -307,11 +331,13 @@ impl<T> Paged<T> {
                 let appended = inflight.append && inflight.gather.is_none();
                 if inflight.gather.is_some() {
                     Self::join(&mut self.staged, page.items, key);
+                    Self::trim(&mut self.staged, self.keep_last);
                     self.items = std::mem::take(&mut self.staged);
                     self.pages = self.staged_pages + 1;
                     self.staged_pages = 0;
                 } else if appended {
                     Self::join(&mut self.items, page.items, key);
+                    Self::trim(&mut self.items, self.keep_last);
                     self.pages += 1;
                 } else {
                     self.items = page.items;
@@ -340,6 +366,19 @@ impl<T> Paged<T> {
             }
         }
     }
+    fn trim(rows: &mut Vec<T>, keep: Option<usize>) {
+        if let Some(keep) = keep
+            && rows.len() > keep
+        {
+            rows.drain(..rows.len() - keep);
+        }
+    }
+    /// A list that keeps only its newest `rows` rows (the last ones) as pages join, so a long log
+    /// never holds more than that, even while its pages are gathered.
+    pub fn keeping_last(mut self, rows: usize) -> Self {
+        self.keep_last = Some(rows);
+        self
+    }
     fn join(into: &mut Vec<T>, more: Vec<T>, key: Option<&dyn Fn(&T) -> String>) {
         match key {
             None => into.extend(more),
@@ -349,11 +388,12 @@ impl<T> Paged<T> {
             }
         }
     }
-    /// Records a failure of the page that was refused ([`Applied::Fenced`]): the rows stay, the
-    /// cursor stays, and a retry reads that page again.
+    /// Records why a page was refused ([`Applied::Fenced`]): the rows stay. The cursor no longer
+    /// belongs to the snapshot the source is at, so a retry reads the list again from the
+    /// first page rather than that cursor.
     pub fn fail(&mut self, error: impl Into<String>) {
         self.error = Some(error.into());
-        self.failed_append = true;
+        self.failed_append = false;
     }
     /// Starts a request that reads the first page without touching the rows (a cheap check
     /// whether the source changed). It is in flight until [`end`](Self::end).
@@ -447,6 +487,8 @@ impl<T> Paged<T> {
             next: parts.iter().any(|p| p.more()).then(String::new),
             fence: None,
             staged_fence: None,
+            keep_last: None,
+            reload_generation: 0,
             generation: 0,
             inflight: parts.iter().any(|p| p.loading()).then_some(Inflight {
                 generation: 0,
@@ -472,6 +514,8 @@ impl<T> Paged<T> {
             next: self.next.clone(),
             fence: self.fence.clone(),
             staged_fence: None,
+            keep_last: None,
+            reload_generation: 0,
             generation: self.generation,
             inflight: self.inflight,
             failed_append: self.failed_append,
@@ -869,12 +913,71 @@ mod tests {
             list.error.as_deref(),
             Some("The catalog changed while paging.")
         );
-        let retry = list.more_page().unwrap();
+        assert!(
+            !list.failed_append,
+            "a retry starts over, not at the old cursor"
+        );
+        let again = list.reload();
+        assert!(!again.append());
         assert_eq!(
-            list.apply(retry.generation, Ok(page(&[2], None).fenced("rev-1"))),
-            Applied::Appended
+            list.apply(again.generation, Ok(page(&[1, 2], None).fenced("rev-2"))),
+            Applied::Replaced
         );
         assert_eq!(list.items, [1, 2]);
+        assert!(list.error.is_none());
+    }
+
+    #[test]
+    fn lists_in_separate_spaces_never_accept_each_others_replies() {
+        let mut a = Paged::<u32>::default();
+        let mut b = Paged::<u32>::default();
+        b.separate(1);
+        let fa = a.reload();
+        let fb = b.reload();
+        assert_ne!(fa.generation, fb.generation);
+        assert_eq!(
+            b.apply(fa.generation, Err("stale of a".into())),
+            Applied::Stale
+        );
+        assert!(b.loading() && b.error.is_none());
+        assert_eq!(a.apply(fb.generation, Ok(page(&[1], None))), Applied::Stale);
+    }
+
+    #[test]
+    fn further_pages_do_not_move_the_generation_of_the_newest_first_page_read() {
+        let mut list = Paged::<u32>::default();
+        let first = list.reload();
+        list.apply(first.generation, Ok(page(&[1], Some("c1"))));
+        let named = list.reload_generation();
+        assert_eq!(named, first.generation);
+        let next = list.more_page().unwrap();
+        assert!(list.generation() > named);
+        assert_eq!(list.reload_generation(), named);
+        list.apply(next.generation, Ok(page(&[2], None)));
+        let again = list.reload();
+        assert_eq!(list.reload_generation(), again.generation);
+    }
+
+    #[test]
+    fn a_gathered_log_keeps_only_its_newest_rows_while_it_is_read() {
+        let mut list = Paged::<u32>::default().keeping_last(3);
+        let all = list.reload_all();
+        let Applied::Continue(second) = list.apply(all.generation, Ok(page(&[1, 2], Some("c1"))))
+        else {
+            panic!("a page follows");
+        };
+        assert!(list.staged.len() <= 3);
+        let Applied::Continue(third) = list.apply(second.generation, Ok(page(&[3, 4], Some("c2"))))
+        else {
+            panic!("a page follows");
+        };
+        assert_eq!(
+            list.staged,
+            [2, 3, 4],
+            "older rows are dropped as pages arrive"
+        );
+        list.apply(third.generation, Ok(page(&[5], None)));
+        assert_eq!(list.items, [3, 4, 5]);
     }
 
     #[test]
