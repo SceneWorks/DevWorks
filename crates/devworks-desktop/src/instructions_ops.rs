@@ -14,6 +14,8 @@ use crate::{
 pub enum InstructionsSlot {
     /// Settings → Roles and skills: a discovery page (load generation).
     InstructionSkills(u64),
+    /// A page of the complete active project list the panel gathers (load generation).
+    InstructionProjects(u64),
     /// The active record of one role (role item ID).
     InstructionRole(String),
     /// A history page of the selected item (detail generation).

@@ -505,7 +505,29 @@ fn statement(sql: &str) -> Vec<Use> {
         }
     }
     let mut tables: Vec<(String, Vec<String>)> = Vec::new();
-    let mut aliases: BTreeMap<String, String> = BTreeMap::new();
+    // Aliases are bound per query: a parenthesis that opens with SELECT or WITH starts a new
+    // scope, and a qualified column resolves in the innermost scope that binds its alias, then
+    // outward (a correlated subquery may use an outer alias).
+    let mut scope_of = Vec::with_capacity(toks.len());
+    let mut depth_of = Vec::with_capacity(toks.len());
+    let mut parents: Vec<Option<usize>> = vec![None];
+    let mut stack = vec![0usize];
+    for (i, t) in toks.iter().enumerate() {
+        if *t == Tok::Punct(')') && stack.len() > 1 {
+            stack.pop();
+        }
+        scope_of.push(*stack.last().unwrap_or(&0));
+        depth_of.push(stack.len() - 1);
+        if *t == Tok::Punct('(') {
+            if is_kw(toks.get(i + 1), "select") || is_kw(toks.get(i + 1), "with") {
+                parents.push(stack.last().copied());
+                stack.push(parents.len() - 1);
+            } else {
+                stack.push(*stack.last().unwrap_or(&0));
+            }
+        }
+    }
+    let mut aliases: BTreeMap<(usize, String), String> = BTreeMap::new();
     let add = |tables: &mut Vec<(String, Vec<String>)>, name: &str| {
         if ctes.iter().any(|c| c == name) {
             return None;
@@ -526,7 +548,15 @@ fn statement(sql: &str) -> Vec<Use> {
         let into = (is_kw(here, "into")
             && (is_kw(i.checked_sub(1).and_then(|p| toks.get(p)), "insert")
                 || is_kw(i.checked_sub(1).and_then(|p| toks.get(p)), "merge")))
-            || (is_kw(here, "update") && i == first.unwrap_or(0));
+            || (is_kw(here, "update")
+                && (i == first.unwrap_or(0)
+                    // After the CTE list (`WITH … ) UPDATE`) or inside a data-modifying CTE
+                    // (`AS ( UPDATE`).
+                    || (kind == "with"
+                        && i.checked_sub(1).and_then(|p| toks.get(p)).is_some_and(|p| {
+                            (*p == Tok::Punct(')') && depth_of[i] == 0)
+                                || *p == Tok::Punct('(')
+                        }))));
         if !(from || into) {
             i += 1;
             continue;
@@ -564,7 +594,9 @@ fn statement(sql: &str) -> Vec<Use> {
                 if is_kw(toks.get(k), "as") {
                     k += 1;
                 }
-                if matches!(toks.get(k), Some(Tok::Word(a)) if !stop_word(a)) {
+                if matches!(toks.get(k), Some(Tok::Word(a)) if !stop_word(a))
+                    || matches!(toks.get(k), Some(Tok::Quoted(_)))
+                {
                     k += 1;
                 }
                 if toks.get(k) == Some(&Tok::Punct(',')) {
@@ -579,17 +611,21 @@ fn statement(sql: &str) -> Vec<Use> {
             if is_kw(toks.get(k), "as") {
                 k += 1;
             }
-            if let Some(Tok::Word(alias)) = toks.get(k)
-                && !stop_word(alias)
+            // A quoted alias is never a keyword (`AS "where"` is a name).
+            if let Some(Tok::Word(alias) | Tok::Quoted(alias)) = toks.get(k)
+                && (matches!(toks.get(k), Some(Tok::Quoted(_))) || !stop_word(alias))
             {
                 if at.is_some() {
-                    aliases.insert(alias.to_lowercase(), name.clone());
+                    aliases.insert((scope_of[i], alias.to_lowercase()), name.clone());
                 }
                 k += 1;
             }
             if at.is_some() {
                 aliases.insert(
-                    name.rsplit('.').next().unwrap_or(&name).to_owned(),
+                    (
+                        scope_of[i],
+                        name.rsplit('.').next().unwrap_or(&name).to_owned(),
+                    ),
                     name.clone(),
                 );
             }
@@ -667,14 +703,26 @@ fn statement(sql: &str) -> Vec<Use> {
         return Vec::new();
     }
     // `alias.column` and `table.column` name a column of that table.
-    for w in toks.windows(3) {
+    for (at, w) in toks.windows(3).enumerate() {
         if let [
             Tok::Word(a) | Tok::Quoted(a),
             Tok::Punct('.'),
             Tok::Word(c) | Tok::Quoted(c),
         ] = w
-            && let Some(table) = aliases.get(&a.to_lowercase())
-            && let Some(entry) = tables.iter_mut().find(|(t, _)| t == table)
+            && let Some(table) = {
+                let a = a.to_lowercase();
+                let mut scope = Some(scope_of[at]);
+                let mut found = None;
+                while let Some(s) = scope {
+                    if let Some(t) = aliases.get(&(s, a.clone())) {
+                        found = Some(t.clone());
+                        break;
+                    }
+                    scope = parents[s];
+                }
+                found
+            }
+            && let Some(entry) = tables.iter_mut().find(|(t, _)| *t == table)
             && !entry.1.contains(&c.to_lowercase())
         {
             entry.1.push(c.to_lowercase());
@@ -1255,6 +1303,61 @@ mod tests {
             tables("MERGE INTO stock USING incoming ON stock.sku = incoming.sku"),
             [t("stock"), c("stock", "sku")]
         );
+    }
+
+    #[test]
+    fn a_subquery_alias_shadows_the_outer_alias_only_inside_the_subquery() {
+        let found = tables("SELECT u.id FROM users u WHERE EXISTS (SELECT u.token FROM tokens u)");
+        assert!(found.contains(&c("users", "id")), "{found:?}");
+        assert!(found.contains(&c("tokens", "token")), "{found:?}");
+        assert!(!found.contains(&c("tokens", "id")), "{found:?}");
+        assert!(!found.contains(&c("users", "token")), "{found:?}");
+        // A correlated subquery resolves an outer alias it does not rebind.
+        let found = tables(
+            "SELECT 1 FROM users u WHERE EXISTS (SELECT 1 FROM orders o WHERE o.uid = u.id)",
+        );
+        assert!(found.contains(&c("users", "id")), "{found:?}");
+        assert!(found.contains(&c("orders", "uid")), "{found:?}");
+    }
+
+    #[test]
+    fn updates_after_cte_definitions_and_inside_data_modifying_ctes_are_recognised() {
+        let found = tables("WITH recent AS (SELECT id FROM events) UPDATE users SET active = 1");
+        assert!(found.contains(&t("events")), "{found:?}");
+        assert!(found.contains(&c("users", "active")), "{found:?}");
+        assert!(!found.contains(&t("recent")), "{found:?}");
+        let found = tables(
+            "WITH x AS (UPDATE jobs SET state = 2 RETURNING id) SELECT id FROM x JOIN logs ON true",
+        );
+        assert!(found.contains(&c("jobs", "state")), "{found:?}");
+        assert!(found.contains(&t("logs")), "{found:?}");
+        // INSERT, DELETE and MERGE are found anywhere already.
+        let found =
+            tables("WITH r AS (SELECT id FROM a) DELETE FROM b WHERE id IN (SELECT id FROM r)");
+        assert!(found.contains(&t("b")), "{found:?}");
+    }
+
+    #[test]
+    fn quoted_aliases_bind_columns_with_or_without_as() {
+        for sql in [
+            r#"SELECT "u"."id" FROM "users" AS "u""#,
+            r#"SELECT "u"."id" FROM "users" "u""#,
+            "SELECT `u`.`id` FROM `users` AS `u`",
+            "SELECT [u].[id] FROM [users] [u]",
+        ] {
+            let found = tables(sql);
+            assert!(found.contains(&c("users", "id")), "{sql}: {found:?}");
+        }
+        // A quoted alias that spells a keyword is still an alias.
+        let found = tables(r#"SELECT "where"."id" FROM users AS "where""#);
+        assert!(found.contains(&c("users", "id")), "{found:?}");
+        // Quoted aliases are scoped to their query like bare ones.
+        let found = tables(
+            r#"SELECT "u"."id" FROM users "u" WHERE EXISTS (SELECT "u"."token" FROM tokens "u")"#,
+        );
+        assert!(found.contains(&c("users", "id")), "{found:?}");
+        assert!(found.contains(&c("tokens", "token")), "{found:?}");
+        assert!(!found.contains(&c("tokens", "id")), "{found:?}");
     }
 
     #[test]

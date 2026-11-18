@@ -214,6 +214,7 @@ fn samples() -> Vec<Slot> {
         Slot::Settings(SettingsSlot::EmbeddingSpaces(7)),
         Slot::Settings(SettingsSlot::Configure(7)),
         Slot::Instructions(InstructionsSlot::InstructionSkills(7)),
+        Slot::Instructions(InstructionsSlot::InstructionProjects(7)),
         Slot::Instructions(InstructionsSlot::InstructionRole("s".into())),
         Slot::Instructions(InstructionsSlot::InstructionHistory(7)),
         Slot::Instructions(InstructionsSlot::InstructionText(7)),

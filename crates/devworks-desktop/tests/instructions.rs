@@ -304,3 +304,56 @@ fn a_person_creates_and_edits_a_skill_for_one_project() {
     );
     assert!(!root.0.join("skills/deploy").exists());
 }
+
+#[test]
+fn projects_beyond_the_first_page_are_scoped_and_discovered() {
+    let _case = native_runtime_case();
+    let root = Root::new("instruction-many-projects");
+    let engine = start(&root);
+    let backend = engine.backend();
+    let page = usize::from(devworks_desktop::ops::PAGE_LIMIT);
+    for n in 0..page + 3 {
+        let made = devworks_desktop::ops::project_changed(backend.command(
+            "projects.create",
+            &devworks_desktop::ops::project_create(&*backend, &format!("Project {n:03}"), "", &[]),
+        ));
+        assert!(made.is_ok(), "{n}");
+    }
+    let mut h = harness(shell(&engine, &root, Script::default()), 1440.0, 1400.0);
+    settle(&mut h);
+    click_nav(&mut h, "Settings");
+    click(&mut h, Role::Button, "Role instructions");
+    wait(&mut h, "every project gathered", |s| {
+        s.settings.instructions.skills.result().is_some()
+            && s.settings.instructions.projects.len() == page + 3
+    });
+    // The shell's own list holds one page at most; the panel's choices hold them all.
+    assert!(h.state().projects.list.items.len() <= page);
+    let shown: Vec<String> = h
+        .state()
+        .projects
+        .list
+        .items
+        .iter()
+        .map(|p| p.id.0.as_str().to_owned())
+        .collect();
+    let beyond = h
+        .state()
+        .settings
+        .instructions
+        .projects
+        .iter()
+        .map(|(id, _)| id.clone())
+        .find(|id| !shown.contains(id))
+        .expect("a project beyond the shell's first page is selectable");
+    // Its own skill is discovered by a refresh.
+    let dir = root.0.join("project-skills").join(&beyond).join("deploy");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("SKILL.md"), b"Deploy this project.").unwrap();
+    click(&mut h, Role::Button, "Refresh roles and skills");
+    wait(&mut h, "the later project's skill discovered", |s| {
+        matches!(s.settings.instructions.skills.result(), Some(Ok(list)) if list.iter().any(|r| {
+            r.name.0 == "deploy" && iop::record_project(r).as_deref() == Some(beyond.as_str())
+        }))
+    });
+}
