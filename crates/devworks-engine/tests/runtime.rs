@@ -744,7 +744,14 @@ fn an_idle_runtime_runs_no_polling_pass_for_ten_seconds() {
     assert!(c.config.polling_interval > Duration::from_secs(10));
     let app = rt.block_on(boot(c)).unwrap();
     rt.block_on(settle_boot_publications(&app));
-    rt.block_on(async { tokio::time::sleep(Duration::from_secs(1)).await });
+    // Boot's Help ingestion commits in a burst of hundreds of writes, and a loop woken by the
+    // tail of it runs one coalesced pass up to five seconds later. The window opens only once
+    // every loop has seen every commit and is waiting.
+    rt.block_on(within("every polling loop to settle", async {
+        while !app.polling_settled() {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    }));
     let settled = app.polling_passes();
     assert!(settled > 0, "no polling loop ran its boot pass");
     rt.block_on(async { tokio::time::sleep(Duration::from_secs(10)).await });

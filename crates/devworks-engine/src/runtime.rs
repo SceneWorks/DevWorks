@@ -16,7 +16,7 @@ use crate::package_host::{HostConfig, LaunchPorts, PackageHost};
 use crate::replies::reply_consumer;
 use crate::resources::{BootReport as ResourceBootReport, Housekeeper};
 use crate::runs::{ActivationLauncher, RunGate, RunSettings, RunSupervisor};
-use crate::workers::{Commits, DrainAt, Loop, Next, StopAt, Ticker, Workers};
+use crate::workers::{Commits, DrainAt, Loop, LoopState, Next, StopAt, Ticker, Workers};
 use devworks_core::context::InvocationContext;
 use devworks_core::gateway::{CommandOutcome, Gateway, PreparedReceive, QueryOutcome};
 use devworks_core::ports::files::FileFault;
@@ -513,6 +513,8 @@ pub struct Runtime {
     polling_passes: Arc<AtomicU64>,
     /// The loops built on [`Commits`], by name (tests check every polling loop is among them).
     polling_loops: Arc<Mutex<Vec<&'static str>>>,
+    /// What each polling loop has seen, with the commit and delivery counts to compare it to.
+    polling_states: PollingStates,
     /// What the usage worker's drain established, for the shutdown report.
     usage_drain: Arc<Mutex<Option<Result<crate::usage::UsageDrain, StorageError>>>>,
 }
@@ -1491,7 +1493,8 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
     // without a commit signal falls back to admitted commands (and the interval).
     let polling_passes = Arc::new(AtomicU64::new(0));
     let polling_loops = Arc::new(Mutex::new(Vec::new()));
-    let commits = {
+    let loop_states = Arc::new(Mutex::new(Vec::new()));
+    let (commits, polling_marks) = {
         let stored = match store.commit_signal() {
             Some(signal) => {
                 let (tx, rx) = watch::channel(signal.generation());
@@ -1503,15 +1506,28 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
             None => admitter.changes.subscribe(),
         };
         let delivered = dispatcher.subscribe();
+        let marks = (stored.clone(), delivered.clone());
         let (passes, fallback) = (polling_passes.clone(), config.polling_interval);
-        let registered = polling_loops.clone();
-        move |name: &'static str| {
+        let (registered, states) = (polling_loops.clone(), loop_states.clone());
+        let register = move |name: &'static str| {
             registered
                 .lock()
                 .unwrap_or_else(|p| p.into_inner())
                 .push(name);
-            Commits::new(stored.clone(), delivered.clone(), fallback, passes.clone())
-        }
+            let state = LoopState::new();
+            states
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .push(state.clone());
+            Commits::new(
+                stored.clone(),
+                delivered.clone(),
+                fallback,
+                passes.clone(),
+                state,
+            )
+        };
+        (register, marks)
     };
     let (run, stop, idle) = (dispatcher.clone(), dispatcher.clone(), dispatcher.clone());
     workers.start(
@@ -2034,6 +2050,10 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
         usage_drain,
         polling_passes,
         polling_loops,
+        polling_states: PollingStates {
+            states: loop_states,
+            marks: polling_marks,
+        },
     })
 }
 
@@ -2107,6 +2127,12 @@ pub struct NativeTurnProgress {
     pub continuation: Option<devworks_core::protocol::provider::ArtifactRef>,
 }
 
+/// The commit-woken loops' progress and the commit and delivery counts it is compared to.
+struct PollingStates {
+    states: Arc<Mutex<Vec<Arc<LoopState>>>>,
+    marks: (watch::Receiver<u64>, watch::Receiver<u64>),
+}
+
 impl Runtime {
     pub fn mcp_service(&self) -> Option<Arc<devworks_core::services::mcp::McpClientService>> {
         self.use_cases.mcp_service()
@@ -2115,6 +2141,20 @@ impl Runtime {
     /// interval ([`RuntimeConfig::polling_interval`]); constant while the runtime is idle.
     pub fn polling_passes(&self) -> u64 {
         self.polling_passes.load(Ordering::SeqCst)
+    }
+    /// Whether every commit-woken loop is waiting and has seen every store commit and finished
+    /// delivery so far, so none has a wake or a pass pending. A burst of commits (boot's Help
+    /// ingestion) leaves loops with a coalesced pass up to five seconds out; an idle check
+    /// starts only after this holds.
+    pub fn polling_settled(&self) -> bool {
+        let (stored, delivered) = &self.polling_states.marks;
+        let (stored, delivered) = (*stored.borrow(), *delivered.borrow());
+        self.polling_states
+            .states
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .iter()
+            .all(|state| state.caught_up(stored, delivered))
     }
     /// Names of the background loops that wait on store commits instead of a private timer.
     pub fn polling_loops(&self) -> Vec<&'static str> {

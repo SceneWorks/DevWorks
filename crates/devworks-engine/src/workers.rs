@@ -275,6 +275,31 @@ pub(crate) struct Commits {
     delivered: watch::Receiver<u64>,
     fallback: Duration,
     passes: Arc<AtomicU64>,
+    state: Arc<LoopState>,
+}
+
+/// What one commit-woken loop has seen, so the runtime can say whether any loop still has a wake
+/// or a pass pending. A loop is busy from creation until its first pass settles into a wait.
+pub(crate) struct LoopState {
+    busy: AtomicBool,
+    stored: AtomicU64,
+    delivered: AtomicU64,
+}
+
+impl LoopState {
+    pub(crate) fn new() -> Arc<Self> {
+        Arc::new(Self {
+            busy: AtomicBool::new(true),
+            stored: AtomicU64::new(0),
+            delivered: AtomicU64::new(0),
+        })
+    }
+    /// True when the loop waits and has seen every commit and delivery up to the given counts.
+    pub(crate) fn caught_up(&self, stored: u64, delivered: u64) -> bool {
+        !self.busy.load(Ordering::SeqCst)
+            && self.stored.load(Ordering::SeqCst) == stored
+            && self.delivered.load(Ordering::SeqCst) == delivered
+    }
 }
 
 impl Commits {
@@ -283,12 +308,14 @@ impl Commits {
         delivered: watch::Receiver<u64>,
         fallback: Duration,
         passes: Arc<AtomicU64>,
+        state: Arc<LoopState>,
     ) -> Self {
         Self {
             stored,
             delivered,
             fallback,
             passes,
+            state,
         }
     }
     /// Counts one store pass (the idle-runtime test reads the total).
@@ -297,8 +324,11 @@ impl Commits {
     }
     /// Marks every commit so far as seen and returns the commit count.
     fn observe(&mut self) -> u64 {
-        let _ = *self.delivered.borrow_and_update();
-        *self.stored.borrow_and_update()
+        let delivered = *self.delivered.borrow_and_update();
+        let stored = *self.stored.borrow_and_update();
+        self.state.delivered.store(delivered, Ordering::SeqCst);
+        self.state.stored.store(stored, Ordering::SeqCst);
+        stored
     }
     /// Runs `pass` until `live` is false or the loop is stopped. The first pass runs without
     /// waiting; after each pass the loop runs again at once ([`Next::Now`]) or waits.
@@ -311,6 +341,7 @@ impl Commits {
     {
         let mut gap = MIN_WAKE_GAP;
         while live() && !stopped.is_set() {
+            self.state.busy.store(true, Ordering::SeqCst);
             self.pass();
             let started = tokio::time::Instant::now();
             let before = self.observe();
@@ -318,6 +349,7 @@ impl Commits {
             if next == Next::Now {
                 continue;
             }
+            self.state.busy.store(false, Ordering::SeqCst);
             // Commits during the pass are newer than what it read: they wake the wait below,
             // and the longer gap keeps a pass that commits on every run from spinning.
             let busy = *self.stored.borrow() != before;
@@ -574,6 +606,7 @@ mod tests {
             delivered,
             Duration::from_secs(3600),
             Arc::new(AtomicU64::new(0)),
+            LoopState::new(),
         );
         let (count, sender) = (runs.clone(), stored_tx.clone());
         let task = tokio::spawn(commits.run(
