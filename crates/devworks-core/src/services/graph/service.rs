@@ -576,7 +576,12 @@ impl GraphService {
         }
         let unavailable_repositories = missing
             .iter()
-            .map(|m| model::wire(json!({"repositoryId":m.repository_id,"reason":m.reason})))
+            .map(|m| {
+                Ok::<_, Failure>(CodeUnavailableRepository {
+                    repository_id: m.repository_id.clone(),
+                    reason: model::text(&m.reason)?,
+                })
+            })
             .collect::<Result<Vec<CodeUnavailableRepository>, _>>()?;
         let scope_coverage = Some(CodeReadCoverage {
             coverage: coverage.clone(),
@@ -715,7 +720,17 @@ impl GraphService {
                 let s = if let Some(s) = selection {
                     s.clone()
                 } else {
-                    model::wire(json!({"repositoryId":repository_id,"path":unit_key}))?
+                    CodeFileSelection {
+                        repository_id: repository_id.clone().ok_or_else(model::unrepresentable)?,
+                        path: model::text(
+                            unit_key
+                                .as_ref()
+                                .ok_or_else(model::unrepresentable)?
+                                .as_str(),
+                        )?,
+                        line: None,
+                        depth: None,
+                    }
                 };
                 if matches!(query, GraphQuery::FileImpact { .. }) {
                     impact::file_impact(
@@ -766,12 +781,15 @@ impl GraphService {
                     3,
                     None,
                 )?;
-                let value = serde_json::to_value(status).map_err(|_| scope::unavailable(None))?;
-                let record: CodeRepositoryStatus = model::wire(json!({
-                    "repositoryId":row.id,"freshness":value["freshness"],
-                    "languages":value["languages"],"semanticPacks":value["semanticPacks"],
-                    "overlays":value["overlays"]
-                }))?;
+                let record = CodeRepositoryStatus {
+                    repository_id: row.id.clone(),
+                    freshness: status.freshness.ok_or_else(model::unrepresentable)?,
+                    languages: model::list(status.languages.ok_or_else(model::unrepresentable)?.0)?,
+                    semantic_packs: model::list(
+                        status.semantic_packs.ok_or_else(model::unrepresentable)?.0,
+                    )?,
+                    overlays: model::list(status.overlays.ok_or_else(model::unrepresentable)?.0)?,
+                };
                 if repositories.len() >= metadata.limit || !metadata.retain_wire(&record)? {
                     *metadata.next.borrow_mut() = Some(Position {
                         offset: index,
@@ -852,9 +870,9 @@ fn resolved(
             let parent = refs.last().map(|r: &LayerRef| r.generation_id.clone());
             refs.push(LayerRef {
                 generation_id: id.clone(),
-                manifest_digest: model::wire(json!(crate::fingerprint::sha256_hex(
-                    generation.manifest.to_string().as_bytes()
-                )))?,
+                manifest_digest: model::text(&crate::fingerprint::sha256_hex(
+                    generation.manifest.to_string().as_bytes(),
+                ))?,
                 parent_generation_id: parent,
             });
         }
@@ -918,8 +936,8 @@ fn legacy(result: GraphResult) -> Result<GraphResult, Failure> {
             .ok_or_else(|| scope::unavailable(None))?;
         Ok(NodeView {
             node_id: n.node_id,
-            unit_key: model::wire(json!(n.unit_key))?,
-            kind: model::wire(json!(n.node_kind))?,
+            unit_key: model::text(&n.unit_key.0)?,
+            kind: model::text(&n.node_kind.0)?,
             name: n.name.0,
             citation,
         })

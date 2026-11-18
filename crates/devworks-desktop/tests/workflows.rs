@@ -4,6 +4,7 @@ mod common;
 use common::*;
 use devworks_core::protocol::records::{StatusRecord, WorkRecord};
 use devworks_desktop::backend::Backend;
+use devworks_desktop::frame::fixture::command_input;
 use devworks_desktop::ops;
 use devworks_desktop::route::Route;
 use devworks_desktop::work_ops as wops;
@@ -55,9 +56,9 @@ fn statuses(b: &dyn Backend, p: &str) -> Vec<StatusRecord> {
         .0
 }
 fn create_issue(b: &dyn Backend, p: &str, title: &str, status: &str) -> WorkRecord {
-    wops::work_changed(b.command("issues.create",&wops::work_command(b,"issues.create",json!({
+    wops::work_changed(b.command("issues.create",&wops::work_command(b, command_input("issues.create", json!({
         "projectId":p,"title":title,"description":"A concrete actionable native test issue.","repositoryIds":[],"priority":10,"statusId":status
-    })))).unwrap()
+    }))))).unwrap()
 }
 fn open(engine: &devworks_desktop::host::Engine, root: &Root, p: &str) -> Ui {
     let mut h = harness(shell(engine, root, Script::default()), 1800.0, 1300.0);
@@ -136,7 +137,7 @@ fn custom_columns_rename_order_and_occupied_removal_use_backend_fences() {
     );
     let unchanged = wops::work_record(b.query(
         "tasks.get",
-        &wops::work_get(&*b, "tasks.get", issue.id.as_str()),
+        &wops::work_get(&*b, wops::Family::Tasks, issue.id.as_str()),
     ))
     .unwrap();
     assert_eq!(
@@ -150,14 +151,14 @@ fn custom_columns_rename_order_and_occupied_removal_use_backend_fences() {
     assert!(statuses(&*b, &p).iter().all(|s| s.id != incoming.id));
     let changed = wops::work_record(b.query(
         "tasks.get",
-        &wops::work_get(&*b, "tasks.get", issue.id.as_str()),
+        &wops::work_get(&*b, wops::Family::Tasks, issue.id.as_str()),
     ))
     .unwrap();
     assert_eq!(changed.id, issue.id);
     assert_ne!(changed.status_id, incoming.id);
     let arrived = wops::work_record(b.query(
         "tasks.get",
-        &wops::work_get(&*b, "tasks.get", arrived.id.as_str()),
+        &wops::work_get(&*b, wops::Family::Tasks, arrived.id.as_str()),
     ))
     .unwrap();
     assert_eq!(
@@ -182,9 +183,9 @@ fn a_stale_status_editor_keeps_its_name_until_explicit_current_review() {
         .into_iter()
         .find(|s| s.category.0 == "Ready")
         .unwrap();
-    wops::workflow_changed(b.command("workflows.rename_status",&wops::workflow_command(&*b,"workflows.rename_status",json!({
+    wops::workflow_changed(b.command("workflows.rename_status",&wops::workflow_command(&*b, command_input("workflows.rename_status", json!({
         "projectId":p,"statusId":ready.id,"expectedRevision":ready.revision,"label":"Changed elsewhere"
-    })))).unwrap();
+    }))))).unwrap();
     settle(&mut h);
     press(&mut h, "Save status name");
     assert!(has_text(&h, "Your draft is kept"));
@@ -255,7 +256,7 @@ fn empty_queue_is_truthful_and_a_manual_claim_never_starts_execution() {
     assert!(claim.work_kind.is_some() && claim.work_revision.is_some());
     let record = wops::work_record(b.query(
         "tasks.get",
-        &wops::work_get(&*b, "tasks.get", issue.id.as_str()),
+        &wops::work_get(&*b, wops::Family::Tasks, issue.id.as_str()),
     ))
     .unwrap();
     assert!(
@@ -386,7 +387,7 @@ fn native_type_and_label_editing_preserves_unset_and_uses_selection_filters() {
     press(&mut h, "Create");
     let created = wops::work_page(real.query(
         "issues.list",
-        &wops::work_list(&*real, "issues.list", &p, None),
+        &wops::work_list(&*real, wops::Family::Issues, &p, None),
     ))
     .unwrap()
     .0
@@ -457,7 +458,7 @@ fn native_type_and_label_editing_preserves_unset_and_uses_selection_filters() {
     press(&mut h, "Save");
     let current = wops::work_record(real.query(
         "tasks.get",
-        &wops::work_get(&*real, "tasks.get", created.id.as_str()),
+        &wops::work_get(&*real, wops::Family::Tasks, created.id.as_str()),
     ))
     .unwrap();
     assert!(current.task_type.is_none());

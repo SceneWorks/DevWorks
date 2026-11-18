@@ -221,7 +221,10 @@ fn sampling_runs_in_the_agent_session_as_mcp_usage_without_transcript_or_head_ch
         assert_eq!(category, "Mcp");
         assert_eq!(attempt.session_id, Some(id("agent-session")));
         assert_eq!(attempt.actor_id, ActorId(id("sampling-agent")));
-        assert_eq!(attempt.state, "Settled");
+        assert_eq!(
+            attempt.state,
+            devworks_core::ports::storage::AttemptState::Settled
+        );
         assert!(
             read(f.store.as_ref(), |s| s.sessions().entries(
                 &id("agent-session"),

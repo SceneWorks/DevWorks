@@ -601,6 +601,12 @@ def gen_family(fam, ops):
     for o in ops:
         for mode, _, variant, _ in bindings(o):
             out.append(f'            Self::{variant}(_) => Mode::{mode},')
+    out += ['        }', '    }',
+            '    /// The `/body` members of this input, without the `kind` discriminator.',
+            '    pub fn body(&self) -> Result<serde_json::Value, serde_json::Error> {', '        match self {']
+    for o in ops:
+        for _, _, variant, _ in bindings(o):
+            out.append(f'            Self::{variant}(i) => serde_json::to_value(i),')
     out += ['        }', '    }', '}']
     return '\n'.join(out) + '\n'
 
@@ -618,6 +624,10 @@ def gen_operations_mod(families):
     out += [f'            Self::{pascal(f["family"])}(i) => i.operation(),' for f in families]
     out += ['        }', '    }', '    pub fn mode(&self) -> Mode {', '        match self {']
     out += [f'            Self::{pascal(f["family"])}(i) => i.mode(),' for f in families]
+    out += ['        }', '    }',
+            '    /// The `/body` members of the selected input, without the `kind` discriminator.',
+            '    pub fn body(&self) -> Result<serde_json::Value, serde_json::Error> {', '        match self {']
+    out += [f'            Self::{pascal(f["family"])}(i) => i.body(),' for f in families]
     out += ['        }', '    }', '}']
     return '\n'.join(out) + '\n'
 

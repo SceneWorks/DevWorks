@@ -26,11 +26,11 @@ impl Scope {
             Self::Project(id) => format!("project:{id}"),
         }
     }
-    pub fn wire(&self) -> serde_json::Value {
-        match self {
-            Self::Workspace => serde_json::json!({"kind":"Workspace"}),
-            Self::Project(id) => serde_json::json!({"kind":"Project","projectId":id}),
-        }
+    pub fn data(&self) -> Option<DataScope> {
+        crate::frame::scope(match self {
+            Self::Workspace => None,
+            Self::Project(id) => Some(id.as_str()),
+        })
     }
     pub fn of(scope: &DataScope) -> Self {
         match scope {
@@ -52,7 +52,7 @@ pub struct Target {
 pub struct Reader {
     pub target: Option<Target>,
     /// Cursor-free first-page request, independent of the returned canonical identity.
-    pub intent: Option<serde_json::Value>,
+    pub intent: Option<devworks_core::operations::OperationInput>,
     pub view: Option<ConventionReadView>,
     pub cursors: Vec<Option<String>>,
     pub loading: bool,
@@ -208,8 +208,8 @@ pub struct ScopeState {
     pub scope_revision: Option<i64>,
     pub source_scope_revision: Option<i64>,
     pub list_generation: u64,
-    pub query_snapshot: Option<serde_json::Value>,
-    pub pending_listing: Option<(u64, serde_json::Value)>,
+    pub query_snapshot: Option<devworks_core::operations::OperationInput>,
+    pub pending_listing: Option<(u64, devworks_core::operations::OperationInput)>,
     pub search_recovery: Option<crate::conventions_ops::SearchRecovery>,
     pub last_search: Option<crate::conventions_ops::SearchRecovery>,
     pub search_preparation: Option<(String, OperationRef)>,
@@ -240,7 +240,7 @@ pub struct ScopeState {
     pub resource_loading: bool,
     pub resource_generation: u64,
     pub resource_scope_revision: Option<i64>,
-    pub resource_query_snapshot: Option<serde_json::Value>,
+    pub resource_query_snapshot: Option<devworks_core::operations::OperationInput>,
     pub operation_ids: Vec<String>,
     pub operation_input: String,
     pub operation_text: BTreeMap<String, String>,
@@ -718,8 +718,7 @@ fn browse(
         if let Some(query) = s
             .query_snapshot
             .as_ref()
-            .and_then(|v| v.get("text"))
-            .and_then(serde_json::Value::as_str)
+            .and_then(crate::conventions_ops::search_text)
         {
             widgets::caption(ui, format!("Results for: {query}"));
         }

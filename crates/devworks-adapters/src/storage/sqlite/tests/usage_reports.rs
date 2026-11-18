@@ -111,7 +111,7 @@ fn attempt(
         access_mode: "ApiKey".into(),
         provider_model_id: Some("gpt-6.1-sol".into()),
         pricing_snapshot: serde_json::to_value(snapshot).unwrap(),
-        state: "Admitted".into(),
+        state: devworks_core::ports::storage::AttemptState::Admitted,
         revision: 1,
         created_at_ms: T0,
     };
@@ -120,7 +120,7 @@ fn attempt(
         revision: 1,
         priced_micro_usd: Some(amount),
         reserved_micro_usd: Some(10),
-        classification: "OfficialEstimate".into(),
+        classification: devworks_core::ports::usage::CostClassification::OfficialEstimate,
         monetary_complete: true,
         incomplete: false,
         unknown_tail: false,
@@ -157,11 +157,10 @@ fn origin(
         recorded_at_ms: time,
         priced_micro_usd: amount,
         classification: if amount.is_some() {
-            "OfficialEstimate"
+            devworks_core::ports::usage::CostClassification::OfficialEstimate
         } else {
-            "Untracked"
-        }
-        .into(),
+            devworks_core::ports::usage::CostClassification::Untracked
+        },
         monetary_complete: false,
         incomplete: false,
         unknown_tail: false,

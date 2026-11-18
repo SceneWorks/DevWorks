@@ -14,21 +14,28 @@
 //! outcome that is not known keeps its exact frame for Confirm outcomes and the next launch.
 use super::{ListState, Shell};
 use crate::backend::{Reply, Slot, TaskOutput, is_unknown, resolve_command};
+use crate::frame;
 use crate::ops::{self, Failure};
 use crate::route::Route;
 use crate::theme;
 use crate::watch_ops::{WatchScope, WatchView};
 use crate::widgets::{self, Header, Tone, ViewState, chip};
 use crate::work_ops as wops;
-use devworks_core::protocol::provider::ArtifactRef;
-use devworks_core::protocol::records::{
-    AcceptanceCriterion, ApprovalState, FindingState, LifeState, ReadinessDisposition,
-    RequirementItem, RequirementStatus, RetainedMessage, RetainedMessageEvent, RootSnapshot,
-    WorkKind, WorkRecord,
+use devworks_core::operations::{
+    OperationInput as In, agents, features, issues, next_work, tasks, workflows,
 };
+use devworks_core::protocol::provider::{ArtifactRef, Digest};
+use devworks_core::protocol::records::{
+    AcceptanceCriterion, ApprovalState, CriterionState, FeatureCreation, FeaturePatch,
+    FindingState, LifeState, PendingFeaturePlan, PlanDraft, QueuePlacement, ReadinessDisposition,
+    RequirementItem, RequirementStatus, RetainedMessage, RetainedMessageEvent, RootSnapshot,
+    TaskPatch, WorkKind, WorkRecord,
+};
+use devworks_core::protocol::support::{BoundedList, Label};
 use devworks_core::protocol::{
     BlockerChange, ControlReason, DomainErrorCode, Event, EventBody, EventSubject,
 };
+use devworks_core::protocol::{Id, ProjectId, Revision, RootId};
 use devworks_core::services::work::fold;
 pub(crate) mod workflow;
 pub use crate::work_screen::detail::{BlockerEdit, blocker_change, plan_error};
@@ -40,7 +47,6 @@ use devworks_core::protocol::records::{
     AllocationSelection, StatusRecord,
 };
 use eframe::egui::{self, RichText, Ui};
-use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
 use workflow::{WorkflowAction, WorkflowUi};
 
@@ -363,88 +369,112 @@ pub fn open_plan_form(f: &WorkRecord) -> PlanForm {
 
 /// The criteria of `entries`, keeping the stored state and evidence of each one whose ID and
 /// text are unchanged (an unchanged entry is submitted exactly as it was read).
-fn merged_criteria(entries: &[Entry], base: &[AcceptanceCriterion]) -> Vec<Value> {
-    entries
-        .iter()
-        .filter(|e| !e.text.trim().is_empty())
-        .map(|e| match base.iter().find(|b| b.id.as_str() == e.id) {
-            Some(b) if b.text.0 == e.text => serde_json::to_value(b).unwrap_or(Value::Null),
-            _ => json!({"id": e.id.trim(), "text": e.text, "evidenceIds": [], "state": "Unmet"}),
-        })
-        .collect()
+fn merged_criteria(
+    entries: &[Entry],
+    base: &[AcceptanceCriterion],
+) -> Option<BoundedList<AcceptanceCriterion, 0, 128>> {
+    frame::bounded(
+        entries
+            .iter()
+            .filter(|e| !e.text.trim().is_empty())
+            .map(|e| match base.iter().find(|b| b.id.as_str() == e.id) {
+                Some(b) if b.text.0 == e.text => Some(b.clone()),
+                _ => Some(AcceptanceCriterion {
+                    id: frame::id(e.id.trim())?,
+                    text: frame::text(&e.text)?,
+                    evidence_ids: BoundedList(Vec::new()),
+                    state: CriterionState::Unmet,
+                }),
+            })
+            .collect::<Option<Vec<_>>>()?,
+    )
 }
 
 /// The `features.edit_plan` draft of a plan form: what the user wrote, with what the form does
 /// not show kept from the draft it started from — each requirement's status, drop decision and
 /// covering tasks, dropped requirements (their decision stays recorded), and each unchanged
-/// criterion's state and evidence.
-pub fn plan_body(form: &PlanForm, content: &ArtifactRef) -> Value {
+/// criterion's state and evidence. None when a value is outside its contract.
+pub fn plan_body(form: &PlanForm, content: &ArtifactRef) -> Option<PlanDraft> {
     let written: Vec<&Entry> = form
         .requirements
         .iter()
         .filter(|e| !e.text.trim().is_empty() || form.drops.contains_key(&e.id))
         .collect();
-    let mut reqs: Vec<Value> = written
+    let mut reqs = written
         .iter()
         .map(|e| {
-            match form
-                .base
-                .requirements
-                .iter()
-                .find(|b| b.id.as_str() == e.id)
-            {
-                Some(b) => {
-                    let mut v = serde_json::to_value(b).unwrap_or(Value::Null);
-                    if !e.text.trim().is_empty() {
-                        v["statement"] = json!(e.text);
+            Some(
+                match form
+                    .base
+                    .requirements
+                    .iter()
+                    .find(|b| b.id.as_str() == e.id)
+                {
+                    Some(b) => {
+                        let mut v = b.clone();
+                        if !e.text.trim().is_empty() {
+                            v.statement = frame::text(&e.text)?;
+                        }
+                        if let Some(status) = form.statuses.get(&e.id) {
+                            v.status = status.clone();
+                        }
+                        if let Some(drop) = form.drops.get(&e.id) {
+                            v.status = RequirementStatus::Dropped;
+                            v.drop_decision = drop.artifact.clone();
+                        } else if matches!(b.status, RequirementStatus::Dropped) {
+                            // A dropped entry is normally hidden and retained below. Making it
+                            // editable is the explicit Restore action, never an implicit rewrite.
+                            let status = form
+                                .snapshot
+                                .requirements
+                                .0
+                                .iter()
+                                .find(|r| {
+                                    r.id == b.id && !matches!(r.status, RequirementStatus::Dropped)
+                                })
+                                .map(|r| r.status.clone())
+                                .unwrap_or(RequirementStatus::Proposed);
+                            v.status = form.statuses.get(&e.id).cloned().unwrap_or(status);
+                            v.drop_decision = None;
+                        }
+                        v
                     }
-                    if let Some(status) = form.statuses.get(&e.id) { v["status"] = json!(status); }
-                    if let Some(drop) = form.drops.get(&e.id) {
-                        v["status"] = json!("Dropped");
-                        v["dropDecision"] = json!(drop.artifact);
-                    } else if matches!(b.status, RequirementStatus::Dropped) {
-                        // A dropped entry is normally hidden and retained below. Making it
-                        // editable is the explicit Restore action, never an implicit rewrite.
-                        let status = form
-                            .snapshot
-                            .requirements
-                            .0
-                            .iter()
-                            .find(|r| {
-                                r.id == b.id && !matches!(r.status, RequirementStatus::Dropped)
-                            })
-                            .map(|r| r.status.clone())
-                            .unwrap_or(RequirementStatus::Proposed);
-                        let status = form.statuses.get(&e.id).cloned().unwrap_or(status);
-                        v["status"] = json!(status);
-                        v.as_object_mut()
-                            .expect("requirement")
-                            .remove("dropDecision");
-                    }
-                    v
-                }
-                None => json!({"id": e.id.trim(), "statement": e.text,
-                    "status": form.statuses.get(&e.id).cloned().unwrap_or(RequirementStatus::Confirmed),
-                    "coveredByTaskIds": []}),
-            }
+                    None => RequirementItem {
+                        id: frame::id(e.id.trim())?,
+                        statement: frame::text(&e.text)?,
+                        status: form
+                            .statuses
+                            .get(&e.id)
+                            .cloned()
+                            .unwrap_or(RequirementStatus::Confirmed),
+                        drop_decision: None,
+                        covered_by_task_ids: BoundedList(Vec::new()),
+                    },
+                },
+            )
         })
-        .collect();
+        .collect::<Option<Vec<_>>>()?;
     for b in &form.base.requirements {
         if matches!(b.status, RequirementStatus::Dropped)
             && !written.iter().any(|e| e.id == b.id.as_str())
         {
-            reqs.push(serde_json::to_value(b).unwrap_or(Value::Null));
+            reqs.push(b.clone());
         }
     }
-    let goals: Vec<&String> = form.goals.iter().filter(|g| !g.trim().is_empty()).collect();
-    let repos: Vec<&String> = form.repositories.iter().collect();
-    json!({
-        "content": content,
-        "acceptance": merged_criteria(&form.acceptance, &form.base.acceptance),
-        "repositoryIds": repos,
-        "goals": goals,
-        "requirements": reqs,
-        "acceptanceTests": merged_criteria(&form.acceptance_tests, &form.base.acceptance_tests),
+    let goals: Vec<String> = form
+        .goals
+        .iter()
+        .filter(|g| !g.trim().is_empty())
+        .cloned()
+        .collect();
+    let repositories: Vec<String> = form.repositories.iter().cloned().collect();
+    Some(PlanDraft {
+        content: content.clone(),
+        acceptance: merged_criteria(&form.acceptance, &form.base.acceptance)?,
+        repository_ids: frame::ids(&repositories)?,
+        goals: frame::texts(&goals)?,
+        requirements: frame::bounded(reqs)?,
+        acceptance_tests: merged_criteria(&form.acceptance_tests, &form.base.acceptance_tests)?,
     })
 }
 /// A bounded newest-first project or card feed. Refresh re-reads only the number of
@@ -740,13 +770,19 @@ pub(crate) enum Action {
     OpenWork(String),
     Create(CreateForm),
     Edit(EditForm),
-    /// A work command on one item (`operation`, body).
-    Command(String, &'static str, Value),
+    /// A work command on one item.
+    Command(String, In),
     Move(WorkRecord, String),
     /// Opens Overview's Activity with one work item's changes.
     ShowActivity(String),
     /// A queue order: operation, feature, priority, placement, expected revision.
-    Order(&'static str, Option<String>, Option<i32>, Value, String),
+    Order(
+        &'static str,
+        Option<String>,
+        Option<i32>,
+        QueuePlacement,
+        String,
+    ),
     SavePlan(PlanForm),
     RequestApproval(WorkRecord),
     Inspect(String),
@@ -869,13 +905,13 @@ impl Shell {
             Slot::WorkFeatures(p.clone()),
             "Loading features",
             "features.list",
-            move |be| wops::work_list(be, "features.list", &a, None),
+            move |be| wops::work_list(be, wops::Family::Features, &a, None),
         );
         self.query(
             Slot::WorkCards(p.clone()),
             "Loading tasks and issues",
             "tasks.list",
-            move |be| wops::work_list(be, "tasks.list", &b, None),
+            move |be| wops::work_list(be, wops::Family::Tasks, &b, None),
         );
         // Derived reverse links have no independent revision on their prerequisite. Reload the
         // visible detail too; the client fences any older reply for the same detail slot.
@@ -1059,17 +1095,17 @@ impl Shell {
             self.refresh_history(Some(w.id.as_str().to_owned()));
         }
         self.load_git_links(w.id.as_str(), None);
-        let op = if matches!(w.kind, WorkKind::Feature) {
-            "features.get"
+        let (op, family) = if matches!(w.kind, WorkKind::Feature) {
+            ("features.get", wops::Family::Features)
         } else {
-            "tasks.get"
+            ("tasks.get", wops::Family::Tasks)
         };
         let id = w.id.as_str().to_owned();
         self.query(
             Slot::WorkDetail(id.clone()),
             "Reading work",
             op,
-            move |be| wops::work_get(be, op, &id),
+            move |be| wops::work_get(be, family, &id),
         );
     }
     fn load_git_links(&mut self, work: &str, cursor: Option<String>) {
@@ -1103,7 +1139,7 @@ impl Shell {
             Slot::WorkOpen(id.to_owned(), false),
             "Opening work",
             "tasks.get",
-            move |be| wops::work_get(be, "tasks.get", &w),
+            move |be| wops::work_get(be, wops::Family::Tasks, &w),
         );
     }
     /// Counts the roots (features and standalone issues) and running roots of `project` for
@@ -1118,16 +1154,16 @@ impl Shell {
             }
             self.work.counting.insert(key, (0, 0));
             let p = project.to_owned();
-            let op = if features {
-                "features.list"
+            let (op, family) = if features {
+                ("features.list", wops::Family::Features)
             } else {
-                "issues.list"
+                ("issues.list", wops::Family::Issues)
             };
             self.query(
                 Slot::ArchiveCount(project.to_owned(), features),
                 "Counting running work",
                 op,
-                move |be| wops::work_list(be, op, &p, None),
+                move |be| wops::work_list(be, family, &p, None),
             );
         }
     }
@@ -1197,13 +1233,12 @@ impl Shell {
                     {
                         continue;
                     }
-                    let body = message_post_body(&draft);
-                    let p = project.clone();
+                    let input = message_post_body(&draft, &project);
                     if self.command(
                         Slot::WorkMessagePost(project),
                         "Posting message",
                         "agents.post",
-                        move |be| wops::message_post(be, &p, body),
+                        move |be| wops::message_post(be, input),
                     ) {
                         self.work.messages.sending = Some(draft);
                     }
@@ -1261,132 +1296,61 @@ impl Shell {
                         ));
                         continue;
                     };
-                    let (op, body): (&'static str, Value) = match form.kind.as_str() {
-                        "feature" => (
-                            "features.create",
-                            json!({"projectId": p, "creation": {"kind": "Single",
-                                "title": form.title, "description": form.description,
-                                "repositoryIds": [], "statusId": backlog,
-                                "priority": form.priority}}),
-                        ),
-                        "issue" => {
-                            let mut b = json!({"projectId": p, "title": form.title,
-                                "description": form.description, "repositoryIds": [],
-                                "statusId": backlog, "priority": form.priority});
-                            if let Some(f) = &form.feature {
-                                b["featureId"] = json!(f);
-                            }
-                            ("issues.create", b)
-                        }
-                        _ => {
-                            let mut b = json!({"projectId": p, "title": form.title,
-                                "description": form.description, "repositoryIds": [],
-                                "statusId": backlog, "priority": form.priority});
-                            if let Some(f) = &form.feature {
-                                b["parentId"] = json!(f);
-                            }
-                            ("tasks.create", b)
+                    let (op, input) = match create_request(&form, &p, &backlog) {
+                        Ok(request) => request,
+                        Err(error) => {
+                            self.work.message = Some((Tone::Bad, error));
+                            continue;
                         }
                     };
-                    let mut body = body;
-                    let metadata = if form.kind == "feature" {
-                        &mut body["creation"]
-                    } else {
-                        &mut body
-                    };
-                    metadata["labels"] = json!(form.labels);
-                    if form.kind == "feature" {
-                        match form.budget.input() {
-                            Ok(input) => metadata["budget"] = input,
-                            Err(error) => {
-                                self.work.message = Some((Tone::Bad, error));
-                                continue;
-                            }
-                        }
-                    }
-                    if form.kind != "feature"
-                        && let Some(kind) = &form.task_type
-                    {
-                        metadata["taskType"] = json!(kind);
-                    }
                     if self.command(
                         Slot::WorkCreate(p.clone()),
                         "Creating work",
                         op,
-                        move |be| wops::work_command(be, op, body),
+                        move |be| wops::work_command(be, input),
                     ) {
                         self.work.create_saving.insert(p, form);
                     }
                 }
                 Action::Edit(form) => {
                     let w = form.snapshot.clone();
-                    let mut changes = json!({});
-                    if form.title != w.title.0 {
-                        changes["title"] = json!(form.title);
-                    }
-                    if form.description != w.description.0 {
-                        changes["description"] = json!(form.description);
-                    }
-                    let feature = matches!(w.kind, WorkKind::Feature);
-                    if form.labels != labels_of(&w) {
-                        changes["labels"] = json!(form.labels);
-                    }
-                    if !feature && form.task_type != task_type_of(&w) {
-                        if let Some(kind) = &form.task_type {
-                            changes["taskType"] = json!(kind);
-                        } else {
-                            changes["clearTaskType"] = json!(true);
+                    let (op, input) = match edit_request(&form) {
+                        Ok(Some(request)) => request,
+                        Ok(None) => {
+                            self.work.edit = None;
+                            continue;
                         }
-                    }
-                    if feature && form.budget_changed {
-                        match form.budget.input() {
-                            Ok(input) => changes["budget"] = input,
-                            Err(error) => {
-                                self.work.message = Some((Tone::Bad, error));
-                                continue;
-                            }
+                        Err(error) => {
+                            self.work.message = Some((Tone::Bad, error));
+                            continue;
                         }
-                    }
-                    if !feature && form.priority != w.priority {
-                        changes["priority"] = json!(form.priority);
-                    }
-                    if changes.as_object().is_some_and(|m| m.is_empty()) {
-                        self.work.edit = None;
-                        continue;
-                    }
-                    let op = if feature {
-                        "features.edit"
-                    } else {
-                        "tasks.edit"
                     };
-                    let body = json!({"workId": w.id, "expectedRevision": w.revision,
-                        "changes": changes});
                     self.work.edit_saving.insert(w.id.as_str().to_owned(), form);
                     self.command(
                         Slot::WorkCommand(w.id.as_str().to_owned()),
                         "Saving work",
                         op,
-                        move |be| wops::work_command(be, op, body),
+                        move |be| wops::work_command(be, input),
                     );
                 }
-                Action::Command(id, op, body) => {
-                    self.command(Slot::WorkCommand(id), "Changing work", op, move |be| {
-                        wops::work_command(be, op, body)
-                    });
+                Action::Command(id, input) => {
+                    self.command(
+                        Slot::WorkCommand(id),
+                        "Changing work",
+                        input.operation(),
+                        move |be| wops::work_command(be, input),
+                    );
                 }
                 Action::Move(w, status) => {
                     let id = w.id.as_str().to_owned();
-                    let body = json!({"taskId": w.id, "expectedRevision": w.revision,
-                        "statusId": status,
-                        "expectedWorkflowRevision": w.workflow_revision.clone()
-                            .map_or("1".to_owned(), |r| r.as_str().to_owned())});
+                    let input = move_request(&w, &status);
                     // The marker shows the move as submitted; the card stays where it is until
                     // the outcome is confirmed.
                     if self.command(
                         Slot::WorkCommand(id.clone()),
                         "Moving a card",
                         "tasks.move",
-                        move |be| wops::work_command(be, "tasks.move", body),
+                        move |be| wops::work_command(be, input),
                     ) {
                         self.work.moving.insert(id, status);
                     }
@@ -1396,17 +1360,11 @@ impl Shell {
                         continue;
                     };
                     // One bounded placement, whatever the bucket's size.
-                    let mut body = json!({"projectId": p, "expectedQueueRevision": expected,
-                        "placement": placement});
-                    if op == "tasks.prioritize" {
-                        body["priority"] = json!(priority.unwrap_or(0));
-                        if let Some(f) = &feature {
-                            body["featureId"] = json!(f);
-                        }
-                    }
+                    let input =
+                        order_request(op, &p, feature.as_deref(), priority, placement, &expected);
                     let key = format!("{p}/{}", feature.unwrap_or_default());
                     self.command(Slot::WorkOrder(key), "Reordering work", op, move |be| {
-                        wops::work_command(be, op, body)
+                        wops::work_command(be, input)
                     });
                 }
                 Action::SavePlan(form) => self.save_plan(form),
@@ -1432,13 +1390,12 @@ impl Shell {
                         self.work.message=Some((Tone::Attention,"Refresh the feature to read its captured pending plan token before requesting approval.".into()));
                         continue;
                     };
-                    let body = json!({"featureId": w.id, "expectedRevision": w.revision,
-                        "planRevision": pending.revision, "planDigest": digest});
+                    let input = approval_request(&w, &pending, digest);
                     self.command(
                         Slot::WorkCommand(w.id.as_str().to_owned()),
                         "Requesting plan approval",
                         "features.request_plan_approval",
-                        move |be| wops::work_command(be, "features.request_plan_approval", body),
+                        move |be| wops::work_command(be, input),
                     );
                 }
                 Action::InspectGit(repository, tree) => {
@@ -1583,30 +1540,18 @@ impl Shell {
     }
     fn submit_plan(&mut self, form: &PlanForm, content: &ArtifactRef) {
         let w = &form.snapshot;
-        // Every live requirement of the active plan stays in the draft (dropping one needs an
-        // explicit decision); what the form does not show is kept from its starting draft.
-        let mut body = json!({"featureId": w.id, "expectedRevision": w.revision,
-            "plan": plan_body(form, content)});
-        if let Some(budget) = &form.budget {
-            match budget.input() {
-                Ok(input) => body["budget"] = input,
-                Err(error) => {
-                    self.work.message = Some((Tone::Bad, error));
-                    return;
-                }
+        let input = match plan_request(form, content) {
+            Ok(input) => input,
+            Err(error) => {
+                self.work.message = Some((Tone::Bad, error));
+                return;
             }
-        } else if w
-            .pending_plan
-            .as_ref()
-            .is_some_and(|pending| pending.budget.is_some())
-        {
-            body["clearBudgetProposal"] = json!(true);
-        }
+        };
         self.command(
             Slot::WorkPlan(w.id.as_str().to_owned()),
             "Saving the plan draft",
             "features.edit_plan",
-            move |be| wops::work_command(be, "features.edit_plan", body),
+            move |be| wops::work_command(be, input),
         );
     }
 
@@ -1766,7 +1711,7 @@ impl Shell {
                                 Slot::WorkFeatures(p.clone()),
                                 "Loading features",
                                 "features.list",
-                                move |be| wops::work_list(be, "features.list", &p, Some(&c)),
+                                move |be| wops::work_list(be, wops::Family::Features, &p, Some(&c)),
                             );
                         }
                         None => {
@@ -1796,7 +1741,7 @@ impl Shell {
                                 Slot::WorkCards(p.clone()),
                                 "Loading tasks and issues",
                                 "tasks.list",
-                                move |be| wops::work_list(be, "tasks.list", &p, Some(&c)),
+                                move |be| wops::work_list(be, wops::Family::Tasks, &p, Some(&c)),
                             );
                         }
                         None => {
@@ -1911,7 +1856,7 @@ impl Shell {
                         Slot::WorkOpen(id.clone(), true),
                         "Opening work",
                         "features.get",
-                        move |be| wops::work_get(be, "features.get", &id),
+                        move |be| wops::work_get(be, wops::Family::Features, &id),
                     );
                 }
                 Err(e) => self.announce(format!("The work could not be opened: {}", e.describe())),
@@ -1930,16 +1875,16 @@ impl Shell {
                         entry.1 += items.iter().filter(|w| !w.attempts.0.is_empty()).count();
                         match next {
                             Some(c) => {
-                                let op = if features {
-                                    "features.list"
+                                let (op, family) = if features {
+                                    ("features.list", wops::Family::Features)
                                 } else {
-                                    "issues.list"
+                                    ("issues.list", wops::Family::Issues)
                                 };
                                 self.query(
                                     Slot::ArchiveCount(p.clone(), features),
                                     "Counting running work",
                                     op,
-                                    move |be| wops::work_list(be, op, &p, Some(&c)),
+                                    move |be| wops::work_list(be, family, &p, Some(&c)),
                                 );
                             }
                             None => {
@@ -2701,8 +2646,7 @@ impl Shell {
                 self.work.unlink = None;
                 actions.push(Action::Command(
                     w.id.as_str().to_owned(),
-                    "tasks.set_feature",
-                    json!({"taskId": w.id, "expectedRevision": w.revision, "clearFeature": true}),
+                    unlink_request(&w),
                 ));
             }
             Some(false) => self.work.unlink = None,
@@ -2711,45 +2655,287 @@ impl Shell {
     }
 }
 
+/// The command that creates what `form` describes in project `p`, whose backlog status is
+/// `backlog`: its operation, and the input (none when a value is outside its contract, which
+/// the gateway then rejects as a malformed request).
+pub(crate) fn create_request(
+    form: &CreateForm,
+    p: &str,
+    backlog: &str,
+) -> Result<(&'static str, Option<In>), String> {
+    let feature = form.kind == "feature";
+    let budget = if feature {
+        Some(form.budget.input()?)
+    } else {
+        None
+    };
+    let op = match form.kind.as_str() {
+        "feature" => "features.create",
+        "issue" => "issues.create",
+        _ => "tasks.create",
+    };
+    let input = || {
+        let project_id = ProjectId(frame::id(p)?);
+        let title = frame::text(&form.title)?;
+        let description = frame::text(&form.description)?;
+        let repository_ids = BoundedList(Vec::new());
+        let status_id = frame::id(backlog)?;
+        let priority = form.priority;
+        let labels = Some(frame::texts::<Label, 128>(&form.labels)?);
+        Some(match op {
+            "features.create" => In::Features(features::Input::Create(features::CreateInput {
+                project_id,
+                creation: FeatureCreation::Single {
+                    title,
+                    description,
+                    repository_ids,
+                    status_id,
+                    priority,
+                    plan: None,
+                    labels,
+                    budget,
+                },
+            })),
+            "issues.create" => In::Issues(issues::Input::Create(issues::CreateInput {
+                project_id,
+                title,
+                description,
+                repository_ids,
+                status_id,
+                priority,
+                feature_id: frame::lift(form.feature.as_deref().map(frame::text::<RootId>))?,
+                task_type: frame::lift(form.task_type.as_deref().map(frame::text))?,
+                labels,
+            })),
+            _ => In::Tasks(tasks::Input::Create(tasks::CreateInput {
+                project_id,
+                title,
+                description,
+                repository_ids,
+                parent_id: frame::lift(form.feature.as_deref().map(frame::text::<RootId>))?,
+                status_id,
+                priority,
+                task_type: frame::lift(form.task_type.as_deref().map(frame::text))?,
+                labels,
+            })),
+        })
+    };
+    Ok((op, input()))
+}
+
+/// The command that saves `form`'s changes to its item (its operation and input, as
+/// [`create_request`]), or none when nothing changed.
+pub(crate) fn edit_request(form: &EditForm) -> Result<Option<(&'static str, Option<In>)>, String> {
+    let w = &form.snapshot;
+    let feature = matches!(w.kind, WorkKind::Feature);
+    let title = (form.title != w.title.0).then_some(form.title.as_str());
+    let description = (form.description != w.description.0).then_some(form.description.as_str());
+    let labels = (form.labels != labels_of(w)).then_some(form.labels.as_slice());
+    let task_type = (!feature && form.task_type != task_type_of(w)).then_some(&form.task_type);
+    let budget = if feature && form.budget_changed {
+        Some(form.budget.input()?)
+    } else {
+        None
+    };
+    let priority = (!feature && form.priority != w.priority).then_some(form.priority);
+    if title.is_none()
+        && description.is_none()
+        && labels.is_none()
+        && task_type.is_none()
+        && budget.is_none()
+        && priority.is_none()
+    {
+        return Ok(None);
+    }
+    let input = || {
+        let work_id = w.id.clone();
+        let expected_revision = w.revision.clone();
+        let title = frame::lift(title.map(frame::text))?;
+        let description = frame::lift(description.map(frame::text))?;
+        let labels = frame::lift(labels.map(frame::texts::<Label, 128>))?;
+        Some(if feature {
+            In::Features(features::Input::Edit(features::EditInput {
+                work_id,
+                expected_revision,
+                changes: FeaturePatch {
+                    title,
+                    description,
+                    labels,
+                    budget,
+                    ..wops::empty()?
+                },
+            }))
+        } else {
+            let (task_type, clear_task_type) = match task_type {
+                Some(Some(kind)) => (Some(frame::text(kind)?), None),
+                Some(None) => (None, Some(true)),
+                None => (None, None),
+            };
+            In::Tasks(tasks::Input::Edit(tasks::EditInput {
+                work_id,
+                expected_revision,
+                changes: TaskPatch {
+                    title,
+                    description,
+                    labels,
+                    priority,
+                    task_type,
+                    clear_task_type,
+                    ..wops::empty()?
+                },
+            }))
+        })
+    };
+    Ok(Some((
+        if feature {
+            "features.edit"
+        } else {
+            "tasks.edit"
+        },
+        input(),
+    )))
+}
+
+/// The `tasks.move` command moving `w` to workflow status `status`.
+pub(crate) fn move_request(w: &WorkRecord, status: &str) -> Option<In> {
+    Some(In::Tasks(tasks::Input::Move(tasks::MoveInput {
+        task_id: w.id.clone(),
+        expected_revision: w.revision.clone(),
+        status_id: frame::id(status)?,
+        expected_workflow_revision: match &w.workflow_revision {
+            Some(revision) => revision.clone(),
+            None => frame::number(1)?,
+        },
+    })))
+}
+
+/// The queue placement command of `op` for one bounded `placement`.
+pub(crate) fn order_request(
+    op: &str,
+    p: &str,
+    feature: Option<&str>,
+    priority: Option<i32>,
+    placement: QueuePlacement,
+    expected: &str,
+) -> Option<In> {
+    let project_id = ProjectId(frame::id(p)?);
+    let expected_queue_revision = frame::text(expected)?;
+    let placement = Some(placement);
+    Some(match op {
+        "features.prioritize" => {
+            In::Features(features::Input::Prioritize(features::PrioritizeInput {
+                project_id,
+                expected_queue_revision,
+                ordered_work_ids: None,
+                placement,
+            }))
+        }
+        "issues.prioritize" => In::Issues(issues::Input::Prioritize(issues::PrioritizeInput {
+            project_id,
+            expected_queue_revision,
+            ordered_work_ids: None,
+            placement,
+        })),
+        _ => In::Tasks(tasks::Input::Prioritize(tasks::PrioritizeInput {
+            project_id,
+            feature_id: frame::lift(feature.map(frame::text::<RootId>))?,
+            expected_queue_revision,
+            priority: priority.unwrap_or(0),
+            ordered_task_ids: None,
+            placement,
+        })),
+    })
+}
+
+/// The `features.request_plan_approval` command for the pending plan of `w`.
+pub(crate) fn approval_request(
+    w: &WorkRecord,
+    pending: &PendingFeaturePlan,
+    digest: &Digest,
+) -> In {
+    In::Features(features::Input::RequestPlanApproval(
+        features::RequestPlanApprovalInput {
+            feature_id: RootId(w.id.clone()),
+            expected_revision: w.revision.clone(),
+            plan_revision: pending.revision.clone(),
+            plan_digest: digest.clone(),
+        },
+    ))
+}
+
+/// The `tasks.set_feature` command making `w` a standalone issue.
+pub(crate) fn unlink_request(w: &WorkRecord) -> In {
+    In::Tasks(tasks::Input::SetFeature(tasks::SetFeatureInput {
+        task_id: w.id.clone(),
+        expected_revision: w.revision.clone(),
+        feature_id: None,
+        clear_feature: true,
+    }))
+}
+
+/// The `features.edit_plan` command saving `form` (as [`create_request`]). Every live
+/// requirement of the active plan stays in the draft (dropping one needs an explicit decision);
+/// what the form does not show is kept from its starting draft.
+pub(crate) fn plan_request(form: &PlanForm, content: &ArtifactRef) -> Result<Option<In>, String> {
+    let w = &form.snapshot;
+    let (budget, clear_budget_proposal) = match &form.budget {
+        Some(budget) => (Some(budget.input()?), None),
+        None if w
+            .pending_plan
+            .as_ref()
+            .is_some_and(|pending| pending.budget.is_some()) =>
+        {
+            (None, Some(true))
+        }
+        None => (None, None),
+    };
+    Ok(plan_body(form, content).map(|plan| {
+        In::Features(features::Input::EditPlan(features::EditPlanInput {
+            feature_id: RootId(w.id.clone()),
+            expected_revision: w.revision.clone(),
+            plan,
+            budget,
+            clear_budget_proposal,
+        }))
+    }))
+}
+
 /// The desktop user's actor (the host binds it), for "You" in Activity.
 fn devworks_desktop_user() -> String {
     crate::host::USER_ACTOR.to_owned()
 }
 
-fn message_post_body(draft: &MessageDraft) -> Value {
+/// The `agents.post` command of `draft` in `project` (none when a value is outside its
+/// contract).
+pub(crate) fn message_post_body(draft: &MessageDraft, project: &str) -> Option<In> {
     let kind = ["Info", "Question", "Request", "Blocker", "Announcement"]
         .get(draft.kind)
         .copied()
         .unwrap_or("Info");
-    let mut body = json!({"body":draft.body,"messageKind":kind});
-    for (name, value) in [
-        ("toSessionId", &draft.to_session),
-        ("itemId", &draft.item),
-        ("featureId", &draft.feature),
-        ("resourceName", &draft.resource),
-        ("inReplyToId", &draft.reply_to),
-    ] {
-        if !value.trim().is_empty() {
-            body[name] = json!(value.trim());
-        }
+    fn field(value: &str) -> Option<&str> {
+        Some(value.trim()).filter(|v| !v.is_empty())
     }
-    if draft.to_human {
-        body["toHuman"] = json!(true);
-    }
-    if draft.blocking {
-        body["blocking"] = json!(true);
-    }
-    if !draft.reply_to.trim().is_empty() {
-        let resolution = match draft.resolution {
-            1 => Some("Answered"),
-            2 => Some("Declined"),
-            _ => None,
-        };
-        if let Some(resolution) = resolution {
-            body["resolves"] = json!(resolution);
-        }
-    }
-    body
+    let reply = field(&draft.reply_to);
+    let resolution = match (reply, draft.resolution) {
+        (Some(_), 1) => Some("Answered"),
+        (Some(_), 2) => Some("Declined"),
+        _ => None,
+    };
+    Some(In::Agents(agents::Input::Post(agents::PostInput {
+        session_id: None,
+        project_id: Some(ProjectId(frame::id(project)?)),
+        body: frame::text(&draft.body)?,
+        message_kind: Some(frame::text(kind)?),
+        item_id: frame::lift(field(&draft.item).map(frame::text))?,
+        feature_id: frame::lift(field(&draft.feature).map(frame::text))?,
+        resource_name: frame::lift(field(&draft.resource).map(frame::text))?,
+        to_session_id: frame::lift(field(&draft.to_session).map(frame::text))?,
+        to_human: draft.to_human.then_some(true),
+        blocking: draft.blocking.then_some(true),
+        in_reply_to_id: frame::lift(reply.map(frame::text))?,
+        resolves: frame::lift(resolution.map(frame::text))?,
+        idempotency_key: None,
+    })))
 }
 
 fn message_board(ui: &mut Ui, board: &mut MessageBoard, open: bool, actions: &mut Vec<Action>) {

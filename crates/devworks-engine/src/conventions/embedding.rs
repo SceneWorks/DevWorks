@@ -212,7 +212,10 @@ impl NativeEmbeddings {
         let Some((attempt, balance, state)) = row else {
             return Ok(None);
         };
-        if attempt.state != "Settled" || !balance.local_quiescent || balance.unknown_tail {
+        if attempt.state != devworks_core::ports::storage::AttemptState::Settled
+            || !balance.local_quiescent
+            || balance.unknown_tail
+        {
             return Err(EmbeddingFailure::Unknown {
                 request_id: request.clone(),
                 reason: "The exact native embedding outcome is not closed and complete.".into(),

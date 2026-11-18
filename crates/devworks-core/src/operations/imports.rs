@@ -143,4 +143,14 @@ impl Input {
             Self::Inspect(_) => Mode::Query,
         }
     }
+    /// The `/body` members of this input, without the `kind` discriminator.
+    pub fn body(&self) -> Result<serde_json::Value, serde_json::Error> {
+        match self {
+            Self::Preview(i) => serde_json::to_value(i),
+            Self::Configure(i) => serde_json::to_value(i),
+            Self::Apply(i) => serde_json::to_value(i),
+            Self::Runs(i) => serde_json::to_value(i),
+            Self::Inspect(i) => serde_json::to_value(i),
+        }
+    }
 }

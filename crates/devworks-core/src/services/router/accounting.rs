@@ -344,7 +344,7 @@ impl InferenceRouter {
             .usage()
             .inference_attempt(id)?
             .ok_or_else(|| StorageError::InvalidRecord("unknown accounted attempt".into()))?;
-        if attempt.state == "Admitted" {
+        if attempt.state == crate::ports::storage::AttemptState::Admitted {
             let snapshot = crate::services::usage::accounting::snapshot(&attempt)?;
             if let Some(reason) = self.attempt_route_current(
                 tx,

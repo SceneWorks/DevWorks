@@ -250,4 +250,16 @@ impl Input {
             Self::Search(_) => Mode::Query,
         }
     }
+    /// The `/body` members of this input, without the `kind` discriminator.
+    pub fn body(&self) -> Result<serde_json::Value, serde_json::Error> {
+        match self {
+            Self::List(i) => serde_json::to_value(i),
+            Self::Get(i) => serde_json::to_value(i),
+            Self::Nodes(i) => serde_json::to_value(i),
+            Self::RemoveIndex(i) => serde_json::to_value(i),
+            Self::Readme(i) => serde_json::to_value(i),
+            Self::Summary(i) => serde_json::to_value(i),
+            Self::Search(i) => serde_json::to_value(i),
+        }
+    }
 }

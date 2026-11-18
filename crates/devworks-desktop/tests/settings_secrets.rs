@@ -64,7 +64,7 @@ fn set(backend: &dyn Backend, key: &str, value: Value) {
     let body = json!({"scope":{"kind":"Workspace"},"expectedRevision":revision.to_string(),"entries":[{"key":key,"value":{"schema":d.schema_ref(),"value":value}}]});
     ops::settings_saved(backend.command(
         "settings.save_revision",
-        &ops::command_frame(backend, "settings.save_revision", body),
+        &devworks_desktop::frame::fixture::command(backend, "settings.save_revision", body),
     ))
     .unwrap();
 }

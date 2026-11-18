@@ -879,7 +879,10 @@ async fn delivered_message_replays_until_read_acknowledgment() {
         .await
         .unwrap();
     assert_eq!(first.items.len(), 1);
-    assert_eq!(first.items[0].0.state, "Delivered");
+    assert_eq!(
+        first.items[0].0.state,
+        devworks_core::ports::storage::DeliveryState::Delivered
+    );
     assert_eq!(first.items[0].1.id, posted.message.id);
     let delivered_revision = first.items[0].0.revision;
 
@@ -888,7 +891,10 @@ async fn delivered_message_replays_until_read_acknowledgment() {
         .await
         .unwrap();
     assert_eq!(replay.items.len(), 1);
-    assert_eq!(replay.items[0].0.state, "Delivered");
+    assert_eq!(
+        replay.items[0].0.state,
+        devworks_core::ports::storage::DeliveryState::Delivered
+    );
     assert_eq!(replay.items[0].0.revision, delivered_revision);
 
     let acknowledged = driver
@@ -902,7 +908,10 @@ async fn delivered_message_replays_until_read_acknowledgment() {
         .await
         .unwrap();
     assert_eq!(acknowledged.changed.len(), 1);
-    assert_eq!(acknowledged.changed[0].0.state, "Read");
+    assert_eq!(
+        acknowledged.changed[0].0.state,
+        devworks_core::ports::storage::DeliveryState::Read
+    );
     assert!(
         driver
             .receive(user.clone(), project.clone(), receive(false))
@@ -916,7 +925,10 @@ async fn delivered_message_replays_until_read_acknowledgment() {
         .await
         .unwrap();
     assert_eq!(read.items.len(), 1);
-    assert_eq!(read.items[0].0.state, "Read");
+    assert_eq!(
+        read.items[0].0.state,
+        devworks_core::ports::storage::DeliveryState::Read
+    );
 
     let resumed = driver
         .wait_events(user.clone(), project.clone(), Some(0), 0)

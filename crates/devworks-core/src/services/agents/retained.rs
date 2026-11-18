@@ -1,6 +1,7 @@
 //! The retained work-message inbox's single transactional delivery pass. A gateway command can
 //! long-poll by repeating this pass between transactions; no connection is held during a wait.
 use crate::context::{InvocationContext, PrincipalKind};
+use crate::ports::storage::DeliveryState;
 use crate::ports::storage::{
     ANY_QUEUE, AgentMessageHistoryFilter, ReadSnapshot, StorageError, StoredAgentDelivery,
     StoredAgentMessage, StoredAgentMessageEvent, Unavailable, WriteTransaction,
@@ -234,6 +235,12 @@ pub enum Resolution {
 }
 
 impl Resolution {
+    fn delivery_state(self) -> DeliveryState {
+        match self {
+            Self::Answered => DeliveryState::Answered,
+            Self::Declined => DeliveryState::Declined,
+        }
+    }
     fn state(self) -> &'static str {
         match self {
             Self::Answered => "Answered",
@@ -416,9 +423,9 @@ pub fn deliver_inbox(
             .agent_inbox(project, None, after, include_read, limit)?,
     };
     for (delivery, _) in &mut rows {
-        if delivery.state == "Pending" {
+        if delivery.state == DeliveryState::Pending {
             let expected = delivery.revision;
-            delivery.state = "Delivered".into();
+            delivery.state = DeliveryState::Delivered;
             delivery.revision += 1;
             delivery.delivered_at_ms = Some(now);
             tx.runs().update_agent_delivery(delivery, expected)?;
@@ -839,7 +846,7 @@ pub(super) fn resolve_message(
     tx.runs()
         .resolve_agent_message(&resolved, message.revision)?;
     let expected = delivery.revision;
-    delivery.state = resolution.state().into();
+    delivery.state = resolution.delivery_state();
     delivery.revision += 1;
     delivery.delivered_at_ms.get_or_insert(now);
     delivery.read_at_ms.get_or_insert(now);

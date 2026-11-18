@@ -850,4 +850,33 @@ impl Input {
             Self::TaggedLessons(_) => Mode::Query,
         }
     }
+    /// The `/body` members of this input, without the `kind` discriminator.
+    pub fn body(&self) -> Result<serde_json::Value, serde_json::Error> {
+        match self {
+            Self::Search(i) => serde_json::to_value(i),
+            Self::Read(i) => serde_json::to_value(i),
+            Self::Record(i) => serde_json::to_value(i),
+            Self::Revise(i) => serde_json::to_value(i),
+            Self::Relate(i) => serde_json::to_value(i),
+            Self::Tag(i) => serde_json::to_value(i),
+            Self::Verify(i) => serde_json::to_value(i),
+            Self::Retract(i) => serde_json::to_value(i),
+            Self::Scope(i) => serde_json::to_value(i),
+            Self::Diagnostics(i) => serde_json::to_value(i),
+            Self::DeleteBySource(i) => serde_json::to_value(i),
+            Self::DeleteSelected(i) => serde_json::to_value(i),
+            Self::WriteStatus(i) => serde_json::to_value(i),
+            Self::Subgraph(i) => serde_json::to_value(i),
+            Self::EntityBundle(i) => serde_json::to_value(i),
+            Self::EntityGraph(i) => serde_json::to_value(i),
+            Self::ClaimBundle(i) => serde_json::to_value(i),
+            Self::ExpandFrontier(i) => serde_json::to_value(i),
+            Self::RenderSummary(i) => serde_json::to_value(i),
+            Self::Query(i) => serde_json::to_value(i),
+            Self::ImportUserData(i) => serde_json::to_value(i),
+            Self::Promote(i) => serde_json::to_value(i),
+            Self::Challenge(i) => serde_json::to_value(i),
+            Self::TaggedLessons(i) => serde_json::to_value(i),
+        }
+    }
 }

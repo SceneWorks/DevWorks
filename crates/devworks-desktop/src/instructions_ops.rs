@@ -4,6 +4,7 @@
 //! anything the instruction service decides.
 use crate::{
     backend::{Backend, TaskOutput, screen_slot},
+    frame::{self, Negotiate},
     ops::{self, Failure},
 };
 
@@ -31,16 +32,18 @@ pub enum InstructionsSlot {
 screen_slot!(InstructionsSlot, Instructions);
 use devworks_core::{
     gateway::{CommandOutcome, QueryOutcome},
+    operations::{OperationInput as In, roles, skills},
     protocol::{
         DomainErrorCode,
+        data::DataScope,
         provider::ArtifactRef,
-        records::{InstructionRecord, SkillResource, SkillResourcePageResult},
+        records::{InstructionRecord, PageRequest, SkillResource, SkillResourcePageResult},
         results::OperationResult,
+        support::BoundedList,
     },
     services::instructions::{HARNESS_ROOT_ID, MAX_TEXT_BYTES, SHARED_ROOT_ID, role_item_id},
     settings::catalog::AgentRole,
 };
-use serde_json::{Value, json};
 use std::path::PathBuf;
 
 /// Rows one discovery or history page asks for.
@@ -265,56 +268,108 @@ pub fn role_title(role: AgentRole) -> &'static str {
 // ---------------------------------------------------------------------------------------------
 // Frames
 
-fn workspace() -> Value {
-    json!({"kind": "Workspace"})
+fn page(cursor: Option<&str>) -> Option<PageRequest> {
+    frame::page(u32::from(PAGE), cursor)
 }
-fn page(cursor: Option<&str>) -> Value {
-    let mut p = json!({"limit": PAGE});
-    if let Some(c) = cursor {
-        p["cursor"] = json!(c);
-    }
-    p
+pub fn discover(cursor: Option<&str>) -> Option<In> {
+    Some(In::Skills(skills::Input::Discover(skills::DiscoverInput {
+        scope: DataScope::Workspace,
+        root_ids: BoundedList(Vec::new()),
+        page: page(cursor)?,
+    })))
 }
-pub fn discover_body(cursor: Option<&str>) -> Value {
-    json!({"scope": workspace(), "rootIds": [], "page": page(cursor)})
+pub fn read(kind: Kind, id: &str, revision: Option<i64>) -> Option<In> {
+    let instruction_id = frame::id(id)?;
+    let revision = frame::lift(revision.map(frame::number))?;
+    Some(match kind {
+        Kind::Skill => In::Skills(skills::Input::Read(skills::ReadInput {
+            instruction_id,
+            revision,
+        })),
+        Kind::Role => In::Roles(roles::Input::Read(roles::ReadInput {
+            instruction_id,
+            revision,
+        })),
+    })
 }
-pub fn read_body(id: &str, revision: Option<i64>) -> Value {
-    let mut body = json!({"instructionId": id});
-    if let Some(r) = revision {
-        body["revision"] = json!(r.to_string());
-    }
-    body
+pub fn history(kind: Kind, id: &str, cursor: Option<&str>) -> Option<In> {
+    let (instruction_id, page) = (frame::id(id)?, page(cursor)?);
+    Some(match kind {
+        Kind::Skill => In::Skills(skills::Input::History(skills::HistoryInput {
+            instruction_id,
+            page,
+        })),
+        Kind::Role => In::Roles(roles::Input::History(roles::HistoryInput {
+            instruction_id,
+            page,
+        })),
+    })
 }
-pub fn history_body(id: &str, cursor: Option<&str>) -> Value {
-    json!({"instructionId": id, "page": page(cursor)})
-}
-pub fn resources_body(id: &str, revision: i64, cursor: Option<&str>) -> Value {
-    json!({"instructionId": id, "revision": revision.to_string(), "page": page(cursor)})
+pub fn read_resources(id: &str, revision: i64, cursor: Option<&str>) -> Option<In> {
+    Some(In::Skills(skills::Input::Resources(
+        skills::ResourcesInput {
+            instruction_id: frame::id(id)?,
+            revision: frame::number(revision)?,
+            page: page(cursor)?,
+        },
+    )))
 }
 /// A human draft. `target` is `(instructionId, latest revision)`; `None` creates a new
 /// harness skill named `name`.
-pub fn draft_body(target: Option<(&str, i64)>, name: &str, content: &ArtifactRef) -> Value {
-    let mut body = json!({"scope": workspace(), "name": name, "content": content});
-    if let Some((id, expected)) = target {
-        body["instructionId"] = json!(id);
-        body["expectedRevision"] = json!(expected.to_string());
-    }
-    body
+pub fn draft(
+    kind: Kind,
+    target: Option<(&str, i64)>,
+    name: &str,
+    content: &ArtifactRef,
+) -> Option<In> {
+    let (instruction_id, expected_revision) = match target {
+        Some((id, expected)) => (Some(frame::id(id)?), Some(frame::number(expected)?)),
+        None => (None, None),
+    };
+    let (name, content) = (frame::text(name)?, content.clone());
+    Some(match kind {
+        Kind::Skill => In::Skills(skills::Input::Draft(skills::DraftInput {
+            scope: DataScope::Workspace,
+            instruction_id,
+            expected_revision,
+            name,
+            content,
+        })),
+        Kind::Role => In::Roles(roles::Input::Draft(roles::DraftInput {
+            scope: DataScope::Workspace,
+            instruction_id,
+            expected_revision,
+            name,
+            content,
+        })),
+    })
 }
-pub fn rollback_body(id: &str, expected: i64, target: i64) -> Value {
-    json!({"instructionId": id, "expectedRevision": expected.to_string(),
-        "targetRevision": target.to_string()})
+pub fn rollback(kind: Kind, id: &str, expected: i64, target: i64) -> Option<In> {
+    let instruction_id = frame::id(id)?;
+    let (expected_revision, target_revision) = (frame::number(expected)?, frame::number(target)?);
+    Some(match kind {
+        Kind::Skill => In::Skills(skills::Input::Rollback(skills::RollbackInput {
+            instruction_id,
+            expected_revision,
+            target_revision,
+            proposal_id: None,
+        })),
+        Kind::Role => In::Roles(roles::Input::Rollback(roles::RollbackInput {
+            instruction_id,
+            expected_revision,
+            target_revision,
+            proposal_id: None,
+        })),
+    })
 }
-pub fn query(b: &dyn Backend, operation: &str, body: Value) -> Vec<u8> {
-    ops::query_frame(b, operation, body)
+/// A request that did not convert (`None`) is sent as no bytes, which the gateway rejects like
+/// any malformed request. Every instruction operation is sent at its newest schema revision
+/// (`skills.resources` at 3 carries each resource's skill-relative path).
+pub fn query(b: &dyn Backend, input: impl Into<Option<In>>) -> Vec<u8> {
+    frame::build(b, Negotiate::Latest, input.into())
 }
-/// The `skills.resources` frame at schema revision 3, whose items carry each resource's
-/// skill-relative path beside its artifact.
-pub fn resources_query(b: &dyn Backend, body: Value) -> Vec<u8> {
-    ops::at_revision(ops::query_frame(b, "skills.resources", body), 3)
-}
-pub fn command(b: &dyn Backend, operation: &str, body: Value) -> Vec<u8> {
-    ops::command_frame(b, operation, body)
+pub fn command(b: &dyn Backend, input: impl Into<Option<In>>) -> Vec<u8> {
+    frame::build(b, Negotiate::Latest, input.into())
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -440,6 +495,7 @@ pub fn prepare_save(b: &dyn Backend, title: &str, text: &str) -> Result<TaskOutp
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
 
     fn rec(revision: i64, approved: bool, labels: &[&str]) -> InstructionRecord {
         serde_json::from_value(json!({
@@ -534,26 +590,30 @@ mod tests {
 
     #[test]
     fn bodies_use_camel_case_and_decimal_revisions() {
+        let body = |input: Option<In>| input.expect("a typed input").body().expect("a body");
         let content: ArtifactRef = rec(1, true, &[]).content;
-        let b = draft_body(Some(("skill-1", 7)), "lint", &content);
+        let b = body(draft(Kind::Skill, Some(("skill-1", 7)), "lint", &content));
         assert_eq!(b["instructionId"], "skill-1");
         assert_eq!(b["expectedRevision"], "7");
         assert_eq!(b["scope"]["kind"], "Workspace");
         assert_eq!(b["content"]["artifactId"], "art-1");
-        let new = draft_body(None, "fresh", &content);
+        let new = body(draft(Kind::Role, None, "fresh", &content));
         assert!(new.get("instructionId").is_none() && new.get("expectedRevision").is_none());
-        let r = rollback_body("role-worker", 4, 1);
+        let r = body(rollback(Kind::Role, "role-worker", 4, 1));
         assert_eq!(r["expectedRevision"], "4");
         assert_eq!(r["targetRevision"], "1");
-        let d = discover_body(Some("c1"));
+        let d = body(discover(Some("c1")));
         assert_eq!(d["page"]["limit"], json!(PAGE));
         assert!(d["page"]["limit"].is_u64(), "page limit is a JSON integer");
         assert_eq!(d["page"]["cursor"], "c1");
         assert_eq!(d["rootIds"], json!([]));
-        assert_eq!(read_body("x", Some(2))["revision"], "2");
-        assert!(read_body("x", None).get("revision").is_none());
-        assert_eq!(resources_body("x", 3, None)["revision"], "3");
-        assert_eq!(history_body("x", None)["page"]["limit"], json!(PAGE));
+        assert_eq!(body(read(Kind::Skill, "x", Some(2)))["revision"], "2");
+        assert!(body(read(Kind::Role, "x", None)).get("revision").is_none());
+        assert_eq!(body(read_resources("x", 3, None))["revision"], "3");
+        assert_eq!(
+            body(history(Kind::Skill, "x", None))["page"]["limit"],
+            json!(PAGE)
+        );
     }
 
     #[test]

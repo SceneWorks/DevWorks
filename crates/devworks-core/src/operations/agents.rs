@@ -379,4 +379,20 @@ impl Input {
             Self::Checkpoint(_) => Mode::Command,
         }
     }
+    /// The `/body` members of this input, without the `kind` discriminator.
+    pub fn body(&self) -> Result<serde_json::Value, serde_json::Error> {
+        match self {
+            Self::Inspect(i) => serde_json::to_value(i),
+            Self::Delegate(i) => serde_json::to_value(i),
+            Self::Messages(i) => serde_json::to_value(i),
+            Self::Post(i) => serde_json::to_value(i),
+            Self::Receive(i) => serde_json::to_value(i),
+            Self::Ack(i) => serde_json::to_value(i),
+            Self::History(i) => serde_json::to_value(i),
+            Self::Events(i) => serde_json::to_value(i),
+            Self::Inbox(i) => serde_json::to_value(i),
+            Self::Acknowledge(i) => serde_json::to_value(i),
+            Self::Checkpoint(i) => serde_json::to_value(i),
+        }
+    }
 }

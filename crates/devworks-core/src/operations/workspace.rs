@@ -512,4 +512,17 @@ impl Input {
             Self::RecordDiagnostic(_) => Mode::Command,
         }
     }
+    /// The `/body` members of this input, without the `kind` discriminator.
+    pub fn body(&self) -> Result<serde_json::Value, serde_json::Error> {
+        match self {
+            Self::Diagnostics(i) => serde_json::to_value(i),
+            Self::Backup(i) => serde_json::to_value(i),
+            Self::Restore(i) => serde_json::to_value(i),
+            Self::Migrate(i) => serde_json::to_value(i),
+            Self::UpdateStatus(i) => serde_json::to_value(i),
+            Self::ApproveInstall(i) => serde_json::to_value(i),
+            Self::Logs(i) => serde_json::to_value(i),
+            Self::RecordDiagnostic(i) => serde_json::to_value(i),
+        }
+    }
 }

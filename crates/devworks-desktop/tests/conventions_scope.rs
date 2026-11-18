@@ -12,6 +12,28 @@ use std::{
     time::{Duration, Instant},
 };
 
+/// A convention request of a JSON body, through the typed input the registry decodes it into.
+fn request_query(
+    backend: &dyn devworks_desktop::backend::Backend,
+    operation: &str,
+    body: serde_json::Value,
+) -> Vec<u8> {
+    cop::query(
+        backend,
+        devworks_desktop::frame::fixture::query_input(operation, body),
+    )
+}
+fn request_command(
+    backend: &dyn devworks_desktop::backend::Backend,
+    operation: &str,
+    body: serde_json::Value,
+) -> Vec<u8> {
+    cop::command(
+        backend,
+        devworks_desktop::frame::fixture::command_input(operation, body),
+    )
+}
+
 struct Fixture {
     backend: Arc<dyn Backend>,
     engine: Engine,
@@ -28,7 +50,7 @@ impl Fixture {
             "desktop requests must not acquire a synthetic project lineage"
         );
         let backend = engine.backend();
-        let frame = cop::command(
+        let frame = request_command(
             &*backend,
             "projects.create",
             json!({"name":"Explicit convention project","description":"Native scoped source regression","repositoryIds":[]}),
@@ -84,7 +106,7 @@ impl Fixture {
             &serde_json::to_vec(&manifest).unwrap(),
             "application/json",
         );
-        let frame = cop::command(
+        let frame = request_command(
             &*self.backend,
             "conventions.import",
             json!({"scope":self.scope(),"source":source,"schema":devworks_core::services::conventions::model::manifest_schema()}),
@@ -98,7 +120,7 @@ impl Fixture {
         loop {
             let status = cop::operation(self.backend.query(
                 "conventions.read",
-                &cop::query(
+                &request_query(
                     &*self.backend,
                     "conventions.read",
                     json!({"scope":self.scope(),"operationId":operation}),
@@ -123,7 +145,7 @@ impl Fixture {
         }
         let page = cop::page(self.backend.query(
             "conventions.list",
-            &cop::query(
+            &request_query(
                 &*self.backend,
                 "conventions.list",
                 json!({"scope":self.scope(),"page":{"limit":10},"applicability":[]}),
@@ -143,7 +165,7 @@ impl Fixture {
         body.as_object_mut()
             .unwrap()
             .extend(extra.as_object().unwrap().clone());
-        let frame = cop::command(&*self.backend, "conventions.edit", body);
+        let frame = request_command(&*self.backend, "conventions.edit", body);
         let cop::Change::Record(record) =
             cop::changed(self.backend.command("conventions.edit", &frame)).unwrap()
         else {
@@ -154,7 +176,7 @@ impl Fixture {
     fn document(&self, owner: &ConventionRecord, format: &str) -> ConventionReadView {
         cop::document(self.backend.query(
             "conventions.read",
-            &cop::query(
+            &request_query(
                 &*self.backend,
                 "conventions.read",
                 json!({"scope":self.scope(),"conventionId":owner.id,"format":format}),
@@ -163,7 +185,7 @@ impl Fixture {
         .unwrap()
     }
     fn resources(&self, owner: &ConventionRecord) -> Vec<ConventionResourceRecord> {
-        let view=cop::resources(self.backend.query("conventions.resources",&cop::query(&*self.backend,"conventions.resources",json!({"scope":self.scope(),"page":{"limit":10},"applicability":[],"selection":{"kind":"Attachments","conventionId":owner.id,"conventionRevision":owner.revision}})))).unwrap();
+        let view=cop::resources(self.backend.query("conventions.resources",&request_query(&*self.backend,"conventions.resources",json!({"scope":self.scope(),"page":{"limit":10},"applicability":[],"selection":{"kind":"Attachments","conventionId":owner.id,"conventionRevision":owner.revision}})))).unwrap();
         let ConventionResourcesView::Attachments { page } = view else {
             panic!("real attachment metadata")
         };
@@ -186,7 +208,7 @@ fn project_metadata_edit_reuses_authorized_current_markdown_and_raw_without_line
         f.document(&edited, "Raw").passage.unwrap().text.0,
         "Raw original\0source"
     );
-    let denied = cop::changed(f.backend.command("conventions.edit", &cop::command(&*f.backend,"conventions.edit",json!({"scope":{"kind":"Workspace"},"conventionId":edited.id,"expectedRevision":edited.revision,"content":edited.content,"title":"Wrong scope must not apply"}))));
+    let denied = cop::changed(f.backend.command("conventions.edit", &request_command(&*f.backend,"conventions.edit",json!({"scope":{"kind":"Workspace"},"conventionId":edited.id,"expectedRevision":edited.revision,"content":edited.content,"title":"Wrong scope must not apply"}))));
     match denied {
         Err(ops::Failure::Refused(fault)) => assert_eq!(
             fault.code,
@@ -212,7 +234,7 @@ fn project_resource_capture_reuses_exact_authorized_resource_with_new_body_uploa
     let actual = f.resources(&edited).remove(0);
     assert_eq!(actual.name.0, "Retained exact resource");
     assert_eq!(actual.content.sha256, resource.content.sha256);
-    let result=ops::query_result(f.backend.query("conventions.read",&cop::query(&*f.backend,"conventions.read",json!({"scope":f.scope(),"conventionId":edited.id,"resourceId":actual.id,"format":"Resource"})))).unwrap().0;
+    let result=ops::query_result(f.backend.query("conventions.read",&request_query(&*f.backend,"conventions.read",json!({"scope":f.scope(),"conventionId":edited.id,"resourceId":actual.id,"format":"Resource"})))).unwrap().0;
     assert_eq!(
         cop::binary(result).unwrap().passage.base64.0,
         "AP8BcmVzb3VyY2U="
@@ -241,7 +263,7 @@ fn project_historical_source_restore_uses_history_scope_instead_of_upload_visibi
     );
     let versions = cop::page(f.backend.query(
         "conventions.version",
-        &cop::query(
+        &request_query(
             &*f.backend,
             "conventions.version",
             json!({"scope":f.scope(),"conventionId":restored.id,"page":{"limit":10}}),
@@ -289,7 +311,7 @@ fn project_search_and_section_path_keep_the_authorized_hit_scope_without_lineage
     }
     let page = cop::search(f.backend.query(
         "conventions.search",
-        &cop::query(
+        &request_query(
             &*f.backend,
             "conventions.search",
             json!({"scope":f.scope(),"page":{"limit":10},"applicability":[],"text":"scopeguard"}),
@@ -299,12 +321,12 @@ fn project_search_and_section_path_keep_the_authorized_hit_scope_without_lineage
     assert!(!page.items.0.is_empty(), "actual lexical corpus hit");
     let hit = &page.items.0[0];
     assert_eq!(hit.convention.id, owner.id);
-    let view=cop::document(f.backend.query("conventions.read",&cop::query(&*f.backend,"conventions.read",json!({"scope":f.scope(),"conventionId":owner.id,"format":"SectionPath","sectionPath":hit.indexed_path})))).unwrap();
+    let view=cop::document(f.backend.query("conventions.read",&request_query(&*f.backend,"conventions.read",json!({"scope":f.scope(),"conventionId":owner.id,"format":"SectionPath","sectionPath":hit.indexed_path})))).unwrap();
     assert_eq!(
         view.passage.unwrap().text.0,
         "Project source guide > # Scope λ"
     );
-    let denied = cop::document(f.backend.query("conventions.read", &cop::query(&*f.backend,"conventions.read",json!({"scope":{"kind":"Workspace"},"conventionId":owner.id,"format":"SectionPath","sectionPath":hit.indexed_path}))));
+    let denied = cop::document(f.backend.query("conventions.read", &request_query(&*f.backend,"conventions.read",json!({"scope":{"kind":"Workspace"},"conventionId":owner.id,"format":"SectionPath","sectionPath":hit.indexed_path}))));
     match denied {
         Err(ops::Failure::Refused(fault)) => assert_eq!(
             fault.code,
@@ -412,7 +434,7 @@ fn native_search_pages_large_legal_applicability_inside_real_response_frame() {
         }
         let response = f.backend.query(
             "conventions.search",
-            &cop::query(&*f.backend, "conventions.search", body),
+            &request_query(&*f.backend, "conventions.search", body),
         );
         let bytes =
             serde_json::to_vec(response.as_ref().expect("actual native search reply")).unwrap();

@@ -46,4 +46,10 @@ impl Input {
             Self::CurrentScreen(_) => Mode::Query,
         }
     }
+    /// The `/body` members of this input, without the `kind` discriminator.
+    pub fn body(&self) -> Result<serde_json::Value, serde_json::Error> {
+        match self {
+            Self::CurrentScreen(i) => serde_json::to_value(i),
+        }
+    }
 }

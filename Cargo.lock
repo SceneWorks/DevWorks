@@ -1274,6 +1274,7 @@ dependencies = [
  "block2 0.5.1",
  "devworks-adapters",
  "devworks-core",
+ "devworks-desktop",
  "devworks-engine",
  "devworks-test-support",
  "ed25519-dalek",

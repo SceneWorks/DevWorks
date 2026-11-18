@@ -8,16 +8,22 @@
 //! recorded; a search reply from an older request generation is ignored; a page continuation
 //! whose cursor expired (the scope changed) restarts the listing instead of mixing revisions.
 use crate::backend::Backend;
+use crate::frame::{self, Negotiate};
 use crate::ops::{self, Failure};
 use crate::theme;
 use crate::widgets::{self, Tone, ViewState, chip};
 use devworks_core::gateway::{CommandOutcome, QueryOutcome};
-use devworks_core::protocol::provider::ArtifactRef;
-use devworks_core::protocol::records::{KnowledgeBundle, KnowledgeClaim};
+use devworks_core::operations::{OperationInput as In, knowledge};
+use devworks_core::protocol::data::DataScope;
+use devworks_core::protocol::provider::{ArtifactRef, SchemaRef};
+use devworks_core::protocol::records::{
+    Applicability, ChallengeOutcome, ClaimDraft, KnowledgeBatch, KnowledgeBundle, KnowledgeClaim,
+    KnowledgeEntityDraft, KnowledgeKind, LessonDraft, LessonSource, PromoteAction, RevisionedRef,
+};
 use devworks_core::protocol::results::OperationResult;
+use devworks_core::protocol::support::{BoundedList, Limit, Probability};
 use devworks_core::protocol::{DomainErrorCode, Id};
 use eframe::egui::{self, RichText, Ui};
-use serde_json::{Value, json};
 
 /// The entry kinds a person creates (KNOW-03), with the recorded kind each projects onto.
 pub const ENTRY_KINDS: [(&str, &str); 10] = [
@@ -39,24 +45,14 @@ pub const PAGE: u32 = 100;
 /// The scope choice for general (workspace) Knowledge.
 pub const GENERAL: &str = "General (all projects)";
 
-/// The newest schema revision `op` registers (frames carry it, so revision-2 members are kept).
-pub fn revision_of(op: &str) -> u64 {
-    devworks_core::registry::find(op)
-        .and_then(|d| d.revisions.iter().map(|r| u64::from(r.0)).max())
-        .unwrap_or(1)
+/// A Knowledge request at the operation's newest schema revision (so revision-2 members are
+/// kept). A request that did not convert (`None`) is sent as no bytes, which the gateway rejects
+/// like any malformed request.
+pub fn query(backend: &dyn Backend, input: impl Into<Option<In>>) -> Vec<u8> {
+    frame::build(backend, Negotiate::Latest, input.into())
 }
-fn at_revision(frame: Vec<u8>, revision: u64) -> Vec<u8> {
-    let mut v: Value = serde_json::from_slice(&frame).expect("frames are JSON");
-    if revision > 1 {
-        v["schemaRevision"] = json!(revision);
-    }
-    v.to_string().into_bytes()
-}
-pub fn query(backend: &dyn Backend, op: &str, body: Value) -> Vec<u8> {
-    at_revision(ops::query_frame(backend, op, body), revision_of(op))
-}
-pub fn command(backend: &dyn Backend, op: &str, body: Value) -> Vec<u8> {
-    at_revision(ops::command_frame(backend, op, body), revision_of(op))
+pub fn command(backend: &dyn Backend, input: impl Into<Option<In>>) -> Vec<u8> {
+    frame::build(backend, Negotiate::Latest, input.into())
 }
 fn wire<T: std::fmt::Debug>(v: &T) -> String {
     format!("{v:?}")
@@ -74,34 +70,41 @@ fn split(list: &str) -> Vec<String> {
 /// subject, predicate, object, confidence, cited evidence, structured value, normalized text,
 /// source, effective time, origin reference and the rest of the applicability are kept, so an
 /// edit never drops citations or content it did not show.
-pub fn revision_of_claim(c: &KnowledgeClaim, d: &Draft, kind: &str) -> Value {
-    let mut v = json!({"kind": kind, "entryKind": d.entry_kind, "subjectId": c.subject_id,
-        "predicate": c.predicate, "value": d.value.trim(), "confidence": c.confidence.get(),
-        "evidenceIds": c.evidence_ids, "tags": split(&d.tags)});
-    if let Some(o) = &c.object_id {
-        v["objectId"] = json!(o);
-    }
-    if let Some(j) = &c.value_json {
-        v["valueJson"] = j.0.clone();
-    }
-    if let Some(t) = &c.normalized_text {
-        v["normalizedText"] = json!(t);
-    }
-    if let Some(t) = &c.effective_at_ms {
-        v["effectiveAtMs"] = json!(t);
-    }
-    if let Some(s) = &c.source {
-        v["source"] = json!(s);
-    }
-    if let Some(r) = &c.origin_ref {
-        v["originRef"] = json!(r);
-    }
-    if let Some(l) = &c.lesson {
-        let mut applicability = serde_json::to_value(&l.applicability).expect("applicability");
-        applicability["activities"] = json!(split(&d.activities));
-        v["lesson"] = json!({"source": l.source, "applicability": applicability});
-    }
-    v
+pub fn claim_draft(c: &KnowledgeClaim, d: &Draft, kind: &str) -> Option<ClaimDraft> {
+    let lesson = match &c.lesson {
+        Some(l) => {
+            let mut applicability = l.applicability.clone();
+            applicability.activities = frame::texts(&split(&d.activities))?;
+            Some(LessonDraft {
+                source: l.source.clone(),
+                source_ref: None,
+                quoted_words: None,
+                applicability,
+                same_as: None,
+            })
+        }
+        None => None,
+    };
+    Some(ClaimDraft {
+        kind: frame::text(kind)?,
+        subject_id: c.subject_id.clone(),
+        predicate: c.predicate.clone(),
+        object_id: c.object_id.clone(),
+        value: Some(frame::text(d.value.trim())?),
+        confidence: c.confidence.clone(),
+        evidence_ids: c.evidence_ids.clone(),
+        tags: frame::texts(&split(&d.tags))?,
+        value_json: c.value_json.clone(),
+        normalized_text: c.normalized_text.clone(),
+        effective_at_ms: c.effective_at_ms.clone(),
+        supersedes: None,
+        source: c.source.clone(),
+        entry_kind: Some(frame::text(d.entry_kind)?),
+        origin: None,
+        origin_ref: c.origin_ref.clone(),
+        lesson,
+        source_revision: None,
+    })
 }
 
 /// A create or edit draft.
@@ -268,12 +271,12 @@ pub enum ImportStage {
     Previewing {
         name: String,
         source: ArtifactRef,
-        scope: Value,
+        scope: Option<String>,
     },
     Ready {
         name: String,
         source: ArtifactRef,
-        scope: Value,
+        scope: Option<String>,
         digest: String,
         candidates: Vec<ImportCandidate>,
         summary: String,
@@ -281,7 +284,7 @@ pub enum ImportStage {
     Importing {
         name: String,
         source: ArtifactRef,
-        scope: Value,
+        scope: Option<String>,
         digest: String,
         candidates: Vec<ImportCandidate>,
         summary: String,
@@ -312,21 +315,44 @@ impl ImportStage {
 }
 
 /// What the shell does after an import file's save task replied.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug)]
 pub enum ImportNext {
     /// Admit this exact `artifacts.save` frame.
     Store(Vec<u8>),
     /// Run this preview query (`knowledge.diagnostics`).
-    Preview(Value),
+    Preview(Option<In>),
     Nothing,
 }
 /// The import format's schema reference.
-pub fn import_schema() -> Value {
+fn import_schema() -> Option<SchemaRef> {
     use devworks_core::services::knowledge::import::{
         IMPORT_SCHEMA_ID, IMPORT_SCHEMA_REVISION, import_schema_digest,
     };
-    json!({"schemaId": IMPORT_SCHEMA_ID, "revision": IMPORT_SCHEMA_REVISION.to_string(),
-        "sha256": import_schema_digest()})
+    Some(SchemaRef {
+        schema_id: frame::text(IMPORT_SCHEMA_ID)?,
+        revision: frame::number(IMPORT_SCHEMA_REVISION)?,
+        sha256: frame::text(&import_schema_digest())?,
+    })
+}
+/// The preview query of an import file saved as `source`, read in the scope of `project`.
+pub fn import_preview_input(project: Option<&str>, source: &ArtifactRef) -> Option<In> {
+    Some(In::Knowledge(knowledge::Input::Diagnostics(
+        knowledge::DiagnosticsInput {
+            import_source: Some(source.clone()),
+            import_schema: Some(import_schema()?),
+            ..diagnostics(frame::scope(project)?)
+        },
+    )))
+}
+/// A `knowledge.diagnostics` query of `scope` with no preview members.
+fn diagnostics(scope: DataScope) -> knowledge::DiagnosticsInput {
+    knowledge::DiagnosticsInput {
+        scope,
+        source_id: None,
+        import_source: None,
+        import_schema: None,
+        source_label: None,
+    }
 }
 
 /// What the screen asks the shell to do.
@@ -411,8 +437,9 @@ pub struct KnowledgeScreen {
     pub scrolls: crate::virtual_list::Scrolls,
     /// The selected subview (Entries, Documents).
     pub tab: usize,
-    /// The scope the shown listing was read in.
-    pub listed_scope: Option<Value>,
+    /// The scope the shown listing was read in: its project (`None`: general Knowledge), or
+    /// `None` before any listing.
+    pub listed_scope: Option<Option<String>>,
     /// The source a cleanup names, and its preview once read.
     pub cleanup_source: String,
     pub source_preview: Option<SourcePreview>,
@@ -423,9 +450,8 @@ pub struct KnowledgeScreen {
 impl KnowledgeScreen {
     pub(crate) fn purge_owner(&self) -> Option<&str> {
         match self.listed_scope.as_ref() {
-            Some(scope) if scope["kind"].as_str() == Some("Project") => scope["projectId"].as_str(),
-            Some(scope) if scope["kind"].as_str() == Some("Workspace") => None,
-            _ => self.project.as_deref(),
+            Some(project) => project.as_deref(),
+            None => self.project.as_deref(),
         }
     }
 
@@ -437,15 +463,10 @@ impl KnowledgeScreen {
     }
     /// The scope chosen in the picker (applied by the next search). A project that is no longer
     /// listed (deleted, or no longer visible) is never used: general Knowledge is.
-    fn typed_scope(&self) -> Value {
-        match self
-            .project
-            .as_deref()
+    fn typed_scope(&self) -> Option<String> {
+        self.project
+            .clone()
             .filter(|p| self.project_name(Some(p)).is_some())
-        {
-            None => json!({"kind": "Workspace"}),
-            Some(p) => json!({"kind": "Project", "projectId": p}),
-        }
     }
     fn project_name(&self, id: Option<&str>) -> Option<&str> {
         let id = id?;
@@ -477,18 +498,21 @@ impl KnowledgeScreen {
     }
     /// The scope of the listing shown: reads and writes of its entries use it, never a scope
     /// typed but not searched yet.
-    fn scope(&self) -> Value {
+    fn scope_project(&self) -> Option<String> {
         self.listed_scope
             .clone()
             .unwrap_or_else(|| self.typed_scope())
+    }
+    fn scope(&self) -> Option<DataScope> {
+        frame::scope(self.scope_project().as_deref())
     }
 
     // -----------------------------------------------------------------------------------------
     // Frames
 
-    /// Starts a new listing generation and returns its frame body (`knowledge.search`, narrowed
+    /// Starts a new listing generation and returns its request (`knowledge.search`, narrowed
     /// to lessons when only lessons are listed).
-    pub fn begin_listing(&mut self, append: bool) -> (&'static str, Value) {
+    pub fn begin_listing(&mut self, append: bool) -> (&'static str, Option<In>) {
         if !append {
             let scope = self.typed_scope();
             if self.listed_scope.as_ref() != Some(&scope) {
@@ -510,36 +534,61 @@ impl KnowledgeScreen {
             generation: self.generation,
             append,
         });
-        let mut page = json!({"limit": PAGE});
-        if append && let Some(c) = &self.cursor {
-            page["cursor"] = json!(c);
-        }
-        let tags = split(&self.tags);
-        let states: Vec<&str> = LIFECYCLES
+        let cursor = self.cursor.clone().filter(|_| append);
+        let states: Vec<String> = LIFECYCLES
             .iter()
             .zip(self.lifecycles)
             .filter(|(_, on)| *on)
-            .map(|(s, _)| *s)
+            .map(|(s, _)| (*s).to_owned())
             .collect();
-        let mut body = json!({"scope": self.scope(),
-            "text": if self.text.trim().is_empty() { " " } else { self.text.as_str() },
-            "tags": tags, "kinds": [], "page": page, "entityLimit": 500, "claimLimit": PAGE,
-            "states": if states.is_empty() { vec!["Active"] } else { states }});
-        if let Some(k) = self.entry_kind {
-            body["entryKinds"] = json!([k]);
-        }
-        // Lessons only narrows the same search (its text, tags, entry kind and lifecycles
-        // all still apply).
-        if self.lessons_only {
-            body["kinds"] = json!(["Lesson"]);
-        }
-        ("knowledge.search", body)
+        let search = || {
+            Some(In::Knowledge(knowledge::Input::Search(
+                knowledge::SearchInput {
+                    scope: self.scope()?,
+                    text: frame::text(if self.text.trim().is_empty() {
+                        " "
+                    } else {
+                        self.text.as_str()
+                    })?,
+                    tags: frame::texts(&split(&self.tags))?,
+                    // Lessons only narrows the same search (its text, tags, entry kind and
+                    // lifecycles all still apply).
+                    kinds: BoundedList(if self.lessons_only {
+                        vec![KnowledgeKind::Lesson]
+                    } else {
+                        Vec::new()
+                    }),
+                    page: frame::page(PAGE, cursor.as_deref())?,
+                    entity_limit: Limit::new(500)?,
+                    claim_limit: Limit::new(PAGE)?,
+                    states: Some(frame::texts(&if states.is_empty() {
+                        vec!["Active".to_owned()]
+                    } else {
+                        states.clone()
+                    })?),
+                    entry_kinds: frame::lift(
+                        self.entry_kind.map(|k| frame::texts(&[k.to_owned()])),
+                    )?,
+                    source: None,
+                    stale: None,
+                },
+            )))
+        };
+        ("knowledge.search", search())
     }
-    pub fn read_body(&self, claim: &Id) -> Value {
-        json!({"scope": self.scope(), "claimId": claim})
+    pub fn read_input(&self, claim: &Id) -> Option<In> {
+        Some(In::Knowledge(knowledge::Input::Read(
+            knowledge::ReadInput {
+                scope: self.scope()?,
+                claim_id: claim.clone(),
+                revision: None,
+            },
+        )))
     }
-    pub fn diagnostics_body(&self) -> Value {
-        json!({"scope": self.scope()})
+    pub fn diagnostics_input(&self) -> Option<In> {
+        Some(In::Knowledge(knowledge::Input::Diagnostics(diagnostics(
+            self.scope()?,
+        ))))
     }
     fn selected_claim(&self) -> Option<&KnowledgeClaim> {
         let id = self.selected.as_ref()?;
@@ -550,7 +599,7 @@ impl KnowledgeScreen {
     }
 
     /// The command a draft submits: a new entry (with its subject entity) or a revision.
-    pub fn save_body(&self, d: &Draft) -> Result<(&'static str, Value), String> {
+    pub fn save_input(&self, d: &Draft) -> Result<(&'static str, Option<In>), String> {
         if d.value.trim().is_empty() {
             return Err("Write what the entry says.".into());
         }
@@ -559,14 +608,6 @@ impl KnowledgeScreen {
             .find(|(e, _)| *e == d.entry_kind)
             .map(|(_, k)| *k)
             .ok_or("Unknown entry kind.")?;
-        let mut claim = json!({"kind": kind, "entryKind": d.entry_kind,
-            "predicate": d.entry_kind.to_lowercase(), "value": d.value.trim(), "confidence": 0.8,
-            "evidenceIds": [], "tags": split(&d.tags)});
-        if d.entry_kind == "Lesson" {
-            claim["lesson"] = json!({"source": "Prompt", "applicability": {
-                "activities": split(&d.activities), "paths": [], "tools": [],
-                "repositoryIds": []}});
-        }
         match &d.revises {
             Some((id, revision)) => {
                 let Some(current) = self.selected_claim().filter(|c| c.id == *id) else {
@@ -574,27 +615,83 @@ impl KnowledgeScreen {
                 };
                 Ok((
                     "knowledge.revise",
-                    json!({"scope": current.scope, "claimId": id,
-                        "expectedRevision": revision.to_string(),
-                        "replacement": revision_of_claim(current, d, kind)}),
+                    (|| {
+                        Some(In::Knowledge(knowledge::Input::Revise(
+                            knowledge::ReviseInput {
+                                scope: current.scope.clone(),
+                                claim_id: id.clone(),
+                                expected_revision: frame::number(*revision)?,
+                                replacement: claim_draft(current, d, kind)?,
+                            },
+                        )))
+                    })(),
                 ))
             }
-            None => {
-                let subject = if d.subject.trim().is_empty() {
-                    "General"
-                } else {
-                    d.subject.trim()
-                };
-                claim["subjectId"] = json!("subject");
-                Ok((
-                    "knowledge.record",
-                    json!({"scope": self.scope(), "batch": {
-                        "entities": [{"clientId": "subject", "label": subject,
-                            "entityType": "topic", "aliases": []}],
-                        "claims": [claim], "evidence": []}}),
-                ))
-            }
+            None => Ok(("knowledge.record", self.record_input(d, kind))),
         }
+    }
+    /// The `knowledge.record` of a new entry of recorded `kind`, under its subject entity.
+    fn record_input(&self, d: &Draft, kind: &str) -> Option<In> {
+        let subject = if d.subject.trim().is_empty() {
+            "General"
+        } else {
+            d.subject.trim()
+        };
+        let lesson = if d.entry_kind == "Lesson" {
+            Some(LessonDraft {
+                source: LessonSource::Prompt,
+                source_ref: None,
+                quoted_words: None,
+                applicability: Applicability {
+                    activities: frame::texts(&split(&d.activities))?,
+                    paths: BoundedList(Vec::new()),
+                    tools: BoundedList(Vec::new()),
+                    harness: None,
+                    repository_ids: BoundedList(Vec::new()),
+                },
+                same_as: None,
+            })
+        } else {
+            None
+        };
+        let claim = ClaimDraft {
+            kind: frame::text(kind)?,
+            subject_id: frame::id("subject")?,
+            predicate: frame::text(&d.entry_kind.to_lowercase())?,
+            object_id: None,
+            value: Some(frame::text(d.value.trim())?),
+            confidence: Probability::new(0.8)?,
+            evidence_ids: BoundedList(Vec::new()),
+            tags: frame::texts(&split(&d.tags))?,
+            value_json: None,
+            normalized_text: None,
+            effective_at_ms: None,
+            supersedes: None,
+            source: None,
+            entry_kind: Some(frame::text(d.entry_kind)?),
+            origin: None,
+            origin_ref: None,
+            lesson,
+            source_revision: None,
+        };
+        Some(In::Knowledge(knowledge::Input::Record(
+            knowledge::RecordInput {
+                scope: self.scope()?,
+                batch: KnowledgeBatch {
+                    entities: BoundedList(vec![KnowledgeEntityDraft {
+                        client_id: frame::id("subject")?,
+                        label: frame::text(subject)?,
+                        entity_type: frame::text("topic")?,
+                        aliases: BoundedList(Vec::new()),
+                        canonical_name: None,
+                        external_id: None,
+                        source: None,
+                    }]),
+                    claims: BoundedList(vec![claim]),
+                    evidence: BoundedList(Vec::new()),
+                },
+            },
+        )))
     }
 
     /// What a lifecycle change takes from the forms (its reason, when it needs one).
@@ -607,60 +704,117 @@ impl KnowledgeScreen {
     }
 
     /// The command a lifecycle change of the selected entry submits.
-    pub fn change_body(&self, change: Change) -> Result<(&'static str, Value), String> {
+    pub fn change_input(&self, change: Change) -> Result<(&'static str, Option<In>), String> {
         let c = self.selected_claim().ok_or("Select an entry first.")?;
         let reason = self.reason.trim();
         if change.needs_reason() && reason.is_empty() {
             return Err(format!("{} needs a reason.", change.label()));
         }
-        let revision = c.revision.get().to_string();
         // Every change acts in the scope the claim lives in (a general claim shown in a project
         // listing stays general); only "Make general" names another scope.
-        let scope = serde_json::to_value(&c.scope).expect("scope");
+        let scope = c.scope.clone();
+        let at = || RevisionedRef {
+            id: c.id.clone(),
+            revision: c.revision.clone(),
+        };
+        let none = || BoundedList(Vec::new());
+        let one = || BoundedList(vec![at()]);
+        let challenge = |outcome| {
+            Some(knowledge::ChallengeInput {
+                scope: scope.clone(),
+                claim_id: c.id.clone(),
+                expected_revision: c.revision.clone(),
+                reason: frame::text(reason)?,
+                evidence_ids: none(),
+                resolve_challenge_id: None,
+                outcome,
+            })
+        };
+        let promote = |action, reason| {
+            Some(knowledge::PromoteInput {
+                claim_id: c.id.clone(),
+                expected_revision: c.revision.clone(),
+                destination: scope.clone(),
+                proposal_id: None,
+                action,
+                address: None,
+                reason,
+            })
+        };
+        let k = In::Knowledge;
         Ok(match change {
             Change::Verify => (
                 "knowledge.verify",
-                json!({"scope": scope, "claimId": c.id, "expectedRevision": revision,
-                    "reason": reason, "evidenceIds": []}),
+                (|| {
+                    Some(k(knowledge::Input::Verify(knowledge::VerifyInput {
+                        scope: scope.clone(),
+                        claim_id: c.id.clone(),
+                        expected_revision: c.revision.clone(),
+                        reason: frame::text(reason)?,
+                        evidence_ids: none(),
+                        source_revision: None,
+                    })))
+                })(),
             ),
             Change::Retract => (
                 "knowledge.retract",
-                json!({"scope": scope, "claimId": c.id, "expectedRevision": revision,
-                    "reason": reason, "evidenceIds": []}),
+                (|| {
+                    Some(k(knowledge::Input::Retract(knowledge::RetractInput {
+                        scope: scope.clone(),
+                        claim_id: c.id.clone(),
+                        expected_revision: c.revision.clone(),
+                        reason: frame::text(reason)?,
+                        evidence_ids: none(),
+                    })))
+                })(),
             ),
             Change::Challenge => (
                 "knowledge.challenge",
-                json!({"scope": scope, "claimId": c.id, "expectedRevision": revision,
-                    "reason": reason, "evidenceIds": []}),
+                challenge(None).map(|i| k(knowledge::Input::Challenge(i))),
             ),
             Change::Retire => (
                 "knowledge.challenge",
-                json!({"scope": scope, "claimId": c.id, "expectedRevision": revision,
-                    "reason": reason, "evidenceIds": [], "outcome": "Retire"}),
+                challenge(Some(ChallengeOutcome::Retire))
+                    .map(|i| k(knowledge::Input::Challenge(i))),
             ),
             Change::Promote => (
                 "knowledge.promote",
-                json!({"claimId": c.id, "expectedRevision": revision, "destination": scope}),
+                promote(None, None).map(|i| k(knowledge::Input::Promote(i))),
             ),
             Change::Reject => (
                 "knowledge.promote",
-                json!({"claimId": c.id, "expectedRevision": revision, "destination": scope,
-                    "action": "Reject", "reason": reason}),
+                (|| {
+                    promote(Some(PromoteAction::Reject), Some(frame::text(reason)?))
+                        .map(|i| k(knowledge::Input::Promote(i)))
+                })(),
             ),
             Change::Delete => (
                 "knowledge.delete_selected",
-                json!({"scope": scope, "claims": [{"id": c.id, "revision": revision}]}),
+                Some(k(knowledge::Input::DeleteSelected(
+                    knowledge::DeleteSelectedInput {
+                        scope: scope.clone(),
+                        claims: one(),
+                        proposal_id: None,
+                    },
+                ))),
             ),
             Change::MakeGeneral => (
                 "knowledge.scope",
-                json!({"claimIds": [{"id": c.id, "revision": revision}],
-                    "destination": {"kind": "Workspace"}}),
+                Some(k(knowledge::Input::Scope(knowledge::ScopeInput {
+                    claim_ids: one(),
+                    destination: DataScope::Workspace,
+                }))),
             ),
             Change::SaveTags => (
                 "knowledge.tag",
-                json!({"scope": scope, "claimIds": [c.id],
-                    "expectedRevisions": [{"id": c.id, "revision": revision}],
-                    "tags": split(&self.tag_edit)}),
+                (|| {
+                    Some(k(knowledge::Input::Tag(knowledge::TagInput {
+                        scope: scope.clone(),
+                        claim_ids: BoundedList(vec![c.id.clone()]),
+                        expected_revisions: one(),
+                        tags: frame::texts(&split(&self.tag_edit))?,
+                    })))
+                })(),
             ),
         })
     }
@@ -766,15 +920,18 @@ impl KnowledgeScreen {
         }
     }
     /// The diagnostics query that previews deleting `cleanup_source` in the listed scope.
-    pub fn preview_body(&self) -> Result<(String, Value), String> {
+    pub fn preview_input(&self) -> Result<(String, Option<In>), String> {
         let source = self.cleanup_source.as_str();
-        if serde_json::from_value::<devworks_core::protocol::support::Label>(json!(source)).is_err()
-        {
-            return Err("A source is a nonempty label of at most 256 characters.".into());
-        }
+        let label: devworks_core::protocol::support::Label =
+            frame::text(source).ok_or("A source is a nonempty label of at most 256 characters.")?;
         Ok((
             source.to_owned(),
-            json!({"scope": self.scope(), "sourceLabel": source}),
+            self.scope().map(|scope| {
+                In::Knowledge(knowledge::Input::Diagnostics(knowledge::DiagnosticsInput {
+                    source_label: Some(label),
+                    ..diagnostics(scope)
+                }))
+            }),
         ))
     }
     /// Applies a preview reply for `source` (ignored when the field names another source now).
@@ -811,7 +968,7 @@ impl KnowledgeScreen {
         }
     }
     /// The delete by source the shown preview describes, exactly (digest and scope revision).
-    pub fn delete_source_body(&self) -> Result<(&'static str, Value), String> {
+    pub fn delete_source_input(&self) -> Result<(&'static str, Option<In>), String> {
         let p = self
             .source_preview
             .as_ref()
@@ -819,9 +976,18 @@ impl KnowledgeScreen {
             .ok_or("Preview the source first.")?;
         Ok((
             "knowledge.delete_by_source",
-            json!({"scope": self.scope(), "sourceLabel": p.source,
-                "expectedScopeRevision": p.scope_revision.to_string(),
-                "previewDigest": p.digest}),
+            (|| {
+                Some(In::Knowledge(knowledge::Input::DeleteBySource(
+                    knowledge::DeleteBySourceInput {
+                        scope: self.scope()?,
+                        source_id: None,
+                        expected_scope_revision: frame::number(p.scope_revision)?,
+                        preview_digest: frame::text(&p.digest)?,
+                        proposal_id: None,
+                        source_label: Some(frame::text(&p.source)?),
+                    },
+                )))
+            })(),
         ))
     }
     fn cleanup(&mut self, ui: &mut Ui, actions: &mut Vec<KnowledgeAction>) {
@@ -902,9 +1068,8 @@ impl KnowledgeScreen {
         };
         match stored {
             Ok(record) => {
-                let scope = self.scope();
-                let body = json!({"scope": scope, "importSource": record.artifact,
-                    "importSchema": import_schema()});
+                let scope = self.scope_project();
+                let body = import_preview_input(scope.as_deref(), &record.artifact);
                 self.import = Some(ImportStage::Previewing {
                     name,
                     source: record.artifact,
@@ -979,17 +1144,23 @@ impl KnowledgeScreen {
         });
     }
     /// The import the preview shows, exactly (same source, scope, schema and digest).
-    pub fn import_body(&self) -> Result<Value, String> {
+    pub fn import_input(&self) -> Result<Option<In>, String> {
         match &self.import {
             Some(ImportStage::Ready {
                 source,
                 scope,
                 digest,
                 ..
-            }) => Ok(
-                json!({"scope": scope, "source": source, "schema": import_schema(),
-                "previewDigest": digest}),
-            ),
+            }) => Ok((|| {
+                Some(In::Knowledge(knowledge::Input::ImportUserData(
+                    knowledge::ImportUserDataInput {
+                        scope: frame::scope(scope.as_deref())?,
+                        source: source.clone(),
+                        schema: import_schema()?,
+                        preview_digest: frame::text(digest)?,
+                    },
+                )))
+            })()),
             _ => Err("Preview a file first.".into()),
         }
     }
@@ -1738,11 +1909,18 @@ impl KnowledgeScreen {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::{Value, json};
+
+    /// The `/body` members of a typed request.
+    fn body_of(input: Option<In>) -> Value {
+        input.expect("a typed input").body().expect("a body")
+    }
 
     #[test]
     fn writes_use_the_scope_of_the_listing_shown_not_an_unsearched_one() {
         let mut s = KnowledgeScreen::new();
-        let (_, body) = s.begin_listing(false);
+        let (_, input) = s.begin_listing(false);
+        let body = body_of(input);
         assert_eq!(body["scope"], json!({"kind": "Workspace"}));
         s.set_projects(vec![("project-x".into(), "Project X".into())]);
         s.project = Some("project-x".into());
@@ -1750,18 +1928,21 @@ mod tests {
             value: "A fact".into(),
             ..Draft::default()
         };
-        let (_, body) = s.save_body(&draft).unwrap();
+        let (_, input) = s.save_input(&draft).unwrap();
+        let body = body_of(input);
         assert_eq!(
             body["scope"],
             json!({"kind": "Workspace"}),
             "typed, not searched"
         );
-        let (_, body) = s.begin_listing(false);
+        let (_, input) = s.begin_listing(false);
+        let body = body_of(input);
         assert_eq!(
             body["scope"],
             json!({"kind": "Project", "projectId": "project-x"})
         );
-        let (_, body) = s.save_body(&draft).unwrap();
+        let (_, input) = s.save_input(&draft).unwrap();
+        let body = body_of(input);
         assert_eq!(
             body["scope"],
             json!({"kind": "Project", "projectId": "project-x"})
@@ -1769,7 +1950,8 @@ mod tests {
         // A continuation stays in the listed scope even if the field changes again.
         s.cursor = Some("c".into());
         s.project = None;
-        let (_, body) = s.begin_listing(true);
+        let (_, input) = s.begin_listing(true);
+        let body = body_of(input);
         assert_eq!(
             body["scope"],
             json!({"kind": "Project", "projectId": "project-x"})
@@ -1817,8 +1999,9 @@ mod tests {
             tags: "lesson, edited".into(),
             activities: "implementing".into(),
         };
-        let (op, body) = s.save_body(&d).unwrap();
+        let (op, input) = s.save_input(&d).unwrap();
         assert_eq!(op, "knowledge.revise");
+        let body = body_of(input);
         let r = &body["replacement"];
         assert_eq!(r["value"], json!("New text"));
         assert_eq!(r["tags"], json!(["lesson", "edited"]));
@@ -1854,12 +2037,14 @@ mod tests {
             Change::Delete,
             Change::SaveTags,
         ] {
-            let (_, body) = s.change_body(change).unwrap();
+            let (_, input) = s.change_input(change).unwrap();
+            let body = body_of(input);
             assert_eq!(body["scope"], json!({"kind": "Workspace"}), "{change:?}");
         }
         // Making a general lesson effective (or rejecting it) keeps it general.
         for change in [Change::Promote, Change::Reject] {
-            let (_, body) = s.change_body(change).unwrap();
+            let (_, input) = s.change_input(change).unwrap();
+            let body = body_of(input);
             assert_eq!(
                 body["destination"],
                 json!({"kind": "Workspace"}),
@@ -1867,7 +2052,8 @@ mod tests {
             );
         }
         // Only the explicit scope change names another scope.
-        let (op, body) = s.change_body(Change::MakeGeneral).unwrap();
+        let (op, input) = s.change_input(Change::MakeGeneral).unwrap();
+        let body = body_of(input);
         assert_eq!(op, "knowledge.scope");
         assert_eq!(body["destination"], json!({"kind": "Workspace"}));
     }

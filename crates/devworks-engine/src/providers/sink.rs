@@ -457,7 +457,7 @@ pub(crate) fn validate(
         .usage()
         .inference_attempt(&attempt.attempt_id)?
         .ok_or(StorageError::ScopeDenied)?;
-    if current.state != "Dispatched"
+    if current.state != devworks_core::ports::storage::AttemptState::Dispatched
         || current.request_id != attempt.request_id
         || current.actor_id != attempt.actor_id
         || current.pricing_snapshot != attempt.pricing_snapshot

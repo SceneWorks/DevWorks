@@ -36,9 +36,15 @@ tokio = { version = "=1.54.1", default-features = false, features = ["net", "rt"
 [target.'cfg(unix)'.dependencies]
 libc = "=0.2.191"
 
+[features]
+# The hand-written request helpers in `frame::fixture`, for tests only. Integration tests reach
+# them through the self dev-dependency below; production builds do not compile them.
+test-support = []
+
 [dev-dependencies]
 # Shared test doubles and seeding helpers (no production crate depends on it).
 devworks-test-support = { path = "../devworks-test-support" }
+devworks-desktop = { path = ".", features = ["test-support"] }
 # Seeds empty test data roots from one migrated store per test binary (test builds only).
 devworks-adapters = { path = "../devworks-adapters", features = ["test-support"] }
 egui_kittest = "=0.37.0"

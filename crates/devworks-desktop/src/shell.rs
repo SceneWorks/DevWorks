@@ -17,8 +17,11 @@ use crate::theme;
 use crate::virtual_list::{self, Scrolls};
 use crate::web_panel::WebAction;
 use crate::widgets::{self, Header, Tone, ViewState, chip};
+use devworks_core::operations::{OperationInput as In, mcp};
 use devworks_core::protocol::provider::ArtifactRef;
-use devworks_core::protocol::records::{ConnectionLifecycle, ItemState, LifeState, ProjectRecord};
+use devworks_core::protocol::records::{
+    ConnectionLifecycle, ItemState, LifeState, McpTransport, ProjectRecord, RouterConfigAction,
+};
 use devworks_core::protocol::{DomainErrorCode, Id};
 use devworks_core::settings::validate::codes;
 use devworks_core::settings::view::Health;
@@ -925,9 +928,6 @@ impl Shell {
         use crate::addons::{self as a, AddonsAction};
         for action in actions {
             let registry = self.addons.registry_revision;
-            let command = |op: &'static str,
-                           cmd: serde_json::Value|
-             -> (&'static str, serde_json::Value) { (op, cmd) };
             let lifecycle = match action {
                 AddonsAction::Refresh => {
                     self.load_addons();
@@ -996,41 +996,19 @@ impl Shell {
                     package,
                     bundle,
                     update,
-                } => {
-                    let bundle = serde_json::to_value(&bundle).unwrap_or_default();
-                    let expected = registry.max(1).to_string();
-                    Some(if update {
-                        command(
-                            "addons.update",
-                            serde_json::json!({"kind": "Update", "packageId": package, "bundle": bundle, "expectedRegistryRevision": expected}),
-                        )
-                    } else {
-                        command(
-                            "addons.install",
-                            serde_json::json!({"kind": "Install", "bundle": bundle, "expectedRegistryRevision": expected}),
-                        )
-                    })
-                }
-                AddonsAction::Enable(p) => Some(command(
-                    "addons.enable",
-                    serde_json::json!({"kind": "Enable", "packageId": p, "expectedRegistryRevision": registry.max(1).to_string()}),
+                } => Some(a::install_command(
+                    bundle,
+                    update.then_some(package.as_str()),
+                    registry,
                 )),
-                AddonsAction::Disable(p) => Some(command(
-                    "addons.disable",
-                    serde_json::json!({"kind": "Disable", "packageId": p, "expectedRegistryRevision": registry.max(1).to_string()}),
-                )),
-                AddonsAction::Uninstall(p) => Some(command(
-                    "addons.uninstall",
-                    serde_json::json!({"kind": "Uninstall", "packageId": p, "expectedRegistryRevision": registry.max(1).to_string()}),
-                )),
+                AddonsAction::Enable(p) => Some(a::enable_command(&p, registry)),
+                AddonsAction::Disable(p) => Some(a::disable_command(&p, registry)),
+                AddonsAction::Uninstall(p) => Some(a::uninstall_command(&p, registry)),
                 AddonsAction::Rollback {
                     package,
                     target,
                     generation,
-                } => Some(command(
-                    "addons.rollback",
-                    serde_json::json!({"kind": "Rollback", "packageId": package, "targetManifestDigest": target, "expectedRegistryRevision": registry.max(1).to_string(), "expectedStateGeneration": generation.max(1).to_string()}),
-                )),
+                } => Some(a::rollback_command(&package, &target, registry, generation)),
                 AddonsAction::TrustPublisher {
                     package,
                     revision,
@@ -1075,11 +1053,20 @@ impl Shell {
                     None
                 }
             };
-            if let Some((op, cmd)) = lifecycle {
-                self.addons.busy = true;
-                self.command(Slot::AddonsCommand, "Updating the add-on", op, move |b| {
-                    a::lifecycle_frame(b, cmd)
-                });
+            match lifecycle {
+                Some(Some(command)) => {
+                    self.addons.busy = true;
+                    self.command(
+                        Slot::AddonsCommand,
+                        "Updating the add-on",
+                        a::operation(&command),
+                        move |b| a::lifecycle_frame(b, command),
+                    );
+                }
+                Some(None) => {
+                    self.addons.notice = Some("The add-on request is not valid.".into());
+                }
+                None => {}
             }
         }
     }
@@ -1093,16 +1080,16 @@ impl Shell {
             Slot::KnowledgeList(generation),
             "Loading Knowledge",
             op,
-            move |b| knowledge_screen::query(b, op, body),
+            move |b| knowledge_screen::query(b, body),
         ) {
             self.knowledge.listing = None;
         }
-        let body = self.knowledge.diagnostics_body();
+        let body = self.knowledge.diagnostics_input();
         self.query(
             Slot::KnowledgeDiagnostics,
             "Checking Knowledge",
             "knowledge.diagnostics",
-            move |b| knowledge_screen::query(b, "knowledge.diagnostics", body),
+            move |b| knowledge_screen::query(b, body),
         );
     }
     /// Gives the Knowledge screen the projects the user can see (active and archived, from
@@ -1178,12 +1165,12 @@ impl Shell {
         }
     }
     fn read_knowledge(&mut self, claim: devworks_core::protocol::Id) {
-        let body = self.knowledge.read_body(&claim);
+        let body = self.knowledge.read_input(&claim);
         self.query(
             Slot::KnowledgeRead(claim.as_str().to_owned()),
             "Loading a Knowledge entry",
             "knowledge.read",
-            move |b| knowledge_screen::query(b, "knowledge.read", body),
+            move |b| knowledge_screen::query(b, body),
         );
     }
     /// Submits one Knowledge write at a time; what it took from the screen's forms
@@ -1192,7 +1179,7 @@ impl Shell {
         &mut self,
         label: &str,
         op: &'static str,
-        body: serde_json::Value,
+        body: Option<devworks_core::operations::OperationInput>,
         submitted: knowledge_screen::Submitted,
     ) {
         if self.knowledge.writing.is_some() {
@@ -1201,7 +1188,7 @@ impl Shell {
         self.knowledge.writing = Some(label.to_owned());
         self.knowledge.submitted = Some(submitted);
         if !self.command(Slot::KnowledgeWrite, label, op, move |b| {
-            knowledge_screen::command(b, op, body)
+            knowledge_screen::command(b, body)
         }) {
             // Refused because an earlier write is unresolved: that one stays the write in
             // flight until Confirm outcomes settles it.
@@ -1239,7 +1226,7 @@ impl Shell {
                         Slot::KnowledgeList(generation),
                         "Loading more Knowledge",
                         op,
-                        move |b| knowledge_screen::query(b, op, body),
+                        move |b| knowledge_screen::query(b, body),
                     ) {
                         self.knowledge.listing = None;
                     }
@@ -1250,7 +1237,7 @@ impl Shell {
                     self.knowledge.detail_error = None;
                     self.read_knowledge(id);
                 }
-                KnowledgeAction::Save(draft) => match self.knowledge.save_body(&draft) {
+                KnowledgeAction::Save(draft) => match self.knowledge.save_input(&draft) {
                     Ok((op, body)) => self.knowledge_write(
                         "Entry",
                         op,
@@ -1259,14 +1246,14 @@ impl Shell {
                     ),
                     Err(m) => self.knowledge.message = Some((widgets::Tone::Attention, m)),
                 },
-                KnowledgeAction::PreviewSource => match self.knowledge.preview_body() {
+                KnowledgeAction::PreviewSource => match self.knowledge.preview_input() {
                     Ok((source, body)) => {
                         self.knowledge.source_preview = None;
                         self.query(
                             Slot::KnowledgePreview(source),
                             "Previewing a cleanup",
                             "knowledge.diagnostics",
-                            move |b| knowledge_screen::query(b, "knowledge.diagnostics", body),
+                            move |b| knowledge_screen::query(b, body),
                         );
                     }
                     Err(m) => self.knowledge.message = Some((widgets::Tone::Attention, m)),
@@ -1276,15 +1263,13 @@ impl Shell {
                     self.import_knowledge_file(picked);
                 }
                 KnowledgeAction::ImportFiles(paths) => self.import_knowledge_file(paths),
-                KnowledgeAction::ConfirmImport => match self.knowledge.import_body() {
+                KnowledgeAction::ConfirmImport => match self.knowledge.import_input() {
                     Ok(body) => {
                         if self.command(
                             Slot::KnowledgeImport,
                             "Importing Knowledge",
                             "knowledge.import_user_data",
-                            move |b| {
-                                knowledge_screen::command(b, "knowledge.import_user_data", body)
-                            },
+                            move |b| knowledge_screen::command(b, body),
                         ) {
                             self.knowledge.import_started();
                         } else {
@@ -1301,7 +1286,7 @@ impl Shell {
                         self.knowledge.import = None;
                     }
                 }
-                KnowledgeAction::DeleteSource => match self.knowledge.delete_source_body() {
+                KnowledgeAction::DeleteSource => match self.knowledge.delete_source_input() {
                     Ok((op, body)) => self.knowledge_write(
                         "Delete by source",
                         op,
@@ -1310,7 +1295,7 @@ impl Shell {
                     ),
                     Err(m) => self.knowledge.message = Some((widgets::Tone::Attention, m)),
                 },
-                KnowledgeAction::Change(change) => match self.knowledge.change_body(change) {
+                KnowledgeAction::Change(change) => match self.knowledge.change_input(change) {
                     Ok((op, body)) => {
                         let submitted = self.knowledge.change_submission(change);
                         self.knowledge_write(change.label(), op, body, submitted)
@@ -1947,7 +1932,7 @@ impl Shell {
                         Slot::KnowledgeImportPreview,
                         "Previewing an import",
                         "knowledge.diagnostics",
-                        move |b| knowledge_screen::query(b, "knowledge.diagnostics", body),
+                        move |b| knowledge_screen::query(b, body),
                     );
                     if !submitted {
                         self.knowledge.import = None;
@@ -2470,77 +2455,53 @@ impl Shell {
                         .opened(&server, Err("the app is offline or closing".into()));
                 }
             }
-            other => {
-                let (operation, body, secret, pending_server) = match other {
-                    McpAction::Configure { body, secret } => ("mcp.configure", body, secret, None),
-                    McpAction::Connect(id, revision) => (
-                        "mcp.connect",
-                        serde_json::json!({"scope":ops::mcp_scope(self.settings.mcp.project.as_ref()),"serverId":id,"expectedRevision":revision.to_string()}),
-                        None,
-                        Some(id),
-                    ),
-                    McpAction::Disable(id, revision) => (
-                        "mcp.disable",
-                        serde_json::json!({"scope":ops::mcp_scope(self.settings.mcp.project.as_ref()),"serverId":id,"expectedRevision":revision.to_string()}),
-                        None,
-                        Some(id),
-                    ),
-                    McpAction::Remove(id, revision, handles) => {
-                        self.settings.mcp.removing = Some(handles);
-                        (
-                            "mcp.remove",
-                            serde_json::json!({"scope":ops::mcp_scope(self.settings.mcp.project.as_ref()),"serverId":id,"expectedRevision":revision.to_string()}),
-                            None,
-                            Some(id),
-                        )
+            mut other => {
+                let pending_server = match &other {
+                    McpAction::Connect(id, _)
+                    | McpAction::Disable(id, _)
+                    | McpAction::Discover(id, _) => Some(id.clone()),
+                    McpAction::Remove(id, _, handles) => {
+                        self.settings.mcp.removing = Some(handles.clone());
+                        Some(id.clone())
                     }
-                    McpAction::Discover(id, revision) => (
-                        "mcp.discover",
-                        serde_json::json!({"scope":ops::mcp_scope(self.settings.mcp.project.as_ref()),"serverId":id,"expectedCatalogRevision":revision.to_string()}),
-                        None,
-                        Some(id),
-                    ),
-                    McpAction::Select(id, revision, catalog, tools)
-                    | McpAction::Sampling(id, revision, catalog, tools) => (
-                        "mcp.select_tools",
-                        serde_json::json!({"scope":ops::mcp_scope(self.settings.mcp.project.as_ref()),"serverId":id,"expectedRevision":revision.to_string(),"expectedCatalogRevision":catalog.to_string(),"toolIds":tools}),
-                        None,
-                        None,
-                    ),
-                    McpAction::Classify(id, revision, tool, read_only) => {
-                        let mut body = serde_json::json!({"scope":ops::mcp_scope(self.settings.mcp.project.as_ref()),"serverId":id,"expectedRevision":revision.to_string(),"toolId":tool});
-                        if let Some(read_only) = read_only {
-                            body["readOnly"] = serde_json::json!(read_only);
-                        }
-                        ("mcp.classify_tool", body, None, None)
-                    }
-                    McpAction::Reload | McpAction::Catalog(_, _) | McpAction::Open(..) => {
-                        unreachable!()
-                    }
+                    _ => None,
                 };
-                let submitted = if let Some(secret) = secret {
-                    self.online().is_ok()
-                        && self.client.as_mut().is_some_and(|client| {
-                            client.task(
-                                Slot::McpCommand,
-                                "Storing MCP credential",
-                                move |backend| {
-                                    let handle = backend.stage_mcp_api_key(secret)?;
-                                    let mut body = body;
-                                    body["transport"]["credentialRef"] = serde_json::json!(handle);
-                                    Ok(TaskOutput::Prepared {
-                                        frame: ops::mcp_command(backend, operation, body),
-                                    })
-                                },
-                            )
-                        })
-                } else {
-                    self.command(
+                let secret = match &mut other {
+                    McpAction::Configure { secret, .. } => secret.take(),
+                    _ => None,
+                };
+                let submitted = match (other.input(self.settings.mcp.project.as_ref()), secret) {
+                    (None, _) => false,
+                    (Some(mut input), Some(secret)) => {
+                        self.online().is_ok()
+                            && self.client.as_mut().is_some_and(|client| {
+                                client.task(
+                                    Slot::McpCommand,
+                                    "Storing MCP credential",
+                                    move |backend| {
+                                        let handle = backend.stage_mcp_api_key(secret)?;
+                                        // The key goes to the OS secret store first; only its
+                                        // handle travels.
+                                        if let In::Mcp(mcp::Input::Configure(configure)) =
+                                            &mut input
+                                            && let McpTransport::Http { credential_ref, .. } =
+                                                &mut configure.transport
+                                        {
+                                            *credential_ref = Some(handle);
+                                        }
+                                        Ok(TaskOutput::Prepared {
+                                            frame: ops::mcp_command(backend, input),
+                                        })
+                                    },
+                                )
+                            })
+                    }
+                    (Some(input), None) => self.command(
                         Slot::McpCommand,
                         "Updating MCP",
-                        operation,
-                        move |backend| ops::mcp_command(backend, operation, body),
-                    )
+                        input.operation(),
+                        move |backend| ops::mcp_command(backend, input),
+                    ),
                 };
                 if !submitted {
                     self.settings.mcp.busy = false;
@@ -2703,8 +2664,11 @@ impl Shell {
                             let handle = b
                                 .stage_api_key(key)
                                 .map_err(|e| format!("the secret store refused the key: {e}"))?;
-                            action["credentialRef"] =
-                                serde_json::Value::String(handle.as_str().to_owned());
+                            if let RouterConfigAction::Connection { credential_ref, .. } =
+                                &mut action
+                            {
+                                *credential_ref = Some(handle);
+                            }
                         }
                         if let Some((flow, pasted)) = code {
                             b.submit_sign_in_code(&flow, pasted)?;
@@ -2762,9 +2726,12 @@ impl Shell {
                 .is_none_or(|last| last.elapsed() >= interval)
         {
             self.settings.mcp.last_operation_poll = Some(Instant::now());
-            self.query(slot, "Checking MCP operation", "history.operation_status", move |backend| {
-                serde_json::json!({"protocol":ops::PROTOCOL,"queryId":backend.token("q"),"query":{"kind":"history.operation_status","operationId":operation}}).to_string().into_bytes()
-            });
+            self.query(
+                slot,
+                "Checking MCP operation",
+                "history.operation_status",
+                move |backend| crate::usage_ops::operation_status(backend, &operation),
+            );
         }
         ctx.request_repaint_after(interval);
     }

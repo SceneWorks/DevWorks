@@ -6,6 +6,7 @@
 //! what the user asked for as actions; the controller submits them.
 use crate::indexing_screen::{self, IndexAction, IndexingScreen};
 use crate::memory::RouteMemory;
+use crate::ops::LifecycleChange;
 use crate::route::Route;
 use crate::shell::{ListState, ListText, list_body};
 use crate::theme;
@@ -23,9 +24,6 @@ use std::ops::{Deref, DerefMut};
 /// The repository base directory setting a project may override (SET-07/08).
 pub const BASE_DIRECTORY: &str = "repositories.baseDirectory";
 pub const CONTAINER_RUNTIME: &str = "containers.preferredRuntime";
-pub(crate) const ARCHIVE: &str = "projects.archive";
-pub(crate) const RESTORE: &str = "projects.restore";
-pub(crate) const DELETE: &str = "projects.delete";
 /// The lifecycle tabs of All projects.
 pub const TABS: [&str; 3] = ["Active", "Archived", "Deleted"];
 
@@ -176,7 +174,7 @@ pub(crate) enum Action {
     Create(CreateForm),
     Edit(EditForm),
     Membership(MembershipForm),
-    Lifecycle(&'static str, ProjectRecord),
+    Lifecycle(LifecycleChange, ProjectRecord),
     Open(String),
     OpenGraph(String, String),
     LoadBase(String),
@@ -868,7 +866,7 @@ fn project_detail(
                     .add_enabled(enabled, egui::Button::new("Restore"))
                     .clicked()
                 {
-                    actions.push(Action::Lifecycle(RESTORE, p.clone()));
+                    actions.push(Action::Lifecycle(LifecycleChange::Restore, p.clone()));
                 }
                 if ui
                     .add_enabled(enabled, egui::Button::new("Delete…"))

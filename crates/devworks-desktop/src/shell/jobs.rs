@@ -8,15 +8,18 @@
 //! exact frame (Confirm outcomes, and the next launch, resubmit it).
 use super::{ListState, Shell};
 use crate::backend::Slot;
-use crate::ops::{self, Failure, JobChange};
+use crate::frame;
+use crate::ops::{self, Failure, JobChange, JobCommand};
 use crate::route::Route;
 use crate::theme;
 use crate::widgets::{self, Header, Tone, ViewState, chip};
+use devworks_core::protocol::records::SchemaValue;
 use devworks_core::protocol::records::{
     ArtifactRecord, EffortName, JobDefinition, JobHold, JobInspection, JobRecord, JobRun,
     JobRunStatus, RouteCatalogModel, RouteIntent, Schedule,
 };
-use devworks_core::protocol::{Counter, DomainErrorCode};
+use devworks_core::protocol::support::DynamicJson;
+use devworks_core::protocol::{Counter, DomainErrorCode, ProjectId};
 use devworks_core::services::jobs::NativeCapability;
 use eframe::egui::{self, RichText, Ui};
 use serde_json::{Value, json};
@@ -179,36 +182,37 @@ impl JobForm {
     }
 }
 
-/// The wire schedule and definition a form describes, or why it is incomplete. Values the job
+/// The schedule and definition a form describes, or why it is incomplete. Values the job
 /// service validates (the expression, the zone, the arguments, the targets) are passed through
 /// as written: its refusal is shown, never second-guessed here.
 pub fn form_values(
     form: &JobForm,
     caps: &[NativeCapability],
     artifacts: &[ArtifactRecord],
-) -> Result<(Value, Value), String> {
+) -> Result<(Schedule, JobDefinition), String> {
     if form.title.trim().is_empty() {
         return Err("Give the job a title.".into());
     }
     let schedule = match form.schedule_kind {
-        0 => json!({"kind": "Manual"}),
+        0 => Schedule::Manual {},
         1 => {
             let s = form.seconds.trim();
             if s.parse::<u64>().map_or(true, |n| n == 0) {
                 return Err("The interval is a whole number of seconds.".into());
             }
-            json!({"kind": "Interval", "seconds": s})
+            Schedule::Interval {
+                seconds: frame::text(s).ok_or("The interval is a whole number of seconds.")?,
+            }
         }
-        _ => json!({"kind": "Calendar", "expression": form.expression.trim(),
-            "timezone": form.timezone.trim()}),
-    };
-    let value: Value = if form.definition_kind == 0 {
-        serde_json::from_str(&form.arguments)
-            .map_err(|e| format!("The arguments are not valid JSON: {e}."))?
-    } else {
-        Value::Null
+        _ => Schedule::Calendar {
+            expression: frame::text(form.expression.trim())
+                .ok_or("Check the schedule expression.")?,
+            timezone: frame::text(form.timezone.trim()).ok_or("Check the schedule time zone.")?,
+        },
     };
     let definition = if form.definition_kind == 0 {
+        let value: Value = serde_json::from_str(&form.arguments)
+            .map_err(|e| format!("The arguments are not valid JSON: {e}."))?;
         if !value.is_object() {
             return Err("The arguments are a JSON object.".into());
         }
@@ -222,19 +226,22 @@ pub fn form_values(
         // The capability as this build offers it; one the build no longer offers keeps the
         // schema it was saved with (the job service decides whether it still runs).
         let schema = match caps.iter().find(|c| c.capability_id.as_str() == chosen) {
-            Some(cap) => serde_json::to_value(&cap.schema).unwrap_or_default(),
+            Some(cap) => cap.schema.clone(),
             None => match form.original() {
                 Some(JobDefinition::Native {
                     capability_id,
                     arguments,
-                }) if capability_id.as_str() == chosen => {
-                    serde_json::to_value(&arguments.schema).unwrap_or_default()
-                }
+                }) if capability_id.as_str() == chosen => arguments.schema.clone(),
                 _ => return Err("No maintenance capability is available in this build.".into()),
             },
         };
-        json!({"kind": "Native", "capabilityId": chosen, "arguments": {
-            "schema": schema, "value": value}})
+        JobDefinition::Native {
+            capability_id: frame::id(chosen).ok_or("Check the maintenance capability.")?,
+            arguments: SchemaValue {
+                schema,
+                value: DynamicJson(value),
+            },
+        }
     } else {
         let Some(chosen) = &form.prompt else {
             return Err("Choose the saved prompt (an artifact) the task runs.".into());
@@ -245,13 +252,13 @@ pub fn form_values(
             Some(JobDefinition::Inference { prompt, .. })
                 if prompt.artifact_id.as_str() == chosen =>
             {
-                serde_json::to_value(prompt).unwrap_or_default()
+                prompt.clone()
             }
             _ => match artifacts
                 .iter()
                 .find(|a| a.artifact.artifact_id.as_str() == chosen)
             {
-                Some(a) => serde_json::to_value(&a.artifact).unwrap_or_default(),
+                Some(a) => a.artifact.clone(),
                 None => return Err("Choose the saved prompt (an artifact) the task runs.".into()),
             },
         };
@@ -261,20 +268,29 @@ pub fn form_values(
                 if m.is_empty() {
                     return Err("Name the model the task is routed to.".into());
                 }
-                json!({"kind": "Model", "modelId": m})
+                RouteIntent::Model {
+                    model_id: frame::id(m).ok_or("Check the model the task is routed to.")?,
+                }
             }
-            2 => json!({"kind": "OpenRouterAuto"}),
-            _ => json!({"kind": "Tier", "tier": TIERS[form.tier.min(TIERS.len() - 1)]}),
+            2 => RouteIntent::OpenRouterAuto {},
+            _ => RouteIntent::Tier {
+                tier: frame::text(TIERS[form.tier.min(TIERS.len() - 1)])
+                    .ok_or("Check the routing tier.")?,
+            },
         };
-        let mut d = json!({"kind": "Inference", "prompt": prompt, "route": route,
-            "effort": EFFORTS[form.effort.min(EFFORTS.len() - 1)]});
-        if !form.target_project.trim().is_empty() {
-            d["projectId"] = json!(form.target_project.trim());
+        let target = |value: &str| (!value.trim().is_empty()).then(|| value.trim().to_owned());
+        JobDefinition::Inference {
+            prompt,
+            route,
+            effort: frame::text(EFFORTS[form.effort.min(EFFORTS.len() - 1)])
+                .ok_or("Check the effort.")?,
+            project_id: frame::lift(
+                target(&form.target_project).map(|p| frame::id(&p).map(ProjectId)),
+            )
+            .ok_or("Check the target project.")?,
+            feature_id: frame::lift(target(&form.feature).map(|f| frame::text(&f)))
+                .ok_or("Check the target feature.")?,
         }
-        if !form.feature.trim().is_empty() {
-            d["featureId"] = json!(form.feature.trim());
-        }
-        d
     };
     Ok((schedule, definition))
 }
@@ -531,7 +547,7 @@ pub enum JobAction {
     RetryPrompts(Option<String>),
     EditJob(JobRecord),
     Save(JobForm),
-    Command(&'static str, JobRecord),
+    Command(JobCommand, JobRecord),
     Cancel(JobRun),
 }
 
@@ -699,16 +715,16 @@ impl Shell {
                         }
                     }
                 }
-                JobAction::Command(op, job) => {
+                JobAction::Command(command, job) => {
                     self.jobs.confirm_delete = None;
                     let slot = Slot::JobCommand(job.id.as_str().to_owned());
-                    let label = match op {
-                        "jobs.run_now" => "Starting a run",
-                        "jobs.enable" => "Enabling the job",
-                        "jobs.disable" => "Disabling the job",
-                        _ => "Deleting the job",
+                    let (label, op) = match command {
+                        JobCommand::RunNow => ("Starting a run", "jobs.run_now"),
+                        JobCommand::Enable => ("Enabling the job", "jobs.enable"),
+                        JobCommand::Disable => ("Disabling the job", "jobs.disable"),
+                        JobCommand::Delete => ("Deleting the job", "jobs.delete"),
                     };
-                    self.command(slot, label, op, move |b| ops::job_command(b, op, &job));
+                    self.command(slot, label, op, move |b| ops::job_command(b, command, &job));
                 }
                 JobAction::Cancel(run) => {
                     let slot = Slot::JobCommand(run.job_id.as_str().to_owned());
@@ -1187,7 +1203,7 @@ impl Shell {
                     });
                 });
             match (open, decided) {
-                (_, Some(true)) => actions.push(JobAction::Command("jobs.delete", job)),
+                (_, Some(true)) => actions.push(JobAction::Command(JobCommand::Delete, job)),
                 (false, _) | (_, Some(false)) => self.jobs.confirm_delete = None,
                 _ => {}
             }
@@ -1424,19 +1440,19 @@ fn details(ui: &mut Ui, jobs: &mut JobsUi, actions: &mut Vec<JobAction>, busy: b
             .add_enabled(!busy, egui::Button::new("Run now"))
             .clicked()
         {
-            actions.push(JobAction::Command("jobs.run_now", j.clone()));
+            actions.push(JobAction::Command(JobCommand::RunNow, j.clone()));
         }
         if (!j.enabled || j.hold.is_some() || j.authorized == Some(false))
             && ui.add_enabled(!busy, egui::Button::new("Enable")).clicked()
         {
-            actions.push(JobAction::Command("jobs.enable", j.clone()));
+            actions.push(JobAction::Command(JobCommand::Enable, j.clone()));
         }
         if j.enabled
             && ui
                 .add_enabled(!busy, egui::Button::new("Disable"))
                 .clicked()
         {
-            actions.push(JobAction::Command("jobs.disable", j.clone()));
+            actions.push(JobAction::Command(JobCommand::Disable, j.clone()));
         }
         if ui.add_enabled(!busy, egui::Button::new("Edit")).clicked() {
             actions.push(JobAction::EditJob(j.clone()));
