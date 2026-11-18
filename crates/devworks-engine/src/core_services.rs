@@ -20,7 +20,6 @@ use devworks_core::ports::http::{Entropy, HttpTransport};
 use devworks_core::ports::packages::{
     HostPlatform, PackageFiles, PackageInspector, RuntimeProbe, SchemaValidator,
 };
-use devworks_core::ports::retrieval::{NoVectorIndex, VectorIndex};
 use devworks_core::ports::router::ConnectionDirectory;
 use devworks_core::ports::secrets::{SecretResolver, SecretStore};
 use devworks_core::ports::storage::ApplicationStore;
@@ -83,19 +82,10 @@ pub struct DiagnosticComposition {
 }
 
 /// What the knowledge service is built over: the artifact files its imports read (none: imports
-/// are refused) and the vector index (lexical retrieval until an embedding route exists).
-#[derive(Clone)]
+/// are refused). Retrieval is lexical until an embedding route exists.
+#[derive(Clone, Default)]
 pub struct KnowledgeComposition {
     pub files: Option<Arc<dyn ArtifactFiles>>,
-    pub vectors: Arc<dyn VectorIndex>,
-}
-impl Default for KnowledgeComposition {
-    fn default() -> Self {
-        Self {
-            files: None,
-            vectors: Arc::new(NoVectorIndex),
-        }
-    }
 }
 
 /// The ports of run root control: the plan and readiness port (none: the production one) and
@@ -340,13 +330,8 @@ impl CoreServices {
         // Unified Knowledge: imports read their saved artifact version, and a large delete by
         // source continues through its durable consumer, registered by boot.
         let knowledge = Arc::new(
-            KnowledgeService::new(
-                ids.clone(),
-                clock.clone(),
-                k.files.clone(),
-                k.vectors.clone(),
-            )
-            .with_summaries(store.clone(), artifacts.clone()),
+            KnowledgeService::new(ids.clone(), clock.clone(), k.files.clone())
+                .with_summaries(store.clone(), artifacts.clone()),
         );
         let agents = Arc::new(AgentService::new(ids.clone(), control.clone()));
         // The shared web tools: fetched pages become artifacts and every search and fetch is

@@ -4,11 +4,11 @@
 //! outcomes, and the next launch, resubmit it).
 use crate::backend::{Reply, Unresolved};
 use crate::memory::RouteMemory;
-use crate::ops::{self, Failure};
+use crate::ops::{self, Failure, LifecycleChange};
 use crate::project_purge::Live;
 use crate::projects_ops::ProjectsSlot;
 use crate::projects_screen::{
-    ARCHIVE, Action, DELETE, PortfolioView, RESTORE, RepositoriesView, confirm_window, same_access,
+    Action, PortfolioView, RepositoriesView, confirm_window, same_access,
 };
 pub use crate::projects_screen::{
     BASE_DIRECTORY, BaseDirectory, CONTAINER_RUNTIME, Confirm, CreateForm, EditForm, GitView,
@@ -165,19 +165,17 @@ impl ProjectsCtl<'_, '_> {
                 continue;
             }
             self.projects.texts.insert(key, TextState::Loading);
-            let (r, op) = (
-                repository.to_owned(),
-                if readme {
-                    "repositories.readme"
-                } else {
-                    "repositories.summary"
-                },
-            );
+            let r = repository.to_owned();
+            let op = if readme {
+                "repositories.readme"
+            } else {
+                "repositories.summary"
+            };
             self.query(
                 ProjectsSlot::RepositoryText(repository.to_owned(), readme),
                 "Reading repository texts",
                 op,
-                move |b| ops::repository_text(b, op, &r),
+                move |b| ops::repository_text(b, &r, readme),
             );
         }
     }
@@ -250,14 +248,16 @@ impl ProjectsCtl<'_, '_> {
                         move |b| ops::project_membership(b, &p, &repos),
                     );
                 }
-                Action::Lifecycle(op, p) => {
+                Action::Lifecycle(change, p) => {
                     let slot = ProjectsSlot::ProjectCommand(p.id.0.as_str().to_owned());
-                    let label = match op {
-                        ARCHIVE => "Archiving the project",
-                        RESTORE => "Restoring the project",
-                        _ => "Deleting the project",
+                    let label = match change {
+                        LifecycleChange::Archive => "Archiving the project",
+                        LifecycleChange::Restore => "Restoring the project",
+                        LifecycleChange::Delete => "Deleting the project",
                     };
-                    self.command(slot, label, op, move |b| ops::project_lifecycle(b, op, &p));
+                    self.command(slot, label, change.operation(), move |b| {
+                        ops::project_lifecycle(b, change, &p)
+                    });
                 }
                 Action::OpenGraph(id, name) => self.effects.push(Effect::OpenGraph(id, name)),
                 Action::Open(id) => {
@@ -923,8 +923,8 @@ impl ProjectsCtl<'_, '_> {
             Some(true) => {
                 self.projects.confirm = None;
                 actions.push(match confirm {
-                    Confirm::Archive(p) => Action::Lifecycle(ARCHIVE, p),
-                    Confirm::Delete(p) => Action::Lifecycle(DELETE, p),
+                    Confirm::Archive(p) => Action::Lifecycle(LifecycleChange::Archive, p),
+                    Confirm::Delete(p) => Action::Lifecycle(LifecycleChange::Delete, p),
                     Confirm::RemoveIndex(r) => Action::RemoveIndex(r),
                 });
             }

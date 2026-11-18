@@ -431,7 +431,8 @@ fn native_task_lifecycle_transport(
 ) {
     use devworks_core::protocol::results::DomainDecision;
     use devworks_core::protocol::{CommandReply, ProjectId, RootId};
-    use devworks_core::services::git::{EffectOutcome, RegisteredGitRoot};
+    use devworks_core::services::effect::EffectOutcome;
+    use devworks_core::services::git::RegisteredGitRoot;
     let h = Harness::new();
     h.readers.store(1, std::sync::atomic::Ordering::SeqCst);
     let store = h.open();

@@ -41,6 +41,9 @@ contract-suite = []
 # Only tests/extension_scalar_parity.rs: the package protocol mirrors core's wire scalars without
 # depending on core, and that test holds both copies to one corpus.
 devworks-extension-protocol = { path = "../devworks-extension-protocol" }
+# Test doubles, the stub for repositories a test does not model, and seeding helpers shared with
+# the other crates' tests. It depends on core, so only the integration tests use it.
+devworks-test-support = { path = "../devworks-test-support" }
 
 [target.'cfg(unix)'.dependencies]
 # Opening a watched file without blocking on a FIFO; version already resolved in the workspace.

@@ -16,9 +16,10 @@ use devworks_engine::{
     Consumer, Delivery, DeliveryHandler, Dispatcher, DispatcherConfig, EffectExecutor,
     EffectFuture, EffectResult, Outcome, RetryPolicy,
 };
+use devworks_test_support::{TempRoot, seed};
 use serde_json::json;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicI64, AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 #[path = "native_runtime_case.rs"]
@@ -48,31 +49,13 @@ pub fn help_startup_diagnostics<'a>(
     help_startup::watch(store, dispatcher)
 }
 
-pub const T0: i64 = 1_700_000_000_000;
-
-pub struct TestClock(pub AtomicI64);
-impl Clock for TestClock {
-    fn now_ms(&self) -> Counter {
-        Counter::new(self.0.load(Ordering::SeqCst)).unwrap()
-    }
-}
-pub struct TestIds(AtomicU64);
-impl TestIds {
-    /// Identifiers issued so far; durable work such as each Help topic allocates new ones.
-    pub fn issued(&self) -> u64 {
-        self.0.load(Ordering::SeqCst)
-    }
-}
-impl IdSource for TestIds {
-    fn next_id(&self, kind: IdKind) -> Id {
-        let n = self.0.fetch_add(1, Ordering::SeqCst) + 1;
-        Id::new(format!("{kind:?}-{n}").to_lowercase()).unwrap()
-    }
-}
+pub use devworks_test_support::{T0, TestClock, TestIds};
 
 /// A temporary data root reopened across simulated process restarts.
 pub struct Harness {
     pub root: PathBuf,
+    /// Removes the root when the harness drops.
+    _root: TempRoot,
     pub clock: Arc<TestClock>,
     pub ids: Arc<TestIds>,
     /// Read connections of every store opened (0: the adapter's default).
@@ -80,20 +63,18 @@ pub struct Harness {
 }
 impl Harness {
     pub fn new() -> Self {
-        static NEXT: AtomicU64 = AtomicU64::new(0);
         // Cargo's per-target scratch directory, not the system temp directory: on GitHub's
         // Windows runners %TEMP% is on the C: OS disk, whose flush latency stalls the hundreds of
         // durable commits of native Help startup past the `within` guard.
-        let root = std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!(
-            "devworks-engine-test-{}-{}",
-            std::process::id(),
-            NEXT.fetch_add(1, Ordering::SeqCst)
-        ));
-        let _ = std::fs::remove_dir_all(&root);
+        let guard = TempRoot::under(
+            std::path::Path::new(env!("CARGO_TARGET_TMPDIR")),
+            "devworks-engine-test",
+        );
         Self {
-            root,
-            clock: Arc::new(TestClock(AtomicI64::new(T0))),
-            ids: Arc::new(TestIds(AtomicU64::new(0))),
+            root: guard.path().to_path_buf(),
+            _root: guard,
+            clock: Arc::new(TestClock::new(T0)),
+            ids: Arc::new(TestIds::new()),
             readers: AtomicUsize::new(0),
         }
     }
@@ -172,11 +153,6 @@ impl Harness {
     ) -> Arc<devworks_core::services::artifacts::ArtifactService> {
         let ids: Arc<dyn devworks_core::ports::IdSource> = self.ids.clone();
         devworks_engine::CoreServices::for_fixture(store, &self.clock(), &ids, ports).artifacts
-    }
-}
-impl Drop for Harness {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.root);
     }
 }
 
@@ -632,15 +608,15 @@ pub fn principal(s: &dyn ApplicationStore, name: &str, kind: PrincipalKind) -> I
     )
 }
 
-/// Seeds a project and a feature work item `root` directly in the store file: root-scoped
-/// deliveries need an owning root and the engine has no work-item port.
-pub fn seed_root(h: &Harness, root: &str) {
-    let c = rusqlite::Connection::open(h.root.join("workspace.sqlite")).unwrap();
-    c.busy_timeout(std::time::Duration::from_secs(5)).unwrap();
-    c.execute_batch(&format!(
-        "INSERT OR IGNORE INTO projects(id,title,lifecycle,revision,scope_revision,created_at) VALUES('project-a','A','Active',1,1,0);
-         INSERT INTO work_items VALUES('{root}','project-a','feature',NULL,NULL,NULL,'Fixture',1,0,1,1,1,'{{}}');"
-    ))
+/// Seeds project `project-a` (when it does not exist yet) and a feature work item `root` through
+/// the repository ports: root-scoped deliveries need an owning root and the engine has no
+/// work-item service to create one with a chosen id.
+pub fn seed_root(store: &dyn ApplicationStore, root: &str) {
+    seed::rows(
+        store,
+        &[seed::ProjectSeed::new("project-a").name("A").created_at(0)],
+        &[seed::WorkSeed::feature(root, "project-a").title("Fixture")],
+    )
     .unwrap();
 }
 

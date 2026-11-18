@@ -20,6 +20,7 @@
 //! abandons them: a run whose dispatch did not finish is reconciled at the next boot.
 use crate::dispatch::{Either, first};
 use crate::store;
+use crate::workers::Ticker;
 use devworks_core::ports::storage::WriteOptions;
 use devworks_core::ports::storage::{ApplicationStore, StorageError, StoredJobRun};
 use devworks_core::protocol::Id;
@@ -29,10 +30,8 @@ use devworks_core::services::jobs::runner::{
 };
 use devworks_core::services::process::{ProcessSupervisor, StopOutcome, StopScope};
 use std::collections::{HashMap, HashSet};
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
-use tokio::sync::Notify;
 use tokio::task::JoinHandle;
 use tokio::time::Instant;
 
@@ -79,8 +78,7 @@ pub struct Scheduler {
     /// One tick at a time (the loop's and an explicit one never interleave, so a cancellation's
     /// native stop runs once per tick).
     ticking: tokio::sync::Mutex<()>,
-    wake: Notify,
-    stopping: AtomicBool,
+    ticker: Ticker,
 }
 
 impl Scheduler {
@@ -123,8 +121,7 @@ impl Scheduler {
             running: Mutex::new(HashMap::new()),
             live: Mutex::new(HashSet::new()),
             ticking: tokio::sync::Mutex::new(()),
-            wake: Notify::new(),
-            stopping: AtomicBool::new(false),
+            ticker: Ticker::new(),
         })
     }
     pub fn service(&self) -> &Arc<JobService> {
@@ -148,14 +145,14 @@ impl Scheduler {
     }
     /// Requests a tick now (a committed Run now, cancel, enable or edit).
     pub fn notify(&self) {
-        self.wake.notify_one();
+        self.ticker.notify();
     }
 
     /// One pass (see the module documentation).
     pub async fn tick(self: &Arc<Self>) -> Result<SchedulerTick, StorageError> {
         let mut report = SchedulerTick::default();
         let _one = self.ticking.lock().await;
-        if self.stopping.load(Ordering::SeqCst) {
+        if self.ticker.is_stopped() {
             return Ok(report);
         }
         let svc = self.service.clone();
@@ -185,7 +182,7 @@ impl Scheduler {
                 report.cancelled.push(done);
             }
         }
-        if self.stopping.load(Ordering::SeqCst) {
+        if self.ticker.is_stopped() {
             return Ok(report);
         }
         // A start that committed after its task ended (its acknowledgment lost, or the task
@@ -215,7 +212,7 @@ impl Scheduler {
         })
         .await?;
         for run in runnable {
-            if self.stopping.load(Ordering::SeqCst) {
+            if self.ticker.is_stopped() {
                 break;
             }
             if self.executing(&run.id) {
@@ -317,7 +314,7 @@ impl Scheduler {
         loop {
             match store::write(&self.store, WriteOptions::observed(), step.clone()).await {
                 Ok(v) => return Ok(v),
-                Err(e) if self.stopping.load(Ordering::SeqCst) => return Err(e),
+                Err(e) if self.ticker.is_stopped() => return Err(e),
                 Err(_) => {
                     tokio::time::sleep(wait).await;
                     wait = (wait * 2).min(MAX_RETRY_BACKOFF);
@@ -338,7 +335,7 @@ impl Scheduler {
         else {
             return Ok(());
         };
-        if self.stopping.load(Ordering::SeqCst) {
+        if self.ticker.is_stopped() {
             return self.release(begun).await;
         }
         let (svc, b) = (self.service.clone(), Arc::new(begun.clone()));
@@ -408,19 +405,16 @@ impl Scheduler {
 
     /// Ticks every `every` (or sooner when notified) until [`Self::stop`].
     pub async fn run(self: Arc<Self>, every: Duration) {
-        while !self.stopping.load(Ordering::SeqCst) {
-            let _ = self.tick().await;
-            if self.stopping.load(Ordering::SeqCst) {
-                break;
-            }
-            let _ = first(self.wake.notified(), tokio::time::sleep(every)).await;
-        }
+        self.ticker
+            .run(every, || async {
+                let _ = self.tick().await;
+            })
+            .await;
     }
 
     /// Freezes claims and starts (shutdown step 1).
     pub fn stop(&self) {
-        self.stopping.store(true, Ordering::SeqCst);
-        self.wake.notify_one();
+        self.ticker.stop();
     }
 
     /// Waits for in-flight runs until `deadline`, then abandons the rest (their dispatch, if it

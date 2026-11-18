@@ -466,7 +466,7 @@ fn resolve_dispatched(
         frame,
     ) && let devworks_core::admission::CallerKey::Command(request_key) = decoded.key
     {
-        let lookup = serde_json::json!({"protocol":"1.0-draft.1","schemaRevision":6,"queryId":backend.token("purged-receipt"),"query":{"kind":"history.command_receipt","requestKey":request_key}}).to_string().into_bytes();
+        let lookup = receipt_lookup(backend, &request_key);
         if let Ok(devworks_core::protocol::results::DomainQueryReply::Result {
             result:
                 devworks_core::protocol::results::OperationResult::HistoryCommandReceipt { value },
@@ -485,6 +485,27 @@ fn resolve_dispatched(
     }
 
     outcome
+}
+
+/// The `history.command_receipt` query that resolves the receipt held for `request_key`.
+pub(crate) fn receipt_lookup(
+    backend: &dyn Backend,
+    request_key: &devworks_core::protocol::RequestKey,
+) -> Vec<u8> {
+    use crate::frame::{self, Negotiate};
+    use devworks_core::operations::{OperationInput, history};
+    use devworks_core::protocol::{Query, QueryRequest};
+    frame::with(backend, Negotiate::Latest, || {
+        Some(OperationInput::History(history::Input::CommandReceipt(
+            QueryRequest {
+                protocol: frame::protocol(),
+                query_id: frame::text(&backend.token("purged-receipt"))?,
+                query: Query::Receipt {
+                    request_key: request_key.clone(),
+                },
+            },
+        )))
+    })
 }
 
 /// The host ingress chosen by the native interaction, retained with exact retry frames.

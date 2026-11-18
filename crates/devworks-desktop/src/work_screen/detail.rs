@@ -1,16 +1,18 @@
 //! Feature and card detail: plans and their requirement editor, readiness, blockers, feature
 //! membership, acceptance, assignment, run controls, history and source control.
+use crate::frame;
 use crate::theme;
 use crate::widgets::{self, Tone, chip};
 use crate::work_ops as wops;
+use devworks_core::operations::{OperationInput as In, features, tasks};
 use devworks_core::protocol::records::{
-    ApprovalState, CriterionState, FindingState, ReadinessDisposition, ReadinessFreshness,
-    RequirementStatus, WorkKind, WorkRecord,
+    ApprovalState, CriterionState, DependencyEdge, DependencyReplacement, FeaturePatch,
+    FindingState, ReadinessDisposition, ReadinessFreshness, RequirementStatus, WorkKind,
+    WorkRecord,
 };
-use devworks_core::protocol::{Event, Id};
+use devworks_core::protocol::{AssignmentId, Event, Id};
 use devworks_core::services::work::deps::MAX_PREREQUISITES;
 use eframe::egui::{self, RichText, Ui};
-use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
 
 use super::*;
@@ -58,12 +60,11 @@ pub(crate) fn feature_detail(
             })
             .response
             .widget_info(|| egui::WidgetInfo::labeled(egui::Role::ComboBox, enabled, "Feature status"));
-        if target != f.status_id.as_str() && enabled {
-            actions.push(Action::Command(
-                f.id.as_str().to_owned(),
-                "features.edit",
-                json!({"workId": f.id, "expectedRevision": f.revision, "changes": {"statusId": target}}),
-            ));
+        if target != f.status_id.as_str()
+            && enabled
+            && let Some(input) = feature_status_request(f, &target)
+        {
+            actions.push(Action::Command(f.id.as_str().to_owned(), input));
         }
         edit_section(ui, work, f, enabled, actions);
         ui.add_space(8.0);
@@ -646,22 +647,71 @@ pub enum BlockerEdit<'a> {
     Remove(&'a str),
 }
 
-/// The `tasks.dependency_links` body applying one blocker change to `w`, at its revision. The
-/// operation replaces the whole incoming list, so the change is applied to the record's
+/// The `tasks.dependency_links` command applying one blocker change to `w`, at its revision.
+/// The operation replaces the whole incoming list, so the change is applied to the record's
 /// `dependencyIds`, which is complete: no writer stores more than [`MAX_PREREQUISITES`], the
 /// projection's own bound. `None` when the change changes nothing or would exceed the bound.
-pub fn blocker_change(w: &WorkRecord, edit: BlockerEdit<'_>) -> Option<Value> {
-    let mut ids: Vec<&str> = w.dependency_ids.0.iter().map(|d| d.as_str()).collect();
+pub fn blocker_change(w: &WorkRecord, edit: BlockerEdit<'_>) -> Option<In> {
+    let mut ids: Vec<Id> = w.dependency_ids.0.clone();
     match edit {
-        BlockerEdit::Add(a) if !ids.contains(&a) && ids.len() < MAX_PREREQUISITES => ids.push(a),
-        BlockerEdit::Remove(r) if ids.contains(&r) => ids.retain(|d| *d != r),
+        BlockerEdit::Add(a)
+            if !ids.iter().any(|d| d.as_str() == a) && ids.len() < MAX_PREREQUISITES =>
+        {
+            ids.push(frame::id(a)?)
+        }
+        BlockerEdit::Remove(r) if ids.iter().any(|d| d.as_str() == r) => {
+            ids.retain(|d| d.as_str() != r)
+        }
         _ => return None,
     }
-    let edges: Vec<Value> = ids
-        .iter()
-        .map(|p| json!({"predecessor": p, "successor": w.id}))
+    let edges = ids
+        .into_iter()
+        .map(|predecessor| DependencyEdge {
+            predecessor,
+            successor: w.id.clone(),
+        })
         .collect();
-    Some(json!({"taskId": w.id, "expectedRevision": w.revision, "replacement": {"edges": edges}}))
+    Some(In::Tasks(tasks::Input::DependencyLinks(
+        tasks::DependencyLinksInput {
+            task_id: w.id.clone(),
+            expected_revision: w.revision.clone(),
+            replacement: DependencyReplacement {
+                edges: frame::bounded(edges)?,
+            },
+        },
+    )))
+}
+
+/// The `features.edit` command moving feature `f` to workflow status `target`.
+pub(crate) fn feature_status_request(f: &WorkRecord, target: &str) -> Option<In> {
+    Some(In::Features(features::Input::Edit(features::EditInput {
+        work_id: f.id.clone(),
+        expected_revision: f.revision.clone(),
+        changes: FeaturePatch {
+            status_id: Some(frame::id(target)?),
+            ..wops::empty()?
+        },
+    })))
+}
+/// The `tasks.set_feature` command putting `w` in feature `f`.
+pub(crate) fn set_feature_request(w: &WorkRecord, f: &str) -> Option<In> {
+    Some(In::Tasks(tasks::Input::SetFeature(
+        tasks::SetFeatureInput {
+            task_id: w.id.clone(),
+            expected_revision: w.revision.clone(),
+            feature_id: Some(frame::text(f)?),
+            clear_feature: false,
+        },
+    )))
+}
+/// The `tasks.assign` command recording `assignment` on `w`, or clearing its assignment.
+pub(crate) fn assign_request(w: &WorkRecord, assignment: Option<&AssignmentId>) -> In {
+    In::Tasks(tasks::Input::Assign(tasks::AssignInput {
+        task_id: w.id.clone(),
+        expected_revision: w.revision.clone(),
+        assignment_id: assignment.cloned(),
+        clear_assignment: assignment.is_none(),
+    }))
 }
 
 /// An editable list of entries, one ID field and one multi-line text field each, with add and
@@ -745,210 +795,301 @@ pub(crate) fn card_detail(
         .iter()
         .map(|f| (f.id.as_str().to_owned(), f.title.0.clone()))
         .collect();
-    egui::ScrollArea::vertical().id_salt("card-detail").show(ui, |ui| {
-        ui.label(RichText::new(&w.title.0).strong());
-        widgets::caption(ui, format!("{} · revision {} · priority {}", kind_label(w), w.revision.as_str(), w.priority));
-        metadata_summary(ui,w);
-        if !w.description.0.is_empty() {
-            ui.label(&w.description.0);
-        }
-        source_control(ui, work, w.id.as_str(), actions);
-        // Workflow status: moving it never starts, pauses or completes execution.
-        let mut target = w.status_id.as_str().to_owned();
-        egui::ComboBox::from_id_salt(("card-status", w.id.as_str()))
-            .selected_text(status_name(cols, &target))
-            .show_ui(ui, |ui| {
-                for c in cols {
-                    ui.selectable_value(&mut target, c.id.clone(), &c.name);
-                }
-            })
-            .response
-            .widget_info(|| egui::WidgetInfo::labeled(egui::Role::ComboBox, enabled, "Status"));
-        if target != w.status_id.as_str() && enabled {
-            actions.push(Action::Move(w.clone(), target));
-        }
-        let semantic = semantic_of(cols, w.status_id.as_str());
-        if semantic == "Done" {
-            let verified = !w.acceptance.0.is_empty()
-                && w.acceptance.0.iter().all(|c| matches!(c.state, CriterionState::Met) && !c.evidence_ids.0.is_empty());
-            chip(
+    egui::ScrollArea::vertical()
+        .id_salt("card-detail")
+        .show(ui, |ui| {
+            ui.label(RichText::new(&w.title.0).strong());
+            widgets::caption(
                 ui,
-                if verified { "Completed with verified acceptance evidence" } else { "Completed manually (no verified evidence)" },
-                if verified { Tone::Good } else { Tone::Attention },
+                format!(
+                    "{} · revision {} · priority {}",
+                    kind_label(w),
+                    w.revision.as_str(),
+                    w.priority
+                ),
             );
-        }
-        edit_section(ui, work, w, enabled, actions);
-        ui.add_space(6.0);
-        if let Some(origin) = &w.previous_inheritance {
-            widgets::caption(ui,format!("Earlier requirements from feature {}: {}",origin.feature_id.as_str(),origin.requirement_ids.0.iter().map(Id::as_str).collect::<Vec<_>>().join(", ")));
-            if ui.button("Open earlier feature").clicked() { actions.push(Action::OpenWork(origin.feature_id.as_str().into())); }
-        }
-        // Membership: link, transfer or remove (remove pauses).
-        let current = w
-            .parent_id
-            .as_ref()
-            .and_then(|p| features.iter().find(|(id, _)| id == p.as_str()))
-            .map_or("No feature (standalone issue)".to_owned(), |(_, t)| t.clone());
-        let mut chosen = w.parent_id.as_ref().map(|p| p.as_str().to_owned());
-        egui::ComboBox::from_id_salt(("card-feature", w.id.as_str()))
-            .selected_text(current)
-            .show_ui(ui, |ui| {
-                for (id, t) in &features {
-                    ui.selectable_value(&mut chosen, Some(id.clone()), t);
+            metadata_summary(ui, w);
+            if !w.description.0.is_empty() {
+                ui.label(&w.description.0);
+            }
+            source_control(ui, work, w.id.as_str(), actions);
+            // Workflow status: moving it never starts, pauses or completes execution.
+            let mut target = w.status_id.as_str().to_owned();
+            egui::ComboBox::from_id_salt(("card-status", w.id.as_str()))
+                .selected_text(status_name(cols, &target))
+                .show_ui(ui, |ui| {
+                    for c in cols {
+                        ui.selectable_value(&mut target, c.id.clone(), &c.name);
+                    }
+                })
+                .response
+                .widget_info(|| egui::WidgetInfo::labeled(egui::Role::ComboBox, enabled, "Status"));
+            if target != w.status_id.as_str() && enabled {
+                actions.push(Action::Move(w.clone(), target));
+            }
+            let semantic = semantic_of(cols, w.status_id.as_str());
+            if semantic == "Done" {
+                let verified = !w.acceptance.0.is_empty()
+                    && w.acceptance.0.iter().all(|c| {
+                        matches!(c.state, CriterionState::Met) && !c.evidence_ids.0.is_empty()
+                    });
+                chip(
+                    ui,
+                    if verified {
+                        "Completed with verified acceptance evidence"
+                    } else {
+                        "Completed manually (no verified evidence)"
+                    },
+                    if verified {
+                        Tone::Good
+                    } else {
+                        Tone::Attention
+                    },
+                );
+            }
+            edit_section(ui, work, w, enabled, actions);
+            ui.add_space(6.0);
+            if let Some(origin) = &w.previous_inheritance {
+                widgets::caption(
+                    ui,
+                    format!(
+                        "Earlier requirements from feature {}: {}",
+                        origin.feature_id.as_str(),
+                        origin
+                            .requirement_ids
+                            .0
+                            .iter()
+                            .map(Id::as_str)
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    ),
+                );
+                if ui.button("Open earlier feature").clicked() {
+                    actions.push(Action::OpenWork(origin.feature_id.as_str().into()));
                 }
-            })
-            .response
-            .widget_info(|| egui::WidgetInfo::labeled(egui::Role::ComboBox, enabled, "Feature membership"));
-        if chosen != w.parent_id.as_ref().map(|p| p.as_str().to_owned()) && enabled
-            && let Some(f) = chosen
-        {
-            actions.push(Action::Command(
-                w.id.as_str().to_owned(),
-                "tasks.set_feature",
-                json!({"taskId": w.id, "expectedRevision": w.revision, "featureId": f, "clearFeature": false}),
-            ));
-        }
-        if w.parent_id.is_some()
-            && ui.add_enabled(enabled, egui::Button::new("Remove from feature…")).clicked()
-        {
-            work.unlink = Some(w.clone());
-        }
-        ui.add_space(6.0);
-        // Blocking links (one stored edge, both views).
-        ui.label(RichText::new("Blocked by").strong());
-        if w.dependency_ids.0.is_empty() {
-            widgets::caption(ui, "Nothing blocks it.");
-        }
-        for d in &w.dependency_ids.0 {
-            let (t, s) = titles.get(d.as_str()).cloned().unwrap_or((d.as_str().to_owned(), String::new()));
-            ui.horizontal(|ui| {
-                ui.label(format!("{t} ({})", status_name(cols, &s)));
-                if ui.add_enabled(enabled, egui::Button::new(format!("Remove blocker {}", short(&t, 16))).small()).clicked()
-                    && let Some(body) = blocker_change(w, BlockerEdit::Remove(d.as_str()))
+            }
+            // Membership: link, transfer or remove (remove pauses).
+            let current = w
+                .parent_id
+                .as_ref()
+                .and_then(|p| features.iter().find(|(id, _)| id == p.as_str()))
+                .map_or("No feature (standalone issue)".to_owned(), |(_, t)| {
+                    t.clone()
+                });
+            let mut chosen = w.parent_id.as_ref().map(|p| p.as_str().to_owned());
+            egui::ComboBox::from_id_salt(("card-feature", w.id.as_str()))
+                .selected_text(current)
+                .show_ui(ui, |ui| {
+                    for (id, t) in &features {
+                        ui.selectable_value(&mut chosen, Some(id.clone()), t);
+                    }
+                })
+                .response
+                .widget_info(|| {
+                    egui::WidgetInfo::labeled(egui::Role::ComboBox, enabled, "Feature membership")
+                });
+            if chosen != w.parent_id.as_ref().map(|p| p.as_str().to_owned())
+                && enabled
+                && let Some(f) = chosen
+                && let Some(input) = set_feature_request(w, &f)
+            {
+                actions.push(Action::Command(w.id.as_str().to_owned(), input));
+            }
+            if w.parent_id.is_some()
+                && ui
+                    .add_enabled(enabled, egui::Button::new("Remove from feature…"))
+                    .clicked()
+            {
+                work.unlink = Some(w.clone());
+            }
+            ui.add_space(6.0);
+            // Blocking links (one stored edge, both views).
+            ui.label(RichText::new("Blocked by").strong());
+            if w.dependency_ids.0.is_empty() {
+                widgets::caption(ui, "Nothing blocks it.");
+            }
+            for d in &w.dependency_ids.0 {
+                let (t, s) = titles
+                    .get(d.as_str())
+                    .cloned()
+                    .unwrap_or((d.as_str().to_owned(), String::new()));
+                ui.horizontal(|ui| {
+                    ui.label(format!("{t} ({})", status_name(cols, &s)));
+                    if ui
+                        .add_enabled(
+                            enabled,
+                            egui::Button::new(format!("Remove blocker {}", short(&t, 16))).small(),
+                        )
+                        .clicked()
+                        && let Some(input) = blocker_change(w, BlockerEdit::Remove(d.as_str()))
+                    {
+                        actions.push(Action::Command(w.id.as_str().to_owned(), input));
+                    }
+                });
+            }
+            let mut add: Option<String> = None;
+            let full = w.dependency_ids.0.len() >= MAX_PREREQUISITES;
+            if full {
+                widgets::caption(
+                    ui,
+                    "It has the most blockers an item can have; remove one to add another.",
+                );
+            }
+            egui::ComboBox::from_id_salt(("add-blocker", w.id.as_str()))
+                .selected_text("Add a blocker…")
+                .show_ui(ui, |ui| {
+                    for (id, (t, _)) in &titles {
+                        if id != w.id.as_str()
+                            && !w.dependency_ids.0.iter().any(|d| d.as_str() == id)
+                        {
+                            ui.selectable_value(&mut add, Some(id.clone()), t);
+                        }
+                    }
+                })
+                .response
+                .widget_info(|| {
+                    egui::WidgetInfo::labeled(
+                        egui::Role::ComboBox,
+                        enabled && !full,
+                        "Add a blocker",
+                    )
+                });
+            if let Some(a) = add
+                && enabled
+                && let Some(input) = blocker_change(w, BlockerEdit::Add(&a))
+            {
+                actions.push(Action::Command(w.id.as_str().to_owned(), input));
+            }
+            ui.label(RichText::new("Blocks").strong());
+            if w.dependent_ids.0.is_empty() {
+                widgets::caption(ui, "It blocks nothing.");
+            }
+            for d in &w.dependent_ids.0 {
+                let (t, _) = titles
+                    .get(d.as_str())
+                    .cloned()
+                    .unwrap_or((d.as_str().to_owned(), String::new()));
+                ui.label(t);
+            }
+            ui.add_space(6.0);
+            ui.label(RichText::new("Acceptance").strong());
+            if w.acceptance.0.is_empty() {
+                widgets::caption(ui, "No acceptance criteria.");
+            }
+            for c in &w.acceptance.0 {
+                let state = match (&c.state, c.evidence_ids.0.is_empty()) {
+                    (CriterionState::Met, false) => "met with evidence",
+                    (CriterionState::Met, true) => "met (manual)",
+                    _ => "unmet",
+                };
+                ui.label(format!("{}: {} · {state}", c.id.as_str(), c.text.0));
+            }
+            ui.add_space(6.0);
+            ui.label(RichText::new("Agents").strong());
+            match &w.assigned_agent_id {
+                Some(a) => ui.label(format!("Assigned to {}", a.as_str())),
+                None => ui.label("No agent assigned."),
+            };
+            if !w.attempts.0.is_empty() {
+                widgets::caption(ui, "An agent is working on it now.");
+            }
+            // The card records the agent working on it through its live assignment, or clears that.
+            let working = w.attempts.0.iter().find_map(|a| a.assignment_id.as_ref());
+            if w.assigned_agent_id.is_some() {
+                if ui
+                    .add_enabled(enabled, egui::Button::new("Clear assignment"))
+                    .clicked()
                 {
-                    actions.push(Action::Command(w.id.as_str().to_owned(), "tasks.dependency_links", body));
+                    actions.push(Action::Command(
+                        w.id.as_str().to_owned(),
+                        assign_request(w, None),
+                    ));
                 }
-            });
-        }
-        let mut add: Option<String> = None;
-        let full = w.dependency_ids.0.len() >= MAX_PREREQUISITES;
-        if full {
-            widgets::caption(ui, "It has the most blockers an item can have; remove one to add another.");
-        }
-        egui::ComboBox::from_id_salt(("add-blocker", w.id.as_str()))
-            .selected_text("Add a blocker…")
-            .show_ui(ui, |ui| {
-                for (id, (t, _)) in &titles {
-                    if id != w.id.as_str() && !w.dependency_ids.0.iter().any(|d| d.as_str() == id) {
-                        ui.selectable_value(&mut add, Some(id.clone()), t);
+            } else if let Some(assignment) = working {
+                if ui
+                    .add_enabled(enabled, egui::Button::new("Assign to the working agent"))
+                    .clicked()
+                {
+                    actions.push(Action::Command(
+                        w.id.as_str().to_owned(),
+                        assign_request(w, Some(assignment)),
+                    ));
+                }
+            } else {
+                widgets::caption(ui, "An agent can be assigned while one is working on it.");
+            }
+            // Run controls of a root (a standalone issue, or a card with controls of its own).
+            if let Some(s) = work.runs.get(w.id.as_str()).cloned() {
+                let held = s.blockers.items.iter().any(|b| wops::manual_hold(&b.cause));
+                widgets::caption(
+                    ui,
+                    format!(
+                        "Execution: {:?}{}",
+                        s.root.desired_state,
+                        if held {
+                            " · paused until you continue it"
+                        } else {
+                            ""
+                        }
+                    ),
+                );
+                ui.horizontal(|ui| {
+                    if w.parent_id.is_none()
+                        && ui
+                            .add_enabled(enabled, egui::Button::new("Start"))
+                            .clicked()
+                    {
+                        actions.push(Action::Run("runs.start", w.clone()));
+                    }
+                    if ui
+                        .add_enabled(enabled, egui::Button::new("Pause"))
+                        .clicked()
+                    {
+                        actions.push(Action::Run("runs.pause", w.clone()));
+                    }
+                    if ui
+                        .add_enabled(enabled && held, egui::Button::new("Continue"))
+                        .clicked()
+                    {
+                        actions.push(Action::Run("runs.continue", w.clone()));
+                    }
+                });
+            } else if w.parent_id.is_none() && ui.button("Show run controls").clicked() {
+                actions.push(Action::Inspect(w.id.as_str().to_owned()));
+            }
+            ui.add_space(6.0);
+            if ui.button("Show its history").clicked() {
+                actions.push(Action::ShowActivity(w.id.as_str().to_owned()));
+            }
+            let feed = work.histories.get(w.id.as_str());
+            let history: Vec<&Event> = feed
+                .into_iter()
+                .flat_map(|feed| feed.items.iter())
+                .collect();
+            if let Some(feed) = feed {
+                if let Some(error) = &feed.error {
+                    widgets::caption(ui, error);
+                    if ui.button("Reload card history").clicked() {
+                        actions.push(Action::RefreshHistory(Some(w.id.as_str().to_owned())));
                     }
                 }
-            })
-            .response
-            .widget_info(|| egui::WidgetInfo::labeled(egui::Role::ComboBox, enabled && !full, "Add a blocker"));
-        if let Some(a) = add
-            && enabled
-            && let Some(body) = blocker_change(w, BlockerEdit::Add(&a))
-        {
-            actions.push(Action::Command(w.id.as_str().to_owned(), "tasks.dependency_links", body));
-        }
-        ui.label(RichText::new("Blocks").strong());
-        if w.dependent_ids.0.is_empty() {
-            widgets::caption(ui, "It blocks nothing.");
-        }
-        for d in &w.dependent_ids.0 {
-            let (t, _) = titles.get(d.as_str()).cloned().unwrap_or((d.as_str().to_owned(), String::new()));
-            ui.label(t);
-        }
-        ui.add_space(6.0);
-        ui.label(RichText::new("Acceptance").strong());
-        if w.acceptance.0.is_empty() {
-            widgets::caption(ui, "No acceptance criteria.");
-        }
-        for c in &w.acceptance.0 {
-            let state = match (&c.state, c.evidence_ids.0.is_empty()) {
-                (CriterionState::Met, false) => "met with evidence",
-                (CriterionState::Met, true) => "met (manual)",
-                _ => "unmet",
-            };
-            ui.label(format!("{}: {} · {state}", c.id.as_str(), c.text.0));
-        }
-        ui.add_space(6.0);
-        ui.label(RichText::new("Agents").strong());
-        match &w.assigned_agent_id {
-            Some(a) => ui.label(format!("Assigned to {}", a.as_str())),
-            None => ui.label("No agent assigned."),
-        };
-        if !w.attempts.0.is_empty() {
-            widgets::caption(ui, "An agent is working on it now.");
-        }
-        // The card records the agent working on it through its live assignment, or clears that.
-        let working = w.attempts.0.iter().find_map(|a| a.assignment_id.as_ref());
-        if w.assigned_agent_id.is_some() {
-            if ui.add_enabled(enabled, egui::Button::new("Clear assignment")).clicked() {
-                actions.push(Action::Command(
-                    w.id.as_str().to_owned(),
-                    "tasks.assign",
-                    json!({"taskId": w.id, "expectedRevision": w.revision, "clearAssignment": true}),
-                ));
-            }
-        } else if let Some(assignment) = working {
-            if ui.add_enabled(enabled, egui::Button::new("Assign to the working agent")).clicked() {
-                actions.push(Action::Command(
-                    w.id.as_str().to_owned(),
-                    "tasks.assign",
-                    json!({"taskId": w.id, "expectedRevision": w.revision,
-                        "assignmentId": assignment, "clearAssignment": false}),
-                ));
-            }
-        } else {
-            widgets::caption(ui, "An agent can be assigned while one is working on it.");
-        }
-        // Run controls of a root (a standalone issue, or a card with controls of its own).
-        if let Some(s) = work.runs.get(w.id.as_str()).cloned() {
-            let held = s.blockers.items.iter().any(|b| wops::manual_hold(&b.cause));
-            widgets::caption(ui, format!(
-                "Execution: {:?}{}",
-                s.root.desired_state,
-                if held { " · paused until you continue it" } else { "" }
-            ));
-            ui.horizontal(|ui| {
-                if w.parent_id.is_none() && ui.add_enabled(enabled, egui::Button::new("Start")).clicked() {
-                    actions.push(Action::Run("runs.start", w.clone()));
-                }
-                if ui.add_enabled(enabled, egui::Button::new("Pause")).clicked() {
-                    actions.push(Action::Run("runs.pause", w.clone()));
-                }
-                if ui.add_enabled(enabled && held, egui::Button::new("Continue")).clicked() {
-                    actions.push(Action::Run("runs.continue", w.clone()));
-                }
-            });
-        } else if w.parent_id.is_none() && ui.button("Show run controls").clicked() {
-            actions.push(Action::Inspect(w.id.as_str().to_owned()));
-        }
-        ui.add_space(6.0);
-        if ui.button("Show its history").clicked() {
-            actions.push(Action::ShowActivity(w.id.as_str().to_owned()));
-        }
-        let feed=work.histories.get(w.id.as_str());
-        let history: Vec<&Event>=feed.into_iter().flat_map(|feed|feed.items.iter()).collect();
-        if let Some(feed)=feed {
-            if let Some(error)=&feed.error {
-                widgets::caption(ui,error);
-                if ui.button("Reload card history").clicked() {
-                    actions.push(Action::RefreshHistory(Some(w.id.as_str().to_owned())));
+                if feed.more
+                    && ui
+                        .add_enabled(!feed.loading, egui::Button::new("Load older card changes"))
+                        .clicked()
+                {
+                    actions.push(Action::OlderHistory(Some(w.id.as_str().to_owned())));
                 }
             }
-            if feed.more && ui.add_enabled(!feed.loading,egui::Button::new("Load older card changes")).clicked() {
-                actions.push(Action::OlderHistory(Some(w.id.as_str().to_owned())));
-            }
-        }
-        egui::ScrollArea::vertical().id_salt(("card-history", w.id.as_str())).max_height(160.0).show(ui, |ui| {
-            for e in history {
-                widgets::caption(ui, activity_line(e, e.actor_id.0.as_str(), "this item"));
-            }
+            egui::ScrollArea::vertical()
+                .id_salt(("card-history", w.id.as_str()))
+                .max_height(160.0)
+                .show(ui, |ui| {
+                    for e in history {
+                        widgets::caption(ui, activity_line(e, e.actor_id.0.as_str(), "this item"));
+                    }
+                });
         });
-    });
 }
 
 pub(crate) fn source_control(ui: &mut Ui, work: &WorkUi, root: &str, actions: &mut Vec<Action>) {

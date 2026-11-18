@@ -2,9 +2,11 @@
 //! provided by the shared Help service; this module only selects operations and wire revision.
 use crate::{
     backend::{Backend, Slot},
+    frame::{self, Negotiate},
     ops,
 };
-use serde_json::{Value, json};
+use devworks_core::operations::{OperationInput as In, help};
+use devworks_core::protocol::records::PageRequest;
 
 /// The Help requests the screen waits for. The names are persisted (see [`Slot`]).
 #[derive(Clone, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
@@ -34,52 +36,58 @@ impl TryFrom<Slot> for HelpSlot {
 
 pub const PASSAGE_CHARS: u32 = 16_000;
 pub const TOPICS_PER_PAGE: u16 = 50;
-fn page(cursor: Option<&str>) -> Value {
-    let mut page = json!({"limit": TOPICS_PER_PAGE});
-    if let Some(cursor) = cursor {
-        page["cursor"] = json!(cursor);
-    }
-    page
+fn page(cursor: Option<&str>) -> Option<PageRequest> {
+    frame::page(TOPICS_PER_PAGE.into(), cursor)
 }
-fn query(b: &dyn Backend, operation: &str, body: Value) -> Vec<u8> {
-    ops::at_revision(ops::query_frame(b, operation, body), 3)
+fn query(b: &dyn Backend, input: impl FnOnce() -> Option<help::Input>) -> Vec<u8> {
+    frame::with(b, Negotiate::Latest, || input().map(In::Help))
 }
 pub fn search(b: &dyn Backend, text: &str, cursor: Option<&str>) -> Vec<u8> {
-    query(
-        b,
-        "help.search",
-        json!({"query": if text.trim().is_empty() { "*" } else { text }, "page":page(cursor)}),
-    )
+    query(b, || {
+        Some(help::Input::Search(help::SearchInput {
+            query: frame::text(if text.trim().is_empty() { "*" } else { text })?,
+            page: page(cursor)?,
+        }))
+    })
 }
 pub fn context(b: &dyn Backend, screen: &str, cursor: Option<&str>) -> Vec<u8> {
-    query(
-        b,
-        "help.topic_for_screen",
-        json!({"screenId":screen,"current":true,"page":page(cursor)}),
-    )
+    query(b, || {
+        Some(help::Input::TopicForScreen(help::TopicForScreenInput {
+            screen_id: frame::id(screen)?,
+            capability_revision: None,
+            current: Some(true),
+            page: Some(page(cursor)?),
+        }))
+    })
 }
 pub fn read(b: &dyn Backend, topic: &str, version: &str, cursor: Option<&str>) -> Vec<u8> {
-    let mut body = json!({"topicId":topic,"version":version,"maxChars":PASSAGE_CHARS.to_string()});
-    if let Some(cursor) = cursor {
-        body["cursor"] = json!(cursor);
-    }
-    query(b, "help.read", body)
+    query(b, || {
+        Some(help::Input::Read(help::ReadInput {
+            topic_id: frame::id(topic)?,
+            version: frame::text(version)?,
+            cursor: frame::lift(cursor.map(frame::text))?,
+            max_chars: Some(frame::number(PASSAGE_CHARS.into())?),
+        }))
+    })
 }
 pub fn guides(b: &dyn Backend, package: &str, version: &str, cursor: Option<&str>) -> Vec<u8> {
-    query(
-        b,
-        "help.package_guides",
-        json!({"packageId":package,"version":version,"page":page(cursor)}),
-    )
+    query(b, || {
+        Some(help::Input::PackageGuides(help::PackageGuidesInput {
+            package_id: frame::id(package)?,
+            version: frame::text(version)?,
+            page: page(cursor)?,
+        }))
+    })
 }
 pub fn generate(b: &dyn Backend, registry_revision: i64, help_revision: i64) -> Vec<u8> {
-    ops::command_frame(
-        b,
-        "help.generate_capability_docs",
-        json!({
-            "registryRevision": registry_revision.to_string(), "expectedHelpRevision":help_revision.to_string()
-        }),
-    )
+    frame::with(b, Negotiate::Initial, || {
+        Some(In::Help(help::Input::GenerateCapabilityDocs(
+            help::GenerateCapabilityDocsInput {
+                registry_revision: frame::number(registry_revision)?,
+                expected_help_revision: frame::number(help_revision)?,
+            },
+        )))
+    })
 }
 
 use crate::ops::Failure;

@@ -1190,6 +1190,7 @@ dependencies = [
  "core-foundation 0.9.4",
  "devworks-core",
  "devworks-extension-protocol",
+ "devworks-test-support",
  "ed25519-dalek",
  "enigo",
  "futures-util",
@@ -1257,6 +1258,7 @@ version = "0.1.0"
 dependencies = [
  "base64 0.22.1",
  "devworks-extension-protocol",
+ "devworks-test-support",
  "jiff",
  "libc",
  "num-rational",
@@ -1279,7 +1281,9 @@ dependencies = [
  "block2 0.5.1",
  "devworks-adapters",
  "devworks-core",
+ "devworks-desktop",
  "devworks-engine",
+ "devworks-test-support",
  "ed25519-dalek",
  "eframe",
  "egui_kittest",
@@ -1308,6 +1312,7 @@ dependencies = [
  "devworks-core",
  "devworks-engine",
  "devworks-extension-protocol",
+ "devworks-test-support",
  "ed25519-dalek",
  "rmcp",
  "rusqlite",
@@ -1323,6 +1328,14 @@ dependencies = [
  "schemars",
  "semver",
  "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "devworks-test-support"
+version = "0.1.0"
+dependencies = [
+ "devworks-core",
  "serde_json",
 ]
 

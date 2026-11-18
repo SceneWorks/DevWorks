@@ -2,6 +2,7 @@
 //! not authorize removing a referring row or expanding the ownership selection.
 use super::super::conn::db;
 use super::candidates::{key_value, primary_keys, quote};
+use crate::storage::sqlite::support::invalid;
 use devworks_core::ports::storage::{
     ProjectPurgeReference, ProjectPurgeReferenceKind, ProjectRecordKind, StorageError,
 };
@@ -67,9 +68,6 @@ pub(super) const ARTIFACT_SUBJECT_TARGETS: &[(&str, &str)] = &[
     ("session", "sessions"),
 ];
 
-fn invalid(message: &str) -> StorageError {
-    StorageError::InvalidRecord(message.into())
-}
 struct ForeignKey {
     target: String,
     columns: Vec<(String, Option<String>)>,

@@ -688,11 +688,14 @@ async fn dispatch_pending_off_thread(
     let ctx = ctx.clone();
     let session_id = session_id.clone();
     let cancellation = cancellation.clone();
-    tokio::task::spawn_blocking(move || {
-        worker.dispatch_pending_tool_calls_cancellable(&ctx, &session_id, Some(&cancellation))
+    // The worker thread ends once every call is answered or parked: a receive that has nothing
+    // to read yet is awaited here without holding a thread.
+    let pass = tokio::task::spawn_blocking(move || {
+        worker.dispatch_pending_pass(&ctx, &session_id, Some(&cancellation), true)
     })
     .await
     .map_err(|error| TurnError::Worker(format!("agent tool worker: {error}")))??;
+    engine.settle_pending(pass).await;
     Ok(())
 }
 

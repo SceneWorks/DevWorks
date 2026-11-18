@@ -20,11 +20,24 @@ fn read<T>(s: &SqliteStore, f: impl FnOnce(&dyn ReadSnapshot) -> Result<T, Stora
 fn seed(h: &Harness) -> SqliteStore {
     let s = h.store();
     let raw = h.raw();
-    for project in ["project-a", "project-b"] {
-        raw.execute("INSERT INTO projects(id,title,lifecycle,revision,scope_revision,created_at) VALUES(?1,?1,'Active',1,1,?2)",rusqlite::params![project,T0]).unwrap();
-    }
-    raw.execute("INSERT INTO work_items(id,project_id,kind,title,priority,manual_order,revision,scope_revision,created_at,brief_json) VALUES('feature','project-a','feature','Feature',0,0,1,1,?1,'{}')",[T0]).unwrap();
-    raw.execute("INSERT INTO work_items(id,project_id,kind,parent_feature_id,title,priority,manual_order,revision,scope_revision,created_at,brief_json) VALUES('issue','project-a','issue','feature','Issue',0,0,1,1,?1,'{}')",[T0]).unwrap();
+    devworks_test_support::seed::rows(
+        &s,
+        &[
+            devworks_test_support::seed::ProjectSeed::new("project-a").created_at(T0),
+            devworks_test_support::seed::ProjectSeed::new("project-b").created_at(T0),
+        ],
+        &[
+            devworks_test_support::seed::WorkSeed::feature("feature", "project-a")
+                .title("Feature")
+                .priority(0)
+                .created_at(T0),
+            devworks_test_support::seed::WorkSeed::task("issue", "project-a", "feature")
+                .title("Issue")
+                .priority(0)
+                .created_at(T0),
+        ],
+    )
+    .unwrap();
     raw.execute("INSERT INTO router_connections(id,name,profile,endpoint,credential_revision,lifecycle,revision,created_at,updated_at) VALUES('connection','Actual transport','OpenAiResponses','https://example.test',0,'Disconnected',1,?1,?1)",[T0]).unwrap();
     drop(raw);
     run_write(&s, WriteOptions::fixture(), |tx| {
@@ -98,7 +111,7 @@ fn attempt(
         access_mode: "ApiKey".into(),
         provider_model_id: Some("gpt-6.1-sol".into()),
         pricing_snapshot: serde_json::to_value(snapshot).unwrap(),
-        state: "Admitted".into(),
+        state: devworks_core::ports::storage::AttemptState::Admitted,
         revision: 1,
         created_at_ms: T0,
     };
@@ -107,7 +120,7 @@ fn attempt(
         revision: 1,
         priced_micro_usd: Some(amount),
         reserved_micro_usd: Some(10),
-        classification: "OfficialEstimate".into(),
+        classification: devworks_core::ports::usage::CostClassification::OfficialEstimate,
         monetary_complete: true,
         incomplete: false,
         unknown_tail: false,
@@ -144,11 +157,10 @@ fn origin(
         recorded_at_ms: time,
         priced_micro_usd: amount,
         classification: if amount.is_some() {
-            "OfficialEstimate"
+            devworks_core::ports::usage::CostClassification::OfficialEstimate
         } else {
-            "Untracked"
-        }
-        .into(),
+            devworks_core::ports::usage::CostClassification::Untracked
+        },
         monetary_complete: false,
         incomplete: false,
         unknown_tail: false,

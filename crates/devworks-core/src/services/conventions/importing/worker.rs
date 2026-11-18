@@ -2,6 +2,7 @@ use super::{
     commands::{Job, invalid, validate},
     *,
 };
+use crate::services::effect::{EffectOutcome, JournaledEffect};
 use crate::{
     ports::{IdKind, Preparation},
     protocol::{
@@ -14,20 +15,16 @@ use crate::{
     },
 };
 use serde_json::json;
-#[derive(Debug)]
-pub enum ImportOutcome {
-    Completed(OperationResult),
-    Failed(String),
-    NotApplied(String),
-    Unknown(String),
-}
 impl ImportService {
-    pub fn execute(&self, operation: &OperationRecord) -> ImportOutcome {
+    pub fn execute(&self, operation: &OperationRecord) -> EffectOutcome {
         match self.run(operation) {
-            Ok(result) => ImportOutcome::Completed(result),
+            Ok(result) => match serde_json::to_value(result) {
+                Ok(value) => EffectOutcome::Completed(value),
+                Err(_) => EffectOutcome::Unknown("Import result encoding refused".into()),
+            },
             Err(StorageError::Busy) => self.busy_outcome(operation),
             Err(StorageError::Cancelled) => {
-                ImportOutcome::NotApplied("Import cancelled or host closing".into())
+                EffectOutcome::NotApplied("Import cancelled or host closing".into())
             }
             Err(error) => {
                 let cancelled = Preparation::new(self.store.as_ref(), None, None)
@@ -38,13 +35,13 @@ impl ImportService {
                     })
                     .unwrap_or(false);
                 if cancelled {
-                    return ImportOutcome::NotApplied("Import cancelled before publication".into());
+                    return EffectOutcome::NotApplied("Import cancelled before publication".into());
                 }
                 if self.is_stopped() {
-                    return ImportOutcome::NotApplied("Host import owner stopped".into());
+                    return EffectOutcome::NotApplied("Host import owner stopped".into());
                 }
                 if matches!(error, StorageError::CommitUnknown) {
-                    return ImportOutcome::Unknown("Import commit must be observed".into());
+                    return EffectOutcome::Unknown("Import commit must be observed".into());
                 }
                 // Staged rows remain private. A refusal never repeats a partially published document.
                 let op = operation.id.clone();
@@ -66,16 +63,16 @@ impl ImportService {
                     }
                     Ok(())
                 });
-                ImportOutcome::Failed(reason)
+                EffectOutcome::Failed(reason)
             }
         }
     }
     // Recheck the shared execution guard under the SAME journal owner before classifying Busy.
     // A temporary control hold is pending observation, never a four-attempt not-applied retry.
-    fn busy_outcome(&self, operation: &OperationRecord) -> ImportOutcome {
+    fn busy_outcome(&self, operation: &OperationRecord) -> EffectOutcome {
         let job: Job = match serde_json::from_value(operation.payload.clone()) {
             Ok(job) => job,
-            Err(_) => return ImportOutcome::Failed("Invalid import journal".into()),
+            Err(_) => return EffectOutcome::Failed("Invalid import journal".into()),
         };
         let op = operation.clone();
         match self.write(move|tx|{
@@ -93,13 +90,13 @@ impl ImportService {
                 Err(error)=>Err(error),
             }
         }) {
-            Ok(true)=>ImportOutcome::Unknown("Import is waiting for its current execution controls; the original journal and private draft are retained.".into()),
-            Ok(false)=>ImportOutcome::NotApplied("Private import staging raced current blob metadata; recheck required".into()),
-            Err(StorageError::ScopeDenied|StorageError::InvalidRecord(_))=>ImportOutcome::Failed("Import source or captured work ownership changed.".into()),
-            Err(_)=>ImportOutcome::Unknown("Import controls/storage could not be observed; the original journal and private draft are retained.".into()),
+            Ok(true)=>EffectOutcome::Unknown("Import is waiting for its current execution controls; the original journal and private draft are retained.".into()),
+            Ok(false)=>EffectOutcome::NotApplied("Private import staging raced current blob metadata; recheck required".into()),
+            Err(StorageError::ScopeDenied|StorageError::InvalidRecord(_))=>EffectOutcome::Failed("Import source or captured work ownership changed.".into()),
+            Err(_)=>EffectOutcome::Unknown("Import controls/storage could not be observed; the original journal and private draft are retained.".into()),
         }
     }
-    pub fn observe(&self, operation: &OperationRecord) -> ImportOutcome {
+    pub fn observe(&self, operation: &OperationRecord) -> EffectOutcome {
         self.execute(operation)
     }
     fn run(&self, operation: &OperationRecord) -> Result<OperationResult, StorageError> {
@@ -551,5 +548,14 @@ fn failure(error: Failure) -> StorageError {
     match error {
         Failure::Storage(error) => error,
         _ => StorageError::ScopeDenied,
+    }
+}
+
+impl JournaledEffect for ImportService {
+    fn execute(&self, operation: &OperationRecord) -> EffectOutcome {
+        ImportService::execute(self, operation)
+    }
+    fn observe(&self, operation: &OperationRecord) -> EffectOutcome {
+        ImportService::observe(self, operation)
     }
 }

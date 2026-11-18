@@ -16,7 +16,10 @@ use crate::settings_ops::SettingsSlot;
 use crate::settings_screen::{HostSection, KEEP_AWAKE, SettingsAction, SettingsScreen};
 use crate::web_panel::WebAction;
 use crate::widgets::{self, Tone};
-use devworks_core::protocol::records::{ConnectionLifecycle, ItemState};
+use devworks_core::operations::{OperationInput as In, mcp};
+use devworks_core::protocol::records::{
+    ConnectionLifecycle, ItemState, McpTransport, RouterConfigAction,
+};
 use devworks_core::protocol::{DomainErrorCode, Id};
 use devworks_core::settings::validate::codes;
 use devworks_core::settings::view::Health;
@@ -430,77 +433,53 @@ impl SettingsCtl<'_, '_> {
                         .opened(&server, Err("the app is offline or closing".into()));
                 }
             }
-            other => {
-                let (operation, body, secret, pending_server) = match other {
-                    McpAction::Configure { body, secret } => ("mcp.configure", body, secret, None),
-                    McpAction::Connect(id, revision) => (
-                        "mcp.connect",
-                        serde_json::json!({"scope":ops::mcp_scope(self.settings.mcp.project.as_ref()),"serverId":id,"expectedRevision":revision.to_string()}),
-                        None,
-                        Some(id),
-                    ),
-                    McpAction::Disable(id, revision) => (
-                        "mcp.disable",
-                        serde_json::json!({"scope":ops::mcp_scope(self.settings.mcp.project.as_ref()),"serverId":id,"expectedRevision":revision.to_string()}),
-                        None,
-                        Some(id),
-                    ),
-                    McpAction::Remove(id, revision, handles) => {
-                        self.settings.mcp.removing = Some(handles);
-                        (
-                            "mcp.remove",
-                            serde_json::json!({"scope":ops::mcp_scope(self.settings.mcp.project.as_ref()),"serverId":id,"expectedRevision":revision.to_string()}),
-                            None,
-                            Some(id),
-                        )
+            mut other => {
+                let pending_server = match &other {
+                    McpAction::Connect(id, _)
+                    | McpAction::Disable(id, _)
+                    | McpAction::Discover(id, _) => Some(id.clone()),
+                    McpAction::Remove(id, _, handles) => {
+                        self.settings.mcp.removing = Some(handles.clone());
+                        Some(id.clone())
                     }
-                    McpAction::Discover(id, revision) => (
-                        "mcp.discover",
-                        serde_json::json!({"scope":ops::mcp_scope(self.settings.mcp.project.as_ref()),"serverId":id,"expectedCatalogRevision":revision.to_string()}),
-                        None,
-                        Some(id),
-                    ),
-                    McpAction::Select(id, revision, catalog, tools)
-                    | McpAction::Sampling(id, revision, catalog, tools) => (
-                        "mcp.select_tools",
-                        serde_json::json!({"scope":ops::mcp_scope(self.settings.mcp.project.as_ref()),"serverId":id,"expectedRevision":revision.to_string(),"expectedCatalogRevision":catalog.to_string(),"toolIds":tools}),
-                        None,
-                        None,
-                    ),
-                    McpAction::Classify(id, revision, tool, read_only) => {
-                        let mut body = serde_json::json!({"scope":ops::mcp_scope(self.settings.mcp.project.as_ref()),"serverId":id,"expectedRevision":revision.to_string(),"toolId":tool});
-                        if let Some(read_only) = read_only {
-                            body["readOnly"] = serde_json::json!(read_only);
-                        }
-                        ("mcp.classify_tool", body, None, None)
-                    }
-                    McpAction::Reload | McpAction::Catalog(_, _) | McpAction::Open(..) => {
-                        unreachable!()
-                    }
+                    _ => None,
                 };
-                let submitted = if let Some(secret) = secret {
-                    self.online().is_ok()
-                        && self.client.as_deref_mut().is_some_and(|client| {
-                            client.task(
-                                SettingsSlot::McpCommand.into(),
-                                "Storing MCP credential",
-                                move |backend| {
-                                    let handle = backend.stage_mcp_api_key(secret)?;
-                                    let mut body = body;
-                                    body["transport"]["credentialRef"] = serde_json::json!(handle);
-                                    Ok(TaskOutput::Prepared {
-                                        frame: ops::mcp_command(backend, operation, body),
-                                    })
-                                },
-                            )
-                        })
-                } else {
-                    self.command(
+                let secret = match &mut other {
+                    McpAction::Configure { secret, .. } => secret.take(),
+                    _ => None,
+                };
+                let submitted = match (other.input(self.settings.mcp.project.as_ref()), secret) {
+                    (None, _) => false,
+                    (Some(mut input), Some(secret)) => {
+                        self.online().is_ok()
+                            && self.client.as_deref_mut().is_some_and(|client| {
+                                client.task(
+                                    SettingsSlot::McpCommand.into(),
+                                    "Storing MCP credential",
+                                    move |backend| {
+                                        let handle = backend.stage_mcp_api_key(secret)?;
+                                        // The key goes to the OS secret store first; only its
+                                        // handle travels.
+                                        if let In::Mcp(mcp::Input::Configure(configure)) =
+                                            &mut input
+                                            && let McpTransport::Http { credential_ref, .. } =
+                                                &mut configure.transport
+                                        {
+                                            *credential_ref = Some(handle);
+                                        }
+                                        Ok(TaskOutput::Prepared {
+                                            frame: ops::mcp_command(backend, input),
+                                        })
+                                    },
+                                )
+                            })
+                    }
+                    (Some(input), None) => self.command(
                         SettingsSlot::McpCommand,
                         "Updating MCP",
-                        operation,
-                        move |backend| ops::mcp_command(backend, operation, body),
-                    )
+                        input.operation(),
+                        move |backend| ops::mcp_command(backend, input),
+                    ),
                 };
                 if !submitted {
                     self.settings.mcp.busy = false;
@@ -658,8 +637,11 @@ impl SettingsCtl<'_, '_> {
                             let handle = b
                                 .stage_api_key(key)
                                 .map_err(|e| format!("the secret store refused the key: {e}"))?;
-                            action["credentialRef"] =
-                                serde_json::Value::String(handle.as_str().to_owned());
+                            if let RouterConfigAction::Connection { credential_ref, .. } =
+                                &mut action
+                            {
+                                *credential_ref = Some(handle);
+                            }
                         }
                         if let Some((flow, pasted)) = code {
                             b.submit_sign_in_code(&flow, pasted)?;
@@ -717,9 +699,12 @@ impl SettingsCtl<'_, '_> {
                 .is_none_or(|last| last.elapsed() >= interval)
         {
             self.settings.mcp.last_operation_poll = Some(Instant::now());
-            self.query(slot, "Checking MCP operation", "history.operation_status", move |backend| {
-                serde_json::json!({"protocol":ops::PROTOCOL,"queryId":backend.token("q"),"query":{"kind":"history.operation_status","operationId":operation}}).to_string().into_bytes()
-            });
+            self.query(
+                slot,
+                "Checking MCP operation",
+                "history.operation_status",
+                move |backend| crate::usage_ops::operation_status(backend, &operation),
+            );
         }
         ctx.request_repaint_after(interval);
     }

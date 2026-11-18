@@ -70,13 +70,10 @@ fn measured<T>(run: impl FnOnce() -> T) -> (T, usize) {
 }
 struct Fixture {
     root: PathBuf,
+    /// Removes the root when the fixture drops.
+    _guard: devworks_test_support::TempRoot,
     store: NativePackageFiles,
     files: Vec<InspectedFile>,
-}
-impl Drop for Fixture {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.root);
-    }
 }
 impl Fixture {
     fn new(length: u64, other: bool) -> Self {
@@ -117,7 +114,13 @@ impl Fixture {
                 executable: true,
             });
         }
-        Self { root, store, files }
+        let _guard = devworks_test_support::TempRoot::adopt(root.clone());
+        Self {
+            root,
+            _guard,
+            store,
+            files,
+        }
     }
     fn open(
         &self,

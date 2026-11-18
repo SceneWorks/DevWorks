@@ -82,7 +82,13 @@ fn source(
     let owner =
         current(conn, &index.convention_id)?.ok_or_else(|| invalid("convention owner missing"))?;
     if owner.revision != expected {
-        return Err(conflict(&owner.id, expected, owner.revision));
+        return Err(conflict(
+            RevisionDimension::Source,
+            "convention",
+            owner.id.as_str(),
+            expected,
+            owner.revision,
+        ));
     }
     let captured = convention(
         conn,
@@ -352,7 +358,7 @@ fn validate_vector(vector: &[f32], dimensions: u32) -> Result<(), StorageError> 
 }
 macro_rules! reads {($ty:ty)=>{impl ConventionIndexRead for $ty {
  fn convention_section(&self,g:&Id,id:&Id)->Result<Option<StoredConventionSection>,StorageError>{section(self.conn,g,id)}
- fn convention_sections(&self,g:&Id,after:Option<&Id>,limit:u16)->Result<Vec<StoredConventionSection>,StorageError>{let limit=page(limit)?;let mut stmt=db(self.conn.prepare_cached(&format!("SELECT {SECTION_COLUMNS} FROM convention_sections WHERE generation_id=?1 AND (?2 IS NULL OR id>?2) ORDER BY id LIMIT ?3")))?;db(db(stmt.query_map(params![g.as_str(),after.map(Id::as_str),limit],section_record))?.collect())}
+ fn convention_sections(&self,g:&Id,after:Option<&Id>,limit:u16)->Result<Vec<StoredConventionSection>,StorageError>{let limit=page_limit(limit)?;let mut stmt=db(self.conn.prepare_cached(&format!("SELECT {SECTION_COLUMNS} FROM convention_sections WHERE generation_id=?1 AND (?2 IS NULL OR id>?2) ORDER BY id LIMIT ?3")))?;db(db(stmt.query_map(params![g.as_str(),after.map(Id::as_str),limit],section_record))?.collect())}
  fn convention_chunk(&self,g:&Id,id:&Id)->Result<Option<StoredConventionChunk>,StorageError>{match generation(self.conn,g)?{Some(index)=>chunk(self.conn,&index,id),None=>Ok(None)}}
     fn convention_chunk_count(&self,id:&Id)->Result<u64,StorageError>{let count:i64=db(self.conn.query_row("SELECT count(*) FROM convention_chunks WHERE generation_id=?1",[id.as_str()],|r|r.get(0)))?;u64::try_from(count).map_err(|_|invalid("negative chunk count"))}
     fn convention_index_status(&self,id:&Id)->Result<Option<StoredConventionIndex>,StorageError>{index_status(self.conn,id)}
@@ -362,8 +368,8 @@ macro_rules! reads {($ty:ty)=>{impl ConventionIndexRead for $ty {
     fn convention_index_head(&self,id:&Id)->Result<Option<StoredConventionIndex>,StorageError>{published_head(self.conn,id)}
     fn convention_index_gaps(&self,q:&ConventionQuery,space:Option<&str>,limit:u16)->Result<Vec<(Id,String)>,StorageError>{gaps(self.conn,q,space,limit)}
     fn convention_index_generation(&self,id:&Id)->Result<Option<StoredConventionIndex>,StorageError>{generation(self.conn,id)}
-    fn convention_index_generations(&self,owner:Option<&Id>,operation:Option<&OperationId>,after:Option<&Id>,limit:u16)->Result<Vec<StoredConventionIndex>,StorageError>{let limit=page(limit)?;let mut s=db(self.conn.prepare_cached(&format!("SELECT {INDEX_COLUMNS} FROM convention_indexes WHERE (?1 IS NULL OR convention_id=?1) AND (?2 IS NULL OR operation_id=?2) AND (?3 IS NULL OR generation_id>?3) ORDER BY generation_id LIMIT ?4")))?;db(db(s.query_map(params![owner.map(Id::as_str),operation.map(|o|o.0.as_str()),after.map(Id::as_str),limit],index_record))?.collect())}
-    fn convention_chunks(&self,id:&Id,after:Option<i64>,limit:u16)->Result<Vec<StoredConventionChunk>,StorageError>{let limit=page(limit)?;if after.is_some_and(|v|v<0){return Err(invalid("negative chunk cursor"));}let Some(index)=generation(self.conn,id)?else{return Ok(Vec::new());};let mut s=db(self.conn.prepare_cached("SELECT id FROM convention_chunks WHERE generation_id=?1 AND chunk_index>coalesce(?2,-1) ORDER BY chunk_index LIMIT ?3"))?;let ids=db(db(s.query_map(params![id.as_str(),after,limit],|r|identifier(r,0)))?.collect::<rusqlite::Result<Vec<_>>>())?;ids.into_iter().map(|id|chunk(self.conn,&index,&id)?.ok_or_else(||invalid("chunk disappeared"))).collect()}
+    fn convention_index_generations(&self,owner:Option<&Id>,operation:Option<&OperationId>,after:Option<&Id>,limit:u16)->Result<Vec<StoredConventionIndex>,StorageError>{let limit=page_limit(limit)?;let mut s=db(self.conn.prepare_cached(&format!("SELECT {INDEX_COLUMNS} FROM convention_indexes WHERE (?1 IS NULL OR convention_id=?1) AND (?2 IS NULL OR operation_id=?2) AND (?3 IS NULL OR generation_id>?3) ORDER BY generation_id LIMIT ?4")))?;db(db(s.query_map(params![owner.map(Id::as_str),operation.map(|o|o.0.as_str()),after.map(Id::as_str),limit],index_record))?.collect())}
+    fn convention_chunks(&self,id:&Id,after:Option<i64>,limit:u16)->Result<Vec<StoredConventionChunk>,StorageError>{let limit=page_limit(limit)?;if after.is_some_and(|v|v<0){return Err(invalid("negative chunk cursor"));}let Some(index)=generation(self.conn,id)?else{return Ok(Vec::new());};let mut s=db(self.conn.prepare_cached("SELECT id FROM convention_chunks WHERE generation_id=?1 AND chunk_index>coalesce(?2,-1) ORDER BY chunk_index LIMIT ?3"))?;let ids=db(db(s.query_map(params![id.as_str(),after,limit],|r|identifier(r,0)))?.collect::<rusqlite::Result<Vec<_>>>())?;ids.into_iter().map(|id|chunk(self.conn,&index,&id)?.ok_or_else(||invalid("chunk disappeared"))).collect()}
     fn convention_lexical_statistics(&self,q:&ConventionQuery,terms:&[String])->Result<ConventionLexicalStatistics,StorageError>{statistics(self.conn,q,terms)}
     fn convention_ranked_chunks(&self,q:&ConventionQuery,terms:&[ConventionWeightedTerm],average:f64,space:Option<&str>,vector:Option<&[f32]>,limit:u16)->Result<Vec<ConventionRankedChunk>,StorageError>{ranked(self.conn,q,terms,average,space,vector,limit)}
 }};}
@@ -725,7 +731,7 @@ impl ConventionIndexRepository for Unit<'_> {
         op: &OperationId,
         limit: u16,
     ) -> Result<bool, StorageError> {
-        let limit = page(limit)?;
+        let limit = page_limit(limit)?;
         let index = generation(self.conn, g)?.ok_or_else(|| invalid("generation missing"))?;
         let current: bool = db(self.conn.query_row(
             "SELECT EXISTS(SELECT 1 FROM convention_index_heads WHERE generation_id=?1)",
@@ -894,7 +900,7 @@ fn gaps(
     space: Option<&str>,
     limit: u16,
 ) -> Result<Vec<(Id, String)>, StorageError> {
-    let limit = page(limit)?;
+    let limit = page_limit(limit)?;
     let (scope, filter) = super::filter(q)?;
     let (_, order) = super::order(&q.order);
     let filter_sql = super::FILTER;

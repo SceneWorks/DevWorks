@@ -15,7 +15,7 @@ mod status;
 use crate::{
     ports::{
         Clock, IdSource,
-        storage::{ApplicationStore, StorageError, WriteOptions, WriteTransaction, run_write},
+        storage::{ApplicationStore, StorageError, WriteOptions, WriteTransaction},
     },
     services::artifacts::ArtifactService,
 };
@@ -99,14 +99,7 @@ impl IndexService {
         T: Send + 'static,
         F: FnOnce(&mut dyn WriteTransaction) -> Result<T, StorageError> + Send + 'static,
     {
-        let _phase = self.closed.enter()?;
-        let closed = self.closed.clone();
-        run_write(self.store.as_ref(), options, move |tx| {
-            if closed.is_closed() {
-                return Err(StorageError::Cancelled);
-            }
-            work(tx)
-        })
+        self.closed.write(self.store.as_ref(), options, work)
     }
 }
 

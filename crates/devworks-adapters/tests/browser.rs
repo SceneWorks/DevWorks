@@ -6,29 +6,16 @@ use devworks_adapters::browser::{Candidate, NativeBrowserPlatform, PipeTransport
 use devworks_core::ports::browser::{BrowserFault, BrowserPlatform, CdpTransport, Qualification};
 use devworks_core::protocol::Id;
 use devworks_core::services::browser::cdp::{Cdp, CdpError};
+use devworks_test_support::TempRoot;
 use serde_json::{Value, json};
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
-struct Dir(PathBuf);
+struct Dir(TempRoot);
 impl Dir {
     fn new() -> Self {
-        static NEXT: AtomicU64 = AtomicU64::new(0);
-        let p = std::env::temp_dir().join(format!(
-            "devworks-browser-adapter-{}-{}",
-            std::process::id(),
-            NEXT.fetch_add(1, Ordering::SeqCst)
-        ));
-        let _ = std::fs::remove_dir_all(&p);
-        std::fs::create_dir_all(&p).unwrap();
-        Self(p)
-    }
-}
-impl Drop for Dir {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.0);
+        Self(TempRoot::new("devworks-browser-adapter").created())
     }
 }
 
@@ -451,7 +438,7 @@ fn a_served_page_is_read_only_from_a_staged_file_of_its_session() {
 fn relative_browser_candidates_launch_from_their_profile_directory() {
     let d = Dir::new();
     let name = d.0.file_name().unwrap();
-    let local = Dir(std::env::current_dir().unwrap().join(name));
+    let local = Dir(TempRoot::at(std::env::current_dir().unwrap().join(name)));
     std::fs::create_dir(&local.0).unwrap();
     std::fs::create_dir(local.0.join("bin")).unwrap();
     let exe = local.0.join("bin/chrome");

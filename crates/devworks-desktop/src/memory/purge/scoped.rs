@@ -204,9 +204,13 @@ mod tests {
     fn scoped_transfers_preserve_other_owners_and_return_original_producers() {
         let scope = super::super::tests::scope();
         let mut memory = Memory::default();
+        let schema =
+            serde_json::to_value(devworks_core::services::conventions::model::manifest_schema())
+                .unwrap();
         let pipeline = |owner: Value, path: &str| {
             json!({
-                "scope":owner,"operation":"conventions.create","body":{},"at":0,
+                "scope":owner,"operation":"conventions.create",
+                "body":{"scope":{"kind":"Workspace"},"schema":schema},"at":0,
                 "files":[{"path":path,"name":"source","media_type":"text/plain",
                     "pointer":"/content","owned":true}],
                 "submission":{"scope":owner,"operation":"conventions.create","target":null,

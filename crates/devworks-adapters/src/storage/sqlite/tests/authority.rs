@@ -1,7 +1,7 @@
 //! Host authority end to end on the real SQLite store: role/tool/profile restrictions, scoped
 //! grants, revocation races at the commit and publication points, destructive refusals in
 //! history and the dedicated primary repository deletion. Deterministic; no inference.
-use super::{Accept, Harness, Seq, T0, start};
+use super::{Accept, Harness, T0, seq, start};
 use crate::fs::NativeFilesystem;
 use crate::paths::FsPathProbe;
 use crate::storage::sqlite::SqliteStore;
@@ -50,7 +50,7 @@ struct Fx {
     settings: Arc<SettingsService>,
     /// The production operation registry: settings reach the gateway through it.
     cases: UseCases,
-    ids: Seq,
+    ids: devworks_test_support::NumberedIds,
     n: AtomicU64,
 }
 
@@ -74,17 +74,20 @@ impl Fx {
     /// distinct stores.
     fn with_id_offset(offset: u64) -> Self {
         let h = Harness::new();
-        h.ids.0.store(offset, Ordering::SeqCst);
+        h.ids.set(offset);
         let store = Arc::new(h.store());
-        store
-            .with_writer_connection(|c| {
-                super::super::conn::db(c.execute_batch(
-                    "INSERT INTO projects VALUES('project-a','A','Active',1,1,1);
-                     INSERT INTO projects VALUES('project-b','B','Active',1,1,1);
-                     INSERT INTO work_items VALUES('root-a','project-a','feature',NULL,NULL,NULL,'Fixture',1,0,1,1,1,'{}');",
-                ))
-            })
-            .unwrap();
+        devworks_test_support::seed::rows(
+            &*store,
+            &[
+                devworks_test_support::seed::ProjectSeed::new("project-a").name("A"),
+                devworks_test_support::seed::ProjectSeed::new("project-b").name("B"),
+            ],
+            &[
+                devworks_test_support::seed::WorkSeed::feature("root-a", "project-a")
+                    .title("Fixture"),
+            ],
+        )
+        .unwrap();
         let settings = Arc::new(SettingsService {
             roles: Arc::new(HostRoles {
                 store: store.clone(),
@@ -97,7 +100,7 @@ impl Fx {
             store,
             cases: UseCases::new().with_settings(settings.clone()),
             settings,
-            ids: Seq(AtomicU64::new(0)),
+            ids: seq(),
             n: AtomicU64::new(0),
         };
         fx.write(|tx| {
@@ -1567,26 +1570,13 @@ fn a_read_revoked_before_publication_is_not_published() {
 }
 
 /// A uniquely named disposable directory, removed on drop.
-pub(crate) struct Scratch(pub std::path::PathBuf);
+pub(crate) struct Scratch(pub devworks_test_support::TempRoot);
 impl Scratch {
     pub(crate) fn new(tag: &str) -> Self {
-        static NEXT: AtomicU64 = AtomicU64::new(0);
-        let dir = std::env::temp_dir().join(format!(
-            "devworks-authority-{tag}-{}-{}",
-            std::process::id(),
-            NEXT.fetch_add(1, Ordering::SeqCst)
-        ));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        Self(dir)
+        Self(devworks_test_support::TempRoot::new(&format!("devworks-authority-{tag}")).created())
     }
     pub(crate) fn path(&self, rel: &str) -> String {
-        self.0.join(rel).to_string_lossy().into_owned()
-    }
-}
-impl Drop for Scratch {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.0);
+        self.0.text(rel)
     }
 }
 

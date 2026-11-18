@@ -194,4 +194,15 @@ impl Input {
             Self::MarkRead(_) => Mode::Command,
         }
     }
+    /// The `/body` members of this input, without the `kind` discriminator.
+    pub fn body(&self) -> Result<serde_json::Value, serde_json::Error> {
+        match self {
+            Self::List(i) => serde_json::to_value(i),
+            Self::Read(i) => serde_json::to_value(i),
+            Self::Acknowledge(i) => serde_json::to_value(i),
+            Self::SettingsQuery(i) => serde_json::to_value(i),
+            Self::SettingsCommand(i) => serde_json::to_value(i),
+            Self::MarkRead(i) => serde_json::to_value(i),
+        }
+    }
 }

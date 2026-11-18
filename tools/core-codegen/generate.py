@@ -11,6 +11,7 @@ Outputs (deterministic, rustfmt-formatted, checked for drift in CI):
   crates/devworks-core/src/protocol/results.rs
   crates/devworks-core/src/operations/mod.rs and one module per family
   crates/devworks-core/src/registry/catalog.rs
+  crates/devworks-test-support/src/unmodelled_generated.rs  (test stub of every storage repository port; see stubs.py)
 
 Uses only the Python standard library plus `rustfmt` from the pinned Rust toolchain.
 """
@@ -24,6 +25,8 @@ ROOT = Path(__file__).resolve().parents[2]
 SPEC = json.loads((ROOT / 'tools/contracts-eval/domain-spec.json').read_text(encoding='utf-8'))
 REGISTER = json.loads((ROOT / 'docs/architecture/contracts/family-coverage.json').read_text(encoding='utf-8'))
 sys.path.insert(0, str(ROOT / 'tools/contracts-eval'))
+sys.path.insert(0, str(ROOT / 'tools/core-codegen'))
+import stubs
 from versioned_result import generate as gen_versioned
 from variant_revision import containing as variant_types, extend as variant_extend
 CORE = ROOT / 'crates/devworks-core/src'
@@ -56,7 +59,7 @@ SUPPORT = set('Check Label Text DefaultValueText Content Cursor PlanItems PlanFe
               'Depth Port ByteLimit TokenBudget PathSet Url RelativePath Money SignedCounter PositiveCounter Finite Probability '
               'DynamicJson SavedCommandInput GraphText GraphUnitKey DomainErrorCode DomainFault'.split())
 # Hand-written support types that gate a member by schema revision themselves.
-GATED_SUPPORT = {'HistoryPage', 'GraphPage'}
+GATED_SUPPORT = {'HistoryPage', 'GraphPage', 'TranscriptPage'}
 PRIMITIVE = {'bool', 'i32', 'Option'}
 
 SPECIALIZED = {
@@ -598,6 +601,12 @@ def gen_family(fam, ops):
     for o in ops:
         for mode, _, variant, _ in bindings(o):
             out.append(f'            Self::{variant}(_) => Mode::{mode},')
+    out += ['        }', '    }',
+            '    /// The `/body` members of this input, without the `kind` discriminator.',
+            '    pub fn body(&self) -> Result<serde_json::Value, serde_json::Error> {', '        match self {']
+    for o in ops:
+        for _, _, variant, _ in bindings(o):
+            out.append(f'            Self::{variant}(i) => serde_json::to_value(i),')
     out += ['        }', '    }', '}']
     return '\n'.join(out) + '\n'
 
@@ -615,6 +624,10 @@ def gen_operations_mod(families):
     out += [f'            Self::{pascal(f["family"])}(i) => i.operation(),' for f in families]
     out += ['        }', '    }', '    pub fn mode(&self) -> Mode {', '        match self {']
     out += [f'            Self::{pascal(f["family"])}(i) => i.mode(),' for f in families]
+    out += ['        }', '    }',
+            '    /// The `/body` members of the selected input, without the `kind` discriminator.',
+            '    pub fn body(&self) -> Result<serde_json::Value, serde_json::Error> {', '        match self {']
+    out += [f'            Self::{pascal(f["family"])}(i) => i.body(),' for f in families]
     out += ['        }', '    }', '}']
     return '\n'.join(out) + '\n'
 
@@ -636,7 +649,8 @@ def gen_results(ops):
     out += ['        }', '    }', '}', 'impl Check for OperationResult {', '    fn check(&self) -> Result<(), String> {',
             '        match self {']
     out += [f'            Self::{pascal(n)} {{ value }} => value.check()?,' for n, _ in results]
-    # HistoryPage is a support type with its own revision-2 member (the tail checkpoint).
+    # HistoryPage is a support type with its own revision-2 member (the tail checkpoint);
+    # TranscriptPage leaves out or maps the transcript entries introduced at revision 8.
     projected = [n for n, t in results if tokens(t) & (RC | GATED_SUPPORT)]
     out += ['        }',
             '        crate::protocol::rules::result(self.operation(), &serde_json::to_value(self).map_err(|e| e.to_string())?)',
@@ -788,6 +802,7 @@ def main():
         write(CORE / 'protocol/results.rs', gen_results(ops)),
         write(CORE / 'operations/mod.rs', gen_operations_mod(REGISTER['families'])),
         write(CORE / 'registry/catalog.rs', gen_catalog(ops)),
+        write(ROOT / 'crates/devworks-test-support/src/unmodelled_generated.rs', stubs.generate(CORE)),
     ]
     family_dir = CORE / 'operations'
     expected = {'mod.rs'} | {f'{f}.rs' for f in by_family}

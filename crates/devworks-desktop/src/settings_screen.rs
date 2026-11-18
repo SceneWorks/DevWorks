@@ -76,7 +76,7 @@ pub enum HostSection<'a> {
 }
 
 /// What the screen asks the shell to do.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug)]
 pub enum SettingsAction {
     Reload,
     RefreshContainers,

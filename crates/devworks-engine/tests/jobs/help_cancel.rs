@@ -1,6 +1,7 @@
 use super::*;
-use devworks_core::ports::files::{ArtifactFiles, FileFault, PublishedBlob};
-use std::{io::Read, path::Path, sync::Condvar};
+use devworks_core::ports::files::ArtifactFiles;
+use devworks_test_support::{FaultFiles, FileOp};
+use std::sync::Condvar;
 
 #[derive(Clone)]
 struct HeldPublication {
@@ -10,7 +11,9 @@ struct HeldPublication {
     run: Id,
 }
 struct PublishGate {
-    inner: NativeArtifactFiles,
+    inner: Arc<NativeArtifactFiles>,
+    /// The file store to compose: `inner`, pausing after each publication this gate is armed for.
+    files: Arc<FaultFiles>,
     armed: AtomicBool,
     entered: AtomicBool,
     released: Mutex<bool>,
@@ -22,8 +25,27 @@ struct PublishGate {
 }
 impl PublishGate {
     fn new(h: &Harness) -> Arc<Self> {
-        Arc::new(Self {
-            inner: NativeArtifactFiles::new(h.root.clone(), h.root.with_extension("cache")),
+        let inner = Arc::new(NativeArtifactFiles::new(
+            h.root.clone(),
+            h.root.with_extension("cache"),
+        ));
+        Arc::new_cyclic(|this: &std::sync::Weak<Self>| {
+            let files = FaultFiles::over(inner.clone());
+            files.refuse_defaults(&[FileOp::DerivedRoot, FileOp::RemoveDerivedRemnants]);
+            let this = this.clone();
+            files.after(FileOp::Publish, move |call, published| {
+                // The input is this new staging intent; returned backing may be reused.
+                if published && let Some(gate) = this.upgrade() {
+                    gate.pause(call.generation);
+                }
+            });
+            Self::with(inner, files)
+        })
+    }
+    fn with(inner: Arc<NativeArtifactFiles>, files: Arc<FaultFiles>) -> Self {
+        Self {
+            inner,
+            files,
             armed: AtomicBool::new(false),
             entered: AtomicBool::new(false),
             released: Mutex::new(false),
@@ -32,7 +54,7 @@ impl PublishGate {
             job: Mutex::new(None),
             held: Mutex::new(None),
             last_observed: Mutex::new(None),
-        })
+        }
     }
     fn arm(&self) {
         *self.released.lock().unwrap() = false;
@@ -143,87 +165,6 @@ impl Drop for Release {
         self.0.release();
     }
 }
-impl ArtifactFiles for PublishGate {
-    fn publish(
-        &self,
-        name: &str,
-        source: &mut dyn Read,
-        digest: &str,
-        bytes: u64,
-        reuse: Option<&str>,
-        generation: &str,
-    ) -> Result<PublishedBlob, FileFault> {
-        let published = self
-            .inner
-            .publish(name, source, digest, bytes, reuse, generation)?;
-        // The input is this new staging intent; returned backing may be reused.
-        self.pause(generation);
-        Ok(published)
-    }
-    fn managed_path(&self, d: &str, g: &str) -> Result<String, FileFault> {
-        self.inner.managed_path(d, g)
-    }
-    fn present(&self, d: &str, g: &str, n: u64) -> Result<bool, FileFault> {
-        self.inner.present(d, g, n)
-    }
-    fn inspect(&self, d: &str, g: &str) -> Result<Option<u64>, FileFault> {
-        self.inner.inspect(d, g)
-    }
-    fn read_range(&self, d: &str, g: &str, n: u64, o: u64, m: usize) -> Result<Vec<u8>, FileFault> {
-        self.inner.read_range(d, g, n, o, m)
-    }
-    fn open(&self, d: &str, g: &str, n: u64) -> Result<Box<dyn Read + Send>, FileFault> {
-        self.inner.open(d, g, n)
-    }
-    fn open_controlled(
-        &self,
-        d: &str,
-        g: &str,
-        n: u64,
-        stopped: &mut dyn FnMut() -> bool,
-    ) -> Result<Box<dyn Read + Send>, FileFault> {
-        let reader = self.inner.open_controlled(d, g, n, stopped)?;
-        Ok(reader)
-    }
-    fn read_range_controlled(
-        &self,
-        d: &str,
-        g: &str,
-        n: u64,
-        o: u64,
-        m: usize,
-        stopped: &mut dyn FnMut() -> bool,
-    ) -> Result<Vec<u8>, FileFault> {
-        self.inner.read_range_controlled(d, g, n, o, m, stopped)
-    }
-    fn unlink(&self, d: &str, g: &str) -> Result<(), FileFault> {
-        self.inner.unlink(d, g)
-    }
-    fn quarantine(&self, d: &str, g: &str) -> Result<(), FileFault> {
-        self.inner.quarantine(d, g)
-    }
-    fn staged(&self) -> Result<Vec<String>, FileFault> {
-        self.inner.staged()
-    }
-    fn remove_staged(&self, n: &str) -> Result<(), FileFault> {
-        self.inner.remove_staged(n)
-    }
-    fn stored_files(&self) -> Result<Vec<(String, String)>, FileFault> {
-        self.inner.stored_files()
-    }
-    fn write_derived(&self, k: &str, b: &[u8]) -> Result<(), FileFault> {
-        self.inner.write_derived(k, b)
-    }
-    fn read_derived(&self, k: &str, m: usize) -> Result<Option<Vec<u8>>, FileFault> {
-        self.inner.read_derived(k, m)
-    }
-    fn collect_derived(&self) -> Result<u64, FileFault> {
-        self.inner.collect_derived()
-    }
-    fn export(&self, d: &str, g: &str, n: u64, p: &Path, o: bool) -> Result<(), FileFault> {
-        self.inner.export(d, g, n, p, o)
-    }
-}
 #[test]
 fn cancelling_an_accepted_help_job_cancels_only_its_delivery_and_prevents_catalog_publication() {
     let _native_case = crate::common::native_runtime_case();
@@ -232,7 +173,7 @@ fn cancelling_an_accepted_help_job_cancels_only_its_delivery_and_prevents_catalo
     seed(&h);
     let rt = runtime();
     let gate = PublishGate::new(&h);
-    let app = boot_help_with_files(&rt, &h, gate.clone());
+    let app = boot_help_with_files(&rt, &h, gate.files.clone());
     *gate.store.lock().unwrap() = Some(Arc::downgrade(&app.store));
     let _diagnostics =
         crate::common::help_startup_diagnostics(&*app.store, app.runtime.dispatcher());

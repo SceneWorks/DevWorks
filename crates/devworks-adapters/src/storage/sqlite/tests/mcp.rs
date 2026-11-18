@@ -23,7 +23,8 @@ use devworks_core::protocol::{
 };
 use devworks_core::services::UseCases;
 use devworks_core::services::artifacts::ArtifactService;
-use devworks_core::services::mcp::{McpClientService, McpEffectOutcome};
+use devworks_core::services::effect::EffectOutcome;
+use devworks_core::services::mcp::McpClientService;
 use serde_json::{Value, json};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
@@ -109,8 +110,8 @@ fn id(value: &str) -> Id {
 fn artifacts(h: &Harness) -> Arc<ArtifactService> {
     Arc::new(ArtifactService::new(
         Arc::new(NativeArtifactFiles::new(
-            h.root.0.clone(),
-            h.root.0.with_extension("cache"),
+            h.root.path().to_path_buf(),
+            h.root.path().with_extension("cache"),
         )),
         Arc::new(HostArtifactSources::new(h.clock.clone(), h.ids.clone())),
         Arc::new(NativeFilesystem::new()),
@@ -604,7 +605,7 @@ fn journaled_connect_rechecks_configuration_before_native_io() {
     let operation = dispatched(&store, &operation_id);
     assert!(matches!(
         service.execute(&operation),
-        McpEffectOutcome::Completed(_)
+        EffectOutcome::Completed(_)
     ));
     assert_eq!(remote.0.load(Ordering::SeqCst), 1);
     assert_eq!(servers(&h, &store, &cases)[0].revision.get(), 3);
@@ -634,7 +635,7 @@ fn journaled_connect_rechecks_configuration_before_native_io() {
     let operation = dispatched(&store, &operation_id);
     assert!(matches!(
         service.execute(&operation),
-        McpEffectOutcome::Failed(_)
+        EffectOutcome::Failed(_)
     ));
     assert_eq!(remote.0.load(Ordering::SeqCst), 1);
 }
@@ -696,7 +697,7 @@ fn failed_connection_persists_a_safe_diagnostic_for_settings() {
     let operation = dispatched(&store, &operation_id);
     assert!(matches!(
         service.execute(&operation),
-        McpEffectOutcome::Failed(_)
+        EffectOutcome::Failed(_)
     ));
     let server = servers(&h, &store, &cases).remove(0);
     assert!(matches!(
@@ -722,7 +723,7 @@ fn failed_connection_persists_a_safe_diagnostic_for_settings() {
     let operation = dispatched(&store, &operation_id);
     assert!(matches!(
         service.observe(&operation),
-        McpEffectOutcome::Unknown(_)
+        EffectOutcome::Unknown(_)
     ));
     let server = servers(&h, &store, &cases).remove(0);
     assert!(matches!(
@@ -997,7 +998,7 @@ fn journaled_first_discovery_selects_read_only_hints() {
     let operation = dispatched(&store, &operation_id);
     assert!(matches!(
         service.execute(&operation),
-        McpEffectOutcome::Completed(_)
+        EffectOutcome::Completed(_)
     ));
     let DomainDecision::Accepted { operation_id } = command(
         &h,
@@ -1012,7 +1013,7 @@ fn journaled_first_discovery_selects_read_only_hints() {
     let operation = dispatched(&store, &operation_id);
     assert!(matches!(
         service.execute(&operation),
-        McpEffectOutcome::Completed(_)
+        EffectOutcome::Completed(_)
     ));
     let published = servers(&h, &store, &cases).pop().unwrap();
     assert_eq!(published.catalog_revision.get(), 2);
@@ -1038,7 +1039,7 @@ fn journaled_first_discovery_selects_read_only_hints() {
     let operation = dispatched(&store, &operation_id);
     assert!(matches!(
         service.execute(&operation),
-        McpEffectOutcome::Completed(_)
+        EffectOutcome::Completed(_)
     ));
     let after = read_snapshot(&*store, &ReadOptions::default(), |snapshot| {
         Ok(snapshot
@@ -1381,7 +1382,7 @@ fn discovered_server(
         };
         assert!(matches!(
             service.execute(&dispatched(store, &operation_id)),
-            McpEffectOutcome::Completed(_)
+            EffectOutcome::Completed(_)
         ));
     }
     let current = servers(h, store, cases).remove(0);
@@ -2355,7 +2356,7 @@ fn a_disabled_server_stops_serving_until_a_human_enables_it_and_a_removed_one_is
     assert_eq!(disabled.selected_tool_ids.0, selection);
     assert!(offered().is_empty());
     assert_eq!(remote.5.load(Ordering::SeqCst), 0);
-    let McpEffectOutcome::Completed(record) = service.execute(&dispatched(&store, &operation_id))
+    let EffectOutcome::Completed(record) = service.execute(&dispatched(&store, &operation_id))
     else {
         panic!("disconnect did not complete");
     };
@@ -2458,7 +2459,7 @@ fn a_disabled_server_stops_serving_until_a_human_enables_it_and_a_removed_one_is
     let connects = remote.0.load(Ordering::SeqCst);
     assert!(matches!(
         service.execute(&dispatched(&store, &operation_id)),
-        McpEffectOutcome::Completed(_)
+        EffectOutcome::Completed(_)
     ));
     assert_eq!(remote.0.load(Ordering::SeqCst), connects + 1);
     let enabled = servers(&h, &store, &cases).remove(0);
@@ -2492,12 +2493,12 @@ fn a_disabled_server_stops_serving_until_a_human_enables_it_and_a_removed_one_is
     let disconnects = remote.5.load(Ordering::SeqCst);
     assert!(matches!(
         service.execute(&dispatched(&store, &late)),
-        McpEffectOutcome::Completed(_)
+        EffectOutcome::Completed(_)
     ));
     assert_eq!(remote.5.load(Ordering::SeqCst), disconnects);
     assert!(matches!(
         service.execute(&dispatched(&store, &reenable)),
-        McpEffectOutcome::Completed(_)
+        EffectOutcome::Completed(_)
     ));
     assert_eq!(offered(), ["lookup"]);
 
@@ -2515,7 +2516,7 @@ fn a_disabled_server_stops_serving_until_a_human_enables_it_and_a_removed_one_is
     assert!(servers(&h, &store, &cases).is_empty());
     assert!(offered().is_empty());
     let disconnects = remote.5.load(Ordering::SeqCst);
-    let McpEffectOutcome::Completed(record) = service.execute(&dispatched(&store, &operation_id))
+    let EffectOutcome::Completed(record) = service.execute(&dispatched(&store, &operation_id))
     else {
         panic!("removal disconnect did not complete");
     };
@@ -3011,7 +3012,7 @@ fn a_stdio_server_without_its_runtime_is_flagged_before_connecting_and_does_not_
     };
     assert!(matches!(
         service.execute(&dispatched(&store, &operation_id)),
-        McpEffectOutcome::Failed(_)
+        EffectOutcome::Failed(_)
     ));
     let failed = servers(&h, &store, &cases)
         .into_iter()

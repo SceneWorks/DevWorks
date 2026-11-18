@@ -113,7 +113,7 @@ impl InstructionsCtl<'_, '_> {
                 "roles.read",
                 {
                     let id = id.clone();
-                    move |b| iop::query(b, "roles.read", iop::read_body(&id, None))
+                    move |b| iop::query(b, iop::read(Kind::Role, &id, None))
                 },
             );
             if !submitted {
@@ -142,7 +142,7 @@ impl InstructionsCtl<'_, '_> {
             InstructionsSlot::InstructionSkills(generation),
             "Discovering skills",
             "skills.discover",
-            move |b| iop::query(b, "skills.discover", iop::discover_body(cursor.as_deref())),
+            move |b| iop::query(b, iop::discover(cursor.as_deref())),
         ) {
             self.panel().skills = Some(Err("Not requested: DevWorks is offline.".into()));
         }
@@ -210,7 +210,7 @@ impl InstructionsCtl<'_, '_> {
             InstructionsSlot::InstructionHistory(generation),
             "Reading instruction history",
             op,
-            move |b| iop::query(b, op, iop::history_body(&id, cursor.as_deref())),
+            move |b| iop::query(b, iop::history(kind, &id, cursor.as_deref())),
         ) {
             self.panel().detail.history = Some(Err("Not requested: DevWorks is offline.".into()));
         }
@@ -227,7 +227,7 @@ impl InstructionsCtl<'_, '_> {
             InstructionsSlot::InstructionResources(generation),
             "Reading skill resources",
             "skills.resources",
-            move |b| iop::resources_query(b, iop::resources_body(&id, revision, cursor.as_deref())),
+            move |b| iop::query(b, iop::read_resources(&id, revision, cursor.as_deref())),
         ) {
             self.panel().detail.resources = Some(Err("Not requested: DevWorks is offline.".into()));
         }
@@ -330,7 +330,7 @@ impl InstructionsCtl<'_, '_> {
             InstructionsSlot::InstructionCommand(token),
             "Restoring an instruction revision",
             op,
-            move |b| iop::command(b, op, iop::rollback_body(&id, expected, target)),
+            move |b| iop::command(b, iop::rollback(kind, &id, expected, target)),
         );
         let p = self.panel();
         if submitted {
@@ -557,7 +557,8 @@ impl InstructionsCtl<'_, '_> {
                             self.fail_instruction(token, "No draft to save.".into());
                             return None;
                         };
-                        let op = pending.kind.draft_op();
+                        let draft_kind = pending.kind;
+                        let op = draft_kind.draft_op();
                         let content = record.artifact;
                         if let Some(p) = &mut self.panel().pending {
                             p.stage = Stage::Saving;
@@ -568,7 +569,7 @@ impl InstructionsCtl<'_, '_> {
                             op,
                             move |b| {
                                 let target = target.as_ref().map(|(id, r)| (id.as_str(), *r));
-                                iop::command(b, op, iop::draft_body(target, &name, &content))
+                                iop::command(b, iop::draft(draft_kind, target, &name, &content))
                             },
                         ) {
                             self.fail_instruction(token, "Not saved: DevWorks is offline.".into());

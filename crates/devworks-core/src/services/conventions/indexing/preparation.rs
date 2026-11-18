@@ -448,7 +448,9 @@ pub fn settle_native_preparation(
     };
     let target = if balance.unknown_tail || !balance.local_quiescent || !is_terminal(native.state) {
         OperationState::OutcomeUnknown
-    } else if native.state == OperationState::ObservedComplete && usage.state == "Settled" {
+    } else if native.state == OperationState::ObservedComplete
+        && usage.state == crate::ports::storage::AttemptState::Settled
+    {
         OperationState::ObservedComplete
     } else {
         OperationState::Failed

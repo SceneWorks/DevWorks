@@ -15,7 +15,7 @@ use devworks_core::context::{HostIngress, InvocationContext, PrincipalKind};
 use devworks_core::fingerprint::sha256_hex;
 use devworks_core::gateway::Gateway;
 use devworks_core::ports::files::{
-    ArtifactFiles, ArtifactSources, FileFault, PublishedBlob, ResolvedSource, SourceRefusal,
+    ArtifactFiles, ArtifactSources, FileFault, ResolvedSource, SourceRefusal,
 };
 use devworks_core::ports::storage::*;
 use devworks_core::protocol::data::{ArtifactSource, DataScope};
@@ -44,12 +44,11 @@ use devworks_core::services::history::{
 };
 use devworks_core::services::sessions::SessionService;
 use devworks_core::settings::catalog::AgentRole;
+use devworks_test_support::{FaultFiles, FileOp};
 use serde_json::{Value, json};
-use std::io::Read;
 use std::panic::{AssertUnwindSafe, catch_unwind};
-use std::path::Path;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 fn id(s: &str) -> Id {
     Id::new(s).unwrap()
@@ -74,70 +73,6 @@ impl ArtifactSources for NoSources {
     }
 }
 
-/// The native adapter, with a publication that can be made to fail once (a full volume).
-struct Flaky {
-    inner: Arc<NativeArtifactFiles>,
-    fail_publish: AtomicBool,
-}
-impl ArtifactFiles for Flaky {
-    fn publish(
-        &self,
-        s: &str,
-        src: &mut dyn Read,
-        d: &str,
-        n: u64,
-        r: Option<&str>,
-        g: &str,
-    ) -> Result<PublishedBlob, FileFault> {
-        if self.fail_publish.swap(false, Ordering::SeqCst) {
-            return Err(FileFault::DiskFull);
-        }
-        self.inner.publish(s, src, d, n, r, g)
-    }
-    fn managed_path(&self, d: &str, g: &str) -> Result<String, FileFault> {
-        self.inner.managed_path(d, g)
-    }
-    fn present(&self, d: &str, g: &str, n: u64) -> Result<bool, FileFault> {
-        self.inner.present(d, g, n)
-    }
-    fn inspect(&self, d: &str, g: &str) -> Result<Option<u64>, FileFault> {
-        self.inner.inspect(d, g)
-    }
-    fn read_range(&self, d: &str, g: &str, n: u64, o: u64, m: usize) -> Result<Vec<u8>, FileFault> {
-        self.inner.read_range(d, g, n, o, m)
-    }
-    fn open(&self, d: &str, g: &str, n: u64) -> Result<Box<dyn Read + Send>, FileFault> {
-        self.inner.open(d, g, n)
-    }
-    fn unlink(&self, d: &str, g: &str) -> Result<(), FileFault> {
-        self.inner.unlink(d, g)
-    }
-    fn quarantine(&self, d: &str, g: &str) -> Result<(), FileFault> {
-        self.inner.quarantine(d, g)
-    }
-    fn staged(&self) -> Result<Vec<String>, FileFault> {
-        self.inner.staged()
-    }
-    fn remove_staged(&self, n: &str) -> Result<(), FileFault> {
-        self.inner.remove_staged(n)
-    }
-    fn stored_files(&self) -> Result<Vec<(String, String)>, FileFault> {
-        self.inner.stored_files()
-    }
-    fn write_derived(&self, k: &str, b: &[u8]) -> Result<(), FileFault> {
-        self.inner.write_derived(k, b)
-    }
-    fn read_derived(&self, k: &str, m: usize) -> Result<Option<Vec<u8>>, FileFault> {
-        self.inner.read_derived(k, m)
-    }
-    fn collect_derived(&self) -> Result<u64, FileFault> {
-        self.inner.collect_derived()
-    }
-    fn export(&self, d: &str, g: &str, n: u64, dest: &Path, o: bool) -> Result<(), FileFault> {
-        self.inner.export(d, g, n, dest, o)
-    }
-}
-
 const ACTORS: [(&str, PrincipalKind); 8] = [
     ("user-a", PrincipalKind::Human),
     ("user-b", PrincipalKind::Human),
@@ -153,7 +88,8 @@ struct Fx {
     h: Harness,
     store: Arc<SqliteStore>,
     files: Arc<NativeArtifactFiles>,
-    flaky: Arc<Flaky>,
+    /// The native adapter, with a publication that can be made to fail (a full volume).
+    flaky: Arc<FaultFiles>,
     svc: Arc<ArtifactService>,
     replies: ReceiptReplies,
     cases: UseCases,
@@ -163,15 +99,18 @@ struct Fx {
 impl Fx {
     fn new() -> Self {
         let fx = Self::open(Harness::new(), Arc::new(AtomicU64::new(0)));
-        fx.store
-            .with_writer_connection(|c| {
-                super::super::conn::db(c.execute_batch(
-                    "INSERT INTO projects VALUES('project-a','A','Active',1,1,1);
-                     INSERT INTO projects VALUES('project-b','B','Active',1,1,1);
-                     INSERT INTO work_items VALUES('root-a','project-a','feature',NULL,NULL,NULL,'Feature A',1,0,1,1,1,'{}');",
-                ))
-            })
+        {
+            use devworks_test_support::seed::{ProjectSeed, WorkSeed};
+            devworks_test_support::seed::rows(
+                &*fx.store,
+                &[
+                    ProjectSeed::new("project-a").name("A"),
+                    ProjectSeed::new("project-b").name("B"),
+                ],
+                &[WorkSeed::feature("root-a", "project-a").title("Feature A")],
+            )
             .unwrap();
+        }
         fx.write(|tx| {
             for (a, k) in ACTORS {
                 tx.actors().register(&actor(a), k, a)?;
@@ -232,13 +171,10 @@ impl Fx {
     fn open(h: Harness, n: Arc<AtomicU64>) -> Self {
         let store = Arc::new(h.store());
         let files = Arc::new(NativeArtifactFiles::new(
-            h.root.0.clone(),
-            h.root.0.with_extension("cache"),
+            h.root.path().to_path_buf(),
+            h.root.path().with_extension("cache"),
         ));
-        let flaky = Arc::new(Flaky {
-            inner: files.clone(),
-            fail_publish: AtomicBool::new(false),
-        });
+        let flaky = FaultFiles::required_only(files.clone());
         let svc = Arc::new(ArtifactService::new(
             flaky.clone(),
             Arc::new(NoSources),
@@ -1214,7 +1150,7 @@ fn a_failed_publication_in_boot_is_retried_without_residue() {
     let fx = Fx::new();
     let user = fx.user();
     recorded(&fx.start_home(&user, "start-1", "Home"));
-    fx.flaky.fail_publish.store(true, Ordering::SeqCst);
+    fx.flaky.fail_next(FileOp::Publish, 1, FileFault::DiskFull);
     let claimed = fx.claim();
     let outcome = fx.replies.publish(&*fx.store, &claimed[0]);
     let ReplyOutcome::Retry(cause) = &outcome else {
@@ -1315,7 +1251,7 @@ fn seed_workspace_artifact(fx: &Fx, owner: &str) -> (Id, Id) {
     let owner = actor(owner);
     let generation = "seed-generation".to_owned();
     let path = fx.files.managed_path(&digest, &generation).unwrap();
-    let full = fx.h.root.0.join(&path);
+    let full = fx.h.root.join(&path);
     std::fs::create_dir_all(full.parent().unwrap()).unwrap();
     std::fs::write(&full, bytes).unwrap();
     fx.write(move |tx| {

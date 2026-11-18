@@ -9,7 +9,6 @@ use crate::work_ops::WorkSlot;
 use crate::work_screen::detail::{card_detail, feature_detail};
 use crate::work_screen::{board, create_form, feature_list, no_project};
 use eframe::egui::{self, Ui};
-use serde_json::json;
 use std::collections::BTreeSet;
 impl WorkCtl<'_, '_> {
     pub(crate) fn features_screen(&mut self, ui: &mut Ui) {
@@ -249,8 +248,7 @@ impl WorkCtl<'_, '_> {
                 self.work.unlink = None;
                 actions.push(Action::Command(
                     w.id.as_str().to_owned(),
-                    "tasks.set_feature",
-                    json!({"taskId": w.id, "expectedRevision": w.revision, "clearFeature": true}),
+                    unlink_request(&w),
                 ));
             }
             Some(false) => self.work.unlink = None,

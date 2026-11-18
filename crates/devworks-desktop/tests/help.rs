@@ -805,7 +805,14 @@ fn install_named_guide(
     if installed.enabled {
         let (_, registry, _) =
             addons::catalog(b.query("addons.catalog", &addons::catalog_frame(&*b, None))).unwrap();
-        ops::command_result(b.command("addons.disable", &addons::lifecycle_frame(&*b,json!({"kind":"Disable","packageId":installed.id,"expectedRegistryRevision":registry.to_string()})))).unwrap();
+        ops::command_result(b.command(
+            "addons.disable",
+            &addons::lifecycle_frame(
+                &*b,
+                addons::disable_command(installed.id.as_str(), registry).unwrap(),
+            ),
+        ))
+        .unwrap();
     }
     assert_eq!(installed.digest.as_str(), manifest_digest);
     // Installation changes the registry, not its published documentation. Await the real

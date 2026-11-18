@@ -193,16 +193,16 @@ impl KnowledgeCtl<'_, '_> {
             KnowledgeSlot::KnowledgeList(generation),
             "Loading Knowledge",
             op,
-            move |b| knowledge_screen::query(b, op, body),
+            move |b| knowledge_screen::query(b, body),
         ) {
             self.knowledge.listing = None;
         }
-        let body = self.knowledge.diagnostics_body();
+        let body = self.knowledge.diagnostics_input();
         self.query(
             KnowledgeSlot::KnowledgeDiagnostics,
             "Checking Knowledge",
             "knowledge.diagnostics",
-            move |b| knowledge_screen::query(b, "knowledge.diagnostics", body),
+            move |b| knowledge_screen::query(b, body),
         );
     }
     /// Gives the Knowledge screen the projects the user can see (active and archived, from
@@ -279,12 +279,12 @@ impl KnowledgeCtl<'_, '_> {
         }
     }
     fn read_knowledge(&mut self, claim: Id) {
-        let body = self.knowledge.read_body(&claim);
+        let body = self.knowledge.read_input(&claim);
         self.query(
             KnowledgeSlot::KnowledgeRead(claim.as_str().to_owned()),
             "Loading a Knowledge entry",
             "knowledge.read",
-            move |b| knowledge_screen::query(b, "knowledge.read", body),
+            move |b| knowledge_screen::query(b, body),
         );
     }
     /// Submits one Knowledge write at a time; what it took from the screen's forms
@@ -293,7 +293,7 @@ impl KnowledgeCtl<'_, '_> {
         &mut self,
         label: &str,
         op: &'static str,
-        body: serde_json::Value,
+        body: Option<devworks_core::operations::OperationInput>,
         submitted: knowledge_screen::Submitted,
     ) {
         if self.knowledge.writing.is_some() {
@@ -302,7 +302,7 @@ impl KnowledgeCtl<'_, '_> {
         self.knowledge.writing = Some(label.to_owned());
         self.knowledge.submitted = Some(submitted);
         if !self.command(KnowledgeSlot::KnowledgeWrite, label, op, move |b| {
-            knowledge_screen::command(b, op, body)
+            knowledge_screen::command(b, body)
         }) {
             // Refused because an earlier write is unresolved: that one stays the write in
             // flight until Confirm outcomes settles it.
@@ -341,7 +341,7 @@ impl KnowledgeCtl<'_, '_> {
                         KnowledgeSlot::KnowledgeList(generation),
                         "Loading more Knowledge",
                         op,
-                        move |b| knowledge_screen::query(b, op, body),
+                        move |b| knowledge_screen::query(b, body),
                     ) {
                         self.knowledge.listing = None;
                     }
@@ -352,7 +352,7 @@ impl KnowledgeCtl<'_, '_> {
                     self.knowledge.detail_error = None;
                     self.read_knowledge(id);
                 }
-                KnowledgeAction::Save(draft) => match self.knowledge.save_body(&draft) {
+                KnowledgeAction::Save(draft) => match self.knowledge.save_input(&draft) {
                     Ok((op, body)) => self.knowledge_write(
                         "Entry",
                         op,
@@ -361,14 +361,14 @@ impl KnowledgeCtl<'_, '_> {
                     ),
                     Err(m) => self.knowledge.message = Some((widgets::Tone::Attention, m)),
                 },
-                KnowledgeAction::PreviewSource => match self.knowledge.preview_body() {
+                KnowledgeAction::PreviewSource => match self.knowledge.preview_input() {
                     Ok((source, body)) => {
                         self.knowledge.source_preview = None;
                         self.query(
                             KnowledgeSlot::KnowledgePreview(source),
                             "Previewing a cleanup",
                             "knowledge.diagnostics",
-                            move |b| knowledge_screen::query(b, "knowledge.diagnostics", body),
+                            move |b| knowledge_screen::query(b, body),
                         );
                     }
                     Err(m) => self.knowledge.message = Some((widgets::Tone::Attention, m)),
@@ -378,15 +378,13 @@ impl KnowledgeCtl<'_, '_> {
                     self.import_knowledge_file(picked);
                 }
                 KnowledgeAction::ImportFiles(paths) => self.import_knowledge_file(paths),
-                KnowledgeAction::ConfirmImport => match self.knowledge.import_body() {
+                KnowledgeAction::ConfirmImport => match self.knowledge.import_input() {
                     Ok(body) => {
                         if self.command(
                             KnowledgeSlot::KnowledgeImport,
                             "Importing Knowledge",
                             "knowledge.import_user_data",
-                            move |b| {
-                                knowledge_screen::command(b, "knowledge.import_user_data", body)
-                            },
+                            move |b| knowledge_screen::command(b, body),
                         ) {
                             self.knowledge.import_started();
                         } else {
@@ -403,7 +401,7 @@ impl KnowledgeCtl<'_, '_> {
                         self.knowledge.import = None;
                     }
                 }
-                KnowledgeAction::DeleteSource => match self.knowledge.delete_source_body() {
+                KnowledgeAction::DeleteSource => match self.knowledge.delete_source_input() {
                     Ok((op, body)) => self.knowledge_write(
                         "Delete by source",
                         op,
@@ -412,7 +410,7 @@ impl KnowledgeCtl<'_, '_> {
                     ),
                     Err(m) => self.knowledge.message = Some((widgets::Tone::Attention, m)),
                 },
-                KnowledgeAction::Change(change) => match self.knowledge.change_body(change) {
+                KnowledgeAction::Change(change) => match self.knowledge.change_input(change) {
                     Ok((op, body)) => {
                         let submitted = self.knowledge.change_submission(change);
                         self.knowledge_write(change.label(), op, body, submitted)
@@ -467,7 +465,7 @@ impl KnowledgeCtl<'_, '_> {
                             KnowledgeSlot::KnowledgeImportPreview,
                             "Previewing an import",
                             "knowledge.diagnostics",
-                            move |b| knowledge_screen::query(b, "knowledge.diagnostics", body),
+                            move |b| knowledge_screen::query(b, body),
                         );
                         if !submitted {
                             self.knowledge.import = None;

@@ -3,6 +3,7 @@
 mod common;
 use common::*;
 use devworks_core::protocol::{data::CoverageState, records::*};
+use devworks_desktop::frame::fixture::{command_input, query_input};
 use devworks_desktop::route::Route;
 use devworks_desktop::{backend::Backend, ops, usage_ops as uops, work_ops as wops};
 use eframe::egui::{self, accesskit::Role};
@@ -47,13 +48,17 @@ fn project(b: &dyn Backend, name: &str) -> String {
 fn features(b: &dyn Backend, p: &str) -> Vec<WorkRecord> {
     wops::work_page(b.query(
         "features.list",
-        &wops::work_list(b, "features.list", p, None),
+        &wops::work_list(b, wops::Family::Features, p, None),
     ))
     .unwrap()
     .0
 }
 fn feature(b: &dyn Backend, id: &str) -> WorkRecord {
-    wops::work_record(b.query("features.get", &wops::work_get(b, "features.get", id))).unwrap()
+    wops::work_record(b.query(
+        "features.get",
+        &wops::work_get(b, wops::Family::Features, id),
+    ))
+    .unwrap()
 }
 /// The feature's budget once usage accounting is ready. Readiness is the engine's usage
 /// bootstrap, which completes in the background after start, so a budget read right after
@@ -250,10 +255,12 @@ fn withdrawing_a_reopened_pending_cap_preserves_active_budget_and_off_remains_ex
         "features.edit_plan",
         &wops::work_command(
             &*b,
-            "features.edit_plan",
-            json!({
-                "featureId":f.id,"expectedRevision":saved.revision,"plan":pending.draft
-            }),
+            command_input(
+                "features.edit_plan",
+                json!({
+                    "featureId":f.id,"expectedRevision":saved.revision,"plan":pending.draft
+                }),
+            ),
         ),
     ))
     .unwrap();
@@ -348,7 +355,7 @@ fn local_free_connection_policy_is_explicit_and_unrelated_edits_preserve_it() {
     config.connection_tick = None;
     let engine = devworks_desktop::host::Engine::start(config).unwrap();
     let b = engine.backend();
-    ops::configured(b.command("router.configure",&ops::router_configure(&*b,json!({"kind":"Connection","name":"Explicit local policy","profile":"CompatibleChat","endpoint":"http://127.0.0.1:11434/v1"})))).unwrap();
+    ops::configured(b.command("router.configure",&ops::router_configure(&*b, serde_json::from_value(json!({"kind":"Connection","name":"Explicit local policy","profile":"CompatibleChat","endpoint":"http://127.0.0.1:11434/v1"})).unwrap()))).unwrap();
     let records = || {
         ops::connection_records(b.query("router.connections", &ops::router_connections(&*b, None)))
             .unwrap()
@@ -386,7 +393,7 @@ fn local_free_connection_policy_is_explicit_and_unrelated_edits_preserve_it() {
     );
     assert_eq!(records()[0].name.0, "Renamed local policy");
     let row = records().remove(0);
-    ops::configured(b.command("router.configure",&ops::router_configure(&*b,json!({"kind":"Connection","connectionId":row.id,"expectedRevision":row.revision,"name":row.name,"profile":"CompatibleChat","endpoint":row.endpoint})))).unwrap();
+    ops::configured(b.command("router.configure",&ops::router_configure(&*b, serde_json::from_value(json!({"kind":"Connection","connectionId":row.id,"expectedRevision":row.revision,"name":row.name,"profile":"CompatibleChat","endpoint":row.endpoint})).unwrap()))).unwrap();
     assert_eq!(records()[0].local_free, Some(true));
 }
 
@@ -400,8 +407,10 @@ fn price_catalog(b: &dyn Backend, model: &str) -> PriceCatalogView {
         "router.price_status",
         &uops::query(
             b,
-            "router.price_status",
-            json!({"modelIds":models,"includeHistory":true,"page":{"limit":100}}),
+            query_input(
+                "router.price_status",
+                json!({"modelIds":models,"includeHistory":true,"page":{"limit":100}}),
+            ),
         ),
     ))
     .unwrap()
@@ -413,7 +422,7 @@ fn native_tariff_editor_preserves_all_dimensions_and_recovers_from_authoritative
     let engine = start(&root);
     let b = engine.backend();
     let model = "native-price-model";
-    ops::configured(b.command("router.configure",&ops::router_configure(&*b,json!({"kind":"Model","model":{"id":model,"displayName":"Native price model","endpointProfile":"CompatibleChat","upstreamModelId":"fixture/native-price","enabled":true,"tierMemberships":[],"efforts":[],"imageInput":false,"tools":false,"revision":"1"}})))).unwrap();
+    ops::configured(b.command("router.configure",&ops::router_configure(&*b, serde_json::from_value(json!({"kind":"Model","model":{"id":model,"displayName":"Native price model","endpointProfile":"CompatibleChat","upstreamModelId":"fixture/native-price","enabled":true,"tierMemberships":[],"efforts":[],"imageInput":false,"tools":false,"revision":"1"}})).unwrap()))).unwrap();
     let initial = price_catalog(&*b, model);
     assert_eq!(initial.models.0[0].revision.as_str(), "1");
     assert!(matches!(
@@ -470,7 +479,7 @@ fn native_tariff_editor_preserves_all_dimensions_and_recovers_from_authoritative
     let draft = h.state().usage.price_draft.clone().unwrap();
     let mut other = expected.clone();
     other["amountUsd"] = json!("9.1");
-    uops::overridden(b.command("router.price_override",&uops::command(&*b,"router.price_override",json!({"modelId":model,"expectedRevision":saved.models.0[0].revision,"change":{"kind":"Set","tariffs":[other]}})))).unwrap();
+    uops::overridden(b.command("router.price_override",&uops::command(&*b, command_input("router.price_override", json!({"modelId":model,"expectedRevision":saved.models.0[0].revision,"change":{"kind":"Set","tariffs":[other]}}))))).unwrap();
     press(&mut h, "Reload price catalog");
     assert_eq!(h.state().usage.price_draft.as_ref().unwrap(), &draft);
     assert!(has_text(&h, "Your tariff draft is preserved"));
@@ -836,9 +845,9 @@ fn native_price_paging_keeps_loaded_rows_and_draft_until_explicit_catalog_reload
     startup::settled(&engine, &root);
     let b = engine.backend();
     let model = "paged-price-model";
-    ops::configured(b.command("router.configure",&ops::router_configure(&*b,json!({"kind":"Model","model":{"id":model,"displayName":"Paged price model","endpointProfile":"CompatibleChat","upstreamModelId":"fixture/paged-price","enabled":true,"tierMemberships":[],"efforts":[],"imageInput":false,"tools":false,"revision":"1"}})))).unwrap();
+    ops::configured(b.command("router.configure",&ops::router_configure(&*b, serde_json::from_value(json!({"kind":"Model","model":{"id":model,"displayName":"Paged price model","endpointProfile":"CompatibleChat","upstreamModelId":"fixture/paged-price","enabled":true,"tierMemberships":[],"efforts":[],"imageInput":false,"tools":false,"revision":"1"}})).unwrap()))).unwrap();
     let tariffs=(0..105).map(|i|json!({"upstreamModelId":"fixture/paged-price","serviceTier":format!("service-{i:03}"),"modality":"Text","chargeKind":"Input","unit":"Token","units":"1000000","amountUsd":"1"})).collect::<Vec<_>>();
-    uops::overridden(b.command("router.price_override",&uops::command(&*b,"router.price_override",json!({"modelId":model,"expectedRevision":"1","change":{"kind":"Set","tariffs":tariffs}})))).unwrap();
+    uops::overridden(b.command("router.price_override",&uops::command(&*b, command_input("router.price_override", json!({"modelId":model,"expectedRevision":"1","change":{"kind":"Set","tariffs":tariffs}}))))).unwrap();
     let mut h = harness(shell(&engine, &root, Script::default()), 1800.0, 1800.0);
     settle(&mut h);
     h.state_mut().navigate(Route::Usage);
@@ -862,7 +871,7 @@ fn native_price_paging_keeps_loaded_rows_and_draft_until_explicit_catalog_reload
     assert_eq!(draft.tariffs.len(), 105);
     drop(writer);
     let replacement = json!({"upstreamModelId":"fixture/paged-price","serviceTier":"changed-source","modality":"Text","chargeKind":"Input","unit":"Token","units":"1000000","amountUsd":"2"});
-    uops::overridden(b.command("router.price_override",&uops::command(&*b,"router.price_override",json!({"modelId":model,"expectedRevision":"2","change":{"kind":"Set","tariffs":[replacement]}})))).unwrap();
+    uops::overridden(b.command("router.price_override",&uops::command(&*b, command_input("router.price_override", json!({"modelId":model,"expectedRevision":"2","change":{"kind":"Set","tariffs":[replacement]}}))))).unwrap();
     settle(&mut h);
     assert!(h.state().usage.price_update_available);
     assert_eq!(
@@ -901,7 +910,7 @@ fn native_connection_billing_edit_preserves_refused_and_stale_draft_until_explic
     c.connection_tick = None;
     let engine = devworks_desktop::host::Engine::start(c).unwrap();
     let b = engine.backend();
-    ops::configured(b.command("router.configure",&ops::router_configure(&*b,json!({"kind":"Connection","name":"Captured billing","profile":"CompatibleChat","endpoint":"http://127.0.0.1:11434/v1"})))).unwrap();
+    ops::configured(b.command("router.configure",&ops::router_configure(&*b, serde_json::from_value(json!({"kind":"Connection","name":"Captured billing","profile":"CompatibleChat","endpoint":"http://127.0.0.1:11434/v1"})).unwrap()))).unwrap();
     let mut h = harness(shell(&engine, &root, Script::default()), 1800.0, 1600.0);
     settle(&mut h);
     h.state_mut().navigate(Route::Settings);
@@ -941,7 +950,7 @@ fn native_connection_billing_edit_preserves_refused_and_stale_draft_until_explic
     );
     replace(&mut h, "Captured billing name", "My billing choice");
     let r = configured_connection(&*b);
-    ops::configured(b.command("router.configure",&ops::router_configure(&*b,json!({"kind":"Connection","connectionId":r.id,"expectedRevision":r.revision,"name":"External current","profile":"CompatibleChat","endpoint":"http://127.0.0.1:11435/v1","localFree":false})))).unwrap();
+    ops::configured(b.command("router.configure",&ops::router_configure(&*b, serde_json::from_value(json!({"kind":"Connection","connectionId":r.id,"expectedRevision":r.revision,"name":"External current","profile":"CompatibleChat","endpoint":"http://127.0.0.1:11435/v1","localFree":false})).unwrap()))).unwrap();
     press(&mut h, "Reload");
     assert!(has_text(&h, "Editing captured connection revision 1"));
     assert!(has_text(&h, "Stored revision 2"));
@@ -977,7 +986,7 @@ fn native_unknown_connection_billing_edit_survives_restart_with_exact_frame_and_
     c.connection_tick = None;
     let engine = devworks_desktop::host::Engine::start(c).unwrap();
     let real = engine.backend();
-    ops::configured(real.command("router.configure",&ops::router_configure(&*real,json!({"kind":"Connection","name":"Uncertain billing","profile":"CompatibleChat","endpoint":"http://127.0.0.1:11434/v1"})))).unwrap();
+    ops::configured(real.command("router.configure",&ops::router_configure(&*real, serde_json::from_value(json!({"kind":"Connection","name":"Uncertain billing","profile":"CompatibleChat","endpoint":"http://127.0.0.1:11434/v1"})).unwrap()))).unwrap();
     let lossy = LoseAcks::over(real.clone(), "router.configure", 4);
     let mut h = harness(
         shell_with(Ok(lossy.clone()), &root, Script::default(), None),
@@ -1043,19 +1052,19 @@ fn recorded_report_origins(engine: &devworks_desktop::host::Engine, project: &st
     use devworks_core::ports::storage::{StoredUsageOrigin, WriteOptions, run_write};
     use devworks_core::protocol::{Id, ProjectId};
     let b = engine.backend();
-    let session=ops::started(b.command("sessions.start", &ops::command_frame(&*b,"sessions.start",json!({"scope":{"kind":"Project","projectId":project},"title":"Recorded report context"})))).unwrap().id;
+    let session=ops::started(b.command("sessions.start", &devworks_desktop::frame::fixture::command(&*b,"sessions.start",json!({"scope":{"kind":"Project","projectId":project},"title":"Recorded report context"})))).unwrap().id;
     let project = ProjectId(Id::new(project).unwrap());
     let other = ProjectId(Id::new(other).unwrap());
     run_write(&**engine.host().runtime().store(),WriteOptions::fixture(),move |tx| {
         // Immutable historical source fixtures, deliberately without canonical attempt identity.
         // This exercises the actual SQLite/gateway projection, not a frontend report substitute.
         for (source,category,input,output) in [("assistant","Assistant",10,5),("review","CodeReview",7,3),("analysis","RepositoryAnalysis",2,1)] {
-            tx.usage().insert_usage_origin(&StoredUsageOrigin {source_kind:"SessionUsage".into(),source_id:source.into(),attempt_id:None,request_id:Some(Id::new(format!("recorded-{source}")).unwrap()),project_id:Some(project.clone()),feature_id:None,work_id:None,session_id:Some(session.clone()),job_run_id:None,payload:json!({"actorId":"recorded-user","providerId":"openrouter","reportCategory":category,"item":{"purpose":"Conversation","modelId":"recorded-user","inputTokens":input.to_string(),"outputTokens":output.to_string()}}),recorded_at_ms:1000,priced_micro_usd:None,classification:"Untracked".into(),monetary_complete:false,incomplete:true,unknown_tail:false,committed_sequence:Some(1)})?;
+            tx.usage().insert_usage_origin(&StoredUsageOrigin {source_kind:"SessionUsage".into(),source_id:source.into(),attempt_id:None,request_id:Some(Id::new(format!("recorded-{source}")).unwrap()),project_id:Some(project.clone()),feature_id:None,work_id:None,session_id:Some(session.clone()),job_run_id:None,payload:json!({"actorId":"recorded-user","providerId":"openrouter","reportCategory":category,"item":{"purpose":"Conversation","modelId":"recorded-user","inputTokens":input.to_string(),"outputTokens":output.to_string()}}),recorded_at_ms:1000,priced_micro_usd:None,classification:devworks_core::ports::usage::CostClassification::Untracked,monetary_complete:false,incomplete:true,unknown_tail:false,committed_sequence:Some(1)})?;
         }
         for (kind,source,payload) in [("RouterRequest","activity",json!({"actorId":"recorded-user","providerId":"openrouter","reportCategory":"Assistant","modelId":"recorded-user","purpose":"Conversation","state":"completed"})),("ToolInvocation","mcp",json!({"actorId":"recorded-user","transportOrigin":"Mcp","capabilityId":"fixture.tool","outcome":"success","durationMs":"3"}))] {
-            tx.usage().insert_usage_origin(&StoredUsageOrigin{source_kind:kind.into(),source_id:source.into(),attempt_id:None,request_id:Some(Id::new(format!("recorded-{source}")).unwrap()),project_id:Some(project.clone()),feature_id:None,work_id:None,session_id:Some(session.clone()),job_run_id:None,payload,recorded_at_ms:1000,priced_micro_usd:None,classification:"Untracked".into(),monetary_complete:false,incomplete:true,unknown_tail:false,committed_sequence:None})?;
+            tx.usage().insert_usage_origin(&StoredUsageOrigin{source_kind:kind.into(),source_id:source.into(),attempt_id:None,request_id:Some(Id::new(format!("recorded-{source}")).unwrap()),project_id:Some(project.clone()),feature_id:None,work_id:None,session_id:Some(session.clone()),job_run_id:None,payload,recorded_at_ms:1000,priced_micro_usd:None,classification:devworks_core::ports::usage::CostClassification::Untracked,monetary_complete:false,incomplete:true,unknown_tail:false,committed_sequence:None})?;
         }
-        tx.usage().insert_usage_origin(&StoredUsageOrigin{source_kind:"SessionUsage".into(),source_id:"other-project".into(),attempt_id:None,request_id:Some(Id::new("other-request").unwrap()),project_id:Some(other.clone()),feature_id:None,work_id:None,session_id:None,job_run_id:None,payload:json!({"actorId":"other-user","providerId":"other-provider","reportCategory":"Assistant","item":{"purpose":"Conversation","modelId":"other-model","inputTokens":"999","outputTokens":"999"}}),recorded_at_ms:1000,priced_micro_usd:None,classification:"Untracked".into(),monetary_complete:false,incomplete:true,unknown_tail:false,committed_sequence:Some(1)})?;
+        tx.usage().insert_usage_origin(&StoredUsageOrigin{source_kind:"SessionUsage".into(),source_id:"other-project".into(),attempt_id:None,request_id:Some(Id::new("other-request").unwrap()),project_id:Some(other.clone()),feature_id:None,work_id:None,session_id:None,job_run_id:None,payload:json!({"actorId":"other-user","providerId":"other-provider","reportCategory":"Assistant","item":{"purpose":"Conversation","modelId":"other-model","inputTokens":"999","outputTokens":"999"}}),recorded_at_ms:1000,priced_micro_usd:None,classification:devworks_core::ports::usage::CostClassification::Untracked,monetary_complete:false,incomplete:true,unknown_tail:false,committed_sequence:Some(1)})?;
         Ok(())
     }).unwrap();
 }
@@ -1207,7 +1216,7 @@ fn native_unknown_tariff_override_restores_exact_typed_draft_and_replays_one_ori
     let engine = start(&root);
     let real = engine.backend();
     let model = "unknown-tariff-model";
-    ops::configured(real.command("router.configure",&ops::router_configure(&*real,json!({"kind":"Model","model":{"id":model,"displayName":"Unknown tariff model","endpointProfile":"CompatibleChat","upstreamModelId":"fixture/unknown-tariff","enabled":true,"tierMemberships":[],"efforts":[],"imageInput":false,"tools":false,"revision":"1"}})))).unwrap();
+    ops::configured(real.command("router.configure",&ops::router_configure(&*real, serde_json::from_value(json!({"kind":"Model","model":{"id":model,"displayName":"Unknown tariff model","endpointProfile":"CompatibleChat","upstreamModelId":"fixture/unknown-tariff","enabled":true,"tierMemberships":[],"efforts":[],"imageInput":false,"tools":false,"revision":"1"}})).unwrap()))).unwrap();
     let lossy = LoseAcks::over(real.clone(), "router.price_override", 4);
     let mut h = harness(
         shell_with(Ok(lossy.clone()), &root, Script::default(), None),
@@ -1282,7 +1291,7 @@ fn native_usage_paging_keeps_applied_filters_and_preserves_unsubmitted_filter_dr
     let p = project(&*b, "Usage paging");
     let session = ops::started(b.command(
         "sessions.start",
-        &ops::command_frame(
+        &devworks_desktop::frame::fixture::command(
             &*b,
             "sessions.start",
             json!({"scope":{"kind":"Project","projectId":p},"title":"Recorded paging context"}),
@@ -1293,7 +1302,7 @@ fn native_usage_paging_keeps_applied_filters_and_preserves_unsubmitted_filter_dr
     let project_id = ProjectId(Id::new(p.clone()).unwrap());
     run_write(&**engine.host().runtime().store(),WriteOptions::fixture(),move|tx|{
         for i in 0..120 {
-            tx.usage().insert_usage_origin(&StoredUsageOrigin{source_kind:"SessionUsage".into(),source_id:format!("page-{i:03}"),attempt_id:None,request_id:Some(Id::new(format!("recorded-page-{i:03}")).unwrap()),project_id:Some(project_id.clone()),feature_id:None,work_id:None,session_id:Some(session.clone()),job_run_id:None,payload:json!({"actorId":format!("recorded-user-{i:03}"),"providerId":"openrouter","reportCategory":"Assistant","item":{"purpose":"Conversation","modelId":format!("recorded-model-{i:03}"),"inputTokens":"1","outputTokens":"1"}}),recorded_at_ms:1000,priced_micro_usd:None,classification:"Untracked".into(),monetary_complete:false,incomplete:true,unknown_tail:false,committed_sequence:Some(1)})?;
+            tx.usage().insert_usage_origin(&StoredUsageOrigin{source_kind:"SessionUsage".into(),source_id:format!("page-{i:03}"),attempt_id:None,request_id:Some(Id::new(format!("recorded-page-{i:03}")).unwrap()),project_id:Some(project_id.clone()),feature_id:None,work_id:None,session_id:Some(session.clone()),job_run_id:None,payload:json!({"actorId":format!("recorded-user-{i:03}"),"providerId":"openrouter","reportCategory":"Assistant","item":{"purpose":"Conversation","modelId":format!("recorded-model-{i:03}"),"inputTokens":"1","outputTokens":"1"}}),recorded_at_ms:1000,priced_micro_usd:None,classification:devworks_core::ports::usage::CostClassification::Untracked,monetary_complete:false,incomplete:true,unknown_tail:false,committed_sequence:Some(1)})?;
         }Ok(())
     }).unwrap();
     startup::settled(&engine, &root);
@@ -1382,7 +1391,7 @@ fn native_connection_state_change_preserves_an_unsaved_billing_editor() {
     c.connection_tick = None;
     let engine = devworks_desktop::host::Engine::start(c).unwrap();
     let b = engine.backend();
-    ops::configured(b.command("router.configure",&ops::router_configure(&*b,json!({"kind":"Connection","name":"Independent billing","profile":"CompatibleChat","endpoint":"http://127.0.0.1:11434/v1"})))).unwrap();
+    ops::configured(b.command("router.configure",&ops::router_configure(&*b, serde_json::from_value(json!({"kind":"Connection","name":"Independent billing","profile":"CompatibleChat","endpoint":"http://127.0.0.1:11434/v1"})).unwrap()))).unwrap();
     let mut h = harness(shell(&engine, &root, Script::default()), 1800.0, 1600.0);
     settle(&mut h);
     h.state_mut().navigate(Route::Settings);
@@ -1504,7 +1513,7 @@ fn native_blank_tariff_editor_prices_default_requests_and_preserves_exact_custom
     config.connection_tick = None;
     let engine = devworks_desktop::host::Engine::start(config).unwrap();
     let b = engine.backend();
-    ops::configured(b.command("router.configure", &ops::router_configure(&*b,json!({"kind":"Connection","name":"Default tier quote connection","profile":"CompatibleChat","endpoint":"http://127.0.0.1:9/v1"})))).unwrap();
+    ops::configured(b.command("router.configure", &ops::router_configure(&*b, serde_json::from_value(json!({"kind":"Connection","name":"Default tier quote connection","profile":"CompatibleChat","endpoint":"http://127.0.0.1:9/v1"})).unwrap()))).unwrap();
     let connections =
         ops::connection_records(b.query("router.connections", &ops::router_connections(&*b, None)))
             .unwrap()
@@ -1514,7 +1523,7 @@ fn native_blank_tariff_editor_prices_default_requests_and_preserves_exact_custom
         .find(|record| record.name.0 == "Default tier quote connection")
         .unwrap();
     let model = "native-default-service-tier";
-    ops::configured(b.command("router.configure", &ops::router_configure(&*b,json!({"kind":"Model","model":{"id":model,"displayName":"Default tier quote model","endpointProfile":"CompatibleChat","connectionId":connection.id,"upstreamModelId":"fixture/default-tier","enabled":true,"tierMemberships":[],"efforts":[],"imageInput":false,"tools":false,"revision":"1"}})))).unwrap();
+    ops::configured(b.command("router.configure", &ops::router_configure(&*b, serde_json::from_value(json!({"kind":"Model","model":{"id":model,"displayName":"Default tier quote model","endpointProfile":"CompatibleChat","connectionId":connection.id,"upstreamModelId":"fixture/default-tier","enabled":true,"tierMemberships":[],"efforts":[],"imageInput":false,"tools":false,"revision":"1"}})).unwrap()))).unwrap();
     assert!(matches!(
         price_catalog(&*b, model).models.0[0].price_kind,
         UsagePriceKind::Untracked

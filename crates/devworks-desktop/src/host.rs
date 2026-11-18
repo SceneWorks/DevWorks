@@ -585,7 +585,6 @@ async fn compose(
         diagnostics: diagnostic_ports,
         knowledge: KnowledgeComposition {
             files: Some(artifact_files),
-            ..KnowledgeComposition::default()
         },
         application,
         web: Some(config.web.clone()),

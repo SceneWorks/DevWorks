@@ -1,71 +1,23 @@
 use super::*;
-use devworks_core::ports::files::{ArtifactFiles, FileFault, PublishedBlob};
-use std::{io::Read, path::Path};
+use devworks_core::ports::files::ArtifactFiles;
+use devworks_test_support::{FaultFiles, FileOp};
 
-/// The blob has been staged durably, but its artifact metadata UOW has not begun.
-struct PublicationGate {
-    inner: NativeArtifactFiles,
-    gate: Arc<Gate>,
+/// The native file store whose publication, once the blob is staged durably, waits at `gate`
+/// before its artifact metadata unit of work begins.
+fn publication_gate(a: &App, gate: &Arc<Gate>) -> Arc<dyn ArtifactFiles> {
+    let files = FaultFiles::required_only(Arc::new(NativeArtifactFiles::new(
+        a.h.root.clone(),
+        a.h.root.with_extension("cache"),
+    )));
+    let gate = gate.clone();
+    files.after(FileOp::Publish, move |_, published| {
+        if published {
+            gate.pass(IdKind::ArtifactVersion);
+        }
+    });
+    files
 }
-impl ArtifactFiles for PublicationGate {
-    fn publish(
-        &self,
-        name: &str,
-        source: &mut dyn Read,
-        digest: &str,
-        bytes: u64,
-        reuse: Option<&str>,
-        generation: &str,
-    ) -> Result<PublishedBlob, FileFault> {
-        let published = self
-            .inner
-            .publish(name, source, digest, bytes, reuse, generation)?;
-        self.gate.pass(IdKind::ArtifactVersion);
-        Ok(published)
-    }
-    fn managed_path(&self, d: &str, g: &str) -> Result<String, FileFault> {
-        self.inner.managed_path(d, g)
-    }
-    fn present(&self, d: &str, g: &str, n: u64) -> Result<bool, FileFault> {
-        self.inner.present(d, g, n)
-    }
-    fn inspect(&self, d: &str, g: &str) -> Result<Option<u64>, FileFault> {
-        self.inner.inspect(d, g)
-    }
-    fn read_range(&self, d: &str, g: &str, n: u64, o: u64, m: usize) -> Result<Vec<u8>, FileFault> {
-        self.inner.read_range(d, g, n, o, m)
-    }
-    fn open(&self, d: &str, g: &str, n: u64) -> Result<Box<dyn Read + Send>, FileFault> {
-        self.inner.open(d, g, n)
-    }
-    fn unlink(&self, d: &str, g: &str) -> Result<(), FileFault> {
-        self.inner.unlink(d, g)
-    }
-    fn quarantine(&self, d: &str, g: &str) -> Result<(), FileFault> {
-        self.inner.quarantine(d, g)
-    }
-    fn staged(&self) -> Result<Vec<String>, FileFault> {
-        self.inner.staged()
-    }
-    fn remove_staged(&self, n: &str) -> Result<(), FileFault> {
-        self.inner.remove_staged(n)
-    }
-    fn stored_files(&self) -> Result<Vec<(String, String)>, FileFault> {
-        self.inner.stored_files()
-    }
-    fn write_derived(&self, k: &str, b: &[u8]) -> Result<(), FileFault> {
-        self.inner.write_derived(k, b)
-    }
-    fn read_derived(&self, k: &str, m: usize) -> Result<Option<Vec<u8>>, FileFault> {
-        self.inner.read_derived(k, m)
-    }
-    fn collect_derived(&self) -> Result<u64, FileFault> {
-        self.inner.collect_derived()
-    }
-    fn export(&self, d: &str, g: &str, n: u64, p: &Path, o: bool) -> Result<(), FileFault> {
-        self.inner.export(d, g, n, p, o)
-    }
-}
+
 fn domain_rows(a: &App) -> (i64, i64, i64, i64) {
     rusqlite::Connection::open(a.h.root.join("workspace.sqlite")).unwrap().query_row("SELECT (SELECT count(*) FROM decision_approvals),(SELECT count(*) FROM work_items),(SELECT count(*) FROM repositories),(SELECT count(*) FROM knowledge_entities)",[],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?))).unwrap()
 }
@@ -75,10 +27,7 @@ fn evidence_publication_rechecks_revocation_tools_and_scope_in_its_commit() {
     for change in ["revoked", "tools", "project"] {
         let mut a = App::unbooted(Harness::new(), None, None);
         let gate = Arc::new(Gate::default());
-        a.artifact_files = Some(Arc::new(PublicationGate {
-            inner: NativeArtifactFiles::new(a.h.root.clone(), a.h.root.with_extension("cache")),
-            gate: gate.clone(),
-        }));
+        a.artifact_files = Some(publication_gate(&a, &gate));
         let mut composition = a.composition();
         composition.authority = Arc::new(RealAuthority {
             store: a.store.clone(),
@@ -193,10 +142,7 @@ fn bootstrap_skips_a_source_revoked_during_publication_and_continues() {
     let _serial = serial();
     let mut a = App::unbooted(Harness::new(), None, None);
     let gate = Arc::new(Gate::default());
-    a.artifact_files = Some(Arc::new(PublicationGate {
-        inner: NativeArtifactFiles::new(a.h.root.clone(), a.h.root.with_extension("cache")),
-        gate: gate.clone(),
-    }));
+    a.artifact_files = Some(publication_gate(&a, &gate));
     let mut composition = a.composition();
     composition.authority = Arc::new(RealAuthority {
         store: a.store.clone(),
@@ -286,10 +232,7 @@ fn bootstrap_rechecks_source_deleted_after_preparation_before_staging_any_review
     let _serial = serial();
     let mut a = App::unbooted(Harness::new(), None, None);
     let gate = Arc::new(Gate::default());
-    a.artifact_files = Some(Arc::new(PublicationGate {
-        inner: NativeArtifactFiles::new(a.h.root.clone(), a.h.root.with_extension("cache")),
-        gate: gate.clone(),
-    }));
+    a.artifact_files = Some(publication_gate(&a, &gate));
     let mut composition = a.composition();
     composition.authority = Arc::new(RealAuthority {
         store: a.store.clone(),

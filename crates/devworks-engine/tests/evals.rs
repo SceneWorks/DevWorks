@@ -120,11 +120,17 @@ fn supervisor(h: &Harness, store: Arc<dyn ApplicationStore>) -> Arc<EvalSupervis
         vec![suite()],
     )
 }
-fn seed_work(h: &Harness) {
-    let db = rusqlite::Connection::open(h.root.join("workspace.sqlite")).unwrap();
-    db.execute_batch("INSERT INTO projects(id,title,lifecycle,revision,scope_revision,created_at) VALUES('project','P','Active',1,1,0);
-        INSERT INTO work_items VALUES('root','project','feature',NULL,NULL,NULL,'Root',1,0,1,1,1,'{}');
-        INSERT INTO work_items VALUES('worker','project','task','root',NULL,NULL,'Worker',1,0,1,1,1,'{}');").unwrap();
+fn seed_work(store: &dyn ApplicationStore) {
+    use devworks_test_support::seed::{ProjectSeed, WorkSeed};
+    devworks_test_support::seed::rows(
+        store,
+        &[ProjectSeed::new("project").name("P").created_at(0)],
+        &[
+            WorkSeed::feature("root", "project").title("Root"),
+            WorkSeed::task("worker", "project", "root").title("Worker"),
+        ],
+    )
+    .unwrap();
 }
 fn activation(store: &dyn ApplicationStore, phase: ActivationPhase) -> StoredActivation {
     write(store, move |tx| {
@@ -232,7 +238,7 @@ fn stopped_activation_grades_open_coordinator_and_worker_and_live_activation_doe
     let h = Harness::new();
     runtime().block_on(async {
         let store = h.open();
-        seed_work(&h);
+        seed_work(&*store);
         session(&*store, "coordinator", false, Some("root"));
         session(&*store, "worker-session", false, Some("root"));
         let a = activation(&*store, ActivationPhase::Running);
@@ -355,7 +361,7 @@ fn boot_grades_open_sessions_after_recovering_their_interrupted_activation() {
     let h = Harness::new();
     {
         let store = h.open();
-        seed_work(&h);
+        seed_work(&*store);
         session(&*store, "coordinator", false, Some("root"));
         session(&*store, "worker-session", false, Some("root"));
         activation(&*store, ActivationPhase::Running);

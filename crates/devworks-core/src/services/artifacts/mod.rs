@@ -126,6 +126,7 @@ pub(crate) use convention_source::{ConventionSourceLease, ConventionSourceSelect
 pub mod lifecycle;
 pub mod observed;
 pub mod preview;
+mod publish;
 pub mod replies;
 
 use crate::authority::reads::{ReadRefusal, ReadRequest, VerifiedReader};

@@ -10,16 +10,10 @@ use crate::protocol::records::{HelpProvenance, OperationRef};
 use crate::protocol::results::OperationResult;
 use crate::protocol::support::BoundedText;
 use crate::protocol::{EventId, Id, OperationId, OperationState};
+use crate::services::effect::{EffectOutcome, JournaledEffect};
 use crate::services::kernel::rev;
 use serde_json::{Value, json};
 use sha2::{Digest as _, Sha256};
-
-#[derive(Clone, Debug, PartialEq)]
-pub enum GenerationOutcome {
-    Completed(Value),
-    Failed(String),
-    Unknown(String),
-}
 
 fn invalid(message: &str) -> StorageError {
     StorageError::InvalidRecord(message.into())
@@ -144,6 +138,23 @@ impl HelpService {
             .map_err(|_| invalid("invalid Help generation journal"))
     }
 
+    /// One write whose first step re-checks that the generation job is still current: the
+    /// guarded write every Help generation phase publishes through.
+    fn guarded_write<T: Send + 'static>(
+        &self,
+        operation: &OperationRecord,
+        job: &GenerationJob,
+        work: impl FnOnce(&mut dyn WriteTransaction, &HelpService) -> Result<T, StorageError>
+        + Send
+        + 'static,
+    ) -> Result<T, StorageError> {
+        let (service, operation, job) = (self.clone(), operation.clone(), job.clone());
+        run_write(&*self.store, WriteOptions::host_state(), move |tx| {
+            service.current(tx, &operation, &job)?;
+            work(tx, &service)
+        })
+    }
+
     fn current(
         &self,
         tx: &mut dyn WriteTransaction,
@@ -257,12 +268,9 @@ impl HelpService {
         if control.stopped() {
             return control.finish(Err(StorageError::Cancelled));
         }
-        let service = self.clone();
-        let op = operation.clone();
         let source = job.clone();
         let metadata = document.topic.clone();
-        let existing = run_write(&*self.store, WriteOptions::host_state(), move |tx| {
-            service.current(tx, &op, &source)?;
+        let existing = self.guarded_write(operation, job, move |tx, _| {
             let existing = tx
                 .help()
                 .staged_help_topic(&source.generation, &metadata.id)?;
@@ -344,12 +352,10 @@ impl HelpService {
             None
         };
         drop(body); // No full source, even an inline host document, enters the writer mailbox.
-        let service = self.clone();
         let op = operation.clone();
         let source = job.clone();
         let artifact = staged.clone();
-        let result = run_write(&*self.store, WriteOptions::host_state(), move |tx| {
-            service.current(tx, &op, &source)?;
+        let result = self.guarded_write(operation, job, move |tx, service| {
             if let Some(existing) = tx
                 .help()
                 .staged_help_topic(&source.generation, &document.topic.id)?
@@ -667,11 +673,9 @@ impl HelpService {
             .iter()
             .map(|byte| format!("{byte:02x}"))
             .collect::<String>();
-        let service = self.clone();
-        let operation = operation.clone();
-        let job = job.clone();
-        run_write(&*self.store, WriteOptions::host_state(), move |tx| {
-            service.current(tx, &operation, &job)?;
+        let (held_operation, held_job) = (operation.clone(), job.clone());
+        self.guarded_write(operation, job, move |tx, _| {
+            let (operation, job) = (held_operation, held_job);
             let old = tx.help().help_head()?;
             let candidate = StoredHelpHead {
                 revision: job.expected_help_revision + 1,
@@ -708,40 +712,49 @@ impl HelpService {
 
     /// Recovery first consumes an exact durable publication observation. Otherwise the same
     /// immutable draft can be resumed, under fresh source/authority/cancellation checks.
-    pub fn execute(&self, operation: &OperationRecord) -> GenerationOutcome {
+    pub fn execute(&self, operation: &OperationRecord) -> EffectOutcome {
         let job = match self.job(operation) {
             Ok(job) => job,
-            Err(_) => return GenerationOutcome::Failed("Invalid Help generation journal.".into()),
+            Err(_) => return EffectOutcome::Failed("Invalid Help generation journal.".into()),
         };
         let current = match read_snapshot(&*self.store, &ReadOptions::default(), |read| {
             read.operations().operation(&operation.id)
         }) {
             Ok(Some(current)) => current,
             Ok(None) => {
-                return GenerationOutcome::Unknown(
+                return EffectOutcome::Unknown(
                     "The original Help journal is unavailable; no new publication was attempted."
                         .into(),
                 );
             }
             Err(_) => {
-                return GenerationOutcome::Unknown(
+                return EffectOutcome::Unknown(
                     "The Help journal could not be read; no new publication was attempted.".into(),
                 );
             }
         };
         if let Some(result) = recorded_completion(&current) {
-            return GenerationOutcome::Completed(result);
+            return EffectOutcome::Completed(result);
         }
         match self.build(operation,&job) {
-            Ok(result)=>GenerationOutcome::Completed(result),
-            Err(StorageError::Cancelled) if self.is_stopped()=>GenerationOutcome::Unknown("Help generation stopped before publication; its immutable draft is recoverable.".into()),
-            Err(StorageError::Cancelled)=>GenerationOutcome::Failed("Help generation was cancelled before catalog publication.".into()),
-            Err(StorageError::CommitUnknown | StorageError::Busy | StorageError::StorageUnavailable { .. }) => GenerationOutcome::Unknown("Help publication needs durable journal reconciliation; the original draft and operation are retained.".into()),
-            Err(StorageError::LeaseLost {..})=>GenerationOutcome::Unknown("Help generation owner changed; no catalog was published.".into()),
-            Err(_)=>GenerationOutcome::Failed("Help generation source, authority or local publication became unavailable; no partial catalog was published.".into()),
+            Ok(result)=>EffectOutcome::Completed(result),
+            Err(StorageError::Cancelled) if self.is_stopped()=>EffectOutcome::Unknown("Help generation stopped before publication; its immutable draft is recoverable.".into()),
+            Err(StorageError::Cancelled)=>EffectOutcome::Failed("Help generation was cancelled before catalog publication.".into()),
+            Err(StorageError::CommitUnknown | StorageError::Busy | StorageError::StorageUnavailable { .. }) => EffectOutcome::Unknown("Help publication needs durable journal reconciliation; the original draft and operation are retained.".into()),
+            Err(StorageError::LeaseLost {..})=>EffectOutcome::Unknown("Help generation owner changed; no catalog was published.".into()),
+            Err(_)=>EffectOutcome::Failed("Help generation source, authority or local publication became unavailable; no partial catalog was published.".into()),
         }
     }
-    pub fn observe(&self, operation: &OperationRecord) -> GenerationOutcome {
+    pub fn observe(&self, operation: &OperationRecord) -> EffectOutcome {
         self.execute(operation)
+    }
+}
+
+impl JournaledEffect for HelpService {
+    fn execute(&self, operation: &OperationRecord) -> EffectOutcome {
+        HelpService::execute(self, operation)
+    }
+    fn observe(&self, operation: &OperationRecord) -> EffectOutcome {
+        HelpService::observe(self, operation)
     }
 }

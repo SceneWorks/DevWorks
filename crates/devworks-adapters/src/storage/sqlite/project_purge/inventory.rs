@@ -12,7 +12,7 @@ use rusqlite::Connection;
 use serde_json::Value;
 use std::collections::BTreeMap;
 
-fn invalid() -> StorageError {
+fn inconsistent_inventory() -> StorageError {
     StorageError::InvalidRecord("native purge owner inventory is inconsistent".into())
 }
 type Materialized = (ProjectPurgeRowWitness, Vec<Value>);
@@ -45,30 +45,36 @@ fn materialize(
         let key = (0..keys.len())
             .map(|i| key_value(db(record.get_ref(i))?))
             .collect::<Result<Vec<_>, _>>()?;
-        let digest =
-            super::guard::key_digest(&serde_json::to_string(&key).map_err(|_| invalid())?)?;
-        let witness = witnesses.get(digest.as_str()).ok_or_else(invalid)?;
+        let digest = super::guard::key_digest(
+            &serde_json::to_string(&key).map_err(|_| inconsistent_inventory())?,
+        )?;
+        let witness = witnesses
+            .get(digest.as_str())
+            .ok_or_else(inconsistent_inventory)?;
         let values = (keys.len()..keys.len() + columns.len())
             .map(|i| key_value(db(record.get_ref(i))?))
             .collect::<Result<Vec<_>, _>>()?;
         result.push(((*witness).clone(), values));
     }
     if result.len() != witnesses.len() {
-        return Err(invalid());
+        return Err(inconsistent_inventory());
     }
     Ok(result)
 }
 fn text(value: &Value) -> Result<&str, StorageError> {
-    value.as_str().ok_or_else(invalid)
+    value.as_str().ok_or_else(inconsistent_inventory)
 }
 fn id(value: &Value) -> Result<Id, StorageError> {
-    Id::new(text(value)?).map_err(|_| invalid())
+    Id::new(text(value)?).map_err(|_| inconsistent_inventory())
 }
 fn owner(
     set: &mut BTreeMap<String, PurgeFileOwner>,
     owner: PurgeFileOwner,
 ) -> Result<(), StorageError> {
-    set.insert(serde_json::to_string(&owner).map_err(|_| invalid())?, owner);
+    set.insert(
+        serde_json::to_string(&owner).map_err(|_| inconsistent_inventory())?,
+        owner,
+    );
     Ok(())
 }
 
@@ -112,8 +118,9 @@ fn kept_reference_versions(
         let key = (0..keys.len())
             .map(|i| key_value(db(record.get_ref(i))?))
             .collect::<Result<Vec<_>, _>>()?;
-        let digest =
-            super::guard::key_digest(&serde_json::to_string(&key).map_err(|_| invalid())?)?;
+        let digest = super::guard::key_digest(
+            &serde_json::to_string(&key).map_err(|_| inconsistent_inventory())?,
+        )?;
         if actions
             .get(digest.as_str())
             .is_some_and(|a| **a == Action::Delete)
@@ -121,7 +128,10 @@ fn kept_reference_versions(
             continue;
         }
         let version: String = db(record.get(keys.len()))?;
-        versions.insert(version.clone(), Id::new(version).map_err(|_| invalid())?);
+        versions.insert(
+            version.clone(),
+            Id::new(version).map_err(|_| inconsistent_inventory())?,
+        );
     }
     for (key, version_id) in versions {
         let (digest, generation, deleted): (String,String,Option<i64>) = db(conn.query_row(
@@ -167,7 +177,7 @@ pub(in crate::storage::sqlite) fn read_with_client_keepers(
         [],
         |r| Ok((r.get(0)?, r.get(1)?)),
     ))?;
-    let store_id = StoreId(Id::new(store).map_err(|_| invalid())?);
+    let store_id = StoreId(Id::new(store).map_err(|_| inconsistent_inventory())?);
     let mut removing = BTreeMap::new();
     let mut kept = BTreeMap::new();
     let mut unsettled_operations = Vec::new();
@@ -183,7 +193,7 @@ pub(in crate::storage::sqlite) fn read_with_client_keepers(
             match text(&values[1])? {
                 "Ready" | "Claimed" | "Reconciling" => unsettled_deliveries.push(id(&values[0])?),
                 "Completed" | "Failed" | "Cancelled" | "Dismissed" => {}
-                _ => return Err(invalid()),
+                _ => return Err(inconsistent_inventory()),
             }
         }
     }
@@ -257,7 +267,7 @@ pub(in crate::storage::sqlite) fn read_with_client_keepers(
         if row.reason != Reason::PurgeControlAudit {
             client.operation_ids.push(operation.clone());
             let state: OperationState =
-                serde_json::from_value(values[2].clone()).map_err(|_| invalid())?;
+                serde_json::from_value(values[2].clone()).map_err(|_| inconsistent_inventory())?;
             if !is_terminal(state) {
                 unsettled_operations.push(OperationId(operation.clone()));
             }
@@ -287,7 +297,7 @@ pub(in crate::storage::sqlite) fn read_with_client_keepers(
         let set = match row.action {
             Action::Delete => &mut removing,
             Action::Keep => &mut kept,
-            _ => return Err(invalid()),
+            _ => return Err(inconsistent_inventory()),
         };
         owner(
             set,
@@ -312,7 +322,7 @@ pub(in crate::storage::sqlite) fn read_with_client_keepers(
                 Action::Keep,
                 Reason::SharedContent | Reason::IndependentPublication | Reason::PurgeControlAudit,
             ) => &mut kept,
-            _ => return Err(invalid()),
+            _ => return Err(inconsistent_inventory()),
         };
         let digest = text(&values[0])?.to_owned();
         let generation = text(&values[1])?.to_owned();
@@ -350,7 +360,7 @@ pub(in crate::storage::sqlite) fn read_with_client_keepers(
             "ClientStaging" => PurgeFileOwner::ClientStaging { file_id },
             // Preview attribution comes from the exact version, not a reservation ID.
             "Preview" => continue,
-            _ => return Err(invalid()),
+            _ => return Err(inconsistent_inventory()),
         };
         owner(&mut removing, file)?;
     }
@@ -365,7 +375,7 @@ pub(in crate::storage::sqlite) fn read_with_client_keepers(
     unsettled_operations.sort_by(|a, b| a.0.as_str().cmp(b.0.as_str()));
     kept_reference_versions(conn, &selection, &planning, &mut kept)?;
     if removing.keys().any(|key| kept.contains_key(key)) {
-        return Err(invalid());
+        return Err(inconsistent_inventory());
     }
     let removing_files = PurgeFileSelection {
         project_id: project.clone(),

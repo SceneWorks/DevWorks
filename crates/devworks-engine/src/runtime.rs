@@ -21,9 +21,9 @@ use crate::package_host::{HostConfig, LaunchPorts, PackageHost};
 use crate::replies::reply_consumer;
 use crate::resources::{BootReport as ResourceBootReport, Housekeeper};
 use crate::runs::{RunGate, RunSettings, RunSupervisor};
-use crate::workers::{DrainAt, Loop, StopAt, Workers};
+use crate::workers::{Commits, DrainAt, Loop, LoopState, Next, StopAt, Ticker, Workers};
 use devworks_core::context::InvocationContext;
-use devworks_core::gateway::{CommandOutcome, Gateway, QueryOutcome};
+use devworks_core::gateway::{CommandOutcome, Gateway, PreparedReceive, QueryOutcome};
 use devworks_core::ports::files::FileFault;
 use devworks_core::ports::os_notifications::{OsNotificationPermission, OsNotificationPort};
 use devworks_core::ports::process::{PowerPort, ProcessHost};
@@ -57,13 +57,16 @@ use devworks_core::services::runs::recovery::{BootRecovery, LifecycleHooks};
 use devworks_core::services::work::WorkService;
 use devworks_core::settings::view::Health;
 use std::collections::BTreeMap;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, Weak};
 use std::time::Duration;
-use tokio::sync::{Notify, watch};
+use tokio::sync::watch;
 
 /// The operation whose applied decision may leave blobs pending physical removal.
 const RELEASES_BLOBS: &str = "artifacts.delete";
+/// How long the container loop waits before retrying a stop that stayed uncertain.
+const CONTAINER_RETRY: Duration = Duration::from_secs(5);
+
 /// The operation through which the `power.keepAwake` setting changes.
 const SAVES_SETTINGS: &str = "settings.save_revision";
 /// The operation that records a reported diagnostic (its commit raises the live-log hint).
@@ -73,6 +76,17 @@ const RECORDS_DIAGNOSTIC: &str = "workspace.record_diagnostic";
 const ARCHIVES_PROJECT: &str = "projects.archive";
 /// The operation whose commit cancels an index run (the run it names is signalled at once).
 const CANCELS_INDEX_RUN: &str = "indexing.cancel";
+/// Registry families whose commits wake a background worker. Each must name a registered
+/// family (`commit_wake_families_are_registered` checks it).
+const ROUTER_FAMILY: &str = "router";
+const RUNS_FAMILY: &str = "runs";
+const JOBS_FAMILY: &str = "jobs";
+const INDEXING_FAMILY: &str = "indexing";
+/// The family the operation registry records for `operation`; an operation the registry does
+/// not know belongs to none.
+fn family_of(operation: &str) -> Option<&'static str> {
+    devworks_core::registry::find(operation).map(|descriptor| descriptor.family)
+}
 /// The query answered after a discovery scan.
 const DISCOVERS_REPOSITORIES: &str = "indexing.discover";
 
@@ -342,6 +356,11 @@ pub struct RuntimeConfig {
     pub notification_interval: Duration,
     /// Time between watcher passes (settle observed outcomes, deliver pending events).
     pub watch_interval: Duration,
+    /// Fallback between store passes of the loops that otherwise wake on a commit signal (git
+    /// cancellation, help, schema views, convention imports, project purge, container
+    /// reconciliation). An idle runtime does one pass per interval, which repairs a missed
+    /// signal and covers work that becomes due by time alone (an expired schema pin).
+    pub polling_interval: Duration,
     /// File-backed skills and role instructions (`skills.*`, `roles.*`). Absent: neither family
     /// is registered.
     pub instructions: Option<InstructionComposition>,
@@ -389,6 +408,7 @@ impl RuntimeConfig {
             providers: None,
             notification_interval: Duration::from_secs(5),
             watch_interval: Duration::from_millis(250),
+            polling_interval: Duration::from_secs(30),
             instructions: None,
         }
     }
@@ -447,14 +467,12 @@ pub struct CollectionPass {
 }
 
 struct Collector {
-    trigger: Notify,
-    stopping: AtomicBool,
+    ticker: Ticker,
     status: watch::Sender<Option<CollectionPass>>,
 }
 impl Collector {
     fn stop(&self) {
-        self.stopping.store(true, Ordering::SeqCst);
-        self.trigger.notify_one();
+        self.ticker.stop();
     }
 }
 
@@ -521,6 +539,12 @@ pub struct Runtime {
     /// iterate it; each loop is awaited only within the shutdown bound (a root stop or a
     /// cancellation one is executing may be blocked on a tree).
     workers: Workers,
+    /// Store passes the commit-woken polling loops have started (diagnostics and tests).
+    polling_passes: Arc<AtomicU64>,
+    /// The loops built on [`Commits`], by name (tests check every polling loop is among them).
+    polling_loops: Arc<Mutex<Vec<&'static str>>>,
+    /// What each polling loop has seen, with the commit and delivery counts to compare it to.
+    polling_states: PollingStates,
     /// What the usage worker's drain established, for the shutdown report.
     usage_drain: Arc<Mutex<Option<Result<crate::usage::UsageDrain, StorageError>>>>,
 }
@@ -1170,8 +1194,7 @@ async fn build(composition: Composition, core: CoreServices) -> Result<Engine, B
     let keep_awake = Arc::new(KeepAwake::new(power));
     let (status, _) = watch::channel(None);
     let collector = Arc::new(Collector {
-        trigger: Notify::new(),
-        stopping: AtomicBool::new(false),
+        ticker: Ticker::new(),
         status,
     });
     let browser_supervision = Arc::new(BrowserSupervision::default());
@@ -1571,6 +1594,46 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
     // Every background loop is registered here, at the point boot starts it; see `workers` for
     // where shutdown stops and drains each one.
     let mut workers = Workers::default();
+    // The polling loops wake on store commits, not a timer: each gets its own receiver. A store
+    // without a commit signal falls back to admitted commands (and the interval).
+    let polling_passes = Arc::new(AtomicU64::new(0));
+    let polling_loops = Arc::new(Mutex::new(Vec::new()));
+    let loop_states = Arc::new(Mutex::new(Vec::new()));
+    let (commits, polling_marks) = {
+        let stored = match store.commit_signal() {
+            Some(signal) => {
+                let (tx, rx) = watch::channel(signal.generation());
+                signal.subscribe(move |generation| {
+                    tx.send_replace(generation);
+                });
+                rx
+            }
+            None => admitter.changes.subscribe(),
+        };
+        let delivered = dispatcher.subscribe();
+        let marks = (stored.clone(), delivered.clone());
+        let (passes, fallback) = (polling_passes.clone(), config.polling_interval);
+        let (registered, states) = (polling_loops.clone(), loop_states.clone());
+        let register = move |name: &'static str| {
+            registered
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .push(name);
+            let state = LoopState::new();
+            states
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .push(state.clone());
+            Commits::new(
+                stored.clone(),
+                delivered.clone(),
+                fallback,
+                passes.clone(),
+                state,
+            )
+        };
+        (register, marks)
+    };
     let (run, stop, idle) = (dispatcher.clone(), dispatcher.clone(), dispatcher.clone());
     workers.start(
         StopAt::Work,
@@ -1678,13 +1741,31 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
         workers.start(
             StopAt::Work,
             None,
-            Arc::new(Loop::new("project purge", |mut stopped| async move {
-                while !stopped.is_set() {
-                    let (worker, flag) = (worker.clone(), stopped.clone());
-                    let _ = tokio::task::spawn_blocking(move || worker.step(&mut || flag.is_set()))
-                        .await;
-                    stopped.wait(Duration::from_millis(250)).await;
-                }
+            Arc::new(Loop::new("project purge", |stopped| {
+                let flag = stopped.clone();
+                commits("project purge").run(
+                    stopped,
+                    || true,
+                    move || {
+                        let (worker, flag) = (worker.clone(), flag.clone());
+                        async move {
+                            // A pass that settled effects looks for more at once; a held
+                            // effect (an owner still in use, which commits nothing when it
+                            // frees) is retried when its window ends.
+                            match tokio::task::spawn_blocking(move || {
+                                worker.step_pass(&mut || flag.is_set())
+                            })
+                            .await
+                            {
+                                Ok(Ok(pass)) if pass.settled > 0 && pass.retry_after.is_none() => {
+                                    Next::Now
+                                }
+                                Ok(Ok(pass)) => pass.retry_after.map_or(Next::Idle, Next::Within),
+                                _ => Next::Idle,
+                            }
+                        }
+                    },
+                )
             })),
         );
     }
@@ -1717,21 +1798,34 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
         StopAt::Work,
         None,
         Arc::new(
-            Loop::new("convention imports", |mut stopped| async move {
-                let mut after = None;
-                while !imports.is_stopped() && !stopped.is_set() {
-                    let (service, position) = (imports.clone(), after.clone());
-                    if let Ok(Ok(pass)) =
-                        tokio::task::spawn_blocking(move || service.cleanup_terminal_page(position))
+            Loop::new("convention imports", |stopped| {
+                let live = imports.clone();
+                let after = Arc::new(Mutex::new(None));
+                commits("convention imports").run(
+                    stopped,
+                    move || !live.is_stopped(),
+                    move || {
+                        let (service, after) = (imports.clone(), after.clone());
+                        let collection_wakeup = collection_wakeup.clone();
+                        async move {
+                            let position = after.lock().unwrap_or_else(|p| p.into_inner()).clone();
+                            if let Ok(Ok(pass)) = tokio::task::spawn_blocking(move || {
+                                service.cleanup_terminal_page(position)
+                            })
                             .await
-                    {
-                        after = pass.next;
-                        if pass.released {
-                            collection_wakeup.trigger.notify_one();
+                            {
+                                if pass.released {
+                                    collection_wakeup.ticker.notify();
+                                }
+                                // A full page continues with the next one at once.
+                                let more = pass.next.is_some();
+                                *after.lock().unwrap_or_else(|p| p.into_inner()) = pass.next;
+                                return more;
+                            }
+                            false
                         }
-                    }
-                    stopped.wait(Duration::from_secs(1)).await;
-                }
+                    },
+                )
             })
             .on_stop(move || stop.stop()),
         ),
@@ -1742,8 +1836,10 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
             StopAt::Work,
             None,
             Arc::new(
-                Loop::new("git", |stopped| crate::git::run(service.clone(), stopped))
-                    .on_stop(move || stop.stop()),
+                Loop::new("git", |stopped| {
+                    crate::git::run(service.clone(), stopped, commits("git"))
+                })
+                .on_stop(move || stop.stop()),
             ),
         );
     }
@@ -1841,24 +1937,37 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
             StopAt::Work,
             None,
             Arc::new(
-                Loop::new("help maintenance", |mut stopped| async move {
-                    while !service.is_stopped() && !stopped.is_set() {
-                        let current = service.clone();
-                        let target = command.clone();
-                        let _ = tokio::task::spawn_blocking(move || {
-                            let _ = current.cleanup();
-                            if let Ok(Some((context, frame))) = current.maintenance_request() {
-                                let _ = target.command_with(
-                                    &context,
-                                    "help.generate_capability_docs",
-                                    &frame,
-                                    WriteOptions::command(),
-                                );
+                Loop::new("help maintenance", |stopped| {
+                    let live = service.clone();
+                    commits("help maintenance").run(
+                        stopped,
+                        move || !live.is_stopped(),
+                        move || {
+                            let current = service.clone();
+                            let target = command.clone();
+                            async move {
+                                // A cleanup pass is bounded: one that removed drafts runs again.
+                                matches!(
+                                    tokio::task::spawn_blocking(move || {
+                                        let removed = current.cleanup();
+                                        if let Ok(Some((context, frame))) =
+                                            current.maintenance_request()
+                                        {
+                                            let _ = target.command_with(
+                                                &context,
+                                                "help.generate_capability_docs",
+                                                &frame,
+                                                WriteOptions::command(),
+                                            );
+                                        }
+                                        removed
+                                    })
+                                    .await,
+                                    Ok(Ok(removed)) if removed > 0
+                                )
                             }
-                        })
-                        .await;
-                        stopped.wait(Duration::from_secs(1)).await;
-                    }
+                        },
+                    )
                 })
                 .on_stop(move || stop.stop()),
             ),
@@ -1870,14 +1979,28 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
             StopAt::Work,
             None,
             Arc::new(
-                Loop::new("schema view cleanup", |mut stopped| async move {
-                    while !service.is_stopped() && !stopped.is_set() {
-                        let current = service.clone();
-                        let _ =
-                            tokio::task::spawn_blocking(move || current.cleanup_retained_views())
-                                .await;
-                        stopped.wait(Duration::from_secs(1)).await;
-                    }
+                Loop::new("schema view cleanup", |stopped| {
+                    let live = service.clone();
+                    commits("schema view cleanup").run(
+                        stopped,
+                        move || !live.is_stopped(),
+                        move || {
+                            let current = service.clone();
+                            async move {
+                                // Each pass is bounded: one that removed rows runs again;
+                                // otherwise the next pin expiry is the next time work is due.
+                                match tokio::task::spawn_blocking(move || current.retention_pass())
+                                    .await
+                                {
+                                    Ok(Ok(pass)) if pass.removed > 0 => Next::Now,
+                                    Ok(Ok(pass)) => {
+                                        pass.next_expiry.map_or(Next::Idle, Next::Within)
+                                    }
+                                    _ => Next::Idle,
+                                }
+                            }
+                        },
+                    )
                 })
                 .on_stop(move || stop.stop()),
             ),
@@ -1888,19 +2011,32 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
         workers.start(
             StopAt::Work,
             None,
-            Arc::new(Loop::new(
-                "container reconciliation",
-                |mut stopped| async move {
-                    while !stopped.is_set() {
+            Arc::new(Loop::new("container reconciliation", |stopped| {
+                commits("container reconciliation").run(
+                    stopped,
+                    || true,
+                    move || {
                         let current = service.clone();
-                        let _ = tokio::task::spawn_blocking(move || {
-                            current.reconcile_revoked_agent_work(Duration::from_secs(30))
-                        })
-                        .await;
-                        stopped.wait(Duration::from_secs(1)).await;
-                    }
-                },
-            )),
+                        async move {
+                            // An uncertain stop is retried by a later pass: committing the retry
+                            // wakes nothing by itself, so ask for one.
+                            match tokio::task::spawn_blocking(move || {
+                                current.reconcile_revoked_agent_work(Duration::from_secs(30))
+                            })
+                            .await
+                            {
+                                Ok(report)
+                                    if !report.uncertain.is_empty()
+                                        || report.read_error.is_some() =>
+                                {
+                                    Next::Within(CONTAINER_RETRY)
+                                }
+                                _ => Next::Idle,
+                            }
+                        }
+                    },
+                )
+            })),
         );
     }
     if let Some(worker) = &embedding_probes {
@@ -2033,6 +2169,12 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
         indexing: index_supervisor,
         workers,
         usage_drain,
+        polling_passes,
+        polling_loops,
+        polling_states: PollingStates {
+            states: loop_states,
+            marks: polling_marks,
+        },
     })
 }
 
@@ -2059,25 +2201,30 @@ async fn collect(
     interval: Duration,
 ) {
     let mut pass = 0;
-    while !collector.stopping.load(Ordering::SeqCst) {
-        pass += 1;
-        let (svc, st) = (artifacts.clone(), store.clone());
-        let (blobs, derived) =
-            tokio::task::spawn_blocking(move || (svc.collect(&*st), svc.collect_derived()))
-                .await
-                .unwrap_or_else(|_| {
-                    (
-                        Err(panicked("artifact collection")),
-                        Err(FileFault::Io("artifact collection panicked".into())),
-                    )
-                });
-        collector.status.send_replace(Some(CollectionPass {
-            pass,
-            blobs,
-            derived,
-        }));
-        let _ = dispatch::first(collector.trigger.notified(), tokio::time::sleep(interval)).await;
-    }
+    let collector = &*collector;
+    collector
+        .ticker
+        .run(interval, || {
+            pass += 1;
+            let (svc, st, n) = (artifacts.clone(), store.clone(), pass);
+            async move {
+                let (blobs, derived) =
+                    tokio::task::spawn_blocking(move || (svc.collect(&*st), svc.collect_derived()))
+                        .await
+                        .unwrap_or_else(|_| {
+                            (
+                                Err(panicked("artifact collection")),
+                                Err(FileFault::Io("artifact collection panicked".into())),
+                            )
+                        });
+                collector.status.send_replace(Some(CollectionPass {
+                    pass: n,
+                    blobs,
+                    derived,
+                }));
+            }
+        })
+        .await;
 }
 
 /// One independently attempted durable provider call.
@@ -2101,6 +2248,12 @@ pub struct NativeTurnProgress {
     pub continuation: Option<devworks_core::protocol::provider::ArtifactRef>,
 }
 
+/// The commit-woken loops' progress and the commit and delivery counts it is compared to.
+struct PollingStates {
+    states: Arc<Mutex<Vec<Arc<LoopState>>>>,
+    marks: (watch::Receiver<u64>, watch::Receiver<u64>),
+}
+
 impl Runtime {
     /// The handles agent turns run on.
     pub fn turn_engine(&self) -> &crate::turn_engine::TurnEngine {
@@ -2108,6 +2261,32 @@ impl Runtime {
     }
     pub fn mcp_service(&self) -> Option<Arc<devworks_core::services::mcp::McpClientService>> {
         self.use_cases.mcp_service()
+    }
+    /// Store passes started by the loops that wake on a commit signal, with their fallback
+    /// interval ([`RuntimeConfig::polling_interval`]); constant while the runtime is idle.
+    pub fn polling_passes(&self) -> u64 {
+        self.polling_passes.load(Ordering::SeqCst)
+    }
+    /// Whether every commit-woken loop is waiting and has seen every store commit and finished
+    /// delivery so far, so none has a wake or a pass pending. A burst of commits (boot's Help
+    /// ingestion) leaves loops with a coalesced pass up to five seconds out; an idle check
+    /// starts only after this holds.
+    pub fn polling_settled(&self) -> bool {
+        let (stored, delivered) = &self.polling_states.marks;
+        let (stored, delivered) = (*stored.borrow(), *delivered.borrow());
+        self.polling_states
+            .states
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .iter()
+            .all(|state| state.caught_up(stored, delivered))
+    }
+    /// Names of the background loops that wait on store commits instead of a private timer.
+    pub fn polling_loops(&self) -> Vec<&'static str> {
+        self.polling_loops
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .clone()
     }
     /// What boot recovery established.
     pub fn report(&self) -> &BootReport {
@@ -2543,7 +2722,7 @@ impl Runtime {
     /// Requests a collection pass now, for a change made outside the runtime's commands that can
     /// let a blob go (for example a released backup pin).
     pub fn request_collection(&self) {
-        self.collector.trigger.notify_one();
+        self.collector.ticker.notify();
     }
 
     pub fn query(&self, ctx: &InvocationContext, operation: &str, raw: &[u8]) -> QueryOutcome {
@@ -2743,6 +2922,29 @@ impl Runtime {
         options: WriteOptions,
     ) -> CommandOutcome {
         self.admitter.command_with(ctx, operation, raw, options)
+    }
+
+    /// [`Self::command_with`] for a caller that can await. An `agents.receive` with nothing to
+    /// read yet waits as a suspended task: it holds no thread, ends at once on cancellation and
+    /// looks again when a command commits or every five seconds. Any other operation runs as
+    /// [`Self::command_with`] does. Callers that cannot await keep [`Self::command_with`], which
+    /// parks the calling thread for the wait.
+    pub async fn command_awaiting(
+        &self,
+        ctx: &InvocationContext,
+        operation: &str,
+        raw: &[u8],
+        options: WriteOptions,
+    ) -> CommandOutcome {
+        if operation != "agents.receive" {
+            return self.command_with(ctx, operation, raw, options);
+        }
+        let (admitter, call_ctx, bytes) = (self.admitter.clone(), ctx.clone(), raw.to_vec());
+        let started = blocking(move || admitter.begin_receive(&call_ctx, &bytes, options)).await;
+        match started {
+            ReceiveStart::Answered(outcome) => outcome,
+            ReceiveStart::Waiting(wait) => self.admitter.clone().finish_receive(wait).await,
+        }
     }
 
     /// The jobs service the `jobs.*` use cases, the scheduler and the lifecycle hooks share.
@@ -3089,6 +3291,62 @@ pub(crate) struct Admitter {
     handle: tokio::runtime::Handle,
 }
 
+/// One pending tool call after the synchronous part of dispatch.
+pub(crate) enum PendingCall {
+    Done(ToolDispatch),
+    /// A waiting `agents.receive`, parked without a thread.
+    Parked(Box<crate::tool_turn::ParkedReceive>),
+}
+
+/// Runs store work on a blocking thread and passes a panic on to the caller.
+async fn blocking<T: Send + 'static>(work: impl FnOnce() -> T + Send + 'static) -> T {
+    match tokio::task::spawn_blocking(work).await {
+        Ok(value) => value,
+        Err(error) => std::panic::resume_unwind(error.into_panic()),
+    }
+}
+
+/// Drives every future to completion on the calling task and returns the outputs in order.
+pub(crate) async fn join_all<'a, T>(
+    mut futures: Vec<std::pin::Pin<Box<dyn std::future::Future<Output = T> + Send + 'a>>>,
+) -> Vec<T> {
+    let mut outputs: Vec<Option<T>> = futures.iter().map(|_| None).collect();
+    std::future::poll_fn(|cx| {
+        let mut pending = false;
+        for (future, output) in futures.iter_mut().zip(outputs.iter_mut()) {
+            if output.is_none() {
+                match future.as_mut().poll(cx) {
+                    std::task::Poll::Ready(value) => *output = Some(value),
+                    std::task::Poll::Pending => pending = true,
+                }
+            }
+        }
+        if pending {
+            std::task::Poll::Pending
+        } else {
+            std::task::Poll::Ready(())
+        }
+    })
+    .await;
+    outputs.into_iter().flatten().collect()
+}
+
+/// Where a receive stands after its first, non-blocking look.
+#[allow(clippy::large_enum_variant)] // the reply is returned at once; boxing it buys nothing
+pub(crate) enum ReceiveStart {
+    Answered(CommandOutcome),
+    Waiting(Box<ReceiveWait>),
+}
+
+/// A receive waiting for a message. It holds no thread; dropping it abandons the wait.
+pub(crate) struct ReceiveWait {
+    ctx: InvocationContext,
+    raw: Vec<u8>,
+    prepared: PreparedReceive,
+    /// Keeps the wait registered for shutdown to cancel.
+    guard: ReceiveWaitGuard,
+}
+
 struct ReceiveWaitGuard {
     id: u64,
     waiters: Arc<Mutex<BTreeMap<u64, Cancellation>>>,
@@ -3259,7 +3517,129 @@ impl Admitter {
                     .command_with(&self.gateway(), ctx, operation, raw, options.clone())
             })?
         };
-        let (committed, released) = match &outcome {
+        self.after_command(operation, raw, &outcome, wake_resumes);
+        Some(outcome)
+    }
+
+    /// Phase one of an `agents.receive` that holds no thread: admits it, looks once and either
+    /// answers or returns the wait for the caller to await ([`Self::finish_receive`]).
+    pub(crate) fn begin_receive(
+        &self,
+        ctx: &InvocationContext,
+        raw: &[u8],
+        mut options: WriteOptions,
+    ) -> ReceiveStart {
+        let token = options
+            .cancellation
+            .get_or_insert_with(Cancellation::new)
+            .clone();
+        let guard = {
+            let open = self.admission.read().unwrap_or_else(|p| p.into_inner());
+            if *open {
+                return ReceiveStart::Answered(closing_reply(
+                    raw,
+                    self.ids.next_id(devworks_core::ports::IdKind::Correlation),
+                ));
+            }
+            let id = self.next_receive_waiter.fetch_add(1, Ordering::Relaxed);
+            self.receive_waiters
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .insert(id, token);
+            ReceiveWaitGuard {
+                id,
+                waiters: self.receive_waiters.clone(),
+            }
+        };
+        match self
+            .use_cases
+            .start_receive(&self.gateway(), ctx, raw, options)
+        {
+            Ok(prepared) if prepared.ticket().is_some() => {
+                ReceiveStart::Waiting(Box::new(ReceiveWait {
+                    ctx: ctx.clone(),
+                    raw: raw.to_vec(),
+                    prepared,
+                    guard,
+                }))
+            }
+            prepared => {
+                drop(guard);
+                ReceiveStart::Answered(self.decide_receive(ctx, raw, prepared))
+            }
+        }
+    }
+
+    /// Phase two: waits without holding a thread for a signal, a cancellation or the recheck
+    /// interval, looks again, and decides once nothing is left to wait for.
+    pub(crate) async fn finish_receive(self: Arc<Self>, wait: Box<ReceiveWait>) -> CommandOutcome {
+        let ReceiveWait {
+            ctx,
+            raw,
+            mut prepared,
+            guard,
+        } = *wait;
+        while let Some(ticket) = prepared.ticket() {
+            let (wake, generation, pause) =
+                (ticket.wake.clone(), ticket.generation, ticket.pause());
+            // A timeout is the recheck interval or the deadline; either ends in a new look.
+            let _ = tokio::time::timeout(pause, wake.changed_after(generation)).await;
+            // Each look reads the store, so it runs on a blocking thread.
+            let (admitter, look_ctx) = (self.clone(), ctx.clone());
+            let (back, result) = blocking(move || {
+                let result = admitter.use_cases.recheck_receive(
+                    &admitter.gateway(),
+                    &look_ctx,
+                    &mut prepared,
+                );
+                (prepared, result)
+            })
+            .await;
+            if let Err(outcome) = result {
+                return outcome;
+            }
+            prepared = back;
+        }
+        drop(guard);
+        blocking(move || self.decide_receive(&ctx, &raw, Ok(prepared))).await
+    }
+
+    /// The short decision of a receive under the admission fence, then its commit wakeups.
+    fn decide_receive(
+        &self,
+        ctx: &InvocationContext,
+        raw: &[u8],
+        prepared: Result<PreparedReceive, CommandOutcome>,
+    ) -> CommandOutcome {
+        let open = self.admission.read().unwrap_or_else(|p| p.into_inner());
+        let outcome = if *open {
+            closing_reply(
+                raw,
+                self.ids.next_id(devworks_core::ports::IdKind::Correlation),
+            )
+        } else {
+            match prepared {
+                Ok(prepared) => self
+                    .use_cases
+                    .finish_receive(&self.gateway(), ctx, prepared),
+                Err(outcome) => outcome,
+            }
+        };
+        drop(open);
+        self.after_command("agents.receive", raw, &outcome, true);
+        outcome
+    }
+
+    /// What a command's outcome sets in motion once it is known: the state-change count, the
+    /// workers a commit wakes and the follow-up work some operations start.
+    fn after_command(
+        &self,
+        operation: &str,
+        raw: &[u8],
+        outcome: &CommandOutcome,
+        wake_resumes: bool,
+    ) {
+        let (committed, released) = match outcome {
             Ok(CommandReply::Recorded { receipt, .. }) => (
                 true,
                 matches!(receipt.decision, DomainDecision::Applied { .. }),
@@ -3269,7 +3649,7 @@ impl Admitter {
         };
         // A replayed receipt or a refusal records nothing new in domain state, so it cannot
         // unblock a waiter; counting it would wake the caller that submitted it.
-        let changed = match &outcome {
+        let changed = match outcome {
             Ok(CommandReply::Recorded {
                 receipt, replayed, ..
             }) => !replayed && !matches!(receipt.decision, DomainDecision::Refused { .. }),
@@ -3279,10 +3659,11 @@ impl Admitter {
         if changed {
             self.changes.send_modify(|n| *n = n.wrapping_add(1));
         }
+        let family = family_of(operation);
         if committed {
             self.dispatcher.wakeup().wake();
             self.usage.notify();
-            if operation.starts_with("router.")
+            if family == Some(ROUTER_FAMILY)
                 && let Some(worker) = &self.prices
             {
                 worker.notify();
@@ -3293,14 +3674,14 @@ impl Admitter {
             if wake_resumes && let Some(resumes) = self.resumes.get().and_then(Weak::upgrade) {
                 resumes.notify();
             }
-            if operation == "sessions.end" || operation.starts_with("runs.") {
+            if operation == "sessions.end" || family == Some(RUNS_FAMILY) {
                 self.evals.notify();
             }
-            if operation.starts_with("runs.") {
+            if family == Some(RUNS_FAMILY) {
                 // A stop to execute, a stop to signal or a new activation to claim.
                 self.runs.notify();
             }
-            if (operation.starts_with("jobs.") || operation == ARCHIVES_PROJECT)
+            if (family == Some(JOBS_FAMILY) || operation == ARCHIVES_PROJECT)
                 && let Some(s) = self.scheduler.get().and_then(Weak::upgrade)
             {
                 // A run to start, a cancellation to execute or a changed next occurrence.
@@ -3308,7 +3689,7 @@ impl Admitter {
             }
         }
         if released && operation == RELEASES_BLOBS {
-            self.collector.trigger.notify_one();
+            self.collector.ticker.notify();
         }
         if committed && operation == RECORDS_DIAGNOSTIC {
             self.diagnostics.committed();
@@ -3329,7 +3710,7 @@ impl Admitter {
         }
         if committed
             && let Some(ix) = &self.indexing
-            && (operation.starts_with("indexing.") || operation == "repositories.remove_index")
+            && (family == Some(INDEXING_FAMILY) || operation == "repositories.remove_index")
         {
             if operation == CANCELS_INDEX_RUN
                 && let Some(run) = cancelled_run(raw)
@@ -3358,7 +3739,6 @@ impl Admitter {
                 |s| ka.refresh(s.configuration()),
             );
         }
-        Some(outcome)
     }
 }
 impl crate::package_host::broker::GatewayCalls for Admitter {
@@ -3476,6 +3856,30 @@ pub(crate) fn skill_adoption_payload(
         "transitions": transitions,
         "conflicts": after.map(|s| s.conflicts.clone()).unwrap_or_default(),
     })
+}
+
+#[cfg(test)]
+mod commit_wake_tests {
+    use super::{INDEXING_FAMILY, JOBS_FAMILY, ROUTER_FAMILY, RUNS_FAMILY, family_of};
+    use devworks_core::registry;
+
+    #[test]
+    fn commit_wake_families_are_registered() {
+        for family in [ROUTER_FAMILY, RUNS_FAMILY, JOBS_FAMILY, INDEXING_FAMILY] {
+            assert!(registry::families().contains(&family), "{family}");
+        }
+    }
+
+    /// The family check replaced a name-prefix check, so every operation's name must start with
+    /// its family; otherwise the two would select different operations.
+    #[test]
+    fn every_operation_name_starts_with_its_family() {
+        for descriptor in registry::all() {
+            let prefix = descriptor.name.split('.').next();
+            assert_eq!(prefix, Some(descriptor.family), "{}", descriptor.name);
+            assert_eq!(family_of(descriptor.name), Some(descriptor.family));
+        }
+    }
 }
 
 #[cfg(test)]

@@ -174,6 +174,9 @@ fn word_part(c: char) -> bool {
     c.is_alphanumeric() || matches!(c, '_' | '@' | '#' | '$')
 }
 
+/// Lexes SQL source (strings, comments, quoted and bare identifiers, punctuation) for the code
+/// index. It is not a search tokenizer; Knowledge and Conventions each keep their own for text
+/// search (see `conventions::indexing::rank::tokens`).
 fn tokenize(text: &str) -> Vec<Tok> {
     let b = text.as_bytes();
     let mut toks = Vec::new();

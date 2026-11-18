@@ -103,4 +103,28 @@ impl Input {
             Self::RepositoryDependencies(_) => Mode::Query,
         }
     }
+    /// The `/body` members of this input, without the `kind` discriminator.
+    pub fn body(&self) -> Result<serde_json::Value, serde_json::Error> {
+        match self {
+            Self::Search(i) => serde_json::to_value(i),
+            Self::Architecture(i) => serde_json::to_value(i),
+            Self::Dependency(i) => serde_json::to_value(i),
+            Self::Impact(i) => serde_json::to_value(i),
+            Self::Source(i) => serde_json::to_value(i),
+            Self::Traverse(i) => serde_json::to_value(i),
+            Self::GraphScopeStatus(i) => serde_json::to_value(i),
+            Self::Overview(i) => serde_json::to_value(i),
+            Self::NodesByFile(i) => serde_json::to_value(i),
+            Self::NodeDetail(i) => serde_json::to_value(i),
+            Self::SetTrust(i) => serde_json::to_value(i),
+            Self::FileImpact(i) => serde_json::to_value(i),
+            Self::GraphSchema(i) => serde_json::to_value(i),
+            Self::CallPath(i) => serde_json::to_value(i),
+            Self::DataLineage(i) => serde_json::to_value(i),
+            Self::Consumers(i) => serde_json::to_value(i),
+            Self::Publishers(i) => serde_json::to_value(i),
+            Self::Snippet(i) => serde_json::to_value(i),
+            Self::RepositoryDependencies(i) => serde_json::to_value(i),
+        }
+    }
 }

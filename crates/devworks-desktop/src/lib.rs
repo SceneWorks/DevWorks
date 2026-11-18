@@ -47,6 +47,9 @@ pub mod decision_ops;
 pub mod decisions_screen;
 pub mod embedding_spaces_screen;
 pub mod files;
+pub mod frame;
+#[cfg(test)]
+mod frame_golden;
 pub mod graph_ops;
 pub mod graph_screen;
 pub mod help_ops;

@@ -277,7 +277,7 @@ fn approved_operations_wait_for_independent_pause_without_minting_a_refusal_rece
     let h = Harness::new();
     runtime().block_on(async {
         let store = h.open();
-        seed_root(&h, "root");
+        seed_root(&*store, "root");
         rusqlite::Connection::open(h.root.join("workspace.sqlite"))
             .unwrap()
             .execute("UPDATE work_items SET kind='issue' WHERE id='root'", [])
@@ -546,30 +546,73 @@ impl devworks_engine::approvals::ResumeAdmission for NormalAdmission {
 #[test]
 fn paused_rows_at_the_head_do_not_starve_ready_approvals_beyond_one_page() {
     let h = Harness::new();
-    runtime().block_on(async{
-        let store=h.open();seed_root(&h,"root-0");
-        let db=rusqlite::Connection::open(h.root.join("workspace.sqlite")).unwrap();
-        db.busy_timeout(Duration::from_secs(5)).unwrap();
-        db.execute("UPDATE work_items SET kind='issue' WHERE id='root-0'",[]).unwrap();
-        for n in 1..66{db.execute("INSERT INTO work_items(id,project_id,kind,parent_feature_id,associated_feature_id,status_id,title,priority,manual_order,revision,scope_revision,created_at,brief_json) VALUES(?1,'project-a','issue',NULL,NULL,NULL,?1,1,0,1,1,1,'{}')",[format!("root-{n}")]).unwrap();}
-        drop(db);
-        let (user,agent)=principals(&*store);let app=Arc::new(boot(composition(&h,store.clone())).await.unwrap());app.approval_resumes().drain().await;
-        let mut records=Vec::new();
-        for n in 0..66{
-            let root=RootId(id(&format!("root-{n}")));
-            let ctx=agent.clone().with_lineage(Some(ProjectId(id("project-a"))),Some(root.clone()),None);
-            let job=draft(&h,&app,&ctx,&format!("Paged reviewed job {n}"),true);
-            let proposal=propose_enable(&h,&app,&ctx,&job,true);
-            value(app.record_human_decision(&user,&decision(&h,&proposal)).unwrap());
-            records.push((proposal["id"].as_str().unwrap().to_owned(),root,job));
+    runtime().block_on(async {
+        let store = h.open();
+        let issues: Vec<_> = (0..66)
+            .map(|n| {
+                devworks_test_support::seed::WorkSeed::issue(&format!("root-{n}"), "project-a")
+            })
+            .collect();
+        devworks_test_support::seed::rows(
+            &*store,
+            &[devworks_test_support::seed::ProjectSeed::new("project-a")
+                .name("A")
+                .created_at(0)],
+            &issues,
+        )
+        .unwrap();
+        rusqlite::Connection::open(h.root.join("workspace.sqlite"))
+            .unwrap()
+            .execute(
+                "UPDATE work_items SET kind='issue' WHERE id LIKE 'root-%'",
+                [],
+            )
+            .unwrap();
+        let (user, agent) = principals(&*store);
+        let app = Arc::new(boot(composition(&h, store.clone())).await.unwrap());
+        app.approval_resumes().drain().await;
+        let mut records = Vec::new();
+        for n in 0..66 {
+            let root = RootId(id(&format!("root-{n}")));
+            let ctx = agent.clone().with_lineage(
+                Some(ProjectId(id("project-a"))),
+                Some(root.clone()),
+                None,
+            );
+            let job = draft(&h, &app, &ctx, &format!("Paged reviewed job {n}"), true);
+            let proposal = propose_enable(&h, &app, &ctx, &job, true);
+            value(
+                app.record_human_decision(&user, &decision(&h, &proposal))
+                    .unwrap(),
+            );
+            records.push((proposal["id"].as_str().unwrap().to_owned(), root, job));
         }
-        records.sort_by(|a,b|a.0.cmp(&b.0));
-        let waiting:Vec<_>=records.iter().take(65).map(|r|r.1.clone()).collect();
-        write(&*store,move|tx|{for root in waiting{tx.runs().insert_root_control(&StoredRootControl{desired:DesiredExecution::Paused,..StoredRootControl::initial(root)})?;}Ok(())}).unwrap();
-        let driver=devworks_engine::approvals::ResumeDispatcher::new(store.clone(),app.approvals().clone(),Arc::new(NormalAdmission(app.clone())));
-        let report=driver.tick().await.unwrap();assert_eq!(report.visited,66);assert_eq!(report.waiting,65);assert_eq!(report.submitted,1);
-        for (index,(_,_,job)) in records.iter().enumerate(){assert_eq!(enabled(&*store,job),index==65);}
-        driver.drain().await;app.shutdown().await;
+        records.sort_by(|a, b| a.0.cmp(&b.0));
+        let waiting: Vec<_> = records.iter().take(65).map(|r| r.1.clone()).collect();
+        write(&*store, move |tx| {
+            for root in waiting {
+                tx.runs().insert_root_control(&StoredRootControl {
+                    desired: DesiredExecution::Paused,
+                    ..StoredRootControl::initial(root)
+                })?;
+            }
+            Ok(())
+        })
+        .unwrap();
+        let driver = devworks_engine::approvals::ResumeDispatcher::new(
+            store.clone(),
+            app.approvals().clone(),
+            Arc::new(NormalAdmission(app.clone())),
+        );
+        let report = driver.tick().await.unwrap();
+        assert_eq!(report.visited, 66);
+        assert_eq!(report.waiting, 65);
+        assert_eq!(report.submitted, 1);
+        for (index, (_, _, job)) in records.iter().enumerate() {
+            assert_eq!(enabled(&*store, job), index == 65);
+        }
+        driver.drain().await;
+        app.shutdown().await;
     });
 }
 
@@ -602,7 +645,7 @@ fn pause_between_preparation_and_gateway_rolls_back_without_poisoning_the_saved_
     let h = Harness::new();
     runtime().block_on(async {
         let store = h.open();
-        seed_root(&h, "root");
+        seed_root(&*store, "root");
         rusqlite::Connection::open(h.root.join("workspace.sqlite")).unwrap()
             .execute("UPDATE work_items SET kind='issue' WHERE id='root'", []).unwrap();
         let (user, agent) = principals(&*store);

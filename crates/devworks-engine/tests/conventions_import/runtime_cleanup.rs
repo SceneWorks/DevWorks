@@ -265,15 +265,9 @@ fn runtime_cancel_after_staging_releases_private_blobs_automatically_without_rew
 {
     let h = Harness::new();
     let (started, waiting) = std::sync::mpsc::sync_channel(1);
-    let files = Arc::new(GateFiles {
-        native: NativeArtifactFiles::new(h.root.clone(), h.root.with_extension("import-cache")),
-        calls: std::sync::atomic::AtomicUsize::new(0),
-        started,
-        release: std::sync::Mutex::new(false),
-        changed: std::sync::Condvar::new(),
-    });
+    let files = GateFiles::new(&h, started, false);
     let _release = ReleaseGate(files.clone());
-    let f = Fx::with_files(h, files.clone());
+    let f = Fx::with_files(h, files.files.clone());
     let input = f.source(&serde_json::to_vec(&manifest(3)).unwrap());
     runtime().block_on(async {
         let engine = boot(composition(&f.h, f.store.clone(), f.files.clone())).await.unwrap();
@@ -293,8 +287,7 @@ fn runtime_cancel_after_staging_releases_private_blobs_automatically_without_rew
         let frame = json!({"protocol":"1.0-draft.1","schemaRevision":3,"mode":"Command","requestKey":"cancel-real-runtime","body":{"kind":"conventions.retire","operationId":op,"expectedRevision":saved.revision.to_string(),"scope":{"kind":"Workspace"}}});
         let reply = engine.command(&f.ctx, "conventions.retire", frame.to_string().as_bytes()).unwrap();
         assert!(matches!(reply, CommandReply::Recorded { ref receipt, .. } if matches!(receipt.decision, DomainDecision::Applied { .. })), "{reply:?}");
-        *files.release.lock().unwrap() = true;
-        files.changed.notify_all();
+        files.open();
         until("actual cancelled owner settles and maintenance releases staged captures", || {
             read(&*f.store, |r| r.operations().operation(&op)).is_some_and(|o| o.state == OperationState::CancelledBeforeDispatch)
                 && captures(&*f.store, &op).is_empty()

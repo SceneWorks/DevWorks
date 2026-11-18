@@ -1,8 +1,9 @@
 //! Durable allocation ownership and record-level fences. Eligibility stays in the work service.
 use super::conn::db;
 use super::repos::Unit;
+use super::support::{conflict, id_of, invalid, stored_name};
 use devworks_core::ports::storage::*;
-use devworks_core::protocol::{ActorId, Id, ProjectId, Revision, RevisionDimension, RootId};
+use devworks_core::protocol::{ActorId, Id, ProjectId, RevisionDimension, RootId};
 use rusqlite::{Connection, OptionalExtension, Row, params};
 
 const COLUMNS: &str = "id,project_id,root_id,work_id,kind,queue_key,owner_id,session_id,ingress_namespace,invocation_id,state,parent_feature_id,execution_id,fence,expires_at,revision,work_revision,root_control_revision,queue_revision,created_at,feature_task_set_revision";
@@ -24,14 +25,6 @@ fn row(row: &Row<'_>) -> rusqlite::Result<Raw> {
         row.get(20)?,
     ))
 }
-fn invalid(message: &str) -> StorageError {
-    StorageError::InvalidRecord(message.into())
-}
-fn id(value: String) -> Result<Id, StorageError> {
-    Id::new(value).map_err(|_| {
-        StorageError::unavailable(Unavailable::Corrupt, "invalid stored allocation identifier")
-    })
-}
 fn claim(
     (text, num, feature_task_set_revision): Raw,
 ) -> Result<StoredAllocationClaim, StorageError> {
@@ -42,19 +35,19 @@ fn claim(
             .ok_or_else(|| StorageError::unavailable(Unavailable::Corrupt, "NULL allocation field"))
     };
     Ok(StoredAllocationClaim {
-        id: id(need(next())?)?,
-        project_id: ProjectId(id(need(next())?)?),
-        root_id: RootId(id(need(next())?)?),
-        work_id: id(need(next())?)?,
+        id: id_of(need(next())?)?,
+        project_id: ProjectId(id_of(need(next())?)?),
+        root_id: RootId(id_of(need(next())?)?),
+        work_id: id_of(need(next())?)?,
         kind: need(next())?,
         queue_key: need(next())?,
-        owner_id: ActorId(id(need(next())?)?),
-        session_id: next().map(id).transpose()?,
-        ingress_namespace: id(need(next())?)?,
-        invocation_id: id(need(next())?)?,
-        state: need(next())?,
-        parent_feature_id: next().map(id).transpose()?,
-        execution_id: next().map(id).transpose()?,
+        owner_id: ActorId(id_of(need(next())?)?),
+        session_id: next().map(id_of).transpose()?,
+        ingress_namespace: id_of(need(next())?)?,
+        invocation_id: id_of(need(next())?)?,
+        state: stored_name("allocation state", &need(next())?, ClaimState::parse)?,
+        parent_feature_id: next().map(id_of).transpose()?,
+        execution_id: next().map(id_of).transpose()?,
         fence: num[0],
         expires_at_ms: num[1],
         revision: num[2],
@@ -140,9 +133,6 @@ pub(super) fn invocation(
     .into_iter()
     .next())
 }
-fn live(state: &str) -> bool {
-    matches!(state, "Active" | "Transferred" | "Yielding")
-}
 fn check(c: &StoredAllocationClaim) -> Result<(), StorageError> {
     if c.fence < 1
         || c.revision < 1
@@ -155,25 +145,13 @@ fn check(c: &StoredAllocationClaim) -> Result<(), StorageError> {
     {
         return Err(invalid("allocation counters and lease are invalid"));
     }
-    if !matches!(
-        c.state.as_str(),
-        "Active" | "Transferred" | "Yielding" | "Released" | "Expired" | "Yielded" | "Invalidated"
-    ) || !matches!(c.kind.as_str(), "feature" | "task" | "issue")
+    if !matches!(c.kind.as_str(), "feature" | "task" | "issue")
         || c.queue_key.is_empty()
         || c.queue_key.len() > 160
     {
-        return Err(invalid("invalid allocation state, kind or queue"));
+        return Err(invalid("invalid allocation kind or queue"));
     }
     Ok(())
-}
-fn conflict(c: &StoredAllocationClaim, expected: i64) -> Result<StorageError, StorageError> {
-    Ok(StorageError::conflict(
-        RevisionDimension::Claim,
-        "allocation_claim",
-        c.id.clone(),
-        Revision::new(expected).map_err(|_| invalid("expected claim revision is positive"))?,
-        Revision::new(c.revision).map_err(|_| invalid("claim revision is positive"))?,
-    ))
 }
 fn source(unit: &Unit<'_>, c: &StoredAllocationClaim, original: bool) -> Result<(), StorageError> {
     let work = unit
@@ -246,8 +224,8 @@ fn duplicate(
     c: &StoredAllocationClaim,
     exclude: Option<&Id>,
 ) -> Result<(), StorageError> {
-    let execution_slot =
-        c.queue_key == PROJECT_QUEUE && matches!(c.state.as_str(), "Transferred" | "Yielding");
+    let execution_slot = c.queue_key == PROJECT_QUEUE
+        && matches!(c.state, ClaimState::Transferred | ClaimState::Yielding);
     let collision:Option<String>=db(conn.query_row(
         "SELECT id FROM allocation_claims WHERE id<>?1 AND ((state IN ('Active','Transferred','Yielding') AND work_id=?2) OR (?4 AND project_id=?3 AND queue_key='project' AND state IN ('Transferred','Yielding'))) LIMIT 1",
         params![exclude.map_or("",Id::as_str),c.work_id.as_str(),c.project_id.0.as_str(),execution_slot],|row|row.get(0),
@@ -263,7 +241,7 @@ fn duplicate(
 
 pub(super) fn insert(unit: &mut Unit<'_>, c: &StoredAllocationClaim) -> Result<(), StorageError> {
     check(c)?;
-    if c.state != "Active"
+    if c.state != ClaimState::Active
         || c.revision != 1
         || c.execution_id.is_some()
         || c.expires_at_ms <= unit.now_ms()
@@ -296,7 +274,7 @@ pub(super) fn insert(unit: &mut Unit<'_>, c: &StoredAllocationClaim) -> Result<(
     if c.fence <= previous {
         return Err(invalid("allocation fence must advance prior ownership"));
     }
-    db(unit.conn.execute("INSERT INTO allocation_claims(id,project_id,root_id,work_id,kind,queue_key,owner_id,session_id,ingress_namespace,invocation_id,fence,expires_at,state,revision,work_revision,parent_feature_id,root_control_revision,queue_revision,feature_task_set_revision,created_at,execution_id) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21)",params![c.id.as_str(),c.project_id.0.as_str(),c.root_id.0.as_str(),c.work_id.as_str(),c.kind,c.queue_key,c.owner_id.0.as_str(),c.session_id.as_ref().map(Id::as_str),c.ingress_namespace.as_str(),c.invocation_id.as_str(),c.fence,c.expires_at_ms,c.state,c.revision,c.work_revision,c.parent_feature_id.as_ref().map(Id::as_str),c.root_control_revision,c.queue_revision,c.feature_task_set_revision,c.created_at_ms,c.execution_id.as_ref().map(Id::as_str)]))?;
+    db(unit.conn.execute("INSERT INTO allocation_claims(id,project_id,root_id,work_id,kind,queue_key,owner_id,session_id,ingress_namespace,invocation_id,fence,expires_at,state,revision,work_revision,parent_feature_id,root_control_revision,queue_revision,feature_task_set_revision,created_at,execution_id) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21)",params![c.id.as_str(),c.project_id.0.as_str(),c.root_id.0.as_str(),c.work_id.as_str(),c.kind,c.queue_key,c.owner_id.0.as_str(),c.session_id.as_ref().map(Id::as_str),c.ingress_namespace.as_str(),c.invocation_id.as_str(),c.fence,c.expires_at_ms,c.state.as_str(),c.revision,c.work_revision,c.parent_feature_id.as_ref().map(Id::as_str),c.root_control_revision,c.queue_revision,c.feature_task_set_revision,c.created_at_ms,c.execution_id.as_ref().map(Id::as_str)]))?;
     Ok(())
 }
 pub(super) fn update(
@@ -310,7 +288,13 @@ pub(super) fn update(
         id: c.id.as_str().into(),
     })?;
     if old.revision != expected {
-        return Err(conflict(&old, expected)?);
+        return Err(conflict(
+            RevisionDimension::Claim,
+            "allocation_claim",
+            old.id.as_str(),
+            expected,
+            old.revision,
+        ));
     }
     if c.revision
         != expected
@@ -343,20 +327,15 @@ pub(super) fn update(
             return Err(invalid("allocation fence must advance prior ownership"));
         }
     }
-    let allowed = match old.state.as_str() {
-        "Active" => matches!(
-            c.state.as_str(),
-            "Active" | "Transferred" | "Released" | "Expired" | "Invalidated"
+    use ClaimState::*;
+    let allowed = match old.state {
+        Active => matches!(
+            c.state,
+            Active | Transferred | Released | Expired | Invalidated
         ),
-        "Transferred" => matches!(
-            c.state.as_str(),
-            "Transferred" | "Yielding" | "Released" | "Expired"
-        ),
-        "Yielding" => matches!(
-            c.state.as_str(),
-            "Yielding" | "Transferred" | "Yielded" | "Released"
-        ),
-        "Yielded" => c.state == "Active",
+        Transferred => matches!(c.state, Transferred | Yielding | Released | Expired),
+        Yielding => matches!(c.state, Yielding | Transferred | Yielded | Released),
+        Yielded => c.state == Active,
         _ => false,
     };
     if !allowed {
@@ -370,25 +349,25 @@ pub(super) fn update(
             "live allocation execution binding cannot be replaced",
         ));
     }
-    if c.state == "Expired" && c.expires_at_ms > unit.now_ms() {
+    if c.state == ClaimState::Expired && c.expires_at_ms > unit.now_ms() {
         return Err(invalid("allocation lease has not expired"));
     }
-    if !live(&c.state) && executing(unit.conn, &old)? {
+    if !c.state.is_live() && executing(unit.conn, &old)? {
         return Err(invalid(
             "live execution retains allocation ownership until quiescent",
         ));
     }
-    if c.state == "Active" {
+    if c.state == ClaimState::Active {
         if c.expires_at_ms <= unit.now_ms() || c.execution_id.is_some() {
             return Err(invalid(
                 "active allocation needs a future lease and no execution",
             ));
         }
-        source(unit, c, old.state == "Yielded")?;
-        if old.state == "Yielded" && c.fence <= old.fence {
+        source(unit, c, old.state == ClaimState::Yielded)?;
+        if old.state == ClaimState::Yielded && c.fence <= old.fence {
             return Err(invalid("reallocation advances the ownership fence"));
         }
-    } else if live(&c.state) {
+    } else if c.state.is_live() {
         source(unit, c, false)?;
         if let Some(execution) = &c.execution_id {
             let root: Option<String> = db(unit
@@ -406,10 +385,10 @@ pub(super) fn update(
             return Err(invalid("transferred allocation names its execution"));
         }
     }
-    if live(&c.state) {
+    if c.state.is_live() {
         duplicate(unit.conn, c, Some(&c.id))?;
     }
-    db(unit.conn.execute("UPDATE allocation_claims SET owner_id=?2,session_id=?3,fence=?4,expires_at=?5,state=?6,revision=?7,work_revision=?8,parent_feature_id=?9,root_control_revision=?10,queue_revision=?11,feature_task_set_revision=?12,execution_id=?13 WHERE id=?1 AND revision=?14",params![c.id.as_str(),c.owner_id.0.as_str(),c.session_id.as_ref().map(Id::as_str),c.fence,c.expires_at_ms,c.state,c.revision,c.work_revision,c.parent_feature_id.as_ref().map(Id::as_str),c.root_control_revision,c.queue_revision,c.feature_task_set_revision,c.execution_id.as_ref().map(Id::as_str),expected]))?;
+    db(unit.conn.execute("UPDATE allocation_claims SET owner_id=?2,session_id=?3,fence=?4,expires_at=?5,state=?6,revision=?7,work_revision=?8,parent_feature_id=?9,root_control_revision=?10,queue_revision=?11,feature_task_set_revision=?12,execution_id=?13 WHERE id=?1 AND revision=?14",params![c.id.as_str(),c.owner_id.0.as_str(),c.session_id.as_ref().map(Id::as_str),c.fence,c.expires_at_ms,c.state.as_str(),c.revision,c.work_revision,c.parent_feature_id.as_ref().map(Id::as_str),c.root_control_revision,c.queue_revision,c.feature_task_set_revision,c.execution_id.as_ref().map(Id::as_str),expected]))?;
     Ok(())
 }
 
@@ -432,10 +411,10 @@ pub(super) fn replay(
         .optional())?;
     row.map(|(intent_digest, result, claim_id, project)| {
         Ok(StoredAllocationReplay {
-            project_id: ProjectId(id(project)?),
+            project_id: ProjectId(id_of(project)?),
             key: key.into(),
             intent_digest,
-            claim_id: claim_id.map(id).transpose()?,
+            claim_id: claim_id.map(id_of).transpose()?,
             result: serde_json::from_str(&result).map_err(|_| {
                 StorageError::unavailable(Unavailable::Corrupt, "invalid allocation replay result")
             })?,

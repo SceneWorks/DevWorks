@@ -15,22 +15,20 @@
 //! collector never removes a blob a reader holds). They back the browser's explicit file grants:
 //! only an exact artifact the invocation may see is ever materialized for a page.
 use super::lifecycle::ReaderGuard;
+use super::publish::Gate;
 use super::{
     ArtifactService, Failure, Refusal, StagedFile, Viewer, complete_operation, put_staged_blob,
-    setting_i64, usage, version_ref, visible,
+    version_ref, visible,
 };
 use crate::context::InvocationContext;
-use crate::fingerprint::sha256_hex;
-use crate::ports::files::SourceOrigin;
 use crate::ports::storage::{
-    ApplicationStore, ArtifactLink, ArtifactRetention, ArtifactScope, ArtifactState, BlobState,
-    LinkPurpose, NewEvent, ReadOptions, StorageError, StoredArtifact, StoredVersion, SubjectKey,
-    WriteOptions, WriteTransaction, read_snapshot, run_write,
+    ApplicationStore, ArtifactLink, ArtifactRetention, ArtifactScope, ArtifactState, LinkPurpose,
+    NewEvent, ReadOptions, StorageError, StoredArtifact, StoredVersion, SubjectKey,
+    WriteTransaction, read_snapshot,
 };
-use crate::ports::{IdKind, Preparation};
+use crate::ports::{Authorization, IdKind};
 use crate::protocol::provider::ArtifactRef;
 use crate::protocol::{ActorId, AssignmentId, DomainErrorCode, EventId, Id, RootId};
-use crate::settings::catalog::{ARTIFACT_MAX_FILE_KEY, ARTIFACT_QUOTA_KEY};
 use serde_json::{Value, json};
 use std::io::Read;
 
@@ -85,7 +83,9 @@ pub struct ExactRead {
 impl ArtifactService {
     /// Publishes `bytes` as a new evidence artifact and runs `then` in the same write that
     /// records it (with the new version's reference), so the caller's index rows commit with
-    /// the evidence or not at all.
+    /// the evidence or not at all. For a caller with no invocation: the write re-checks that the
+    /// producer's binding is the one the publication started with and still active. A caller
+    /// holding an invocation uses [`Self::publish_evidence_as`].
     pub fn publish_evidence<T, F>(
         &self,
         store: &dyn ApplicationStore,
@@ -99,120 +99,56 @@ impl ArtifactService {
             + Send
             + 'static,
     {
-        let env = Preparation::new(store, None, None);
-        let digest = sha256_hex(bytes);
-        let n = bytes.len() as i64;
-        let scope = evidence.scope.clone();
-        let d = digest.clone();
-        let (max, quota, used, reuse) = env.read(move |s| {
-            let max = setting_i64(s.configuration(), None, ARTIFACT_MAX_FILE_KEY);
-            let quota = setting_i64(s.configuration(), scope.project(), ARTIFACT_QUOTA_KEY);
-            let reuse = s
-                .artifacts()
-                .blob(&d)?
-                .filter(|b| matches!(b.state, BlobState::Present | BlobState::UnlinkPending))
-                .map(|b| b.generation);
-            Ok((max, quota, usage(s.artifacts(), &scope)?, reuse))
-        })?;
-        let (max, quota) = (max?, quota?);
-        if n > max {
-            return Err(EvidenceFailure::Refused(Refusal::new(
-                DomainErrorCode::InvalidArgument,
-                "artifact_file_limit",
-                None,
-            )));
-        }
-        if quota > 0 && reuse.is_none() && used.saturating_add(n) > quota {
-            return Err(EvidenceFailure::Refused(super::quota_refusal(
-                &evidence.scope,
-            )));
-        }
-        let payload = json!({"digest": digest, "byteCount": n,
-            "projectId": evidence.scope.project().map(|p| p.0.as_str()), "source": evidence.source});
-        let (staging, published) = self.journal_and_publish(
-            &env,
-            &mut std::io::Cursor::new(bytes),
-            &digest,
-            n,
-            reuse.as_deref(),
-            payload,
-        )?;
-        let published = match published {
-            Ok(p) => p,
-            Err(fault) => {
-                self.abandon_or_defer(&env, &staging, json!({"failed": format!("{fault:?}")}));
-                return Err(EvidenceFailure::Storage(super::file_failure(fault)));
-            }
-        };
-        let staged = StagedFile {
-            operation_id: staging.operation_id.clone(),
-            digest,
-            byte_count: n,
-            generation: published.generation,
-            reused: published.reused,
-            relative_path: published.relative_path,
-            origin: SourceOrigin::default(),
-            source: evidence.source.clone(),
-            fence: staging.fence.clone(),
-        };
-        let files = self.files.clone();
-        let s = staged.clone();
-        let committed = run_write(store, WriteOptions::observed(), move |tx| {
-            // The storage limit is checked again with the new version in place, inside the
-            // publishing transaction (as a save does): concurrent publications that each passed
-            // the check above cannot together exceed it. Over the limit, nothing is kept.
-            let savepoint = tx.savepoint()?;
-            let r = commit(tx, &*files, &evidence, &s)?;
-            match super::check_quota(tx, &evidence.scope) {
-                Ok(()) => {}
-                Err(Failure::Refused(refusal)) => {
-                    tx.rollback_to(savepoint)?;
-                    return Ok(Err(refusal));
-                }
-                Err(Failure::Storage(e)) => return Err(e),
-            }
-            tx.release(savepoint)?;
-            let t = then(tx, &r)?;
-            Ok(Ok((r, t)))
-        });
-        let committed = match committed {
-            Ok(Ok(r)) => r,
-            Ok(Err(refusal)) => {
-                self.abandon_or_defer(
-                    &env,
-                    &staging,
-                    json!({"abandoned": "the storage limit was reached"}),
-                );
-                return Err(EvidenceFailure::Refused(refusal));
-            }
-            Err(e) => {
-                // Re-read under the staging fence: completed if the version did commit.
-                self.abandon_or_defer(
-                    &env,
-                    &staging,
-                    json!({"abandoned": "the evidence metadata was not committed"}),
-                );
-                return Err(e.into());
-            }
-        };
-        if !staged.reused {
-            self.remove_unbound_generation(&env, &staged);
-        }
-        Ok(committed)
+        let gate = Gate::Producer(evidence.producer.clone());
+        self.publish_gated(store, gate, evidence, bytes, then)
     }
 
-    /// After a commit that kept another live generation of the same bytes, this operation's own
-    /// generation is an orphan nothing can bind: remove it.
-    fn remove_unbound_generation(&self, env: &Preparation<'_>, staged: &StagedFile) {
-        let (digest, own) = (staged.digest.clone(), staged.operation_id.0.clone());
-        let bound = env.read(|s| {
-            Ok(s.artifacts()
-                .blob(&digest)?
-                .is_some_and(|b| b.generation == own.as_str()))
-        });
-        if matches!(bound, Ok(false)) {
-            let _ = self.files.unlink(&staged.digest, own.as_str());
-        }
+    /// [`Self::publish_evidence`] for a caller holding the invocation's authorization: the write
+    /// re-checks the whole authorization (store and restore epoch, every fence and grant).
+    pub fn publish_evidence_as<T, F>(
+        &self,
+        store: &dyn ApplicationStore,
+        ctx: &InvocationContext,
+        authorization: &Authorization,
+        evidence: Evidence,
+        bytes: &[u8],
+        then: F,
+    ) -> Result<(ArtifactRef, T), EvidenceFailure>
+    where
+        T: Send + 'static,
+        F: FnOnce(&mut dyn WriteTransaction, &ArtifactRef) -> Result<T, StorageError>
+            + Send
+            + 'static,
+    {
+        let gate = Gate::Authorization(ctx.clone(), authorization.clone());
+        self.publish_gated(store, gate, evidence, bytes, then)
+    }
+
+    fn publish_gated<T, F>(
+        &self,
+        store: &dyn ApplicationStore,
+        gate: Gate,
+        evidence: Evidence,
+        bytes: &[u8],
+        then: F,
+    ) -> Result<(ArtifactRef, T), EvidenceFailure>
+    where
+        T: Send + 'static,
+        F: FnOnce(&mut dyn WriteTransaction, &ArtifactRef) -> Result<T, StorageError>
+            + Send
+            + 'static,
+    {
+        let scope = evidence.scope.clone();
+        let source = evidence.source.clone();
+        Ok(self.publish_bytes(
+            store,
+            scope,
+            &source,
+            gate,
+            bytes,
+            move |tx, files, staged| Ok(commit(tx, files, &evidence, staged)?),
+            then,
+        )?)
     }
 
     /// Opens the exact immutable version `reference` names, when `ctx` may see it now: the

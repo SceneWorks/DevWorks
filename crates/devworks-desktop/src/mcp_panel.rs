@@ -1,19 +1,26 @@
 //! Outgoing MCP configuration and effective tool selection in Settings > Agent tools.
 //! All mutations go through the same domain gateway used by agents.
-use crate::ops::McpContentRequest;
+use crate::frame;
+use crate::ops::{McpContentRequest, mcp_data_scope};
+use devworks_core::operations::{OperationInput as In, mcp};
 use devworks_core::ports::secrets::Secret;
-use devworks_core::protocol::records::{McpCapability, McpServer, McpTransport, ProjectRecord};
+use devworks_core::protocol::records::{
+    McpCapability, McpServer, McpTransport, ProjectRecord, SchemaValue,
+};
+use devworks_core::protocol::support::DynamicJson;
 use devworks_core::protocol::{Id, OperationId, OperationState, ProjectId};
 use eframe::egui::{self, Ui};
-use serde_json::{Value, json};
+use serde_json::Value;
 use std::time::Instant;
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug)]
 pub enum McpAction {
     Reload,
     Catalog(Id, i64),
+    /// Save a server; a bearer `secret` is staged first and its handle becomes the transport's
+    /// credential reference.
     Configure {
-        body: Value,
+        input: mcp::ConfigureInput,
         secret: Option<Secret>,
     },
     Connect(Id, i64),
@@ -29,6 +36,57 @@ pub enum McpAction {
     /// Classify a tool as read-only or not in place of the server's hint (`None` returns it to
     /// the hint): server, server revision, tool.
     Classify(Id, i64, Id, Option<bool>),
+}
+
+impl McpAction {
+    /// The typed input of a command action in `project`'s scope; `None` for a read action or a
+    /// revision outside the wire contract.
+    pub fn input(&self, project: Option<&ProjectId>) -> Option<In> {
+        let scope = || Some(mcp_data_scope(project));
+        Some(In::Mcp(match self {
+            Self::Configure { input, .. } => mcp::Input::Configure(input.clone()),
+            Self::Connect(id, revision) => mcp::Input::Connect(mcp::ConnectInput {
+                scope: scope(),
+                server_id: id.clone(),
+                expected_revision: frame::number(*revision)?,
+            }),
+            Self::Disable(id, revision) => mcp::Input::Disable(mcp::DisableInput {
+                scope: scope(),
+                server_id: id.clone(),
+                expected_revision: frame::number(*revision)?,
+            }),
+            Self::Remove(id, revision, _) => mcp::Input::Remove(mcp::RemoveInput {
+                scope: scope(),
+                server_id: id.clone(),
+                expected_revision: frame::number(*revision)?,
+            }),
+            Self::Discover(id, revision) => mcp::Input::Discover(mcp::DiscoverInput {
+                scope: scope(),
+                server_id: id.clone(),
+                expected_catalog_revision: frame::number(*revision)?,
+            }),
+            Self::Select(id, revision, catalog, tools)
+            | Self::Sampling(id, revision, catalog, tools) => {
+                mcp::Input::SelectTools(mcp::SelectToolsInput {
+                    scope: scope(),
+                    server_id: id.clone(),
+                    expected_revision: frame::number(*revision)?,
+                    expected_catalog_revision: frame::number(*catalog)?,
+                    tool_ids: frame::bounded(tools.clone())?,
+                })
+            }
+            Self::Classify(id, revision, tool, read_only) => {
+                mcp::Input::ClassifyTool(mcp::ClassifyToolInput {
+                    scope: scope(),
+                    server_id: id.clone(),
+                    expected_revision: frame::number(*revision)?,
+                    tool_id: tool.clone(),
+                    read_only: *read_only,
+                })
+            }
+            Self::Reload | Self::Catalog(..) | Self::Open(..) => return None,
+        }))
+    }
 }
 
 /// A read in flight: the server it was sent to and what it reads.
@@ -151,6 +209,7 @@ fn describe(configuration: &McpTransport) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
 
     #[test]
     fn a_classification_reload_keeps_unsaved_tool_selection() {
@@ -477,9 +536,16 @@ impl McpPanel {
                 self.busy = true;
                 self.error = None;
                 actions.push(McpAction::Configure {
-                    body: json!({"scope":self.scope(),"serverId":server.id,
-                        "expectedRevision":server.revision,"name":server.name,
-                        "transport":{"kind":"Http","endpoint":endpoint}}),
+                    input: mcp::ConfigureInput {
+                        scope: self.scope(),
+                        server_id: Some(server.id.clone()),
+                        expected_revision: Some(server.revision.clone()),
+                        name: server.name.clone(),
+                        transport: McpTransport::Http {
+                            endpoint: endpoint.clone(),
+                            credential_ref: None,
+                        },
+                    },
                     secret: None,
                 });
             }
@@ -751,40 +817,14 @@ impl McpPanel {
             )
             .clicked()
         {
-            let transport = if self.stdio {
-                match serde_json::from_str::<Value>(&self.process_spec) {
-                    Ok(process) => json!({"kind":"Stdio","process":process}),
-                    Err(error) => {
-                        self.error = Some(format!("Invalid process spec JSON: {error}"));
-                        return;
-                    }
-                }
-            } else {
-                let mut transport = json!({"kind":"Http","endpoint":self.endpoint.trim()});
-                if !self.credential_ref.trim().is_empty() {
-                    transport["credentialRef"] = json!(self.credential_ref.trim());
-                }
-                transport
+            let Some(input) = self.configure_input() else {
+                return;
             };
-            let mut body =
-                json!({"scope":self.scope(),"name":self.name.trim(),"transport":transport});
-            if self.editing {
-                let Some(server) = self
-                    .selected
-                    .as_ref()
-                    .and_then(|id| self.servers.iter().find(|record| &record.id == id))
-                else {
-                    self.error = Some("Choose a server to update.".into());
-                    return;
-                };
-                body["serverId"] = json!(server.id);
-                body["expectedRevision"] = json!(server.revision);
-            }
             self.busy = true;
             self.error = None;
             let secret = (!self.stdio && !self.credential.is_empty())
                 .then(|| Secret::new(std::mem::take(&mut self.credential)));
-            actions.push(McpAction::Configure { body, secret });
+            actions.push(McpAction::Configure { input, secret });
         }
     }
 
@@ -861,10 +901,12 @@ impl McpPanel {
                 let arguments = match typed.trim() {
                     "" => None,
                     text => match serde_json::from_str::<Value>(text) {
-                        Ok(value) if value.is_object() => cap
-                            .input_schema
-                            .as_ref()
-                            .map(|schema| json!({"schema":schema,"value":value})),
+                        Ok(value) if value.is_object() => {
+                            cap.input_schema.as_ref().map(|schema| SchemaValue {
+                                schema: schema.clone(),
+                                value: DynamicJson(value),
+                            })
+                        }
                         _ => {
                             self.error = Some("Prompt arguments must be a JSON object.".into());
                             continue;
@@ -964,10 +1006,62 @@ impl McpPanel {
         }
     }
 
-    fn scope(&self) -> Value {
-        self.project.as_ref().map_or_else(
-            || json!({"kind":"Workspace"}),
-            |id| json!({"kind":"Project","projectId":id}),
-        )
+    fn scope(&self) -> devworks_core::protocol::data::DataScope {
+        mcp_data_scope(self.project.as_ref())
+    }
+
+    /// The `mcp.configure` input the form describes; a reason is shown when the form does not
+    /// describe one.
+    fn configure_input(&mut self) -> Option<mcp::ConfigureInput> {
+        let transport = if self.stdio {
+            match serde_json::from_str(&self.process_spec) {
+                Ok(process) => McpTransport::Stdio { process },
+                Err(error) => {
+                    self.error = Some(format!("Invalid process spec JSON: {error}"));
+                    return None;
+                }
+            }
+        } else {
+            let (endpoint, credential) = (
+                self.endpoint.trim().to_owned(),
+                self.credential_ref.trim().to_owned(),
+            );
+            McpTransport::Http {
+                endpoint: self.valid(frame::text(&endpoint), "endpoint")?,
+                credential_ref: match credential.is_empty() {
+                    true => None,
+                    false => Some(self.valid(frame::id(&credential), "secret reference")?),
+                },
+            }
+        };
+        let name = self.name.trim().to_owned();
+        let mut input = mcp::ConfigureInput {
+            scope: self.scope(),
+            server_id: None,
+            expected_revision: None,
+            name: self.valid(frame::text(&name), "name")?,
+            transport,
+        };
+        if self.editing {
+            let Some(server) = self
+                .selected
+                .as_ref()
+                .and_then(|id| self.servers.iter().find(|record| &record.id == id))
+            else {
+                self.error = Some("Choose a server to update.".into());
+                return None;
+            };
+            input.server_id = Some(server.id.clone());
+            input.expected_revision = Some(server.revision.clone());
+        }
+        Some(input)
+    }
+
+    /// `value`, or a message naming the form field that does not convert.
+    fn valid<T>(&mut self, value: Option<T>, field: &str) -> Option<T> {
+        if value.is_none() {
+            self.error = Some(format!("The server {field} is not valid."));
+        }
+        value
     }
 }

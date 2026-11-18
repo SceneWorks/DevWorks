@@ -495,7 +495,7 @@ fn upgrade_moves_session_and_job_usage_into_origins_with_the_same_reads_and_tota
                 o.payload.to_string(),
                 o.recorded_at_ms,
                 o.priced_micro_usd,
-                o.classification,
+                o.classification.as_str(),
                 o.incomplete,
                 o.unknown_tail
             ],

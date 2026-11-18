@@ -86,6 +86,10 @@ pub fn fold_applicability(
 /// token and folds them away), so a decomposed (NFD) spelling gives the same words as a
 /// composed (NFC) one. Each word is searched as a quoted phrase, which the tokenizer splits
 /// again where it alone would, so a word here is never wider in effect than its tokens.
+///
+/// This is not the Conventions tokenizer (`conventions::indexing::rank::tokens`, ASCII with
+/// `_` and `-` kept, for retained BM25 statistics): Knowledge matches through FTS5, so its words
+/// must split where FTS5 splits.
 pub fn words(text: &str) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
     let mut word = String::new();

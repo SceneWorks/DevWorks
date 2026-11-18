@@ -57,6 +57,7 @@ mod schemas;
 #[cfg(any(test, feature = "test-support"))]
 mod seed;
 mod sessions;
+mod support;
 mod usage;
 mod watchers;
 mod work;
@@ -548,6 +549,10 @@ impl ApplicationStore for SqliteStore {
         self.info.clone()
     }
 
+    fn commit_signal(&self) -> Option<devworks_core::ports::storage::CommitSignal> {
+        self.writer.as_ref().map(WriterHandle::signal)
+    }
+
     fn submit_write(
         &self,
         options: WriteOptions,
@@ -625,7 +630,7 @@ impl ApplicationStore for SqliteStore {
             db(conn.execute_batch("BEGIN DEFERRED"))?;
             // The first read establishes the snapshot; every statement shares this snapshot
             // and the same VM progress bound. The lease unregisters before rollback/check-in.
-            let stamp = repos::stamp(conn)?;
+            let stamp = repos::stamp(conn, self.clock.now_ms().get(), self.info.boot_id.clone())?;
             let snapshot = repos::Snapshot {
                 conn,
                 stamp,

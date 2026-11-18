@@ -1,19 +1,11 @@
 //! Bounded, insert-only eval reports (migration 24).
 use super::conn::db;
 use super::repos::{Snapshot, Unit};
+use super::support::{corrupt, id_of, invalid, page_limit};
 use devworks_core::ports::storage::*;
 use devworks_core::protocol::{Id, ProjectId};
 use rusqlite::{Connection, OptionalExtension, params};
 
-fn invalid(message: &str) -> StorageError {
-    StorageError::InvalidRecord(message.into())
-}
-fn corrupt(message: impl Into<String>) -> StorageError {
-    StorageError::unavailable(Unavailable::Corrupt, message)
-}
-fn id(value: String) -> Result<Id, StorageError> {
-    Id::new(value).map_err(|_| corrupt("invalid eval identifier"))
-}
 fn runs<P: rusqlite::Params>(
     conn: &Connection,
     tail: &str,
@@ -54,11 +46,11 @@ fn runs<P: rusqlite::Params>(
                 report,
             )| {
                 Ok(StoredEvalRun {
-                    id: id(run)?,
-                    suite_id: id(suite)?,
+                    id: id_of(run)?,
+                    suite_id: id_of(suite)?,
                     suite_revision,
-                    project_id: project.map(id).transpose()?.map(ProjectId),
-                    session_id: id(session)?,
+                    project_id: project.map(id_of).transpose()?.map(ProjectId),
+                    session_id: id_of(session)?,
                     session_revision,
                     session_sequence,
                     measurement_digest,
@@ -83,9 +75,7 @@ macro_rules! eval_reads {
                 after: Option<&Id>,
                 limit: u16,
             ) -> Result<Vec<StoredEvalRun>, StorageError> {
-                if limit == 0 || limit > MAX_PAGE {
-                    return Err(invalid("eval page limit out of bounds"));
-                }
+                page_limit(limit)?;
                 runs(
                     self.conn,
                     "session_id=?1 AND id>?2 ORDER BY id LIMIT ?3",

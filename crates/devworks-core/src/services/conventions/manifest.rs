@@ -1,5 +1,6 @@
 //! A resumable manifest transport. Its cursor is a source locator, so later pages never
 //! regenerate or scan the preceding document/resource bytes. No whole bundle is retained.
+use super::model::manifest_writer as format;
 use super::{
     ConventionService, access, model,
     passages::{DocumentRequest, PreparedDocument},
@@ -246,22 +247,25 @@ impl ConventionService {
                 break;
             }
             let literal = match state.part {
-                Part::Header => Some(format!(
-                    "{{\"format\":\"devworks-convention\",\"version\":1,\"slug\":{},\"title\":{},\"parentPath\":{},\"sortOrder\":{},\"lifecycle\":{},\"applicability\":{},\"markdown\":",
-                    q(&request.owner.slug)?,
-                    q(&request.owner.title)?,
-                    q(&parent_path)?,
-                    request.owner.sort_order,
-                    q(&request.owner.lifecycle)?,
-                    q(&request.owner.applicability)?
-                )),
+                Part::Header => Some(
+                    format::header(
+                        &request.owner.slug,
+                        &request.owner.title,
+                        &parent_path,
+                        Some(request.owner.sort_order),
+                        &request.owner.lifecycle,
+                        &request.owner.applicability,
+                    )
+                    .map_err(invalid)?,
+                ),
                 Part::MdPrefix => Some(source_prefix(&md)?),
-                Part::MdEnd | Part::RawEnd => Some("\"}".into()),
+                Part::MdEnd | Part::RawEnd => Some(format::PAYLOAD_END.into()),
                 Part::RawPrefix => Some(format!(
-                    ",\"rawContent\":{}",
+                    "{}{}",
+                    format::RAW_CONTENT_KEY,
                     source_prefix(raw.as_ref().ok_or_else(changed)?)?
                 )),
-                Part::Resources => Some(",\"resources\":[".into()),
+                Part::Resources => Some(format::RESOURCES_OPEN.into()),
                 Part::ResourcePrefix => {
                     if resource.is_none() {
                         resource = self.manifest_resource(
@@ -277,19 +281,21 @@ impl ConventionService {
                         continue;
                     };
                     state.resource = Some(r.row.id.clone());
-                    Some(format!(
-                        "{}{{\"key\":{},\"name\":{},\"mediaType\":{},\"lifecycle\":{},\"sha256\":{},\"byteLength\":{},\"base64\":\"",
-                        if state.first { "" } else { "," },
-                        q(&format!("resource-{}", r.row.id.as_str()))?,
-                        q(&r.row.name)?,
-                        q(&r.row.media_type)?,
-                        q(&r.row.lifecycle)?,
-                        q(&r.reference.sha256)?,
-                        q(&r.reference.byte_length.get().to_string())?
-                    ))
+                    Some(
+                        format::resource_prefix(
+                            state.first,
+                            &format!("resource-{}", r.row.id.as_str()),
+                            &r.row.name,
+                            &r.row.media_type,
+                            &r.row.lifecycle,
+                            &r.reference.sha256.0,
+                            r.reference.byte_length.get() as u64,
+                        )
+                        .map_err(invalid)?,
+                    )
                 }
-                Part::ResourceEnd => Some("\"}".into()),
-                Part::End => Some("]}".into()),
+                Part::ResourceEnd => Some(format::PAYLOAD_END.into()),
+                Part::End => Some(format::MANIFEST_END.into()),
                 _ => None,
             };
             if let Some(literal) = literal {
@@ -416,12 +422,7 @@ impl ConventionService {
                 let value =
                     std::str::from_utf8(raw.get(..n).ok_or_else(changed)?).map_err(invalid)?;
                 let ch = value.chars().next().ok_or_else(changed)?;
-                let encoded = match ch {
-                    '"' => "\\\"".into(),
-                    '\\' => "\\\\".into(),
-                    c if (c as u32) < 32 => format!("\\u{:04x}", c as u32),
-                    _ => value.to_owned(),
-                };
+                let encoded = format::escape_scalar(ch);
                 (encoded, n)
             };
             let remaining = encoded
@@ -467,9 +468,5 @@ impl ConventionService {
     }
 }
 fn source_prefix(reference: &ArtifactRef) -> Result<String, StorageError> {
-    Ok(format!(
-        "{{\"sha256\":{},\"byteLength\":{},\"text\":\"",
-        q(&reference.sha256)?,
-        q(&reference.byte_length.get().to_string())?
-    ))
+    format::source_prefix(&reference.sha256.0, reference.byte_length.get() as u64).map_err(invalid)
 }

@@ -16,6 +16,7 @@ use crate::{
 };
 use serde_json::json;
 use std::collections::BTreeMap;
+use std::time::Duration;
 #[derive(Default)]
 pub(super) struct PreparedViews(pub BTreeMap<String, StoredSchemaReadPin>);
 fn unavailable() -> Failure {
@@ -122,21 +123,18 @@ impl SchemaService {
         if query.schema_revision().0 < 5 {
             return Ok(None);
         }
-        let _phase = runtime.closed.enter()?;
-        let (closed, ids, clock, ctx, auth, scope) = (
-            runtime.closed.clone(),
+        let (ids, clock, ctx, auth, scope) = (
             self.ids.clone(),
             self.clock.clone(),
             ctx.clone(),
             query.authorization().clone(),
             scope.clone(),
         );
-        let cancellation = env.cancellation.cloned();
         let deadline = env.deadline_ms;
-        let prepared = run_write(
+        let prepared = runtime.closed.write(
             runtime.store.as_ref(),
             WriteOptions {
-                cancellation: cancellation.clone(),
+                cancellation: env.cancellation.cloned(),
                 deadline_ms: deadline,
                 ..WriteOptions::host_state()
             },
@@ -146,12 +144,7 @@ impl SchemaService {
                 // of their writer or extend their fixed retention interval.
                 let created_at_ms = tx.now_ms();
                 let now = clock.now_ms().get();
-                if closed.is_closed()
-                    || cancellation
-                        .as_ref()
-                        .is_some_and(Cancellation::is_cancelled)
-                    || deadline.is_some_and(|d| now > d)
-                {
+                if deadline.is_some_and(|d| now > d) {
                     return Err(StorageError::Cancelled);
                 }
                 if !crate::authority::authorization_holds_in(tx, &ctx, &auth)? {
@@ -218,24 +211,40 @@ impl SchemaService {
     }
 }
 
+/// What one retention pass removed and when the next live pin expires.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct RetentionPass {
+    pub removed: usize,
+    pub next_expiry: Option<Duration>,
+}
+
 impl SchemaService {
     /// Fixed-size local retention pass; no target connection or authority grant is involved.
     pub fn cleanup_retained_views(&self) -> Result<usize, StorageError> {
+        self.retention_pass().map(|pass| pass.removed)
+    }
+
+    /// [`Self::cleanup_retained_views`], also reporting how long until the next live pin
+    /// expires, so the caller can wake then instead of polling.
+    pub fn retention_pass(&self) -> Result<RetentionPass, StorageError> {
         let Some(runtime) = &self.runtime else {
-            return Ok(0);
+            return Ok(RetentionPass::default());
         };
-        let _phase = runtime.closed.enter()?;
-        let (closed, clock) = (runtime.closed.clone(), self.clock.clone());
-        run_write(
+        let clock = self.clock.clone();
+        runtime.closed.write(
             runtime.store.as_ref(),
             WriteOptions::housekeeping(),
             move |tx| {
-                if closed.is_closed() {
-                    return Err(StorageError::Cancelled);
-                }
-                let pins = tx.schemas().expire_schema_pins(clock.now_ms().get(), 500)?;
+                let now = clock.now_ms().get();
+                let pins = tx.schemas().expire_schema_pins(now, 500)?;
                 let rows = tx.schemas().prune_schema_views(500)?;
-                Ok(pins + rows)
+                let next_expiry = tx.schemas().next_schema_pin_expiry()?.map(|at| {
+                    Duration::from_millis(u64::try_from(at.saturating_sub(now)).unwrap_or(0))
+                });
+                Ok(RetentionPass {
+                    removed: pins + rows,
+                    next_expiry,
+                })
             },
         )
     }

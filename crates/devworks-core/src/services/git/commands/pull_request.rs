@@ -1,5 +1,6 @@
 //! Task PR creation/update and current-membership target reconciliation.
 use super::*;
+use crate::services::effect::EffectOutcome;
 use crate::services::git::github::{Fault, PullRequest, Repository};
 
 pub(super) struct StagedPr(Result<PrInput, Failure>);

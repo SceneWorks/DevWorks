@@ -18,11 +18,11 @@ use devworks_core::authority::destructive::ProtectedRoots;
 use devworks_core::authority::service as auth;
 use devworks_core::context::{HostIngress, InvocationContext, PrincipalKind};
 use devworks_core::gateway::Gateway;
+use devworks_core::ports::Authorization;
 use devworks_core::ports::process::{Probe, ProcessHost, ProcessSpec, ProcessTree, TreeStatus};
 #[cfg(unix)]
 use devworks_core::ports::secrets::{Secret, SecretKey, SecretStore, SessionSecrets};
 use devworks_core::ports::storage::*;
-use devworks_core::ports::{Authorization, Clock, IdKind, IdSource};
 use devworks_core::protocol::records::{LeaseRecord, LeaseState, SettingAssignment};
 use devworks_core::protocol::results::{
     DomainCommandReply, DomainDecision, DomainQueryReply, OperationResult,
@@ -34,7 +34,6 @@ use devworks_core::protocol::{
 use devworks_core::services::UseCases;
 use devworks_core::services::artifacts::ArtifactService;
 use devworks_core::services::artifacts::observed::Observed;
-use devworks_core::services::containers::EffectOutcome as ContainerEffectOutcome;
 use devworks_core::services::containers::registry_auth::WorkloadEnvironment;
 use devworks_core::services::containers::runner::ContainerRunner;
 use devworks_core::services::containers::service::ContainerService;
@@ -44,6 +43,7 @@ use devworks_core::services::containers::{
     inspection::{parse as parse_container_inspect, verified_lifecycle_target},
     probe::{self as container_probe, Availability as ContainerAvailability, HostPlatform},
 };
+use devworks_core::services::effect::EffectOutcome as ContainerEffectOutcome;
 #[cfg(unix)]
 use devworks_core::services::process::tools::RegisteredCredential;
 use devworks_core::services::process::tools::{RegisteredExecutable, ToolBindings};
@@ -63,11 +63,11 @@ use std::path::PathBuf;
 /// The image the native container engine tests pull and run: Alpine 3.24, pinned by its
 /// multi-platform index digest. No tag: Podman refuses a reference with both a tag and a digest.
 const QUALIFIED_IMAGE: &str = "docker.io/library/alpine@sha256:f59abe656b692d901e184be3445e084786602108599d2a51d229c0f5a48c71bf";
-use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
-const T0: i64 = 1_700_000_000_000;
+use devworks_test_support::{T0, TempRoot, TestClock, TestIds};
 
 /// Serializes the tests of this binary (see the module documentation).
 fn serial() -> MutexGuard<'static, ()> {
@@ -75,39 +75,21 @@ fn serial() -> MutexGuard<'static, ()> {
     SERIAL.lock().unwrap_or_else(|p| p.into_inner())
 }
 
-struct TestClock(AtomicI64);
-impl Clock for TestClock {
-    fn now_ms(&self) -> Counter {
-        Counter::new(self.0.load(Ordering::SeqCst)).unwrap()
-    }
-}
-struct TestIds(AtomicU64);
-impl IdSource for TestIds {
-    fn next_id(&self, kind: IdKind) -> Id {
-        let n = self.0.fetch_add(1, Ordering::SeqCst) + 1;
-        Id::new(format!("{kind:?}-{n}").to_lowercase()).unwrap()
-    }
-}
-
 /// A temporary data root reopened across simulated process restarts.
 struct Harness {
     root: PathBuf,
+    _root: TempRoot,
     clock: Arc<TestClock>,
     ids: Arc<TestIds>,
 }
 impl Harness {
     fn new() -> Self {
-        static NEXT: AtomicU64 = AtomicU64::new(0);
-        let root = std::env::temp_dir().join(format!(
-            "devworks-process-test-{}-{}",
-            std::process::id(),
-            NEXT.fetch_add(1, Ordering::SeqCst)
-        ));
-        let _ = std::fs::remove_dir_all(&root);
+        let guard = TempRoot::new("devworks-process-test");
         Self {
-            root,
-            clock: Arc::new(TestClock(AtomicI64::new(T0))),
-            ids: Arc::new(TestIds(AtomicU64::new(0))),
+            root: guard.path().to_path_buf(),
+            _root: guard,
+            clock: Arc::new(TestClock::new(T0)),
+            ids: Arc::new(TestIds::new()),
         }
     }
     fn store(&self) -> SqliteStore {
@@ -137,33 +119,14 @@ impl Harness {
             .unwrap();
     }
 }
-impl Drop for Harness {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.root);
-    }
-}
-
 /// A removed-on-drop scratch directory.
-struct Scratch(PathBuf);
+struct Scratch(TempRoot);
 impl Scratch {
     fn new(tag: &str) -> Self {
-        static NEXT: AtomicU64 = AtomicU64::new(0);
-        let dir = std::env::temp_dir().join(format!(
-            "devworks-process-{tag}-{}-{}",
-            std::process::id(),
-            NEXT.fetch_add(1, Ordering::SeqCst)
-        ));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        Self(dir)
+        Self(TempRoot::new(&format!("devworks-process-{tag}")).created())
     }
     fn path(&self, rel: &str) -> String {
-        self.0.join(rel).to_string_lossy().into_owned()
-    }
-}
-impl Drop for Scratch {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.0);
+        self.0.text(rel)
     }
 }
 
@@ -214,12 +177,21 @@ struct Fx {
 impl Fx {
     fn new() -> Self {
         let fx = Self::open(Harness::new(), Arc::new(AtomicU64::new(0)));
-        fx.h.sql(
-            "INSERT INTO projects VALUES('project-a','A','Active',1,1,1);
-             INSERT INTO projects VALUES('project-b','B','Active',1,1,1);
-             INSERT INTO work_items VALUES('root-a','project-a','feature',NULL,NULL,NULL,'Feature A',1,0,1,1,1,'{}');
-             INSERT INTO work_items VALUES('root-b','project-b','feature',NULL,NULL,NULL,'Feature B',1,0,1,1,1,'{}');",
-        );
+        {
+            use devworks_test_support::seed::{ProjectSeed, WorkSeed};
+            devworks_test_support::seed::rows(
+                &*fx.store,
+                &[
+                    ProjectSeed::new("project-a").name("A"),
+                    ProjectSeed::new("project-b").name("B"),
+                ],
+                &[
+                    WorkSeed::feature("root-a", "project-a").title("Feature A"),
+                    WorkSeed::feature("root-b", "project-b").title("Feature B"),
+                ],
+            )
+            .unwrap();
+        }
         fx.write(|tx| {
             for (a, k) in [
                 ("user-a", PrincipalKind::Human),
@@ -2491,7 +2463,9 @@ esac
         .unwrap();
     match service.execute_effect(&operation, &fx.authority()) {
         ContainerEffectOutcome::Completed(_) => {}
-        ContainerEffectOutcome::Failed(reason) | ContainerEffectOutcome::Unknown(reason) => {
+        ContainerEffectOutcome::Failed(reason)
+        | ContainerEffectOutcome::NotApplied(reason)
+        | ContainerEffectOutcome::Unknown(reason) => {
             panic!("credentialed pull failed: {reason}")
         }
     }
@@ -2742,7 +2716,9 @@ fn native_container_effects_commit_owned_create_start_and_stop(engine: &str, exe
     let build_outcome = service.execute_effect(&build_op, &fx.authority());
     match build_outcome {
         ContainerEffectOutcome::Completed(_) => {}
-        ContainerEffectOutcome::Failed(reason) | ContainerEffectOutcome::Unknown(reason) => {
+        ContainerEffectOutcome::Failed(reason)
+        | ContainerEffectOutcome::NotApplied(reason)
+        | ContainerEffectOutcome::Unknown(reason) => {
             panic!("build outcome: {reason}")
         }
     }

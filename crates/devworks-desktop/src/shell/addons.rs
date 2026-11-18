@@ -84,9 +84,6 @@ impl AddonsCtl<'_, '_> {
     fn addons_actions(&mut self, actions: Vec<AddonsAction>) {
         for action in actions {
             let registry = self.addons.registry_revision;
-            let command = |op: &'static str,
-                           cmd: serde_json::Value|
-             -> (&'static str, serde_json::Value) { (op, cmd) };
             let lifecycle = match action {
                 AddonsAction::Refresh => {
                     self.load_addons();
@@ -151,41 +148,19 @@ impl AddonsCtl<'_, '_> {
                     package,
                     bundle,
                     update,
-                } => {
-                    let bundle = serde_json::to_value(&bundle).unwrap_or_default();
-                    let expected = registry.max(1).to_string();
-                    Some(if update {
-                        command(
-                            "addons.update",
-                            serde_json::json!({"kind": "Update", "packageId": package, "bundle": bundle, "expectedRegistryRevision": expected}),
-                        )
-                    } else {
-                        command(
-                            "addons.install",
-                            serde_json::json!({"kind": "Install", "bundle": bundle, "expectedRegistryRevision": expected}),
-                        )
-                    })
-                }
-                AddonsAction::Enable(p) => Some(command(
-                    "addons.enable",
-                    serde_json::json!({"kind": "Enable", "packageId": p, "expectedRegistryRevision": registry.max(1).to_string()}),
+                } => Some(a::install_command(
+                    bundle,
+                    update.then_some(package.as_str()),
+                    registry,
                 )),
-                AddonsAction::Disable(p) => Some(command(
-                    "addons.disable",
-                    serde_json::json!({"kind": "Disable", "packageId": p, "expectedRegistryRevision": registry.max(1).to_string()}),
-                )),
-                AddonsAction::Uninstall(p) => Some(command(
-                    "addons.uninstall",
-                    serde_json::json!({"kind": "Uninstall", "packageId": p, "expectedRegistryRevision": registry.max(1).to_string()}),
-                )),
+                AddonsAction::Enable(p) => Some(a::enable_command(&p, registry)),
+                AddonsAction::Disable(p) => Some(a::disable_command(&p, registry)),
+                AddonsAction::Uninstall(p) => Some(a::uninstall_command(&p, registry)),
                 AddonsAction::Rollback {
                     package,
                     target,
                     generation,
-                } => Some(command(
-                    "addons.rollback",
-                    serde_json::json!({"kind": "Rollback", "packageId": package, "targetManifestDigest": target, "expectedRegistryRevision": registry.max(1).to_string(), "expectedStateGeneration": generation.max(1).to_string()}),
-                )),
+                } => Some(a::rollback_command(&package, &target, registry, generation)),
                 AddonsAction::TrustPublisher {
                     package,
                     revision,
@@ -230,14 +205,20 @@ impl AddonsCtl<'_, '_> {
                     None
                 }
             };
-            if let Some((op, cmd)) = lifecycle {
-                self.addons.busy = true;
-                self.command(
-                    AddonsSlot::AddonsCommand,
-                    "Updating the add-on",
-                    op,
-                    move |b| a::lifecycle_frame(b, cmd),
-                );
+            match lifecycle {
+                Some(Some(command)) => {
+                    self.addons.busy = true;
+                    self.command(
+                        AddonsSlot::AddonsCommand,
+                        "Updating the add-on",
+                        a::operation(&command),
+                        move |b| a::lifecycle_frame(b, command),
+                    );
+                }
+                Some(None) => {
+                    self.addons.notice = Some("The add-on request is not valid.".into());
+                }
+                None => {}
             }
         }
     }

@@ -13,7 +13,6 @@ use crate::{
 use devworks_core::ports::storage::ProjectPurgeClientScope;
 use devworks_core::protocol::data::GraphResult;
 use eframe::egui::Ui;
-use serde_json::json;
 
 impl Shell {
     pub fn open_repository_graph(&mut self, repository: &str, name: &str) {
@@ -93,14 +92,7 @@ impl GraphCtl<'_, '_> {
             line_end: "200".into(),
             ..Default::default()
         };
-        self.open_graph_read(
-            Read::new(
-                "code.overview",
-                "Overview",
-                json!({"kind":"Overview","repositoryId":repository}),
-            ),
-            false,
-        );
+        self.open_graph_read(Read::overview(repository), false);
     }
     fn open_graph_read(&mut self, read: Read, remember: bool) {
         if remember && let Some(mut old) = self.graph.read.take() {
@@ -141,11 +133,14 @@ impl GraphCtl<'_, '_> {
             "Reading repository graph",
             read.operation,
             move |b| {
-                if read.operation == "repositories.nodes" {
-                    graph_ops::repository_nodes(b, scope, read.query, view, cursor.as_deref())
-                } else {
-                    graph_ops::read(b, scope, view, read.query, cursor.as_deref())
-                }
+                graph_ops::read(
+                    b,
+                    read.operation,
+                    scope,
+                    view,
+                    read.query,
+                    cursor.as_deref(),
+                )
             },
         ) {
             self.graph.loading = false;
@@ -287,14 +282,7 @@ impl GraphCtl<'_, '_> {
                                 .as_ref()
                                 .is_some_and(|node| node.node_id.as_str() == id)
                         {
-                            self.open_graph_read(
-                                Read::new(
-                                    "code.node_detail",
-                                    "Node details",
-                                    json!({"kind":"Node","nodeId":id}),
-                                ),
-                                false,
-                            );
+                            self.open_graph_read(Read::node("Node details", &id), false);
                         }
                     }
                     Err(Failure::Unknown) => {
@@ -391,14 +379,7 @@ impl GraphCtl<'_, '_> {
                 }
                 Action::Indexing => self.navigate(Route::Indexing),
                 Action::Repository(repository) => {
-                    self.open_graph_read(
-                        Read::new(
-                            "code.overview",
-                            "Overview",
-                            json!({"kind":"Overview","repositoryId":repository}),
-                        ),
-                        true,
-                    );
+                    self.open_graph_read(Read::overview(&repository), true);
                     self.graph.repository = repository;
                     self.graph.name = self
                         .projects
@@ -416,14 +397,10 @@ impl GraphCtl<'_, '_> {
                     module,
                     kind,
                 } => {
-                    let mut query = json!({"repositoryId":repository});
-                    if let Some(module) = &module {
-                        query["internalModule"] = json!(module);
-                    }
-                    if let Some(kind) = &kind {
-                        query["nodeKind"] = json!(kind);
-                    }
-                    self.open_graph_read(Read::new("repositories.nodes", "Nodes", query), true);
+                    self.open_graph_read(
+                        Read::nodes(&repository, module.as_deref(), kind.as_deref()),
+                        true,
+                    );
                     self.graph.repository = repository;
                     self.graph.node_kind = kind.unwrap_or_default();
                     self.graph.module = module.unwrap_or_default();
@@ -432,26 +409,12 @@ impl GraphCtl<'_, '_> {
                 }
                 Action::Node(node) => {
                     let id = node.node_id.clone();
-                    self.open_graph_read(
-                        Read::new(
-                            "code.node_detail",
-                            "Node details",
-                            json!({"kind":"Node","nodeId":id}),
-                        ),
-                        true,
-                    );
+                    self.open_graph_read(Read::node("Node details", id.as_str()), true);
                     self.graph.selected = Some(node);
                     self.graph.target_name.clear();
                 }
                 Action::Endpoint { id, repository } => {
-                    self.open_graph_read(
-                        Read::new(
-                            "code.node_detail",
-                            "Related node",
-                            json!({"kind":"Node","nodeId":id}),
-                        ),
-                        true,
-                    );
+                    self.open_graph_read(Read::node("Related node", &id), true);
                     self.graph.selected = None;
                     self.graph.repository = repository;
                     self.graph.target_name.clear();
@@ -469,14 +432,7 @@ impl GraphCtl<'_, '_> {
                     self.graph.pin = None;
                     self.graph.history.clear();
                     self.graph.selected = None;
-                    self.open_graph_read(
-                        Read::new(
-                            "code.overview",
-                            "Overview",
-                            json!({"kind":"Overview","repositoryId":self.graph.repository}),
-                        ),
-                        false,
-                    );
+                    self.open_graph_read(Read::overview(&self.graph.repository), false);
                 }
                 Action::Page(next) => {
                     if let Some(read) = &mut self.graph.read {
@@ -499,11 +455,7 @@ impl GraphCtl<'_, '_> {
                 Action::Trust(node, trusted) => {
                     let id = node.node_id.as_str().to_owned();
                     let scope = self.graph.scope();
-                    let pin = self
-                        .graph
-                        .pin
-                        .as_ref()
-                        .map(|pin| pin.pin_id.as_str().to_owned());
+                    let pin = self.graph.pin.as_ref().map(|pin| pin.pin_id.clone());
                     if self.command(
                         GraphSlot::GraphTrust(id),
                         "Changing node trust",

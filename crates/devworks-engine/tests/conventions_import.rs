@@ -23,6 +23,7 @@ use devworks_core::{
     },
 };
 use devworks_engine::conventions_import as actual_consumer;
+use devworks_test_support::{FaultFiles, FileOp, LoseAcks};
 use serde_json::json;
 use std::sync::Arc;
 struct Fx {
@@ -237,7 +238,7 @@ fn durable_import_publishes_verified_exact_sources_and_fresh_resources_atomicall
     assert!(
         matches!(
             again,
-            devworks_core::services::conventions::importing::ImportOutcome::Completed(_)
+            devworks_core::services::effect::EffectOutcome::Completed(_)
         ),
         "{again:?}"
     );
@@ -360,83 +361,14 @@ fn imports_more_than_one_resource_page_without_silent_cap_or_public_bundle() {
     );
 }
 
-/// Lose a real writer acknowledgment after a selected private/public phase committed. All
-/// repositories, transactions and bytes remain the actual native owners.
-struct LostAckStore {
-    inner: Arc<dyn ApplicationStore>,
-    target: OperationId,
-    phase: &'static str,
-    armed: Arc<std::sync::atomic::AtomicBool>,
-}
-struct LostAckJob {
-    inner: Box<dyn WriteJob>,
-    target: OperationId,
-    phase: &'static str,
-    armed: Arc<std::sync::atomic::AtomicBool>,
-    hide: bool,
-}
-impl WriteJob for LostAckJob {
-    fn run(&mut self, tx: &mut dyn WriteTransaction) -> Result<(), StorageError> {
-        self.inner.run(tx)?;
-        if tx
-            .conventions()
-            .convention_import(&self.target)?
-            .is_some_and(|d| d.phase == self.phase)
-            && self.armed.swap(false, std::sync::atomic::Ordering::SeqCst)
-        {
-            self.hide = true;
-        }
-        Ok(())
-    }
-    fn finish(self: Box<Self>, outcome: Result<(), StorageError>) {
-        self.inner.finish(if self.hide && outcome.is_ok() {
-            Err(StorageError::CommitUnknown)
-        } else {
-            outcome
-        });
-    }
-}
-impl ApplicationStore for LostAckStore {
-    fn info(&self) -> StoreInfo {
-        self.inner.info()
-    }
-    fn read(
-        &self,
-        options: &ReadOptions,
-        work: &mut dyn FnMut(&dyn ReadSnapshot) -> Result<(), StorageError>,
-    ) -> Result<(), StorageError> {
-        self.inner.read(options, work)
-    }
-    fn submit_write(
-        &self,
-        options: WriteOptions,
-        job: Box<dyn WriteJob>,
-    ) -> Result<(), StorageError> {
-        self.inner.submit_write(
-            options,
-            Box::new(LostAckJob {
-                inner: job,
-                target: self.target.clone(),
-                phase: self.phase,
-                armed: self.armed.clone(),
-                hide: false,
-            }),
-        )
-    }
-}
 #[test]
 fn actual_reopen_resumes_private_checkpoint_and_observes_publication_without_duplicates() {
     for phase in ["Parsing", "Published"] {
         let mut f = Fx::new();
         let source = f.source(&serde_json::to_vec(&manifest(3)).unwrap());
         let op = f.admit(&source, &format!("lose-{phase}"));
-        let armed = Arc::new(std::sync::atomic::AtomicBool::new(true));
-        f.store = Arc::new(LostAckStore {
-            inner: f.store.clone(),
-            target: op.clone(),
-            phase,
-            armed: armed.clone(),
-        });
+        let lose = lose_ack_after_phase(f.store.clone(), &op, phase);
+        f.store = lose.clone();
         let index = Arc::new(IndexService::new(
             f.store.clone(),
             f.artifacts.clone(),
@@ -458,7 +390,9 @@ fn actual_reopen_resumes_private_checkpoint_and_observes_publication_without_dup
             OperationState::OutcomeUnknown,
             "{phase}: {record:?}"
         );
-        assert!(!armed.load(std::sync::atomic::Ordering::SeqCst));
+        assert!(!lose.armed());
+        // The wrapper holds the store: release it before the data root is reopened below.
+        drop(lose);
         let draft = read(f.store.as_ref(), |r| r.conventions().convention_import(&op)).unwrap();
         assert_eq!(draft.phase, phase);
         if phase == "Parsing" {
@@ -610,73 +544,80 @@ fn current_scope_and_quota_are_rechecked_after_admission_without_publishing_a_pr
     }
 }
 
+/// The native file adapter, whose third verified range read parks until released: the worker is
+/// then provably inside a real source read when the test cancels it.
 struct GateFiles {
-    native: NativeArtifactFiles,
+    files: Arc<FaultFiles>,
+    native: Arc<NativeArtifactFiles>,
     calls: std::sync::atomic::AtomicUsize,
-    started: std::sync::mpsc::SyncSender<()>,
     release: std::sync::Mutex<bool>,
     changed: std::sync::Condvar,
+}
+impl GateFiles {
+    /// `started` is told when the parked read is reached; `open` says whether it parks at all.
+    fn new(h: &Harness, started: std::sync::mpsc::SyncSender<()>, open: bool) -> Arc<Self> {
+        let native = Arc::new(NativeArtifactFiles::new(
+            h.root.clone(),
+            h.root.with_extension("import-cache"),
+        ));
+        let gate = Arc::new(Self {
+            files: FaultFiles::over(native.clone()),
+            native,
+            calls: std::sync::atomic::AtomicUsize::new(0),
+            release: std::sync::Mutex::new(open),
+            changed: std::sync::Condvar::new(),
+        });
+        gate.files
+            .refuse_defaults(&[FileOp::DerivedRoot, FileOp::RemoveDerivedRemnants]);
+        let started = std::sync::Mutex::new(started);
+        let hook = gate.clone();
+        gate.files.before(FileOp::ReadRangeControlled, move |_| {
+            if hook.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 2 {
+                started.lock().unwrap().send(()).unwrap();
+                let mut release = hook.release.lock().unwrap();
+                while !*release {
+                    release = hook.changed.wait(release).unwrap();
+                }
+            }
+            Ok(())
+        });
+        gate
+    }
+    fn open(&self) {
+        *self.release.lock().unwrap() = true;
+        self.changed.notify_all();
+    }
 }
 struct ReleaseGate(Arc<GateFiles>);
 impl Drop for ReleaseGate {
     fn drop(&mut self) {
-        *self.0.release.lock().unwrap() = true;
-        self.0.changed.notify_all();
+        self.0.open();
     }
 }
-macro_rules! native_files {($(fn $name:ident(&self $(,$arg:ident:$ty:ty)*) -> $out:ty;)*)=>{$(fn $name(&self,$($arg:$ty),*)->$out {self.native.$name($($arg),*)})*};}
-impl devworks_core::ports::files::ArtifactFiles for GateFiles {
-    native_files! {
-     fn publish(&self,staging_name:&str,source:&mut dyn std::io::Read,digest:&str,bytes:u64,reuse:Option<&str>,generation:&str)->Result<devworks_core::ports::files::PublishedBlob,devworks_core::ports::files::FileFault>;
-     fn managed_path(&self,digest:&str,generation:&str)->Result<String,devworks_core::ports::files::FileFault>;
-     fn present(&self,digest:&str,generation:&str,bytes:u64)->Result<bool,devworks_core::ports::files::FileFault>;
-     fn inspect(&self,digest:&str,generation:&str)->Result<Option<u64>,devworks_core::ports::files::FileFault>;
-     fn read_range(&self,digest:&str,generation:&str,bytes:u64,offset:u64,max:usize)->Result<Vec<u8>,devworks_core::ports::files::FileFault>;
-     fn open(&self,digest:&str,generation:&str,bytes:u64)->Result<Box<dyn std::io::Read+Send>,devworks_core::ports::files::FileFault>;
-     fn open_controlled(&self,digest:&str,generation:&str,bytes:u64,stopped:&mut dyn FnMut()->bool)->Result<Box<dyn std::io::Read+Send>,devworks_core::ports::files::FileFault>;
-     fn unlink(&self,digest:&str,generation:&str)->Result<(),devworks_core::ports::files::FileFault>;
-     fn quarantine(&self,digest:&str,generation:&str)->Result<(),devworks_core::ports::files::FileFault>;
-     fn staged(&self)->Result<Vec<String>,devworks_core::ports::files::FileFault>;
-     fn remove_staged(&self,name:&str)->Result<(),devworks_core::ports::files::FileFault>;
-     fn stored_files(&self)->Result<Vec<(String,String)>,devworks_core::ports::files::FileFault>;
-     fn write_derived(&self,key:&str,bytes:&[u8])->Result<(),devworks_core::ports::files::FileFault>;
-     fn read_derived(&self,key:&str,max:usize)->Result<Option<Vec<u8>>,devworks_core::ports::files::FileFault>;
-     fn collect_derived(&self)->Result<u64,devworks_core::ports::files::FileFault>;
-     fn export(&self,digest:&str,generation:&str,bytes:u64,destination:&std::path::Path,overwrite:bool)->Result<(),devworks_core::ports::files::FileFault>;
-    }
-    fn read_range_controlled(
-        &self,
-        digest: &str,
-        generation: &str,
-        bytes: u64,
-        offset: u64,
-        max: usize,
-        stopped: &mut dyn FnMut() -> bool,
-    ) -> Result<Vec<u8>, devworks_core::ports::files::FileFault> {
-        if self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 2 {
-            self.started.send(()).unwrap();
-            let mut release = self.release.lock().unwrap();
-            while !*release {
-                release = self.changed.wait(release).unwrap();
-            }
-        }
-        self.native
-            .read_range_controlled(digest, generation, bytes, offset, max, stopped)
-    }
+/// Loses a real writer acknowledgment after a selected private/public phase of `target`
+/// committed. All repositories, transactions and bytes remain the actual native owners.
+fn lose_ack_after_phase(
+    store: Arc<dyn ApplicationStore>,
+    target: &OperationId,
+    phase: &'static str,
+) -> Arc<LoseAcks> {
+    let lose = LoseAcks::over(store);
+    let target = target.clone();
+    lose.lose_when(move |tx| {
+        Ok(tx
+            .conventions()
+            .convention_import(&target)?
+            .is_some_and(|d| d.phase == phase))
+    });
+    lose
 }
 #[test]
 fn cancellation_during_a_real_source_read_preserves_private_prefix_and_blocks_publication() {
     let h = Harness::new();
     let (started, waiting) = std::sync::mpsc::sync_channel(1);
-    let files = Arc::new(GateFiles {
-        native: NativeArtifactFiles::new(h.root.clone(), h.root.with_extension("import-cache")),
-        calls: std::sync::atomic::AtomicUsize::new(0),
-        started,
-        release: std::sync::Mutex::new(false),
-        changed: std::sync::Condvar::new(),
-    });
+    let files = GateFiles::new(&h, started, false);
     let _release = ReleaseGate(files.clone());
-    let f = Fx::with_files(h, files.clone());
+    let f = Fx::with_files(h, files.files.clone());
     let source = f.source(&serde_json::to_vec(&manifest(3)).unwrap());
     let op = f.admit(&source, "cancel-reading");
     let dispatcher = dispatcher_with(
@@ -721,8 +662,7 @@ fn cancellation_during_a_real_source_read_preserves_private_prefix_and_blocks_pu
             .map_err(|_| StorageError::ScopeDenied)
     })
     .unwrap();
-    *files.release.lock().unwrap() = true;
-    files.changed.notify_all();
+    files.open();
     job.join().unwrap();
     let op_record = read(f.store.as_ref(), |r| r.operations().operation(&op)).unwrap();
     assert_eq!(

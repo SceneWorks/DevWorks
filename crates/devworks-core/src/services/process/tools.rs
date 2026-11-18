@@ -9,7 +9,8 @@
 //! qualified, so `Project` and `Confined` are refused instead of silently upgraded.
 use super::executables::PathExecutables;
 use super::{
-    LaunchPolicy, LaunchRefusal, LaunchRequest, OwnedProcess, ProcessSupervisor, StopOutcome,
+    CaptureFault, CapturePolicy, CaptureStream, CaptureWait, LaunchPolicy, LaunchRefusal,
+    LaunchRequest, OwnedProcess, ProcessSupervisor, StopOutcome,
 };
 use crate::authority::destructive::{FilesystemResolver, ProtectedRoots};
 use crate::authority::redact::Redactor;
@@ -45,6 +46,7 @@ use crate::protocol::{
 use crate::protocol::{Id, ProjectId};
 use crate::registry::Mode;
 use crate::services::artifacts::{Viewer, visible};
+use crate::services::effect::{EffectOutcome, JournaledEffect};
 use crate::services::kernel::{Refusal, counter, decided, query_fault, rev};
 use base64::Engine;
 use serde::{Deserialize, Serialize};
@@ -2552,13 +2554,6 @@ impl Drop for LiveOutputGuard<'_> {
     }
 }
 
-#[derive(Clone, Debug, PartialEq)]
-pub enum EffectOutcome {
-    Completed(Value),
-    Failed(String),
-    Unknown(String),
-}
-
 impl ProcessToolService {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
@@ -3267,7 +3262,9 @@ impl ProcessToolService {
             && serde_json::from_value::<ExecuteJob>(operation.payload.clone())
                 .is_ok_and(|job| job.watch.is_some());
         if !watched {
-            return self.execute(operation);
+            // Named explicitly: `self` is an `Arc`, and `self.execute` would resolve to the
+            // `JournaledEffect` impl for `Arc<ProcessToolService>`, which calls this method.
+            return ProcessToolService::execute(self, operation);
         }
         let (report, launched) = std::sync::mpsc::channel();
         let report = LaunchReport::new(report);
@@ -3310,6 +3307,7 @@ impl ProcessToolService {
         let evidence = match outcome {
             EffectOutcome::Completed(evidence) => evidence.clone(),
             EffectOutcome::Failed(reason) => json!({"failed": reason}),
+            EffectOutcome::NotApplied(reason) => json!({"notApplied": reason}),
             EffectOutcome::Unknown(reason) => json!({"unknown": reason}),
         };
         let id = operation.id.clone();
@@ -3621,83 +3619,55 @@ impl ProcessToolService {
                 .unwrap_or_else(|p| p.into_inner())
                 .insert(process.id.as_str().to_owned(), matches.clone());
         }
-        let (drained_tx, drained_rx) = std::sync::mpsc::channel();
-        for (stream, mut pipe) in [stdout, stderr].into_iter().enumerate() {
-            let output = output.clone();
-            let tail = tail.clone();
-            let matches = matches.clone();
-            let drained_tx = drained_tx.clone();
-            std::thread::spawn(move || {
-                use std::io::Read;
-                let mut chunk = [0u8; 8192];
-                loop {
-                    match pipe.read(&mut chunk) {
-                        Ok(0) | Err(_) => break,
-                        Ok(n) => {
-                            output
-                                .lock()
-                                .unwrap_or_else(|p| p.into_inner())
-                                .append(&chunk[..n]);
-                            if let Some(tail) = &tail {
-                                tail.lock()
-                                    .unwrap_or_else(|p| p.into_inner())
-                                    .append(&chunk[..n]);
-                            }
-                            if let Some(matches) = &matches {
-                                matches.lock().unwrap_or_else(|p| p.into_inner())[stream]
-                                    .feed(&chunk[..n]);
-                            }
-                        }
+        let streams = [0, 1].map(|stream| {
+            let (output, tail, matches) = (output.clone(), tail.clone(), matches.clone());
+            let finish = matches.clone();
+            CaptureStream {
+                on_chunk: Box::new(move |chunk| {
+                    output
+                        .lock()
+                        .unwrap_or_else(|p| p.into_inner())
+                        .append(chunk);
+                    if let Some(tail) = &tail {
+                        tail.lock().unwrap_or_else(|p| p.into_inner()).append(chunk);
                     }
-                }
-                if let Some(matches) = &matches {
-                    matches.lock().unwrap_or_else(|p| p.into_inner())[stream].finish();
-                }
-                let _ = drained_tx.send(());
-            });
-        }
-        drop(drained_tx);
-        let deadline = Instant::now() + Duration::from_millis(timeout_ms as u64);
-        let mut timed_out = false;
-        let outcome = loop {
-            match self.processes.poll(&process) {
-                Ok(Some(outcome)) => break Ok(outcome),
-                Ok(None) => {}
-                // A native poll or its record write can fail transiently. Keep ownership and
-                // the timeout guard active; a later poll may still verify the exit.
-                Err(_) => {}
+                    if let Some(matches) = &matches {
+                        matches.lock().unwrap_or_else(|p| p.into_inner())[stream].feed(chunk);
+                    }
+                }),
+                on_end: finish.map(|matches| {
+                    Box::new(move || {
+                        matches.lock().unwrap_or_else(|p| p.into_inner())[stream].finish();
+                    }) as Box<dyn FnOnce() + Send>
+                }),
             }
-            if Instant::now() >= deadline {
-                timed_out = true;
-                break self
-                    .processes
-                    .cancel(&process, Duration::from_secs(1), Duration::from_secs(5))
-                    .map_err(|failure| {
-                        format!("process timeout stop was not recorded: {}", failure.error)
-                    });
+        });
+        let captured = self.processes.run_captured(
+            &process,
+            (stdout, stderr),
+            streams,
+            CapturePolicy {
+                stop_at: Instant::now() + Duration::from_millis(timeout_ms as u64),
+                term_grace: Duration::from_secs(1),
+                stop_wait: CaptureWait::For(Duration::from_secs(5)),
+                drain_wait: CaptureWait::For(Duration::from_secs(5)),
+                drain_stop_wait: Duration::from_secs(5),
+            },
+        );
+        let exit = match captured {
+            Ok(exit) => exit,
+            Err(CaptureFault::StopNotRecorded(error)) => {
+                return EffectOutcome::Unknown(format!(
+                    "process timeout stop was not recorded: {error}"
+                ));
             }
-            std::thread::sleep(Duration::from_millis(10));
-        };
-        let duration_ms = started.elapsed().as_millis();
-        let Ok(StopOutcome::Reaped {
-            exit_code, signal, ..
-        }) = outcome
-        else {
-            return EffectOutcome::Unknown(match outcome {
-                Ok(StopOutcome::Uncertain(reason)) | Err(reason) => reason,
-                _ => "process outcome unknown".into(),
-            });
-        };
-        // A descendant can inherit a pipe after the observed parent exits. Do not let that
-        // keep a dispatcher worker blocked forever; its tree remains under the process owner.
-        for _ in 0..2 {
-            if drained_rx.recv_timeout(Duration::from_secs(5)).is_err() {
-                let _ = self
-                    .processes
-                    .cancel(&process, Duration::ZERO, Duration::from_secs(5));
+            Err(CaptureFault::StopUnverified(reason)) => return EffectOutcome::Unknown(reason),
+            Err(CaptureFault::DrainTimedOut) => {
                 return EffectOutcome::Unknown("owned process output did not drain".into());
             }
-        }
+        };
+        let (exit_code, signal, timed_out) = (exit.exit_code, exit.signal, exit.timed_out);
+        let duration_ms = exit.exited_at.duration_since(started).as_millis();
         let stored = read_snapshot(&*self.store, &ReadOptions::default(), |snapshot| {
             snapshot.resources().process(&process.id)
         });
@@ -4706,6 +4676,15 @@ impl BoundedOutput {
 
     pub fn retained(&self) -> &[u8] {
         &self.bytes
+    }
+}
+
+impl JournaledEffect for Arc<ProcessToolService> {
+    fn execute(&self, operation: &OperationRecord) -> EffectOutcome {
+        self.execute_detached(operation)
+    }
+    fn observe(&self, operation: &OperationRecord) -> EffectOutcome {
+        ProcessToolService::observe(self, operation)
     }
 }
 

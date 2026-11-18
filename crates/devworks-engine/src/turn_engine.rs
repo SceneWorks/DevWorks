@@ -6,12 +6,12 @@ use crate::package_host::PackageHost;
 use crate::providers::driver::NativeProviders;
 use crate::runs::RunSupervisor;
 use crate::runtime::{
-    Admitter, NativeTurnProgress, ToolDispatch, ToolOperationUpdate, drop_stamped_guidance,
-    skill_adoption_payload, with_role,
+    Admitter, NativeTurnProgress, PendingCall, ReceiveStart, ReceiveWait, ToolDispatch,
+    ToolOperationUpdate, drop_stamped_guidance, join_all, skill_adoption_payload, with_role,
 };
 use devworks_core::context::InvocationContext;
 use devworks_core::gateway::{CommandOutcome, QueryOutcome};
-use devworks_core::ports::storage::{ApplicationStore, Cancellation};
+use devworks_core::ports::storage::{ApplicationStore, Cancellation, WriteOptions};
 use devworks_core::ports::storage::{StorageError, Unavailable};
 use devworks_core::protocol::Id;
 use devworks_core::services::approvals::ApprovalService;
@@ -143,11 +143,13 @@ impl TurnEngine {
                 StorageError::InvalidRecord("tool turn lacks durable start position".into())
             })?;
             if has_tools {
-                tool_dispatches = self.dispatch_pending_tool_calls_cancellable(
+                let pass = self.dispatch_pending_pass(
                     &ctx,
                     &session_id,
                     tool_cancellation.as_ref(),
+                    true,
                 )?;
+                tool_dispatches = self.settle_pending(pass).await;
             }
             let unanswered =
                 !crate::tool_turn::pending_calls(self.store.as_ref(), &ctx, &session_id)?
@@ -192,23 +194,29 @@ impl TurnEngine {
         session_id: &Id,
         call: &devworks_core::protocol::provider::ToolCallKey,
     ) -> Result<devworks_core::services::sessions::transcript::BatchOutcome, StorageError> {
-        self.dispatch_tool_call_cancellable(ctx, session_id, call, None)
+        match self.dispatch_tool_call_step(ctx, session_id, call, None, false)? {
+            crate::tool_turn::DispatchStep::Answered(outcome) => Ok(outcome),
+            crate::tool_turn::DispatchStep::Parked(_) => Err(StorageError::InvalidRecord(
+                "a blocking dispatch cannot park".into(),
+            )),
+        }
     }
 
-    fn dispatch_tool_call_cancellable(
+    fn dispatch_tool_call_step(
         &self,
         ctx: &InvocationContext,
         session_id: &Id,
         call: &devworks_core::protocol::provider::ToolCallKey,
         cancellation: Option<&Cancellation>,
-    ) -> Result<devworks_core::services::sessions::transcript::BatchOutcome, StorageError> {
+        defer_receive: bool,
+    ) -> Result<crate::tool_turn::DispatchStep, StorageError> {
         let providers = self.providers.as_ref().ok_or_else(|| {
             StorageError::unavailable(
                 Unavailable::UnsupportedRuntime,
                 "native provider unavailable",
             )
         })?;
-        crate::tool_turn::dispatch_one(
+        crate::tool_turn::dispatch_step(
             self,
             self.store.as_ref(),
             &self.artifacts,
@@ -217,7 +225,23 @@ impl TurnEngine {
             session_id,
             call,
             cancellation,
+            defer_receive,
         )
+    }
+
+    /// The first, non-blocking look at an `agents.receive` (see [`Admitter::begin_receive`]).
+    pub(crate) fn begin_receive(
+        &self,
+        ctx: &InvocationContext,
+        raw: &[u8],
+        options: WriteOptions,
+    ) -> ReceiveStart {
+        self.admitter.begin_receive(ctx, raw, options)
+    }
+
+    /// Awaits a receive's wait and decides it (see [`Admitter::finish_receive`]).
+    pub(crate) async fn finish_receive(&self, wait: Box<ReceiveWait>) -> CommandOutcome {
+        self.admitter.clone().finish_receive(wait).await
     }
 
     /// Record a final cancellation only if this durable call has no dispatch-start marker.
@@ -249,6 +273,26 @@ impl TurnEngine {
         session_id: &Id,
         cancellation: Option<&Cancellation>,
     ) -> Result<Vec<ToolDispatch>, StorageError> {
+        Ok(self
+            .dispatch_pending_pass(ctx, session_id, cancellation, false)?
+            .into_iter()
+            .filter_map(|pass| match pass {
+                PendingCall::Done(dispatch) => Some(dispatch),
+                PendingCall::Parked(_) => None,
+            })
+            .collect())
+    }
+
+    /// The synchronous part of dispatching a session's pending calls on a bounded worker set.
+    /// With `defer_receive`, an `agents.receive` that has nothing to read yet comes back parked,
+    /// holding no thread; [`Self::settle_pending`] awaits it.
+    pub(crate) fn dispatch_pending_pass(
+        &self,
+        ctx: &InvocationContext,
+        session_id: &Id,
+        cancellation: Option<&Cancellation>,
+        defer_receive: bool,
+    ) -> Result<Vec<PendingCall>, StorageError> {
         let calls = crate::tool_turn::pending_calls(self.store.as_ref(), ctx, session_id)?;
         if calls.is_empty() {
             return Ok(Vec::new());
@@ -260,7 +304,7 @@ impl TurnEngine {
         let results = std::sync::Mutex::new(
             std::iter::repeat_with(|| None)
                 .take(calls.len())
-                .collect::<Vec<Option<ToolDispatch>>>(),
+                .collect::<Vec<Option<PendingCall>>>(),
         );
         std::thread::scope(|scope| {
             for _ in 0..calls.len().min(8) {
@@ -271,26 +315,35 @@ impl TurnEngine {
                     loop {
                         let index = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                         let Some(call) = calls.get(index) else { break };
-                        let outcome = if cancellation.is_some_and(Cancellation::is_cancelled) {
-                            self.cancel_tool_call_before_dispatch(ctx, session_id, call)
+                        let done = |outcome| {
+                            PendingCall::Done(ToolDispatch {
+                                call: call.clone(),
+                                outcome,
+                            })
+                        };
+                        let result = if cancellation.is_some_and(Cancellation::is_cancelled) {
+                            done(self.cancel_tool_call_before_dispatch(ctx, session_id, call))
                         } else {
-                            match self.dispatch_tool_call_cancellable(
+                            match self.dispatch_tool_call_step(
                                 ctx,
                                 session_id,
                                 call,
                                 cancellation,
+                                defer_receive,
                             ) {
-                                Err(StorageError::Cancelled) => {
-                                    self.cancel_tool_call_before_dispatch(ctx, session_id, call)
+                                Ok(crate::tool_turn::DispatchStep::Answered(outcome)) => {
+                                    done(Ok(outcome))
                                 }
-                                other => other,
+                                Ok(crate::tool_turn::DispatchStep::Parked(parked)) => {
+                                    PendingCall::Parked(parked)
+                                }
+                                Err(StorageError::Cancelled) => done(
+                                    self.cancel_tool_call_before_dispatch(ctx, session_id, call),
+                                ),
+                                Err(error) => done(Err(error)),
                             }
                         };
-                        results.lock().unwrap_or_else(|p| p.into_inner())[index] =
-                            Some(ToolDispatch {
-                                call: call.clone(),
-                                outcome,
-                            });
+                        results.lock().unwrap_or_else(|p| p.into_inner())[index] = Some(result);
                     }
                 });
             }
@@ -301,6 +354,35 @@ impl TurnEngine {
             .into_iter()
             .map(|result| result.expect("joined tool worker"))
             .collect())
+    }
+
+    /// The asynchronous part: awaits every parked receive together, without a thread each, and
+    /// returns every call's dispatch in the order the calls were listed.
+    pub(crate) async fn settle_pending(&self, passes: Vec<PendingCall>) -> Vec<ToolDispatch> {
+        let mut waiting: Vec<
+            std::pin::Pin<Box<dyn std::future::Future<Output = ToolDispatch> + Send + '_>>,
+        > = Vec::new();
+        let mut slots = Vec::new();
+        let mut dispatches = Vec::new();
+        for (index, pass) in passes.into_iter().enumerate() {
+            match pass {
+                PendingCall::Done(dispatch) => dispatches.push(Some(dispatch)),
+                PendingCall::Parked(parked) => {
+                    dispatches.push(None);
+                    slots.push(index);
+                    waiting.push(Box::pin(async move {
+                        let call = parked.key.clone();
+                        let outcome = parked.finish(self).await;
+                        ToolDispatch { call, outcome }
+                    }));
+                }
+            }
+        }
+        let mut finished = join_all(waiting).await.into_iter();
+        for index in slots {
+            dispatches[index] = finished.next();
+        }
+        dispatches.into_iter().flatten().collect()
     }
 
     /// Read a closed tool turn in native ordinal order after every emitted call has its one

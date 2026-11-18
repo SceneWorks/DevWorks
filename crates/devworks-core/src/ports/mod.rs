@@ -20,7 +20,6 @@ pub mod packages;
 pub mod process;
 pub mod project_purge;
 pub mod provider_http;
-pub mod retrieval;
 pub mod router;
 pub mod secrets;
 pub mod skill_files;
@@ -445,10 +444,48 @@ pub trait CommandHandler: Send + Sync {
         _env: &Preparation<'_>,
     ) {
     }
+    /// One short, non-blocking look at whether the command should wait before it is decided.
+    /// `None` means decide now; `Some` names the signal to wait on and the deadline to stop
+    /// waiting at, so the caller waits without holding a thread and then looks again with the
+    /// `deadline` it was given. `deadline` is `None` on the first look. A command that never
+    /// waits keeps the default.
+    fn poll_wait(
+        &self,
+        _ctx: &InvocationContext,
+        _command: &AdmittedCommand,
+        _env: &Preparation<'_>,
+        _deadline: Option<std::time::Instant>,
+    ) -> Result<Option<WaitTicket>, StorageError> {
+        Ok(None)
+    }
     fn decide(
         &self,
         ctx: &InvocationContext,
         command: &AdmittedCommand,
         tx: &mut dyn WriteTransaction,
     ) -> Result<Decided, HandlerFailure>;
+}
+
+/// What a command that must wait for something waits on ([`CommandHandler::poll_wait`]).
+#[derive(Clone, Debug)]
+pub struct WaitTicket {
+    /// The signal that something may have changed.
+    pub wake: std::sync::Arc<storage::Wake>,
+    /// [`storage::Wake::generation`] read before the command was checked.
+    pub generation: u64,
+    /// When the wait ends and the command is decided as it stands.
+    pub deadline: std::time::Instant,
+    /// The longest pause before looking again even without a signal, for a change the signal
+    /// does not announce.
+    pub recheck: std::time::Duration,
+}
+impl WaitTicket {
+    /// How long to wait for the signal before looking again: the recheck interval, or less when
+    /// the deadline is nearer.
+    pub fn pause(&self) -> std::time::Duration {
+        self.recheck.min(
+            self.deadline
+                .saturating_duration_since(std::time::Instant::now()),
+        )
+    }
 }

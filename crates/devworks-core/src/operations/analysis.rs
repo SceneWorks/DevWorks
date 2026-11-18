@@ -476,4 +476,25 @@ impl Input {
             Self::FileHotspot(_) => Mode::Query,
         }
     }
+    /// The `/body` members of this input, without the `kind` discriminator.
+    pub fn body(&self) -> Result<serde_json::Value, serde_json::Error> {
+        match self {
+            Self::Health(i) => serde_json::to_value(i),
+            Self::CrossRepoLinks(i) => serde_json::to_value(i),
+            Self::CommunityAnalysis(i) => serde_json::to_value(i),
+            Self::Status(i) => serde_json::to_value(i),
+            Self::Clusters(i) => serde_json::to_value(i),
+            Self::ClusterDetail(i) => serde_json::to_value(i),
+            Self::LinkAndDetect(i) => serde_json::to_value(i),
+            Self::ProcessBatch(i) => serde_json::to_value(i),
+            Self::Security(i) => serde_json::to_value(i),
+            Self::Metrics(i) => serde_json::to_value(i),
+            Self::Hotspots(i) => serde_json::to_value(i),
+            Self::Reanalyze(i) => serde_json::to_value(i),
+            Self::Synthesize(i) => serde_json::to_value(i),
+            Self::FleetHealth(i) => serde_json::to_value(i),
+            Self::ArchivalCandidates(i) => serde_json::to_value(i),
+            Self::FileHotspot(i) => serde_json::to_value(i),
+        }
+    }
 }

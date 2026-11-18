@@ -3,7 +3,7 @@
 //! state the review fences and removes what a completed purge owned.
 use super::*;
 use crate::project_purge::Live;
-use crate::purge_ops::{PurgeSlot, purge_frame};
+use crate::purge_ops::PurgeSlot;
 pub use crate::purge_screen::PurgeUi;
 use crate::screen::{Screen, ScreenContext, controller};
 use devworks_core::{
@@ -99,14 +99,7 @@ impl PurgeCtl<'_, '_> {
             PurgeSlot::PurgePrepare,
             "Preparing deletion manifest",
             "projects.prepare_purge",
-            move |b| {
-                purge_frame(
-                    b,
-                    "projects.prepare_purge",
-                    json!({"projectId":project.id,"expectedRevision":project.revision}),
-                    false,
-                )
-            },
+            move |b| ops::purge_prepare(b, &project),
         );
     }
     fn refresh_purge_status(&mut self) {
@@ -117,14 +110,7 @@ impl PurgeCtl<'_, '_> {
                 PurgeSlot::PurgeStatus,
                 "Reading purge status",
                 "projects.purge_status",
-                move |b| {
-                    purge_frame(
-                        b,
-                        "projects.purge_status",
-                        json!({"projectId":m.project_id,"manifestId":m.id}),
-                        true,
-                    )
-                },
+                move |b| ops::purge_status(b, &m),
             );
         }
     }
@@ -134,10 +120,12 @@ impl PurgeCtl<'_, '_> {
         };
         let next = self.purge.next.clone();
         self.purge.busy = true;
-        self.query(PurgeSlot::PurgePage,"Reading deletion manifest","projects.purge_manifest",move|b|{
-            let mut page=json!({"limit":200});if let Some(c)=next{page["cursor"]=json!(c);}
-            purge_frame(b,"projects.purge_manifest",json!({"projectId":m.project_id,"manifestId":m.id,"expectedRevision":m.revision,"page":page}),true)
-        });
+        self.query(
+            PurgeSlot::PurgePage,
+            "Reading deletion manifest",
+            "projects.purge_manifest",
+            move |b| ops::purge_manifest_page(b, &m, next.as_deref()),
+        );
     }
     fn apply_purge(&mut self, slot: PurgeSlot, reply: Reply) -> Option<(PurgeSlot, Reply)> {
         use devworks_core::protocol::results::OperationResult;
@@ -193,12 +181,7 @@ impl PurgeCtl<'_, '_> {
     /// Submits the purge the user confirmed, with the exact manifest reviewed.
     fn confirm_purge(&mut self) {
         if let (Some(b), Some(m)) = (self.backend(), self.purge.manifest.clone()) {
-            let frame = purge_frame(
-                &*b,
-                "projects.purge",
-                json!({"projectId":m.project_id,"manifestId":m.id,"expectedRevision":m.revision,"expectedDigest":m.digest,"expectedProjectRevision":m.project_revision,"confirm":true}),
-                false,
-            );
+            let frame = ops::purge_confirm(&*b, &m);
             self.purge.busy = self.client.as_deref_mut().is_some_and(|c| {
                 c.confirm_project_purge(
                     PurgeSlot::PurgeConfirm.into(),

@@ -14,7 +14,6 @@ use devworks_core::ports::secrets::SessionSecrets;
 use devworks_core::ports::storage::{
     ApplicationStore, ConfigScope, EventFilter, ReadOptions, WriteOptions, read_snapshot, run_write,
 };
-use devworks_core::ports::{Clock, IdKind, IdSource};
 use devworks_core::protocol::{ActorId, Counter, Id, Revision};
 use devworks_core::services::process::ProcessSupervisor;
 use devworks_core::services::process::executables::PathExecutables;
@@ -28,7 +27,6 @@ use rmcp::model::{
 };
 use serde_json::json;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 const SERVER_MODE: &str = "DEVWORKS_MCP_STDIO_SERVER";
@@ -83,27 +81,10 @@ fn serve() {
         });
 }
 
-struct FixedClock;
-impl Clock for FixedClock {
-    fn now_ms(&self) -> Counter {
-        Counter::new(1_700_000_000_000).unwrap()
-    }
-}
-struct Ids(AtomicU64);
-impl IdSource for Ids {
-    fn next_id(&self, kind: IdKind) -> Id {
-        let n = self.0.fetch_add(1, Ordering::SeqCst) + 1;
-        Id::new(format!("{kind:?}-{n}").to_lowercase()).unwrap()
-    }
-}
+use devworks_test_support::{FixedClock, TempRoot, TestIds as Ids};
 
 /// Removes the test's data and working roots.
-struct Scratch(std::path::PathBuf);
-impl Drop for Scratch {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.0);
-    }
-}
+struct Scratch(TempRoot);
 
 fn reaped(store: &SqliteStore) -> usize {
     read_snapshot(store, &ReadOptions::default(), |snapshot| {
@@ -119,13 +100,13 @@ fn reaped(store: &SqliteStore) -> usize {
 }
 
 fn a_registered_stdio_mcp_server_is_launched_called_and_reaped() {
-    let scratch =
-        Scratch(std::env::temp_dir().join(format!("devworks-mcp-stdio-{}", std::process::id())));
-    let _ = std::fs::remove_dir_all(&scratch.0);
+    let scratch = Scratch(TempRoot::at(
+        std::env::temp_dir().join(format!("devworks-mcp-stdio-{}", std::process::id())),
+    ));
     let (data, work_root) = (scratch.0.join("data"), scratch.0.join("root"));
     std::fs::create_dir_all(work_root.join("work")).unwrap();
     let clock = Arc::new(FixedClock);
-    let ids = Arc::new(Ids(AtomicU64::new(0)));
+    let ids = Arc::new(Ids::new());
     let store = Arc::new(
         SqliteStore::open(SqliteConfig::new(
             data,
@@ -220,9 +201,9 @@ fn a_registered_stdio_mcp_server_is_launched_called_and_reaped() {
 /// lookup that opened a second read would wait for the pool and then report an allowed,
 /// installed runtime as missing; it must use the caller's snapshot instead.
 fn missing_runtime_uses_the_callers_read_on_a_single_connection_pool() {
-    let scratch =
-        Scratch(std::env::temp_dir().join(format!("devworks-mcp-runtime-{}", std::process::id())));
-    let _ = std::fs::remove_dir_all(&scratch.0);
+    let scratch = Scratch(TempRoot::at(
+        std::env::temp_dir().join(format!("devworks-mcp-runtime-{}", std::process::id())),
+    ));
     let (data, bin, work_root) = (
         scratch.0.join("data"),
         scratch.0.join("bin"),
@@ -236,7 +217,7 @@ fn missing_runtime_uses_the_callers_read_on_a_single_connection_pool() {
     #[cfg(windows)]
     std::fs::copy(std::env::current_exe().unwrap(), bin.join("node.exe")).unwrap();
     let clock = Arc::new(FixedClock);
-    let ids = Arc::new(Ids(AtomicU64::new(0)));
+    let ids = Arc::new(Ids::new());
     let mut config = SqliteConfig::new(
         data,
         clock.clone(),

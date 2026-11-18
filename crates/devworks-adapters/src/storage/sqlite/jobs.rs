@@ -3,38 +3,13 @@
 //! origins.
 use super::conn::db;
 use super::repos::{Snapshot, Unit};
+use super::support::{conflict, corrupt, id_of, invalid, page_limit};
 use devworks_core::ports::storage::*;
-use devworks_core::protocol::{
-    ActorId, Id, OperationId, ProjectId, Revision, RevisionDimension, RootId,
-};
+use devworks_core::protocol::{ActorId, Id, OperationId, ProjectId, RevisionDimension, RootId};
 use rusqlite::{Connection, OptionalExtension, Row, params};
 
-fn invalid(m: impl Into<String>) -> StorageError {
-    StorageError::InvalidRecord(m.into())
-}
-fn corrupt(m: impl Into<String>) -> StorageError {
-    StorageError::unavailable(Unavailable::Corrupt, m)
-}
-fn id_of(s: String) -> Result<Id, StorageError> {
-    Id::new(s).map_err(|e| corrupt(format!("stored identifier: {e}")))
-}
 fn opt_id(s: Option<String>) -> Result<Option<Id>, StorageError> {
     s.map(id_of).transpose()
-}
-fn limit_ok(limit: u16) -> Result<i64, StorageError> {
-    if limit == 0 || limit > 500 {
-        return Err(invalid("limit must be 1..=500"));
-    }
-    Ok(i64::from(limit))
-}
-fn conflict(kind: &'static str, id: &Id, expected: i64, current: i64) -> StorageError {
-    StorageError::conflict(
-        RevisionDimension::Schedule,
-        kind,
-        id.clone(),
-        Revision::new(expected.max(1)).expect("positive"),
-        Revision::new(current.max(1)).expect("positive"),
-    )
 }
 fn duplicate(kind: &'static str, id: impl Into<String>) -> StorageError {
     StorageError::Duplicate {
@@ -613,7 +588,7 @@ macro_rules! job_reads {
                 after: Option<(&str, &str)>,
                 limit: u16,
             ) -> Result<Vec<StoredJob>, StorageError> {
-                let limit = limit_ok(limit)?;
+                let limit = page_limit(limit)?;
                 let (scope_kind, project) = match scope {
                     JobScope::App => (0, None),
                     JobScope::Project(p) => (1, Some(p.0.as_str())),
@@ -656,7 +631,7 @@ macro_rules! job_reads {
                 .pop())
             }
             fn due_jobs(&self, now_ms: i64, limit: u16) -> Result<Vec<StoredJob>, StorageError> {
-                let limit = limit_ok(limit)?;
+                let limit = page_limit(limit)?;
                 jobs_query(
                     self.conn,
                     &format!(
@@ -667,7 +642,7 @@ macro_rules! job_reads {
                 )
             }
             fn all_jobs(&self, after: Option<&Id>, limit: u16) -> Result<Vec<StoredJob>, StorageError> {
-                let limit = limit_ok(limit)?;
+                let limit = page_limit(limit)?;
                 jobs_query(
                     self.conn,
                     &format!(
@@ -685,7 +660,7 @@ macro_rules! job_reads {
                 before_seq: Option<i64>,
                 limit: u16,
             ) -> Result<Vec<StoredJobRun>, StorageError> {
-                let limit = limit_ok(limit)?;
+                let limit = page_limit(limit)?;
                 runs_query(
                     self.conn,
                     &format!(
@@ -703,7 +678,7 @@ macro_rules! job_reads {
                 after: Option<&Id>,
                 limit: u16,
             ) -> Result<Vec<StoredJobRun>, StorageError> {
-                let limit = limit_ok(limit)?;
+                let limit = page_limit(limit)?;
                 let after = after.map_or("", Id::as_str);
                 let active = "state IN ('Queued','Running','Holding')";
                 match filter {
@@ -757,7 +732,7 @@ macro_rules! job_reads {
                 after_seq: Option<i64>,
                 limit: u16,
             ) -> Result<Vec<StoredJobUsage>, StorageError> {
-                usage_rows(self.conn, run, after_seq.unwrap_or(0), limit_ok(limit)?)
+                usage_rows(self.conn, run, after_seq.unwrap_or(0), page_limit(limit)?)
             }
             fn usage_totals(&self, run: &Id) -> Result<JobUsageTotals, StorageError> {
                 usage_totals(self.conn, run)
@@ -791,7 +766,13 @@ impl JobRepository for Unit<'_> {
             id: j.id.as_str().to_owned(),
         })?;
         if current.revision != expected_revision {
-            return Err(conflict("job", &j.id, expected_revision, current.revision));
+            return Err(conflict(
+                RevisionDimension::Schedule,
+                "job",
+                j.id.as_str(),
+                expected_revision,
+                current.revision,
+            ));
         }
         if current.project_id != j.project_id {
             return Err(invalid("a job never changes scope"));
@@ -814,7 +795,13 @@ impl JobRepository for Unit<'_> {
             id: id.as_str().to_owned(),
         })?;
         if j.revision != expected_revision {
-            return Err(conflict("job", id, expected_revision, j.revision));
+            return Err(conflict(
+                RevisionDimension::Schedule,
+                "job",
+                id.as_str(),
+                expected_revision,
+                j.revision,
+            ));
         }
         j.next_at_ms = next_at_ms;
         j.interrupted_run_id = interrupted_run_id.cloned();
@@ -871,8 +858,9 @@ impl JobRepository for Unit<'_> {
         })?;
         if current.revision != expected_revision {
             return Err(conflict(
+                RevisionDimension::Schedule,
                 "job_run",
-                &r.id,
+                r.id.as_str(),
                 expected_revision,
                 current.revision,
             ));
@@ -943,7 +931,13 @@ impl JobRepository for Unit<'_> {
                 });
             }
             (Some(e), Some(cur)) if e != cur.revision => {
-                return Err(conflict("job_checkpoint", &c.job_id, e, cur.revision));
+                return Err(conflict(
+                    RevisionDimension::Schedule,
+                    "job_checkpoint",
+                    c.job_id.as_str(),
+                    e,
+                    cur.revision,
+                ));
             }
             (Some(e), Some(_)) => e + 1,
         };
@@ -981,8 +975,9 @@ impl JobRepository for Unit<'_> {
             })?;
         if current.revision != expected_revision {
             return Err(conflict(
+                RevisionDimension::Schedule,
                 "job_action",
-                &a.job_id,
+                a.job_id.as_str(),
                 expected_revision,
                 current.revision,
             ));

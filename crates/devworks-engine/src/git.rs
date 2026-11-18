@@ -1,12 +1,8 @@
 //! Git effects share the application's operation journal and owned process supervisor.
-use crate::dispatch::{
-    Consumer, Delivery, DeliveryHandler, EffectExecutor, EffectFuture, EffectResult, Outcome,
-    RetryPolicy,
-};
-use devworks_core::ports::storage::{OperationRecord, StorageError, WriteTransaction};
-use devworks_core::services::git::{EFFECT_CONSUMER, EffectOutcome, GitConfig, GitService};
+use crate::dispatch::Consumer;
+use crate::effect_consumer::{PanicReasons, STANDARD_RETRY, effect_consumer};
+use devworks_core::services::git::{EFFECT_CONSUMER, GitConfig, GitService};
 use std::sync::Arc;
-use std::time::Duration;
 
 #[derive(Clone)]
 pub struct GitComposition {
@@ -16,64 +12,38 @@ pub struct GitComposition {
     /// composed).
     pub github_http: Option<Arc<dyn devworks_core::ports::http::HttpTransport>>,
 }
-struct Effects(Arc<GitService>);
-fn result(outcome: EffectOutcome) -> EffectResult {
-    match outcome {
-        EffectOutcome::Completed(result) => EffectResult::Completed(result),
-        EffectOutcome::Failed(reason) => EffectResult::Failed(reason),
-        EffectOutcome::Unknown(reason) => EffectResult::Unknown(reason),
-    }
-}
-impl EffectExecutor for Effects {
-    fn execute(&self, operation: OperationRecord) -> EffectFuture {
-        let service = self.0.clone();
-        Box::pin(async move {
-            match tokio::task::spawn_blocking(move || service.execute(&operation)).await {
-                Ok(outcome) => result(outcome),
-                Err(_) => EffectResult::Unknown("Git effect panicked after dispatch".into()),
-            }
-        })
-    }
-    fn observe(&self, operation: OperationRecord) -> EffectFuture {
-        let service = self.0.clone();
-        Box::pin(async move {
-            match tokio::task::spawn_blocking(move || service.observe(&operation)).await {
-                Ok(outcome) => result(outcome),
-                Err(_) => EffectResult::Unknown("Git observation panicked".into()),
-            }
-        })
-    }
-}
-struct Settle;
-impl DeliveryHandler for Settle {
-    fn apply(&self, _: &mut dyn WriteTransaction, _: &Delivery) -> Result<Outcome, StorageError> {
-        Ok(Outcome::Completed)
-    }
-}
 pub fn consumer(service: Arc<GitService>) -> Consumer {
-    Consumer {
-        name: EFFECT_CONSUMER.into(),
-        handler: Arc::new(Settle),
-        effect: Some(Arc::new(Effects(service))),
-        async_handler: None,
-        eligibility: None,
-        stop_grace_ms: 5_000,
-        retry: RetryPolicy {
-            base_delay_ms: 500,
-            max_delay_ms: 30_000,
-            max_attempts: 4,
+    effect_consumer(
+        EFFECT_CONSUMER,
+        service,
+        PanicReasons {
+            execute: "Git effect panicked after dispatch",
+            observe: "Git observation panicked",
         },
-        max_in_flight: None,
-    }
+        STANDARD_RETRY,
+        None,
+    )
 }
 /// Cancel-before-dispatch is already proved by the shared journal; release those local
 /// reservations without repeating a Git command or deleting anything from the filesystem.
-pub(crate) async fn run(service: Arc<GitService>, mut stopped: crate::workers::Stopped) {
-    while !service.is_stopped() && !stopped.is_set() {
-        let current = service.clone();
-        let _ = tokio::task::spawn_blocking(move || current.reconcile_cancelled()).await;
-        // Waits out the interval, or ends at once when the runtime stops (a stop sent while a
-        // pass is running ends the wait as soon as it begins).
-        stopped.wait(Duration::from_secs(1)).await;
-    }
+pub(crate) async fn run(
+    service: Arc<GitService>,
+    stopped: crate::workers::Stopped,
+    commits: crate::workers::Commits,
+) {
+    let live = service.clone();
+    commits
+        .run(
+            stopped,
+            move || !live.is_stopped(),
+            move || {
+                let current = service.clone();
+                async move {
+                    let _ =
+                        tokio::task::spawn_blocking(move || current.reconcile_cancelled()).await;
+                    false
+                }
+            },
+        )
+        .await;
 }

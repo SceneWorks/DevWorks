@@ -235,7 +235,7 @@ impl OwnedInferenceSource for NativeProviderSource {
             || attempt.connection_id != self.prepared.identity.binding.connection_id
             || attempt.catalog_model_id != self.prepared.identity.binding.model_id
             || attempt.endpoint_profile != format!("{:?}", self.prepared.profile)
-            || attempt.state != "Dispatched"
+            || attempt.state != devworks_core::ports::storage::AttemptState::Dispatched
         {
             return Err(StorageError::ScopeDenied);
         }

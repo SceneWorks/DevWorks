@@ -1,11 +1,14 @@
 //! Host-owned framing of provider tool arguments. A provider chooses arguments only; the
 //! selected operation, mode, request identity and contract envelope come from the host.
+use crate::runtime::{ReceiveStart, ReceiveWait};
 use crate::turn_error::artifact_read_fault;
 use crate::{providers::schemas::RegisteredSchemas, turn_engine::TurnEngine};
+use devworks_core::services::approvals::ApprovalService;
 use devworks_core::{
     admission::{self, Selection},
     context::{InvocationContext, PrincipalKind},
     fingerprint::sha256_hex,
+    gateway::CommandOutcome,
     ports::{IdKind, storage::*},
     protocol::{
         ActorId, AttemptId, CONTRACT, CommandReply, Id, OperationId, OperationState, RetryAdvice,
@@ -1726,11 +1729,69 @@ pub(crate) fn frame_as(
     Ok(bytes)
 }
 
+/// Where a dispatch stands after its synchronous part.
+pub(crate) enum DispatchStep {
+    Answered(BatchOutcome),
+    /// An `agents.receive` with nothing to read yet: it holds no thread while it waits.
+    Parked(Box<ParkedReceive>),
+}
+
+/// A dispatched `agents.receive` waiting for a message, with what the call needs to record its
+/// response once the wait ends.
+pub(crate) struct ParkedReceive {
+    pub(crate) wait: Box<ReceiveWait>,
+    descriptor: &'static OperationDescriptor,
+    raw: Vec<u8>,
+    ctx: InvocationContext,
+    session_id: Id,
+    pub(crate) key: ToolCallKey,
+}
+impl ParkedReceive {
+    /// Waits without holding a thread, then records the call's response. Store reads, the
+    /// decision and the recording run on blocking threads; only the wake is awaited here.
+    pub(crate) async fn finish(self, engine: &TurnEngine) -> Result<BatchOutcome, StorageError> {
+        let Self {
+            wait,
+            descriptor,
+            raw,
+            ctx,
+            session_id,
+            key,
+        } = self;
+        let reply = engine.finish_receive(wait).await;
+        let (store, artifacts, approvals) = (
+            engine.store().clone(),
+            engine.artifacts().clone(),
+            engine.approvals().clone(),
+        );
+        match tokio::task::spawn_blocking(move || {
+            let (outcome, bytes) =
+                command_response(&approvals, store.as_ref(), &ctx, descriptor, &raw, reply)?;
+            record_response(
+                store.as_ref(),
+                &artifacts,
+                &ctx,
+                &session_id,
+                &key,
+                outcome,
+                bytes,
+            )
+        })
+        .await
+        {
+            Ok(result) => result,
+            Err(error) => std::panic::resume_unwind(error.into_panic()),
+        }
+    }
+}
+
 /// Execute one durable, unanswered provider call through the same gateway used by UI and agent
 /// tools. The call's recorded schema chooses the operation; provider arguments never choose it.
 /// Command retries reuse the host key, so a lost reply cannot repeat the effect.
+/// With `defer_receive`, a waiting `agents.receive` comes back parked instead of blocking the
+/// calling thread.
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn dispatch_one(
+pub(crate) fn dispatch_step(
     engine: &TurnEngine,
     store: &dyn ApplicationStore,
     artifacts: &Arc<ArtifactService>,
@@ -1739,7 +1800,8 @@ pub(crate) fn dispatch_one(
     session_id: &Id,
     key: &ToolCallKey,
     cancellation: Option<&Cancellation>,
-) -> Result<BatchOutcome, StorageError> {
+    defer_receive: bool,
+) -> Result<DispatchStep, StorageError> {
     let (call, started, call_sequence, context_epoch) =
         read_snapshot(store, &ReadOptions::default(), |read| {
             let session = authorized_session(read, ctx, session_id, SessionActors::AgentsAndHosts)?;
@@ -1785,7 +1847,9 @@ pub(crate) fn dispatch_one(
                 .usage()
                 .inference_attempt(&key.attempt_id.0)?
                 .ok_or(StorageError::ScopeDenied)?;
-            if attempt.session_id.as_ref() != Some(session_id) || attempt.state != "Settled" {
+            if attempt.session_id.as_ref() != Some(session_id)
+                || attempt.state != devworks_core::ports::storage::AttemptState::Settled
+            {
                 return Err(StorageError::ScopeDenied);
             }
             let page = read.history().page(
@@ -1980,44 +2044,49 @@ pub(crate) fn dispatch_one(
                 }
             },
             Ok((descriptor, Mode::Command, raw)) => {
-                match engine.command(ctx, descriptor.name, &raw) {
-                    Ok(CommandReply::CommandStatusUnknown { .. }) => {
-                        // Same host key is retried on recovery until the gateway returns its receipt.
-                        return Err(StorageError::unavailable(
-                            Unavailable::UnsupportedRuntime,
-                            "tool command status unknown",
-                        ));
-                    }
-                    Ok(CommandReply::ReceiptPurged { .. }) => {
-                        return Err(StorageError::unavailable(
-                            Unavailable::UnsupportedRuntime,
-                            "tool command receipt purged before outcome reconciliation",
-                        ));
-                    }
-                    Ok(reply @ CommandReply::Recorded { .. }) if approval_refusal(&reply) => {
-                        held_approval(engine, store, ctx, descriptor, &raw)?
-                    }
-                    Ok(reply @ CommandReply::Recorded { .. }) => recorded_command(&reply)?,
-                    Ok(CommandReply::Rejected { code, retry, .. }) => {
-                        if needs_recovery(retry) {
-                            return Err(StorageError::unavailable(
-                                Unavailable::UnsupportedRuntime,
-                                "tool command rejection requires reconciliation",
-                            ));
+                let reply = if defer_receive && descriptor.name == "agents.receive" {
+                    match engine.begin_receive(
+                        ctx,
+                        &raw,
+                        WriteOptions {
+                            cancellation: cancellation.cloned(),
+                            ..WriteOptions::command()
+                        },
+                    ) {
+                        ReceiveStart::Answered(reply) => reply,
+                        ReceiveStart::Waiting(wait) => {
+                            return Ok(DispatchStep::Parked(Box::new(ParkedReceive {
+                                wait,
+                                descriptor,
+                                raw,
+                                ctx: ctx.clone(),
+                                session_id: session_id.clone(),
+                                key: key.clone(),
+                            })));
                         }
-                        failed(&format!("command_{code:?}"))
                     }
-                    Err(_) => {
-                        return Err(StorageError::unavailable(
-                            Unavailable::UnsupportedRuntime,
-                            "tool command gateway failed before receipt reconciliation",
-                        ));
-                    }
-                }
+                } else {
+                    engine.command(ctx, descriptor.name, &raw)
+                };
+                command_response(engine.approvals(), store, ctx, descriptor, &raw, reply)?
             }
             Err(_) => failed("tool_invalid_arguments"),
         }
     };
+    record_response(store, artifacts, ctx, session_id, key, outcome, bytes)
+        .map(DispatchStep::Answered)
+}
+
+/// Records the one response of a dispatched call (staging its result bytes as an artifact).
+fn record_response(
+    store: &dyn ApplicationStore,
+    artifacts: &Arc<ArtifactService>,
+    ctx: &InvocationContext,
+    session_id: &Id,
+    key: &ToolCallKey,
+    outcome: ToolOutcome,
+    bytes: Option<Vec<u8>>,
+) -> Result<BatchOutcome, StorageError> {
     let staged =
         if let Some(bytes) = &bytes {
             Some(artifacts.stage_host_bytes(store, bytes,
@@ -2487,6 +2556,52 @@ fn recorded_command(
     })
 }
 
+/// Turns a command's gateway outcome into the response a tool call records. An outcome that
+/// leaves the call unanswered is an error: the same host key is retried on recovery.
+fn command_response(
+    approvals: &Arc<ApprovalService>,
+    store: &dyn ApplicationStore,
+    ctx: &InvocationContext,
+    descriptor: &'static OperationDescriptor,
+    raw: &[u8],
+    reply: CommandOutcome,
+) -> Result<(ToolOutcome, Option<Vec<u8>>), StorageError> {
+    Ok(match reply {
+        Ok(CommandReply::CommandStatusUnknown { .. }) => {
+            // Same host key is retried on recovery until the gateway returns its receipt.
+            return Err(StorageError::unavailable(
+                Unavailable::UnsupportedRuntime,
+                "tool command status unknown",
+            ));
+        }
+        Ok(CommandReply::ReceiptPurged { .. }) => {
+            return Err(StorageError::unavailable(
+                Unavailable::UnsupportedRuntime,
+                "tool command receipt purged before outcome reconciliation",
+            ));
+        }
+        Ok(reply @ CommandReply::Recorded { .. }) if approval_refusal(&reply) => {
+            held_approval(approvals, store, ctx, descriptor, raw)?
+        }
+        Ok(reply @ CommandReply::Recorded { .. }) => recorded_command(&reply)?,
+        Ok(CommandReply::Rejected { code, retry, .. }) => {
+            if needs_recovery(retry) {
+                return Err(StorageError::unavailable(
+                    Unavailable::UnsupportedRuntime,
+                    "tool command rejection requires reconciliation",
+                ));
+            }
+            failed(&format!("command_{code:?}"))
+        }
+        Err(_) => {
+            return Err(StorageError::unavailable(
+                Unavailable::UnsupportedRuntime,
+                "tool command gateway failed before receipt reconciliation",
+            ));
+        }
+    })
+}
+
 /// Whether a domain command refused the call because a person must approve it.
 fn approval_refusal(reply: &DomainCommandReply) -> bool {
     matches!(reply, CommandReply::Recorded { receipt, .. }
@@ -2498,7 +2613,7 @@ fn approval_refusal(reply: &DomainCommandReply) -> bool {
 /// it, so the turn goes on; the decision reaches the agent later as an update of the operation.
 /// A request no approval can carry is answered as failed rather than held.
 fn held_approval(
-    engine: &TurnEngine,
+    approvals: &Arc<ApprovalService>,
     store: &dyn ApplicationStore,
     ctx: &InvocationContext,
     descriptor: &'static OperationDescriptor,
@@ -2533,7 +2648,7 @@ fn held_approval(
             frame
         }
     };
-    match engine.approvals().stage_held(
+    match approvals.stage_held(
         store,
         ctx,
         descriptor.name,

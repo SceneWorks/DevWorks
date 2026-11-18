@@ -12,6 +12,7 @@ use common::*;
 use devworks_core::protocol::records::WorkRecord;
 use devworks_core::services::work::workflow::default_status_id;
 use devworks_desktop::backend::Backend;
+use devworks_desktop::frame::fixture::command_input;
 use devworks_desktop::ops;
 use devworks_desktop::route::Route;
 use devworks_desktop::work_ops as wops;
@@ -31,12 +32,22 @@ fn type_into(
     h.step();
 }
 fn list(backend: &dyn Backend, op: &str, project: &str) -> Vec<WorkRecord> {
-    wops::work_page(backend.query(op, &wops::work_list(backend, op, project, None)))
+    let family = match op {
+        "features.list" => wops::Family::Features,
+        "issues.list" => wops::Family::Issues,
+        _ => wops::Family::Tasks,
+    };
+    wops::work_page(backend.query(op, &wops::work_list(backend, family, project, None)))
         .unwrap()
         .0
 }
+fn post_frame(backend: &dyn Backend, project: &str, mut body: serde_json::Value) -> Vec<u8> {
+    body["projectId"] = json!(project);
+    wops::message_post(backend, command_input("agents.post", body))
+}
 fn command(backend: &dyn Backend, op: &str, body: serde_json::Value) -> WorkRecord {
-    wops::work_changed(backend.command(op, &wops::work_command(backend, op, body))).unwrap()
+    wops::work_changed(backend.command(op, &wops::work_command(backend, command_input(op, body))))
+        .unwrap()
 }
 fn click_row(h: &mut egui_kittest::Harness<'_, devworks_desktop::shell::Shell>, prefix: &str) {
     h.query_all_by_label_contains(prefix)
@@ -63,7 +74,7 @@ fn overview_messages_use_the_retained_gateway_and_show_delivered_then_read_state
     let pid = project.id.0.as_str().to_owned();
     let posted = wops::message_posted(backend.command(
         "agents.post",
-        &wops::message_post(
+        &post_frame(
             &*backend,
             &pid,
             json!({"body":"Please review the build","messageKind":"Question","toHuman":true}),
@@ -114,7 +125,7 @@ fn overview_messages_use_the_retained_gateway_and_show_delivered_then_read_state
     assert!(h.state().work.messages.inbox.is_empty());
     wops::message_posted(backend.command(
         "agents.post",
-        &wops::message_post(
+        &post_frame(
             &*backend,
             &pid,
             json!({"body":"External update","toHuman":true}),
@@ -148,7 +159,7 @@ fn message_event_refresh_keeps_earlier_unread_inbox_entries() {
     let post = |body: &str| {
         wops::message_posted(backend.command(
             "agents.post",
-            &wops::message_post(&*backend, &pid, json!({"body":body,"toHuman":true})),
+            &post_frame(&*backend, &pid, json!({"body":body,"toHuman":true})),
         ))
         .unwrap()
     };
@@ -255,7 +266,7 @@ fn message_subscription_starts_before_the_initial_inbox_snapshot() {
 
     wops::message_posted(backend.command(
         "agents.post",
-        &wops::message_post(
+        &post_frame(
             &*backend,
             &pid,
             json!({"body":"Between subscription and snapshot","toHuman":true}),
@@ -471,7 +482,7 @@ fn the_plan_editor_keeps_what_it_does_not_show() {
     );
     form.requirements[0].text = "pay by card\nor wallet".into();
     let content = serde_json::from_value(art.clone()).unwrap();
-    let body = plan_body(&form, &content);
+    let body = serde_json::to_value(plan_body(&form, &content).unwrap()).unwrap();
     // Saving keeps the acceptance tests, each requirement's status and coverage, the dropped
     // requirement with its decision, and the unchanged criterion's state and evidence.
     assert_eq!(body["acceptanceTests"], draft["acceptanceTests"]);
@@ -526,7 +537,7 @@ fn the_plan_editor_keeps_what_it_does_not_show() {
     assert_eq!(form.requirements.last().unwrap().id, "E3");
     let mut form = form.clone();
     form.requirements.last_mut().unwrap().text = "new requirement".into();
-    let saved = plan_body(&form, &content);
+    let saved = serde_json::to_value(plan_body(&form, &content).unwrap()).unwrap();
     let added = saved["requirements"]
         .as_array()
         .unwrap()
@@ -616,7 +627,7 @@ fn a_plan_save_submits_the_form_it_started_from_into_the_project() {
     // (the feature's agents read it there; a workspace-only artifact is refused).
     let saved = wops::work_record(real.query(
         "features.get",
-        &wops::work_get(&*real, "features.get", feature.id.as_str()),
+        &wops::work_get(&*real, wops::Family::Features, feature.id.as_str()),
     ))
     .unwrap();
     let pending = saved.pending_plan.clone().expect("the draft is saved");
@@ -630,7 +641,7 @@ fn a_plan_save_submits_the_form_it_started_from_into_the_project() {
     settle(&mut h);
     let saved = wops::work_record(real.query(
         "features.get",
-        &wops::work_get(&*real, "features.get", feature.id.as_str()),
+        &wops::work_get(&*real, wops::Family::Features, feature.id.as_str()),
     ))
     .unwrap();
     let again = saved.pending_plan.expect("the draft is saved");
@@ -722,7 +733,8 @@ fn a_blocker_change_starts_from_the_complete_list() {
         devworks_core::protocol::Id::new("a").unwrap(),
         devworks_core::protocol::Id::new("b").unwrap(),
     ];
-    let edges = |v: serde_json::Value| -> Vec<String> {
+    let edges = |input: devworks_core::operations::OperationInput| -> Vec<String> {
+        let v = input.body().unwrap();
         v["replacement"]["edges"]
             .as_array()
             .unwrap()
@@ -792,7 +804,7 @@ fn an_item_edit_made_while_a_save_runs_stays_open() {
     settle(&mut h);
     let saved = wops::work_record(real.query(
         "issues.get",
-        &wops::work_get(&*real, "issues.get", issue.id.as_str()),
+        &wops::work_get(&*real, wops::Family::Issues, issue.id.as_str()),
     ))
     .unwrap();
     assert_eq!(saved.title.0, "Crash on start");
@@ -987,7 +999,7 @@ fn save_plan_now(
 fn pending_statement(backend: &dyn Backend, feature: &WorkRecord) -> Option<String> {
     wops::work_record(backend.query(
         "features.get",
-        &wops::work_get(backend, "features.get", feature.id.as_str()),
+        &wops::work_get(backend, wops::Family::Features, feature.id.as_str()),
     ))
     .unwrap()
     .pending_plan
@@ -1269,12 +1281,12 @@ fn an_adjacent_move_is_one_bounded_placement_whatever_the_bucket_size() {
     let bucket: Vec<&str> = names.iter().map(String::as_str).collect();
     let up = adjacent_move(&bucket, 250, true).unwrap();
     assert_eq!(
-        up,
+        serde_json::to_value(up).unwrap(),
         json!({"workId": "w250", "anchorId": "w249", "side": "Before"})
     );
     let down = adjacent_move(&bucket, 250, false).unwrap();
     assert_eq!(
-        down,
+        serde_json::to_value(down).unwrap(),
         json!({"workId": "w250", "anchorId": "w251", "side": "After"})
     );
     assert!(adjacent_move(&bucket, 0, true).is_none());
@@ -1349,8 +1361,11 @@ fn a_plan_stays_savable_after_a_covering_card_leaves_its_feature() {
             "parentId": feature.id.as_str()}),
     );
     let get = |id: &str| {
-        wops::work_record(real.query("features.get", &wops::work_get(&*real, "features.get", id)))
-            .unwrap()
+        wops::work_record(real.query(
+            "features.get",
+            &wops::work_get(&*real, wops::Family::Features, id),
+        ))
+        .unwrap()
     };
     let f = get(feature.id.as_str());
     let mut draft = serde_json::to_value(f.pending_plan.clone().unwrap().draft).unwrap();
@@ -1403,10 +1418,12 @@ fn approve_plan(
         "features.request_plan_approval",
         &wops::work_command(
             backend,
-            "features.request_plan_approval",
-            json!({"featureId":feature.id,
+            command_input(
+                "features.request_plan_approval",
+                json!({"featureId":feature.id,
             "expectedRevision":feature.revision, "planRevision":pending.revision,
             "planDigest":devworks_core::services::work::plan_digest(&pending.draft)}),
+            ),
         ),
     ))
     .unwrap()
@@ -1457,7 +1474,7 @@ fn initial_approved_plan(
     click(h, Role::Button, "Save plan draft");
     let saved = wops::work_record(backend.query(
         "features.get",
-        &wops::work_get(backend, "features.get", feature.id.as_str()),
+        &wops::work_get(backend, wops::Family::Features, feature.id.as_str()),
     ))
     .unwrap();
     let approved = approve_plan(engine, backend, &saved);
@@ -1701,7 +1718,7 @@ fn restored_requirement_case(delayed_detail: bool) {
     assert!(h.state().work.plan.is_none());
     let saved = wops::work_record(backend.query(
         "features.get",
-        &wops::work_get(&*backend, "features.get", feature.id.as_str()),
+        &wops::work_get(&*backend, wops::Family::Features, feature.id.as_str()),
     ))
     .unwrap();
     assert!(
@@ -1808,7 +1825,7 @@ fn restored_requirement_case(delayed_detail: bool) {
     click(&mut h, Role::Button, "Save plan draft");
     let restored = wops::work_record(backend.query(
         "features.get",
-        &wops::work_get(&*backend, "features.get", feature.id.as_str()),
+        &wops::work_get(&*backend, wops::Family::Features, feature.id.as_str()),
     ))
     .unwrap();
     assert!(matches!(
@@ -1873,7 +1890,7 @@ fn drop_save_race(keep: bool) {
     settle(&mut h);
     let saved = wops::work_record(real.query(
         "features.get",
-        &wops::work_get(&*real, "features.get", feature.id.as_str()),
+        &wops::work_get(&*real, wops::Family::Features, feature.id.as_str()),
     ))
     .unwrap();
     let first = &saved.pending_plan.as_ref().unwrap().draft;
@@ -1890,7 +1907,7 @@ fn drop_save_race(keep: bool) {
     assert!(h.state().work.plan.is_none());
     let saved = wops::work_record(real.query(
         "features.get",
-        &wops::work_get(&*real, "features.get", feature.id.as_str()),
+        &wops::work_get(&*real, wops::Family::Features, feature.id.as_str()),
     ))
     .unwrap();
     let pending = saved.pending_plan.unwrap().draft;
@@ -1940,7 +1957,7 @@ fn a_drop_decision_upload_failure_keeps_the_draft_and_changes_no_plan() {
     assert!(form.drops["E1"].reason.contains("IO failure"));
     let saved = wops::work_record(backend.query(
         "features.get",
-        &wops::work_get(&*backend, "features.get", feature.id.as_str()),
+        &wops::work_get(&*backend, wops::Family::Features, feature.id.as_str()),
     ))
     .unwrap();
     assert!(
@@ -1990,7 +2007,7 @@ fn a_drop_decision_upload_pending_at_close_finishes_after_relaunch() {
     settle(&mut h);
     let saved = wops::work_record(real.query(
         "features.get",
-        &wops::work_get(&*real, "features.get", feature.id.as_str()),
+        &wops::work_get(&*real, wops::Family::Features, feature.id.as_str()),
     ))
     .unwrap();
     let requirement = &saved.pending_plan.unwrap().draft.requirements.0[0];
@@ -2064,7 +2081,7 @@ fn next_task_selects_within_the_approved_assessed_feature_without_starting_it() 
     assert_eq!(frame["schemaRevision"], 3);
     let card = wops::work_record(backend.query(
         "tasks.get",
-        &wops::work_get(&*backend, "tasks.get", card.id.as_str()),
+        &wops::work_get(&*backend, wops::Family::Tasks, card.id.as_str()),
     ))
     .unwrap();
     assert!(
@@ -2235,7 +2252,7 @@ fn an_inbox_reply_read_before_mark_read_landed_does_not_restore_the_message() {
     let post = |body: &str| {
         wops::message_posted(real.command(
             "agents.post",
-            &wops::message_post(&*real, &pid, json!({"body":body,"toHuman":true})),
+            &post_frame(&*real, &pid, json!({"body":body,"toHuman":true})),
         ))
         .unwrap()
     };
@@ -2333,14 +2350,15 @@ fn the_work_card_assigns_its_working_agent_and_clears_the_assignment_through_tas
     );
     // A live primary assignment of the issue, registered through the run substrate as a
     // starting agent registers one (no agent runs in this test).
-    let mut frame: serde_json::Value = serde_json::from_slice(&ops::command_frame(
-        &*backend,
-        "sessions.start",
-        json!({"scope": {"kind": "Project", "projectId": pid}, "rootId": issue.id,
+    let mut frame: serde_json::Value =
+        serde_json::from_slice(&devworks_desktop::frame::fixture::command(
+            &*backend,
+            "sessions.start",
+            json!({"scope": {"kind": "Project", "projectId": pid}, "rootId": issue.id,
             "title": "Work"}),
-    ))
-    .unwrap();
-    frame["schemaRevision"] = json!(ops::SESSION_REVISION);
+        ))
+        .unwrap();
+    frame["schemaRevision"] = json!(devworks_desktop::frame::latest_revision("sessions.start"));
     let session =
         ops::started(backend.command("sessions.start", frame.to_string().as_bytes())).unwrap();
     let live = {

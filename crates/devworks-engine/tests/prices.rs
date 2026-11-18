@@ -6,7 +6,6 @@ use devworks_adapters::fs::artifacts::NativeArtifactFiles;
 use devworks_core::authority::HostAuthority;
 use devworks_core::context::{InvocationContext, PrincipalKind};
 use devworks_core::gateway::Gateway;
-use devworks_core::ports::files::{ArtifactFiles, FileFault, PublishedBlob};
 use devworks_core::ports::storage::*;
 use devworks_core::ports::usage::*;
 use devworks_core::ports::{IdKind, IdSource};
@@ -21,10 +20,9 @@ use devworks_engine::{
     ArtifactComposition, DiagnosticComposition, KnowledgeComposition, RunComposition,
 };
 use devworks_engine::{Dispatcher, DispatcherConfig};
+use devworks_test_support::{FaultFiles, FileOp};
 use serde_json::{Value, json};
 use std::collections::VecDeque;
-use std::io::Read;
-use std::path::Path;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 
@@ -252,75 +250,6 @@ fn catalog(provider: OfficialPriceProvider, now: i64, amount: &str) -> FetchedPr
         effective_date: None,
         tariffs: vec![input, output],
         modifiers: Default::default(),
-    }
-}
-// Receipt files have a separate gate from the public price source. This makes their
-// independent history publication deterministic instead of attributing it to a late GET.
-struct GatedFiles {
-    inner: NativeArtifactFiles,
-    gate: Arc<Gate>,
-    started: Arc<AtomicUsize>,
-}
-impl ArtifactFiles for GatedFiles {
-    fn publish(
-        &self,
-        s: &str,
-        src: &mut dyn Read,
-        d: &str,
-        n: u64,
-        r: Option<&str>,
-        g: &str,
-    ) -> Result<PublishedBlob, FileFault> {
-        self.started.fetch_add(1, Ordering::SeqCst);
-        self.gate.started.notify_one();
-        let mut open = self.gate.open.lock().unwrap();
-        while !*open {
-            open = self.gate.release.wait(open).unwrap();
-        }
-        drop(open);
-        self.inner.publish(s, src, d, n, r, g)
-    }
-    fn managed_path(&self, d: &str, g: &str) -> Result<String, FileFault> {
-        self.inner.managed_path(d, g)
-    }
-    fn present(&self, d: &str, g: &str, n: u64) -> Result<bool, FileFault> {
-        self.inner.present(d, g, n)
-    }
-    fn inspect(&self, d: &str, g: &str) -> Result<Option<u64>, FileFault> {
-        self.inner.inspect(d, g)
-    }
-    fn read_range(&self, d: &str, g: &str, n: u64, o: u64, m: usize) -> Result<Vec<u8>, FileFault> {
-        self.inner.read_range(d, g, n, o, m)
-    }
-    fn open(&self, d: &str, g: &str, n: u64) -> Result<Box<dyn Read + Send>, FileFault> {
-        self.inner.open(d, g, n)
-    }
-    fn unlink(&self, d: &str, g: &str) -> Result<(), FileFault> {
-        self.inner.unlink(d, g)
-    }
-    fn quarantine(&self, d: &str, g: &str) -> Result<(), FileFault> {
-        self.inner.quarantine(d, g)
-    }
-    fn staged(&self) -> Result<Vec<String>, FileFault> {
-        self.inner.staged()
-    }
-    fn remove_staged(&self, n: &str) -> Result<(), FileFault> {
-        self.inner.remove_staged(n)
-    }
-    fn stored_files(&self) -> Result<Vec<(String, String)>, FileFault> {
-        self.inner.stored_files()
-    }
-    fn write_derived(&self, k: &str, b: &[u8]) -> Result<(), FileFault> {
-        self.inner.write_derived(k, b)
-    }
-    fn read_derived(&self, k: &str, m: usize) -> Result<Option<Vec<u8>>, FileFault> {
-        self.inner.read_derived(k, m)
-    }
-    fn collect_derived(&self) -> Result<u64, FileFault> {
-        self.inner.collect_derived()
-    }
-    fn export(&self, d: &str, g: &str, n: u64, dest: &Path, o: bool) -> Result<(), FileFault> {
-        self.inner.export(d, g, n, dest, o)
     }
 }
 
@@ -1511,11 +1440,25 @@ async fn price_shutdown_case(recovering: bool, receipt_race_control: bool) {
     receipt_gate.release();
     let _release_receipts = Release(receipt_gate.clone());
     composed.artifacts = ArtifactComposition::new(
-        Arc::new(GatedFiles {
-            inner: NativeArtifactFiles::new(fx.h.root.clone(), fx.h.root.with_extension("cache")),
-            gate: receipt_gate.clone(),
-            started: receipt_starts.clone(),
-        }),
+        // Receipt files have a separate gate from the public price source. This makes their
+        // independent history publication deterministic instead of attributing it to a late GET.
+        {
+            let files = FaultFiles::required_only(Arc::new(NativeArtifactFiles::new(
+                fx.h.root.clone(),
+                fx.h.root.with_extension("cache"),
+            )));
+            let (gate, started) = (receipt_gate.clone(), receipt_starts.clone());
+            files.before(FileOp::Publish, move |_| {
+                started.fetch_add(1, Ordering::SeqCst);
+                gate.started.notify_one();
+                let mut open = gate.open.lock().unwrap();
+                while !*open {
+                    open = gate.release.wait(open).unwrap();
+                }
+                Ok(())
+            });
+            files
+        },
         Arc::new(devworks_adapters::fs::sources::HostArtifactSources::new(
             fx.h.clock(),
             fx.h.ids.clone(),

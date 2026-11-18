@@ -129,8 +129,9 @@ for n in results: lines += [f' Self::{pascal(n)} {{..}}=>"{n}",']
 lines += ['}}}', 'impl Check for OperationResult {fn check(&self)->Result<(),String>{match self{']
 for n in results:lines += [f' Self::{pascal(n)} {{value}}=>value.check()?,']
 lines += ['} super::domain_rules::result(self.operation(), &serde_json::to_value(self).map_err(|e|e.to_string())?) }}', '']
-# HistoryPage is a support type with its own revision-2 member (the tail checkpoint).
-projected=[n for n,t in results.items() if tokens(t)&(RC|{'HistoryPage','GraphPage'})]
+# HistoryPage is a support type with its own revision-2 member (the tail checkpoint);
+# TranscriptPage leaves out or maps the transcript entries introduced at revision 8.
+projected=[n for n,t in results.items() if tokens(t)&(RC|{'HistoryPage','GraphPage','TranscriptPage'})]
 lines += ['impl Revisioned for OperationResult {fn retain_revision(&mut self,revision:u32){match self{',*[f' Self::{pascal(n)} {{value}}=>value.retain_revision(revision),' for n in projected],*([' _ => {}'] if len(projected)<len(results) else []),'}}', 'fn check_revision(&self,revision:u32)->Result<(),String>{match self{',*[f'Self::{pascal(n)} {{..}} if revision<{d["introducedRevision"]}=>Err("operation result predates its introduction".into()),' for n,d in OPS.items() if d.get('introducedRevision',1)>1],*[f'Self::{pascal(n)} {{value}}=>value.check_revision(revision),' for n,t in results.items() if TYPES.get(t,{}).get('kind')=='versioned' or t=='GraphPage' or t in variant_types(TYPES)],'_=>Ok(())}}','}','']
 # Generic receipts preserve admitted/rejected/unknown command distinctions. Outcome
 # variants cannot mint human authority or make an external uncertainty successful.

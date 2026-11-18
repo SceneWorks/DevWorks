@@ -159,4 +159,19 @@ impl Input {
             Self::RemoveIndex(_) => Mode::Command,
         }
     }
+    /// The `/body` members of this input, without the `kind` discriminator.
+    pub fn body(&self) -> Result<serde_json::Value, serde_json::Error> {
+        match self {
+            Self::Import(i) => serde_json::to_value(i),
+            Self::List(i) => serde_json::to_value(i),
+            Self::Read(i) => serde_json::to_value(i),
+            Self::Search(i) => serde_json::to_value(i),
+            Self::Share(i) => serde_json::to_value(i),
+            Self::Move(i) => serde_json::to_value(i),
+            Self::Index(i) => serde_json::to_value(i),
+            Self::Retry(i) => serde_json::to_value(i),
+            Self::DisableRetrieval(i) => serde_json::to_value(i),
+            Self::RemoveIndex(i) => serde_json::to_value(i),
+        }
+    }
 }

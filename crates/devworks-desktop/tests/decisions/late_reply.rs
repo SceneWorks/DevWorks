@@ -3,6 +3,7 @@ use devworks_core::protocol::CommandReply;
 use devworks_core::protocol::results::DomainDecision;
 use devworks_desktop::backend::Slot;
 use devworks_desktop::decision_ops::DecisionsSlot;
+use devworks_desktop::frame::fixture::command_input;
 
 struct Release(Gate);
 impl Drop for Release {
@@ -51,11 +52,7 @@ fn late_decision(stale: bool) {
         draft["goals"] = json!(["A revised after its exact inspection"]);
         wops::work_changed(real.command(
             "features.edit_plan",
-            &wops::work_command(
-                &*real,
-                "features.edit_plan",
-                json!({"featureId":feature_a.id,"expectedRevision":current.revision,"plan":draft}),
-            ),
+            &wops::work_command(&*real, command_input("features.edit_plan", json!({"featureId":feature_a.id,"expectedRevision":current.revision,"plan":draft}))),
         ))
         .unwrap();
     }

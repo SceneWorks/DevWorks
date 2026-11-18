@@ -5,7 +5,7 @@ use crate::backend::Reply;
 use crate::jobs_ops::JobsSlot;
 pub use crate::jobs_screen::*;
 use crate::memory::RouteMemory;
-use crate::ops::{self, Failure, JobChange};
+use crate::ops::{self, Failure, JobChange, JobCommand};
 use crate::route::Route;
 use crate::screen::{Cx, Screen, ScreenContext, ScreenId, controller};
 use crate::theme;
@@ -242,16 +242,16 @@ impl JobsCtl<'_, '_> {
                         }
                     }
                 }
-                JobAction::Command(op, job) => {
+                JobAction::Command(command, job) => {
                     self.jobs.confirm_delete = None;
                     let slot = JobsSlot::JobCommand(job.id.as_str().to_owned());
-                    let label = match op {
-                        "jobs.run_now" => "Starting a run",
-                        "jobs.enable" => "Enabling the job",
-                        "jobs.disable" => "Disabling the job",
-                        _ => "Deleting the job",
+                    let (label, op) = match command {
+                        JobCommand::RunNow => ("Starting a run", "jobs.run_now"),
+                        JobCommand::Enable => ("Enabling the job", "jobs.enable"),
+                        JobCommand::Disable => ("Disabling the job", "jobs.disable"),
+                        JobCommand::Delete => ("Deleting the job", "jobs.delete"),
                     };
-                    self.command(slot, label, op, move |b| ops::job_command(b, op, &job));
+                    self.command(slot, label, op, move |b| ops::job_command(b, command, &job));
                 }
                 JobAction::Cancel(run) => {
                     let slot = JobsSlot::JobCommand(run.job_id.as_str().to_owned());
@@ -730,7 +730,7 @@ impl JobsCtl<'_, '_> {
                     });
                 });
             match (open, decided) {
-                (_, Some(true)) => actions.push(JobAction::Command("jobs.delete", job)),
+                (_, Some(true)) => actions.push(JobAction::Command(JobCommand::Delete, job)),
                 (false, _) | (_, Some(false)) => self.jobs.confirm_delete = None,
                 _ => {}
             }

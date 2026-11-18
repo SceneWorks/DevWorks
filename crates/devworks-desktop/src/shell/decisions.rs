@@ -133,17 +133,22 @@ impl DecisionsCtl<'_, '_> {
         self.review_page(None);
     }
     fn approval_page(&mut self, cursor: Option<String>) {
-        let mut body = json!({"scope":dops::scope(self.decisions.project.as_deref()), "page":dops::page(cursor.as_deref())});
-        if self.decisions.tab == 0 {
-            body["state"] = json!("Pending");
-        } else if let Some(state) = &self.decisions.history_state {
-            body["state"] = json!(state);
-        }
+        let project = self.decisions.project.clone();
+        let state = if self.decisions.tab == 0 {
+            Some("Pending".to_owned())
+        } else {
+            self.decisions.history_state.clone()
+        };
         self.query(
             DecisionsSlot::ApprovalsList,
             "Loading approvals",
             "approvals.list",
-            move |b| dops::query(b, "approvals.list", body),
+            move |b| {
+                dops::query(
+                    b,
+                    dops::approvals_list(project.as_deref(), state.as_deref(), cursor.as_deref()),
+                )
+            },
         );
     }
     fn review_page(&mut self, cursor: Option<String>) {
@@ -153,15 +158,13 @@ impl DecisionsCtl<'_, '_> {
             self.decisions.reviews_loaded = false;
             return;
         };
-        // The retained informational queue requires a project and permits at most 50 per page.
-        let mut page = dops::page(cursor.as_deref());
-        page["limit"] = json!(50);
-        let body = json!({"projectId":project,"page":page});
+        // The retained informational queue requires a project.
+        let project = project.clone();
         self.query(
             DecisionsSlot::ReviewQueue,
             "Loading Knowledge review queue",
             "approvals.review_queue",
-            move |b| dops::query(b, "approvals.review_queue", body),
+            move |b| dops::query(b, dops::review_queue(&project, cursor.as_deref())),
         );
     }
     fn load_completion_notifications(&mut self) {
@@ -179,24 +182,17 @@ impl DecisionsCtl<'_, '_> {
                 DecisionsSlot::NotificationSettings,
                 "Loading notification settings",
                 "notifications.settings",
-                |b| ops::query_frame(b, "notifications.settings", json!({})),
+                |b| dops::query(b, dops::settings_query()),
             );
         }
     }
     fn notification_page(&mut self, completion: bool, cursor: Option<String>) {
-        let mut body = if completion {
-            json!({"scope":dops::scope(None),"page":dops::page(cursor.as_deref()),"unacknowledgedOnly":true,"completionOnly":true})
-        } else {
-            json!({"scope":dops::scope(self.decisions.notification_project.as_deref()),"page":dops::page(cursor.as_deref()),"unacknowledgedOnly":self.decisions.unacknowledged_only})
-        };
-        if !completion {
-            if self.decisions.unread_only {
-                body["read"] = json!(false);
-            }
-            if !self.decisions.category.trim().is_empty() {
-                body["categories"] = json!([self.decisions.category.trim()]);
-            }
-        }
+        let filter = (
+            self.decisions.notification_project.clone(),
+            self.decisions.unacknowledged_only,
+            self.decisions.unread_only,
+            self.decisions.category.clone(),
+        );
         let slot = if completion {
             DecisionsSlot::CompletionList
         } else {
@@ -206,7 +202,23 @@ impl DecisionsCtl<'_, '_> {
             slot,
             "Loading notifications",
             "notifications.list",
-            move |b| dops::query(b, "notifications.list", body),
+            move |b| {
+                dops::query(
+                    b,
+                    if completion {
+                        dops::completions(cursor.as_deref())
+                    } else {
+                        let (project, unacknowledged, unread, category) = &filter;
+                        dops::notifications_list(
+                            project.as_deref(),
+                            *unacknowledged,
+                            *unread,
+                            category,
+                            cursor.as_deref(),
+                        )
+                    },
+                )
+            },
         );
     }
     fn inspect_approval(&mut self, id: String) {
@@ -226,7 +238,7 @@ impl DecisionsCtl<'_, '_> {
             DecisionsSlot::ApprovalInspect(key),
             "Inspecting exact approval content",
             "approvals.inspect",
-            move |b| dops::query(b, "approvals.inspect", json!({"proposalId":id})),
+            move |b| dops::query(b, dops::approval_inspect(&id)),
         );
     }
     fn refresh_selected_approval(&mut self) {
@@ -247,7 +259,7 @@ impl DecisionsCtl<'_, '_> {
             DecisionsSlot::ApprovalRefresh(id.clone()),
             "Checking inspected proposal status",
             "approvals.inspect",
-            move |b| dops::query(b, "approvals.inspect", json!({"proposalId":id})),
+            move |b| dops::query(b, dops::approval_inspect(&id)),
         );
     }
     fn load_approval_text(&mut self) {
@@ -261,15 +273,7 @@ impl DecisionsCtl<'_, '_> {
             DecisionsSlot::ApprovalContent(id),
             "Reading exact proposal artifact",
             "artifacts.read",
-            move |b| {
-                let mut frame: serde_json::Value =
-                    serde_json::from_slice(&ops::artifact_read(b, &artifact))
-                        .expect("typed artifact frame");
-                if let Some(cursor) = cursor {
-                    frame["cursor"] = json!(cursor);
-                }
-                serde_json::to_vec(&frame).expect("typed artifact frame")
-            },
+            move |b| ops::artifact_read_after(b, &artifact, cursor.as_deref()),
         );
     }
     fn decide(&mut self, approve: bool) {
@@ -294,12 +298,10 @@ impl DecisionsCtl<'_, '_> {
         } else {
             self.decisions.rationale.as_str()
         };
-        let body = json!({"proposalId":p.id,"expectedRevision":p.revision,"contentDigest":p.content_digest,
-            "decision":if approve {"Approve"} else {"Reject"},"rationale":rationale});
         let Some(b) = self.backend() else {
             return;
         };
-        let frame = dops::command(&*b, "approvals.record_human_decision", body);
+        let frame = dops::command(&*b, dops::decision(p, approve, rationale));
         if let Some(c) = &mut self.client {
             c.human_decision(slot.into(), "Recording your approval decision", frame);
         }
@@ -315,12 +317,9 @@ impl DecisionsCtl<'_, '_> {
         } else {
             "notifications.acknowledge"
         };
-        let mut body = json!({"notificationId":record.id,"expectedRevision":record.revision});
-        if let Some(read) = read {
-            body["read"] = json!(read);
-        }
+        let input = dops::notification_change(&record, read);
         self.command(slot, "Updating notification", op, move |b| {
-            dops::command(b, op, body)
+            dops::command(b, input)
         });
     }
     fn notification_updated(&mut self, record: NotificationRecord) {
@@ -654,7 +653,7 @@ impl DecisionsCtl<'_, '_> {
                         DecisionsSlot::NotificationRead(key),
                         "Reading notification",
                         "notifications.read",
-                        move |b| dops::query(b, "notifications.read", json!({"notificationId":id})),
+                        move |b| dops::query(b, dops::notification_read(&id)),
                     );
                 }
                 Action::MarkRead(n, read) => self.change_notification(n, Some(read)),
@@ -711,7 +710,8 @@ impl DecisionsCtl<'_, '_> {
                             .filter(|x| !x.is_empty())
                             .map(|x| devworks_core::protocol::support::BoundedText(x.into()))
                             .collect();
-                        let body = json!({"expectedRevision":revision,"config":config});
+                        let revision = revision.clone();
+                        let saved = config.clone();
                         self.decisions.config_saving = Some(config.clone());
                         self.decisions.config_draft = Some(config);
                         self.decisions.config_kinds_saving =
@@ -720,7 +720,7 @@ impl DecisionsCtl<'_, '_> {
                             DecisionsSlot::NotificationSettingsSave,
                             "Saving notification settings",
                             "notifications.settings",
-                            move |b| ops::command_frame(b, "notifications.settings", body),
+                            move |b| dops::command(b, dops::settings_save(&revision, saved)),
                         );
                     }
                 }

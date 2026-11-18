@@ -159,17 +159,6 @@ pub fn snapshot(attempt: &StoredInferenceAttempt) -> Result<AdmittedSnapshot, St
 pub fn summary(balance: &StoredAttemptBalance) -> Result<BalanceSummary, StorageError> {
     serde_json::from_value(balance.summary.clone()).map_err(|_| invalid("invalid attempt balance"))
 }
-fn classification(value: CostClassification) -> String {
-    match value {
-        CostClassification::ReportedCharge => "ReportedCharge",
-        CostClassification::ConfiguredEstimate => "ConfiguredEstimate",
-        CostClassification::OfficialEstimate => "OfficialEstimate",
-        CostClassification::SubscriptionApiEquivalent => "SubscriptionApiEquivalent",
-        CostClassification::LocalFree => "LocalFree",
-        CostClassification::Untracked => "Untracked",
-    }
-    .into()
-}
 
 /// Validates the immutable quotation's publication and override fences inside the write owner.
 fn quote_current(
@@ -663,7 +652,7 @@ pub(crate) fn admit_attempt(
         // observation can establish which model the provider actually served.
         provider_model_id: None,
         pricing_snapshot: encoded(&admitted)?,
-        state: "Admitted".into(),
+        state: AttemptState::Admitted,
         revision: 1,
         created_at_ms: tx.now_ms(),
     };
@@ -682,7 +671,7 @@ pub(crate) fn admit_attempt(
                 None
             },
             reserved_micro_usd: reserved.tracked_micro_usd,
-            classification: classification(request.quote.classification),
+            classification: request.quote.classification,
             monetary_complete: request.quote.classification == CostClassification::LocalFree,
             incomplete: true,
             unknown_tail: false,
@@ -801,15 +790,18 @@ pub(crate) fn mark_dispatched(
         .inference_attempt(id)?
         .ok_or_else(|| invalid("unknown inference attempt"))?;
     if matches!(
-        attempt.state.as_str(),
-        "Dispatched" | "Settled" | "UnknownTail" | "CancelledBeforeDispatch"
+        attempt.state,
+        AttemptState::Dispatched
+            | AttemptState::Settled
+            | AttemptState::UnknownTail
+            | AttemptState::CancelledBeforeDispatch
     ) {
         return Ok(Admission::Admitted {
             attempt,
             reused: true,
         });
     }
-    if attempt.state != "Admitted" {
+    if attempt.state != AttemptState::Admitted {
         return Err(invalid("inference attempt is not dispatchable"));
     }
     let bound = snapshot(&attempt)?;
@@ -942,7 +934,7 @@ pub(crate) fn mark_dispatched(
     )?;
     let expected = attempt.revision;
     attempt.revision += 1;
-    attempt.state = "Dispatched".into();
+    attempt.state = AttemptState::Dispatched;
     tx.usage().update_inference_attempt(&attempt, expected)?;
     log(
         tx,
@@ -1041,8 +1033,8 @@ pub fn observe(
         .inference_attempt(id)?
         .ok_or_else(|| invalid("unknown inference attempt"))?;
     if !matches!(
-        attempt.state.as_str(),
-        "Dispatched" | "Settled" | "UnknownTail"
+        attempt.state,
+        AttemptState::Dispatched | AttemptState::Settled | AttemptState::UnknownTail
     ) {
         return Err(invalid("usage is not bound to a dispatched attempt"));
     }
@@ -1142,7 +1134,10 @@ pub fn observe(
         }
     }
     state.unknown_components = priced.unknown_components;
-    let reserved = if matches!(attempt.state.as_str(), "Settled" | "UnknownTail") {
+    let reserved = if matches!(
+        attempt.state,
+        AttemptState::Settled | AttemptState::UnknownTail
+    ) {
         before.reserved_micro_usd
     } else {
         bound.reservation_micro_usd.map(|reserved| {
@@ -1166,7 +1161,7 @@ pub fn observe(
         revision: before.revision + 1,
         priced_micro_usd: priced.tracked_micro_usd,
         reserved_micro_usd: reserved,
-        classification: classification(effective),
+        classification: effective,
         monetary_complete: priced.monetary_complete,
         incomplete: before.incomplete,
         unknown_tail: before.unknown_tail,
@@ -1204,7 +1199,7 @@ pub fn observe(
         &attempt,
         "InferenceUsageObserved",
         delta,
-        json!({"observationKey":observation.key,"pricedMicroUsd":balance.priced_micro_usd,"classification":balance.classification,"monetaryComplete":balance.monetary_complete,"unknownComponents":state.unknown_components}),
+        json!({"observationKey":observation.key,"pricedMicroUsd":balance.priced_micro_usd,"classification":balance.classification.as_str(),"monetaryComplete":balance.monetary_complete,"unknownComponents":state.unknown_components}),
     )?;
     if let Some(feature) = &attempt.feature_id
         && let Some(work) = tx.work().work(feature)?
@@ -1291,8 +1286,8 @@ pub(super) fn settle(
         return Err(invalid("transport quiescence belongs to another owner"));
     }
     if !matches!(
-        attempt.state.as_str(),
-        "Dispatched" | "Settled" | "UnknownTail"
+        attempt.state,
+        AttemptState::Dispatched | AttemptState::Settled | AttemptState::UnknownTail
     ) {
         return Err(invalid("attempt was never dispatched"));
     }
@@ -1312,18 +1307,17 @@ pub(super) fn settle(
     let expected = attempt.revision;
     attempt.revision += 1;
     attempt.state = if outcome == AttemptEnd::UnknownTail {
-        "UnknownTail"
+        AttemptState::UnknownTail
     } else {
-        "Settled"
-    }
-    .into();
+        AttemptState::Settled
+    };
     tx.usage().update_inference_attempt(&attempt, expected)?;
     let balance = StoredAttemptBalance {
         attempt_id: attempt.attempt_id.clone(),
         revision: before.revision + 1,
         priced_micro_usd: before.priced_micro_usd,
         reserved_micro_usd: None,
-        classification: before.classification.clone(),
+        classification: before.classification,
         monetary_complete: before.monetary_complete,
         incomplete: !matches!(outcome, AttemptEnd::Completed | AttemptEnd::ToolCallsReady),
         unknown_tail: outcome == AttemptEnd::UnknownTail,
@@ -1389,7 +1383,9 @@ pub(crate) fn note_cancellation_requested(
         .usage()
         .inference_attempt(&attempt.attempt_id)?
         .ok_or_else(|| invalid("missing cancellation attempt"))?;
-    if current.pricing_snapshot != attempt.pricing_snapshot || current.state != "Dispatched" {
+    if current.pricing_snapshot != attempt.pricing_snapshot
+        || current.state != AttemptState::Dispatched
+    {
         return Ok(());
     }
     let before = tx
@@ -1433,17 +1429,17 @@ pub fn cancel_admitted(
         .usage()
         .attempt_balance(id)?
         .ok_or_else(|| invalid("missing inference balance"))?;
-    if attempt.state == "CancelledBeforeDispatch" {
+    if attempt.state == AttemptState::CancelledBeforeDispatch {
         return Ok(before);
     }
-    if attempt.state != "Admitted" {
+    if attempt.state != AttemptState::Admitted {
         return Err(invalid(
             "a dispatched inference requires actual transport quiescence",
         ));
     }
     let expected = attempt.revision;
     attempt.revision += 1;
-    attempt.state = "CancelledBeforeDispatch".into();
+    attempt.state = AttemptState::CancelledBeforeDispatch;
     tx.usage().update_inference_attempt(&attempt, expected)?;
     let mut state = summary(&before)?;
     state.finished_at_ms = Some(tx.now_ms());
@@ -1454,7 +1450,7 @@ pub fn cancel_admitted(
         revision: before.revision + 1,
         priced_micro_usd: Some(0),
         reserved_micro_usd: None,
-        classification: before.classification.clone(),
+        classification: before.classification,
         monetary_complete: true,
         incomplete: false,
         unknown_tail: false,

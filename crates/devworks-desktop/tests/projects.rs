@@ -821,7 +821,7 @@ fn set_access_profile(backend: &dyn Backend, project: &str, profile: &str) {
         {"key": key, "value": {"schema": d.schema_ref(), "value": profile}}]});
     ops::settings_saved(backend.command(
         "settings.save_revision",
-        &ops::command_frame(backend, "settings.save_revision", body),
+        &devworks_desktop::frame::fixture::command(backend, "settings.save_revision", body),
     ))
     .expect("the access profile is saved");
 }

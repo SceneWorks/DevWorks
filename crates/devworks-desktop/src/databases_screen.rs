@@ -261,9 +261,6 @@ fn project_access(ui: &mut Ui, config: &mut Value, projects: &[(String, String)]
     config["projectAccess"] = json!(access);
 }
 impl DatabasesScreen {
-    pub fn scope(&self) -> Value {
-        scope(self.project.as_deref())
-    }
     pub fn source(&self) -> Option<&SchemaConnection> {
         self.selected
             .as_deref()
@@ -824,13 +821,6 @@ impl DatabasesScreen {
             actions.push(Action::More);
         }
     }
-}
-
-pub fn scope(project: Option<&str>) -> Value {
-    project.map_or_else(
-        || json!({"kind":"Workspace"}),
-        |p| json!({"kind":"Project","projectId":p}),
-    )
 }
 
 impl DatabasesScreen {

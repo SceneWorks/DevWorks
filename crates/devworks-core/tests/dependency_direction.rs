@@ -323,7 +323,7 @@ fn service_helpers_and_git_client_have_one_neutral_home() {
 const ALLOWED: &[(&str, [usize; 4], &str)] = &[
     (
         "services/agents.rs",
-        [0, 0, 3, 0],
+        [0, 0, 2, 0],
         "monotonic deadline of a bounded wait for new messages",
     ),
     (
@@ -350,7 +350,7 @@ const ALLOWED: &[(&str, [usize; 4], &str)] = &[
     ),
     (
         "services/containers/runner.rs",
-        [0, 0, 5, 0],
+        [0, 0, 2, 0],
         "monotonic deadlines of the container command runner",
     ),
     (
@@ -396,7 +396,7 @@ const ALLOWED: &[(&str, [usize; 4], &str)] = &[
     ),
     (
         "services/process/tools.rs",
-        [16, 3, 3, 0],
+        [16, 3, 2, 0],
         "toolchain detection reads the project's manifests and the host PATH, RUSTUP_HOME and \
          HOME to build a tool's environment, and creates the scratch directory it runs in; \
          the script-free install safety checks read repository manifests and lockfiles \
@@ -407,7 +407,7 @@ const ALLOWED: &[(&str, [usize; 4], &str)] = &[
     ),
     (
         "services/process.rs",
-        [0, 0, 4, 0],
+        [0, 0, 8, 0],
         "monotonic timers of the process owner's bounded waits",
     ),
     (

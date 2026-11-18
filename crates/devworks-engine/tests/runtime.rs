@@ -16,8 +16,7 @@ use devworks_core::authority::reads::ReadRoot;
 use devworks_core::context::{InvocationContext, PrincipalKind};
 use devworks_core::fingerprint::sha256_hex;
 use devworks_core::ports::files::{
-    ArtifactFiles, ArtifactSources, FileFault, PublishedBlob, ResolvedSource, SourceOrigin,
-    SourceRefusal,
+    ArtifactFiles, ArtifactSources, ResolvedSource, SourceOrigin, SourceRefusal,
 };
 use devworks_core::ports::storage::{
     ApplicationStore, BlobState, ReadOptions, ReadSnapshot, StorageError, StoreInfo, Unavailable,
@@ -35,9 +34,8 @@ use devworks_engine::{
     ArtifactComposition, DiagnosticComposition, KnowledgeComposition, RunComposition,
 };
 use devworks_engine::{BootError, BootReport, Composition, Runtime, RuntimeConfig, boot};
+use devworks_test_support::{FaultFiles, FileOp};
 use serde_json::json;
-use std::io::Read;
-use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
@@ -89,76 +87,6 @@ enum Crash {
     AfterReceipt,
     /// While the reply delivery is claimed: the reply file is in place, its metadata is not.
     AfterReplyFile,
-}
-
-/// The native adapter; when `die` is set, the process dies right after a publication renamed
-/// its file into place.
-struct Files {
-    inner: NativeArtifactFiles,
-    die: Option<(Arc<AtomicBool>, Arc<Notify>)>,
-    armed: Arc<AtomicBool>,
-}
-impl ArtifactFiles for Files {
-    fn publish(
-        &self,
-        s: &str,
-        src: &mut dyn Read,
-        d: &str,
-        n: u64,
-        r: Option<&str>,
-        g: &str,
-    ) -> Result<PublishedBlob, FileFault> {
-        let published = self.inner.publish(s, src, d, n, r, g);
-        if let Some((dead, died)) = &self.die
-            && self.armed.load(Ordering::SeqCst)
-        {
-            dead.store(true, Ordering::SeqCst);
-            died.notify_one();
-        }
-        published
-    }
-    fn managed_path(&self, d: &str, g: &str) -> Result<String, FileFault> {
-        self.inner.managed_path(d, g)
-    }
-    fn present(&self, d: &str, g: &str, n: u64) -> Result<bool, FileFault> {
-        self.inner.present(d, g, n)
-    }
-    fn inspect(&self, d: &str, g: &str) -> Result<Option<u64>, FileFault> {
-        self.inner.inspect(d, g)
-    }
-    fn read_range(&self, d: &str, g: &str, n: u64, o: u64, m: usize) -> Result<Vec<u8>, FileFault> {
-        self.inner.read_range(d, g, n, o, m)
-    }
-    fn open(&self, d: &str, g: &str, n: u64) -> Result<Box<dyn Read + Send>, FileFault> {
-        self.inner.open(d, g, n)
-    }
-    fn unlink(&self, d: &str, g: &str) -> Result<(), FileFault> {
-        self.inner.unlink(d, g)
-    }
-    fn quarantine(&self, d: &str, g: &str) -> Result<(), FileFault> {
-        self.inner.quarantine(d, g)
-    }
-    fn staged(&self) -> Result<Vec<String>, FileFault> {
-        self.inner.staged()
-    }
-    fn remove_staged(&self, n: &str) -> Result<(), FileFault> {
-        self.inner.remove_staged(n)
-    }
-    fn stored_files(&self) -> Result<Vec<(String, String)>, FileFault> {
-        self.inner.stored_files()
-    }
-    fn write_derived(&self, k: &str, b: &[u8]) -> Result<(), FileFault> {
-        self.inner.write_derived(k, b)
-    }
-    fn read_derived(&self, k: &str, m: usize) -> Result<Option<Vec<u8>>, FileFault> {
-        self.inner.read_derived(k, m)
-    }
-    fn collect_derived(&self) -> Result<u64, FileFault> {
-        self.inner.collect_derived()
-    }
-    fn export(&self, d: &str, g: &str, n: u64, dest: &Path, o: bool) -> Result<(), FileFault> {
-        self.inner.export(d, g, n, dest, o)
-    }
 }
 
 /// Upload tickets naming files beneath one registered read root.
@@ -405,11 +333,18 @@ fn a_reply_interrupted_by_a_crash_is_delivered_exactly_once_after_boot() {
                 dead: dead.clone(),
             });
             let armed = Arc::new(AtomicBool::new(false));
-            let files = Arc::new(Files {
-                inner: native(&h),
-                armed: armed.clone(),
-                die: (crash == Crash::AfterReplyFile).then(|| (dead.clone(), died.clone())),
-            });
+            // The native adapter; when the crash is `AfterReplyFile`, the process dies right after
+            // a publication renamed its file into place.
+            let files = FaultFiles::required_only(Arc::new(native(&h)));
+            if crash == Crash::AfterReplyFile {
+                let (dead, died, armed) = (dead.clone(), died.clone(), armed.clone());
+                files.after(FileOp::Publish, move |_, _| {
+                    if armed.load(Ordering::SeqCst) {
+                        dead.store(true, Ordering::SeqCst);
+                        died.notify_one();
+                    }
+                });
+            }
             let user = principal(&*store, "user-a", PrincipalKind::Human);
             let app = rt
                 .block_on(boot(composition(&h, store.clone(), files, src.clone())))
@@ -608,7 +543,7 @@ fn an_applied_delete_starts_a_collection_pass_that_removes_the_released_file() {
     let h = Harness::new();
     let rt = runtime();
     let store = h.open();
-    seed_root(&h, "root-a");
+    seed_root(&*store, "root-a");
     let src = sources(&h);
     let user = principal(&*store, "user-a", PrincipalKind::Human);
     let app = rt
@@ -705,6 +640,7 @@ fn shutdown_with_hour_long_intervals_finishes_well_under_the_bound() {
     c.config.approval_resume_interval = hour;
     c.config.notification_interval = hour;
     c.config.watch_interval = hour;
+    c.config.polling_interval = hour;
     c.config.shutdown_bound = Duration::from_secs(30);
     let app = rt.block_on(boot(c)).unwrap();
     // Every loop finishes its first pass and enters its wait.
@@ -717,4 +653,87 @@ fn shutdown_with_hour_long_intervals_finishes_well_under_the_bound() {
         took < Duration::from_secs(5),
         "shutdown took {took:?} with a 30 s bound"
     );
+}
+
+/// An idle runtime performs no store pass in its commit-woken polling loops (git cancellation,
+/// help, schema views, convention imports, project purge, container reconciliation): each ran its
+/// boot pass and now waits for a commit signal or the 30 s fallback, so none runs for 10 s.
+#[test]
+fn an_idle_runtime_runs_no_polling_pass_for_ten_seconds() {
+    let h = Harness::new();
+    let rt = runtime();
+    let store = h.open();
+    let c = composition(&h, store, Arc::new(native(&h)), sources(&h));
+    assert!(c.config.polling_interval > Duration::from_secs(10));
+    let app = rt.block_on(boot(c)).unwrap();
+    rt.block_on(settle_boot_publications(&app));
+    // Boot's Help ingestion commits in a burst of hundreds of writes, and a loop woken by the
+    // tail of it runs one coalesced pass up to five seconds later. The window opens only once
+    // every loop has seen every commit and is waiting.
+    // Read the pass count between two settled checks, so no pass can start unseen between the
+    // check and the baseline.
+    let settled = rt.block_on(within("every polling loop to settle", async {
+        loop {
+            if app.polling_settled() {
+                let passes = app.polling_passes();
+                if app.polling_settled() {
+                    return passes;
+                }
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    }));
+    assert!(settled > 0, "no polling loop ran its boot pass");
+    rt.block_on(async { tokio::time::sleep(Duration::from_secs(10)).await });
+    assert_eq!(
+        app.polling_passes(),
+        settled,
+        "an idle runtime started a polling pass"
+    );
+    rt.block_on(app.shutdown()).into_result().unwrap();
+}
+
+/// A committed command wakes the polling loops at once, without waiting for the fallback.
+#[test]
+fn a_committed_command_wakes_the_polling_loops_before_the_fallback_interval() {
+    let h = Harness::new();
+    let rt = runtime();
+    let store = h.open();
+    seed_root(&*store, "root-a");
+    let user = principal(&*store, "user-a", PrincipalKind::Human);
+    let mut c = composition(&h, store, Arc::new(native(&h)), sources(&h));
+    c.config.polling_interval = Duration::from_secs(3600);
+    let app = rt.block_on(boot(c)).unwrap();
+    rt.block_on(settle_boot_publications(&app));
+    rt.block_on(async { tokio::time::sleep(Duration::from_secs(1)).await });
+    let before = app.polling_passes();
+    applied(start(&app, &user, "wake-1"));
+    rt.block_on(within("a polling pass after the commit", async {
+        while app.polling_passes() == before {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    }));
+    rt.block_on(app.shutdown()).into_result().unwrap();
+}
+
+/// A commit that never passes the command gateway (a supervisor write, a host-observed write, a
+/// retried container stop) wakes the polling loops too.
+#[test]
+fn a_store_commit_outside_the_gateway_wakes_the_polling_loops() {
+    let h = Harness::new();
+    let rt = runtime();
+    let store = h.open();
+    let mut c = composition(&h, store.clone(), Arc::new(native(&h)), sources(&h));
+    c.config.polling_interval = Duration::from_secs(3600);
+    let app = rt.block_on(boot(c)).unwrap();
+    rt.block_on(settle_boot_publications(&app));
+    rt.block_on(async { tokio::time::sleep(Duration::from_secs(1)).await });
+    let before = app.polling_passes();
+    principal(&*store, "direct-writer", PrincipalKind::Host);
+    rt.block_on(within("a polling pass after a direct write", async {
+        while app.polling_passes() == before {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    }));
+    rt.block_on(app.shutdown()).into_result().unwrap();
 }

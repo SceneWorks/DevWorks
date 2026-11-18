@@ -116,7 +116,7 @@ fn attempt(s: &SqliteStore, name: &str) -> StoredInferenceAttempt {
         access_mode: "Subscription".into(),
         provider_model_id: None,
         pricing_snapshot: json!({"quote":{"classification":"Untracked","connection_revision":1,"override_revision":null,"snapshot_id":null},"reservation_micro_usd":100}),
-        state: "Admitted".into(),
+        state: devworks_core::ports::storage::AttemptState::Admitted,
         revision: 1,
         created_at_ms: T0,
     }
@@ -132,7 +132,7 @@ fn balance(
         revision: 1,
         priced_micro_usd: priced,
         reserved_micro_usd: reserved,
-        classification: class.into(),
+        classification: devworks_core::ports::usage::CostClassification::parse(class).unwrap(),
         monetary_complete: priced.is_some(),
         incomplete: false,
         unknown_tail: false,
@@ -155,11 +155,10 @@ fn origin(name: &str, kind: &str, amount: Option<i64>) -> StoredUsageOrigin {
         recorded_at_ms: T0,
         priced_micro_usd: amount,
         classification: if amount.is_some() {
-            "OfficialEstimate"
+            devworks_core::ports::usage::CostClassification::OfficialEstimate
         } else {
-            "Untracked"
-        }
-        .into(),
+            devworks_core::ports::usage::CostClassification::Untracked
+        },
         monetary_complete: amount.is_some(),
         incomplete: false,
         unknown_tail: false,
@@ -289,6 +288,54 @@ fn usage28_migration_is_checksummed_old_writers_refused_and_new_records_reopen()
     assert!(s.integrity_check().unwrap().problems.is_empty());
 }
 #[test]
+fn unknown_stored_attempt_state_and_classification_are_a_corrupt_store() {
+    let h = Harness::new();
+    let s = seeded(&h);
+    let a = attempt(&s, "a");
+    run_write(&s, WriteOptions::fixture(), move |tx| {
+        tx.usage().insert_inference_attempt(&a)?;
+        tx.usage()
+            .put_attempt_balance(&balance("a", Some(0), Some(100), "OfficialEstimate"), None)?;
+        tx.usage()
+            .insert_usage_origin(&origin("legacy", "SessionUsage", Some(900)))
+    })
+    .unwrap();
+    let corrupt = |result: Result<(), StorageError>| {
+        assert!(
+            matches!(
+                result,
+                Err(StorageError::StorageUnavailable {
+                    cause: Unavailable::Corrupt,
+                    ..
+                })
+            ),
+            "{result:?}"
+        );
+    };
+    let raw = h.raw();
+    raw.pragma_update(None, "ignore_check_constraints", true)
+        .unwrap();
+    let read = |f: fn(&dyn ReadSnapshot) -> Result<(), StorageError>| {
+        read_snapshot(&s, &ReadOptions::default(), |r| f(r))
+    };
+    raw.execute("UPDATE usage_attempts SET state='Bogus'", [])
+        .unwrap();
+    corrupt(read(|r| r.usage().inference_attempt(&id("a")).map(drop)));
+    raw.execute(
+        "UPDATE usage_attempt_balances SET classification='Bogus'",
+        [],
+    )
+    .unwrap();
+    corrupt(read(|r| r.usage().attempt_balance(&id("a")).map(drop)));
+    raw.execute("DROP TRIGGER usage_origins_immutable_update", [])
+        .unwrap();
+    raw.execute("UPDATE usage_origins SET classification='Bogus'", [])
+        .unwrap();
+    corrupt(read(|r| {
+        r.usage().usage_origin("SessionUsage", "legacy").map(drop)
+    }));
+}
+#[test]
 fn usage28_balances_replace_estimate_without_double_counting_and_legacy_facts_stay_separate() {
     let h = Harness::new();
     let s = seeded(&h);
@@ -366,7 +413,7 @@ fn usage28_observations_are_immutable_idempotent_bounded_and_attempt_binding_can
         assert!(tx.usage().update_inference_attempt(&bad, 1).is_err());
         let mut dispatched = a;
         dispatched.revision = 2;
-        dispatched.state = "Dispatched".into();
+        dispatched.state = devworks_core::ports::storage::AttemptState::Dispatched;
         tx.usage().update_inference_attempt(&dispatched, 1)?;
         assert!(tx.usage().update_inference_attempt(&dispatched, 1).is_err());
         let quote = dispatched.pricing_snapshot.clone();
@@ -1499,7 +1546,7 @@ fn usage28_provider_model_identity_uses_retained_text_contract_without_byte_or_n
     })
     .unwrap();
     original.revision = 2;
-    original.state = "Dispatched".into();
+    original.state = devworks_core::ports::storage::AttemptState::Dispatched;
     original.provider_model_id = Some(unicode.clone());
     let observed = original.clone();
     run_write(&s, WriteOptions::fixture(), move |tx| {

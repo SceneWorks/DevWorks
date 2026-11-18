@@ -27,7 +27,7 @@ fn allow_executables(backend: &dyn devworks_desktop::backend::Backend, names: &[
         {"key": key, "value": {"schema": d.schema_ref(), "value": names}}]});
     ops::settings_saved(backend.command(
         "settings.save_revision",
-        &ops::command_frame(backend, "settings.save_revision", body),
+        &devworks_desktop::frame::fixture::command(backend, "settings.save_revision", body),
     ))
     .expect("process executables saved");
 }
@@ -68,7 +68,11 @@ fn native_execute_has_receipt_identity_completion_and_bounded_output() {
     let unlisted = backend
         .command(
             "process.execute",
-            &ops::command_frame(&*backend, "process.execute", json!({"spec":spec})),
+            &devworks_desktop::frame::fixture::command(
+                &*backend,
+                "process.execute",
+                json!({"spec":spec}),
+            ),
         )
         .expect("unlisted reply");
     assert!(
@@ -85,7 +89,11 @@ fn native_execute_has_receipt_identity_completion_and_bounded_output() {
     let receipt = backend
         .command(
             "process.execute",
-            &ops::command_frame(&*backend, "process.execute", json!({"spec":spec})),
+            &devworks_desktop::frame::fixture::command(
+                &*backend,
+                "process.execute",
+                json!({"spec":spec}),
+            ),
         )
         .expect("gateway command");
     let operation = match receipt {
@@ -118,7 +126,7 @@ fn native_execute_has_receipt_identity_completion_and_bounded_output() {
     assert!(record.truncated);
     let page = ops::query_result(backend.query(
         "process.output",
-        &ops::query_frame(
+        &devworks_desktop::frame::fixture::query(
             &*backend,
             "process.output",
             json!({
@@ -139,7 +147,7 @@ fn native_execute_has_receipt_identity_completion_and_bounded_output() {
     let binary = backend
         .command(
             "process.execute",
-            &ops::command_frame(
+            &devworks_desktop::frame::fixture::command(
                 &*backend,
                 "process.execute",
                 json!({"spec": {
@@ -171,7 +179,7 @@ fn native_execute_has_receipt_identity_completion_and_bounded_output() {
     }
     let binary_page = ops::query_result(backend.query(
         "process.output",
-        &ops::query_frame(
+        &devworks_desktop::frame::fixture::query(
             &*backend,
             "process.output",
             json!({"processId":binary_id.0,"afterBytes":"0","maxBytes":64}),
@@ -185,7 +193,7 @@ fn native_execute_has_receipt_identity_completion_and_bounded_output() {
         "{binary_page:?}"
     );
 
-    let restricted = backend.command("process.execute", &ops::command_frame(
+    let restricted = backend.command("process.execute", &devworks_desktop::frame::fixture::command(
         &*backend, "process.execute", json!({"spec": {
             "executableRef":"printf", "args":["refused"],
             "workingDirectory":{"rootId":"process-repository","relative":"work"},
@@ -198,7 +206,7 @@ fn native_execute_has_receipt_identity_completion_and_bounded_output() {
     let sleeping = backend
         .command(
             "process.execute",
-            &ops::command_frame(
+            &devworks_desktop::frame::fixture::command(
                 &*backend,
                 "process.execute",
                 json!({"spec": {
@@ -235,7 +243,7 @@ fn native_execute_has_receipt_identity_completion_and_bounded_output() {
     let second = backend
         .command(
             "process.execute",
-            &ops::command_frame(
+            &devworks_desktop::frame::fixture::command(
                 &*backend,
                 "process.execute",
                 json!({"spec": {
@@ -273,7 +281,7 @@ fn native_execute_has_receipt_identity_completion_and_bounded_output() {
     let cancelled = backend
         .command(
             "process.cancel",
-            &ops::command_frame(
+            &devworks_desktop::frame::fixture::command(
                 &*backend,
                 "process.cancel",
                 json!({"processId":sleeping.0,"expectedRevision":running.revision.to_string()}),
@@ -308,7 +316,7 @@ fn native_execute_has_receipt_identity_completion_and_bounded_output() {
     let second_cancel = backend
         .command(
             "process.cancel",
-            &ops::command_frame(
+            &devworks_desktop::frame::fixture::command(
                 &*backend,
                 "process.cancel",
                 json!({"processId":second_id.0,
@@ -377,12 +385,13 @@ fn native_execute_has_receipt_identity_completion_and_bounded_output() {
             "repositoryId":"process-repository", "expectedRevision":"1",
             "manifest":saved.artifact, "profile":"Full"
         });
-        let mut frame: serde_json::Value = serde_json::from_slice(&ops::command_frame(
-            &*backend,
-            "process.install_project_dependencies",
-            body.clone(),
-        ))
-        .expect("frame");
+        let mut frame: serde_json::Value =
+            serde_json::from_slice(&devworks_desktop::frame::fixture::command(
+                &*backend,
+                "process.install_project_dependencies",
+                body.clone(),
+            ))
+            .expect("frame");
         if let Some(allow) = allow_scripts {
             body["allowScripts"] = json!(allow);
             body["kind"] = json!("process.install_project_dependencies");
@@ -416,7 +425,7 @@ fn native_execute_has_receipt_identity_completion_and_bounded_output() {
                     if value.exit_code != Some(0) {
                         let output = ops::query_result(backend.query(
                             "process.output",
-                            &ops::query_frame(
+                            &devworks_desktop::frame::fixture::query(
                                 &*backend,
                                 "process.output",
                                 json!({"processId":install_id.0,"afterBytes":"0","maxBytes":8192}),
@@ -447,7 +456,7 @@ fn native_execute_has_receipt_identity_completion_and_bounded_output() {
     assert!(rlib.exists());
     let output = ops::query_result(backend.query(
         "process.output",
-        &ops::query_frame(
+        &devworks_desktop::frame::fixture::query(
             &*backend,
             "process.output",
             json!({"processId":install_id.0,"afterBytes":"0","maxBytes":128}),
@@ -459,7 +468,7 @@ fn native_execute_has_receipt_identity_completion_and_bounded_output() {
     let restricted_install = backend
         .command(
             "process.install_project_dependencies",
-            &ops::command_frame(
+            &devworks_desktop::frame::fixture::command(
                 &*backend,
                 "process.install_project_dependencies",
                 json!({
@@ -481,7 +490,7 @@ fn native_execute_has_receipt_identity_completion_and_bounded_output() {
     let changed_install = backend
         .command(
             "process.install_project_dependencies",
-            &ops::command_frame(
+            &devworks_desktop::frame::fixture::command(
                 &*backend,
                 "process.install_project_dependencies",
                 json!({
@@ -517,7 +526,7 @@ fn native_execute_has_receipt_identity_completion_and_bounded_output() {
     .expect("saved package spec");
     let proposed = ops::command_result(backend.command(
         "process.request_system_install",
-        &ops::command_frame(
+        &devworks_desktop::frame::fixture::command(
             &*backend,
             "process.request_system_install",
             json!({
@@ -535,7 +544,7 @@ fn native_execute_has_receipt_identity_completion_and_bounded_output() {
         devworks_core::protocol::records::ApprovalState::Pending
     ));
     let decided = ops::command_result(backend.human_decision(
-        &ops::command_frame(
+        &devworks_desktop::frame::fixture::command(
             &*backend,
             "approvals.record_human_decision",
             json!({

@@ -3,17 +3,12 @@
 //! [`PackageRegistryRead`] and [`PackageRegistry`].
 use super::conn::db;
 use super::repos::{Snapshot, Unit};
+use super::support::{conflict, corrupt, invalid};
 use devworks_core::ports::storage::*;
-use devworks_core::protocol::{ActorId, Id, Revision, RevisionDimension};
+use devworks_core::protocol::{ActorId, Id, RevisionDimension};
 use rusqlite::{Connection, OptionalExtension, Row, params};
 use serde_json::Value;
 
-fn invalid(m: impl Into<String>) -> StorageError {
-    StorageError::InvalidRecord(m.into())
-}
-fn corrupt(m: impl Into<String>) -> StorageError {
-    StorageError::unavailable(Unavailable::Corrupt, m)
-}
 fn json_of(s: &str) -> Result<Value, StorageError> {
     serde_json::from_str(s).map_err(|e| corrupt(format!("stored package JSON: {e}")))
 }
@@ -42,9 +37,6 @@ fn package_id(p: &str) -> Result<(), StorageError> {
         return Err(invalid("package id"));
     }
     Ok(())
-}
-fn rev(v: i64) -> Revision {
-    Revision::new(v.max(1)).expect("positive revision")
 }
 
 const PACKAGE: &str = "package_id,revision,enabled,installed,active_digest,predecessor_digest,pending_digest,state_generation,config_json,config_revision,trust_json,failure_json,created_at,updated_at";
@@ -501,12 +493,12 @@ impl PackageRegistry for Unit<'_> {
         ))?;
         let current = registry_revision(self.conn)?;
         if changed != 1 {
-            return Err(StorageError::conflict(
+            return Err(conflict(
                 RevisionDimension::Registry,
                 "package_registry",
-                Id::new("registry").expect("valid id"),
-                rev(expected),
-                rev(current),
+                Id::new("registry").expect("valid id").as_str(),
+                expected,
+                current,
             ));
         }
         Ok(current)
@@ -572,12 +564,14 @@ impl PackageRegistry for Unit<'_> {
                     kind: "package",
                     id: p.package_id.clone(),
                 }),
-                Some(c) => Err(StorageError::conflict(
+                Some(c) => Err(conflict(
                     RevisionDimension::Package,
                     "package",
-                    Id::new(&p.package_id).map_err(|_| invalid("package id"))?,
-                    rev(expected_revision),
-                    rev(c.revision),
+                    Id::new(&p.package_id)
+                        .map_err(|_| invalid("package id"))?
+                        .as_str(),
+                    expected_revision,
+                    c.revision,
                 )),
             };
         }
@@ -712,12 +706,12 @@ impl PackageRegistry for Unit<'_> {
                     kind: "package_proposal",
                     id: p.id.as_str().to_owned(),
                 }),
-                Some(c) => Err(StorageError::conflict(
+                Some(c) => Err(conflict(
                     RevisionDimension::Package,
                     "package_proposal",
-                    p.id.clone(),
-                    rev(expected_revision),
-                    rev(c.revision),
+                    p.id.as_str(),
+                    expected_revision,
+                    c.revision,
                 )),
             };
         }

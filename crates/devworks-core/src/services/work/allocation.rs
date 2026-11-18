@@ -40,7 +40,7 @@ struct Filters {
 }
 
 fn live(c: &StoredAllocationClaim) -> bool {
-    matches!(c.state.as_str(), "Active" | "Transferred" | "Yielding")
+    c.state.is_live()
 }
 fn owner_heartbeat(
     tx: &mut dyn WriteTransaction,
@@ -89,7 +89,7 @@ fn reserved(
     if !live(c) {
         return Ok(false);
     }
-    if c.state != "Active" {
+    if c.state != ClaimState::Active {
         return Ok(true);
     }
     Ok(c.expires_at_ms > tx.now_ms() || owner_heartbeat(tx, c)?.is_some())
@@ -110,7 +110,7 @@ pub fn claims(
 fn change(
     tx: &mut dyn WriteTransaction,
     c: &StoredAllocationClaim,
-    state: &str,
+    state: ClaimState,
     actor: &ActorId,
 ) -> Result<StoredAllocationClaim, StorageError> {
     let mut next = c.clone();
@@ -118,14 +118,14 @@ fn change(
         next.work_revision = w.revision;
         next.parent_feature_id = w.parent_feature_id;
     }
-    next.state = state.into();
+    next.state = state;
     next.revision += 1;
     next.fence += 1;
     tx.work().update_allocation_claim(&next, c.revision)?;
     let id = crate::protocol::EventId(tx.new_id(IdKind::Event));
     tx.history().append(NewEvent { id, actor: actor.clone(), project_id: Some(c.project_id.clone()), root_id: Some(c.root_id.clone()), operation_id: None,
         aggregate_kind: "allocation_claim".into(), aggregate_id: c.id.as_str().into(), aggregate_revision: next.revision,
-        kind: format!("Allocation{state}"), payload: json!({"claimId": c.id, "workId":c.work_id,"rootId":c.root_id,"fence":next.fence,"ownerId":c.owner_id,"sessionId":c.session_id}) })?;
+        kind: format!("Allocation{}", state.as_str()), payload: json!({"claimId": c.id, "workId":c.work_id,"rootId":c.root_id,"fence":next.fence,"ownerId":c.owner_id,"sessionId":c.session_id}) })?;
     Ok(next)
 }
 fn wire(c: &StoredAllocationClaim, now: i64) -> AllocationClaimRecord {
@@ -147,11 +147,11 @@ fn wire(c: &StoredAllocationClaim, now: i64) -> AllocationClaimRecord {
         root_id: Some(c.root_id.clone()),
         owner_session_id: c.session_id.clone(),
         queue_revision: Some(crate::services::kernel::rev(c.queue_revision)),
-        state: match c.state.as_str() {
-            "Active" if c.expires_at_ms > now => LeaseState::Held,
-            "Transferred" => LeaseState::Held,
-            "Yielding" => LeaseState::Releasing,
-            "Yielded" => LeaseState::Waiting,
+        state: match c.state {
+            ClaimState::Active if c.expires_at_ms > now => LeaseState::Held,
+            ClaimState::Transferred => LeaseState::Held,
+            ClaimState::Yielding => LeaseState::Releasing,
+            ClaimState::Yielded => LeaseState::Waiting,
             _ => LeaseState::Released,
         },
     }
@@ -454,8 +454,8 @@ pub fn invalidate_work(
         return Ok(());
     };
     for c in claims(tx.work(), &w.project_id)? {
-        if c.work_id == *work && c.state == "Active" {
-            change(tx, &c, "Invalidated", ctx.principal())?;
+        if c.work_id == *work && c.state == ClaimState::Active {
+            change(tx, &c, ClaimState::Invalidated, ctx.principal())?;
         }
     }
     Ok(())
@@ -706,14 +706,13 @@ impl WorkService {
                 continue;
             }
             // Expired reservations are retired before another owner gets a fresh monotonic fence.
-            for old in all
-                .iter()
-                .filter(|c| c.work_id == w.id && c.state == "Active" && !held.contains(&c.id))
-            {
+            for old in all.iter().filter(|c| {
+                c.work_id == w.id && c.state == ClaimState::Active && !held.contains(&c.id)
+            }) {
                 let state = if old.expires_at_ms <= tx.now_ms() {
-                    "Expired"
+                    ClaimState::Expired
                 } else {
-                    "Invalidated"
+                    ClaimState::Invalidated
                 };
                 change(tx, old, state, ctx.principal())?;
             }
@@ -721,13 +720,13 @@ impl WorkService {
                 for old in all.iter().filter(|c| {
                     c.queue_key == PROJECT_QUEUE
                         && c.work_id != w.id
-                        && c.state == "Active"
+                        && c.state == ClaimState::Active
                         && !held.contains(&c.id)
                 }) {
                     let state = if old.expires_at_ms <= tx.now_ms() {
-                        "Expired"
+                        ClaimState::Expired
                     } else {
-                        "Invalidated"
+                        ClaimState::Invalidated
                     };
                     change(tx, old, state, ctx.principal())?;
                 }
@@ -759,7 +758,7 @@ impl WorkService {
                 .expect("digest identifier"),
                 fence,
                 expires_at_ms: tx.now_ms().saturating_add(lease),
-                state: "Active".into(),
+                state: ClaimState::Active,
                 revision: 1,
                 work_revision: w.revision,
                 parent_feature_id: w.parent_feature_id.clone(),
@@ -853,10 +852,10 @@ impl WorkService {
                 },
             });
         }
-        if c.state != "Active" && !work_quiesced(tx, &c)? {
+        if c.state != ClaimState::Active && !work_quiesced(tx, &c)? {
             return Err(conflict("execution_not_quiescent", &c.id));
         }
-        let released = change(tx, &c, "Released", ctx.principal())?;
+        let released = change(tx, &c, ClaimState::Released, ctx.principal())?;
         super::items::bump(tx, &c.project_id, std::slice::from_ref(&c.queue_key))?;
         Ok(DomainDecision::Applied {
             result: OperationResult::NextWorkReleaseClaim {
@@ -949,7 +948,7 @@ pub fn projected_claim(
             owner_id: c.owner_id,
             fence: counter(c.fence),
             expires_at_ms: counter(c.expires_at_ms),
-            state: if c.state == "Yielding" {
+            state: if c.state == ClaimState::Yielding {
                 LeaseState::Releasing
             } else {
                 LeaseState::Held
@@ -971,13 +970,13 @@ pub fn check_start(
     if all.iter().any(|c| {
         c.queue_key == PROJECT_QUEUE
             && c.root_id != w.id
-            && matches!(c.state.as_str(), "Transferred" | "Yielding")
+            && matches!(c.state, ClaimState::Transferred | ClaimState::Yielding)
     }) {
         return Err(conflict("project_execution_owned", &w.project_id.0));
     }
     if all
         .iter()
-        .any(|c| c.work_id == w.id.0 && c.state == "Active")
+        .any(|c| c.work_id == w.id.0 && c.state == ClaimState::Active)
     {
         let mut after = None;
         loop {
@@ -996,7 +995,7 @@ pub fn check_start(
         }
     }
     for c in all.iter().filter(|c| c.work_id == w.id.0 && live(c)) {
-        if c.state == "Active" {
+        if c.state == ClaimState::Active {
             if !owned(c, ctx) || !reserved(tx, c)? {
                 return Err(super::refuse(
                     DomainErrorCode::LeaseLost,
@@ -1026,7 +1025,7 @@ pub fn check_start(
                 refreshed.revision += 1;
                 tx.work().update_allocation_claim(&refreshed, c.revision)?;
             }
-        } else if c.state == "Yielding" {
+        } else if c.state == ClaimState::Yielding {
             return Err(conflict("root_yielding", &c.id));
         }
     }
@@ -1047,8 +1046,8 @@ pub fn transfer(
         .into_iter()
         .filter(|c| c.work_id == *work)
     {
-        if c.state != "Active" {
-            if c.state != "Transferred" || session.is_none() {
+        if c.state != ClaimState::Active {
+            if c.state != ClaimState::Transferred || session.is_none() {
                 continue;
             }
             if let Some(old) = &c.execution_id
@@ -1072,7 +1071,7 @@ pub fn transfer(
         {
             next.owner_id = session.agent_id;
         }
-        next.state = "Transferred".into();
+        next.state = ClaimState::Transferred;
         next.revision += 1;
         next.fence += 1;
         tx.work().update_allocation_claim(&next, c.revision)?;
@@ -1127,9 +1126,9 @@ pub fn reconcile_project(
         let Some(w) = tx.work().work(&c.work_id)? else {
             continue;
         };
-        if c.state == "Active" {
+        if c.state == ClaimState::Active {
             if c.parent_feature_id != w.parent_feature_id {
-                change(tx, &c, "Invalidated", &actor)?;
+                change(tx, &c, ClaimState::Invalidated, &actor)?;
                 changed += 1;
                 continue;
             }
@@ -1145,25 +1144,25 @@ pub fn reconcile_project(
                 continue;
             }
         }
-        if c.state == "Active" && !reserved(tx, &c)? {
+        if c.state == ClaimState::Active && !reserved(tx, &c)? {
             let state = if c.expires_at_ms <= tx.now_ms() {
-                "Expired"
+                ClaimState::Expired
             } else {
-                "Invalidated"
+                ClaimState::Invalidated
             };
             change(tx, &c, state, &actor)?;
             changed += 1;
             continue;
         }
-        if c.state == "Transferred" && work_quiesced(tx, &c)? {
-            change(tx, &c, "Released", &actor)?;
+        if c.state == ClaimState::Transferred && work_quiesced(tx, &c)? {
+            change(tx, &c, ClaimState::Released, &actor)?;
             changed += 1;
             continue;
         }
         if c.queue_key != PROJECT_QUEUE {
             continue;
         }
-        if c.state == "Transferred" && fully_dependency_blocked(tx, service, &w)? {
+        if c.state == ClaimState::Transferred && fully_dependency_blocked(tx, service, &w)? {
             // Holds remain independently owned. A yield is not a user pause or a Continue.
             if service
                 .evaluate(
@@ -1175,11 +1174,11 @@ pub fn reconcile_project(
                 .eligible
             {
                 service.request_allocation_yield(tx, &c.root_id)?;
-                change(tx, &c, "Yielding", &actor)?;
+                change(tx, &c, ClaimState::Yielding, &actor)?;
                 changed += 1;
             }
-        } else if c.state == "Yielding" && quiesced(tx, &c.root_id)? {
-            change(tx, &c, "Yielded", &actor)?;
+        } else if c.state == ClaimState::Yielding && quiesced(tx, &c.root_id)? {
+            change(tx, &c, ClaimState::Yielded, &actor)?;
             super::items::bump(tx, project, std::slice::from_ref(&c.queue_key)).map_err(
                 |f| match f {
                     crate::services::kernel::Failure::Storage(e) => e,
@@ -1187,7 +1186,7 @@ pub fn reconcile_project(
                 },
             )?;
             changed += 1;
-        } else if c.state == "Transferred" {
+        } else if c.state == ClaimState::Transferred {
             let statuses = tx.work().statuses(project)?;
             let ended = w
                 .status_id
@@ -1195,7 +1194,7 @@ pub fn reconcile_project(
                 .and_then(|id| super::workflow::semantic_of(&statuses, id))
                 .is_some_and(super::workflow::finished);
             if ended && quiesced(tx, &c.root_id)? {
-                change(tx, &c, "Released", &actor)?;
+                change(tx, &c, ClaimState::Released, &actor)?;
                 changed += 1;
             }
         }
@@ -1365,7 +1364,7 @@ pub(crate) fn retire_handoff_claims(
         .into_iter()
         .filter(|c| c.work_id == *work && live(c))
     {
-        change(tx, &c, "Released", actor)?;
+        change(tx, &c, ClaimState::Released, actor)?;
     }
     Ok(())
 }
@@ -1390,11 +1389,13 @@ pub(crate) fn request_handoff_yield(
     for claim in claims(tx.work(), &feature.project_id)?
         .into_iter()
         .filter(|c| {
-            c.root_id == *source && c.queue_key == PROJECT_QUEUE && c.state == "Transferred"
+            c.root_id == *source
+                && c.queue_key == PROJECT_QUEUE
+                && c.state == ClaimState::Transferred
         })
     {
         service.request_allocation_yield(tx, source)?;
-        change(tx, &claim, "Yielding", &actor)?;
+        change(tx, &claim, ClaimState::Yielding, &actor)?;
     }
     Ok(())
 }

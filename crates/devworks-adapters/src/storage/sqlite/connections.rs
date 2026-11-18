@@ -2,29 +2,12 @@
 //! `router_connections` and `router_decision_models`. No secret is ever stored: a connection
 //! names its credential by an opaque handle and a credential revision.
 use super::conn::db;
+use super::support::{conflict, corrupt, id_of, invalid, page_limit};
 use devworks_core::ports::storage::*;
-use devworks_core::protocol::{Id, OperationId, Revision, RevisionDimension};
+use devworks_core::protocol::{Id, OperationId, RevisionDimension};
 use rusqlite::{Connection, OptionalExtension, Row, params};
 use serde_json::{Value, json};
 
-fn invalid(m: impl Into<String>) -> StorageError {
-    StorageError::InvalidRecord(m.into())
-}
-fn corrupt(m: impl Into<String>) -> StorageError {
-    StorageError::unavailable(Unavailable::Corrupt, m)
-}
-fn id_of(s: String) -> Result<Id, StorageError> {
-    Id::new(s).map_err(|e| corrupt(format!("stored identifier: {e}")))
-}
-fn conflict(kind: &'static str, id: &Id, expected: i64, current: i64) -> StorageError {
-    StorageError::conflict(
-        RevisionDimension::Configuration,
-        kind,
-        id.clone(),
-        Revision::new(expected.max(1)).expect("positive"),
-        Revision::new(current.max(1)).expect("positive"),
-    )
-}
 /// The next revision of a compare-and-set insert (`expected` `None`) or replacement.
 fn next_revision(
     kind: &'static str,
@@ -42,7 +25,13 @@ fn next_revision(
             kind,
             id: id.as_str().to_owned(),
         }),
-        (Some(e), Some(c)) if e != c => Err(conflict(kind, id, e, c)),
+        (Some(e), Some(c)) if e != c => Err(conflict(
+            RevisionDimension::Configuration,
+            kind,
+            id.as_str(),
+            e,
+            c,
+        )),
         (Some(e), Some(_)) => e.checked_add(1).ok_or_else(|| invalid("revision overflow")),
     }
 }
@@ -226,9 +215,7 @@ pub(super) fn connections(
     after: Option<&str>,
     limit: u16,
 ) -> Result<Vec<StoredConnection>, StorageError> {
-    if limit == 0 || limit > 500 {
-        return Err(invalid("limit must be 1..=500"));
-    }
+    page_limit(limit)?;
     let mut st = db(conn.prepare_cached(&format!(
         "SELECT {CONNECTION_COLUMNS} FROM router_connections WHERE id > ?1 ORDER BY id LIMIT ?2"
     )))?;
@@ -416,7 +403,13 @@ pub(super) fn delete_connection(
         });
     };
     if current.revision != expected {
-        return Err(conflict("connection", id, expected, current.revision));
+        return Err(conflict(
+            RevisionDimension::Configuration,
+            "connection",
+            id.as_str(),
+            expected,
+            current.revision,
+        ));
     }
     let bound: bool = db(conn.query_row(
         "SELECT EXISTS(SELECT 1 FROM router_models WHERE connection_id=?1) \
@@ -506,9 +499,7 @@ pub(super) fn decision_models(
     after: Option<&str>,
     limit: u16,
 ) -> Result<Vec<StoredDecisionModel>, StorageError> {
-    if limit == 0 || limit > 500 {
-        return Err(invalid("limit must be 1..=500"));
-    }
+    page_limit(limit)?;
     let mut st = db(conn.prepare_cached(&format!(
         "SELECT {DECISION_COLUMNS} FROM router_decision_models WHERE id > ?1 ORDER BY id LIMIT ?2"
     )))?;

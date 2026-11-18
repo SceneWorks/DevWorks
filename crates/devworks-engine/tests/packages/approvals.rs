@@ -145,7 +145,7 @@ impl devworks_engine::approvals::ResumeAdmission for PauseBeforeReadmission {
 fn saved_package_late_root_pause_preserves_exact_pending_source_and_unspent_grant() {
     let _serial = serial();
     let mut a = native_app();
-    seed_root(&a.h, "package-root");
+    seed_root(&*a.store, "package-root");
     rusqlite::Connection::open(a.h.root.join("workspace.sqlite"))
         .unwrap()
         .execute(

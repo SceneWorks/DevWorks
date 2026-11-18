@@ -685,7 +685,7 @@ fn coordinator_usage(
                     revision: 1,
                     priced_micro_usd: None,
                     reserved_micro_usd: Some(10),
-                    classification: "Untracked".into(),
+                    classification: devworks_core::ports::usage::CostClassification::Untracked,
                     monetary_complete: false,
                     incomplete: true,
                     unknown_tail: false,

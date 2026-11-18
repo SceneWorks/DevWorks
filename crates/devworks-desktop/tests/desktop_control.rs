@@ -11,6 +11,7 @@ use devworks_core::protocol::records::{DesktopInput, DesktopRecord, ItemState};
 use devworks_core::protocol::results::{DomainDecision, OperationCompletion, OperationResult};
 use devworks_core::protocol::{CommandReply, OperationState};
 use devworks_desktop::backend::Backend;
+use devworks_desktop::frame::fixture::command_input;
 use devworks_desktop::{decision_ops as dops, ops};
 use image::{DynamicImage, ImageFormat, RgbaImage};
 use serde_json::json;
@@ -82,7 +83,7 @@ fn opted_in_agent_capture_still_requires_current_consent() {
         Counter::new(store.info().restore_epoch).unwrap(),
         Revision::new(1).unwrap(),
     );
-    let raw = ops::query_frame(
+    let raw = devworks_desktop::frame::fixture::query(
         &*backend,
         "desktop.capture",
         json!({"desktopId":desktop.desktop_id,"expectedRevision":desktop.revision}),
@@ -162,7 +163,7 @@ fn at_revision(frame: Vec<u8>, revision: u64) -> Vec<u8> {
 fn inspect(backend: &dyn Backend) -> DesktopRecord {
     let (result, _) = ops::query_result(backend.query(
         "desktop.inspect",
-        &ops::query_frame(backend, "desktop.inspect", json!({})),
+        &devworks_desktop::frame::fixture::query(backend, "desktop.inspect", json!({})),
     ))
     .expect("desktop inspect");
     let OperationResult::DesktopInspect { value } = result else {
@@ -196,7 +197,11 @@ fn control_requires_human_ok_and_live_fenced_consent() {
         backend
             .command(
                 "desktop.request_control",
-                &ops::command_frame(&*backend, "desktop.request_control", request.clone()),
+                &devworks_desktop::frame::fixture::command(
+                    &*backend,
+                    "desktop.request_control",
+                    request.clone(),
+                ),
             )
             .expect("direct takeover reply"),
     );
@@ -213,28 +218,26 @@ fn control_requires_human_ok_and_live_fenced_consent() {
     .expect("selected saved operation");
     let proposal = dops::decided(backend.command(
         "approvals.propose",
-        &dops::command(
-            &*backend,
-            "approvals.propose",
-            json!({
+        &dops::command(&*backend, command_input("approvals.propose", json!({
                 "scope":{"kind":"Workspace"},"operationKind":"desktop.request_control",
                 "target":{"id":before.desktop_id,"revision":before.revision},
                 "contentDigest":decoded.fingerprint.as_str(),"summary":"Request desktop control",
                 "payload":{"kind":"SavedOperation","schemaRevision":"1","input":request}
-            }),
-        ),
+            }))),
     ))
     .expect("staged exact proposal");
     assert!(platform.input.lock().unwrap().is_empty());
     dops::decided(backend.human_decision(
         &dops::command(
             &*backend,
-            "approvals.record_human_decision",
-            json!({
-                "proposalId":proposal.id,"expectedRevision":proposal.revision,
-                "contentDigest":proposal.content_digest,"decision":"Approve",
-                "rationale":"OK: test desktop takeover"
-            }),
+            command_input(
+                "approvals.record_human_decision",
+                json!({
+                    "proposalId":proposal.id,"expectedRevision":proposal.revision,
+                    "contentDigest":proposal.content_digest,"decision":"Approve",
+                    "rationale":"OK: test desktop takeover"
+                }),
+            ),
         ),
         backend.control_epoch(),
     ))
@@ -270,13 +273,15 @@ fn control_requires_human_ok_and_live_fenced_consent() {
         "approvals.propose",
         &dops::command(
             &*backend,
-            "approvals.propose",
-            json!({
-                "scope":{"kind":"Workspace"},"operationKind":"desktop.request_control",
-                "target":{"id":held.desktop_id,"revision":held.revision},
-                "contentDigest":decoded.fingerprint.as_str(),"summary":"Second desktop control",
-                "payload":{"kind":"SavedOperation","schemaRevision":"1","input":second_request}
-            }),
+            command_input(
+                "approvals.propose",
+                json!({
+                    "scope":{"kind":"Workspace"},"operationKind":"desktop.request_control",
+                    "target":{"id":held.desktop_id,"revision":held.revision},
+                    "contentDigest":decoded.fingerprint.as_str(),"summary":"Second desktop control",
+                    "payload":{"kind":"SavedOperation","schemaRevision":"1","input":second_request}
+                }),
+            ),
         ),
     ))
     .expect("second proposal");
@@ -284,12 +289,14 @@ fn control_requires_human_ok_and_live_fenced_consent() {
         dops::decided(backend.human_decision(
             &dops::command(
                 &*backend,
-                "approvals.record_human_decision",
-                json!({
-                    "proposalId":second.id,"expectedRevision":second.revision,
-                    "contentDigest":second.content_digest,"decision":"Approve",
-                    "rationale":"Synthetic event must not grant trusted approval"
-                }),
+                command_input(
+                    "approvals.record_human_decision",
+                    json!({
+                        "proposalId":second.id,"expectedRevision":second.revision,
+                        "contentDigest":second.content_digest,"decision":"Approve",
+                        "rationale":"Synthetic event must not grant trusted approval"
+                    })
+                )
             ),
             backend.control_epoch()
         ))
@@ -307,7 +314,7 @@ fn control_requires_human_ok_and_live_fenced_consent() {
         backend
             .command(
                 "resources.renew",
-                &ops::command_frame(
+                &devworks_desktop::frame::fixture::command(
                     &*backend,
                     "resources.renew",
                     json!({
@@ -326,7 +333,11 @@ fn control_requires_human_ok_and_live_fenced_consent() {
         backend
             .command(
                 "desktop.input",
-                &ops::command_frame(&*backend, "desktop.input", action.clone()),
+                &devworks_desktop::frame::fixture::command(
+                    &*backend,
+                    "desktop.input",
+                    action.clone(),
+                ),
             )
             .expect("input reply"),
     ) {
@@ -364,7 +375,10 @@ fn control_requires_human_ok_and_live_fenced_consent() {
     ));
     let (target_inspection, _) = ops::query_result(backend.query(
         "desktop.inspect",
-        &at_revision(ops::query_frame(&*backend, "desktop.inspect", json!({})), 3),
+        &at_revision(
+            devworks_desktop::frame::fixture::query(&*backend, "desktop.inspect", json!({})),
+            3,
+        ),
     ))
     .expect("revision-three accessibility inspection");
     let OperationResult::DesktopInspect {
@@ -388,7 +402,11 @@ fn control_requires_human_ok_and_live_fenced_consent() {
             .command(
                 "desktop.input",
                 &at_revision(
-                    ops::command_frame(&*backend, "desktop.input", target_action),
+                    devworks_desktop::frame::fixture::command(
+                        &*backend,
+                        "desktop.input",
+                        target_action,
+                    ),
                     3,
                 ),
             )
@@ -409,7 +427,7 @@ fn control_requires_human_ok_and_live_fenced_consent() {
     }
     assert_eq!(platform.input.lock().unwrap().len(), 2);
     let released = decision(backend.command("desktop.release_control",
-        &ops::command_frame(&*backend,"desktop.release_control",json!({
+        &devworks_desktop::frame::fixture::command(&*backend,"desktop.release_control",json!({
             "desktopId":held.desktop_id,"leaseId":lease_id,"expectedFence":lease.fence.to_string()
         }))).expect("release reply"));
     assert!(matches!(
@@ -419,15 +437,16 @@ fn control_requires_human_ok_and_live_fenced_consent() {
         }
     ));
     assert!(matches!(inspect(&*backend).state, ItemState::Disabled));
-    let mut acquire: serde_json::Value = serde_json::from_slice(&ops::command_frame(
-        &*backend,
-        "resources.acquire",
-        json!({
-            "resourceId":"desktop","expectedRevision":"1","units":1,
-            "leaseMs":"30000","purpose":format!("desktop-consent:{}", proposal.id.as_str())
-        }),
-    ))
-    .expect("resource frame");
+    let mut acquire: serde_json::Value =
+        serde_json::from_slice(&devworks_desktop::frame::fixture::command(
+            &*backend,
+            "resources.acquire",
+            json!({
+                "resourceId":"desktop","expectedRevision":"1","units":1,
+                "leaseMs":"30000","purpose":format!("desktop-consent:{}", proposal.id.as_str())
+            }),
+        ))
+        .expect("resource frame");
     acquire["schemaRevision"] = json!(2);
     let reused = decision(
         backend
@@ -440,7 +459,7 @@ fn control_requires_human_ok_and_live_fenced_consent() {
         backend
             .command(
                 "desktop.input",
-                &ops::command_frame(&*backend, "desktop.input", action),
+                &devworks_desktop::frame::fixture::command(&*backend, "desktop.input", action),
             )
             .expect("stale input reply"),
     );
@@ -450,7 +469,7 @@ fn control_requires_human_ok_and_live_fenced_consent() {
     let after = inspect(&*backend);
     let (capture, _) = ops::query_result(backend.query(
         "desktop.capture",
-        &ops::query_frame(
+        &devworks_desktop::frame::fixture::query(
             &*backend,
             "desktop.capture",
             json!({
@@ -465,7 +484,7 @@ fn control_requires_human_ok_and_live_fenced_consent() {
     assert!(
         ops::query_result(backend.query(
             "desktop.capture",
-            &ops::query_frame(
+            &devworks_desktop::frame::fixture::query(
                 &*backend,
                 "desktop.capture",
                 json!({
@@ -495,27 +514,25 @@ fn hold_control(
     .expect("selected saved operation");
     let proposal = dops::decided(backend.command(
         "approvals.propose",
-        &dops::command(
-            &**backend,
-            "approvals.propose",
-            json!({
+        &dops::command(&**backend, command_input("approvals.propose", json!({
                 "scope":{"kind":"Workspace"},"operationKind":"desktop.request_control",
                 "target":{"id":before.desktop_id,"revision":before.revision},
                 "contentDigest":decoded.fingerprint.as_str(),"summary":"Request desktop control",
                 "payload":{"kind":"SavedOperation","schemaRevision":"1","input":request}
-            }),
-        ),
+            }))),
     ))
     .expect("staged exact proposal");
     dops::decided(backend.human_decision(
         &dops::command(
             &**backend,
-            "approvals.record_human_decision",
-            json!({
-                "proposalId":proposal.id,"expectedRevision":proposal.revision,
-                "contentDigest":proposal.content_digest,"decision":"Approve",
-                "rationale":"OK: test desktop takeover"
-            }),
+            command_input(
+                "approvals.record_human_decision",
+                json!({
+                    "proposalId":proposal.id,"expectedRevision":proposal.revision,
+                    "contentDigest":proposal.content_digest,"decision":"Approve",
+                    "rationale":"OK: test desktop takeover"
+                }),
+            ),
         ),
         backend.control_epoch(),
     ))
@@ -545,7 +562,7 @@ fn hold_control(
 }
 
 fn release_control(backend: &Arc<dyn Backend>, held: &DesktopRecord, fence: i64) {
-    let frame = ops::command_frame(
+    let frame = devworks_desktop::frame::fixture::command(
         &**backend,
         "desktop.release_control",
         json!({"desktopId":held.desktop_id,"leaseId":held.lease_id,
@@ -627,13 +644,15 @@ fn a_deletion_clicked_while_control_was_held_is_refused_even_after_release() {
         "approvals.propose",
         &dops::command(
             &*backend,
-            "approvals.propose",
-            json!({
-                "scope":{"kind":"Workspace"},"operationKind":"desktop.request_control",
-                "target":{"id":record.desktop_id,"revision":record.revision},
-                "contentDigest":decoded.fingerprint.as_str(),"summary":"Another takeover",
-                "payload":{"kind":"SavedOperation","schemaRevision":"1","input":request}
-            }),
+            command_input(
+                "approvals.propose",
+                json!({
+                    "scope":{"kind":"Workspace"},"operationKind":"desktop.request_control",
+                    "target":{"id":record.desktop_id,"revision":record.revision},
+                    "contentDigest":decoded.fingerprint.as_str(),"summary":"Another takeover",
+                    "payload":{"kind":"SavedOperation","schemaRevision":"1","input":request}
+                }),
+            ),
         ),
     ))
     .expect("staged proposal");
@@ -641,12 +660,14 @@ fn a_deletion_clicked_while_control_was_held_is_refused_even_after_release() {
         backend.human_decision(
             &dops::command(
                 &*backend,
-                "approvals.record_human_decision",
-                json!({
-                    "proposalId":pending.id,"expectedRevision":pending.revision,
-                    "contentDigest":pending.content_digest,"decision":"Reject",
-                    "rationale":"Not now"
-                }),
+                command_input(
+                    "approvals.record_human_decision",
+                    json!({
+                        "proposalId":pending.id,"expectedRevision":pending.revision,
+                        "contentDigest":pending.content_digest,"decision":"Reject",
+                        "rationale":"Not now"
+                    }),
+                ),
             ),
             received,
         )

@@ -40,6 +40,8 @@ add('session-user-message','session-command-request',msg)
 for field in ['role','actorId','authorityReceipt','hostNotice']:mut('reject-message-'+field,'session-command-request',msg,lambda v,f=field:v.update({f:'forged'}))
 add('transcript-query','session-query-request',{'protocol':P,'queryId':'q-a','sessionId':'session-a','limit':100})
 add('transcript-query-too-large','session-query-request',{'protocol':P,'queryId':'q-a','sessionId':'session-a','limit':501},False)
+# Revision 8 reads carry the tool dispatch fence and accepted-operation outcomes.
+add('transcript-query-r8','session-query-request',{'protocol':P,'queryId':'q-a','sessionId':'session-a','limit':100,'schemaRevision':8})
 def batch(bid,entries,expected='1',epoch='0'):return {'protocol':P,'batchId':bid,'sessionId':'session-a','contextEpoch':epoch,'expectedNextSequence':expected,'entries':entries}
 def entry(eid,seq,body):return {'entryId':eid,'sequence':str(seq),'body':body}
 entries=[entry('entry-call',1,{'kind':'ToolCallRecorded','toolCall':call}),entry('entry-response',2,{'kind':'ToolResponseRecorded','call':call['call'],'outcome':{'kind':'ApprovalRequired','approvalId':'approval-a','operationId':'op-a'}})]

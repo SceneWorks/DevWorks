@@ -90,7 +90,7 @@ class SchemaRevisionRules(unittest.TestCase):
             'projects.purge_status', 'history.command_receipt', 'agents.post', 'agents.receive', 'agents.ack',
             'agents.history', 'agents.events', 'skills.resources', *MCP,
             'watch.create', 'watch.list', 'watch.inspect', 'watch.cancel', 'containers.create',
-            'process.install_project_dependencies'})
+            'process.install_project_dependencies', 'sessions.transcript'})
         for name in MCP:
             self.assertEqual(carried[name], {8})
         for name in ('agents.post', 'agents.receive', 'agents.ack', 'agents.history', 'agents.events'):
@@ -315,6 +315,56 @@ class AuthorityAttributeRules(unittest.TestCase):
     def test_command_rules_on_a_query_fail(self):
         generate.OPERATION_AUTHORITY['sessions.list']['nativeExecution'] = True
         self.refused('sessions.list: native execution, approval and administration apply only to commands')
+
+
+class StubGeneration(unittest.TestCase):
+    """The repository-port test stub is read from the trait declarations."""
+
+    def setUp(self):
+        import stubs
+        self.stubs = stubs
+
+    def test_required_methods_are_stubbed_and_defaulted_ones_are_not(self):
+        source = '''
+pub trait Sample {
+    /// Doc with a brace { and a semicolon; inside.
+    fn one(&self, id: &Id, n: u16) -> Result<Vec<(String, u8)>, StorageError>;
+    fn two(&mut self, f: &mut dyn FnMut() -> bool) -> Result<(), StorageError> { Ok(()) }
+    fn three<T: Into<u8>>(&mut self, v: T) -> Result<u8, StorageError>;
+}
+'''
+        methods = self.stubs.required_methods(source, 'Sample')
+        self.assertEqual([m[0] for m in methods], ['one', 'three'])
+        self.assertEqual([self.stubs.pattern_free(p) for p in methods[0][2]], ['&self', '_: &Id', '_: u16'])
+        self.assertEqual(methods[1][1], '<T: Into<u8>>')
+
+    def test_the_recorded_ports_generate_a_stub_for_every_repository_trait(self):
+        text = self.stubs.generate(generate.CORE)
+        for name in ('WorkRepository', 'ConventionIndexRead', 'SchemaRepository'):
+            self.assertIn(f'impl {name} for Unmodelled', text)
+
+    def refuses(self, source, *named):
+        with self.assertRaises(ValueError) as caught:
+            for _, _, params, _ in self.stubs.required_methods(source, 'Sample'):
+                for p in params:
+                    self.stubs.pattern_free(p, 'Sample::m')
+        for text in named:
+            self.assertIn(text, str(caught.exception))
+
+    def test_a_generic_trait_is_refused(self):
+        self.refuses('pub trait Sample<T> { fn m(&self) -> Result<(), StorageError>; }', 'Sample', 'generics')
+
+    def test_an_async_method_is_refused(self):
+        self.refuses('pub trait Sample { async fn m(&self) -> Result<(), StorageError>; }', 'Sample::m', 'async')
+
+    def test_an_unsafe_method_is_refused(self):
+        self.refuses('pub trait Sample { unsafe fn m(&self) -> Result<(), StorageError>; }', 'Sample::m', 'unsafe')
+
+    def test_a_cfg_attribute_on_a_method_is_refused(self):
+        self.refuses('pub trait Sample {\n    #[cfg(unix)]\n    fn m(&self) -> Result<(), StorageError>;\n}', 'Sample::m', 'cfg')
+
+    def test_a_typed_receiver_is_refused(self):
+        self.refuses('pub trait Sample { fn m(self: Box<Self>) -> Result<(), StorageError>; }', 'Sample::m', 'receiver')
 
 
 if __name__ == '__main__':

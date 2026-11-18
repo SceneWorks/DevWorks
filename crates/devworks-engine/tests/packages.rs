@@ -1648,13 +1648,21 @@ fn shutdown_abandons_a_blocked_package_host_stop_at_its_bound_after_the_continue
     a.shutdown_bound = Some(Duration::from_secs(5));
     a.boot();
     // One live issue root, held for manual Continue at shutdown.
-    let c = rusqlite::Connection::open(a.h.root.join("workspace.sqlite")).unwrap();
-    c.busy_timeout(Duration::from_secs(5)).unwrap();
-    c.execute_batch(
-        "INSERT INTO work_items VALUES('root-i','project-a','issue',NULL,NULL,NULL,'root-i',1,0,1,1,1,'{}');",
+    devworks_test_support::seed::work(
+        &*a.store,
+        &[devworks_test_support::seed::WorkSeed::issue(
+            "root-i",
+            "project-a",
+        )],
     )
     .unwrap();
-    drop(c);
+    rusqlite::Connection::open(a.h.root.join("workspace.sqlite"))
+        .unwrap()
+        .execute(
+            "UPDATE work_items SET kind='issue' WHERE id IN ('root-i')",
+            [],
+        )
+        .unwrap();
     let frame = json!({"protocol": "1.0-draft.1", "requestKey": a.key("start"), "command": {"kind": "runs.start",
         "rootId": "root-i", "expectedWorkRevision": "1", "expectedControlRevision": "1"}});
     applied(

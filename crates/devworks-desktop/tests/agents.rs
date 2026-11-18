@@ -12,7 +12,7 @@ fn native_host_registers_agent_coordination_owner() {
     let backend = engine.backend();
     let reply = backend.query(
         "agents.inspect",
-        &ops::query_frame(
+        &devworks_desktop::frame::fixture::query(
             &*backend,
             "agents.inspect",
             json!({"assignmentId": "missing-assignment"}),

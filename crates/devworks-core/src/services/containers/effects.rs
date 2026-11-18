@@ -24,17 +24,13 @@ use crate::protocol::results::OperationResult;
 use crate::protocol::support::BoundedText;
 use crate::registry::Mode;
 use crate::services::artifacts::observed::Observed;
+use crate::services::effect::{EffectOutcome, JournaledEffect};
 use crate::services::kernel::rev;
 use base64::Engine as _;
-use serde_json::{Value, json};
+use serde_json::json;
 use std::collections::BTreeSet;
+use std::sync::Arc;
 use std::time::Duration;
-
-pub enum EffectOutcome {
-    Completed(Value),
-    Failed(String),
-    Unknown(String),
-}
 
 struct ExecutionPlan<'a> {
     backend: Backend,
@@ -1305,6 +1301,20 @@ impl ContainerService {
             }
             _ => EffectOutcome::Unknown("container effect requires owner reconciliation".into()),
         }
+    }
+}
+
+/// A container service bound to the authority its effects recheck.
+pub struct ContainerEffects {
+    pub service: Arc<ContainerService>,
+    pub authority: Arc<dyn AuthorityPort>,
+}
+impl JournaledEffect for ContainerEffects {
+    fn execute(&self, operation: &OperationRecord) -> EffectOutcome {
+        self.service.execute_effect(operation, &*self.authority)
+    }
+    fn observe(&self, operation: &OperationRecord) -> EffectOutcome {
+        self.service.observe_effect(operation, &*self.authority)
     }
 }
 

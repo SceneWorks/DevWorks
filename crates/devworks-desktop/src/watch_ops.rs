@@ -1,15 +1,15 @@
 //! Watcher frames (`watch.list`, `watch.cancel`) and the requests the watcher views wait for.
+use crate::frame::{self, Negotiate};
 use crate::{
     backend::{Backend, screen_slot},
     ops::{self, Failure},
 };
 use devworks_core::gateway::{CommandOutcome, QueryOutcome};
+use devworks_core::operations::{OperationInput as In, watch};
+use devworks_core::protocol::RootId;
 use devworks_core::protocol::records::{WatcherPage, WatcherRecord};
 use devworks_core::protocol::results::OperationResult;
-use serde_json::{Value, json};
 
-/// Watch operations were introduced at schema revision 8.
-pub const WATCH_REVISION: u64 = 8;
 /// Watchers one page request asks for.
 pub const WATCH_PAGE: u16 = 50;
 
@@ -52,36 +52,30 @@ pub fn list(
     cursor: Option<&str>,
     limit: usize,
 ) -> Vec<u8> {
-    let mut page = json!({"limit": limit.clamp(1, WATCH_MAX_ROWS)});
-    if let Some(cursor) = cursor {
-        page["cursor"] = json!(cursor);
-    }
-    let mut body: Value = json!({"page": page});
-    match scope {
-        WatchScope::All => {}
-        WatchScope::Session(id) => body["sessionId"] = json!(id),
-        WatchScope::Feature(id) => body["featureId"] = json!(id),
-    }
-    ops::at_revision(
-        ops::query_frame(backend, "watch.list", body),
-        WATCH_REVISION,
-    )
+    frame::with(backend, Negotiate::Latest, || {
+        let (session_id, feature_id) = match scope {
+            WatchScope::All => (None, None),
+            WatchScope::Session(id) => (Some(frame::id(id)?), None),
+            WatchScope::Feature(id) => (None, Some(RootId(frame::id(id)?))),
+        };
+        Some(In::Watch(watch::Input::List(watch::ListInput {
+            session_id,
+            feature_id,
+            states: None,
+            page: frame::page(limit.clamp(1, WATCH_MAX_ROWS) as u32, cursor)?,
+        })))
+    })
 }
 
 /// Stops observing `watcher` at the revision shown; `stop_process` also stops what it launched.
 pub fn cancel(backend: &dyn Backend, watcher: &WatcherRecord, stop_process: bool) -> Vec<u8> {
-    ops::at_revision(
-        ops::command_frame(
-            backend,
-            "watch.cancel",
-            json!({
-                "watcherId": watcher.id,
-                "expectedRevision": watcher.revision,
-                "stopProcess": stop_process,
-            }),
-        ),
-        WATCH_REVISION,
-    )
+    frame::with(backend, Negotiate::Latest, || {
+        Some(In::Watch(watch::Input::Cancel(watch::CancelInput {
+            watcher_id: watcher.id.clone(),
+            expected_revision: watcher.revision.clone(),
+            stop_process,
+        })))
+    })
 }
 
 pub fn page(outcome: QueryOutcome) -> Result<WatcherPage, Failure> {
