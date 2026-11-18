@@ -621,6 +621,62 @@ mod tests {
         (stored_tx, runs, stop, task)
     }
 
+    /// A commit made during a pass leaves the loop not caught up until a later pass has seen it.
+    #[test]
+    fn a_commit_during_a_pass_keeps_the_loop_unsettled_until_the_next_pass() {
+        rt().block_on(async {
+            let (stored_tx, stored) = watch::channel(0u64);
+            let delivered = watch::channel(0u64).1;
+            let state = LoopState::new();
+            let (stop, stopped) = watch::channel(false);
+            let commits = Commits::new(
+                stored,
+                delivered,
+                Duration::from_secs(3600),
+                Arc::new(AtomicU64::new(0)),
+                state.clone(),
+            );
+            let runs = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+            let (count, sender) = (runs.clone(), stored_tx.clone());
+            let (release_tx, release) = watch::channel(false);
+            let task = tokio::spawn(commits.run(
+                Stopped(stopped),
+                || true,
+                move || {
+                    let n = count.fetch_add(1, Ordering::SeqCst) + 1;
+                    let sender = sender.clone();
+                    let mut release = release.clone();
+                    async move {
+                        if n == 1 {
+                            // A commit lands after the loop recorded what it had seen.
+                            sender.send(1).unwrap();
+                            while !*release.borrow_and_update() {
+                                release.changed().await.unwrap();
+                            }
+                        }
+                        Next::Idle
+                    }
+                },
+            ));
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            assert!(
+                !state.caught_up(1, 0),
+                "a loop mid-pass is reported settled"
+            );
+            release_tx.send(true).unwrap();
+            tokio::time::timeout(Duration::from_secs(10), async {
+                while !state.caught_up(1, 0) {
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                }
+            })
+            .await
+            .expect("the loop never caught up with the commit");
+            assert_eq!(runs.load(Ordering::SeqCst), 2);
+            stop.send(true).unwrap();
+            task.await.unwrap();
+        });
+    }
+
     /// A pass that reports a deadline is run again then, not after the hour-long interval.
     #[test]
     fn a_pass_deadline_wakes_the_loop_before_the_fallback_interval() {
