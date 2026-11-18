@@ -9,7 +9,7 @@ use crate::fs::artifacts::{NativeArtifactFiles, Step};
 use crate::storage::sqlite::{MIGRATION_0006_SHA256, MIGRATIONS, SqliteStore};
 use devworks_core::admission::{self, Selection};
 use devworks_core::authority::HostAuthority;
-use devworks_core::authority::destructive::{BlockReason, FileIdentity};
+use devworks_core::authority::destructive::BlockReason;
 use devworks_core::authority::reads::ReadRoot;
 use devworks_core::authority::service as auth;
 use devworks_core::context::{HostIngress, InvocationContext, PrincipalKind};
@@ -45,6 +45,7 @@ use devworks_core::services::artifacts::{
 use devworks_core::services::projects::managed_files::ManagedFileCustody;
 use devworks_core::settings::catalog::{AgentRole, descriptor};
 use devworks_core::settings::service::SettingsService;
+use devworks_test_support::{FaultFiles, FileOp};
 use serde_json::{Value, json};
 use std::collections::HashMap;
 use std::io::Read;
@@ -2485,128 +2486,60 @@ fn a_save_refused_after_staging_resolves_its_staging_without_a_restart() {
 // ---------------------------------------------------------------------------------------------
 // Review regressions: claims, concurrent recovery, preparation limits, integrity, sources.
 
-/// The real file adapter with hooks at the interleaving points the reviews probed.
+/// The real file adapter, through the shared fault-injecting decorator, with one-shot hooks at the
+/// interleaving points the reviews probed.
 struct HookFiles {
-    inner: Arc<NativeArtifactFiles>,
-    before_publish: Mutex<Option<OnResolve>>,
-    during_publish: Mutex<Option<OnResolve>>,
-    after_publish: Mutex<Option<OnResolve>>,
-    on_unlink: Mutex<Option<OnResolve>>,
-    after_unlink: Mutex<Option<OnResolve>>,
-    read_ranges: AtomicU64,
+    /// The file store to compose.
+    files: Arc<FaultFiles>,
+    before_publish: Arc<Mutex<Option<OnResolve>>>,
+    /// Runs after the first chunk of the source (the staging file exists, partly written).
+    during_publish: Arc<Mutex<Option<OnResolve>>>,
+    after_publish: Arc<Mutex<Option<OnResolve>>>,
+    on_unlink: Arc<Mutex<Option<OnResolve>>>,
+    after_unlink: Arc<Mutex<Option<OnResolve>>>,
 }
 impl HookFiles {
     fn new(inner: Arc<NativeArtifactFiles>) -> Arc<Self> {
-        Arc::new(Self {
-            inner,
-            before_publish: Mutex::new(None),
-            during_publish: Mutex::new(None),
-            after_publish: Mutex::new(None),
-            on_unlink: Mutex::new(None),
-            after_unlink: Mutex::new(None),
-            read_ranges: AtomicU64::new(0),
-        })
+        let files = FaultFiles::over(inner);
+        let slot = || Arc::new(Mutex::new(None::<OnResolve>));
+        let hook = Self {
+            files,
+            before_publish: slot(),
+            during_publish: slot(),
+            after_publish: slot(),
+            on_unlink: slot(),
+            after_unlink: slot(),
+        };
+        let (bp, dp, ap) = (
+            hook.before_publish.clone(),
+            hook.during_publish.clone(),
+            hook.after_publish.clone(),
+        );
+        let (ou, au) = (hook.on_unlink.clone(), hook.after_unlink.clone());
+        hook.files.before(FileOp::Publish, move |_| {
+            Self::fire(&bp);
+            Ok(())
+        });
+        hook.files.on_source_chunk(move |_| Self::fire(&dp));
+        hook.files
+            .after(FileOp::Publish, move |_, _| Self::fire(&ap));
+        hook.files.before(FileOp::Unlink, move |_| {
+            Self::fire(&ou);
+            Ok(())
+        });
+        hook.files
+            .after(FileOp::Unlink, move |_, _| Self::fire(&au));
+        Arc::new(hook)
+    }
+    /// `read_range` calls so far.
+    fn read_ranges(&self) -> usize {
+        self.files.calls(FileOp::ReadRange)
     }
     fn fire(slot: &Mutex<Option<OnResolve>>) {
         let hook = slot.lock().unwrap().take();
         if let Some(h) = hook {
             h();
         }
-    }
-}
-/// A source that runs a hook after its first chunk (the staging file exists, partly written).
-struct HookedReader<'a> {
-    inner: &'a mut dyn Read,
-    hook: Option<OnResolve>,
-}
-impl Read for HookedReader<'_> {
-    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
-        let cap = buf.len().min(4);
-        let n = self.inner.read(&mut buf[..cap])?;
-        if let Some(h) = self.hook.take() {
-            h();
-        }
-        Ok(n)
-    }
-}
-impl ArtifactFiles for HookFiles {
-    fn publish(
-        &self,
-        s: &str,
-        source: &mut dyn Read,
-        d: &str,
-        n: u64,
-        reuse: Option<&str>,
-        generation: &str,
-    ) -> Result<devworks_core::ports::files::PublishedBlob, FileFault> {
-        Self::fire(&self.before_publish);
-        let hook = self.during_publish.lock().unwrap().take();
-        let mut reader = HookedReader {
-            inner: source,
-            hook,
-        };
-        let published = self.inner.publish(s, &mut reader, d, n, reuse, generation);
-        Self::fire(&self.after_publish);
-        published
-    }
-    fn managed_path(&self, d: &str, g: &str) -> Result<String, FileFault> {
-        self.inner.managed_path(d, g)
-    }
-    fn present(&self, d: &str, g: &str, n: u64) -> Result<bool, FileFault> {
-        self.inner.present(d, g, n)
-    }
-    fn inspect(&self, d: &str, g: &str) -> Result<Option<u64>, FileFault> {
-        self.inner.inspect(d, g)
-    }
-    fn read_range(&self, d: &str, g: &str, n: u64, o: u64, m: usize) -> Result<Vec<u8>, FileFault> {
-        self.read_ranges.fetch_add(1, Ordering::SeqCst);
-        self.inner.read_range(d, g, n, o, m)
-    }
-    fn open(&self, d: &str, g: &str, n: u64) -> Result<Box<dyn Read + Send>, FileFault> {
-        self.inner.open(d, g, n)
-    }
-    fn unlink(&self, d: &str, g: &str) -> Result<(), FileFault> {
-        Self::fire(&self.on_unlink);
-        let removed = self.inner.unlink(d, g);
-        Self::fire(&self.after_unlink);
-        removed
-    }
-    fn quarantine(&self, d: &str, g: &str) -> Result<(), FileFault> {
-        self.inner.quarantine(d, g)
-    }
-    fn staged(&self) -> Result<Vec<String>, FileFault> {
-        self.inner.staged()
-    }
-    fn remove_staged(&self, n: &str) -> Result<(), FileFault> {
-        self.inner.remove_staged(n)
-    }
-    fn stored_files(&self) -> Result<Vec<(String, String)>, FileFault> {
-        self.inner.stored_files()
-    }
-    fn write_derived(&self, k: &str, b: &[u8]) -> Result<(), FileFault> {
-        self.inner.write_derived(k, b)
-    }
-    fn derived_root(&self) -> Result<FileIdentity, FileFault> {
-        self.inner.derived_root()
-    }
-    fn remove_derived_remnants(&self, key: &str, root: FileIdentity) -> Result<(), FileFault> {
-        self.inner.remove_derived_remnants(key, root)
-    }
-    fn read_derived(&self, k: &str, m: usize) -> Result<Option<Vec<u8>>, FileFault> {
-        self.inner.read_derived(k, m)
-    }
-    fn collect_derived(&self) -> Result<u64, FileFault> {
-        self.inner.collect_derived()
-    }
-    fn export(
-        &self,
-        d: &str,
-        g: &str,
-        n: u64,
-        p: &std::path::Path,
-        o: bool,
-    ) -> Result<(), FileFault> {
-        self.inner.export(d, g, n, p, o)
     }
 }
 
@@ -2728,7 +2661,7 @@ fn abandoning_a_staged_file_never_unlinks_bytes_a_concurrent_save_committed() {
     fx.source("t1", "t1.bin", bytes, SourceOrigin::default());
     fx.source("t2", "t2.bin", bytes, SourceOrigin::default());
     let hook = HookFiles::new(fx.files.clone());
-    let (_, cases) = fx.service_with(hook.clone(), fx.sources.clone());
+    let (_, cases) = fx.service_with(hook.files.clone(), fx.sources.clone());
     // Save B (same bytes) runs between A's resolution and its physical removal.
     let slot = Arc::new(Mutex::new(None));
     *hook.on_unlink.lock().unwrap() = Some(save_into(&fx, "t2", bytes, slot.clone()));
@@ -2766,7 +2699,7 @@ fn a_digest_another_save_is_staging_is_never_claimed() {
     fx.source("t1", "t1.bin", bytes, SourceOrigin::default());
     fx.source("t2", "t2.bin", bytes, SourceOrigin::default());
     let hook = HookFiles::new(fx.files.clone());
-    let (_, cases) = fx.service_with(hook.clone(), fx.sources.clone());
+    let (_, cases) = fx.service_with(hook.files.clone(), fx.sources.clone());
     // B is mid-staging (journaled, file published) while A is refused and resolved.
     let slot = Arc::new(Mutex::new(None));
     let a_frame = fx.save_frame(
@@ -2837,7 +2770,7 @@ fn recovery_running_while_saves_stage_removes_nothing_in_flight() {
     let bytes = b"recover around me";
     fx.source("t1", "t1.bin", bytes, SourceOrigin::default());
     let hook = HookFiles::new(fx.files.clone());
-    let (svc, cases) = fx.service_with(hook.clone(), fx.sources.clone());
+    let (svc, cases) = fx.service_with(hook.files.clone(), fx.sources.clone());
     let reports = Arc::new(Mutex::new(Vec::new()));
     for slot in [
         &hook.before_publish,
@@ -3056,7 +2989,7 @@ fn replay_only_and_expired_commands_prepare_nothing() {
     assert!(fx.files.staged().unwrap().is_empty());
     // A deadline that passes while the file streams stops it and resolves the staging.
     let hook = HookFiles::new(fx.files.clone());
-    let (_, cases) = fx.service_with(hook.clone(), fx.sources.clone());
+    let (_, cases) = fx.service_with(hook.files.clone(), fx.sources.clone());
     let clock = fx.h.clock.clone();
     *hook.during_publish.lock().unwrap() = Some(Box::new(move || {
         clock.0.store(T0 + 10_000, Ordering::SeqCst);
@@ -3335,7 +3268,7 @@ fn previews_are_served_from_the_derived_cache_until_it_is_collected() {
     let fx = Fx::new();
     let user = fx.user();
     let hook = HookFiles::new(fx.files.clone());
-    let (svc, cases) = fx.service_with(hook.clone(), fx.sources.clone());
+    let (svc, cases) = fx.service_with(hook.files.clone(), fx.sources.clone());
     fx.source("t1", "t1.bin", b"cached preview", SourceOrigin::default());
     let frame = fx.save_frame(
         &fx.key(),
@@ -3371,21 +3304,14 @@ fn previews_are_served_from_the_derived_cache_until_it_is_collected() {
         }
     };
     let first = preview();
-    let reads = hook.read_ranges.load(Ordering::SeqCst);
+    let reads = hook.read_ranges();
     assert!(reads >= 1);
     let second = preview();
-    assert_eq!(
-        hook.read_ranges.load(Ordering::SeqCst),
-        reads,
-        "cache hit reads the source"
-    );
+    assert_eq!(hook.read_ranges(), reads, "cache hit reads the source");
     assert_eq!(hex(&first.sha256), hex(&second.sha256));
     assert!(svc.collect_derived().unwrap() >= 1);
     let third = preview();
-    assert!(
-        hook.read_ranges.load(Ordering::SeqCst) > reads,
-        "rebuilt after collection"
-    );
+    assert!(hook.read_ranges() > reads, "rebuilt after collection");
     assert_eq!(hex(&first.sha256), hex(&third.sha256));
 }
 
@@ -3683,7 +3609,7 @@ fn a_stale_remover_mid_unlink_never_reaches_the_newer_generation() {
     fx.claim(&old, "earlier-boot.claimant");
     fx.source("t2", "t2.bin", bytes, SourceOrigin::default());
     let hook = HookFiles::new(fx.files.clone());
-    let (r1, _) = fx.service_with(hook.clone(), fx.sources.clone());
+    let (r1, _) = fx.service_with(hook.files.clone(), fx.sources.clone());
     let slot = Arc::new(Mutex::new(None));
     let save = save_into(&fx, "t2", bytes, slot.clone());
     let second = Arc::new(Mutex::new(None));
@@ -3810,7 +3736,7 @@ fn abandon_recovery_and_a_save_of_the_same_bytes_interleave_safely() {
     fx.source("t1", "t1.bin", bytes, SourceOrigin::default());
     fx.source("t2", "t2.bin", bytes, SourceOrigin::default());
     let hook = HookFiles::new(fx.files.clone());
-    let (_, cases) = fx.service_with(hook.clone(), fx.sources.clone());
+    let (_, cases) = fx.service_with(hook.files.clone(), fx.sources.clone());
     let slot = Arc::new(Mutex::new(None));
     let save = save_into(&fx, "t2", bytes, slot.clone());
     let (svc, store) = (fx.svc.clone(), fx.store.clone());
@@ -3850,7 +3776,7 @@ fn collection_recovery_and_a_save_of_the_same_bytes_interleave_safely() {
     let old = fx.deleted("t1", bytes);
     fx.source("t2", "t2.bin", bytes, SourceOrigin::default());
     let hook = HookFiles::new(fx.files.clone());
-    let (collector, _) = fx.service_with(hook.clone(), fx.sources.clone());
+    let (collector, _) = fx.service_with(hook.files.clone(), fx.sources.clone());
     let slot = Arc::new(Mutex::new(None));
     let save = save_into(&fx, "t2", bytes, slot.clone());
     let (svc, store) = (fx.svc.clone(), fx.store.clone());
@@ -3877,7 +3803,7 @@ fn a_crash_between_claim_and_removal_is_finished_by_recovery() {
         let bytes = format!("crash around removal {after_unlink}").into_bytes();
         let old = fx.deleted("t1", &bytes);
         let hook = HookFiles::new(fx.files.clone());
-        let (collector, _) = fx.service_with(hook.clone(), fx.sources.clone());
+        let (collector, _) = fx.service_with(hook.files.clone(), fx.sources.clone());
         let slot = if after_unlink {
             &hook.after_unlink
         } else {
@@ -3993,94 +3919,27 @@ fn recovery_quarantines_a_corrupt_present_generation_and_a_save_heals_it() {
 // ---------------------------------------------------------------------------------------------
 // Retire on claim: a generation ever claimed for removal is permanently dead.
 
-/// The native adapter with injectable removal and quarantine failures (a transient sharing
-/// violation or EIO).
-struct Faulty {
-    inner: Arc<NativeArtifactFiles>,
-    fail_unlink: bool,
-    fail_quarantine_of: Option<String>,
-}
-impl ArtifactFiles for Faulty {
-    fn publish(
-        &self,
-        s: &str,
-        src: &mut dyn Read,
-        d: &str,
-        n: u64,
-        r: Option<&str>,
-        g: &str,
-    ) -> Result<devworks_core::ports::files::PublishedBlob, FileFault> {
-        self.inner.publish(s, src, d, n, r, g)
-    }
-    fn managed_path(&self, d: &str, g: &str) -> Result<String, FileFault> {
-        self.inner.managed_path(d, g)
-    }
-    fn present(&self, d: &str, g: &str, n: u64) -> Result<bool, FileFault> {
-        self.inner.present(d, g, n)
-    }
-    fn inspect(&self, d: &str, g: &str) -> Result<Option<u64>, FileFault> {
-        self.inner.inspect(d, g)
-    }
-    fn read_range(&self, d: &str, g: &str, n: u64, o: u64, m: usize) -> Result<Vec<u8>, FileFault> {
-        self.inner.read_range(d, g, n, o, m)
-    }
-    fn open(&self, d: &str, g: &str, n: u64) -> Result<Box<dyn Read + Send>, FileFault> {
-        self.inner.open(d, g, n)
-    }
-    fn unlink(&self, d: &str, g: &str) -> Result<(), FileFault> {
-        if self.fail_unlink {
-            return Err(FileFault::Io("sharing violation".into()));
-        }
-        self.inner.unlink(d, g)
-    }
-    fn quarantine(&self, d: &str, g: &str) -> Result<(), FileFault> {
-        if self.fail_quarantine_of.as_deref() == Some(d) {
-            return Err(FileFault::Io("quarantine refused".into()));
-        }
-        self.inner.quarantine(d, g)
-    }
-    fn staged(&self) -> Result<Vec<String>, FileFault> {
-        self.inner.staged()
-    }
-    fn remove_staged(&self, n: &str) -> Result<(), FileFault> {
-        self.inner.remove_staged(n)
-    }
-    fn stored_files(&self) -> Result<Vec<(String, String)>, FileFault> {
-        self.inner.stored_files()
-    }
-    fn write_derived(&self, k: &str, b: &[u8]) -> Result<(), FileFault> {
-        self.inner.write_derived(k, b)
-    }
-    fn derived_root(&self) -> Result<FileIdentity, FileFault> {
-        self.inner.derived_root()
-    }
-    fn remove_derived_remnants(&self, key: &str, root: FileIdentity) -> Result<(), FileFault> {
-        self.inner.remove_derived_remnants(key, root)
-    }
-    fn read_derived(&self, k: &str, m: usize) -> Result<Option<Vec<u8>>, FileFault> {
-        self.inner.read_derived(k, m)
-    }
-    fn collect_derived(&self) -> Result<u64, FileFault> {
-        self.inner.collect_derived()
-    }
-    fn export(
-        &self,
-        d: &str,
-        g: &str,
-        n: u64,
-        p: &std::path::Path,
-        o: bool,
-    ) -> Result<(), FileFault> {
-        self.inner.export(d, g, n, p, o)
-    }
-}
 impl Fx {
-    fn faulty(&self, fail_unlink: bool, fail_quarantine_of: Option<String>) -> Arc<Faulty> {
-        Arc::new(Faulty {
-            inner: self.files.clone(),
-            fail_unlink,
-            fail_quarantine_of,
-        })
+    /// The native adapter with injectable removal and quarantine failures (a transient sharing
+    /// violation or EIO).
+    fn faulty(&self, fail_unlink: bool, fail_quarantine_of: Option<String>) -> Arc<FaultFiles> {
+        let files = FaultFiles::over(self.files.clone());
+        files.refuse_defaults(&[FileOp::OpenControlled, FileOp::ReadRangeControlled]);
+        if fail_unlink {
+            files.before(FileOp::Unlink, |_| {
+                Err(FileFault::Io("sharing violation".into()))
+            });
+        }
+        if let Some(digest) = fail_quarantine_of {
+            files.before(FileOp::Quarantine, move |call| {
+                if call.digest == digest {
+                    Err(FileFault::Io("quarantine refused".into()))
+                } else {
+                    Ok(())
+                }
+            });
+        }
+        files
     }
 }
 
@@ -4094,7 +3953,7 @@ fn an_adopted_claim_whose_removal_failed_is_retired_and_never_reused() {
     let old = fx.deleted("t1", bytes);
     fx.source("t2", "t2.bin", bytes, SourceOrigin::default());
     let hook = HookFiles::new(fx.files.clone());
-    let (collector_a, _) = fx.service_with(hook.clone(), fx.sources.clone());
+    let (collector_a, _) = fx.service_with(hook.files.clone(), fx.sources.clone());
     let (recovery_b, _) = fx.service_with(fx.faulty(true, None), fx.sources.clone());
     let slot = Arc::new(Mutex::new(None));
     let save = save_into(&fx, "t2", bytes, slot.clone());
@@ -4165,7 +4024,7 @@ fn reusing_a_pending_generation_while_collection_claims_it_is_refused() {
     let old = fx.deleted("t1", bytes);
     fx.source("t2", "t2.bin", bytes, SourceOrigin::default());
     let hook = HookFiles::new(fx.files.clone());
-    let (_, cases) = fx.service_with(hook.clone(), fx.sources.clone());
+    let (_, cases) = fx.service_with(hook.files.clone(), fx.sources.clone());
     let (svc, store) = (fx.svc.clone(), fx.store.clone());
     *hook.after_publish.lock().unwrap() = Some(Box::new(move || {
         assert_eq!(svc.collect(&*store).unwrap().unlinked.len(), 1);
@@ -4213,7 +4072,7 @@ fn healing_past_a_wrong_length_generation_quarantines_it() {
     fx.source("ta", "ta.bin", bytes, SourceOrigin::default());
     fx.source("tb", "tb.bin", bytes, SourceOrigin::default());
     let hook = HookFiles::new(fx.files.clone());
-    let (_, cases) = fx.service_with(hook.clone(), fx.sources.clone());
+    let (_, cases) = fx.service_with(hook.files.clone(), fx.sources.clone());
     // After A published its own generation, B commits its own and B's file is truncated.
     let slot = Arc::new(Mutex::new(None));
     let save_b = save_into(&fx, "tb", bytes, slot.clone());

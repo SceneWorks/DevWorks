@@ -1,15 +1,9 @@
 //! Cancellation reaches the real accepted body-index source, without touching other work.
 use super::super::conventions::{DirectNative, imported_body};
 use super::super::*;
-use devworks_core::{
-    ports::files::{ArtifactFiles, FileFault, PublishedBlob},
-    protocol::provider::ArtifactRef,
-};
-use std::{
-    io::Read,
-    path::Path,
-    sync::{Condvar, Weak},
-};
+use devworks_core::protocol::provider::ArtifactRef;
+use devworks_test_support::{FaultFiles, FileOp};
+use std::sync::{Condvar, Weak};
 
 #[derive(Clone)]
 struct SourceBinding {
@@ -26,7 +20,8 @@ struct HeldSource {
 }
 /// Pauses only the verified imported body while its real Accepted index child owns it.
 struct SourceVerificationGate {
-    inner: NativeArtifactFiles,
+    /// The file store to compose: the native one, pausing after each controlled verified open.
+    files: Arc<FaultFiles>,
     binding: Mutex<Option<SourceBinding>>,
     held: Mutex<Option<HeldSource>>,
     entered: AtomicBool,
@@ -35,14 +30,30 @@ struct SourceVerificationGate {
 }
 impl SourceVerificationGate {
     fn new(h: &Harness) -> Arc<Self> {
-        Arc::new(Self {
-            inner: NativeArtifactFiles::new(h.root.clone(), h.root.with_extension("cache")),
+        let native = Arc::new(NativeArtifactFiles::new(
+            h.root.clone(),
+            h.root.with_extension("cache"),
+        ));
+        Arc::new_cyclic(|this: &std::sync::Weak<Self>| {
+            let files = FaultFiles::over(native);
+            let this = this.clone();
+            files.after(FileOp::OpenControlled, move |call, opened| {
+                if opened && let Some(gate) = this.upgrade() {
+                    gate.pause(call.digest, call.generation, call.bytes);
+                }
+            });
+            Self::with(files)
+        })
+    }
+    fn with(files: Arc<FaultFiles>) -> Self {
+        Self {
+            files,
             binding: Mutex::new(None),
             held: Mutex::new(None),
             entered: AtomicBool::new(false),
             released: Mutex::new(false),
             wake: Condvar::new(),
-        })
+        }
     }
     fn arm(&self, store: &Arc<dyn ApplicationStore>, job: &Id, index: &StoredConventionIndex) {
         let reference: ArtifactRef = serde_json::from_value(index.source_ref.clone()).unwrap();
@@ -154,83 +165,6 @@ impl Drop for ReleaseSource {
         self.0.release();
     }
 }
-impl ArtifactFiles for SourceVerificationGate {
-    fn publish(
-        &self,
-        n: &str,
-        r: &mut dyn Read,
-        d: &str,
-        b: u64,
-        reuse: Option<&str>,
-        g: &str,
-    ) -> Result<PublishedBlob, FileFault> {
-        self.inner.publish(n, r, d, b, reuse, g)
-    }
-    fn managed_path(&self, d: &str, g: &str) -> Result<String, FileFault> {
-        self.inner.managed_path(d, g)
-    }
-    fn present(&self, d: &str, g: &str, n: u64) -> Result<bool, FileFault> {
-        self.inner.present(d, g, n)
-    }
-    fn inspect(&self, d: &str, g: &str) -> Result<Option<u64>, FileFault> {
-        self.inner.inspect(d, g)
-    }
-    fn read_range(&self, d: &str, g: &str, n: u64, o: u64, m: usize) -> Result<Vec<u8>, FileFault> {
-        self.inner.read_range(d, g, n, o, m)
-    }
-    fn open(&self, d: &str, g: &str, n: u64) -> Result<Box<dyn Read + Send>, FileFault> {
-        self.inner.open(d, g, n)
-    }
-    fn open_controlled(
-        &self,
-        d: &str,
-        g: &str,
-        n: u64,
-        stopped: &mut dyn FnMut() -> bool,
-    ) -> Result<Box<dyn Read + Send>, FileFault> {
-        let verified = self.inner.open_controlled(d, g, n, stopped)?;
-        self.pause(d, g, n);
-        Ok(verified)
-    }
-    fn read_range_controlled(
-        &self,
-        d: &str,
-        g: &str,
-        n: u64,
-        o: u64,
-        m: usize,
-        stopped: &mut dyn FnMut() -> bool,
-    ) -> Result<Vec<u8>, FileFault> {
-        self.inner.read_range_controlled(d, g, n, o, m, stopped)
-    }
-    fn unlink(&self, d: &str, g: &str) -> Result<(), FileFault> {
-        self.inner.unlink(d, g)
-    }
-    fn quarantine(&self, d: &str, g: &str) -> Result<(), FileFault> {
-        self.inner.quarantine(d, g)
-    }
-    fn staged(&self) -> Result<Vec<String>, FileFault> {
-        self.inner.staged()
-    }
-    fn remove_staged(&self, n: &str) -> Result<(), FileFault> {
-        self.inner.remove_staged(n)
-    }
-    fn stored_files(&self) -> Result<Vec<(String, String)>, FileFault> {
-        self.inner.stored_files()
-    }
-    fn write_derived(&self, k: &str, b: &[u8]) -> Result<(), FileFault> {
-        self.inner.write_derived(k, b)
-    }
-    fn read_derived(&self, k: &str, m: usize) -> Result<Option<Vec<u8>>, FileFault> {
-        self.inner.read_derived(k, m)
-    }
-    fn collect_derived(&self) -> Result<u64, FileFault> {
-        self.inner.collect_derived()
-    }
-    fn export(&self, d: &str, g: &str, n: u64, p: &Path, o: bool) -> Result<(), FileFault> {
-        self.inner.export(d, g, n, p, o)
-    }
-}
 
 #[test]
 fn cancelling_an_accepted_convention_job_preserves_previous_head_and_cancels_its_source() {
@@ -240,7 +174,7 @@ fn cancelling_an_accepted_convention_job_preserves_previous_head_and_cancels_its
     seed(&h);
     let rt = runtime();
     let gate = SourceVerificationGate::new(&h);
-    let app = boot_help_with_files(&rt, &h, gate.clone());
+    let app = boot_help_with_files(&rt, &h, gate.files.clone());
     let owner = imported_body(&app, &rt);
     let old = read(app.store.as_ref(), |s| {
         s.conventions().convention_index_head(&owner)

@@ -77,6 +77,7 @@ struct Hooks {
     after: HashMap<FileOp, Vec<After>>,
     wrap: HashMap<FileOp, Vec<Wrap>>,
     check: HashMap<FileOp, Vec<Check>>,
+    chunk: Vec<Check>,
 }
 
 /// One configurable decorator of any `ArtifactFiles` for tests that need a file store to fail,
@@ -89,12 +90,12 @@ struct Hooks {
 /// - [`on_stop_check`](Self::on_stop_check) runs every time the inner store polls the `stopped`
 ///   control of a controlled call.
 ///
-/// Hooks may be added while the store is in use. The controlled methods and the project-cache
-/// custody methods forward by default; [`required_only`](Self::required_only) makes them refuse
-/// like an adapter that leaves the trait defaults in place.
+/// Hooks may be added while the store is in use. Every method forwards by default, the
+/// controlled reads and the project-cache custody included; [`required_only`](Self::required_only)
+/// and [`refuse_defaults`](Self::refuse_defaults) make those refuse like an adapter that leaves
+/// the trait defaults in place.
 pub struct FaultFiles {
     inner: Arc<dyn ArtifactFiles>,
-    forward_optional: bool,
     hooks: RwLock<Hooks>,
     counts: RwLock<HashMap<FileOp, Arc<AtomicUsize>>>,
 }
@@ -103,19 +104,36 @@ impl FaultFiles {
     pub fn over(inner: Arc<dyn ArtifactFiles>) -> Arc<Self> {
         Arc::new(Self {
             inner,
-            forward_optional: true,
             hooks: RwLock::default(),
             counts: RwLock::default(),
         })
     }
-    /// Like [`over`](Self::over), refusing the optional methods the trait defaults to refusing.
+    /// Like [`over`](Self::over), refusing the four optional methods (the controlled reads and
+    /// the project-cache custody) as an adapter that leaves the trait defaults in place does.
     pub fn required_only(inner: Arc<dyn ArtifactFiles>) -> Arc<Self> {
-        Arc::new(Self {
-            inner,
-            forward_optional: false,
-            hooks: RwLock::default(),
-            counts: RwLock::default(),
-        })
+        let files = Self::over(inner);
+        files.refuse_defaults(&[
+            FileOp::OpenControlled,
+            FileOp::ReadRangeControlled,
+            FileOp::DerivedRoot,
+            FileOp::RemoveDerivedRemnants,
+        ]);
+        files
+    }
+    /// Makes each of `ops` that the trait gives a default (the controlled reads and the
+    /// project-cache custody) refuse with that default's fault instead of reaching the inner store.
+    pub fn refuse_defaults(&self, ops: &[FileOp]) {
+        for &op in ops {
+            let what = match op {
+                FileOp::OpenControlled => "controlled blob verification is unavailable",
+                FileOp::ReadRangeControlled => "controlled blob ranges are unavailable",
+                FileOp::DerivedRoot | FileOp::RemoveDerivedRemnants => {
+                    "project cache custody unavailable"
+                }
+                other => panic!("{other:?} has no default to refuse with"),
+            };
+            self.before(op, move |_| Err(FileFault::Unsupported(what.into())));
+        }
     }
     pub fn before(
         &self,
@@ -160,6 +178,11 @@ impl FaultFiles {
             .entry(op)
             .or_default()
             .push(Arc::new(hook));
+    }
+    /// Reads the source of every publication in chunks of at most 4 bytes and runs `hook` after
+    /// the first chunk of each: the staging file then exists, partly written.
+    pub fn on_source_chunk(&self, hook: impl Fn(&Call) + Send + Sync + 'static) {
+        self.hooks.write().unwrap().chunk.push(Arc::new(hook));
     }
     /// Fails the next `times` calls of `op` with `fault` (a full volume, say).
     pub fn fail_next(&self, op: FileOp, times: usize, fault: FileFault) {
@@ -214,9 +237,6 @@ impl FaultFiles {
             .into_iter()
             .fold(reader, |r, hook| hook(call, r))
     }
-    fn refusal(what: &str) -> FileFault {
-        FileFault::Unsupported(what.into())
-    }
 }
 
 impl ArtifactFiles for FaultFiles {
@@ -233,7 +253,19 @@ impl ArtifactFiles for FaultFiles {
             name: staging_name,
             ..Call::blob(FileOp::Publish, expected_digest, generation, expected_bytes)
         };
+        let chunk = self.hooks_of(|h| Some(&h.chunk));
         self.run(call, || {
+            let mut chunked = Chunked {
+                inner: source,
+                hooks: chunk,
+                call,
+                fired: false,
+            };
+            let source: &mut dyn Read = if chunked.hooks.is_empty() {
+                chunked.inner
+            } else {
+                &mut chunked
+            };
             self.inner.publish(
                 staging_name,
                 source,
@@ -294,9 +326,6 @@ impl ArtifactFiles for FaultFiles {
         byte_count: u64,
         stopped: &mut dyn FnMut() -> bool,
     ) -> Result<Box<dyn Read + Send>, FileFault> {
-        if !self.forward_optional {
-            return Err(Self::refusal("controlled blob verification is unavailable"));
-        }
         let call = Call::blob(FileOp::OpenControlled, digest, generation, byte_count);
         let checks = self.hooks_of(|h| h.check.get(&call.op));
         let reader = self.run(call, || {
@@ -317,9 +346,6 @@ impl ArtifactFiles for FaultFiles {
         max: usize,
         stopped: &mut dyn FnMut() -> bool,
     ) -> Result<Vec<u8>, FileFault> {
-        if !self.forward_optional {
-            return Err(Self::refusal("controlled blob ranges are unavailable"));
-        }
         let call = Call::blob(FileOp::ReadRangeControlled, digest, generation, byte_count);
         let checks = self.hooks_of(|h| h.check.get(&call.op));
         self.run(call, || {
@@ -364,15 +390,9 @@ impl ArtifactFiles for FaultFiles {
         })
     }
     fn derived_root(&self) -> Result<FileIdentity, FileFault> {
-        if !self.forward_optional {
-            return Err(Self::refusal("project cache custody unavailable"));
-        }
         self.run(Call::of(FileOp::DerivedRoot), || self.inner.derived_root())
     }
     fn remove_derived_remnants(&self, key: &str, root: FileIdentity) -> Result<(), FileFault> {
-        if !self.forward_optional {
-            return Err(Self::refusal("project cache custody unavailable"));
-        }
         self.run(Call::named(FileOp::RemoveDerivedRemnants, key), || {
             self.inner.remove_derived_remnants(key, root)
         })
@@ -402,5 +422,24 @@ impl ArtifactFiles for FaultFiles {
                     .export(digest, generation, byte_count, destination, overwrite)
             },
         )
+    }
+}
+
+/// A publication source read in chunks of at most 4 bytes, running the chunk hooks after the first.
+struct Chunked<'a, 'c> {
+    inner: &'a mut dyn Read,
+    hooks: Vec<Check>,
+    call: Call<'c>,
+    fired: bool,
+}
+impl Read for Chunked<'_, '_> {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        let cap = buf.len().min(4);
+        let n = self.inner.read(&mut buf[..cap])?;
+        if !self.fired {
+            self.fired = true;
+            self.hooks.iter().for_each(|hook| hook(&self.call));
+        }
+        Ok(n)
     }
 }

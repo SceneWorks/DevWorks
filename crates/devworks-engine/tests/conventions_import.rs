@@ -23,6 +23,7 @@ use devworks_core::{
     },
 };
 use devworks_engine::conventions_import as actual_consumer;
+use devworks_test_support::{FaultFiles, FileOp};
 use serde_json::json;
 use std::sync::Arc;
 struct Fx {
@@ -607,73 +608,61 @@ fn current_scope_and_quota_are_rechecked_after_admission_without_publishing_a_pr
     }
 }
 
+/// The native file adapter, whose third verified range read parks until released: the worker is
+/// then provably inside a real source read when the test cancels it.
 struct GateFiles {
-    native: NativeArtifactFiles,
+    files: Arc<FaultFiles>,
+    native: Arc<NativeArtifactFiles>,
     calls: std::sync::atomic::AtomicUsize,
-    started: std::sync::mpsc::SyncSender<()>,
     release: std::sync::Mutex<bool>,
     changed: std::sync::Condvar,
+}
+impl GateFiles {
+    /// `started` is told when the parked read is reached; `open` says whether it parks at all.
+    fn new(h: &Harness, started: std::sync::mpsc::SyncSender<()>, open: bool) -> Arc<Self> {
+        let native = Arc::new(NativeArtifactFiles::new(
+            h.root.clone(),
+            h.root.with_extension("import-cache"),
+        ));
+        let gate = Arc::new(Self {
+            files: FaultFiles::over(native.clone()),
+            native,
+            calls: std::sync::atomic::AtomicUsize::new(0),
+            release: std::sync::Mutex::new(open),
+            changed: std::sync::Condvar::new(),
+        });
+        let started = std::sync::Mutex::new(started);
+        let hook = gate.clone();
+        gate.files.before(FileOp::ReadRangeControlled, move |_| {
+            if hook.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 2 {
+                started.lock().unwrap().send(()).unwrap();
+                let mut release = hook.release.lock().unwrap();
+                while !*release {
+                    release = hook.changed.wait(release).unwrap();
+                }
+            }
+            Ok(())
+        });
+        gate
+    }
+    fn open(&self) {
+        *self.release.lock().unwrap() = true;
+        self.changed.notify_all();
+    }
 }
 struct ReleaseGate(Arc<GateFiles>);
 impl Drop for ReleaseGate {
     fn drop(&mut self) {
-        *self.0.release.lock().unwrap() = true;
-        self.0.changed.notify_all();
-    }
-}
-macro_rules! native_files {($(fn $name:ident(&self $(,$arg:ident:$ty:ty)*) -> $out:ty;)*)=>{$(fn $name(&self,$($arg:$ty),*)->$out {self.native.$name($($arg),*)})*};}
-impl devworks_core::ports::files::ArtifactFiles for GateFiles {
-    native_files! {
-     fn publish(&self,staging_name:&str,source:&mut dyn std::io::Read,digest:&str,bytes:u64,reuse:Option<&str>,generation:&str)->Result<devworks_core::ports::files::PublishedBlob,devworks_core::ports::files::FileFault>;
-     fn managed_path(&self,digest:&str,generation:&str)->Result<String,devworks_core::ports::files::FileFault>;
-     fn present(&self,digest:&str,generation:&str,bytes:u64)->Result<bool,devworks_core::ports::files::FileFault>;
-     fn inspect(&self,digest:&str,generation:&str)->Result<Option<u64>,devworks_core::ports::files::FileFault>;
-     fn read_range(&self,digest:&str,generation:&str,bytes:u64,offset:u64,max:usize)->Result<Vec<u8>,devworks_core::ports::files::FileFault>;
-     fn open(&self,digest:&str,generation:&str,bytes:u64)->Result<Box<dyn std::io::Read+Send>,devworks_core::ports::files::FileFault>;
-     fn open_controlled(&self,digest:&str,generation:&str,bytes:u64,stopped:&mut dyn FnMut()->bool)->Result<Box<dyn std::io::Read+Send>,devworks_core::ports::files::FileFault>;
-     fn unlink(&self,digest:&str,generation:&str)->Result<(),devworks_core::ports::files::FileFault>;
-     fn quarantine(&self,digest:&str,generation:&str)->Result<(),devworks_core::ports::files::FileFault>;
-     fn staged(&self)->Result<Vec<String>,devworks_core::ports::files::FileFault>;
-     fn remove_staged(&self,name:&str)->Result<(),devworks_core::ports::files::FileFault>;
-     fn stored_files(&self)->Result<Vec<(String,String)>,devworks_core::ports::files::FileFault>;
-     fn write_derived(&self,key:&str,bytes:&[u8])->Result<(),devworks_core::ports::files::FileFault>;
-     fn read_derived(&self,key:&str,max:usize)->Result<Option<Vec<u8>>,devworks_core::ports::files::FileFault>;
-     fn collect_derived(&self)->Result<u64,devworks_core::ports::files::FileFault>;
-     fn export(&self,digest:&str,generation:&str,bytes:u64,destination:&std::path::Path,overwrite:bool)->Result<(),devworks_core::ports::files::FileFault>;
-    }
-    fn read_range_controlled(
-        &self,
-        digest: &str,
-        generation: &str,
-        bytes: u64,
-        offset: u64,
-        max: usize,
-        stopped: &mut dyn FnMut() -> bool,
-    ) -> Result<Vec<u8>, devworks_core::ports::files::FileFault> {
-        if self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 2 {
-            self.started.send(()).unwrap();
-            let mut release = self.release.lock().unwrap();
-            while !*release {
-                release = self.changed.wait(release).unwrap();
-            }
-        }
-        self.native
-            .read_range_controlled(digest, generation, bytes, offset, max, stopped)
+        self.0.open();
     }
 }
 #[test]
 fn cancellation_during_a_real_source_read_preserves_private_prefix_and_blocks_publication() {
     let h = Harness::new();
     let (started, waiting) = std::sync::mpsc::sync_channel(1);
-    let files = Arc::new(GateFiles {
-        native: NativeArtifactFiles::new(h.root.clone(), h.root.with_extension("import-cache")),
-        calls: std::sync::atomic::AtomicUsize::new(0),
-        started,
-        release: std::sync::Mutex::new(false),
-        changed: std::sync::Condvar::new(),
-    });
+    let files = GateFiles::new(&h, started, false);
     let _release = ReleaseGate(files.clone());
-    let f = Fx::with_files(h, files.clone());
+    let f = Fx::with_files(h, files.files.clone());
     let source = f.source(&serde_json::to_vec(&manifest(3)).unwrap());
     let op = f.admit(&source, "cancel-reading");
     let dispatcher = dispatcher_with(
@@ -718,8 +707,7 @@ fn cancellation_during_a_real_source_read_preserves_private_prefix_and_blocks_pu
             .map_err(|_| StorageError::ScopeDenied)
     })
     .unwrap();
-    *files.release.lock().unwrap() = true;
-    files.changed.notify_all();
+    files.open();
     job.join().unwrap();
     let op_record = read(f.store.as_ref(), |r| r.operations().operation(&op)).unwrap();
     assert_eq!(
