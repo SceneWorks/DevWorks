@@ -1518,11 +1518,14 @@ fn operation_status_and_command_receipts_are_scoped() {
 #[test]
 fn bound_agent_session_reads_stay_within_its_work_root() {
     let fx = Fx::new();
-    fx.store.with_writer_connection(|conn| {
-        super::super::conn::db(conn.execute_batch(
-            "INSERT INTO work_items VALUES('root-c','project-a','feature',NULL,NULL,NULL,'Feature C',1,0,1,1,1,'{}');",
-        ))
-    }).unwrap();
+    devworks_test_support::seed::work(
+        &*fx.store,
+        &[
+            devworks_test_support::seed::WorkSeed::feature("root-c", "project-a")
+                .title("Feature C"),
+        ],
+    )
+    .unwrap();
     fx.seed_session("session-a", "agent-a", Some("root-a"));
     fx.seed_session("session-shared", "agent-p", Some("root-a"));
     fx.seed_session("session-foreign", "agent-p", Some("root-c"));
@@ -2879,13 +2882,14 @@ fn lineage_keys_are_stable_and_a_hierarchy_change_expires_the_cursor() {
     // than skipping it, and a fresh listing shows it once.
     let page = lineage_page(fx.lineage(&user, "root-a", 1, None));
     let cursor = page.next_cursor.expect("more").0;
-    fx.store
-        .with_writer_connection(|c| {
-            super::super::conn::db(c.execute_batch(
-                "INSERT INTO work_items VALUES('task-late','project-a','task','root-a',NULL,NULL,'Late',1,0,1,1,1,'{}');",
-            ))
-        })
-        .unwrap();
+    devworks_test_support::seed::work(
+        &*fx.store,
+        &[
+            devworks_test_support::seed::WorkSeed::task("task-late", "project-a", "root-a")
+                .title("Late"),
+        ],
+    )
+    .unwrap();
     assert_eq!(
         fault(fx.lineage(&user, "root-a", 1, Some(&cursor))).code,
         DomainErrorCode::CursorExpired

@@ -232,14 +232,30 @@ impl PowerPort for NoPower {
     }
 }
 
+/// Seeds project `project-a`, the issue root `root-i` and the human `user-a` into a closed data root.
 fn seed(h: &Harness) {
-    let c = rusqlite::Connection::open(h.root.join("workspace.sqlite")).unwrap();
-    c.busy_timeout(Duration::from_secs(5)).unwrap();
-    c.execute_batch(
-        "INSERT INTO projects(id,title,lifecycle,revision,scope_revision,created_at) VALUES('project-a','A','Active',1,1,0);
-         INSERT INTO work_items VALUES('root-i','project-a','issue',NULL,NULL,NULL,'root-i',1,0,1,1,1,'{}');
-         INSERT INTO actors VALUES('user-a','human','User');",
+    use devworks_test_support::seed::{ProjectSeed, WorkSeed};
+    let store = h.open();
+    devworks_test_support::seed::rows(
+        &*store,
+        &[ProjectSeed::new("project-a").name("A").created_at(0)],
+        &[WorkSeed::issue("root-i", "project-a")],
     )
+    .unwrap();
+    rusqlite::Connection::open(h.root.join("workspace.sqlite"))
+        .unwrap()
+        .execute(
+            "UPDATE work_items SET kind='issue' WHERE id IN ('root-i')",
+            [],
+        )
+        .unwrap();
+    write(&*store, |tx| {
+        tx.actors().register(
+            &devworks_core::protocol::ActorId(id("user-a")),
+            PrincipalKind::Human,
+            "User",
+        )
+    })
     .unwrap();
 }
 

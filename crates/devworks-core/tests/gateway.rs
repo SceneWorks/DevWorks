@@ -606,9 +606,7 @@ fn storage_failures_and_lost_acknowledgments_have_typed_outcomes() {
     );
 
     // The commit happened but its acknowledgment was lost.
-    h.store
-        .lose_next_ack
-        .store(true, std::sync::atomic::Ordering::SeqCst);
+    h.acks.lose_nth_commit(1);
     let reply = h
         .gateway()
         .command(&ctx, "projects.edit", EDIT.as_bytes(), handler.clone())

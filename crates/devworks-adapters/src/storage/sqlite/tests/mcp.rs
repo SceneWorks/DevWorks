@@ -110,8 +110,8 @@ fn id(value: &str) -> Id {
 fn artifacts(h: &Harness) -> Arc<ArtifactService> {
     Arc::new(ArtifactService::new(
         Arc::new(NativeArtifactFiles::new(
-            h.root.0.clone(),
-            h.root.0.with_extension("cache"),
+            h.root.path().to_path_buf(),
+            h.root.path().with_extension("cache"),
         )),
         Arc::new(HostArtifactSources::new(h.clock.clone(), h.ids.clone())),
         Arc::new(NativeFilesystem::new()),

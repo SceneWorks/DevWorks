@@ -47,6 +47,7 @@ use devworks_core::services::browser::{BrowserConfig, BrowserService, EFFECT_CON
 use devworks_core::settings::catalog::AgentRole;
 use devworks_engine::browser::BrowserComposition;
 use devworks_engine::{Composition, Runtime, RuntimeConfig, ShutdownStage, boot};
+use devworks_test_support::{FaultFiles, FileOp};
 use serde_json::{Value, json};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
@@ -4796,132 +4797,6 @@ fn evidence_of_a_principal_revoked_before_the_write_publishes_nothing() {
     );
 }
 
-/// An artifact file store that runs `hook` once, right after the content is flushed: after the
-/// publication's pre-checks and before its recording write.
-struct HookedFiles {
-    inner: NativeArtifactFiles,
-    hook: Mutex<Option<Box<dyn FnOnce() + Send>>>,
-}
-impl devworks_core::ports::files::ArtifactFiles for HookedFiles {
-    fn publish(
-        &self,
-        staging_name: &str,
-        source: &mut dyn std::io::Read,
-        expected_digest: &str,
-        expected_bytes: u64,
-        reuse: Option<&str>,
-        generation: &str,
-    ) -> Result<devworks_core::ports::files::PublishedBlob, devworks_core::ports::files::FileFault>
-    {
-        let published = self.inner.publish(
-            staging_name,
-            source,
-            expected_digest,
-            expected_bytes,
-            reuse,
-            generation,
-        );
-        if let Some(hook) = self.hook.lock().unwrap().take() {
-            hook();
-        }
-        published
-    }
-    fn managed_path(
-        &self,
-        digest: &str,
-        generation: &str,
-    ) -> Result<String, devworks_core::ports::files::FileFault> {
-        self.inner.managed_path(digest, generation)
-    }
-    fn present(
-        &self,
-        digest: &str,
-        generation: &str,
-        byte_count: u64,
-    ) -> Result<bool, devworks_core::ports::files::FileFault> {
-        self.inner.present(digest, generation, byte_count)
-    }
-    fn inspect(
-        &self,
-        digest: &str,
-        generation: &str,
-    ) -> Result<Option<u64>, devworks_core::ports::files::FileFault> {
-        self.inner.inspect(digest, generation)
-    }
-    fn read_range(
-        &self,
-        digest: &str,
-        generation: &str,
-        byte_count: u64,
-        offset: u64,
-        max: usize,
-    ) -> Result<Vec<u8>, devworks_core::ports::files::FileFault> {
-        self.inner
-            .read_range(digest, generation, byte_count, offset, max)
-    }
-    fn open(
-        &self,
-        digest: &str,
-        generation: &str,
-        byte_count: u64,
-    ) -> Result<Box<dyn std::io::Read + Send>, devworks_core::ports::files::FileFault> {
-        self.inner.open(digest, generation, byte_count)
-    }
-    fn unlink(
-        &self,
-        digest: &str,
-        generation: &str,
-    ) -> Result<(), devworks_core::ports::files::FileFault> {
-        self.inner.unlink(digest, generation)
-    }
-    fn quarantine(
-        &self,
-        digest: &str,
-        generation: &str,
-    ) -> Result<(), devworks_core::ports::files::FileFault> {
-        self.inner.quarantine(digest, generation)
-    }
-    fn staged(&self) -> Result<Vec<String>, devworks_core::ports::files::FileFault> {
-        self.inner.staged()
-    }
-    fn remove_staged(&self, name: &str) -> Result<(), devworks_core::ports::files::FileFault> {
-        self.inner.remove_staged(name)
-    }
-    fn stored_files(
-        &self,
-    ) -> Result<Vec<(String, String)>, devworks_core::ports::files::FileFault> {
-        self.inner.stored_files()
-    }
-    fn write_derived(
-        &self,
-        key: &str,
-        bytes: &[u8],
-    ) -> Result<(), devworks_core::ports::files::FileFault> {
-        self.inner.write_derived(key, bytes)
-    }
-    fn read_derived(
-        &self,
-        key: &str,
-        max: usize,
-    ) -> Result<Option<Vec<u8>>, devworks_core::ports::files::FileFault> {
-        self.inner.read_derived(key, max)
-    }
-    fn collect_derived(&self) -> Result<u64, devworks_core::ports::files::FileFault> {
-        self.inner.collect_derived()
-    }
-    fn export(
-        &self,
-        digest: &str,
-        generation: &str,
-        byte_count: u64,
-        destination: &Path,
-        overwrite: bool,
-    ) -> Result<(), devworks_core::ports::files::FileFault> {
-        self.inner
-            .export(digest, generation, byte_count, destination, overwrite)
-    }
-}
-
 /// How a mid-write authority change reaches the publication in flight.
 enum Change {
     Revoke,
@@ -4971,10 +4846,21 @@ fn publish_while_authority_changes(
     });
     let h = fx.h();
     let service = ArtifactService::new(
-        Arc::new(HookedFiles {
-            inner: NativeArtifactFiles::new(h.root.clone(), h.root.with_extension("cache")),
-            hook: Mutex::new(Some(hook)),
-        }),
+        // An artifact file store that runs `hook` once, right after the content is flushed: after
+        // the publication's pre-checks and before its recording write.
+        {
+            let files = FaultFiles::required_only(Arc::new(NativeArtifactFiles::new(
+                h.root.clone(),
+                h.root.with_extension("cache"),
+            )));
+            let hook = Mutex::new(Some(hook));
+            files.after(FileOp::Publish, move |_, _| {
+                if let Some(hook) = hook.lock().unwrap().take() {
+                    hook();
+                }
+            });
+            files
+        },
         Arc::new(HostArtifactSources::new(h.clock(), h.ids.clone())),
         Arc::new(NativeFilesystem::new()),
         h.clock(),

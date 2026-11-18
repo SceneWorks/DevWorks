@@ -26,7 +26,7 @@ use std::time::Duration;
 async fn waiting_inbox_cancels_without_a_held_writer() {
     let harness = Harness::new();
     let store = harness.open();
-    seed_root(&harness, "root-a");
+    seed_root(&*store, "root-a");
     let user = principal(store.as_ref(), "waiting-human", PrincipalKind::Human);
     let driver = RetainedInboxDriver::new(store.clone());
     let cancellation = Cancellation::new();
@@ -80,7 +80,7 @@ async fn waiting_inbox_cancels_without_a_held_writer() {
 fn agent_rules_refuse_with_their_target_and_a_corrupt_message_row_is_a_storage_fault() {
     let harness = Harness::new();
     let store = harness.open();
-    seed_root(&harness, "root-a");
+    seed_root(&*store, "root-a");
     let user = principal(store.as_ref(), "rules-user", PrincipalKind::Human);
     let runs = Arc::new(ControlService::with_scope(
         harness.ids.clone(),
@@ -215,10 +215,18 @@ fn agent_rules_refuse_with_their_target_and_a_corrupt_message_row_is_a_storage_f
 fn selected_retained_post_uses_the_native_gateway_and_replays_its_receipt() {
     let harness = Harness::new();
     let store = harness.open();
-    seed_root(&harness, "root-a");
+    seed_root(&*store, "root-a");
+    devworks_test_support::seed::work(
+        &*store,
+        &[devworks_test_support::seed::WorkSeed::issue("issue-a", "project-a").title("Issue")],
+    )
+    .unwrap();
     rusqlite::Connection::open(harness.root.join("workspace.sqlite"))
         .unwrap()
-        .execute_batch("INSERT INTO work_items VALUES('issue-a','project-a','issue',NULL,NULL,NULL,'Issue',1,0,1,1,1,'{}');")
+        .execute(
+            "UPDATE work_items SET kind='issue' WHERE id IN ('issue-a')",
+            [],
+        )
         .unwrap();
     let user = principal(store.as_ref(), "post-user", PrincipalKind::Human);
     let runs = Arc::new(ControlService::with_scope(
@@ -584,7 +592,7 @@ fn selected_retained_post_uses_the_native_gateway_and_replays_its_receipt() {
 fn selected_receive_waits_replays_and_acknowledges_through_the_native_gateway() {
     let harness = Harness::new();
     let store = harness.open();
-    seed_root(&harness, "root-a");
+    seed_root(&*store, "root-a");
     let user = principal(store.as_ref(), "receive-user", PrincipalKind::Human);
     let runs = Arc::new(ControlService::with_scope(
         harness.ids.clone(),
@@ -737,7 +745,7 @@ fn selected_receive_waits_replays_and_acknowledges_through_the_native_gateway() 
 fn selected_receive_cancellation_keeps_the_request_key_retryable() {
     let harness = Harness::new();
     let store = harness.open();
-    seed_root(&harness, "root-a");
+    seed_root(&*store, "root-a");
     let user = principal(store.as_ref(), "receive-cancel-user", PrincipalKind::Human);
     let runs = Arc::new(ControlService::with_scope(
         harness.ids.clone(),
@@ -836,7 +844,7 @@ fn selected_receive_cancellation_keeps_the_request_key_retryable() {
 async fn delivered_message_replays_until_read_acknowledgment() {
     let harness = Harness::new();
     let store = harness.open();
-    seed_root(&harness, "root-a");
+    seed_root(&*store, "root-a");
     let user = principal(store.as_ref(), "inbox-user", PrincipalKind::Human);
     let project = ProjectId(id("project-a"));
     let send_context = user.clone();
@@ -952,9 +960,17 @@ async fn delivered_message_replays_until_read_acknowledgment() {
             .items
             .is_empty()
     );
+    devworks_test_support::seed::work(
+        &*store,
+        &[devworks_test_support::seed::WorkSeed::issue("issue-b", "project-a").title("Issue")],
+    )
+    .unwrap();
     rusqlite::Connection::open(harness.root.join("workspace.sqlite"))
         .unwrap()
-        .execute_batch("INSERT INTO work_items VALUES('issue-b','project-a','issue',NULL,NULL,NULL,'Issue',1,0,1,1,1,'{}');")
+        .execute(
+            "UPDATE work_items SET kind='issue' WHERE id IN ('issue-b')",
+            [],
+        )
         .unwrap();
     let blocking_context = user.clone();
     let blocking_project = project.clone();
@@ -1014,7 +1030,7 @@ async fn delivered_message_replays_until_read_acknowledgment() {
 fn parked_receives_wake_on_a_delivery_and_on_cancellation() {
     let harness = Harness::new();
     let store = harness.open();
-    seed_root(&harness, "root-a");
+    seed_root(&*store, "root-a");
     let user = principal(store.as_ref(), "wake-user", PrincipalKind::Human);
     let runs = Arc::new(ControlService::with_scope(
         harness.ids.clone(),

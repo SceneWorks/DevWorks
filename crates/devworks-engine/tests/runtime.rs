@@ -16,8 +16,7 @@ use devworks_core::authority::reads::ReadRoot;
 use devworks_core::context::{InvocationContext, PrincipalKind};
 use devworks_core::fingerprint::sha256_hex;
 use devworks_core::ports::files::{
-    ArtifactFiles, ArtifactSources, FileFault, PublishedBlob, ResolvedSource, SourceOrigin,
-    SourceRefusal,
+    ArtifactFiles, ArtifactSources, ResolvedSource, SourceOrigin, SourceRefusal,
 };
 use devworks_core::ports::storage::{
     ApplicationStore, BlobState, ReadOptions, ReadSnapshot, StorageError, StoreInfo, Unavailable,
@@ -36,9 +35,8 @@ use devworks_core::services::history::HistoryService;
 use devworks_core::services::resources::ResourceService;
 use devworks_core::services::sessions::SessionService;
 use devworks_engine::{BootError, BootReport, Composition, Runtime, RuntimeConfig, boot};
+use devworks_test_support::{FaultFiles, FileOp};
 use serde_json::json;
-use std::io::Read;
-use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
@@ -90,76 +88,6 @@ enum Crash {
     AfterReceipt,
     /// While the reply delivery is claimed: the reply file is in place, its metadata is not.
     AfterReplyFile,
-}
-
-/// The native adapter; when `die` is set, the process dies right after a publication renamed
-/// its file into place.
-struct Files {
-    inner: NativeArtifactFiles,
-    die: Option<(Arc<AtomicBool>, Arc<Notify>)>,
-    armed: Arc<AtomicBool>,
-}
-impl ArtifactFiles for Files {
-    fn publish(
-        &self,
-        s: &str,
-        src: &mut dyn Read,
-        d: &str,
-        n: u64,
-        r: Option<&str>,
-        g: &str,
-    ) -> Result<PublishedBlob, FileFault> {
-        let published = self.inner.publish(s, src, d, n, r, g);
-        if let Some((dead, died)) = &self.die
-            && self.armed.load(Ordering::SeqCst)
-        {
-            dead.store(true, Ordering::SeqCst);
-            died.notify_one();
-        }
-        published
-    }
-    fn managed_path(&self, d: &str, g: &str) -> Result<String, FileFault> {
-        self.inner.managed_path(d, g)
-    }
-    fn present(&self, d: &str, g: &str, n: u64) -> Result<bool, FileFault> {
-        self.inner.present(d, g, n)
-    }
-    fn inspect(&self, d: &str, g: &str) -> Result<Option<u64>, FileFault> {
-        self.inner.inspect(d, g)
-    }
-    fn read_range(&self, d: &str, g: &str, n: u64, o: u64, m: usize) -> Result<Vec<u8>, FileFault> {
-        self.inner.read_range(d, g, n, o, m)
-    }
-    fn open(&self, d: &str, g: &str, n: u64) -> Result<Box<dyn Read + Send>, FileFault> {
-        self.inner.open(d, g, n)
-    }
-    fn unlink(&self, d: &str, g: &str) -> Result<(), FileFault> {
-        self.inner.unlink(d, g)
-    }
-    fn quarantine(&self, d: &str, g: &str) -> Result<(), FileFault> {
-        self.inner.quarantine(d, g)
-    }
-    fn staged(&self) -> Result<Vec<String>, FileFault> {
-        self.inner.staged()
-    }
-    fn remove_staged(&self, n: &str) -> Result<(), FileFault> {
-        self.inner.remove_staged(n)
-    }
-    fn stored_files(&self) -> Result<Vec<(String, String)>, FileFault> {
-        self.inner.stored_files()
-    }
-    fn write_derived(&self, k: &str, b: &[u8]) -> Result<(), FileFault> {
-        self.inner.write_derived(k, b)
-    }
-    fn read_derived(&self, k: &str, m: usize) -> Result<Option<Vec<u8>>, FileFault> {
-        self.inner.read_derived(k, m)
-    }
-    fn collect_derived(&self) -> Result<u64, FileFault> {
-        self.inner.collect_derived()
-    }
-    fn export(&self, d: &str, g: &str, n: u64, dest: &Path, o: bool) -> Result<(), FileFault> {
-        self.inner.export(d, g, n, dest, o)
-    }
 }
 
 /// Upload tickets naming files beneath one registered read root.
@@ -417,11 +345,18 @@ fn a_reply_interrupted_by_a_crash_is_delivered_exactly_once_after_boot() {
                 dead: dead.clone(),
             });
             let armed = Arc::new(AtomicBool::new(false));
-            let files = Arc::new(Files {
-                inner: native(&h),
-                armed: armed.clone(),
-                die: (crash == Crash::AfterReplyFile).then(|| (dead.clone(), died.clone())),
-            });
+            // The native adapter; when the crash is `AfterReplyFile`, the process dies right after
+            // a publication renamed its file into place.
+            let files = FaultFiles::required_only(Arc::new(native(&h)));
+            if crash == Crash::AfterReplyFile {
+                let (dead, died, armed) = (dead.clone(), died.clone(), armed.clone());
+                files.after(FileOp::Publish, move |_, _| {
+                    if armed.load(Ordering::SeqCst) {
+                        dead.store(true, Ordering::SeqCst);
+                        died.notify_one();
+                    }
+                });
+            }
             let user = principal(&*store, "user-a", PrincipalKind::Human);
             let app = rt
                 .block_on(boot(composition(&h, store.clone(), files, src.clone())))
@@ -620,7 +555,7 @@ fn an_applied_delete_starts_a_collection_pass_that_removes_the_released_file() {
     let h = Harness::new();
     let rt = runtime();
     let store = h.open();
-    seed_root(&h, "root-a");
+    seed_root(&*store, "root-a");
     let src = sources(&h);
     let user = principal(&*store, "user-a", PrincipalKind::Human);
     let app = rt
@@ -776,7 +711,7 @@ fn a_committed_command_wakes_the_polling_loops_before_the_fallback_interval() {
     let h = Harness::new();
     let rt = runtime();
     let store = h.open();
-    seed_root(&h, "root-a");
+    seed_root(&*store, "root-a");
     let user = principal(&*store, "user-a", PrincipalKind::Human);
     let mut c = composition(&h, store, Arc::new(native(&h)), sources(&h));
     c.config.polling_interval = Duration::from_secs(3600);

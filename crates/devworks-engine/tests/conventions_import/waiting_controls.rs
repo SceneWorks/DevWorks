@@ -7,7 +7,7 @@ use devworks_core::{
 #[test]
 fn temporary_control_wait_is_unknown_without_retry_exhaustion_then_same_import_completes() {
     let mut f = Fx::new();
-    common::seed_root(&f.h, "waiting-root");
+    common::seed_root(&*f.store, "waiting-root");
     f.ctx = f.ctx.clone().with_lineage(
         Some(ProjectId(id("project-a"))),
         Some(RootId(id("waiting-root"))),

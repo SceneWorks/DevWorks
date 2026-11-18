@@ -9,9 +9,7 @@ use devworks_adapters::fs::NativeFilesystem;
 use devworks_adapters::fs::artifacts::NativeArtifactFiles;
 use devworks_core::context::{InvocationContext, PrincipalKind};
 use devworks_core::gateway::Gateway;
-use devworks_core::ports::files::{
-    ArtifactFiles, ArtifactSources, FileFault, PublishedBlob, ResolvedSource, SourceRefusal,
-};
+use devworks_core::ports::files::{ArtifactSources, FileFault, ResolvedSource, SourceRefusal};
 use devworks_core::ports::storage::ApplicationStore;
 use devworks_core::protocol::data::ArtifactSource;
 use devworks_core::protocol::records::{ReceiptLookupState, ReceiptObservation};
@@ -24,79 +22,10 @@ use devworks_core::services::history::HistoryService;
 use devworks_core::services::sessions::SessionService;
 use devworks_engine::replies::reply_consumer;
 use devworks_engine::{AsyncDelivery, AsyncDeliveryHandler, AsyncFuture, AsyncOutcome};
+use devworks_test_support::{FaultFiles, FileOp};
 use serde_json::json;
-use std::io::Read;
-use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
-
-/// The native adapter, with the next `fail` publications failing on a full volume.
-struct Flaky {
-    inner: NativeArtifactFiles,
-    fail: AtomicUsize,
-}
-impl ArtifactFiles for Flaky {
-    fn publish(
-        &self,
-        s: &str,
-        src: &mut dyn Read,
-        d: &str,
-        n: u64,
-        r: Option<&str>,
-        g: &str,
-    ) -> Result<PublishedBlob, FileFault> {
-        if self
-            .fail
-            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| n.checked_sub(1))
-            .is_ok()
-        {
-            return Err(FileFault::DiskFull);
-        }
-        self.inner.publish(s, src, d, n, r, g)
-    }
-    fn managed_path(&self, d: &str, g: &str) -> Result<String, FileFault> {
-        self.inner.managed_path(d, g)
-    }
-    fn present(&self, d: &str, g: &str, n: u64) -> Result<bool, FileFault> {
-        self.inner.present(d, g, n)
-    }
-    fn inspect(&self, d: &str, g: &str) -> Result<Option<u64>, FileFault> {
-        self.inner.inspect(d, g)
-    }
-    fn read_range(&self, d: &str, g: &str, n: u64, o: u64, m: usize) -> Result<Vec<u8>, FileFault> {
-        self.inner.read_range(d, g, n, o, m)
-    }
-    fn open(&self, d: &str, g: &str, n: u64) -> Result<Box<dyn Read + Send>, FileFault> {
-        self.inner.open(d, g, n)
-    }
-    fn unlink(&self, d: &str, g: &str) -> Result<(), FileFault> {
-        self.inner.unlink(d, g)
-    }
-    fn quarantine(&self, d: &str, g: &str) -> Result<(), FileFault> {
-        self.inner.quarantine(d, g)
-    }
-    fn staged(&self) -> Result<Vec<String>, FileFault> {
-        self.inner.staged()
-    }
-    fn remove_staged(&self, n: &str) -> Result<(), FileFault> {
-        self.inner.remove_staged(n)
-    }
-    fn stored_files(&self) -> Result<Vec<(String, String)>, FileFault> {
-        self.inner.stored_files()
-    }
-    fn write_derived(&self, k: &str, b: &[u8]) -> Result<(), FileFault> {
-        self.inner.write_derived(k, b)
-    }
-    fn read_derived(&self, k: &str, m: usize) -> Result<Option<Vec<u8>>, FileFault> {
-        self.inner.read_derived(k, m)
-    }
-    fn collect_derived(&self) -> Result<u64, FileFault> {
-        self.inner.collect_derived()
-    }
-    fn export(&self, d: &str, g: &str, n: u64, dest: &Path, o: bool) -> Result<(), FileFault> {
-        self.inner.export(d, g, n, dest, o)
-    }
-}
 
 struct NoSources;
 impl ArtifactSources for NoSources {
@@ -121,10 +50,12 @@ fn boot(h: &Harness) -> Boot {
 /// A boot whose first `failures` reply file publications fail on a full volume.
 fn boot_failing(h: &Harness, failures: usize) -> Boot {
     let store = h.open();
-    let files = Arc::new(Flaky {
-        inner: NativeArtifactFiles::new(h.root.clone(), h.root.with_extension("cache")),
-        fail: AtomicUsize::new(failures),
-    });
+    // The native adapter, with the next `failures` publications failing on a full volume.
+    let files = FaultFiles::required_only(Arc::new(NativeArtifactFiles::new(
+        h.root.clone(),
+        h.root.with_extension("cache"),
+    )));
+    files.fail_next(FileOp::Publish, failures, FileFault::DiskFull);
     let svc = Arc::new(ArtifactService::new(
         files,
         Arc::new(NoSources),

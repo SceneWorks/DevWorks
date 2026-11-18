@@ -1,18 +1,11 @@
 use super::*;
-use devworks_core::{
-    ports::files::{ArtifactFiles, FileFault, PublishedBlob},
-    protocol::{ProjectId, RootId},
-};
+use devworks_core::protocol::{ProjectId, RootId};
+use devworks_test_support::{FaultFiles, FileOp};
 use std::{
     io::Read,
-    path::Path,
     sync::{Mutex, mpsc},
 };
 type Gate = (mpsc::SyncSender<()>, mpsc::Receiver<()>);
-struct GatedFiles {
-    inner: NativeArtifactFiles,
-    gate: Mutex<Option<Gate>>,
-}
 struct GatedReader {
     inner: Box<dyn Read + Send>,
     gate: Option<Gate>,
@@ -28,89 +21,25 @@ impl Read for GatedReader {
         self.inner.read(out)
     }
 }
-impl ArtifactFiles for GatedFiles {
-    fn publish(
-        &self,
-        s: &str,
-        src: &mut dyn Read,
-        d: &str,
-        n: u64,
-        r: Option<&str>,
-        g: &str,
-    ) -> Result<PublishedBlob, FileFault> {
-        self.inner.publish(s, src, d, n, r, g)
-    }
-    fn managed_path(&self, d: &str, g: &str) -> Result<String, FileFault> {
-        self.inner.managed_path(d, g)
-    }
-    fn present(&self, d: &str, g: &str, n: u64) -> Result<bool, FileFault> {
-        self.inner.present(d, g, n)
-    }
-    fn inspect(&self, d: &str, g: &str) -> Result<Option<u64>, FileFault> {
-        self.inner.inspect(d, g)
-    }
-    fn read_range(&self, d: &str, g: &str, n: u64, o: u64, m: usize) -> Result<Vec<u8>, FileFault> {
-        self.inner.read_range(d, g, n, o, m)
-    }
-    fn open(&self, d: &str, g: &str, n: u64) -> Result<Box<dyn Read + Send>, FileFault> {
-        self.inner.open(d, g, n)
-    }
-    fn open_controlled(
-        &self,
-        d: &str,
-        g: &str,
-        n: u64,
-        stopped: &mut dyn FnMut() -> bool,
-    ) -> Result<Box<dyn Read + Send>, FileFault> {
-        let reader = self.inner.open_controlled(d, g, n, stopped)?;
-        let gate = self.gate.lock().unwrap().take();
-        Ok(Box::new(GatedReader {
-            inner: reader,
-            gate,
-        }))
-    }
-    fn unlink(&self, d: &str, g: &str) -> Result<(), FileFault> {
-        self.inner.unlink(d, g)
-    }
-    fn quarantine(&self, d: &str, g: &str) -> Result<(), FileFault> {
-        self.inner.quarantine(d, g)
-    }
-    fn staged(&self) -> Result<Vec<String>, FileFault> {
-        self.inner.staged()
-    }
-    fn remove_staged(&self, n: &str) -> Result<(), FileFault> {
-        self.inner.remove_staged(n)
-    }
-    fn stored_files(&self) -> Result<Vec<(String, String)>, FileFault> {
-        self.inner.stored_files()
-    }
-    fn write_derived(&self, k: &str, b: &[u8]) -> Result<(), FileFault> {
-        self.inner.write_derived(k, b)
-    }
-    fn read_derived(&self, k: &str, m: usize) -> Result<Option<Vec<u8>>, FileFault> {
-        self.inner.read_derived(k, m)
-    }
-    fn collect_derived(&self) -> Result<u64, FileFault> {
-        self.inner.collect_derived()
-    }
-    fn export(&self, d: &str, g: &str, n: u64, dest: &Path, o: bool) -> Result<(), FileFault> {
-        self.inner.export(d, g, n, dest, o)
-    }
-}
 
-fn fixture(root: &str) -> (Fixture, Arc<GatedFiles>) {
+fn fixture(root: &str) -> (Fixture, Arc<FaultFiles>) {
     let h = Harness::new();
     let store = h.open();
-    common::seed_root(&h, root);
+    common::seed_root(&*store, root);
     let ctx = principal(&*store, "body-author", PrincipalKind::Human).with_lineage(
         Some(ProjectId(id("project-a"))),
         Some(RootId(id(root))),
         None,
     );
-    let files = Arc::new(GatedFiles {
-        inner: NativeArtifactFiles::new(h.root.clone(), h.root.with_extension("cache")),
-        gate: Mutex::new(None),
-    });
+    let files = FaultFiles::over(Arc::new(NativeArtifactFiles::new(
+        h.root.clone(),
+        h.root.with_extension("cache"),
+    )));
+    files.refuse_defaults(&[
+        FileOp::ReadRangeControlled,
+        FileOp::DerivedRoot,
+        FileOp::RemoveDerivedRemnants,
+    ]);
     let artifacts = Arc::new(ArtifactService::new(
         files.clone(),
         Arc::new(HostArtifactSources::new(h.clock(), h.ids.clone())),
@@ -135,10 +64,17 @@ fn fixture(root: &str) -> (Fixture, Arc<GatedFiles>) {
         files,
     )
 }
-fn gate(files: &GatedFiles) -> (mpsc::Receiver<()>, mpsc::SyncSender<()>) {
+/// Makes the next controlled open return a reader whose first read waits for the release.
+fn gate(files: &FaultFiles) -> (mpsc::Receiver<()>, mpsc::SyncSender<()>) {
     let (entered, wait) = mpsc::sync_channel(1);
     let (release, blocked) = mpsc::sync_channel(1);
-    *files.gate.lock().unwrap() = Some((entered, blocked));
+    let slot = Mutex::new(Some((entered, blocked)));
+    files.wrap_reader(FileOp::OpenControlled, move |_, reader| {
+        Box::new(GatedReader {
+            inner: reader,
+            gate: slot.lock().unwrap().take(),
+        })
+    });
     (wait, release)
 }
 fn pause(store: &dyn ApplicationStore, root: RootId) {
@@ -198,10 +134,16 @@ fn pause_after_actual_body_read_blocks_publication_without_clearing_hold_and_con
 #[test]
 fn relinked_task_cannot_publish_under_old_parent_or_waive_new_parent_pause() {
     let (mut f, files) = fixture("feature-a");
-    common::seed_root(&f.h, "feature-b");
-    let connection = rusqlite::Connection::open(f.h.root.join("workspace.sqlite")).unwrap();
-    connection.execute("INSERT INTO work_items(id,project_id,kind,parent_feature_id,status_id,title,priority,manual_order,revision,scope_revision,created_at,brief_json)VALUES('task','project-a','task','feature-a',NULL,'Task',1,0,1,1,0,'{}')",[]).unwrap();
-    drop(connection);
+    common::seed_root(&*f.store, "feature-b");
+    devworks_test_support::seed::work(
+        &*f.store,
+        &[
+            devworks_test_support::seed::WorkSeed::task("task", "project-a", "feature-a")
+                .title("Task")
+                .created_at(0),
+        ],
+    )
+    .unwrap();
     f.ctx = f.ctx.clone().with_lineage(
         Some(ProjectId(id("project-a"))),
         Some(RootId(id("task"))),

@@ -96,7 +96,7 @@ impl Fx {
     /// Two projects, the user, an agent confined to each project and an unconfined agent.
     fn new() -> Self {
         let h = Harness::new();
-        let src = h.root.0.with_extension("sources");
+        let src = h.root.path().with_extension("sources");
         let _ = std::fs::remove_dir_all(&src);
         std::fs::create_dir_all(&src).unwrap();
         let sources = Arc::new(Sources {
@@ -108,8 +108,8 @@ impl Fx {
         });
         let store = Arc::new(h.store());
         let files = Arc::new(NativeArtifactFiles::new(
-            h.root.0.clone(),
-            h.root.0.with_extension("cache"),
+            h.root.path().to_path_buf(),
+            h.root.path().with_extension("cache"),
         ));
         let artifacts = Arc::new(ArtifactService::new(
             files.clone(),

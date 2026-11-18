@@ -232,15 +232,9 @@ fn out_of_range_or_mid_scalar_path_cursors_are_refused_before_literal_indexing()
 fn cancellation_inside_the_real_body_read_remains_cancelled_in_the_typed_reply() {
     let h = Harness::new();
     let (started, waiting) = std::sync::mpsc::sync_channel(1);
-    let files = Arc::new(GateFiles {
-        native: NativeArtifactFiles::new(h.root.clone(), h.root.with_extension("import-cache")),
-        calls: std::sync::atomic::AtomicUsize::new(0),
-        started,
-        release: std::sync::Mutex::new(true),
-        changed: std::sync::Condvar::new(),
-    });
+    let files = GateFiles::new(&h, started, true);
     let _release = ReleaseGate(files.clone());
-    let f = Fx::with_files(h, files.clone());
+    let f = Fx::with_files(h, files.files.clone());
     let owner = imported_literal(&f, "cancelled-read", "Cancel read", &[], "read-owner");
     while waiting.try_recv().is_ok() {}
     *files.release.lock().unwrap() = false;
@@ -261,8 +255,7 @@ fn cancellation_inside_the_real_body_read_remains_cancelled_in_the_typed_reply()
         .recv_timeout(std::time::Duration::from_secs(30))
         .expect("query did not enter real controlled file read");
     cancellation.cancel();
-    *files.release.lock().unwrap() = true;
-    files.changed.notify_all();
+    files.open();
     let reply = thread.join().unwrap();
     assert_eq!(reply["fault"]["code"], "Cancelled", "{reply}");
 }

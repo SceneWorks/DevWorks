@@ -1198,15 +1198,22 @@ fn closing_the_window_keeps_a_live_root_or_its_existing_policy_hold() {
     let root = Root::new("close-holds-runs");
     let engine = start(&root);
     // A standalone issue root (work items arrive with later items; seeded here directly).
-    let db = rusqlite::Connection::open(root.0.join("workspace.sqlite")).unwrap();
-    db.busy_timeout(Duration::from_secs(5)).unwrap();
-    db.execute_batch(
-        "INSERT INTO projects(id,title,lifecycle,revision,scope_revision,created_at) \
-         VALUES('project-a','A','Active',1,1,0); \
-         INSERT INTO work_items VALUES('root-i','project-a','issue',NULL,NULL,NULL,'root-i',1,0,1,1,1,'{}');",
-    )
-    .unwrap();
-    drop(db);
+    {
+        use devworks_test_support::seed::{ProjectSeed, WorkSeed};
+        devworks_test_support::seed::rows(
+            &**engine.host().runtime().store(),
+            &[ProjectSeed::new("project-a").name("A").created_at(0)],
+            &[WorkSeed::issue("root-i", "project-a")],
+        )
+        .unwrap();
+        rusqlite::Connection::open(root.0.join("workspace.sqlite"))
+            .unwrap()
+            .execute(
+                "UPDATE work_items SET kind='issue' WHERE id IN ('root-i')",
+                [],
+            )
+            .unwrap();
+    }
     let backend = engine.backend();
     // `runs.*` frames use the specialized command and query envelopes.
     let start_frame = |key: &str, control: &str| {

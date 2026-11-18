@@ -51,6 +51,7 @@ use devworks_engine::{
     ActivationLauncher, Composition, Launch, LaunchEnd, LaunchFuture, RunComposition, RunGate,
     RunSupervisor, RunTick, RuntimeConfig, ShutdownStage, boot,
 };
+use devworks_test_support::{FaultFiles, FileOp};
 use serde_json::{Value, json};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Barrier, Condvar, Mutex};
@@ -112,6 +113,8 @@ impl StreamingHttp for AgentWire {
     }
 }
 
+/// Legacy-shaped roots: the stored kind `issue` that the tests below assert is reported as an Issue
+/// (the ports only create `feature` and `task` rows).
 fn seed(h: &Harness) {
     let c = rusqlite::Connection::open(h.root.join("workspace.sqlite")).unwrap();
     c.busy_timeout(Duration::from_secs(5)).unwrap();
@@ -2183,9 +2186,9 @@ fn agent_first_context_publishes_the_assignment_brief_and_recovers_exactly() {
         empty_pin.session_id = empty_session.id.clone();
         empty_pin.pin_id = id("empty-handoff-pin");
         fx.tx(move |_, tx| tx.router().put_session_pin(&empty_pin, None));
-        db.execute(
-            "INSERT INTO work_items VALUES('root-h','project-a','feature',NULL,NULL,NULL,'root-h',1,0,1,1,1,'{}')",
-            [],
+        devworks_test_support::seed::work(
+            &*fx.store,
+            &[devworks_test_support::seed::WorkSeed::feature("root-h", "project-a")],
         )
         .unwrap();
         db.execute(
@@ -7730,125 +7733,6 @@ fn shutdown_abandons_a_blocked_monitor_pass_at_its_bound() {
     assert!(held_for_continue(&fx, "root-i"), "{:?}", fx.holds("root-i"));
 }
 
-/// The artifact file store, with its derived-cache collection waiting on a gate.
-struct BlockingFiles(NativeArtifactFiles, Arc<Gate>);
-impl devworks_core::ports::files::ArtifactFiles for BlockingFiles {
-    fn publish(
-        &self,
-        staging_name: &str,
-        source: &mut dyn std::io::Read,
-        expected_digest: &str,
-        expected_bytes: u64,
-        reuse: Option<&str>,
-        generation: &str,
-    ) -> Result<devworks_core::ports::files::PublishedBlob, devworks_core::ports::files::FileFault>
-    {
-        self.0.publish(
-            staging_name,
-            source,
-            expected_digest,
-            expected_bytes,
-            reuse,
-            generation,
-        )
-    }
-    fn managed_path(
-        &self,
-        digest: &str,
-        generation: &str,
-    ) -> Result<String, devworks_core::ports::files::FileFault> {
-        self.0.managed_path(digest, generation)
-    }
-    fn present(
-        &self,
-        digest: &str,
-        generation: &str,
-        byte_count: u64,
-    ) -> Result<bool, devworks_core::ports::files::FileFault> {
-        self.0.present(digest, generation, byte_count)
-    }
-    fn inspect(
-        &self,
-        digest: &str,
-        generation: &str,
-    ) -> Result<Option<u64>, devworks_core::ports::files::FileFault> {
-        self.0.inspect(digest, generation)
-    }
-    fn read_range(
-        &self,
-        digest: &str,
-        generation: &str,
-        byte_count: u64,
-        offset: u64,
-        max: usize,
-    ) -> Result<Vec<u8>, devworks_core::ports::files::FileFault> {
-        self.0
-            .read_range(digest, generation, byte_count, offset, max)
-    }
-    fn open(
-        &self,
-        digest: &str,
-        generation: &str,
-        byte_count: u64,
-    ) -> Result<Box<dyn std::io::Read + Send>, devworks_core::ports::files::FileFault> {
-        self.0.open(digest, generation, byte_count)
-    }
-    fn unlink(
-        &self,
-        digest: &str,
-        generation: &str,
-    ) -> Result<(), devworks_core::ports::files::FileFault> {
-        self.0.unlink(digest, generation)
-    }
-    fn quarantine(
-        &self,
-        digest: &str,
-        generation: &str,
-    ) -> Result<(), devworks_core::ports::files::FileFault> {
-        self.0.quarantine(digest, generation)
-    }
-    fn staged(&self) -> Result<Vec<String>, devworks_core::ports::files::FileFault> {
-        self.0.staged()
-    }
-    fn remove_staged(&self, name: &str) -> Result<(), devworks_core::ports::files::FileFault> {
-        self.0.remove_staged(name)
-    }
-    fn stored_files(
-        &self,
-    ) -> Result<Vec<(String, String)>, devworks_core::ports::files::FileFault> {
-        self.0.stored_files()
-    }
-    fn write_derived(
-        &self,
-        key: &str,
-        bytes: &[u8],
-    ) -> Result<(), devworks_core::ports::files::FileFault> {
-        self.0.write_derived(key, bytes)
-    }
-    fn read_derived(
-        &self,
-        key: &str,
-        max: usize,
-    ) -> Result<Option<Vec<u8>>, devworks_core::ports::files::FileFault> {
-        self.0.read_derived(key, max)
-    }
-    fn collect_derived(&self) -> Result<u64, devworks_core::ports::files::FileFault> {
-        self.1.pass();
-        self.0.collect_derived()
-    }
-    fn export(
-        &self,
-        digest: &str,
-        generation: &str,
-        byte_count: u64,
-        destination: &std::path::Path,
-        overwrite: bool,
-    ) -> Result<(), devworks_core::ports::files::FileFault> {
-        self.0
-            .export(digest, generation, byte_count, destination, overwrite)
-    }
-}
-
 /// A delivery handler that never returns and ignores the request to stop.
 struct Stuck(Arc<Gate>);
 impl devworks_engine::dispatch::AsyncDeliveryHandler for Stuck {
@@ -7880,10 +7764,19 @@ fn shutdown_abandons_a_blocked_delivery_and_collection_pass_at_its_bound() {
     composition.config.shutdown_bound = Duration::from_millis(200);
     let h = &fx.h;
     composition.artifacts = Arc::new(ArtifactService::new(
-        Arc::new(BlockingFiles(
-            NativeArtifactFiles::new(h.root.clone(), h.root.with_extension("cache")),
-            collection.clone(),
-        )),
+        // The artifact file store, with its derived-cache collection waiting on a gate.
+        {
+            let files = FaultFiles::required_only(Arc::new(NativeArtifactFiles::new(
+                h.root.clone(),
+                h.root.with_extension("cache"),
+            )));
+            let gate = collection.clone();
+            files.before(FileOp::CollectDerived, move |_| {
+                gate.pass();
+                Ok(())
+            });
+            files
+        },
         Arc::new(HostArtifactSources::new(h.clock(), h.ids.clone())),
         Arc::new(NativeFilesystem::new()),
         h.clock(),

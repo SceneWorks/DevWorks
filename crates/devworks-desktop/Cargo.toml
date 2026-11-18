@@ -42,6 +42,8 @@ libc = "=0.2.191"
 test-support = []
 
 [dev-dependencies]
+# Shared test doubles and seeding helpers (no production crate depends on it).
+devworks-test-support = { path = "../devworks-test-support" }
 devworks-desktop = { path = ".", features = ["test-support"] }
 # Seeds empty test data roots from one migrated store per test binary (test builds only).
 devworks-adapters = { path = "../devworks-adapters", features = ["test-support"] }
