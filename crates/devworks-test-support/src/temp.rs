@@ -44,6 +44,13 @@ impl TempRoot {
         std::fs::create_dir_all(&self.path).expect("create the temporary directory");
         self
     }
+    /// Names the directory by another spelling of the same path (a canonical form, say) that
+    /// `spell` returns; the original spelling is removed too.
+    pub fn respelled(mut self, spell: impl FnOnce(&Path) -> PathBuf) -> Self {
+        let spelled = spell(&self.path);
+        self.extra.push(std::mem::replace(&mut self.path, spelled));
+        self
+    }
     /// Removes `path` too when the guard drops (a sibling the test derives from the root).
     pub fn and_removes(mut self, path: PathBuf) -> Self {
         self.extra.push(path);

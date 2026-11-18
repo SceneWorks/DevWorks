@@ -64,12 +64,13 @@ fn id(s: &str) -> Id {
 struct Temp(TempRoot);
 impl Temp {
     fn new(tag: &str) -> Self {
-        let dir = TempRoot::new(&format!("devworks-index-{tag}")).created();
         // In the identity form discovery records (macOS /private/var; on Windows without the
         // verbatim prefix `canonicalize` adds, which Git also refuses in `worktree add`).
-        let canonical = NativeSourceTree::new().canonical_dir(&dir).unwrap();
-        // Removes the directory it created, under whichever spelling the test names it.
-        Self(TempRoot::adopt(canonical).and_removes(dir.path().to_path_buf()))
+        Self(
+            TempRoot::new(&format!("devworks-index-{tag}"))
+                .created()
+                .respelled(|dir| NativeSourceTree::new().canonical_dir(dir).unwrap()),
+        )
     }
     fn join(&self, p: &str) -> PathBuf {
         self.0.join(p)

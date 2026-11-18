@@ -389,6 +389,8 @@ fn actual_reopen_resumes_private_checkpoint_and_observes_publication_without_dup
             "{phase}: {record:?}"
         );
         assert!(!lose.armed());
+        // The wrapper holds the store: release it before the data root is reopened below.
+        drop(lose);
         let draft = read(f.store.as_ref(), |r| r.conventions().convention_import(&op)).unwrap();
         assert_eq!(draft.phase, phase);
         if phase == "Parsing" {
