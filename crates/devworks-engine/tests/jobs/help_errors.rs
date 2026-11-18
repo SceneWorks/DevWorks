@@ -25,6 +25,9 @@ impl TransientFaults {
             mode: AtomicUsize::new(0),
             hits: Arc::new(AtomicUsize::new(0)),
         });
+        faults
+            .files
+            .refuse_defaults(&[FileOp::DerivedRoot, FileOp::RemoveDerivedRemnants]);
         let this = Arc::downgrade(&faults);
         faults.files.before(FileOp::OpenControlled, {
             let this = this.clone();

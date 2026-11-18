@@ -1,6 +1,6 @@
 use devworks_core::ports::storage::{
-    ApplicationStore, CommitSignal, ReadOptions, ReadSnapshot, StorageError, StoreInfo, WriteJob,
-    WriteOptions, WriteTransaction,
+    ApplicationStore, ReadOptions, ReadSnapshot, StorageError, StoreInfo, WriteJob, WriteOptions,
+    WriteTransaction,
 };
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
@@ -198,9 +198,6 @@ impl WriteJob for Probing {
 impl ApplicationStore for LoseAcks {
     fn info(&self) -> StoreInfo {
         self.inner.info()
-    }
-    fn commit_signal(&self) -> Option<CommitSignal> {
-        self.inner.commit_signal()
     }
     fn submit_write(
         &self,

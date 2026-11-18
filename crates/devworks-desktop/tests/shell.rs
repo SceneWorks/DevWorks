@@ -1206,6 +1206,13 @@ fn closing_the_window_keeps_a_live_root_or_its_existing_policy_hold() {
             &[WorkSeed::issue("root-i", "project-a")],
         )
         .unwrap();
+        rusqlite::Connection::open(root.0.join("workspace.sqlite"))
+            .unwrap()
+            .execute(
+                "UPDATE work_items SET kind='issue' WHERE id IN ('root-i')",
+                [],
+            )
+            .unwrap();
     }
     let backend = engine.backend();
     // `runs.*` frames use the specialized command and query envelopes.

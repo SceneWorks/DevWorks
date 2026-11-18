@@ -1643,6 +1643,13 @@ fn shutdown_abandons_a_blocked_package_host_stop_at_its_bound_after_the_continue
         )],
     )
     .unwrap();
+    rusqlite::Connection::open(a.h.root.join("workspace.sqlite"))
+        .unwrap()
+        .execute(
+            "UPDATE work_items SET kind='issue' WHERE id IN ('root-i')",
+            [],
+        )
+        .unwrap();
     let frame = json!({"protocol": "1.0-draft.1", "requestKey": a.key("start"), "command": {"kind": "runs.start",
         "rootId": "root-i", "expectedWorkRevision": "1", "expectedControlRevision": "1"}});
     applied(

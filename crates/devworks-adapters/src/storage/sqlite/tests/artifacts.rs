@@ -2508,6 +2508,7 @@ struct HookFiles {
 impl HookFiles {
     fn new(inner: Arc<NativeArtifactFiles>) -> Arc<Self> {
         let files = FaultFiles::over(inner);
+        files.refuse_defaults(&[FileOp::OpenControlled, FileOp::ReadRangeControlled]);
         let slot = || Arc::new(Mutex::new(None::<OnResolve>));
         let hook = Self {
             files,

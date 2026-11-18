@@ -563,6 +563,13 @@ fn paused_rows_at_the_head_do_not_starve_ready_approvals_beyond_one_page() {
             &issues,
         )
         .unwrap();
+        rusqlite::Connection::open(h.root.join("workspace.sqlite"))
+            .unwrap()
+            .execute(
+                "UPDATE work_items SET kind='issue' WHERE id LIKE 'root-%'",
+                [],
+            )
+            .unwrap();
         let (user, agent) = principals(&*store);
         let app = Arc::new(boot(composition(&h, store.clone())).await.unwrap());
         app.approval_resumes().drain().await;

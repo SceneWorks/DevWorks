@@ -564,6 +564,8 @@ impl GateFiles {
             release: std::sync::Mutex::new(open),
             changed: std::sync::Condvar::new(),
         });
+        gate.files
+            .refuse_defaults(&[FileOp::DerivedRoot, FileOp::RemoveDerivedRemnants]);
         let started = std::sync::Mutex::new(started);
         let hook = gate.clone();
         gate.files.before(FileOp::ReadRangeControlled, move |_| {

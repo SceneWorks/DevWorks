@@ -603,6 +603,12 @@ impl Fx {
             .map(|r| devworks_test_support::seed::WorkSeed::issue(r, p.0.as_str()))
             .collect();
         devworks_test_support::seed::work(&*self.store, &work).unwrap();
+        // The legacy stored kind: the ports create only `feature` and `task` rows.
+        let raw = self.h.raw();
+        for r in roots {
+            raw.execute("UPDATE work_items SET kind='issue' WHERE id=?1", [r])
+                .unwrap();
+        }
     }
     fn eligible(&self, root: &str) -> bool {
         let (runs, root) = (self.runs.clone(), RootId(id(root)));

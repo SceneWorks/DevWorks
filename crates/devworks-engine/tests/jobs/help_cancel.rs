@@ -31,6 +31,7 @@ impl PublishGate {
         ));
         Arc::new_cyclic(|this: &std::sync::Weak<Self>| {
             let files = FaultFiles::over(inner.clone());
+            files.refuse_defaults(&[FileOp::DerivedRoot, FileOp::RemoveDerivedRemnants]);
             let this = this.clone();
             files.after(FileOp::Publish, move |call, published| {
                 // The input is this new staging intent; returned backing may be reused.

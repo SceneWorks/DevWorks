@@ -317,10 +317,6 @@ class AuthorityAttributeRules(unittest.TestCase):
         self.refused('sessions.list: native execution, approval and administration apply only to commands')
 
 
-if __name__ == '__main__':
-    unittest.main()
-
-
 class StubGeneration(unittest.TestCase):
     """The repository-port test stub is read from the trait declarations."""
 
@@ -346,3 +342,30 @@ pub trait Sample {
         text = self.stubs.generate(generate.CORE)
         for name in ('WorkRepository', 'ConventionIndexRead', 'SchemaRepository'):
             self.assertIn(f'impl {name} for Unmodelled', text)
+
+    def refuses(self, source, *named):
+        with self.assertRaises(ValueError) as caught:
+            for _, _, params, _ in self.stubs.required_methods(source, 'Sample'):
+                for p in params:
+                    self.stubs.pattern_free(p, 'Sample::m')
+        for text in named:
+            self.assertIn(text, str(caught.exception))
+
+    def test_a_generic_trait_is_refused(self):
+        self.refuses('pub trait Sample<T> { fn m(&self) -> Result<(), StorageError>; }', 'Sample', 'generics')
+
+    def test_an_async_method_is_refused(self):
+        self.refuses('pub trait Sample { async fn m(&self) -> Result<(), StorageError>; }', 'Sample::m', 'async')
+
+    def test_an_unsafe_method_is_refused(self):
+        self.refuses('pub trait Sample { unsafe fn m(&self) -> Result<(), StorageError>; }', 'Sample::m', 'unsafe')
+
+    def test_a_cfg_attribute_on_a_method_is_refused(self):
+        self.refuses('pub trait Sample {\n    #[cfg(unix)]\n    fn m(&self) -> Result<(), StorageError>;\n}', 'Sample::m', 'cfg')
+
+    def test_a_typed_receiver_is_refused(self):
+        self.refuses('pub trait Sample { fn m(self: Box<Self>) -> Result<(), StorageError>; }', 'Sample::m', 'receiver')
+
+
+if __name__ == '__main__':
+    unittest.main()

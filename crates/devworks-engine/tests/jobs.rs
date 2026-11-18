@@ -242,6 +242,13 @@ fn seed(h: &Harness) {
         &[WorkSeed::issue("root-i", "project-a")],
     )
     .unwrap();
+    rusqlite::Connection::open(h.root.join("workspace.sqlite"))
+        .unwrap()
+        .execute(
+            "UPDATE work_items SET kind='issue' WHERE id IN ('root-i')",
+            [],
+        )
+        .unwrap();
     write(&*store, |tx| {
         tx.actors().register(
             &devworks_core::protocol::ActorId(id("user-a")),

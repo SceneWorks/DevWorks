@@ -36,6 +36,7 @@ impl SourceVerificationGate {
         ));
         Arc::new_cyclic(|this: &std::sync::Weak<Self>| {
             let files = FaultFiles::over(native);
+            files.refuse_defaults(&[FileOp::DerivedRoot, FileOp::RemoveDerivedRemnants]);
             let this = this.clone();
             files.after(FileOp::OpenControlled, move |call, opened| {
                 if opened && let Some(gate) = this.upgrade() {

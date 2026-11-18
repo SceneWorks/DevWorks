@@ -2332,6 +2332,12 @@ fn purge_planning_shared_source_access_keeps_independent_configuration_and_opera
         ],
     )
     .unwrap();
+    h.raw()
+        .execute(
+            "UPDATE work_items SET kind='issue' WHERE id='source-purge-work'",
+            [],
+        )
+        .unwrap();
     let mut shared = source("independent-shared-source", true);
     shared.connection.config.as_mut().unwrap().project_access=Some(serde_json::from_value(json!([{"projectId":"metadata-project","metadataEnabled":true,"dataReadEnabled":false,"dataWriteEnabled":false},{"projectId":"other-project","metadataEnabled":true,"dataReadEnabled":false,"dataWriteEnabled":false}])).unwrap());
     shared.connection.active_operation_id = Some(id("source-purge-operation"));

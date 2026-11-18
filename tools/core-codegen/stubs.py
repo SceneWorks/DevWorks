@@ -134,6 +134,8 @@ def required_methods(source, trait):
     m = re.search(r'\bpub trait ' + re.escape(trait) + r'\b[^{;]*\{', blanked)
     if not m:
         raise ValueError(f'trait {trait} not found')
+    if re.match(r'pub trait\s+\w+\s*<', blanked[m.start():]):
+        raise ValueError(f'trait {trait} has generics: the stub cannot name its parameters')
     body_start = m.end() - 1
     body_end = match_close(blanked, body_start, '{', '}')
     body, body_text = blanked[body_start + 1:body_end], source[body_start + 1:body_end]
@@ -141,6 +143,12 @@ def required_methods(source, trait):
     while i < len(body):
         if re.match(r'fn\s', body[i:]) and (i == 0 or not (body[i - 1].isalnum() or body[i - 1] == '_')):
             name = re.match(r'fn\s+(\w+)', body[i:]).group(1)
+            item_start = max(body.rfind(c, 0, i) for c in '{};') + 1
+            front = body[item_start:i]
+            if re.search(r'\b(async|unsafe)\b', front):
+                raise ValueError(f'{trait}::{name} is async or unsafe: the stub cannot restate it')
+            if re.search(r'#\s*\[\s*cfg', front):
+                raise ValueError(f'{trait}::{name} has a #[cfg] attribute: the stub cannot follow it')
             j, paren = i, 0
             while True:
                 if body[j] in '([':
@@ -151,7 +159,10 @@ def required_methods(source, trait):
                     break
                 j += 1
             if body[j] == ';':
-                methods.append(parse_signature(name, body_text[i:j], body[i:j]))
+                try:
+                    methods.append(parse_signature(name, body_text[i:j], body[i:j]))
+                except ValueError as error:
+                    raise ValueError(f'{trait}::{name}: {error}') from None
                 i = j + 1
             else:
                 i = match_close(body, j, '{', '}') + 1
@@ -174,7 +185,9 @@ def parse_signature(name, signature, blank_sig):
     return name, generics, params, ret
 
 
-def pattern_free(param):
+def pattern_free(param, where=''):
+    if re.match(r'(mut\s+)?self\s*:', param):
+        raise ValueError(f'{where or "method"}: receiver {param!r} has an explicit type the stub would mangle')
     if re.fullmatch(r"(&\s*('\w+\s+)?(mut\s+)?)?self", param):
         return param
     _, _, ty = param.partition(':')
@@ -225,7 +238,7 @@ def generate(core_src):
     for trait in sorted(traits):
         out.append(f'impl {trait} for Unmodelled {{')
         for name, generics, params, ret in required_methods(traits[trait], trait):
-            sig = ', '.join(pattern_free(p) for p in params)
+            sig = ', '.join(pattern_free(p, f'{trait}::{name}') for p in params)
             body = MODELLED.get((trait, name))
             if body is not None:
                 used.add((trait, name))

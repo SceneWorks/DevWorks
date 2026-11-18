@@ -35,6 +35,11 @@ fn fixture(root: &str) -> (Fixture, Arc<FaultFiles>) {
         h.root.clone(),
         h.root.with_extension("cache"),
     )));
+    files.refuse_defaults(&[
+        FileOp::ReadRangeControlled,
+        FileOp::DerivedRoot,
+        FileOp::RemoveDerivedRemnants,
+    ]);
     let artifacts = Arc::new(ArtifactService::new(
         files.clone(),
         Arc::new(HostArtifactSources::new(h.clock(), h.ids.clone())),
