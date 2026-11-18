@@ -1,10 +1,5 @@
 use super::*;
-use std::sync::atomic::{AtomicBool, Ordering};
-struct LoseCapture {
-    store: Arc<dyn ApplicationStore>,
-    operation: OperationId,
-    armed: Arc<AtomicBool>,
-}
+use devworks_test_support::LoseAcks;
 struct RecordedResponses {
     native: Arc<NativeEmbeddings>,
     http: Arc<ScriptHttp>,
@@ -40,67 +35,25 @@ impl ConventionEmbeddings for RecordedResponses {
         self.native.observe(c, r)
     }
 }
-struct CaptureJob {
-    job: Box<dyn WriteJob>,
-    operation: OperationId,
-    armed: Arc<AtomicBool>,
-    hide: bool,
-}
-impl WriteJob for CaptureJob {
-    fn run(&mut self, tx: &mut dyn WriteTransaction) -> Result<(), StorageError> {
-        self.job.run(tx)?;
-        if !tx
-            .conventions()
-            .convention_index_generations(None, Some(&self.operation), None, 1)?
-            .is_empty()
-            && self.armed.swap(false, Ordering::SeqCst)
-        {
-            self.hide = true;
-        }
-        Ok(())
-    }
-    fn finish(self: Box<Self>, result: Result<(), StorageError>) {
-        self.job.finish(if self.hide && result.is_ok() {
-            Err(StorageError::CommitUnknown)
-        } else {
-            result
-        });
-    }
-}
-impl ApplicationStore for LoseCapture {
-    fn info(&self) -> StoreInfo {
-        self.store.info()
-    }
-    fn read(
-        &self,
-        o: &ReadOptions,
-        f: &mut dyn FnMut(&dyn ReadSnapshot) -> Result<(), StorageError>,
-    ) -> Result<(), StorageError> {
-        self.store.read(o, f)
-    }
-    fn submit_write(&self, o: WriteOptions, job: Box<dyn WriteJob>) -> Result<(), StorageError> {
-        self.store.submit_write(
-            o,
-            Box::new(CaptureJob {
-                job,
-                operation: self.operation.clone(),
-                armed: self.armed.clone(),
-                hide: false,
-            }),
-        )
-    }
-}
 fn interrupted_capture(
     f: &Fx,
     native: Arc<NativeEmbeddings>,
     op: &OperationRecord,
 ) -> Arc<IndexService> {
     let index = Arc::new(IndexService::new(
-        Arc::new(LoseCapture {
-            store: f.store.clone(),
-            operation: op.id.clone(),
-            armed: Arc::new(AtomicBool::new(true)),
-        }),
+        // Loses the acknowledgment of the write that first records the operation's index
+        // generation headers (the partial capture).
+        {
+            let lose = LoseAcks::over(f.store.clone());
+            let operation = op.id.clone();
+            lose.lose_when(move |tx| {
+                Ok(!tx
+                    .conventions()
+                    .convention_index_generations(None, Some(&operation), None, 1)?
+                    .is_empty())
+            });
+            lose
+        },
         f.artifacts.clone(),
         f.h.ids.clone(),
         f.h.clock(),

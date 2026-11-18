@@ -23,7 +23,7 @@ use devworks_core::{
     },
 };
 use devworks_engine::conventions_import as actual_consumer;
-use devworks_test_support::{FaultFiles, FileOp};
+use devworks_test_support::{FaultFiles, FileOp, LoseAcks};
 use serde_json::json;
 use std::sync::Arc;
 struct Fx {
@@ -359,83 +359,14 @@ fn imports_more_than_one_resource_page_without_silent_cap_or_public_bundle() {
     );
 }
 
-/// Lose a real writer acknowledgment after a selected private/public phase committed. All
-/// repositories, transactions and bytes remain the actual native owners.
-struct LostAckStore {
-    inner: Arc<dyn ApplicationStore>,
-    target: OperationId,
-    phase: &'static str,
-    armed: Arc<std::sync::atomic::AtomicBool>,
-}
-struct LostAckJob {
-    inner: Box<dyn WriteJob>,
-    target: OperationId,
-    phase: &'static str,
-    armed: Arc<std::sync::atomic::AtomicBool>,
-    hide: bool,
-}
-impl WriteJob for LostAckJob {
-    fn run(&mut self, tx: &mut dyn WriteTransaction) -> Result<(), StorageError> {
-        self.inner.run(tx)?;
-        if tx
-            .conventions()
-            .convention_import(&self.target)?
-            .is_some_and(|d| d.phase == self.phase)
-            && self.armed.swap(false, std::sync::atomic::Ordering::SeqCst)
-        {
-            self.hide = true;
-        }
-        Ok(())
-    }
-    fn finish(self: Box<Self>, outcome: Result<(), StorageError>) {
-        self.inner.finish(if self.hide && outcome.is_ok() {
-            Err(StorageError::CommitUnknown)
-        } else {
-            outcome
-        });
-    }
-}
-impl ApplicationStore for LostAckStore {
-    fn info(&self) -> StoreInfo {
-        self.inner.info()
-    }
-    fn read(
-        &self,
-        options: &ReadOptions,
-        work: &mut dyn FnMut(&dyn ReadSnapshot) -> Result<(), StorageError>,
-    ) -> Result<(), StorageError> {
-        self.inner.read(options, work)
-    }
-    fn submit_write(
-        &self,
-        options: WriteOptions,
-        job: Box<dyn WriteJob>,
-    ) -> Result<(), StorageError> {
-        self.inner.submit_write(
-            options,
-            Box::new(LostAckJob {
-                inner: job,
-                target: self.target.clone(),
-                phase: self.phase,
-                armed: self.armed.clone(),
-                hide: false,
-            }),
-        )
-    }
-}
 #[test]
 fn actual_reopen_resumes_private_checkpoint_and_observes_publication_without_duplicates() {
     for phase in ["Parsing", "Published"] {
         let mut f = Fx::new();
         let source = f.source(&serde_json::to_vec(&manifest(3)).unwrap());
         let op = f.admit(&source, &format!("lose-{phase}"));
-        let armed = Arc::new(std::sync::atomic::AtomicBool::new(true));
-        f.store = Arc::new(LostAckStore {
-            inner: f.store.clone(),
-            target: op.clone(),
-            phase,
-            armed: armed.clone(),
-        });
+        let lose = lose_ack_after_phase(f.store.clone(), &op, phase);
+        f.store = lose.clone();
         let index = Arc::new(IndexService::new(
             f.store.clone(),
             f.artifacts.clone(),
@@ -457,7 +388,7 @@ fn actual_reopen_resumes_private_checkpoint_and_observes_publication_without_dup
             OperationState::OutcomeUnknown,
             "{phase}: {record:?}"
         );
-        assert!(!armed.load(std::sync::atomic::Ordering::SeqCst));
+        assert!(!lose.armed());
         let draft = read(f.store.as_ref(), |r| r.conventions().convention_import(&op)).unwrap();
         assert_eq!(draft.phase, phase);
         if phase == "Parsing" {
@@ -655,6 +586,23 @@ impl Drop for ReleaseGate {
     fn drop(&mut self) {
         self.0.open();
     }
+}
+/// Loses a real writer acknowledgment after a selected private/public phase of `target`
+/// committed. All repositories, transactions and bytes remain the actual native owners.
+fn lose_ack_after_phase(
+    store: Arc<dyn ApplicationStore>,
+    target: &OperationId,
+    phase: &'static str,
+) -> Arc<LoseAcks> {
+    let lose = LoseAcks::over(store);
+    let target = target.clone();
+    lose.lose_when(move |tx| {
+        Ok(tx
+            .conventions()
+            .convention_import(&target)?
+            .is_some_and(|d| d.phase == phase))
+    });
+    lose
 }
 #[test]
 fn cancellation_during_a_real_source_read_preserves_private_prefix_and_blocks_publication() {

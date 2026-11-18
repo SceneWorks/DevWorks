@@ -33,6 +33,7 @@ use devworks_core::settings::catalog::{LOG_MAX_RECORDS_KEY, LOG_RETENTION_DAYS_K
 use devworks_core::settings::model;
 use devworks_engine::runtime::PurgeComposition;
 use devworks_engine::{BootError, Composition, Consumer, Outcome, Runtime, RuntimeConfig, boot};
+use devworks_test_support::LoseAcks;
 use serde_json::{Value, json};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -873,88 +874,6 @@ fn an_abandoned_export_claim_is_taken_over() {
     rt.block_on(app.shutdown());
 }
 
-/// A store whose next write, once armed, reports `CommitUnknown`: it commits but loses its
-/// acknowledgment, or (not `commits`) rolls back while reporting the same, optionally followed by
-/// one failed read.
-struct LostAck {
-    inner: Arc<dyn ApplicationStore>,
-    /// Writes to let through before the one whose acknowledgment is lost (0: none armed).
-    writes_before_loss: std::sync::atomic::AtomicUsize,
-    armed: std::sync::atomic::AtomicBool,
-    commits: std::sync::atomic::AtomicBool,
-    fail_read_after: std::sync::atomic::AtomicBool,
-    fail_next_read: std::sync::atomic::AtomicBool,
-}
-impl LostAck {
-    fn arm(&self, writes_before: usize, commits: bool, then_fail_read: bool) {
-        use std::sync::atomic::Ordering::SeqCst;
-        self.writes_before_loss.store(writes_before, SeqCst);
-        self.commits.store(commits, SeqCst);
-        self.fail_read_after.store(then_fail_read, SeqCst);
-        self.armed.store(true, SeqCst);
-    }
-}
-struct LoseAck(Box<dyn WriteJob>);
-impl WriteJob for LoseAck {
-    fn run(&mut self, tx: &mut dyn WriteTransaction) -> Result<(), StorageError> {
-        self.0.run(tx)
-    }
-    fn finish(self: Box<Self>, outcome: Result<(), StorageError>) {
-        self.0.finish(outcome.and(Err(StorageError::CommitUnknown)));
-    }
-}
-/// Rolls the write back (its work never runs) but reports the outcome as unknown.
-struct DropWrite(Box<dyn WriteJob>);
-impl WriteJob for DropWrite {
-    fn run(&mut self, _: &mut dyn WriteTransaction) -> Result<(), StorageError> {
-        Err(StorageError::Busy)
-    }
-    fn finish(self: Box<Self>, _: Result<(), StorageError>) {
-        self.0.finish(Err(StorageError::CommitUnknown));
-    }
-}
-impl ApplicationStore for LostAck {
-    fn info(&self) -> StoreInfo {
-        self.inner.info()
-    }
-    fn submit_write(
-        &self,
-        options: WriteOptions,
-        job: Box<dyn WriteJob>,
-    ) -> Result<(), StorageError> {
-        use std::sync::atomic::Ordering::SeqCst;
-        if self.armed.load(SeqCst) {
-            if self.writes_before_loss.load(SeqCst) > 0 {
-                self.writes_before_loss.fetch_sub(1, SeqCst);
-            } else {
-                self.armed.store(false, SeqCst);
-                if self.fail_read_after.load(SeqCst) {
-                    self.fail_next_read.store(true, SeqCst);
-                }
-                return if self.commits.load(SeqCst) {
-                    self.inner.submit_write(options, Box::new(LoseAck(job)))
-                } else {
-                    self.inner.submit_write(options, Box::new(DropWrite(job)))
-                };
-            }
-        }
-        self.inner.submit_write(options, job)
-    }
-    fn read(
-        &self,
-        options: &ReadOptions,
-        work: &mut dyn FnMut(&dyn ReadSnapshot) -> Result<(), StorageError>,
-    ) -> Result<(), StorageError> {
-        if self
-            .fail_next_read
-            .swap(false, std::sync::atomic::Ordering::SeqCst)
-        {
-            return Err(StorageError::Busy);
-        }
-        self.inner.read(options, work)
-    }
-}
-
 #[test]
 fn a_lost_acknowledgment_of_the_intent_keeps_the_staged_file_and_resolves_durably() {
     let h = Harness::new();
@@ -968,20 +887,16 @@ fn a_lost_acknowledgment_of_the_intent_keeps_the_staged_file_and_resolves_durabl
         None,
         None,
     );
-    let flaky = Arc::new(LostAck {
-        inner: app.store().clone(),
-        writes_before_loss: Default::default(),
-        armed: Default::default(),
-        commits: Default::default(),
-        fail_read_after: Default::default(),
-        fail_next_read: Default::default(),
-    });
+    // A store whose next write, once armed, reports `CommitUnknown`: it commits but loses its
+    // acknowledgment, or (not `commits`) rolls back while reporting the same, optionally followed
+    // by one failed read.
+    let flaky = LoseAcks::over(app.store().clone());
     let svc = DiagnosticService::new(flaky.clone(), h.ids.clone(), h.clock(), None);
     svc.set_export_staging(parts.exports.clone());
     let submit = |raw: &[u8]| app.command(&user, "artifacts.save", raw);
     // The claim commits; recording the command commits but its acknowledgment is lost. The
     // re-read shows the command recorded, so the export goes on and saves.
-    flaky.arm(1, true, false);
+    flaky.lose_next(1, true, false);
     let (saved, replayed) = saved_artifact(
         svc.export(&user, &LogQuery::default(), "lost-ack", submit)
             .expect("resolved from the durable intent"),
@@ -996,7 +911,7 @@ fn a_lost_acknowledgment_of_the_intent_keeps_the_staged_file_and_resolves_durabl
     assert_eq!(again.version_id, saved.version_id);
     // The same, but the re-read fails too: the outcome stays unknown, so the staged file the
     // recorded command names is kept, and a later retry resolves and saves with it.
-    flaky.arm(1, true, true);
+    flaky.lose_next(1, true, true);
     let unknown = svc.export(&user, &LogQuery::default(), "lost-twice", submit);
     assert!(
         matches!(
@@ -1015,7 +930,7 @@ fn a_lost_acknowledgment_of_the_intent_keeps_the_staged_file_and_resolves_durabl
     assert!(staged_files(&h).is_empty(), "{:?}", staged_files(&h));
     // The write did not commit: the re-read shows the claim still pending, so the staged file
     // and the claim both go, and a retry exports at once (a held claim would leave it pending).
-    flaky.arm(1, false, false);
+    flaky.lose_next(1, false, false);
     let failed = svc.export(&user, &LogQuery::default(), "never-recorded", submit);
     assert!(
         matches!(

@@ -99,12 +99,7 @@ fn publication_after_head_change(move_scope: bool) {
     let destination = project(&f, "publication-destination");
     let source = f.source(&serde_json::to_vec(&manifest(1)).unwrap());
     let op = f.admit(&source, "publication-before-head-change");
-    f.store = Arc::new(LostAckStore {
-        inner: f.store.clone(),
-        target: op.clone(),
-        phase: "Published",
-        armed: Arc::new(std::sync::atomic::AtomicBool::new(true)),
-    });
+    f.store = lose_ack_after_phase(f.store.clone(), &op, "Published");
     let index = Arc::new(IndexService::new(
         f.store.clone(),
         f.artifacts.clone(),
