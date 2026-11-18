@@ -456,6 +456,32 @@ fn name_at(toks: &[Tok], mut i: usize) -> Option<(String, usize)> {
     Some((parts[keep..].join("."), i))
 }
 
+/// Whether the `INTO` at `i` names an INSERT or MERGE target: `INSERT INTO`, `MERGE INTO`, and
+/// the INSERT modifiers between them (SQLite `INSERT OR IGNORE|REPLACE|ABORT|FAIL|ROLLBACK`,
+/// MySQL `INSERT [LOW_PRIORITY|DELAYED|HIGH_PRIORITY] [IGNORE]`).
+fn writes_into(toks: &[Tok], i: usize) -> bool {
+    let at = |n: usize| i.checked_sub(n).and_then(|p| toks.get(p));
+    let mut back = 1;
+    if ["ignore", "replace", "abort", "fail", "rollback"]
+        .iter()
+        .any(|k| is_kw(at(back), k))
+        && is_kw(at(back + 1), "or")
+    {
+        back += 2;
+    } else {
+        if is_kw(at(back), "ignore") {
+            back += 1;
+        }
+        if ["low_priority", "delayed", "high_priority"]
+            .iter()
+            .any(|k| is_kw(at(back), k))
+        {
+            back += 1;
+        }
+    }
+    is_kw(at(back), "insert") || (back == 1 && is_kw(at(1), "merge"))
+}
+
 /// Where the body of a common table expression named just before `i` opens: an optional column
 /// list (`name(a, b)`), then `AS`, an optional `MATERIALIZED` or `NOT MATERIALIZED`, and `(`.
 fn cte_body(toks: &[Tok], mut i: usize) -> Option<usize> {
@@ -577,9 +603,7 @@ fn statement(sql: &str) -> Vec<Use> {
     while i < toks.len() {
         let here = toks.get(i);
         let from = is_kw(here, "from") || is_kw(here, "join");
-        let into = (is_kw(here, "into")
-            && (is_kw(i.checked_sub(1).and_then(|p| toks.get(p)), "insert")
-                || is_kw(i.checked_sub(1).and_then(|p| toks.get(p)), "merge")))
+        let into = (is_kw(here, "into") && writes_into(&toks, i))
             || (is_kw(here, "update")
                 && (i == first.unwrap_or(0)
                     // After the CTE list (`WITH … ) UPDATE`) or inside a data-modifying CTE
@@ -830,7 +854,7 @@ static TABLES: [TablePattern; 11] = [
         languages: JVM,
         regex: LazyLock::new(|| {
             re(
-                r#"@(?:(?:javax|jakarta)\.persistence\.)?Table\s*\((?:[^)]*?\bschema\s*=\s*"(?P<schema>[^"]+)")?[^)]*?\bname\s*=\s*"(?P<table>[^"]+)""#,
+                r#"@(?:(?:javax|jakarta)\.persistence\.)?Table\s*\((?:[^)]*?\bschema\s*=\s*"(?P<schema>[^"]+)")?[^)]*?\bname\s*=\s*"(?P<table>[^"]+)"(?:[^)]*?\bschema\s*=\s*"(?P<schema_after>[^"]+)")?"#,
             )
         }),
         scope: Scope::Owner,
@@ -1117,7 +1141,9 @@ fn orm(language: &str, text: &str, root: Node<'_>, out: &FileExtract, uses: &mut
             else {
                 continue;
             };
-            let table = qualified(m.name("schema").map(|s| s.as_str()), table);
+            // A JPA `schema` may come before or after `name`.
+            let schema = m.name("schema").or_else(|| m.name("schema_after"));
+            let table = qualified(schema.map(|s| s.as_str()), table);
             let at = whole.start();
             let mut owner_at = owner(out, at);
             if owner_at == 0
@@ -1370,6 +1396,21 @@ mod tests {
     }
 
     #[test]
+    fn insert_targets_after_conflict_and_priority_modifiers_are_recognised() {
+        for sql in [
+            "INSERT OR IGNORE INTO users(id) VALUES (1)",
+            "INSERT OR REPLACE INTO users(id) VALUES (1)",
+            "INSERT OR ROLLBACK INTO users(id) VALUES (1)",
+            "INSERT IGNORE INTO users(id) VALUES (1)",
+            "INSERT LOW_PRIORITY IGNORE INTO users(id) VALUES (1)",
+            "INSERT DELAYED INTO users(id) VALUES (1)",
+        ] {
+            let found = tables(sql);
+            assert!(found.contains(&c("users", "id")), "{sql}: {found:?}");
+        }
+    }
+
+    #[test]
     fn ctes_with_column_lists_quoted_names_or_materialization_are_recognised() {
         for sql in [
             "WITH recent(id) AS (SELECT id FROM events) SELECT * FROM recent",
@@ -1527,6 +1568,25 @@ mod tests {
             "{java:?}"
         );
         assert!(!tables_of(&java).contains("ghost"), "{java:?}");
+        // The same mapping with `name` before `schema` keeps its schema.
+        let name_first = uses(
+            "java",
+            "Order.java",
+            "import jakarta.persistence.*;\n@Entity\n@Table(name = \"orders\", schema \
+                = \"sales\")\nclass Order {}\n",
+        );
+        assert!(
+            has(
+                &name_first,
+                "USES_TABLE",
+                "Order",
+                "sales.orders",
+                "",
+                "orm:jpa"
+            ),
+            "{name_first:?}"
+        );
+        assert!(!tables_of(&name_first).contains("orders"), "{name_first:?}");
         let cs = uses(
             "csharp",
             "Invoice.cs",
