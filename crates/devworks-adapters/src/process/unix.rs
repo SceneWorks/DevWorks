@@ -320,6 +320,12 @@ impl UnixTree {
         self.identity.pid as libc::pid_t
     }
     fn signal(&mut self, signal: libc::c_int) -> Result<(), ProcessError> {
+        self.signal_group(signal, false)
+    }
+    /// `after_kill`: an earlier SIGKILL round already reached the group, so macOS's EPERM for
+    /// members still dying (not yet zombies, so [`members`] lists them) means "already signalled",
+    /// and the caller's next round checks the members again.
+    fn signal_group(&mut self, signal: libc::c_int, after_kill: bool) -> Result<(), ProcessError> {
         if self.empty {
             return Ok(());
         }
@@ -333,6 +339,7 @@ impl UnixTree {
         // exiting or zombies; that is a stopped group too.
         if group != 0
             && group_err.raw_os_error() != Some(libc::ESRCH)
+            && !(after_kill && group_err.raw_os_error() == Some(libc::EPERM))
             && !members(self.pgid()).is_ok_and(|m| m.is_empty())
         {
             return Err(ProcessError::Control(format!(
@@ -355,8 +362,8 @@ impl ProcessTree for UnixTree {
         // A member forking while the group is signalled can create a child the signal missed
         // (observed on macOS), so the group is signalled again until no live member remains,
         // within a short bound. The root stays uncollected throughout, so the group ID is ours.
-        for _ in 0..KILL_ROUNDS {
-            self.signal(libc::SIGKILL)?;
+        for round in 0..KILL_ROUNDS {
+            self.signal_group(libc::SIGKILL, round > 0)?;
             if self.empty || members(self.pgid())?.is_empty() {
                 return Ok(());
             }
