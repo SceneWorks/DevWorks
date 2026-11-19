@@ -1045,8 +1045,28 @@ async fn compact(
         .read_exact(store, ctx, &summary, 8 * 1024 * 1024)
         .map_err(artifact_read_fault)?
         .0;
-    let summary = String::from_utf8(bytes)
+    let mut summary = String::from_utf8(bytes)
         .map_err(|_| StorageError::InvalidRecord("compaction summary is not text".into()))?;
+    if let Some(packages) = engine.packages().cloned() {
+        let context = source.context.clone();
+        let principal = ctx.clone();
+        let suggestions = tokio::task::spawn_blocking(move || {
+            packages.context_suggestions(
+                &principal,
+                devworks_extension_protocol::package::HookPhase::Compact,
+                &context,
+            )
+        })
+        .await
+        .map_err(|error| TurnError::Worker(format!("compaction context hook: {error}")))?;
+        if cancellation.is_cancelled() {
+            return Err(StorageError::Cancelled.into());
+        }
+        for suggestion in suggestions {
+            summary.push_str("\n\n");
+            summary.push_str(&suggestion);
+        }
+    }
     Ok(crate::compaction::publish_compacted(
         store,
         engine.artifacts(),
@@ -1905,7 +1925,15 @@ pub fn publish_first_context(
     if binding.endpoint_profile != EndpointProfile::CodexSubscriptionResponses {
         prompt.parameters.max_output_tokens = Some(headroom as u32);
     }
-    let bound = engine.bind_provider_instructions(ctx, prompt, &[])?;
+    let mut bound = engine.bind_provider_instructions(ctx, prompt, &[])?;
+    if let Some(packages) = engine.packages() {
+        use crate::package_host::context_hook::append_context_suggestions;
+        use devworks_extension_protocol::package::HookPhase;
+        let assembled = packages.context_suggestions(ctx, HookPhase::Assemble, &bound);
+        let decision = packages.context_suggestions(ctx, HookPhase::Decision, &bound);
+        append_context_suggestions(&mut bound, assembled);
+        append_context_suggestions(&mut bound, decision);
+    }
     let head = engine.publish_initial_native_context(ctx, session_id, &binding, &bound)?;
     Ok((head, binding))
 }

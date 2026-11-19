@@ -64,6 +64,9 @@
 //! service's trust model).
 pub mod artifact_io;
 pub mod broker;
+pub(crate) mod codec;
+pub(crate) mod context_hook;
+mod contributions;
 pub mod discovery;
 pub mod events;
 pub mod http;
@@ -71,8 +74,10 @@ pub mod inference;
 pub mod intents;
 pub mod native_ui;
 pub(crate) mod recovery;
+pub(crate) mod semantic;
 pub mod session;
 mod state_proposal;
+mod workflow;
 
 pub use discovery::{IndexPorts, RuntimePorts};
 
@@ -242,6 +247,11 @@ impl Instance {
 pub enum InvocationKind {
     Ordinary,
     NativeUi,
+    ContextHook,
+    ProviderCodec,
+    Semantic,
+    WorkflowStep,
+    WorkflowGate,
     /// A claimed event delivery: the host-resolved binding `broker.commit_event` checks.
     Event(Box<PackageInvocation>),
 }
@@ -259,11 +269,26 @@ struct SlotContext {
     grants: broker::Grants,
     /// The invocation's durable operation (the stable identity of its brokered calls).
     operation_id: String,
+    /// The immutable input is readable, but cannot attest to production by the invocation.
+    input_key: (String, String, String),
     /// Artifact versions of this invocation: its input and the broker's results for it.
     artifacts: Mutex<BTreeSet<(String, String, String)>>,
     /// Pending artifact writes, by the package's write ID ([`artifact_io`]).
     writes: Mutex<artifact_io::Writes>,
 }
+impl InvocationKind {
+    fn restricted_descriptor(&self) -> Option<&'static str> {
+        match self {
+            Self::NativeUi => Some("NativeUi"),
+            Self::ContextHook => Some("ContextHook"),
+            Self::ProviderCodec => Some("Provider"),
+            Self::Semantic => Some("Semantic"),
+            Self::WorkflowGate => Some("Workflow"),
+            Self::Ordinary | Self::WorkflowStep | Self::Event(_) => None,
+        }
+    }
+}
+
 impl SlotContext {
     fn in_scope(&self, artifact: &wire::ArtifactRef) -> bool {
         self.artifacts
@@ -428,6 +453,16 @@ impl InvocationHandle {
             .context
             .downcast_ref::<SlotContext>()
             .is_some_and(|c| c.in_scope(artifact))
+    }
+    /// Whether the host published this artifact during the invocation.
+    pub(super) fn produced(&self, artifact: &wire::ArtifactRef) -> bool {
+        self.run
+            .slot
+            .context
+            .downcast_ref::<SlotContext>()
+            .is_some_and(|context| {
+                context.input_key != broker::artifact_key(artifact) && context.in_scope(artifact)
+            })
     }
     /// Cancels (see [`Running::cancel`]) and returns what is proven about the outcome.
     pub fn cancel(&self) -> InvokeOutcome {
@@ -1735,9 +1770,13 @@ impl PackageHost {
                         Some(inst) if inst.serving() => {
                             if !inst.inspection.contributions.iter().any(|c| {
                                 c.id == req.contribution_id
-                                    && (!matches!(req.kind, InvocationKind::NativeUi)
-                                        || (c.kind == "NativeUi"
-                                            && c.verified_descriptor().is_some()))
+                                    && req.kind.restricted_descriptor().is_none_or(|kind| {
+                                        c.kind == kind && c.verified_descriptor().is_some()
+                                    })
+                                    && (!matches!(req.kind, InvocationKind::WorkflowStep)
+                                        || (c.kind == "Workflow"
+                                            && c.verified_descriptor()
+                                                .is_some_and(|d| d["role"] == "Step")))
                             }) {
                                 return Err(InvokeRefusal::NoSuchContribution);
                             }
@@ -1842,6 +1881,7 @@ impl PackageHost {
                     &req.allowed_operations,
                 ),
                 operation_id: req.operation_id.as_str().to_owned(),
+                input_key: broker::artifact_key(&req.input),
                 artifacts: Mutex::new(BTreeSet::from([broker::artifact_key(&req.input)])),
                 writes: Mutex::default(),
             }),
@@ -2004,12 +2044,7 @@ fn committed_configuration(p: &StoredPackage) -> Option<(Value, Value)> {
     }
 }
 
-fn project_disabled(p: &StoredPackage, project: &str) -> bool {
-    p.config
-        .as_ref()
-        .and_then(|c| c["disabledProjects"].as_array())
-        .is_some_and(|a| a.iter().any(|v| v.as_str() == Some(project)))
-}
+use devworks_core::services::packages::policy::project_disabled;
 
 /// The environment a helper starts with: no inherited variables except what locates the
 /// system and a temporary directory, so stored credentials in the host's environment never
@@ -2188,7 +2223,7 @@ impl Broker for HostBroker {
         let event = matches!(ctx.kind, InvocationKind::Event(_));
         match request {
             PackageRequest::Call { params, .. } => {
-                if matches!(ctx.kind, InvocationKind::NativeUi)
+                if ctx.kind.restricted_descriptor().is_some()
                     && !matches!(
                         params.call,
                         BrokerCall::ArtifactRead { .. }
@@ -2198,7 +2233,7 @@ impl Broker for HostBroker {
                 {
                     return Err(rpc_error(
                         RpcErrorClass::PermissionDenied,
-                        "a native view uses only invocation artifacts",
+                        "this contribution uses only invocation artifacts",
                     ));
                 }
                 if event && effectful(&params.call) {
@@ -2240,10 +2275,10 @@ impl Broker for HostBroker {
                         expected_revision,
                         proposal,
                     } => {
-                        if matches!(ctx.kind, InvocationKind::NativeUi) {
+                        if ctx.kind.restricted_descriptor().is_some() {
                             return Err(rpc_error(
                                 RpcErrorClass::PermissionDenied,
-                                "loading a native view cannot change package state",
+                                "this contribution cannot change package state",
                             ));
                         }
                         if event {

@@ -26,6 +26,7 @@ pub(crate) struct Exec<'a> {
     /// Each group member's share of the repository-level group extraction of the layer being
     /// staged (see [`group_members`]).
     pub shares: BTreeMap<String, FileExtract>,
+    pub semantic_packs: Vec<Arc<dyn crate::ports::indexing::SemanticEnricher>>,
 }
 
 impl Exec<'_> {
@@ -513,6 +514,8 @@ impl Exec<'_> {
                 "an exclusion now names this repository",
             ));
         }
+        self.semantic_packs = semantic::select(&env, &cfg);
+        let semantic_binding = semantic::binding(&self.semantic_packs);
         let pointer = previous.as_ref().map_or(0, |(_, r)| *r);
         let parent = previous
             .as_ref()
@@ -560,6 +563,11 @@ impl Exec<'_> {
             self.run.kind == RUN_INDEX
                 && p.manifest.get("configDigest").and_then(Value::as_str)
                     == Some(cfg.digest.as_str())
+                && p.manifest
+                    .get("semanticBinding")
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    == semantic_binding
                 && p.manifest.get("extractorVersion").and_then(Value::as_i64)
                     == Some(EXTRACTOR_VERSION)
         });
@@ -572,6 +580,7 @@ impl Exec<'_> {
                 .map_or(String::new(), |p| p.id.as_str().to_owned()),
             &pointer.to_string(),
             &self.run.kind,
+            &semantic_binding,
         ]);
         // The staging generation: the checkpoint of an earlier attempt when its plan still holds.
         let existing = match &self.run.generation_id {
@@ -603,6 +612,7 @@ impl Exec<'_> {
                         "commit": head, "objectFormat": format,
                         "configDigest": cfg.digest, "configRevision": self.run.config_revision,
                         "extractorVersion": EXTRACTOR_VERSION, "planDigest": plan_digest,
+                        "semanticBinding": semantic_binding,
                     }),
                 };
                 let id = stored.id.clone();
@@ -719,6 +729,7 @@ impl Exec<'_> {
                 })?;
             stored.state = GEN_SEALED.into();
             stored.watermark = count;
+            stored.manifest["packs"] = coverage["semanticPacks"].clone();
             stored.manifest["coverage"] = coverage;
             stored.manifest["indexedAtMs"] = json!(now);
             stored.manifest["units"] = json!(count);
@@ -768,6 +779,8 @@ impl Exec<'_> {
         stop: &(dyn Fn() -> bool + Sync),
     ) -> Result<(), Stop> {
         let env = self.w.env.clone();
+        let packs = self.semantic_packs.clone();
+        let commit = self.run.source_oid.clone().unwrap_or_default();
         let mut i = 0;
         while i < units.len() {
             if self.stopped() {
@@ -818,6 +831,34 @@ impl Exec<'_> {
                 );
                 sources.stage(&mut row.0, c.filter(|_| capture))?;
                 rows.push(row);
+            }
+            if !packs.is_empty() {
+                let files: Vec<_> = batch
+                    .iter()
+                    .filter_map(|unit| {
+                        let language = unit.language?;
+                        let bytes = content.get(unit.oid.as_deref()?)?;
+                        matches!(unit.mode, MODE_STRUCTURAL | MODE_TEXT_FALLBACK).then_some(
+                            crate::ports::indexing::EnrichmentSource {
+                                unit: &unit.key,
+                                language,
+                                bytes,
+                            },
+                        )
+                    })
+                    .collect();
+                semantic::enrich_batch(
+                    self,
+                    &packs,
+                    semantic::SemanticBatch {
+                        root: dir,
+                        commit: &commit,
+                        capture: None,
+                        files: &files,
+                    },
+                    &mut rows,
+                    stop,
+                )?;
             }
             let n = rows.len() as i64;
             let staged = sources.records();

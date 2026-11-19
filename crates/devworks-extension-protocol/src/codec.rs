@@ -42,6 +42,10 @@ pub enum CodecBody {
         binding: NativeBinding,
         artifact: ArtifactRef,
     },
+    Embedding {
+        index: Counter,
+        artifact: ArtifactRef,
+    },
     Usage {
         observation: RawUsageObservation,
     },

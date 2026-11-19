@@ -212,6 +212,21 @@ impl AddonsCtl<'_, '_> {
                     self.load_addon_logs(id);
                     None
                 }
+                AddonsAction::ReadContent {
+                    package,
+                    digest,
+                    contribution,
+                } => {
+                    self.addons.busy = self.command(
+                        AddonsSlot::ReadContent,
+                        "Opening package content",
+                        "addons.read_content",
+                        move |backend| {
+                            a::read_content_frame(backend, &package, &digest, &contribution)
+                        },
+                    );
+                    None
+                }
                 AddonsAction::OpenIndexing => {
                     self.navigate(Route::Indexing);
                     None
@@ -420,6 +435,25 @@ impl AddonsCtl<'_, '_> {
                     Ok(_) => "Unexpected package action response".into(),
                     Err(error) => error.describe(),
                 });
+            }
+            (AddonsSlot::ReadContent, Reply::Command(outcome)) => {
+                self.addons.busy = is_unknown(&outcome);
+                match ops::command_result(outcome) {
+                    Ok(devworks_core::protocol::results::OperationResult::AddonsReadContent {
+                        value,
+                    }) => {
+                        self.cx
+                            .routes
+                            .entry(Route::Artifacts)
+                            .or_default()
+                            .selection = Some(value.artifact.artifact_id.as_str().to_owned());
+                        self.navigate(Route::Artifacts);
+                    }
+                    Ok(_) => {
+                        self.addons.notice = Some("Unexpected package content response".into())
+                    }
+                    Err(error) => self.addons.notice = Some(error.describe()),
+                }
             }
             (AddonsSlot::AddonsDiscovery, Reply::Task(t)) => {
                 if let Err(e) = t {

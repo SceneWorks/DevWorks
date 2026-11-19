@@ -1,6 +1,25 @@
 {
   "status": "Architecture candidates, not production or public SDK freeze",
   "types": {
+    "PackageContent": {
+      "kind": "record",
+      "fields": {
+        "package_id": "Id",
+        "contribution_id": "Label",
+        "content_kind": "Label",
+        "manifest_digest": "Digest",
+        "artifact": "ArtifactRef"
+      }
+    },
+    "PackageWorkflowGate": {
+      "kind": "record",
+      "fields": {
+        "package_id": "Id",
+        "contribution_id": "Label",
+        "manifest_digest": "Digest",
+        "reason": "Content"
+      }
+    },
     "LifeState": {
       "kind": "enum",
       "values": [
@@ -10639,6 +10658,37 @@
       "rules": "Human only. Starts one invocation of an installed, enabled package's tool contribution as the calling person: the package's brokered application and inference calls run as that person under their current authority, narrowed by the version's approved manifest grants. Records one durable package.invoke operation and returns it with its state; the invocation runs once, a result that cannot be established is held for reconciliation and never re-run. expected_digest, when given, must be the active manifest digest. Refused for an agent, for a contribution that is not a tool of the active version, and for a package that is not ready.",
       "introducedRevision": 8
     },
+    "addons.read_content": {
+      "operation": "addons.read_content",
+      "mode": "Command",
+      "fields": {
+        "package_id": "Id",
+        "contribution_id": "Label",
+        "manifest_digest": "Digest"
+      },
+      "result": "PackageContent",
+      "effect": "Local",
+      "authority": "Scoped",
+      "rules": "Materializes the exact approved package Skill, Role or Prompt in the caller's artifact scope. Reading content does not adopt instructions or grant tools. Existing instruction-authoring and approval operations adopt any changes.",
+      "introducedRevision": 9
+    },
+    "addons.run_workflow": {
+      "operation": "addons.run_workflow",
+      "mode": "Command",
+      "fields": {
+        "workflow_id": "Id",
+        "package_id": "Id",
+        "contribution_id": "Label",
+        "manifest_digest": "Digest",
+        "input": "ArtifactRef",
+        "required_gates": "Items<PackageWorkflowGate>"
+      },
+      "result": "PackageInvocation",
+      "effect": "Journaled",
+      "authority": "Scoped",
+      "rules": "Queues an approved package workflow step and the exact ordered verification gates selected by the person or authorized agent. Each run pins the immutable scoped input, package manifests and schema contracts before dispatch. Completion requires current passing evidence from every selected gate and preserves all ordinary DevWorks controls.",
+      "introducedRevision": 9
+    },
     "addons.invocation": {
       "operation": "addons.invocation",
       "mode": "Query",
@@ -11714,6 +11764,12 @@
     ],
     "addons.invoke": [
       8
+    ],
+    "addons.read_content": [
+      9
+    ],
+    "addons.run_workflow": [
+      9
     ],
     "addons.invocation": [
       8
@@ -12912,6 +12968,8 @@
     "addons.logs": {"assignmentScope": "project", "nativeExecution": false, "approvalRequired": false, "humanOnly": false},
     "addons.rollback": {"assignmentScope": "project", "nativeExecution": true, "approvalRequired": false, "humanOnly": false},
     "addons.uninstall": {"assignmentScope": "project", "nativeExecution": false, "approvalRequired": false, "humanOnly": false},
+    "addons.read_content": {"assignmentScope": "project", "nativeExecution": false, "approvalRequired": false, "humanOnly": false},
+    "addons.run_workflow": {"assignmentScope": "root", "nativeExecution": true, "approvalRequired": false, "humanOnly": false},
     "addons.invoke": {"assignmentScope": "project", "nativeExecution": true, "approvalRequired": false, "humanOnly": true},
     "addons.invocation": {"assignmentScope": "project", "nativeExecution": false, "approvalRequired": false, "humanOnly": true},
     "help.search": {"assignmentScope": "project", "nativeExecution": false, "approvalRequired": false, "humanOnly": false},

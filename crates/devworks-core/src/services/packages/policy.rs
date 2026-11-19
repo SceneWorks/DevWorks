@@ -720,3 +720,12 @@ mod closure_tests {
         }
     }
 }
+
+/// Whether the package was disabled for the named project.
+pub fn project_disabled(package: &StoredPackage, project: &str) -> bool {
+    package
+        .config
+        .as_ref()
+        .and_then(|config| config["disabledProjects"].as_array())
+        .is_some_and(|disabled| disabled.iter().any(|entry| entry.as_str() == Some(project)))
+}

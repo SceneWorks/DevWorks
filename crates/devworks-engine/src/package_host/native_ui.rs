@@ -2,18 +2,10 @@ use super::{InvocationKind, InvokeOutcome, InvokeRequest, PackageHost, policy, p
 use devworks_core::context::{InvocationContext, PrincipalKind};
 use devworks_core::ports::IdKind;
 use devworks_core::ports::packages::Inspection;
-use devworks_core::ports::storage::{
-    ArtifactScope, ReadOptions, StorageError, StoredPackageVersion, WriteOptions, read_snapshot,
-    run_write,
-};
+use devworks_core::ports::storage::{ReadOptions, read_snapshot};
 use devworks_core::protocol::provider::ArtifactRef;
 use devworks_core::protocol::records::PackageAvailability;
-use devworks_core::services::artifacts::{host::HostArtifactPublication, version_ref};
-use devworks_core::services::packages::recovery;
-use devworks_extension_protocol::package::{
-    Contribution, ContributionEvent, InvocationOutcome, InvocationScope,
-};
-use devworks_extension_protocol::scalars as wire;
+use devworks_extension_protocol::package::{Contribution, ContributionEvent, InvocationOutcome};
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
 use std::time::Duration;
@@ -102,56 +94,7 @@ impl PackageHost {
         if !form.is_object() || bytes.len() > MAX_FORM_BYTES {
             return Err("a package form must be a JSON object of at most 64 KiB".into());
         }
-        let ports = self
-            .broker
-            .get()
-            .ok_or("package artifacts are not available")?;
-        let staged = ports
-            .artifacts
-            .stage_host_bytes(&*self.store, &bytes, provenance.clone())
-            .map_err(|error| error.to_string())?
-            .map_err(|error| error.to_string())?;
-        let scope = principal
-            .project_id()
-            .cloned()
-            .map_or(ArtifactScope::Workspace, ArtifactScope::Project);
-        let artifacts = ports.artifacts.clone();
-        let pending = staged.clone();
-        let digest = expected_digest.to_owned();
-        let package_id = package_id.to_owned();
-        let owner = principal.principal().clone();
-        let epoch = principal.restore_epoch().get();
-        let committed = run_write(&*self.store, WriteOptions::observed(), move |tx| {
-            if tx.store().restore_epoch != epoch
-                || tx.actors().actor_kind(&owner)? != Some(PrincipalKind::Human)
-                || !tx.packages().package(&package_id)?.is_some_and(|package| {
-                    package.installed
-                        && package.enabled
-                        && package.active_digest.as_deref() == Some(digest.as_str())
-                        && scope
-                            .project()
-                            .is_none_or(|project| !project_disabled(&package, project.0.as_str()))
-                })
-            {
-                return Err(StorageError::ScopeDenied);
-            }
-            let version = artifacts.commit_host_bytes_in_scope(
-                tx,
-                &pending,
-                HostArtifactPublication {
-                    title: "Package view action input",
-                    media_type: "application/json",
-                    provenance,
-                    scope,
-                    owner,
-                },
-            )?;
-            Ok(version_ref(&version))
-        });
-        ports
-            .artifacts
-            .settle_host_bytes(&*self.store, &staged, committed.is_ok());
-        committed.map_err(|error| error.to_string())
+        self.stage_contribution_input(principal, (package_id, expected_digest), &bytes, provenance)
     }
 
     /// Fetches data for a published view through its own read-only helper invocation.
@@ -178,7 +121,7 @@ impl PackageHost {
                 _ => None,
             })
             .ok_or("the native view is unavailable")?;
-        let input_schema = self.view_schema(&inspection, &meta.input_schema)?;
+        let input_schema = self.contribution_schema(&inspection, &meta.input_schema)?;
         if self
             .service
             .validator()
@@ -187,7 +130,7 @@ impl PackageHost {
         {
             return Err("the form does not match the view's input schema".into());
         }
-        let output_schema = self.view_schema(&inspection, &meta.output_schema)?;
+        let output_schema = self.contribution_schema(&inspection, &meta.output_schema)?;
         let input = self.stage_view_form(
             principal,
             package_id,
@@ -197,13 +140,7 @@ impl PackageHost {
                 "kind": "PackageViewRead", "packageId": package_id, "viewId": view_id,
             }),
         )?;
-        let scope = if let Some(project) = principal.project_id() {
-            InvocationScope::Project {
-                project_id: wire::ProjectId(wire::Id::try_from(project.0.as_str().to_owned())?),
-            }
-        } else {
-            InvocationScope::Workspace
-        };
+        let scope = super::contributions::scope_of(principal)?;
         let handle = self
             .invoke(InvokeRequest {
                 package_id: package_id.to_owned(),
@@ -241,7 +178,7 @@ impl PackageHost {
             if newest
                 .as_ref()
                 .is_some_and(|(previous, _)| revision <= *previous)
-                || !handle.in_scope(&data)
+                || !handle.produced(&data)
             {
                 return Err(
                     "the view update has a stale revision or an unverified artifact".into(),
@@ -292,7 +229,7 @@ impl PackageHost {
             UiNode::Table { data_schema, .. } => {
                 let id = data_schema.schema_id.as_str();
                 let rows = &data["tables"][id];
-                let schema = self.view_schema(inspection, data_schema)?;
+                let schema = self.contribution_schema(inspection, data_schema)?;
                 if self.service.validator().validate(&schema, rows).is_err() {
                     return Err("a package table does not match its data schema".into());
                 }
@@ -305,28 +242,6 @@ impl PackageHost {
             _ => {}
         }
         Ok(())
-    }
-
-    fn view_schema(
-        &self,
-        inspection: &Inspection,
-        reference: &wire::SchemaRef,
-    ) -> Result<Value, String> {
-        let reference = serde_json::to_value(reference).map_err(|error| error.to_string())?;
-        let file = inspection
-            .schema_file(&reference)
-            .ok_or("the package view schema is absent")?;
-        let bytes = self
-            .service
-            .files()
-            .read_verified(
-                &inspection.package_id,
-                &inspection.manifest_digest,
-                file,
-                1024 * 1024,
-            )
-            .map_err(|error| error.to_string())?;
-        devworks_core::framing::parse(&bytes).map_err(|error| error.to_string())
     }
 
     fn view_inspection_at(
@@ -368,27 +283,9 @@ impl PackageHost {
         })
         .map_err(|error| error.to_string())?
         .ok_or("the add-on or displayed version is unavailable")?;
-        self.view_inspection(&version)
+        self.verified_inspection(&version)
     }
 
-    fn view_inspection(&self, version: &StoredPackageVersion) -> Result<Inspection, String> {
-        let inspection = policy::inspection(version).ok_or("the package inspection is invalid")?;
-        if !recovery::compact(&inspection) {
-            return Ok(inspection);
-        }
-        let ports = self
-            .broker
-            .get()
-            .ok_or("the package broker is unavailable")?;
-        recovery::recover(
-            &*self.store,
-            &ports.artifacts,
-            &self.service,
-            &self.host_ctx(),
-            version,
-        )
-        .map_err(|_| "the package's view descriptors cannot be verified".into())
-    }
     fn declared_views(&self, inspection: &Inspection) -> Result<Vec<NativeView>, String> {
         let tools: BTreeSet<&str> = inspection
             .contributions
@@ -411,7 +308,7 @@ impl PackageHost {
                     return Err("the contribution is not a native view".into());
                 };
                 validate_bindings(&view, &tools, inspection)?;
-                let schema = self.view_schema(inspection, &meta.input_schema)?;
+                let schema = self.contribution_schema(inspection, &meta.input_schema)?;
                 let mut choices = BTreeMap::new();
                 collect_choices(&view, &schema, &mut choices);
                 Ok(NativeView {

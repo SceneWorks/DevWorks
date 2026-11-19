@@ -29,5 +29,6 @@ pub enum AddonsSlot {
     },
     PrepareViewAction,
     InvokeViewAction,
+    ReadContent,
 }
 screen_slot!(AddonsSlot, AddOns);

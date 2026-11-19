@@ -81,6 +81,11 @@ pub enum AddonsAction {
         action: String,
         form: serde_json::Value,
     },
+    ReadContent {
+        package: String,
+        digest: String,
+        contribution: String,
+    },
     OpenIndexing,
     /// Probe runtimes and refresh the signed package indexes.
     Discover,
@@ -381,6 +386,24 @@ impl AddonsScreen {
             ui_granted && !self.busy,
             actions,
         );
+        if let Some(access) = &r.effective_access {
+            for content in access
+                .0
+                .iter()
+                .filter_map(|entry| entry.0.strip_prefix("content:"))
+            {
+                if ui
+                    .add_enabled(!self.busy, egui::Button::new(format!("Open {content}")))
+                    .clicked()
+                {
+                    actions.push(AddonsAction::ReadContent {
+                        package: r.id.as_str().to_owned(),
+                        digest: r.digest.as_str().to_owned(),
+                        contribution: content.to_owned(),
+                    });
+                }
+            }
+        }
         if let Some(p) = &r.prerequisites
             && !p.0.is_empty()
         {
@@ -856,6 +879,27 @@ pub fn invoke_view_action_frame(
                 devworks_core::protocol::provider::Digest::try_from(digest.to_owned()).ok()?,
             ),
         })))
+    })
+}
+pub fn read_content_frame(
+    backend: &dyn Backend,
+    package: &str,
+    digest: &str,
+    contribution: &str,
+) -> Vec<u8> {
+    frame::with(backend, Negotiate::Latest, || {
+        Some(In::Addons(addons::Input::ReadContent(
+            addons::ReadContentInput {
+                package_id: frame::id(package)?,
+                contribution_id: devworks_core::protocol::support::BoundedText(
+                    contribution.to_owned(),
+                ),
+                manifest_digest: devworks_core::protocol::provider::Digest::try_from(
+                    digest.to_owned(),
+                )
+                .ok()?,
+            },
+        )))
     })
 }
 pub fn configure_frame(

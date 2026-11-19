@@ -6,6 +6,10 @@
 //! No test runs inference or touches the network. These tests spawn processes, so they run
 //! serialized in their own binary.
 mod common;
+#[path = "packages/contributions.rs"]
+mod contributions;
+#[path = "packages/workflow.rs"]
+mod workflow;
 use common::*;
 use devworks_adapters::fs::NativeFilesystem;
 use devworks_adapters::fs::artifacts::NativeArtifactFiles;
@@ -370,6 +374,11 @@ struct Spec {
     /// announcement instead of tools.
     handlers: Vec<&'static str>,
     intent_commands: Vec<&'static str>,
+    workflow: bool,
+    provider_codec: bool,
+    context_hooks: bool,
+    content: bool,
+    semantic_format: Option<&'static str>,
     native_view: Option<Value>,
 }
 impl Spec {
@@ -398,6 +407,11 @@ impl Spec {
             effect: "ReadCandidate",
             handlers: vec![],
             intent_commands: vec![],
+            workflow: false,
+            provider_codec: false,
+            context_hooks: false,
+            content: false,
+            semantic_format: None,
             native_view: None,
         }
     }
@@ -410,6 +424,11 @@ impl Spec {
             .collect()
     }
 }
+const HOST_INPUT: &[u8] = br#"{"type":"object"}"#;
+const HOOK_OUTPUT: &[u8] = br#"{"type":"object","required":["text"],"additionalProperties":false,"properties":{"text":{"type":"string"}}}"#;
+const WORKFLOW_INPUT: &[u8] = br#"{"type":"object","additionalProperties":false,"required":["workflowOperation","source","sourceDocument","stepResult","stepDocument"],"properties":{"workflowOperation":{"type":"string"},"source":{"type":"object"},"sourceDocument":{"type":"object"},"stepResult":{"type":"object"},"stepDocument":{"type":"object"}}}"#;
+const WORKFLOW_RESULT: &[u8] = br#"{"type":"object","additionalProperties":false,"required":["outcome"],"properties":{"outcome":{"const":"Checked"}}}"#;
+
 fn schema(id: &str, digest: &str) -> Value {
     json!({"schemaId": id, "revision": "1", "sha256": digest})
 }
@@ -489,6 +508,45 @@ fn bundle(spec: &Spec) -> (Vec<u8>, String) {
     );
     files.push(("schemas/state.json".into(), spec.state_schema.to_vec()));
     assets.push(json!({"reference": state_ref, "path": "schemas/state.json"}));
+    if spec.content {
+        files.push((
+            "package-content.md".into(),
+            b"Reusable package content.\n".to_vec(),
+        ));
+    }
+    let host_input = schema(
+        &format!("{}/host-input", spec.package),
+        &sha256_hex(HOST_INPUT),
+    );
+    let hook_output = schema(
+        &format!("{}/context-result", spec.package),
+        &sha256_hex(HOOK_OUTPUT),
+    );
+    if spec.context_hooks || spec.provider_codec || spec.semantic_format.is_some() {
+        files.push(("schemas/host-input.json".into(), HOST_INPUT.to_vec()));
+        assets.push(json!({"reference":host_input,"path":"schemas/host-input.json"}));
+    }
+    if spec.context_hooks {
+        files.push(("schemas/context-result.json".into(), HOOK_OUTPUT.to_vec()));
+        assets.push(json!({"reference":hook_output,"path":"schemas/context-result.json"}));
+    }
+    let workflow_input = schema(
+        &format!("{}/gate-input", spec.package),
+        &sha256_hex(WORKFLOW_INPUT),
+    );
+    let workflow_output = schema(
+        &format!("{}/workflow-result", spec.package),
+        &sha256_hex(WORKFLOW_RESULT),
+    );
+    if spec.workflow {
+        files.push(("schemas/gate-input.json".into(), WORKFLOW_INPUT.to_vec()));
+        assets.push(json!({"reference":workflow_input,"path":"schemas/gate-input.json"}));
+        files.push((
+            "schemas/workflow-result.json".into(),
+            WORKFLOW_RESULT.to_vec(),
+        ));
+        assets.push(json!({"reference":workflow_output,"path":"schemas/workflow-result.json"}));
+    }
     let view_output = schema(
         &format!("{}/view-output", spec.package),
         &sha256_hex(VIEW_OUTPUT),
@@ -512,6 +570,37 @@ fn bundle(spec: &Spec) -> (Vec<u8>, String) {
             if local == "native-view" {
                 meta["outputSchema"] = view_output.clone();
                 json!({"kind": "NativeUi", "meta": meta, "view": spec.native_view})
+            } else if spec.content && matches!(local, "skill" | "role" | "prompt") {
+                let bytes = b"Reusable package content.\n";
+                let kind = match local { "skill" => "Skill", "role" => "Role", _ => "Prompt" };
+                json!({"kind":"Content","meta":meta,"contentKind":kind,"artifact":{
+                    "artifactId":"bundle-artifact","versionId":"bundle-version","sha256":sha256_hex(bytes),
+                    "byteLength":bytes.len().to_string(),"mediaType":"text/markdown"}})
+            } else if spec.provider_codec && local == "provider-codec" {
+                meta["inputSchema"] = host_input.clone();
+                meta["outputSchema"] = host_input.clone();
+                json!({"kind":"Provider","meta":meta,"profiles":["CompatibleChat"],"endpointIds":["connection"]})
+            } else if spec.context_hooks && local.starts_with("context-") {
+                let (phase, priority) = match local {
+                    "context-compact" => ("Compact", 10),
+                    "context-decision" => ("Decision", 10),
+                    "context-stale" => ("Assemble", 20),
+                    _ => ("Assemble", 10),
+                };
+                meta["inputSchema"] = host_input.clone();
+                meta["outputSchema"] = hook_output.clone();
+                json!({"kind":"ContextHook","meta":meta,"phase":phase,"priority":priority})
+            } else if let Some(format) = spec.semantic_format {
+                meta["inputSchema"] = host_input.clone();
+                meta["outputSchema"] = host_input.clone();
+                json!({"kind":"Semantic","meta":meta,"languages":["rust"],"format":format})
+            } else if spec.workflow && matches!(local, "workflow-step" | "workflow-gate") {
+                let role = if local == "workflow-step" { "Step" } else { "VerificationGate" };
+                if role == "VerificationGate" {
+                    meta["inputSchema"] = workflow_input.clone();
+                }
+                meta["outputSchema"] = workflow_output.clone();
+                json!({"kind":"Workflow","meta":meta,"role":role,"evidenceSchema":workflow_output})
             } else if spec.handlers.contains(&local) {
                 json!({"kind": "EventHandler", "meta": meta, "eventSchemas": [
                     schema(devworks_engine::package_host::events::AVAILABILITY_SCHEMA, &"d".repeat(64))],
@@ -650,6 +739,7 @@ struct App {
     log_ids: Arc<Gate>,
     /// A scripted model behind the host's inference router, when a test composes inference.
     model: Option<Arc<ScriptedModel>>,
+    indexing: bool,
 }
 fn config() -> HostConfig {
     HostConfig {
@@ -766,6 +856,7 @@ impl App {
             host_ids: Arc::default(),
             log_ids,
             model: None,
+            indexing: false,
         };
         if me.probe_path.is_none() {
             me.runtimes.set(std::collections::BTreeMap::from([(
@@ -836,7 +927,17 @@ impl App {
         Composition {
             git: None,
             browser: None,
-            indexing: None,
+            indexing: self.indexing.then(|| devworks_engine::IndexComposition {
+                parser: Arc::new(devworks_adapters::index::treesitter::TreeSitterParser::new()),
+                source: Arc::new(devworks_adapters::index::NativeSourceTree::new()),
+                fs: Arc::new(NativeFilesystem::new()),
+                settings: Default::default(),
+                config: devworks_engine::IndexingConfig {
+                    discover_at_boot: false,
+                    ..Default::default()
+                },
+                enrichers: Vec::new(),
+            }),
             store: store.clone(),
             clock: h.clock(),
             // The package host allocates its invocation identifiers from these.

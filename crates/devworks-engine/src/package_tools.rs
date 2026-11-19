@@ -338,6 +338,13 @@ fn execute(
     if op.state != OperationState::Dispatching || op.capability != CAPABILITY {
         return EffectResult::Failed("not a dispatched package tool invocation".into());
     }
+    let workflow = match op.payload.get("workflow") {
+        Some(value) => match serde_json::from_value(value.clone()) {
+            Ok(workflow) => Some(workflow),
+            Err(_) => return EffectResult::Failed("invalid package workflow invocation".into()),
+        },
+        None => None,
+    };
     let Some(request) = Request::from_json(&op.payload) else {
         return EffectResult::Failed("invalid package tool invocation".into());
     };
@@ -392,14 +399,18 @@ fn execute(
         }
         let Some(session_id) = &request.session_id else {
             // A person's invocation has no session; the person must still be a registered human.
-            return Ok(kind == PrincipalKind::Human
-                && s.actors().actor_kind(&request.principal)? == Some(PrincipalKind::Human));
+            return Ok((kind == PrincipalKind::Human
+                || (kind == PrincipalKind::Host
+                    && workflow.is_some()
+                    && request.principal == info.host_actor))
+                && s.actors().actor_kind(&request.principal)? == Some(kind));
         };
         let session = s.sessions().session(session_id)?;
         Ok(session.is_some_and(|session| {
             !session.closed()
                 && session.agent_id == request.principal
                 && session.project_id == request.project_id
+                && (workflow.is_none() || session.root_id == request.root_id)
         }))
     });
     match current {
@@ -408,6 +419,15 @@ fn execute(
             return EffectResult::Failed("the call's authority or session changed".into());
         }
         Err(e) => return EffectResult::NotApplied(format!("{e:?}")),
+    }
+    if let Some(workflow) = &workflow {
+        let Ok(delivery) = serde_json::from_value(op.payload["deliveryId"].clone()) else {
+            return EffectResult::Failed("invalid workflow delivery binding".into());
+        };
+        if op.payload["restoreEpoch"].as_str() != Some(info.restore_epoch.to_string().as_str()) {
+            return EffectResult::Failed("the workflow's store was restored".into());
+        }
+        return host.execute_workflow(&ctx, &op.id, &delivery, workflow);
     }
     let scope = match &request.project_id {
         Some(project) => match wire::Id::try_from(project.0.as_str().to_owned()) {

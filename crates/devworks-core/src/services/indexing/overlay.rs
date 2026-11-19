@@ -516,8 +516,22 @@ pub(crate) fn refresh(
         // The reuse identity is the snapshot (a ref overlay's is its commit, which `existing`
         // already matched) and the configuration it was built under.
         let moved = super::status::overlay_config_moved(tx.indexing(), o, &effective.digest)?;
+        let mut semantic_changed = false;
+        for id in [&o.branch_generation_id, &o.worktree_generation_id]
+            .into_iter()
+            .flatten()
+        {
+            if let Some(layer) = tx.indexing().generation(id)? {
+                semantic_changed |= super::status::semantic_stale(
+                    tx.packages(),
+                    &layer.manifest,
+                    ctx.project_id(),
+                )?;
+            }
+        }
         let state = super::status::effective_overlay_state(o, base.as_ref(), now, moved);
         if state == OVERLAY_READY
+            && !semantic_changed
             && (commit.is_some() || snapshot.is_some_and(|s| same_snapshot(o, s)))
             && let Some(run) = o
                 .run_id
@@ -1007,6 +1021,7 @@ pub(crate) fn execute(exec: &mut Exec<'_>) -> Result<(), Stop> {
         ))
     })
     .map_err(Stop::storage)?;
+    exec.semantic_packs = super::worker::semantic::select(&env, &cfg);
     let base_pointer = base_view.map_or(0, |p| p.revision);
     let root = PathBuf::from(&snap.worktree_path);
     let head = snap.head_oid.clone();
@@ -1613,11 +1628,16 @@ fn stage_layer(
     exec.stage_units(root, name, generation, &from_commit, &mut done, total, stop)?;
     // Worktree content, in bounded batches, verified against the capture.
     let mut i = 0;
+    let packs = exec.semantic_packs.clone();
+    let commit = exec.run.source_oid.clone().unwrap_or_default();
+    let capture =
+        expected.and_then(|files| crate::fingerprint::canonical_digest(&json!(files)).ok());
     while i < from_worktree.len() {
         if exec.stopped() {
             return Err(Stop::Cancelled);
         }
         let mut rows = Vec::new();
+        let mut captured_files = Vec::new();
         let mut sources = super::source::Sources::new(env.clone(), exec.run.repository_id.clone());
         let mut bytes = 0usize;
         while i < from_worktree.len()
@@ -1663,8 +1683,39 @@ fn stage_layer(
                 &mut exec.warnings,
             )?;
             sources.stage(&mut row.0, content.as_deref())?;
+            if !packs.is_empty()
+                && matches!(
+                    u.mode,
+                    super::worker::MODE_STRUCTURAL | super::worker::MODE_TEXT_FALLBACK
+                )
+                && let (Some(language), Some(content)) = (u.language, content)
+            {
+                captured_files.push((u.key.as_str(), language, content));
+            }
             rows.push(row);
         }
+        let files: Vec<_> = captured_files
+            .iter()
+            .map(
+                |(unit, language, bytes)| crate::ports::indexing::EnrichmentSource {
+                    unit,
+                    language,
+                    bytes,
+                },
+            )
+            .collect();
+        super::worker::semantic::enrich_batch(
+            exec,
+            &packs,
+            super::worker::semantic::SemanticBatch {
+                root,
+                commit: &commit,
+                capture: capture.as_deref(),
+                files: &files,
+            },
+            &mut rows,
+            stop,
+        )?;
         let n = rows.len() as i64;
         let staged = sources.records();
         let capture_env = env.clone();
@@ -1706,6 +1757,7 @@ fn seal_layer(exec: &mut Exec<'_>, generation: &Id) -> Result<(), Stop> {
             })?;
         stored.state = GEN_SEALED.into();
         stored.watermark = count;
+        stored.manifest["packs"] = coverage["semanticPacks"].clone();
         stored.manifest["coverage"] = coverage;
         stored.manifest["units"] = json!(count);
         stored.manifest["indexedAtMs"] = json!(now);

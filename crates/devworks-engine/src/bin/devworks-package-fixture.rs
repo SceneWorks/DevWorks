@@ -113,6 +113,53 @@ fn finished(st: &State, id: &Value, inv: &Value, outcome: Value) {
     ));
 }
 
+fn artifact_callbacks<'a>(st: &'a State, inv: &'a Value) -> impl Fn(&str, Value) -> Value + 'a {
+    move |key, call| {
+        st.call(
+            "broker.call",
+            json!({"processSessionId":inv["processSessionId"],
+        "invocationId":inv["invocationId"],"invocationToken":inv["invocationToken"],
+        "actionKey":key,"call":call}),
+        )
+    }
+}
+
+fn read_input(call: &impl Fn(&str, Value) -> Value, inv: &Value) -> Value {
+    call(
+        "read-input",
+        json!({"kind":"ArtifactRead","artifact":inv["input"]}),
+    )["result"]["data"]
+        .as_str()
+        .and_then(base64url_decode)
+        .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+        .unwrap_or(Value::Null)
+}
+
+fn publish_json(call: &impl Fn(&str, Value) -> Value, value: &Value) -> Value {
+    publish_bytes(call, value.to_string().as_bytes(), "application/json")
+}
+
+fn publish_bytes(call: &impl Fn(&str, Value) -> Value, bytes: &[u8], media_type: &str) -> Value {
+    call(
+        "append-output",
+        json!({"kind":"ArtifactAppend","writeId":"output","data":base64url(bytes)}),
+    );
+    call(
+        "publish-output",
+        json!({"kind":"ArtifactPublish","writeId":"output","mediaType":media_type,
+        "sha256":sha256_hex(bytes)}),
+    )["result"]["artifact"]
+        .clone()
+}
+
+fn contribution_event(st: &State, inv: &Value, sequence: u64, event: Value) {
+    st.out
+        .send(&json!({"jsonrpc":"2.0","method":"package.event","params":{
+            "processSessionId":inv["processSessionId"],"invocationId":inv["invocationId"],
+            "invocationToken":inv["invocationToken"],"sequence":sequence.to_string(),"event":event
+        }}));
+}
+
 fn invoke(st: Arc<State>, id: Value, inv: Value, cancel: mpsc::Receiver<()>, package: String) {
     let contribution = inv["contributionId"].as_str().unwrap_or("").to_owned();
     let name = contribution.split('/').nth(1).unwrap_or("");
@@ -451,6 +498,177 @@ fn invoke(st: Arc<State>, id: Value, inv: Value, cancel: mpsc::Receiver<()>, pac
                 &id,
                 &inv,
                 json!({"kind": "Completed", "artifacts": []}),
+            );
+        }
+        "semantic-native" | "semantic-scip" | "semantic-stale" => {
+            let call = artifact_callbacks(&st, &inv);
+            let input = read_input(&call, &inv);
+            let files = input["files"].as_array().expect("source files");
+            let (format, artifact) = if name == "semantic-scip" {
+                use protobuf::Message;
+                use scip::types::{Document, Index, Occurrence, SymbolRole};
+                let docs = files
+                    .iter()
+                    .map(|file| Document {
+                        relative_path: file["unit"].as_str().unwrap().into(),
+                        occurrences: vec![Occurrence {
+                            range: vec![0, 3, 4],
+                            symbol: "local 0".into(),
+                            symbol_roles: SymbolRole::Definition as i32,
+                            ..Default::default()
+                        }],
+                        ..Default::default()
+                    })
+                    .collect();
+                let index = Index {
+                    documents: docs,
+                    ..Default::default()
+                };
+                (
+                    "Scip",
+                    publish_bytes(
+                        &call,
+                        &index.write_to_bytes().unwrap(),
+                        "application/octet-stream",
+                    ),
+                )
+            } else {
+                let units: Vec<_> = files.iter().map(|file| json!({"unitKey":file["unit"],"nodes":[
+                    {"kind":"File","name":file["unit"],"qualifiedName":file["unit"],"parent":null,
+                        "properties":{},"span":{"startLine":1,"startColumn":1,"endLine":1,"endColumn":1,"startByte":0,"endByte":0}},
+                    {"kind":"Function","name":"semantic-a","qualifiedName":"semantic-a","parent":0,
+                        "properties":{},"span":{"startLine":1,"startColumn":4,"endLine":1,"endColumn":5,"startByte":3,"endByte":4}}],
+                    "edges":[]})).collect();
+                ("Native", publish_json(&call, &json!({"units":units})))
+            };
+            let mut snapshot = inv["input"].clone();
+            if name == "semantic-stale" {
+                snapshot["versionId"] = json!("other-source");
+            }
+            contribution_event(
+                &st,
+                &inv,
+                1,
+                json!({"kind":"SemanticIndex","sourceSnapshot":snapshot,
+                "index":artifact,"format":format}),
+            );
+            finished(
+                &st,
+                &id,
+                &inv,
+                json!({"kind":"Completed","artifacts":[artifact]}),
+            );
+        }
+        "context-assemble" | "context-compact" | "context-decision" | "context-stale" => {
+            let call = artifact_callbacks(&st, &inv);
+            let input = read_input(&call, &inv);
+            let proposal = publish_json(
+                &call,
+                &json!({"text":format!("Notes for {}",input["context"]["phase"].as_str().unwrap_or("?"))}),
+            );
+            let digest = if name == "context-stale" {
+                json!("f".repeat(64))
+            } else {
+                input["contextDigest"].clone()
+            };
+            contribution_event(
+                &st,
+                &inv,
+                1,
+                json!({"kind":"ContextProposal","inputDigest":digest,"proposal":proposal}),
+            );
+            finished(
+                &st,
+                &id,
+                &inv,
+                json!({"kind":"Completed","artifacts":[proposal]}),
+            );
+        }
+        "provider-codec" => {
+            let call = artifact_callbacks(&st, &inv);
+            let input = read_input(&call, &inv);
+            if input["payload"]["kind"] == "Encode" {
+                let mut body = input["payload"]["body"].clone();
+                body["fixture_codec"] = json!(true);
+                let output = publish_json(&call, &json!({"body":body}));
+                finished(
+                    &st,
+                    &id,
+                    &inv,
+                    json!({"kind":"Completed","artifacts":[output]}),
+                );
+                return;
+            }
+            let response = &input["payload"]["response"];
+            let sequence: u64 = input["payload"]["nextSequence"]
+                .as_str()
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(1);
+            let mut seq = sequence;
+            let mut emit = |event| {
+                contribution_event(
+                    &st,
+                    &inv,
+                    seq - sequence + 1,
+                    json!({"kind":"Provider","event":{
+                    "requestId":input["requestId"],"attemptId":input["attemptId"],
+                    "sequence":seq.to_string(),"event":event}}),
+                );
+                seq += 1;
+            };
+            if response.to_string().contains("Sampled answer") {
+                emit(json!({"kind":"TextDelta","blockIndex":"0","text":"Decoded by package"}));
+            }
+            if response.to_string().contains("[DONE]") || input["payload"]["endOfInput"] == true {
+                emit(json!({"kind":"Terminal","outcome":"Completed","nativeStopReason":"stop"}));
+            }
+            finished(&st, &id, &inv, json!({"kind":"Completed","artifacts":[]}));
+        }
+        "workflow-step" | "workflow-gate" => {
+            let ids = json!({"processSessionId":inv["processSessionId"],
+                "invocationId":inv["invocationId"],"invocationToken":inv["invocationToken"]});
+            let call = |action: &str, data: Value| {
+                let mut params = ids.clone();
+                params["actionKey"] = json!(action);
+                params["call"] = data;
+                st.call("broker.call", params)
+            };
+            let reply = call(
+                "read-source",
+                json!({"kind":"ArtifactRead","artifact":inv["input"]}),
+            );
+            let input: Value = reply["result"]["data"]
+                .as_str()
+                .and_then(base64url_decode)
+                .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+                .unwrap_or(Value::Null);
+            let result = br#"{"outcome":"Checked"}"#;
+            call(
+                "append-result",
+                json!({"kind":"ArtifactAppend","writeId":"workflow-result",
+                "data":base64url(result)}),
+            );
+            let published = call(
+                "publish-result",
+                json!({"kind":"ArtifactPublish",
+                "writeId":"workflow-result","mediaType":"application/json","sha256":sha256_hex(result)}),
+            );
+            let artifact = &published["result"]["artifact"];
+            if name == "workflow-gate" {
+                let passed = input["sourceDocument"]["text"] == "valid"
+                    && input["stepDocument"]["outcome"] == "Checked";
+                let mut event = ids;
+                event["sequence"] = json!("1");
+                event["event"] =
+                    json!({"kind":"Verification","passed":passed,"evidence":[artifact]});
+                st.out
+                    .send(&json!({"jsonrpc":"2.0","method":"package.event","params":event}));
+            }
+            finished(
+                &st,
+                &id,
+                &inv,
+                json!({"kind":"Completed","artifacts":[artifact]}),
             );
         }
         "native-view" => {

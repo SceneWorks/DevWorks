@@ -13,3 +13,7 @@ Decode fragmented SSE/JSON without treating a bare marker or partial tool argume
 Report nullable raw usage, exact decimal charges, actual serving identity and cache semantics to the host; never declare a free connection. Preserve unknown totals and remote tails. The host's owned transport must close/quiesce locally and respect cancellation, deadlines, byte limits and no-redirect credential fences.
 
 End-to-end inference is available only when the actual runtime/codec/profile is qualified. No old router server or external agent CLI is required by the native design. See [Connections](help:settings-connections), [Routing](help:routing-context), [Usage](help:usage), and [Protocol](help:sdk-protocol).
+
+A package codec is selected only for a routed connection ID and endpoint profile in its approved manifest. The encode input carries the admitted credential-free body. Return a JSON artifact with `body`. The host retains the admitted fields and owns the request path, headers, and transport.
+
+The decode input binds `requestId`, `attemptId`, and the native account/model/context `binding`. It carries a batch of framed server events or an aggregate body, `endOfInput`, and `nextSequence`. Emit bound, ordered provider events. Return one terminal result by end of input. Cite invocation-produced artifacts for tool arguments, native continuation, and embedding vectors. The host rechecks selected tool schemas and embedding dimensions and settles the attempt through the existing router and accounting.

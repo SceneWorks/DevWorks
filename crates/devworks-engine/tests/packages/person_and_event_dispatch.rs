@@ -670,3 +670,35 @@ fn a_rerun_of_a_handler_under_its_operation_is_not_charged_again() {
         "the rerun replayed the recorded answer instead of inferring again"
     );
 }
+
+#[test]
+fn an_approved_codec_encodes_and_decodes_through_the_owned_router_attempt() {
+    let _s = serial();
+    let a = App::with_model();
+    let mut codec = Spec::new("codec-pack", "1.0.0");
+    codec.contributions = vec!["provider-codec"];
+    codec.provider_codec = true;
+    package(a.install(&a.user, &codec));
+    a.ready("codec-pack");
+    let script = react_script(&a, "codec-consumer");
+    package(a.install(&a.user, &handler_pack("codec-consumer", "1.0.0")));
+    settled(&a, CONSUMER, 1);
+    let _ = std::fs::remove_file(script);
+    let recorded = attempts(&a);
+    assert_eq!(recorded.len(), 1, "{recorded:?}");
+    assert_eq!(recorded[0].state, AttemptState::Settled);
+    let operation = read(&*a.store, |snapshot| {
+        snapshot.operations().operation(&recorded[0].operation_id)
+    })
+    .expect("the router records the invocation outcome");
+    assert_eq!(
+        operation.state,
+        OperationState::ObservedComplete,
+        "{operation:?}"
+    );
+    let requests = a.model.as_ref().unwrap().0.lock().unwrap();
+    assert_eq!(requests.len(), 1, "{recorded:?}");
+    let body: Value = serde_json::from_slice(requests[0].body.as_deref().unwrap()).unwrap();
+    assert_eq!(body["fixture_codec"], true);
+    assert_eq!(body["model"], "fixture-model");
+}

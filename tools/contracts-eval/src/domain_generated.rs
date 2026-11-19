@@ -14,6 +14,52 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PackageContent {
+    pub package_id: Id,
+    pub contribution_id: Label,
+    pub content_kind: Label,
+    pub manifest_digest: Digest,
+    pub artifact: ArtifactRef,
+}
+impl Check for PackageContent {
+    fn check(&self) -> Result<(), String> {
+        self.package_id.check()?;
+        self.contribution_id.check()?;
+        self.content_kind.check()?;
+        self.manifest_digest.check()?;
+        self.artifact.check()?;
+        super::domain_rules::record(
+            "PackageContent",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PackageWorkflowGate {
+    pub package_id: Id,
+    pub contribution_id: Label,
+    pub manifest_digest: Digest,
+    pub reason: Content,
+}
+impl Check for PackageWorkflowGate {
+    fn check(&self) -> Result<(), String> {
+        self.package_id.check()?;
+        self.contribution_id.check()?;
+        self.manifest_digest.check()?;
+        self.reason.check()?;
+        super::domain_rules::record(
+            "PackageWorkflowGate",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 pub enum LifeState {
     Active,
     Archived,
@@ -23317,6 +23363,23 @@ pub enum DomainCommand {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         expected_digest: Option<Digest>,
     },
+    #[schemars(extend("x-since" = 9))]
+    #[serde(rename = "addons.read_content")]
+    AddonsReadContent {
+        package_id: Id,
+        contribution_id: Label,
+        manifest_digest: Digest,
+    },
+    #[schemars(extend("x-since" = 9))]
+    #[serde(rename = "addons.run_workflow")]
+    AddonsRunWorkflow {
+        workflow_id: Id,
+        package_id: Id,
+        contribution_id: Label,
+        manifest_digest: Digest,
+        input: ArtifactRef,
+        required_gates: Items<PackageWorkflowGate>,
+    },
     #[serde(rename = "help.generate_capability_docs")]
     HelpGenerateCapabilityDocs {
         registry_revision: Revision,
@@ -23804,6 +23867,8 @@ impl DomainCommand {
             Self::AddonsConfigure { .. } => "addons.configure",
             Self::AddonsPropose { .. } => "addons.propose",
             Self::AddonsInvoke { .. } => "addons.invoke",
+            Self::AddonsReadContent { .. } => "addons.read_content",
+            Self::AddonsRunWorkflow { .. } => "addons.run_workflow",
             Self::HelpGenerateCapabilityDocs { .. } => "help.generate_capability_docs",
             Self::WorkspaceRecordDiagnostic { .. } => "workspace.record_diagnostic",
             Self::WorkspaceBackup { .. } => "workspace.backup",
@@ -25499,6 +25564,30 @@ impl Check for DomainCommand {
                 input.check()?;
                 expected_digest.check()?;
             }
+            Self::AddonsReadContent {
+                package_id,
+                contribution_id,
+                manifest_digest,
+            } => {
+                package_id.check()?;
+                contribution_id.check()?;
+                manifest_digest.check()?;
+            }
+            Self::AddonsRunWorkflow {
+                workflow_id,
+                package_id,
+                contribution_id,
+                manifest_digest,
+                input,
+                required_gates,
+            } => {
+                workflow_id.check()?;
+                package_id.check()?;
+                contribution_id.check()?;
+                manifest_digest.check()?;
+                input.check()?;
+                required_gates.check()?;
+            }
             Self::HelpGenerateCapabilityDocs {
                 registry_revision,
                 expected_help_revision,
@@ -26295,6 +26384,12 @@ impl Revisioned for DomainCommand {
             Self::AddonsInvoke { .. } if revision < 8 => {
                 Err("operation predates its introduction".into())
             }
+            Self::AddonsReadContent { .. } if revision < 9 => {
+                Err("operation predates its introduction".into())
+            }
+            Self::AddonsRunWorkflow { .. } if revision < 9 => {
+                Err("operation predates its introduction".into())
+            }
             Self::NotificationsMarkRead { .. } if revision < 3 => {
                 Err("operation predates its introduction".into())
             }
@@ -26909,6 +27004,12 @@ pub enum OperationResult {
     #[schemars(extend("x-since" = 8))]
     #[serde(rename = "addons.invoke")]
     AddonsInvoke { value: PackageInvocation },
+    #[schemars(extend("x-since" = 9))]
+    #[serde(rename = "addons.read_content")]
+    AddonsReadContent { value: PackageContent },
+    #[schemars(extend("x-since" = 9))]
+    #[serde(rename = "addons.run_workflow")]
+    AddonsRunWorkflow { value: PackageInvocation },
     #[schemars(extend("x-since" = 8))]
     #[serde(rename = "addons.invocation")]
     AddonsInvocation { value: PackageInvocation },
@@ -27427,6 +27528,8 @@ impl OperationResult {
             Self::AddonsPropose { .. } => "addons.propose",
             Self::AddonsLogs { .. } => "addons.logs",
             Self::AddonsInvoke { .. } => "addons.invoke",
+            Self::AddonsReadContent { .. } => "addons.read_content",
+            Self::AddonsRunWorkflow { .. } => "addons.run_workflow",
             Self::AddonsInvocation { .. } => "addons.invocation",
             Self::HelpSearch { .. } => "help.search",
             Self::HelpRead { .. } => "help.read",
@@ -27813,6 +27916,8 @@ impl Check for OperationResult {
             Self::AddonsPropose { value } => value.check()?,
             Self::AddonsLogs { value } => value.check()?,
             Self::AddonsInvoke { value } => value.check()?,
+            Self::AddonsReadContent { value } => value.check()?,
+            Self::AddonsRunWorkflow { value } => value.check()?,
             Self::AddonsInvocation { value } => value.check()?,
             Self::HelpSearch { value } => value.check()?,
             Self::HelpRead { value } => value.check()?,
@@ -28158,6 +28263,12 @@ impl Revisioned for OperationResult {
                 Err("operation result predates its introduction".into())
             }
             Self::AddonsInvoke { .. } if revision < 8 => {
+                Err("operation result predates its introduction".into())
+            }
+            Self::AddonsReadContent { .. } if revision < 9 => {
+                Err("operation result predates its introduction".into())
+            }
+            Self::AddonsRunWorkflow { .. } if revision < 9 => {
                 Err("operation result predates its introduction".into())
             }
             Self::AddonsInvocation { .. } if revision < 8 => {

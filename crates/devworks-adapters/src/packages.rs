@@ -405,6 +405,24 @@ impl PackageInspector for BundleInspector {
         let mut access_set: Vec<String> =
             manifest.requested_permissions.iter().map(access).collect();
         for contribution in &manifest.contributions {
+            if let Contribution::ContextHook { meta, .. } = contribution {
+                access_set.push(format!("context-hook:{}", meta.id.as_str()));
+            }
+            if let Contribution::Content { meta, .. } = contribution {
+                access_set.push(format!("content:{}", meta.id.as_str()));
+            }
+            if let Contribution::Provider {
+                endpoint_ids,
+                profiles,
+                ..
+            } = contribution
+            {
+                for endpoint in endpoint_ids {
+                    for profile in profiles {
+                        access_set.push(format!("provider:{}:{profile:?}", endpoint.as_str()));
+                    }
+                }
+            }
             if let Contribution::EventHandler {
                 meta,
                 intent_commands,
