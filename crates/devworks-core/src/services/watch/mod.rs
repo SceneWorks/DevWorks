@@ -1934,9 +1934,10 @@ fn finish_in(
     watcher.revision += 1;
     watcher.outcome = Some(outcome);
     watcher.duration_ms = duration_ms;
-    if tail.is_some() {
-        watcher.output_tail = tail;
-        watcher.output_truncated = truncated;
+    if let Some(tail) = tail {
+        let (tail, cut) = keep_end(tail, MAX_WATCH_TAIL_BYTES);
+        watcher.output_tail = Some(tail);
+        watcher.output_truncated = truncated || cut;
     }
     if let Some(probe) = watcher.probe.as_mut() {
         probe.next_run_at_ms = None;

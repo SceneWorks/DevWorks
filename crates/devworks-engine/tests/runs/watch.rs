@@ -1729,6 +1729,53 @@ fn the_first_output_match_completes_a_process_watcher() {
 }
 
 #[test]
+fn a_process_match_settles_with_a_bounded_tail_after_redaction() {
+    let _native_case = native_runtime_case();
+    let fx = Fx::new();
+    let work = fx.h.root.with_extension("watch-expanded-tail-work");
+    std::fs::create_dir_all(work.join("work")).unwrap();
+    let work = work.canonicalize().unwrap();
+    runtime().block_on(async {
+        let (composed, _wired) = watch_composition(&fx, &work);
+        let app = Arc::new(boot(composed).await.unwrap());
+        let (ctx, _) = agent_context(&fx);
+        let watcher = command(
+            &app,
+            &ctx,
+            "watch.create",
+            json!({
+                "process": {
+                    "executableRef": "sh",
+                    "args": ["-c", "printf '%033000d\\nREADY\\n' 0; sleep 30"],
+                    "workingDirectory": {"rootId": "watch-root", "relative": "work"},
+                    "environment": [{"name": "WATCH_SECRET", "value": "0000"}],
+                    "profile": "Full",
+                    "timeoutMs": "60000",
+                    "outputLimitBytes": "4096"
+                },
+                "matching": {"pattern": "READY", "each": false},
+                "tailBytes": 65536
+            }),
+            "w-expanded-tail",
+        );
+        let watcher_id = watcher["id"].as_str().unwrap();
+        settle_all(&app, &ctx, &[watcher_id]).await;
+        let record = inspect(&app, &ctx, watcher_id);
+        assert_eq!(record["outcome"]["kind"], json!("Succeeded"), "{record}");
+        assert_eq!(record["outputTruncated"], json!(true), "{record}");
+        let stored = read(&**app.store(), |s| s.watchers().watcher(&id(watcher_id))).unwrap();
+        let tail = stored.output_tail.unwrap();
+        assert!(tail.len() <= devworks_core::ports::storage::MAX_WATCH_TAIL_BYTES);
+        assert!(tail.ends_with(b"\nREADY\n"));
+        assert!(String::from_utf8_lossy(&tail).contains("[REDACTED]"));
+        let process = watcher["process"]["processId"].as_str().unwrap();
+        let tree = read(&**app.store(), |s| s.resources().process(&id(process))).unwrap();
+        assert_eq!(tree.phase, ProcessPhase::Running);
+        app.shutdown().await;
+    });
+}
+
+#[test]
 fn a_process_match_observed_after_exit_keeps_the_final_tail() {
     let _native_case = native_runtime_case();
     let fx = Fx::new();
