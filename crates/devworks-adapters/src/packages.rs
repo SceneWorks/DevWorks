@@ -404,6 +404,18 @@ impl PackageInspector for BundleInspector {
         };
         let mut access_set: Vec<String> =
             manifest.requested_permissions.iter().map(access).collect();
+        for contribution in &manifest.contributions {
+            if let Contribution::EventHandler {
+                meta,
+                intent_commands,
+                ..
+            } = contribution
+            {
+                access_set.extend(intent_commands.iter().map(|command| {
+                    format!("event-intent:{}:{}", meta.id.as_str(), command.as_str())
+                }));
+            }
+        }
         access_set.sort();
         access_set.dedup();
         let contributions = manifest

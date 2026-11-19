@@ -2569,4 +2569,4 @@ impl CommandHandler for ArtifactService {
     }
 }
 
-pub(crate) use lifecycle::exact_reference_readable_in;
+pub use lifecycle::exact_reference_readable_in;

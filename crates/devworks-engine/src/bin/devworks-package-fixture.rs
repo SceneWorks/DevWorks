@@ -286,9 +286,34 @@ fn invoke(st: Arc<State>, id: Value, inv: Value, cancel: mpsc::Receiver<()>, pac
                 .ok()
                 .and_then(|b| serde_json::from_slice(&b).ok())
                 .unwrap_or(json!({}));
-            let mut params = ids;
+            let echo = |sequence: u64, event_id: &Value, receipt: &str| {
+                let mut params = ids.clone();
+                params["sequence"] = json!(sequence.to_string());
+                params["event"] = json!({
+                    "kind": "EventProcessed", "subscriptionId": commit["subscriptionId"],
+                    "eventId": event_id, "processingReceipt": receipt
+                });
+                st.out.send(&json!({
+                    "jsonrpc": "2.0", "method": "package.event", "params": params
+                }));
+            };
+            echo(1, &commit["eventId"], "unverified-receipt");
+            if commit["echoOnly"] == true {
+                finished(
+                    &st,
+                    &id,
+                    &inv,
+                    json!({"kind": "Completed", "artifacts": []}),
+                );
+                return;
+            }
+            let mut params = ids.clone();
             for (k, v) in commit.as_object().cloned().unwrap_or_default() {
-                params[k] = v;
+                params[k] = if v == "$input" {
+                    inv["input"].clone()
+                } else {
+                    v
+                };
             }
             let r = st.call("broker.commit_event", params.clone());
             st.progress(
@@ -300,6 +325,12 @@ fn invoke(st: Arc<State>, id: Value, inv: Value, cancel: mpsc::Receiver<()>, pac
                     r["result"]["stateRevision"].as_str().unwrap_or("-")
                 ),
             );
+            if let Some(receipt) = r["result"]["processingReceipt"].as_str() {
+                echo(2, &json!("other-event"), receipt);
+                echo(3, &commit["eventId"], "another-unverified-receipt");
+                echo(4, &commit["eventId"], receipt);
+                echo(5, &commit["eventId"], receipt);
+            }
             // An identical commit replays its receipt.
             let again = st.call("broker.commit_event", params);
             st.progress(
@@ -391,6 +422,28 @@ fn invoke(st: Arc<State>, id: Value, inv: Value, cancel: mpsc::Receiver<()>, pac
             commit["stateGeneration"] = inv["stateGeneration"].clone();
             commit["expectedStateRevision"] = snap["result"]["revision"].clone();
             commit["intents"] = json!([]);
+            let source = &event["event"]["event"];
+            if let Some(intent) = script["applicationIntent"].as_object()
+                && intent["triggerPackage"] == source["packageId"]
+                && let Some(revision) = source["registryRevision"].as_i64()
+            {
+                let arguments = json!({"command": {"kind": "Disable",
+                    "packageId": intent["targetPackage"], "expectedRegistryRevision": revision.to_string()}});
+                let bytes = arguments.to_string().into_bytes();
+                broker_call(
+                    "append-intent",
+                    json!({"kind": "ArtifactAppend", "writeId": "intent", "data": base64url(&bytes)}),
+                );
+                let published = broker_call(
+                    "publish-intent",
+                    json!({"kind": "ArtifactPublish", "writeId": "intent",
+                        "mediaType": "application/json", "sha256": sha256_hex(&bytes)}),
+                );
+                commit["intents"] = json!([{"actionKey": "app-intent", "call": {
+                    "kind": "Application", "operation": intent["operation"],
+                    "inputSchema": intent["inputSchema"], "arguments": published["result"]["artifact"]
+                }}]);
+            }
             let committed = st.call("broker.commit_event", commit);
             st.progress(&inv, 4, &format!("commit:{}", class(&committed)));
             finished(
@@ -399,6 +452,45 @@ fn invoke(st: Arc<State>, id: Value, inv: Value, cancel: mpsc::Receiver<()>, pac
                 &inv,
                 json!({"kind": "Completed", "artifacts": []}),
             );
+        }
+        "native-view" => {
+            let binding = json!({"processSessionId": inv["processSessionId"], "invocationId": inv["invocationId"],
+                "invocationToken": inv["invocationToken"]});
+            let call = |action: &str, data: Value| {
+                let mut params = binding.clone();
+                params["actionKey"] = json!(action);
+                params["call"] = data;
+                st.call("broker.call", params)
+            };
+            let content =
+                json!({"tables": { (format!("{package}/view-rows")): [{"result":"Available"}] }})
+                    .to_string();
+            let appended = call(
+                "view-append",
+                json!({"kind": "ArtifactAppend", "writeId":"view",
+                "data":base64url(content.as_bytes())}),
+            );
+            let published = call(
+                "view-publish",
+                json!({"kind":"ArtifactPublish", "writeId":"view",
+                "mediaType":"application/json", "sha256":sha256_hex(content.as_bytes())}),
+            );
+            if class(&appended) != "ArtifactAppended" || class(&published) != "BrokerCompleted" {
+                finished(
+                    &st,
+                    &id,
+                    &inv,
+                    json!({"kind":"Failed","code":"ViewPublicationFailed"}),
+                );
+                return;
+            }
+            let mut params = binding;
+            params["sequence"] = json!("1");
+            params["event"] =
+                json!({"kind":"ViewUpdate","revision":"1","data":published["result"]["artifact"]});
+            st.out
+                .send(&json!({"jsonrpc":"2.0","method":"package.event","params":params}));
+            finished(&st, &id, &inv, json!({"kind":"Completed","artifacts":[]}));
         }
         "call" => {
             let path = std::env::temp_dir().join(format!("devworks-fixture-{package}-call.json"));
@@ -421,6 +513,18 @@ fn invoke(st: Arc<State>, id: Value, inv: Value, cancel: mpsc::Receiver<()>, pac
                 if let Some(ms) = step["sleepMs"].as_u64() {
                     std::thread::sleep(std::time::Duration::from_millis(ms));
                 }
+                if let Some(grant) = step["credit"].as_object() {
+                    let stream_id = grant.get("streamId").unwrap_or(&inv["input"]["versionId"]);
+                    let token = grant.get("token").unwrap_or(&inv["invocationToken"]);
+                    let process = grant
+                        .get("processSessionId")
+                        .unwrap_or(&inv["processSessionId"]);
+                    st.out.send(&json!({"jsonrpc": "2.0", "method": "broker.streamCredit", "params": {
+                        "processSessionId": process, "invocationId": inv["invocationId"],
+                        "invocationToken": token, "streamId": stream_id, "sequence": grant["sequence"],
+                        "grantBytes": grant["bytes"]
+                    }}));
+                }
                 let mut call = step["call"].clone();
                 // `"$input"` names this invocation's input; `"$last"` the previous result.
                 for (k, v) in call.as_object().cloned().unwrap_or_default() {
@@ -441,6 +545,11 @@ fn invoke(st: Arc<State>, id: Value, inv: Value, cancel: mpsc::Receiver<()>, pac
                 if step["reportMessage"] == json!(true) {
                     text.push(':');
                     text.push_str(r["error"]["message"].as_str().unwrap_or(""));
+                }
+                if step["reportBytes"] == true
+                    && let Some(bytes) = r["result"]["data"].as_str().and_then(base64url_decode)
+                {
+                    text.push_str(&format!(":{}", bytes.len()));
                 }
                 st.progress(&inv, n as u64 + 1, &text);
                 if let Some(d) = r["result"].get("data") {
@@ -531,10 +640,15 @@ fn main() {
                 } else {
                     p["expectedManifestDigest"].clone()
                 };
+                let features = if mode == "credited-artifacts" {
+                    vec![devworks_extension_protocol::package::ARTIFACT_READ_CREDIT]
+                } else {
+                    Vec::new()
+                };
                 st.out.send(&result(
                     &id,
                     json!({"kind": "Initialized", "selected": p["offeredMax"],
-                    "manifestDigest": digest, "contributionIds": inventory, "features": []}),
+                    "manifestDigest": digest, "contributionIds": inventory, "features": features}),
                 ));
             }
             Some("host.activate") => {

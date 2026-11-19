@@ -92,27 +92,16 @@ impl PackageService {
             }
         }
         // The tool is a contribution whose verified descriptor is the approved one.
-        let Some((contribution, descriptor)) = inspection
+        let Some(descriptor) = inspection
             .contributions
             .iter()
             .find(|c| c.id == i.contribution_id.0.as_str() && c.kind == "Tool")
-            .and_then(|c| Some((c, c.descriptor.as_ref()?)))
+            .and_then(|c| c.verified_descriptor())
         else {
             return Ok(Err(unavailable));
         };
-        if crate::fingerprint::canonical_digest(descriptor)
-            .ok()
-            .as_deref()
-            != Some(contribution.contract_digest.as_str())
-        {
-            return Ok(Err(unavailable));
-        }
         // Its input schema is a document the package ships, whose bytes are the installed ones.
-        let schema_file = inspection
-            .schema_assets
-            .iter()
-            .find(|a| a.reference == descriptor["meta"]["inputSchema"])
-            .and_then(|a| inspection.files.iter().find(|f| f.path == a.path));
+        let schema_file = inspection.schema_file(&descriptor["meta"]["inputSchema"]);
         let Some(schema) =
             schema_file.and_then(|file| self.read_schema(&inspection.package_id, &digest, file))
         else {

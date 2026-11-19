@@ -69,18 +69,20 @@ pub mod events;
 pub mod http;
 pub mod inference;
 pub mod intents;
+pub mod native_ui;
 pub(crate) mod recovery;
 pub mod session;
+mod state_proposal;
 
 pub use discovery::{IndexPorts, RuntimePorts};
 
 use crate::package::{
-    CommitOutcome, CommitRefusal, IntentOrigin, PackageInvocation, commit_event_from,
+    CommitOutcome, CommitRefusal, IntentOrigin, PackageInvocation, commit_event_with_state_check,
 };
 use devworks_core::authority::destructive::{FilesystemResolver, ProtectedRoots};
 use devworks_core::context::{HostIngress, InvocationContext, PrincipalKind};
 use devworks_core::locks::LockExt;
-use devworks_core::ports::packages::{Inspection, PackageActivity, QuiescenceGuard};
+use devworks_core::ports::packages::{InspectedFile, Inspection, PackageActivity, QuiescenceGuard};
 use devworks_core::ports::process::ProcessSpec;
 use devworks_core::ports::storage::{
     ApplicationStore, ReadOptions, StorageError, StoredPackage, StoredPackageVersion, WriteOptions,
@@ -94,9 +96,9 @@ use devworks_core::services::process::{
     LaunchPolicy, LaunchRequest, OwnedProcess, ProcessSupervisor,
 };
 use devworks_extension_protocol::package::{
-    Activate, ActivateConfiguration, BrokerCall, Cancel, HostRequest, Initialize,
-    InvocationOutcome, InvocationScope, Invoke, PackageRequest, RpcErrorClass, RpcResult,
-    RpcVersion, Shutdown, StateAction, WireVersion,
+    ARTIFACT_READ_CREDIT, Activate, ActivateConfiguration, BrokerCall, Cancel, ContributionEvent,
+    HostRequest, Initialize, InvocationOutcome, InvocationScope, Invoke, PackageRequest,
+    RpcErrorClass, RpcResult, RpcVersion, Shutdown, StateAction, WireVersion,
 };
 use devworks_extension_protocol::scalars as wire;
 use serde_json::{Value, json};
@@ -239,6 +241,7 @@ impl Instance {
 #[derive(Clone)]
 pub enum InvocationKind {
     Ordinary,
+    NativeUi,
     /// A claimed event delivery: the host-resolved binding `broker.commit_event` checks.
     Event(Box<PackageInvocation>),
 }
@@ -249,6 +252,7 @@ struct SlotContext {
     /// Manifest digest of the version the invocation runs.
     manifest_digest: String,
     state_generation: i64,
+    state_document: Option<InspectedFile>,
     kind: InvocationKind,
     access: BTreeSet<String>,
     /// What `broker.call` may reach (resolved at admission).
@@ -406,6 +410,11 @@ impl InvocationHandle {
             s.progress.iter().map(|(_, t)| t.clone()).collect(),
             s.dropped_progress,
         )
+    }
+    /// The helper's bounded observations. Acceptance of effects stays with the host.
+    pub fn events(&self) -> (Vec<ContributionEvent>, i64) {
+        let state = self.run.slot.state.locked();
+        (state.events.clone(), state.dropped_events)
     }
     /// Waits up to `timeout` for the outcome.
     pub fn wait(&self, timeout: Duration) -> Option<InvokeOutcome> {
@@ -1414,13 +1423,13 @@ impl PackageHost {
             },
             left(),
         );
-        let (selected, manifest_digest, contributions) = match reply {
+        let (selected, manifest_digest, contributions, features) = match reply {
             Reply::Result(RpcResult::Initialized {
                 selected,
                 manifest_digest,
                 contribution_ids,
-                ..
-            }) => (selected, manifest_digest, contribution_ids),
+                features,
+            }) => (selected, manifest_digest, contribution_ids, features),
             Reply::Lost(why) => {
                 return Err((
                     "StartupTimeout",
@@ -1465,6 +1474,12 @@ impl PackageHost {
                 "the helper's contribution inventory differs from its manifest".into(),
             ));
         }
+        s.artifact_read_credit.store(
+            features
+                .iter()
+                .any(|feature| feature.as_str() == ARTIFACT_READ_CREDIT),
+            Ordering::SeqCst,
+        );
         let (registry, generation, config) = (
             inst.registry_revision,
             inst.key.generation,
@@ -1718,12 +1733,12 @@ impl PackageHost {
                         // and the watcher has not recorded it yet) is not admitted to: the
                         // admission waits for its restart like for any instance not yet ready.
                         Some(inst) if inst.serving() => {
-                            if !inst
-                                .inspection
-                                .contributions
-                                .iter()
-                                .any(|c| c.id == req.contribution_id)
-                            {
+                            if !inst.inspection.contributions.iter().any(|c| {
+                                c.id == req.contribution_id
+                                    && (!matches!(req.kind, InvocationKind::NativeUi)
+                                        || (c.kind == "NativeUi"
+                                            && c.verified_descriptor().is_some()))
+                            }) {
                                 return Err(InvokeRefusal::NoSuchContribution);
                             }
                             *b.in_flight.entry(req.package_id.clone()).or_default() += 1;
@@ -1803,6 +1818,7 @@ impl PackageHost {
             }
             k => k,
         };
+        let inspection = self.grant_inspection(&inst, &req.contribution_id);
         let slot = Arc::new(Slot {
             invocation_id: invocation_id.clone(),
             token: token.clone(),
@@ -1816,10 +1832,11 @@ impl PackageHost {
                 package_id: req.package_id.clone(),
                 manifest_digest: inst.key.digest.clone(),
                 state_generation: p.state_generation,
+                state_document: inspection.schema_file(&inspection.state_schema).cloned(),
                 kind,
                 access: inst.inspection.access.iter().cloned().collect(),
                 grants: broker::Grants::resolve(
-                    self.grant_inspection(&inst, &req.contribution_id),
+                    inspection,
                     &req.contribution_id,
                     req.principal.clone(),
                     &req.allowed_operations,
@@ -1829,6 +1846,9 @@ impl PackageHost {
                 writes: Mutex::default(),
             }),
         });
+        if session.artifact_read_credit.load(Ordering::SeqCst) {
+            slot.enable_artifact_credit(inst.inspection.limits.stream_credit_bytes);
+        }
         let (req_package, req_contribution) = (req.package_id.clone(), req.contribution_id.clone());
         let operation = req.operation_id.as_str().to_owned();
         let scope_json = serde_json::to_value(&req.scope).unwrap_or(Value::Null);
@@ -2168,6 +2188,19 @@ impl Broker for HostBroker {
         let event = matches!(ctx.kind, InvocationKind::Event(_));
         match request {
             PackageRequest::Call { params, .. } => {
+                if matches!(ctx.kind, InvocationKind::NativeUi)
+                    && !matches!(
+                        params.call,
+                        BrokerCall::ArtifactRead { .. }
+                            | BrokerCall::ArtifactAppend { .. }
+                            | BrokerCall::ArtifactPublish { .. }
+                    )
+                {
+                    return Err(rpc_error(
+                        RpcErrorClass::PermissionDenied,
+                        "a native view uses only invocation artifacts",
+                    ));
+                }
                 if event && effectful(&params.call) {
                     return Err(rpc_error(
                         RpcErrorClass::PermissionDenied,
@@ -2207,6 +2240,12 @@ impl Broker for HostBroker {
                         expected_revision,
                         proposal,
                     } => {
+                        if matches!(ctx.kind, InvocationKind::NativeUi) {
+                            return Err(rpc_error(
+                                RpcErrorClass::PermissionDenied,
+                                "loading a native view cannot change package state",
+                            ));
+                        }
                         if event {
                             return Err(rpc_error(
                                 RpcErrorClass::PermissionDenied,
@@ -2222,6 +2261,7 @@ impl Broker for HostBroker {
                         let expected: i64 = String::from(expected_revision.clone())
                             .parse()
                             .unwrap_or(-1);
+                        let proposal = state_proposal::prepare(&self.host, ctx, proposal)?;
                         self.cas_state(&ctx.package_id, pinned, expected, proposal, slot.clone())
                     }
                 }
@@ -2252,15 +2292,46 @@ impl Broker for HostBroker {
                     contribution_id: slot.contribution_id.clone(),
                     manifest_digest: ctx.manifest_digest.clone(),
                 };
+                let proposal = params
+                    .state_proposal
+                    .as_ref()
+                    .map(|value| state_proposal::prepare(&self.host, ctx, value));
+                let proposal_error = proposal
+                    .as_ref()
+                    .and_then(|prepared| prepared.as_ref().err())
+                    .cloned();
+                let commit_slot = slot.clone();
                 let outcome = run_write(&*self.host.store, WriteOptions::host_state(), move |tx| {
-                    let _guard = slot.state.locked();
-                    if slot.revoked.load(Ordering::SeqCst) {
+                    let _guard = commit_slot.state.locked();
+                    if commit_slot.revoked.load(Ordering::SeqCst) {
                         return Ok(CommitOutcome::Refused(CommitRefusal::StaleInvocation));
                     }
-                    commit_event_from(tx, &inv, Some(&origin), &commit)
+                    commit_event_with_state_check(tx, &inv, Some(&origin), &commit, |tx| {
+                        match proposal {
+                            Some(Ok(proposal)) => proposal.readable_in(tx),
+                            _ => Ok(false),
+                        }
+                    })
                 });
                 match outcome {
-                    Ok(CommitOutcome::Accepted(r)) | Ok(CommitOutcome::Replayed(r)) => Ok(r),
+                    Ok(CommitOutcome::Accepted(r)) | Ok(CommitOutcome::Replayed(r)) => {
+                        if let RpcResult::EventCommitAccepted {
+                            processing_receipt, ..
+                        } = &r
+                        {
+                            slot.record_event_receipt(
+                                params.subscription_id.clone(),
+                                params.event_id.clone(),
+                                processing_receipt.clone(),
+                            );
+                        }
+                        Ok(r)
+                    }
+                    Ok(CommitOutcome::Refused(CommitRefusal::UnverifiedStateProposal)) => {
+                        Err(proposal_error.unwrap_or_else(|| {
+                            commit_refused(&CommitRefusal::UnverifiedStateProposal)
+                        }))
+                    }
                     Ok(CommitOutcome::Refused(why)) => Err(commit_refused(&why)),
                     Err(e) => Err(broker::host_failure(
                         &self.host,
@@ -2309,11 +2380,10 @@ impl HostBroker {
         package: &str,
         generation: i64,
         expected: i64,
-        proposal: &wire::ArtifactRef,
+        proposal: state_proposal::Prepared,
         slot: Arc<Slot>,
     ) -> Result<RpcResult, devworks_extension_protocol::package::RpcError> {
         let pkg = package.to_owned();
-        let value = json!({"artifact": proposal});
         let written = run_write(&*self.host.store, WriteOptions::host_state(), move |tx| {
             let _guard = slot.state.locked();
             if slot.revoked.load(Ordering::SeqCst) {
@@ -2337,8 +2407,14 @@ impl HostBroker {
                 }
                 _ => {}
             }
+            if !proposal.readable_in(tx)? {
+                return Err(StorageError::LeaseLost {
+                    kind: "package_state_proposal",
+                    id: pkg.clone(),
+                });
+            }
             tx.packages()
-                .compare_and_set_state(&pkg, generation, expected, value)
+                .compare_and_set_state(&pkg, generation, expected, proposal.state())
         });
         match written {
             Ok(st) => Ok(snapshot(&st.state, generation, st.revision)),
@@ -2348,6 +2424,13 @@ impl HostBroker {
             }) => Err(rpc_error(
                 RpcErrorClass::PermissionDenied,
                 "the invocation is no longer live",
+            )),
+            Err(StorageError::LeaseLost {
+                kind: "package_state_proposal",
+                ..
+            }) => Err(rpc_error(
+                RpcErrorClass::PermissionDenied,
+                "the state proposal is no longer readable",
             )),
             Err(StorageError::LeaseLost { .. }) => Err(rpc_error(
                 RpcErrorClass::Conflict,
@@ -2372,6 +2455,10 @@ impl HostBroker {
 fn commit_refused(why: &CommitRefusal) -> devworks_extension_protocol::package::RpcError {
     let (class, message) = match why {
         CommitRefusal::Invalid(e) => (RpcErrorClass::ProtocolViolation, *e),
+        CommitRefusal::UnverifiedStateProposal => (
+            RpcErrorClass::PermissionDenied,
+            "the state proposal is outside this invocation or cannot be verified",
+        ),
         CommitRefusal::BindingMismatch => (
             RpcErrorClass::PermissionDenied,
             "the commit does not name this invocation's delivery",

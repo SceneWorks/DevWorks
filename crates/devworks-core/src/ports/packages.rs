@@ -82,6 +82,18 @@ pub struct InspectedContribution {
     pub languages: Vec<String>,
 }
 
+impl InspectedContribution {
+    /// Returns the descriptor that matches the inspected identity, kind and signed digest.
+    pub fn verified_descriptor(&self) -> Option<&Value> {
+        let descriptor = self.descriptor.as_ref()?;
+        (descriptor["meta"]["id"].as_str() == Some(self.id.as_str())
+            && descriptor["kind"].as_str() == Some(self.kind.as_str())
+            && crate::fingerprint::canonical_digest(descriptor)
+                .is_ok_and(|digest| digest == self.contract_digest))
+        .then_some(descriptor)
+    }
+}
+
 /// Requested resource limits (admission inputs, not OS containment).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -141,6 +153,15 @@ pub struct Inspection {
     pub configuration_schema_document: Option<Value>,
 }
 impl Inspection {
+    /// Finds the installed file for this exact manifest schema reference.
+    pub fn schema_file(&self, reference: &Value) -> Option<&InspectedFile> {
+        let asset = self
+            .schema_assets
+            .iter()
+            .find(|a| &a.reference == reference)?;
+        self.files.iter().find(|f| f.path == asset.path)
+    }
+
     /// Languages of every semantic contribution, sorted and unique.
     pub fn languages(&self) -> Vec<String> {
         let mut v: Vec<String> = self

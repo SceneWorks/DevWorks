@@ -350,7 +350,7 @@ fn run(
         .contributions
         .iter()
         .find(|c| c.id == target.contribution)
-        .and_then(|c| c.descriptor.as_ref())
+        .and_then(|c| c.verified_descriptor())
         .filter(|d| d["kind"] == "EventHandler")
         .is_some_and(|d| {
             d["eventSchemas"]

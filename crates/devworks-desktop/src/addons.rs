@@ -13,6 +13,8 @@
 //!
 //! Nothing here decides a rule: every action is a framed command the gateway admits, and a
 //! refusal is shown as the use case recorded it.
+pub(crate) mod views;
+
 use crate::paged::Paged;
 use crate::theme;
 use crate::widgets::{self, Tone};
@@ -62,6 +64,23 @@ pub enum AddonsAction {
         disabled: Vec<String>,
     },
     Logs(String),
+    LoadViews {
+        package: String,
+        digest: String,
+    },
+    RefreshView {
+        package: String,
+        digest: String,
+        view: String,
+        form: serde_json::Value,
+    },
+    ViewAction {
+        package: String,
+        digest: String,
+        view: String,
+        action: String,
+        form: serde_json::Value,
+    },
     OpenIndexing,
     /// Probe runtimes and refresh the signed package indexes.
     Discover,
@@ -93,6 +112,7 @@ pub struct AddonsScreen {
     project_bases: HashMap<String, (String, i64)>,
     config_bases: HashMap<String, (String, i64, SchemaRef)>,
     pub filter: String,
+    pub(crate) package_views: views::PackageViews,
     pub busy: bool,
     /// A configuration refusal whose field errors are being fetched: (package, diagnostic).
     pub awaiting: Option<(String, String)>,
@@ -350,6 +370,17 @@ impl AddonsScreen {
         );
         row(ui, "Requested access", list(&r.requested_access));
         row(ui, "Effective access", list(&r.effective_access));
+        let ui_granted = r
+            .effective_access
+            .as_ref()
+            .is_some_and(|access| access.0.iter().any(|entry| entry.0 == "ui"));
+        self.package_views.render(
+            ui,
+            r.id.as_str(),
+            r.digest.as_str(),
+            ui_granted && !self.busy,
+            actions,
+        );
         if let Some(p) = &r.prerequisites
             && !p.0.is_empty()
         {
@@ -807,6 +838,24 @@ pub fn lifecycle_frame(backend: &dyn Backend, command: AddonCommand) -> Vec<u8> 
             request_key: frame::request_key(backend)?,
             command,
         }))
+    })
+}
+pub fn invoke_view_action_frame(
+    backend: &dyn Backend,
+    package: &str,
+    digest: &str,
+    action: &str,
+    input: ArtifactRef,
+) -> Vec<u8> {
+    frame::with(backend, Negotiate::Latest, || {
+        Some(In::Addons(addons::Input::Invoke(addons::InvokeInput {
+            package_id: frame::id(package)?,
+            contribution_id: devworks_core::protocol::support::BoundedText(action.to_owned()),
+            input,
+            expected_digest: Some(
+                devworks_core::protocol::provider::Digest::try_from(digest.to_owned()).ok()?,
+            ),
+        })))
     })
 }
 pub fn configure_frame(
