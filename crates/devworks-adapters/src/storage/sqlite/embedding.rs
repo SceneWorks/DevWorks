@@ -19,8 +19,12 @@ const SUBJECT_COLUMNS: &str =
     "s.model_id,s.connection_id,s.upstream_model_id,s.created_connection_revision,s.created_at";
 // This is current persisted identity, not eligibility: offline/disabled pricing authoring
 // remains possible. Transport/qualification and the invocation's authority are separate owners.
-const CANDIDATE_IDENTITY: &str = "json_extract(c.body_json,'$.accountRevision')=e.account_revision AND json_extract(c.body_json,'$.accountDigest') IS e.account_digest AND json_extract(c.body_json,'$.endpoint')=e.endpoint";
-const KNOWN_EMBEDDING: &str = "e.profile='Embedding' AND EXISTS(SELECT 1 FROM json_each(e.discovered_json) d WHERE json_extract(d.value,'$.id')=s.upstream_model_id)";
+const CANDIDATE_IDENTITY: &str = "json_extract(c.body_json,'$.accountRevision')=e.account_revision AND \
+    json_extract(c.body_json,'$.accountDigest') IS e.account_digest AND \
+    json_extract(c.body_json,'$.endpoint')=e.endpoint";
+const KNOWN_EMBEDDING: &str = "e.profile='Embedding' AND EXISTS(SELECT 1 FROM \
+    json_each(e.discovered_json) d WHERE json_extract(d.value,\
+    '$.id')=s.upstream_model_id)";
 fn subject_row(
     row: &rusqlite::Row<'_>,
 ) -> rusqlite::Result<(String, String, String, i64, i64, Option<String>)> {
@@ -48,7 +52,11 @@ fn subject_of(
 }
 fn subject_selection() -> String {
     format!(
-        "SELECT {SUBJECT_COLUMNS},CASE WHEN {KNOWN_EMBEDDING} THEN (SELECT c.id FROM router_embedding_candidates c WHERE c.pricing_model_id=s.model_id AND {CANDIDATE_IDENTITY} ORDER BY c.id LIMIT 1) END FROM router_embedding_price_subjects s LEFT JOIN router_connections e ON e.id=s.connection_id"
+        "SELECT {SUBJECT_COLUMNS},CASE WHEN {KNOWN_EMBEDDING} THEN (SELECT c.id \
+            FROM router_embedding_candidates c WHERE c.pricing_model_id=s.model_id \
+            AND {CANDIDATE_IDENTITY} ORDER BY c.id LIMIT 1) END FROM \
+            router_embedding_price_subjects s LEFT JOIN router_connections e ON \
+            e.id=s.connection_id"
     )
 }
 pub(super) fn price_subject(
@@ -77,7 +85,10 @@ fn candidate_price_subject(
     id: &Id,
 ) -> Result<Option<StoredEmbeddingPriceSubject>, StorageError> {
     let sql = format!(
-        "SELECT {SUBJECT_COLUMNS},c.id FROM router_embedding_candidates c JOIN router_embedding_price_subjects s ON s.model_id=c.pricing_model_id JOIN router_connections e ON e.id=s.connection_id WHERE c.id=?1 AND {KNOWN_EMBEDDING} AND {CANDIDATE_IDENTITY}"
+        "SELECT {SUBJECT_COLUMNS},c.id FROM router_embedding_candidates c JOIN \
+            router_embedding_price_subjects s ON s.model_id=c.pricing_model_id JOIN \
+            router_connections e ON e.id=s.connection_id WHERE c.id=?1 AND \
+            {KNOWN_EMBEDDING} AND {CANDIDATE_IDENTITY}"
     );
     db(conn.query_row(&sql, [id.as_str()], subject_row).optional())?
         .map(subject_of)
@@ -114,10 +125,25 @@ fn qualification(
     conn: &Connection,
     id: &Id,
 ) -> Result<Option<StoredEmbeddingQualification>, StorageError> {
-    db(conn.query_row("SELECT body_json FROM router_embedding_qualifications WHERE candidate_id=?1 ORDER BY revision DESC LIMIT 1", [id.as_str()], |r| r.get::<_, String>(0)).optional())?.map(decode).transpose()
+    db(conn
+        .query_row(
+            "SELECT body_json FROM router_embedding_qualifications WHERE \
+        candidate_id=?1 ORDER BY revision DESC LIMIT 1",
+            [id.as_str()],
+            |r| r.get::<_, String>(0),
+        )
+        .optional())?
+    .map(decode)
+    .transpose()
 }
 fn selection(conn: &Connection) -> Result<StoredEmbeddingSelection, StorageError> {
-    let (revision, candidate_id, space_id): (i64, Option<String>, Option<String>) = db(conn.query_row("SELECT revision,candidate_id,space_id FROM router_embedding_selection ORDER BY revision DESC LIMIT 1", [], |r| Ok((r.get(0)?,r.get(1)?,r.get(2)?))))?;
+    let (revision, candidate_id, space_id): (i64, Option<String>, Option<String>) = db(conn
+        .query_row(
+            "SELECT revision,candidate_id,space_id FROM router_embedding_selection \
+        ORDER BY revision DESC LIMIT 1",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+        ))?;
     let id = |s: String| Id::new(s).map_err(|_| corrupt("embedding selection ID"));
     Ok(StoredEmbeddingSelection {
         revision,
@@ -148,10 +174,26 @@ fn validate(c: &StoredEmbeddingCandidate) -> Result<(), StorageError> {
     {
         return Err(invalid("invalid embedding candidate identity"));
     }
-    let model_identity = serde_json::json!({"version":1,"connectionId":c.connection_id,"endpointProfile":"Embedding","endpoint":c.endpoint,"accountRevision":c.account_revision.to_string(),"accountDigest":c.account_digest,"upstreamModelId":c.upstream_model_id});
+    let model_identity = serde_json::json!({
+        "version": 1,
+        "connectionId": c.connection_id,
+        "endpointProfile": "Embedding",
+        "endpoint": c.endpoint,
+        "accountRevision": c.account_revision.to_string(),
+        "accountDigest": c.account_digest,
+        "upstreamModelId": c.upstream_model_id
+    });
     let model = devworks_core::fingerprint::canonical_digest(&model_identity)
         .map_err(|_| invalid("embedding model identity"))?;
-    let expected_encoder = serde_json::json!({"version":1,"modelDigest":c.model_digest,"dimensions":c.dimensions,"dimensionMode":c.dimension_mode,"metric":c.metric,"elementType":c.element_type,"encodingFormat":"float"});
+    let expected_encoder = serde_json::json!({
+        "version": 1,
+        "modelDigest": c.model_digest,
+        "dimensions": c.dimensions,
+        "dimensionMode": c.dimension_mode,
+        "metric": c.metric,
+        "elementType": c.element_type,
+        "encodingFormat": "float"
+    });
     if model != c.model_digest
         || c.encoder_config != expected_encoder
         || c.space_id.as_str() != format!("embspace-{}", c.configuration_digest)
@@ -192,7 +234,21 @@ fn current_source(
     Ok(source)
 }
 fn append(conn: &Connection, q: &StoredEmbeddingQualification) -> Result<(), StorageError> {
-    db(conn.execute("INSERT INTO router_embedding_qualifications(candidate_id,revision,state,operation_id,body_json,updated_at) VALUES(?1,?2,?3,?4,?5,?6)",params![q.candidate_id.as_str(),q.revision,serde_json::to_value(q.state).map_err(|_|invalid("qualification state"))?.as_str().ok_or_else(||invalid("qualification state"))?,q.probe.as_ref().map(|p|p.operation_id.0.as_str()),encode(q)?,q.updated_at_ms]))?;
+    db(conn.execute(
+        "INSERT INTO router_embedding_qualifications(candidate_id,revision,state,\
+        operation_id,body_json,updated_at) VALUES(?1,?2,?3,?4,?5,?6)",
+        params![
+            q.candidate_id.as_str(),
+            q.revision,
+            serde_json::to_value(q.state)
+                .map_err(|_| invalid("qualification state"))?
+                .as_str()
+                .ok_or_else(|| invalid("qualification state"))?,
+            q.probe.as_ref().map(|p| p.operation_id.0.as_str()),
+            encode(q)?,
+            q.updated_at_ms
+        ],
+    ))?;
     Ok(())
 }
 fn checked_qualification(
@@ -223,21 +279,70 @@ fn next(q: &mut StoredEmbeddingQualification, now: i64) -> Result<(), StorageErr
     q.updated_at_ms = now;
     Ok(())
 }
-macro_rules! reads { ($t:ty) => { impl EmbeddingRead for $t {
-    fn embedding_price_subject(&self,id:&Id)->Result<Option<StoredEmbeddingPriceSubject>,StorageError>{price_subject(self.conn,id)}
-    fn embedding_price_subject_for_candidate(&self,id:&Id)->Result<Option<StoredEmbeddingPriceSubject>,StorageError>{candidate_price_subject(self.conn,id)}
-    fn embedding_price_subjects(&self,after:Option<&Id>,limit:u16)->Result<Vec<StoredEmbeddingPriceSubject>,StorageError>{price_subjects(self.conn,after,limit)}
-    fn embedding_inventory_revision(&self)->Result<i64,StorageError>{db(self.conn.query_row("SELECT revision FROM router_embedding_inventory WHERE singleton=1",[],|r|r.get(0)))}
-    fn embedding_candidate(&self,id:&Id)->Result<Option<StoredEmbeddingCandidate>,StorageError>{candidate(self.conn,id)}
-    fn embedding_candidates(&self,after:Option<&Id>,limit:u16)->Result<Vec<StoredEmbeddingCandidate>,StorageError>{
-        page_limit(limit)?;
-        let mut stmt=db(self.conn.prepare_cached("SELECT body_json FROM router_embedding_candidates WHERE id>?1 ORDER BY id LIMIT ?2"))?;
-        let rows=db(db(stmt.query_map(params![after.map_or("",Id::as_str),limit],|r|r.get::<_,String>(0)))?.collect::<rusqlite::Result<Vec<_>>>())?;
-        rows.into_iter().map(decode).collect()
-    }
-    fn embedding_qualification(&self,id:&Id)->Result<Option<StoredEmbeddingQualification>,StorageError>{qualification(self.conn,id)}
-    fn embedding_selection(&self)->Result<StoredEmbeddingSelection,StorageError>{selection(self.conn)}
-}}; }
+macro_rules! reads {
+    ($t:ty) => {
+        impl EmbeddingRead for $t {
+            fn embedding_price_subject(
+                &self,
+                id: &Id,
+            ) -> Result<Option<StoredEmbeddingPriceSubject>, StorageError> {
+                price_subject(self.conn, id)
+            }
+            fn embedding_price_subject_for_candidate(
+                &self,
+                id: &Id,
+            ) -> Result<Option<StoredEmbeddingPriceSubject>, StorageError> {
+                candidate_price_subject(self.conn, id)
+            }
+            fn embedding_price_subjects(
+                &self,
+                after: Option<&Id>,
+                limit: u16,
+            ) -> Result<Vec<StoredEmbeddingPriceSubject>, StorageError> {
+                price_subjects(self.conn, after, limit)
+            }
+            fn embedding_inventory_revision(&self) -> Result<i64, StorageError> {
+                db(self.conn.query_row(
+                    "SELECT revision FROM router_embedding_inventory WHERE singleton=1",
+                    [],
+                    |r| r.get(0),
+                ))
+            }
+            fn embedding_candidate(
+                &self,
+                id: &Id,
+            ) -> Result<Option<StoredEmbeddingCandidate>, StorageError> {
+                candidate(self.conn, id)
+            }
+            fn embedding_candidates(
+                &self,
+                after: Option<&Id>,
+                limit: u16,
+            ) -> Result<Vec<StoredEmbeddingCandidate>, StorageError> {
+                page_limit(limit)?;
+                let mut stmt = db(self.conn.prepare_cached(
+                    "SELECT body_json FROM router_embedding_candidates WHERE id>?1 ORDER BY \
+            id LIMIT ?2",
+                ))?;
+                let rows = db(db(stmt
+                    .query_map(params![after.map_or("", Id::as_str), limit], |r| {
+                        r.get::<_, String>(0)
+                    }))?
+                .collect::<rusqlite::Result<Vec<_>>>())?;
+                rows.into_iter().map(decode).collect()
+            }
+            fn embedding_qualification(
+                &self,
+                id: &Id,
+            ) -> Result<Option<StoredEmbeddingQualification>, StorageError> {
+                qualification(self.conn, id)
+            }
+            fn embedding_selection(&self) -> Result<StoredEmbeddingSelection, StorageError> {
+                selection(self.conn)
+            }
+        }
+    };
+}
 reads!(Snapshot<'_>);
 reads!(Unit<'_>);
 
@@ -300,8 +405,31 @@ impl EmbeddingRepository for Unit<'_> {
             return Err(invalid("embedding price subject identity collision"));
         }
         atomic(self.conn, || {
-            db(self.conn.execute("INSERT OR IGNORE INTO router_embedding_price_subjects(model_id,connection_id,upstream_model_id,created_connection_revision,created_at) VALUES(?1,?2,?3,?4,?5)",params![pricing_id.as_str(),c.connection_id.as_str(),c.upstream_model_id,source.revision,c.created_at_ms]))?;
-            db(self.conn.execute("INSERT INTO router_embedding_candidates(id,space_id,configuration_digest,pricing_model_id,body_json,created_at) VALUES(?1,?2,?3,?4,?5,?6)",params![c.id.as_str(),c.space_id.as_str(),c.configuration_digest,pricing_id.as_str(),encode(c)?,c.created_at_ms]))?;
+            db(self.conn.execute(
+                "INSERT OR IGNORE INTO router_embedding_price_subjects(model_id,\
+                connection_id,upstream_model_id,created_connection_revision,created_at) \
+                VALUES(?1,?2,?3,?4,?5)",
+                params![
+                    pricing_id.as_str(),
+                    c.connection_id.as_str(),
+                    c.upstream_model_id,
+                    source.revision,
+                    c.created_at_ms
+                ],
+            ))?;
+            db(self.conn.execute(
+                "INSERT INTO router_embedding_candidates(id,space_id,\
+                configuration_digest,pricing_model_id,body_json,created_at) VALUES(?1,\
+                ?2,?3,?4,?5,?6)",
+                params![
+                    c.id.as_str(),
+                    c.space_id.as_str(),
+                    c.configuration_digest,
+                    pricing_id.as_str(),
+                    encode(c)?,
+                    c.created_at_ms
+                ],
+            ))?;
             append(
                 self.conn,
                 &StoredEmbeddingQualification {
@@ -335,9 +463,22 @@ impl EmbeddingRepository for Unit<'_> {
         {
             return Err(StorageError::ScopeDenied);
         }
-        let reused:bool=db(self.conn.query_row(
-            "SELECT EXISTS(SELECT 1 FROM router_embedding_qualifications WHERE operation_id=?1 AND candidate_id<>?2) OR EXISTS(SELECT 1 FROM router_embedding_qualifications WHERE operation_id IS NOT NULL AND json_extract(body_json,'$.probe.requestId')=?3 AND operation_id<>?1) OR EXISTS(SELECT 1 FROM router_embedding_qualifications WHERE operation_id IS NOT NULL AND json_extract(body_json,'$.probe.admissionKey')=?4 AND operation_id<>?1)",
-            params![p.operation_id.0.as_str(),id.as_str(),p.request_id.as_str(),p.admission_key.as_str()],|r|r.get(0)))?;
+        let reused: bool = db(self.conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM router_embedding_qualifications WHERE \
+                operation_id=?1 AND candidate_id<>?2) OR EXISTS(SELECT 1 FROM \
+                router_embedding_qualifications WHERE operation_id IS NOT NULL AND \
+                json_extract(body_json,'$.probe.requestId')=?3 AND operation_id<>?1) OR \
+                EXISTS(SELECT 1 FROM router_embedding_qualifications WHERE operation_id \
+                IS NOT NULL AND json_extract(body_json,'$.probe.admissionKey')=?4 AND \
+                operation_id<>?1)",
+            params![
+                p.operation_id.0.as_str(),
+                id.as_str(),
+                p.request_id.as_str(),
+                p.admission_key.as_str()
+            ],
+            |r| r.get(0),
+        ))?;
         if reused {
             return Err(invalid(
                 "embedding probe identity already belongs to another intent",
@@ -516,7 +657,15 @@ impl EmbeddingRepository for Unit<'_> {
                 .as_ref()
                 .ok_or_else(|| invalid("embedding evidence absent"))?;
             check_evidence(self, id, &p, e, true)?;
-            let registered:Option<(String,i64,String,String)>=db(self.conn.query_row("SELECT model_digest,dimensions,metric,element_type FROM embedding_spaces WHERE id=?1",[c.space_id.as_str()],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?))).optional())?;
+            let registered: Option<(String, i64, String, String)> = db(self
+                .conn
+                .query_row(
+                    "SELECT model_digest,dimensions,metric,element_type FROM \
+                embedding_spaces WHERE id=?1",
+                    [c.space_id.as_str()],
+                    |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+                )
+                .optional())?;
             let identity = (
                 c.model_digest.clone(),
                 c.dimensions,
@@ -526,7 +675,17 @@ impl EmbeddingRepository for Unit<'_> {
             if registered.as_ref().is_some_and(|r| r != &identity) {
                 return Err(invalid("registered embedding space identity collision"));
             }
-            db(self.conn.execute("INSERT OR IGNORE INTO embedding_spaces(id,model_digest,dimensions,metric,element_type) VALUES(?1,?2,?3,?4,?5)",params![c.space_id.as_str(),c.model_digest,c.dimensions,c.metric,c.element_type]))?;
+            db(self.conn.execute(
+                "INSERT OR IGNORE INTO embedding_spaces(id,model_digest,dimensions,\
+                metric,element_type) VALUES(?1,?2,?3,?4,?5)",
+                params![
+                    c.space_id.as_str(),
+                    c.model_digest,
+                    c.dimensions,
+                    c.metric,
+                    c.element_type
+                ],
+            ))?;
         }
         if reason.is_some_and(|r| r.chars().count() > 65536 || r.contains('\0')) {
             return Err(invalid("embedding reason bound"));
@@ -593,7 +752,15 @@ impl EmbeddingRepository for Unit<'_> {
             .revision
             .checked_add(1)
             .ok_or_else(|| invalid("selection revision overflow"))?;
-        db(self.conn.execute("INSERT INTO router_embedding_selection(revision,candidate_id,space_id) VALUES(?1,?2,?3)",params![next,candidate.as_ref().map(|c|c.id.as_str()),candidate.as_ref().map(|c|c.space_id.as_str())]))?;
+        db(self.conn.execute(
+            "INSERT INTO router_embedding_selection(revision,candidate_id,space_id) \
+            VALUES(?1,?2,?3)",
+            params![
+                next,
+                candidate.as_ref().map(|c| c.id.as_str()),
+                candidate.as_ref().map(|c| c.space_id.as_str())
+            ],
+        ))?;
         selection(self.conn)
     }
 }

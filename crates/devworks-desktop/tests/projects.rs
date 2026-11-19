@@ -38,9 +38,12 @@ fn register(engine: &devworks_desktop::host::Engine, id: &str, name: &str) {
 }
 
 fn listed(backend: &dyn Backend, lifecycle: Option<&str>) -> Vec<ProjectRecord> {
-    ops::projects(backend.query("projects.list", &ops::projects_list(backend, lifecycle)))
-        .unwrap()
-        .0
+    ops::projects(backend.query(
+        "projects.list",
+        &ops::projects_list(backend, lifecycle, None),
+    ))
+    .unwrap()
+    .items
 }
 
 fn type_into(
@@ -191,10 +194,10 @@ fn a_project_is_created_changed_archived_and_deleted_through_the_shared_commands
     // Its repositories stay registered.
     let repos = ops::repositories(backend.query(
         "repositories.list",
-        &ops::repositories_list(&*backend, None),
+        &ops::repositories_list(&*backend, None, None),
     ))
     .unwrap()
-    .0;
+    .items;
     assert_eq!(repos.len(), 2);
     click(&mut h, Role::Button, "Deleted");
     assert!(has_text(&h, "Engine work 2"));
@@ -272,6 +275,83 @@ fn the_selected_project_narrows_repositories_and_its_base_directory_inherits_or_
     let mut h = harness(shell(&engine, &root, Script::default()), 1440.0, 900.0);
     settle(&mut h);
     assert_eq!(h.state().selected_project(), Some(made.id.0.as_str()));
+}
+
+#[test]
+fn a_repository_delivery_setting_is_set_for_that_repository_only_and_shows_its_source() {
+    let root = Root::new("projects-repository-delivery");
+    let engine = start(&root);
+    register(&engine, "repo-a", "engine");
+    register(&engine, "repo-b", "tools");
+    let backend = engine.backend();
+    let made = ops::project_changed(backend.command(
+        "projects.create",
+        &ops::project_create(&*backend, "Engine", "", &["repo-a".into(), "repo-b".into()]),
+    ))
+    .unwrap();
+    let project = made.id.0.as_str().to_owned();
+    let read = |repository: &str| {
+        ops::settings_entries(backend.query(
+            "settings.read_effective",
+            &ops::repository_settings_read(
+                &*backend,
+                &project,
+                repository,
+                &["delivery.autoMerge", "delivery.mandatoryReview"],
+            ),
+        ))
+        .unwrap()
+        .1
+    };
+    let source = |e: &devworks_core::protocol::records::SettingEntry| {
+        (
+            e.value.value.0.clone(),
+            e.source_repository_id
+                .as_ref()
+                .map(|r| r.as_str().to_owned()),
+        )
+    };
+    let mut h = harness(shell(&engine, &root, Script::default()), 1440.0, 900.0);
+    settle(&mut h);
+    click_nav(&mut h, "Repositories");
+    h.state_mut().select_project(Some(project.clone()));
+    settle(&mut h);
+    click_row(&mut h, "engine  ·");
+    settle(&mut h);
+    // Nothing is set anywhere: the built-in default shows, and the mandate is enforced.
+    assert!(has_text(&h, "Delivery settings for this repository"));
+    assert!(has_text(&h, "Effective: On · Source: Default"));
+    assert!(has_text(&h, "Enforced by DevWorks"));
+    // Turning Auto-Merge off for this repository saves a repository-scope revision.
+    click(&mut h, Role::CheckBox, "Auto-Merge");
+    click(&mut h, Role::Button, "Save repository delivery settings");
+    settle(&mut h);
+    assert!(has_text(
+        &h,
+        "Effective: Off · Source: Repository (revision 2)"
+    ));
+    let own = read("repo-a");
+    assert_eq!(
+        source(&own[0]),
+        (serde_json::json!(false), Some("repo-a".into()))
+    );
+    // The mandate is read-only whatever the repository says.
+    assert_eq!(source(&own[1]), (serde_json::json!(true), None));
+    // The other repository of the project, and the project itself, keep the default.
+    assert_eq!(source(&read("repo-b")[0]), (serde_json::json!(true), None));
+    let project_level = ops::settings_entries(backend.query(
+        "settings.read_effective",
+        &ops::project_settings_read(&*backend, &project, &["delivery.autoMerge"]),
+    ))
+    .unwrap()
+    .1;
+    assert_eq!(project_level[0].value.value.0, serde_json::json!(true));
+    // Using the project value again clears the repository's own value.
+    click(&mut h, Role::Button, "Use the project value for Auto-Merge");
+    click(&mut h, Role::Button, "Save repository delivery settings");
+    settle(&mut h);
+    assert!(has_text(&h, "Effective: On · Source: Default"));
+    assert_eq!(source(&read("repo-a")[0]), (serde_json::json!(true), None));
 }
 
 #[test]

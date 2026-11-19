@@ -2,20 +2,36 @@
 //! written as a complete tree beside the live one and swapped in with renames, so a reader sees
 //! the old or the new tree. Nothing outside this root is ever written; shared skill folders are
 //! only read, through the source-tree adapter.
+use devworks_core::locks::LockExt;
 use devworks_core::ports::skill_files::{SkillFile, SkillFileFault, SkillFiles};
 use std::collections::HashSet;
 use std::fs::{self, File};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
+
+/// Folder under the data root holding one skill store per project. It sits beside, not inside,
+/// the workspace skill folder, so a project's folder is never read as a workspace skill.
+pub const PROJECT_SKILLS_DIR: &str = "project-skills";
 
 pub struct NativeSkillFiles {
     root: PathBuf,
+    /// The folder holding one skill store per project; `None` keeps no project skills.
+    projects: Option<PathBuf>,
 }
 impl NativeSkillFiles {
     pub fn new(root: impl Into<PathBuf>) -> Self {
-        Self { root: root.into() }
+        Self {
+            root: root.into(),
+            projects: None,
+        }
+    }
+    /// Also keeps project skills, one store per project beneath `projects`. It must not lie
+    /// inside the workspace root, or its folders would be read as workspace skills.
+    pub fn with_projects(mut self, projects: impl Into<PathBuf>) -> Self {
+        self.projects = Some(projects.into());
+        self
     }
 }
 
@@ -190,8 +206,7 @@ static NEXT_SWAP: AtomicU64 = AtomicU64::new(0);
 static ACTIVE: Mutex<Option<HashSet<(PathBuf, String)>>> = Mutex::new(None);
 fn is_active(root: &Path, tag: &str) -> bool {
     ACTIVE
-        .lock()
-        .unwrap_or_else(|p| p.into_inner())
+        .locked()
         .as_ref()
         .is_some_and(|set| set.contains(&(root.to_path_buf(), tag.to_string())))
 }
@@ -200,17 +215,13 @@ struct ActiveSwap(PathBuf, String);
 impl ActiveSwap {
     fn new(root: &Path, tag: &str) -> Self {
         let key = (root.to_path_buf(), tag.to_string());
-        ACTIVE
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .get_or_insert_with(HashSet::new)
-            .insert(key);
+        ACTIVE.locked().get_or_insert_with(HashSet::new).insert(key);
         Self(root.to_path_buf(), tag.to_string())
     }
 }
 impl Drop for ActiveSwap {
     fn drop(&mut self) {
-        if let Some(set) = ACTIVE.lock().unwrap_or_else(|p| p.into_inner()).as_mut() {
+        if let Some(set) = ACTIVE.locked().as_mut() {
             set.remove(&(self.0.clone(), self.1.clone()));
         }
     }
@@ -306,6 +317,37 @@ impl SkillFiles for NativeSkillFiles {
                 .iter()
                 .any(|f| f.eq_ignore_ascii_case(u) || within(u, f) || within(f, u))
         }))
+    }
+    fn project(&self, project: &str) -> Option<Arc<dyn SkillFiles>> {
+        if !valid_segment(project) || project.starts_with('.') {
+            return None;
+        }
+        Some(Arc::new(NativeSkillFiles::new(
+            self.projects.as_ref()?.join(project),
+        )))
+    }
+    fn project_folders(&self) -> Result<Vec<String>, SkillFileFault> {
+        let Some(projects) = &self.projects else {
+            return Ok(Vec::new());
+        };
+        let entries = match fs::read_dir(projects) {
+            Ok(entries) => entries,
+            Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(e) => return Err(io_fault(e)),
+        };
+        let mut found = Vec::new();
+        for entry in entries {
+            let entry = entry.map_err(io_fault)?;
+            let is_dir = entry.file_type().map_err(io_fault)?.is_dir();
+            if let Some(name) = entry.file_name().to_str()
+                && is_dir
+                && !name.starts_with('.')
+            {
+                found.push(name.to_owned());
+            }
+        }
+        found.sort();
+        Ok(found)
     }
     fn root(&self) -> Result<PathBuf, SkillFileFault> {
         fs::create_dir_all(&self.root).map_err(io_fault)?;
@@ -744,5 +786,32 @@ mod tests {
             .collect();
         assert_eq!(leftovers, ["demo"]);
         remove_tree(&root).unwrap();
+    }
+
+    #[test]
+    fn project_stores_are_separate_and_listed() {
+        let root = temp();
+        let files = NativeSkillFiles::new(root.join("skills")).with_projects(root.join("projects"));
+        let one = files.project("project-a").expect("project store");
+        let file = |text: &str| SkillFile {
+            path: "SKILL.md".into(),
+            bytes: text.as_bytes().to_vec(),
+            executable: false,
+        };
+        one.materialize("deploy", &[file("A")]).unwrap();
+        assert_eq!(
+            fs::read(root.join("projects/project-a/deploy/SKILL.md")).unwrap(),
+            b"A"
+        );
+        assert!(!root.join("skills/deploy").exists());
+        files.project("project-b").unwrap().root().unwrap();
+        assert_eq!(files.project_folders().unwrap(), ["project-a", "project-b"]);
+        // Names that could leave the store are refused, and a host without project skills has none.
+        assert!(files.project("../x").is_none() && files.project(".hidden").is_none());
+        assert!(
+            NativeSkillFiles::new(root.join("other"))
+                .project("project-a")
+                .is_none()
+        );
     }
 }

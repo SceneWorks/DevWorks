@@ -357,11 +357,15 @@ fn every_shipped_migration_matches_its_recorded_checksum() {
         assert_eq!(
             m.checksum(),
             m.expected_sha256,
-            "migration {} text differs from its recorded checksum. A shipped migration is \
-             immutable: every store that applied it would refuse to open, so revert the edit and \
-             add a new migration instead. Only a migration that has never been released may change; \
-             then set `expected_sha256` of version {} in MIGRATIONS \
-             (crates/devworks-adapters/src/storage/sqlite/migrations.rs) to the new value.",
+            "migration {} text differs from its recorded checksum. A shipped \
+                migration is \
+                immutable: every store that applied it would refuse to open, so revert \
+                the edit and \
+                add a new migration instead. Only a migration that has never been \
+                released may change; \
+                then set `expected_sha256` of version {} in MIGRATIONS \
+                (crates/devworks-adapters/src/storage/sqlite/migrations.rs) to the new \
+                value.",
             m.version,
             m.version,
         );
@@ -405,7 +409,8 @@ fn migration_one_is_exactly_the_adopted_schema_fixture() {
     let has_column: bool = h
         .raw()
         .query_row(
-            "SELECT EXISTS(SELECT 1 FROM pragma_table_info('queue_entries') WHERE name='claim_boot_id')",
+            "SELECT EXISTS(SELECT 1 FROM pragma_table_info('queue_entries') WHERE \
+                name='claim_boot_id')",
             [],
             |r| r.get(0),
         )
@@ -433,10 +438,19 @@ fn migration_three_upgrades_existing_deliveries() {
     // Seed a v1 delivery row directly (v1 has no partition/sequence columns).
     let c = h.raw();
     c.execute_batch(
-        "INSERT INTO events(id,actor_id,aggregate_kind,aggregate_id,aggregate_revision,kind,created_at,payload_json) VALUES('ev-old','host','fixture','a',1,'Old',0,'{}');
-         INSERT INTO events(id,actor_id,aggregate_kind,aggregate_id,aggregate_revision,kind,created_at,payload_json) VALUES('ev-v1','host','fixture','a',1,'Changed',0,'{}');
-         INSERT INTO queue_entries(id,consumer,event_id,priority,ready_at,state,payload_json) VALUES('q-v1','work','ev-v1',0,0,'Ready','{}');
-         INSERT INTO queue_entries(id,consumer,event_id,priority,ready_at,state,payload_json) VALUES('q-failed','work','ev-old',0,7,'Failed','{}');",
+        "INSERT INTO events(id,actor_id,aggregate_kind,aggregate_id,\
+            aggregate_revision,kind,created_at,payload_json) VALUES('ev-old','host',\
+            'fixture','a',1,'Old',0,'{}');
+         INSERT INTO events(id,actor_id,\
+            aggregate_kind,aggregate_id,aggregate_revision,kind,created_at,\
+            payload_json) VALUES('ev-v1','host','fixture','a',1,'Changed',0,\
+            '{}');
+         INSERT INTO queue_entries(id,consumer,event_id,priority,\
+            ready_at,state,payload_json) VALUES('q-v1','work','ev-v1',0,0,'Ready',\
+            '{}');
+         INSERT INTO queue_entries(id,consumer,event_id,priority,\
+            ready_at,state,payload_json) VALUES('q-failed','work','ev-old',0,7,\
+            'Failed','{}');",
     )
     .unwrap();
     drop(c);
@@ -498,7 +512,11 @@ fn every_shipped_table_is_strict_and_its_foreign_keys_resolve() {
     drop(h.store());
     let c = h.raw();
     let tables: Vec<(String, bool)> = c
-        .prepare("SELECT name,strict FROM pragma_table_list WHERE schema='main' AND type='table' AND name NOT LIKE 'sqlite_%' AND name NOT LIKE 'search_fts_%' ORDER BY name")
+        .prepare(
+            "SELECT name,strict FROM pragma_table_list WHERE schema='main' AND \
+            type='table' AND name NOT LIKE 'sqlite_%' AND name NOT LIKE \
+            'search_fts_%' ORDER BY name",
+        )
         .unwrap()
         .query_map([], |r| Ok((r.get(0)?, r.get::<_, i64>(1)? == 1)))
         .unwrap()
@@ -509,7 +527,10 @@ fn every_shipped_table_is_strict_and_its_foreign_keys_resolve() {
     for (table, strict) in &tables {
         assert!(*strict, "{table} is not STRICT");
         let fks: Vec<(i64, String, String, Option<String>)> = c
-            .prepare(&format!("SELECT id,\"table\",\"from\",\"to\" FROM pragma_foreign_key_list('{table}') ORDER BY id,seq"))
+            .prepare(&format!(
+                "SELECT id,\"table\",\"from\",\"to\" FROM \
+                pragma_foreign_key_list('{table}') ORDER BY id,seq"
+            ))
             .unwrap()
             .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))
             .unwrap()
@@ -639,16 +660,31 @@ fn upgraded_store_drops_unwritten_tables_keeps_rebuilt_rows_and_indexes_capabili
     h.raw()
         .execute_batch(
             "INSERT INTO actors VALUES('human-a','human','Human');
-             INSERT INTO projects VALUES('project-a','A','Active',1,1,1);
-             INSERT INTO work_items(id,project_id,kind,title,priority,manual_order,revision,scope_revision,created_at,brief_json)
-               VALUES('feature-a','project-a','feature','F',1,0,1,1,1,'{}');
-             INSERT INTO feature_plans(feature_id,revision,approved_plan_json,approved_by,approved_at,pending_plan_json,pending_revision)
-               VALUES('feature-a',3,'{\"a\":1}','human-a',5,'{\"b\":2}',4);
-             INSERT INTO conversations VALUES('conv-a','feature-a',0);
-             INSERT INTO sessions(id,conversation_id,agent_id,root_id,context_epoch,revision,project_id,created_at)
-               VALUES('session-a','conv-a','human-a','feature-a',0,1,'project-a',1);
-             INSERT INTO transcript_chunks(session_id,seq,kind,payload_json,entry_id,batch_id,context_epoch,actor_id,created_at)
-               VALUES('session-a',1,'Message','{\"text\":\"kept\"}','entry-a','batch-a',2,'human-a',7);",
+             \
+                INSERT INTO projects VALUES('project-a','A','Active',1,1,\
+                1);
+             INSERT INTO work_items(id,project_id,kind,title,\
+                priority,manual_order,revision,scope_revision,created_at,\
+                brief_json)
+               VALUES('feature-a','project-a','feature','F',\
+                1,0,1,1,1,'{}');
+             INSERT INTO feature_plans(feature_id,\
+                revision,approved_plan_json,approved_by,approved_at,pending_plan_json,\
+                pending_revision)
+               VALUES('feature-a',3,'{\"a\":1}',\
+                'human-a',5,'{\"b\":2}',4);
+             INSERT INTO conversations \
+                VALUES('conv-a','feature-a',0);
+             INSERT INTO sessions(id,\
+                conversation_id,agent_id,root_id,context_epoch,revision,project_id,\
+                created_at)
+               VALUES('session-a','conv-a','human-a',\
+                'feature-a',0,1,'project-a',1);
+             INSERT INTO \
+                transcript_chunks(session_id,seq,kind,payload_json,entry_id,batch_id,\
+                context_epoch,actor_id,created_at)
+               VALUES('session-a',1,\
+                'Message','{\"text\":\"kept\"}','entry-a','batch-a',2,'human-a',7);",
         )
         .unwrap();
     drop(SqliteStore::open_with(h.config(), MIGRATIONS).unwrap());
@@ -681,9 +717,19 @@ fn upgraded_store_drops_unwritten_tables_keeps_rebuilt_rows_and_indexes_capabili
     assert!(!columns("transcript_chunks").contains(&"provider_attempt_id".to_owned()));
     let plan: (i64, String, String, i64, String, i64) = c
         .query_row(
-            "SELECT revision,approved_plan_json,approved_by,approved_at,pending_plan_json,pending_revision FROM feature_plans",
+            "SELECT revision,approved_plan_json,approved_by,approved_at,\
+                pending_plan_json,pending_revision FROM feature_plans",
             [],
-            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?)),
+            |r| {
+                Ok((
+                    r.get(0)?,
+                    r.get(1)?,
+                    r.get(2)?,
+                    r.get(3)?,
+                    r.get(4)?,
+                    r.get(5)?,
+                ))
+            },
         )
         .unwrap();
     assert_eq!(
@@ -699,9 +745,19 @@ fn upgraded_store_drops_unwritten_tables_keeps_rebuilt_rows_and_indexes_capabili
     );
     let chunk: (String, String, String, i64, String, i64) = c
         .query_row(
-            "SELECT payload_json,entry_id,batch_id,context_epoch,actor_id,created_at FROM transcript_chunks WHERE session_id='session-a' AND seq=1",
+            "SELECT payload_json,entry_id,batch_id,context_epoch,actor_id,created_at \
+                FROM transcript_chunks WHERE session_id='session-a' AND seq=1",
             [],
-            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?)),
+            |r| {
+                Ok((
+                    r.get(0)?,
+                    r.get(1)?,
+                    r.get(2)?,
+                    r.get(3)?,
+                    r.get(4)?,
+                    r.get(5)?,
+                ))
+            },
         )
         .unwrap();
     assert_eq!(
@@ -767,27 +823,61 @@ fn upgrade_counts_knowledge_tallies_and_moves_each_mcp_catalog_apart() {
     h.raw()
         .execute_batch(&format!(
             "INSERT INTO actors VALUES('human-a','human','Human');
-             INSERT INTO projects VALUES('project-a','A','Active',1,1,1);
-             INSERT INTO work_items(id,project_id,kind,title,priority,manual_order,revision,scope_revision,created_at,brief_json)
-               VALUES('feature-a','project-a','feature','F',1,0,1,1,1,'{{}}');
-             INSERT INTO conversations VALUES('conv-a','feature-a',0);
-             INSERT INTO conversations VALUES('conv-b','feature-a',0);
-             INSERT INTO sessions(id,conversation_id,agent_id,root_id,context_epoch,revision,project_id,created_at)
-               VALUES('session-a','conv-a','human-a','feature-a',0,1,'project-a',1);
-             INSERT INTO sessions(id,conversation_id,agent_id,root_id,context_epoch,revision,project_id,created_at)
-               VALUES('session-b','conv-b','human-a','feature-a',0,1,'project-a',1);
-             INSERT INTO knowledge_entities(id,scope_key,revision,label,entity_type,aliases_json,canonical_key,author_id,created_at,updated_at)
-               VALUES('entity-a','workspace',1,'Habits','topic','[]','topic|habits','human-a',1,1);
-             INSERT INTO knowledge_claims(id,scope_key,revision,kind,entry_kind,lifecycle,subject_id,predicate,author_id,created_at,updated_at,body_json)
-               VALUES('claim-a','workspace',1,'Fact','Fact','Active','entity-a','states','human-a',1,1,'{{}}');
-             INSERT INTO knowledge_deliveries VALUES('session-a','claim-a',1,5),('session-a','claim-a',2,9),('session-b','claim-a',1,7);
-             INSERT INTO knowledge_lesson_events(claim_id,event_key,source,actor_id,at,write_id)
-               VALUES('claim-a','Prompt|1','Prompt','human-a',1,'w1'),('claim-a','Prompt|2','Prompt','human-a',2,'w2');
-             INSERT INTO knowledge_challenges(id,claim_id,state,reason,evidence_json,author_id,opened_at,resolved_at,resolved_by,resolution)
-               VALUES('ch-1','claim-a','Open','r','[]','human-a',1,NULL,NULL,NULL),
-                     ('ch-2','claim-a','Retired','r','[]','human-a',1,2,'human-a','done');
-             INSERT INTO configuration_revisions VALUES('workspace','outgoing_mcp',2,1,'{blob}');
-             INSERT INTO effective_configuration VALUES('workspace','outgoing_mcp',2);"
+             \
+                INSERT INTO projects VALUES('project-a','A','Active',1,1,\
+                1);
+             INSERT INTO work_items(id,project_id,kind,title,\
+                priority,manual_order,revision,scope_revision,created_at,\
+                brief_json)
+               VALUES('feature-a','project-a','feature','F',\
+                1,0,1,1,1,'{{}}');
+             INSERT INTO conversations \
+                VALUES('conv-a','feature-a',0);
+             INSERT INTO conversations \
+                VALUES('conv-b','feature-a',0);
+             INSERT INTO sessions(id,\
+                conversation_id,agent_id,root_id,context_epoch,revision,project_id,\
+                created_at)
+               VALUES('session-a','conv-a','human-a',\
+                'feature-a',0,1,'project-a',1);
+             INSERT INTO sessions(id,\
+                conversation_id,agent_id,root_id,context_epoch,revision,project_id,\
+                created_at)
+               VALUES('session-b','conv-b','human-a',\
+                'feature-a',0,1,'project-a',1);
+             INSERT INTO \
+                knowledge_entities(id,scope_key,revision,label,entity_type,aliases_json,\
+                canonical_key,author_id,created_at,updated_at)
+               \
+                VALUES('entity-a','workspace',1,'Habits','topic','[]','topic|habits',\
+                'human-a',1,1);
+             INSERT INTO knowledge_claims(id,scope_key,\
+                revision,kind,entry_kind,lifecycle,subject_id,predicate,author_id,\
+                created_at,updated_at,body_json)
+               VALUES('claim-a',\
+                'workspace',1,'Fact','Fact','Active','entity-a','states','human-a',1,1,\
+                '{{}}');
+             INSERT INTO knowledge_deliveries \
+                VALUES('session-a','claim-a',1,5),('session-a','claim-a',2,9),\
+                ('session-b','claim-a',1,7);
+             INSERT INTO \
+                knowledge_lesson_events(claim_id,event_key,source,actor_id,at,\
+                write_id)
+               VALUES('claim-a','Prompt|1','Prompt','human-a',\
+                1,'w1'),('claim-a','Prompt|2','Prompt','human-a',2,'w2');
+             \
+                INSERT INTO knowledge_challenges(id,claim_id,state,reason,evidence_json,\
+                author_id,opened_at,resolved_at,resolved_by,resolution)
+               \
+                VALUES('ch-1','claim-a','Open','r','[]','human-a',1,NULL,NULL,\
+                NULL),
+                     ('ch-2','claim-a','Retired','r','[]',\
+                'human-a',1,2,'human-a','done');
+             INSERT INTO \
+                configuration_revisions VALUES('workspace','outgoing_mcp',2,1,\
+                '{blob}');
+             INSERT INTO effective_configuration \
+                VALUES('workspace','outgoing_mcp',2);"
         ))
         .unwrap();
     let s = SqliteStore::open_with(h.config(), MIGRATIONS).unwrap();
@@ -846,6 +936,114 @@ fn upgrade_counts_knowledge_tallies_and_moves_each_mcp_catalog_apart() {
         let mut expected = catalog(name);
         expected["retired"] = json!({});
         assert_eq!((moved.revision, moved.body), (2, expected));
+    }
+}
+
+/// Migration 62 on a store with skills and lessons already in it: every existing row is kept,
+/// no revision has a link, and a link between an existing revision and lesson is then recorded
+/// and read from both sides. A link to a lesson or revision that does not exist is refused.
+#[test]
+fn upgrade_adds_revision_lesson_links_beside_existing_skills_and_lessons() {
+    let h = Harness::new();
+    drop(SqliteStore::open_with(h.config(), &through(61)).unwrap());
+    let has_table = |name: &str| -> bool {
+        h.raw()
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM sqlite_schema WHERE name=?1)",
+                [name],
+                |r| r.get(0),
+            )
+            .unwrap()
+    };
+    assert!(!has_table("instruction_revision_lessons"));
+    h.raw()
+        .execute_batch(
+            "INSERT INTO actors VALUES('human-a','human','Human');
+             \
+                INSERT INTO knowledge_entities(id,scope_key,revision,label,entity_type,\
+                aliases_json,canonical_key,author_id,created_at,\
+                updated_at)
+               VALUES('entity-a','workspace',1,'Habits',\
+                'topic','[]','topic|habits','human-a',1,1);
+             INSERT INTO \
+                knowledge_claims(id,scope_key,revision,kind,entry_kind,lifecycle,\
+                subject_id,predicate,author_id,created_at,updated_at,body_json,\
+                rule_state,lesson_source)
+               VALUES('lesson-a','workspace',\
+                1,'Lesson','Lesson','Active','entity-a','lesson','human-a',1,1,'{}',\
+                'Candidate','Prompt');
+             INSERT INTO instructions(id,kind,\
+                name,scope_key,project_id,origin,root_path,source_path,latest_revision,\
+                active_revision,enabled,present,version,created_at,updated_at,\
+                confined_project_id)
+               VALUES('skill-a','Skill','deploy',\
+                'workspace',NULL,'Harness','/r','/r/skill-a',2,2,1,1,1,0,0,\
+                NULL);
+             INSERT INTO instruction_revisions(instruction_id,\
+                revision,content_json,content_digest,state,author,origin_json,\
+                resources_json,applicability_json,created_at)
+               \
+                VALUES('skill-a',1,'{}',replace(hex(zeroblob(32)),'0','a'),'Approved',\
+                'human-a','{}','[]','[]',0),
+                     ('skill-a',2,'{}',\
+                replace(hex(zeroblob(32)),'0','b'),'Approved','human-a','{}','[]','[]',\
+                0);",
+        )
+        .unwrap();
+    let s = SqliteStore::open_with(h.config(), MIGRATIONS).unwrap();
+    assert!(has_table("instruction_revision_lessons"));
+    let id = |s: &str| Id::new(s).unwrap();
+    let (skill, lesson) = (id("skill-a"), id("lesson-a"));
+    let existing = read_snapshot(&s, &ReadOptions::default(), |r| {
+        let revisions = r.instructions().instruction_revisions(&skill, None, 10)?;
+        let linked = r.instructions().instruction_revision_lessons(&skill, 2)?;
+        let by_lesson = r
+            .instructions()
+            .lesson_instruction_revisions(&lesson, None, 10)?;
+        Ok((revisions.len(), linked, by_lesson))
+    })
+    .unwrap();
+    assert_eq!(existing, (2, Vec::new(), Vec::new()));
+    let (link_skill, link_lesson) = (skill.clone(), lesson.clone());
+    write(&s, move |tx| {
+        tx.instructions().link_instruction_revision_lessons(
+            &link_skill,
+            2,
+            std::slice::from_ref(&link_lesson),
+        )?;
+        tx.instructions()
+            .link_instruction_revision_lessons(&link_skill, 1, &[link_lesson])
+    })
+    .unwrap();
+    let (by_revision, by_lesson) = read_snapshot(&s, &ReadOptions::default(), |r| {
+        Ok((
+            r.instructions().instruction_revision_lessons(&skill, 2)?,
+            r.instructions()
+                .lesson_instruction_revisions(&lesson, None, 10)?,
+        ))
+    })
+    .unwrap();
+    assert_eq!(by_revision, vec![lesson.clone()]);
+    assert_eq!(by_lesson, vec![(skill.clone(), 1), (skill.clone(), 2)]);
+    let after_first = read_snapshot(&s, &ReadOptions::default(), |r| {
+        r.instructions()
+            .lesson_instruction_revisions(&lesson, Some((&skill, 1)), 10)
+    })
+    .unwrap();
+    assert_eq!(after_first, vec![(skill.clone(), 2)]);
+    for (item, number, named) in [
+        ("skill-a", 2, "no-such-lesson"),
+        ("skill-a", 3, "lesson-a"),
+        ("no-skill", 1, "lesson-a"),
+    ] {
+        let (item, named) = (id(item), id(named));
+        assert!(
+            write(&s, move |tx| tx
+                .instructions()
+                .link_instruction_revision_lessons(&item, number, &[named]))
+            .is_err(),
+            "{number}"
+        );
     }
 }
 
@@ -991,7 +1189,8 @@ const BROKEN: Migration = Migration {
     version: 4,
     minimum_reader: 1,
     minimum_writer: 4,
-    sql: "CREATE TABLE fixture_partial(id TEXT PRIMARY KEY) STRICT; INSERT INTO no_such_table VALUES(1);",
+    sql: "CREATE TABLE fixture_partial(id TEXT PRIMARY KEY) STRICT; INSERT INTO \
+        no_such_table VALUES(1);",
     expected_sha256: "",
     rebuilds_tables: false,
 };
@@ -1000,7 +1199,9 @@ const DANGLING: Migration = Migration {
     version: 4,
     minimum_reader: 1,
     minimum_writer: 4,
-    sql: "CREATE TABLE fixture_dangling(id TEXT PRIMARY KEY) STRICT; PRAGMA defer_foreign_keys=ON; INSERT INTO command_receipts VALUES('nobody','s','k','x','d',NULL,'{}',1);",
+    sql: "CREATE TABLE fixture_dangling(id TEXT PRIMARY KEY) STRICT; PRAGMA \
+        defer_foreign_keys=ON; INSERT INTO command_receipts VALUES('nobody','s',\
+        'k','x','d',NULL,'{}',1);",
     expected_sha256: "",
     rebuilds_tables: false,
 };
@@ -1008,7 +1209,8 @@ const DANGLING: Migration = Migration {
 fn version_and_ledger(h: &Harness, table: &str) -> (i64, i64, i64) {
     h.raw()
         .query_row(
-            "SELECT (SELECT count(*) FROM sqlite_schema WHERE name=?1),(SELECT schema_version FROM store_meta),(SELECT count(*) FROM schema_migrations)",
+            "SELECT (SELECT count(*) FROM sqlite_schema WHERE name=?1),(SELECT \
+                schema_version FROM store_meta),(SELECT count(*) FROM schema_migrations)",
             [table],
             |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
         )

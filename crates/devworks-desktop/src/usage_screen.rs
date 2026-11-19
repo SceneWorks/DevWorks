@@ -1,8 +1,9 @@
 //! Native usage/price views. Every total, classification, coverage flag and tariff is supplied
 //! by the shared services; drafts retain their inspected revision across refreshes.
+use crate::paged::Paged;
 use crate::{
     frame, theme,
-    widgets::{self, Header, Tone, ViewState, chip},
+    widgets::{self, Header, Tone, ViewState, chip, local_time, utc_time},
 };
 use devworks_core::operations::{
     OperationInput as In,
@@ -28,9 +29,10 @@ pub const REPORTS: [(&str, &str); 6] = [
 ];
 /// No native repository analysis makes inference requests yet (the model-assisted analysis
 /// stages are owned by DW-29), so this report can only hold imported or unattributed usage.
-pub const REPOSITORY_ANALYSIS_INACTIVE: &str = "Not yet active: no DevWorks repository analysis makes model requests yet, so this report shows only imported or unattributed usage.";
+pub const REPOSITORY_ANALYSIS_INACTIVE: &str = "Not yet active: no DevWorks repository analysis makes model requests \
+    yet, so this report shows only imported or unattributed usage.";
 pub const TABS: [&str; 3] = ["Reports", "Attempts", "Prices"];
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Filters {
     pub project: Option<String>,
     pub start: String,
@@ -143,7 +145,15 @@ impl TariffForm {
         }
     }
     pub fn tariff(&self) -> Result<PriceTariff, String> {
-        let mut v = json!({"upstreamModelId":self.upstream,"serviceTier":self.service,"modality":self.modality,"chargeKind":self.charge,"unit":self.unit,"units":self.units.trim(),"amountUsd":self.amount.trim()});
+        let mut v = json!({
+            "upstreamModelId": self.upstream,
+            "serviceTier": self.service,
+            "modality": self.modality,
+            "chargeKind": self.charge,
+            "unit": self.unit,
+            "units": self.units.trim(),
+            "amountUsd": self.amount.trim()
+        });
         for (key, value) in [
             ("contextLowerExclusive", &self.lower),
             ("contextUpperInclusive", &self.upper),
@@ -177,15 +187,16 @@ pub struct UsageScreen {
     pub report: usize,
     pub draft: Filters,
     pub applied: Option<Filters>,
-    pub generation: u64,
-    pub data: Option<UsageQueryResult>,
-    pub loading: bool,
-    pub error: Option<String>,
-    pub options: Vec<UsageFilterOption>,
-    pub prices: Option<PriceCatalogView>,
-    pub prices_loading: bool,
-    pub price_generation: u64,
-    pub price_pages: usize,
+    /// The report kind the applied filters were read for.
+    pub applied_kind: Option<&'static str>,
+    /// The applied report: one result object that each further page extends, fenced by the
+    /// result's own context (a page read for another report is refused).
+    pub data: Paged<UsageQueryResult>,
+    /// The values the filters offer, every page read before they show.
+    pub options: Paged<UsageFilterOption>,
+    /// The price catalog: one view object that each further page extends, fenced by its catalog
+    /// revision.
+    pub prices: Paged<PriceCatalogView>,
     pub price_update_available: bool,
     pub price_error: Option<String>,
     pub history: bool,
@@ -229,26 +240,30 @@ impl UsageScreen {
             REPORTS[self.report.min(REPORTS.len() - 1)].0
         }
     }
-    pub fn more(&self) -> Option<&str> {
-        match self.data.as_ref()? {
-            UsageQueryResult::Attempts { page } => page.next_cursor.as_ref().map(|x| x.0.as_str()),
-            UsageQueryResult::Report { report } => {
-                report.next_cursor.as_ref().map(|x| x.0.as_str())
-            }
+    /// The report shown.
+    pub fn result(&self) -> Option<&UsageQueryResult> {
+        self.data.items.first()
+    }
+    /// The price catalog shown.
+    pub fn price_view(&self) -> Option<&PriceCatalogView> {
+        self.prices.items.first()
+    }
+    /// The cursor after the rows of a result.
+    pub fn next_of(value: &UsageQueryResult) -> Option<String> {
+        match value {
+            UsageQueryResult::Attempts { page } => page.next_cursor.as_ref().map(|x| x.0.clone()),
+            UsageQueryResult::Report { report } => report.next_cursor.as_ref().map(|x| x.0.clone()),
             UsageQueryResult::Filters { filters } => {
-                filters.next_cursor.as_ref().map(|x| x.0.as_str())
+                filters.next_cursor.as_ref().map(|x| x.0.clone())
             }
         }
     }
-    pub fn append(&mut self, value: UsageQueryResult) -> Result<(), String> {
+    /// Joins a further page onto the result shown: refused when it belongs to another report.
+    pub fn join(previous: &mut UsageQueryResult, value: UsageQueryResult) -> Result<(), String> {
         let context = |v: &UsageQueryResult| match v {
             UsageQueryResult::Attempts { page } => serde_json::to_value(&page.context),
             UsageQueryResult::Report { report } => serde_json::to_value(&report.context),
             UsageQueryResult::Filters { filters } => serde_json::to_value(&filters.context),
-        };
-        let Some(previous) = &mut self.data else {
-            self.data = Some(value);
-            return Ok(());
         };
         if context(previous).ok() != context(&value).ok() {
             return Err(
@@ -301,7 +316,7 @@ impl UsageScreen {
             |ui, state| {
                 if ui
                     .add_enabled(
-                        online.is_ok() && !state.0.loading && !state.0.prices_loading,
+                        online.is_ok() && !state.0.data.loading() && !state.0.prices.loading(),
                         egui::Button::new(if tab == 2 {
                             "Reload price catalog"
                         } else {
@@ -351,26 +366,26 @@ impl UsageScreen {
                                 }
                             }
                             s.filters_ui(ui, projects, actions);
-                            if s.loading {
+                            if s.data.loading() {
                                 ui.spinner();
-                                ui.label(if s.data.is_some() {
+                                ui.label(if s.result().is_some() {
                                     "Refreshing; previous applied result remains below."
                                 } else {
                                     "Loading usage…"
                                 });
                             }
-                            if let Some(e) = &s.error {
+                            if let Some(e) = &s.data.error {
                                 ui.colored_label(theme::RED, e);
                             }
-                            if let Some(data) = &s.data {
+                            if let Some(data) = s.result() {
                                 s.result_ui(ui, data, actions);
-                            } else if !s.loading && s.error.is_none() {
+                            } else if !s.data.loading() && s.data.error.is_none() {
                                 ui.label("Apply filters to read authoritative usage.");
                             }
-                            if s.more().is_some()
+                            if s.data.more()
                                 && ui
                                     .add_enabled(
-                                        !s.loading,
+                                        !s.data.loading(),
                                         egui::Button::new("Load more usage rows"),
                                     )
                                     .clicked()
@@ -399,17 +414,99 @@ impl UsageScreen {
         projects: &[(String, String)],
         actions: &mut Vec<Action>,
     ) {
-        ui.collapsing("Usage filters",|ui|{
-            let current=self.draft.project.as_ref().and_then(|p|projects.iter().find(|(id,_)|id==p)).map_or("All authorized projects",|(_,name)|name.as_str());
-            egui::ComboBox::from_label("Usage project").selected_text(current).show_ui(ui,|ui|{ui.selectable_value(&mut self.draft.project,None,"All authorized projects");for(id,name)in projects{ui.selectable_value(&mut self.draft.project,Some(id.clone()),name);}});
-            ui.horizontal_wrapped(|ui|{field(ui,"Start UTC",&mut self.draft.start,"2026-11-01T00:00:00Z");field(ui,"End UTC (exclusive)",&mut self.draft.end,"2026-12-01T00:00:00Z");});
-            ui.label("Blank dates use the service's last-30-days range. Start is inclusive; end is exclusive.");
-            egui::ComboBox::from_label("Usage interval").selected_text(if self.draft.interval.is_empty(){"Auto"}else{&self.draft.interval}).show_ui(ui,|ui|{for(value,label)in[("","Auto"),("day","Day"),("week","Week (Monday)"),("month","Month")]{ui.selectable_value(&mut self.draft.interval,value.into(),label);}});
-            for(dimension,value)in[("user",&mut self.draft.user),("provider",&mut self.draft.provider),("model",&mut self.draft.model),("tool",&mut self.draft.tool)]{ui.push_id(dimension,|ui|{field(ui,&format!("Usage {dimension}"),value,"All");let choices=self.options.iter().filter(|o|o.dimension.0==dimension).map(|o|o.value.0.as_str()).collect::<Vec<_>>();if !choices.is_empty(){egui::ComboBox::from_label(format!("Available {dimension} values")).selected_text("Choose a recorded value").show_ui(ui,|ui|{for choice in choices{ui.selectable_value(value,choice.into(),choice);}});}});}
-            field(ui,"Usage purpose",&mut self.draft.purpose,"All purposes");
-            ui.collapsing("Work and session filters",|ui|{field(ui,"Work root ID",&mut self.draft.root,"");field(ui,"Session ID",&mut self.draft.session,"");field(ui,"Job run ID",&mut self.draft.job_run,"");});
-            if let Err(e)=self.draft.body(self.kind(),None){ui.colored_label(theme::RED,e);}
-            if ui.add_enabled(!self.loading&&self.draft.body(self.kind(),None).is_ok(),egui::Button::new("Apply usage filters")).clicked(){actions.push(Action::Apply);}
+        ui.collapsing("Usage filters", |ui| {
+            let current = self
+                .draft
+                .project
+                .as_ref()
+                .and_then(|p| projects.iter().find(|(id, _)| id == p))
+                .map_or("All authorized projects", |(_, name)| name.as_str());
+            egui::ComboBox::from_label("Usage project")
+                .selected_text(current)
+                .show_ui(ui, |ui| {
+                    ui.selectable_value(&mut self.draft.project, None, "All authorized projects");
+                    for (id, name) in projects {
+                        ui.selectable_value(&mut self.draft.project, Some(id.clone()), name);
+                    }
+                });
+            ui.horizontal_wrapped(|ui| {
+                field(
+                    ui,
+                    "Start UTC",
+                    &mut self.draft.start,
+                    "2026-11-01T00:00:00Z",
+                );
+                field(
+                    ui,
+                    "End UTC (exclusive)",
+                    &mut self.draft.end,
+                    "2026-12-01T00:00:00Z",
+                );
+            });
+            ui.label(
+                "Blank dates use the service's last-30-days range. Start is inclusive; \
+                end is exclusive.",
+            );
+            egui::ComboBox::from_label("Usage interval")
+                .selected_text(if self.draft.interval.is_empty() {
+                    "Auto"
+                } else {
+                    &self.draft.interval
+                })
+                .show_ui(ui, |ui| {
+                    for (value, label) in [
+                        ("", "Auto"),
+                        ("day", "Day"),
+                        ("week", "Week (Monday)"),
+                        ("month", "Month"),
+                    ] {
+                        ui.selectable_value(&mut self.draft.interval, value.into(), label);
+                    }
+                });
+            for (dimension, value) in [
+                ("user", &mut self.draft.user),
+                ("provider", &mut self.draft.provider),
+                ("model", &mut self.draft.model),
+                ("tool", &mut self.draft.tool),
+            ] {
+                ui.push_id(dimension, |ui| {
+                    field(ui, &format!("Usage {dimension}"), value, "All");
+                    let choices = self
+                        .options
+                        .items
+                        .iter()
+                        .filter(|o| o.dimension.0 == dimension)
+                        .map(|o| o.value.0.as_str())
+                        .collect::<Vec<_>>();
+                    if !choices.is_empty() {
+                        egui::ComboBox::from_label(format!("Available {dimension} values"))
+                            .selected_text("Choose a recorded value")
+                            .show_ui(ui, |ui| {
+                                for choice in choices {
+                                    ui.selectable_value(value, choice.into(), choice);
+                                }
+                            });
+                    }
+                });
+            }
+            field(ui, "Usage purpose", &mut self.draft.purpose, "All purposes");
+            ui.collapsing("Work and session filters", |ui| {
+                field(ui, "Work root ID", &mut self.draft.root, "");
+                field(ui, "Session ID", &mut self.draft.session, "");
+                field(ui, "Job run ID", &mut self.draft.job_run, "");
+            });
+            if let Err(e) = self.draft.body(self.kind(), None) {
+                ui.colored_label(theme::RED, e);
+            }
+            if ui
+                .add_enabled(
+                    !self.data.loading() && self.draft.body(self.kind(), None).is_ok(),
+                    egui::Button::new("Apply usage filters"),
+                )
+                .clicked()
+            {
+                actions.push(Action::Apply);
+            }
         });
     }
     fn result_ui(&self, ui: &mut Ui, data: &UsageQueryResult, actions: &mut Vec<Action>) {
@@ -422,8 +519,8 @@ impl UsageScreen {
         widgets::caption(
             ui,
             format!(
-                "Applied {} to {} UTC · {} buckets · read revision {}",
-                time(
+                "Applied {} to {} · {} buckets · read revision {}",
+                utc_time(
                     context
                         .range
                         .start_ms
@@ -431,7 +528,7 @@ impl UsageScreen {
                         .parse::<i64>()
                         .expect("validated range timestamp")
                 ),
-                time(
+                utc_time(
                     context
                         .range
                         .end_ms
@@ -461,7 +558,10 @@ impl UsageScreen {
             UsageQueryResult::Attempts { page } => {
                 totals_ui(ui, &page.totals);
                 if page.items.0.is_empty() {
-                    ui.label("No attempt records in this result. Coverage above determines whether history is complete.");
+                    ui.label(
+                        "No attempt records in this result. Coverage above determines whether \
+                        history is complete.",
+                    );
                 }
                 for record in &page.items.0 {
                     ui.push_id(record.id.as_str(), |ui| {
@@ -554,7 +654,7 @@ impl UsageScreen {
                                     ui.strong(label);
                                     ui.end_row();
                                     for (at, value) in points {
-                                        ui.label(time(at));
+                                        ui.label(utc_time(at));
                                         ui.label(value);
                                         ui.end_row();
                                     }
@@ -577,14 +677,23 @@ impl UsageScreen {
                     });
                 }
                 if report.has_more {
-                    ui.label("More report rows are available; loaded series and breakdowns are partial until all pages are read.");
+                    ui.label(
+                        "More report rows are available; loaded series and breakdowns are \
+                        partial until all pages are read.",
+                    );
                 }
                 if report.items.0.is_empty() {
-                    ui.label("No report rows were returned. No monetary or cache observations are inferred.");
+                    ui.label(
+                        "No report rows were returned. No monetary or cache observations are \
+                        inferred.",
+                    );
                 }
             }
             UsageQueryResult::Filters { filters } => {
-                ui.label("Available values for the applied range. Categorical filters do not narrow discovery.");
+                ui.label(
+                    "Available values for the applied range. Categorical filters do not \
+                    narrow discovery.",
+                );
                 for option in &filters.items.0 {
                     ui.label(format!(
                         "{}: {}",
@@ -605,7 +714,7 @@ impl UsageScreen {
                 .add_enabled(
                     // A retained catalog may revalidate in the click frame. Applying
                     // new filters supersedes that request through its generation fence.
-                    !self.prices_loading || self.prices.is_some(),
+                    !self.prices.loading() || self.prices.loaded,
                     egui::Button::new("Apply price catalog filters"),
                 )
                 .clicked()
@@ -633,20 +742,24 @@ impl UsageScreen {
                 "Comma separated; current when blank",
             );
         });
-        if self.prices_loading && self.prices.is_none() {
+        if self.prices.loading() && !self.prices.loaded {
             ui.spinner();
             ui.label("Loading price sources…");
         }
         if let Some(e) = &self.price_error {
             ui.colored_label(theme::RED, e);
         }
-        let Some(prices) = &self.prices else {
+        let Some(prices) = self.prices.items.first() else {
             ui.label("Load the catalog to inspect current prices, unpriced models and sources.");
             return;
         };
         coverage_ui(ui, &prices.coverage);
         if self.price_update_available {
-            ui.colored_label(theme::AMBER, "The price catalog changed. Reload to inspect the current revision; loaded pages and your tariff draft are preserved until then.");
+            ui.colored_label(
+                theme::AMBER,
+                "The price catalog changed. Reload to inspect the current revision; \
+                loaded pages and your tariff draft are preserved until then.",
+            );
         }
         ui.label(format!(
             "Price catalog revision {}",
@@ -670,10 +783,10 @@ impl UsageScreen {
                         },
                     );
                     if let Some(at) = &provider.last_checked_at_ms {
-                        ui.label(format!("Checked {}", time(at.get())));
+                        ui.label(format!("Checked {}", local_time(at.get())));
                     }
                     if let Some(at) = &provider.next_check_at_ms {
-                        ui.label(format!("Next check {}", time(at.get())));
+                        ui.label(format!("Next check {}", local_time(at.get())));
                     }
                     if let Some(e) = &provider.error {
                         ui.colored_label(theme::RED, &e.0);
@@ -696,7 +809,10 @@ impl UsageScreen {
         {
             actions.push(Action::RefreshPrices);
         }
-        ui.label("Official sources: openai, anthropic. Public price refresh does not enable a connection or require provider credentials.");
+        ui.label(
+            "Official sources: openai, anthropic. Public price refresh does not \
+            enable a connection or require provider credentials.",
+        );
         if let Some(operation) = &self.refresh {
             ui.label(format!(
                 "Price refresh {:?} · {}",
@@ -717,7 +833,7 @@ impl UsageScreen {
                         ui.hyperlink_to("Official source", &snapshot.source_url.0);
                         ui.label(format!(
                             "Verified {} · parser {}",
-                            time(snapshot.verified_at_ms.get()),
+                            local_time(snapshot.verified_at_ms.get()),
                             snapshot.parser_version.0
                         ));
                         ui.label(format!("Source digest {}", snapshot.source_digest.as_str()));
@@ -738,7 +854,8 @@ impl UsageScreen {
         if prices.has_more {
             widgets::caption(
                 ui,
-                "Load the remaining price rows before editing so every current rate is retained. Filter to one model to narrow this view.",
+                "Load the remaining price rows before editing so every current rate is \
+                    retained. Filter to one model to narrow this view.",
             );
         }
         for model in &prices.models.0 {
@@ -805,7 +922,7 @@ impl UsageScreen {
                                     .map_or("Not recorded", |actor| actor.0.as_str()),
                                 updated.as_ref().map_or_else(
                                     || "Time not recorded".into(),
-                                    |at| time(at.get())
+                                    |at| local_time(at.get())
                                 )
                             ));
                             if let PriceOverrideOutcome::Set { tariffs, .. } = change {
@@ -842,7 +959,7 @@ impl UsageScreen {
         if prices.has_more
             && ui
                 .add_enabled(
-                    !self.prices_loading,
+                    !self.prices.loading(),
                     egui::Button::new("Load more price rows"),
                 )
                 .clicked()
@@ -861,7 +978,15 @@ impl UsageScreen {
             let stale = self.price_update_available
                 || current.is_none_or(|model| model.revision.as_str() != draft.revision);
             if stale {
-                ui.colored_label(theme::AMBER,if current.is_some(){"This model's price revision changed. Your tariff draft is preserved."}else{"The current model revision is not in these loaded rows. Load its catalog entry before submitting; your draft is preserved."});
+                ui.colored_label(
+                    theme::AMBER,
+                    if current.is_some() {
+                        "This model's price revision changed. Your tariff draft is preserved."
+                    } else {
+                        "The current model revision is not in these loaded rows. Load its \
+                    catalog entry before submitting; your draft is preserved."
+                    },
+                );
                 if current.is_some()
                     && !self.price_update_available
                     && !prices.has_more
@@ -913,7 +1038,10 @@ impl UsageScreen {
                 actions.push(Action::ClearPrice);
             }
             if !valid {
-                ui.label("Complete each rate's upstream model, service tier, amount and units before saving.");
+                ui.label(
+                    "Complete each rate's upstream model, service tier, amount and units \
+                    before saving.",
+                );
             }
         }
     }
@@ -947,15 +1075,6 @@ pub fn human(key: &str) -> String {
     chars.next().map_or(String::new(), |first| {
         first.to_uppercase().collect::<String>() + chars.as_str()
     })
-}
-pub fn time(ms: i64) -> String {
-    jiff::Timestamp::from_millisecond(ms)
-        .map(|t| {
-            t.to_zoned(jiff::tz::TimeZone::UTC)
-                .strftime("%Y-%m-%d %H:%M")
-                .to_string()
-        })
-        .unwrap_or_else(|_| "Time unavailable".into())
 }
 pub fn usd(micro: i64) -> String {
     format!("${}.{:06}", micro / 1_000_000, micro % 1_000_000)
@@ -1371,7 +1490,10 @@ pub fn budget_status(ui: &mut Ui, budget: &FeatureBudgetView) {
             "Budget hold · explicit Continue required",
             Tone::Attention,
         );
-        ui.label("Raising or turning off the cap does not clear this hold. Continue rechecks all remaining holds.");
+        ui.label(
+            "Raising or turning off the cap does not clear this hold. Continue \
+            rechecks all remaining holds.",
+        );
     }
     if !budget.accounting_ready
         || budget.untracked_attempts.get() > 0
@@ -1386,7 +1508,8 @@ pub fn budget_status(ui: &mut Ui, budget: &FeatureBudgetView) {
     widgets::caption(
         ui,
         format!(
-            "Untracked {} · unknown tail {} · monetary incomplete {} · historical facts {} · budget revision {}",
+            "Untracked {} · unknown tail {} · monetary incomplete {} · historical \
+                facts {} · budget revision {}",
             budget.untracked_attempts.as_str(),
             budget.unknown_tail_attempts.as_str(),
             budget.monetary_incomplete_attempts.as_str(),
@@ -1401,7 +1524,20 @@ mod tests {
     use super::*;
     #[test]
     fn tariff_editor_round_trips_every_dimension_and_exact_decimal_rate() {
-        let raw = json!({"upstreamModelId":"publisher/model-v7","serviceTier":"priority","contextLowerExclusive":"200000","contextUpperInclusive":"1000000","modality":"Video","chargeKind":"CacheWrite","cacheTtlSeconds":"3600","unit":"Second","units":"17","amountUsd":"0.000000000123","region":"region-42","endpointProfile":"compatible"});
+        let raw = json!({
+            "upstreamModelId": "publisher/model-v7",
+            "serviceTier": "priority",
+            "contextLowerExclusive": "200000",
+            "contextUpperInclusive": "1000000",
+            "modality": "Video",
+            "chargeKind": "CacheWrite",
+            "cacheTtlSeconds": "3600",
+            "unit": "Second",
+            "units": "17",
+            "amountUsd": "0.000000000123",
+            "region": "region-42",
+            "endpointProfile": "compatible"
+        });
         let tariff: PriceTariff = serde_json::from_value(raw.clone()).unwrap();
         let edited = TariffForm::from_tariff(&tariff).tariff().unwrap();
         assert_eq!(serde_json::to_value(edited).unwrap(), raw);
@@ -1427,15 +1563,39 @@ mod tests {
     #[test]
     fn report_paging_refuses_a_different_read_snapshot_without_replacing_prior_rows() {
         let page = |revision: &str| {
-            serde_json::from_value::<UsageQueryResult>(json!({"kind":"Report","report":{"context":{"reportKind":"AssistantUsage","range":{"startMs":"0","endMs":"1000"},"interval":"day","appliedFilters":{},"readRevision":revision},"items":[{"kind":"Total","key":"totalTokens","label":"Total tokens","value":"8"}],"hasMore":false,"coverage":{"state":"Partial","gaps":["history-missing"],"moreGaps":false}}})).unwrap()
+            serde_json::from_value::<UsageQueryResult>(json!({
+                "kind": "Report",
+                "report": {
+                    "context": {
+                        "reportKind": "AssistantUsage",
+                        "range": {"startMs": "0", "endMs": "1000"},
+                        "interval": "day",
+                        "appliedFilters": {},
+                        "readRevision": revision
+                    },
+                    "items": [{
+                        "kind": "Total",
+                        "key": "totalTokens",
+                        "label": "Total tokens",
+                        "value": "8"
+                    }],
+                    "hasMore": false,
+                    "coverage": {
+                        "state": "Partial",
+                        "gaps": ["history-missing"],
+                        "moreGaps": false
+                    }
+                }
+            }))
+            .unwrap()
         };
         let mut screen = UsageScreen {
-            data: Some(page("1")),
+            data: Paged::from_items(vec![page("1")]),
             ..Default::default()
         };
-        assert!(screen.append(page("2")).is_err());
+        assert!(UsageScreen::join(&mut screen.data.items[0], page("2")).is_err());
         assert_eq!(
-            serde_json::to_value(screen.data.as_ref().unwrap()).unwrap(),
+            serde_json::to_value(screen.result().unwrap()).unwrap(),
             serde_json::to_value(page("1")).unwrap()
         );
     }

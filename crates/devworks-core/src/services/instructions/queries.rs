@@ -1,7 +1,8 @@
 //! `skills.discover`, `.read`, `.resources`, `.history` and `roles.read`, `.history`.
 use super::{
     HARNESS_ROOT_ID, InstructionService, SHARED_ROOT_ID, config_scope, invalid, item_visible,
-    record, revision_visible, visible_current, visible_item, visible_revision,
+    record, record_with_approval, revision_visible, visible_current, visible_item,
+    visible_revision, with_lessons,
 };
 use crate::context::InvocationContext;
 use crate::operations::{roles as role_ops, skills as skill_ops};
@@ -9,12 +10,12 @@ use crate::ports::storage::{
     ConfigScope, InstructionFilter, InstructionKind, InstructionOrigin, InstructionRead,
     ReadSnapshot, StorageError, StoredInstructionItem,
 };
-use crate::protocol::Id;
 use crate::protocol::records::{
     InstructionRecord, PageRequest, SkillResource, SkillResourcePage, SkillResourcePageResult,
 };
 use crate::protocol::results::OperationResult;
 use crate::protocol::support::Page;
+use crate::protocol::{Id, ProjectId};
 use crate::services::cursor::{self, CursorBinding};
 use crate::services::kernel::Failure;
 use std::collections::BTreeMap;
@@ -44,17 +45,21 @@ impl Standing {
     }
 }
 
-/// Every skill item with its standing.
-pub(crate) fn skill_items(
+/// Every skill item an agent working in `project` can use (the workspace's and that project's)
+/// with its standing. Another project's skills are never read.
+pub(crate) fn skill_items_in(
     read: &dyn InstructionRead,
+    project: Option<&ProjectId>,
 ) -> Result<Vec<(StoredInstructionItem, Standing)>, StorageError> {
+    let mut scopes = vec![ConfigScope::Workspace];
+    scopes.extend(project.map(|p| ConfigScope::Project(p.clone())));
     let mut all = Vec::new();
     let mut after: Option<Id> = None;
     loop {
         let page = read.instruction_items(
             &InstructionFilter {
                 kind: Some(InstructionKind::Skill),
-                scopes: vec![ConfigScope::Workspace],
+                scopes: scopes.clone(),
                 name: None,
             },
             after.as_ref(),
@@ -68,7 +73,13 @@ pub(crate) fn skill_items(
         }
     }
     let usable = |i: &StoredInstructionItem| i.present && i.enabled && i.active_revision.is_some();
-    let rank = |i: &StoredInstructionItem| u8::from(i.origin != InstructionOrigin::Harness);
+    // A project's skill overrides a workspace skill of the same name, which overrides a shared
+    // one, so the most specific skill is the one in effect.
+    let rank = |i: &StoredInstructionItem| match (&i.scope, &i.origin) {
+        (ConfigScope::Project(_), _) => 0,
+        (_, InstructionOrigin::Harness) => 1,
+        _ => 2,
+    };
     // Per folded name: the best rank and every usable item holding it.
     let mut best: BTreeMap<String, (u8, Vec<Id>)> = BTreeMap::new();
     for item in all.iter().filter(|i| usable(i)) {
@@ -112,8 +123,9 @@ impl InstructionService {
         let instructions = read.instructions();
         match input {
             skill_ops::Input::Discover(i) => {
-                // Skills are workspace resources visible from every project scope.
-                config_scope(ctx, &i.scope)?;
+                // Workspace skills are visible from every project; a project's own skills are
+                // listed with them when its scope is named (and only within that project).
+                let scope = config_scope(ctx, &i.scope)?;
                 let roots: Vec<&str> = i.root_ids.0.iter().map(Id::as_str).collect();
                 if roots
                     .iter()
@@ -123,7 +135,14 @@ impl InstructionService {
                 }
                 let mut records = Vec::new();
                 let mut fence = 0i64;
-                for (item, standing) in skill_items(instructions)? {
+                // Standing is computed for the project the caller works in even when the
+                // workspace list is asked for, so a workspace skill a project's skill shadows
+                // is shown as overridden.
+                let working = scope.project_id().or(ctx.project_id());
+                for (item, standing) in skill_items_in(instructions, working)? {
+                    if scope == ConfigScope::Workspace && item.scope != ConfigScope::Workspace {
+                        continue;
+                    }
                     let root = if item.origin == InstructionOrigin::Shared {
                         SHARED_ROOT_ID
                     } else {
@@ -163,7 +182,7 @@ impl InstructionService {
             }
             skill_ops::Input::Read(i) => {
                 let (record, revision) = self.read_record(
-                    instructions,
+                    read,
                     ctx,
                     &i.instruction_id,
                     InstructionKind::Skill,
@@ -211,7 +230,7 @@ impl InstructionService {
             }
             skill_ops::Input::History(i) => {
                 let (page, revision) = self.history(
-                    instructions,
+                    read,
                     ctx,
                     &i.instruction_id,
                     InstructionKind::Skill,
@@ -229,11 +248,10 @@ impl InstructionService {
         ctx: &InvocationContext,
         input: &role_ops::Input,
     ) -> Result<(OperationResult, i64), Failure> {
-        let instructions = read.instructions();
         match input {
             role_ops::Input::Read(i) => {
                 let (record, revision) = self.read_record(
-                    instructions,
+                    read,
                     ctx,
                     &i.instruction_id,
                     InstructionKind::Role,
@@ -242,13 +260,8 @@ impl InstructionService {
                 Ok((OperationResult::RolesRead { value: record }, revision))
             }
             role_ops::Input::History(i) => {
-                let (page, revision) = self.history(
-                    instructions,
-                    ctx,
-                    &i.instruction_id,
-                    InstructionKind::Role,
-                    &i.page,
-                )?;
+                let (page, revision) =
+                    self.history(read, ctx, &i.instruction_id, InstructionKind::Role, &i.page)?;
                 Ok((OperationResult::RolesHistory { value: page }, revision))
             }
             _ => Err(invalid("instruction_operation")),
@@ -257,36 +270,42 @@ impl InstructionService {
 
     fn read_record(
         &self,
-        read: &dyn InstructionRead,
+        snapshot: &dyn ReadSnapshot,
         ctx: &InvocationContext,
         id: &Id,
         kind: InstructionKind,
         revision: Option<i64>,
     ) -> Result<(InstructionRecord, i64), Failure> {
+        let read = snapshot.instructions();
         let item = visible_item(read, ctx, id, kind)?;
         let r = match revision {
             Some(n) => visible_revision(read, ctx, &item, n)?,
             None => visible_current(read, ctx, &item)?,
         };
         let effective = if kind == InstructionKind::Skill {
-            skill_items(read)?
+            skill_items_in(read, item.scope.project_id().or(ctx.project_id()))?
                 .into_iter()
                 .find(|(i, _)| i.id == item.id)
                 .map(|(_, standing)| standing)
         } else {
             None
         };
-        Ok((record(&item, &r, effective)?, item.version))
+        let record = record_with_approval(snapshot.decisions(), &item, &r, effective)?;
+        Ok((
+            with_lessons(snapshot, ctx, record, &item.id, r.revision)?,
+            item.version,
+        ))
     }
 
     fn history(
         &self,
-        read: &dyn InstructionRead,
+        snapshot: &dyn ReadSnapshot,
         ctx: &InvocationContext,
         id: &Id,
         kind: InstructionKind,
         page: &PageRequest,
     ) -> Result<(Page<InstructionRecord>, i64), Failure> {
+        let read = snapshot.instructions();
         let item = visible_item(read, ctx, id, kind)?;
         let binding = CursorBinding::new(ctx, "instructions.history", &[item.id.as_str()], 1);
         // Another project's confined drafts are skipped; read on until the page fills.
@@ -308,7 +327,10 @@ impl InstructionService {
             |r| r.revision.to_string(),
         )?;
         Ok((
-            rows.try_into_page(|r| record(&item, &r, None))?,
+            rows.try_into_page(|r| {
+                let record = record_with_approval(snapshot.decisions(), &item, &r, None)?;
+                with_lessons(snapshot, ctx, record, &item.id, r.revision)
+            })?,
             item.version,
         ))
     }
@@ -321,7 +343,7 @@ mod tests {
     use crate::protocol::ActorId;
     use serde_json::json;
 
-    struct Items(Vec<StoredInstructionItem>);
+    struct Items(Vec<StoredInstructionItem>, Vec<(Id, i64)>);
     impl InstructionRead for Items {
         fn instruction_item(&self, id: &Id) -> Result<Option<StoredInstructionItem>, StorageError> {
             Ok(self.0.iter().find(|i| i.id == *id).cloned())
@@ -373,6 +395,23 @@ mod tests {
         ) -> Result<Option<StoredInstructionRevision>, StorageError> {
             Ok(None)
         }
+        fn instruction_revision_lessons(&self, _: &Id, _: i64) -> Result<Vec<Id>, StorageError> {
+            Ok(Vec::new())
+        }
+        fn lesson_instruction_revisions(
+            &self,
+            _: &Id,
+            after: Option<(&Id, i64)>,
+            limit: u16,
+        ) -> Result<Vec<(Id, i64)>, StorageError> {
+            Ok(self
+                .1
+                .iter()
+                .filter(|(i, n)| after.is_none_or(|(a, m)| (i.as_str(), *n) > (a.as_str(), m)))
+                .take(usize::from(limit))
+                .cloned()
+                .collect())
+        }
     }
     fn item(id: &str, name: &str, origin: InstructionOrigin) -> StoredInstructionItem {
         StoredInstructionItem {
@@ -398,13 +437,16 @@ mod tests {
 
     #[test]
     fn same_precedence_name_collisions_are_conflicts_and_never_effective() {
-        let read = Items(vec![
-            item("s-alpha", "alpha", InstructionOrigin::Shared),
-            item("s-alpha-upper", "Alpha", InstructionOrigin::Shared),
-            item("s-beta", "beta", InstructionOrigin::Shared),
-            item("h-beta", "Beta", InstructionOrigin::Harness),
-        ]);
-        let standing: BTreeMap<String, Standing> = skill_items(&read)
+        let read = Items(
+            vec![
+                item("s-alpha", "alpha", InstructionOrigin::Shared),
+                item("s-alpha-upper", "Alpha", InstructionOrigin::Shared),
+                item("s-beta", "beta", InstructionOrigin::Shared),
+                item("h-beta", "Beta", InstructionOrigin::Harness),
+            ],
+            Vec::new(),
+        );
+        let standing: BTreeMap<String, Standing> = skill_items_in(&read, None)
             .unwrap()
             .into_iter()
             .map(|(i, s)| (i.id.as_str().to_owned(), s))
@@ -419,5 +461,46 @@ mod tests {
         assert_eq!(effective.conflicts.len(), 1);
         assert_eq!(effective.conflicts[0].name, "alpha");
         assert_eq!(effective.conflicts[0].instruction_ids.len(), 2);
+    }
+
+    #[test]
+    fn many_hidden_links_do_not_hide_a_visible_skill() {
+        use crate::context::PrincipalKind;
+        use crate::protocol::{Counter, ProjectId, Revision, StoreId};
+        let ctx = InvocationContext::new(
+            ActorId(Id::new("agent").unwrap()),
+            PrincipalKind::Agent,
+            Id::new("invocation").unwrap(),
+            Id::new("namespace").unwrap(),
+            StoreId(Id::new("store").unwrap()),
+            Counter::new(0).unwrap(),
+            Revision::new(1).unwrap(),
+        )
+        .in_project(ProjectId(Id::new("project-a").unwrap()));
+        // Seven hidden skills (another project's) sort ahead of two visible ones, so a page of
+        // three holds no visible link until the third page.
+        let mut items = Vec::new();
+        let mut links = Vec::new();
+        for n in 0..9 {
+            let mut it = item(
+                &format!("s-{n}"),
+                &format!("skill-{n}"),
+                InstructionOrigin::Shared,
+            );
+            if n < 7 {
+                it.scope = ConfigScope::Project(ProjectId(Id::new("project-b").unwrap()));
+            }
+            links.push((it.id.clone(), 1));
+            items.push(it);
+        }
+        let read = Items(items, links);
+        let lesson = Id::new("lesson").unwrap();
+        for page in [3, 4, 500] {
+            let found =
+                crate::services::instructions::lesson_skill_links(&read, &ctx, &lesson, page)
+                    .unwrap();
+            let names: Vec<&str> = found.iter().map(|l| l.name.0.as_str()).collect();
+            assert_eq!(names, ["skill-7", "skill-8"], "page {page}");
+        }
     }
 }

@@ -1452,10 +1452,6 @@ impl CommandHandler for JobService {
 pub fn record_of(s: &dyn ReadSnapshot, job: &StoredJob) -> Result<JobRecord, StorageError> {
     build_job(job, job_facts(s.jobs(), job)?)
 }
-/// The record of a run with its first usage page.
-pub fn run_record_of(s: &dyn ReadSnapshot, run: &StoredJobRun) -> Result<JobRun, StorageError> {
-    run_in_snapshot(s, run, None)
-}
 /// The operation journal entry a new run records before anything is dispatched.
 pub(crate) fn run_operation(id: OperationId, job: &StoredJob, run_id: &Id) -> NewOperation {
     NewOperation {
@@ -1838,7 +1834,17 @@ fn job_approval_preview(
         target_id: candidate.target,
         target_revision: candidate.revision,
         summary: format!("Review job {}", candidate.title),
-        reviewed: json!({"title":candidate.title,"schedule":candidate.schedule,"definition":candidate.definition,"enabled":candidate.enabled,"prior":before,"artifact":match &candidate.definition {JobDefinition::Inference {prompt,..}=>Some(prompt),_=>None}}),
+        reviewed: json!({
+            "title": candidate.title,
+            "schedule": candidate.schedule,
+            "definition": candidate.definition,
+            "enabled": candidate.enabled,
+            "prior": before,
+            "artifact": match &candidate.definition {
+                JobDefinition::Inference { prompt, .. } => Some(prompt),
+                _ => None,
+            }
+        }),
         binding: json!({"prior":before,"project":project,"prompt":prompt,"route":route}),
     };
     if preview.reviewed["artifact"].is_null() {
@@ -1909,6 +1915,32 @@ impl JobService {
             ));
         }
         Ok(())
+    }
+}
+
+impl crate::services::approvals::SavedOperationOwners for JobService {
+    fn supports(&self, operation: &str) -> bool {
+        matches!(
+            operation,
+            "jobs.create" | "jobs.edit" | "jobs.enable" | "jobs.run_now"
+        )
+    }
+    fn prepare(
+        &self,
+        ctx: &crate::context::InvocationContext,
+        request: &crate::admission::DecodedRequest,
+        env: &crate::ports::Preparation<'_>,
+    ) -> Result<crate::services::approvals::OwnerPreview, crate::services::kernel::Failure> {
+        self.approval_preview(ctx, request, env)
+    }
+    fn validate(
+        &self,
+        tx: &mut dyn crate::ports::storage::WriteTransaction,
+        ctx: &crate::context::InvocationContext,
+        request: &crate::admission::DecodedRequest,
+        preview: &crate::services::approvals::OwnerPreview,
+    ) -> Result<(), crate::services::kernel::Failure> {
+        self.validate_approval_preview(tx, ctx, request, preview)
     }
 }
 

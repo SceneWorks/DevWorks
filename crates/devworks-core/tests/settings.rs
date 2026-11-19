@@ -439,3 +439,170 @@ fn package_index_sources_default_to_none_and_need_a_location_and_key() {
         assert!(!check_value(d, &bad).is_empty(), "{bad}");
     }
 }
+
+fn repository_scope() -> ConfigScope {
+    ConfigScope::Repository {
+        project: ProjectId(Id::new("project-a").unwrap()),
+        repository: Id::new("repo-a").unwrap(),
+    }
+}
+
+#[test]
+fn only_delivery_settings_are_repository_scoped_and_the_mandate_is_not_one_of_them() {
+    let repository_scoped: Vec<&str> = catalog()
+        .iter()
+        .filter(|d| d.allows(ScopeKind::Repository))
+        .map(|d| d.key)
+        .collect();
+    assert_eq!(
+        repository_scoped,
+        [
+            "delivery.autoMerge",
+            "delivery.maxReviewFixCycles",
+            "reviews.automationWaitSeconds"
+        ]
+    );
+    // Every repository-scoped setting is also a project and a workspace setting.
+    for d in catalog().iter().filter(|d| d.allows(ScopeKind::Repository)) {
+        assert!(d.allows(ScopeKind::Project) && d.allows(ScopeKind::Workspace));
+    }
+    // The mandatory review is a harness protection: no scope (a repository included) can set or
+    // weaken it, not even to a stricter value.
+    let mandate = descriptor("delivery.mandatoryReview").unwrap();
+    assert!(mandate.locked());
+    assert_eq!(mandate.scopes, [ScopeKind::Workspace]);
+    let layer = devworks_core::settings::model::Layer::initial(repository_scope());
+    for value in [json!(false), json!(true)] {
+        let plan = devworks_core::settings::model::plan(
+            &layer,
+            &[serde_json::from_value(json!({"key": mandate.key,
+                "value": {"schema": mandate.schema_ref(), "value": value}}))
+            .unwrap()],
+        );
+        assert!(
+            plan.blocking().any(|i| i.code == codes::HARNESS_ENFORCED),
+            "{value}"
+        );
+        assert!(plan.values.is_empty());
+    }
+    // A setting that is not repository-scoped is refused at a repository, not stored.
+    let shell = descriptor("tools.shell").unwrap();
+    let plan = devworks_core::settings::model::plan(
+        &layer,
+        &[serde_json::from_value(json!({"key": shell.key,
+            "value": {"schema": shell.schema_ref(), "value": true}}))
+        .unwrap()],
+    );
+    assert!(plan.blocking().any(|i| i.code == codes::SCOPE_NOT_ALLOWED));
+    let base = descriptor("repositories.baseDirectory").unwrap();
+    let plan = devworks_core::settings::model::plan(
+        &layer,
+        &[serde_json::from_value(json!({"key": base.key,
+            "value": {"schema": base.schema_ref(), "value": "/srv/x"}}))
+        .unwrap()],
+    );
+    assert!(plan.blocking().any(|i| i.code == codes::SCOPE_NOT_ALLOWED));
+}
+
+#[test]
+fn a_repository_scope_has_a_project_qualified_key_and_inherits_through_its_project() {
+    let scope = repository_scope();
+    assert_eq!(scope.key(), "repository:project-a:repo-a");
+    assert_eq!(ConfigScope::from_key(&scope.key()), Some(scope.clone()));
+    assert_eq!(ConfigScope::from_key("repository:project-a"), None);
+    assert_eq!(scope.project_id().map(|p| p.0.as_str()), Some("project-a"));
+    assert_eq!(scope.target_id().as_str(), "repo-a");
+    // The data scope names the owning project; a workspace scope cannot be narrowed.
+    let project: devworks_core::protocol::data::DataScope =
+        serde_json::from_value(json!({"kind": "Project", "projectId": "project-a"})).unwrap();
+    let repo = Id::new("repo-a").unwrap();
+    assert_eq!(
+        ConfigScope::addressed(&project, Some(&repo)).unwrap(),
+        scope
+    );
+    assert_eq!(
+        ConfigScope::addressed(&project, None).unwrap(),
+        ConfigScope::Project(ProjectId(Id::new("project-a").unwrap()))
+    );
+    let workspace: devworks_core::protocol::data::DataScope =
+        serde_json::from_value(json!({"kind": "Workspace"})).unwrap();
+    assert!(ConfigScope::addressed(&workspace, Some(&repo)).is_err());
+}
+
+#[test]
+fn the_view_shows_a_repository_value_and_its_source_apart_from_the_project_and_workspace() {
+    let project_scope = json!({"kind": "Project", "projectId": "project-a"});
+    let mut entries = defaults();
+    let put =
+        |entries: &mut Vec<SettingEntry>, key: &str, value: Value, repo: Option<&str>, revision| {
+            let i = entries.iter().position(|e| e.key.0 == key).unwrap();
+            let mut e = entry(key, value, project_scope.clone(), revision);
+            if let Some(repo) = repo {
+                e.source_repository_id = Some(Id::new(repo).unwrap());
+            }
+            entries[i] = e;
+        };
+    // The repository's own value wins; the project's value shows for a setting it set.
+    put(
+        &mut entries,
+        "delivery.maxReviewFixCycles",
+        json!(9),
+        Some("repo-a"),
+        4,
+    );
+    put(&mut entries, "delivery.autoMerge", json!(false), None, 3);
+    let mut view = SettingsView::new(repository_scope(), 4, &entries);
+    let own = view.item("delivery.maxReviewFixCycles").unwrap();
+    assert_eq!(
+        (own.status, &own.source, &own.effective),
+        (
+            Status::Overridden,
+            &Source::Repository { revision: 4 },
+            &json!(9)
+        )
+    );
+    assert_eq!(own.source.label(), "Repository");
+    let inherited = view.item("delivery.autoMerge").unwrap();
+    assert_eq!(
+        (inherited.status, &inherited.source, &inherited.effective),
+        (
+            Status::Inherited,
+            &Source::Project { revision: 3 },
+            &json!(false)
+        )
+    );
+    assert_eq!(
+        view.item("reviews.automationWaitSeconds").unwrap().status,
+        Status::Default
+    );
+    // The mandate is enforced and read-only; a workspace-only or project-only setting is not
+    // editable at a repository.
+    let mandate = view.item("delivery.mandatoryReview").unwrap();
+    assert_eq!(mandate.status, Status::Enforced);
+    assert!(!mandate.editable);
+    assert_eq!(
+        view.item("tools.shell").unwrap().status,
+        Status::WorkspaceOnly
+    );
+    assert!(!view.item("repositories.baseDirectory").unwrap().editable);
+    assert_eq!(
+        view.edit("delivery.mandatoryReview", json!(false))
+            .unwrap_err(),
+        ViewError::NotEditable
+    );
+    // A draft saves against the repository: the input names the repository and its project.
+    view.edit("delivery.autoMerge", json!(true)).unwrap();
+    let input = view.save_input().unwrap();
+    assert_eq!(
+        input.repository_id.as_ref().map(|r| r.as_str()),
+        Some("repo-a")
+    );
+    assert_eq!(serde_json::to_value(&input.scope).unwrap(), project_scope);
+    // Project views never name a repository.
+    let project_view = SettingsView::new(
+        ConfigScope::Project(ProjectId(Id::new("project-a").unwrap())),
+        1,
+        &defaults(),
+    );
+    assert!(project_view.save_input().is_none());
+}

@@ -65,6 +65,7 @@
 use crate::authority::AuthorityCapability;
 use crate::context::{PrincipalKind, ReceiptIdentity};
 use crate::fingerprint::Fingerprint;
+use crate::locks::LockExt;
 use crate::ports::{GrantUse, IdKind, StoredReceipt};
 use crate::protocol::{
     ActorId, AssignmentId, AttemptId, Counter, EventId, ExecutionId, Id, OperationId,
@@ -287,7 +288,7 @@ impl Cancellation {
     pub fn cancel(&self) {
         self.0.flag.store(true, Ordering::SeqCst);
         let wakes: Vec<_> = {
-            let mut wakes = self.0.wakes.lock().unwrap_or_else(|p| p.into_inner());
+            let mut wakes = self.0.wakes.locked();
             wakes.retain(|wake| wake.strong_count() > 0);
             wakes.iter().filter_map(Weak::upgrade).collect()
         };
@@ -302,7 +303,7 @@ impl Cancellation {
     /// already happened leaves the caller to see [`Self::is_cancelled`] on its next check, so a
     /// waiter registers first and checks the flag second.
     pub fn wake_on_cancel(&self, wake: &Arc<Wake>) {
-        let mut wakes = self.0.wakes.lock().unwrap_or_else(|p| p.into_inner());
+        let mut wakes = self.0.wakes.locked();
         wakes.retain(|other| other.strong_count() > 0);
         if !wakes
             .iter()
@@ -332,13 +333,10 @@ impl Wake {
     pub fn new() -> Arc<Self> {
         Arc::new(Self::default())
     }
-    fn lock(&self) -> std::sync::MutexGuard<'_, WakeState> {
-        self.state.lock().unwrap_or_else(|p| p.into_inner())
-    }
     /// Signals every waiter.
     pub fn notify(&self) {
         let wakers = {
-            let mut state = self.lock();
+            let mut state = self.state.locked();
             state.generation += 1;
             std::mem::take(&mut state.wakers)
         };
@@ -348,7 +346,7 @@ impl Wake {
     }
     /// The number of signals so far.
     pub fn generation(&self) -> u64 {
-        self.lock().generation
+        self.state.locked().generation
     }
     /// Resolves once a signal arrives after `seen`. Dropping it ends the wait.
     pub fn changed_after(self: &Arc<Self>, seen: u64) -> Changed {
@@ -396,7 +394,7 @@ impl Future for Changed {
     type Output = ();
     fn poll(mut self: std::pin::Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<()> {
         let wake = self.wake.clone();
-        let mut state = wake.lock();
+        let mut state = wake.state.locked();
         if state.generation != self.seen {
             if let Some(slot) = self.slot.take() {
                 state.wakers.retain(|(id, _)| *id != slot);
@@ -421,7 +419,11 @@ impl Future for Changed {
 impl Drop for Changed {
     fn drop(&mut self) {
         if let Some(slot) = self.slot {
-            self.wake.lock().wakers.retain(|(id, _)| *id != slot);
+            self.wake
+                .state
+                .locked()
+                .wakers
+                .retain(|(id, _)| *id != slot);
         }
     }
 }
@@ -447,13 +449,7 @@ impl CommitSignal {
             .generation
             .fetch_add(1, Ordering::SeqCst)
             .wrapping_add(1);
-        for listener in self
-            .0
-            .listeners
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .iter()
-        {
+        for listener in self.0.listeners.locked().iter() {
             listener(generation);
         }
     }
@@ -463,11 +459,7 @@ impl CommitSignal {
     }
     /// Calls `listener` with the new generation after each later commit.
     pub fn subscribe(&self, listener: impl Fn(u64) + Send + Sync + 'static) {
-        self.0
-            .listeners
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .push(Box::new(listener));
+        self.0.listeners.locked().push(Box::new(listener));
     }
 }
 
@@ -1709,7 +1701,7 @@ mod wake_tests {
         let mut dropped = wake.changed_after(wake.generation());
         assert!(poll_once(&mut dropped).is_pending());
         drop(dropped);
-        assert!(wake.lock().wakers.is_empty());
+        assert!(wake.state.locked().wakers.is_empty());
     }
 
     #[test]

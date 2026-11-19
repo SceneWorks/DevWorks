@@ -793,8 +793,8 @@ fn home_requires_a_project_for_knowledge_review_and_filters_before_paging() {
     settle(&mut h);
     press(&mut h, "Knowledge review");
     assert!(has_text(&h, "Select a project to review Knowledge"));
-    assert!(h.state().decisions.reviews.is_empty());
-    assert!(!h.state().decisions.reviews_loaded);
+    assert!(h.state().decisions.reviews.items.is_empty());
+    assert!(!h.state().decisions.reviews.loaded);
     {
         let frames = traced.frames.lock().unwrap();
         assert!(
@@ -811,14 +811,15 @@ fn home_requires_a_project_for_knowledge_review_and_filters_before_paging() {
     }
     choose_review_project(&mut h, "Review beta");
     assert!(
-        h.state().decisions.error.is_none(),
+        h.state().decisions.approvals.error.is_none(),
         "{:?}",
-        h.state().decisions.error
+        h.state().decisions.approvals.error
     );
     let shown = |h: &Ui| {
         h.state()
             .decisions
             .reviews
+            .items
             .iter()
             .map(|row| row.entry.id.as_str().to_owned())
             .collect::<std::collections::BTreeSet<_>>()
@@ -827,7 +828,7 @@ fn home_requires_a_project_for_knowledge_review_and_filters_before_paging() {
     assert!(shown(&h).is_disjoint(&workspace));
     choose_review_project(&mut h, "Review alpha");
     assert_eq!(shown(&h), alpha_ids);
-    assert!(h.state().decisions.reviews_loaded);
+    assert!(h.state().decisions.reviews.loaded);
     {
         let frames = traced.frames.lock().unwrap();
         let review = frames
@@ -852,7 +853,7 @@ fn home_requires_a_project_for_knowledge_review_and_filters_before_paging() {
     }
     choose_review_project(&mut h, "All projects");
     assert!(has_text(&h, "Select a project to review Knowledge"));
-    assert!(h.state().decisions.reviews.is_empty());
+    assert!(h.state().decisions.reviews.items.is_empty());
     assert!(
         traced
             .frames

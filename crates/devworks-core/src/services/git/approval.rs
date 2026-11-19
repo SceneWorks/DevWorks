@@ -247,8 +247,18 @@ impl GitService {
             } else {
                 format!("Review {} for {}", request.descriptor.name, repository.name)
             },
-            reviewed: json!({"input":request.normalized,"repository":repository_value(&repository),"worktree":tree,
-                "currentHead":physical.head,"currentBranch":physical.branch,"dirty":physical.dirty,"native":native,"commitManifest":contents,"artifact":commit_evidence,"commitEvidence":commit_evidence}),
+            reviewed: json!({
+                "input": request.normalized,
+                "repository": repository_value(&repository),
+                "worktree": tree,
+                "currentHead": physical.head,
+                "currentBranch": physical.branch,
+                "dirty": physical.dirty,
+                "native": native,
+                "commitManifest": contents,
+                "artifact": commit_evidence,
+                "commitEvidence": commit_evidence
+            }),
             binding,
         };
         if preview.reviewed["artifact"].is_null() {
@@ -608,10 +618,14 @@ pub(super) fn compact_commit_manifest(manifest: &Value) -> Result<Value, Failure
     let files = manifest["files"]
         .as_array()
         .ok_or_else(|| Refusal::new(DomainErrorCode::InvalidArgument, "commit_manifest", None))?;
-    Ok(
-        json!({"head":manifest["head"],"branch":manifest["branch"],"executionPolicy":manifest["executionPolicy"],"sha256":crate::fingerprint::sha256_hex(bytes.as_bytes()),
-        "byteLength":bytes.len(),"fileCount":files.len()}),
-    )
+    Ok(json!({
+        "head": manifest["head"],
+        "branch": manifest["branch"],
+        "executionPolicy": manifest["executionPolicy"],
+        "sha256": crate::fingerprint::sha256_hex(bytes.as_bytes()),
+        "byteLength": bytes.len(),
+        "fileCount": files.len()
+    }))
 }
 impl GitService {
     fn commit_review_evidence(
@@ -633,5 +647,28 @@ impl GitService {
             ),
             manifest,
         )
+    }
+}
+
+impl crate::services::approvals::SavedOperationOwners for GitService {
+    fn supports(&self, operation: &str) -> bool {
+        matches!(operation, "git.worktree" | "git.commit" | "git.push")
+    }
+    fn prepare(
+        &self,
+        ctx: &crate::context::InvocationContext,
+        request: &crate::admission::DecodedRequest,
+        env: &crate::ports::Preparation<'_>,
+    ) -> Result<crate::services::approvals::OwnerPreview, crate::services::kernel::Failure> {
+        self.approval_preview(ctx, request, env)
+    }
+    fn validate(
+        &self,
+        tx: &mut dyn crate::ports::storage::WriteTransaction,
+        ctx: &crate::context::InvocationContext,
+        request: &crate::admission::DecodedRequest,
+        preview: &crate::services::approvals::OwnerPreview,
+    ) -> Result<(), crate::services::kernel::Failure> {
+        self.validate_approval_preview(tx, ctx, request, preview)
     }
 }

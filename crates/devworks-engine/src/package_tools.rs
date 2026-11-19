@@ -9,6 +9,10 @@
 //! application calls run as that agent), and records what the package returned. Only artifacts
 //! of the invocation itself (its input and its broker results) are accepted as output.
 //!
+//! A person's `addons.invoke` records the same operation (`devworks_core::services::packages::invoke`)
+//! with no session or provider call: the effect then checks that the person is still a registered
+//! human and invokes the contribution as that person.
+//!
 //! A refused admission (no ready helper, shutting down) did not reach the package and is retried
 //! under the consumer's policy. An invocation whose outcome cannot be established (the helper
 //! died, the deadline passed and it had to be terminated) is `OutcomeUnknown`: the package's
@@ -43,9 +47,9 @@ use std::sync::{Arc, OnceLock, Weak};
 use std::time::Duration;
 
 /// The consumer that runs package tool invocations.
-pub const CONSUMER: &str = "package-tools";
+pub const CONSUMER: &str = devworks_core::services::packages::invoke::CONSUMER;
 /// The journal capability of one package tool invocation.
-pub const CAPABILITY: &str = "package.invoke";
+pub const CAPABILITY: &str = devworks_core::services::packages::invoke::CAPABILITY;
 /// How long one package tool invocation may run before the host cancels it.
 pub const DEADLINE: Duration = Duration::from_secs(10 * 60);
 
@@ -58,12 +62,14 @@ struct Request {
     input: wire::ArtifactRef,
     principal: ActorId,
     principal_kind: String,
-    session_id: Id,
+    /// The invoking agent's session; a person's invocation has none.
+    session_id: Option<Id>,
     project_id: Option<ProjectId>,
     root_id: Option<RootId>,
     assignment_id: Option<AssignmentId>,
     fences: Vec<AuthorityFence>,
-    call: ToolCallKey,
+    /// The provider call that requested it; a person's invocation has none.
+    call: Option<ToolCallKey>,
     /// The invoking agent's activation binding `(activation, owner epoch)`, when it has one.
     activation: Option<(Id, i64)>,
 }
@@ -230,12 +236,12 @@ pub fn queue(
             .map_err(|e| StorageError::InvalidRecord(e.to_string()))?,
         principal: ctx.principal().clone(),
         principal_kind: format!("{:?}", ctx.principal_kind()),
-        session_id: session_id.clone(),
+        session_id: Some(session_id.clone()),
         project_id: ctx.project_id().cloned(),
         root_id: ctx.root_id().cloned(),
         assignment_id: ctx.assignment_id().cloned(),
         fences,
-        call: key.clone(),
+        call: Some(key.clone()),
         activation: ctx.activation().map(|(id, epoch)| (id.clone(), epoch)),
     };
     let ctx = ctx.clone();
@@ -270,9 +276,11 @@ fn record(
     {
         return Err(StorageError::ScopeDenied);
     }
-    let session = tx
-        .sessions()
-        .session(&request.session_id)?
+    let session = request
+        .session_id
+        .as_ref()
+        .and_then(|id| tx.sessions().session(id).transpose())
+        .transpose()?
         .ok_or(StorageError::ScopeDenied)?;
     if session.closed() || session.agent_id != *ctx.principal() {
         return Err(StorageError::ScopeDenied);
@@ -336,6 +344,7 @@ fn execute(
     let kind = match request.principal_kind.as_str() {
         "Agent" => PrincipalKind::Agent,
         "Host" => PrincipalKind::Host,
+        "Human" => PrincipalKind::Human,
         _ => return EffectResult::Failed("invalid package tool principal".into()),
     };
     let Some(host) = host.get().and_then(Weak::upgrade) else {
@@ -359,8 +368,11 @@ fn execute(
             request.project_id.clone(),
             request.root_id.clone(),
             request.assignment_id.clone(),
-        )
-        .with_session(request.session_id.clone());
+        );
+    let ctx = match &request.session_id {
+        Some(session) => ctx.with_session(session.clone()),
+        None => ctx,
+    };
     // `with_lineage` clears it: the activation binding is restored last, and the current
     // activation checks of the operations it reaches still apply.
     let ctx = match &request.activation {
@@ -378,7 +390,12 @@ fn execute(
         {
             return Ok(false);
         }
-        let session = s.sessions().session(&request.session_id)?;
+        let Some(session_id) = &request.session_id else {
+            // A person's invocation has no session; the person must still be a registered human.
+            return Ok(kind == PrincipalKind::Human
+                && s.actors().actor_kind(&request.principal)? == Some(PrincipalKind::Human));
+        };
+        let session = s.sessions().session(session_id)?;
         Ok(session.is_some_and(|session| {
             !session.closed()
                 && session.agent_id == request.principal

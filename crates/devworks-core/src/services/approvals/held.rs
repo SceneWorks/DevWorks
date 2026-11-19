@@ -83,7 +83,7 @@ impl ApprovalService {
         if !env.read(|s| super::prepare_authority(s, ctx, &request))? {
             return Err(super::service::denied("saved_operation_current_authority"));
         }
-        if super::service::builtin(operation) {
+        if !self.owners.holdable(operation) {
             return Err(unsupported());
         }
         let preview: OwnerPreview = self.owners.prepare(ctx, &request, &env)?;
@@ -91,7 +91,9 @@ impl ApprovalService {
             "schemaRevision": schema_revision.to_string(), "input": input});
         let scope = match &preview.scope {
             ConfigScope::Workspace => json!({"kind": "Workspace"}),
-            ConfigScope::Project(p) => json!({"kind": "Project", "projectId": p}),
+            ConfigScope::Project(p) | ConfigScope::Repository { project: p, .. } => {
+                json!({"kind": "Project", "projectId": p})
+            }
         };
         let proposal: crate::operations::approvals::ProposeInput = serde_json::from_value(json!({
             "scope": scope,

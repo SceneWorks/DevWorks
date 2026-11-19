@@ -7,6 +7,7 @@
 //! indexing. Each job runs in its own `BEGIN IMMEDIATE` transaction.
 use super::conn::db;
 use super::repos::Unit;
+use devworks_core::locks::LockExt;
 use devworks_core::ports::storage::{
     Cancellation, CommitSignal, StorageError, StoreInfo, Unavailable, WriteJob, WriteOptions,
     WritePriority,
@@ -38,7 +39,7 @@ struct Doorbell {
 }
 impl Doorbell {
     fn ring(&self) {
-        let mut n = self.rung.lock().unwrap_or_else(|p| p.into_inner());
+        let mut n = self.rung.locked();
         *n = n.wrapping_add(1);
         self.cv.notify_one();
     }
@@ -249,7 +250,7 @@ impl Worker {
 
     fn run(mut self) {
         loop {
-            let seen = *self.doorbell.rung.lock().unwrap_or_else(|p| p.into_inner());
+            let seen = *self.doorbell.rung.locked();
             if self.stopping.load(Ordering::SeqCst) {
                 break;
             }
@@ -257,7 +258,7 @@ impl Worker {
                 self.execute(envelope);
                 continue;
             }
-            let guard = self.doorbell.rung.lock().unwrap_or_else(|p| p.into_inner());
+            let guard = self.doorbell.rung.locked();
             let _unused = self
                 .doorbell
                 .cv

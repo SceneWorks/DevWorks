@@ -227,9 +227,22 @@ fn quote_current(
 }
 
 fn intent(request: &AttemptRequest, route: &StoredRouteRequest) -> Result<String, StorageError> {
-    let value = json!({"requestId":request.request_id,"actorId":request.actor_id,"workId":request.work_id,"jobRunId":request.job_run_id,"role":request.role,
-        "modelId":route.model_id,"connectionId":route.connection_id,"sessionId":route.session_id,"purpose":route.purpose,
-        "selection":request.selection,"inputTokens":request.input_tokens,"outputHeadroom":request.output_headroom,"unitHeadroom":request.unit_headroom,"dispatch":request.dispatch});
+    let value = json!({
+        "requestId": request.request_id,
+        "actorId": request.actor_id,
+        "workId": request.work_id,
+        "jobRunId": request.job_run_id,
+        "role": request.role,
+        "modelId": route.model_id,
+        "connectionId": route.connection_id,
+        "sessionId": route.session_id,
+        "purpose": route.purpose,
+        "selection": request.selection,
+        "inputTokens": request.input_tokens,
+        "outputHeadroom": request.output_headroom,
+        "unitHeadroom": request.unit_headroom,
+        "dispatch": request.dispatch
+    });
     crate::fingerprint::canonical_digest(&value).map_err(|_| invalid("invalid accounting intent"))
 }
 
@@ -600,13 +613,11 @@ pub(crate) fn admit_attempt(
         }
     }
     .to_owned();
-    let mut query = request.query.clone();
-    query.access_mode = access_mode.clone();
     let admitted = AdmittedSnapshot {
         admission_key: request.admission_key.clone(),
         intent_digest: digest,
         quote: request.quote.clone(),
-        query,
+        query: request.query.clone(),
         price_generation: request.price_generation,
         override_revision: request.override_revision,
         pricing: request.pricing.clone(),
@@ -1199,7 +1210,13 @@ pub fn observe(
         &attempt,
         "InferenceUsageObserved",
         delta,
-        json!({"observationKey":observation.key,"pricedMicroUsd":balance.priced_micro_usd,"classification":balance.classification.as_str(),"monetaryComplete":balance.monetary_complete,"unknownComponents":state.unknown_components}),
+        json!({
+            "observationKey": observation.key,
+            "pricedMicroUsd": balance.priced_micro_usd,
+            "classification": balance.classification.as_str(),
+            "monetaryComplete": balance.monetary_complete,
+            "unknownComponents": state.unknown_components
+        }),
     )?;
     if let Some(feature) = &attempt.feature_id
         && let Some(work) = tx.work().work(feature)?
@@ -1364,7 +1381,12 @@ pub(super) fn settle(
         &attempt,
         "InferenceAttemptSettled",
         None,
-        json!({"outcome":outcome.label(),"releasedReservationMicroUsd":before.reserved_micro_usd,"unknownTail":balance.unknown_tail,"monetaryComplete":balance.monetary_complete}),
+        json!({
+            "outcome": outcome.label(),
+            "releasedReservationMicroUsd": before.reserved_micro_usd,
+            "unknownTail": balance.unknown_tail,
+            "monetaryComplete": balance.monetary_complete
+        }),
     )?;
     if let Some(feature) = &attempt.feature_id
         && let Some(work) = tx.work().work(feature)?

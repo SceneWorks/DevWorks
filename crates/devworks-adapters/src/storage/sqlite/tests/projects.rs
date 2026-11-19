@@ -142,11 +142,23 @@ fn purge_preparation_and_permit_bind_native_rows_client_and_exact_human_confirma
     )));
     // This fixture has no publisher/dispatcher. Cancel its never-started deliveries;
     // production composition acceptance exercises real publication before preparation.
-    fx.store.with_writer_connection(|c| {
-        let claimed:i64=super::super::conn::db(c.query_row("SELECT count(*) FROM queue_entries WHERE consumer='receipt_replies' AND state='Claimed'",[],|r|r.get(0)))?;
-        assert_eq!(claimed,0);
-        super::super::conn::db(c.execute("UPDATE queue_entries SET state='Cancelled' WHERE consumer='receipt_replies' AND state='Ready'",[])).map(|_|())
-    }).unwrap();
+    fx.store
+        .with_writer_connection(|c| {
+            let claimed: i64 = super::super::conn::db(c.query_row(
+                "SELECT count(*) FROM queue_entries WHERE consumer='receipt_replies' AND \
+            state='Claimed'",
+                [],
+                |r| r.get(0),
+            ))?;
+            assert_eq!(claimed, 0);
+            super::super::conn::db(c.execute(
+                "UPDATE queue_entries SET state='Cancelled' WHERE \
+            consumer='receipt_replies' AND state='Ready'",
+                [],
+            ))
+            .map(|_| ())
+        })
+        .unwrap();
     let owners = Arc::new(PurgeOwners(std::sync::Mutex::new(("a".repeat(64), false))));
     let service = Arc::new(PurgeCoordinator::new(
         fx.store.clone(),
@@ -304,7 +316,15 @@ fn purge_preparation_and_permit_bind_native_rows_client_and_exact_human_confirma
         serde_json::to_value(fx.repo(&user, "repo-1").unwrap()).unwrap(),
         repository
     );
-    let remaining = fx.h.raw().query_row("SELECT count(*) FROM command_receipts WHERE result_json LIKE '%private purge preview%'",[],|r|r.get::<_,i64>(0)).unwrap();
+    let remaining =
+        fx.h.raw()
+            .query_row(
+                "SELECT count(*) FROM command_receipts WHERE result_json LIKE '%private \
+        purge preview%'",
+                [],
+                |r| r.get::<_, i64>(0),
+            )
+            .unwrap();
     assert_eq!(remaining, 0);
     assert!(
         sources
@@ -2028,7 +2048,15 @@ fn compact_receipt_for_test(
 ) -> devworks_core::protocol::records::PurgedReceiptOutcome {
     use devworks_core::protocol::records::{PurgedDecisionKind, PurgedReceiptOutcome};
     let scope = devworks_core::context::ScopeKey::of(ctx);
-    let (operation,digest,result):(String,String,String)=fx.h.raw().query_row("SELECT command_kind,payload_digest,result_json FROM command_receipts WHERE actor_id=?1 AND scope_key=?2 AND idempotency_key=?3",rusqlite::params![ctx.principal().0.as_str(),scope.as_str(),key],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?))).unwrap();
+    let (operation, digest, result): (String, String, String) =
+        fx.h.raw()
+            .query_row(
+                "SELECT command_kind,payload_digest,result_json FROM command_receipts \
+        WHERE actor_id=?1 AND scope_key=?2 AND idempotency_key=?3",
+                rusqlite::params![ctx.principal().0.as_str(), scope.as_str(), key],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .unwrap();
     let body: Value = serde_json::from_str(&result).unwrap();
     let stored = devworks_core::ports::StoredReceipt {
         operation,
@@ -2060,7 +2088,21 @@ fn compact_receipt_for_test(
     };
     let body = json!({"contract":stored.contract,"schemaRevision":stored.schema_revision.0,"purged":outcome});
     assert!(!body.to_string().contains("PRIVATE_RECEIPT_CONTENT"));
-    assert_eq!(fx.h.raw().execute("UPDATE command_receipts SET result_json=?1 WHERE actor_id=?2 AND scope_key=?3 AND idempotency_key=?4",rusqlite::params![body.to_string(),ctx.principal().0.as_str(),scope.as_str(),key]).unwrap(),1);
+    assert_eq!(
+        fx.h.raw()
+            .execute(
+                "UPDATE command_receipts SET result_json=?1 WHERE actor_id=?2 AND \
+        scope_key=?3 AND idempotency_key=?4",
+                rusqlite::params![
+                    body.to_string(),
+                    ctx.principal().0.as_str(),
+                    scope.as_str(),
+                    key
+                ]
+            )
+            .unwrap(),
+        1
+    );
     outcome
 }
 fn receipt_lookup_at(
@@ -2075,7 +2117,13 @@ fn receipt_lookup_at(
         store: &*fx.store,
         ids: &*fx.h.ids,
     };
-    let frame=json!({"protocol":"1.0-draft.1","schemaRevision":revision,"queryId":"purged-receipt-lookup","query":{"kind":"history.command_receipt","requestKey":key}}).to_string();
+    let frame = json!({
+        "protocol": "1.0-draft.1",
+        "schemaRevision": revision,
+        "queryId": "purged-receipt-lookup",
+        "query": {"kind": "history.command_receipt", "requestKey": key}
+    })
+    .to_string();
     gateway
         .query(
             ctx,
@@ -2150,12 +2198,25 @@ fn purged_receipt_keeps_legacy_replay_fences_and_current_observation_after_resta
     assert_eq!(value.command_id, Some(receipt.command_id));
     assert_eq!(value.committed_sequence, Some(receipt.committed_sequence));
     assert_eq!(value.purged.unwrap().request_digest, outcome.request_digest);
-    assert!(
-        matches!(receipt_lookup_at(&fx,&user,key,1),DomainQueryReply::Rejected{fault,..} if fault.code==DomainErrorCode::ViewUnavailable && fault.target_kind.as_ref().is_some_and(|k|k.0=="receipt_content_purged"))
-    );
-    assert!(
-        matches!(receipt_lookup_at(&fx,&user,"never-recorded-key",6),DomainQueryReply::Result{result:OperationResult::HistoryCommandReceipt{value},..} if matches!(value.state,devworks_core::protocol::records::ReceiptLookupState::NotFound) && value.purged.is_none())
-    );
+    assert!(matches!(
+        receipt_lookup_at(&fx, &user, key, 1),
+        DomainQueryReply::Rejected { fault, .. }
+            if fault.code == DomainErrorCode::ViewUnavailable
+                && fault
+                    .target_kind
+                    .as_ref()
+                    .is_some_and(|k| k.0 == "receipt_content_purged")
+    ));
+    assert!(matches!(
+        receipt_lookup_at(&fx, &user, "never-recorded-key", 6),
+        DomainQueryReply::Result {
+            result: OperationResult::HistoryCommandReceipt { value },
+            ..
+        } if matches!(
+            value.state,
+            devworks_core::protocol::records::ReceiptLookupState::NotFound
+        ) && value.purged.is_none()
+    ));
 }
 #[test]
 fn purged_receipt_never_bypasses_current_principal_revocation() {
@@ -2164,7 +2225,11 @@ fn purged_receipt_never_bypasses_current_principal_revocation() {
     fx.bind_agents(&p.id);
     let principal = fx.project_agent(&p.id);
     let key = "purged-agent-edit";
-    let body = json!({"projectId":p.id,"expectedRevision":"1","changes":{"name":"PRIVATE_RECEIPT_CONTENT"}});
+    let body = json!({
+        "projectId": p.id,
+        "expectedRevision": "1",
+        "changes": {"name": "PRIVATE_RECEIPT_CONTENT"}
+    });
     let reply = fx.command_keyed(&principal, "projects.edit", key, body.clone());
     assert!(
         matches!(reply,CommandReply::Recorded{receipt,..} if matches!(receipt.decision,DomainDecision::Applied{..})),
@@ -2200,7 +2265,18 @@ fn purged_receipt_revision6_preserves_an_original_refusal_as_a_terminal_outcome(
             _tx: &mut dyn WriteTransaction,
         ) -> Result<devworks_core::ports::Decided, devworks_core::ports::HandlerFailure> {
             self.0.fetch_add(1, Ordering::SeqCst);
-            Ok(devworks_core::ports::Decided { decision:DomainDecision::Refused {fault:serde_json::from_value(json!({"code":"Conflict","retry":"Never","correlationId":"refusal-probe","blockerIds":[]})).unwrap()},operation_id:None })
+            Ok(devworks_core::ports::Decided {
+                decision: DomainDecision::Refused {
+                    fault: serde_json::from_value(json!({
+                        "code": "Conflict",
+                        "retry": "Never",
+                        "correlationId": "refusal-probe",
+                        "blockerIds": []
+                    }))
+                    .unwrap(),
+                },
+                operation_id: None,
+            })
         }
     }
     let fx = Fx::new();
@@ -2251,7 +2327,10 @@ fn purged_receipt_revision6_preserves_an_original_refusal_as_a_terminal_outcome(
         "a terminal purged outcome never reaches the handler again"
     );
     assert!(
-        matches!(replay,CommandReply::ReceiptPurged{outcome,..} if outcome.command_id==original.command_id && matches!(outcome.original_decision,devworks_core::protocol::records::PurgedDecisionKind::Refused) && outcome.original_fault_code==original.original_fault_code)
+        matches!(replay,CommandReply::ReceiptPurged{outcome,..} if outcome.command_id==original.command_id && matches!(
+            outcome.original_decision,
+            devworks_core::protocol::records::PurgedDecisionKind::Refused
+        ) && outcome.original_fault_code==original.original_fault_code)
     );
     assert_eq!(
         fx.get(&user, &p.id).unwrap().revision,
@@ -2284,10 +2363,41 @@ fn purge_storage_fixture(store: &SqliteStore) -> StoredProjectPurge {
         Ok(())
     })
     .unwrap();
-    let mut prepared=StoredProjectPurge {
-        manifest:serde_json::from_value(json!({"id":"purge-manifest","projectId":"purge-a","revision":"1","projectRevision":"1","digest":"a".repeat(64),"phase":"Prepared","recordCount":"2","managedByteCount":"0","keptRecordCount":"1","keptByteCount":"0","pendingEffects":"0","createdAtMs":T0.to_string()})).unwrap(),
-        actor_id:actor("purge-human"),store_id:info.store_id,restore_epoch:info.restore_epoch,scope_revision:2,policy_digest:"b".repeat(64),witness_digest:"c".repeat(64),
-        entries:vec![serde_json::from_value(json!({"id":"d".repeat(64),"kind":"RecordClass","recordClass":"work_items","disposition":"Remove","recordCount":"2","byteCount":"0","reason":"OwnedProjectRecords"})).unwrap()],rows:vec![]
+    let mut prepared = StoredProjectPurge {
+        manifest: serde_json::from_value(json!({
+            "id": "purge-manifest",
+            "projectId": "purge-a",
+            "revision": "1",
+            "projectRevision": "1",
+            "digest": "a".repeat(64),
+            "phase": "Prepared",
+            "recordCount": "2",
+            "managedByteCount": "0",
+            "keptRecordCount": "1",
+            "keptByteCount": "0",
+            "pendingEffects": "0",
+            "createdAtMs": T0.to_string()
+        }))
+        .unwrap(),
+        actor_id: actor("purge-human"),
+        store_id: info.store_id,
+        restore_epoch: info.restore_epoch,
+        scope_revision: 2,
+        policy_digest: "b".repeat(64),
+        witness_digest: "c".repeat(64),
+        entries: vec![
+            serde_json::from_value(json!({
+                "id": "d".repeat(64),
+                "kind": "RecordClass",
+                "recordClass": "work_items",
+                "disposition": "Remove",
+                "recordCount": "2",
+                "byteCount": "0",
+                "reason": "OwnedProjectRecords"
+            }))
+            .unwrap(),
+        ],
+        rows: vec![],
     };
     prepared.manifest.digest = project_purge_digest(&prepared).try_into().unwrap();
     prepared
@@ -2320,7 +2430,18 @@ fn purge_effect_leases_survive_restart_reject_stale_owners_and_retain_only_clien
         action: ProjectPurgeRowAction::Delete,
         reason: ProjectPurgeRowReason::OwnedLineage,
     });
-    prepared.entries.push(serde_json::from_value(json!({"id":devworks_core::ports::project_purge::reviewed_effect_entry(&intent),"kind":"RecordClass","recordClass":"client_state","disposition":"Remove","recordCount":"0","byteCount":"0","reason":"OwnedClientState"})).unwrap());
+    prepared.entries.push(
+        serde_json::from_value(json!({
+            "id": devworks_core::ports::project_purge::reviewed_effect_entry(&intent),
+            "kind": "RecordClass",
+            "recordClass": "client_state",
+            "disposition": "Remove",
+            "recordCount": "0",
+            "byteCount": "0",
+            "reason": "OwnedClientState"
+        }))
+        .unwrap(),
+    );
     prepared.manifest.digest = project_purge_digest(&prepared).try_into().unwrap();
     let copy = prepared.clone();
     run_write(&store, WriteOptions::fixture(), move |tx| {
@@ -2350,11 +2471,19 @@ fn purge_effect_leases_survive_restart_reject_stale_owners_and_retain_only_clien
     prepared.manifest.pending_effects = Counter::new(1).unwrap();
     h.raw()
         .execute(
-            "UPDATE project_purge_manifests SET phase='RemovingBytes',operation_id='purge-operation',body_json=?1",
+            "UPDATE project_purge_manifests SET phase='RemovingBytes',\
+                operation_id='purge-operation',body_json=?1",
             [serde_json::to_string(&prepared.manifest).unwrap()],
         )
         .unwrap();
-    h.raw().execute("INSERT INTO project_purge_effects(manifest_id,id,kind,owner_digest,body_json,byte_count,state) VALUES('purge-manifest',?1,'Client',?2,?3,0,'Pending')",rusqlite::params![effect,owner_digest,body]).unwrap();
+    h.raw()
+        .execute(
+            "INSERT INTO project_purge_effects(manifest_id,id,kind,owner_digest,\
+        body_json,byte_count,state) VALUES('purge-manifest',?1,'Client',?2,?3,0,\
+        'Pending')",
+            rusqlite::params![effect, owner_digest, body],
+        )
+        .unwrap();
     let mut forged = intent.clone();
     if let PurgeEffectIntent::Client { digest, .. } = &mut forged {
         *digest = "b".repeat(64);
@@ -2553,7 +2682,18 @@ fn a_purge_step_asks_for_a_retry_while_the_client_is_unacknowledged_then_complet
         scope,
         digest: "a".repeat(64),
     };
-    prepared.entries.push(serde_json::from_value(json!({"id":devworks_core::ports::project_purge::reviewed_effect_entry(&intent),"kind":"RecordClass","recordClass":"client_state","disposition":"Remove","recordCount":"0","byteCount":"0","reason":"OwnedClientState"})).unwrap());
+    prepared.entries.push(
+        serde_json::from_value(json!({
+            "id": devworks_core::ports::project_purge::reviewed_effect_entry(&intent),
+            "kind": "RecordClass",
+            "recordClass": "client_state",
+            "disposition": "Remove",
+            "recordCount": "0",
+            "byteCount": "0",
+            "reason": "OwnedClientState"
+        }))
+        .unwrap(),
+    );
     prepared.manifest.digest = project_purge_digest(&prepared).try_into().unwrap();
     let copy = prepared.clone();
     run_write(&*store, WriteOptions::fixture(), move |tx| {
@@ -2583,11 +2723,19 @@ fn a_purge_step_asks_for_a_retry_while_the_client_is_unacknowledged_then_complet
     prepared.manifest.pending_effects = Counter::new(1).unwrap();
     h.raw()
         .execute(
-            "UPDATE project_purge_manifests SET phase='RemovingBytes',operation_id='purge-operation',body_json=?1",
+            "UPDATE project_purge_manifests SET phase='RemovingBytes',\
+                operation_id='purge-operation',body_json=?1",
             [serde_json::to_string(&prepared.manifest).unwrap()],
         )
         .unwrap();
-    h.raw().execute("INSERT INTO project_purge_effects(manifest_id,id,kind,owner_digest,body_json,byte_count,state) VALUES('purge-manifest',?1,'Client',?2,?3,0,'Pending')",rusqlite::params![effect,owner_digest,body]).unwrap();
+    h.raw()
+        .execute(
+            "INSERT INTO project_purge_effects(manifest_id,id,kind,owner_digest,\
+        body_json,byte_count,state) VALUES('purge-manifest',?1,'Client',?2,?3,0,\
+        'Pending')",
+            rusqlite::params![effect, owner_digest, body],
+        )
+        .unwrap();
     let client = Arc::new(AckClient(Default::default()));
     let owners = Arc::new(PurgeOwners(std::sync::Mutex::new(("a".repeat(64), false))));
     let worker = PurgeWorker::new(store.clone(), h.ids.clone(), owners, client.clone());
@@ -2753,7 +2901,14 @@ fn purge_row_witnesses_survive_restart_bind_the_review_and_refuse_duplicates_ato
     })
     .unwrap();
     let raw = h.raw();
-    let text:String=raw.query_row("SELECT group_concat(table_name||key_digest||row_digest||action||reason) FROM project_purge_rows",[],|r|r.get(0)).unwrap();
+    let text: String = raw
+        .query_row(
+            "SELECT group_concat(table_name||key_digest||row_digest||action||reason) \
+        FROM project_purge_rows",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
     assert!(!text.contains(private_key));
     drop(raw);
     drop(store);
@@ -2858,18 +3013,31 @@ fn purge_candidate_snapshot_tracks_shared_and_moved_content_without_selecting_it
     let h = Harness::new();
     let store = h.store();
     let _ = purge_storage_fixture(&store);
-    store.with_writer_connection(|c| {
-        super::super::conn::db(c.execute_batch(
-            "INSERT INTO artifacts(id,title,revision,scope_revision,origin_project_id,current_project_id,scope_kind,owner_actor_id) VALUES
-             ('owned-private','private sentinel',1,1,'purge-a','purge-a','Project',NULL),
-             ('moved-in','currently owned sentinel',1,1,'purge-b','purge-a','Project',NULL),
-             ('shared-out','shared sentinel',1,1,'purge-a','purge-a','Project',NULL),
-             ('moved-workspace','independent workspace sentinel',1,1,'purge-a',NULL,'Workspace','purge-human'),
-             ('shared-in','other project sentinel',1,1,'purge-b','purge-b','Project',NULL),
-             ('unrelated','unrelated sentinel',1,1,'purge-b','purge-b','Project',NULL);
-             INSERT INTO artifact_shares VALUES('shared-out','purge-b'),('shared-in','purge-a');"
-        ))
-    }).unwrap();
+    store
+        .with_writer_connection(|c| {
+            super::super::conn::db(c.execute_batch(
+                "INSERT INTO artifacts(id,title,revision,scope_revision,\
+                origin_project_id,current_project_id,scope_kind,owner_actor_id) \
+                VALUES
+             ('owned-private','private sentinel',1,1,'purge-a',\
+                'purge-a','Project',NULL),
+             ('moved-in','currently owned \
+                sentinel',1,1,'purge-b','purge-a','Project',NULL),
+             \
+                ('shared-out','shared sentinel',1,1,'purge-a','purge-a','Project',\
+                NULL),
+             ('moved-workspace','independent workspace sentinel',\
+                1,1,'purge-a',NULL,'Workspace','purge-human'),
+             \
+                ('shared-in','other project sentinel',1,1,'purge-b','purge-b','Project',\
+                NULL),
+             ('unrelated','unrelated sentinel',1,1,'purge-b',\
+                'purge-b','Project',NULL);
+             INSERT INTO artifact_shares \
+                VALUES('shared-out','purge-b'),('shared-in','purge-a');",
+            ))
+        })
+        .unwrap();
     let snapshot = || {
         read_snapshot(&store, &ReadOptions::default(), |r| {
             r.projects().purge_candidates(&project("purge-a"))
@@ -3021,7 +3189,19 @@ fn purge_candidate_receipts_include_actual_events_and_explicit_creation_snapshot
         "projects.edit",
         json!({"projectId":other.id,"expectedRevision":"1","changes":{"name":"Other renamed"}}),
     ));
-    assert_eq!(fx.h.raw().query_row("SELECT count(*) FROM events WHERE kind='CommandDecided' AND project_id IS NULL AND json_extract(payload_json,'$.operation')='projects.create'", [], |r| r.get::<_,i64>(0)).unwrap(), 2, "workspace creation receipts need typed snapshot redaction, not invented project ownership");
+    assert_eq!(
+        fx.h.raw()
+            .query_row(
+                "SELECT count(*) FROM events WHERE kind='CommandDecided' AND project_id \
+        IS NULL AND json_extract(payload_json,'$.operation')='projects.create'",
+                [],
+                |r| r.get::<_, i64>(0)
+            )
+            .unwrap(),
+        2,
+        "workspace creation receipts need typed snapshot redaction, not invented \
+        project ownership"
+    );
     let snapshot = |p: &ProjectId| {
         read_snapshot(fx.store.as_ref(), &ReadOptions::default(), |r| {
             r.projects().purge_candidates(p)
@@ -3040,7 +3220,17 @@ fn purge_candidate_receipts_include_actual_events_and_explicit_creation_snapshot
     assert_eq!(count(&other.id), 2);
     // Every command used the same current Human/store scope. Attribution still
     // follows actual CommandDecided targets plus explicit typed creation snapshots.
-    assert_eq!(fx.h.raw().query_row("SELECT count(DISTINCT scope_key) FROM command_receipts WHERE command_kind IN('projects.create','projects.edit')",[],|r|r.get::<_,i64>(0)).unwrap(),1);
+    assert_eq!(
+        fx.h.raw()
+            .query_row(
+                "SELECT count(DISTINCT scope_key) FROM command_receipts WHERE \
+        command_kind IN('projects.create','projects.edit')",
+                [],
+                |r| r.get::<_, i64>(0)
+            )
+            .unwrap(),
+        1
+    );
     assert_eq!(count(&p.id), 3);
 }
 
@@ -3049,10 +3239,22 @@ fn purge_candidate_snapshot_witnesses_independent_references_without_expanding_o
     let h = Harness::new();
     let store = h.store();
     let _ = purge_storage_fixture(&store);
-    store.with_writer_connection(|c| super::super::conn::db(c.execute_batch(
-        "INSERT INTO operations(id,capability,schema_version,args_digest,payload_json,state,revision,created_at) VALUES('owned-operation','schemas.index',5,'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa','{}','Completed',1,0);
-         INSERT INTO events(id,actor_id,project_id,operation_id,aggregate_kind,aggregate_id,aggregate_revision,kind,created_at,payload_json) VALUES('owned-command-event','purge-human','purge-a','owned-operation','command','owned-command',1,'CommandDecided',0,'{}');"
-    ))).unwrap();
+    store
+        .with_writer_connection(|c| {
+            super::super::conn::db(c.execute_batch(
+                "INSERT INTO operations(id,capability,schema_version,args_digest,\
+            payload_json,state,revision,created_at) VALUES('owned-operation',\
+            'schemas.index',5,\
+            'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa','{}',\
+            'Completed',1,0);
+         INSERT INTO events(id,actor_id,project_id,\
+            operation_id,aggregate_kind,aggregate_id,aggregate_revision,kind,\
+            created_at,payload_json) VALUES('owned-command-event','purge-human',\
+            'purge-a','owned-operation','command','owned-command',1,\
+            'CommandDecided',0,'{}');",
+            ))
+        })
+        .unwrap();
     let snapshot = || {
         read_snapshot(&store, &ReadOptions::default(), |r| {
             r.projects().purge_candidates(&project("purge-a"))
@@ -3066,17 +3268,51 @@ fn purge_candidate_snapshot_witnesses_independent_references_without_expanding_o
         .iter()
         .find(|r| r.table == "operations")
         .unwrap();
-    store.with_writer_connection(|c| super::super::conn::db(c.execute(
-        "INSERT INTO usage_price_status(provider,revision,refresh_pending,refresh_operation_id) VALUES('independent-provider',1,0,'owned-operation')",[]
-    )).map(|_|())).unwrap();
-    store.with_writer_connection(|c| super::super::conn::db(c.execute_batch(
-        "INSERT INTO events(id,actor_id,aggregate_kind,aggregate_id,aggregate_revision,kind,created_at,payload_json) VALUES('global-package-event','purge-human','package','global-package',1,'GlobalFixture',0,'{}');
-         INSERT INTO package_handler_commits(package_id,subscription_id,event_id,receipt_id,payload_digest,state_generation,state_revision,checkpoint,intents_json) VALUES('independent-package','subscription','global-package-event','processing-receipt','aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',1,1,1,'[{\"actionKey\":\"private-action-key\",\"operationId\":\"owned-operation\"}]');
-         INSERT INTO artifacts(id,title,revision,scope_revision,scope_kind,owner_actor_id) VALUES('independent-artifact','independent artifact sentinel',1,1,'Workspace','purge-human');
-         INSERT INTO blobs(digest,byte_count,relative_path,state,generation) VALUES('cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc',1,'controlled-reference-fixture','Live','fixture');
-         INSERT INTO artifact_versions(id,artifact_id,version_no,blob_digest,media_type,created_at,source_json) VALUES('independent-version','independent-artifact',1,'cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc','text/plain',0,'{}');
-         INSERT INTO artifact_links VALUES('independent-version','operation','owned-operation','Origin');"
-    ))).unwrap();
+    store
+        .with_writer_connection(|c| {
+            super::super::conn::db(c.execute(
+                "INSERT INTO usage_price_status(provider,revision,refresh_pending,\
+            refresh_operation_id) VALUES('independent-provider',1,0,\
+            'owned-operation')",
+                [],
+            ))
+            .map(|_| ())
+        })
+        .unwrap();
+    store
+        .with_writer_connection(|c| {
+            super::super::conn::db(c.execute_batch(
+                "INSERT INTO events(id,actor_id,aggregate_kind,aggregate_id,\
+            aggregate_revision,kind,created_at,payload_json) \
+            VALUES('global-package-event','purge-human','package','global-package',\
+            1,'GlobalFixture',0,'{}');
+         INSERT INTO \
+            package_handler_commits(package_id,subscription_id,event_id,receipt_id,\
+            payload_digest,state_generation,state_revision,checkpoint,intents_json) \
+            VALUES('independent-package','subscription','global-package-event',\
+            'processing-receipt',\
+            'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',1,1,\
+            1,'[{\"actionKey\":\"private-action-key\",\
+            \"operationId\":\"owned-operation\"}]');
+         INSERT INTO \
+            artifacts(id,title,revision,scope_revision,scope_kind,owner_actor_id) \
+            VALUES('independent-artifact','independent artifact sentinel',1,1,\
+            'Workspace','purge-human');
+         INSERT INTO blobs(digest,\
+            byte_count,relative_path,state,generation) \
+            VALUES('cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc\
+            ',1,'controlled-reference-fixture','Live','fixture');
+         INSERT \
+            INTO artifact_versions(id,artifact_id,version_no,blob_digest,media_type,\
+            created_at,source_json) VALUES('independent-version',\
+            'independent-artifact',1,\
+            'cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc',\
+            'text/plain',0,'{}');
+         INSERT INTO artifact_links \
+            VALUES('independent-version','operation','owned-operation','Origin');",
+            ))
+        })
+        .unwrap();
     let after = snapshot();
     assert_eq!(
         before.rows, after.rows,
@@ -3166,14 +3402,28 @@ fn purge_candidate_snapshot_witnesses_independent_references_without_expanding_o
             .unwrap(),
         "Completed"
     );
-    let original_intents=h.raw().query_row("SELECT intents_json FROM package_handler_commits WHERE receipt_id='processing-receipt'",[],|r|r.get::<_,String>(0)).unwrap();
+    let original_intents = h
+        .raw()
+        .query_row(
+            "SELECT intents_json FROM package_handler_commits WHERE \
+        receipt_id='processing-receipt'",
+            [],
+            |r| r.get::<_, String>(0),
+        )
+        .unwrap();
     for unknown in [
         json!({"actionKey":"key","operationId":"owned-operation"}),
         json!([{"actionKey":"key","operationId":"owned-operation","arguments":"unmapped private arguments"}]),
         json!([{"actionKey":"","operationId":"owned-operation"}]),
         json!([{"actionKey":"key","operationId":42}]),
     ] {
-        h.raw().execute("UPDATE package_handler_commits SET intents_json=?1 WHERE receipt_id='processing-receipt'",[unknown.to_string()]).unwrap();
+        h.raw()
+            .execute(
+                "UPDATE package_handler_commits SET intents_json=?1 WHERE \
+            receipt_id='processing-receipt'",
+                [unknown.to_string()],
+            )
+            .unwrap();
         let refused = read_snapshot(&store, &ReadOptions::default(), |r| {
             r.projects().purge_candidates(&project("purge-a"))
         });
@@ -3192,9 +3442,25 @@ fn purge_candidate_snapshot_witnesses_independent_references_without_expanding_o
             "{}"
         );
     }
-    h.raw().execute("UPDATE package_handler_commits SET intents_json=?1 WHERE receipt_id='processing-receipt'",[original_intents]).unwrap();
+    h.raw()
+        .execute(
+            "UPDATE package_handler_commits SET intents_json=?1 WHERE \
+        receipt_id='processing-receipt'",
+            [original_intents],
+        )
+        .unwrap();
     assert_eq!(snapshot().digest, after.digest);
-    assert_eq!(h.raw().query_row("SELECT refresh_operation_id FROM usage_price_status WHERE provider='independent-provider'",[],|r|r.get::<_,String>(0)).unwrap(),"owned-operation");
+    assert_eq!(
+        h.raw()
+            .query_row(
+                "SELECT refresh_operation_id FROM usage_price_status WHERE \
+        provider='independent-provider'",
+                [],
+                |r| r.get::<_, String>(0)
+            )
+            .unwrap(),
+        "owned-operation"
+    );
 }
 
 #[test]
@@ -3202,7 +3468,13 @@ fn purge_planning_classifies_records_read_only_and_never_enables_ordinary_delete
     let h = Harness::new();
     let store = h.store();
     let _ = purge_storage_fixture(&store);
-    h.raw().execute("INSERT INTO allocation_replays(project_id,key,intent_digest,result_json) VALUES('purge-a',?1,?2,'{}')",rusqlite::params!["a".repeat(64),"b".repeat(64)]).unwrap();
+    h.raw()
+        .execute(
+            "INSERT INTO allocation_replays(project_id,key,intent_digest,\
+        result_json) VALUES('purge-a',?1,?2,'{}')",
+            rusqlite::params!["a".repeat(64), "b".repeat(64)],
+        )
+        .unwrap();
     let plan = read_snapshot(&store, &ReadOptions::default(), |r| {
         r.projects().purge_planning(&project("purge-a"))
     })
@@ -3271,10 +3543,26 @@ fn purge_planning_compacts_typed_creation_snapshots() {
         fx.get(&fx.user(), &p.id).unwrap().name.0,
         "Private copied project name"
     );
-    let original=fx.h.raw().query_row("SELECT result_json FROM command_receipts WHERE command_kind='projects.create' AND json_extract(result_json,'$.receipt.decision.result.value.id')=?1",[p.id.0.as_str()],|r|r.get::<_,String>(0)).unwrap();
+    let original =
+        fx.h.raw()
+            .query_row(
+                "SELECT result_json FROM command_receipts WHERE \
+        command_kind='projects.create' AND json_extract(result_json,\
+        '$.receipt.decision.result.value.id')=?1",
+                [p.id.0.as_str()],
+                |r| r.get::<_, String>(0),
+            )
+            .unwrap();
     let mut malformed: Value = serde_json::from_str(&original).unwrap();
     malformed["unmappedPrivateBody"] = json!("unrecognized receipt body");
-    fx.h.raw().execute("UPDATE command_receipts SET result_json=?1 WHERE command_kind='projects.create' AND json_extract(result_json,'$.receipt.decision.result.value.id')=?2",rusqlite::params![malformed.to_string(),p.id.0.as_str()]).unwrap();
+    fx.h.raw()
+        .execute(
+            "UPDATE command_receipts SET result_json=?1 WHERE \
+        command_kind='projects.create' AND json_extract(result_json,\
+        '$.receipt.decision.result.value.id')=?2",
+            rusqlite::params![malformed.to_string(), p.id.0.as_str()],
+        )
+        .unwrap();
     let refused = read_snapshot(fx.store.as_ref(), &ReadOptions::default(), |r| {
         r.projects().purge_planning(&p.id)
     })
@@ -3323,7 +3611,21 @@ fn purge_planning_business_digest_excludes_only_validated_minimal_control_audit(
         .unwrap()
     };
     let before = assess();
-    let manifest=serde_json::from_value(json!({"id":"control-manifest","projectId":p.id,"revision":"1","projectRevision":p.revision,"digest":"a".repeat(64),"phase":"Prepared","recordCount":"2","managedByteCount":"0","keptRecordCount":"1","keptByteCount":"0","pendingEffects":"0","createdAtMs":T0.to_string()})).unwrap();
+    let manifest = serde_json::from_value(json!({
+        "id": "control-manifest",
+        "projectId": p.id,
+        "revision": "1",
+        "projectRevision": p.revision,
+        "digest": "a".repeat(64),
+        "phase": "Prepared",
+        "recordCount": "2",
+        "managedByteCount": "0",
+        "keptRecordCount": "1",
+        "keptByteCount": "0",
+        "pendingEffects": "0",
+        "createdAtMs": T0.to_string()
+    }))
+    .unwrap();
     let mut frame: Value = serde_json::from_str(&Fx::frame(
         "projects.prepare_purge",
         "control-digest-preview",
@@ -3365,7 +3667,15 @@ fn purge_planning_business_digest_excludes_only_validated_minimal_control_audit(
             .count(),
         3
     );
-    let event=fx.h.raw().query_row("SELECT seq,payload_json FROM events WHERE kind='CommandDecided' AND json_extract(payload_json,'$.operation')='projects.prepare_purge'",[],|r|Ok((r.get::<_,i64>(0)?,r.get::<_,String>(1)?))).unwrap();
+    let event =
+        fx.h.raw()
+            .query_row(
+                "SELECT seq,payload_json FROM events WHERE kind='CommandDecided' AND \
+        json_extract(payload_json,'$.operation')='projects.prepare_purge'",
+                [],
+                |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)),
+            )
+            .unwrap();
     let mut payload: Value = serde_json::from_str(&event.1).unwrap();
     payload["subject"] = json!({"privateBody":"unexpected copied content"});
     fx.h.raw()
@@ -3948,7 +4258,14 @@ fn managed_purge_file_reservations_survive_restart_block_preview_and_publish_onl
         .is_empty()
     );
     let raw = h.raw();
-    let (path,witness):(String,String)=raw.query_row("SELECT relative_path,identity_json FROM project_managed_files WHERE id='managed-export'",[],|r|Ok((r.get(0)?,r.get(1)?))).unwrap();
+    let (path, witness): (String, String) = raw
+        .query_row(
+            "SELECT relative_path,identity_json FROM project_managed_files WHERE \
+        id='managed-export'",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .unwrap();
     assert!(path.is_empty());
     assert_eq!(witness, "{}");
 }
@@ -3999,7 +4316,14 @@ fn project_preview_writes_refuse_a_logically_purged_project_and_leave_workspace_
         "purge-preview-fence",
     )));
     manifest.pending_effects = Counter::new(1).unwrap();
-    h.raw().execute("UPDATE project_purge_manifests SET phase='RemovingBytes',revision=2,operation_id='purge-preview-fence',body_json=?1 WHERE id='purge-manifest'",[serde_json::to_string(&manifest).unwrap()]).unwrap();
+    h.raw()
+        .execute(
+            "UPDATE project_purge_manifests SET phase='RemovingBytes',revision=2,\
+        operation_id='purge-preview-fence',body_json=?1 WHERE \
+        id='purge-manifest'",
+            [serde_json::to_string(&manifest).unwrap()],
+        )
+        .unwrap();
     let late = devworks_core::services::artifacts::preview::preview_id("late-purge");
     assert!(
         custody
@@ -4124,12 +4448,16 @@ fn native_purge_files_cover_all_owned_classes_and_preserve_sources_and_other_gen
         "browser/sessions/other/profile".into(),
         "source/.git/config".into(),
         "source/main.rs".into(),
+        "project-skills/purge-b/deploy/SKILL.md".into(),
+        "skills/deploy/SKILL.md".into(),
     ];
     let owned = [
         blob,
         "staging/purge-op.part".into(),
         format!("quarantine/{digest}.g1.123-1"),
         "browser/sessions/purge-session/nested/profile".into(),
+        "project-skills/purge-a/deploy/SKILL.md".into(),
+        "project-skills/purge-a/deploy/refs/notes.md".into(),
     ];
     for name in owned.iter().chain(kept.iter()) {
         let path = data.join(name);
@@ -4170,6 +4498,9 @@ fn native_purge_files_cover_all_owned_classes_and_preserve_sources_and_other_gen
             },
             O::ClientPaste {
                 file_id: id("purge-paste"),
+            },
+            O::ProjectSkills {
+                project_id: id("purge-a"),
             },
         ],
     };
@@ -4252,6 +4583,10 @@ fn native_purge_files_cover_all_owned_classes_and_preserve_sources_and_other_gen
         assert!(!data.join(path).exists());
     }
     assert!(!data.join("browser/sessions/purge-session").exists());
+    assert!(
+        !data.join("project-skills/purge-a").exists(),
+        "the whole project skill folder is removed"
+    );
     for path in kept {
         assert!(
             data.join(&path).exists(),
@@ -4400,7 +4735,9 @@ fn purge_preparation_refuses_unreviewed_tables_columns_indexes_and_triggers_with
         "CREATE TABLE future_project_records(project_id TEXT,private_body TEXT)",
         "ALTER TABLE projects ADD COLUMN future_private_body TEXT",
         "CREATE INDEX future_project_owner ON projects(title)",
-        "CREATE TRIGGER future_project_delete AFTER DELETE ON project_details BEGIN DELETE FROM project_repositories WHERE project_id=OLD.project_id; END",
+        "CREATE TRIGGER future_project_delete AFTER DELETE ON project_details \
+            BEGIN DELETE FROM project_repositories WHERE project_id=OLD.project_id; \
+            END",
     ] {
         let h = Harness::new();
         let store = h.store();
@@ -4538,9 +4875,28 @@ fn purge_planning_removes_only_integration_links_the_project_owns() {
             "independent-local-work",
         ),
     ] {
-        fx.h.raw().execute("INSERT INTO integration_records VALUES(?1,?2,'repo-1',?3,'issue',?1,1,'Observed',?4)",rusqlite::params![record,owner.0.as_str(),work,json!({"privateBody":"copied integration detail"}).to_string()]).unwrap();
+        fx.h.raw()
+            .execute(
+                "INSERT INTO integration_records VALUES(?1,?2,'repo-1',?3,'issue',?1,1,\
+            'Observed',?4)",
+                rusqlite::params![
+                    record,
+                    owner.0.as_str(),
+                    work,
+                    json!({"privateBody":"copied integration detail"}).to_string()
+                ],
+            )
+            .unwrap();
     }
-    fx.h.raw().execute_batch("INSERT INTO integration_links VALUES('owned-integration','independent-local-work','reference');INSERT INTO integration_links VALUES('independent-integration','purge-local-work','reference');INSERT INTO integration_links VALUES('independent-integration','independent-local-work','reference');").unwrap();
+    fx.h.raw()
+        .execute_batch(
+            "INSERT INTO integration_links VALUES('owned-integration',\
+        'independent-local-work','reference');INSERT INTO integration_links \
+        VALUES('independent-integration','purge-local-work','reference');INSERT \
+        INTO integration_links VALUES('independent-integration',\
+        'independent-local-work','reference');",
+        )
+        .unwrap();
     let plan = read_snapshot(fx.store.as_ref(), &ReadOptions::default(), |r| {
         r.projects().purge_planning(&p.id)
     })

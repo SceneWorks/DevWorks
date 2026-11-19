@@ -359,7 +359,7 @@ fn shared_operation_fixtures_match_recorded_outcomes() {
 
 #[test]
 fn domain_fixtures_match_recorded_outcomes() {
-    assert_eq!(run("domain-fixtures.json", 2005), 2005);
+    assert_eq!(run("domain-fixtures.json", 2082), 2082);
 }
 
 #[test]
@@ -451,8 +451,16 @@ fn every_catalog_input_has_a_positive_recorded_fixture_admitted_natively() {
     // and mcp.remove arrive at revision 8, and so does mcp.classify_tool; containers.create adds
     // revision 8 for the explicit wider port bind, and process.install_project_dependencies
     // adds revision 8 for the explicit allowScripts. history.work_lineage revision 3 (actor
-    // attribution) adds one; sessions.transcript revision 8 (the dispatch fence) adds one.
-    assert_eq!(admitted.len(), 632);
+    // attribution) adds one; sessions.transcript revision 8 (the dispatch fence) adds one;
+    // skills.set_enabled arrives at revision 8; the four settings operations
+    // add revision 8 for the repository scope (repositoryId, sourceRepositoryId); the ten
+    // skill and role history operations add revision 8 for the draft rationale and the record's
+    // author, session, rationale, state and approval outcome; ten operations that return lessons
+    // add revision 8 for the skills that name a lesson (knowledge.search, .read, .subgraph,
+    // .entity_bundle, .entity_graph, .claim_bundle, .expand_frontier, .query, .tagged_lessons and
+    // approvals.review_queue); addons.invoke and addons.invocation arrive at revision 8;
+    // router.catalog revision 4 (offeredEfforts) adds one.
+    assert_eq!(admitted.len(), 662);
 }
 
 #[test]

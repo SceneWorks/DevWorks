@@ -31,12 +31,18 @@ pub enum Source {
     Project {
         revision: i64,
     },
+    Repository {
+        revision: i64,
+    },
 }
 impl Source {
     fn of(d: &SettingDescriptor, e: &SettingEntry) -> Self {
         let revision = e.revision.get();
         match &e.source_scope {
             _ if d.locked() => Self::HarnessPolicy,
+            DataScope::Project { .. } if e.source_repository_id.is_some() => {
+                Self::Repository { revision }
+            }
             DataScope::Workspace if revision == INITIAL_REVISION => Self::Default,
             DataScope::Workspace => Self::Workspace { revision },
             DataScope::Project { .. } => Self::Project { revision },
@@ -48,6 +54,7 @@ impl Source {
             Self::HarnessPolicy => "Enforced by DevWorks",
             Self::Workspace { .. } => "Workspace",
             Self::Project { .. } => "Project",
+            Self::Repository { .. } => "Repository",
         }
     }
 }
@@ -57,7 +64,7 @@ impl Source {
 pub enum Status {
     /// Nothing configured anywhere; the built-in default applies.
     Default,
-    /// The viewed project uses the workspace value.
+    /// The viewed project or repository uses a value set at a wider scope.
     Inherited,
     /// Configured at the viewed scope.
     Overridden,
@@ -175,11 +182,14 @@ impl SettingsView {
                 let source = Source::of(d, e);
                 let status = match (&source, viewed) {
                     (Source::HarnessPolicy, _) => Status::Enforced,
-                    (_, ScopeKind::Project) if !d.allows(ScopeKind::Project) => {
+                    (_, ScopeKind::Project | ScopeKind::Repository)
+                        if !d.allows(ScopeKind::Project) =>
+                    {
                         Status::WorkspaceOnly
                     }
                     (Source::Default, _) => Status::Default,
-                    (Source::Project { .. }, ScopeKind::Project)
+                    (Source::Repository { .. }, ScopeKind::Repository)
+                    | (Source::Project { .. }, ScopeKind::Project)
                     | (Source::Workspace { .. }, ScopeKind::Workspace) => Status::Overridden,
                     _ => Status::Inherited,
                 };
@@ -379,6 +389,7 @@ impl SettingsView {
         }
         Some(SaveRevisionInput {
             scope: crate::protocol::data::DataScope::from(&self.scope),
+            repository_id: self.scope.repository_id().cloned(),
             expected_revision: Revision::new(self.revision).ok()?,
             entries: BoundedList(entries),
         })

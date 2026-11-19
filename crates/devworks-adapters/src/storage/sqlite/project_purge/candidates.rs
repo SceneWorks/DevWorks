@@ -229,6 +229,20 @@ pub(super) fn selection(project: &ProjectId) -> Result<Selection, StorageError> 
                 .into(),
         ),
     );
+    // A link from a skill or role revision to a lesson follows both of its ends: it goes with the
+    // project when the revision does (a project skill or a draft confined to the project) or the
+    // lesson does (a claim of the project), whichever the other end is.
+    predicates.insert(
+        "instruction_revision_lessons".into(),
+        Value::String(
+            "lesson_id IN (SELECT id FROM knowledge_claims WHERE project_id=?1) OR \
+                (instruction_id, revision) IN (SELECT instruction_id, revision FROM \
+                instruction_revisions WHERE confined_project_id=?1 OR instruction_id IN \
+                (SELECT id FROM instructions WHERE project_id=?1 OR \
+                confined_project_id=?1))"
+                .into(),
+        ),
+    );
     Ok(Selection {
         project: project.clone(),
         anchors,
@@ -332,12 +346,24 @@ mod tests {
             c.execute("INSERT INTO projects(id,title,lifecycle,revision,scope_revision,created_at) VALUES(?1,'Fixture','Deleted',1,1,0)",[p]).unwrap();
         }
         let item = |id: &str, confined: Option<&str>| {
-            c.execute("INSERT INTO instructions(id,kind,name,scope_key,project_id,origin,root_path,source_path,latest_revision,active_revision,enabled,present,version,created_at,updated_at,confined_project_id) VALUES(?1,'Skill',?1,'workspace',NULL,'Harness','/r',?2,2,NULL,1,0,1,0,0,?3)",
-                rusqlite::params![id, format!("/r/{id}"), confined]).unwrap();
+            c.execute(
+                "INSERT INTO instructions(id,kind,name,scope_key,project_id,origin,\
+                root_path,source_path,latest_revision,active_revision,enabled,present,\
+                version,created_at,updated_at,confined_project_id) VALUES(?1,'Skill',?1,\
+                'workspace',NULL,'Harness','/r',?2,2,NULL,1,0,1,0,0,?3)",
+                rusqlite::params![id, format!("/r/{id}"), confined],
+            )
+            .unwrap();
         };
         let revision = |item: &str, n: i64, confined: Option<&str>| {
-            c.execute("INSERT INTO instruction_revisions(instruction_id,revision,content_json,content_digest,state,author,origin_json,resources_json,applicability_json,created_at,confined_project_id) VALUES(?1,?2,'{}',?3,'Draft','agent','{}','[]','[]',0,?4)",
-                rusqlite::params![item, n, "a".repeat(64), confined]).unwrap();
+            c.execute(
+                "INSERT INTO instruction_revisions(instruction_id,revision,content_json,\
+                content_digest,state,author,origin_json,resources_json,\
+                applicability_json,created_at,confined_project_id) VALUES(?1,?2,'{}',?3,\
+                'Draft','agent','{}','[]','[]',0,?4)",
+                rusqlite::params![item, n, "a".repeat(64), confined],
+            )
+            .unwrap();
         };
         // An item a project-A agent created, with its confined draft and a later unconfined one.
         item("made-by-a", Some("purge-a"));
@@ -366,13 +392,208 @@ mod tests {
     }
 
     #[test]
+    fn project_skills_are_purged_with_their_project_only() {
+        let h = crate::storage::sqlite::tests::Harness::new();
+        let store = h.store();
+        let c = h.raw();
+        for p in ["purge-a", "purge-b"] {
+            c.execute("INSERT INTO projects(id,title,lifecycle,revision,scope_revision,created_at) VALUES(?1,'Fixture','Deleted',1,1,0)",[p]).unwrap();
+        }
+        // An approved project skill in each project and a workspace skill.
+        for (id, project) in [
+            ("skill-a", Some("purge-a")),
+            ("skill-b", Some("purge-b")),
+            ("skill-ws", None),
+        ] {
+            let scope = project.map_or("workspace".to_owned(), |p| format!("project:{p}"));
+            c.execute(
+                "INSERT INTO instructions(id,kind,name,scope_key,project_id,origin,\
+                root_path,source_path,latest_revision,active_revision,enabled,present,\
+                version,created_at,updated_at,confined_project_id) VALUES(?1,'Skill',\
+                'deploy',?2,?3,'Harness','/r',?4,1,1,1,1,1,0,0,NULL)",
+                rusqlite::params![id, scope, project, format!("/r/{id}")],
+            )
+            .unwrap();
+            c.execute(
+                "INSERT INTO instruction_revisions(instruction_id,revision,content_json,\
+                content_digest,state,author,origin_json,resources_json,\
+                applicability_json,created_at) VALUES(?1,1,'{}',?2,'Approved','user',\
+                '{}','[]','[]',0)",
+                rusqlite::params![id, "a".repeat(64)],
+            )
+            .unwrap();
+        }
+        let p = ProjectId(Id::new("purge-a").unwrap());
+        let selected = read_snapshot(&store, &ReadOptions::default(), |r| {
+            r.projects().purge_candidates(&p)
+        })
+        .unwrap()
+        .unwrap();
+        let count = |table: &str| selected.rows.iter().filter(|r| r.table == table).count();
+        assert_eq!(count("instructions"), 1, "only project A's skill");
+        assert_eq!(count("instruction_revisions"), 1, "and its revision");
+    }
+
+    /// A link from a skill revision to a lesson goes with the project when either end is the
+    /// project's, and stays otherwise; the other end of a deleted link is never deleted for it.
+    #[test]
+    fn lesson_links_are_purged_with_either_end_and_only_when_it_is_the_projects() {
+        let h = crate::storage::sqlite::tests::Harness::new();
+        let store = h.store();
+        let c = h.raw();
+        for p in ["purge-a", "purge-b"] {
+            c.execute("INSERT INTO projects(id,title,lifecycle,revision,scope_revision,created_at) VALUES(?1,'Fixture','Deleted',1,1,0)",[p]).unwrap();
+        }
+        c.execute("INSERT INTO actors VALUES('human-a','human','Human')", [])
+            .unwrap();
+        // A general lesson and one lesson of each project, each on its own subject.
+        for (lesson, project) in [
+            ("lesson-ws", None),
+            ("lesson-a", Some("purge-a")),
+            ("lesson-b", Some("purge-b")),
+        ] {
+            let scope = project.map_or("workspace".to_owned(), |p| format!("project:{p}"));
+            c.execute(
+                "INSERT INTO knowledge_entities(id,scope_key,project_id,revision,label,\
+                entity_type,aliases_json,canonical_key,author_id,created_at,updated_at) \
+                VALUES(?1,?2,?3,1,?1,'topic','[]',?1,'human-a',1,1)",
+                rusqlite::params![format!("entity-{lesson}"), scope, project],
+            )
+            .unwrap();
+            c.execute(
+                "INSERT INTO knowledge_claims(id,scope_key,project_id,revision,kind,\
+                entry_kind,lifecycle,subject_id,predicate,author_id,created_at,\
+                updated_at,body_json,rule_state,lesson_source) VALUES(?1,?2,?3,1,\
+                'Lesson','Lesson','Active',?4,'lesson','human-a',1,1,'{}','Candidate',\
+                'Prompt')",
+                rusqlite::params![lesson, scope, project, format!("entity-{lesson}")],
+            )
+            .unwrap();
+        }
+        // A workspace skill (its second revision a draft confined to project A), a skill of each project.
+        for (id, project) in [
+            ("skill-ws", None),
+            ("skill-a", Some("purge-a")),
+            ("skill-b", Some("purge-b")),
+        ] {
+            let scope = project.map_or("workspace".to_owned(), |p| format!("project:{p}"));
+            c.execute(
+                "INSERT INTO instructions(id,kind,name,scope_key,project_id,origin,\
+                root_path,source_path,latest_revision,active_revision,enabled,present,\
+                version,created_at,updated_at,confined_project_id) VALUES(?1,'Skill',?1,\
+                ?2,?3,'Harness','/r',?4,2,1,1,1,1,0,0,NULL)",
+                rusqlite::params![id, scope, project, format!("/r/{id}")],
+            )
+            .unwrap();
+            for (revision, confined, state) in [
+                (1, None, "Approved"),
+                (2, (id == "skill-ws").then_some("purge-a"), "Draft"),
+            ] {
+                c.execute(
+                    "INSERT INTO instruction_revisions(instruction_id,revision,content_json,\
+                    content_digest,state,author,origin_json,resources_json,\
+                    applicability_json,created_at,confined_project_id) VALUES(?1,?2,'{}',?3,\
+                    ?4,'human-a','{}','[]','[]',0,?5)",
+                    rusqlite::params![id, revision, "a".repeat(64), state, confined],
+                )
+                .unwrap();
+            }
+        }
+        let links = [
+            ("skill-ws", 1, "lesson-ws", "neither end is a project's"),
+            (
+                "skill-ws",
+                1,
+                "lesson-a",
+                "a general skill names project A's lesson",
+            ),
+            (
+                "skill-a",
+                1,
+                "lesson-ws",
+                "project A's skill names a general lesson",
+            ),
+            (
+                "skill-ws",
+                2,
+                "lesson-ws",
+                "A's confined draft of a general skill",
+            ),
+            ("skill-b", 1, "lesson-b", "both ends are project B's"),
+            (
+                "skill-b",
+                2,
+                "lesson-ws",
+                "project B's skill names a general lesson",
+            ),
+        ];
+        for (skill, revision, lesson, _) in links {
+            c.execute("INSERT INTO instruction_revision_lessons(instruction_id,revision,lesson_id) VALUES(?1,?2,?3)",
+                rusqlite::params![skill, revision, lesson]).unwrap();
+        }
+        let candidates = |project: &str| {
+            let p = ProjectId(Id::new(project).unwrap());
+            read_snapshot(&store, &ReadOptions::default(), |r| {
+                r.projects().purge_candidates(&p)
+            })
+            .unwrap()
+            .unwrap()
+        };
+        let count = |project: &str, table: &str| {
+            candidates(project)
+                .rows
+                .iter()
+                .filter(|r| r.table == table)
+                .count()
+        };
+        // Project A: the second, third and fourth links; project B: the fifth and sixth.
+        assert_eq!(count("purge-a", "instruction_revision_lessons"), 3);
+        assert_eq!(count("purge-b", "instruction_revision_lessons"), 2);
+        // The ends of a link are selected only by their own ownership: A's lesson and A's skill
+        // and confined draft, not the general lesson or skill a link joins them to.
+        assert_eq!(count("purge-a", "knowledge_claims"), 1);
+        assert_eq!(count("purge-a", "instructions"), 1);
+        assert_eq!(count("purge-a", "instruction_revisions"), 3);
+        // Planning classifies each selected link for deletion and leaves nothing unresolved.
+        let p = ProjectId(Id::new("purge-a").unwrap());
+        let plan = read_snapshot(&store, &ReadOptions::default(), |r| {
+            r.projects().purge_planning(&p)
+        })
+        .unwrap()
+        .unwrap();
+        assert_eq!(
+            plan.rows
+                .iter()
+                .filter(|r| r.table == "instruction_revision_lessons"
+                    && r.action == devworks_core::ports::storage::ProjectPurgeRowAction::Delete)
+                .count(),
+            3,
+            "{:?}",
+            plan.rows
+        );
+        assert!(
+            !plan
+                .unresolved
+                .iter()
+                .any(|r| r.table == "instruction_revision_lessons"),
+            "{:?}",
+            plan.unresolved
+        );
+    }
+
+    #[test]
     fn candidate_primary_key_hash_matches_the_native_exact_row_guard() {
         let h = crate::storage::sqlite::tests::Harness::new();
         let store = h.store();
         let c = h.raw();
         c.execute("INSERT INTO projects(id,title,lifecycle,revision,scope_revision,created_at) VALUES('purge-a','Fixture','Deleted',1,1,0)",[]).unwrap();
         let key = "a".repeat(64);
-        c.execute("INSERT INTO allocation_replays(project_id,key,intent_digest,result_json) VALUES('purge-a',?1,?2,'{}')",rusqlite::params![key,"b".repeat(64)]).unwrap();
+        c.execute(
+            "INSERT INTO allocation_replays(project_id,key,intent_digest,\
+            result_json) VALUES('purge-a',?1,?2,'{}')",
+            rusqlite::params![key, "b".repeat(64)],
+        )
+        .unwrap();
         let p = ProjectId(Id::new("purge-a").unwrap());
         let selected = read_snapshot(&store, &ReadOptions::default(), |r| {
             r.projects().purge_candidates(&p)

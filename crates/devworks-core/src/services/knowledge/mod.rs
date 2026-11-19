@@ -490,6 +490,8 @@ pub(crate) fn claim_wire(
                 delivered_sessions: counter(deliveries.sessions),
                 last_delivered_at_ms: deliveries.last_at_ms.map(counter),
                 reason: c.body.lesson_reason.as_deref().map(content),
+                // Set by `with_skills` where the viewer is known.
+                skills: None,
             })
         }
     };
@@ -752,7 +754,8 @@ impl KnowledgeService {
         let th = thresholds(snapshot.configuration(), &scoped.readable)?;
         Ok((
             OperationResult::KnowledgeSearch {
-                value: rows.try_into_page(|c| claim_wire(k, &c, &th))?,
+                value: rows
+                    .try_into_page(|c| with_skills(snapshot, ctx, claim_wire(k, &c, &th)?))?,
             },
             exact_revision,
         ))
@@ -810,7 +813,8 @@ impl KnowledgeService {
         )?;
         Ok((
             OperationResult::KnowledgeTaggedLessons {
-                value: rows.try_into_page(|c| claim_wire(k, &c, &th))?,
+                value: rows
+                    .try_into_page(|c| with_skills(snapshot, ctx, claim_wire(k, &c, &th)?))?,
             },
             exact_revision,
         ))
@@ -845,7 +849,8 @@ impl KnowledgeService {
             }
             _ => (claim_wire(k, &claim, &th)?, None),
         };
-        let bundle = bundle_of(k, &scoped, &claim, wire, &th, at)?;
+        let mut bundle = bundle_of(k, &scoped, &claim, wire, &th, at)?;
+        bundle.claims.0 = with_skills_all(snapshot, ctx, bundle.claims.0)?;
         Ok((
             OperationResult::KnowledgeRead { value: bundle },
             k.knowledge_scope_revision(&scoped.exact)?,
@@ -1278,7 +1283,7 @@ pub fn rules_for(
 }
 
 /// Whether a write of `scope` is visible from this invocation.
-fn visible_from(ctx: &InvocationContext, reach: &Reach, scope: &KnowledgeScope) -> bool {
+pub(crate) fn visible_from(ctx: &InvocationContext, reach: &Reach, scope: &KnowledgeScope) -> bool {
     match scope {
         KnowledgeScope::Workspace => true,
         KnowledgeScope::Project(p) => {
@@ -1289,6 +1294,52 @@ fn visible_from(ctx: &InvocationContext, reach: &Reach, scope: &KnowledgeScope) 
                 }
         }
     }
+}
+
+/// A lesson with the skills whose revisions name it that the invocation may see (the lesson's
+/// `skills`, absent when there are none). Only skills are listed; a role revision that names the
+/// lesson shows it in its own history. A skill or revision hidden from the invocation (another
+/// project's skill, a draft confined to another project) is left out.
+pub(crate) fn with_skills(
+    snapshot: &dyn ReadSnapshot,
+    ctx: &InvocationContext,
+    mut claim: KnowledgeClaim,
+) -> Result<KnowledgeClaim, StorageError> {
+    // A deleted claim shows no lesson content: only its identity remains.
+    if matches!(claim.lifecycle, Some(KnowledgeLifecycle::Deleted)) {
+        return Ok(claim);
+    }
+    let Some(lesson) = claim.lesson.as_mut() else {
+        return Ok(claim);
+    };
+    let links = crate::services::instructions::lesson_skill_links(
+        snapshot.instructions(),
+        ctx,
+        &claim.id,
+        crate::services::instructions::LESSON_LINK_PAGE,
+    )?;
+    if !links.is_empty() {
+        lesson.skills = Some(BoundedList(links));
+    }
+    Ok(claim)
+}
+
+/// [`with_skills`] over every claim of a result.
+pub(crate) fn with_skills_all(
+    snapshot: &dyn ReadSnapshot,
+    ctx: &InvocationContext,
+    claims: Vec<KnowledgeClaim>,
+) -> Result<Vec<KnowledgeClaim>, StorageError> {
+    claims
+        .into_iter()
+        .map(|c| with_skills(snapshot, ctx, c))
+        .collect()
+}
+
+/// Whether a claim is a lesson the invocation may name or list: it exists (a deleted claim keeps
+/// only its identity) and its scope is visible from the invocation.
+pub(crate) fn lesson_visible(ctx: &InvocationContext, reach: &Reach, claim: &StoredClaim) -> bool {
+    claim.lesson.is_some() && claim.lifecycle != "Deleted" && visible_from(ctx, reach, &claim.scope)
 }
 
 fn refs(parts: &[String]) -> Vec<&str> {

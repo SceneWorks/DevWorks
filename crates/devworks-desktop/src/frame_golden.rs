@@ -136,16 +136,16 @@ fn frames() -> BTreeMap<String, String> {
             "settings_explain",
             ops::settings_explain(b, "power.keepAwake"),
         ),
-        ("sessions_list", ops::sessions_list(b)),
+        ("sessions_list", ops::sessions_list(b, None)),
         ("session_start", ops::session_start(b, "A title")),
-        ("resources_list", ops::resources_list(b)),
+        ("resources_list", ops::resources_list(b, None)),
         (
             "browser_sessions_workspace",
-            ops::browser_sessions_list(b, None),
+            ops::browser_sessions_list(b, None, None),
         ),
         (
             "browser_sessions_project",
-            ops::browser_sessions_list(b, Some("project-a")),
+            ops::browser_sessions_list(b, Some("project-a"), None),
         ),
         ("browser_close", ops::browser_close(b, "session-a", "5")),
         ("router_catalog_first", ops::router_catalog(b, None)),
@@ -170,10 +170,10 @@ fn frames() -> BTreeMap<String, String> {
         ("web_fetch", ops::web_fetch(b, "https://example.com/a?b=c")),
         ("web_search", ops::web_search(b, "query text", "provider-a")),
         ("web_activity", ops::web_activity(b)),
-        ("projects_list", ops::projects_list(b, None)),
+        ("projects_list", ops::projects_list(b, None, None)),
         (
             "projects_list_archived",
-            ops::projects_list(b, Some("Archived")),
+            ops::projects_list(b, Some("Archived"), None),
         ),
         (
             "project_create",
@@ -201,11 +201,11 @@ fn frames() -> BTreeMap<String, String> {
         ),
         (
             "repositories_list_workspace",
-            ops::repositories_list(b, None),
+            ops::repositories_list(b, None, None),
         ),
         (
             "repositories_list_project",
-            ops::repositories_list(b, Some("project-a")),
+            ops::repositories_list(b, Some("project-a"), None),
         ),
         ("repository_readme", ops::repository_text(b, "repo-a", true)),
         (
@@ -218,10 +218,10 @@ fn frames() -> BTreeMap<String, String> {
             ops::project_settings_read(b, "project-a", &["power.keepAwake"]),
         ),
         ("index_status", ops::index_status(b, "repo-a")),
-        ("index_runs_workspace", ops::index_runs(b, None, None)),
+        ("index_runs_workspace", ops::index_runs(b, None, None, None)),
         (
             "index_runs_project_repo",
-            ops::index_runs(b, Some("project-a"), Some("repo-a")),
+            ops::index_runs(b, Some("project-a"), Some("repo-a"), None),
         ),
         (
             "index_repository",
@@ -467,7 +467,7 @@ fn the_registry_lists_the_revisions_the_desktop_used_to_hard_code() {
         ("sessions.start", 2),
         ("sessions.get", 2),
         ("browser.sessions", 3),
-        ("router.catalog", 3),
+        ("router.catalog", 4),
         ("router.availability", 3),
         ("router.pin", 3),
         ("router.route", 3),

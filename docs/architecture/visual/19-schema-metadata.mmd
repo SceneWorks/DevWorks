@@ -1,0 +1,106 @@
+---
+title: Schema metadata - sources, capture, retained views and queries (implemented)
+---
+classDiagram
+  direction LR
+  class SchemaService {
+    ids / clock
+    credentials: Option Credentials
+    runtime: Option Arc Runtime
+    schemas.configure .remove_index .index .refresh (CommandHandler)
+    schemas.connections .objects .relationships .code_references (QueryHandler)
+    +run_metadata(op, cancel) SchemaOutcome
+    +fail_metadata(op, failure)
+    +cleanup_retained_views() usize
+    +is_stopped() / stop()
+  }
+  class Credentials {
+    store / secrets / intake: staged passwords
+    +stage_password(ctx, Secret) Id
+    +discard_password(handle)
+    +generate_encryption_key(ctx, Entropy)
+    +reconcile_credential_orphans()
+    30 minute staged ttl, human ingress only
+  }
+  class Runtime {
+    store: ApplicationStore
+    reader: MetadataReader
+    artifacts: ArtifactService
+    closed: PublicationFence
+    active: operation id to Cancellation
+  }
+  class SchemaJob {
+    kind SchemaMetadataV1
+    connection_id / source_revision / scope
+    test_only / actor / fences / delivery_id
+    store_id / restore_epoch
+  }
+  class SchemaOutcome {
+    Completed(Value)
+    Failed(String)
+  }
+  class MetadataReader {
+    <<trait>>
+    +read(MetadataRequest) MetadataFuture
+  }
+  class MetadataSnapshot {
+    profile / coverage
+    objects / relationships
+  }
+  class MetadataFailure {
+    Cancelled, Deadline, AccessDenied, Unavailable
+    UnsupportedProfile, UnsupportedServerVersion
+    InvalidTarget, CredentialsRequired, InvalidMetadata
+  }
+  class NativeMetadataReader {
+    <<adapter>>
+    Sqlite engine to SqliteMetadataReader
+    other engines to NetworkMetadataReader
+  }
+  class SecretStore { <<trait>> }
+  class SchemaRepository {
+    <<trait>>
+    schema_source / revise_schema_source
+    create_schema_view / append_schema_rows / seal_schema_view
+    schema_pin / create_schema_pin / expire_schema_pins
+    prune_schema_views / record_schema_publication
+    set_schema_certificate
+  }
+  class schemas_consumer {
+    <<fn>>
+    consumer name schema_metadata
+    Effects execute and observe call run_metadata
+    max_in_flight 1, stop grace 5000 ms
+  }
+  class SchemaComposition {
+    reader: Arc MetadataReader
+    secrets: Arc SecretStore
+    set by the desktop host
+  }
+  class EngineRuntime {
+    <<engine>>
+    Loop schema view cleanup every 1 s
+    on_stop calls SchemaService.stop
+    boot reconciles credential orphans
+  }
+  class DatabasesScreen {
+    <<desktop>>
+    databases_ops query and command frames
+    reads code_references at its own revision
+  }
+  SchemaService *-- Credentials
+  SchemaService o-- Runtime
+  Runtime o-- MetadataReader
+  Runtime ..> SchemaRepository : publishes in one write
+  Credentials o-- SecretStore
+  SchemaService ..> SchemaJob : queues as operation payload
+  SchemaService ..> SchemaOutcome
+  SchemaService ..> MetadataSnapshot : captures into an immutable view
+  MetadataReader ..> MetadataFailure
+  NativeMetadataReader ..|> MetadataReader
+  schemas_consumer ..> SchemaService : run_metadata
+  SchemaComposition o-- MetadataReader
+  SchemaComposition o-- SecretStore
+  EngineRuntime ..> SchemaComposition : builds SchemaService when present
+  EngineRuntime ..> schemas_consumer : registers
+  DatabasesScreen ..> SchemaService : through Gateway

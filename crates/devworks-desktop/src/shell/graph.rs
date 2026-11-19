@@ -29,6 +29,18 @@ impl Shell {
     }
 }
 
+impl Shell {
+    /// Opens a repository's graph on the detail of one of its nodes (a use another screen
+    /// found). The repository's name is not known there, so its ID names it.
+    pub fn open_graph_node(&mut self, repository: &str, node: &str) {
+        self.open_repository_graph(repository, repository);
+        let node = node.to_owned();
+        self.with_typed(|graph: &mut GraphScreen, cx| {
+            GraphCtl { graph, cx }.open_graph_read(Read::node("Node details", &node), true)
+        });
+    }
+}
+
 controller!(GraphCtl, graph: GraphScreen);
 
 /// The repository graph is drawn inside Repositories while it is open.
@@ -231,7 +243,8 @@ impl GraphCtl<'_, '_> {
                                                     != graph_screen::module_scalar(item)
                                         })
                                     }) {
-                                        self.graph.error=Some("Module analysis changed while paging. Refresh the selected graph view before combining more entries.".into());
+                                        self.graph.error=Some("Module analysis changed while paging. Refresh the selected graph view \
+                                            before combining more entries.".into());
                                         return None;
                                     }
                                 }
@@ -288,7 +301,8 @@ impl GraphCtl<'_, '_> {
                     Err(Failure::Unknown) => {
                         self.graph.trust_unknown = true;
                         self.graph.trust_busy = true;
-                        self.graph.notice=Some((Tone::Attention,"Trust change outcome is not confirmed. Confirm outcomes checks the same original request.".into()));
+                        self.graph.notice=Some((Tone::Attention,"Trust change outcome is not confirmed. Confirm outcomes checks the same \
+                            original request.".into()));
                     }
                     Err(error) => {
                         self.graph.trust_unknown = false;
@@ -413,6 +427,9 @@ impl GraphCtl<'_, '_> {
                     self.graph.selected = Some(node);
                     self.graph.target_name.clear();
                 }
+                Action::FindTable(table) => self
+                    .effects
+                    .push(crate::screen::Effect::FindDatabaseTable(table)),
                 Action::Endpoint { id, repository } => {
                     self.open_graph_read(Read::node("Related node", &id), true);
                     self.graph.selected = None;

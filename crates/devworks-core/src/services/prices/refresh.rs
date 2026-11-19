@@ -564,7 +564,17 @@ impl PriceService {
                             status.next_refresh_ms = Some(now.saturating_add(WEEK_MS));
                             tx.usage().put_price_status(&status, Some(before))?;
                         }
-                        tx.operations().observe(&operation_id,attempt_no,json!({"kind":"PriceProviderPublication","provider":provider_key,"outcome":"Completed","snapshotId":row.id,"snapshotRevision":row.revision.to_string()}))?;
+                        tx.operations().observe(
+                            &operation_id,
+                            attempt_no,
+                            json!({
+                                "kind": "PriceProviderPublication",
+                                "provider": provider_key,
+                                "outcome": "Completed",
+                                "snapshotId": row.id,
+                                "snapshotRevision": row.revision.to_string()
+                            }),
+                        )?;
                         Ok(None)
                     }
                     Err(error) => {
@@ -577,7 +587,16 @@ impl PriceService {
                         row.last_attempt_ms = Some(now);
                         row.next_refresh_ms = Some(now.saturating_add(WEEK_MS));
                         tx.usage().put_price_status(&row, Some(old.revision))?;
-                        tx.operations().observe(&operation_id,attempt_no,json!({"kind":"PriceProviderPublication","provider":provider_key,"outcome":"Failed","reason":reason}))?;
+                        tx.operations().observe(
+                            &operation_id,
+                            attempt_no,
+                            json!({
+                                "kind": "PriceProviderPublication",
+                                "provider": provider_key,
+                                "outcome": "Failed",
+                                "reason": reason
+                            }),
+                        )?;
                         Ok(Some(reason))
                     }
                 }

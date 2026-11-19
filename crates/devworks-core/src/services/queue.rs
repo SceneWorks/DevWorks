@@ -11,23 +11,28 @@
 //! a pause. Each command presents the delivery's current `revision` (a stale one is a durable
 //! `RevisionConflict`) and its fencing generation (`expectedFence`; a stale one is `LeaseLost`).
 //!
-//! | Resolution | Accepted from | Effect |
-//! | --- | --- | --- |
-//! | `Retry` | `Failed`, `Reconciling` | Ready now with a fresh retry budget; the failure cause stays visible until it completes. |
-//! | `Reconcile` | `Reconciling` | Re-evaluates the operation journal; once the outcome is established the delivery is redelivered so its handler records it idempotently. |
-//! | `AcknowledgePoison` | `Failed` | `Dismissed` (terminal); its partition continues. |
-//! | `CancelBeforeDispatch` | `Ready`, `Reconciling` | `Cancelled`; an undispatched operation (`IntentRecorded`, `RetryPending`, `Preflighted`) becomes `CancelledBeforeDispatch`. Refused with `Conflict` once the operation has an outcome (`ObservedComplete`, `Failed`, `CancelledBeforeDispatch`): an established outcome is recorded by redelivery, never cancelled away. |
+//! - `Retry`, accepted from `Failed`, `Reconciling`: Ready now with a fresh retry budget; the
+//!   failure cause stays visible until it completes.
+//! - `Reconcile`, accepted from `Reconciling`: Re-evaluates the operation journal; once the
+//!   outcome is established the delivery is redelivered so its handler records it idempotently.
+//! - `AcknowledgePoison`, accepted from `Failed`: `Dismissed` (terminal); its partition
+//!   continues.
+//! - `CancelBeforeDispatch`, accepted from `Ready`, `Reconciling`: `Cancelled`; an undispatched
+//!   operation (`IntentRecorded`, `RetryPending`, `Preflighted`) becomes
+//!   `CancelledBeforeDispatch`. Refused with `Conflict` once the operation has an outcome
+//!   (`ObservedComplete`, `Failed`, `CancelledBeforeDispatch`): an established outcome is
+//!   recorded by redelivery, never cancelled away.
 //!
 //! While the linked operation is possibly dispatched (`Dispatching`, `OutcomeUnknown`,
 //! `NeedsInput`) every resolution is refused with `OutcomeUnknown` and the delivery stays held:
 //! the operation's reconciler must first record what actually happened. `queue.retry` accepts
 //! only `Retry` and `queue.reconcile` only `Reconcile`; `queue.resolve` accepts all four.
 //!
-//! A receipt's reply is mandatory (consumer [`REPLY_CONSUMER`]):
+//! A receipt's reply is mandatory (consumer `receipt_reply`, whose [`ConsumerHook`] refuses):
 //! `CancelBeforeDispatch` of its delivery is always refused, and `AcknowledgePoison` only
 //! dismisses a failed delivery that can never be honoured (its payload is not a publication
 //! intent, or it does not name its receipt's own decision). Both refusals are `Conflict` with
-//! target kind [`REPLY_REQUIRED`] and retry `Never`; a failed reply that can still be published
+//! target kind `receipt_reply_required` and retry `Never`; a failed reply that can still be published
 //! is retried (`queue.retry`).
 //!
 //! A cancellation requested while a delivery was claimed or held is durable: a later `Retry` or
@@ -69,18 +74,56 @@ use crate::protocol::{
     CorrelationId, Counter, DomainErrorCode, DomainFault, EventId, Id, OperationId, OperationState,
     RetryAdvice, Revision, RevisionDimension,
 };
-use crate::services::artifacts::replies::{REPLY_CONSUMER, unhonourable};
 use crate::services::cursor::{self, CursorBinding};
 use serde_json::json;
 
-/// Fault target kind of a resolution that would abandon a receipt's mandatory reply
-/// (`Conflict`, retry `Never`): cancelling a [`REPLY_CONSUMER`] delivery, or acknowledging one
-/// as poison while it can still be honoured.
-pub const REPLY_REQUIRED: &str = "receipt_reply_required";
+/// What one queue consumer adds to the operator resolution of its own deliveries. The queue
+/// service holds no knowledge of any consumer: each registers a hook where the service is
+/// composed ([`QueueService::new`]), and a consumer without a hook is resolved generically.
+pub trait ConsumerHook: Send + Sync {
+    /// The consumer whose deliveries this hook covers.
+    fn consumer(&self) -> &'static str;
 
-/// The queue use cases (stateless; all state is in the store).
-#[derive(Clone, Copy, Debug, Default)]
-pub struct QueueService;
+    /// The fault target kind to refuse `resolution` of `entry` with (`Conflict`, retry `Never`),
+    /// or `None` to let it proceed.
+    fn refuse(
+        &self,
+        _tx: &mut dyn WriteTransaction,
+        _entry: &QueueEntry,
+        _resolution: &QueueResolution,
+    ) -> Result<Option<&'static str>, StorageError> {
+        Ok(None)
+    }
+
+    /// Runs in the same writer unit as a cancellation before dispatch, once the store has
+    /// cancelled the delivery and its undispatched operation.
+    fn cancelled(
+        &self,
+        _tx: &mut dyn WriteTransaction,
+        _entry: &QueueEntry,
+    ) -> Result<(), StorageError> {
+        Ok(())
+    }
+}
+
+/// The queue use cases (all state is in the store; only the consumer hooks are held).
+#[derive(Clone)]
+pub struct QueueService {
+    hooks: Vec<std::sync::Arc<dyn ConsumerHook>>,
+}
+
+impl QueueService {
+    pub fn new(hooks: Vec<std::sync::Arc<dyn ConsumerHook>>) -> Self {
+        Self { hooks }
+    }
+
+    fn hook(&self, consumer: &str) -> Option<&dyn ConsumerHook> {
+        self.hooks
+            .iter()
+            .find(|h| h.consumer() == consumer)
+            .map(|h| h.as_ref())
+    }
+}
 
 /// The operations this service implements.
 pub const OPERATIONS: [&str; 5] = [
@@ -368,11 +411,12 @@ impl CommandHandler for QueueService {
                 ));
             }
         };
-        resolve(ctx, tx, &request)
+        resolve(self, ctx, tx, &request)
     }
 }
 
 fn resolve(
+    service: &QueueService,
     ctx: &InvocationContext,
     tx: &mut dyn WriteTransaction,
     r: &Request<'_>,
@@ -445,26 +489,17 @@ fn resolve(
             Some(op.id.clone()),
         ));
     }
-    // A receipt's reply is mandatory: its delivery is never cancelled, and is dismissed only
-    // when it can never be honoured (it is not a publication intent, or does not name its
-    // receipt's decision). Any other failed reply is retried (`queue.retry`), never abandoned.
-    if entry.consumer == REPLY_CONSUMER {
-        let abandons = match r.resolution {
-            QueueResolution::CancelBeforeDispatch => true,
-            QueueResolution::AcknowledgePoison => {
-                entry.state == QueueState::Failed && !unhonourable(tx, &entry)?
-            }
-            QueueResolution::Retry | QueueResolution::Reconcile => false,
-        };
-        if abandons {
-            let mut f = targeted(
-                fault(DomainErrorCode::Conflict, RetryAdvice::Never),
-                id,
-                Some(entry.revision),
-            );
-            f.target_kind = Some(BoundedText(REPLY_REQUIRED.into()));
-            return Ok(refused(f, None));
-        }
+    let hook = service.hook(&entry.consumer);
+    if let Some(hook) = hook
+        && let Some(kind) = hook.refuse(tx, &entry, r.resolution)?
+    {
+        let mut f = targeted(
+            fault(DomainErrorCode::Conflict, RetryAdvice::Never),
+            id,
+            Some(entry.revision),
+        );
+        f.target_kind = Some(BoundedText(kind.into()));
+        return Ok(refused(f, None));
     }
     let conflict = || {
         Ok(refused(
@@ -513,10 +548,8 @@ fn resolve(
             }
             // The store cancels the undispatched operation with its delivery.
             let after = tx.queue().cancel(id)?;
-            if after.consumer == super::schemas::indexing::EFFECT_CONSUMER
-                && let Some(operation) = &after.operation_id
-            {
-                super::schemas::indexing::settle_cancelled(tx, operation)?;
+            if let Some(hook) = hook {
+                hook.cancelled(tx, &after)?;
             }
             after
         }

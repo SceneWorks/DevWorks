@@ -46,6 +46,7 @@
 //! lowercase hex digests are not credential-shaped. Anything else, for example an unregistered
 //! value with no recognisable shape and no sensitive name beside it, or JSON cut off before
 //! it closes, is not caught: the redactor cannot prove arbitrary text contains no secret.
+use crate::locks::RwLockExt;
 use crate::settings::validate::{is_secret_ref, looks_like_credential, mint_secret_ref};
 use serde_json::{Map, Value};
 use std::collections::VecDeque;
@@ -136,7 +137,7 @@ pub fn register_resolved_secret(value: &str) {
     if !(RESOLVED_VALUE_MIN..=RESOLVED_VALUE_MAX).contains(&value.len()) {
         return;
     }
-    let mut known = RESOLVED.write().unwrap_or_else(|p| p.into_inner());
+    let mut known = RESOLVED.write_locked();
     if let Some(i) = known.iter().position(|k| k == value) {
         // Most recently resolved last, so a value in use is evicted last.
         let again = known.remove(i).expect("position is in range");
@@ -179,7 +180,7 @@ impl Redactor {
     pub fn redact_text(&self, text: &str) -> String {
         let mut out = redact_pem(text);
         {
-            let resolved = RESOLVED.read().unwrap_or_else(|p| p.into_inner());
+            let resolved = RESOLVED.read_locked();
             let mut known: Vec<&str> = self
                 .known
                 .iter()

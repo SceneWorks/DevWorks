@@ -1,4 +1,5 @@
 use devworks_core::authority::destructive::FileIdentity;
+use devworks_core::locks::RwLockExt;
 use devworks_core::ports::files::{ArtifactFiles, FileFault, PublishedBlob};
 use std::collections::HashMap;
 use std::io::Read;
@@ -141,8 +142,7 @@ impl FaultFiles {
         hook: impl Fn(&Call) -> Result<(), FileFault> + Send + Sync + 'static,
     ) {
         self.hooks
-            .write()
-            .unwrap()
+            .write_locked()
             .before
             .entry(op)
             .or_default()
@@ -150,8 +150,7 @@ impl FaultFiles {
     }
     pub fn after(&self, op: FileOp, hook: impl Fn(&Call, bool) + Send + Sync + 'static) {
         self.hooks
-            .write()
-            .unwrap()
+            .write_locked()
             .after
             .entry(op)
             .or_default()
@@ -163,8 +162,7 @@ impl FaultFiles {
         hook: impl Fn(&Call, Box<dyn Read + Send>) -> Box<dyn Read + Send> + Send + Sync + 'static,
     ) {
         self.hooks
-            .write()
-            .unwrap()
+            .write_locked()
             .wrap
             .entry(op)
             .or_default()
@@ -172,8 +170,7 @@ impl FaultFiles {
     }
     pub fn on_stop_check(&self, op: FileOp, hook: impl Fn(&Call) + Send + Sync + 'static) {
         self.hooks
-            .write()
-            .unwrap()
+            .write_locked()
             .check
             .entry(op)
             .or_default()
@@ -182,7 +179,7 @@ impl FaultFiles {
     /// Reads the source of every publication in chunks of at most 4 bytes and runs `hook` after
     /// the first chunk of each: the staging file then exists, partly written.
     pub fn on_source_chunk(&self, hook: impl Fn(&Call) + Send + Sync + 'static) {
-        self.hooks.write().unwrap().chunk.push(Arc::new(hook));
+        self.hooks.write_locked().chunk.push(Arc::new(hook));
     }
     /// Fails the next `times` calls of `op` with `fault` (a full volume, say).
     pub fn fail_next(&self, op: FileOp, times: usize, fault: FileFault) {
@@ -196,7 +193,7 @@ impl FaultFiles {
     }
     /// Removes every hook.
     pub fn clear(&self) {
-        *self.hooks.write().unwrap() = Hooks::default();
+        *self.hooks.write_locked() = Hooks::default();
     }
     /// Calls of `op` made so far (before its hooks ran).
     pub fn calls(&self, op: FileOp) -> usize {
@@ -204,15 +201,13 @@ impl FaultFiles {
     }
 
     fn counter(&self, op: FileOp) -> Arc<AtomicUsize> {
-        if let Some(c) = self.counts.read().unwrap().get(&op) {
+        if let Some(c) = self.counts.read_locked().get(&op) {
             return c.clone();
         }
-        self.counts.write().unwrap().entry(op).or_default().clone()
+        self.counts.write_locked().entry(op).or_default().clone()
     }
     fn hooks_of<T: Clone>(&self, pick: impl Fn(&Hooks) -> Option<&Vec<T>>) -> Vec<T> {
-        pick(&self.hooks.read().unwrap())
-            .cloned()
-            .unwrap_or_default()
+        pick(&self.hooks.read_locked()).cloned().unwrap_or_default()
     }
     fn enter(&self, call: &Call) -> Result<(), FileFault> {
         self.counter(call.op).fetch_add(1, Ordering::SeqCst);

@@ -89,9 +89,30 @@ fn attempt(s: &SqliteStore, name: &str) -> StoredInferenceAttempt {
     let mut raw = rusqlite::Connection::open(&s.path).unwrap();
     raw.pragma_update(None, "foreign_keys", true).unwrap();
     let tx = raw.transaction().unwrap();
-    tx.execute("INSERT INTO operations(id,root_id,capability,schema_version,args_digest,payload_json,state,revision,created_at) VALUES(?1,'feature','inference.request',1,?2,'{}','Preflighted',2,?3)",rusqlite::params![format!("operation-{name}"),"a".repeat(64),T0]).unwrap();
-    tx.execute("INSERT INTO operation_attempts(id,operation_id,attempt_no,boot_id,state,observations_json) VALUES(?1,?2,1,?3,'Preflighted','[]')",rusqlite::params![name,format!("operation-{name}"),s.info().boot_id.as_ref().unwrap().as_str()]).unwrap();
-    tx.execute("INSERT INTO router_requests(request_id,operation_id,purpose,project_id,model_id,connection_id,created_at) VALUES(?1,?2,'Conversation','project','sol','connection',?3)",rusqlite::params![format!("request-{name}"),format!("operation-{name}"),T0]).unwrap();
+    tx.execute(
+        "INSERT INTO operations(id,root_id,capability,schema_version,args_digest,\
+        payload_json,state,revision,created_at) VALUES(?1,'feature',\
+        'inference.request',1,?2,'{}','Preflighted',2,?3)",
+        rusqlite::params![format!("operation-{name}"), "a".repeat(64), T0],
+    )
+    .unwrap();
+    tx.execute(
+        "INSERT INTO operation_attempts(id,operation_id,attempt_no,boot_id,state,\
+        observations_json) VALUES(?1,?2,1,?3,'Preflighted','[]')",
+        rusqlite::params![
+            name,
+            format!("operation-{name}"),
+            s.info().boot_id.as_ref().unwrap().as_str()
+        ],
+    )
+    .unwrap();
+    tx.execute(
+        "INSERT INTO router_requests(request_id,operation_id,purpose,project_id,\
+        model_id,connection_id,created_at) VALUES(?1,?2,'Conversation',\
+        'project','sol','connection',?3)",
+        rusqlite::params![format!("request-{name}"), format!("operation-{name}"), T0],
+    )
+    .unwrap();
     tx.commit().unwrap();
 
     StoredInferenceAttempt {
@@ -115,7 +136,15 @@ fn attempt(s: &SqliteStore, name: &str) -> StoredInferenceAttempt {
         endpoint_profile: "CodexSubscriptionResponses".into(),
         access_mode: "Subscription".into(),
         provider_model_id: None,
-        pricing_snapshot: json!({"quote":{"classification":"Untracked","connection_revision":1,"override_revision":null,"snapshot_id":null},"reservation_micro_usd":100}),
+        pricing_snapshot: json!({
+            "quote": {
+                "classification": "Untracked",
+                "connection_revision": 1,
+                "override_revision": null,
+                "snapshot_id": null
+            },
+            "reservation_micro_usd": 100
+        }),
         state: devworks_core::ports::storage::AttemptState::Admitted,
         revision: 1,
         created_at_ms: T0,

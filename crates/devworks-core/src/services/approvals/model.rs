@@ -28,7 +28,22 @@ pub(crate) fn settings(
     let state = format!("{:?}", p.state);
     let scope = scope_wire(&p.scope);
     let binding = json!({"source":"Settings","scope":scope,"baseRevision":p.base_revision,"contentDigest":p.body["contentDigest"]});
-    let mut v = json!({"id":p.id,"revision":rev(p.revision),"contentDigest":p.body["contentDigest"],"state":state,"operationKind":"settings.configure","targetId":p.scope.target_id(),"targetRevision":rev(p.base_revision),"summary":"Review settings changes","scope":scope,"stale":matches!(p.state,crate::ports::storage::ProposalState::Pending)&&current!=p.base_revision,"requestedBy":p.author,"createdAtMs":counter(p.created_at_ms),"scopeDigest":hash(&binding)});
+    let mut v = json!({
+        "id": p.id,
+        "revision": rev(p.revision),
+        "contentDigest": p.body["contentDigest"],
+        "state": state,
+        "operationKind": "settings.configure",
+        "targetId": p.scope.target_id(),
+        "targetRevision": rev(p.base_revision),
+        "summary": "Review settings changes",
+        "scope": scope,
+        "stale": matches!(p.state, crate::ports::storage::ProposalState::Pending)
+            && current != p.base_revision,
+        "requestedBy": p.author,
+        "createdAtMs": counter(p.created_at_ms),
+        "scopeDigest": hash(&binding)
+    });
     if full {
         v["reviewedSource"] = json!({"kind":"Settings","entries":p.body["entries"]});
         v["reviewedContent"] = binding;
@@ -51,7 +66,21 @@ pub(crate) fn plan(
                     .and_then(Value::as_str)
                     != Some(p.plan_digest.as_str())
         });
-    let mut v = json!({"id":p.id,"revision":rev(p.revision),"contentDigest":p.plan_digest,"state":p.state,"operationKind":"features.plan_approval","targetId":p.feature_id,"targetRevision":rev(p.plan_revision),"summary":content(&p.summary),"scope":{"kind":"Project","projectId":project},"stale":stale,"requestedBy":p.requested_by,"createdAtMs":counter(p.requested_at_ms),"scopeDigest":hash(&binding)});
+    let mut v = json!({
+        "id": p.id,
+        "revision": rev(p.revision),
+        "contentDigest": p.plan_digest,
+        "state": p.state,
+        "operationKind": "features.plan_approval",
+        "targetId": p.feature_id,
+        "targetRevision": rev(p.plan_revision),
+        "summary": content(&p.summary),
+        "scope": {"kind": "Project", "projectId": project},
+        "stale": stale,
+        "requestedBy": p.requested_by,
+        "createdAtMs": counter(p.requested_at_ms),
+        "scopeDigest": hash(&binding)
+    });
     if full {
         v["payload"] = json!({"kind":"FeaturePlan","proposalId":p.id});
         // Legacy rows have no captured snapshot: expose that fact, never substitute today's draft.
@@ -71,7 +100,20 @@ pub(crate) fn generic(
     full: bool,
     resume: Option<&crate::ports::storage::StoredApprovalResume>,
 ) -> Result<ApprovalViewRecord, StorageError> {
-    let mut v = json!({"id":p.id,"revision":rev(p.revision),"contentDigest":p.content_digest,"state":p.state,"operationKind":label(&p.operation_kind,"operation"),"targetId":p.target_id,"targetRevision":rev(p.target_revision),"summary":content(&p.summary),"scope":scope_wire(&p.scope),"requestedBy":p.author,"createdAtMs":counter(p.created_at_ms),"scopeDigest":p.scope_digest});
+    let mut v = json!({
+        "id": p.id,
+        "revision": rev(p.revision),
+        "contentDigest": p.content_digest,
+        "state": p.state,
+        "operationKind": label(&p.operation_kind, "operation"),
+        "targetId": p.target_id,
+        "targetRevision": rev(p.target_revision),
+        "summary": content(&p.summary),
+        "scope": scope_wire(&p.scope),
+        "requestedBy": p.author,
+        "createdAtMs": counter(p.created_at_ms),
+        "scopeDigest": p.scope_digest
+    });
     if let Some(a) = &p.artifact {
         v["artifact"] = a.clone();
     }
@@ -155,7 +197,10 @@ fn public(content: &Value) -> Value {
 pub(crate) fn scope_wire(scope: &crate::ports::storage::ConfigScope) -> Value {
     match scope {
         crate::ports::storage::ConfigScope::Workspace => json!({"kind":"Workspace"}),
-        crate::ports::storage::ConfigScope::Project(p) => json!({"kind":"Project","projectId":p}),
+        crate::ports::storage::ConfigScope::Project(p)
+        | crate::ports::storage::ConfigScope::Repository { project: p, .. } => {
+            json!({"kind":"Project","projectId":p})
+        }
     }
 }
 
@@ -175,7 +220,21 @@ fn resumed_operation_id(result: &Value) -> Option<&Value> {
 mod tests {
     #[test]
     fn resumed_operation_projects_the_canonical_recorded_reply() {
-        let reply:crate::protocol::results::DomainCommandReply=serde_json::from_value(serde_json::json!({"kind":"Recorded","protocol":"1.0-draft.1","replayed":false,"receipt":{"commandId":"command","committedSequence":"1","acceptedAtMs":"1","requestDigest":"a".repeat(64),"operationId":"operation","decision":{"kind":"Accepted","operationId":"operation"}}})).unwrap();
+        let reply: crate::protocol::results::DomainCommandReply =
+            serde_json::from_value(serde_json::json!({
+                "kind": "Recorded",
+                "protocol": "1.0-draft.1",
+                "replayed": false,
+                "receipt": {
+                    "commandId": "command",
+                    "committedSequence": "1",
+                    "acceptedAtMs": "1",
+                    "requestDigest": "a".repeat(64),
+                    "operationId": "operation",
+                    "decision": {"kind": "Accepted", "operationId": "operation"}
+                }
+            }))
+            .unwrap();
         let value = serde_json::to_value(reply).unwrap();
         assert_eq!(
             super::resumed_operation_id(&value),

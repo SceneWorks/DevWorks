@@ -10,5 +10,9 @@ pub fn frames() -> Vec<(&'static str, Vec<u8>)> {
     vec![
         ("attachment_max_bytes", attachments::max_bytes_query(b)),
         ("receipt_lookup", backend::receipt_lookup(b, &key)),
+        (
+            "settings_repository_read",
+            crate::ops::repository_settings_read(b, "project-a", "repo-a", &["delivery.autoMerge"]),
+        ),
     ]
 }

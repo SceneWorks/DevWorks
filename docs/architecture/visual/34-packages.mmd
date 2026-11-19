@@ -1,0 +1,167 @@
+---
+title: Executable packages, ports, adapters and the package host (implemented)
+---
+classDiagram
+  direction LR
+  class UseCases { <<registry>> }
+  class PackageService {
+    store, ids, artifacts: Arc ArtifactService
+    inspector, files, runtimes, validator
+    activity: RwLock Arc dyn PackageActivity
+    quiesce_wait: 2 s
+    addons.catalog .logs (QueryHandler)
+    addons.install .update .configure .enable .disable
+    addons.rollback .uninstall .propose (CommandHandler)
+    +retry_pending() +startup_failed()
+    +record_running() +collect_files()
+    +decide_proposal() +sync_pending_reviews()
+  }
+  class policy {
+    <<module>>
+    availability
+    auto_update
+    activation_regresses
+  }
+  class index {
+    <<module>>
+    signed publisher offers
+    record_index
+    observe
+  }
+  class view {
+    <<module>>
+    PackageRecord
+    catalog
+    logs
+    changes
+  }
+  class approval {
+    <<module>>
+    approval_preview
+    validate_approval_preview
+    decide_approval_source
+  }
+  class review_evidence {
+    <<module>>
+    immutable evidence with JSON pointer bindings
+  }
+  class PackageInspector {
+    <<trait>>
+    inspect(bundle)
+  }
+  class PackageFiles {
+    <<trait>>
+    publish, verify, open_verified
+    remove, installed, clean_staging
+  }
+  class RuntimeProbe { <<trait>> }
+  class SchemaValidator { <<trait>> }
+  class IndexTransport { <<trait>> }
+  class IndexVerifier { <<trait>> }
+  class PackageActivity {
+    <<trait>>
+    quiesce(package, wait) and fence
+  }
+  class BundleInspector {
+    <<adapter>>
+    DWPKG container
+    manifest
+    Ed25519
+  }
+  class NativePackageFiles {
+    <<adapter>>
+    content-addressed install directories
+  }
+  class JsonSchemaValidator { <<adapter>> }
+  class NativeIndexTransport {
+    <<adapter>>
+    https or local directory
+  }
+  class BundleIndexVerifier { <<adapter>> }
+  class RuntimeCache {
+    <<core port impl>>
+    filled by discovery probes
+  }
+  class PackageComposition {
+    <<engine>>
+    service
+    runtimes
+    index
+  }
+  class PackageHost {
+    <<engine>>
+    instances keyed by digest, generation, config revision
+    barriers, retry_at, epoch
+    +boot() +start() +reconcile()
+    +invoke(InvokeRequest) InvocationHandle
+    +shutdown(bound)
+  }
+  class Session {
+    <<engine>>
+    one framed protocol session per helper
+  }
+  class HostBroker {
+    <<engine>>
+    state
+    call
+    commit_event
+    artifact reads
+  }
+  class Grants {
+    <<engine>>
+    resolved at admission
+  }
+  class commit_event {
+    <<fn>>
+    state CAS + intents + receipt + checkpoint in one write
+  }
+  class http {
+    <<module>>
+    brokered HTTP through named connections
+  }
+  class inference {
+    <<module>>
+    brokered text inference through the router
+  }
+  class ProcessSupervisor { <<engine>> }
+  class PackageToolsConsumer {
+    <<engine>>
+    package-tools
+    queue() then execute()
+  }
+  class PackageIntentsConsumer {
+    <<engine>>
+    package-intents
+    runs package.broker.* effects
+  }
+  UseCases o-- PackageService : with_packages
+  PackageService o-- PackageInspector
+  PackageService o-- PackageFiles
+  PackageService o-- RuntimeProbe
+  PackageService o-- SchemaValidator
+  PackageService o-- PackageActivity
+  PackageService ..> policy
+  PackageService ..> index
+  PackageService ..> view
+  PackageService ..> approval
+  approval ..> review_evidence
+  index ..> IndexTransport
+  index ..> IndexVerifier
+  BundleInspector ..|> PackageInspector
+  NativePackageFiles ..|> PackageFiles
+  JsonSchemaValidator ..|> SchemaValidator
+  NativeIndexTransport ..|> IndexTransport
+  BundleIndexVerifier ..|> IndexVerifier
+  RuntimeCache ..|> RuntimeProbe
+  PackageComposition *-- PackageService
+  PackageHost ..|> PackageActivity
+  PackageHost o-- PackageService : host seams only
+  PackageHost o-- ProcessSupervisor
+  PackageHost *-- Session : one per ready instance
+  PackageHost *-- HostBroker
+  HostBroker ..> Grants
+  HostBroker ..> commit_event
+  HostBroker ..> http : network ports attached by desktop host
+  HostBroker ..> inference : attached when providers and router exist
+  PackageToolsConsumer ..> PackageHost : invoke
+  PackageIntentsConsumer ..> PackageHost

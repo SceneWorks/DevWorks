@@ -14,9 +14,11 @@
 //! `ui-state.json` and sent with the conversation's first routed request. The status line shows
 //! the pinned model or the truthful availability of the selection: its blockers, and the
 //! earliest cooldown expiry when that is all it waits for (rechecked then, never earlier).
+use crate::paged::Paged;
 use devworks_core::protocol::records::{
     EffortName, RouteAvailability, RouteCatalogModel, RouteChoice, RouteIntent, TierName,
 };
+use devworks_core::protocol::wire_name;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
@@ -28,7 +30,8 @@ pub struct Selection {
 }
 impl PartialEq for Selection {
     fn eq(&self, other: &Self) -> bool {
-        same_intent(&self.intent, &other.intent) && wire(&self.effort) == wire(&other.effort)
+        same_intent(&self.intent, &other.intent)
+            && wire_name(&self.effort) == wire_name(&other.effort)
     }
 }
 impl Default for Selection {
@@ -52,8 +55,9 @@ pub struct Status {
 
 #[derive(Default)]
 pub struct Routing {
-    /// The complete query catalog; selection options filter unavailable concrete models.
-    pub catalog: Vec<RouteCatalogModel>,
+    /// The complete query catalog, read page by page and shown only once every page is read;
+    /// selection options filter unavailable concrete models.
+    pub catalog: Paged<RouteCatalogModel>,
     pub catalog_loaded: bool,
     pub catalog_error: Option<String>,
     /// Selections by conversation key (a session ID, or the new-chat draft key).
@@ -65,10 +69,6 @@ pub struct Routing {
     /// The cooldown expiry each conversation's status was last rechecked for, so a router
     /// that still reports it (clocks differ slightly) is not asked again every frame.
     pub rechecked: BTreeMap<String, i64>,
-    /// The catalog load being gathered page by page (the shown catalog changes only when it is
-    /// complete), and the generation of the latest load started.
-    pub catalog_load: Option<CatalogLoad>,
-    pub catalog_generation: u64,
     /// Conversations whose first route is being saved: their selection is the one it carries,
     /// so it cannot change until the pin is confirmed (or the route refused).
     pub first_in_flight: std::collections::BTreeSet<String>,
@@ -81,23 +81,6 @@ pub struct Routing {
     pub status_asked: BTreeMap<String, Selection>,
 }
 
-/// One catalog load: the pages gathered so far.
-#[derive(Clone, Debug, Default)]
-pub struct CatalogLoad {
-    pub generation: u64,
-    pub items: Vec<RouteCatalogModel>,
-}
-
-/// What a catalog page did to the load it belongs to.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum CatalogPage {
-    /// A page of a load a newer one replaced: ignored.
-    Stale,
-    /// Gathered; the next page continues after this cursor.
-    More(String),
-    /// The last page: the gathered catalog is now shown.
-    Complete,
-}
 impl Routing {
     /// Forgets everything derived from the catalog and routing settings (after they changed):
     /// the catalog is reloaded and each conversation's availability asked again.
@@ -105,67 +88,6 @@ impl Routing {
         self.catalog_loaded = false;
         self.status.clear();
         self.rechecked.clear();
-    }
-    /// Starts a new catalog load, replacing any load still gathering pages.
-    pub fn begin_catalog_load(&mut self) -> u64 {
-        self.catalog_generation += 1;
-        self.catalog_load = Some(CatalogLoad {
-            generation: self.catalog_generation,
-            items: Vec::new(),
-        });
-        self.catalog_generation
-    }
-    /// Takes one page of load `generation`; pages of any other load never mix in.
-    pub fn catalog_page(
-        &mut self,
-        generation: u64,
-        items: Vec<RouteCatalogModel>,
-        next: Option<String>,
-    ) -> CatalogPage {
-        let Some(load) = self
-            .catalog_load
-            .as_mut()
-            .filter(|l| l.generation == generation)
-        else {
-            return CatalogPage::Stale;
-        };
-        load.items.extend(items);
-        match next {
-            Some(cursor) => CatalogPage::More(cursor),
-            None => {
-                self.catalog = self
-                    .catalog_load
-                    .take()
-                    .map(|l| l.items)
-                    .unwrap_or_default();
-                self.catalog_loaded = true;
-                self.catalog_error = None;
-                CatalogPage::Complete
-            }
-        }
-    }
-    /// Load `generation` stopped without a reply (its next page could not be submitted): it is
-    /// no longer in progress, and the catalog stays as shown (and unloaded if it never was).
-    pub fn abandon_catalog_load(&mut self, generation: u64) {
-        if self
-            .catalog_load
-            .as_ref()
-            .is_some_and(|l| l.generation == generation)
-        {
-            self.catalog_load = None;
-        }
-    }
-    /// A failed page of load `generation` ends that load (the shown catalog is kept).
-    pub fn catalog_failed(&mut self, generation: u64, error: String) {
-        if self
-            .catalog_load
-            .as_ref()
-            .is_some_and(|l| l.generation == generation)
-        {
-            self.catalog_load = None;
-            self.catalog_loaded = true;
-            self.catalog_error = Some(error);
-        }
     }
     /// Whether the conversation's selection may change now: not while its first route, which
     /// carries the current selection, is waiting or being saved.
@@ -199,7 +121,7 @@ pub const LATEST_FAMILIES: [(&str, &str); 8] = [
 ];
 
 pub fn is_latest(m: &RouteCatalogModel) -> bool {
-    devworks_core::services::router::latest::alias_family(m.id.as_str()).is_some()
+    devworks_core::protocol::helpers::router::alias_family(m.id.as_str()).is_some()
 }
 
 pub fn selectable(m: &RouteCatalogModel) -> bool {
@@ -208,16 +130,9 @@ pub fn selectable(m: &RouteCatalogModel) -> bool {
 
 const OPEN_ROUTER_AUTO_UPSTREAM: &str = "openrouter/auto";
 
-fn wire<T: Serialize>(v: &T) -> String {
-    serde_json::to_value(v)
-        .ok()
-        .and_then(|v| v.as_str().map(str::to_owned))
-        .unwrap_or_default()
-}
-
 /// Whether a catalog model is OpenRouter's own automatic route.
 pub fn is_open_router_auto(m: &RouteCatalogModel) -> bool {
-    wire(&m.endpoint_profile) == "OpenRouterChat"
+    wire_name(&m.endpoint_profile) == "OpenRouterChat"
         && m.upstream_model_id.0 == OPEN_ROUTER_AUTO_UPSTREAM
 }
 
@@ -289,42 +204,13 @@ pub fn intent_label(catalog: &[RouteCatalogModel], intent: &RouteIntent) -> Stri
                 .map(|m| m.display_name.0.clone())
                 .unwrap_or_else(|| model_id.as_str().to_owned()),
             RouteIntent::OpenRouterAuto {} => "Open Router Auto".into(),
-            RouteIntent::Tier { tier } => format!("Tier {}", wire(tier)),
+            RouteIntent::Tier { tier } => format!("Tier {}", wire_name(tier)),
         })
 }
 
-fn models_of<'c>(
-    catalog: &'c [RouteCatalogModel],
-    intent: &RouteIntent,
-) -> Vec<&'c RouteCatalogModel> {
-    catalog
-        .iter()
-        .filter(|m| m.enabled && m.available != Some(false))
-        .filter(|m| match intent {
-            RouteIntent::Tier { tier } => {
-                m.tier_memberships.0.iter().any(|t| wire(t) == wire(tier))
-            }
-            RouteIntent::Model { model_id } => {
-                if devworks_core::services::router::latest::alias_family(model_id.as_str())
-                    .is_some()
-                {
-                    catalog
-                        .iter()
-                        .find(|a| &a.id == model_id)
-                        .filter(|a| a.available == Some(true))
-                        .and_then(|a| a.resolves_to_model_ids.as_ref())
-                        .is_some_and(|ids| ids.0.contains(&m.id))
-                } else {
-                    &m.id == model_id
-                }
-            }
-            RouteIntent::OpenRouterAuto {} => is_open_router_auto(m),
-        })
-        .collect()
-}
-
-/// The efforts offered for `intent`: Provider default, then every explicit effort a pooled
-/// model declares (lowest first).
+/// The efforts offered for `intent`: Provider default, then every explicit effort the catalog
+/// says the selection offers (lowest first). The router decides what each row offers
+/// (`offeredEfforts`); a tier offers what its member rows offer.
 pub fn efforts(catalog: &[RouteCatalogModel], intent: &RouteIntent) -> Vec<EffortName> {
     const ORDER: [EffortName; 6] = [
         EffortName::Minimal,
@@ -334,36 +220,25 @@ pub fn efforts(catalog: &[RouteCatalogModel], intent: &RouteIntent) -> Vec<Effor
         EffortName::XHigh,
         EffortName::Max,
     ];
-    let declared: Vec<String> = models_of(catalog, intent)
+    let declared: Vec<String> = catalog
         .iter()
-        .flat_map(|m| {
-            if is_latest(m) {
-                m.resolves_to_model_ids
-                    .as_ref()
-                    .map(|ids| {
-                        ids.0
-                            .iter()
-                            .filter_map(|id| {
-                                catalog.iter().find(|target| {
-                                    &target.id == id
-                                        && target.enabled
-                                        && target.available != Some(false)
-                                })
-                            })
-                            .flat_map(|target| target.efforts.0.iter().map(wire))
-                            .collect::<Vec<_>>()
-                    })
-                    .unwrap_or_default()
-            } else {
-                m.efforts.0.iter().map(wire).collect()
-            }
+        .filter(|m| match intent {
+            RouteIntent::Tier { tier } => m
+                .tier_memberships
+                .0
+                .iter()
+                .any(|t| wire_name(t) == wire_name(tier)),
+            RouteIntent::Model { model_id } => &m.id == model_id,
+            RouteIntent::OpenRouterAuto {} => is_open_router_auto(m),
         })
+        .flat_map(|m| m.offered_efforts.iter().flat_map(|e| e.0.iter()))
+        .map(wire_name)
         .collect();
     let mut out = vec![EffortName::Default];
     out.extend(
         ORDER
             .into_iter()
-            .filter(|e| declared.iter().any(|d| *d == wire(e))),
+            .filter(|e| declared.iter().any(|d| *d == wire_name(e))),
     );
     out
 }
@@ -372,7 +247,7 @@ pub fn effort_label(e: &EffortName) -> String {
     match e {
         EffortName::Default => "Provider default".into(),
         EffortName::XHigh => "Extra high".into(),
-        other => wire(other),
+        other => wire_name(other),
     }
 }
 
@@ -397,17 +272,6 @@ pub fn reason(code: &str) -> &'static str {
         "NoInventory" => "waiting for complete provider inventory",
         _ => "unavailable",
     }
-}
-
-/// Local wall-clock time of a UTC millisecond instant.
-pub fn local_time(ms: i64) -> String {
-    jiff::Timestamp::from_millisecond(ms)
-        .map(|t| {
-            t.to_zoned(jiff::tz::TimeZone::system())
-                .strftime("%H:%M:%S")
-                .to_string()
-        })
-        .unwrap_or_else(|_| "an unknown time".into())
 }
 
 /// The status line of a selection: the pinned route, or the selection's truthful availability.
@@ -461,7 +325,12 @@ pub fn status_line(
     let wait = a
         .retry_at_ms
         .as_ref()
-        .map(|t| format!("; rechecked at {}", local_time(t.get())))
+        .map(|t| {
+            format!(
+                "; rechecked at {}",
+                crate::widgets::local_time_seconds(t.get())
+            )
+        })
         .unwrap_or_default();
     format!(
         "{pinned}{route} · {effort} · no eligible model: {}{wait}",
@@ -493,9 +362,6 @@ mod tests {
             "imageInput": false, "tools": true, "revision": "1"
         }))
         .unwrap()
-    }
-    fn ids(r: &Routing) -> Vec<String> {
-        r.catalog.iter().map(|m| m.id.as_str().to_owned()).collect()
     }
 
     #[test]
@@ -529,24 +395,61 @@ mod tests {
         );
     }
 
+    fn offering(mut m: RouteCatalogModel, efforts: &[&str]) -> RouteCatalogModel {
+        m.offered_efforts = Some(serde_json::from_value(serde_json::json!(efforts)).unwrap());
+        m
+    }
+
+    fn names(efforts: Vec<EffortName>) -> Vec<String> {
+        efforts.iter().map(wire_name).collect()
+    }
+
     #[test]
-    fn latest_effort_comes_only_from_its_current_targets_and_pin_keeps_both_names() {
-        let mut concrete = model("astra-v2");
-        concrete.available = Some(true);
-        concrete.efforts.0 = vec![EffortName::High];
-        let mut alias = model("astra-latest");
-        alias.display_name = serde_json::from_value(serde_json::json!("Astra Latest")).unwrap();
-        alias.available = Some(true);
-        alias.resolves_to_model_ids =
-            Some(serde_json::from_value(serde_json::json!([concrete.id])).unwrap());
+    fn the_effort_selector_offers_what_the_catalog_says_each_selection_offers() {
+        let alias = offering(model("astra-latest"), &["High"]);
         let selection = Selection {
             intent: intent_of(&alias),
             effort: EffortName::High,
         };
-        let mut catalog = vec![alias, concrete];
-        assert_eq!(efforts(&catalog, &selection.intent).len(), 2);
-        catalog[0].available = Some(false);
-        assert_eq!(efforts(&catalog, &selection.intent).len(), 1);
+        let mut catalog = vec![alias, model("astra-v2")];
+        assert_eq!(
+            names(efforts(&catalog, &selection.intent)),
+            ["Default", "High"]
+        );
+        catalog[0] = offering(model("astra-latest"), &[]);
+        assert_eq!(names(efforts(&catalog, &selection.intent)), ["Default"]);
+        // A row without the member (an older reply) offers only the provider default.
+        let none = vec![model("a")];
+        assert_eq!(names(efforts(&none, &selection.intent)), ["Default"]);
+    }
+
+    #[test]
+    fn a_tier_offers_the_union_of_its_member_rows_lowest_first() {
+        let mut high = offering(model("a"), &["High", "Low"]);
+        high.tier_memberships = serde_json::from_value(serde_json::json!(["High"])).unwrap();
+        let mut other = offering(model("b"), &["Max"]);
+        other.tier_memberships = serde_json::from_value(serde_json::json!(["High"])).unwrap();
+        let mut outside = offering(model("c"), &["Minimal"]);
+        outside.tier_memberships = serde_json::from_value(serde_json::json!(["Low"])).unwrap();
+        let catalog = vec![high, other, outside];
+        let tier = RouteIntent::Tier {
+            tier: serde_json::from_value(serde_json::json!("High")).unwrap(),
+        };
+        assert_eq!(
+            names(efforts(&catalog, &tier)),
+            ["Default", "Low", "High", "Max"]
+        );
+    }
+
+    #[test]
+    fn a_pin_keeps_both_names() {
+        let mut alias = model("astra-latest");
+        alias.display_name = serde_json::from_value(serde_json::json!("Astra Latest")).unwrap();
+        let selection = Selection {
+            intent: intent_of(&alias),
+            effort: EffortName::High,
+        };
+        let catalog = vec![alias];
         assert_eq!(
             effort_label(&selection.effort),
             "High",
@@ -583,35 +486,5 @@ mod tests {
             text.contains("Astra Latest") && text.contains("Pinned: astra-v1"),
             "{text}"
         );
-    }
-
-    #[test]
-    fn catalog_pages_are_gathered_and_never_mixed_across_loads() {
-        let mut r = Routing::default();
-        let first = r.begin_catalog_load();
-        assert_eq!(
-            r.catalog_page(first, vec![model("a1")], Some("c1".into())),
-            CatalogPage::More("c1".into())
-        );
-        assert!(!r.catalog_loaded, "not loaded until every page arrived");
-        // A refresh starts while the first load is still paging.
-        let second = r.begin_catalog_load();
-        assert_eq!(
-            r.catalog_page(first, vec![model("a2")], None),
-            CatalogPage::Stale
-        );
-        assert!(!r.catalog_loaded && r.catalog.is_empty());
-        r.catalog_page(second, vec![model("b1")], Some("c2".into()));
-        r.catalog_failed(first, "late".into());
-        assert!(
-            r.catalog_load.is_some(),
-            "a stale failure does not end the newer load"
-        );
-        assert_eq!(
-            r.catalog_page(second, vec![model("b2")], None),
-            CatalogPage::Complete
-        );
-        assert!(r.catalog_loaded);
-        assert_eq!(ids(&r), ["b1", "b2"]);
     }
 }

@@ -352,7 +352,9 @@ async fn run_native_loop(
                     context.messages.push(Message {
                         role: MessageRole::User,
                         content: vec![ContentBlock::Text {
-                            text: "Host notice: The previous assistant response was interrupted before completion. Continue from the last completed step; do not assume the partial response was applied.".into(),
+                            text: "Host notice: The previous assistant response was interrupted before \
+                                completion. Continue from the last completed step; do not assume the \
+                                partial response was applied.".into(),
                             cache: None,
                         }],
                     });
@@ -1390,7 +1392,10 @@ pub fn initial_context(
 
 /// Host guidance after the role text when the selected tools span several windows. It is not
 /// part of the role: adopting a changed role keeps it.
-pub(crate) const TOOL_WINDOW_NOTICE: &str = "Selected tools are presented in successive windows. A completed response may be followed by another turn with the remaining tools before the assignment closes. If a needed tool is absent, state the intended operation and continue when the next window appears.";
+pub(crate) const TOOL_WINDOW_NOTICE: &str = "Selected tools are presented in successive windows. A completed \
+    response may be followed by another turn with the remaining tools \
+    before the assignment closes. If a needed tool is absent, state the \
+    intended operation and continue when the next window appears.";
 
 /// A membership handoff advances the session epoch in the same transaction as its root change.
 /// Rebuild the provider root before the destination child sends another native request.
@@ -1521,7 +1526,9 @@ pub fn ensure_membership_context(
                         context.messages.push(Message {
                             role: MessageRole::User,
                             content: vec![ContentBlock::Text {
-                                text: "Host notice: The previous assistant response was interrupted before completion. Continue from the last completed step; do not assume the partial response was applied.".into(),
+                                text: "Host notice: The previous assistant response was interrupted before \
+                                    completion. Continue from the last completed step; do not assume the \
+                                    partial response was applied.".into(),
                                 cache: None,
                             }],
                         });
@@ -1905,6 +1912,7 @@ pub fn publish_first_context(
 
 /// Build an attributed native request from the exact published head and routed pin. The driver
 /// rechecks the pin, current owner, price and context before sending anything to a provider.
+#[cfg(any(test, feature = "test-support"))]
 pub fn plan_generation(
     engine: &TurnEngine,
     ctx: &InvocationContext,
@@ -2069,15 +2077,6 @@ fn plan_request(
             provider_model_id: pin.upstream_model_id,
             connection_id: connection.id,
             endpoint_profile: connection.profile.clone(),
-            access_mode: if matches!(
-                connection.profile.as_str(),
-                "CodexSubscriptionResponses" | "ClaudeSubscriptionMessages"
-            ) {
-                "Subscription"
-            } else {
-                "Api"
-            }
-            .into(),
             service_tier: None,
             input_tokens: None,
             cache_write_ttl_ms: None,

@@ -422,7 +422,31 @@ fn request(m: &mut Material, c: &ProviderContext) -> InferenceRequest {
         &serde_json::to_vec(c).unwrap(),
         "application/vnd.devworks.provider-context+json",
     );
-    serde_json::from_value(json!({"protocol":"1.0-draft.1","requestId":"request","purpose":"Conversation","attribution":{"kind":"Workspace","sessionId":"session"},"authorityRevision":"1","controlGeneration":"1","instructionRevision":"1","cancellationRevision":"1","options":{"selection":{"kind":"Model","modelId":"catalog"},"deadlineMs":30000},"input":{"kind":"Generation","sessionId":"session","context":reference,"contextEpoch":"0","tools":[],"responseHeadroomTokens":"1024","requiresImages":false,"requiresParallelTools":false}})).unwrap()
+    serde_json::from_value(json!({
+        "protocol": "1.0-draft.1",
+        "requestId": "request",
+        "purpose": "Conversation",
+        "attribution": {"kind": "Workspace", "sessionId": "session"},
+        "authorityRevision": "1",
+        "controlGeneration": "1",
+        "instructionRevision": "1",
+        "cancellationRevision": "1",
+        "options": {
+            "selection": {"kind": "Model", "modelId": "catalog"},
+            "deadlineMs": 30000
+        },
+        "input": {
+            "kind": "Generation",
+            "sessionId": "session",
+            "context": reference,
+            "contextEpoch": "0",
+            "tools": [],
+            "responseHeadroomTokens": "1024",
+            "requiresImages": false,
+            "requiresParallelTools": false
+        }
+    }))
+    .unwrap()
 }
 fn limits() -> PreparationLimits {
     PreparationLimits {
@@ -709,7 +733,19 @@ fn schema_ref_digest_and_limits_are_enforced_before_prepared_bytes() {
 }
 #[test]
 fn openrouter_auto_beta_uses_its_distinct_retained_plugin_and_provider_constraints() {
-    let o:crate::protocol::records::OpenRouterConstraints=serde_json::from_value(json!({"allowedModels":["vendor/*"],"excludedModels":["vendor/old"],"costTier":"low","provider":{"order":["preferred"],"allowFallbacks":false,"requireParameters":true,"dataCollection":"deny","maxPrice":{"prompt":"1.5","completion":"3"}}})).unwrap();
+    let o: crate::protocol::records::OpenRouterConstraints = serde_json::from_value(json!({
+        "allowedModels": ["vendor/*"],
+        "excludedModels": ["vendor/old"],
+        "costTier": "low",
+        "provider": {
+            "order": ["preferred"],
+            "allowFallbacks": false,
+            "requireParameters": true,
+            "dataCollection": "deny",
+            "maxPrice": {"prompt": "1.5", "completion": "3"}
+        }
+    }))
+    .unwrap();
     let map = crate::providers::openrouter::open_router_request_fields(&o, "openrouter/auto-beta");
     assert_eq!(map["plugins"][0]["id"], "auto-beta-router");
     assert_eq!(map["plugins"][0]["allowed_models"], json!(["vendor/*"]));

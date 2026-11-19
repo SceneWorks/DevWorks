@@ -55,7 +55,26 @@ fn capture(
     let op = OperationId(id(&format!("stage-{name}")));
     let kind = if n == 0 { "Markdown" } else { "Resource" };
     let key = (n != 0).then(|| format!("key-{n}"));
-    tx.operations().record_intent(NewOperation{id:op.clone(),root_id:None,assignment_id:None,capability:STAGE_CAPABILITY.into(),schema_version:1,args_digest:digest.clone(),payload:json!({"digest":digest,"byteCount":bytes.len(),"source":{"kind":"ConventionImportSource","operationId":d.operation_id,"conventionId":d.convention_id,"ordinal":n,"entryKind":kind,"resourceKey":key}})})?;
+    tx.operations().record_intent(NewOperation {
+        id: op.clone(),
+        root_id: None,
+        assignment_id: None,
+        capability: STAGE_CAPABILITY.into(),
+        schema_version: 1,
+        args_digest: digest.clone(),
+        payload: json!({
+            "digest": digest,
+            "byteCount": bytes.len(),
+            "source": {
+                "kind": "ConventionImportSource",
+                "operationId": d.operation_id,
+                "conventionId": d.convention_id,
+                "ordinal": n,
+                "entryKind": kind,
+                "resourceKey": key
+            }
+        }),
+    })?;
     let attempt = tx
         .operations()
         .begin_attempt(&op, 1, AttemptBinding::default())?;
@@ -123,9 +142,25 @@ fn ready(
     body: &StoredConventionImportArtifact,
     count: i64,
 ) -> Result<StoredConventionImport, StorageError> {
-    let reference = json!({"artifactId":body.artifact.id,"versionId":body.version.id,"sha256":body.version.blob_digest,"byteLength":body.version.byte_count.to_string(),"mediaType":body.version.media_type});
+    let reference = json!({
+        "artifactId": body.artifact.id,
+        "versionId": body.version.id,
+        "sha256": body.version.blob_digest,
+        "byteLength": body.version.byte_count.to_string(),
+        "mediaType": body.version.media_type
+    });
     let mut row = record(d.convention_id.as_str(), d.scope.clone(), Some(reference));
-    row.provenance = json!({"kind":"Imported","actorId":"host","source":d.source_ref,"schema":{"schemaId":"devworks.conventions/portable","revision":"1","sha256":"a".repeat(64)},"importedAtMs":T0.to_string()});
+    row.provenance = json!({
+        "kind": "Imported",
+        "actorId": "host",
+        "source": d.source_ref,
+        "schema": {
+            "schemaId": "devworks.conventions/portable",
+            "revision": "1",
+            "sha256": "a".repeat(64)
+        },
+        "importedAtMs": T0.to_string()
+    });
     let updated = tx
         .conventions()
         .set_convention_import_metadata(&d.operation_id, &row, None)?;
@@ -193,7 +228,13 @@ fn private_import_pages_publish_atomically_reopen_and_reject_stale_counts() {
         .is_err()
     );
     assert!(read(&store, |r| r.artifacts().artifact(&id("streamed-entry-0"))).is_none());
-    h.raw().execute_batch("CREATE TRIGGER fail_convention_import BEFORE INSERT ON convention_heads WHEN NEW.id='streamed' BEGIN SELECT RAISE(ABORT,'injected publication failure'); END;").unwrap();
+    h.raw()
+        .execute_batch(
+            "CREATE TRIGGER fail_convention_import BEFORE INSERT ON convention_heads \
+        WHEN NEW.id='streamed' BEGIN SELECT RAISE(ABORT,'injected publication \
+        failure'); END;",
+        )
+        .unwrap();
     let failing = d.clone();
     run_write(&store, WriteOptions::fixture(), move |tx| {
         assert!(

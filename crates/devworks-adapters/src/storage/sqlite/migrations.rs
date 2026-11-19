@@ -313,7 +313,8 @@ pub const MIGRATIONS: &[Migration] = &[
     // proposals, retained state generations, index sources and availability observations (seven
     // tables and an index), independent of every table of migrations 11-19 (it references only
     // its own tables). The writer floor stays at 19, the highest so far: applying a migration
-    // overwrites both floors, so a lower writer floor would re-admit the writers migrations 11, 14, 16 and 19 refuse. It need not rise: no earlier build reads or writes these tables, and the
+    // overwrites both floors, so a lower writer floor would re-admit the writers migrations 11, 14,
+    // 16 and 19 refuse. It need not rise: no earlier build reads or writes these tables, and the
     // package handler state rows (migration 1) a generation publication rewrites were never
     // written by an earlier build. The reader floor stays at 8: no earlier build reads these
     // tables, and every query an earlier reader makes is unchanged.
@@ -702,6 +703,16 @@ pub const MIGRATIONS: &[Migration] = &[
         expected_sha256: "910fd21382ea8c47bd6daf7b0afad5ad9d4b0991bd51612abfa44186ce86d002",
         rebuilds_tables: false,
     },
+    // One new table and its index: a prior reader never reads it. A prior writer writes revisions
+    // without links (harmless), and a prior build's project purge refuses the unreviewed schema.
+    Migration {
+        version: 62,
+        minimum_reader: 57,
+        minimum_writer: 61,
+        sql: include_str!("migrations/0062_instruction_revision_lessons.sql"),
+        expected_sha256: "4348986bcf858ecf1989b6554f3ba3c31bf40cf754363a4a8e35758aa6c848e6",
+        rebuilds_tables: false,
+    },
 ];
 /// Recorded checksum of migration 17; a test fails if the shipped text changes.
 pub const MIGRATION_0017_SHA256: &str =
@@ -783,7 +794,8 @@ pub(crate) fn read_meta(conn: &Connection) -> Result<Option<Meta>, StorageError>
     }
     db(conn
         .query_row(
-            "SELECT store_id,schema_version,minimum_reader,minimum_writer,restore_epoch FROM store_meta WHERE singleton=1",
+            "SELECT store_id,schema_version,minimum_reader,minimum_writer,\
+                restore_epoch FROM store_meta WHERE singleton=1",
             [],
             |r| {
                 Ok(Meta {
@@ -869,16 +881,19 @@ fn apply_in_transaction(
         db(conn.execute_batch(m.sql))?;
         match bootstrap_store_id {
             Some(store_id) => db(conn.execute(
-                "INSERT INTO store_meta(singleton,store_id,schema_version,minimum_reader,minimum_writer,restore_epoch) VALUES(1,?1,?2,?3,?4,0)",
+                "INSERT INTO store_meta(singleton,store_id,schema_version,minimum_reader,\
+                    minimum_writer,restore_epoch) VALUES(1,?1,?2,?3,?4,0)",
                 params![store_id, m.version, m.minimum_reader, m.minimum_writer],
             ))?,
             None => db(conn.execute(
-                "UPDATE store_meta SET schema_version=?1,minimum_reader=?2,minimum_writer=?3 WHERE singleton=1",
+                "UPDATE store_meta SET schema_version=?1,minimum_reader=?2,\
+                    minimum_writer=?3 WHERE singleton=1",
                 params![m.version, m.minimum_reader, m.minimum_writer],
             ))?,
         };
         db(conn.execute(
-            "INSERT INTO schema_migrations(version,checksum,applied_at,app_build) VALUES(?1,?2,?3,?4)",
+            "INSERT INTO schema_migrations(version,checksum,applied_at,app_build) \
+                VALUES(?1,?2,?3,?4)",
             params![m.version, m.checksum(), now_ms, app_build],
         ))?;
         db(conn.pragma_update(None, "user_version", m.version))?;
@@ -943,7 +958,8 @@ pub(crate) fn check(
     let access = if meta.minimum_writer > build {
         AccessMode::ReadOnly {
             reason: format!(
-                "store schema {} requires writer version {}; this build is {build} (diagnostics/export only)",
+                "store schema {} requires writer version {}; this build is {build} \
+                    (diagnostics/export only)",
                 meta.schema_version, meta.minimum_writer
             ),
         }

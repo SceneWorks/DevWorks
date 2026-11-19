@@ -2,6 +2,7 @@
 //! All mutations go through the same domain gateway used by agents.
 use crate::frame;
 use crate::ops::{McpContentRequest, mcp_data_scope};
+use crate::paged::Paged;
 use devworks_core::operations::{OperationInput as In, mcp};
 use devworks_core::ports::secrets::Secret;
 use devworks_core::protocol::records::{
@@ -221,18 +222,18 @@ mod tests {
         .unwrap();
         record.selected_tool_ids.0 = vec![Id::new("saved-tool").unwrap()];
         let mut panel = McpPanel {
-            servers: vec![record],
+            servers: Paged::from_items(vec![record]),
             selected: Some(server.clone()),
             ..McpPanel::default()
         };
         // An unsaved checkbox edit, then a saved classification.
         panel.selection = vec![Id::new("unsaved-tool").unwrap()];
         panel.keep_selection = true;
-        panel.loaded_catalog(&server, vec![], false);
+        panel.catalog_loaded(&server, true);
         assert_eq!(panel.selection, vec![Id::new("unsaved-tool").unwrap()]);
         assert!(!panel.keep_selection);
         // Any other reload shows the saved selection.
-        panel.loaded_catalog(&server, vec![], false);
+        panel.catalog_loaded(&server, true);
         assert_eq!(panel.selection, vec![Id::new("saved-tool").unwrap()]);
     }
 
@@ -268,10 +269,11 @@ mod tests {
 pub struct McpPanel {
     pub projects: Vec<ProjectRecord>,
     pub project: Option<ProjectId>,
-    pub servers: Vec<McpServer>,
-    pub capabilities: Vec<McpCapability>,
+    /// The scope's servers, shown as their pages arrive.
+    pub servers: Paged<McpServer>,
+    /// The selected server's capabilities, shown as their pages arrive.
+    pub capabilities: Paged<McpCapability>,
     pub selected: Option<Id>,
-    pub loading: bool,
     pub busy: bool,
     pub error: Option<String>,
     pub message: Option<String>,
@@ -362,43 +364,38 @@ impl McpPanel {
         true
     }
 
-    pub fn loaded_servers(&mut self, servers: Vec<McpServer>, append: bool, complete: bool) {
+    /// A page of servers arrived (`complete` when it was the last): the selection follows them.
+    pub fn servers_loaded(&mut self, complete: bool) {
         self.error = None;
-        if append {
-            self.servers.extend(servers);
-        } else {
-            self.servers = servers;
-        }
         if complete
             && let Some(selected) = &self.selected
-            && !self.servers.iter().any(|server| &server.id == selected)
+            && !self
+                .servers
+                .items
+                .iter()
+                .any(|server| &server.id == selected)
         {
             self.selected = None;
-            self.capabilities.clear();
+            self.capabilities.reset();
             self.selection.clear();
         }
     }
 
-    pub fn loaded_catalog(&mut self, server: &Id, capabilities: Vec<McpCapability>, append: bool) {
-        if self.selected.as_ref() != Some(server) {
+    /// A page of `server`'s capabilities arrived (`first` when it replaced the list).
+    pub fn catalog_loaded(&mut self, server: &Id, first: bool) {
+        if self.selected.as_ref() != Some(server) || !first {
             return;
         }
-        if append {
-            self.capabilities.extend(capabilities);
-        } else {
-            self.capabilities = capabilities;
+        if std::mem::take(&mut self.keep_selection) {
+            return;
         }
-        if !append {
-            if std::mem::take(&mut self.keep_selection) {
-                return;
-            }
-            self.selection = self
-                .servers
-                .iter()
-                .find(|record| &record.id == server)
-                .map(|record| record.selected_tool_ids.0.clone())
-                .unwrap_or_default();
-        }
+        self.selection = self
+            .servers
+            .items
+            .iter()
+            .find(|record| &record.id == server)
+            .map(|record| record.selected_tool_ids.0.clone())
+            .unwrap_or_default();
     }
 
     pub fn ui(&mut self, ui: &mut Ui, online: bool, actions: &mut Vec<McpAction>) {
@@ -406,10 +403,9 @@ impl McpPanel {
         ui.heading("External MCP servers");
         ui.label("Choose the tools agents can use. Read-only tools start selected after discovery; other tools need an explicit selection.");
         if ui.button("Refresh MCP servers").clicked() {
-            self.loading = true;
             actions.push(McpAction::Reload);
         }
-        if self.loading {
+        if self.servers.loading() {
             ui.spinner();
         }
         if let Some(error) = &self.error {
@@ -444,21 +440,21 @@ impl McpPanel {
             self.pending_operation = None;
             self.opening = None;
             self.content = None;
-            self.capabilities.clear();
+            self.capabilities.reset();
             self.selection.clear();
-            self.servers.clear();
+            self.servers.reset();
             actions.push(McpAction::Reload);
         }
         let chosen = self
             .selected
             .as_ref()
-            .and_then(|id| self.servers.iter().find(|server| &server.id == id));
+            .and_then(|id| self.servers.items.iter().find(|server| &server.id == id));
         egui::ComboBox::from_id_salt("mcp-server")
             .selected_text(
                 chosen.map_or("Choose a server".to_owned(), |server| server.name.0.clone()),
             )
             .show_ui(ui, |ui| {
-                for server in &self.servers {
+                for server in &self.servers.items {
                     if ui
                         .selectable_label(
                             self.selected.as_ref() == Some(&server.id),
@@ -469,7 +465,7 @@ impl McpPanel {
                         self.selected = Some(server.id.clone());
                         self.opening = None;
                         self.content = None;
-                        self.capabilities.clear();
+                        self.capabilities.reset();
                         self.selection = server.selected_tool_ids.0.clone();
                         self.keep_selection = false;
                         self.form_from = Some(server.clone());
@@ -485,7 +481,7 @@ impl McpPanel {
         if let Some(server) = self
             .selected
             .as_ref()
-            .and_then(|id| self.servers.iter().find(|record| &record.id == id))
+            .and_then(|id| self.servers.items.iter().find(|record| &record.id == id))
         {
             let server_id = server.id.clone();
             let server_idle = self.pending_server.as_ref() != Some(&server_id);
@@ -624,6 +620,7 @@ impl McpPanel {
             });
             let sampling: Vec<McpCapability> = self
                 .capabilities
+                .items
                 .iter()
                 .filter(|cap| cap.kind.0 == "sampling")
                 .cloned()
@@ -661,6 +658,7 @@ impl McpPanel {
             }
             let tools: Vec<_> = self
                 .capabilities
+                .items
                 .iter()
                 .filter(|cap| cap.kind.0 == "tool")
                 .collect();
@@ -769,7 +767,7 @@ impl McpPanel {
             self.form_from = self
                 .selected
                 .as_ref()
-                .and_then(|id| self.servers.iter().find(|record| &record.id == id))
+                .and_then(|id| self.servers.items.iter().find(|record| &record.id == id))
                 .cloned();
         }
         if let Some(server) = self.form_from.take() {
@@ -841,12 +839,14 @@ impl McpPanel {
     ) {
         let resources: Vec<McpCapability> = self
             .capabilities
+            .items
             .iter()
             .filter(|cap| cap.kind.0 == "resource")
             .cloned()
             .collect();
         let prompts: Vec<McpCapability> = self
             .capabilities
+            .items
             .iter()
             .filter(|cap| cap.kind.0 == "prompt")
             .cloned()
@@ -1046,7 +1046,7 @@ impl McpPanel {
             let Some(server) = self
                 .selected
                 .as_ref()
-                .and_then(|id| self.servers.iter().find(|record| &record.id == id))
+                .and_then(|id| self.servers.items.iter().find(|record| &record.id == id))
             else {
                 self.error = Some("Choose a server to update.".into());
                 return None;

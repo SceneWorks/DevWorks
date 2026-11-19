@@ -31,7 +31,9 @@ const PURPOSES: [&str; 8] = [
 // ---------------------------------------------------------------------------------------------
 // Models
 
-const MODEL_COLUMNS: &str = "id,display_name,endpoint_profile,upstream_model_id,enabled,efforts_json,image_input,tools,context_tokens,position,revision,updated_at,connection_id";
+const MODEL_COLUMNS: &str = "id,display_name,endpoint_profile,upstream_model_id,enabled,efforts_json,\
+    image_input,tools,context_tokens,position,revision,updated_at,\
+    connection_id";
 
 /// A stored catalog row before its identifiers and lists are validated.
 struct RawModel {
@@ -127,7 +129,9 @@ fn validate_model(m: &StoredRouteModel) -> Result<(), StorageError> {
 // ---------------------------------------------------------------------------------------------
 // Pins
 
-const PIN_COLUMNS: &str = "session_id,pin_id,revision,model_id,connection_id,intent_json,requested_effort,effective_effort,capabilities_json,replaced_pin_id,reason,updated_at,upstream_model_id,endpoint_profile,identity_origin";
+const PIN_COLUMNS: &str = "session_id,pin_id,revision,model_id,connection_id,intent_json,\
+    requested_effort,effective_effort,capabilities_json,replaced_pin_id,\
+    reason,updated_at,upstream_model_id,endpoint_profile,identity_origin";
 
 type RawPin = (
     String,
@@ -437,13 +441,19 @@ impl RouterRepository for Unit<'_> {
             }
         }
         db(self.conn.execute(
-            "INSERT INTO router_models(id,display_name,endpoint_profile,upstream_model_id,enabled,efforts_json,image_input,tools,context_tokens,position,revision,updated_at,connection_id) \
-             VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13) \
-             ON CONFLICT(id) DO UPDATE SET display_name=excluded.display_name, endpoint_profile=excluded.endpoint_profile, \
-             upstream_model_id=excluded.upstream_model_id, enabled=excluded.enabled, efforts_json=excluded.efforts_json, \
-             image_input=excluded.image_input, tools=excluded.tools, context_tokens=excluded.context_tokens, \
-             position=excluded.position, revision=excluded.revision, updated_at=excluded.updated_at, \
-             connection_id=excluded.connection_id",
+            "INSERT INTO router_models(id,display_name,endpoint_profile,\
+                upstream_model_id,enabled,efforts_json,image_input,tools,context_tokens,\
+                position,revision,updated_at,connection_id) \
+                VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13) \
+                ON CONFLICT(id) DO UPDATE SET display_name=excluded.display_name, \
+                endpoint_profile=excluded.endpoint_profile, \
+                upstream_model_id=excluded.upstream_model_id, enabled=excluded.enabled, \
+                efforts_json=excluded.efforts_json, \
+                image_input=excluded.image_input, tools=excluded.tools, \
+                context_tokens=excluded.context_tokens, \
+                position=excluded.position, revision=excluded.revision, \
+                updated_at=excluded.updated_at, \
+                connection_id=excluded.connection_id",
             params![
                 m.id.as_str(),
                 m.display_name,
@@ -526,15 +536,23 @@ impl RouterRepository for Unit<'_> {
         };
         revision(next)?;
         let n = db(self.conn.execute(
-            "INSERT INTO router_pins(session_id,pin_id,revision,model_id,connection_id,intent_json,requested_effort,effective_effort,capabilities_json,replaced_pin_id,reason,updated_at,upstream_model_id,endpoint_profile,identity_origin) \
-             VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15) \
-             ON CONFLICT(session_id) DO UPDATE SET pin_id=excluded.pin_id, revision=excluded.revision, \
-             model_id=excluded.model_id, connection_id=excluded.connection_id, intent_json=excluded.intent_json, \
-             requested_effort=excluded.requested_effort, effective_effort=excluded.effective_effort, \
-             capabilities_json=excluded.capabilities_json, replaced_pin_id=excluded.replaced_pin_id, \
-             reason=excluded.reason, updated_at=excluded.updated_at, \
-             upstream_model_id=excluded.upstream_model_id, endpoint_profile=excluded.endpoint_profile, \
-             identity_origin=excluded.identity_origin WHERE revision=?16",
+            "INSERT INTO router_pins(session_id,pin_id,revision,model_id,\
+                connection_id,intent_json,requested_effort,effective_effort,\
+                capabilities_json,replaced_pin_id,reason,updated_at,upstream_model_id,\
+                endpoint_profile,identity_origin) \
+                VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15) \
+                ON CONFLICT(session_id) DO UPDATE SET pin_id=excluded.pin_id, \
+                revision=excluded.revision, \
+                model_id=excluded.model_id, connection_id=excluded.connection_id, \
+                intent_json=excluded.intent_json, \
+                requested_effort=excluded.requested_effort, \
+                effective_effort=excluded.effective_effort, \
+                capabilities_json=excluded.capabilities_json, \
+                replaced_pin_id=excluded.replaced_pin_id, \
+                reason=excluded.reason, updated_at=excluded.updated_at, \
+                upstream_model_id=excluded.upstream_model_id, \
+                endpoint_profile=excluded.endpoint_profile, \
+                identity_origin=excluded.identity_origin WHERE revision=?16",
             params![
                 p.session_id.as_str(),
                 p.pin_id.as_str(),
@@ -604,7 +622,9 @@ impl RouterRepository for Unit<'_> {
             });
         }
         db(self.conn.execute(
-            "INSERT INTO router_requests(request_id,operation_id,purpose,session_id,project_id,model_id,connection_id,pin_id,created_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9)",
+            "INSERT INTO router_requests(request_id,operation_id,purpose,session_id,\
+                project_id,model_id,connection_id,pin_id,created_at) VALUES(?1,?2,?3,?4,\
+                ?5,?6,?7,?8,?9)",
             params![
                 r.request_id.as_str(),
                 r.operation_id.0.as_str(),

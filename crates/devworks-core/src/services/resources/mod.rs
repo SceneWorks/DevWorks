@@ -63,6 +63,7 @@
 //! transferred only after reconciliation.
 use crate::context::InvocationContext;
 use crate::gateway::{AdmittedCommand, AdmittedQuery};
+use crate::locks::LockExt;
 use crate::operations::{OperationInput, resources as ops};
 use crate::ports::storage::{
     LeaseEndReason, LeasePhase, NewEvent, NewResource, OpenLeaseFilter, ProcessFilter,
@@ -141,6 +142,7 @@ pub fn desktop() -> MachineResource {
 }
 /// The machine resource a harness-controlled operation must hold a lease on before dispatch.
 /// Desktop input and taking desktop control need the desktop; reading the screen does not.
+#[cfg(any(test, feature = "test-support"))]
 pub fn required_resource(operation: &str) -> Option<&'static str> {
     matches!(operation, "desktop.input" | "desktop.request_control").then_some(DESKTOP)
 }
@@ -209,13 +211,12 @@ impl Dispatches {
     fn add(&self, lease: &Id) {
         *self
             .0
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
+            .locked()
             .entry(lease.as_str().to_owned())
             .or_default() += 1;
     }
     fn remove(&self, lease: &Id) {
-        let mut map = self.0.lock().unwrap_or_else(|p| p.into_inner());
+        let mut map = self.0.locked();
         if let Some(n) = map.get_mut(lease.as_str()) {
             *n -= 1;
             if *n == 0 {
@@ -225,12 +226,7 @@ impl Dispatches {
     }
     /// How many admitted dispatches of `lease` are still in flight.
     pub fn in_flight(&self, lease: &Id) -> usize {
-        self.0
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .get(lease.as_str())
-            .copied()
-            .unwrap_or(0)
+        self.0.locked().get(lease.as_str()).copied().unwrap_or(0)
     }
 }
 

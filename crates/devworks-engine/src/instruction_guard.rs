@@ -34,6 +34,7 @@ impl InstructionGuard {
     /// The skill stamp a context must carry now (`None`: no skills in effect).
     pub(crate) fn current_skills(
         &self,
+        project: Option<&devworks_core::protocol::ProjectId>,
     ) -> Result<Option<devworks_core::providers::instructions::SkillStamp>, StorageError> {
         let Some(service) = &self.skills else {
             return Ok(None);
@@ -42,7 +43,12 @@ impl InstructionGuard {
         let set = devworks_core::ports::storage::read_snapshot(
             self.store.as_ref(),
             &devworks_core::ports::storage::ReadOptions::default(),
-            |read| devworks_core::services::instructions::effective_skills(read.instructions()),
+            |read| {
+                devworks_core::services::instructions::effective_skills_in(
+                    read.instructions(),
+                    project,
+                )
+            },
         )?;
         Ok(set.stamp())
     }
@@ -56,32 +62,35 @@ impl InstructionGuard {
         context
             .validate()
             .map_err(|e| StorageError::InvalidRecord(format!("instruction context: {e:?}")))?;
-        let (required, project_scope) = devworks_core::ports::storage::read_snapshot(
-            self.store.as_ref(),
-            &devworks_core::ports::storage::ReadOptions::default(),
-            |read| {
-                if read.stamp().store_id != *ctx.store_id()
-                    || read.stamp().restore_epoch != ctx.restore_epoch().get()
-                    || read.actors().actor_kind(ctx.principal())? != Some(ctx.principal_kind())
-                {
-                    return Err(StorageError::ScopeDenied);
-                }
-                let session_project = match ctx.session_id() {
-                    Some(session_id) => read
-                        .sessions()
-                        .session(session_id)?
-                        .ok_or(StorageError::ScopeDenied)?
-                        .project_id
-                        .is_some(),
-                    None => false,
-                };
-                Ok((
-                    ctx.worktree()
-                        .map_or_else(Vec::new, |bound| vec![bound.repository_id().clone()]),
-                    session_project || ctx.project_id().is_some(),
-                ))
-            },
-        )?;
+        let (required, project_scope, skill_project) =
+            devworks_core::ports::storage::read_snapshot(
+                self.store.as_ref(),
+                &devworks_core::ports::storage::ReadOptions::default(),
+                |read| {
+                    if read.stamp().store_id != *ctx.store_id()
+                        || read.stamp().restore_epoch != ctx.restore_epoch().get()
+                        || read.actors().actor_kind(ctx.principal())? != Some(ctx.principal_kind())
+                    {
+                        return Err(StorageError::ScopeDenied);
+                    }
+                    let session_project = match ctx.session_id() {
+                        Some(session_id) => {
+                            read.sessions()
+                                .session(session_id)?
+                                .ok_or(StorageError::ScopeDenied)?
+                                .project_id
+                        }
+                        None => None,
+                    };
+                    let skill_project = ctx.project_id().cloned().or(session_project.clone());
+                    Ok((
+                        ctx.worktree()
+                            .map_or_else(Vec::new, |bound| vec![bound.repository_id().clone()]),
+                        session_project.is_some() || ctx.project_id().is_some(),
+                        skill_project,
+                    ))
+                },
+            )?;
         if (project_scope || !required.is_empty() || !context.instruction_stamps.is_empty())
             && expected.is_none()
         {
@@ -139,7 +148,9 @@ impl InstructionGuard {
         }
         // Saved, approved or externally changed skills are adopted at a safe boundary: a context
         // bound to another skill set (or none while skills are in effect) is not dispatched.
-        if self.skills.is_some() && context.skill_stamp != self.current_skills()? {
+        if self.skills.is_some()
+            && context.skill_stamp != self.current_skills(skill_project.as_ref())?
+        {
             return Err(StorageError::unavailable(
                 Unavailable::UnsupportedRuntime,
                 "skills changed before provider dispatch",

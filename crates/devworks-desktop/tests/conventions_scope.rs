@@ -373,7 +373,7 @@ fn native_project_bulk_index_uses_exact_source_revision_after_listing_and_search
     common::step_until(&mut ui, "project source revision", |s| {
         s.conventions
             .state()
-            .is_some_and(|v| v.loaded && v.source_scope_revision.is_some())
+            .is_some_and(|v| v.list.loaded && v.source_scope_revision.is_some())
     });
     let state = ui.state().conventions.state().unwrap();
     assert_ne!(
@@ -387,7 +387,7 @@ fn native_project_bulk_index_uses_exact_source_revision_after_listing_and_search
             common::step_until(&mut ui, "actual project lexical search", |s| {
                 s.conventions
                     .state()
-                    .is_some_and(|v| v.searched && !v.listing)
+                    .is_some_and(|v| v.searched && !v.list.loading())
             });
         }
         let before = ui.state().conventions.state().unwrap().operation_ids.len();

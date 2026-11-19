@@ -8,12 +8,12 @@
 //! Domain-envelope inputs are the `/body` members other than the `kind` discriminator; the
 //! registry decodes a body only into the input of the operation and mode the host selected.
 //! Specialized envelopes keep their recorded candidate shape and selector.
-use crate::protocol::Revision;
 use crate::protocol::data::DataScope;
 #[allow(unused_imports)]
 use crate::protocol::records::*;
 #[allow(unused_imports)]
 use crate::protocol::support::*;
+use crate::protocol::{Id, Revision};
 use crate::registry::Mode;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -23,19 +23,31 @@ use serde::{Deserialize, Serialize};
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ReadEffectiveInput {
     pub scope: DataScope,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Id", extend("x-since" = 8))]
+    pub repository_id: Option<Id>,
     pub keys: Items<Label>,
     pub page: PageRequest,
 }
 impl Check for ReadEffectiveInput {
     fn check(&self) -> Result<(), String> {
         self.scope.check()?;
+        self.repository_id.check()?;
         self.keys.check()?;
         self.page.check()?;
         Ok(())
     }
 }
 impl Revisioned for ReadEffectiveInput {
-    fn retain_revision(&mut self, _: u32) {}
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 8 {
+            self.repository_id = None;
+        }
+    }
 }
 
 /// `settings.validate` Query input.
@@ -43,19 +55,31 @@ impl Revisioned for ReadEffectiveInput {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ValidateInput {
     pub scope: DataScope,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Id", extend("x-since" = 8))]
+    pub repository_id: Option<Id>,
     pub expected_revision: Revision,
     pub entries: NonEmpty<SettingAssignment>,
 }
 impl Check for ValidateInput {
     fn check(&self) -> Result<(), String> {
         self.scope.check()?;
+        self.repository_id.check()?;
         self.expected_revision.check()?;
         self.entries.check()?;
         Ok(())
     }
 }
 impl Revisioned for ValidateInput {
-    fn retain_revision(&mut self, _: u32) {}
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 8 {
+            self.repository_id = None;
+        }
+    }
 }
 
 /// `settings.save_revision` Command input.
@@ -63,19 +87,31 @@ impl Revisioned for ValidateInput {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct SaveRevisionInput {
     pub scope: DataScope,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Id", extend("x-since" = 8))]
+    pub repository_id: Option<Id>,
     pub expected_revision: Revision,
     pub entries: NonEmpty<SettingAssignment>,
 }
 impl Check for SaveRevisionInput {
     fn check(&self) -> Result<(), String> {
         self.scope.check()?;
+        self.repository_id.check()?;
         self.expected_revision.check()?;
         self.entries.check()?;
         Ok(())
     }
 }
 impl Revisioned for SaveRevisionInput {
-    fn retain_revision(&mut self, _: u32) {}
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 8 {
+            self.repository_id = None;
+        }
+    }
 }
 
 /// `settings.explain_source` Query input.
@@ -83,17 +119,29 @@ impl Revisioned for SaveRevisionInput {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ExplainSourceInput {
     pub scope: DataScope,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Id", extend("x-since" = 8))]
+    pub repository_id: Option<Id>,
     pub key: Label,
 }
 impl Check for ExplainSourceInput {
     fn check(&self) -> Result<(), String> {
         self.scope.check()?;
+        self.repository_id.check()?;
         self.key.check()?;
         Ok(())
     }
 }
 impl Revisioned for ExplainSourceInput {
-    fn retain_revision(&mut self, _: u32) {}
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 8 {
+            self.repository_id = None;
+        }
+    }
 }
 
 /// An admitted input of the `settings` family, built only for the selected operation and mode.

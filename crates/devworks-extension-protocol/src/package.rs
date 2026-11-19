@@ -481,7 +481,14 @@ macro_rules! requests {($name:ident; $($variant:ident => $method:literal : $para
  #[serde(tag="method",deny_unknown_fields)]
  pub enum $name {$ (#[serde(rename=$method)]$variant{jsonrpc:RpcVersion,#[schemars(length(min=1,max=256))]id:String,params:$params}),+}
 };}
-requests!(HostRequest;Initialize=>"host.initialize":Initialize,Activate=>"host.activate":Activate,Invoke=>"host.invoke":Invoke,Cancel=>"host.cancel":Cancel,Shutdown=>"host.shutdown":Shutdown);
+requests!(
+    HostRequest;
+    Initialize => "host.initialize": Initialize,
+    Activate => "host.activate": Activate,
+    Invoke => "host.invoke": Invoke,
+    Cancel => "host.cancel": Cancel,
+    Shutdown => "host.shutdown": Shutdown
+);
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "kind", rename_all_fields = "camelCase", deny_unknown_fields)]
 pub enum BrokerCall {

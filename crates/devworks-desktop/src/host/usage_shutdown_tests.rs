@@ -173,7 +173,6 @@ fn actual_engine_and_tokio_drop_finish_while_owned_start_or_close_is_stalled() {
                 provider_model_id: Some("native-metadata-source".into()),
                 connection_id: id("usage-connection"),
                 endpoint_profile: "CompatibleChat".into(),
-                access_mode: "host-derived".into(),
                 service_tier: None,
                 input_tokens: Some(10),
                 cache_write_ttl_ms: None,

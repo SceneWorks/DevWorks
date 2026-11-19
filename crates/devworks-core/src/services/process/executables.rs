@@ -7,6 +7,7 @@
 //! called that name in an absolute PATH directory, recorded with its canonical file. A found
 //! executable is kept until the configured names or PATH change, so a binding still detects one
 //! replaced after it was first resolved; a name not found is looked up again on its next use.
+use crate::locks::LockExt;
 use crate::ports::storage::{ApplicationStore, ConfigScope, ReadOptions, read_snapshot};
 use crate::settings::catalog::{PROCESS_EXECUTABLES_KEY, descriptor};
 use crate::settings::model::{chain, current_layer};
@@ -88,7 +89,7 @@ impl PathExecutables {
         configured: Option<Vec<String>>,
     ) -> Option<ResolvedExecutable> {
         let path = (self.search_path)();
-        let mut cache = self.cache.lock().unwrap_or_else(|e| e.into_inner());
+        let mut cache = self.cache.locked();
         // A failed settings read keeps the names last read; none read yet selects nothing.
         let names = configured.unwrap_or_else(|| cache.names.clone());
         if cache.names != names || cache.path != path {

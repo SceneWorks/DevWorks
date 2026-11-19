@@ -3,6 +3,7 @@
 //! envelopes an agent tool submits; nothing here decides anything a use case decides.
 use crate::backend::Backend;
 use crate::frame::{self, Negotiate};
+use crate::paged::Page;
 use devworks_core::gateway::{CommandOutcome, GatewayFailure, QueryOutcome};
 use devworks_core::operations::{
     OperationInput as In, artifacts, browser, containers, git, indexing, jobs, mcp, projects,
@@ -46,6 +47,24 @@ const WORKSPACE_ARTIFACT_NEGOTIATION: Negotiate = Negotiate::pinned(
 );
 /// Most rows one page request asks for.
 pub const PAGE_LIMIT: u16 = 200;
+
+/// A list reply as a page: its rows and the cursor of the next page (none on the last page). A
+/// reply that says more rows exist without a cursor to read them is refused, not shown as a
+/// complete list.
+fn page_of<T>(
+    operation: &str,
+    items: Vec<T>,
+    has_more: bool,
+    next_cursor: Option<devworks_core::protocol::support::Cursor>,
+) -> Result<Page<T>, Failure> {
+    let next = next_cursor.map(|c| c.0).filter(|_| has_more);
+    if has_more && next.is_none() {
+        return Err(Failure::Other(format!(
+            "{operation} reported more pages without a cursor"
+        )));
+    }
+    Ok(Page::new(items, next))
+}
 
 /// Why a request produced no usable result. Never rendered as success or as zero values.
 #[derive(Clone, Debug)]
@@ -348,6 +367,7 @@ pub fn settings_read(backend: &dyn Backend) -> Vec<u8> {
         Some(In::Settings(settings::Input::ReadEffective(
             settings::ReadEffectiveInput {
                 scope: DataScope::Workspace,
+                repository_id: None,
                 keys: BoundedList(Vec::new()),
                 page: frame::page(500, None)?,
             },
@@ -382,6 +402,7 @@ pub fn settings_explain(backend: &dyn Backend, key: &str) -> Vec<u8> {
         Some(In::Settings(settings::Input::ExplainSource(
             settings::ExplainSourceInput {
                 scope: DataScope::Workspace,
+                repository_id: None,
                 key: frame::text(key)?,
             },
         )))
@@ -400,12 +421,19 @@ pub fn settings_submit(
     validate: bool,
 ) -> Option<Vec<u8>> {
     let input = view.save_input()?;
+    // A repository scope exists from schema revision 8; earlier revisions refuse the member.
+    let negotiate = if input.repository_id.is_some() {
+        Negotiate::Latest
+    } else {
+        Negotiate::Initial
+    };
     Some(frame::build(
         backend,
-        Negotiate::Initial,
+        negotiate,
         Some(In::Settings(if validate {
             settings::Input::Validate(settings::ValidateInput {
                 scope: input.scope,
+                repository_id: input.repository_id,
                 expected_revision: input.expected_revision,
                 entries: input.entries,
             })
@@ -446,6 +474,7 @@ fn settings_validate(
         Some(In::Settings(settings::Input::Validate(
             settings::ValidateInput {
                 scope,
+                repository_id: None,
                 expected_revision: frame::number(revision)?,
                 entries: frame::bounded(entries)?,
             },
@@ -468,18 +497,23 @@ pub fn settings_saved(outcome: CommandOutcome) -> Result<(), Failure> {
 // ---------------------------------------------------------------------------------------------
 // Sessions (UI-01..04, UI-11..13)
 
-pub fn sessions_list(backend: &dyn Backend) -> Vec<u8> {
+pub fn sessions_list(backend: &dyn Backend, cursor: Option<&str>) -> Vec<u8> {
     frame::with(backend, Negotiate::Latest, || {
         Some(In::Sessions(sessions::Input::List(sessions::ListInput {
             scope: DataScope::Workspace,
-            page: frame::page(PAGE_LIMIT.into(), None)?,
+            page: frame::page(PAGE_LIMIT.into(), cursor)?,
             closed: None,
         })))
     })
 }
-pub fn sessions(outcome: QueryOutcome) -> Result<(Vec<SessionRecord>, bool), Failure> {
+pub fn sessions(outcome: QueryOutcome) -> Result<Page<SessionRecord>, Failure> {
     match query_result(outcome)? {
-        (OperationResult::SessionsList { value }, _) => Ok((value.items.0, value.has_more)),
+        (OperationResult::SessionsList { value }, _) => page_of(
+            "sessions.list",
+            value.items.0,
+            value.has_more,
+            value.next_cursor,
+        ),
         (other, _) => Err(unexpected("sessions.list", &other)),
     }
 }
@@ -742,8 +776,8 @@ pub fn deleted(outcome: CommandOutcome) -> Result<(), Failure> {
         other => Err(unexpected("artifacts.delete", &other)),
     }
 }
-pub fn workspace_artifacts(backend: &dyn Backend) -> Vec<u8> {
-    artifact_list(backend, None, true, None)
+pub fn workspace_artifacts(backend: &dyn Backend, cursor: Option<&str>) -> Vec<u8> {
+    artifact_list(backend, None, true, cursor)
 }
 /// One page of `artifacts.list` of the workspace (`workspace`) or of `project`.
 fn artifact_list(
@@ -769,8 +803,8 @@ fn artifact_list(
     })
 }
 /// `artifacts.list` of one project's artifacts.
-pub fn project_artifacts(backend: &dyn Backend, project: &str) -> Vec<u8> {
-    artifact_list(backend, Some(project), false, None)
+pub fn project_artifacts(backend: &dyn Backend, project: &str, cursor: Option<&str>) -> Vec<u8> {
+    artifact_list(backend, Some(project), false, cursor)
 }
 /// A bounded prompt-picker page, independent of the artifacts screen's current page.
 pub fn prompt_artifacts(
@@ -791,36 +825,50 @@ pub fn prompt_artifact_page(
         (other, _) => Err(unexpected("artifacts.list", &other)),
     }
 }
-pub fn artifacts(outcome: QueryOutcome) -> Result<(Vec<ArtifactRecord>, bool), Failure> {
+pub fn artifacts(outcome: QueryOutcome) -> Result<Page<ArtifactRecord>, Failure> {
     match query_result(outcome)? {
-        (OperationResult::ArtifactsList { value }, _) => Ok((value.items.0, value.has_more)),
+        (OperationResult::ArtifactsList { value }, _) => page_of(
+            "artifacts.list",
+            value.items.0,
+            value.has_more,
+            value.next_cursor,
+        ),
         (other, _) => Err(unexpected("artifacts.list", &other)),
     }
 }
-pub fn resources_list(backend: &dyn Backend) -> Vec<u8> {
+pub fn resources_list(backend: &dyn Backend, cursor: Option<&str>) -> Vec<u8> {
     frame::with(backend, Negotiate::Initial, || {
         Some(In::Resources(resources::Input::List(
             resources::ListInput {
                 scope: DataScope::Workspace,
-                page: frame::page(PAGE_LIMIT.into(), None)?,
+                page: frame::page(PAGE_LIMIT.into(), cursor)?,
             },
         )))
     })
 }
 /// The owned browser sessions (`browser.sessions`) of `project`, or of the workspace.
-pub fn browser_sessions_list(backend: &dyn Backend, project: Option<&str>) -> Vec<u8> {
+pub fn browser_sessions_list(
+    backend: &dyn Backend,
+    project: Option<&str>,
+    cursor: Option<&str>,
+) -> Vec<u8> {
     frame::with(backend, Negotiate::Latest, || {
         Some(In::Browser(browser::Input::SessionsQuery(
             browser::SessionsQueryInput {
                 scope: frame::scope(project)?,
-                page: frame::page(PAGE_LIMIT.into(), None)?,
+                page: frame::page(PAGE_LIMIT.into(), cursor)?,
             },
         )))
     })
 }
-pub fn browser_sessions(outcome: QueryOutcome) -> Result<(Vec<BrowserSession>, bool), Failure> {
+pub fn browser_sessions(outcome: QueryOutcome) -> Result<Page<BrowserSession>, Failure> {
     match query_result(outcome)? {
-        (OperationResult::BrowserSessions { value }, _) => Ok((value.items.0, value.has_more)),
+        (OperationResult::BrowserSessions { value }, _) => page_of(
+            "browser.sessions",
+            value.items.0,
+            value.has_more,
+            value.next_cursor,
+        ),
         (other, _) => Err(unexpected("browser.sessions", &other)),
     }
 }
@@ -851,9 +899,14 @@ pub fn browser_closed(outcome: CommandOutcome) -> Result<bool, Failure> {
         CommandReply::CommandStatusUnknown { .. } => Err(Failure::Unknown),
     }
 }
-pub fn resources(outcome: QueryOutcome) -> Result<(Vec<ResourceRecord>, bool), Failure> {
+pub fn resources(outcome: QueryOutcome) -> Result<Page<ResourceRecord>, Failure> {
     match query_result(outcome)? {
-        (OperationResult::ResourcesList { value }, _) => Ok((value.items.0, value.has_more)),
+        (OperationResult::ResourcesList { value }, _) => page_of(
+            "resources.list",
+            value.items.0,
+            value.has_more,
+            value.next_cursor,
+        ),
         (other, _) => Err(unexpected("resources.list", &other)),
     }
 }
@@ -1050,18 +1103,27 @@ pub fn web_entries(outcome: QueryOutcome) -> Result<Vec<DiagnosticEntry>, Failur
 // Projects and repository registrations (DW-11)
 
 /// The lifecycle a projects listing shows (`None`: active and archived).
-pub fn projects_list(backend: &dyn Backend, lifecycle: Option<&str>) -> Vec<u8> {
+pub fn projects_list(
+    backend: &dyn Backend,
+    lifecycle: Option<&str>,
+    cursor: Option<&str>,
+) -> Vec<u8> {
     frame::with(backend, Negotiate::Initial, || {
         Some(In::Projects(projects::Input::List(projects::ListInput {
             scope: DataScope::Workspace,
-            page: frame::page(PAGE_LIMIT.into(), None)?,
+            page: frame::page(PAGE_LIMIT.into(), cursor)?,
             lifecycle: frame::lift(lifecycle.map(frame::text))?,
         })))
     })
 }
-pub fn projects(outcome: QueryOutcome) -> Result<(Vec<ProjectRecord>, bool), Failure> {
+pub fn projects(outcome: QueryOutcome) -> Result<Page<ProjectRecord>, Failure> {
     match query_result(outcome)? {
-        (OperationResult::ProjectsList { value }, _) => Ok((value.items.0, value.has_more)),
+        (OperationResult::ProjectsList { value }, _) => page_of(
+            "projects.list",
+            value.items.0,
+            value.has_more,
+            value.next_cursor,
+        ),
         (other, _) => Err(unexpected("projects.list", &other)),
     }
 }
@@ -1226,20 +1288,29 @@ pub fn project_changed(outcome: CommandOutcome) -> Result<ProjectRecord, Failure
     }
 }
 /// Registered repositories: a project's members, or every registration (`None`).
-pub fn repositories_list(backend: &dyn Backend, project: Option<&str>) -> Vec<u8> {
+pub fn repositories_list(
+    backend: &dyn Backend,
+    project: Option<&str>,
+    cursor: Option<&str>,
+) -> Vec<u8> {
     frame::with(backend, Negotiate::Initial, || {
         Some(In::Repositories(repositories::Input::List(
             repositories::ListInput {
                 scope: frame::scope(project)?,
-                page: frame::page(PAGE_LIMIT.into(), None)?,
+                page: frame::page(PAGE_LIMIT.into(), cursor)?,
                 text: None,
             },
         )))
     })
 }
-pub fn repositories(outcome: QueryOutcome) -> Result<(Vec<RepositoryRecord>, bool), Failure> {
+pub fn repositories(outcome: QueryOutcome) -> Result<Page<RepositoryRecord>, Failure> {
     match query_result(outcome)? {
-        (OperationResult::RepositoriesList { value }, _) => Ok((value.items.0, value.has_more)),
+        (OperationResult::RepositoriesList { value }, _) => page_of(
+            "repositories.list",
+            value.items.0,
+            value.has_more,
+            value.next_cursor,
+        ),
         (other, _) => Err(unexpected("repositories.list", &other)),
     }
 }
@@ -1292,6 +1363,31 @@ pub fn project_settings_read(backend: &dyn Backend, project: &str, keys: &[&str]
         Some(In::Settings(settings::Input::ReadEffective(
             settings::ReadEffectiveInput {
                 scope: frame::scope(Some(project))?,
+                repository_id: None,
+                keys: BoundedList(
+                    keys.iter()
+                        .map(|key| frame::text(key))
+                        .collect::<Option<Vec<_>>>()?,
+                ),
+                page: frame::page(500, None)?,
+            },
+        )))
+    })
+}
+/// `settings.read_effective` of `keys` at one repository of a project: the repository's own
+/// values over the project's, over the workspace's, each entry naming the layer it came from.
+/// A repository scope exists from schema revision 8.
+pub fn repository_settings_read(
+    backend: &dyn Backend,
+    project: &str,
+    repository: &str,
+    keys: &[&str],
+) -> Vec<u8> {
+    frame::with(backend, Negotiate::Latest, || {
+        Some(In::Settings(settings::Input::ReadEffective(
+            settings::ReadEffectiveInput {
+                scope: frame::scope(Some(project))?,
+                repository_id: Some(frame::id(repository)?),
                 keys: BoundedList(
                     keys.iter()
                         .map(|key| frame::text(key))
@@ -1343,6 +1439,7 @@ pub fn index_runs(
     backend: &dyn Backend,
     project: Option<&str>,
     repository: Option<&str>,
+    cursor: Option<&str>,
 ) -> Vec<u8> {
     frame::with(backend, Negotiate::Initial, || {
         Some(In::Indexing(indexing::Input::Runs(indexing::RunsInput {
@@ -1350,15 +1447,20 @@ pub fn index_runs(
             repository_id: frame::lift(repository.map(frame::id))?,
             states: None,
             kinds: None,
-            page: frame::page(50, None)?,
+            page: frame::page(50, cursor)?,
         })))
     })
 }
 pub fn index_runs_result(
     outcome: QueryOutcome,
-) -> Result<(Vec<devworks_core::protocol::records::IndexRunRecord>, bool), Failure> {
+) -> Result<Page<devworks_core::protocol::records::IndexRunRecord>, Failure> {
     match query_result(outcome)? {
-        (OperationResult::IndexingRuns { value }, _) => Ok((value.items.0, value.has_more)),
+        (OperationResult::IndexingRuns { value }, _) => page_of(
+            "indexing.runs",
+            value.items.0,
+            value.has_more,
+            value.next_cursor,
+        ),
         (other, _) => Err(unexpected("indexing.runs", &other)),
     }
 }
@@ -1535,11 +1637,14 @@ pub fn jobs_list_after(
     })
 }
 /// A page of jobs with the cursor of the next one.
-pub fn jobs_page(outcome: QueryOutcome) -> Result<(Vec<JobRecord>, Option<String>), Failure> {
+pub fn jobs_page(outcome: QueryOutcome) -> Result<Page<JobRecord>, Failure> {
     match query_result(outcome)? {
-        (OperationResult::JobsList { value }, _) => {
-            Ok((value.items.0, value.next_cursor.map(|c| c.0)))
-        }
+        (OperationResult::JobsList { value }, _) => page_of(
+            "jobs.list",
+            value.items.0,
+            value.has_more,
+            value.next_cursor,
+        ),
         (other, _) => Err(unexpected("jobs.list", &other)),
     }
 }

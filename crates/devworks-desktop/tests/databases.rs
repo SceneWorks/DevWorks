@@ -53,10 +53,10 @@ fn native_databases_create_sync_page_inspect_and_remove_only_indexed_metadata() 
     click(&mut h, Role::Button, "Choose database file");
     click(&mut h, Role::Button, "Save database source");
     step_until(&mut h, "native source save returned", |s| {
-        !s.databases.busy && !s.databases.loading
+        !s.databases.busy && !s.databases.connections.loading()
     });
     assert!(
-        h.state().databases.draft.is_none() && h.state().databases.connections.len() == 1,
+        h.state().databases.draft.is_none() && h.state().databases.connections.items.len() == 1,
         "source result: {:?}",
         h.state().databases.error
     );
@@ -76,40 +76,42 @@ fn native_databases_create_sync_page_inspect_and_remove_only_indexed_metadata() 
         "admission: notice={:?}; error={:?}; source={:?}",
         h.state().databases.notice,
         h.state().databases.error,
-        h.state().databases.connections.first()
+        h.state().databases.connections.items.first()
     );
     step_until(&mut h, "actual native metadata published", |s| {
         s.databases
             .connections
+            .items
             .first()
             .is_some_and(|c| c.current_view_id.is_some() && c.active_operation_id.is_none())
     });
     click(&mut h, Role::Button, "Search schema objects");
     step_until(&mut h, "native first object page", |s| {
-        !s.databases.read_loading && !s.databases.objects.is_empty()
+        !s.databases.read_loading() && !s.databases.objects.items.is_empty()
     });
     assert!(
-        h.state().databases.object_next.is_some(),
+        h.state().databases.objects.more(),
         "fixture exceeds one actual result page"
     );
-    while h.state().databases.object_next.is_some() {
-        let before = h.state().databases.objects.len();
+    while h.state().databases.objects.more() {
+        let before = h.state().databases.objects.items.len();
         click(&mut h, Role::Button, "More schema objects");
         step_until(&mut h, "next exact schema page", |s| {
-            !s.databases.read_loading
+            !s.databases.read_loading()
         });
         assert!(
-            h.state().databases.objects.len() > before,
+            h.state().databases.objects.items.len() > before,
             "page result: count={}; error={:?}; cursor={:?}",
-            h.state().databases.objects.len(),
+            h.state().databases.objects.items.len(),
             h.state().databases.error,
-            h.state().databases.object_next
+            h.state().databases.objects.more()
         );
     }
     let parent = h
         .state()
         .databases
         .objects
+        .items
         .iter()
         .find(|o| {
             o.metadata.as_ref().is_some_and(|m| m.name.0 == "parent")
@@ -124,7 +126,7 @@ fn native_databases_create_sync_page_inspect_and_remove_only_indexed_metadata() 
     click(&mut h, Role::Button, &label);
     click(&mut h, Role::Button, "Inspect schema relationships");
     step_until(&mut h, "native parent relationships", |s| {
-        !s.databases.read_loading && !s.databases.relations.is_empty()
+        !s.databases.read_loading() && !s.databases.relations.items.is_empty()
     });
     // A relationship endpoint deliberately installs an exact-object filter before children.
     let endpoint = format!("Inspect relationship target: {}", parent.qualified_name.0);
@@ -134,21 +136,22 @@ fn native_databases_create_sync_page_inspect_and_remove_only_indexed_metadata() 
         .click_accesskit();
     settle(&mut h);
     step_until(&mut h, "exact relationship endpoint", |s| {
-        !s.databases.read_loading && s.databases.object_id.as_deref() == Some(parent.id.as_str())
+        !s.databases.read_loading() && s.databases.object_id.as_deref() == Some(parent.id.as_str())
     });
     click(&mut h, Role::Button, "Inspect schema children");
     step_until(&mut h, "native table columns", |s| {
-        !s.databases.read_loading
+        !s.databases.read_loading()
     });
     assert!(
         h.state()
             .databases
             .objects
+            .items
             .iter()
             .any(|o| o.parent_id.as_ref() == Some(&parent.id))
     );
     assert!(
-        !serde_json::to_string(&h.state().databases.objects)
+        !serde_json::to_string(&h.state().databases.objects.items)
             .unwrap()
             .contains("SOURCE_ROW_SENTINEL_NEVER_INDEX")
     );
@@ -165,15 +168,16 @@ fn native_databases_create_sync_page_inspect_and_remove_only_indexed_metadata() 
     step_until(&mut h, "native index removal", |s| {
         s.databases
             .connections
+            .items
             .first()
             .is_some_and(|c| c.current_view_id.is_none() && c.active_operation_id.is_none())
             && !s.databases.busy
     });
     assert!(
-        h.state().databases.objects.is_empty(),
+        h.state().databases.objects.items.is_empty(),
         "removed metadata must leave the explorer"
     );
-    assert!(h.state().databases.relations.is_empty());
+    assert!(h.state().databases.relations.items.is_empty());
     assert!(h.state().databases.selected_object.is_none());
     assert!(h.state().databases.view.is_none() && h.state().databases.read_pin.is_none());
     click(&mut h, Role::Button, "Sync database metadata");
@@ -181,12 +185,13 @@ fn native_databases_create_sync_page_inspect_and_remove_only_indexed_metadata() 
         !s.databases.busy
             && s.databases
                 .connections
+                .items
                 .first()
                 .is_some_and(|c| c.current_view_id.is_some() && c.active_operation_id.is_none())
     });
     click(&mut h, Role::Button, "Search schema objects");
     step_until(&mut h, "replacement explorer uses a live read pin", |s| {
-        !s.databases.read_loading && !s.databases.objects.is_empty()
+        !s.databases.read_loading() && !s.databases.objects.items.is_empty()
     });
     assert!(
         h.state().databases.error.is_none(),
@@ -214,7 +219,7 @@ fn native_databases_create_sync_page_inspect_and_remove_only_indexed_metadata() 
     );
     click(&mut h, Role::Button, "Confirm database removal");
     step_until(&mut h, "native source removal", |s| {
-        s.databases.connections.is_empty() && !s.databases.busy
+        s.databases.connections.items.is_empty() && !s.databases.busy
     });
     assert!(path.exists());
 }
@@ -267,10 +272,10 @@ fn native_database_sync_all_includes_sources_after_the_first_catalog_page() {
     h.state_mut().navigate(Route::Databases);
     settle(&mut h);
     step_until(&mut h, "first source catalog page", |s| {
-        s.databases.loaded && !s.databases.loading
+        s.databases.connections.loaded && !s.databases.connections.loading()
     });
-    assert_eq!(h.state().databases.connections.len(), 100);
-    assert!(h.state().databases.next.is_some());
+    assert_eq!(h.state().databases.connections.items.len(), 100);
+    assert!(h.state().databases.connections.more());
     click(&mut h, Role::Button, "Sync all enabled sources");
     step_until(&mut h, "all catalog pages admitted", |s| {
         !s.databases.batch_active && !s.databases.batch_scanning && !s.databases.busy
@@ -324,11 +329,13 @@ fn native_database_inspector_explains_partial_object_metadata() {
     click(&mut h, Role::Button, "Choose database file");
     click(&mut h, Role::Button, "Save database source");
     step_until(&mut h, "partial fixture configured", |s| {
-        !s.databases.busy && !s.databases.loading && s.databases.connections.len() == 1
+        !s.databases.busy
+            && !s.databases.connections.loading()
+            && s.databases.connections.items.len() == 1
     });
     click(&mut h, Role::Button, "Sync database metadata");
     step_until(&mut h, "bounded metadata published", |s| {
-        s.databases.connections.first().is_some_and(|c| {
+        s.databases.connections.items.first().is_some_and(|c| {
             c.current_view_id.is_some()
                 && c.active_operation_id.is_none()
                 && matches!(
@@ -339,9 +346,10 @@ fn native_database_inspector_explains_partial_object_metadata() {
     });
     click(&mut h, Role::Button, "Search schema objects");
     step_until(&mut h, "partial column listed", |s| {
-        !s.databases.read_loading
+        !s.databases.read_loading()
             && s.databases
                 .objects
+                .items
                 .iter()
                 .any(|o| o.qualified_name.0 == "main.defaults.value")
     });
@@ -424,7 +432,7 @@ fn native_database_key_utility_generates_32_bytes_without_persisting_or_reconfig
         copied,
         "native clipboard command contains the exact generated key"
     );
-    assert!(h.state().databases.connections.is_empty());
+    assert!(h.state().databases.connections.items.is_empty());
     assert!(
         !serde_json::to_string(&h.state().memory())
             .unwrap()
@@ -471,7 +479,7 @@ fn native_database_background_inventory_failure_cannot_abort_an_admitted_sync_al
     h.state_mut().navigate(Route::Databases);
     settle(&mut h);
     step_until(&mut h, "fault batch sources loaded", |s| {
-        s.databases.connections.len() == 3 && !s.databases.loading
+        s.databases.connections.items.len() == 3 && !s.databases.connections.loading()
     });
     struct Release(Gate);
     impl Drop for Release {
@@ -489,13 +497,13 @@ fn native_database_background_inventory_failure_cannot_abort_an_admitted_sync_al
         |s| s.databases.batch_submitted == 1 && s.databases.busy && !s.databases.batch_scanning,
     );
     step_until(&mut h, "inventory idle before fault", |s| {
-        !s.databases.loading
+        !s.databases.connections.loading()
     });
     inventory.fail_next_query();
     h.get_by_role_and_label(Role::Button, "Refresh databases")
         .click_accesskit();
     step_until(&mut h, "ordinary inventory read refused", |s| {
-        !s.databases.loading && s.databases.error.is_some()
+        !s.databases.connections.loading() && s.databases.error.is_some()
     });
     assert!(
         h.state().databases.batch_active,
@@ -552,6 +560,7 @@ fn native_database_search_refreshes_a_missing_prepared_capture_before_reading_ob
     step_until(&mut h, "capture source published", |s| {
         s.databases
             .connections
+            .items
             .first()
             .is_some_and(|c| c.read_view.is_some() && c.active_operation_id.is_none())
     });
@@ -566,14 +575,14 @@ fn native_database_search_refreshes_a_missing_prepared_capture_before_reading_ob
     inventory.close();
     // Legal source projection when publication changes between lease preparation and read:
     // status sees the new head while no earlier capture can be attached to that head.
-    h.state_mut().databases.connections[0].read_view = None;
+    h.state_mut().databases.connections.items[0].read_view = None;
     h.state_mut().databases.view = None;
     h.state_mut().databases.read_pin = None;
     h.get_by_role_and_label(Role::Button, "Search schema objects")
         .click_accesskit();
     h.step();
     assert!(
-        h.state().databases.read_loading,
+        h.state().databases.read_loading(),
         "the explicit read intent waits for a fresh owner capture"
     );
     assert!(
@@ -582,9 +591,10 @@ fn native_database_search_refreshes_a_missing_prepared_capture_before_reading_ob
     );
     drop(release);
     step_until(&mut h, "fresh-capture object read", |s| {
-        !s.databases.read_loading
+        !s.databases.read_loading()
             && s.databases
                 .objects
+                .items
                 .iter()
                 .any(|o| o.qualified_name.0 == "main.captured")
     });
@@ -659,6 +669,7 @@ fn native_database_boot_without_secret_facility_keeps_sqlite_metadata_and_native
     step_until(&mut h, "credential-free SQLite still publishes", |s| {
         s.databases
             .connections
+            .items
             .first()
             .is_some_and(|c| c.current_view_id.is_some() && c.active_operation_id.is_none())
     });
@@ -728,7 +739,7 @@ fn native_database_switching_saved_network_source_to_sqlite_clears_network_custo
         .click_accesskit();
     settle(&mut h);
     step_until(&mut h, "converted source saved", |s| {
-        !s.databases.busy && s.databases.draft.is_none() && !s.databases.loading
+        !s.databases.busy && s.databases.draft.is_none() && !s.databases.connections.loading()
     });
     // A late source-status reply can reflow the selected-source controls.
     // Activate the native control by identity, as an accessibility client does.
@@ -742,6 +753,7 @@ fn native_database_switching_saved_network_source_to_sqlite_clears_network_custo
         |s| {
             s.databases
                 .connections
+                .items
                 .first()
                 .is_some_and(|c| c.current_view_id.is_some() && c.active_operation_id.is_none())
         },
@@ -829,6 +841,7 @@ fn native_database_relationships_refreshes_a_missing_prepared_capture_before_rea
     step_until(&mut h, "capture source published", |s| {
         s.databases
             .connections
+            .items
             .first()
             .is_some_and(|c| c.read_view.is_some() && c.active_operation_id.is_none())
     });
@@ -846,14 +859,14 @@ fn native_database_relationships_refreshes_a_missing_prepared_capture_before_rea
     inventory.close();
     // Legal source projection when publication changes between lease preparation and read:
     // status sees the new head while no earlier capture can be attached to that head.
-    h.state_mut().databases.connections[0].read_view = None;
+    h.state_mut().databases.connections.items[0].read_view = None;
     h.state_mut().databases.view = None;
     h.state_mut().databases.read_pin = None;
     h.get_by_role_and_label(Role::Button, "Load database relationships")
         .click_accesskit();
     h.step();
     assert!(
-        h.state().databases.read_loading,
+        h.state().databases.read_loading(),
         "the explicit read intent waits for a fresh owner capture"
     );
     assert!(
@@ -862,9 +875,10 @@ fn native_database_relationships_refreshes_a_missing_prepared_capture_before_rea
     );
     drop(release);
     step_until(&mut h, "fresh-capture relationship read", |s| {
-        !s.databases.read_loading
+        !s.databases.read_loading()
             && s.databases
                 .relations
+                .items
                 .iter()
                 .any(|r| r.relation.0 == "HAS_COLUMN")
     });
@@ -924,9 +938,10 @@ fn native_database_review_selecting_a_source_clears_foreign_endpoint_filter() {
     let mut h = harness(shell(&engine, &root, Script::default()), 1600.0, 1200.0);
     h.state_mut().navigate(Route::Databases);
     step_until(&mut h, "both source views published", |s| {
-        s.databases.connections.len() == 2
+        s.databases.connections.items.len() == 2
             && s.databases
                 .connections
+                .items
                 .iter()
                 .all(|c| c.current_view_id.is_some() && c.active_operation_id.is_none())
     });
@@ -938,6 +953,7 @@ fn native_database_review_selecting_a_source_clears_foreign_endpoint_filter() {
         .state()
         .databases
         .objects
+        .items
         .iter()
         .find(|o| {
             o.metadata.as_ref().is_some_and(|m| m.name.0 == "parent")
@@ -966,6 +982,7 @@ fn native_database_review_selecting_a_source_clears_foreign_endpoint_filter() {
         .state()
         .databases
         .objects
+        .items
         .iter()
         .find(|o| {
             o.metadata.as_ref().is_some_and(|m| m.name.0 == "parent")
@@ -1121,7 +1138,9 @@ fn corrected_password_save(edit: bool) {
         h.state().databases.error
     );
     assert_eq!(
-        h.state().databases.connections[0].credential_ref.as_ref(),
+        h.state().databases.connections.items[0]
+            .credential_ref
+            .as_ref(),
         Some(&key.handle)
     );
     assert!(

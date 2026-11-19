@@ -503,10 +503,10 @@ fn native_tariff_editor_preserves_all_dimensions_and_recovers_from_authoritative
         h.state().usage.price_draft.is_some(),
         "editor open: busy={}, loading={}, update={}, pages={}, more={}, error={:?}",
         h.state().usage.price_busy,
-        h.state().usage.prices_loading,
+        h.state().usage.prices.loading(),
         h.state().usage.price_update_available,
-        h.state().usage.price_pages,
-        h.state().usage.prices.as_ref().is_some_and(|p| p.has_more),
+        h.state().usage.prices.pages(),
+        h.state().usage.price_view().is_some_and(|p| p.has_more),
         h.state().usage.price_error
     );
     press(&mut h, "Clear tariff override");
@@ -671,16 +671,7 @@ fn native_manual_public_price_refresh_is_async_and_keeps_verified_history_withou
     click(&mut h, Role::DisclosureTriangle, "Price catalog filters");
     replace(&mut h, "Price source IDs", "openai");
     press(&mut h, "Apply price catalog filters");
-    assert!(
-        h.state()
-            .usage
-            .prices
-            .as_ref()
-            .unwrap()
-            .snapshots
-            .0
-            .is_empty()
-    );
+    assert!(h.state().usage.price_view().unwrap().snapshots.0.is_empty());
     start_native_price_refresh(&mut h);
     let first = h
         .state()
@@ -692,14 +683,7 @@ fn native_manual_public_price_refresh_is_async_and_keeps_verified_history_withou
         .clone();
     assert!(has_text(&h, "awaiting the recorded operation outcome"));
     assert!(
-        h.state()
-            .usage
-            .prices
-            .as_ref()
-            .unwrap()
-            .snapshots
-            .0
-            .is_empty(),
+        h.state().usage.price_view().unwrap().snapshots.0.is_empty(),
         "accepted never invents a verified snapshot"
     );
     // GUI requests and frames completed while the real adapter's public HTTP request was blocked.
@@ -729,8 +713,7 @@ fn native_manual_public_price_refresh_is_async_and_keeps_verified_history_withou
     assert!(
         h.state()
             .usage
-            .prices
-            .as_ref()
+            .price_view()
             .unwrap()
             .snapshots
             .0
@@ -752,12 +735,12 @@ fn native_manual_public_price_refresh_is_async_and_keeps_verified_history_withou
     click(&mut h, Role::CheckBox, "Include historical price sources");
     press(&mut h, "Apply price catalog filters");
     assert_eq!(
-        h.state().usage.prices.as_ref().unwrap().snapshots.0.len(),
+        h.state().usage.price_view().unwrap().snapshots.0.len(),
         2,
         "history={} query={:?} loading={} refresh={:?} error={:?}",
         h.state().usage.history,
         h.state().usage.price_query,
-        h.state().usage.prices_loading,
+        h.state().usage.prices.loading(),
         h.state().usage.refresh,
         h.state().usage.price_error
     );
@@ -765,12 +748,9 @@ fn native_manual_public_price_refresh_is_async_and_keeps_verified_history_withou
     assert!(has_text(&h, "official-markdown-v1"));
     replace(&mut h, "Price snapshot IDs", snapshot.as_str());
     press(&mut h, "Apply price catalog filters");
+    assert_eq!(h.state().usage.price_view().unwrap().snapshots.0.len(), 1);
     assert_eq!(
-        h.state().usage.prices.as_ref().unwrap().snapshots.0.len(),
-        1
-    );
-    assert_eq!(
-        h.state().usage.prices.as_ref().unwrap().snapshots.0[0]
+        h.state().usage.price_view().unwrap().snapshots.0[0]
             .id
             .as_str(),
         snapshot.as_str()
@@ -856,7 +836,7 @@ fn native_price_paging_keeps_loaded_rows_and_draft_until_explicit_catalog_reload
     // This positive continuation needs one unchanged real event snapshot.
     let writer = paging::WriterHold::new(engine.host().runtime().store().clone());
     press(&mut h, "Apply price catalog filters");
-    assert!(h.state().usage.prices.as_ref().unwrap().has_more);
+    assert!(h.state().usage.price_view().unwrap().has_more);
     assert!(
         h.get_by_role_and_label(Role::Button, &format!("Edit tariff override for {model}"))
             .accesskit_node()
@@ -864,8 +844,8 @@ fn native_price_paging_keeps_loaded_rows_and_draft_until_explicit_catalog_reload
         "a partial rate set cannot replace the full configured override"
     );
     press(&mut h, "Load more price rows");
-    assert_eq!(h.state().usage.prices.as_ref().unwrap().items.0.len(), 105);
-    assert_eq!(h.state().usage.price_pages, 2);
+    assert_eq!(h.state().usage.price_view().unwrap().items.0.len(), 105);
+    assert_eq!(h.state().usage.prices.pages(), 2);
     press(&mut h, &format!("Edit tariff override for {model}"));
     let draft = h.state().usage.price_draft.clone().unwrap();
     assert_eq!(draft.tariffs.len(), 105);
@@ -875,7 +855,7 @@ fn native_price_paging_keeps_loaded_rows_and_draft_until_explicit_catalog_reload
     settle(&mut h);
     assert!(h.state().usage.price_update_available);
     assert_eq!(
-        h.state().usage.prices.as_ref().unwrap().items.0.len(),
+        h.state().usage.price_view().unwrap().items.0.len(),
         105,
         "background updates never silently discard a loaded page set"
     );
@@ -890,7 +870,7 @@ fn native_price_paging_keeps_loaded_rows_and_draft_until_explicit_catalog_reload
             .is_disabled()
     );
     press(&mut h, "Reload price catalog");
-    assert_eq!(h.state().usage.prices.as_ref().unwrap().items.0.len(), 1);
+    assert_eq!(h.state().usage.price_view().unwrap().items.0.len(), 1);
     assert_eq!(h.state().usage.price_draft.as_ref().unwrap(), &draft);
     assert!(!h.state().usage.price_update_available);
     assert!(has_text(&h, "price revision changed"));
@@ -1069,7 +1049,7 @@ fn recorded_report_origins(engine: &devworks_desktop::host::Engine, project: &st
     }).unwrap();
 }
 fn report_total(h: &Ui, key: &str) -> Option<String> {
-    match h.state().usage.data.as_ref().unwrap() {
+    match h.state().usage.result().unwrap() {
         UsageQueryResult::Report { report } => report.items.0.iter().find_map(|r| match r {
             UsageReportRow::Total { key: k, value, .. } if k.0 == key => {
                 Some(value.as_str().to_owned())
@@ -1127,7 +1107,7 @@ fn native_usage_six_reports_share_authoritative_filters_utc_buckets_and_partial_
         has_text(&h, "1969-12-29"),
         "negative epoch Monday bucket renders exactly"
     );
-    if let UsageQueryResult::Report { report } = h.state().usage.data.as_ref().unwrap() {
+    if let UsageQueryResult::Report { report } = h.state().usage.result().unwrap() {
         assert!(report.context.applied_filters.tool.is_none());
         assert_eq!(
             report
@@ -1159,12 +1139,12 @@ fn native_usage_six_reports_share_authoritative_filters_utc_buckets_and_partial_
     click(&mut h, Role::Button, "MCP usage");
     assert_eq!(report_total(&h, "callCount").as_deref(), Some("1"));
     assert_eq!(report_total(&h, "averageDurationMs").as_deref(), Some("3"));
-    if let UsageQueryResult::Report { report } = h.state().usage.data.as_ref().unwrap() {
+    if let UsageQueryResult::Report { report } = h.state().usage.result().unwrap() {
         assert!(report.context.applied_filters.provider.is_none());
     }
     click(&mut h, Role::ComboBox, "Report");
     click(&mut h, Role::Button, "Filter discovery");
-    let UsageQueryResult::Filters { filters } = h.state().usage.data.as_ref().unwrap() else {
+    let UsageQueryResult::Filters { filters } = h.state().usage.result().unwrap() else {
         panic!("filter discovery uses real typed response")
     };
     assert!(
@@ -1183,7 +1163,7 @@ fn native_usage_six_reports_share_authoritative_filters_utc_buckets_and_partial_
     );
     replace(&mut h, "Usage tool", "");
     press(&mut h, "Attempts");
-    let UsageQueryResult::Attempts { page } = h.state().usage.data.as_ref().unwrap() else {
+    let UsageQueryResult::Attempts { page } = h.state().usage.result().unwrap() else {
         panic!("attempt page")
     };
     assert_eq!(page.items.0.len(), 3);
@@ -1199,7 +1179,7 @@ fn native_usage_six_reports_share_authoritative_filters_utc_buckets_and_partial_
     replace(&mut h, "Start UTC", "1960-01-01T00:00:00Z");
     replace(&mut h, "End UTC (exclusive)", "1961-01-01T00:00:00Z");
     press(&mut h, "Apply usage filters");
-    let UsageQueryResult::Attempts { page } = h.state().usage.data.as_ref().unwrap() else {
+    let UsageQueryResult::Attempts { page } = h.state().usage.result().unwrap() else {
         panic!("historical range remains an actual attempt query")
     };
     assert_eq!(page.context.range.start_ms.0, "-315619200000");
@@ -1315,7 +1295,7 @@ fn native_usage_paging_keeps_applied_filters_and_preserves_unsubmitted_filter_dr
     replace(&mut h, "End UTC (exclusive)", "1970-01-02T00:00:00Z");
     h.state_mut().usage.draft.project = Some(p);
     press(&mut h, "Apply usage filters");
-    let UsageQueryResult::Report { report } = h.state().usage.data.as_ref().unwrap() else {
+    let UsageQueryResult::Report { report } = h.state().usage.result().unwrap() else {
         panic!("actualreport")
     };
     let context = serde_json::to_value(&report.context).unwrap();
@@ -1323,16 +1303,16 @@ fn native_usage_paging_keeps_applied_filters_and_preserves_unsubmitted_filter_dr
     assert!(report.has_more);
     replace(&mut h, "Usage user", "unsubmitted-user");
     press(&mut h, "Load more usage rows");
-    let UsageQueryResult::Report { report } = h.state().usage.data.as_ref().unwrap() else {
+    let UsageQueryResult::Report { report } = h.state().usage.result().unwrap() else {
         panic!("actualreport")
     };
     assert!(
         report.items.0.len() > initial,
         "initial={initial} rows={} loading={} generation={} error={:?} hasmore={} applied={:?} context={:?}",
         report.items.0.len(),
-        h.state().usage.loading,
-        h.state().usage.generation,
-        h.state().usage.error,
+        h.state().usage.data.loading(),
+        h.state().usage.data.generation(),
+        h.state().usage.data.error,
         report.has_more,
         h.state().usage.applied,
         report.context
@@ -1343,14 +1323,14 @@ fn native_usage_paging_keeps_applied_filters_and_preserves_unsubmitted_filter_dr
     replace(&mut h, "Usage user", "");
     assert!(h.state().usage.draft.user.is_empty());
     press(&mut h, "Attempts");
-    let UsageQueryResult::Attempts { page } = h.state().usage.data.as_ref().unwrap() else {
+    let UsageQueryResult::Attempts { page } = h.state().usage.result().unwrap() else {
         panic!("actualattemptpage")
     };
     assert!(page.has_more);
     assert_eq!(page.items.0.len(), 100);
     let context = serde_json::to_value(&page.context).unwrap();
     press(&mut h, "Load more usage rows");
-    let UsageQueryResult::Attempts { page } = h.state().usage.data.as_ref().unwrap() else {
+    let UsageQueryResult::Attempts { page } = h.state().usage.result().unwrap() else {
         panic!("actualattemptpage")
     };
     assert!(!page.has_more);
@@ -1360,7 +1340,7 @@ fn native_usage_paging_keeps_applied_filters_and_preserves_unsubmitted_filter_dr
     // A genuinely new event must still expire this full-snapshot cursor. The UI keeps the
     // loaded result and unsent input instead of silently retrying against a different view.
     press(&mut h, "Apply usage filters");
-    let UsageQueryResult::Attempts { page } = h.state().usage.data.as_ref().unwrap() else {
+    let UsageQueryResult::Attempts { page } = h.state().usage.result().unwrap() else {
         panic!("actual first attempt page")
     };
     assert_eq!(page.items.0.len(), 100);
@@ -1371,11 +1351,12 @@ fn native_usage_paging_keeps_applied_filters_and_preserves_unsubmitted_filter_dr
     assert!(
         h.state()
             .usage
+            .data
             .error
             .as_ref()
             .is_some_and(|e| e.contains("CursorExpired"))
     );
-    let UsageQueryResult::Attempts { page } = h.state().usage.data.as_ref().unwrap() else {
+    let UsageQueryResult::Attempts { page } = h.state().usage.result().unwrap() else {
         panic!("retained attempt page")
     };
     assert_eq!(page.items.0.len(), 100);
@@ -1497,7 +1478,7 @@ fn settling_applies_requests_started_in_the_last_successful_repaint_frame() {
         h.state().client().unwrap().activities().is_empty(),
         "a successful repaint left a real backend reply pending"
     );
-    assert!(!h.state().usage.prices_loading);
+    assert!(!h.state().usage.prices.loading());
 }
 
 #[test]
@@ -1543,7 +1524,6 @@ fn native_blank_tariff_editor_prices_default_requests_and_preserves_exact_custom
         provider_model_id: Some("fixture/default-tier".into()),
         connection_id: connection.id.clone(),
         endpoint_profile: "CompatibleChat".into(),
-        access_mode: "Api".into(),
         service_tier: None,
         input_tokens: Some(100),
         cache_write_ttl_ms: None,

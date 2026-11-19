@@ -145,7 +145,13 @@ mod tests {
         };
         let document = document(&raw);
         let encoded = bytes(&document);
-        let reference = json!({"artifactId":"artifact","versionId":"version","sha256":crate::fingerprint::sha256_hex(&encoded),"byteLength":encoded.len().to_string(),"mediaType":"application/json"});
+        let reference = json!({
+            "artifactId": "artifact",
+            "versionId": "version",
+            "sha256": crate::fingerprint::sha256_hex(&encoded),
+            "byteLength": encoded.len().to_string(),
+            "mediaType": "application/json"
+        });
         let mut retained = raw.clone();
         retained.reviewed = json!({"artifact":reference});
         retained.binding = json!({"reviewEnvelope":{"version":1,"artifact":{"reference":reference},"document":document}});

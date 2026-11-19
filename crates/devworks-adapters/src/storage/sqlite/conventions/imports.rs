@@ -143,7 +143,9 @@ fn import_record(r: &Row<'_>) -> rusqlite::Result<StoredConventionImport> {
         updated_at_ms: r.get(13)?,
     })
 }
-const IMPORT_COLUMNS: &str = "operation_id,convention_id,scope_key,author_id,source_ref_json,expected_scope_revision,revision,phase,checkpoint_json,processed_resources,total_resources,error,created_at,updated_at";
+const IMPORT_COLUMNS: &str = "operation_id,convention_id,scope_key,author_id,source_ref_json,\
+    expected_scope_revision,revision,phase,checkpoint_json,\
+    processed_resources,total_resources,error,created_at,updated_at";
 fn get(
     conn: &Connection,
     op: &OperationId,
@@ -178,7 +180,13 @@ fn captures(
         return Err(invalid("negative import ordinal"));
     }
     let limit = page_limit(limit)?;
-    let mut stmt=db(conn.prepare_cached("SELECT ordinal,kind,resource_id,resource_key,resource_name,resource_lifecycle,resource_media_type,artifact_json,version_json,staging_operation_id,staging_attempt,staging_generation,managed_path FROM convention_import_artifacts WHERE operation_id=?1 AND ordinal>coalesce(?2,-1) ORDER BY ordinal LIMIT ?3"))?;
+    let mut stmt = db(conn.prepare_cached(
+        "SELECT ordinal,kind,resource_id,resource_key,resource_name,\
+        resource_lifecycle,resource_media_type,artifact_json,version_json,\
+        staging_operation_id,staging_attempt,staging_generation,managed_path \
+        FROM convention_import_artifacts WHERE operation_id=?1 AND \
+        ordinal>coalesce(?2,-1) ORDER BY ordinal LIMIT ?3",
+    ))?;
     let rows = db(
         db(stmt.query_map(params![op.0.as_str(), after, limit], |r| {
             Ok((
@@ -324,7 +332,14 @@ fn stage_proof(
             "private import capture lacks exact verified staging association",
         ));
     }
-    let fence:Option<(i64,Option<i64>)>=db(conn.query_row("SELECT attempt_no,owner_generation FROM operation_attempts WHERE operation_id=?1 ORDER BY attempt_no DESC LIMIT 1",[row.staging_operation_id.0.as_str()],|r|Ok((r.get(0)?,r.get(1)?))).optional())?;
+    let fence: Option<(i64, Option<i64>)> = db(conn
+        .query_row(
+            "SELECT attempt_no,owner_generation FROM operation_attempts WHERE \
+        operation_id=?1 ORDER BY attempt_no DESC LIMIT 1",
+            [row.staging_operation_id.0.as_str()],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .optional())?;
     if fence
         != Some((
             row.staging_fence.attempt_no,
@@ -336,7 +351,17 @@ fn stage_proof(
             id: row.staging_operation_id.0.as_str().into(),
         });
     }
-    let blob:bool=db(conn.query_row("SELECT EXISTS(SELECT 1 FROM blobs WHERE digest=?1 AND generation=?2 AND byte_count=?3 AND relative_path=?4 AND state='Present')",params![row.version.blob_digest,row.version.blob_generation,row.version.byte_count,row.managed_path],|r|r.get(0)))?;
+    let blob: bool = db(conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM blobs WHERE digest=?1 AND generation=?2 AND \
+        byte_count=?3 AND relative_path=?4 AND state='Present')",
+        params![
+            row.version.blob_digest,
+            row.version.blob_generation,
+            row.version.byte_count,
+            row.managed_path
+        ],
+        |r| r.get(0),
+    ))?;
     if !blob {
         return Err(StorageError::Busy);
     }
@@ -418,7 +443,17 @@ fn capture_valid(
             "document capture cannot claim a resource association",
         ));
     }
-    let collision:bool=db(conn.query_row("SELECT EXISTS(SELECT 1 FROM artifacts WHERE id=?1) OR EXISTS(SELECT 1 FROM artifact_versions WHERE id=?2) OR EXISTS(SELECT 1 FROM convention_resource_heads WHERE id=?3)",params![a.id.as_str(),v.id.as_str(),r.resource_id.as_ref().map(Id::as_str)],|r|r.get(0)))?;
+    let collision: bool = db(conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM artifacts WHERE id=?1) OR EXISTS(SELECT 1 \
+        FROM artifact_versions WHERE id=?2) OR EXISTS(SELECT 1 FROM \
+        convention_resource_heads WHERE id=?3)",
+        params![
+            a.id.as_str(),
+            v.id.as_str(),
+            r.resource_id.as_ref().map(Id::as_str)
+        ],
+        |r| r.get(0),
+    ))?;
     if collision {
         return Err(invalid(
             "import prospective identity already exists publicly",
@@ -427,16 +462,82 @@ fn capture_valid(
     stage_proof(conn, r, false)
 }
 fn ref_of(row: &StoredConventionImportArtifact) -> Value {
-    json!({"artifactId":row.artifact.id,"versionId":row.version.id,"sha256":row.version.blob_digest,"byteLength":row.version.byte_count.to_string(),"mediaType":row.version.media_type})
+    json!({
+        "artifactId": row.artifact.id,
+        "versionId": row.version.id,
+        "sha256": row.version.blob_digest,
+        "byteLength": row.version.byte_count.to_string(),
+        "mediaType": row.version.media_type
+    })
 }
 
-macro_rules! reads {($ty:ty)=>{impl ConventionImportRead for $ty {
-    fn convention_import_storage_usage(&self,op:&OperationId)->Result<ConventionImportStorageUsage,StorageError>{let d=required(self.conn,op)?;db(self.conn.query_row("SELECT coalesce(max(byte_count),0),coalesce((SELECT sum(b.byte_count) FROM blobs b WHERE b.digest IN(SELECT blob_digest FROM convention_import_artifacts WHERE operation_id=?1) AND NOT EXISTS(SELECT 1 FROM artifact_versions v JOIN artifacts a ON a.id=v.artifact_id WHERE v.blob_digest=b.digest AND a.retention='Explicit' AND v.deleted_at IS NULL AND a.current_project_id IS ?2)),0) FROM convention_import_artifacts WHERE operation_id=?1",params![op.0.as_str(),d.scope.project().map(|p|p.0.as_str())],|r|Ok(ConventionImportStorageUsage{max_entry_bytes:r.get(0)?,additional_scope_bytes:r.get(1)?})))}
-    fn convention_import(&self,op:&OperationId)->Result<Option<StoredConventionImport>,StorageError>{get(self.conn,op)}
-    fn convention_imports_pending(&self,after:Option<&OperationId>,limit:u16)->Result<Vec<StoredConventionImport>,StorageError>{let limit=page_limit(limit)?;let mut stmt=db(self.conn.prepare_cached(&format!("SELECT {IMPORT_COLUMNS} FROM convention_imports WHERE phase!='Published' AND (phase IN('Queued','Parsing','Ready') OR EXISTS(SELECT 1 FROM convention_import_artifacts a WHERE a.operation_id=convention_imports.operation_id)) AND (?1 IS NULL OR operation_id>?1) ORDER BY operation_id LIMIT ?2")))?;db(db(stmt.query_map(params![after.map(|o|o.0.as_str()),limit],import_record))?.collect())}
-    fn convention_import_metadata(&self,op:&OperationId)->Result<Option<StoredConvention>,StorageError>{metadata(self.conn,op)}
-    fn convention_import_artifacts(&self,op:&OperationId,after:Option<i64>,limit:u16)->Result<Vec<StoredConventionImportArtifact>,StorageError>{captures(self.conn,op,after,limit)}
-}};}
+macro_rules! reads {
+    ($ty:ty) => {
+        impl ConventionImportRead for $ty {
+            fn convention_import_storage_usage(
+                &self,
+                op: &OperationId,
+            ) -> Result<ConventionImportStorageUsage, StorageError> {
+                let d = required(self.conn, op)?;
+                db(self.conn.query_row(
+                    "SELECT coalesce(max(byte_count),0),coalesce((SELECT sum(b.byte_count) \
+        FROM blobs b WHERE b.digest IN(SELECT blob_digest FROM \
+        convention_import_artifacts WHERE operation_id=?1) AND NOT \
+        EXISTS(SELECT 1 FROM artifact_versions v JOIN artifacts a ON \
+        a.id=v.artifact_id WHERE v.blob_digest=b.digest AND \
+        a.retention='Explicit' AND v.deleted_at IS NULL AND \
+        a.current_project_id IS ?2)),0) FROM convention_import_artifacts WHERE \
+        operation_id=?1",
+                    params![op.0.as_str(), d.scope.project().map(|p| p.0.as_str())],
+                    |r| {
+                        Ok(ConventionImportStorageUsage {
+                            max_entry_bytes: r.get(0)?,
+                            additional_scope_bytes: r.get(1)?,
+                        })
+                    },
+                ))
+            }
+            fn convention_import(
+                &self,
+                op: &OperationId,
+            ) -> Result<Option<StoredConventionImport>, StorageError> {
+                get(self.conn, op)
+            }
+            fn convention_imports_pending(
+                &self,
+                after: Option<&OperationId>,
+                limit: u16,
+            ) -> Result<Vec<StoredConventionImport>, StorageError> {
+                let limit = page_limit(limit)?;
+                let mut stmt = db(self.conn.prepare_cached(&format!(
+                    "SELECT {IMPORT_COLUMNS} FROM convention_imports WHERE \
+        phase!='Published' AND (phase IN('Queued','Parsing','Ready') OR \
+        EXISTS(SELECT 1 FROM convention_import_artifacts a WHERE \
+        a.operation_id=convention_imports.operation_id)) AND (?1 IS NULL OR \
+        operation_id>?1) ORDER BY operation_id LIMIT ?2"
+                )))?;
+                db(
+                    db(stmt.query_map(params![after.map(|o| o.0.as_str()), limit], import_record))?
+                        .collect(),
+                )
+            }
+            fn convention_import_metadata(
+                &self,
+                op: &OperationId,
+            ) -> Result<Option<StoredConvention>, StorageError> {
+                metadata(self.conn, op)
+            }
+            fn convention_import_artifacts(
+                &self,
+                op: &OperationId,
+                after: Option<i64>,
+                limit: u16,
+            ) -> Result<Vec<StoredConventionImportArtifact>, StorageError> {
+                captures(self.conn, op, after, limit)
+            }
+        }
+    };
+}
 reads!(Snapshot<'_>);
 reads!(Unit<'_>);
 impl ConventionImportRepository for Unit<'_> {
@@ -484,7 +585,25 @@ impl ConventionImportRepository for Unit<'_> {
                 actual,
             ));
         }
-        db(self.conn.execute("INSERT INTO convention_imports(operation_id,convention_id,scope_key,project_id,author_id,source_ref_json,source_version_id,expected_scope_revision,revision,phase,checkpoint_json,processed_resources,total_resources,error,created_at,updated_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,1,'Queued',?9,0,NULL,NULL,?10,?10)",params![d.operation_id.0.as_str(),d.convention_id.as_str(),d.scope.key(),d.scope.project().map(|p|p.0.as_str()),d.author_id.0.as_str(),d.source_ref.to_string(),source.version_id.as_str(),d.expected_scope_revision,d.checkpoint.to_string(),d.created_at_ms]))?;
+        db(self.conn.execute(
+            "INSERT INTO convention_imports(operation_id,convention_id,scope_key,\
+            project_id,author_id,source_ref_json,source_version_id,\
+            expected_scope_revision,revision,phase,checkpoint_json,\
+            processed_resources,total_resources,error,created_at,updated_at) \
+            VALUES(?1,?2,?3,?4,?5,?6,?7,?8,1,'Queued',?9,0,NULL,NULL,?10,?10)",
+            params![
+                d.operation_id.0.as_str(),
+                d.convention_id.as_str(),
+                d.scope.key(),
+                d.scope.project().map(|p| p.0.as_str()),
+                d.author_id.0.as_str(),
+                d.source_ref.to_string(),
+                source.version_id.as_str(),
+                d.expected_scope_revision,
+                d.checkpoint.to_string(),
+                d.created_at_ms
+            ],
+        ))?;
         Ok(d.clone())
     }
     fn stage_convention_import_artifact(
@@ -521,8 +640,40 @@ impl ConventionImportRepository for Unit<'_> {
             .checked_add(i64::from(r.kind == "Resource"))
             .ok_or_else(|| invalid("import resource count overflow"))?;
         atomic(self.conn, || {
-            db(self.conn.execute("INSERT INTO convention_import_artifacts(operation_id,ordinal,kind,resource_id,resource_key,resource_name,resource_lifecycle,resource_media_type,artifact_id,version_id,artifact_json,version_json,blob_digest,blob_generation,byte_count,staging_operation_id,staging_attempt,staging_generation,managed_path) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19)",params![r.operation_id.0.as_str(),r.ordinal,r.kind,r.resource_id.as_ref().map(Id::as_str),r.resource_key,r.resource_name,r.resource_lifecycle,r.resource_media_type,r.artifact.id.as_str(),r.version.id.as_str(),encoded(&ArtifactData::from(&r.artifact))?,encoded(&VersionData::from(&r.version))?,r.version.blob_digest,r.version.blob_generation,r.version.byte_count,r.staging_operation_id.0.as_str(),r.staging_fence.attempt_no,r.staging_fence.owner_generation,r.managed_path]))?;
-            db(self.conn.execute("UPDATE convention_imports SET revision=?2,processed_resources=?3,phase='Parsing',updated_at=max(updated_at,?4) WHERE operation_id=?1",params![r.operation_id.0.as_str(),revision,processed,self.now]))?;
+            db(self.conn.execute(
+                "INSERT INTO convention_import_artifacts(operation_id,ordinal,kind,\
+                resource_id,resource_key,resource_name,resource_lifecycle,\
+                resource_media_type,artifact_id,version_id,artifact_json,version_json,\
+                blob_digest,blob_generation,byte_count,staging_operation_id,\
+                staging_attempt,staging_generation,managed_path) VALUES(?1,?2,?3,?4,?5,\
+                ?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19)",
+                params![
+                    r.operation_id.0.as_str(),
+                    r.ordinal,
+                    r.kind,
+                    r.resource_id.as_ref().map(Id::as_str),
+                    r.resource_key,
+                    r.resource_name,
+                    r.resource_lifecycle,
+                    r.resource_media_type,
+                    r.artifact.id.as_str(),
+                    r.version.id.as_str(),
+                    encoded(&ArtifactData::from(&r.artifact))?,
+                    encoded(&VersionData::from(&r.version))?,
+                    r.version.blob_digest,
+                    r.version.blob_generation,
+                    r.version.byte_count,
+                    r.staging_operation_id.0.as_str(),
+                    r.staging_fence.attempt_no,
+                    r.staging_fence.owner_generation,
+                    r.managed_path
+                ],
+            ))?;
+            db(self.conn.execute(
+                "UPDATE convention_imports SET revision=?2,processed_resources=?3,\
+                phase='Parsing',updated_at=max(updated_at,?4) WHERE operation_id=?1",
+                params![r.operation_id.0.as_str(), revision, processed, self.now],
+            ))?;
             required(self.conn, &r.operation_id)
         })
     }
@@ -538,7 +689,12 @@ impl ConventionImportRepository for Unit<'_> {
         }
         active(self.conn, op)?;
         if let Some(old) = metadata(self.conn, op)? {
-            let prior:Option<i64>=db(self.conn.query_row("SELECT expected_parent_revision FROM convention_import_metadata WHERE operation_id=?1",[op.0.as_str()],|r|r.get(0)))?;
+            let prior: Option<i64> = db(self.conn.query_row(
+                "SELECT expected_parent_revision FROM convention_import_metadata WHERE \
+                operation_id=?1",
+                [op.0.as_str()],
+                |r| r.get(0),
+            ))?;
             return if old == *r && prior == parent_revision {
                 Ok(d)
             } else {
@@ -600,8 +756,42 @@ impl ConventionImportRepository for Unit<'_> {
             .checked_add(1)
             .ok_or_else(|| invalid("import revision overflow"))?;
         atomic(self.conn, || {
-            db(self.conn.execute("INSERT INTO convention_import_metadata(operation_id,convention_id,scope_key,project_id,revision,slug,title,title_folded,slug_folded,parent_id,expected_parent_revision,sort_order,lifecycle,content_ref_json,raw_content_ref_json,applicability_json,provenance_json,author_id,created_at,updated_at,legacy_approved) VALUES(?1,?2,?3,?4,1,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20)",params![op.0.as_str(),r.id.as_str(),r.scope.key(),r.scope.project().map(|p|p.0.as_str()),r.slug,r.title,r.title.to_lowercase(),r.slug.to_lowercase(),r.parent_id.as_ref().map(Id::as_str),parent_revision,r.sort_order,r.lifecycle,r.content_ref.as_ref().map(Value::to_string),r.raw_content_ref.as_ref().map(Value::to_string),json!(r.applicability).to_string(),r.provenance.to_string(),r.author_id.0.as_str(),r.created_at_ms,r.updated_at_ms,r.legacy_approved]))?;
-            db(self.conn.execute("UPDATE convention_imports SET revision=?2,updated_at=max(updated_at,?3) WHERE operation_id=?1",params![op.0.as_str(),revision,self.now]))?;
+            db(self.conn.execute(
+                "INSERT INTO convention_import_metadata(operation_id,convention_id,\
+                scope_key,project_id,revision,slug,title,title_folded,slug_folded,\
+                parent_id,expected_parent_revision,sort_order,lifecycle,\
+                content_ref_json,raw_content_ref_json,applicability_json,\
+                provenance_json,author_id,created_at,updated_at,legacy_approved) \
+                VALUES(?1,?2,?3,?4,1,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,\
+                ?19,?20)",
+                params![
+                    op.0.as_str(),
+                    r.id.as_str(),
+                    r.scope.key(),
+                    r.scope.project().map(|p| p.0.as_str()),
+                    r.slug,
+                    r.title,
+                    r.title.to_lowercase(),
+                    r.slug.to_lowercase(),
+                    r.parent_id.as_ref().map(Id::as_str),
+                    parent_revision,
+                    r.sort_order,
+                    r.lifecycle,
+                    r.content_ref.as_ref().map(Value::to_string),
+                    r.raw_content_ref.as_ref().map(Value::to_string),
+                    json!(r.applicability).to_string(),
+                    r.provenance.to_string(),
+                    r.author_id.0.as_str(),
+                    r.created_at_ms,
+                    r.updated_at_ms,
+                    r.legacy_approved
+                ],
+            ))?;
+            db(self.conn.execute(
+                "UPDATE convention_imports SET revision=?2,updated_at=max(updated_at,?3) \
+                WHERE operation_id=?1",
+                params![op.0.as_str(), revision, self.now],
+            ))?;
             required(self.conn, op)
         })
     }
@@ -654,7 +844,20 @@ impl ConventionImportRepository for Unit<'_> {
         let revision = expected
             .checked_add(1)
             .ok_or_else(|| invalid("import revision overflow"))?;
-        db(self.conn.execute("UPDATE convention_imports SET revision=?2,phase=?3,total_resources=?4,error=?5,checkpoint_json=?6,updated_at=max(updated_at,?7) WHERE operation_id=?1",params![op.0.as_str(),revision,phase,total,error,saved.to_string(),self.now]))?;
+        db(self.conn.execute(
+            "UPDATE convention_imports SET revision=?2,phase=?3,total_resources=?4,\
+            error=?5,checkpoint_json=?6,updated_at=max(updated_at,?7) WHERE \
+            operation_id=?1",
+            params![
+                op.0.as_str(),
+                revision,
+                phase,
+                total,
+                error,
+                saved.to_string(),
+                self.now
+            ],
+        ))?;
         required(self.conn, op)
     }
     fn publish_convention_import(
@@ -704,7 +907,12 @@ impl ConventionImportRepository for Unit<'_> {
                 return Err(invalid("import parent revision changed"));
             }
         }
-        let actual_count:i64=db(self.conn.query_row("SELECT count(*) FROM convention_import_artifacts WHERE operation_id=?1 AND kind='Resource'",[op.0.as_str()],|r|r.get(0)))?;
+        let actual_count: i64 = db(self.conn.query_row(
+            "SELECT count(*) FROM convention_import_artifacts WHERE operation_id=?1 \
+            AND kind='Resource'",
+            [op.0.as_str()],
+            |r| r.get(0),
+        ))?;
         if actual_count != count {
             return Err(invalid("import resources are incomplete"));
         }
@@ -728,14 +936,75 @@ impl ConventionImportRepository for Unit<'_> {
             .checked_add(1)
             .ok_or_else(|| invalid("import revision overflow"))?;
         atomic(self.conn, || {
-            db(self.conn.execute("INSERT INTO artifacts(id,origin_project_id,origin_work_id,title,revision,current_project_id,scope_revision,reference_revision,current_version_id,state,created_at,provenance_json,scope_kind,owner_actor_id,retention) SELECT artifact_id,json_extract(artifact_json,'$.origin_project_id'),json_extract(artifact_json,'$.origin_work_id'),json_extract(artifact_json,'$.title'),1,?2,1,1,NULL,'Live',json_extract(artifact_json,'$.created_at_ms'),json_extract(artifact_json,'$.provenance'),?3,json_extract(artifact_json,'$.owner'),'Explicit' FROM convention_import_artifacts WHERE operation_id=?1",params![op.0.as_str(),d.scope.project().map(|p|p.0.as_str()),if d.scope.project().is_some(){"Project"}else{"Workspace"}]))?;
-            db(self.conn.execute("INSERT INTO artifact_versions(id,artifact_id,version_no,blob_digest,media_type,created_at,deleted_at,source_json) SELECT version_id,artifact_id,1,blob_digest,json_extract(version_json,'$.media_type'),json_extract(version_json,'$.created_at_ms'),NULL,json_extract(version_json,'$.source') FROM convention_import_artifacts WHERE operation_id=?1",[op.0.as_str()]))?;
-            db(self.conn.execute("UPDATE artifacts SET current_version_id=(SELECT version_id FROM convention_import_artifacts d WHERE d.artifact_id=artifacts.id AND d.operation_id=?1) WHERE id IN(SELECT artifact_id FROM convention_import_artifacts WHERE operation_id=?1)",[op.0.as_str()]))?;
+            db(self.conn.execute(
+                "INSERT INTO artifacts(id,origin_project_id,origin_work_id,title,\
+                revision,current_project_id,scope_revision,reference_revision,\
+                current_version_id,state,created_at,provenance_json,scope_kind,\
+                owner_actor_id,retention) SELECT artifact_id,json_extract(artifact_json,\
+                '$.origin_project_id'),json_extract(artifact_json,'$.origin_work_id'),\
+                json_extract(artifact_json,'$.title'),1,?2,1,1,NULL,'Live',\
+                json_extract(artifact_json,'$.created_at_ms'),\
+                json_extract(artifact_json,'$.provenance'),?3,\
+                json_extract(artifact_json,'$.owner'),'Explicit' FROM \
+                convention_import_artifacts WHERE operation_id=?1",
+                params![
+                    op.0.as_str(),
+                    d.scope.project().map(|p| p.0.as_str()),
+                    if d.scope.project().is_some() {
+                        "Project"
+                    } else {
+                        "Workspace"
+                    }
+                ],
+            ))?;
+            db(self.conn.execute(
+                "INSERT INTO artifact_versions(id,artifact_id,version_no,blob_digest,\
+                media_type,created_at,deleted_at,source_json) SELECT version_id,\
+                artifact_id,1,blob_digest,json_extract(version_json,'$.media_type'),\
+                json_extract(version_json,'$.created_at_ms'),NULL,\
+                json_extract(version_json,'$.source') FROM convention_import_artifacts \
+                WHERE operation_id=?1",
+                [op.0.as_str()],
+            ))?;
+            db(self.conn.execute(
+                "UPDATE artifacts SET current_version_id=(SELECT version_id FROM \
+                convention_import_artifacts d WHERE d.artifact_id=artifacts.id AND \
+                d.operation_id=?1) WHERE id IN(SELECT artifact_id FROM \
+                convention_import_artifacts WHERE operation_id=?1)",
+                [op.0.as_str()],
+            ))?;
             ConventionRepository::create_convention(self, &r)?;
-            db(self.conn.execute("INSERT INTO convention_resource_heads(id,convention_id,revision) SELECT resource_id,?2,1 FROM convention_import_artifacts WHERE operation_id=?1 AND kind='Resource'",params![op.0.as_str(),r.id.as_str()]))?;
-            db(self.conn.execute("INSERT INTO convention_resource_versions(resource_id,revision,convention_id,convention_revision,name,media_type,content_ref_json,content_version_id,author_id,created_at,deleted_at,lifecycle) SELECT resource_id,1,?2,1,resource_name,resource_media_type,json_object('artifactId',artifact_id,'versionId',version_id,'sha256',blob_digest,'byteLength',cast(byte_count AS TEXT),'mediaType',json_extract(version_json,'$.media_type')),version_id,?3,?4,CASE WHEN resource_lifecycle='Deleted' THEN ?5 ELSE NULL END,resource_lifecycle FROM convention_import_artifacts WHERE operation_id=?1 AND kind='Resource'",params![op.0.as_str(),r.id.as_str(),d.author_id.0.as_str(),d.created_at_ms,self.now]))?;
+            db(self.conn.execute(
+                "INSERT INTO convention_resource_heads(id,convention_id,revision) SELECT \
+                resource_id,?2,1 FROM convention_import_artifacts WHERE operation_id=?1 \
+                AND kind='Resource'",
+                params![op.0.as_str(), r.id.as_str()],
+            ))?;
+            db(self.conn.execute(
+                "INSERT INTO convention_resource_versions(resource_id,revision,\
+                convention_id,convention_revision,name,media_type,content_ref_json,\
+                content_version_id,author_id,created_at,deleted_at,lifecycle) SELECT \
+                resource_id,1,?2,1,resource_name,resource_media_type,\
+                json_object('artifactId',artifact_id,'versionId',version_id,'sha256',\
+                blob_digest,'byteLength',cast(byte_count AS TEXT),'mediaType',\
+                json_extract(version_json,'$.media_type')),version_id,?3,?4,CASE WHEN \
+                resource_lifecycle='Deleted' THEN ?5 ELSE NULL END,resource_lifecycle \
+                FROM convention_import_artifacts WHERE operation_id=?1 AND \
+                kind='Resource'",
+                params![
+                    op.0.as_str(),
+                    r.id.as_str(),
+                    d.author_id.0.as_str(),
+                    d.created_at_ms,
+                    self.now
+                ],
+            ))?;
             ConventionRepository::bump_convention_scope(self, &d.scope)?;
-            db(self.conn.execute("UPDATE convention_imports SET phase='Published',revision=?2,error=NULL,updated_at=max(updated_at,?3) WHERE operation_id=?1",params![op.0.as_str(),final_revision,self.now]))?;
+            db(self.conn.execute(
+                "UPDATE convention_imports SET phase='Published',revision=?2,error=NULL,\
+                updated_at=max(updated_at,?3) WHERE operation_id=?1",
+                params![op.0.as_str(), final_revision, self.now],
+            ))?;
             Ok(r)
         })
     }
@@ -757,7 +1026,12 @@ impl ConventionImportRepository for Unit<'_> {
                 "only terminal unpublished imports may release private captures",
             ));
         }
-        db(self.conn.execute("DELETE FROM convention_import_artifacts WHERE operation_id=?1 AND ordinal IN(SELECT ordinal FROM convention_import_artifacts WHERE operation_id=?1 ORDER BY ordinal LIMIT ?2)",params![op.0.as_str(),limit]))?;
+        db(self.conn.execute(
+            "DELETE FROM convention_import_artifacts WHERE operation_id=?1 AND \
+            ordinal IN(SELECT ordinal FROM convention_import_artifacts WHERE \
+            operation_id=?1 ORDER BY ordinal LIMIT ?2)",
+            params![op.0.as_str(), limit],
+        ))?;
         let remaining: bool = db(self.conn.query_row(
             "SELECT EXISTS(SELECT 1 FROM convention_import_artifacts WHERE operation_id=?1)",
             [op.0.as_str()],

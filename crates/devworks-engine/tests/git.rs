@@ -667,7 +667,7 @@ fn native_task_lifecycle_transport(
                 &ctx,
                 "queue.resolve",
                 cancel.to_string().as_bytes(),
-                Arc::new(devworks_core::services::queue::QueueService),
+                Arc::new(devworks_core::services::queue_service()),
             )
             .unwrap();
         assert!(

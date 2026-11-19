@@ -47,6 +47,7 @@ use super::{
 };
 use crate::context::InvocationContext;
 use crate::fingerprint::sha256_hex;
+use crate::locks::LockExt;
 use crate::ports::IdKind;
 use crate::ports::indexing::SourceFault;
 use crate::ports::storage::*;
@@ -826,7 +827,7 @@ pub(crate) fn observe_all(
 ) -> Result<(usize, usize), StorageError> {
     // A bounded slice per pass, continuing after the overlay the previous pass ended at (and
     // wrapping around), so every live overlay is observed in turn.
-    let start = cursor.lock().unwrap_or_else(|p| p.into_inner()).clone();
+    let start = cursor.locked().clone();
     let mut all = read_snapshot(&*env.store, &ReadOptions::default(), |s| {
         let mut out = Vec::new();
         let mut after = None;
@@ -858,7 +859,7 @@ pub(crate) fn observe_all(
     all.truncate(OBSERVED_PER_PASS);
     let next = all.last().map(|o| o.id.clone());
     let overlays = all;
-    *cursor.lock().unwrap_or_else(|p| p.into_inner()) = next;
+    *cursor.locked() = next;
     let (mut stale, mut queued) = (0, 0);
     let ctx = env.host_context(None);
     for o in overlays {

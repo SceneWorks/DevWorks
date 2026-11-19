@@ -416,7 +416,11 @@ pub fn index(scope: &Scope, record: &ConventionRecord) -> Option<In> {
     }))
 }
 fn earlier() -> Failure {
-    Failure::Other("This saved response uses an earlier convention format. Refresh to inspect the current convention without changing the saved request.".into())
+    Failure::Other(
+        "This saved response uses an earlier convention format. Refresh to \
+        inspect the current convention without changing the saved request."
+            .into(),
+    )
 }
 pub fn page(outcome: QueryOutcome) -> Result<ConventionPage, Failure> {
     match ops::query_result(outcome)?.0 {
@@ -558,7 +562,7 @@ fn load_complete_source(
     }
     .ok_or("The exact source artifact is unavailable; a partial draft cannot be saved.")?;
     if expected.byte_length.get() as u64
-        > devworks_core::services::conventions::model::MAX_MARKDOWN_BYTES
+        > devworks_core::protocol::helpers::conventions::MAX_MARKDOWN_BYTES
     {
         return Err(
             "The source is larger than the convention owner's editable document limit.".into(),

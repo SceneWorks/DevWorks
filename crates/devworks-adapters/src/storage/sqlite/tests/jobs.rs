@@ -2052,7 +2052,9 @@ fn a_schedule_whose_zone_left_the_platform_stops_visibly_without_blocking_claims
     fx.store
         .with_writer_connection(|c| {
             super::super::conn::db(c.execute_batch(
-                "UPDATE schedules SET schedule_json='{\"expression\":\"0 3 * * *\",\"kind\":\"Calendar\",\"timezone\":\"Gone/Zone\"}', next_at=1 WHERE title='Gone'",
+                "UPDATE schedules SET schedule_json='{\"expression\":\"0 3 * * *\",\
+                    \"kind\":\"Calendar\",\"timezone\":\"Gone/Zone\"}', next_at=1 WHERE \
+                    title='Gone'",
             ))
         })
         .unwrap();

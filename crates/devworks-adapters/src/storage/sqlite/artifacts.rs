@@ -19,7 +19,15 @@ fn bounded(limit: u16) -> Result<i64, StorageError> {
     Ok(limit as i64)
 }
 
-const ARTIFACT_COLUMNS: &str = "id,origin_project_id,origin_work_id,title,revision,current_project_id,scope_revision,reference_revision,current_version_id,state,created_at,provenance_json,scope_kind,owner_actor_id,retention";
+/// The `derived.kind` values of host artifacts that stay out of user listings (see
+/// `retained_help` in core), named once from the typed enum.
+const HELP_KIND: &str =
+    devworks_core::services::artifacts::derivation::DerivedKind::HelpTopic.as_str();
+const INSTRUCTION_KIND: &str =
+    devworks_core::services::artifacts::derivation::DerivedKind::Instruction.as_str();
+const ARTIFACT_COLUMNS: &str = "id,origin_project_id,origin_work_id,title,revision,current_project_id,\
+    scope_revision,reference_revision,current_version_id,state,created_at,\
+    provenance_json,scope_kind,owner_actor_id,retention";
 struct ArtifactRaw {
     id: String,
     origin: Option<String>,
@@ -249,16 +257,32 @@ fn list(
     let wanted = Value::from(tags.to_vec()).to_string();
     let mut s = db(conn.prepare_cached(&format!(
         "SELECT {ARTIFACT_COLUMNS} FROM artifacts a
-         WHERE a.state='Live' AND a.current_version_id IS NOT NULL AND a.retention='Explicit'
-           AND (a.current_project_id=?1 OR EXISTS(SELECT 1 FROM artifact_shares s WHERE s.artifact_id=a.id AND s.project_id=?1))
-           AND (?8 IS NULL OR a.scope_kind='Workspace' OR a.owner_actor_id IS NULL OR a.owner_actor_id=?8)
-           AND NOT (json_extract(a.provenance_json,'$.principalKind') IS 'Host'
-                    AND json_extract(a.provenance_json,'$.producedBy') IS ?7
-                    AND (json_extract(a.provenance_json,'$.derived.kind') IS 'HelpTopic' OR json_extract(a.provenance_json,'$.derived.kind') IS 'Instruction'))
-           AND (?2=9223372036854775807 OR a.created_at<?2 OR (a.created_at=?2 AND a.id<?3))
-           AND (?6=0 OR (SELECT COUNT(*) FROM artifact_tags t WHERE t.artifact_id=a.id
-                         AND t.tag IN (SELECT value FROM json_each(?5)))=?6)
-         ORDER BY a.created_at DESC, a.id DESC LIMIT ?4"
+         WHERE \
+            a.state='Live' AND a.current_version_id IS NOT NULL AND \
+            a.retention='Explicit'
+           AND (a.current_project_id=?1 OR \
+            EXISTS(SELECT 1 FROM artifact_shares s WHERE s.artifact_id=a.id AND \
+            s.project_id=?1))
+           AND (?8 IS NULL OR \
+            a.scope_kind='Workspace' OR a.owner_actor_id IS NULL OR \
+            a.owner_actor_id=?8)
+           AND NOT (json_extract(a.provenance_json,\
+            '$.principalKind') IS 'Host'
+                    AND \
+            json_extract(a.provenance_json,'$.producedBy') IS \
+            ?7
+                    AND (json_extract(a.provenance_json,\
+            '$.derived.kind') IS '{HELP_KIND}' OR json_extract(a.provenance_json,\
+            '$.derived.kind') IS '{INSTRUCTION_KIND}'))
+           AND \
+            (?2=9223372036854775807 OR a.created_at<?2 OR (a.created_at=?2 AND \
+            a.id<?3))
+           AND (?6=0 OR (SELECT COUNT(*) FROM artifact_tags t \
+            WHERE t.artifact_id=a.id
+                         AND t.tag IN (SELECT \
+            value FROM json_each(?5)))=?6)
+         ORDER BY a.created_at DESC, \
+            a.id DESC LIMIT ?4"
     )))?;
     let rows = db(db(s.query_map(
         params![
@@ -292,15 +316,28 @@ fn list_workspace(
     let wanted = Value::from(tags.to_vec()).to_string();
     let mut s = db(conn.prepare_cached(&format!(
         "SELECT {ARTIFACT_COLUMNS} FROM artifacts a
-         WHERE a.scope_kind='Workspace' AND a.state='Live' AND a.current_version_id IS NOT NULL
-           AND a.retention='Explicit' AND (?1 IS NULL OR a.owner_actor_id=?1)
-           AND NOT (json_extract(a.provenance_json,'$.principalKind') IS 'Host'
-                    AND json_extract(a.provenance_json,'$.producedBy') IS ?7
-                    AND (json_extract(a.provenance_json,'$.derived.kind') IS 'HelpTopic' OR json_extract(a.provenance_json,'$.derived.kind') IS 'Instruction'))
-           AND (?2=9223372036854775807 OR a.created_at<?2 OR (a.created_at=?2 AND a.id<?3))
-           AND (?6=0 OR (SELECT COUNT(*) FROM artifact_tags t WHERE t.artifact_id=a.id
-                         AND t.tag IN (SELECT value FROM json_each(?5)))=?6)
-         ORDER BY a.created_at DESC, a.id DESC LIMIT ?4"
+         WHERE \
+            a.scope_kind='Workspace' AND a.state='Live' AND a.current_version_id IS \
+            NOT NULL
+           AND a.retention='Explicit' AND (?1 IS NULL OR \
+            a.owner_actor_id=?1)
+           AND NOT (json_extract(a.provenance_json,\
+            '$.principalKind') IS 'Host'
+                    AND \
+            json_extract(a.provenance_json,'$.producedBy') IS \
+            ?7
+                    AND (json_extract(a.provenance_json,\
+            '$.derived.kind') IS '{HELP_KIND}' OR json_extract(a.provenance_json,\
+            '$.derived.kind') IS '{INSTRUCTION_KIND}'))
+           AND \
+            (?2=9223372036854775807 OR a.created_at<?2 OR (a.created_at=?2 AND \
+            a.id<?3))
+           AND (?6=0 OR (SELECT COUNT(*) FROM artifact_tags t \
+            WHERE t.artifact_id=a.id
+                         AND t.tag IN (SELECT \
+            value FROM json_each(?5)))=?6)
+         ORDER BY a.created_at DESC, \
+            a.id DESC LIMIT ?4"
     )))?;
     let rows = db(db(s.query_map(
         params![
@@ -510,7 +547,11 @@ macro_rules! artifact_reads {
             fn live_references(&self, digest: &str) -> Result<i64, StorageError> {
                 count(
                     self.conn,
-                    "SELECT (SELECT COUNT(*) FROM artifact_versions WHERE blob_digest=?1 AND deleted_at IS NULL) + (SELECT COUNT(*) FROM graph_source_captures WHERE blob_digest=?1) + (SELECT COUNT(*) FROM convention_import_artifacts a JOIN convention_imports d ON d.operation_id=a.operation_id WHERE a.blob_digest=?1 AND d.phase!='Published')",
+                    "SELECT (SELECT COUNT(*) FROM artifact_versions WHERE blob_digest=?1 AND \
+                        deleted_at IS NULL) + (SELECT COUNT(*) FROM graph_source_captures WHERE \
+                        blob_digest=?1) + (SELECT COUNT(*) FROM convention_import_artifacts a \
+                        JOIN convention_imports d ON d.operation_id=a.operation_id WHERE \
+                        a.blob_digest=?1 AND d.phase!='Published')",
                     [digest],
                 )
             }
@@ -777,7 +818,9 @@ impl ArtifactRepository for Unit<'_> {
         }
         let (scope_kind, current) = scope_columns(&a.scope);
         let n = db(db(self.conn.prepare_cached(
-            "UPDATE artifacts SET title=?1,revision=?2,current_project_id=?3,scope_revision=?4,reference_revision=?5,current_version_id=?6,state=?7,scope_kind=?9 WHERE id=?8",
+            "UPDATE artifacts SET title=?1,revision=?2,current_project_id=?3,\
+                scope_revision=?4,reference_revision=?5,current_version_id=?6,state=?7,\
+                scope_kind=?9 WHERE id=?8",
         ))?
         .execute(params![
             a.title,

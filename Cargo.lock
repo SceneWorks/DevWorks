@@ -1188,6 +1188,7 @@ dependencies = [
  "atspi",
  "base64 0.22.1",
  "core-foundation 0.9.4",
+ "devworks-adapters",
  "devworks-core",
  "devworks-extension-protocol",
  "devworks-test-support",
@@ -1257,6 +1258,7 @@ name = "devworks-core"
 version = "0.1.0"
 dependencies = [
  "base64 0.22.1",
+ "devworks-core",
  "devworks-extension-protocol",
  "devworks-test-support",
  "jiff",

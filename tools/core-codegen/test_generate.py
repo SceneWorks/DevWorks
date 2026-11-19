@@ -85,17 +85,24 @@ class SchemaRevisionRules(unittest.TestCase):
             'conventions.import', 'conventions.retire', 'conventions.index', 'conventions.search',
             'conventions.resources', 'conventions.version',
             'schemas.connections', 'schemas.objects', 'schemas.index', 'schemas.refresh',
-            'schemas.configure', 'database.configure_sensitive_columns',
+            'schemas.configure', 'database.configure_sensitive_columns', 'schemas.code_references',
             'projects.prepare_purge', 'projects.purge_manifest', 'projects.purge',
             'projects.purge_status', 'history.command_receipt', 'agents.post', 'agents.receive', 'agents.ack',
             'agents.history', 'agents.events', 'skills.resources', *MCP,
             'watch.create', 'watch.list', 'watch.inspect', 'watch.cancel', 'containers.create',
-            'process.install_project_dependencies', 'sessions.transcript'})
+            'process.install_project_dependencies', 'skills.set_enabled',
+            'addons.invoke', 'addons.invocation',
+            'settings.read_effective', 'settings.validate', 'settings.save_revision',
+            'settings.explain_source', 'dreaming.instructions', 'skills.discover', 'skills.read',
+            'skills.draft', 'skills.history', 'skills.rollback', 'roles.read', 'roles.draft',
+            'roles.history', 'roles.rollback', 'sessions.transcript'})
         for name in MCP:
             self.assertEqual(carried[name], {8})
         for name in ('agents.post', 'agents.receive', 'agents.ack', 'agents.history', 'agents.events'):
             self.assertEqual(carried[name], {7})
-        for name in ('watch.create', 'watch.list', 'watch.inspect', 'watch.cancel'):
+        for name in ('watch.create', 'watch.list', 'watch.inspect', 'watch.cancel',
+                     'schemas.code_references', 'settings.read_effective', 'settings.validate',
+                     'settings.save_revision', 'settings.explain_source'):
             self.assertEqual(carried[name], {8})
         for name in ('projects.prepare_purge', 'projects.purge_manifest', 'projects.purge',
                      'projects.purge_status', 'history.command_receipt'):
@@ -113,8 +120,9 @@ class SchemaRevisionRules(unittest.TestCase):
         self.assertEqual(carried['router.pin'], {3})
         self.assertEqual(carried['router.connections'], {2, 3})
         self.assertEqual(carried['router.configure'], {2, 3})
-        # Knowledge projections expose independent challenges at revision 3; full source labels are additive.
-        self.assertEqual(carried['knowledge.subgraph'], {2, 3})
+        # Knowledge projections expose independent challenges at revision 3 and the skills that name a
+        # lesson at revision 8; full source labels are additive.
+        self.assertEqual(carried['knowledge.subgraph'], {2, 3, 8})
         self.assertEqual(carried['knowledge.tag'], {2})
         self.assertEqual(carried['dreaming.revert'], {2})
         self.assertEqual(carried['knowledge.delete_by_source'], {3})
@@ -142,7 +150,7 @@ class SchemaRevisionRules(unittest.TestCase):
         self.assertNotIn('latest_family', generate.TYPES['RouteModel']['fields'])
         catalog = next(o for _, o in generate.operations() if o['operation'] == 'router.catalog')
         configure = next(o for _, o in generate.operations() if o['operation'] == 'router.configure')
-        self.assertEqual(generate.introduced_in(catalog), {2, 3})
+        self.assertEqual(generate.introduced_in(catalog), {2, 3, 4})
         self.assertEqual(generate.introduced_in(configure), {2, 3})
 
     def test_approval_views_preserve_owner_records_and_new_operations_begin_at_three(self):
@@ -155,8 +163,9 @@ class SchemaRevisionRules(unittest.TestCase):
         self.assertEqual(generate.TYPES['ApprovalContent']['variants']['SavedOperation']['input'], 'SavedCommandInput')
         self.assertIn('SavedCommandInput', generate.SUPPORT)
         byname = {o['operation']: o for _, o in generate.operations()}
-        for name in ['approvals.review_queue', 'notifications.mark_read']:
-            self.assertEqual([r['revision'] for r in byname[name]['schemaRevisions']], [3])
+        # The review queue shows lessons, which list the skills that name them at revision 8.
+        self.assertEqual([r['revision'] for r in byname['approvals.review_queue']['schemaRevisions']], [3, 8])
+        self.assertEqual([r['revision'] for r in byname['notifications.mark_read']['schemaRevisions']], [3])
         self.assertEqual(byname['approvals.review_queue']['resultValueType'], 'KnowledgeReviewPage')
         self.assertEqual([r['revision'] for r in byname['notifications.settings']['schemaRevisions']], [1])
 

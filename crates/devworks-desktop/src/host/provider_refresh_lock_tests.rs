@@ -91,7 +91,23 @@ pub(super) fn block_configure(host: &Host) -> BlockedConfigure {
         })
         .unwrap()
         .unwrap();
-        let frame = serde_json::json!({"mode":"Command","protocol":"1.0-draft.1","schemaRevision":2,"requestKey":"blocked-native-configure","body":{"kind":"router.configure","action":{"kind":"Connection","connectionId":current.id,"expectedRevision":current.revision.to_string(),"name":"Concurrent actual configure","profile":current.profile,"endpoint":current.endpoint}}});
+        let frame = serde_json::json!({
+            "mode": "Command",
+            "protocol": "1.0-draft.1",
+            "schemaRevision": 2,
+            "requestKey": "blocked-native-configure",
+            "body": {
+                "kind": "router.configure",
+                "action": {
+                    "kind": "Connection",
+                    "connectionId": current.id,
+                    "expectedRevision": current.revision.to_string(),
+                    "name": "Concurrent actual configure",
+                    "profile": current.profile,
+                    "endpoint": current.endpoint
+                }
+            }
+        });
         let result = UseCases::new().with_connections(connections).command(
             &gateway,
             &context,
@@ -99,7 +115,10 @@ pub(super) fn block_configure(host: &Host) -> BlockedConfigure {
             &serde_json::to_vec(&frame).unwrap(),
         );
         assert!(
-            !matches!(result, Ok(devworks_core::protocol::CommandReply::Recorded {receipt,..}) if matches!(receipt.decision, devworks_core::protocol::results::DomainDecision::Applied {..})),
+            !matches!(result, Ok(devworks_core::protocol::CommandReply::Recorded {receipt,..}) if matches!(
+                receipt.decision,
+                devworks_core::protocol::results::DomainDecision::Applied { .. }
+            )),
             "a configure queued before host close must be cancelled without publication"
         );
         let _ = finished.send(());

@@ -15,7 +15,7 @@
 //!   a detected wake the running owner reasserts its leases first
 //!   ([`ControlService::reassert_leases`]). Neither adds a manual hold or clears one.
 //! * Scheduled maintenance/inference runs and keep-working are owned by the schedules and
-//!   delegation items; [`RecoveryClass`] and [`LifecycleHooks`] are the hooks they plug in.
+//!   delegation items; [`LifecycleHooks`] is the hook they plug in.
 use super::substrate::ActivationFailure;
 use super::{
     ACTIVATION_AGGREGATE, CONTROL_AGGREGATE, ControlService, HoldSubject, STOP_CAPABILITY,
@@ -31,23 +31,6 @@ use crate::protocol::{Id, OperationId, OperationState, RootId};
 use serde_json::json;
 
 use crate::ports::storage::MAX_PAGE;
-
-/// How a kind of work recovers after a new boot (the AD20 recovery classes).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum RecoveryClass {
-    /// Features and standalone issues: inspect/reconcile, then stay held until an explicit,
-    /// authorized Continue (including accepted-but-unlaunched activations).
-    ManualContinue,
-    /// An interrupted scheduled maintenance or inference run: resume the same run identity after
-    /// reconciliation when its schedule and project are enabled and holds permit.
-    ResumeAfterReconciliation,
-    /// Keep-working mode and restored schedules: stay stopped until explicitly restarted.
-    StaysStopped,
-}
-/// The recovery class of a run root (every root is a feature or a standalone issue).
-pub fn root_recovery_class(_root: &WorkRoot) -> RecoveryClass {
-    RecoveryClass::ManualContinue
-}
 
 /// Lifecycle hooks of the schedules and keep-working items, run in the documented order: at
 /// shutdown before anything stops (freeze schedule admission and keep-working allocation), and at

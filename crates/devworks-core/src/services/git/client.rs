@@ -221,7 +221,13 @@ fn supported_reviewed_version(version: &str) -> bool {
         return false;
     };
     let mut parts = number.split('.');
-    matches!((parts.next().and_then(|v| v.parse::<u64>().ok()), parts.next().and_then(|v| v.parse::<u64>().ok())), (Some(major), Some(minor)) if (major, minor) >= (2, 31))
+    matches!(
+        (
+            parts.next().and_then(|v| v.parse::<u64>().ok()),
+            parts.next().and_then(|v| v.parse::<u64>().ok()),
+        ),
+        (Some(major), Some(minor)) if (major, minor) >= (2, 31)
+    )
 }
 
 /// Git for Windows' cmd/git.exe is a launcher. The --exec-path from the trusted configured
@@ -587,14 +593,6 @@ impl Git<'_> {
             return Err(GitFault::SourceChanged);
         }
         Ok(result)
-    }
-
-    /// Resolve one literal ref, with no revision-expression interpretation.
-    pub fn branch_head(&self, dir: &Path, reference: &str) -> Result<Option<String>, GitFault> {
-        if !reference.starts_with("refs/heads/") || reference.contains(['\0', '\n']) {
-            return Err(GitFault::Malformed("invalid branch ref".into()));
-        }
-        self.line(dir, &["show-ref", "--verify", "--hash", reference])
     }
 
     /// Local-only configuration inventory for the host-owned transport boundary. Values may
@@ -1793,7 +1791,10 @@ mod tests {
                                 .as_slice()
                         )
                     );
-                    return Ok(b".gitattributes\0filter\0unspecified\0sub dir/line\nname.probe\0filter\0probe\0non-utf8-\xff.probe\0filter\0probe\0".to_vec());
+                    return Ok(b".gitattributes\0filter\0unspecified\0sub \
+                        dir/line\nname.probe\0filter\0probe\0non-utf8-\xff.probe\0filter\0probe\
+                        \0"
+                    .to_vec());
                 }
                 panic!(
                     "filter qualification must refuse before status or diff: {:?}",
@@ -1837,7 +1838,8 @@ mod tests {
 
     #[test]
     fn name_status_parses_renames_copies_and_refuses_escapes() {
-        let out = b"M\0src/a.rs\0R087\0old.rs\0new.rs\0C100\0x.rs\0y.rs\0D\0gone.rs\0A\0../evil\0A\0ok/b.py\0";
+        let out = b"M\0src/a.rs\0R087\0old.rs\0new.rs\0C100\0x.rs\0y.rs\0D\0gone.rs\0A\0../e\
+            vil\0A\0ok/b.py\0";
         let (c, refused) = parse_name_status(out).unwrap();
         assert_eq!(
             c,
@@ -1888,7 +1890,8 @@ mod tests {
     fn worktree_listing_parses_porcelain() {
         let oid = "c".repeat(40);
         let w = parse_worktrees(&format!(
-            "worktree /src/a\nHEAD {oid}\nbranch refs/heads/main\n\nworktree /src/a-wt\nHEAD {oid}\ndetached\n\n"
+            "worktree /src/a\nHEAD {oid}\nbranch refs/heads/main\n\nworktree \
+                /src/a-wt\nHEAD {oid}\ndetached\n\n"
         ));
         assert_eq!(w.len(), 2);
         assert_eq!(w[0].branch.as_deref(), Some("refs/heads/main"));

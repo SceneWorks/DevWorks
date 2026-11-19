@@ -108,14 +108,14 @@ def convention_conversion(definition):
                 let content = topic.content.clone()?;
                 let row = InstructionRecord { id: topic.id.clone(), revision: topic.revision.clone(),
                     name: BoundedText(topic.title.0.clone()), scope: topic.scope.clone(), content,
-                    source_path: None, approved: topic.legacy_approved, applicability: topic.applicability.clone() };
+                    source_path: None, approved: topic.legacy_approved, applicability: topic.applicability.clone(), author: None, session_id: None, rationale: None, state: None, approval_outcome: None, lesson_ids: None };
                 row.check().ok().map(|()| row)
             };\n"""
     resource = """            let resource = |topic: &ConventionResourceRecord| -> Option<InstructionRecord> {
                 if !(1..=256).contains(&topic.name.0.chars().count()) || topic.name.0.contains('\\0') { return None; }
                 let row = InstructionRecord { id: topic.id.clone(), revision: topic.revision.clone(),
                     name: BoundedText(topic.name.0.clone()), scope: topic.scope.clone(), content: topic.content.clone(),
-                    source_path: None, approved: false, applicability: topic.applicability.clone() };
+                    source_path: None, approved: false, applicability: topic.applicability.clone(), author: None, session_id: None, rationale: None, state: None, approval_outcome: None, lesson_ids: None };
                 row.check().ok().map(|()| row)
             };\n"""
     if kind == 'convention_mutation':

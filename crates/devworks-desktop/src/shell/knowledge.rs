@@ -32,25 +32,23 @@ impl Screen for KnowledgeScreen {
             ctl.load_projects();
         }
         if ctl.routes.get(&Route::Knowledge).is_none_or(|r| r.tab != 2)
-            && !ctl.knowledge.loaded
-            && ctl.knowledge.listing.is_none()
+            && !ctl.knowledge.claims.loaded
+            && !ctl.knowledge.claims.loading()
         {
             ctl.load_knowledge();
         }
     }
     fn refresh(&mut self, cx: &mut Cx, _route: Route) {
-        // Only an unpaged listing is re-read in place: a re-read of a list the user paged
-        // through would drop the pages they loaded.
+        // A re-read covers every page the user loaded.
         if cx.routes.get(&Route::Knowledge).is_none_or(|r| r.tab != 2)
-            && self.loaded
-            && self.listing.is_none()
-            && self.items.len() <= knowledge_screen::PAGE as usize
+            && self.claims.loaded
+            && !self.claims.loading()
         {
             KnowledgeCtl {
                 knowledge: self,
                 cx,
             }
-            .load_knowledge();
+            .refresh_knowledge();
         }
     }
     fn apply(&mut self, cx: &mut Cx, slot: KnowledgeSlot, reply: Reply) {
@@ -188,15 +186,33 @@ impl KnowledgeCtl<'_, '_> {
     /// that could not be submitted is not left in progress.
     fn load_knowledge(&mut self) {
         let (op, body) = self.knowledge.begin_listing(false);
-        let generation = self.knowledge.generation;
+        self.send_listing(op, body, "Loading Knowledge");
+        self.check_knowledge();
+    }
+    /// Re-reads the same listing (the periodic refresh): every page shown is read again.
+    fn refresh_knowledge(&mut self) {
+        let (op, body) = self.knowledge.begin_refresh();
+        self.send_listing(op, body, "Loading Knowledge");
+        self.check_knowledge();
+    }
+    /// Submits the listing request just started; one nothing took is not left in progress.
+    fn send_listing(
+        &mut self,
+        op: &'static str,
+        body: Option<devworks_core::operations::OperationInput>,
+        label: &str,
+    ) {
+        let generation = self.knowledge.claims.generation();
         if !self.query(
             KnowledgeSlot::KnowledgeList(generation),
-            "Loading Knowledge",
+            label,
             op,
             move |b| knowledge_screen::query(b, body),
         ) {
-            self.knowledge.listing = None;
+            self.knowledge.claims.abandon(generation);
         }
+    }
+    fn check_knowledge(&mut self) {
         let body = self.knowledge.diagnostics_input();
         self.query(
             KnowledgeSlot::KnowledgeDiagnostics,
@@ -233,7 +249,7 @@ impl KnowledgeCtl<'_, '_> {
             self.knowledge.followed = Some(nav.clone());
             changed |= self.knowledge.follow_navigation(nav.as_deref());
         }
-        if changed && self.knowledge.loaded {
+        if changed && self.knowledge.claims.loaded {
             actions.push(KnowledgeAction::Search);
         }
     }
@@ -332,19 +348,11 @@ impl KnowledgeCtl<'_, '_> {
             match a {
                 KnowledgeAction::Search => self.load_knowledge(),
                 KnowledgeAction::More => {
-                    if self.knowledge.listing.is_some() || self.knowledge.cursor.is_none() {
+                    if self.knowledge.claims.loading() || !self.knowledge.claims.more() {
                         continue;
                     }
                     let (op, body) = self.knowledge.begin_listing(true);
-                    let generation = self.knowledge.generation;
-                    if !self.query(
-                        KnowledgeSlot::KnowledgeList(generation),
-                        "Loading more Knowledge",
-                        op,
-                        move |b| knowledge_screen::query(b, body),
-                    ) {
-                        self.knowledge.listing = None;
-                    }
+                    self.send_listing(op, body, "Loading more Knowledge");
                 }
                 KnowledgeAction::Select(id) => {
                     self.knowledge.selected = Some(id.clone());
@@ -439,8 +447,13 @@ impl KnowledgeCtl<'_, '_> {
     ) -> Option<(KnowledgeSlot, Reply)> {
         match (slot, reply) {
             (KnowledgeSlot::KnowledgeList(generation), Reply::Query(q)) => {
-                if self.knowledge.listed(generation, q) {
-                    self.load_knowledge();
+                match self.knowledge.listed(generation, q) {
+                    knowledge_screen::Listed::Restart => self.load_knowledge(),
+                    knowledge_screen::Listed::Continue(fetch) => {
+                        let (op, body) = self.knowledge.continue_listing(&fetch);
+                        self.send_listing(op, body, "Loading Knowledge");
+                    }
+                    knowledge_screen::Listed::Done => {}
                 }
             }
             (KnowledgeSlot::KnowledgeRead(claim), Reply::Query(q)) => {

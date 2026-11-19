@@ -102,6 +102,30 @@ impl Revisioned for RelationshipsInput {
     fn retain_revision(&mut self, _: u32) {}
 }
 
+/// `schemas.code_references` Query input.
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CodeReferencesInput {
+    pub scope: DataScope,
+    pub views: ViewSelection,
+    pub connection_id: Id,
+    pub object_id: Id,
+    pub page: PageRequest,
+}
+impl Check for CodeReferencesInput {
+    fn check(&self) -> Result<(), String> {
+        self.scope.check()?;
+        self.views.check()?;
+        self.connection_id.check()?;
+        self.object_id.check()?;
+        self.page.check()?;
+        Ok(())
+    }
+}
+impl Revisioned for CodeReferencesInput {
+    fn retain_revision(&mut self, _: u32) {}
+}
+
 /// `schemas.index` Command input.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -248,6 +272,8 @@ pub enum Input {
     Objects(ObjectsInput),
     /// `schemas.relationships` (Query).
     Relationships(RelationshipsInput),
+    /// `schemas.code_references` (Query).
+    CodeReferences(CodeReferencesInput),
     /// `schemas.index` (Command).
     Index(IndexInput),
     /// `schemas.refresh` (Command).
@@ -263,6 +289,7 @@ impl Input {
             Self::Connections(_) => "schemas.connections",
             Self::Objects(_) => "schemas.objects",
             Self::Relationships(_) => "schemas.relationships",
+            Self::CodeReferences(_) => "schemas.code_references",
             Self::Index(_) => "schemas.index",
             Self::Refresh(_) => "schemas.refresh",
             Self::RemoveIndex(_) => "schemas.remove_index",
@@ -274,6 +301,7 @@ impl Input {
             Self::Connections(_) => Mode::Query,
             Self::Objects(_) => Mode::Query,
             Self::Relationships(_) => Mode::Query,
+            Self::CodeReferences(_) => Mode::Query,
             Self::Index(_) => Mode::Command,
             Self::Refresh(_) => Mode::Command,
             Self::RemoveIndex(_) => Mode::Command,
@@ -286,6 +314,7 @@ impl Input {
             Self::Connections(i) => serde_json::to_value(i),
             Self::Objects(i) => serde_json::to_value(i),
             Self::Relationships(i) => serde_json::to_value(i),
+            Self::CodeReferences(i) => serde_json::to_value(i),
             Self::Index(i) => serde_json::to_value(i),
             Self::Refresh(i) => serde_json::to_value(i),
             Self::RemoveIndex(i) => serde_json::to_value(i),

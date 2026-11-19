@@ -68,6 +68,19 @@ impl Check for ApprovalState {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub enum InstructionState {
+    Draft,
+    Proposed,
+    Approved,
+    Rejected,
+}
+impl Check for InstructionState {
+    fn check(&self) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 pub enum ReviewState {
     Pending,
     Running,
@@ -2336,6 +2349,73 @@ impl Check for SchemaRelation {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SchemaCodeReference {
+    pub id: Id,
+    pub object_id: Id,
+    pub repository_id: Id,
+    pub graph_view_id: Id,
+    pub unit_key: GraphUnitKey,
+    pub node_id: Id,
+    pub node_name: Content,
+    pub node_kind: Label,
+    pub edge_kind: Label,
+    pub table: Text,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub column: Option<Text>,
+    pub extractor: Label,
+    pub line: Counter,
+    pub snippet: Content,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub statement: Option<Label>,
+}
+impl Check for SchemaCodeReference {
+    fn check(&self) -> Result<(), String> {
+        self.id.check()?;
+        self.object_id.check()?;
+        self.repository_id.check()?;
+        self.graph_view_id.check()?;
+        self.unit_key.check()?;
+        self.node_id.check()?;
+        self.node_name.check()?;
+        self.node_kind.check()?;
+        self.edge_kind.check()?;
+        self.table.check()?;
+        self.column.check()?;
+        self.extractor.check()?;
+        self.line.check()?;
+        self.snippet.check()?;
+        self.statement.check()?;
+        crate::protocol::rules::record(
+            "SchemaCodeReference",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SchemaCodeReferencePage {
+    pub items: Rows<SchemaCodeReference>,
+    pub has_more: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub next_cursor: Option<Cursor>,
+}
+impl Check for SchemaCodeReferencePage {
+    fn check(&self) -> Result<(), String> {
+        self.items.check()?;
+        self.has_more.check()?;
+        self.next_cursor.check()?;
+        crate::protocol::rules::record(
+            "SchemaCodeReferencePage",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "kind", rename_all_fields = "camelCase", deny_unknown_fields)]
 pub enum DbScalar {
     Null {},
@@ -2843,6 +2923,8 @@ impl Revisioned for KnowledgeClaim {
         }
         if revision < 2 {
             self.lesson = None;
+        } else {
+            self.lesson.retain_revision(revision);
         }
         if revision < 3 {
             self.challenges = None;
@@ -3301,6 +3383,48 @@ pub struct InstructionRecord {
     pub source_path: Option<RegisteredPath>,
     pub approved: bool,
     pub applicability: Items<Label>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "ActorId", extend("x-since" = 8))]
+    pub author: Option<ActorId>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Id", extend("x-since" = 8))]
+    pub session_id: Option<Id>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Content", extend("x-since" = 8))]
+    pub rationale: Option<Content>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "InstructionState", extend("x-since" = 8))]
+    pub state: Option<InstructionState>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "ApprovalState", extend("x-since" = 8))]
+    pub approval_outcome: Option<ApprovalState>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Items<Id>", extend("x-since" = 8))]
+    pub lesson_ids: Option<Items<Id>>,
 }
 impl Check for InstructionRecord {
     fn check(&self) -> Result<(), String> {
@@ -3312,11 +3436,40 @@ impl Check for InstructionRecord {
         self.source_path.check()?;
         self.approved.check()?;
         self.applicability.check()?;
+        self.author.check()?;
+        self.session_id.check()?;
+        self.rationale.check()?;
+        self.state.check()?;
+        self.approval_outcome.check()?;
+        self.lesson_ids.check()?;
         crate::protocol::rules::record(
             "InstructionRecord",
             &serde_json::to_value(self).map_err(|e| e.to_string())?,
         )?;
         Ok(())
+    }
+}
+
+impl Revisioned for InstructionRecord {
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 8 {
+            self.author = None;
+        }
+        if revision < 8 {
+            self.session_id = None;
+        }
+        if revision < 8 {
+            self.rationale = None;
+        }
+        if revision < 8 {
+            self.state = None;
+        }
+        if revision < 8 {
+            self.approval_outcome = None;
+        }
+        if revision < 8 {
+            self.lesson_ids = None;
+        }
     }
 }
 
@@ -5270,6 +5423,13 @@ pub struct SettingEntry {
     pub value: SchemaValue,
     pub source_scope: DataScope,
     pub revision: Revision,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Id", extend("x-since" = 8))]
+    pub source_repository_id: Option<Id>,
 }
 impl Check for SettingEntry {
     fn check(&self) -> Result<(), String> {
@@ -5277,11 +5437,20 @@ impl Check for SettingEntry {
         self.value.check()?;
         self.source_scope.check()?;
         self.revision.check()?;
+        self.source_repository_id.check()?;
         crate::protocol::rules::record(
             "SettingEntry",
             &serde_json::to_value(self).map_err(|e| e.to_string())?,
         )?;
         Ok(())
+    }
+}
+
+impl Revisioned for SettingEntry {
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 8 {
+            self.source_repository_id = None;
+        }
     }
 }
 
@@ -9480,6 +9649,29 @@ impl Check for PackageOffer {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PackageInvocation {
+    pub operation_id: OperationId,
+    pub state: OperationState,
+    pub artifacts: Items<ArtifactRef>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub failure: Option<Content>,
+}
+impl Check for PackageInvocation {
+    fn check(&self) -> Result<(), String> {
+        self.operation_id.check()?;
+        self.state.check()?;
+        self.artifacts.check()?;
+        self.failure.check()?;
+        crate::protocol::rules::record(
+            "PackageInvocation",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 pub enum IndexFreshnessState {
     Current,
     Stale,
@@ -10277,6 +10469,13 @@ pub struct LessonRecord {
     pub last_delivered_at_ms: Option<Counter>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reason: Option<Content>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Items<LessonSkillLink>", extend("x-since" = 8))]
+    pub skills: Option<Items<LessonSkillLink>>,
 }
 impl Check for LessonRecord {
     fn check(&self) -> Result<(), String> {
@@ -10294,8 +10493,37 @@ impl Check for LessonRecord {
         self.delivered_sessions.check()?;
         self.last_delivered_at_ms.check()?;
         self.reason.check()?;
+        self.skills.check()?;
         crate::protocol::rules::record(
             "LessonRecord",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+impl Revisioned for LessonRecord {
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 8 {
+            self.skills = None;
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct LessonSkillLink {
+    pub instruction_id: Id,
+    pub name: Label,
+    pub revision: Revision,
+}
+impl Check for LessonSkillLink {
+    fn check(&self) -> Result<(), String> {
+        self.instruction_id.check()?;
+        self.name.check()?;
+        self.revision.check()?;
+        crate::protocol::rules::record(
+            "LessonSkillLink",
             &serde_json::to_value(self).map_err(|e| e.to_string())?,
         )?;
         Ok(())
@@ -11112,6 +11340,13 @@ pub struct RouteCatalogModel {
     )]
     #[schemars(with = "Label", extend("x-since" = 3))]
     pub availability_reason: Option<Label>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Items<EffortName>", extend("x-since" = 4))]
+    pub offered_efforts: Option<Items<EffortName>>,
 }
 impl Check for RouteCatalogModel {
     fn check(&self) -> Result<(), String> {
@@ -11131,6 +11366,7 @@ impl Check for RouteCatalogModel {
         self.resolves_to_model_ids.check()?;
         self.available.check()?;
         self.availability_reason.check()?;
+        self.offered_efforts.check()?;
         crate::protocol::rules::record(
             "RouteCatalogModel",
             &serde_json::to_value(self).map_err(|e| e.to_string())?,
@@ -11158,6 +11394,9 @@ impl Revisioned for RouteCatalogModel {
         }
         if revision < 3 {
             self.availability_reason = None;
+        }
+        if revision < 4 {
+            self.offered_efforts = None;
         }
     }
 }
@@ -16529,6 +16768,12 @@ impl Revisioned for ConventionRecordResult {
                     source_path: None,
                     approved: topic.legacy_approved,
                     applicability: topic.applicability.clone(),
+                    author: None,
+                    session_id: None,
+                    rationale: None,
+                    state: None,
+                    approval_outcome: None,
+                    lesson_ids: None,
                 };
                 row.check().ok().map(|()| row)
             };
@@ -16590,6 +16835,12 @@ impl Revisioned for ConventionReadResult {
                     source_path: None,
                     approved: topic.legacy_approved,
                     applicability: topic.applicability.clone(),
+                    author: None,
+                    session_id: None,
+                    rationale: None,
+                    state: None,
+                    approval_outcome: None,
+                    lesson_ids: None,
                 };
                 row.check().ok().map(|()| row)
             };
@@ -16655,6 +16906,12 @@ impl Revisioned for ConventionPageResult {
                     source_path: None,
                     approved: topic.legacy_approved,
                     applicability: topic.applicability.clone(),
+                    author: None,
+                    session_id: None,
+                    rationale: None,
+                    state: None,
+                    approval_outcome: None,
+                    lesson_ids: None,
                 };
                 row.check().ok().map(|()| row)
             };
@@ -16729,6 +16986,12 @@ impl Revisioned for ConventionResourcePageResult {
                     source_path: None,
                     approved: topic.legacy_approved,
                     applicability: topic.applicability.clone(),
+                    author: None,
+                    session_id: None,
+                    rationale: None,
+                    state: None,
+                    approval_outcome: None,
+                    lesson_ids: None,
                 };
                 row.check().ok().map(|()| row)
             };
@@ -16746,6 +17009,12 @@ impl Revisioned for ConventionResourcePageResult {
                     source_path: None,
                     approved: false,
                     applicability: topic.applicability.clone(),
+                    author: None,
+                    session_id: None,
+                    rationale: None,
+                    state: None,
+                    approval_outcome: None,
+                    lesson_ids: None,
                 };
                 row.check().ok().map(|()| row)
             };
@@ -16831,6 +17100,12 @@ impl Revisioned for ConventionSearchPageResult {
                     source_path: None,
                     approved: topic.legacy_approved,
                     applicability: topic.applicability.clone(),
+                    author: None,
+                    session_id: None,
+                    rationale: None,
+                    state: None,
+                    approval_outcome: None,
+                    lesson_ids: None,
                 };
                 row.check().ok().map(|()| row)
             };

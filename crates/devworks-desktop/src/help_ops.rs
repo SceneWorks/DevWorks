@@ -111,8 +111,14 @@ pub fn topics(outcome: QueryOutcome) -> Result<HelpTopicPage, Failure> {
 }
 pub fn passage(outcome: QueryOutcome) -> Result<HelpReadView, Failure> {
     match ops::query_result(outcome)?.0 {
-        OperationResult::HelpRead { value: HelpReadResult::Current(view) } => Ok(view),
-        OperationResult::HelpRead { .. } => Err(Failure::Other("The Help service did not return a bounded passage for this version. Refresh Help or check app compatibility.".into())),
+        OperationResult::HelpRead {
+            value: HelpReadResult::Current(view),
+        } => Ok(view),
+        OperationResult::HelpRead { .. } => Err(Failure::Other(
+            "The Help service did not return a bounded passage for this version. \
+            Refresh Help or check app compatibility."
+                .into(),
+        )),
         other => Err(ops::unexpected("Help passage", &other)),
     }
 }

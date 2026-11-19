@@ -100,12 +100,28 @@ fn read(request: MetadataRequest) -> Result<MetadataSnapshot, MetadataFailure> {
     .map_err(|_| MetadataFailure::Unavailable)?;
     conn.execute_batch("PRAGMA query_only=ON; PRAGMA trusted_schema=OFF; BEGIN;")
         .map_err(|_| failure(&c))?;
-    let profile = typed(
-        json!({"driver":"rusqlite-0.41.1","serverVersion":rusqlite::version(),"authentication":"File","tls":"NotApplicable",
-        "readOnlyBoundary":"SQLite READONLY open, query_only and fixed catalog statements",
-        "supportedMetadata":["Catalog","Schema","Table","View","Column","Index","Constraint"],"unsupportedMetadata":["Procedure","Type","GraphEntity","GraphEdge"],
-        "limitations":["One file source exposes its main schema; SQLite has no stored-procedure catalog.","CHECK expressions remain in table DDL and are not separately enumerated."]}),
-    )?;
+    let profile = typed(json!({
+        "driver": "rusqlite-0.41.1",
+        "serverVersion": rusqlite::version(),
+        "authentication": "File",
+        "tls": "NotApplicable",
+        "readOnlyBoundary": "SQLite READONLY open, query_only and fixed catalog statements",
+        "supportedMetadata": [
+            "Catalog",
+            "Schema",
+            "Table",
+            "View",
+            "Column",
+            "Index",
+            "Constraint"
+        ],
+        "unsupportedMetadata": ["Procedure", "Type", "GraphEntity", "GraphEdge"],
+        "limitations": [
+            "One file source exposes its main schema; SQLite has no stored-procedure \
+        catalog.",
+            "CHECK expressions remain in table DDL and are not separately enumerated."
+        ]
+    }))?;
     if c.request.test_only {
         // Opening SQLite is lazy: force a fixed catalog read before declaring a healthy target.
         conn.query_row(
@@ -135,7 +151,13 @@ fn read(request: MetadataRequest) -> Result<MetadataSnapshot, MetadataFailure> {
         return Ok(c.finish(profile));
     }
     c.relationship(&root, &schema_key, "CONTAINS")?;
-    let mut tables=conn.prepare("SELECT name,type,CASE WHEN length(sql)<=65536 THEN sql END,length(sql)>65536 FROM main.sqlite_schema WHERE type IN('table','view') AND substr(lower(name),1,7)<>'sqlite_' ORDER BY name COLLATE BINARY").map_err(|_|failure(&c))?;
+    let mut tables = conn
+        .prepare(
+            "SELECT name,type,CASE WHEN length(sql)<=65536 THEN sql END,\
+        length(sql)>65536 FROM main.sqlite_schema WHERE type IN('table','view') \
+        AND substr(lower(name),1,7)<>'sqlite_' ORDER BY name COLLATE BINARY",
+        )
+        .map_err(|_| failure(&c))?;
     let mut rows = tables.query([]).map_err(|_| failure(&c))?;
     while let Some(row) = rows.next().map_err(|_| failure(&c))? {
         c.check()?;
@@ -202,7 +224,12 @@ fn read(request: MetadataRequest) -> Result<MetadataSnapshot, MetadataFailure> {
                 |r| r.get(0),
             )
             .map_err(|_| failure(&c))?;
-        let mut columns=conn.prepare("SELECT cid,name,type,\"notnull\",substr(dflt_value,1,4096),pk,hidden,length(dflt_value)>4096 FROM pragma_table_xinfo(?1,'main') ORDER BY cid").map_err(|_|failure(&c))?;
+        let mut columns = conn
+            .prepare(
+                "SELECT cid,name,type,\"notnull\",substr(dflt_value,1,4096),pk,hidden,\
+            length(dflt_value)>4096 FROM pragma_table_xinfo(?1,'main') ORDER BY cid",
+            )
+            .map_err(|_| failure(&c))?;
         let mut columns = columns.query([&name]).map_err(|_| failure(&c))?;
         let mut primary = Vec::new();
         while let Some(column) = columns.next().map_err(|_| failure(&c))? {
@@ -287,7 +314,12 @@ fn read(request: MetadataRequest) -> Result<MetadataSnapshot, MetadataFailure> {
             }
             c.relationship(&table, &id, "HAS_CONSTRAINT")?;
         }
-        let mut indices=conn.prepare("SELECT name,\"unique\",origin,partial FROM pragma_index_list(?1,'main') ORDER BY name COLLATE BINARY").map_err(|_|failure(&c))?;
+        let mut indices = conn
+            .prepare(
+                "SELECT name,\"unique\",origin,partial FROM pragma_index_list(?1,'main') \
+            ORDER BY name COLLATE BINARY",
+            )
+            .map_err(|_| failure(&c))?;
         let mut indices = indices.query([&name]).map_err(|_| failure(&c))?;
         while let Some(index) = indices.next().map_err(|_| failure(&c))? {
             let index_name: String = index.get(0).map_err(|_| MetadataFailure::InvalidMetadata)?;
@@ -352,7 +384,12 @@ fn read(request: MetadataRequest) -> Result<MetadataSnapshot, MetadataFailure> {
             }
             c.relationship(&table, &id, "HAS_INDEX")?;
         }
-        let mut foreign=conn.prepare("SELECT id,seq,\"table\",\"from\",\"to\" FROM pragma_foreign_key_list(?1,'main') ORDER BY id,seq").map_err(|_|failure(&c))?;
+        let mut foreign = conn
+            .prepare(
+                "SELECT id,seq,\"table\",\"from\",\"to\" FROM pragma_foreign_key_list(?1,\
+            'main') ORDER BY id,seq",
+            )
+            .map_err(|_| failure(&c))?;
         let mut foreign = foreign.query(params![name]).map_err(|_| failure(&c))?;
         type ForeignColumns = (String, Vec<String>, Vec<Option<String>>);
         let mut groups: BTreeMap<i64, ForeignColumns> = BTreeMap::new();
@@ -380,7 +417,15 @@ fn read(request: MetadataRequest) -> Result<MetadataSnapshot, MetadataFailure> {
         }
         for (id, (declared, columns, declared_columns)) in groups {
             c.check()?;
-            let actual:Option<String>=conn.query_row("SELECT name FROM main.sqlite_schema WHERE type='table' AND name=?1 COLLATE NOCASE",[&declared],|r|r.get(0)).optional().map_err(|_|failure(&c))?;
+            let actual: Option<String> = conn
+                .query_row(
+                    "SELECT name FROM main.sqlite_schema WHERE type='table' AND name=?1 \
+                COLLATE NOCASE",
+                    [&declared],
+                    |r| r.get(0),
+                )
+                .optional()
+                .map_err(|_| failure(&c))?;
             let target = actual.as_deref().unwrap_or(&declared);
             let mut unavailable = actual.is_none();
             let referenced = if declared_columns.iter().all(Option::is_none) {
@@ -449,9 +494,25 @@ mod tests {
         }
         fn request(&self) -> MetadataRequest {
             MetadataRequest {
-                connection_id:Id::new("database-target").unwrap(),
-                config:serde_json::from_value(json!({"name":"Database metadata","engine":"Sqlite","endpoint":self.0.to_str().unwrap(),"catalogs":[],"schemas":[],"includePatterns":[],"excludePatterns":[],"writesEnabled":false,"authentication":"File","enabled":true})).unwrap(),
-                password:None,ca_certificate:None,test_only:false,limits:MetadataLimits::default(),cancellation:Default::default(),
+                connection_id: Id::new("database-target").unwrap(),
+                config: serde_json::from_value(json!({
+                    "name": "Database metadata",
+                    "engine": "Sqlite",
+                    "endpoint": self.0.to_str().unwrap(),
+                    "catalogs": [],
+                    "schemas": [],
+                    "includePatterns": [],
+                    "excludePatterns": [],
+                    "writesEnabled": false,
+                    "authentication": "File",
+                    "enabled": true
+                }))
+                .unwrap(),
+                password: None,
+                ca_certificate: None,
+                test_only: false,
+                limits: MetadataLimits::default(),
+                cancellation: Default::default(),
             }
         }
     }
@@ -615,7 +676,9 @@ mod tests {
     #[test]
     fn native_sqlite_composite_implicit_foreign_key_resolves_case_and_primary_order() {
         let target = Target::new(
-            "CREATE TABLE ParentTable(second INTEGER,first INTEGER,PRIMARY KEY(second,first),UNIQUE(first,second)); CREATE TABLE child(b INTEGER,a INTEGER,FOREIGN KEY(b,a) REFERENCES parenttable);",
+            "CREATE TABLE ParentTable(second INTEGER,first INTEGER,PRIMARY \
+                KEY(second,first),UNIQUE(first,second)); CREATE TABLE child(b INTEGER,a \
+                INTEGER,FOREIGN KEY(b,a) REFERENCES parenttable);",
         );
         let snapshot = run(target.request()).unwrap();
         let constraints = snapshot
@@ -839,7 +902,12 @@ mod tests {
     #[test]
     fn native_sqlite_primary_key_nullability_distinguishes_rowid_aliases() {
         let target = Target::new(
-            "CREATE TABLE alias_key(id INTEGER PRIMARY KEY); CREATE TABLE int_key(id INT PRIMARY KEY); CREATE TABLE inline_desc(id INTEGER PRIMARY KEY DESC); CREATE TABLE table_desc(id INTEGER,PRIMARY KEY(id DESC)); CREATE TABLE composite(id INTEGER,other INTEGER,PRIMARY KEY(id,other)); CREATE TABLE without_rowid(id TEXT PRIMARY KEY) WITHOUT ROWID; CREATE TABLE strict_key(id TEXT PRIMARY KEY) STRICT;",
+            "CREATE TABLE alias_key(id INTEGER PRIMARY KEY); CREATE TABLE int_key(id \
+                INT PRIMARY KEY); CREATE TABLE inline_desc(id INTEGER PRIMARY KEY \
+                DESC); CREATE TABLE table_desc(id INTEGER,PRIMARY KEY(id DESC)); CREATE \
+                TABLE composite(id INTEGER,other INTEGER,PRIMARY KEY(id,other)); CREATE \
+                TABLE without_rowid(id TEXT PRIMARY KEY) WITHOUT ROWID; CREATE TABLE \
+                strict_key(id TEXT PRIMARY KEY) STRICT;",
         );
         let conn = Connection::open(&target.0).unwrap();
         for table in [
@@ -884,7 +952,10 @@ mod tests {
     #[test]
     fn native_sqlite_unresolved_view_columns_keep_identity_ddl_and_other_tables() {
         let target = Target::new(
-            "CREATE TABLE ordinary(id INTEGER PRIMARY KEY); CREATE VIEW unresolved AS SELECT application_function(id) AS transformed FROM ordinary; CREATE VIEW dependent AS SELECT * FROM unresolved; INSERT INTO ordinary VALUES(1);",
+            "CREATE TABLE ordinary(id INTEGER PRIMARY KEY); CREATE VIEW unresolved \
+                AS SELECT application_function(id) AS transformed FROM ordinary; CREATE \
+                VIEW dependent AS SELECT * FROM unresolved; INSERT INTO ordinary \
+                VALUES(1);",
         );
         let before = std::fs::read(&target.0).unwrap();
         let snapshot =

@@ -16,7 +16,7 @@ use serde_json::{Value, json};
 /// Revision of every value schema in this catalog build.
 pub const SCHEMA_REVISION: i64 = 1;
 /// Revision of the catalog (keys, defaults, Help IDs) recorded with every saved revision.
-pub const CATALOG_REVISION: i64 = 10;
+pub const CATALOG_REVISION: i64 = 11;
 
 /// Settings categories, in navigation order. Labels follow the approved UI reference.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -84,11 +84,13 @@ impl Category {
     }
 }
 
-/// Scope kinds a setting may be configured at. Inheritance runs Workspace → Project.
+/// Scope kinds a setting may be configured at. Inheritance runs Workspace → Project →
+/// Repository.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum ScopeKind {
     Workspace,
     Project,
+    Repository,
 }
 
 /// When a saved change takes effect for already-running work (SET-04).
@@ -352,6 +354,13 @@ impl SettingDescriptor {
 
 const WORKSPACE: &[ScopeKind] = &[ScopeKind::Workspace];
 const INHERITED: &[ScopeKind] = &[ScopeKind::Workspace, ScopeKind::Project];
+/// Delivery settings also apply per repository. `delivery.mandatoryReview` is not one of them:
+/// it is a harness protection that no scope can set, so a repository cannot weaken it.
+const DELIVERY: &[ScopeKind] = &[
+    ScopeKind::Workspace,
+    ScopeKind::Project,
+    ScopeKind::Repository,
+];
 
 macro_rules! setting {
     ($key:expr, $label:expr, $desc:expr, $cat:ident, $scopes:expr, $kind:expr, $default:expr, $adopt:ident) => {
@@ -391,7 +400,9 @@ fn role(role: AgentRole, default: fn() -> Value) -> SettingDescriptor {
     SettingDescriptor {
         key: role.instructions_key(),
         label: role.label(),
-        description: "Editable role instructions. Harness policies and selected tools still apply; instructions cannot grant tools. Agent-drafted changes need your approval and adopt at the next safe step.",
+        description: "Editable role instructions. Harness policies and selected tools still \
+            apply; instructions cannot grant tools. Agent-drafted changes need your \
+            approval and adopt at the next safe step.",
         category: Category::Instructions,
         scopes: INHERITED,
         kind: ValueKind::Instructions,
@@ -413,7 +424,9 @@ fn build() -> Vec<SettingDescriptor> {
         setting!(
             "repositories.baseDirectory",
             "Repository base directory",
-            "Default destination for new repository clones. Changing it never moves existing repositories or changes their recorded paths. Separate from app data and worktree placement. Engineering default.",
+            "Default destination for new repository clones. Changing it never moves \
+                existing repositories or changes their recorded paths. Separate from \
+                app data and worktree placement. Engineering default.",
             General,
             INHERITED,
             ValueKind::Directory,
@@ -463,7 +476,9 @@ fn build() -> Vec<SettingDescriptor> {
         setting!(
             TOOL_OVERRIDES_KEY,
             "Selected agent tools",
-            "Explicit per-tool choices shared by agents. Missing tools use their origin's default; reviewer read-only rules and other safety controls still apply.",
+            "Explicit per-tool choices shared by agents. Missing tools use their \
+                origin's default; reviewer read-only rules and other safety controls \
+                still apply.",
             Tools,
             WORKSPACE,
             ValueKind::ToolOverrides,
@@ -493,7 +508,9 @@ fn build() -> Vec<SettingDescriptor> {
         setting!(
             WEB_SEARCH_PROVIDER_KEY,
             "Web search provider",
-            "The external search service web search uses. None turns searching off: a search is refused as unsupported rather than answered with no results. Brave Search needs an API key, kept in the OS secret store.",
+            "The external search service web search uses. None turns searching off: \
+                a search is refused as unsupported rather than answered with no \
+                results. Brave Search needs an API key, kept in the OS secret store.",
             Tools,
             WORKSPACE,
             ValueKind::Choice(&["none", "brave"]),
@@ -503,7 +520,9 @@ fn build() -> Vec<SettingDescriptor> {
         setting!(
             WEB_SEARCH_CREDENTIAL_KEY,
             "Web search API key",
-            "Reference to the search provider's API key in the OS secret store. The key itself is never stored in configuration, history or logs, and is sent only to the provider.",
+            "Reference to the search provider's API key in the OS secret store. The \
+                key itself is never stored in configuration, history or logs, and is \
+                sent only to the provider.",
             Tools,
             WORKSPACE,
             ValueKind::SecretRef,
@@ -513,7 +532,9 @@ fn build() -> Vec<SettingDescriptor> {
         setting!(
             WEB_FETCH_MAX_REDIRECTS_KEY,
             "Fetch redirect limit",
-            "Most redirects one fetch follows. Every hop is checked against the network policy again and recorded. Five covers ordinary http-to-https, canonical-host and documentation-version redirects. Engineering default.",
+            "Most redirects one fetch follows. Every hop is checked against the \
+                network policy again and recorded. Five covers ordinary http-to-https, \
+                canonical-host and documentation-version redirects. Engineering default.",
             Tools,
             WORKSPACE,
             ValueKind::Integer { min: 0, max: 20 },
@@ -523,7 +544,10 @@ fn build() -> Vec<SettingDescriptor> {
         setting!(
             WEB_TIMEOUT_KEY,
             "Web request time limit (ms)",
-            "Longest a web fetch or search may take end to end, whatever the caller asks: name resolution, connection, TLS, every redirect and the body. Thirty seconds fits slow documentation hosts while keeping a stuck page from holding an agent. Engineering default.",
+            "Longest a web fetch or search may take end to end, whatever the caller \
+                asks: name resolution, connection, TLS, every redirect and the body. \
+                Thirty seconds fits slow documentation hosts while keeping a stuck page \
+                from holding an agent. Engineering default.",
             Tools,
             WORKSPACE,
             ValueKind::Integer {
@@ -536,7 +560,10 @@ fn build() -> Vec<SettingDescriptor> {
         setting!(
             WEB_FETCH_PRIVATE_KEY,
             "Fetch from private networks",
-            "Allow fetching from loopback and private network addresses, for example a local documentation server. Off by default so a page or agent cannot reach services on this machine or network. Link-local and cloud metadata addresses stay blocked either way.",
+            "Allow fetching from loopback and private network addresses, for example \
+                a local documentation server. Off by default so a page or agent cannot \
+                reach services on this machine or network. Link-local and cloud \
+                metadata addresses stay blocked either way.",
             Tools,
             WORKSPACE,
             ValueKind::Bool,
@@ -546,7 +573,11 @@ fn build() -> Vec<SettingDescriptor> {
         setting!(
             PACKAGE_INDEX_SOURCES_KEY,
             "Package index sources",
-            "Signed publisher indexes the Add-ons screen lists available packs from: an https index URL or a local directory holding devworks-index.json, each with the publisher's Ed25519 public key (hex) the index must be signed with. Only a person applies a change (an agent's change is a proposal). None by default.",
+            "Signed publisher indexes the Add-ons screen lists available packs from: \
+                an https index URL or a local directory holding devworks-index.json, \
+                each with the publisher's Ed25519 public key (hex) the index must be \
+                signed with. Only a person applies a change (an agent's change is a \
+                proposal). None by default.",
             Tools,
             WORKSPACE,
             ValueKind::PackageIndexSources,
@@ -556,7 +587,10 @@ fn build() -> Vec<SettingDescriptor> {
         setting!(
             PACKAGE_CONNECTIONS_KEY,
             "Package connections",
-            "Named connections add-ons reach over HTTPS: each has a name, the network endpoint an add-on must be granted, a base URL, and optionally a credential kept in the OS secret store and sent only in its header to that URL. Requests follow the web fetch network rules. None by default.",
+            "Named connections add-ons reach over HTTPS: each has a name, the \
+                network endpoint an add-on must be granted, a base URL, and optionally \
+                a credential kept in the OS secret store and sent only in its header to \
+                that URL. Requests follow the web fetch network rules. None by default.",
             Tools,
             WORKSPACE,
             ValueKind::PackageConnections,
@@ -576,7 +610,14 @@ fn build() -> Vec<SettingDescriptor> {
         setting!(
             PROCESS_EXECUTABLES_KEY,
             "Process executables",
-            "Command names that process tools, project dependency installs, container backends and local MCP servers may launch. Each name is looked up on PATH when it is first used and runs from its resolved real file; a program not named here cannot be selected wherever it is installed. The default covers the version control, build, package and container tools DevWorks itself runs. Shells and language runtimes run arbitrary code: access rules, approvals and command checks still decide what runs.",
+            "Command names that process tools, project dependency installs, \
+                container backends and local MCP servers may launch. Each name is \
+                looked up on PATH when it is first used and runs from its resolved real \
+                file; a program not named here cannot be selected wherever it is \
+                installed. The default covers the version control, build, package and \
+                container tools DevWorks itself runs. Shells and language runtimes run \
+                arbitrary code: access rules, approvals and command checks still decide \
+                what runs.",
             Tools,
             WORKSPACE,
             ValueKind::ExecutableNames,
@@ -615,7 +656,13 @@ fn build() -> Vec<SettingDescriptor> {
         setting!(
             "safety.accessProfile",
             "Agent access",
-            "Full access, the initial default, lets agents use their selected tools with your ordinary user rights; it is not an OS sandbox. Project scope keeps brokered work inside registered repositories and task worktrees and refuses native shell, package and MCP execution unless you grant a bounded exception, because no confined launcher is qualified. Reviewer restrictions, approvals, main-branch protection and the destructive-operation guard apply in both.",
+            "Full access, the initial default, lets agents use their selected tools \
+                with your ordinary user rights; it is not an OS sandbox. Project scope \
+                keeps brokered work inside registered repositories and task worktrees \
+                and refuses native shell, package and MCP execution unless you grant a \
+                bounded exception, because no confined launcher is qualified. Reviewer \
+                restrictions, approvals, main-branch protection and the \
+                destructive-operation guard apply in both.",
             Safety,
             INHERITED,
             ValueKind::Choice(&["full", "projectScope"]),
@@ -668,7 +715,9 @@ fn build() -> Vec<SettingDescriptor> {
         setting!(
             "github.pollForChanges",
             "Poll GitHub for changes",
-            "Not yet active: DevWorks does not poll GitHub yet, so this switch changes nothing. Once polling is built, pushes, merges, reviews and checks notify agents through authenticated polling.",
+            "Not yet active: DevWorks does not poll GitHub yet, so this switch \
+                changes nothing. Once polling is built, pushes, merges, reviews and \
+                checks notify agents through authenticated polling.",
             GitHub,
             INHERITED,
             ValueKind::Bool,
@@ -678,7 +727,9 @@ fn build() -> Vec<SettingDescriptor> {
         setting!(
             "github.importOpenIssues",
             "Import open issues",
-            "Not yet active: GitHub issue import is not built yet, so this switch changes nothing. Once it is, existing open issues are imported when a repository is connected, and newly reported ones thereafter.",
+            "Not yet active: GitHub issue import is not built yet, so this switch \
+                changes nothing. Once it is, existing open issues are imported when a \
+                repository is connected, and newly reported ones thereafter.",
             GitHub,
             INHERITED,
             ValueKind::Bool,
@@ -688,7 +739,10 @@ fn build() -> Vec<SettingDescriptor> {
         setting!(
             "github.syncLinkedIssueFields",
             "Receive linked issue updates",
-            "Not yet active: GitHub issue synchronization is not built yet, so this switch changes nothing. Once it is, remote issue updates are reflected locally; intermediate execution details stay local and a resolution is published only after completed work is verified.",
+            "Not yet active: GitHub issue synchronization is not built yet, so this \
+                switch changes nothing. Once it is, remote issue updates are reflected \
+                locally; intermediate execution details stay local and a resolution is \
+                published only after completed work is verified.",
             GitHub,
             INHERITED,
             ValueKind::Bool,
@@ -698,7 +752,9 @@ fn build() -> Vec<SettingDescriptor> {
         setting!(
             "github.issueTriageIntervalSeconds",
             "Issue triage interval (seconds)",
-            "Not yet active: automatic issue triage is not built yet, so this value changes nothing. Once it is, this is the app-wide minimum interval between automatic issue triage admissions.",
+            "Not yet active: automatic issue triage is not built yet, so this value \
+                changes nothing. Once it is, this is the app-wide minimum interval \
+                between automatic issue triage admissions.",
             GitHub,
             WORKSPACE,
             POSITIVE,
@@ -708,9 +764,12 @@ fn build() -> Vec<SettingDescriptor> {
         setting!(
             "delivery.autoMerge",
             "Auto-Merge",
-            "Not yet active: DevWorks does not merge pull requests yet, so this switch changes nothing. Once merging is built, work is committed, pushed, review feedback addressed and the pull request merged when all required checks pass.",
+            "Not yet active: DevWorks does not merge pull requests yet, so this \
+                switch changes nothing. Once merging is built, work is committed, \
+                pushed, review feedback addressed and the pull request merged when all \
+                required checks pass.",
             Delivery,
-            INHERITED,
+            DELIVERY,
             ValueKind::Bool,
             true,
             NextAdmission
@@ -729,9 +788,11 @@ fn build() -> Vec<SettingDescriptor> {
         setting!(
             "delivery.maxReviewFixCycles",
             "Review fix cycles",
-            "Not yet active: the review/fix cycle is not built yet, so this value changes nothing. Once it is, this is the maximum number of review/fix cycles before asking for help. Engineering default.",
+            "Not yet active: the review/fix cycle is not built yet, so this value \
+                changes nothing. Once it is, this is the maximum number of review/fix \
+                cycles before asking for help. Engineering default.",
             Delivery,
-            INHERITED,
+            DELIVERY,
             ValueKind::Integer { min: 1, max: 20 },
             3,
             NextAdmission
@@ -739,7 +800,10 @@ fn build() -> Vec<SettingDescriptor> {
         setting!(
             WATCH_BACKUP_ENABLED_KEY,
             "Watcher backup check",
-            "Periodically re-check every unfinished or unacknowledged watcher by a separate path, so an outcome whose first delivery was missed still reaches its agent, and an agent whose watcher stalled is reminded to check it. Engineering default.",
+            "Periodically re-check every unfinished or unacknowledged watcher by a \
+                separate path, so an outcome whose first delivery was missed still \
+                reaches its agent, and an agent whose watcher stalled is reminded to \
+                check it. Engineering default.",
             Agents,
             WORKSPACE,
             ValueKind::Bool,
@@ -762,7 +826,10 @@ fn build() -> Vec<SettingDescriptor> {
         setting!(
             WATCH_MAX_LIFETIME_KEY,
             "Polling watcher lifetime (ms)",
-            "Longest a polling watcher (a probe command) keeps checking before it ends TimedOut, unless the watcher sets its own. A day covers slow deploys and queues without leaving forgotten probes running. Engineering default.",
+            "Longest a polling watcher (a probe command) keeps checking before it \
+                ends TimedOut, unless the watcher sets its own. A day covers slow \
+                deploys and queues without leaving forgotten probes running. \
+                Engineering default.",
             Agents,
             INHERITED,
             ValueKind::Integer {
@@ -775,9 +842,11 @@ fn build() -> Vec<SettingDescriptor> {
         setting!(
             "reviews.automationWaitSeconds",
             "Automated review wait (seconds)",
-            "Not yet active: the review gate is not built yet, so this value changes nothing. Once it is, this is the finite wait for a registered review source before the gate escalates. Engineering default.",
+            "Not yet active: the review gate is not built yet, so this value changes \
+                nothing. Once it is, this is the finite wait for a registered review \
+                source before the gate escalates. Engineering default.",
             Delivery,
-            INHERITED,
+            DELIVERY,
             POSITIVE,
             900,
             NextAdmission
@@ -842,7 +911,9 @@ fn build() -> Vec<SettingDescriptor> {
         setting!(
             "knowledge.visionExtraction",
             "Vision extraction fallback",
-            "Not yet active: document extraction does not use a vision model yet, so this switch changes nothing. Once it does, existing text is extracted first and a vision-capable routed model reads scanned pages.",
+            "Not yet active: document extraction does not use a vision model yet, so \
+                this switch changes nothing. Once it does, existing text is extracted \
+                first and a vision-capable routed model reads scanned pages.",
             Knowledge,
             WORKSPACE,
             ValueKind::Bool,
@@ -852,7 +923,9 @@ fn build() -> Vec<SettingDescriptor> {
         setting!(
             "knowledge.lessonRecurrenceThreshold",
             "Lesson recurrence threshold",
-            "Distinct source events after which a lesson an agent or reviewer inferred takes effect as a rule, without approval. A rule from your own words takes effect at once. Engineering default.",
+            "Distinct source events after which a lesson an agent or reviewer \
+                inferred takes effect as a rule, without approval. A rule from your own \
+                words takes effect at once. Engineering default.",
             Knowledge,
             INHERITED,
             ValueKind::Integer { min: 2, max: 20 },
@@ -862,7 +935,10 @@ fn build() -> Vec<SettingDescriptor> {
         setting!(
             "power.keepAwake",
             "Keep the computer awake while DevWorks is open",
-            "While DevWorks is open, ask the operating system not to sleep when idle, even with no active work; the display may still turn off. It does not prevent explicit sleep, closing the lid, shutdown or every power policy. Closing DevWorks or turning this off releases the request.",
+            "While DevWorks is open, ask the operating system not to sleep when \
+                idle, even with no active work; the display may still turn off. It does \
+                not prevent explicit sleep, closing the lid, shutdown or every power \
+                policy. Closing DevWorks or turning this off releases the request.",
             Power,
             WORKSPACE,
             ValueKind::Bool,
@@ -883,7 +959,11 @@ fn build() -> Vec<SettingDescriptor> {
         setting!(
             ARTIFACT_LOCATION_KEY,
             "Artifact storage location",
-            "Artifact contents are managed files under the application data root (artifacts/, with in-flight files in staging/), outside repositories and disposable worktrees, with their metadata in the workspace store. Moving them is an explicit data-root relocation, never a side effect of a settings edit.",
+            "Artifact contents are managed files under the application data root \
+                (artifacts/, with in-flight files in staging/), outside repositories \
+                and disposable worktrees, with their metadata in the workspace store. \
+                Moving them is an explicit data-root relocation, never a side effect of \
+                a settings edit.",
             Storage,
             WORKSPACE,
             ValueKind::Choice(&["applicationData"]),
@@ -894,7 +974,11 @@ fn build() -> Vec<SettingDescriptor> {
         setting!(
             ARTIFACT_RETENTION_KEY,
             "Artifact retention",
-            "Artifacts are kept until they are explicitly deleted. Age, feature completion, worktree cleanup and storage pressure never remove them; only rebuildable previews are collected. Files still referenced elsewhere, being read or held by a backup stay until those references end.",
+            "Artifacts are kept until they are explicitly deleted. Age, feature \
+                completion, worktree cleanup and storage pressure never remove them; \
+                only rebuildable previews are collected. Files still referenced \
+                elsewhere, being read or held by a backup stay until those references \
+                end.",
             Storage,
             WORKSPACE,
             ValueKind::Choice(&["untilExplicitDeletion"]),
@@ -905,7 +989,9 @@ fn build() -> Vec<SettingDescriptor> {
         setting!(
             ARTIFACT_QUOTA_KEY,
             "Artifact storage limit (bytes)",
-            "Bytes of artifact content a project may hold; 0 means no limit. Reaching it refuses new saves with a visible status and never deletes anything to make room. Engineering default.",
+            "Bytes of artifact content a project may hold; 0 means no limit. \
+                Reaching it refuses new saves with a visible status and never deletes \
+                anything to make room. Engineering default.",
             Storage,
             INHERITED,
             ValueKind::Integer {
@@ -931,7 +1017,11 @@ fn build() -> Vec<SettingDescriptor> {
         setting!(
             LOG_RETENTION_DAYS_KEY,
             "Diagnostic log retention (days)",
-            "Diagnostic and log records older than this are removed by the hourly retention pass and at startup; records survive restarts until then. Thirty days keeps a month of history for recurring failures and post-incident review while the log stays bounded. Evidence artifacts a record names are kept under their own retention. Engineering default.",
+            "Diagnostic and log records older than this are removed by the hourly \
+                retention pass and at startup; records survive restarts until then. \
+                Thirty days keeps a month of history for recurring failures and \
+                post-incident review while the log stays bounded. Evidence artifacts a \
+                record names are kept under their own retention. Engineering default.",
             Storage,
             WORKSPACE,
             ValueKind::Integer { min: 1, max: 365 },
@@ -941,7 +1031,10 @@ fn build() -> Vec<SettingDescriptor> {
         setting!(
             LOG_MAX_RECORDS_KEY,
             "Diagnostic log size (records)",
-            "Most diagnostic and log records kept; the oldest beyond it are removed by the retention pass. With messages bounded to 8 KiB and helper output to 16 KiB per record, 50 000 records stay within about 1.2 GiB in the worst case and a few tens of megabytes typically. Engineering default.",
+            "Most diagnostic and log records kept; the oldest beyond it are removed \
+                by the retention pass. With messages bounded to 8 KiB and helper output \
+                to 16 KiB per record, 50 000 records stay within about 1.2 GiB in the \
+                worst case and a few tens of megabytes typically. Engineering default.",
             Storage,
             WORKSPACE,
             ValueKind::Integer {
@@ -954,7 +1047,11 @@ fn build() -> Vec<SettingDescriptor> {
         setting!(
             OVERLAY_RECORD_RETENTION_DAYS_KEY,
             "Ended ref overlay retention (days)",
-            "An ended ref overlay (expired, retired or failed) is pruned once it ended longer ago than this and is beyond the newest records kept per repository: its record, layers and graph data go, while its runs, history and logs stay. Live overlays and any still named by a view are never pruned. Separate from artifact retention. Engineering default.",
+            "An ended ref overlay (expired, retired or failed) is pruned once it \
+                ended longer ago than this and is beyond the newest records kept per \
+                repository: its record, layers and graph data go, while its runs, \
+                history and logs stay. Live overlays and any still named by a view are \
+                never pruned. Separate from artifact retention. Engineering default.",
             Storage,
             WORKSPACE,
             ValueKind::Integer { min: 1, max: 365 },
@@ -964,7 +1061,9 @@ fn build() -> Vec<SettingDescriptor> {
         setting!(
             OVERLAY_RECORDS_KEPT_KEY,
             "Ended ref overlays kept per repository",
-            "The most recently ended ref overlays each repository keeps whatever their age; older ones past the retention window are pruned. Engineering default.",
+            "The most recently ended ref overlays each repository keeps whatever \
+                their age; older ones past the retention window are pruned. Engineering \
+                default.",
             Storage,
             WORKSPACE,
             ValueKind::Integer { min: 0, max: 10_000 },

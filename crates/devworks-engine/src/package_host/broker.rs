@@ -34,6 +34,7 @@ use crate::providers::schemas::{builtin_operation, schema_ref};
 use devworks_core::context::{InvocationContext, PrincipalKind};
 use devworks_core::fingerprint::sha256_hex;
 use devworks_core::gateway::{CommandOutcome, GatewayFailure, QueryOutcome};
+use devworks_core::locks::LockExt;
 use devworks_core::ports::IdKind;
 use devworks_core::ports::packages::Inspection;
 use devworks_core::ports::storage::{
@@ -502,7 +503,7 @@ fn application(
         &frame,
         slot.cancellation.clone(),
         &|decide| {
-            let _guard = slot.state.lock().unwrap_or_else(|p| p.into_inner());
+            let _guard = slot.state.locked();
             if slot.revoked.load(std::sync::atomic::Ordering::SeqCst) {
                 return None;
             }
@@ -650,7 +651,7 @@ pub(super) fn journal(
     let (slot, invocation_id) = (slot.clone(), slot.invocation_id.clone());
     let written = run_write(&*host.store, WriteOptions::observed(), move |tx| {
         // Serialized with revocation: a cancelled invocation journals nothing new.
-        let _guard = slot.state.lock().unwrap_or_else(|p| p.into_inner());
+        let _guard = slot.state.locked();
         if slot.revoked.load(std::sync::atomic::Ordering::SeqCst) {
             return Err(StorageError::ScopeDenied);
         }

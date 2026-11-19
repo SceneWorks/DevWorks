@@ -107,6 +107,7 @@ record_kinds! {
     IndexRuns,
     IndexSourceConfigs,
     IndexViews,
+    InstructionRevisionLessons,
     InstructionRevisions,
     Instructions,
     IntegrationLinks,

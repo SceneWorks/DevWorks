@@ -11,7 +11,24 @@ pub(super) fn read(
     notification: &Id,
 ) -> Result<Option<StoredOsNotificationDelivery>, StorageError> {
     type Raw = (i64, String, i64, String, Option<String>, i64, i64);
-    let raw:Option<Raw>=db(conn.query_row("SELECT revision,boot_id,attempt,state,detail,created_at,updated_at FROM os_notification_deliveries WHERE user_id=?1 AND notification_id=?2",params![user.0.as_str(),notification.as_str()],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?,r.get(5)?,r.get(6)?))).optional())?;
+    let raw: Option<Raw> = db(conn
+        .query_row(
+            "SELECT revision,boot_id,attempt,state,detail,created_at,updated_at FROM \
+        os_notification_deliveries WHERE user_id=?1 AND notification_id=?2",
+            params![user.0.as_str(), notification.as_str()],
+            |r| {
+                Ok((
+                    r.get(0)?,
+                    r.get(1)?,
+                    r.get(2)?,
+                    r.get(3)?,
+                    r.get(4)?,
+                    r.get(5)?,
+                    r.get(6)?,
+                ))
+            },
+        )
+        .optional())?;
     raw.map(
         |(revision, boot, attempt, state, detail, created_at_ms, updated_at_ms)| {
             Ok(StoredOsNotificationDelivery {
@@ -95,7 +112,23 @@ pub(super) fn claim(
             )
         }
     };
-    db(unit.conn.execute("INSERT INTO os_notification_deliveries(user_id,notification_id,revision,boot_id,attempt,state,detail,created_at,updated_at) VALUES(?1,?2,?3,?4,?5,'Claimed',NULL,?6,?7) ON CONFLICT(user_id,notification_id) DO UPDATE SET revision=excluded.revision,boot_id=excluded.boot_id,attempt=excluded.attempt,state='Claimed',detail=NULL,updated_at=excluded.updated_at",params![user.0.as_str(),notification.as_str(),revision,boot.as_str(),attempt,created,updated]))?;
+    db(unit.conn.execute(
+        "INSERT INTO os_notification_deliveries(user_id,notification_id,revision,\
+        boot_id,attempt,state,detail,created_at,updated_at) VALUES(?1,?2,?3,?4,\
+        ?5,'Claimed',NULL,?6,?7) ON CONFLICT(user_id,notification_id) DO UPDATE \
+        SET revision=excluded.revision,boot_id=excluded.boot_id,\
+        attempt=excluded.attempt,state='Claimed',detail=NULL,\
+        updated_at=excluded.updated_at",
+        params![
+            user.0.as_str(),
+            notification.as_str(),
+            revision,
+            boot.as_str(),
+            attempt,
+            created,
+            updated
+        ],
+    ))?;
     read(unit.conn, user, notification)?.ok_or_else(|| invalid("claimed OS delivery disappeared"))
 }
 pub(super) fn settle(
@@ -143,7 +176,22 @@ pub(super) fn settle(
         .revision
         .checked_add(1)
         .ok_or_else(|| invalid("OS delivery revision overflow"))?;
-    db(unit.conn.execute("UPDATE os_notification_deliveries SET revision=?3,state=?4,detail=?5,updated_at=?6 WHERE user_id=?1 AND notification_id=?2 AND revision=?7 AND boot_id=?8 AND attempt=?9 AND state='Claimed'",params![user.0.as_str(),notification.as_str(),revision,state,detail,unit.now_ms().max(old.updated_at_ms),fence.revision,fence.boot_id.as_str(),fence.attempt]))?;
+    db(unit.conn.execute(
+        "UPDATE os_notification_deliveries SET revision=?3,state=?4,detail=?5,\
+        updated_at=?6 WHERE user_id=?1 AND notification_id=?2 AND revision=?7 \
+        AND boot_id=?8 AND attempt=?9 AND state='Claimed'",
+        params![
+            user.0.as_str(),
+            notification.as_str(),
+            revision,
+            state,
+            detail,
+            unit.now_ms().max(old.updated_at_ms),
+            fence.revision,
+            fence.boot_id.as_str(),
+            fence.attempt
+        ],
+    ))?;
     read(unit.conn, user, notification)?.ok_or_else(|| invalid("settled OS delivery disappeared"))
 }
 pub(super) fn recover(unit: &mut Unit<'_>) -> Result<u64, StorageError> {
@@ -152,6 +200,11 @@ pub(super) fn recover(unit: &mut Unit<'_>) -> Result<u64, StorageError> {
         .boot_id
         .as_ref()
         .ok_or_else(|| invalid("OS delivery recovery requires a host boot"))?;
-    let n=db(unit.conn.execute("UPDATE os_notification_deliveries SET revision=revision+1,state='Unknown',detail='submission outcome unknown after host restart',updated_at=max(updated_at,?2) WHERE state='Claimed' AND boot_id<>?1",params![boot.as_str(),unit.now_ms()]))?;
+    let n = db(unit.conn.execute(
+        "UPDATE os_notification_deliveries SET revision=revision+1,\
+        state='Unknown',detail='submission outcome unknown after host restart',\
+        updated_at=max(updated_at,?2) WHERE state='Claimed' AND boot_id<>?1",
+        params![boot.as_str(), unit.now_ms()],
+    ))?;
     u64::try_from(n).map_err(|_| invalid("OS delivery recovery count overflow"))
 }

@@ -107,6 +107,15 @@ pub const AGENT_OPERATIONS: [&str; 11] = [
     "agents.checkpoint",
 ];
 
+/// The queue service with the hook of every consumer that has rules of its own around operator
+/// resolution. Adding such a consumer is one line here.
+pub fn queue_service() -> queue::QueueService {
+    queue::QueueService::new(vec![
+        Arc::new(artifacts::replies::ReplyQueueHook),
+        Arc::new(schemas::indexing::QueueHook),
+    ])
+}
+
 impl UseCases {
     /// Outgoing MCP configuration and selected capabilities share the gateway with UI and tools.
     pub fn with_mcp(mut self, service: Arc<mcp::McpClientService>) -> Self {
@@ -179,7 +188,7 @@ impl UseCases {
 
     /// Registers the queue family (`QueueDispatcher`).
     pub fn with_queue(mut self) -> Self {
-        let service = Arc::new(queue::QueueService);
+        let service = Arc::new(queue_service());
         for op in queue::OPERATIONS {
             self.register(op, Some(service.clone()), Some(service.clone()));
         }
@@ -217,7 +226,6 @@ impl UseCases {
         self
     }
 
-    /// The same offline Help owner serves every gateway entry path.
     /// Authored guidance shares one owner across native UI, tools and durable jobs.
     pub fn with_conventions(mut self, service: Arc<conventions::ConventionService>) -> Self {
         for operation in conventions::OPERATIONS {
@@ -226,6 +234,7 @@ impl UseCases {
         self
     }
 
+    /// The same offline Help owner serves every gateway entry path.
     pub fn with_help(mut self, service: Arc<help::HelpService>) -> Self {
         for operation in help::OPERATIONS {
             self.register(operation, Some(service.clone()), Some(service.clone()));
@@ -460,6 +469,7 @@ impl UseCases {
             "schemas.connections",
             "schemas.objects",
             "schemas.relationships",
+            "schemas.code_references",
             "schemas.index",
             "schemas.refresh",
             "schemas.remove_index",

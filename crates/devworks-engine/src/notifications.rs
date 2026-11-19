@@ -3,6 +3,7 @@
 //! not read/ack revision; recovered or unconfirmed submissions are never blindly repeated.
 use crate::store;
 use crate::workers::Ticker;
+use devworks_core::locks::{LockExt, RwLockExt};
 use devworks_core::ports::os_notifications::{
     OsDeliveryOutcome, OsNotification, OsNotificationPermission, OsNotificationPort,
 };
@@ -88,11 +89,7 @@ impl OsNotificationSupervisor {
         }
     }
     pub fn permission(&self) -> OsNotificationPermission {
-        self.permission
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .value
-            .clone()
+        self.permission.locked().value.clone()
     }
     pub fn watch(&self) -> watch::Receiver<Option<NotificationPass>> {
         self.status.subscribe()
@@ -109,7 +106,7 @@ impl OsNotificationSupervisor {
         self.ticker.close();
     }
     fn cache_permission(&self, value: OsNotificationPermission, explicit: bool) {
-        let mut cache = self.permission.lock().unwrap_or_else(|p| p.into_inner());
+        let mut cache = self.permission.locked();
         // SystemManaged provides no proof that a prior denial was lifted. It can requalify
         // known non-delivery only through the explicit human permission/retry interaction.
         let lifted = matches!(
@@ -127,7 +124,7 @@ impl OsNotificationSupervisor {
         let fence = self.ticker.fence();
         let stopping = self.ticker.flag();
         let value = tokio::task::spawn_blocking(move || {
-            let closed = fence.read().unwrap_or_else(|p| p.into_inner());
+            let closed = fence.read_locked();
             if *closed || stopping.load(Ordering::SeqCst) {
                 return OsNotificationPermission::Unavailable(
                     "Native notification delivery is stopping".into(),
@@ -185,8 +182,7 @@ impl OsNotificationSupervisor {
         }
         let due = self
             .permission
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
+            .locked()
             .checked_at
             .is_none_or(|at| at.elapsed() >= PERMISSION_INTERVAL);
         if due {
@@ -321,39 +317,92 @@ impl OsNotificationSupervisor {
         tokio::task::spawn_blocking(move || {
             // Keep this one admitted external attempt owned through its durable outcome. Drain
             // fences new effects and waits for this section rather than orphaning a callback.
-            let closed = fence.read().unwrap_or_else(|p| p.into_inner());
-            if *closed { return Ok((false, None)); }
-            let permitted = !*closed && !stopping.load(Ordering::SeqCst) && focus.load(Ordering::SeqCst) == 2;
+            let closed = fence.read_locked();
+            if *closed {
+                return Ok((false, None));
+            }
+            let permitted =
+                !*closed && !stopping.load(Ordering::SeqCst) && focus.load(Ordering::SeqCst) == 2;
             let current = if permitted {
                 read_snapshot(&*store, &ReadOptions::default(), |snapshot| {
-                    let Some(current) = snapshot.decisions().notification(&row.user_id, &row.id)? else { return Ok(false) };
+                    let Some(current) = snapshot.decisions().notification(&row.user_id, &row.id)?
+                    else {
+                        return Ok(false);
+                    };
                     os_eligible(snapshot, &row.user_id, &current)
                 })?
-            } else { false };
-            let outcome = if current && focus.load(Ordering::SeqCst) == 2 && !stopping.load(Ordering::SeqCst) {
-                port.submit(&OsNotification { notification_id: row.id.clone(), title: row.title.clone(), body: row.body.clone() })
-            } else { OsDeliveryOutcome::Suppressed(format!("{DEFERRED} focus, lifecycle or source eligibility changed")) };
+            } else {
+                false
+            };
+            let outcome =
+                if current && focus.load(Ordering::SeqCst) == 2 && !stopping.load(Ordering::SeqCst)
+                {
+                    port.submit(&OsNotification {
+                        notification_id: row.id.clone(),
+                        title: row.title.clone(),
+                        body: row.body.clone(),
+                    })
+                } else {
+                    OsDeliveryOutcome::Suppressed(format!(
+                        "{DEFERRED} focus, lifecycle or source eligibility changed"
+                    ))
+                };
             let submitted = matches!(outcome, OsDeliveryOutcome::Submitted { .. });
             let permission = match &outcome {
                 OsDeliveryOutcome::Denied => Some(OsNotificationPermission::Denied),
-                OsDeliveryOutcome::Suppressed(reason) if !reason.starts_with(DEFERRED) => Some(OsNotificationPermission::Suppressed(reason.clone())),
-                OsDeliveryOutcome::Unavailable(reason) => Some(OsNotificationPermission::Unavailable(reason.clone())),
+                OsDeliveryOutcome::Suppressed(reason) if !reason.starts_with(DEFERRED) => {
+                    Some(OsNotificationPermission::Suppressed(reason.clone()))
+                }
+                OsDeliveryOutcome::Unavailable(reason) => {
+                    Some(OsNotificationPermission::Unavailable(reason.clone()))
+                }
                 _ => None,
             };
             let (state, detail) = outcome_record(outcome);
             run_write(&*store, WriteOptions::observed(), move |tx| {
-                tx.decisions().settle_os_notification_delivery(&row.user_id, &row.id, &claim.fence(), state, detail.as_deref())?;
+                tx.decisions().settle_os_notification_delivery(
+                    &row.user_id,
+                    &row.id,
+                    &claim.fence(),
+                    state,
+                    detail.as_deref(),
+                )?;
                 let event = EventId(ids.next_id(IdKind::Event));
                 let actor = tx.store().host_actor.clone();
-                tx.history().append(NewEvent { id: event, actor, project_id: row.project_id, root_id: row.root_id, operation_id: None,
-                    aggregate_kind: "os_notification_delivery".into(), aggregate_id: format!("{}:{}", row.user_id.0.as_str(), row.id.as_str()), aggregate_revision: claim.revision + 1,
-                    kind: "OsNotificationDeliverySettled".into(), payload: json!({"notificationId":row.id.as_str(), "userId":row.user_id.0.as_str(), "state":state, "detail":detail, "attempt":claim.attempt, "submittedIsVisibilityConfirmed":false}) })?;
+                tx.history().append(NewEvent {
+                    id: event,
+                    actor,
+                    project_id: row.project_id,
+                    root_id: row.root_id,
+                    operation_id: None,
+                    aggregate_kind: "os_notification_delivery".into(),
+                    aggregate_id: format!("{}:{}", row.user_id.0.as_str(), row.id.as_str()),
+                    aggregate_revision: claim.revision + 1,
+                    kind: "OsNotificationDeliverySettled".into(),
+                    payload: json!({
+                        "notificationId": row.id.as_str(),
+                        "userId": row.user_id.0.as_str(),
+                        "state": state,
+                        "detail": detail,
+                        "attempt": claim.attempt,
+                        "submittedIsVisibilityConfirmed": false
+                    }),
+                })?;
                 Ok(())
             })?;
             Ok((submitted, permission))
-        }).await.unwrap_or_else(|_| Err(StorageError::unavailable(Unavailable::HandlerPanicked, "Native notification delivery task failed")))
+        })
+        .await
+        .unwrap_or_else(|_| {
+            Err(StorageError::unavailable(
+                Unavailable::HandlerPanicked,
+                "Native notification delivery task failed",
+            ))
+        })
         .map(|(submitted, permission)| {
-            if let Some(value) = permission { self.cache_permission(value, false); }
+            if let Some(value) = permission {
+                self.cache_permission(value, false);
+            }
             submitted
         })
     }

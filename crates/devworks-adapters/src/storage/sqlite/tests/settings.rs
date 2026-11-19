@@ -160,7 +160,11 @@ impl Fixture {
         format!("key-{n}")
     }
     fn save_raw(&self, actor: &str, request_key: &str, body: Value) -> DomainCommandReply {
-        let frame = json!({"mode": "Command", "protocol": "1.0-draft.1", "requestKey": request_key, "body": body});
+        let mut frame = json!({"mode": "Command", "protocol": "1.0-draft.1", "requestKey": request_key, "body": body});
+        // A repository scope exists from schema revision 8.
+        if frame["body"].get("repositoryId").is_some() {
+            frame["schemaRevision"] = json!(8);
+        }
         self.cases
             .command(
                 &self.gateway(),
@@ -186,8 +190,11 @@ impl Fixture {
     fn query(&self, actor: &str, operation: &str, body: Value) -> DomainQueryReply {
         let mut body = body;
         body["kind"] = json!(operation);
-        let frame =
+        let mut frame =
             json!({"mode": "Query", "protocol": "1.0-draft.1", "queryId": "q-1", "body": body});
+        if frame["body"].get("repositoryId").is_some() {
+            frame["schemaRevision"] = json!(8);
+        }
         self.cases
             .query(
                 &self.gateway(),
@@ -950,15 +957,17 @@ fn credential_values_are_refused_and_never_stored() {
         )],
     );
     assert_eq!(target_kind(refused(&d)), "credential_value");
-    let leaked: i64 = f
-        .h
-        .raw()
-        .query_row(
-            "SELECT (SELECT count(*) FROM configuration_revisions WHERE instr(body_json,?1)>0)+(SELECT count(*) FROM events WHERE instr(payload_json,?1)>0)+(SELECT count(*) FROM command_receipts WHERE instr(result_json,?1)>0)",
-            params![token],
-            |r| r.get(0),
-        )
-        .unwrap();
+    let leaked: i64 =
+        f.h.raw()
+            .query_row(
+                "SELECT (SELECT count(*) FROM configuration_revisions WHERE \
+                instr(body_json,?1)>0)+(SELECT count(*) FROM events WHERE \
+                instr(payload_json,?1)>0)+(SELECT count(*) FROM command_receipts WHERE \
+                instr(result_json,?1)>0)",
+                params![token],
+                |r| r.get(0),
+            )
+            .unwrap();
     assert_eq!(leaked, 0, "the credential reached durable storage");
     // An opaque secret-store reference is accepted.
     let saved = f.save(
@@ -983,8 +992,12 @@ fn repository_base_directory_inherits_reports_and_never_moves_repositories() {
     // Registered repositories, one linked to the project, cloned under earlier defaults.
     f.h.raw()
         .execute_batch(
-            "INSERT INTO repositories(id,canonical_location,revision) VALUES('repo-1','/Users/me/Elsewhere/engine',3),('repo-2','/Users/me/DevWorks/Repositories/tools',1);
-             INSERT INTO project_repositories(project_id,repository_id) VALUES('project-a','repo-1');",
+            "INSERT INTO repositories(id,canonical_location,revision) \
+                VALUES('repo-1','/Users/me/Elsewhere/engine',3),('repo-2',\
+                '/Users/me/DevWorks/Repositories/tools',1);
+             INSERT INTO \
+                project_repositories(project_id,repository_id) VALUES('project-a',\
+                'repo-1');",
         )
         .unwrap();
     type Repositories = Vec<(String, String, i64)>;
@@ -1265,4 +1278,351 @@ fn settings_register_through_the_shared_use_case_registry() {
     }
     assert!(cases.has_query("queue.inspect") && cases.has_command("queue.retry"));
     assert!(!f.cases.has_query("queue.inspect"));
+}
+
+/// A scope value and the repository it narrows to: `settings.*` bodies carry both members.
+fn narrowed(body: Value, scope: (&str, &str)) -> Value {
+    let mut body = body;
+    body["scope"] = json!({"kind": "Project", "projectId": scope.0});
+    body["repositoryId"] = json!(scope.1);
+    body
+}
+fn repository_entries(
+    f: &Fixture,
+    project: &str,
+    repository: &str,
+    keys: &[&str],
+) -> Vec<SettingEntry> {
+    match f.query(
+        "user-a",
+        "settings.read_effective",
+        narrowed(
+            json!({"keys": keys, "page": {"limit": 500}}),
+            (project, repository),
+        ),
+    ) {
+        DomainQueryReply::Result {
+            result: OperationResult::SettingsReadEffective { value },
+            ..
+        } => value.items.0,
+        other => panic!("{other:?}"),
+    }
+}
+fn save_in_repository(
+    f: &Fixture,
+    scope: (&str, &str),
+    expected: i64,
+    entries: &[(&str, Value)],
+) -> DomainDecision {
+    let body = narrowed(save_body(json!(null), expected, entries), scope);
+    match f.save_raw("user-a", &f.key(), body) {
+        CommandReply::Recorded { receipt, .. } => receipt.decision,
+        other => panic!("expected a recorded decision, got {other:?}"),
+    }
+}
+fn source_of(e: &SettingEntry) -> (String, Option<String>, i64, Value) {
+    (
+        serde_json::to_value(&e.source_scope).unwrap()["kind"]
+            .as_str()
+            .unwrap()
+            .to_owned(),
+        e.source_repository_id
+            .as_ref()
+            .map(|r| r.as_str().to_owned()),
+        e.revision.get(),
+        e.value.value.0.clone(),
+    )
+}
+
+#[test]
+fn a_repository_value_overrides_the_project_and_workspace_for_that_repository_only() {
+    let f = Fixture::new();
+    f.h.raw()
+        .execute_batch(
+            "INSERT INTO projects(id,title,lifecycle,revision,scope_revision,created_at) VALUES('project-b','B','Active',1,1,0);
+             INSERT INTO repositories(id,canonical_location,revision) VALUES('repo-1','/r/one',1),('repo-2','/r/two',1),('repo-3','/r/three',1);
+             INSERT INTO project_repositories(project_id,repository_id) VALUES('project-a','repo-1'),('project-a','repo-2'),('project-b','repo-1');",
+        )
+        .unwrap();
+    let key = "delivery.maxReviewFixCycles";
+    let project_b = json!({"kind": "Project", "projectId": "project-b"});
+    applied(&f.save(
+        "user-a",
+        ws(),
+        1,
+        &[(key, json!(7)), ("delivery.autoMerge", json!(false))],
+    ));
+    applied(&f.save("user-a", project(), 1, &[(key, json!(5))]));
+    applied(&save_in_repository(
+        &f,
+        ("project-a", "repo-1"),
+        1,
+        &[(key, json!(9))],
+    ));
+
+    // Delivery in repo-1 of project-a uses the repository's value, naming it as the source.
+    let e = repository_entries(&f, "project-a", "repo-1", &[key]).remove(0);
+    assert_eq!(
+        source_of(&e),
+        ("Project".into(), Some("repo-1".into()), 2, json!(9))
+    );
+    // Every other place keeps the value its own chain gives it.
+    let e = repository_entries(&f, "project-a", "repo-2", &[key]).remove(0);
+    assert_eq!(source_of(&e), ("Project".into(), None, 2, json!(5)));
+    assert_eq!(
+        source_of(&f.effective(project(), key)),
+        ("Project".into(), None, 2, json!(5))
+    );
+    assert_eq!(
+        source_of(&f.effective(project_b.clone(), key)),
+        ("Workspace".into(), None, 2, json!(7))
+    );
+    let e = repository_entries(&f, "project-b", "repo-1", &[key]).remove(0);
+    assert_eq!(source_of(&e), ("Workspace".into(), None, 2, json!(7)));
+    assert_eq!(
+        source_of(&f.effective(ws(), key)),
+        ("Workspace".into(), None, 2, json!(7))
+    );
+    // A value only the workspace set still reaches the repository through the project.
+    let e = repository_entries(&f, "project-a", "repo-1", &["delivery.autoMerge"]).remove(0);
+    assert_eq!(source_of(&e), ("Workspace".into(), None, 2, json!(false)));
+
+    // The delivery lookup resolves the same chain for the repository it delivers in.
+    let lookup = |project: &str, repository: &str| {
+        f.read(|r| {
+            Ok(svc::effective_setting(
+                r,
+                &ConfigScope::Repository {
+                    project: ProjectId(id(project)),
+                    repository: id(repository),
+                },
+                key,
+            )
+            .unwrap()
+            .value
+            .value
+            .0)
+        })
+    };
+    assert_eq!(
+        [
+            lookup("project-a", "repo-1"),
+            lookup("project-a", "repo-2"),
+            lookup("project-b", "repo-1")
+        ],
+        [json!(9), json!(5), json!(7)]
+    );
+
+    // The explained chain lists every layer, the repository first.
+    let chain = match f.query(
+        "user-a",
+        "settings.explain_source",
+        narrowed(json!({"key": key}), ("project-a", "repo-1")),
+    ) {
+        DomainQueryReply::Result {
+            result: OperationResult::SettingsExplainSource { value },
+            ..
+        } => value.items.0,
+        other => panic!("{other:?}"),
+    };
+    assert_eq!(
+        chain.iter().map(source_of).collect::<Vec<_>>(),
+        [
+            ("Project".into(), Some("repo-1".into()), 2, json!(9)),
+            ("Project".into(), None, 2, json!(5)),
+            ("Workspace".into(), None, 2, json!(7)),
+            ("Workspace".into(), None, 1, json!(3)),
+        ]
+    );
+
+    // The settings view shows the effective value and where it comes from.
+    let entries = repository_entries(&f, "project-a", "repo-1", &[]);
+    let scope = ConfigScope::Repository {
+        project: ProjectId(id("project-a")),
+        repository: id("repo-1"),
+    };
+    let mut view = SettingsView::new(scope.clone(), 2, &entries);
+    let item = view.item(key).unwrap();
+    assert_eq!(
+        (item.status, item.effective.clone(), item.source.label()),
+        (Status::Overridden, json!(9), "Repository")
+    );
+    let inherited = view.item("delivery.autoMerge").unwrap();
+    assert_eq!(
+        (inherited.status, inherited.source.label()),
+        (Status::Inherited, "Workspace")
+    );
+    assert_eq!(
+        view.item("delivery.mandatoryReview").unwrap().status,
+        Status::Enforced
+    );
+
+    // Clearing the repository's value (null) inherits the project's again; saving from the view
+    // addresses the repository.
+    view.inherit(key).unwrap();
+    let body = narrowed(
+        serde_json::to_value(view.save_input().unwrap()).unwrap(),
+        ("project-a", "repo-1"),
+    );
+    assert_eq!(body["repositoryId"], "repo-1");
+    let mut body = body;
+    body["kind"] = json!("settings.save_revision");
+    match f.save_raw("user-a", &f.key(), body) {
+        CommandReply::Recorded { receipt, .. } => assert_eq!(
+            source_of(&applied(&receipt.decision)[0]),
+            ("Project".into(), None, 2, json!(5))
+        ),
+        other => panic!("{other:?}"),
+    }
+    assert_eq!(
+        source_of(&repository_entries(&f, "project-a", "repo-1", &[key]).remove(0)),
+        ("Project".into(), None, 2, json!(5))
+    );
+}
+
+#[test]
+fn a_repository_cannot_weaken_a_workspace_mandate_or_set_what_is_not_repository_scoped() {
+    let f = Fixture::new();
+    f.h.raw()
+        .execute_batch(
+            "INSERT INTO repositories(id,canonical_location,revision) VALUES('repo-1','/r/one',1),('repo-3','/r/three',1);
+             INSERT INTO project_repositories(project_id,repository_id) VALUES('project-a','repo-1');",
+        )
+        .unwrap();
+    let scope = ("project-a", "repo-1");
+    // Neither the weaker nor the stricter value is accepted: the mandate has no override value.
+    for value in [json!(false), json!(true)] {
+        let d = save_in_repository(&f, scope, 1, &[("delivery.mandatoryReview", value)]);
+        let fault = refused(&d);
+        assert!(matches!(fault.code, DomainErrorCode::PermissionDenied));
+        assert_eq!(target_kind(fault), "harness_policy");
+    }
+    let e = repository_entries(&f, "project-a", "repo-1", &["delivery.mandatoryReview"]).remove(0);
+    assert_eq!(source_of(&e), ("Workspace".into(), None, 1, json!(true)));
+    // A setting outside the delivery settings is refused at a repository.
+    for key in ["tools.shell", "repositories.baseDirectory"] {
+        let value = if key == "tools.shell" {
+            json!(true)
+        } else {
+            json!("/srv/x")
+        };
+        let d = save_in_repository(&f, scope, 1, &[(key, value)]);
+        assert!(
+            matches!(refused(&d).code, DomainErrorCode::InvalidArgument),
+            "{key}"
+        );
+    }
+    // Nothing was written for the scope.
+    assert_eq!(
+        f.read(|r| Ok(svc::current_revisions(r, None).unwrap().workspace)),
+        1
+    );
+    // A repository not linked to the project, an unknown project and a workspace scope narrowed
+    // to a repository are refused before anything is written.
+    let d = save_in_repository(
+        &f,
+        ("project-a", "repo-3"),
+        1,
+        &[("delivery.autoMerge", json!(false))],
+    );
+    assert!(matches!(refused(&d).code, DomainErrorCode::NotFound));
+    assert_eq!(target_kind(refused(&d)), "repository");
+    let d = save_in_repository(
+        &f,
+        ("project-zz", "repo-1"),
+        1,
+        &[("delivery.autoMerge", json!(false))],
+    );
+    assert!(matches!(refused(&d).code, DomainErrorCode::NotFound));
+    let body = {
+        let mut b = save_body(ws(), 1, &[("delivery.autoMerge", json!(false))]);
+        b["repositoryId"] = json!("repo-1");
+        b
+    };
+    match f.save_raw("user-a", &f.key(), body) {
+        CommandReply::Recorded { receipt, .. } => assert!(matches!(
+            refused(&receipt.decision).code,
+            DomainErrorCode::InvalidArgument
+        )),
+        other => panic!("{other:?}"),
+    }
+    // An agent assigned to the project cannot apply a repository value either: a save is a
+    // receipt-only approval refusal, exactly as at a project scope.
+    let mut body = narrowed(
+        save_body(json!(null), 1, &[("delivery.autoMerge", json!(false))]),
+        scope,
+    );
+    body["kind"] = json!("settings.save_revision");
+    match f.save_raw("agent-a", &f.key(), body) {
+        CommandReply::Recorded { receipt, .. } => assert!(matches!(
+            refused(&receipt.decision).code,
+            DomainErrorCode::ApprovalRequired
+        )),
+        other => panic!("{other:?}"),
+    }
+    let e = repository_entries(&f, "project-a", "repo-1", &["delivery.autoMerge"]).remove(0);
+    assert_eq!(source_of(&e).2, 1);
+}
+
+#[test]
+fn repository_values_are_removed_with_their_project_by_the_purge_selectors() {
+    let f = Fixture::new();
+    f.h.raw()
+        .execute_batch(
+            "INSERT INTO projects(id,title,lifecycle,revision,scope_revision,created_at) VALUES('project-b','B','Active',1,1,0);
+             INSERT INTO repositories(id,canonical_location,revision) VALUES('repo-1','/r/one',1);
+             INSERT INTO project_repositories(project_id,repository_id) VALUES('project-a','repo-1'),('project-b','repo-1');",
+        )
+        .unwrap();
+    applied(&save_in_repository(
+        &f,
+        ("project-a", "repo-1"),
+        1,
+        &[("delivery.autoMerge", json!(false))],
+    ));
+    applied(&save_in_repository(
+        &f,
+        ("project-b", "repo-1"),
+        1,
+        &[("delivery.autoMerge", json!(false))],
+    ));
+    applied(&f.save(
+        "user-a",
+        project(),
+        1,
+        &[("delivery.autoMerge", json!(false))],
+    ));
+    let policy: Value = serde_json::from_str(include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../docs/architecture/validation/project-purge/native-row-selectors.json"
+    )))
+    .unwrap();
+    let c = f.h.raw();
+    for table in ["configuration_revisions", "effective_configuration"] {
+        let predicate = policy["candidatePredicates"][table].as_str().unwrap();
+        let owned = |project: &str| -> Vec<String> {
+            c.prepare(&format!(
+                "SELECT scope_key FROM {table} WHERE ({predicate}) ORDER BY scope_key"
+            ))
+            .unwrap()
+            .query_map([project], |r| r.get(0))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap()
+        };
+        assert_eq!(
+            owned("project-a"),
+            ["project:project-a", "repository:project-a:repo-1"],
+            "{table}"
+        );
+        assert_eq!(
+            owned("project-b"),
+            ["repository:project-b:repo-1"],
+            "{table}"
+        );
+        assert!(
+            owned("project").is_empty(),
+            "{table}: a project ID prefix is not ownership"
+        );
+    }
 }

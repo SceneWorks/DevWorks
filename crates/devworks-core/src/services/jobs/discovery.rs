@@ -19,9 +19,10 @@
 //!
 //! Every write is fenced by the run: it must be active and owned by this boot, so a late task of
 //! a finished, cancelled or superseded run can never record into it or a later run.
+#[cfg(any(test, feature = "test-support"))]
+use crate::ports::storage::StoredJobUsage;
 use crate::ports::storage::{
-    StorageError, StoredJobAction, StoredJobCheckpoint, StoredJobRun, StoredJobUsage,
-    WriteTransaction,
+    StorageError, StoredJobAction, StoredJobCheckpoint, StoredJobRun, WriteTransaction,
 };
 use crate::protocol::{Id, RootId};
 use serde_json::{Value, json};
@@ -220,6 +221,7 @@ pub fn link_root(
 
 /// Records one attributed usage item of the run's own requests (usage only: there is no job
 /// spending limit or monetary hold, JOB-09).
+#[cfg(any(test, feature = "test-support"))]
 pub fn record_usage(
     tx: &mut dyn WriteTransaction,
     usage: &StoredJobUsage,
@@ -228,15 +230,4 @@ pub fn record_usage(
     let recorded = tx.jobs().prepare_usage(usage)?;
     crate::services::usage::ingest::job_usage(tx, &recorded)?;
     Ok(recorded)
-}
-
-/// Saves the run's progress checkpoint (an agent session checkpoint), fenced by the run. Progress
-/// does not advance the run's revision, so a cancellation addressed to the run stays current.
-pub fn save_progress(
-    tx: &mut dyn WriteTransaction,
-    run: &Id,
-    checkpoint: Value,
-) -> Result<(), StorageError> {
-    owned_run(tx, run)?;
-    tx.jobs().set_run_checkpoint(run, &checkpoint.to_string())
 }

@@ -5,8 +5,8 @@
 //! progress and failures; their diagnostics), and the section's source configuration
 //! (languages, packs, exclusions, size bound) and discovery in Settings and on the Indexing
 //! screen. Every change is the same `indexing.*` command an agent submits.
+use crate::paged::{self, Paged};
 use crate::route::Route;
-use crate::shell::ListState;
 use crate::widgets::{self, Header, Tone, ViewState, chip};
 use devworks_core::protocol::OperationState;
 use devworks_core::protocol::data::CoverageState;
@@ -39,7 +39,9 @@ pub struct SourcesForm {
 #[derive(Default)]
 pub struct IndexingScreen {
     pub status: BTreeMap<String, StatusState>,
-    pub runs: ListState<IndexRunRecord>,
+    pub runs: Paged<IndexRunRecord>,
+    /// The project the runs were read for (`None`: every project).
+    pub runs_project: Option<Option<String>>,
     pub sources: Option<SourcesForm>,
     pub sources_error: Option<String>,
     pub message: Option<(Tone, String)>,
@@ -65,6 +67,8 @@ pub enum IndexAction {
         revision: String,
     },
     Runs,
+    /// Read the next page of index runs.
+    MoreRuns,
     LoadSources,
     SaveSources,
     Discover,
@@ -437,22 +441,19 @@ impl IndexingScreen {
                             sources_panel(ui, ix, online, actions);
                             ui.add_space(10.0);
                             ui.label(RichText::new("Runs").strong());
-                            if !ix.runs.loaded {
-                                widgets::state_block(
-                                    ui,
-                                    &ViewState::Loading {
-                                        what: "index runs".into(),
-                                    },
-                                );
-                            } else if let Some(e) = &ix.runs.error {
-                                widgets::state_block(
-                                    ui,
-                                    &ViewState::Failed {
-                                        what: "index runs".into(),
-                                        error: e.clone(),
-                                    },
-                                );
-                            } else if ix.runs.items.is_empty() {
+                            let (mut reload, mut more) = (false, false);
+                            let shown = paged::gate(
+                                ui,
+                                &Ok(()),
+                                &ix.runs,
+                                "index runs",
+                                &mut reload,
+                                &mut more,
+                            );
+                            if reload {
+                                actions.push(IndexAction::Runs);
+                            }
+                            if shown && ix.runs.items.is_empty() {
                                 widgets::state_block(
                                     ui,
                                     &ViewState::Empty {
@@ -474,6 +475,12 @@ impl IndexingScreen {
                                         .join(", "),
                                 );
                                 run_line(ui, r, online, actions);
+                            }
+                            if shown {
+                                paged::load_more_control(ui, &ix.runs, &mut more);
+                            }
+                            if more {
+                                actions.push(IndexAction::MoreRuns);
                             }
                         } else {
                             // Logs: every diagnostic the runs report (the full channel is in

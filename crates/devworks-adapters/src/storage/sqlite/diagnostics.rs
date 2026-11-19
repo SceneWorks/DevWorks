@@ -4,6 +4,7 @@ use super::conn::db;
 use super::repos::{Snapshot, Unit};
 use super::support::{corrupt, id_of, invalid, page_limit};
 use super::{DATABASE_FILE, MIGRATIONS, SqliteStore, migrations};
+use devworks_core::locks::LockExt;
 use devworks_core::ports::diagnostics::{
     Metric, StorageDatabase, StorageFiles, StorageHealthProbe,
 };
@@ -19,7 +20,11 @@ fn opt_id(s: Option<String>) -> Result<Option<Id>, StorageError> {
     s.map(id_of).transpose()
 }
 
-const COLUMNS: &str = "sequence,id,recorded_at,severity,component,code,message,origin,actor_id,correlation_id,project_id,operation,operation_id,target_kind,target_id,stage,source_revision,attempt,started_at,finished_at,progress_completed,progress_total,outcome,error_class,output,output_omitted_bytes,redactions,evidence_json,metrics_json,recovery_json";
+const COLUMNS: &str = "sequence,id,recorded_at,severity,component,code,message,origin,actor_id,\
+    correlation_id,project_id,operation,operation_id,target_kind,target_id,\
+    stage,source_revision,attempt,started_at,finished_at,progress_completed,\
+    progress_total,outcome,error_class,output,output_omitted_bytes,\
+    redactions,evidence_json,metrics_json,recovery_json";
 
 struct Raw {
     sequence: i64,
@@ -184,7 +189,10 @@ fn predicate(f: &DiagnosticFilter) -> (String, Vec<Sql>) {
     if let Some(s) = &f.search {
         // ASCII case-insensitive substring of any searchable member.
         clauses.push(
-            "(instr(lower(code), lower(?)) > 0 OR instr(lower(message), lower(?)) > 0 OR instr(lower(coalesce(stage, '')), lower(?)) > 0 OR instr(lower(coalesce(operation, '')), lower(?)) > 0 OR instr(lower(coalesce(output, '')), lower(?)) > 0)"
+            "(instr(lower(code), lower(?)) > 0 OR instr(lower(message), lower(?)) > \
+                0 OR instr(lower(coalesce(stage, '')), lower(?)) > 0 OR \
+                instr(lower(coalesce(operation, '')), lower(?)) > 0 OR \
+                instr(lower(coalesce(output, '')), lower(?)) > 0)"
                 .into(),
         );
         for _ in 0..5 {
@@ -340,7 +348,14 @@ impl DiagnosticRepository for Unit<'_> {
         }
         let opt = |v: &Option<Id>| v.as_ref().map(|i| i.as_str().to_owned());
         db(self.conn.execute(
-            "INSERT INTO diagnostic_records(id,recorded_at,severity,severity_rank,component,code,message,origin,actor_id,correlation_id,project_id,operation,operation_id,target_kind,target_id,stage,source_revision,attempt,started_at,finished_at,progress_completed,progress_total,outcome,error_class,output,output_omitted_bytes,redactions,evidence_json,metrics_json,recovery_json) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21,?22,?23,?24,?25,?26,?27,?28,?29,?30)",
+            "INSERT INTO diagnostic_records(id,recorded_at,severity,severity_rank,\
+                component,code,message,origin,actor_id,correlation_id,project_id,\
+                operation,operation_id,target_kind,target_id,stage,source_revision,\
+                attempt,started_at,finished_at,progress_completed,progress_total,\
+                outcome,error_class,output,output_omitted_bytes,redactions,\
+                evidence_json,metrics_json,recovery_json) VALUES(?1,?2,?3,?4,?5,?6,?7,\
+                ?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21,?22,?23,?24,?25,\
+                ?26,?27,?28,?29,?30)",
             params![
                 d.id.as_str(),
                 d.recorded_at_ms,
@@ -430,7 +445,9 @@ impl DiagnosticRepository for Unit<'_> {
         // Insert-if-absent, then re-read inside the same write: exactly one claimant per
         // receipt identity, and an existing intent is never touched.
         db(self.conn.execute(
-            "INSERT INTO diagnostic_exports(actor_id,scope_key,request_key,project_id,selection_sha256,command,claim,created_at) VALUES(?1,?2,?3,?4,?5,NULL,?6,?7) ON CONFLICT(actor_id,scope_key,request_key) DO NOTHING",
+            "INSERT INTO diagnostic_exports(actor_id,scope_key,request_key,\
+                project_id,selection_sha256,command,claim,created_at) VALUES(?1,?2,?3,\
+                ?4,?5,NULL,?6,?7) ON CONFLICT(actor_id,scope_key,request_key) DO NOTHING",
             params![
                 i.actor.0.as_str(),
                 i.scope_key,
@@ -572,14 +589,13 @@ impl ExpectedSchemas {
     ) -> Result<SchemaObjects, StorageError> {
         let cell = self
             .versions
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
+            .locked()
             .entry(version)
             .or_insert_with(|| Arc::new(Mutex::new(None)))
             .clone();
         // Single-flight per version. The global map lock is released before building the
         // private in-memory schema; no actual store transaction or writer is involved.
-        let mut ready = cell.lock().unwrap_or_else(|p| p.into_inner());
+        let mut ready = cell.locked();
         if let Some(found) = ready.as_ref() {
             return Ok(found.clone());
         }

@@ -10,10 +10,11 @@
 //! overwrites fresher state. [`Client::wait_idle`] is the synchronization point tests use
 //! (a condition variable, never a sleep).
 use devworks_core::gateway::{CommandOutcome, QueryOutcome};
+use devworks_core::locks::LockExt;
 use devworks_core::ports::secrets::Secret;
 use devworks_core::protocol::CommandReply;
 use devworks_core::protocol::Id;
-use devworks_core::services::desktop::ControlEpoch;
+use devworks_core::protocol::helpers::ControlEpoch;
 use devworks_core::settings::view::Health;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -216,7 +217,7 @@ pub trait Backend: Send + Sync {
     }
     /// The native maintenance capabilities a scheduled job may run in this build (only those
     /// with a registered use case; none are advertised otherwise).
-    fn native_job_capabilities(&self) -> Vec<devworks_core::services::jobs::NativeCapability> {
+    fn native_job_capabilities(&self) -> Vec<devworks_core::protocol::helpers::NativeCapability> {
         Vec::new()
     }
     /// Human-only retained AES key utility. The returned value is transient and redacted.
@@ -611,7 +612,7 @@ struct Shared {
 struct Alive(Arc<Shared>);
 impl Drop for Alive {
     fn drop(&mut self) {
-        let mut n = self.0.alive.lock().unwrap_or_else(|p| p.into_inner());
+        let mut n = self.0.alive.locked();
         *n = n.saturating_sub(1);
         self.0.exited.notify_all();
     }
@@ -683,14 +684,14 @@ impl Client {
                 shared.clone(),
                 waker.clone(),
             );
-            *shared.alive.lock().unwrap_or_else(|p| p.into_inner()) += 1;
+            *shared.alive.locked() += 1;
             let guard = Alive(shared.clone());
             let spawned = std::thread::Builder::new()
                 .name(format!("devworks-ui-{pool}-{n}"))
                 .spawn(move || {
                     let _alive = guard;
                     loop {
-                        let next = rx.lock().unwrap_or_else(|p| p.into_inner()).recv();
+                        let next = rx.locked().recv();
                         let Ok((ticket, job)) = next else { return };
                         let reply =
                             std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| job(&*be)))
@@ -699,11 +700,11 @@ impl Client {
                                 });
                         let _ = tx.send((ticket, reply));
                         {
-                            let mut n = sh.in_flight.lock().unwrap_or_else(|p| p.into_inner());
+                            let mut n = sh.in_flight.locked();
                             *n = n.saturating_sub(1);
                             sh.idle.notify_all();
                         }
-                        if let Some(w) = wk.lock().unwrap_or_else(|p| p.into_inner()).as_ref() {
+                        if let Some(w) = wk.locked().as_ref() {
                             w();
                         }
                     }
@@ -733,6 +734,7 @@ impl Client {
     }
 
     /// Changes how long dropping the client waits for its workers (tests).
+    #[cfg(any(test, feature = "test-support"))]
     pub fn set_join_bound(&mut self, bound: Duration) {
         self.join_bound = bound;
     }
@@ -746,7 +748,7 @@ impl Client {
 
     /// Registers the frame-loop waker for replies and runtime hints.
     pub fn set_waker(&self, make: impl Fn() -> Waker) {
-        *self.waker.lock().unwrap_or_else(|p| p.into_inner()) = Some(make());
+        *self.waker.locked() = Some(make());
         self.backend.set_waker(make());
     }
 
@@ -791,11 +793,7 @@ impl Client {
             command,
             query: None,
         });
-        *self
-            .shared
-            .in_flight
-            .lock()
-            .unwrap_or_else(|p| p.into_inner()) += 1;
+        *self.shared.in_flight.locked() += 1;
         let queue = if network {
             &self.network_jobs
         } else {
@@ -803,11 +801,7 @@ impl Client {
         };
         if queue.send((ticket, job)).is_err() {
             // No worker could start: report the request as failed rather than leave it pending.
-            let mut n = self
-                .shared
-                .in_flight
-                .lock()
-                .unwrap_or_else(|p| p.into_inner());
+            let mut n = self.shared.in_flight.locked();
             *n = n.saturating_sub(1);
             let _ = self.reply_tx.send((
                 ticket,
@@ -1147,11 +1141,7 @@ impl Client {
     /// passes. Returns whether it became idle.
     pub fn wait_idle(&self, bound: Duration) -> bool {
         let deadline = Instant::now() + bound;
-        let mut n = self
-            .shared
-            .in_flight
-            .lock()
-            .unwrap_or_else(|p| p.into_inner());
+        let mut n = self.shared.in_flight.locked();
         while *n > 0 {
             let left = deadline.saturating_duration_since(Instant::now());
             if left.is_zero() {
@@ -1178,7 +1168,7 @@ impl Drop for Client {
         drop(std::mem::replace(&mut self.network_jobs, closed));
         // Wait (bounded) for every worker to end; join only then, so no join can block.
         let deadline = Instant::now() + self.join_bound;
-        let mut alive = self.shared.alive.lock().unwrap_or_else(|p| p.into_inner());
+        let mut alive = self.shared.alive.locked();
         while *alive > 0 {
             let left = deadline.saturating_duration_since(Instant::now());
             if left.is_zero() {
@@ -1239,6 +1229,7 @@ mod tests {
             "skills.draft",
             "roles.rollback",
             "skills.rollback",
+            "skills.set_enabled",
             "agents.post",
             "agents.ack",
             "schemas.configure",
@@ -1476,7 +1467,19 @@ mod human_dispatch_tests {
     }
     fn purged_backend() -> (NoHuman, Vec<u8>) {
         let b = NoHuman::default();
-        let frame=serde_json::json!({"protocol":"1.0-draft.1","mode":"Command","requestKey":"original-key","body":{"kind":"projects.create","name":"private original name","description":"","repositoryIds":[]}}).to_string().into_bytes();
+        let frame = serde_json::json!({
+            "protocol": "1.0-draft.1",
+            "mode": "Command",
+            "requestKey": "original-key",
+            "body": {
+                "kind": "projects.create",
+                "name": "private original name",
+                "description": "",
+                "repositoryIds": []
+            }
+        })
+        .to_string()
+        .into_bytes();
         let decoded = devworks_core::admission::decode(
             devworks_core::admission::Selection {
                 operation: "projects.create",
@@ -1485,16 +1488,63 @@ mod human_dispatch_tests {
             &frame,
         )
         .unwrap();
-        *b.command_reply.lock().unwrap()=Some(serde_json::from_value(serde_json::json!({"kind":"Rejected","protocol":"1.0-draft.1","requestKey":"original-key","code":"UnsupportedSchema","retry":"ResolveReceipt","correlationId":"correlation-a"})).unwrap());
-        *b.query_reply.lock().unwrap()=Some(serde_json::from_value(serde_json::json!({"kind":"Result","protocol":"1.0-draft.1","queryId":"purged-receipt","stamp":{"storeId":"store-a","restoreEpoch":"0","sequence":"9","policyRevision":"1","scopeRevision":"1"},"result":{"kind":"history.command_receipt","value":{"requestKey":"original-key","commandId":"committed-command","committedSequence":"8","state":"Recorded","purged":{"commandId":"committed-command","committedSequence":"8","acceptedAtMs":"100","requestDigest":decoded.fingerprint.as_str(),"originalDecision":"Applied","purgeId":"purge-a"}}}})).unwrap());
+        *b.command_reply.lock().unwrap() = Some(
+            serde_json::from_value(serde_json::json!({
+                "kind": "Rejected",
+                "protocol": "1.0-draft.1",
+                "requestKey": "original-key",
+                "code": "UnsupportedSchema",
+                "retry": "ResolveReceipt",
+                "correlationId": "correlation-a"
+            }))
+            .unwrap(),
+        );
+        *b.query_reply.lock().unwrap() = Some(
+            serde_json::from_value(serde_json::json!({
+                "kind": "Result",
+                "protocol": "1.0-draft.1",
+                "queryId": "purged-receipt",
+                "stamp": {
+                    "storeId": "store-a",
+                    "restoreEpoch": "0",
+                    "sequence": "9",
+                    "policyRevision": "1",
+                    "scopeRevision": "1"
+                },
+                "result": {
+                    "kind": "history.command_receipt",
+                    "value": {
+                        "requestKey": "original-key",
+                        "commandId": "committed-command",
+                        "committedSequence": "8",
+                        "state": "Recorded",
+                        "purged": {
+                            "commandId": "committed-command",
+                            "committedSequence": "8",
+                            "acceptedAtMs": "100",
+                            "requestDigest": decoded.fingerprint.as_str(),
+                            "originalDecision": "Applied",
+                            "purgeId": "purge-a"
+                        }
+                    }
+                }
+            }))
+            .unwrap(),
+        );
         (b, frame)
     }
     #[test]
     fn purged_legacy_command_resolves_once_without_resubmission_or_new_identity() {
         let (b, frame) = purged_backend();
-        assert!(
-            matches!(resolve_command(&b,"projects.create",&frame),Ok(CommandReply::ReceiptPurged{request_key,outcome,..}) if request_key.0.as_str()=="original-key" && outcome.command_id.0.as_str()=="committed-command")
-        );
+        assert!(matches!(
+            resolve_command(&b, "projects.create", &frame),
+            Ok(CommandReply::ReceiptPurged {
+                request_key,
+                outcome,
+                ..
+            }) if request_key.0.as_str() == "original-key"
+                && outcome.command_id.0.as_str() == "committed-command"
+        ));
         assert_eq!(b.generic.load(Ordering::SeqCst), 1);
         assert_eq!(b.queries.load(Ordering::SeqCst), 1);
         assert_eq!(*b.frames.lock().unwrap(), [frame]);

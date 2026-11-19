@@ -135,9 +135,13 @@ fn document(
             version: "1.0.0".into(),
             title: name.into(),
             content_digest: digest.clone(),
-            content_ref: Some(
-                json!({"artifactId":artifact.as_str(),"versionId":version.as_str(),"sha256":digest,"byteLength":body.len().to_string(),"mediaType":"text/markdown"}),
-            ),
+            content_ref: Some(json!({
+                "artifactId": artifact.as_str(),
+                "versionId": version.as_str(),
+                "sha256": digest,
+                "byteLength": body.len().to_string(),
+                "mediaType": "text/markdown"
+            })),
             availability: "Available".into(),
             reason: None,
             provenance: json!({"kind":"Bundled","appVersion":"1.0.0","contentDigest":digest}),
@@ -236,12 +240,43 @@ fn help_drafts_are_invisible_and_published_unicode_pages_filter_and_reopen() {
     let op = claim(&s, "publish-op", 1, 1);
     let body = format!("A🦀é\n100%_literal\n{}", "x".repeat(1_048_577));
     let expected = body.clone();
-    run_write(&s,WriteOptions::fixture(),move|tx|{
-        let a=document(tx,"large-generation","a-guide",&body)?;assert_eq!(tx.help().stage_help_document(&a)?,a.topic);assert_eq!(tx.help().stage_help_document(&a)?,a.topic);
-        let mut b=document(tx,"large-generation","b-guide","Other package guide")?;b.topic.source_kind="Package".into();b.topic.package_id=Some(id("package-a"));b.topic.manifest_digest=Some("f".repeat(64));b.topic.screen_ids=vec!["packages".into()];b.topic.provenance=json!({"kind":"Package","packageId":"package-a","packageVersion":"1.0.0","manifestDigest":"f".repeat(64),"contentDigest":b.topic.content_digest});tx.help().stage_help_document(&b)?;
-        tx.help().stage_help_document(&missing("large-generation","c-missing"))?;
-        assert!(tx.help().help_topic(&id("large-generation"),&id("a-guide"))?.is_none());assert!(tx.help().help_topics(&id("large-generation"),&HelpFilter::default(),None,500)?.is_empty());assert!(tx.help().help_passage_source(&id("large-generation"),&id("a-guide"),0,2)?.is_none());Ok(())
-    }).unwrap();
+    run_write(&s, WriteOptions::fixture(), move |tx| {
+        let a = document(tx, "large-generation", "a-guide", &body)?;
+        assert_eq!(tx.help().stage_help_document(&a)?, a.topic);
+        assert_eq!(tx.help().stage_help_document(&a)?, a.topic);
+        let mut b = document(tx, "large-generation", "b-guide", "Other package guide")?;
+        b.topic.source_kind = "Package".into();
+        b.topic.package_id = Some(id("package-a"));
+        b.topic.manifest_digest = Some("f".repeat(64));
+        b.topic.screen_ids = vec!["packages".into()];
+        b.topic.provenance = json!({
+            "kind": "Package",
+            "packageId": "package-a",
+            "packageVersion": "1.0.0",
+            "manifestDigest": "f".repeat(64),
+            "contentDigest": b.topic.content_digest
+        });
+        tx.help().stage_help_document(&b)?;
+        tx.help()
+            .stage_help_document(&missing("large-generation", "c-missing"))?;
+        assert!(
+            tx.help()
+                .help_topic(&id("large-generation"), &id("a-guide"))?
+                .is_none()
+        );
+        assert!(
+            tx.help()
+                .help_topics(&id("large-generation"), &HelpFilter::default(), None, 500)?
+                .is_empty()
+        );
+        assert!(
+            tx.help()
+                .help_passage_source(&id("large-generation"), &id("a-guide"), 0, 2)?
+                .is_none()
+        );
+        Ok(())
+    })
+    .unwrap();
     assert_eq!(read(&s, |r| r.help().help_head()).revision, 1);
     assert_eq!(
         read(&s, |r| r

@@ -22174,6 +22174,10 @@
           "$ref": "#/$defs/Id",
           "x-since": 3
         },
+        "offeredEfforts": {
+          "$ref": "#/$defs/List_EffortName_0_128",
+          "x-since": 4
+        },
         "resolvesToModelIds": {
           "$ref": "#/$defs/List_Id_0_128",
           "x-since": 3

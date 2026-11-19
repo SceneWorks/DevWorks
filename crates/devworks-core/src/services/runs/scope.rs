@@ -16,6 +16,7 @@
 //!   approved slot reports the feature-wide unit with no readiness evidence (fail closed, never
 //!   manufactured readiness).
 //! * [`ScriptedScope`] is the deterministic double tests and later items' fixtures script.
+use crate::locks::LockExt;
 use crate::ports::storage::{RunRead, StorageError, WorkRoot};
 use crate::protocol::RootId;
 use std::collections::{BTreeMap, HashMap};
@@ -182,10 +183,7 @@ impl ScriptedScope {
     }
     /// Scripts the plan state of `root`.
     pub fn set(&self, root: &RootId, plan: PlanState) {
-        self.plans
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .insert(root.clone(), plan);
+        self.plans.locked().insert(root.clone(), plan);
     }
     /// Scripts an approved plan whose feature-wide scope and named units are all `Current`
     /// (assessment revision 1).
@@ -219,8 +217,9 @@ impl ScriptedScope {
         );
     }
     /// Changes one unit's readiness (`None`: the feature-wide scope) in the scripted plan.
+    #[cfg(any(test, feature = "test-support"))]
     pub fn set_readiness(&self, root: &RootId, key: Option<&str>, readiness: Readiness) {
-        let mut plans = self.plans.lock().unwrap_or_else(|p| p.into_inner());
+        let mut plans = self.plans.locked();
         if let Some(PlanState::Approved { feature, units, .. }) = plans.get_mut(root) {
             let unit = match key {
                 None => Some(feature),
@@ -232,8 +231,9 @@ impl ScriptedScope {
         }
     }
     /// Records a pending revision beside the active plan (it authorizes nothing).
+    #[cfg(any(test, feature = "test-support"))]
     pub fn set_pending(&self, root: &RootId, pending: Option<i64>) {
-        let mut plans = self.plans.lock().unwrap_or_else(|p| p.into_inner());
+        let mut plans = self.plans.locked();
         match plans.get_mut(root) {
             Some(PlanState::Approved {
                 pending_revision, ..
@@ -245,12 +245,7 @@ impl ScriptedScope {
 }
 impl ExecutionScope for ScriptedScope {
     fn plan(&self, runs: &dyn RunRead, root: &WorkRoot) -> Result<PlanState, StorageError> {
-        let scripted = self
-            .plans
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .get(&root.id)
-            .cloned();
+        let scripted = self.plans.locked().get(&root.id).cloned();
         match scripted {
             Some(p) => Ok(p),
             None => RecordedScope.plan(runs, root),

@@ -8348,8 +8348,16 @@
         "applicability": {
           "$ref": "#/$defs/List_Text1To256_0_128"
         },
+        "approvalOutcome": {
+          "$ref": "#/$defs/ApprovalState",
+          "x-since": 8
+        },
         "approved": {
           "type": "boolean"
+        },
+        "author": {
+          "$ref": "#/$defs/Id",
+          "x-since": 8
         },
         "content": {
           "$ref": "#/$defs/ArtifactRef"
@@ -8357,14 +8365,26 @@
         "id": {
           "$ref": "#/$defs/Id"
         },
+        "lessonIds": {
+          "$ref": "#/$defs/List_Id_0_128",
+          "x-since": 8
+        },
         "name": {
           "$ref": "#/$defs/Text1To256"
+        },
+        "rationale": {
+          "$ref": "#/$defs/Text0To65536",
+          "x-since": 8
         },
         "revision": {
           "$ref": "#/$defs/Revision"
         },
         "scope": {
           "$ref": "#/$defs/DataScope"
+        },
+        "sessionId": {
+          "$ref": "#/$defs/Id",
+          "x-since": 8
         },
         "sourcePath": {
           "anyOf": [
@@ -8375,6 +8395,10 @@
               "type": "null"
             }
           ]
+        },
+        "state": {
+          "$ref": "#/$defs/InstructionState",
+          "x-since": 8
         }
       },
       "required": [
@@ -8387,6 +8411,15 @@
         "applicability"
       ],
       "type": "object"
+    },
+    "InstructionState": {
+      "enum": [
+        "Draft",
+        "Proposed",
+        "Approved",
+        "Rejected"
+      ],
+      "type": "string"
     },
     "ItemState": {
       "enum": [
@@ -9699,6 +9732,10 @@
         "ruleState": {
           "$ref": "#/$defs/RuleState"
         },
+        "skills": {
+          "$ref": "#/$defs/List_LessonSkillLink_0_128",
+          "x-since": 8
+        },
         "source": {
           "$ref": "#/$defs/LessonSource"
         },
@@ -9722,6 +9759,26 @@
         "challenges",
         "addressedBy",
         "deliveredSessions"
+      ],
+      "type": "object"
+    },
+    "LessonSkillLink": {
+      "additionalProperties": false,
+      "properties": {
+        "instructionId": {
+          "$ref": "#/$defs/Id"
+        },
+        "name": {
+          "$ref": "#/$defs/Text1To256"
+        },
+        "revision": {
+          "$ref": "#/$defs/Revision"
+        }
+      },
+      "required": [
+        "instructionId",
+        "name",
+        "revision"
       ],
       "type": "object"
     },
@@ -10500,6 +10557,14 @@
       "minItems": 0,
       "type": "array"
     },
+    "List_LessonSkillLink_0_128": {
+      "items": {
+        "$ref": "#/$defs/LessonSkillLink"
+      },
+      "maxItems": 128,
+      "minItems": 0,
+      "type": "array"
+    },
     "List_LineageRecord_0_500": {
       "items": {
         "$ref": "#/$defs/LineageRecord"
@@ -10847,6 +10912,14 @@
     "List_RouteCatalogModel_0_500": {
       "items": {
         "$ref": "#/$defs/RouteCatalogModel"
+      },
+      "maxItems": 500,
+      "minItems": 0,
+      "type": "array"
+    },
+    "List_SchemaCodeReference_0_500": {
+      "items": {
+        "$ref": "#/$defs/SchemaCodeReference"
       },
       "maxItems": 500,
       "minItems": 0,
@@ -14984,6 +15057,24 @@
           "additionalProperties": false,
           "properties": {
             "kind": {
+              "const": "skills.set_enabled",
+              "type": "string"
+            },
+            "value": {
+              "$ref": "#/$defs/InstructionRecord"
+            }
+          },
+          "required": [
+            "kind",
+            "value"
+          ],
+          "type": "object",
+          "x-since": 8
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
               "const": "roles.read",
               "type": "string"
             },
@@ -16823,6 +16914,42 @@
           "additionalProperties": false,
           "properties": {
             "kind": {
+              "const": "addons.invoke",
+              "type": "string"
+            },
+            "value": {
+              "$ref": "#/$defs/PackageInvocation"
+            }
+          },
+          "required": [
+            "kind",
+            "value"
+          ],
+          "type": "object",
+          "x-since": 8
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "addons.invocation",
+              "type": "string"
+            },
+            "value": {
+              "$ref": "#/$defs/PackageInvocation"
+            }
+          },
+          "required": [
+            "kind",
+            "value"
+          ],
+          "type": "object",
+          "x-since": 8
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
               "const": "help.search",
               "type": "string"
             },
@@ -17774,6 +17901,24 @@
             },
             "value": {
               "$ref": "#/$defs/WatcherRecord"
+            }
+          },
+          "required": [
+            "kind",
+            "value"
+          ],
+          "type": "object",
+          "x-since": 8
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "schemas.code_references",
+              "type": "string"
+            },
+            "value": {
+              "$ref": "#/$defs/SchemaCodeReferencePage"
             }
           },
           "required": [
@@ -18922,6 +19067,36 @@
         "Failed"
       ],
       "type": "string"
+    },
+    "PackageInvocation": {
+      "additionalProperties": false,
+      "properties": {
+        "artifacts": {
+          "$ref": "#/$defs/List_ArtifactRef_0_128"
+        },
+        "failure": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Text0To65536"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "operationId": {
+          "$ref": "#/$defs/Id"
+        },
+        "state": {
+          "$ref": "#/$defs/OperationState"
+        }
+      },
+      "required": [
+        "operationId",
+        "state",
+        "artifacts"
+      ],
+      "type": "object"
     },
     "PackageOffer": {
       "additionalProperties": false,
@@ -23551,6 +23726,10 @@
           "$ref": "#/$defs/Id",
           "x-since": 3
         },
+        "offeredEfforts": {
+          "$ref": "#/$defs/List_EffortName_0_128",
+          "x-since": 4
+        },
         "resolvesToModelIds": {
           "$ref": "#/$defs/List_Id_0_128",
           "x-since": 3
@@ -23847,6 +24026,112 @@
         "Password"
       ],
       "type": "string"
+    },
+    "SchemaCodeReference": {
+      "additionalProperties": false,
+      "properties": {
+        "column": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Text1To4096"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "edgeKind": {
+          "$ref": "#/$defs/Text1To256"
+        },
+        "extractor": {
+          "$ref": "#/$defs/Text1To256"
+        },
+        "graphViewId": {
+          "$ref": "#/$defs/Id"
+        },
+        "id": {
+          "$ref": "#/$defs/Id"
+        },
+        "line": {
+          "$ref": "#/$defs/Counter"
+        },
+        "nodeId": {
+          "$ref": "#/$defs/Id"
+        },
+        "nodeKind": {
+          "$ref": "#/$defs/Text1To256"
+        },
+        "nodeName": {
+          "$ref": "#/$defs/Text0To65536"
+        },
+        "objectId": {
+          "$ref": "#/$defs/Id"
+        },
+        "repositoryId": {
+          "$ref": "#/$defs/Id"
+        },
+        "snippet": {
+          "$ref": "#/$defs/Text0To65536"
+        },
+        "statement": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Text1To256"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "table": {
+          "$ref": "#/$defs/Text1To4096"
+        },
+        "unitKey": {
+          "$ref": "#/$defs/GraphUnitKey"
+        }
+      },
+      "required": [
+        "id",
+        "objectId",
+        "repositoryId",
+        "graphViewId",
+        "unitKey",
+        "nodeId",
+        "nodeName",
+        "nodeKind",
+        "edgeKind",
+        "table",
+        "extractor",
+        "line",
+        "snippet"
+      ],
+      "type": "object"
+    },
+    "SchemaCodeReferencePage": {
+      "additionalProperties": false,
+      "properties": {
+        "hasMore": {
+          "type": "boolean"
+        },
+        "items": {
+          "$ref": "#/$defs/List_SchemaCodeReference_0_500"
+        },
+        "nextCursor": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Text1To4096"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "items",
+        "hasMore"
+      ],
+      "type": "object"
     },
     "SchemaConnection": {
       "additionalProperties": false,
@@ -24487,6 +24772,10 @@
         },
         "revision": {
           "$ref": "#/$defs/Revision"
+        },
+        "sourceRepositoryId": {
+          "$ref": "#/$defs/Id",
+          "x-since": 8
         },
         "sourceScope": {
           "$ref": "#/$defs/DataScope"

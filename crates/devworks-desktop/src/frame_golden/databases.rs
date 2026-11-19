@@ -86,6 +86,26 @@ pub fn frames() -> Vec<(&'static str, Vec<u8>)> {
             ),
         ),
         (
+            "databases_code_references",
+            query(
+                b,
+                databases_ops::code_references(None, "pin-a", &source.id, "object-a", None),
+            ),
+        ),
+        (
+            "databases_code_references_more",
+            query(
+                b,
+                databases_ops::code_references(
+                    Some("project-a"),
+                    "pin-a",
+                    &source.id,
+                    "object-a",
+                    Some("c1"),
+                ),
+            ),
+        ),
+        (
             "databases_save_new",
             command(
                 b,

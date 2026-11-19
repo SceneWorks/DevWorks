@@ -289,6 +289,9 @@ pub enum OperationResult {
     SchemasObjects { value: Page<SchemaObject> },
     #[serde(rename = "schemas.relationships")]
     SchemasRelationships { value: Page<SchemaRelation> },
+    #[schemars(extend("x-since" = 8))]
+    #[serde(rename = "schemas.code_references")]
+    SchemasCodeReferences { value: SchemaCodeReferencePage },
     #[serde(rename = "schemas.index")]
     SchemasIndex { value: IndexRunRecord },
     #[serde(rename = "schemas.refresh")]
@@ -447,6 +450,9 @@ pub enum OperationResult {
     SkillsHistory { value: Page<InstructionRecord> },
     #[serde(rename = "skills.rollback")]
     SkillsRollback { value: InstructionRecord },
+    #[schemars(extend("x-since" = 8))]
+    #[serde(rename = "skills.set_enabled")]
+    SkillsSetEnabled { value: InstructionRecord },
     #[serde(rename = "roles.read")]
     RolesRead { value: InstructionRecord },
     #[serde(rename = "roles.draft")]
@@ -699,6 +705,12 @@ pub enum OperationResult {
     AddonsRollback { value: PackageRecord },
     #[serde(rename = "addons.uninstall")]
     AddonsUninstall { value: PackageRecord },
+    #[schemars(extend("x-since" = 8))]
+    #[serde(rename = "addons.invoke")]
+    AddonsInvoke { value: PackageInvocation },
+    #[schemars(extend("x-since" = 8))]
+    #[serde(rename = "addons.invocation")]
+    AddonsInvocation { value: PackageInvocation },
     #[serde(rename = "help.search")]
     HelpSearch { value: HelpTopicPageResult },
     #[serde(rename = "help.read")]
@@ -926,6 +938,7 @@ impl OperationResult {
             Self::SchemasConnections { .. } => "schemas.connections",
             Self::SchemasObjects { .. } => "schemas.objects",
             Self::SchemasRelationships { .. } => "schemas.relationships",
+            Self::SchemasCodeReferences { .. } => "schemas.code_references",
             Self::SchemasIndex { .. } => "schemas.index",
             Self::SchemasRefresh { .. } => "schemas.refresh",
             Self::SchemasRemoveIndex { .. } => "schemas.remove_index",
@@ -1007,6 +1020,7 @@ impl OperationResult {
             Self::SkillsPropose { .. } => "skills.propose",
             Self::SkillsHistory { .. } => "skills.history",
             Self::SkillsRollback { .. } => "skills.rollback",
+            Self::SkillsSetEnabled { .. } => "skills.set_enabled",
             Self::RolesRead { .. } => "roles.read",
             Self::RolesDraft { .. } => "roles.draft",
             Self::RolesPropose { .. } => "roles.propose",
@@ -1132,6 +1146,8 @@ impl OperationResult {
             Self::AddonsLogs { .. } => "addons.logs",
             Self::AddonsRollback { .. } => "addons.rollback",
             Self::AddonsUninstall { .. } => "addons.uninstall",
+            Self::AddonsInvoke { .. } => "addons.invoke",
+            Self::AddonsInvocation { .. } => "addons.invocation",
             Self::HelpSearch { .. } => "help.search",
             Self::HelpRead { .. } => "help.read",
             Self::HelpTopicForScreen { .. } => "help.topic_for_screen",
@@ -1312,6 +1328,7 @@ impl Check for OperationResult {
             Self::SchemasConnections { value } => value.check()?,
             Self::SchemasObjects { value } => value.check()?,
             Self::SchemasRelationships { value } => value.check()?,
+            Self::SchemasCodeReferences { value } => value.check()?,
             Self::SchemasIndex { value } => value.check()?,
             Self::SchemasRefresh { value } => value.check()?,
             Self::SchemasRemoveIndex { value } => value.check()?,
@@ -1391,6 +1408,7 @@ impl Check for OperationResult {
             Self::SkillsPropose { value } => value.check()?,
             Self::SkillsHistory { value } => value.check()?,
             Self::SkillsRollback { value } => value.check()?,
+            Self::SkillsSetEnabled { value } => value.check()?,
             Self::RolesRead { value } => value.check()?,
             Self::RolesDraft { value } => value.check()?,
             Self::RolesPropose { value } => value.check()?,
@@ -1514,6 +1532,8 @@ impl Check for OperationResult {
             Self::AddonsLogs { value } => value.check()?,
             Self::AddonsRollback { value } => value.check()?,
             Self::AddonsUninstall { value } => value.check()?,
+            Self::AddonsInvoke { value } => value.check()?,
+            Self::AddonsInvocation { value } => value.check()?,
             Self::HelpSearch { value } => value.check()?,
             Self::HelpRead { value } => value.check()?,
             Self::HelpTopicForScreen { value } => value.check()?,
@@ -1653,6 +1673,7 @@ impl Revisioned for OperationResult {
             Self::KnowledgePromote { value } => value.retain_revision(revision),
             Self::KnowledgeChallenge { value } => value.retain_revision(revision),
             Self::KnowledgeTaggedLessons { value } => value.retain_revision(revision),
+            Self::DreamingInstructions { value } => value.retain_revision(revision),
             Self::DreamingRevert { value } => value.retain_revision(revision),
             Self::ArtifactsSave { value } => value.retain_revision(revision),
             Self::ArtifactsList { value } => value.retain_revision(revision),
@@ -1670,7 +1691,17 @@ impl Revisioned for OperationResult {
             Self::ConventionsResources { value } => value.retain_revision(revision),
             Self::ConventionsDeleteResource { value } => value.retain_revision(revision),
             Self::ConventionsSearch { value } => value.retain_revision(revision),
+            Self::SkillsDiscover { value } => value.retain_revision(revision),
+            Self::SkillsRead { value } => value.retain_revision(revision),
             Self::SkillsResources { value } => value.retain_revision(revision),
+            Self::SkillsDraft { value } => value.retain_revision(revision),
+            Self::SkillsHistory { value } => value.retain_revision(revision),
+            Self::SkillsRollback { value } => value.retain_revision(revision),
+            Self::SkillsSetEnabled { value } => value.retain_revision(revision),
+            Self::RolesRead { value } => value.retain_revision(revision),
+            Self::RolesDraft { value } => value.retain_revision(revision),
+            Self::RolesHistory { value } => value.retain_revision(revision),
+            Self::RolesRollback { value } => value.retain_revision(revision),
             Self::ApprovalsList { value } => value.retain_revision(revision),
             Self::ApprovalsInspect { value } => value.retain_revision(revision),
             Self::ApprovalsPropose { value } => value.retain_revision(revision),
@@ -1707,6 +1738,9 @@ impl Revisioned for OperationResult {
             Self::JobsCancel { value } => value.retain_revision(revision),
             Self::JobsDelete { value } => value.retain_revision(revision),
             Self::JobsDisable { value } => value.retain_revision(revision),
+            Self::SettingsReadEffective { value } => value.retain_revision(revision),
+            Self::SettingsSaveRevision { value } => value.retain_revision(revision),
+            Self::SettingsExplainSource { value } => value.retain_revision(revision),
             Self::RouterCatalog { value } => value.retain_revision(revision),
             Self::RouterConnections { value } => value.retain_revision(revision),
             Self::RouterRoute { value } => value.retain_revision(revision),
@@ -1776,6 +1810,12 @@ impl Revisioned for OperationResult {
             Self::AgentsEvents { .. } if revision < 7 => {
                 Err("operation result predates its introduction".into())
             }
+            Self::SchemasCodeReferences { .. } if revision < 8 => {
+                Err("operation result predates its introduction".into())
+            }
+            Self::SkillsSetEnabled { .. } if revision < 8 => {
+                Err("operation result predates its introduction".into())
+            }
             Self::ApprovalsReviewQueue { .. } if revision < 3 => {
                 Err("operation result predates its introduction".into())
             }
@@ -1792,6 +1832,12 @@ impl Revisioned for OperationResult {
                 Err("operation result predates its introduction".into())
             }
             Self::McpClassifyTool { .. } if revision < 8 => {
+                Err("operation result predates its introduction".into())
+            }
+            Self::AddonsInvoke { .. } if revision < 8 => {
+                Err("operation result predates its introduction".into())
+            }
+            Self::AddonsInvocation { .. } if revision < 8 => {
                 Err("operation result predates its introduction".into())
             }
             Self::WatchCreate { .. } if revision < 8 => {

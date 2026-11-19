@@ -430,6 +430,15 @@ pub trait IndexRead {
         qualified_name: &str,
         limit: u16,
     ) -> Result<Vec<StoredNode>, StorageError>;
+    /// At most `limit` nodes of `generation` whose qualified name is exactly `qualified_name`,
+    /// by unit and node ID, after the `(unit_key, node_id)` position `after`.
+    fn nodes_qualified_after(
+        &self,
+        generation: &Id,
+        qualified_name: &str,
+        after: Option<(&str, &str)>,
+        limit: u16,
+    ) -> Result<Vec<StoredNode>, StorageError>;
     fn published(&self, repository: &Id) -> Result<Option<StoredPublished>, StorageError>;
     fn view(&self, view: &Id) -> Result<Option<StoredView>, StorageError>;
     /// Read pins of `view` whose lease runs past `now_ms`.

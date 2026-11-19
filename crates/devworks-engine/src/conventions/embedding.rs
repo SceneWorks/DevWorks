@@ -4,6 +4,7 @@ use crate::providers::{
     driver::{NativeInvocation, NativeProviders},
     sink::ProviderResult,
 };
+use devworks_core::locks::LockExt;
 use devworks_core::{
     context::InvocationContext,
     fingerprint::sha256_hex,
@@ -60,11 +61,7 @@ struct Active {
 }
 impl Drop for Active {
     fn drop(&mut self) {
-        self.inner
-            .active
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .remove(self.request.as_str());
+        self.inner.active.locked().remove(self.request.as_str());
     }
 }
 fn unavailable(why: impl Into<String>) -> EmbeddingFailure {
@@ -125,13 +122,7 @@ impl NativeEmbeddings {
     /// native UsageRuntime, whose bounded shutdown/recovery already records that custody.
     pub fn stop(&self) {
         self.inner.closed.begin_close();
-        for token in self
-            .inner
-            .active
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .values()
-        {
+        for token in self.inner.active.locked().values() {
             token.cancel();
         }
         self.inner.closed.drain();
@@ -148,7 +139,7 @@ impl NativeEmbeddings {
         if self.inner.closed.is_closed() || token.is_cancelled() {
             return Err(EmbeddingFailure::Cancelled);
         }
-        let mut active = self.inner.active.lock().unwrap_or_else(|p| p.into_inner());
+        let mut active = self.inner.active.locked();
         if active.contains_key(request.as_str()) {
             return Err(EmbeddingFailure::Unknown {
                 request_id: request.clone(),
@@ -409,10 +400,17 @@ impl NativeEmbeddings {
             match future.as_mut().poll(&mut cx) {
                 Poll::Ready(result) => {
                     let invocation = result?;
+                    use devworks_core::services::usage::host::DriveOutcome;
                     match invocation.accounting {
-                        devworks_core::services::usage::host::DriveOutcome::CancelledBeforeDispatch => return Err(EmbeddingFailure::Cancelled),
-                        devworks_core::services::usage::host::DriveOutcome::Refused(_) => return Err(unavailable("Current inference preflight refused dispatch.")),
-                        _=>{},
+                        DriveOutcome::CancelledBeforeDispatch => {
+                            return Err(EmbeddingFailure::Cancelled);
+                        }
+                        DriveOutcome::Refused(_) => {
+                            return Err(unavailable(
+                                "Current inference preflight refused dispatch.",
+                            ));
+                        }
+                        _ => {}
                     }
                     break;
                 }

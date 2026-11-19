@@ -1,0 +1,34 @@
+---
+title: Watcher and watcher event lifecycle (implemented)
+---
+stateDiagram-v2
+  direction LR
+  state "Watcher (WatcherPhase)" as W {
+    [*] --> Active : watch.create commits watcher and launches process in one write
+    Active --> Settled : tick settle_observed records the outcome and one event
+    Active --> Stopping : watch.cancel with stopProcess and a live run
+    Active --> Cancelled : watch.cancel without stopProcess, or owner session ended or project archived
+    Stopping --> Settled : the stop is observed and the outcome is recorded
+    Settled --> [*]
+    Cancelled --> [*]
+  }
+  state "Event (WatchEventState)" as E {
+    [*] --> Pending : recorded with the watcher state change
+    Pending --> Delivered : deliver_pending appends a host notice to the session and marks it in one write
+    Delivered --> Acknowledged : end_turn of the carrying turn with completed true
+    Delivered --> Delivered : the carrying turn ends otherwise, so the next turn carries it again
+    Acknowledged --> [*]
+  }
+  note right of W
+    Open means Active or Stopping.
+    Outcome kinds: Succeeded, Failed, Cancelled, TimedOut, Interrupted, Lost, Uncertain.
+    A Timer settles at due_at_ms. A Probe waits with doubling backoff up to 8 intervals.
+    A polling watcher settles TimedOut at its maximum lifetime.
+    close_at_shutdown ends a stopped process watcher as Interrupted.
+  end note
+  note right of E
+    Events wait, undelivered, while the owner root is paused or held.
+    Events of an ended session are never delivered.
+    The backup check delivers a missed Pending event under its own event ID
+    and records WatcherBackupCatch.
+  end note

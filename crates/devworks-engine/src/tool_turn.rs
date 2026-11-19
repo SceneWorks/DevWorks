@@ -126,6 +126,7 @@ enum SessionActors {
     AgentsAndHosts,
     /// Skill adoption: also a person acting in their own chat session. A Human skips the
     /// registry and binding checks, which describe agents.
+    #[cfg(any(test, feature = "test-support"))]
     AnyOwner,
 }
 
@@ -202,6 +203,7 @@ pub(crate) fn append_skill_adoption(
 
 /// Records a skill-set change for a session that has no epoch change to carry it, after the
 /// same session gate every other turn write passes.
+#[cfg(any(test, feature = "test-support"))]
 pub(crate) fn record_skill_adoption(
     store: &dyn ApplicationStore,
     ctx: &InvocationContext,

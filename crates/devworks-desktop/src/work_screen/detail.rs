@@ -5,13 +5,13 @@ use crate::theme;
 use crate::widgets::{self, Tone, chip};
 use crate::work_ops as wops;
 use devworks_core::operations::{OperationInput as In, features, tasks};
+use devworks_core::protocol::helpers::work::MAX_PREREQUISITES;
 use devworks_core::protocol::records::{
     ApprovalState, CriterionState, DependencyEdge, DependencyReplacement, FeaturePatch,
     FindingState, ReadinessDisposition, ReadinessFreshness, RequirementStatus, WorkKind,
     WorkRecord,
 };
 use devworks_core::protocol::{AssignmentId, Event, Id};
-use devworks_core::services::work::deps::MAX_PREREQUISITES;
 use eframe::egui::{self, RichText, Ui};
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -30,186 +30,299 @@ pub(crate) fn feature_detail(
     actions: &mut Vec<Action>,
     watchers: &mut dyn FnMut(&mut Ui),
 ) {
-    egui::ScrollArea::vertical().id_salt("feature-detail").show(ui, |ui| {
-        ui.label(RichText::new(&f.title.0).strong());
-        if let Some(budget)=&f.budget {crate::usage_screen::budget_status(ui,budget);}else{widgets::caption(ui,"Feature accounting is unavailable; the effective spending policy is unknown.");}
-        widgets::caption(ui, format!("Revision {} · {}", f.revision.as_str(), status_name(cols, f.status_id.as_str())));
-        metadata_summary(ui,f);
-        if !f.description.0.is_empty() {
-            ui.label(&f.description.0);
-        }
-        workflow::next_task(ui, work, f.id.as_str(), enabled, actions);
-        source_control(ui, work, f.id.as_str(), actions);
-        ui.add_space(6.0);
-        // Approval and readiness are separate facts, shown apart.
-        chip(ui, approval_label(f), if f.approval.is_some() { Tone::Good } else { Tone::Attention });
-        chip(
-            ui,
-            readiness_label(f),
-            if f.readiness.as_ref().is_some_and(|r| r.ready) { Tone::Good } else { Tone::Attention },
-        );
-        ui.add_space(6.0);
-        // Status (the feature's workflow column; not its execution).
-        let mut target = f.status_id.as_str().to_owned();
-        egui::ComboBox::from_id_salt(("feature-status", f.id.as_str()))
-            .selected_text(status_name(cols, &target))
-            .show_ui(ui, |ui| {
-                for c in cols {
-                    ui.selectable_value(&mut target, c.id.clone(), &c.name);
-                }
-            })
-            .response
-            .widget_info(|| egui::WidgetInfo::labeled(egui::Role::ComboBox, enabled, "Feature status"));
-        if target != f.status_id.as_str()
-            && enabled
-            && let Some(input) = feature_status_request(f, &target)
-        {
-            actions.push(Action::Command(f.id.as_str().to_owned(), input));
-        }
-        edit_section(ui, work, f, enabled, actions);
-        ui.add_space(8.0);
-        ui.label(RichText::new("Plan").strong());
-        match (&f.plan, &f.approval) {
-            (Some(_), Some(a)) => widgets::caption(ui, format!("Active plan (approved, revision {})", a.plan_revision.as_str())),
-            _ => widgets::caption(ui, "No approved plan yet: implementation is not authorized."),
-        }
-        for r in &f.requirements.0 {
-            ui.label(format!("{}: {}", r.id.as_str(), r.statement.0));
-        }
-        for a in &f.acceptance.0 {
-            ui.label(format!("Acceptance {}: {}", a.id.as_str(), a.text.0));
-        }
-        if !f.repository_ids.0.is_empty() {
+    egui::ScrollArea::vertical()
+        .id_salt("feature-detail")
+        .show(ui, |ui| {
+            ui.label(RichText::new(&f.title.0).strong());
+            if let Some(budget) = &f.budget {
+                crate::usage_screen::budget_status(ui, budget);
+            } else {
+                widgets::caption(
+                    ui,
+                    "Feature accounting is unavailable; the effective spending policy is \
+            unknown.",
+                );
+            }
             widgets::caption(
                 ui,
                 format!(
-                    "Repositories: {}",
-                    f.repository_ids.0.iter().map(Id::as_str).collect::<Vec<_>>().join(", ")
+                    "Revision {} · {}",
+                    f.revision.as_str(),
+                    status_name(cols, f.status_id.as_str())
                 ),
             );
-        }
-        if let Some(p) = &f.pending_plan {
-            ui.add_space(4.0);
-            ui.label(RichText::new(format!("Pending revision {}", p.revision.as_str())).strong());
-            if let Some(budget)=&p.budget {crate::usage_screen::budget_choice(ui,budget);}
-            for r in &p.draft.requirements.0 {
+            metadata_summary(ui, f);
+            if !f.description.0.is_empty() {
+                ui.label(&f.description.0);
+            }
+            workflow::next_task(ui, work, f.id.as_str(), enabled, actions);
+            source_control(ui, work, f.id.as_str(), actions);
+            ui.add_space(6.0);
+            // Approval and readiness are separate facts, shown apart.
+            chip(
+                ui,
+                approval_label(f),
+                if f.approval.is_some() {
+                    Tone::Good
+                } else {
+                    Tone::Attention
+                },
+            );
+            chip(
+                ui,
+                readiness_label(f),
+                if f.readiness.as_ref().is_some_and(|r| r.ready) {
+                    Tone::Good
+                } else {
+                    Tone::Attention
+                },
+            );
+            ui.add_space(6.0);
+            // Status (the feature's workflow column; not its execution).
+            let mut target = f.status_id.as_str().to_owned();
+            egui::ComboBox::from_id_salt(("feature-status", f.id.as_str()))
+                .selected_text(status_name(cols, &target))
+                .show_ui(ui, |ui| {
+                    for c in cols {
+                        ui.selectable_value(&mut target, c.id.clone(), &c.name);
+                    }
+                })
+                .response
+                .widget_info(|| {
+                    egui::WidgetInfo::labeled(egui::Role::ComboBox, enabled, "Feature status")
+                });
+            if target != f.status_id.as_str()
+                && enabled
+                && let Some(input) = feature_status_request(f, &target)
+            {
+                actions.push(Action::Command(f.id.as_str().to_owned(), input));
+            }
+            edit_section(ui, work, f, enabled, actions);
+            ui.add_space(8.0);
+            ui.label(RichText::new("Plan").strong());
+            match (&f.plan, &f.approval) {
+                (Some(_), Some(a)) => widgets::caption(
+                    ui,
+                    format!(
+                        "Active plan (approved, revision {})",
+                        a.plan_revision.as_str()
+                    ),
+                ),
+                _ => widgets::caption(
+                    ui,
+                    "No approved plan yet: implementation is not authorized.",
+                ),
+            }
+            for r in &f.requirements.0 {
                 ui.label(format!("{}: {}", r.id.as_str(), r.statement.0));
             }
-            let requested = p
-                .approval
-                .as_ref()
-                .is_some_and(|a| matches!(a.state, ApprovalState::Pending));
-            if requested {
-                widgets::caption(ui, "Approval requested: decide it in Approvals.");
-            } else if ui
-                .add_enabled(enabled&&p.plan_digest.is_some(), egui::Button::new("Request approval"))
-                .clicked()
-            {
-                actions.push(Action::RequestApproval(f.clone()));
+            for a in &f.acceptance.0 {
+                ui.label(format!("Acceptance {}: {}", a.id.as_str(), a.text.0));
             }
-        }
-        plan_form(ui, work, f, project_repos, enabled, actions);
-        ui.add_space(8.0);
-        ui.label(RichText::new("Readiness").strong());
-        if let Some(p) = &f.pending_readiness {
-            let open = p
-                .findings
-                .0
-                .iter()
-                .filter(|x| x.blocking && matches!(x.state, FindingState::Open))
-                .count();
-            widgets::caption(
-                ui,
-                format!(
-                    "The pending draft (plan revision {}) is assessed by {}: {open} open blocking finding(s). It gates nothing until the draft is approved.",
-                    p.plan_revision.as_str(),
-                    p.assessed_by.0.as_str()
-                ),
-            );
-        }
-        match &f.readiness {
-            None => widgets::caption(ui, "No readiness assessment yet. The coordinator assesses readiness before implementation."),
-            Some(r) => {
+            if !f.repository_ids.0.is_empty() {
                 widgets::caption(
                     ui,
                     format!(
-                        "Assessed by {} for plan revision {}{} · {}",
-                        r.assessed_by.0.as_str(),
-                        r.plan_revision.as_str(),
-                        if r.reviewed_pending { " (pending draft)" } else { "" },
-                        match r.freshness {
-                            ReadinessFreshness::Current => "current",
-                            ReadinessFreshness::Stale => "stale for changed scope",
-                        }
+                        "Repositories: {}",
+                        f.repository_ids
+                            .0
+                            .iter()
+                            .map(Id::as_str)
+                            .collect::<Vec<_>>()
+                            .join(", ")
                     ),
                 );
-                if !r.summary.0.is_empty() {
-                    ui.label(&r.summary.0);
+            }
+            if let Some(p) = &f.pending_plan {
+                ui.add_space(4.0);
+                ui.label(
+                    RichText::new(format!("Pending revision {}", p.revision.as_str())).strong(),
+                );
+                if let Some(budget) = &p.budget {
+                    crate::usage_screen::budget_choice(ui, budget);
                 }
-                // Remaining findings together, then settled ones.
-                for open in [true, false] {
-                    for x in r.findings.0.iter().filter(|x| matches!(x.state, FindingState::Open) == open) {
-                        egui::Frame::new()
-                            .stroke(theme::soft_line())
-                            .corner_radius(theme::radius())
-                            .inner_margin(theme::margin(8, 6))
-                            .show(ui, |ui| {
-                                ui.label(RichText::new(format!(
-                                    "{} · {} · {}{}",
-                                    x.id.as_str(),
-                                    match x.disposition {
-                                        ReadinessDisposition::ResolvedDecision => "Resolved decision",
-                                        ReadinessDisposition::BoundedInvestigation => "Bounded investigation",
-                                        ReadinessDisposition::NeedsUserDecision => "Needs your decision",
-                                    },
-                                    match x.state {
-                                        FindingState::Open => "open",
-                                        FindingState::Resolved => "resolved",
-                                        FindingState::RiskAccepted => "risk accepted",
-                                    },
-                                    if x.blocking { " · blocking" } else { "" }
-                                )).strong());
-                                ui.label(&x.summary.0);
-                                if !x.requirement_ids.0.is_empty() {
-                                    widgets::caption(ui, format!("Requirements: {}", x.requirement_ids.0.iter().map(Id::as_str).collect::<Vec<_>>().join(", ")));
-                                }
-                                if !x.affected_work_ids.0.is_empty() {
-                                    widgets::caption(ui, format!("Gates {} item(s) of work", x.affected_work_ids.0.len()));
-                                }
-                                for (l, v) in [("Missing", &x.missing.0), ("Consequence", &x.consequence.0), ("Why not resolved autonomously", &x.insufficiency.0), ("Closes when", &x.closure_condition.0)] {
-                                    if !v.is_empty() {
-                                        widgets::caption(ui, format!("{l}: {v}"));
+                for r in &p.draft.requirements.0 {
+                    ui.label(format!("{}: {}", r.id.as_str(), r.statement.0));
+                }
+                let requested = p
+                    .approval
+                    .as_ref()
+                    .is_some_and(|a| matches!(a.state, ApprovalState::Pending));
+                if requested {
+                    widgets::caption(ui, "Approval requested: decide it in Approvals.");
+                } else if ui
+                    .add_enabled(
+                        enabled && p.plan_digest.is_some(),
+                        egui::Button::new("Request approval"),
+                    )
+                    .clicked()
+                {
+                    actions.push(Action::RequestApproval(f.clone()));
+                }
+            }
+            plan_form(ui, work, f, project_repos, enabled, actions);
+            ui.add_space(8.0);
+            ui.label(RichText::new("Readiness").strong());
+            if let Some(p) = &f.pending_readiness {
+                let open = p
+                    .findings
+                    .0
+                    .iter()
+                    .filter(|x| x.blocking && matches!(x.state, FindingState::Open))
+                    .count();
+                widgets::caption(
+                    ui,
+                    format!(
+                        "The pending draft (plan revision {}) is assessed by {}: {open} open \
+                        blocking finding(s). It gates nothing until the draft is approved.",
+                        p.plan_revision.as_str(),
+                        p.assessed_by.0.as_str()
+                    ),
+                );
+            }
+            match &f.readiness {
+                None => widgets::caption(
+                    ui,
+                    "No readiness assessment yet. The coordinator assesses readiness before \
+                implementation.",
+                ),
+                Some(r) => {
+                    widgets::caption(
+                        ui,
+                        format!(
+                            "Assessed by {} for plan revision {}{} · {}",
+                            r.assessed_by.0.as_str(),
+                            r.plan_revision.as_str(),
+                            if r.reviewed_pending {
+                                " (pending draft)"
+                            } else {
+                                ""
+                            },
+                            match r.freshness {
+                                ReadinessFreshness::Current => "current",
+                                ReadinessFreshness::Stale => "stale for changed scope",
+                            }
+                        ),
+                    );
+                    if !r.summary.0.is_empty() {
+                        ui.label(&r.summary.0);
+                    }
+                    // Remaining findings together, then settled ones.
+                    for open in [true, false] {
+                        for x in r
+                            .findings
+                            .0
+                            .iter()
+                            .filter(|x| matches!(x.state, FindingState::Open) == open)
+                        {
+                            egui::Frame::new()
+                                .stroke(theme::soft_line())
+                                .corner_radius(theme::radius())
+                                .inner_margin(theme::margin(8, 6))
+                                .show(ui, |ui| {
+                                    ui.label(
+                                        RichText::new(format!(
+                                            "{} · {} · {}{}",
+                                            x.id.as_str(),
+                                            match x.disposition {
+                                                ReadinessDisposition::ResolvedDecision =>
+                                                    "Resolved decision",
+                                                ReadinessDisposition::BoundedInvestigation =>
+                                                    "Bounded investigation",
+                                                ReadinessDisposition::NeedsUserDecision =>
+                                                    "Needs your decision",
+                                            },
+                                            match x.state {
+                                                FindingState::Open => "open",
+                                                FindingState::Resolved => "resolved",
+                                                FindingState::RiskAccepted => "risk accepted",
+                                            },
+                                            if x.blocking { " · blocking" } else { "" }
+                                        ))
+                                        .strong(),
+                                    );
+                                    ui.label(&x.summary.0);
+                                    if !x.requirement_ids.0.is_empty() {
+                                        widgets::caption(
+                                            ui,
+                                            format!(
+                                                "Requirements: {}",
+                                                x.requirement_ids
+                                                    .0
+                                                    .iter()
+                                                    .map(Id::as_str)
+                                                    .collect::<Vec<_>>()
+                                                    .join(", ")
+                                            ),
+                                        );
                                     }
-                                }
-                                for a in &x.attempts.0 {
-                                    widgets::caption(ui, format!("Tried: {}", a.0));
-                                }
-                                for (l, v) in [("Decision", &x.decision), ("Objective", &x.objective), ("Limits", &x.limits), ("Question", &x.question), ("Recommendation", &x.recommendation), ("Closure", &x.closure_note)] {
-                                    if let Some(v) = v {
-                                        widgets::caption(ui, format!("{l}: {}", v.0));
+                                    if !x.affected_work_ids.0.is_empty() {
+                                        widgets::caption(
+                                            ui,
+                                            format!(
+                                                "Gates {} item(s) of work",
+                                                x.affected_work_ids.0.len()
+                                            ),
+                                        );
                                     }
-                                }
-                                if let Some(c) = &x.confidence {
-                                    widgets::caption(ui, format!("Confidence: {c:?}"));
-                                }
-                                if !x.evidence.0.is_empty() || !x.closure_evidence.0.is_empty() {
-                                    widgets::caption(ui, format!("Evidence: {} item(s)", x.evidence.0.len() + x.closure_evidence.0.len()));
-                                }
-                            });
+                                    for (l, v) in [
+                                        ("Missing", &x.missing.0),
+                                        ("Consequence", &x.consequence.0),
+                                        ("Why not resolved autonomously", &x.insufficiency.0),
+                                        ("Closes when", &x.closure_condition.0),
+                                    ] {
+                                        if !v.is_empty() {
+                                            widgets::caption(ui, format!("{l}: {v}"));
+                                        }
+                                    }
+                                    for a in &x.attempts.0 {
+                                        widgets::caption(ui, format!("Tried: {}", a.0));
+                                    }
+                                    for (l, v) in [
+                                        ("Decision", &x.decision),
+                                        ("Objective", &x.objective),
+                                        ("Limits", &x.limits),
+                                        ("Question", &x.question),
+                                        ("Recommendation", &x.recommendation),
+                                        ("Closure", &x.closure_note),
+                                    ] {
+                                        if let Some(v) = v {
+                                            widgets::caption(ui, format!("{l}: {}", v.0));
+                                        }
+                                    }
+                                    if let Some(c) = &x.confidence {
+                                        widgets::caption(ui, format!("Confidence: {c:?}"));
+                                    }
+                                    if !x.evidence.0.is_empty() || !x.closure_evidence.0.is_empty()
+                                    {
+                                        widgets::caption(
+                                            ui,
+                                            format!(
+                                                "Evidence: {} item(s)",
+                                                x.evidence.0.len() + x.closure_evidence.0.len()
+                                            ),
+                                        );
+                                    }
+                                });
+                        }
                     }
                 }
             }
-        }
-        ui.add_space(8.0);
-        let tasks = work.cards.items.iter().filter(|c| c.parent_id.as_ref() == Some(&f.id)).count();
-        widgets::caption(ui, format!("{tasks} task(s) on its board"));
-        if ui.button("Show its activity").clicked() {
-            actions.push(Action::ShowActivity(f.id.as_str().to_owned()));
-        }
-        ui.add_space(8.0);
-        ui.label(RichText::new("Watchers").strong());
-        watchers(ui);
-    });
+            ui.add_space(8.0);
+            let tasks = work
+                .cards
+                .items
+                .iter()
+                .filter(|c| c.parent_id.as_ref() == Some(&f.id))
+                .count();
+            widgets::caption(ui, format!("{tasks} task(s) on its board"));
+            if ui.button("Show its activity").clicked() {
+                actions.push(Action::ShowActivity(f.id.as_str().to_owned()));
+            }
+            ui.add_space(8.0);
+            ui.label(RichText::new("Watchers").strong());
+            watchers(ui);
+        });
 }
 
 pub(crate) fn edit_section(
@@ -306,7 +419,8 @@ pub(crate) fn plan_form(
     let form = work.plan.as_mut().expect("open");
     widgets::caption(
         ui,
-        "Saving makes this the pending revision; the active plan stays in force until it is approved.",
+        "Saving makes this the pending revision; the active plan stays in force \
+            until it is approved.",
     );
     let mut propose = form.budget.is_some();
     if ui
@@ -622,7 +736,8 @@ pub(crate) fn requirement_editor(ui: &mut Ui, form: &mut PlanForm) {
     if !approved.is_empty() {
         widgets::caption(
             ui,
-            "Approved requirement IDs stay stable. Dropping one records a decision with the pending draft.",
+            "Approved requirement IDs stay stable. Dropping one records a decision \
+                with the pending draft.",
         );
     }
     if ui.small_button("Add requirement").clicked() {
@@ -1073,9 +1188,12 @@ pub(crate) fn card_detail(
                         actions.push(Action::RefreshHistory(Some(w.id.as_str().to_owned())));
                     }
                 }
-                if feed.more
+                if feed.more()
                     && ui
-                        .add_enabled(!feed.loading, egui::Button::new("Load older card changes"))
+                        .add_enabled(
+                            !feed.loading(),
+                            egui::Button::new("Load older card changes"),
+                        )
                         .clicked()
                 {
                     actions.push(Action::OlderHistory(Some(w.id.as_str().to_owned())));
@@ -1166,7 +1284,7 @@ pub(crate) fn source_control(ui: &mut Ui, work: &WorkUi, root: &str, actions: &m
                                 );
                                 if let Some(branch) = &state.branch {
                                     if let Some(url) = link.repository_url.as_ref().and_then(|u| {
-                                        devworks_core::services::git::github::branch_url(
+                                        devworks_core::protocol::helpers::git::branch_url(
                                             &u.0, &branch.0,
                                         )
                                     }) {
@@ -1195,7 +1313,7 @@ pub(crate) fn source_control(ui: &mut Ui, work: &WorkUi, root: &str, actions: &m
                     if let Some(url) = &link.repository_url {
                         ui.hyperlink_to(
                             &branch.0,
-                            devworks_core::services::git::github::branch_url(&url.0, &branch.0)
+                            devworks_core::protocol::helpers::git::branch_url(&url.0, &branch.0)
                                 .unwrap_or_else(|| url.0.clone()),
                         );
                     } else {

@@ -53,7 +53,8 @@
 //! generation; an **event-handler invocation** may not use `broker.state` compare-and-set or an
 //! effectful `broker.call`: its state change, effect intents, processing receipt and checkpoint
 //! commit together through `broker.commit_event` ([`crate::package::commit_event`]) or not at
-//! all. `broker.call` is checked against the invocation's grants, which the host resolves at
+//! all (it may still read artifacts, write its own scratch artifacts and run inference as the
+//! person who approved its version, [`events`]). `broker.call` is checked against the invocation's grants, which the host resolves at
 //! admission from the approved manifest and the invoking principal ([`broker`]): application
 //! operations run as the invoking principal through the ordinary gateway, are journaled with the
 //! package as actor and answer with a result artifact. Brokered HTTP, inference and artifact
@@ -64,6 +65,7 @@
 pub mod artifact_io;
 pub mod broker;
 pub mod discovery;
+pub mod events;
 pub mod http;
 pub mod inference;
 pub mod intents;
@@ -77,6 +79,7 @@ use crate::package::{
 };
 use devworks_core::authority::destructive::{FilesystemResolver, ProtectedRoots};
 use devworks_core::context::{HostIngress, InvocationContext, PrincipalKind};
+use devworks_core::locks::LockExt;
 use devworks_core::ports::packages::{Inspection, PackageActivity, QuiescenceGuard};
 use devworks_core::ports::process::ProcessSpec;
 use devworks_core::ports::storage::{
@@ -202,19 +205,13 @@ struct Instance {
 }
 impl Instance {
     fn status(&self) -> InstanceStatus {
-        self.status
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .clone()
+        self.status.locked().clone()
     }
     fn set(&self, s: InstanceStatus) {
-        *self.status.lock().unwrap_or_else(|p| p.into_inner()) = s;
+        *self.status.locked() = s;
     }
     fn session(&self) -> Option<Arc<Session>> {
-        self.session
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .clone()
+        self.session.locked().clone()
     }
     /// Whether it admits work: ready, with its protocol session still open.
     fn serving(&self) -> bool {
@@ -231,16 +228,10 @@ impl Instance {
     }
     /// The owned process (a copy: the lock is never held across a wait or a kill).
     fn process(&self) -> Option<OwnedProcess> {
-        self.process
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .clone()
+        self.process.locked().clone()
     }
     fn take_process(&self) -> Option<OwnedProcess> {
-        self.process
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .take()
+        self.process.locked().take()
     }
 }
 
@@ -272,14 +263,12 @@ struct SlotContext {
 impl SlotContext {
     fn in_scope(&self, artifact: &wire::ArtifactRef) -> bool {
         self.artifacts
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
+            .locked()
             .contains(&broker::artifact_key(artifact))
     }
     fn admit_artifact(&self, artifact: &wire::ArtifactRef) {
         self.artifacts
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
+            .locked()
             .insert(broker::artifact_key(artifact));
     }
 }
@@ -412,12 +401,7 @@ impl InvocationHandle {
     }
     /// Progress texts so far (bounded) and how many were dropped.
     pub fn progress(&self) -> (Vec<String>, i64) {
-        let s = self
-            .run
-            .slot
-            .state
-            .lock()
-            .unwrap_or_else(|p| p.into_inner());
+        let s = self.run.slot.state.locked();
         (
             s.progress.iter().map(|(_, t)| t.clone()).collect(),
             s.dropped_progress,
@@ -526,7 +510,7 @@ struct Gate {
 impl QuiescenceGuard for Gate {}
 impl Drop for Gate {
     fn drop(&mut self) {
-        let mut b = self.host.barriers.lock().unwrap_or_else(|p| p.into_inner());
+        let mut b = self.host.barriers.locked();
         if let Some(n) = b.gates.get_mut(&self.package) {
             *n -= 1;
             if *n == 0 {
@@ -605,13 +589,12 @@ impl PackageHost {
             network: OnceLock::new(),
             inference: OnceLock::new(),
         });
-        *host.me.lock().unwrap_or_else(|p| p.into_inner()) = Arc::downgrade(&host);
+        *host.me.locked() = Arc::downgrade(&host);
         host
     }
     fn arc(&self) -> Arc<PackageHost> {
         self.me
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
+            .locked()
             .upgrade()
             .expect("the package host is alive")
     }
@@ -633,19 +616,16 @@ impl PackageHost {
         let _ = self.inference.set(ports);
     }
     /// How many restart budgets the host tracks (one per desired instance key at most).
+    #[cfg(any(test, feature = "test-support"))]
     pub fn tracked_budgets(&self) -> usize {
-        self.attempts
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .len()
+        self.attempts.locked().len()
     }
     /// The consecutive failures counted against the restart budget of the package's instance
     /// key (the largest, should it have several), until sustained health resets the budget or
     /// the key stops being the activation intent and its budget is forgotten.
     pub fn failures(&self, package_id: &str) -> u32 {
         self.attempts
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
+            .locked()
             .iter()
             .filter(|((p, _), _)| p == package_id)
             .map(|(_, a)| a.failures)
@@ -756,7 +736,7 @@ impl PackageHost {
                     let wait = host.reconciliation_wait(reconciled_at);
                     {
                         let (m, cv) = &host.wake;
-                        let mut woken = m.lock().unwrap_or_else(|p| p.into_inner());
+                        let mut woken = m.locked();
                         if !*woken {
                             woken = cv
                                 .wait_timeout(woken, wait)
@@ -783,16 +763,14 @@ impl PackageHost {
         let now = Instant::now();
         let staged = self
             .retry_at
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
+            .locked()
             .values()
             .map(|(deadline, _)| *deadline)
             .filter(|deadline| reconciled_at.is_none_or(|seen| *deadline > seen))
             .map(|deadline| deadline.saturating_duration_since(now))
             .min();
         self.attempts
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
+            .locked()
             .values()
             .filter(|attempt| !attempt.exhausted)
             .filter_map(|attempt| attempt.next_at)
@@ -834,7 +812,7 @@ impl PackageHost {
 
     /// A periodic wait that shutdown interrupts; ordinary admission notifications do not reset it.
     fn wait_discovery(&self, interval: Duration) -> bool {
-        let gate = self.barriers.lock().unwrap_or_else(|p| p.into_inner());
+        let gate = self.barriers.locked();
         let (gate, _) = self
             .changed
             .wait_timeout_while(gate, interval, |gate| {
@@ -846,15 +824,14 @@ impl PackageHost {
 
     fn poke(&self) {
         let (m, cv) = &self.wake;
-        *m.lock().unwrap_or_else(|p| p.into_inner()) = true;
+        *m.locked() = true;
         cv.notify_all();
     }
 
     /// `(package, digest)` of every live instance (never collected).
     fn in_use(&self) -> BTreeSet<(String, String)> {
         self.instances
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
+            .locked()
             .values()
             .flatten()
             .filter(|i| i.status() != InstanceStatus::Stopped)
@@ -863,17 +840,14 @@ impl PackageHost {
     }
 
     pub(crate) fn is_stopping(&self) -> bool {
-        self.barriers
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .stopping
+        self.barriers.locked().stopping
     }
 
     /// The instances of a package (current and retiring), for inspection.
+    #[cfg(any(test, feature = "test-support"))]
     pub fn instance_status(&self, package_id: &str) -> Vec<(String, InstanceStatus)> {
         self.instances
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
+            .locked()
             .get(package_id)
             .map(|v| {
                 v.iter()
@@ -885,13 +859,8 @@ impl PackageHost {
 
     /// Makes the running instances match the committed registry (module documentation).
     pub fn reconcile(&self) {
-        let _pass = self.pass.lock().unwrap_or_else(|p| p.into_inner());
-        if self
-            .barriers
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .stopping
-        {
+        let _pass = self.pass.locked();
+        if self.barriers.locked().stopping {
             return;
         }
         let svc = self.service.clone();
@@ -936,13 +905,12 @@ impl PackageHost {
         // generation or configuration, or a recorded failure) are forgotten, so they never
         // accumulate; a person's enable starts a fresh budget.
         self.attempts
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
+            .locked()
             .retain(|(pkg, key), _| desired.get(pkg).is_some_and(|(k, _)| k == key));
         // Retire whatever no longer matches.
         let mut to_start = Vec::new();
         {
-            let mut map = self.instances.lock().unwrap_or_else(|p| p.into_inner());
+            let mut map = self.instances.locked();
             let packages: BTreeSet<String> = map.keys().cloned().chain(known).collect();
             for pkg in packages {
                 let want = desired.get(&pkg);
@@ -964,7 +932,7 @@ impl PackageHost {
                     && !has_current
                 {
                     let attempts = {
-                        let mut all = self.attempts.lock().unwrap_or_else(|p| p.into_inner());
+                        let mut all = self.attempts.locked();
                         let a = all.entry((pkg.clone(), k.clone())).or_default();
                         if a.exhausted && a.exhausted_at.is_some_and(|at| registry > at) {
                             // Wanted again after its failure was recorded: an explicit retry.
@@ -1001,8 +969,7 @@ impl PackageHost {
         // Disabled or uninstalled packages: cancel their invocations (disable cancels).
         let cancel: Vec<Arc<Instance>> = self
             .instances
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
+            .locked()
             .iter()
             .filter(|(pkg, _)| !desired.contains_key(*pkg))
             .flat_map(|(_, v)| v.clone())
@@ -1022,18 +989,12 @@ impl PackageHost {
 
     /// Stops every retiring instance with nothing in flight (not once shutdown owns stopping).
     fn retire_idle(&self) {
-        if self
-            .barriers
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .stopping
-        {
+        if self.barriers.locked().stopping {
             return;
         }
         let idle: Vec<Arc<Instance>> = self
             .instances
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
+            .locked()
             .values()
             .flatten()
             .filter(|i| {
@@ -1048,7 +1009,7 @@ impl PackageHost {
             // The same stop phases as before, all within one deadline.
             self.stop_instance(&inst, Instant::now() + self.config.cancel_grace * 4);
         }
-        let mut map = self.instances.lock().unwrap_or_else(|p| p.into_inner());
+        let mut map = self.instances.locked();
         for list in map.values_mut() {
             list.retain(|i| i.status() != InstanceStatus::Stopped);
         }
@@ -1064,8 +1025,7 @@ impl PackageHost {
         // Recomputed before every phase, against the earlier of this stop's deadline and the
         // shutdown deadline (which may begin while this stop runs).
         let left = || {
-            let by = (*self.shutdown_by.lock().unwrap_or_else(|p| p.into_inner()))
-                .map_or(deadline, |s| s.min(deadline));
+            let by = (*self.shutdown_by.locked()).map_or(deadline, |s| s.min(deadline));
             by.saturating_duration_since(Instant::now())
         };
         if let Some(s) = inst.session() {
@@ -1106,7 +1066,7 @@ impl PackageHost {
     }
 
     fn log_stderr(&self, inst: &Instance, severity: Severity, code: &str, message: &str) {
-        let tail = std::mem::take(&mut *inst.stderr.lock().unwrap_or_else(|p| p.into_inner()));
+        let tail = std::mem::take(&mut *inst.stderr.locked());
         let output = (!tail.is_empty()).then(|| String::from_utf8_lossy(&tail).into_owned());
         self.service
             .record_log(&inst.package_id, severity, code, message, output);
@@ -1154,16 +1114,12 @@ impl PackageHost {
     pub fn abandon(&self) {
         self.running.store(false, Ordering::SeqCst);
         self.detach();
-        self.barriers
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .stopping = true;
+        self.barriers.locked().stopping = true;
         self.poke();
         self.changed.notify_all();
         let all: Vec<Arc<Instance>> = self
             .instances
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
+            .locked()
             .drain()
             .flat_map(|(_, v)| v)
             .collect();
@@ -1183,7 +1139,7 @@ impl PackageHost {
 
     fn release(&self, inst: &Instance) {
         inst.in_flight.fetch_sub(1, Ordering::SeqCst);
-        let mut b = self.barriers.lock().unwrap_or_else(|p| p.into_inner());
+        let mut b = self.barriers.locked();
         if let Some(n) = b.in_flight.get_mut(&inst.package_id) {
             *n = n.saturating_sub(1);
         }
@@ -1203,8 +1159,7 @@ impl PackageHost {
         }
         if let Some(a) = self
             .attempts
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
+            .locked()
             .get_mut(&(inst.package_id.clone(), inst.key.clone()))
         {
             a.failures = 0;
@@ -1223,7 +1178,7 @@ impl PackageHost {
         // Accounted first, in memory: the kill and the log below write to the store and may
         // wait, and no reconciliation pass may restart a spent key meanwhile.
         let key = (inst.package_id.clone(), inst.key.clone());
-        let mut attempts = self.attempts.lock().unwrap_or_else(|p| p.into_inner());
+        let mut attempts = self.attempts.locked();
         let a = attempts.entry(key).or_default();
         a.failures += 1;
         let failures = a.failures;
@@ -1251,8 +1206,7 @@ impl PackageHost {
         self.log_stderr(inst, Severity::Warning, code, message);
         if let Some(a) = self
             .attempts
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
+            .locked()
             .get_mut(&(inst.package_id.clone(), inst.key.clone()))
         {
             a.next_at = Some(
@@ -1277,8 +1231,7 @@ impl PackageHost {
                     self.epoch.fetch_add(1, Ordering::SeqCst);
                     if let Some(a) = self
                         .attempts
-                        .lock()
-                        .unwrap_or_else(|p| p.into_inner())
+                        .locked()
                         .get_mut(&(inst.package_id.clone(), inst.key.clone()))
                     {
                         a.exhausted_at = Some(recorded.registry_revision);
@@ -1288,8 +1241,7 @@ impl PackageHost {
                 Err(_) => {
                     if let Some(a) = self
                         .attempts
-                        .lock()
-                        .unwrap_or_else(|p| p.into_inner())
+                        .locked()
                         .get_mut(&(inst.package_id.clone(), inst.key.clone()))
                     {
                         a.exhausted = false;
@@ -1384,11 +1336,11 @@ impl PackageHost {
         // snapshot sees this process, or the launch completed after stopping began and its tree
         // is killed here.
         let registered = {
-            let b = self.barriers.lock().unwrap_or_else(|p| p.into_inner());
+            let b = self.barriers.locked();
             if b.stopping {
                 false
             } else {
-                *inst.process.lock().unwrap_or_else(|p| p.into_inner()) = Some(owned.clone());
+                *inst.process.locked() = Some(owned.clone());
                 true
             }
         };
@@ -1416,7 +1368,7 @@ impl PackageHost {
             broker,
             usize::from(i.limits.queue_capacity),
         );
-        *inst.session.lock().unwrap_or_else(|p| p.into_inner()) = Some(session.clone());
+        *inst.session.locked() = Some(session.clone());
         match self.handshake(inst, &session) {
             Ok(()) => {
                 // Recorded before it admits work, so a ready helper is always attributed.
@@ -1425,7 +1377,7 @@ impl PackageHost {
                 }
                 inst.set(InstanceStatus::Ready);
                 // The failure budget resets only after sustained health (see `healthy`).
-                *inst.ready_at.lock().unwrap_or_else(|p| p.into_inner()) = Some(Instant::now());
+                *inst.ready_at.locked() = Some(Instant::now());
                 self.watch(inst.clone(), session);
             }
             Err((code, why)) => self.start_failed(inst, code, &why),
@@ -1577,8 +1529,7 @@ impl PackageHost {
                     }
                     if inst
                         .ready_at
-                        .lock()
-                        .unwrap_or_else(|p| p.into_inner())
+                        .locked()
                         .is_some_and(|t| t.elapsed() >= host.config.healthy_after)
                     {
                         host.healthy(&inst);
@@ -1593,13 +1544,7 @@ impl PackageHost {
                             "the helper stopped reading its input",
                         );
                     }
-                    if !host.running.load(Ordering::SeqCst)
-                        && host
-                            .barriers
-                            .lock()
-                            .unwrap_or_else(|p| p.into_inner())
-                            .stopping
-                    {
+                    if !host.running.load(Ordering::SeqCst) && host.barriers.locked().stopping {
                         return;
                     }
                 }
@@ -1647,8 +1592,7 @@ impl PackageHost {
             let now = Instant::now();
             let due = self
                 .retry_at
-                .lock()
-                .unwrap_or_else(|p| p.into_inner())
+                .locked()
                 .get(&pkg)
                 .is_none_or(|(t, _)| now >= *t);
             if !due {
@@ -1670,7 +1614,7 @@ impl PackageHost {
                 }
                 None => false,
             };
-            let mut retry = self.retry_at.lock().unwrap_or_else(|p| p.into_inner());
+            let mut retry = self.retry_at.locked();
             if activated {
                 retry.remove(&pkg);
             } else {
@@ -1743,29 +1687,23 @@ impl PackageHost {
             }
             // Admission is atomic with the barrier: both are decided under the barrier lock.
             {
-                let mut b = self.barriers.lock().unwrap_or_else(|p| p.into_inner());
+                let mut b = self.barriers.locked();
                 if b.stopping {
                     return Err(InvokeRefusal::ShuttingDown);
                 }
                 if !b.gates.contains_key(&req.package_id) {
-                    let inst = self
-                        .instances
-                        .lock()
-                        .unwrap_or_else(|p| p.into_inner())
-                        .get(&req.package_id)
-                        .and_then(|v| {
-                            // A serving instance of the key first; a failed one only when no other.
-                            v.iter()
-                                .find(|i| i.key == key && i.serving())
-                                .or_else(|| {
-                                    v.iter().find(|i| {
-                                        i.key == key
-                                            && !matches!(i.status(), InstanceStatus::Failed(_))
-                                    })
+                    let inst = self.instances.locked().get(&req.package_id).and_then(|v| {
+                        // A serving instance of the key first; a failed one only when no other.
+                        v.iter()
+                            .find(|i| i.key == key && i.serving())
+                            .or_else(|| {
+                                v.iter().find(|i| {
+                                    i.key == key && !matches!(i.status(), InstanceStatus::Failed(_))
                                 })
-                                .or_else(|| v.iter().find(|i| i.key == key))
-                                .cloned()
-                        });
+                            })
+                            .or_else(|| v.iter().find(|i| i.key == key))
+                            .cloned()
+                    });
                     match inst {
                         // A registry published since this pass read it: read it again.
                         _ if self.epoch.load(Ordering::SeqCst) != epoch => {
@@ -1998,19 +1936,18 @@ impl PackageHost {
     pub fn shutdown(&self, bound: Duration) {
         // The deadline is fixed first: any stop already in progress observes it from here.
         let deadline = Instant::now() + bound;
-        *self.shutdown_by.lock().unwrap_or_else(|p| p.into_inner()) = Some(deadline);
+        *self.shutdown_by.locked() = Some(deadline);
         self.running.store(false, Ordering::SeqCst);
         self.detach();
         self.poke();
         {
-            let mut b = self.barriers.lock().unwrap_or_else(|p| p.into_inner());
+            let mut b = self.barriers.locked();
             b.stopping = true;
         }
         self.changed.notify_all();
         let all: Vec<Arc<Instance>> = self
             .instances
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
+            .locked()
             .values()
             .flatten()
             .cloned()
@@ -2023,10 +1960,7 @@ impl PackageHost {
             // whatever is left.
             self.stop_instance(&inst, deadline);
         }
-        self.instances
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .clear();
+        self.instances.locked().clear();
     }
 }
 
@@ -2106,7 +2040,7 @@ fn spawn_tail(mut stderr: Box<dyn Read + Send>, into: Arc<Mutex<Vec<u8>>>, keep:
                 match stderr.read(&mut buf) {
                     Ok(0) | Err(_) => return,
                     Ok(n) => {
-                        let mut t = into.lock().unwrap_or_else(|p| p.into_inner());
+                        let mut t = into.locked();
                         t.extend_from_slice(&buf[..n]);
                         if t.len() > keep {
                             let cut = t.len() - keep;
@@ -2121,7 +2055,7 @@ fn spawn_tail(mut stderr: Box<dyn Read + Send>, into: Arc<Mutex<Vec<u8>>>, keep:
 impl PackageActivity for PackageHost {
     fn quiesce(&self, package_id: &str, wait: Duration) -> Option<Box<dyn QuiescenceGuard>> {
         let until = Instant::now() + wait;
-        let mut b = self.barriers.lock().unwrap_or_else(|p| p.into_inner());
+        let mut b = self.barriers.locked();
         *b.gates.entry(package_id.to_owned()).or_default() += 1;
         let guard = Gate {
             host: self.arc(),
@@ -2147,7 +2081,7 @@ impl PackageActivity for PackageHost {
         }
     }
     fn fence(&self, package_id: &str) -> Box<dyn QuiescenceGuard> {
-        let mut b = self.barriers.lock().unwrap_or_else(|p| p.into_inner());
+        let mut b = self.barriers.locked();
         *b.gates.entry(package_id.to_owned()).or_default() += 1;
         drop(b);
         Box::new(Gate {
@@ -2157,8 +2091,7 @@ impl PackageActivity for PackageHost {
     }
     fn busy(&self, package_id: &str) -> bool {
         self.barriers
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
+            .locked()
             .in_flight
             .get(package_id)
             .copied()
@@ -2180,8 +2113,17 @@ struct HostBroker {
     host: Arc<PackageHost>,
 }
 
+/// Whether an event handler may not make `call` outside `broker.commit_event`. Reads and the
+/// handler's own scratch artifacts change nothing in the application, and inference only spends
+/// the approving person's budget; neither is an effect the commit must make atomic.
 fn effectful(call: &BrokerCall) -> bool {
-    !matches!(call, BrokerCall::ArtifactRead { .. })
+    !matches!(
+        call,
+        BrokerCall::ArtifactRead { .. }
+            | BrokerCall::ArtifactAppend { .. }
+            | BrokerCall::ArtifactPublish { .. }
+            | BrokerCall::Inference { .. }
+    )
 }
 
 impl Broker for HostBroker {
@@ -2311,7 +2253,7 @@ impl Broker for HostBroker {
                     manifest_digest: ctx.manifest_digest.clone(),
                 };
                 let outcome = run_write(&*self.host.store, WriteOptions::host_state(), move |tx| {
-                    let _guard = slot.state.lock().unwrap_or_else(|p| p.into_inner());
+                    let _guard = slot.state.locked();
                     if slot.revoked.load(Ordering::SeqCst) {
                         return Ok(CommitOutcome::Refused(CommitRefusal::StaleInvocation));
                     }
@@ -2373,7 +2315,7 @@ impl HostBroker {
         let pkg = package.to_owned();
         let value = json!({"artifact": proposal});
         let written = run_write(&*self.host.store, WriteOptions::host_state(), move |tx| {
-            let _guard = slot.state.lock().unwrap_or_else(|p| p.into_inner());
+            let _guard = slot.state.locked();
             if slot.revoked.load(Ordering::SeqCst) {
                 return Err(StorageError::LeaseLost {
                     kind: "package_invocation",

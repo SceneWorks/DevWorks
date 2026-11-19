@@ -34,7 +34,10 @@ fn ids(conn: &Connection, sql: &str, p: impl rusqlite::Params) -> Result<Vec<Id>
 // ---------------------------------------------------------------------------------------------
 // Work items
 
-const WORK_COLUMNS: &str = "w.id,w.project_id,w.kind,w.parent_feature_id,w.status_id,w.title,w.priority,w.manual_order,w.revision,w.scope_revision,w.created_at,COALESCE(d.updated_at,w.created_at),d.created_by,d.updated_by,COALESCE(d.search_key,''),d.caller_ref,d.completion,w.brief_json";
+const WORK_COLUMNS: &str = "w.id,w.project_id,w.kind,w.parent_feature_id,w.status_id,w.title,\
+    w.priority,w.manual_order,w.revision,w.scope_revision,w.created_at,\
+    COALESCE(d.updated_at,w.created_at),d.created_by,d.updated_by,\
+    COALESCE(d.search_key,''),d.caller_ref,d.completion,w.brief_json";
 const WORK_FROM: &str = "work_items w LEFT JOIN work_details d ON d.work_id=w.id";
 
 type WorkRaw = (
@@ -157,7 +160,8 @@ fn list_works(
     }
     if !f.repository_ids.is_empty() {
         sql.push_str(&format!(
-            " AND EXISTS(SELECT 1 FROM work_repositories r WHERE r.work_id=w.id AND r.repository_id IN ({}))",
+            " AND EXISTS(SELECT 1 FROM work_repositories r WHERE r.work_id=w.id AND \
+                r.repository_id IN ({}))",
             vec!["?"; f.repository_ids.len()].join(",")
         ));
         values.extend(
@@ -172,7 +176,9 @@ fn list_works(
     }
     if let Some(a) = after {
         sql.push_str(
-            " AND (w.priority<? OR (w.priority=? AND (w.manual_order>? OR (w.manual_order=? AND (w.created_at>? OR (w.created_at=? AND w.id>?))))))",
+            " AND (w.priority<? OR (w.priority=? AND (w.manual_order>? OR \
+                (w.manual_order=? AND (w.created_at>? OR (w.created_at=? AND \
+                w.id>?))))))",
         );
         values.extend([
             Sql::Integer(a.priority),
@@ -223,7 +229,8 @@ fn check_work(w: &StoredWork) -> Result<(), StorageError> {
 fn check_parent(conn: &Connection, w: &StoredWork) -> Result<(), StorageError> {
     if let Some(p) = &w.parent_feature_id {
         let ok: bool = db(db(conn.prepare_cached(
-            "SELECT EXISTS(SELECT 1 FROM work_items WHERE id=?1 AND project_id=?2 AND kind='feature')",
+            "SELECT EXISTS(SELECT 1 FROM work_items WHERE id=?1 AND project_id=?2 \
+                AND kind='feature')",
         ))?
         .query_row(params![p.as_str(), w.project_id.0.as_str()], |r| r.get(0)))?;
         if !ok {
@@ -256,10 +263,15 @@ fn write_details(conn: &Connection, w: &StoredWork) -> Result<(), StorageError> 
         }
     }
     db(db(conn.prepare_cached(
-        "INSERT INTO work_details(work_id,project_id,search_key,caller_ref,completion,created_by,updated_by,updated_at)
-         VALUES(?1,?2,?3,?4,?5,?6,?7,?8)
-         ON CONFLICT(work_id) DO UPDATE SET search_key=excluded.search_key,caller_ref=excluded.caller_ref,
-         completion=excluded.completion,created_by=excluded.created_by,updated_by=excluded.updated_by,
+        "INSERT INTO work_details(work_id,project_id,search_key,caller_ref,\
+            completion,created_by,updated_by,updated_at)
+         VALUES(?1,?2,?3,\
+            ?4,?5,?6,?7,?8)
+         ON CONFLICT(work_id) DO UPDATE SET \
+            search_key=excluded.search_key,caller_ref=excluded.caller_ref,
+         \
+            completion=excluded.completion,created_by=excluded.created_by,\
+            updated_by=excluded.updated_by,
          updated_at=excluded.updated_at",
     ))?
     .execute(params![
@@ -289,7 +301,9 @@ fn plan_of(conn: &Connection, feature: &Id) -> Result<Option<StoredFeaturePlan>,
         Option<i64>,
     );
     let raw: Option<Raw> = db(db(conn.prepare_cached(
-        "SELECT feature_id,revision,approved_plan_json,approved_by,approved_at,pending_plan_json,pending_revision FROM feature_plans WHERE feature_id=?1",
+        "SELECT feature_id,revision,approved_plan_json,approved_by,approved_at,\
+            pending_plan_json,pending_revision FROM feature_plans WHERE \
+            feature_id=?1",
     ))?
     .query_row([feature.as_str()], |r| {
         Ok((
@@ -317,7 +331,8 @@ fn plan_of(conn: &Connection, feature: &Id) -> Result<Option<StoredFeaturePlan>,
     .transpose()
 }
 
-const PROPOSAL_COLUMNS: &str = "id,feature_id,revision,plan_revision,plan_digest,state,requested_by,requested_at,decided_by,decided_at,summary,reviewed_snapshot_json";
+const PROPOSAL_COLUMNS: &str = "id,feature_id,revision,plan_revision,plan_digest,state,requested_by,\
+    requested_at,decided_by,decided_at,summary,reviewed_snapshot_json";
 type ProposalRaw = (
     (String, String, i64, i64, String, String),
     (
@@ -373,12 +388,45 @@ fn proposal_of(raw: ProposalRaw) -> Result<StoredProposal, StorageError> {
 macro_rules! work_reads {
     ($t:ty) => {
         impl WorkRead for $t {
-            fn allocation_replay(&self,key:&str)->Result<Option<StoredAllocationReplay>,StorageError>{super::allocations::replay(self.conn,key)}
-            fn allocation_claim(&self,id:&Id)->Result<Option<StoredAllocationClaim>,StorageError>{super::allocations::one(self.conn,id)}
-            fn allocation_claims(&self,project:&ProjectId,after:Option<&Id>,limit:u16)->Result<Vec<StoredAllocationClaim>,StorageError>{super::allocations::page(self.conn,project,after,limit)}
-            fn live_allocation_claims(&self,project:&ProjectId)->Result<Vec<StoredAllocationClaim>,StorageError>{super::allocations::live_claims(self.conn,project)}
-            fn latest_allocation_claim(&self,work:&Id)->Result<Option<StoredAllocationClaim>,StorageError>{super::allocations::latest(self.conn,work)}
-            fn allocation_by_invocation(&self,namespace:&Id,invocation:&Id)->Result<Option<StoredAllocationClaim>,StorageError>{super::allocations::invocation(self.conn,namespace,invocation)}
+            fn allocation_replay(
+                &self,
+                key: &str,
+            ) -> Result<Option<StoredAllocationReplay>, StorageError> {
+                super::allocations::replay(self.conn, key)
+            }
+            fn allocation_claim(
+                &self,
+                id: &Id,
+            ) -> Result<Option<StoredAllocationClaim>, StorageError> {
+                super::allocations::one(self.conn, id)
+            }
+            fn allocation_claims(
+                &self,
+                project: &ProjectId,
+                after: Option<&Id>,
+                limit: u16,
+            ) -> Result<Vec<StoredAllocationClaim>, StorageError> {
+                super::allocations::page(self.conn, project, after, limit)
+            }
+            fn live_allocation_claims(
+                &self,
+                project: &ProjectId,
+            ) -> Result<Vec<StoredAllocationClaim>, StorageError> {
+                super::allocations::live_claims(self.conn, project)
+            }
+            fn latest_allocation_claim(
+                &self,
+                work: &Id,
+            ) -> Result<Option<StoredAllocationClaim>, StorageError> {
+                super::allocations::latest(self.conn, work)
+            }
+            fn allocation_by_invocation(
+                &self,
+                namespace: &Id,
+                invocation: &Id,
+            ) -> Result<Option<StoredAllocationClaim>, StorageError> {
+                super::allocations::invocation(self.conn, namespace, invocation)
+            }
             fn work(&self, id: &Id) -> Result<Option<StoredWork>, StorageError> {
                 one_work(self.conn, id)
             }
@@ -393,21 +441,24 @@ macro_rules! work_reads {
             fn work_repositories(&self, id: &Id) -> Result<Vec<Id>, StorageError> {
                 ids(
                     self.conn,
-                    "SELECT repository_id FROM work_repositories WHERE work_id=?1 ORDER BY repository_id",
+                    "SELECT repository_id FROM work_repositories WHERE work_id=?1 ORDER BY \
+                        repository_id",
                     [id.as_str()],
                 )
             }
             fn prerequisites(&self, id: &Id) -> Result<Vec<Id>, StorageError> {
                 ids(
                     self.conn,
-                    "SELECT DISTINCT prerequisite_id FROM work_dependencies WHERE work_id=?1 ORDER BY prerequisite_id",
+                    "SELECT DISTINCT prerequisite_id FROM work_dependencies WHERE work_id=?1 \
+                        ORDER BY prerequisite_id",
                     [id.as_str()],
                 )
             }
             fn dependents(&self, id: &Id) -> Result<Vec<Id>, StorageError> {
                 ids(
                     self.conn,
-                    "SELECT DISTINCT work_id FROM work_dependencies WHERE prerequisite_id=?1 ORDER BY work_id",
+                    "SELECT DISTINCT work_id FROM work_dependencies WHERE prerequisite_id=?1 \
+                        ORDER BY work_id",
                     [id.as_str()],
                 )
             }
@@ -424,12 +475,14 @@ macro_rules! work_reads {
             fn next_rank(&self, project: &ProjectId, queue: &str) -> Result<i64, StorageError> {
                 let max: Option<i64> = if queue == PROJECT_QUEUE {
                     db(db(self.conn.prepare_cached(
-                        "SELECT max(manual_order) FROM work_items WHERE project_id=?1 AND (kind='feature' OR parent_feature_id IS NULL)",
+                        "SELECT max(manual_order) FROM work_items WHERE project_id=?1 AND \
+                            (kind='feature' OR parent_feature_id IS NULL)",
                     ))?
                     .query_row([project.0.as_str()], |r| r.get(0)))?
                 } else if let Some(f) = queue.strip_prefix("feature:") {
                     db(db(self.conn.prepare_cached(
-                        "SELECT max(manual_order) FROM work_items WHERE project_id=?1 AND kind<>'feature' AND parent_feature_id=?2",
+                        "SELECT max(manual_order) FROM work_items WHERE project_id=?1 AND \
+                            kind<>'feature' AND parent_feature_id=?2",
                     ))?
                     .query_row(params![project.0.as_str(), f], |r| r.get(0)))?
                 } else {
@@ -439,7 +492,8 @@ macro_rules! work_reads {
             }
             fn statuses(&self, project: &ProjectId) -> Result<Vec<StoredStatus>, StorageError> {
                 let mut st = db(self.conn.prepare_cached(
-                    "SELECT id,project_id,name,semantic,sort_order,revision FROM workflow_statuses WHERE project_id=?1 ORDER BY sort_order,id",
+                    "SELECT id,project_id,name,semantic,sort_order,revision FROM \
+                        workflow_statuses WHERE project_id=?1 ORDER BY sort_order,id",
                 ))?;
                 let rows = db(db(st.query_map([project.0.as_str()], |r| {
                     Ok((
@@ -473,7 +527,9 @@ macro_rules! work_reads {
                 let found: Option<String> = db(db(self.conn.prepare_cached(
                     "SELECT work_id FROM work_details WHERE project_id=?1 AND caller_ref=?2",
                 ))?
-                .query_row(params![project.0.as_str(), caller_ref.as_str()], |r| r.get(0))
+                .query_row(params![project.0.as_str(), caller_ref.as_str()], |r| {
+                    r.get(0)
+                })
                 .optional())?;
                 found.map(id_of).transpose()
             }
@@ -496,7 +552,8 @@ macro_rules! work_reads {
                 feature: &Id,
             ) -> Result<Option<StoredProposal>, StorageError> {
                 let raw = db(db(self.conn.prepare_cached(&format!(
-                    "SELECT {PROPOSAL_COLUMNS} FROM plan_proposals WHERE feature_id=?1 ORDER BY requested_at DESC, rowid DESC LIMIT 1"
+                    "SELECT {PROPOSAL_COLUMNS} FROM plan_proposals WHERE feature_id=?1 ORDER \
+                        BY requested_at DESC, rowid DESC LIMIT 1"
                 )))?
                 .query_row([feature.as_str()], proposal_row)
                 .optional())?;
@@ -516,10 +573,15 @@ pub(crate) fn open_prerequisites(conn: &Connection, id: &Id) -> Result<Vec<Id>, 
     ids(
         conn,
         "SELECT DISTINCT p.id FROM work_dependencies dep
-         JOIN work_items p ON p.id=dep.prerequisite_id
-         LEFT JOIN work_details d ON d.work_id=p.id
-         LEFT JOIN workflow_statuses s ON s.id=p.status_id AND s.project_id=p.project_id
-         WHERE dep.work_id=?1 AND NOT (COALESCE(s.semantic,'')='Done' AND COALESCE(d.completion,'')='Verified')
+         JOIN \
+            work_items p ON p.id=dep.prerequisite_id
+         LEFT JOIN \
+            work_details d ON d.work_id=p.id
+         LEFT JOIN workflow_statuses s \
+            ON s.id=p.status_id AND s.project_id=p.project_id
+         WHERE \
+            dep.work_id=?1 AND NOT (COALESCE(s.semantic,'')='Done' AND \
+            COALESCE(d.completion,'')='Verified')
          ORDER BY p.id",
         [id.as_str()],
     )
@@ -607,7 +669,18 @@ impl WorkRepository for Unit<'_> {
                 "status update preserves semantic and advances revision once",
             ));
         }
-        db(self.conn.execute("UPDATE workflow_statuses SET name=?2,sort_order=?3,revision=?4 WHERE id=?1 AND project_id=?5 AND revision=?6",params![s.id.as_str(),s.name,s.sort_order,s.revision,s.project_id.0.as_str(),expected]))?;
+        db(self.conn.execute(
+            "UPDATE workflow_statuses SET name=?2,sort_order=?3,revision=?4 WHERE \
+            id=?1 AND project_id=?5 AND revision=?6",
+            params![
+                s.id.as_str(),
+                s.name,
+                s.sort_order,
+                s.revision,
+                s.project_id.0.as_str(),
+                expected
+            ],
+        ))?;
         Ok(())
     }
     fn delete_status(
@@ -663,8 +736,11 @@ impl WorkRepository for Unit<'_> {
         check_parent(self.conn, w)?;
         let brief = text_of(&w.brief)?;
         db(db(self.conn.prepare_cached(
-            "INSERT INTO work_items(id,project_id,kind,parent_feature_id,associated_feature_id,status_id,title,priority,manual_order,revision,scope_revision,created_at,brief_json)
-             VALUES(?1,?2,?3,?4,NULL,?5,?6,?7,?8,1,?9,?10,?11)",
+            "INSERT INTO work_items(id,project_id,kind,parent_feature_id,\
+                associated_feature_id,status_id,title,priority,manual_order,revision,\
+                scope_revision,created_at,brief_json)
+             VALUES(?1,?2,?3,?4,\
+                NULL,?5,?6,?7,?8,1,?9,?10,?11)",
         ))?
         .execute(params![
             w.id.as_str(),
@@ -706,13 +782,16 @@ impl WorkRepository for Unit<'_> {
             || w.scope_revision < current.scope_revision
         {
             return Err(invalid(
-                "a work update advances its revision by one and keeps its kind, project, creation and creator",
+                "a work update advances its revision by one and keeps its kind, project, \
+                    creation and creator",
             ));
         }
         check_parent(self.conn, w)?;
         let brief = text_of(&w.brief)?;
         let n = db(db(self.conn.prepare_cached(
-            "UPDATE work_items SET parent_feature_id=?1,status_id=?2,title=?3,priority=?4,manual_order=?5,revision=?6,scope_revision=?7,brief_json=?8 WHERE id=?9 AND revision=?10",
+            "UPDATE work_items SET parent_feature_id=?1,status_id=?2,title=?3,\
+                priority=?4,manual_order=?5,revision=?6,scope_revision=?7,brief_json=?8 \
+                WHERE id=?9 AND revision=?10",
         ))?
         .execute(params![
             w.parent_feature_id.as_ref().map(Id::as_str),
@@ -777,7 +856,8 @@ impl WorkRepository for Unit<'_> {
         .execute([id.as_str()]))?;
         for p in prereqs {
             db(db(self.conn.prepare_cached(
-                "INSERT INTO work_dependencies(work_id,prerequisite_id,condition_kind) VALUES(?1,?2,'blocks')",
+                "INSERT INTO work_dependencies(work_id,prerequisite_id,condition_kind) \
+                    VALUES(?1,?2,'blocks')",
             ))?
             .execute(params![id.as_str(), p.as_str()]))?;
         }
@@ -800,7 +880,8 @@ impl WorkRepository for Unit<'_> {
             return Err(invalid("a status has a name and a positive revision"));
         }
         db(db(self.conn.prepare_cached(
-            "INSERT INTO workflow_statuses(id,project_id,name,semantic,sort_order,revision) VALUES(?1,?2,?3,?4,?5,?6)",
+            "INSERT INTO workflow_statuses(id,project_id,name,semantic,sort_order,\
+                revision) VALUES(?1,?2,?3,?4,?5,?6)",
         ))?
         .execute(params![
             s.id.as_str(),
@@ -851,11 +932,19 @@ impl WorkRepository for Unit<'_> {
             return Err(invalid("a plan change advances its revision by one"));
         }
         db(db(self.conn.prepare_cached(
-            "INSERT INTO feature_plans(feature_id,revision,approved_plan_json,approved_by,approved_at,pending_plan_json,pending_revision)
-             VALUES(?1,?2,?3,?4,?5,?6,?7)
-             ON CONFLICT(feature_id) DO UPDATE SET revision=excluded.revision,approved_plan_json=excluded.approved_plan_json,
-             approved_by=excluded.approved_by,approved_at=excluded.approved_at,pending_plan_json=excluded.pending_plan_json,
-             pending_revision=excluded.pending_revision",
+            "INSERT INTO feature_plans(feature_id,revision,approved_plan_json,\
+                approved_by,approved_at,pending_plan_json,\
+                pending_revision)
+             VALUES(?1,?2,?3,?4,?5,?6,\
+                ?7)
+             ON CONFLICT(feature_id) DO UPDATE SET \
+                revision=excluded.revision,\
+                approved_plan_json=excluded.approved_plan_json,
+             \
+                approved_by=excluded.approved_by,approved_at=excluded.approved_at,\
+                pending_plan_json=excluded.pending_plan_json,
+             \
+                pending_revision=excluded.pending_revision",
         ))?
         .execute(params![
             p.feature_id.as_str(),
@@ -903,7 +992,8 @@ impl WorkRepository for Unit<'_> {
                     return Err(invalid("a new proposal starts at revision 1"));
                 }
                 db(db(self.conn.prepare_cached(&format!(
-                    "INSERT INTO plan_proposals({PROPOSAL_COLUMNS}) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12)"
+                    "INSERT INTO plan_proposals({PROPOSAL_COLUMNS}) VALUES(?1,?2,?3,?4,?5,?6,\
+                        ?7,?8,?9,?10,?11,?12)"
                 )))?
                 .execute(params![
                     p.id.as_str(),
@@ -923,7 +1013,8 @@ impl WorkRepository for Unit<'_> {
             }
             (Some(e), Some(c)) if c == e && p.revision == e + 1 => {
                 db(db(self.conn.prepare_cached(
-                    "UPDATE plan_proposals SET revision=?1,state=?2,decided_by=?3,decided_at=?4 WHERE id=?5 AND revision=?6",
+                    "UPDATE plan_proposals SET revision=?1,state=?2,decided_by=?3,\
+                        decided_at=?4 WHERE id=?5 AND revision=?6",
                 ))?
                 .execute(params![
                     p.revision,
@@ -984,8 +1075,10 @@ impl WorkRepository for Unit<'_> {
             _ => return Err(invalid("a readiness change advances its revision by one")),
         }
         db(db(self.conn.prepare_cached(
-            "INSERT INTO feature_readiness(feature_id,revision,body_json) VALUES(?1,?2,?3)
-             ON CONFLICT(feature_id) DO UPDATE SET revision=excluded.revision,body_json=excluded.body_json",
+            "INSERT INTO feature_readiness(feature_id,revision,body_json) VALUES(?1,\
+                ?2,?3)
+             ON CONFLICT(feature_id) DO UPDATE SET \
+                revision=excluded.revision,body_json=excluded.body_json",
         ))?
         .execute(params![r.feature_id.as_str(), r.revision, body]))?;
         Ok(())

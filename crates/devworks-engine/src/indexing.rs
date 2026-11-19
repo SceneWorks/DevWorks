@@ -10,6 +10,7 @@
 //! interval; past the deadline a run that has not finished is abandoned (its lease expires and
 //! the next boot resumes it from its checkpoint).
 use crate::workers::Ticker;
+use devworks_core::locks::LockExt;
 use devworks_core::ports::storage::StorageError;
 use devworks_core::protocol::Id;
 use devworks_core::services::indexing::IndexEnv;
@@ -188,7 +189,7 @@ impl IndexSupervisor {
                 me.in_flight.fetch_sub(1, Ordering::SeqCst);
                 me.ticker.notify();
             });
-            let mut tasks = self.tasks.lock().unwrap_or_else(|p| p.into_inner());
+            let mut tasks = self.tasks.locked();
             tasks.retain(|t| !t.is_finished());
             tasks.push(task);
         }
@@ -205,7 +206,7 @@ impl IndexSupervisor {
     /// runtime's one shutdown deadline); runs still executing then are abandoned to recovery.
     pub async fn stop(&self, deadline: tokio::time::Instant) -> usize {
         self.signal_stop();
-        let tasks = std::mem::take(&mut *self.tasks.lock().unwrap_or_else(|p| p.into_inner()));
+        let tasks = std::mem::take(&mut *self.tasks.locked());
         let mut abandoned = 0;
         for mut t in tasks {
             let left = deadline.saturating_duration_since(tokio::time::Instant::now());

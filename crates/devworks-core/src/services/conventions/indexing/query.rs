@@ -105,12 +105,32 @@ impl IndexService {
                     .map(|r| json!({"scope":s.key(),"revision":r}))
             })
             .collect::<Result<Vec<_>, _>>()?;
-        let fingerprint=crate::fingerprint::canonical_digest(&json!({"scope":input.scope,"text":input.text,"applicability":input.applicability,"topK":top_k,"pageLimit":input.page.limit,"schema":query.schema_revision().0})).map_err(|_|invalid("search identity"))?;
+        let fingerprint = crate::fingerprint::canonical_digest(&json!({
+            "scope": input.scope,
+            "text": input.text,
+            "applicability": input.applicability,
+            "topK": top_k,
+            "pageLimit": input.page.limit,
+            "schema": query.schema_revision().0
+        }))
+        .map_err(|_| invalid("search identity"))?;
         let principal = read.authority().principal(ctx.principal())?;
         let policy =
             crate::authority::policy::resolve_policy(read.configuration(), ctx.project_id())?
                 .digest();
-        let witness=sha256_hex(json!({"query":fingerprint,"sources":sources,"index":revision,"configuration":config.source_digest,"principal":principal.map(|p|(p.revision,p.active)),"policy":policy,"registry":read.packages().registry_revision()?}).to_string().as_bytes());
+        let witness = sha256_hex(
+            json!({
+                "query": fingerprint,
+                "sources": sources,
+                "index": revision,
+                "configuration": config.source_digest,
+                "principal": principal.map(|p| (p.revision, p.active)),
+                "policy": policy,
+                "registry": read.packages().registry_revision()?
+            })
+            .to_string()
+            .as_bytes(),
+        );
         let documents = read
             .conventions()
             .convention_lexical_statistics(&filter, &[])?
@@ -289,14 +309,38 @@ impl IndexService {
                 self.embed_batch(&inputs.context, request)
             };
             match result {
-                Ok(result) if result.request_id==inputs.request_id && result.space==space && result.vectors.len()==1 && result.vectors[0].len()==space.dimensions as usize && result.vectors[0].iter().all(|v|v.is_finite())=>{prepared.vector=result.vectors.into_iter().next();prepared.request_id=Some(inputs.request_id);prepared.reason=None;}
-                Ok(_)=>return Err(invalid("query embedding population/binding mismatch").into()),
-                Err(EmbeddingFailure::Cancelled)=>return Err(StorageError::Cancelled.into()),
-                Err(EmbeddingFailure::Storage(error))=>return Err(error.into()),
-                Err(_) if position.is_some()=>return Err(StorageError::CursorExpired.into()),
-                Err(EmbeddingFailure::Unknown{..})=>prepared.reason=Some("The native query embedding outcome is unknown; results use lexical retrieval.".into()),
-                Err(EmbeddingFailure::NotStarted{..})=>return Err(invalid("native send returned observer-only absence").into()),
-                Err(EmbeddingFailure::Unavailable(_))=>prepared.reason=Some("The configured native embedding route is unavailable; results use lexical retrieval.".into()),
+                Ok(result)
+                    if result.request_id == inputs.request_id
+                        && result.space == space
+                        && result.vectors.len() == 1
+                        && result.vectors[0].len() == space.dimensions as usize
+                        && result.vectors[0].iter().all(|v| v.is_finite()) =>
+                {
+                    prepared.vector = result.vectors.into_iter().next();
+                    prepared.request_id = Some(inputs.request_id);
+                    prepared.reason = None;
+                }
+                Ok(_) => return Err(invalid("query embedding population/binding mismatch").into()),
+                Err(EmbeddingFailure::Cancelled) => return Err(StorageError::Cancelled.into()),
+                Err(EmbeddingFailure::Storage(error)) => return Err(error.into()),
+                Err(_) if position.is_some() => return Err(StorageError::CursorExpired.into()),
+                Err(EmbeddingFailure::Unknown { .. }) => {
+                    prepared.reason = Some(
+                        "The native query embedding outcome is unknown; results use lexical \
+                    retrieval."
+                            .into(),
+                    )
+                }
+                Err(EmbeddingFailure::NotStarted { .. }) => {
+                    return Err(invalid("native send returned observer-only absence").into());
+                }
+                Err(EmbeddingFailure::Unavailable(_)) => {
+                    prepared.reason = Some(
+                        "The configured native embedding route is unavailable; results use \
+                    lexical retrieval."
+                            .into(),
+                    )
+                }
             }
         }
         Ok(prepared)

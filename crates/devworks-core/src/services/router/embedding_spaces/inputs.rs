@@ -8,7 +8,13 @@ use crate::protocol::provider::ArtifactRef;
 use serde_json::{Value, json};
 
 fn marker(p: &PreparedEmbeddingProbe) -> Value {
-    json!({"kind":"EmbeddingProbeInput","candidateId":p.candidate_id(),"operationId":p.operation_id(),"requestId":p.request_id(),"admissionKey":p.admission_key()})
+    json!({
+        "kind": crate::services::artifacts::derivation::DerivedKind::EmbeddingProbeInput.as_str(),
+        "candidateId": p.candidate_id(),
+        "operationId": p.operation_id(),
+        "requestId": p.request_id(),
+        "admissionKey": p.admission_key()
+    })
 }
 fn cached(
     operation: &OperationRecord,
@@ -182,7 +188,16 @@ impl EmbeddingSpaceService {
         tx.operations().observe(
             p.operation_id(),
             p.operation_fence().attempt_no,
-            json!({"embeddingProbeInputs":{"version":1,"marker":marker(p),"inputs":inputs,"inputReservationEstimate":{"basis":"Utf8ByteCount","value":PROBE_TEXT.len(),"guaranteedUpperBound":false}}}),
+            json!({"embeddingProbeInputs": {
+                "version": 1,
+                "marker": marker(p),
+                "inputs": inputs,
+                "inputReservationEstimate": {
+                    "basis": "Utf8ByteCount",
+                    "value": PROBE_TEXT.len(),
+                    "guaranteedUpperBound": false
+                }
+            }}),
         )?;
         Ok(())
     }

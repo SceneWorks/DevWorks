@@ -123,6 +123,7 @@
 //! SDK's host calls); requested access is an admission input and display, not containment.
 use crate::context::{InvocationContext, PrincipalKind};
 use crate::gateway::{AdmittedCommand, AdmittedQuery};
+use crate::locks::{LockExt, RwLockExt};
 use crate::operations::{OperationInput, addons as ops};
 use crate::ports::packages::{
     FieldError, HostPlatform, InspectError, Inspection, MAX_BUNDLE_BYTES, PackageActivity,
@@ -156,14 +157,16 @@ use std::time::Duration;
 
 pub mod approval;
 pub mod index;
+pub mod invoke;
 pub mod policy;
+pub mod recovery;
 mod review_evidence;
 pub mod view;
 /// A manifest-bound verified guide stream; no package activation or caller authority is added.
 pub use crate::ports::packages::VerifiedPackageFile as VerifiedHelp;
 
 /// The operations [`PackageService`] is registered for.
-pub const OPERATIONS: [&str; 10] = [
+pub const OPERATIONS: [&str; 12] = [
     "addons.catalog",
     "addons.install",
     "addons.configure",
@@ -174,6 +177,8 @@ pub const OPERATIONS: [&str; 10] = [
     "addons.logs",
     "addons.rollback",
     "addons.uninstall",
+    "addons.invoke",
+    "addons.invocation",
 ];
 /// History aggregate of package lifecycle events.
 pub const AGGREGATE: &str = "package";
@@ -268,10 +273,10 @@ impl GuardCell {
         Self(Mutex::new(g))
     }
     fn held(&self) -> bool {
-        self.0.lock().unwrap_or_else(|p| p.into_inner()).is_some()
+        self.0.locked().is_some()
     }
     fn release(&self) {
-        self.0.lock().unwrap_or_else(|p| p.into_inner()).take();
+        self.0.locked().take();
     }
 }
 
@@ -295,10 +300,7 @@ struct PublishHold {
 }
 impl PublishHold {
     fn new(set: &Arc<Mutex<BTreeMap<(String, String), usize>>>, key: (String, String)) -> Self {
-        *set.lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .entry(key.clone())
-            .or_default() += 1;
+        *set.locked().entry(key.clone()).or_default() += 1;
         Self {
             set: set.clone(),
             key,
@@ -307,7 +309,7 @@ impl PublishHold {
 }
 impl Drop for PublishHold {
     fn drop(&mut self) {
-        let mut m = self.set.lock().unwrap_or_else(|p| p.into_inner());
+        let mut m = self.set.locked();
         if let Some(n) = m.get_mut(&self.key) {
             *n -= 1;
             if *n == 0 {
@@ -321,6 +323,8 @@ enum Prep {
     Bundle(Box<BundlePrep>),
     Lifecycle(GuardCell),
     Configure(GuardCell, ConfigRefusal),
+    /// What `addons.invoke` verified before its unit of work.
+    Invoke(invoke::Verified),
 }
 
 fn invalid(field: &'static str) -> Refusal {
@@ -411,21 +415,23 @@ impl PackageService {
             approval_control: Arc::new(RwLock::new(None)),
         }
     }
-    pub(crate) fn set_approval_control(&self, control: Arc<crate::services::runs::ControlService>) {
-        *self
-            .approval_control
-            .write()
-            .unwrap_or_else(|p| p.into_inner()) = Some(control);
+    pub fn set_approval_control(&self, control: Arc<crate::services::runs::ControlService>) {
+        *self.approval_control.write_locked() = Some(control);
     }
     /// Registers the consumers that receive availability announcements (composition root).
     pub fn set_availability_consumers(&self, consumers: Vec<String>) {
-        *self.consumers.write().unwrap_or_else(|p| p.into_inner()) = consumers;
+        *self.consumers.write_locked() = consumers;
+    }
+    /// Registers one more consumer of availability announcements (composition root); a consumer
+    /// already registered stays registered once.
+    pub fn add_availability_consumer(&self, consumer: &str) {
+        let mut all = self.consumers.write_locked();
+        if !all.iter().any(|c| c == consumer) {
+            all.push(consumer.to_owned());
+        }
     }
     pub(crate) fn consumers(&self) -> Vec<String> {
-        self.consumers
-            .read()
-            .unwrap_or_else(|p| p.into_inner())
-            .clone()
+        self.consumers.read_locked().clone()
     }
     /// Inspects bundle bytes with the service's inspector (nothing is published or trusted).
     pub fn inspect(&self, bundle: &[u8]) -> Result<Inspection, InspectError> {
@@ -437,13 +443,10 @@ impl PackageService {
     }
     /// Installs the package host's activity view (once, at boot).
     pub fn set_activity(&self, activity: Arc<dyn PackageActivity>) {
-        *self.activity.write().unwrap_or_else(|p| p.into_inner()) = activity;
+        *self.activity.write_locked() = activity;
     }
     fn activity(&self) -> Arc<dyn PackageActivity> {
-        self.activity
-            .read()
-            .unwrap_or_else(|p| p.into_inner())
-            .clone()
+        self.activity.read_locked().clone()
     }
     pub fn platform(&self) -> &HostPlatform {
         &self.platform
@@ -512,7 +515,7 @@ impl PackageService {
         };
         let i = inspected.inspection;
         // The hold and the publication happen while no collection pass decides or removes.
-        let gate = self.files_gate.lock().unwrap_or_else(|p| p.into_inner());
+        let gate = self.files_gate.locked();
         let held = PublishHold::new(
             &self.publishing,
             (i.package_id.clone(), i.manifest_digest.clone()),
@@ -536,8 +539,7 @@ impl PackageService {
             };
         }
         if let Some(p) = quiesce.filter(|p| *p == i.package_id) {
-            *guard.0.lock().unwrap_or_else(|e| e.into_inner()) =
-                self.activity().quiesce(p, self.quiesce_wait);
+            *guard.0.locked() = self.activity().quiesce(p, self.quiesce_wait);
         }
         BundlePrep {
             target: quiesce.map(str::to_owned),
@@ -1177,7 +1179,15 @@ impl PackageService {
         }
         let payload = json!({"digest": removed, "stateGeneration": p.state_generation, "stateRetained": true});
         Self::republish(tx, ctx.principal(), &mut p, "PackageUninstalled", payload)?;
-        self.log_in(tx, &p.package_id, Severity::Info, "PackageUninstalled", "The package was uninstalled; its state and history are retained and its files are removed after its helper is retired", None)?;
+        self.log_in(
+            tx,
+            &p.package_id,
+            Severity::Info,
+            "PackageUninstalled",
+            "The package was uninstalled; its state and history are retained and its \
+            files are removed after its helper is retired",
+            None,
+        )?;
         Ok(DomainDecision::Applied {
             result: self.result(tx, &p, "addons.uninstall")?,
         })
@@ -1505,7 +1515,23 @@ impl PackageService {
             },
             json!({"trust": p.trust}),
         )?;
-        self.log_in(tx, &p.package_id, Severity::Info, if trust { "PublisherTrusted" } else { "PublisherTrustRevoked" }, if trust { "Signed compatible updates from this publisher may now activate automatically within the approved access" } else { "Updates from this publisher need explicit approval again" }, None)?;
+        self.log_in(
+            tx,
+            &p.package_id,
+            Severity::Info,
+            if trust {
+                "PublisherTrusted"
+            } else {
+                "PublisherTrustRevoked"
+            },
+            if trust {
+                "Signed compatible updates from this publisher may now activate \
+            automatically within the approved access"
+            } else {
+                "Updates from this publisher need explicit approval again"
+            },
+            None,
+        )?;
         Ok(DomainDecision::Applied {
             result: self.result(tx, p, "addons.configure")?,
         })
@@ -2017,18 +2043,38 @@ impl PackageService {
                         tx.release(sp)?;
                         // The failed version stays installed with its failure recorded, never
                         // active again by itself (automatic rollback never returns to it).
-                        p.failure = Some(
-                            json!({"code": code, "message": message, "atMs": tx.now_ms(),
-                            "attempts": attempts, "digest": failed, "rolledBack": true}),
-                        );
+                        p.failure = Some(json!({
+                            "code": code,
+                            "message": message,
+                            "atMs": tx.now_ms(),
+                            "attempts": attempts,
+                            "digest": failed,
+                            "rolledBack": true
+                        }));
                         Self::save(tx, &mut p, false)?;
-                        svc.log_in(tx, &package_id, Severity::Warning, "PackageRolledBack", &format!("The new version failed to start ({code}: {message}) before any work was admitted; the previous version {} was restored", v.version), Some(DiagnosticOutcome::Failed))?;
+                        let note = format!(
+                            "The new version failed to start ({code}: {message}) before any work was \
+                             admitted; the previous version {} was restored",
+                            v.version
+                        );
+                        svc.log_in(
+                            tx,
+                            &package_id,
+                            Severity::Warning,
+                            "PackageRolledBack",
+                            &note,
+                            Some(DiagnosticOutcome::Failed),
+                        )?;
                         event(
                             tx,
                             &host,
                             &p,
                             "PackageStartupRolledBack",
-                            json!({"failedDigest": failed, "restoredDigest": pred, "code": code}),
+                            json!({
+                                "failedDigest": failed,
+                                "restoredDigest": pred,
+                                "code": code
+                            }),
                         )?;
                         svc.observe(tx, "StartupRollback")?;
                         return at(tx, true);
@@ -2042,11 +2088,15 @@ impl PackageService {
             }
             // Bound to the instance that failed: a new configuration or state generation is a new
             // instance and starts again.
-            p.failure = Some(
-                json!({"code": code, "message": message, "atMs": tx.now_ms(),
-                "attempts": attempts, "digest": digest, "configRevision": key.config_revision,
-                "stateGeneration": key.state_generation}),
-            );
+            p.failure = Some(json!({
+                "code": code,
+                "message": message,
+                "atMs": tx.now_ms(),
+                "attempts": attempts,
+                "digest": digest,
+                "configRevision": key.config_revision,
+                "stateGeneration": key.state_generation
+            }));
             Self::save(tx, &mut p, false)?;
             event(
                 tx,
@@ -2134,7 +2184,7 @@ impl PackageService {
     ) -> Result<usize, StorageError> {
         // The whole pass (eligibility in its unit of work and the removals after it) excludes
         // publication, so a republish that reuses a directory never loses its files.
-        let _gate = self.files_gate.lock().unwrap_or_else(|p| p.into_inner());
+        let _gate = self.files_gate.locked();
         // A publication in progress owns its staging directory: outside boot only abandoned
         // (old) ones are removed.
         let _ = self.files.clean_staging(orphan_age);
@@ -2145,13 +2195,7 @@ impl PackageService {
         let svc = self.clone_ports();
         let mut keep = in_use.clone();
         // Directories a command published and has not settled are never collected.
-        keep.extend(
-            self.publishing
-                .lock()
-                .unwrap_or_else(|p| p.into_inner())
-                .keys()
-                .cloned(),
-        );
+        keep.extend(self.publishing.locked().keys().cloned());
         let candidates = on_disk.clone();
         let removable: Vec<(String, String, bool)> =
             run_write(&*self.store, WriteOptions::housekeeping(), move |tx| {
@@ -2452,8 +2496,7 @@ impl PackageService {
         .fault(CorrelationId(tx.new_id(IdKind::Correlation)));
         fault.diagnostic_id = Some(diagnostic.clone());
         if let Some(c) = cell {
-            *c.0.lock().unwrap_or_else(|p| p.into_inner()) =
-                Some((diagnostic, package.to_owned(), errors));
+            *c.0.locked() = Some((diagnostic, package.to_owned(), errors));
         }
         DomainDecision::Refused { fault }
     }
@@ -2558,6 +2601,9 @@ impl QueryHandler for PackageService {
                 view::catalog(snapshot, ctx, i, &self.platform, &*self.runtimes)
             }
             OperationInput::Addons(ops::Input::Logs(i)) => view::logs(snapshot, ctx, i),
+            OperationInput::Addons(ops::Input::Invocation(i)) => {
+                Self::invocation_view(snapshot, ctx, i)
+            }
             _ => {
                 Err(Refusal::new(DomainErrorCode::UnsupportedCapability, "operation", None).into())
             }
@@ -2630,6 +2676,11 @@ impl CommandHandler for PackageService {
             }
             return Ok(Some(Prepared::new(Prep::Bundle(Box::new(prep)))));
         }
+        if let OperationInput::Addons(ops::Input::Invoke(i)) = command.input() {
+            return Ok(Some(Prepared::new(Prep::Invoke(
+                self.verify_invocation(ctx, i, env)?,
+            ))));
+        }
         let Some((_, cmd)) = lifecycle(command.input()) else {
             // addons.configure: fence the package's admissions while the change commits.
             return Ok(Some(Prepared::new(match command.input() {
@@ -2694,6 +2745,7 @@ impl CommandHandler for PackageService {
                 }
             }
             Some(Prep::Lifecycle(g)) => g.release(),
+            Some(Prep::Invoke(_)) => {}
             Some(Prep::Configure(g, refusal)) => {
                 g.release();
                 let refused = matches!(
@@ -2701,7 +2753,7 @@ impl CommandHandler for PackageService {
                     Some(crate::protocol::CommandReply::Recorded { receipt, .. })
                         if matches!(receipt.decision, DomainDecision::Refused { .. })
                 );
-                let detail = refusal.0.lock().unwrap_or_else(|p| p.into_inner()).take();
+                let detail = refusal.0.locked().take();
                 if let (true, Some((id, package, errors))) = (refused, detail) {
                     let lines: Vec<String> = errors
                         .iter()
@@ -2761,6 +2813,7 @@ impl CommandHandler for PackageService {
                     self.configure(tx, ctx, i, refusal)
                 }
                 OperationInput::Addons(ops::Input::Propose(i)) => self.propose(tx, ctx, i, bundle),
+                OperationInput::Addons(ops::Input::Invoke(i)) => self.invoke(tx, ctx, i, prep),
                 input => match lifecycle(input) {
                     Some((
                         _,
@@ -2847,7 +2900,8 @@ impl CommandHandler for PackageService {
                 // Every effective availability or active-version change this command made is
                 // announced in its own unit of work (ADDON-04).
                 if matches!(d, DomainDecision::Applied { .. }) {
-                    self.observe(tx, command.descriptor().name)?;
+                    let origin = Self::event_origin(tx, ctx)?;
+                    self.observe_from(tx, command.descriptor().name, origin.as_ref())?;
                 }
                 tx.release(sp)?;
                 Ok(d)
@@ -2863,20 +2917,4 @@ impl CommandHandler for PackageService {
         };
         decided(tx, outcome)
     }
-}
-
-/// `true` when `e` is a revision conflict of the package registry (the caller re-reads).
-pub fn is_registry_conflict(e: &StorageError) -> bool {
-    matches!(e, StorageError::RevisionConflict(c) if c.target_kind == "package_registry")
-}
-
-#[doc(hidden)]
-pub fn _assert_send_sync() {
-    fn check<T: Send + Sync>() {}
-    check::<PackageService>();
-}
-
-/// For callers composing an [`InspectError`] into a refusal code.
-pub fn inspect_code(e: &InspectError) -> &'static str {
-    e.code()
 }

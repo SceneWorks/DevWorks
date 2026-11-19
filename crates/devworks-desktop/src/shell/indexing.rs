@@ -1,6 +1,5 @@
 //! Repository indexing requests and replies: index status, runs, the section's sources and
 //! discovery. Every change is the same `indexing.*` command an agent submits.
-use super::ListState;
 use crate::backend::Reply;
 use crate::indexing_ops::IndexingSlot;
 pub use crate::indexing_screen::{
@@ -9,6 +8,7 @@ pub use crate::indexing_screen::{
 };
 use crate::memory::RouteMemory;
 use crate::ops::{self, Failure};
+use crate::paged::Applied;
 use crate::project_purge::Live;
 use crate::route::Route;
 use crate::screen::{Cx, Screen, ScreenContext, ScreenId, controller};
@@ -44,7 +44,12 @@ impl Screen for IndexingScreen {
         if let Some(f) = &self.sources
             && let Some(p) = &f.project
         {
-            out.projects.entry(p.clone()).or_insert_with(|| json!({}))["indexSources"] = json!({"languages":f.languages,"packages":f.packages,"excludes":f.excludes,"max":f.max_bytes});
+            out.projects.entry(p.clone()).or_insert_with(|| json!({}))["indexSources"] = json!({
+                "languages": f.languages,
+                "packages": f.packages,
+                "excludes": f.excludes,
+                "max": f.max_bytes
+            });
         }
     }
     fn remove_purged(&mut self, scope: &ProjectPurgeClientScope) {
@@ -75,6 +80,17 @@ impl IndexingScreen {
 }
 
 impl IndexingCtl<'_, '_> {
+    fn send_runs(&mut self, fetch: crate::paged::Fetch, label: &str) {
+        let project = self.selected_project().map(str::to_owned);
+        self.cx.paged(
+            &mut self.indexing.runs,
+            fetch,
+            IndexingSlot::IndexRuns("*".into()),
+            label,
+            "indexing.runs",
+            move |b, cursor| ops::index_runs(b, project.as_deref(), None, cursor),
+        );
+    }
     fn act(&mut self, actions: Vec<IndexAction>) {
         for a in actions {
             match a {
@@ -88,13 +104,21 @@ impl IndexingCtl<'_, '_> {
                     );
                 }
                 IndexAction::Runs => {
+                    // Route entry, the Refresh button and a finished command all re-read the
+                    // runs: the pages shown stay.
+                    // Another project's runs start over, not as many pages as the last had.
                     let project = self.selected_project().map(str::to_owned);
-                    self.query(
-                        IndexingSlot::IndexRuns("*".into()),
-                        "Loading index runs",
-                        "indexing.runs",
-                        move |b| ops::index_runs(b, project.as_deref(), None),
-                    );
+                    if self.indexing.runs_project.as_ref() != Some(&project) {
+                        self.indexing.runs.reset();
+                        self.indexing.runs_project = Some(project);
+                    }
+                    let fetch = self.indexing.runs.reread();
+                    self.send_runs(fetch, "Loading index runs");
+                }
+                IndexAction::MoreRuns => {
+                    if let Some(fetch) = self.indexing.runs.more_page() {
+                        self.send_runs(fetch, "Loading more index runs");
+                    }
                 }
                 IndexAction::Index {
                     repository,
@@ -228,20 +252,14 @@ impl IndexingCtl<'_, '_> {
                 };
                 ix.status.insert(r, state);
             }
-            (IndexingSlot::IndexRuns(_), Reply::Query(q)) => match ops::index_runs_result(q) {
-                Ok((items, more)) => {
-                    ix.runs = ListState {
-                        items,
-                        loaded: true,
-                        error: None,
-                        more,
-                    }
+            (IndexingSlot::IndexRuns(_), Reply::Query(q)) => {
+                let applied = ix
+                    .runs
+                    .apply_current(ops::index_runs_result(q).map_err(failure_text));
+                if let Applied::Continue(fetch) = applied {
+                    self.send_runs(fetch, "Loading index runs");
                 }
-                Err(e) => {
-                    ix.runs.loaded = true;
-                    ix.runs.error = Some(failure_text(e));
-                }
-            },
+            }
             (IndexingSlot::IndexCommand(r), Reply::Command(c)) => {
                 match ops::index_run_result(c) {
                     Ok(run) => {

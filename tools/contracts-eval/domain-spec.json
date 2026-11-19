@@ -34,6 +34,15 @@
         "Expired"
       ]
     },
+    "InstructionState": {
+      "kind": "enum",
+      "values": [
+        "Draft",
+        "Proposed",
+        "Approved",
+        "Rejected"
+      ]
+    },
     "ReviewState": {
       "kind": "enum",
       "values": [
@@ -1001,6 +1010,34 @@
         "inferred": "bool"
       }
     },
+    "SchemaCodeReference": {
+      "kind": "record",
+      "fields": {
+        "id": "Id",
+        "object_id": "Id",
+        "repository_id": "Id",
+        "graph_view_id": "Id",
+        "unit_key": "GraphUnitKey",
+        "node_id": "Id",
+        "node_name": "Content",
+        "node_kind": "Label",
+        "edge_kind": "Label",
+        "table": "Text",
+        "column": "?Text",
+        "extractor": "Label",
+        "line": "Counter",
+        "snippet": "Content",
+        "statement": "?Label"
+      }
+    },
+    "SchemaCodeReferencePage": {
+      "kind": "record",
+      "fields": {
+        "items": "Rows<SchemaCodeReference>",
+        "has_more": "bool",
+        "next_cursor": "?Cursor"
+      }
+    },
     "DbScalar": {
       "kind": "union",
       "variants": {
@@ -1316,7 +1353,21 @@
         "content": "ArtifactRef",
         "source_path": "?RegisteredPath",
         "approved": "bool",
-        "applicability": "Items<Label>"
+        "applicability": "Items<Label>",
+        "author": "?ActorId",
+        "session_id": "?Id",
+        "rationale": "?Content",
+        "state": "?InstructionState",
+        "approval_outcome": "?ApprovalState",
+        "lesson_ids": "?Items<Id>"
+      },
+      "since": {
+        "author": 8,
+        "session_id": 8,
+        "rationale": 8,
+        "state": 8,
+        "approval_outcome": 8,
+        "lesson_ids": 8
       }
     },
     "ProposalRecord": {
@@ -1956,7 +2007,11 @@
         "key": "Label",
         "value": "SchemaValue",
         "source_scope": "DataScope",
-        "revision": "Revision"
+        "revision": "Revision",
+        "source_repository_id": "?Id"
+      },
+      "since": {
+        "source_repository_id": 8
       }
     },
     "ValidationIssue": {
@@ -3383,6 +3438,15 @@
         "newer": "bool"
       }
     },
+    "PackageInvocation": {
+      "kind": "record",
+      "fields": {
+        "operation_id": "OperationId",
+        "state": "OperationState",
+        "artifacts": "Items<ArtifactRef>",
+        "failure": "?Content"
+      }
+    },
     "IndexFreshnessState": {
       "kind": "enum",
       "values": [
@@ -3789,7 +3853,19 @@
         "addressed_by": "Items<LessonAddress>",
         "delivered_sessions": "Counter",
         "last_delivered_at_ms": "?Counter",
-        "reason": "?Content"
+        "reason": "?Content",
+        "skills": "?Items<LessonSkillLink>"
+      },
+      "since": {
+        "skills": 8
+      }
+    },
+    "LessonSkillLink": {
+      "kind": "record",
+      "fields": {
+        "instruction_id": "Id",
+        "name": "Label",
+        "revision": "Revision"
       }
     },
     "KnowledgeRelation": {
@@ -4153,7 +4229,8 @@
         "latest_family": "?Id",
         "resolves_to_model_ids": "?Items<Id>",
         "available": "?bool",
-        "availability_reason": "?Label"
+        "availability_reason": "?Label",
+        "offered_efforts": "?Items<EffortName>"
       },
       "since": {
         "context_tokens": 2,
@@ -4161,7 +4238,8 @@
         "latest_family": 3,
         "resolves_to_model_ids": 3,
         "available": 3,
-        "availability_reason": 3
+        "availability_reason": 3,
+        "offered_efforts": 4
       },
       "earlierName": "RouteModel",
       "earlierBefore": 3
@@ -8953,12 +9031,18 @@
         "instruction_id": "?Id",
         "expected_revision": "?Revision",
         "name": "Label",
-        "content": "ArtifactRef"
+        "content": "ArtifactRef",
+        "rationale": "?Content",
+        "lesson_ids": "?Items<Id>"
       },
       "result": "InstructionRecord",
       "effect": "Local",
       "authority": "Scoped",
-      "rules": "Stage local override or new candidate; shared original untouched and no activation by writing."
+      "rules": "Stage local override or new candidate; shared original untouched and no activation by writing.",
+      "since": {
+        "rationale": 8,
+        "lesson_ids": 8
+      }
     },
     "skills.propose": {
       "operation": "skills.propose",
@@ -8999,6 +9083,20 @@
       "authority": "Scoped",
       "rules": "New attributed revision restores approved content; do not rewrite history or activate beyond current authority."
     },
+    "skills.set_enabled": {
+      "operation": "skills.set_enabled",
+      "mode": "Command",
+      "fields": {
+        "instruction_id": "Id",
+        "expected_revision": "Revision",
+        "enabled": "bool"
+      },
+      "result": "InstructionRecord",
+      "effect": "Local",
+      "authority": "Scoped",
+      "rules": "Human only. Disables or re-enables a skill without deleting it; a disabled skill is not offered to agents and keeps its revisions and history. Refused when the latest revision is not expected_revision.",
+      "introducedRevision": 8
+    },
     "roles.read": {
       "operation": "roles.read",
       "mode": "Query",
@@ -9019,12 +9117,18 @@
         "instruction_id": "?Id",
         "expected_revision": "?Revision",
         "name": "Label",
-        "content": "ArtifactRef"
+        "content": "ArtifactRef",
+        "rationale": "?Content",
+        "lesson_ids": "?Items<Id>"
       },
       "result": "InstructionRecord",
       "effect": "Local",
       "authority": "Scoped",
-      "rules": "Stage local override or new candidate; shared original untouched and no activation by writing."
+      "rules": "Stage local override or new candidate; shared original untouched and no activation by writing.",
+      "since": {
+        "rationale": 8,
+        "lesson_ids": 8
+      }
     },
     "roles.propose": {
       "operation": "roles.propose",
@@ -10021,51 +10125,67 @@
       "mode": "Query",
       "fields": {
         "scope": "DataScope",
+        "repository_id": "?Id",
         "keys": "Items<Label>",
         "page": "PageRequest"
       },
       "result": "Page<SettingEntry>",
       "effect": "Local",
       "authority": "Scoped",
-      "rules": ""
+      "rules": "",
+      "since": {
+        "repository_id": 8
+      }
     },
     "settings.validate": {
       "operation": "settings.validate",
       "mode": "Query",
       "fields": {
         "scope": "DataScope",
+        "repository_id": "?Id",
         "expected_revision": "Revision",
         "entries": "NonEmpty<SettingAssignment>"
       },
       "result": "ValidationReport",
       "effect": "Local",
       "authority": "Scoped",
-      "rules": ""
+      "rules": "",
+      "since": {
+        "repository_id": 8
+      }
     },
     "settings.save_revision": {
       "operation": "settings.save_revision",
       "mode": "Command",
       "fields": {
         "scope": "DataScope",
+        "repository_id": "?Id",
         "expected_revision": "Revision",
         "entries": "NonEmpty<SettingAssignment>"
       },
       "result": "Page<SettingEntry>",
       "effect": "Local",
       "authority": "Configuration",
-      "rules": "Versioned known keys with exact descriptor schemas; caller cannot self-set source_scope/revision as authority. Secret references only, no plaintext credentials. github.issueTriageIntervalSeconds is an app-only positive integer (default1800) with no per-project override; reviews.automationWaitSeconds is a positive finite inherited interval (technical default900). Validate descriptor types and re-evaluate persisted pacing from last actual admission without catch-up credits."
+      "rules": "Versioned known keys with exact descriptor schemas; caller cannot self-set source_scope/revision as authority. Secret references only, no plaintext credentials. github.issueTriageIntervalSeconds is an app-only positive integer (default1800) with no per-project override; reviews.automationWaitSeconds is a positive finite inherited interval (technical default900). Schema revision 8 adds repository_id: with scope Project, it addresses that project's repository scope (inheritance Workspace, Project, Repository) and the repository must belong to the project; Workspace scope refuses it. delivery.mandatoryReview stays a workspace-only harness protection and cannot be set or weakened at any scope. Validate descriptor types and re-evaluate persisted pacing from last actual admission without catch-up credits.",
+      "since": {
+        "repository_id": 8
+      }
     },
     "settings.explain_source": {
       "operation": "settings.explain_source",
       "mode": "Query",
       "fields": {
         "scope": "DataScope",
+        "repository_id": "?Id",
         "key": "Label"
       },
       "result": "Page<SettingEntry>",
       "effect": "Local",
       "authority": "Scoped",
-      "rules": ""
+      "rules": "",
+      "since": {
+        "repository_id": 8
+      }
     },
     "router.catalog": {
       "operation": "router.catalog",
@@ -10077,7 +10197,7 @@
       "result": "Page<RouteCatalogModel>",
       "effect": "Local",
       "authority": "Scoped",
-      "rules": "Read-only conversational catalog in display order (SystemOne decision models never appear). Schema revision 2: each model's declared context window in tokens (contextTokens, absent when unknown) and the one connection that serves it (connectionId, absent when any connection of its endpoint profile may serve it). Schema revision 3 adds query-only latestFamily, resolvesToModelIds, available and availabilityReason metadata without changing configured RouteModel input. The eight reserved family-latest IDs use existing Model route intent. Alias rows retain all concrete configured serving-scope targets; an empty target list is explicit unavailable, unknown complete inventory remains unknown rather than guessed. Inventory availability is distinct from user enablement, authentication, cooldown and request capability eligibility. Revision 1/2 readers keep their exact recorded schema and do not receive virtual alias rows. Complete authoritative inventories are per connection; failed, malformed or partial lists never remove availability, and returning models do not override user-disabled choices."
+      "rules": "Read-only conversational catalog in display order (SystemOne decision models never appear). Schema revision 2: each model's declared context window in tokens (contextTokens, absent when unknown) and the one connection that serves it (connectionId, absent when any connection of its endpoint profile may serve it). Schema revision 3 adds query-only latestFamily, resolvesToModelIds, available and availabilityReason metadata without changing configured RouteModel input. The eight reserved family-latest IDs use existing Model route intent. Alias rows retain all concrete configured serving-scope targets; an empty target list is explicit unavailable, unknown complete inventory remains unknown rather than guessed. Inventory availability is distinct from user enablement, authentication, cooldown and request capability eligibility. Revision 1/2 readers keep their exact recorded schema and do not receive virtual alias rows. Complete authoritative inventories are per connection; failed, malformed or partial lists never remove availability, and returning models do not override user-disabled choices. Schema revision 4 adds query-only offeredEfforts: the explicit efforts (lowest first, never Default) the router offers when this row is selected on its own, empty while the row is turned off or unavailable, and for a family-latest alias the efforts of the enabled, available targets it resolves to; a tier offers the union over its member rows."
     },
     "router.connections": {
       "operation": "router.connections",
@@ -10503,6 +10623,33 @@
       "effect": "Local",
       "authority": "Scoped",
       "rules": ""
+    },
+    "addons.invoke": {
+      "operation": "addons.invoke",
+      "mode": "Command",
+      "fields": {
+        "package_id": "Id",
+        "contribution_id": "Label",
+        "input": "ArtifactRef",
+        "expected_digest": "?Digest"
+      },
+      "result": "PackageInvocation",
+      "effect": "Journaled",
+      "authority": "Scoped",
+      "rules": "Human only. Starts one invocation of an installed, enabled package's tool contribution as the calling person: the package's brokered application and inference calls run as that person under their current authority, narrowed by the version's approved manifest grants. Records one durable package.invoke operation and returns it with its state; the invocation runs once, a result that cannot be established is held for reconciliation and never re-run. expected_digest, when given, must be the active manifest digest. Refused for an agent, for a contribution that is not a tool of the active version, and for a package that is not ready.",
+      "introducedRevision": 8
+    },
+    "addons.invocation": {
+      "operation": "addons.invocation",
+      "mode": "Query",
+      "fields": {
+        "operation_id": "OperationId"
+      },
+      "result": "PackageInvocation",
+      "effect": "Local",
+      "authority": "Scoped",
+      "rules": "Human only. The state of one invocation the calling person started with addons.invoke and, once it completed, the artifacts of the invocation its package returned or, when it failed, the reason. Another person's or an agent's invocation is not found.",
+      "introducedRevision": 8
     },
     "help.search": {
       "operation": "help.search",
@@ -11347,6 +11494,22 @@
       "authority": "Scoped",
       "rules": "Without stop_process the watcher stops observing and delivers nothing; the process keeps running under its owner. With stop_process the launched process is cancelled through process.cancel and the observed Cancelled outcome is delivered. Reviewer roles cannot stop a process through a watcher.",
       "introducedRevision": 8
+    },
+    "schemas.code_references": {
+      "operation": "schemas.code_references",
+      "introducedRevision": 8,
+      "mode": "Query",
+      "fields": {
+        "scope": "DataScope",
+        "views": "ViewSelection",
+        "connection_id": "Id",
+        "object_id": "Id",
+        "page": "PageRequest"
+      },
+      "result": "SchemaCodeReferencePage",
+      "effect": "Local",
+      "authority": "Scoped",
+      "rules": " The code that uses one table or column of the selected view: the SQL literals and explicit ORM mappings recorded in the published graph view of each repository the caller may read in scope, with their evidence. A name matches without case, qualified by its schema or not. No source row values are read."
     }
   },
   "earlierInputResults": {
@@ -11549,6 +11712,12 @@
       2,
       3
     ],
+    "addons.invoke": [
+      8
+    ],
+    "addons.invocation": [
+      8
+    ],
     "router.availability": [
       1,
       2,
@@ -11571,6 +11740,65 @@
       8
     ],
     "mcp.connect": [
+      1,
+      8
+    ],
+    "settings.read_effective": [
+      1,
+      8
+    ],
+    "settings.validate": [
+      1,
+      8
+    ],
+    "settings.save_revision": [
+      1,
+      8
+    ],
+    "settings.explain_source": [
+      1,
+      8
+    ],
+    "skills.set_enabled": [
+      8
+    ],
+    "dreaming.instructions": [
+      1,
+      8
+    ],
+    "skills.discover": [
+      1,
+      8
+    ],
+    "skills.read": [
+      1,
+      8
+    ],
+    "skills.draft": [
+      1,
+      8
+    ],
+    "skills.history": [
+      1,
+      8
+    ],
+    "skills.rollback": [
+      1,
+      8
+    ],
+    "roles.read": [
+      1,
+      8
+    ],
+    "roles.draft": [
+      1,
+      8
+    ],
+    "roles.history": [
+      1,
+      8
+    ],
+    "roles.rollback": [
       1,
       8
     ],
@@ -11626,7 +11854,8 @@
     "router.catalog": [
       1,
       2,
-      3
+      3,
+      4
     ],
     "router.connections": [
       1,
@@ -11641,12 +11870,14 @@
     "knowledge.search": [
       1,
       2,
-      3
+      3,
+      8
     ],
     "knowledge.read": [
       1,
       2,
-      3
+      3,
+      8
     ],
     "knowledge.record": [
       1,
@@ -11672,32 +11903,38 @@
     "knowledge.subgraph": [
       1,
       2,
-      3
+      3,
+      8
     ],
     "knowledge.entity_bundle": [
       1,
       2,
-      3
+      3,
+      8
     ],
     "knowledge.entity_graph": [
       1,
       2,
-      3
+      3,
+      8
     ],
     "knowledge.claim_bundle": [
       1,
       2,
-      3
+      3,
+      8
     ],
     "knowledge.expand_frontier": [
       1,
       2,
-      3
+      3,
+      8
     ],
     "knowledge.query": [
       1,
       2,
-      3
+      3,
+      8
     ],
     "knowledge.promote": [
       1,
@@ -11706,7 +11943,8 @@
     "knowledge.tagged_lessons": [
       1,
       2,
-      3
+      3,
+      8
     ],
     "knowledge.relate": [
       1,
@@ -12016,7 +12254,8 @@
       3
     ],
     "approvals.review_queue": [
-      3
+      3,
+      8
     ],
     "notifications.mark_read": [
       3
@@ -12199,6 +12438,9 @@
     "schemas.relationships": [
       1,
       5
+    ],
+    "schemas.code_references": [
+      8
     ],
     "schemas.index": [
       1,
@@ -12466,6 +12708,7 @@
     "schemas.connections": {"assignmentScope": "project", "nativeExecution": false, "approvalRequired": false, "humanOnly": false},
     "schemas.objects": {"assignmentScope": "project", "nativeExecution": false, "approvalRequired": false, "humanOnly": false},
     "schemas.relationships": {"assignmentScope": "project", "nativeExecution": false, "approvalRequired": false, "humanOnly": false},
+    "schemas.code_references": {"assignmentScope": "project", "nativeExecution": false, "approvalRequired": false, "humanOnly": false},
     "schemas.index": {"assignmentScope": "project", "nativeExecution": false, "approvalRequired": false, "humanOnly": false},
     "schemas.refresh": {"assignmentScope": "project", "nativeExecution": false, "approvalRequired": false, "humanOnly": false},
     "schemas.remove_index": {"assignmentScope": "project", "nativeExecution": false, "approvalRequired": false, "humanOnly": false},
@@ -12545,6 +12788,7 @@
     "skills.propose": {"assignmentScope": "project", "nativeExecution": false, "approvalRequired": false, "humanOnly": false},
     "skills.history": {"assignmentScope": "project", "nativeExecution": false, "approvalRequired": false, "humanOnly": false},
     "skills.rollback": {"assignmentScope": "project", "nativeExecution": false, "approvalRequired": true, "humanOnly": false},
+    "skills.set_enabled": {"assignmentScope": "project", "nativeExecution": false, "approvalRequired": false, "humanOnly": true},
     "roles.read": {"assignmentScope": "project", "nativeExecution": false, "approvalRequired": false, "humanOnly": false},
     "roles.draft": {"assignmentScope": "administration", "nativeExecution": false, "approvalRequired": false, "humanOnly": false},
     "roles.propose": {"assignmentScope": "administration", "nativeExecution": false, "approvalRequired": false, "humanOnly": false},
@@ -12668,6 +12912,8 @@
     "addons.logs": {"assignmentScope": "project", "nativeExecution": false, "approvalRequired": false, "humanOnly": false},
     "addons.rollback": {"assignmentScope": "project", "nativeExecution": true, "approvalRequired": false, "humanOnly": false},
     "addons.uninstall": {"assignmentScope": "project", "nativeExecution": false, "approvalRequired": false, "humanOnly": false},
+    "addons.invoke": {"assignmentScope": "project", "nativeExecution": true, "approvalRequired": false, "humanOnly": true},
+    "addons.invocation": {"assignmentScope": "project", "nativeExecution": false, "approvalRequired": false, "humanOnly": true},
     "help.search": {"assignmentScope": "project", "nativeExecution": false, "approvalRequired": false, "humanOnly": false},
     "help.read": {"assignmentScope": "project", "nativeExecution": false, "approvalRequired": false, "humanOnly": false},
     "help.topic_for_screen": {"assignmentScope": "project", "nativeExecution": false, "approvalRequired": false, "humanOnly": false},

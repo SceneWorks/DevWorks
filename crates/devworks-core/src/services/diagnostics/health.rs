@@ -27,6 +27,7 @@ use super::{
 };
 use crate::authority::redact::Redactor;
 use crate::context::InvocationContext;
+use crate::locks::RwLockExt;
 use crate::ports::diagnostics::Metric;
 use crate::ports::storage::{
     AccessMode, DiagnosticAudience, DiagnosticFilter, ProcessFilter, ProcessPhase, ReadSnapshot,
@@ -457,11 +458,7 @@ fn storage_monitor(svc: &DiagnosticService, out: &mut Vec<HealthCheck>) {
 }
 
 fn queue_checks(svc: &DiagnosticService, snapshot: &dyn ReadSnapshot, out: &mut Vec<HealthCheck>) {
-    let consumers = svc
-        .consumers
-        .read()
-        .unwrap_or_else(|p| p.into_inner())
-        .clone();
+    let consumers = svc.consumers.read_locked().clone();
     let Some(mut consumers) = consumers else {
         out.push(unavailable(
             "queue",
@@ -625,7 +622,9 @@ fn process_checks(
             "process.owned",
             HealthState::Degraded,
             format!(
-                "The scan stopped after {scanned} unsettled process records; more remain. Of those read, {orphaned} are of earlier boots, {uncertain} could not be verified stopped and {lost} recorded no identity."
+                "The scan stopped after {scanned} unsettled process records; more \
+                    remain. Of those read, {orphaned} are of earlier boots, {uncertain} \
+                    could not be verified stopped and {lost} recorded no identity."
             ),
         )
     } else if orphaned == 0 && uncertain == 0 && lost == 0 {
@@ -639,7 +638,9 @@ fn process_checks(
             "process.owned",
             HealthState::Degraded,
             format!(
-                "{orphaned} process trees of earlier boots are unsettled, {uncertain} could not be verified stopped and {lost} launches recorded no identity; only a person can confirm an unverifiable tree stopped."
+                "{orphaned} process trees of earlier boots are unsettled, {uncertain} \
+                    could not be verified stopped and {lost} launches recorded no identity; \
+                    only a person can confirm an unverifiable tree stopped."
             ),
         )
     };
@@ -904,7 +905,10 @@ fn access_check(ctx: &InvocationContext, out: &mut Vec<HealthCheck>) {
         "access.local",
         HealthState::Healthy,
         format!(
-            "Single-user local workspace: no sign-in, no central account or remote control plane, and no issued MCP server tokens. Agents, packages and MCP clients act through local authority bindings. This request is {} ({:?}).",
+            "Single-user local workspace: no sign-in, no central account or remote \
+                control plane, and no issued MCP server tokens. Agents, packages and \
+                MCP clients act through local authority bindings. This request is {} \
+                ({:?}).",
             ctx.principal().0.as_str(),
             ctx.principal_kind()
         ),
@@ -943,7 +947,7 @@ pub(crate) fn checks(
     storage_checks(svc, now, &mut out);
     queue_checks(svc, snapshot, &mut out);
     process_checks(svc, snapshot, &audience, &mut out);
-    for source in svc.sources.read().unwrap_or_else(|p| p.into_inner()).iter() {
+    for source in svc.sources.read_locked().iter() {
         out.extend(source.checks(now));
     }
     indexing_checks(snapshot, &audience, now, &mut out);

@@ -1023,6 +1023,7 @@ const MAX_ENTRIES: usize = 1024;
 /// Builds a signed index document from the index JSON (a publisher tool and the tests use it):
 /// `{"format", "index": <the exact index text>, "signature": {...}}`, the Ed25519 signature
 /// over `"devworks-package-index-v1\n" ‖ index text`.
+#[cfg(any(test, feature = "test-support"))]
 pub fn write_index(index: &Value, key: &SigningKey) -> Vec<u8> {
     let text = index.to_string();
     let mut msg = INDEX_SIGNING_CONTEXT.to_vec();

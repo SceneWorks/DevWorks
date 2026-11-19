@@ -10,6 +10,7 @@
 //! belong to [`ManagedFileCustody`]; this adapter performs only the filesystem I/O.
 use crate::fs::sources::{HostArtifactSources, IssueRefusal};
 use devworks_core::context::{InvocationContext, PrincipalKind};
+use devworks_core::locks::LockExt;
 use devworks_core::ports::diagnostics::{ExportRefused, ExportStaging};
 use devworks_core::ports::project_purge::PurgeFileOwner;
 use devworks_core::ports::storage::{ApplicationStore, ProjectManagedFileReservation};
@@ -111,11 +112,7 @@ impl DiagnosticExports {
     }
 
     fn settle_managed(&self, ticket: &str) {
-        if let Some((project, id)) = self
-            .managed
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .remove(ticket)
+        if let Some((project, id)) = self.managed.locked().remove(ticket)
             && let Some(custody) = &self.custody
         {
             let _ = custody.settle_diagnostic_export(project, id);
@@ -134,7 +131,7 @@ impl DiagnosticExports {
         });
     }
     fn staged(&self) -> std::sync::MutexGuard<'_, HashMap<String, PathBuf>> {
-        self.staged.lock().unwrap_or_else(|p| p.into_inner())
+        self.staged.locked()
     }
 }
 
@@ -290,13 +287,10 @@ impl ExportStaging for DiagnosticExports {
             }
         };
         if let Some(reserved) = attribution {
-            self.managed
-                .lock()
-                .unwrap_or_else(|p| p.into_inner())
-                .insert(
-                    ticket.as_str().to_owned(),
-                    (reserved.project_id, reserved.id),
-                );
+            self.managed.locked().insert(
+                ticket.as_str().to_owned(),
+                (reserved.project_id, reserved.id),
+            );
         }
         self.staged().insert(ticket.as_str().to_owned(), path);
         attempt.committed = true;

@@ -1642,6 +1642,15 @@ impl IndexRead for Unmodelled {
     fn nodes_qualified(&self, _: &Id, _: &str, _: u16) -> Result<Vec<StoredNode>, StorageError> {
         unmodelled()
     }
+    fn nodes_qualified_after(
+        &self,
+        _: &Id,
+        _: &str,
+        _: Option<(&str, &str)>,
+        _: u16,
+    ) -> Result<Vec<StoredNode>, StorageError> {
+        unmodelled()
+    }
     fn published(&self, _: &Id) -> Result<Option<StoredPublished>, StorageError> {
         unmodelled()
     }
@@ -1766,6 +1775,17 @@ impl InstructionRead for Unmodelled {
     ) -> Result<Option<StoredInstructionRevision>, StorageError> {
         unmodelled()
     }
+    fn instruction_revision_lessons(&self, _: &Id, _: i64) -> Result<Vec<Id>, StorageError> {
+        unmodelled()
+    }
+    fn lesson_instruction_revisions(
+        &self,
+        _: &Id,
+        _: Option<(&Id, i64)>,
+        _: u16,
+    ) -> Result<Vec<(Id, i64)>, StorageError> {
+        unmodelled()
+    }
 }
 impl InstructionRepository for Unmodelled {
     fn insert_instruction_item(&mut self, _: &StoredInstructionItem) -> Result<(), StorageError> {
@@ -1796,6 +1816,14 @@ impl InstructionRepository for Unmodelled {
         _: &Id,
         _: i64,
         _: &Value,
+    ) -> Result<(), StorageError> {
+        unmodelled()
+    }
+    fn link_instruction_revision_lessons(
+        &mut self,
+        _: &Id,
+        _: i64,
+        _: &[Id],
     ) -> Result<(), StorageError> {
         unmodelled()
     }

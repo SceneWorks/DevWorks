@@ -72,10 +72,14 @@ impl AccessProfile {
     pub fn guarantee(self) -> &'static str {
         match self {
             Self::Full => {
-                "Selected tools run with your ordinary user rights. Harness checks inspect known destructive intent; they are not OS confinement against arbitrary code."
+                "Selected tools run with your ordinary user rights. Harness checks \
+                    inspect known destructive intent; they are not OS confinement against \
+                    arbitrary code."
             }
             Self::ProjectScope => {
-                "Brokered work is limited to the project. Native shell, package and MCP execution is refused unless you grant a bounded native exception, which runs with your user rights."
+                "Brokered work is limited to the project. Native shell, package and MCP \
+                    execution is refused unless you grant a bounded native exception, which \
+                    runs with your user rights."
             }
         }
     }
@@ -583,10 +587,6 @@ pub fn registered_tool_visibility(
     let Some(_) = policy.profile else {
         return Verdict::Deny(DenialReason::UnsupportedProfile);
     };
-    if !command {
-        return Verdict::Allow;
-    }
-
     Verdict::Allow
 }
 

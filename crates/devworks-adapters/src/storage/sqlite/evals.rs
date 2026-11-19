@@ -12,7 +12,9 @@ fn runs<P: rusqlite::Params>(
     params: P,
 ) -> Result<Vec<StoredEvalRun>, StorageError> {
     let mut statement = db(conn.prepare_cached(&format!(
-        "SELECT id,suite_id,suite_revision,project_id,session_id,session_revision,session_sequence,measurement_digest,created_at,source_watermark,report_json FROM eval_runs WHERE {tail}"
+        "SELECT id,suite_id,suite_revision,project_id,session_id,\
+            session_revision,session_sequence,measurement_digest,created_at,\
+            source_watermark,report_json FROM eval_runs WHERE {tail}"
     )))?;
     let rows = db(db(statement.query_map(params, |row| {
         Ok((
@@ -149,8 +151,22 @@ impl EvalRepository for Unit<'_> {
             return Err(invalid("eval source watermark is in the future"));
         }
         db(self.conn.execute(
-            "INSERT INTO eval_runs(id,suite_id,suite_revision,project_id,session_id,session_revision,session_sequence,measurement_digest,created_at,source_watermark,report_json) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)",
-            params![run.id.as_str(), run.suite_id.as_str(), run.suite_revision, run.project_id.as_ref().map(|project| project.0.as_str()), run.session_id.as_str(), run.session_revision, run.session_sequence, run.measurement_digest, run.created_at_ms, run.source_watermark, report],
+            "INSERT INTO eval_runs(id,suite_id,suite_revision,project_id,session_id,\
+                session_revision,session_sequence,measurement_digest,created_at,\
+                source_watermark,report_json) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)",
+            params![
+                run.id.as_str(),
+                run.suite_id.as_str(),
+                run.suite_revision,
+                run.project_id.as_ref().map(|project| project.0.as_str()),
+                run.session_id.as_str(),
+                run.session_revision,
+                run.session_sequence,
+                run.measurement_digest,
+                run.created_at_ms,
+                run.source_watermark,
+                report
+            ],
         ))?;
         Ok(())
     }

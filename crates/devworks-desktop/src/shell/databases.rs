@@ -5,8 +5,9 @@ use crate::{
     databases_screen::{Action, DatabasesScreen, Draft, ReadIntent},
     memory::RouteMemory,
     ops::{self, Failure},
+    paged::{Applied, Fetch, Page},
     route::Route,
-    screen::{Cx, Screen, ScreenContext, ScreenId, controller},
+    screen::{Cx, Effect, Screen, ScreenContext, ScreenId, controller},
 };
 use devworks_core::{
     operations::OperationInput as In,
@@ -32,7 +33,7 @@ impl Screen for DatabasesScreen {
         .load_databases(false);
     }
     fn refresh(&mut self, cx: &mut Cx, _route: Route) {
-        if !self.loading && !self.batch_scanning && self.connections.len() <= 100 {
+        if !self.connections.loading() && !self.batch_scanning {
             DatabasesCtl {
                 databases: self,
                 cx,
@@ -83,7 +84,7 @@ impl Screen for DatabasesScreen {
         if self.project.as_deref() == Some(p) {
             self.project = None;
             self.clear_explorer();
-            self.loaded = false;
+            self.connections.reset();
         }
         if let Some(d) = &mut self.draft {
             if let Some(a) = d
@@ -113,7 +114,7 @@ impl Screen for DatabasesScreen {
 
 impl DatabasesCtl<'_, '_> {
     fn load_databases(&mut self, append: bool) {
-        if self.databases.loading {
+        if self.databases.connections.loading() || self.databases.scan.loading() {
             return;
         }
         if self.databases.project != self.selected_project
@@ -129,24 +130,57 @@ impl DatabasesCtl<'_, '_> {
         {
             let draft = self.databases.draft.take();
             let sequence = self.databases.sequence.wrapping_add(1);
-            let read_sequence = self.databases.read_sequence.wrapping_add(1);
+            // The lists keep their request counters, so a reply to the old scope stays refused.
+            let mut lists = std::mem::take(&mut *self.databases);
+            lists.connections.reset();
+            lists.scan.reset();
+            lists.objects.reset();
+            lists.relations.reset();
+            lists.code_references.reset();
             *self.databases = Default::default();
+            self.databases.connections = lists.connections;
+            self.databases.scan = lists.scan;
+            self.databases.objects = lists.objects;
+            self.databases.relations = lists.relations;
+            self.databases.code_references = lists.code_references;
             self.databases.sequence = sequence;
-            self.databases.read_sequence = read_sequence;
             self.databases.draft = draft;
             self.databases.project = self.selected_project.clone();
         }
         self.databases.sequence = self.databases.sequence.wrapping_add(1);
-        let n = self.databases.sequence;
-        let project = if self.databases.batch_scanning {
+        let scanning = self.databases.batch_scanning;
+        let list = if scanning {
+            &mut self.databases.scan
+        } else {
+            &mut self.databases.connections
+        };
+        // A sync-all scan always starts at the first page (its list was reset). The sources
+        // list belongs to `databases.project`, which only changes where the lists are reset,
+        // so a re-read of it covers every page shown.
+        let Some(fetch) = (if append {
+            list.more_page()
+        } else if scanning {
+            Some(list.reload())
+        } else {
+            Some(list.reread())
+        }) else {
+            return;
+        };
+        self.send_database_list(fetch);
+    }
+    /// Submits the inventory request `fetch` names, for the scan or the shown sources.
+    fn send_database_list(&mut self, fetch: Fetch) {
+        let scanning = self.databases.batch_scanning;
+        let project = if scanning {
             self.databases.batch_scope.clone()
         } else {
             self.databases.project.clone()
         };
-        let cursor = self.databases.next.clone().filter(|_| append);
-        self.databases.loading = true;
+        let slot = DatabasesSlot::DatabaseList(fetch.generation, fetch.append());
+        let cursor = fetch.cursor.clone();
+        let generation = fetch.generation;
         if !self.query(
-            DatabasesSlot::DatabaseList(n, append),
+            slot,
             "Loading database sources",
             "schemas.connections",
             move |b| {
@@ -156,7 +190,12 @@ impl DatabasesCtl<'_, '_> {
                 )
             },
         ) {
-            self.databases.loading = false;
+            let list = if scanning {
+                &mut self.databases.scan
+            } else {
+                &mut self.databases.connections
+            };
+            list.abandon(generation);
         }
     }
     fn database_read_pin(
@@ -176,19 +215,16 @@ impl DatabasesCtl<'_, '_> {
         let Some(pin) = self.databases.read_pin.clone() else {
             if self.databases.pending_read.is_some() {
                 self.databases.pending_read = None;
-                self.databases.read_loading = false;
                 self.databases.error = Some("No retained schema view is available. Sync this source before reading its metadata.".into());
                 return None;
             }
             // A fresh status can see a publication that changed during preparation. Ask
             // the owner once for a matching lease, then resume this same source's intent.
             self.databases.pending_read = Some((source.id.as_str().into(), intent));
-            self.databases.read_loading = true;
             self.databases.error = None;
             self.load_databases(false);
-            if !self.databases.loading {
+            if !self.databases.connections.loading() {
                 self.databases.pending_read = None;
-                self.databases.read_loading = false;
                 self.databases.error =
                     Some("Could not refresh the source's retained schema view.".into());
             }
@@ -203,15 +239,20 @@ impl DatabasesCtl<'_, '_> {
         };
         // Invalidate any earlier object/relationship reply when a new read intent starts,
         // including one that first needs a fresh source capture.
-        self.databases.read_sequence = self.databases.read_sequence.wrapping_add(1);
-        let n = self.databases.read_sequence;
+        self.databases.supersede_reads();
         let Some(pin) = self.database_read_pin(&source, ReadIntent::Objects(append)) else {
             return;
         };
         if !append {
-            self.databases.objects.clear();
-            self.databases.object_next = None;
+            self.databases.objects.reset();
         }
+        let Some(fetch) = (if append {
+            self.databases.objects.more_page()
+        } else {
+            Some(self.databases.objects.reload())
+        }) else {
+            return;
+        };
         let read = ObjectsRead {
             project: self.databases.project.clone(),
             pin,
@@ -220,17 +261,17 @@ impl DatabasesCtl<'_, '_> {
             text: self.databases.filter.clone(),
             object: self.databases.object_id.clone(),
             parent: self.databases.parent.clone(),
-            cursor: self.databases.object_next.clone().filter(|_| append),
+            cursor: fetch.cursor.clone(),
         };
-        self.databases.read_loading = true;
-        if !self.query(
-            DatabasesSlot::DatabaseObjects(n, append),
+        let slot = DatabasesSlot::DatabaseObjects(fetch.generation, append);
+        self.cx.paged(
+            &mut self.databases.objects,
+            fetch,
+            slot,
             "Reading schema objects",
             "schemas.objects",
-            move |b| query(b, read.input()),
-        ) {
-            self.databases.read_loading = false;
-        }
+            move |b, _| query(b, read.input()),
+        );
     }
     fn resume_database_read(&mut self) {
         if self.databases.batch_scanning {
@@ -241,10 +282,10 @@ impl DatabasesCtl<'_, '_> {
         };
         if self.databases.selected.as_deref() != Some(id.as_str()) {
             self.databases.pending_read = None;
-            self.databases.read_loading = false;
         } else if self
             .databases
             .connections
+            .items
             .iter()
             .any(|source| source.id.as_str() == id)
         {
@@ -253,14 +294,16 @@ impl DatabasesCtl<'_, '_> {
                 ReadIntent::Relationships { ids, append } => {
                     self.load_database_relations(ids, append)
                 }
+                ReadIntent::CodeReferences { id, append } => {
+                    self.load_database_code_references(id, append)
+                }
             }
-        } else if self.databases.next.is_some() {
+        } else if self.databases.connections.more() {
             // The selected source can be on a later inventory page. Never substitute the
             // first source just because a fresh first page does not contain its identity.
             self.load_databases(true);
         } else {
             self.databases.pending_read = None;
-            self.databases.read_loading = false;
             self.databases.error =
                 Some("The selected database source is no longer visible in this scope.".into());
         }
@@ -269,8 +312,7 @@ impl DatabasesCtl<'_, '_> {
         let Some(source) = self.databases.source().cloned() else {
             return;
         };
-        self.databases.read_sequence = self.databases.read_sequence.wrapping_add(1);
-        let n = self.databases.read_sequence;
+        self.databases.supersede_reads();
         let Some(pin) = self.database_read_pin(
             &source,
             ReadIntent::Relationships {
@@ -281,18 +323,25 @@ impl DatabasesCtl<'_, '_> {
             return;
         };
         if !append {
-            self.databases.relations.clear();
-            self.databases.relation_next = None;
+            self.databases.relations.reset();
             self.databases.relation_ids = ids.clone();
         }
+        let Some(fetch) = (if append {
+            self.databases.relations.more_page()
+        } else {
+            Some(self.databases.relations.reload())
+        }) else {
+            return;
+        };
         let project = self.databases.project.clone();
-        let cursor = self.databases.relation_next.clone().filter(|_| append);
-        self.databases.read_loading = true;
-        if !self.query(
-            DatabasesSlot::DatabaseRelations(n, append),
+        let slot = DatabasesSlot::DatabaseRelations(fetch.generation, append);
+        self.cx.paged(
+            &mut self.databases.relations,
+            fetch,
+            slot,
             "Reading schema relationships",
             "schemas.relationships",
-            move |b| {
+            move |b, cursor| {
                 query(
                     b,
                     databases_ops::relationships(
@@ -300,13 +349,59 @@ impl DatabasesCtl<'_, '_> {
                         &pin,
                         &source.id,
                         &ids,
-                        cursor.as_deref(),
+                        cursor,
                     ),
                 )
             },
-        ) {
-            self.databases.read_loading = false;
+        );
+    }
+    fn load_database_code_references(&mut self, id: String, append: bool) {
+        let Some(source) = self.databases.source().cloned() else {
+            return;
+        };
+        self.databases.supersede_reads();
+        let Some(pin) = self.database_read_pin(
+            &source,
+            ReadIntent::CodeReferences {
+                id: id.clone(),
+                append,
+            },
+        ) else {
+            return;
+        };
+        if !append || self.databases.code_object.as_deref() != Some(id.as_str()) {
+            self.databases.code_references.reset();
+            self.databases.code_object = Some(id.clone());
         }
+        let Some(fetch) = (if append {
+            self.databases.code_references.more_page()
+        } else {
+            Some(self.databases.code_references.reload())
+        }) else {
+            return;
+        };
+        let project = self.databases.project.clone();
+        let connection = source.id.clone();
+        let slot = DatabasesSlot::DatabaseCodeReferences(fetch.generation, append);
+        self.cx.paged(
+            &mut self.databases.code_references,
+            fetch,
+            slot,
+            "Reading the code that uses a schema object",
+            "schemas.code_references",
+            move |b, cursor| {
+                query(
+                    b,
+                    databases_ops::code_references(
+                        project.as_deref(),
+                        &pin,
+                        &connection,
+                        &id,
+                        cursor,
+                    ),
+                )
+            },
+        );
     }
     fn database_command(&mut self, input: Option<In>) {
         let Some(input) = input else {
@@ -405,7 +500,7 @@ impl DatabasesCtl<'_, '_> {
     }
     fn databases_screen(&mut self, ui: &mut Ui) {
         if self.databases.project != self.selected_project
-            || (!self.databases.loaded && !self.databases.loading)
+            || (!self.databases.connections.loaded && !self.databases.connections.loading())
         {
             self.load_databases(false);
         }
@@ -441,13 +536,11 @@ impl DatabasesCtl<'_, '_> {
             },
             Action::ClearKey => self.databases.generated_key = None,
             Action::Refresh => {
-                self.databases.pending_read = None;
-                self.databases.read_loading = false;
-                self.databases.read_sequence = self.databases.read_sequence.wrapping_add(1);
+                self.databases.stop_reads();
                 self.databases.view = None;
                 self.databases.read_pin = None;
-                self.databases.objects.clear();
-                self.databases.relations.clear();
+                self.databases.objects.reset();
+                self.databases.relations.reset();
                 self.databases.selected_object = None;
                 self.load_databases(false);
             }
@@ -462,24 +555,22 @@ impl DatabasesCtl<'_, '_> {
                 self.databases.draft = self
                     .databases
                     .connections
+                    .items
                     .iter()
                     .find(|s| s.id.as_str() == id)
                     .and_then(|s| Draft::edit(s, self.databases.project.clone()))
             }
             Action::Select(id) => {
                 self.databases.tab = 0;
-                self.databases.pending_read = None;
-                self.databases.read_loading = false;
+                self.databases.stop_reads();
                 self.databases.selected = Some(id);
                 self.databases.view = None;
                 self.databases.read_pin = None;
                 self.databases.parent = None;
                 self.databases.object_id = None;
-                self.databases.object_next = None;
-                self.databases.relation_next = None;
                 self.databases.relation_ids.clear();
-                self.databases.objects.clear();
-                self.databases.relations.clear();
+                self.databases.objects.reset();
+                self.databases.relations.reset();
                 self.databases.selected_object = None;
                 self.databases.error = None;
                 self.load_database_objects(false);
@@ -507,6 +598,7 @@ impl DatabasesCtl<'_, '_> {
                 if let Some(s) = self
                     .databases
                     .connections
+                    .items
                     .iter()
                     .find(|s| s.id.as_str() == id)
                 {
@@ -564,6 +656,11 @@ impl DatabasesCtl<'_, '_> {
                 self.databases.tab = 1;
                 self.load_database_relations(ids, append);
             }
+            Action::CodeReferences(id, append) => self.load_database_code_references(id, append),
+            Action::OpenCode(r) => self.effects.push(Effect::OpenGraphNode {
+                repository: r.repository_id.as_str().into(),
+                node: r.node_id.as_str().into(),
+            }),
             Action::ConfirmOutcome => self.confirm_outcomes(),
         }
     }
@@ -573,33 +670,52 @@ impl DatabasesCtl<'_, '_> {
         reply: Reply,
     ) -> Option<(DatabasesSlot, Reply)> {
         match (slot, reply) {
-            (DatabasesSlot::DatabaseList(n, _), _) if n != self.databases.sequence => {}
-            (DatabasesSlot::DatabaseList(_, append), Reply::Query(result)) => {
-                self.databases.loading = false;
+            (DatabasesSlot::DatabaseList(g, _), Reply::Query(result)) => {
+                let scanning = self.databases.batch_scanning;
                 match ops::query_result(result) {
                     Ok((OperationResult::SchemasConnections { value }, _)) => {
-                        if self.databases.batch_scanning {
+                        let next = value
+                            .next_cursor
+                            .clone()
+                            .filter(|_| value.has_more)
+                            .map(|s| s.0);
+                        if scanning {
+                            // A sync-all scan reads every page but shows none of them.
+                            let applied = self
+                                .databases
+                                .scan
+                                .apply(g, Ok(Page::new(Vec::new(), next)));
+                            if applied == Applied::Stale {
+                                return None;
+                            }
                             self.scan_database_batch(value);
                             self.resume_database_read();
                             return None;
                         }
-                        if !append {
-                            self.databases.connections.clear();
+                        let rows = Page::new(value.items.0, next);
+                        match self.databases.connections.apply(g, Ok(rows)) {
+                            Applied::Stale => return None,
+                            Applied::Continue(fetch) => {
+                                self.send_database_list(fetch);
+                                return None;
+                            }
+                            _ => {}
                         }
-                        self.databases.connections.extend(value.items.0);
-                        self.databases.next =
-                            value.next_cursor.filter(|_| value.has_more).map(|s| s.0);
-                        self.databases.loaded = true;
                         self.resume_database_read();
                     }
                     Ok((other, _)) => {
-                        self.databases.error =
-                            Some(ops::unexpected("schemas.connections", &other).describe())
+                        let error = ops::unexpected("schemas.connections", &other).describe();
+                        if self.fail_database_list(scanning, g, error.clone()) {
+                            self.databases.error = Some(error);
+                        }
                     }
                     Err(e) => {
+                        if !self.fail_database_list(scanning, g, e.describe()) {
+                            return None;
+                        }
                         self.databases.error = Some(e.describe());
                         if self.databases.pending_read.take().is_some() {
-                            self.databases.read_loading = false;
+                            self.databases.stop_reads();
                         }
                         // Only the inventory scan owns batch cancellation. An unrelated
                         // refresh may fail while a captured batch command still awaits its
@@ -613,46 +729,78 @@ impl DatabasesCtl<'_, '_> {
                     }
                 }
             }
-            (DatabasesSlot::DatabaseObjects(n, _) | DatabasesSlot::DatabaseRelations(n, _), _)
-                if n != self.databases.read_sequence => {}
-            (DatabasesSlot::DatabaseObjects(_, append), Reply::Query(result)) => {
-                self.databases.read_loading = false;
+            (DatabasesSlot::DatabaseCodeReferences(g, _), Reply::Query(result)) => {
+                match ops::query_result(result) {
+                    Ok((OperationResult::SchemasCodeReferences { value }, _)) => {
+                        let next = value.next_cursor.filter(|_| value.has_more).map(|c| c.0);
+                        let rows = Page::new(value.items.0, next);
+                        if self.databases.code_references.apply(g, Ok(rows)) == Applied::Stale {
+                            return None;
+                        }
+                    }
+                    Ok((o, _)) => {
+                        let e = ops::unexpected("schemas.code_references", &o).describe();
+                        if self.databases.code_references.apply(g, Err(e.clone())) != Applied::Stale
+                        {
+                            self.databases.error = Some(e);
+                        }
+                    }
+                    Err(e) => {
+                        if self.databases.code_references.apply(g, Err(e.describe()))
+                            != Applied::Stale
+                        {
+                            self.databases.error = Some(e.describe());
+                        }
+                    }
+                }
+            }
+            (DatabasesSlot::DatabaseObjects(g, _), Reply::Query(result)) => {
                 match ops::query_result(result) {
                     Ok((OperationResult::SchemasObjects { value }, _)) => {
-                        if !append {
-                            self.databases.objects.clear();
+                        let first = value.items.0.first().cloned();
+                        let next = value.next_cursor.filter(|_| value.has_more).map(|c| c.0);
+                        let rows = Page::new(value.items.0, next);
+                        if self.databases.objects.apply(g, Ok(rows)) == Applied::Stale {
+                            return None;
                         }
                         if self.databases.object_id.is_some() {
-                            self.databases.selected_object = value.items.0.first().cloned();
+                            self.databases.selected_object = first;
                         }
-                        self.databases.objects.extend(value.items.0);
-                        self.databases.object_next =
-                            value.next_cursor.filter(|_| value.has_more).map(|c| c.0);
                         self.databases.error = None;
                     }
                     Ok((o, _)) => {
-                        self.databases.error =
-                            Some(ops::unexpected("schemas.objects", &o).describe())
+                        let e = ops::unexpected("schemas.objects", &o).describe();
+                        if self.databases.objects.apply(g, Err(e.clone())) != Applied::Stale {
+                            self.databases.error = Some(e);
+                        }
                     }
-                    Err(e) => self.databases.error = Some(e.describe()),
+                    Err(e) => {
+                        if self.databases.objects.apply(g, Err(e.describe())) != Applied::Stale {
+                            self.databases.error = Some(e.describe());
+                        }
+                    }
                 }
             }
-            (DatabasesSlot::DatabaseRelations(_, append), Reply::Query(result)) => {
-                self.databases.read_loading = false;
+            (DatabasesSlot::DatabaseRelations(g, _), Reply::Query(result)) => {
                 match ops::query_result(result) {
                     Ok((OperationResult::SchemasRelationships { value }, _)) => {
-                        if !append {
-                            self.databases.relations.clear();
+                        let next = value.next_cursor.filter(|_| value.has_more).map(|c| c.0);
+                        let rows = Page::new(value.items.0, next);
+                        if self.databases.relations.apply(g, Ok(rows)) == Applied::Stale {
+                            return None;
                         }
-                        self.databases.relations.extend(value.items.0);
-                        self.databases.relation_next =
-                            value.next_cursor.filter(|_| value.has_more).map(|c| c.0);
                     }
                     Ok((o, _)) => {
-                        self.databases.error =
-                            Some(ops::unexpected("schemas.relationships", &o).describe())
+                        let e = ops::unexpected("schemas.relationships", &o).describe();
+                        if self.databases.relations.apply(g, Err(e.clone())) != Applied::Stale {
+                            self.databases.error = Some(e);
+                        }
                     }
-                    Err(e) => self.databases.error = Some(e.describe()),
+                    Err(e) => {
+                        if self.databases.relations.apply(g, Err(e.describe())) != Applied::Stale {
+                            self.databases.error = Some(e.describe());
+                        }
+                    }
                 }
             }
             (DatabasesSlot::DatabasePrepare, Reply::Task(result)) => match result {
@@ -798,6 +946,12 @@ impl DatabasesCtl<'_, '_> {
 }
 impl DatabasesCtl<'_, '_> {
     fn begin_database_sync_all(&mut self) {
+        if self.databases.connections.loading() {
+            // The scan and the sources list are read one at a time.
+            self.databases.notice =
+                Some("Wait for the database sources to finish loading, then sync all.".into());
+            return;
+        }
         self.databases.batch_remaining.clear();
         self.databases.batch_scanning = true;
         self.databases.batch_active = true;
@@ -805,8 +959,17 @@ impl DatabasesCtl<'_, '_> {
         self.databases.batch_submitted = 0;
         self.databases.batch_failures = 0;
         self.databases.busy = true;
-        self.databases.next = None;
+        self.databases.scan.reset();
         self.load_databases(false);
+    }
+    /// Records that the inventory read `generation` failed; `false` when it was superseded.
+    fn fail_database_list(&mut self, scanning: bool, generation: u64, error: String) -> bool {
+        let list = if scanning {
+            &mut self.databases.scan
+        } else {
+            &mut self.databases.connections
+        };
+        list.apply(generation, Err(error)) != Applied::Stale
     }
     fn scan_database_batch(
         &mut self,
@@ -825,8 +988,7 @@ impl DatabasesCtl<'_, '_> {
                     .push_back((source.id.as_str().into(), source.revision.get()));
             }
         }
-        self.databases.next = page.next_cursor.filter(|_| page.has_more).map(|c| c.0);
-        if self.databases.next.is_some() {
+        if self.databases.scan.more() {
             self.load_databases(true);
         } else {
             self.databases.batch_scanning = false;
@@ -859,7 +1021,7 @@ impl DatabasesCtl<'_, '_> {
     fn resume_database_batch(&mut self) {
         if self.databases.batch_scanning {
             self.databases.batch_remaining.clear();
-            self.databases.next = None;
+            self.databases.scan.reset();
             self.databases.busy = true;
             self.load_databases(false);
         } else if self.databases.batch_active && !self.databases.busy {

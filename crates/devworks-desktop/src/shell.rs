@@ -7,13 +7,14 @@ use crate::knowledge_screen::KnowledgeScreen;
 use crate::memory::{Memory, RouteMemory};
 use crate::notifications::{CardAction, Completions};
 use crate::ops::{self, Failure};
+use crate::paged::{Applied, Fetch, Page};
 use crate::projects_ops::ProjectsSlot;
 use crate::projects_screen::ProjectLists;
 use crate::route::{NAV_ORDER, NavGroup, Route};
 use crate::screen::{Cx, DynScreen, Effect, ScreenId};
 use crate::settings_screen::SettingsScreen;
 use crate::theme;
-use crate::virtual_list::{self, Scrolls};
+use crate::virtual_list::Scrolls;
 use crate::widgets::{self, Header, Tone, ViewState, chip};
 use devworks_core::protocol::provider::ArtifactRef;
 use devworks_core::protocol::records::{LifeState, ProjectRecord};
@@ -156,24 +157,6 @@ pub struct ShellInit {
     pub version: String,
 }
 
-/// A list bound to one query.
-pub struct ListState<T> {
-    pub items: Vec<T>,
-    pub loaded: bool,
-    pub error: Option<String>,
-    pub more: bool,
-}
-impl<T> Default for ListState<T> {
-    fn default() -> Self {
-        Self {
-            items: Vec::new(),
-            loaded: false,
-            error: None,
-            more: false,
-        }
-    }
-}
-
 pub struct Shell {
     client: Option<Client>,
     offline: Option<String>,
@@ -301,7 +284,7 @@ macro_rules! screens {
                             members_of: self.projects.members_of.as_deref(),
                             indexing: Some(&self.projects.indexing),
                         },
-                        catalog: &self.chat.routing.catalog,
+                        catalog: &self.chat.routing.catalog.items,
                         job_status: &self.jobs.project_status,
                         archive_counts: &NO_ARCHIVE_COUNTS,
                         ctx: self.egui.clone(),
@@ -340,19 +323,19 @@ macro_rules! screens {
                 match id {
                     $(ScreenId::$id => {
                         cx.projects.indexing = Some(&self.projects.indexing);
-                        cx.catalog = &self.chat.routing.catalog;
+                        cx.catalog = &self.chat.routing.catalog.items;
                         cx.job_status = &self.jobs.project_status;
                         Some((&mut self.$($field).+, cx))
                     })*
                     $(ScreenId::$nid => {
                         cx.projects.indexing = Some(&self.projects.indexing);
-                        cx.catalog = &self.chat.routing.catalog;
+                        cx.catalog = &self.chat.routing.catalog.items;
                         cx.job_status = &self.jobs.project_status;
                         Some((&mut self.$($nfield).+, cx))
                     })*
                     // The Indexing screen's own context does not hold its state.
                     ScreenId::Indexing => {
-                        cx.catalog = &self.chat.routing.catalog;
+                        cx.catalog = &self.chat.routing.catalog.items;
                         cx.job_status = &self.jobs.project_status;
                         Some((&mut self.projects.indexing, cx))
                     }
@@ -366,7 +349,7 @@ macro_rules! screens {
                     // Decisions keeps the shell's completion cards current.
                     ScreenId::Decisions => {
                         cx.projects.indexing = Some(&self.projects.indexing);
-                        cx.catalog = &self.chat.routing.catalog;
+                        cx.catalog = &self.chat.routing.catalog.items;
                         cx.job_status = &self.jobs.project_status;
                         cx.completions = Some(&mut self.completions);
                         Some((&mut self.decisions, cx))
@@ -374,13 +357,13 @@ macro_rules! screens {
                     // Nor does Jobs': it reads its own run status.
                     ScreenId::Jobs => {
                         cx.projects.indexing = Some(&self.projects.indexing);
-                        cx.catalog = &self.chat.routing.catalog;
+                        cx.catalog = &self.chat.routing.catalog.items;
                         Some((&mut self.jobs, cx))
                     }
                     // Settings draws the indexing sources: its context holds that state.
                     ScreenId::Settings => {
                         cx.projects.indexing = None;
-                        cx.catalog = &self.chat.routing.catalog;
+                        cx.catalog = &self.chat.routing.catalog.items;
                         cx.job_status = &self.jobs.project_status;
                         cx.indexing = Some(&mut self.projects.indexing);
                         Some((&mut self.settings, cx))
@@ -511,6 +494,7 @@ impl Shell {
         self.shutdown_summary.as_deref()
     }
     /// The recorded vertical offset of the list `salt`.
+    #[cfg(any(test, feature = "test-support"))]
     pub fn scroll_offset(&self, salt: &str) -> Option<f32> {
         [&self.scrolls, &self.chat.scrolls, &self.settings.scrolls]
             .into_iter()
@@ -576,6 +560,9 @@ impl Shell {
                 Effect::OpenSession(id) => self.open_session(id),
                 Effect::LoadProjects => self.load_projects(),
                 Effect::LoadRepositories => self.load_repositories(),
+                Effect::LoadMoreProjects => self.load_more_projects(),
+                Effect::LoadMoreRepositories => self.load_more_repositories(),
+                Effect::LoadMoreMembers => self.load_more_members(),
                 Effect::ProjectChanged(p) => {
                     self.projects.mutations += 1;
                     let id = p.id.0.as_str();
@@ -605,6 +592,19 @@ impl Shell {
                 Effect::ForgetArchiveCount(p) => self.work.forget_archive_count(&p),
                 Effect::ReviewPurge(p) => self.start_purge_review(p),
                 Effect::OpenGraph(id, name) => self.open_repository_graph(&id, &name),
+                Effect::OpenGraphNode { repository, node } => {
+                    self.open_graph_node(&repository, &node)
+                }
+                Effect::FindDatabaseTable(table) => {
+                    self.with_typed(|d: &mut crate::databases_screen::DatabasesScreen, _| {
+                        d.tab = 0;
+                        d.filter = table;
+                        d.kind = "Table".into();
+                        d.object_id = None;
+                        d.parent = None;
+                    });
+                    self.navigate(Route::Databases);
+                }
                 Effect::LoadRouterCatalog => self.load_router_catalog(),
                 Effect::Index(action) => {
                     self.with_typed(|s: &mut indexing::IndexingScreen, cx| s.act(cx, vec![action]))
@@ -801,112 +801,133 @@ impl Shell {
 
     pub fn load_projects(&mut self) {
         self.projects.list_at = self.projects.mutations;
-        self.query(
+        // Once listed, a re-read covers every page shown (and a Load more in flight), so a
+        // periodic or mutation re-read never collapses a list the user expanded.
+        let fetch = if self.projects.list.loaded {
+            self.projects.list.refresh()
+        } else {
+            self.projects.list.reload()
+        };
+        self.send_projects(fetch, "Loading projects");
+    }
+    pub fn load_more_projects(&mut self) {
+        if let Some(fetch) = self.projects.list.more_page() {
+            self.send_projects(fetch, "Loading more projects");
+        }
+    }
+    fn send_projects(&mut self, fetch: Fetch, label: &str) {
+        let cursor = fetch.cursor.clone();
+        let sent = self.query(
             ProjectsSlot::ProjectsList.into(),
-            "Loading projects",
+            label,
             "projects.list",
-            |b| ops::projects_list(b, None),
+            move |b| ops::projects_list(b, None, cursor.as_deref()),
         );
+        if !sent {
+            self.projects.list.abandon(fetch.generation);
+        }
     }
     pub fn load_repositories(&mut self) {
-        self.query(
-            ProjectsSlot::RepositoriesList.into(),
-            "Loading repositories",
-            "repositories.list",
-            |b| ops::repositories_list(b, None),
-        );
+        // A re-read covers every page shown; the project's list was reset when the selection
+        // changed, so it starts over then.
+        let fetch = self.projects.repositories.reread();
+        self.send_repositories(fetch, "Loading repositories");
         if let Some(p) = self.selected_project.clone() {
-            self.query(
-                ProjectsSlot::ProjectRepositories(p.clone()).into(),
-                "Loading the project's repositories",
-                "repositories.list",
-                move |b| ops::repositories_list(b, Some(&p)),
-            );
+            let fetch = self.projects.members.reread();
+            self.send_members(p, fetch, "Loading the project's repositories");
+        }
+    }
+    pub fn load_more_repositories(&mut self) {
+        if let Some(fetch) = self.projects.repositories.more_page() {
+            self.send_repositories(fetch, "Loading more repositories");
+        }
+    }
+    pub fn load_more_members(&mut self) {
+        if let Some(p) = self.selected_project.clone()
+            && let Some(fetch) = self.projects.members.more_page()
+        {
+            self.send_members(p, fetch, "Loading more of the project's repositories");
+        }
+    }
+    fn send_repositories(&mut self, fetch: Fetch, label: &str) {
+        let cursor = fetch.cursor.clone();
+        let sent = self.query(
+            ProjectsSlot::RepositoriesList.into(),
+            label,
+            "repositories.list",
+            move |b| ops::repositories_list(b, None, cursor.as_deref()),
+        );
+        if !sent {
+            self.projects.repositories.abandon(fetch.generation);
+        }
+    }
+    fn send_members(&mut self, project: String, fetch: Fetch, label: &str) {
+        let cursor = fetch.cursor.clone();
+        let p = project.clone();
+        let sent = self.query(
+            ProjectsSlot::ProjectRepositories(project).into(),
+            label,
+            "repositories.list",
+            move |b| ops::repositories_list(b, Some(&p), cursor.as_deref()),
+        );
+        if !sent {
+            self.projects.members.abandon(fetch.generation);
         }
     }
     /// A project list reply, read: a list requested before a project mutation is requested
     /// again.
-    fn projects_listed(&mut self, result: Result<(Vec<ProjectRecord>, bool), String>) {
+    fn projects_listed(&mut self, result: Result<Page<ProjectRecord>, String>) {
         if self.projects.list_at != self.projects.mutations {
             self.load_projects();
             return;
         }
-        match result {
-            Ok((items, more)) => {
-                self.projects.list = ListState {
-                    items,
-                    loaded: true,
-                    error: None,
-                    more,
-                };
-                // A selection that no longer exists (deleted elsewhere) is dropped.
-                if let Some(s) = self.selected_project.clone()
-                    && !self.projects.list.more
-                    && !self
-                        .projects
-                        .list
-                        .items
-                        .iter()
-                        .any(|p| p.id.0.as_str() == s)
-                {
-                    self.select_project(None);
-                }
-                // Without a selection the browser sessions of every listed project show.
-                if self.route == Route::Browser && self.selected_project.is_none() {
-                    self.with_screen(ScreenId::Browser, |s, cx| s.load(cx, Route::Browser));
-                }
+        let applied = self.projects.list.apply_current(result);
+        if let Applied::Continue(fetch) = applied {
+            self.send_projects(fetch, "Loading projects");
+            return;
+        }
+        if matches!(applied, Applied::Replaced | Applied::Appended) {
+            // A selection that no longer exists (deleted elsewhere) is dropped.
+            if let Some(s) = self.selected_project.clone()
+                && !self.projects.list.more()
+                && !self
+                    .projects
+                    .list
+                    .items
+                    .iter()
+                    .any(|p| p.id.0.as_str() == s)
+            {
+                self.select_project(None);
             }
-            Err(e) => self.projects.list.error = Some(e),
+            // Without a selection the browser sessions of every listed project show.
+            if self.route == Route::Browser && self.selected_project.is_none() {
+                self.with_screen(ScreenId::Browser, |s, cx| s.load(cx, Route::Browser));
+            }
         }
     }
     fn repositories_listed(
         &mut self,
-        result: Result<
-            (
-                Vec<devworks_core::protocol::records::RepositoryRecord>,
-                bool,
-            ),
-            String,
-        >,
+        result: Result<Page<devworks_core::protocol::records::RepositoryRecord>, String>,
     ) {
-        match result {
-            Ok((items, more)) => {
-                self.projects.repositories = ListState {
-                    items,
-                    loaded: true,
-                    error: None,
-                    more,
-                };
-            }
-            Err(e) => self.projects.repositories.error = Some(e),
+        if let Applied::Continue(fetch) = self.projects.repositories.apply_current(result) {
+            self.send_repositories(fetch, "Loading repositories");
         }
     }
     fn members_listed(
         &mut self,
         project: String,
-        result: Result<
-            (
-                Vec<devworks_core::protocol::records::RepositoryRecord>,
-                bool,
-            ),
-            String,
-        >,
+        result: Result<Page<devworks_core::protocol::records::RepositoryRecord>, String>,
     ) {
         // A reply for a project no longer selected is stale.
         if self.selected_project.as_deref() != Some(project.as_str()) {
             return;
         }
-        match result {
-            Ok((items, more)) => {
-                self.projects.members = ListState {
-                    items,
-                    loaded: true,
-                    error: None,
-                    more,
-                };
-                self.projects.members_of = Some(project);
+        match self.projects.members.apply_current(result) {
+            Applied::Replaced | Applied::Appended => self.projects.members_of = Some(project),
+            Applied::Continue(fetch) => {
+                self.send_members(project, fetch, "Loading the project's repositories");
             }
-            Err(e) => self.projects.members.error = Some(e),
+            _ => {}
         }
     }
     /// The project the navigation selected, if it is still listed.
@@ -928,7 +949,7 @@ impl Shell {
         }
         self.selected_project = project;
         self.with_typed(|g: &mut crate::graph_screen::GraphScreen, _| g.project_changed());
-        self.projects.members = ListState::default();
+        self.projects.members.reset();
         self.projects.members_of = None;
         if self.route == Route::Repositories {
             self.load_repositories();
@@ -1066,12 +1087,15 @@ impl Shell {
 
     /// When a hint-driven refresh is waiting for its interval to end (tests step frames until
     /// then).
+    #[cfg(any(test, feature = "test-support"))]
     pub fn hint_refresh_due_at(&self) -> Option<Instant> {
         self.hint_refresh_due
             .then(|| self.last_poll + HINT_REFRESH_INTERVAL)
     }
 
-    fn refresh_visible(&mut self) {
+    /// Re-reads the visible screen's data: the periodic (and hint driven) refresh, also called
+    /// directly by tests.
+    pub fn refresh_visible(&mut self) {
         self.last_poll = Instant::now();
         if self.online().is_err() {
             return;
@@ -1885,119 +1909,5 @@ impl Shell {
                     });
                 });
         }
-    }
-}
-
-/// Texts of a bound list's states.
-pub(crate) struct ListText<'a> {
-    pub what: &'a str,
-    pub empty_title: &'a str,
-    pub empty_body: &'a str,
-    pub id_salt: &'a str,
-}
-
-/// The body of a list bound to one query: offline, failed, loading, empty and filtered states,
-/// then the rows (virtualized) with the remembered selection.
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn list_body<T>(
-    ui: &mut Ui,
-    online: &Result<(), String>,
-    list: &ListState<T>,
-    text: ListText<'_>,
-    reload: &mut bool,
-    scrolls: &mut Scrolls,
-    haystack: impl Fn(&T) -> String,
-    key: impl Fn(&T) -> String,
-    filter: &str,
-    selection: &mut Option<String>,
-    mut row: impl FnMut(&mut Ui, &T, bool) -> bool,
-) {
-    let what = text.what;
-    if let Err(reason) = online {
-        widgets::state_block(
-            ui,
-            &ViewState::Offline {
-                reason: reason.clone(),
-            },
-        );
-        return;
-    }
-    if let Some(e) = &list.error {
-        let state = if list.loaded {
-            ViewState::Stale { what: what.into() }
-        } else {
-            ViewState::Failed {
-                what: what.into(),
-                error: e.clone(),
-            }
-        };
-        if widgets::state_block(ui, &state) == widgets::StateAction::Retry {
-            *reload = true;
-        }
-        if !list.loaded {
-            return;
-        }
-    }
-    if !list.loaded {
-        widgets::state_block(ui, &ViewState::Loading { what: what.into() });
-        return;
-    }
-    let terms: Vec<String> = filter.split_whitespace().map(str::to_lowercase).collect();
-    let rows: Vec<&T> = list
-        .items
-        .iter()
-        .filter(|i| {
-            let t = haystack(i).to_lowercase();
-            terms.iter().all(|w| t.contains(w))
-        })
-        .collect();
-    if rows.is_empty() {
-        let none = list.items.is_empty();
-        widgets::state_block(
-            ui,
-            &ViewState::Empty {
-                title: if none {
-                    text.empty_title.into()
-                } else {
-                    "Nothing matches the filter".into()
-                },
-                body: if none {
-                    text.empty_body.into()
-                } else {
-                    "Clear or change the filter.".into()
-                },
-            },
-        );
-        return;
-    }
-    widgets::caption(
-        ui,
-        format!(
-            "{} of {} shown{}",
-            rows.len(),
-            list.items.len(),
-            if list.more { " · more exist" } else { "" }
-        ),
-    );
-    if list.more {
-        widgets::state_block(
-            ui,
-            &ViewState::Partial {
-                what: what.into(),
-                missing: "entries beyond the first page".into(),
-            },
-        );
-    }
-    let selected = selection.clone();
-    let mut picked = None;
-    virtual_list::rows(ui, scrolls, text.id_salt, 28.0, rows.len(), |ui, i| {
-        let item = rows[i];
-        let k = key(item);
-        if row(ui, item, selected.as_deref() == Some(k.as_str())) {
-            picked = Some(k);
-        }
-    });
-    if let Some(p) = picked {
-        *selection = Some(p);
     }
 }

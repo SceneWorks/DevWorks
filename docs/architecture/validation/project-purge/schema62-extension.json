@@ -1,0 +1,14 @@
+{
+  "schema": 62,
+  "policy": "dw293-instruction-revision-lessons-v1",
+  "additionalTables": [
+    {
+      "table": "instruction_revision_lessons",
+      "class": "instruction_ownership",
+      "disposition": "project_owner",
+      "purpose": "A link from a skill or role revision to a lesson (a Knowledge claim) it came from follows both of its ends. It is deleted with its project when either end is the project's: the revision belongs to a project skill or is a draft confined to the project (schema49 instructions and instruction_revisions), or the lesson is a claim of the project (knowledge_claims.project_id). Deleting a project's lesson deletes the link even when the revision is a workspace one and stays; deleting a project's skill revision deletes the link even when the lesson is general and stays. Every other link is never a candidate."
+    }
+  ],
+  "readerFloor": 57,
+  "writerFloor": 61
+}

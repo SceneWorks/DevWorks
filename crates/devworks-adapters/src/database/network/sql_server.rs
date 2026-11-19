@@ -132,8 +132,10 @@ pub(super) async fn read(
         ],
         &["GraphEntity", "GraphEdge"],
         &[
-            "SQL password authentication; VerifyFull or explicit numeric-loopback plaintext. VerifyCa is refused by this qualified profile.",
-            "Fixed sys catalog statements enforce this adapter's metadata boundary; use a metadata-only login with VIEW DEFINITION for full visibility.",
+            "SQL password authentication; VerifyFull or explicit numeric-loopback \
+                plaintext. VerifyCa is refused by this qualified profile.",
+            "Fixed sys catalog statements enforce this adapter's metadata boundary; \
+                use a metadata-only login with VIEW DEFINITION for full visibility.",
         ],
     )?;
     if c.request.test_only && (!target.catalog.is_empty() || c.request.config.catalogs.0.is_empty())
@@ -145,7 +147,14 @@ pub(super) async fn read(
         vec![target.catalog.clone()]
     } else {
         let mut names = Vec::new();
-        let mut rows=conn.simple_query("SELECT name FROM sys.databases WHERE state=0 AND database_id>4 AND HAS_DBACCESS(name)=1 ORDER BY name").await.map_err(classify)?.into_row_stream();
+        let mut rows = conn
+            .simple_query(
+                "SELECT name FROM sys.databases WHERE state=0 AND database_id>4 AND \
+            HAS_DBACCESS(name)=1 ORDER BY name",
+            )
+            .await
+            .map_err(classify)?
+            .into_row_stream();
         while let Some(row) = rows.try_next().await.map_err(classify)? {
             c.check()?;
             let name = row

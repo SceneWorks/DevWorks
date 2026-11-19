@@ -328,6 +328,13 @@ impl InvocationContext {
         self.activation = None;
         self
     }
+    /// The same invocation working in `project` (its session's project, resolved by a service
+    /// that reads the session); everything else is unchanged.
+    pub(crate) fn in_project(&self, project: ProjectId) -> Self {
+        let mut bound = self.clone();
+        bound.project_id = Some(project);
+        bound
+    }
     /// Binds the exact activation epoch from the trusted launch path after lineage resolution.
     pub fn with_activation(mut self, id: Id, owner_epoch: i64) -> Self {
         self.activation = Some((id, owner_epoch));
@@ -568,7 +575,15 @@ mod human_decision_tests {
         let ingress = HostIngress {
             store_id: StoreId(id("store-1")),
         };
-        let input: PurgeInput = serde_json::from_value(json!({"projectId":"project-a","manifestId":"manifest-a","expectedRevision":"1","expectedDigest":"a".repeat(64),"expectedProjectRevision":"2","confirm":true})).unwrap();
+        let input: PurgeInput = serde_json::from_value(json!({
+            "projectId": "project-a",
+            "manifestId": "manifest-a",
+            "expectedRevision": "1",
+            "expectedDigest": "a".repeat(64),
+            "expectedProjectRevision": "2",
+            "confirm": true
+        }))
+        .unwrap();
         let generic = context(&ingress, PrincipalKind::Human);
         assert!(!generic.project_purge_matches(&input));
         let bound = ingress.project_purge_context(&generic, &input).unwrap();

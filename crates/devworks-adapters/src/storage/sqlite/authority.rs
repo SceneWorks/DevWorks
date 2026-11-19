@@ -216,7 +216,9 @@ impl AuthorityLedger for Unit<'_> {
         match (current, expected_revision) {
             (None, None) => {
                 db(db(self.conn.prepare_cached(
-                    "INSERT INTO principal_authority(actor_id,role,project_id,tool_families_json,state,revision,bound_by,updated_at) VALUES(?1,?2,?3,?4,'Active',1,?5,?6)",
+                    "INSERT INTO principal_authority(actor_id,role,project_id,\
+                        tool_families_json,state,revision,bound_by,updated_at) VALUES(?1,?2,?3,\
+                        ?4,'Active',1,?5,?6)",
                 ))?
                 .execute(params![
                     b.actor.0.as_str(),
@@ -250,7 +252,9 @@ impl AuthorityLedger for Unit<'_> {
                     ));
                 }
                 db(db(self.conn.prepare_cached(
-                    "UPDATE principal_authority SET role=?1,project_id=?2,tool_families_json=?3,state='Active',revision=revision+1,bound_by=?4,updated_at=?5 WHERE actor_id=?6 AND revision=?7",
+                    "UPDATE principal_authority SET role=?1,project_id=?2,\
+                        tool_families_json=?3,state='Active',revision=revision+1,bound_by=?4,\
+                        updated_at=?5 WHERE actor_id=?6 AND revision=?7",
                 ))?
                 .execute(params![
                     role,
@@ -315,7 +319,9 @@ impl AuthorityLedger for Unit<'_> {
             });
         }
         db(db(self.conn.prepare_cached(
-            "INSERT INTO authority_grants(id,actor_id,kind,issued_by,revision,state,binding_json,expires_at,uses_remaining,created_at) VALUES(?1,?2,?3,?4,1,'Active',?5,?6,?7,?8)",
+            "INSERT INTO authority_grants(id,actor_id,kind,issued_by,revision,state,\
+                binding_json,expires_at,uses_remaining,created_at) VALUES(?1,?2,?3,?4,1,\
+                'Active',?5,?6,?7,?8)",
         ))?
         .execute(params![
             g.id.as_str(),

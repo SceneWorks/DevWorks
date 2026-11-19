@@ -4885,8 +4885,16 @@
               "const": "skills.draft",
               "type": "string"
             },
+            "lessonIds": {
+              "$ref": "#/$defs/List_Id_0_128",
+              "x-since": 8
+            },
             "name": {
               "$ref": "#/$defs/Text1To256"
+            },
+            "rationale": {
+              "$ref": "#/$defs/Text0To65536",
+              "x-since": 8
             },
             "scope": {
               "$ref": "#/$defs/DataScope"
@@ -4963,6 +4971,32 @@
         {
           "additionalProperties": false,
           "properties": {
+            "enabled": {
+              "type": "boolean"
+            },
+            "expectedRevision": {
+              "$ref": "#/$defs/Revision"
+            },
+            "instructionId": {
+              "$ref": "#/$defs/Id"
+            },
+            "kind": {
+              "const": "skills.set_enabled",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "instructionId",
+            "expectedRevision",
+            "enabled"
+          ],
+          "type": "object",
+          "x-since": 8
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
             "content": {
               "$ref": "#/$defs/ArtifactRef"
             },
@@ -4990,8 +5024,16 @@
               "const": "roles.draft",
               "type": "string"
             },
+            "lessonIds": {
+              "$ref": "#/$defs/List_Id_0_128",
+              "x-since": 8
+            },
             "name": {
               "$ref": "#/$defs/Text1To256"
+            },
+            "rationale": {
+              "$ref": "#/$defs/Text0To65536",
+              "x-since": 8
             },
             "scope": {
               "$ref": "#/$defs/DataScope"
@@ -6113,6 +6155,10 @@
               "const": "settings.save_revision",
               "type": "string"
             },
+            "repositoryId": {
+              "$ref": "#/$defs/Id",
+              "x-since": 8
+            },
             "scope": {
               "$ref": "#/$defs/DataScope"
             }
@@ -6612,6 +6658,42 @@
             "manifestDigest"
           ],
           "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "contributionId": {
+              "$ref": "#/$defs/Text1To256"
+            },
+            "expectedDigest": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Digest"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "input": {
+              "$ref": "#/$defs/ArtifactRef"
+            },
+            "kind": {
+              "const": "addons.invoke",
+              "type": "string"
+            },
+            "packageId": {
+              "$ref": "#/$defs/Id"
+            }
+          },
+          "required": [
+            "kind",
+            "packageId",
+            "contributionId",
+            "input"
+          ],
+          "type": "object",
+          "x-since": 8
         },
         {
           "additionalProperties": false,
@@ -10559,6 +10641,10 @@
             "page": {
               "$ref": "#/$defs/PageRequest"
             },
+            "repositoryId": {
+              "$ref": "#/$defs/Id",
+              "x-since": 8
+            },
             "scope": {
               "$ref": "#/$defs/DataScope"
             }
@@ -10584,6 +10670,10 @@
               "const": "settings.validate",
               "type": "string"
             },
+            "repositoryId": {
+              "$ref": "#/$defs/Id",
+              "x-since": 8
+            },
             "scope": {
               "$ref": "#/$defs/DataScope"
             }
@@ -10605,6 +10695,10 @@
             "kind": {
               "const": "settings.explain_source",
               "type": "string"
+            },
+            "repositoryId": {
+              "$ref": "#/$defs/Id",
+              "x-since": 8
             },
             "scope": {
               "$ref": "#/$defs/DataScope"
@@ -11025,6 +11119,24 @@
             "page"
           ],
           "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "addons.invocation",
+              "type": "string"
+            },
+            "operationId": {
+              "$ref": "#/$defs/Id"
+            }
+          },
+          "required": [
+            "kind",
+            "operationId"
+          ],
+          "type": "object",
+          "x-since": 8
         },
         {
           "additionalProperties": false,
@@ -11792,6 +11904,40 @@
           "required": [
             "kind",
             "watcherId"
+          ],
+          "type": "object",
+          "x-since": 8
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "connectionId": {
+              "$ref": "#/$defs/Id"
+            },
+            "kind": {
+              "const": "schemas.code_references",
+              "type": "string"
+            },
+            "objectId": {
+              "$ref": "#/$defs/Id"
+            },
+            "page": {
+              "$ref": "#/$defs/PageRequest"
+            },
+            "scope": {
+              "$ref": "#/$defs/DataScope"
+            },
+            "views": {
+              "$ref": "#/$defs/ViewSelection"
+            }
+          },
+          "required": [
+            "kind",
+            "scope",
+            "views",
+            "connectionId",
+            "objectId",
+            "page"
           ],
           "type": "object",
           "x-since": 8

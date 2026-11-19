@@ -8,10 +8,15 @@ use crate::{
     instructions_screen::{InstructionAction, InstructionsPanel, Pending, Stage},
     memory::RouteMemory,
     ops,
+    paged::{Applied, Fetch, Page},
     route::Route,
     screen::{Cx, Screen, ScreenContext, ScreenId, controller},
     widgets::Tone,
 };
+use devworks_core::protocol::records::LifeState;
+
+/// The cursor that ends one source's pages and starts the next project's discovery.
+const NEXT_SOURCE: &str = "\u{0}next-source";
 use devworks_core::settings::catalog::AgentRole;
 use eframe::egui::Ui;
 
@@ -70,16 +75,22 @@ impl InstructionsCtl<'_, '_> {
             InstructionAction::View(revision) => self.view_instruction_revision(revision),
             InstructionAction::Save {
                 kind,
+                project,
                 target,
                 name,
                 text,
-            } => self.save_instruction(kind, target, name, text),
+            } => self.save_instruction(kind, project, target, name, text),
             InstructionAction::Restore {
                 kind,
                 id,
                 expected,
                 target,
             } => self.restore_instruction(kind, id, expected, target),
+            InstructionAction::SetEnabled {
+                id,
+                expected,
+                enabled,
+            } => self.set_skill_enabled(id, expected, enabled),
             InstructionAction::OpenApprovals => self.navigate(Route::Approvals),
         }
     }
@@ -98,13 +109,20 @@ impl InstructionsCtl<'_, '_> {
     fn load_instructions(&mut self) {
         let p = self.panel();
         p.requested = true;
-        p.skills_generation = p.skills_generation.wrapping_add(1);
-        p.skills_gathering.clear();
-        let generation = p.skills_generation;
-        if p.skills.as_ref().is_some_and(|s| s.is_err()) {
-            p.skills = None;
+        // A failed earlier read shows as loading again; rows read earlier stay until the new
+        // ones are complete.
+        p.skills.error = None;
+        // The workspace's skills are read first, then each active project's own, one after
+        // another. The discovery waits for this panel's own read of every project page: the
+        // shell's list holds only the pages the Projects screen has shown.
+        let fetch = p.skills.reload_all();
+        p.held_discovery = Some(fetch);
+        p.discover_queue.clear();
+        p.discover_project = None;
+        let projects = p.all_projects.reload_all();
+        if !self.send_instruction_projects(projects) {
+            self.start_discovery();
         }
-        self.discover_page(generation, None);
         for role in AgentRole::ALL {
             let id = iop::role_id(role);
             let submitted = self.query(
@@ -126,25 +144,67 @@ impl InstructionsCtl<'_, '_> {
         if p.selected.is_some() {
             // Fence the old details now; they reload with the refreshed record.
             p.reload_selected = true;
-            p.detail.generation = p.detail.generation.wrapping_add(1);
             p.detail.text_generation = p.detail.text_generation.wrapping_add(1);
-            p.detail.resources_generation = p.detail.resources_generation.wrapping_add(1);
-            p.detail.history = None;
-            p.detail.history_gathering.clear();
-            p.detail.resources = None;
-            p.detail.resources_gathering.clear();
+            p.detail.history.reset();
+            p.detail.resources.reset();
             p.detail.text = None;
         }
     }
 
-    fn discover_page(&mut self, generation: u64, cursor: Option<String>) {
-        if !self.query(
-            InstructionsSlot::InstructionSkills(generation),
+    /// Reads one page of the project list the discovery follows; `false` when it was not sent.
+    fn send_instruction_projects(&mut self, fetch: Fetch) -> bool {
+        let slot = InstructionsSlot::InstructionProjects(fetch.generation);
+        self.cx.paged(
+            &mut self.instructions.all_projects,
+            fetch,
+            slot,
+            "Loading projects",
+            "projects.list",
+            |b, cursor| ops::projects_list(b, Some("Active"), cursor),
+        )
+    }
+
+    /// Starts the held discovery over the projects known now: the scope choices and the queue of
+    /// projects whose own skills are read.
+    fn start_discovery(&mut self) {
+        let p = self.panel();
+        p.projects = p
+            .all_projects
+            .items
+            .iter()
+            .filter(|r| matches!(r.lifecycle, LifeState::Active))
+            .map(|r| (r.id.0.as_str().to_owned(), r.name.0.clone()))
+            .collect();
+        p.discover_queue = p.projects.iter().rev().map(|(id, _)| id.clone()).collect();
+        p.discover_project = None;
+        if let Some(fetch) = p.held_discovery.take() {
+            self.discover_page(fetch);
+        }
+    }
+
+    /// Reads one page of the discovery. A cursor that names the next source moves on to the next
+    /// project's skills instead of naming a page.
+    fn discover_page(&mut self, fetch: Fetch) {
+        let p = self.panel();
+        let cursor = match fetch.cursor.as_deref() {
+            Some(NEXT_SOURCE) => {
+                p.discover_project = p.discover_queue.pop();
+                None
+            }
+            other => other.map(str::to_owned),
+        };
+        let project = p.discover_project.clone();
+        let slot = InstructionsSlot::InstructionSkills(fetch.generation);
+        let sent = self.cx.paged(
+            &mut self.instructions.skills,
+            fetch,
+            slot,
             "Discovering skills",
             "skills.discover",
-            move |b| iop::query(b, iop::discover(cursor.as_deref())),
-        ) {
-            self.panel().skills = Some(Err("Not requested: DevWorks is offline.".into()));
+            move |b, _| iop::query(b, iop::discover(project.as_deref(), cursor.as_deref())),
+        );
+        if !sent {
+            self.panel().skills.error = Some("Not requested: DevWorks is offline.".into());
         }
     }
 
@@ -153,21 +213,17 @@ impl InstructionsCtl<'_, '_> {
             return;
         };
         let p = self.panel();
-        p.detail.generation = p.detail.generation.wrapping_add(1);
         p.detail.text_generation = p.detail.text_generation.wrapping_add(1);
-        p.detail.resources_generation = p.detail.resources_generation.wrapping_add(1);
-        let generation = p.detail.generation;
-        p.detail.history = None;
-        p.detail.history_gathering.clear();
-        p.detail.resources = None;
-        p.detail.resources_gathering.clear();
+        p.detail.history.reset();
+        p.detail.resources.reset();
+        let fetch = p.detail.history.reload_all();
         p.detail.resources_revision = None;
         p.detail.text = None;
         p.detail.shown = Some(sel.record.revision.get());
         // The listed record may predate the history (which observes sources first): the text
         // and resources load from the history's current revision once it arrives.
         p.detail.follow_history = true;
-        self.history_page(sel.kind, sel.id.clone(), generation, None);
+        self.history_page(sel.kind, sel.id.clone(), fetch);
     }
 
     /// Loads the text (and a skill's resources) of the history's current revision.
@@ -179,12 +235,12 @@ impl InstructionsCtl<'_, '_> {
         let Some(sel) = p.selected.clone() else {
             return;
         };
-        let current = match &p.detail.history {
+        let current = match p.detail.history.result() {
             Some(Ok(h)) => iop::current_in(h).cloned(),
             Some(Err(e)) => {
                 let e = e.clone();
                 p.detail.text = Some(Err(e.clone()));
-                p.detail.resources = Some(Err(e));
+                p.detail.resources.error = Some(e);
                 return;
             }
             None => return,
@@ -196,40 +252,42 @@ impl InstructionsCtl<'_, '_> {
         let revision = current.revision.get();
         p.detail.shown = Some(revision);
         p.detail.resources_revision = Some(revision);
-        let (text_generation, resources_generation) =
-            (p.detail.text_generation, p.detail.resources_generation);
+        let text_generation = p.detail.text_generation;
         self.load_instruction_text(text_generation, current.content.clone());
         if sel.kind == Kind::Skill {
-            self.resources_page(sel.id, revision, resources_generation, None);
+            let fetch = self.panel().detail.resources.reload_all();
+            self.resources_page(sel.id, revision, fetch);
         }
     }
 
-    fn history_page(&mut self, kind: Kind, id: String, generation: u64, cursor: Option<String>) {
-        let op = kind.history_op();
-        if !self.query(
-            InstructionsSlot::InstructionHistory(generation),
+    fn history_page(&mut self, kind: Kind, id: String, fetch: Fetch) {
+        let slot = InstructionsSlot::InstructionHistory(fetch.generation);
+        let sent = self.cx.paged(
+            &mut self.instructions.detail.history,
+            fetch,
+            slot,
             "Reading instruction history",
-            op,
-            move |b| iop::query(b, iop::history(kind, &id, cursor.as_deref())),
-        ) {
-            self.panel().detail.history = Some(Err("Not requested: DevWorks is offline.".into()));
+            kind.history_op(),
+            move |b, cursor| iop::query(b, iop::history(kind, &id, cursor)),
+        );
+        if !sent {
+            self.panel().detail.history.error = Some("Not requested: DevWorks is offline.".into());
         }
     }
 
-    fn resources_page(
-        &mut self,
-        id: String,
-        revision: i64,
-        generation: u64,
-        cursor: Option<String>,
-    ) {
-        if !self.query(
-            InstructionsSlot::InstructionResources(generation),
+    fn resources_page(&mut self, id: String, revision: i64, fetch: Fetch) {
+        let slot = InstructionsSlot::InstructionResources(fetch.generation);
+        let sent = self.cx.paged(
+            &mut self.instructions.detail.resources,
+            fetch,
+            slot,
             "Reading skill resources",
             "skills.resources",
-            move |b| iop::query(b, iop::read_resources(&id, revision, cursor.as_deref())),
-        ) {
-            self.panel().detail.resources = Some(Err("Not requested: DevWorks is offline.".into()));
+            move |b, cursor| iop::query(b, iop::read_resources(&id, revision, cursor)),
+        );
+        if !sent {
+            self.panel().detail.resources.error =
+                Some("Not requested: DevWorks is offline.".into());
         }
     }
 
@@ -252,7 +310,7 @@ impl InstructionsCtl<'_, '_> {
     }
 
     fn view_instruction_revision(&mut self, revision: i64) {
-        let record = match &self.panel().detail.history {
+        let record = match self.panel().detail.history.result() {
             Some(Ok(h)) => h.iter().find(|r| r.revision.get() == revision).cloned(),
             _ => None,
         };
@@ -276,18 +334,17 @@ impl InstructionsCtl<'_, '_> {
         self.load_instruction_text(text_generation, record.content);
         if skill && let Some(id) = id {
             let d = &mut self.panel().detail;
-            d.resources_generation = d.resources_generation.wrapping_add(1);
-            d.resources = None;
-            d.resources_gathering.clear();
+            d.resources.reset();
             d.resources_revision = Some(revision);
-            let resources_generation = d.resources_generation;
-            self.resources_page(id, revision, resources_generation, None);
+            let fetch = d.resources.reload_all();
+            self.resources_page(id, revision, fetch);
         }
     }
 
     fn save_instruction(
         &mut self,
         kind: Kind,
+        project: Option<String>,
         target: Option<(String, i64)>,
         name: String,
         text: String,
@@ -311,7 +368,9 @@ impl InstructionsCtl<'_, '_> {
                 token,
                 kind,
                 draft: Some((target, name)),
+                project,
                 stage: Stage::Preparing,
+                toggle: None,
                 staged: None,
             });
             p.message = None;
@@ -338,12 +397,46 @@ impl InstructionsCtl<'_, '_> {
                 token,
                 kind,
                 draft: None,
+                project: None,
                 stage: Stage::Saving,
+                toggle: None,
                 staged: None,
             });
             p.message = None;
         } else {
             p.message = Some((Tone::Attention, "Not restored: DevWorks is offline.".into()));
+        }
+    }
+
+    fn set_skill_enabled(&mut self, id: String, expected: i64, enabled: bool) {
+        if self.panel().pending.is_some() {
+            return;
+        }
+        let token = self.panel().next_token();
+        let submitted = self.command(
+            InstructionsSlot::InstructionCommand(token),
+            if enabled {
+                "Enabling a skill"
+            } else {
+                "Disabling a skill"
+            },
+            "skills.set_enabled",
+            move |b| iop::command(b, iop::set_enabled(&id, expected, enabled)),
+        );
+        let p = self.panel();
+        if submitted {
+            p.pending = Some(Pending {
+                token,
+                kind: Kind::Skill,
+                draft: None,
+                project: None,
+                stage: Stage::Saving,
+                toggle: Some(enabled),
+                staged: None,
+            });
+            p.message = None;
+        } else {
+            p.message = Some((Tone::Attention, "Not changed: DevWorks is offline.".into()));
         }
     }
 
@@ -366,18 +459,26 @@ impl InstructionsCtl<'_, '_> {
     ) -> Option<(InstructionsSlot, Reply)> {
         match (slot, reply) {
             (InstructionsSlot::InstructionSkills(generation), Reply::Query(q)) => {
-                if generation != self.panel().skills_generation {
-                    return None;
-                }
                 match iop::records_page(q) {
                     Ok(page) => {
                         let p = self.panel();
-                        p.skills_gathering.extend(page.items);
-                        match page.next {
-                            Some(next) => self.discover_page(generation, Some(next)),
-                            None => {
-                                let mut all = std::mem::take(&mut p.skills_gathering);
-                                all.sort_by(|a, b| {
+                        // A project's discovery lists the workspace's skills too, already read:
+                        // keep only that project's own.
+                        let reading = p.discover_project.clone();
+                        let items: Vec<_> = page
+                            .items
+                            .into_iter()
+                            .filter(|r| reading.is_none() || iop::record_project(r) == reading)
+                            .collect();
+                        // After a source's last page the discovery moves on to the next one.
+                        let next = page
+                            .next
+                            .or_else(|| (!p.discover_queue.is_empty()).then(|| NEXT_SOURCE.into()));
+                        match p.skills.apply(generation, Ok(Page::new(items, next))) {
+                            Applied::Stale => return None,
+                            Applied::Continue(fetch) => self.discover_page(fetch),
+                            Applied::Replaced => {
+                                p.skills.items.sort_by(|a, b| {
                                     a.name
                                         .0
                                         .cmp(&b.name.0)
@@ -386,11 +487,11 @@ impl InstructionsCtl<'_, '_> {
                                 // Keep the selection's record current.
                                 if let Some(sel) = &mut p.selected
                                     && sel.kind == Kind::Skill
-                                    && let Some(r) = all.iter().find(|r| r.id.as_str() == sel.id)
+                                    && let Some(r) =
+                                        p.skills.items.iter().find(|r| r.id.as_str() == sel.id)
                                 {
                                     sel.record = r.clone();
                                 }
-                                p.skills = Some(Ok(all));
                                 if p.reload_selected
                                     && p.selected.as_ref().is_some_and(|s| s.kind == Kind::Skill)
                                 {
@@ -398,13 +499,45 @@ impl InstructionsCtl<'_, '_> {
                                     self.load_instruction_detail();
                                 }
                             }
+                            _ => {}
                         }
                     }
                     Err(e) => {
-                        let p = self.panel();
-                        p.skills_gathering.clear();
-                        p.skills = Some(Err(e.describe()));
+                        if self.panel().skills.apply(generation, Err(e.describe()))
+                            == Applied::Stale
+                        {
+                            return None;
+                        }
                     }
+                }
+            }
+            (InstructionsSlot::InstructionProjects(generation), Reply::Query(q)) => {
+                let applied = match ops::projects(q) {
+                    Ok(page) => self.panel().all_projects.apply(generation, Ok(page)),
+                    Err(e) => self
+                        .panel()
+                        .all_projects
+                        .apply(generation, Err(e.describe())),
+                };
+                match applied {
+                    Applied::Stale => return None,
+                    Applied::Continue(fetch) => {
+                        if !self.send_instruction_projects(fetch) {
+                            self.start_discovery();
+                        }
+                    }
+                    Applied::Failed => {
+                        // The workspace's skills still load; say what is missing.
+                        let p = self.panel();
+                        p.message = Some((
+                            Tone::Bad,
+                            "Projects could not be listed, so project skills are not shown. \
+                             Refresh to try again."
+                                .into(),
+                        ));
+                        self.start_discovery();
+                    }
+                    _ => self.start_discovery(),
                 }
             }
             (InstructionsSlot::InstructionRole(id), Reply::Query(q)) => {
@@ -427,62 +560,43 @@ impl InstructionsCtl<'_, '_> {
                 }
             }
             (InstructionsSlot::InstructionHistory(generation), Reply::Query(q)) => {
-                if generation != self.panel().detail.generation {
-                    return None;
-                }
-                match iop::records_page(q) {
-                    Ok(page) => {
-                        self.panel().detail.history_gathering.extend(page.items);
-                        match page.next {
-                            Some(next) => {
-                                if let Some(sel) = self.panel().selected.clone() {
-                                    self.history_page(sel.kind, sel.id, generation, Some(next));
-                                }
-                            }
-                            None => {
-                                let d = &mut self.panel().detail;
-                                let mut all = std::mem::take(&mut d.history_gathering);
-                                all.sort_by_key(|r| std::cmp::Reverse(r.revision.get()));
-                                d.history = Some(Ok(all));
-                                self.load_current_from_history();
-                            }
+                let page = iop::records_page(q)
+                    .map(|page| Page::new(page.items, page.next))
+                    .map_err(|e| e.describe());
+                match self.panel().detail.history.apply(generation, page) {
+                    Applied::Stale => return None,
+                    Applied::Continue(fetch) => {
+                        if let Some(sel) = self.panel().selected.clone() {
+                            self.history_page(sel.kind, sel.id, fetch);
                         }
                     }
-                    Err(e) => {
-                        let d = &mut self.panel().detail;
-                        d.history_gathering.clear();
-                        d.history = Some(Err(e.describe()));
+                    Applied::Replaced => {
+                        self.panel()
+                            .detail
+                            .history
+                            .items
+                            .sort_by_key(|r| std::cmp::Reverse(r.revision.get()));
                         self.load_current_from_history();
                     }
+                    Applied::Failed => self.load_current_from_history(),
+                    Applied::Appended | Applied::Fenced => {}
                 }
             }
             (InstructionsSlot::InstructionResources(generation), Reply::Query(q)) => {
-                if generation != self.panel().detail.resources_generation {
-                    return None;
-                }
-                match iop::resources(q) {
-                    Ok(page) => {
-                        self.panel().detail.resources_gathering.extend(page.items);
-                        match page.next {
-                            Some(next) => {
-                                let revision = self.panel().detail.resources_revision;
-                                if let (Some(sel), Some(revision)) =
-                                    (self.panel().selected.clone(), revision)
-                                {
-                                    self.resources_page(sel.id, revision, generation, Some(next));
-                                }
-                            }
-                            None => {
-                                let d = &mut self.panel().detail;
-                                d.resources = Some(Ok(std::mem::take(&mut d.resources_gathering)));
-                            }
+                let page = iop::resources(q)
+                    .map(|page| Page::new(page.items, page.next))
+                    .map_err(|e| e.describe());
+                match self.panel().detail.resources.apply(generation, page) {
+                    Applied::Continue(fetch) => {
+                        let revision = self.panel().detail.resources_revision;
+                        if let (Some(sel), Some(revision)) =
+                            (self.panel().selected.clone(), revision)
+                        {
+                            self.resources_page(sel.id, revision, fetch);
                         }
                     }
-                    Err(e) => {
-                        let d = &mut self.panel().detail;
-                        d.resources_gathering.clear();
-                        d.resources = Some(Err(e.describe()));
-                    }
+                    Applied::Stale => return None,
+                    _ => {}
                 }
             }
             (InstructionsSlot::InstructionText(generation), Reply::Task(result)) => {
@@ -559,6 +673,7 @@ impl InstructionsCtl<'_, '_> {
                         };
                         let draft_kind = pending.kind;
                         let op = draft_kind.draft_op();
+                        let project = pending.project.clone();
                         let content = record.artifact;
                         if let Some(p) = &mut self.panel().pending {
                             p.stage = Stage::Saving;
@@ -569,7 +684,16 @@ impl InstructionsCtl<'_, '_> {
                             op,
                             move |b| {
                                 let target = target.as_ref().map(|(id, r)| (id.as_str(), *r));
-                                iop::command(b, iop::draft(draft_kind, target, &name, &content))
+                                iop::command(
+                                    b,
+                                    iop::draft(
+                                        draft_kind,
+                                        project.as_deref(),
+                                        target,
+                                        &name,
+                                        &content,
+                                    ),
+                                )
                             },
                         ) {
                             self.fail_instruction(token, "Not saved: DevWorks is offline.".into());
@@ -584,6 +708,7 @@ impl InstructionsCtl<'_, '_> {
             (InstructionsSlot::InstructionCommand(token), Reply::Command(outcome)) => {
                 let pending = self.pending_for(token);
                 let known = pending.is_some();
+                let toggle = pending.as_ref().and_then(|p| p.toggle);
                 let restore = pending.as_ref().is_some_and(|p| p.draft.is_none());
                 if is_unknown(&outcome) {
                     if let Some(p) = &mut self.panel().pending
@@ -602,15 +727,24 @@ impl InstructionsCtl<'_, '_> {
                         let p = self.panel();
                         p.editor = None;
                         p.new_skill = None;
+                        p.new_skill_project = None;
                         p.message = Some((
                             Tone::Good,
-                            format!(
-                                "{} revision {} of {}. Running agents adopt it at their next \
-                                 safe step.",
-                                if restore { "Restored" } else { "Saved" },
-                                record.revision.get(),
-                                record.name.0
-                            ),
+                            match toggle {
+                                Some(enabled) => format!(
+                                    "{} {}. Running agents adopt the change at their next safe \
+                                     step.",
+                                    if enabled { "Enabled" } else { "Disabled" },
+                                    record.name.0
+                                ),
+                                None => format!(
+                                    "{} revision {} of {}. Running agents adopt it at their \
+                                     next safe step.",
+                                    if restore { "Restored" } else { "Saved" },
+                                    record.revision.get(),
+                                    record.name.0
+                                ),
+                            },
                         ));
                         let kind = if record.id.as_str().starts_with("role-") {
                             Kind::Role

@@ -90,16 +90,16 @@ fn overview_messages_use_the_retained_gateway_and_show_delivered_then_read_state
     click(&mut h, Role::Button, "Messages");
     assert!(has_text(&h, "Please review the build"));
     assert_eq!(h.state().work.messages.inbox.len(), 1);
-    assert_eq!(h.state().work.messages.history.len(), 1);
+    assert_eq!(h.state().work.messages.history.items.len(), 1);
     assert!(matches!(
         h.state().work.messages.inbox[0].delivery,
         Some(devworks_core::protocol::records::RetainedDeliveryState::Delivered)
     ));
     click(&mut h, Role::Button, "Answer question");
     assert!(h.state().work.messages.inbox.is_empty());
-    assert_eq!(h.state().work.messages.history.len(), 1);
+    assert_eq!(h.state().work.messages.history.items.len(), 1);
     assert!(matches!(
-        h.state().work.messages.history[0].state,
+        h.state().work.messages.history.items[0].state,
         Some(devworks_core::protocol::records::RetainedMessageState::Answered)
     ));
     type_into(&mut h, Role::TextInput, "Message body", "I will check it");
@@ -110,6 +110,7 @@ fn overview_messages_use_the_retained_gateway_and_show_delivered_then_read_state
             .work
             .messages
             .history
+            .items
             .iter()
             .any(|m| m.body.0 == "I will check it")
     );
@@ -262,7 +263,7 @@ fn message_subscription_starts_before_the_initial_inbox_snapshot() {
         h.state().work.messages.project
     );
     assert!(!h.state().work.messages.inbox_loaded);
-    assert!(!h.state().work.messages.history_loaded);
+    assert!(!h.state().work.messages.history.loaded);
 
     wops::message_posted(backend.command(
         "agents.post",
@@ -288,6 +289,7 @@ fn message_subscription_starts_before_the_initial_inbox_snapshot() {
             .work
             .messages
             .history
+            .items
             .iter()
             .any(|message| message.body.0 == "Between subscription and snapshot")
     );
@@ -2172,7 +2174,7 @@ fn ten_thousand_events_show_the_newest_page_after_one_native_request() {
     let feed = &h.state().work.activity;
     assert_eq!(feed.items.len(), usize::from(ACTIVITY_PAGE));
     assert_eq!(feed.items[0].sequence.as_str(), newest.to_string());
-    assert!(feed.more);
+    assert!(feed.more());
     click(&mut h, Role::Button, "Load older changes");
     assert_eq!(counted.requests.lock().unwrap().len(), 2);
     assert_eq!(
@@ -2210,12 +2212,14 @@ fn ten_thousand_events_show_the_newest_page_after_one_native_request() {
                 > w[1].sequence.as_str().parse::<i64>().unwrap())
     );
     // A genuinely refused continuation keeps visible rows and offers an explicit fresh reload.
-    h.state_mut()
+    let feed = &mut h
+        .state_mut()
         .work
         .histories
         .get_mut(card.id.as_str())
         .unwrap()
-        .resume = Some("expired".into());
+        .feed;
+    feed.set_next(Some("expired".into()));
     click(&mut h, Role::Button, "Load older changes");
     assert!(h.state().work.histories[card.id.as_str()].error.is_some());
     assert_eq!(

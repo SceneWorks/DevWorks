@@ -75,25 +75,52 @@ impl ImportService {
             Err(_) => return EffectOutcome::Failed("Invalid import journal".into()),
         };
         let op = operation.clone();
-        match self.write(move|tx|{
-            match validate(tx,&op,&job) {
-                Ok(_)=>Ok(false),
-                Err(StorageError::Busy)=>{
-                    let current=tx.operations().operation(&op.id)?.ok_or_else(||invalid("import journal missing"))?;
-                    let attempt=current.latest_attempt().ok_or_else(||invalid("import attempt missing"))?;
-                    if !attempt.observations.iter().any(|v|v.get("conventionImportWaitingControls").is_some()) {
-                        let number=attempt.attempt_no;
-                        tx.operations().observe(&op.id,number,json!({"conventionImportWaitingControls":{"kind":"ExecutionControls","controls":job.controls,"assignmentGeneration":job.assignment_generation}}))?;
-                    }
-                    Ok(true)
-                },
-                Err(error)=>Err(error),
+        match self.write(move |tx| match validate(tx, &op, &job) {
+            Ok(_) => Ok(false),
+            Err(StorageError::Busy) => {
+                let current = tx
+                    .operations()
+                    .operation(&op.id)?
+                    .ok_or_else(|| invalid("import journal missing"))?;
+                let attempt = current
+                    .latest_attempt()
+                    .ok_or_else(|| invalid("import attempt missing"))?;
+                if !attempt
+                    .observations
+                    .iter()
+                    .any(|v| v.get("conventionImportWaitingControls").is_some())
+                {
+                    let number = attempt.attempt_no;
+                    tx.operations().observe(
+                        &op.id,
+                        number,
+                        json!({"conventionImportWaitingControls": {
+                            "kind": "ExecutionControls",
+                            "controls": job.controls,
+                            "assignmentGeneration": job.assignment_generation
+                        }}),
+                    )?;
+                }
+                Ok(true)
             }
+            Err(error) => Err(error),
         }) {
-            Ok(true)=>EffectOutcome::Unknown("Import is waiting for its current execution controls; the original journal and private draft are retained.".into()),
-            Ok(false)=>EffectOutcome::NotApplied("Private import staging raced current blob metadata; recheck required".into()),
-            Err(StorageError::ScopeDenied|StorageError::InvalidRecord(_))=>EffectOutcome::Failed("Import source or captured work ownership changed.".into()),
-            Err(_)=>EffectOutcome::Unknown("Import controls/storage could not be observed; the original journal and private draft are retained.".into()),
+            Ok(true) => EffectOutcome::Unknown(
+                "Import is waiting for its current execution controls; the original \
+                journal and private draft are retained."
+                    .into(),
+            ),
+            Ok(false) => EffectOutcome::NotApplied(
+                "Private import staging raced current blob metadata; recheck required".into(),
+            ),
+            Err(StorageError::ScopeDenied | StorageError::InvalidRecord(_)) => {
+                EffectOutcome::Failed("Import source or captured work ownership changed.".into())
+            }
+            Err(_) => EffectOutcome::Unknown(
+                "Import controls/storage could not be observed; the original journal and \
+                private draft are retained."
+                    .into(),
+            ),
         }
     }
     pub fn observe(&self, operation: &OperationRecord) -> EffectOutcome {
@@ -210,7 +237,14 @@ impl ImportService {
                     if entry.payload.byte_length > max_resource {
                         return Err(invalid("import entry exceeds current file limit"));
                     }
-                    let source = json!({"kind":"ConventionImportSource","operationId":op,"conventionId":draft.convention_id,"ordinal":entry.ordinal,"entryKind":entry.kind,"resourceKey":entry.key});
+                    let source = json!({
+                        "kind": "ConventionImportSource",
+                        "operationId": op,
+                        "conventionId": draft.convention_id,
+                        "ordinal": entry.ordinal,
+                        "entryKind": entry.kind,
+                        "resourceKey": entry.key
+                    });
                     let mut payload = parser::PayloadReader::new(
                         reader.as_mut(),
                         entry.payload.clone(),
@@ -476,6 +510,7 @@ impl ImportService {
             Ok(result)
         })
     }
+    #[cfg(any(test, feature = "test-support"))]
     pub fn recover_pending(&self) -> Result<usize, StorageError> {
         let mut after = None;
         let mut count = 0;

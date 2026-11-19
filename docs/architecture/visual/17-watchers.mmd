@@ -1,0 +1,98 @@
+---
+title: Watchers - service, supervisor and desktop views (implemented)
+---
+classDiagram
+  direction LR
+  class WatchService {
+    store: Arc dyn ApplicationStore
+    processes: Arc ProcessToolService
+    artifacts: Arc ArtifactService
+    control: Option Arc ControlService
+    diagnostics: Option Arc DiagnosticService
+    last_backup_ms / last_polled
+    watch.create .cancel (CommandHandler)
+    watch.list .inspect (QueryHandler)
+    +tick(host) WatchTick
+    +settle_observed() usize
+    +deliver_pending(host) usize
+    +backup_if_due(host) Option BackupPass
+    +close_at_shutdown(stopped, deadline) usize
+  }
+  class WatchTick {
+    settled
+    delivered
+    backup: Option BackupPass
+  }
+  class BackupPass {
+    caught
+    reminded
+  }
+  class WatchSupervisor {
+    store / ids / service
+    host() InvocationContext (host ingress)
+    +tick() +settle() +deliver()
+    +backup_if_due() +close_at_shutdown()
+  }
+  class ProcessToolService {
+    record_execute with ExecuteOrigin Watch
+    bind_spec / preflight / resolve_watched_file
+    is_monitoring / stop_watched_run
+  }
+  class watch_consumer {
+    <<fn>>
+    process-effect consumer for watched runs
+  }
+  class ControlService {
+    root_permits_dispatch
+    +begin_turn carries delivered events
+    +end_turn acknowledges if completed
+  }
+  class WatcherRepository {
+    <<trait>>
+    WatcherRead: watcher, open_watchers, pending_watch_events, watch_events
+    update_watcher, mark delivered, carry_watch_events, release_watch_events
+  }
+  class StoredWatcher {
+    phase: WatcherPhase
+    source_kind: Process Probe Timer File
+    due_at_ms / expires_at_ms
+    probe / matching / tail_bytes
+  }
+  class StoredWatchEvent {
+    state: WatchEventState
+    session_id / created_at_ms
+    carried_turn_id
+  }
+  class Runtime {
+    config.watch_interval 250 ms
+    Loop watchers StopAt Work
+    shutdown calls close_at_shutdown
+  }
+  class WatchersScreen {
+    <<desktop>>
+    all / session / feature: WatchList
+    cancelling / notice
+    act(WatchAction)
+  }
+  class watch_ops {
+    <<fn>>
+    list(scope, cursor, limit) watch.list
+    cancel(watcher, stop_process) watch.cancel
+  }
+  class WatchView { All, Session, Feature }
+  class WatchScope { All, Session, Feature }
+  WatchService ..> WatchTick : returns
+  WatchService ..> BackupPass : returns
+  WatchService o-- ProcessToolService : launches and observes
+  WatchService o-- ControlService : root pause check
+  WatchService ..> WatcherRepository : reads and writes in one transaction
+  WatcherRepository ..> StoredWatcher
+  WatcherRepository ..> StoredWatchEvent
+  WatchSupervisor o-- WatchService
+  Runtime o-- WatchSupervisor : only when process tools are composed
+  watch_consumer ..> ProcessToolService
+  ControlService ..> WatcherRepository : carry and release per turn
+  WatchersScreen *-- WatchView
+  WatchersScreen ..> watch_ops : requests
+  watch_ops ..> WatchService : through Gateway as watch.list and watch.cancel
+  watch_ops ..> WatchScope

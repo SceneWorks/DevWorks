@@ -163,7 +163,12 @@ fn worktree_from(raw: WorktreeRaw) -> Result<StoredWorktree, StorageError> {
     })
 }
 
-const RUN_COLUMNS: &str = "id,batch_id,kind,repository_id,project_id,overlay_id,state,stage,revision,attempt,max_attempts,owner,lease_until,cancel_requested_at,config_revision,config_digest,source_oid,generation_id,completed_units,total_units,output_view_id,error_code,error_message,deterministic,warnings_json,requested_by,created_at,started_at,finished_at,next_attempt_at";
+const RUN_COLUMNS: &str = "id,batch_id,kind,repository_id,project_id,overlay_id,state,stage,\
+    revision,attempt,max_attempts,owner,lease_until,cancel_requested_at,\
+    config_revision,config_digest,source_oid,generation_id,completed_units,\
+    total_units,output_view_id,error_code,error_message,deterministic,\
+    warnings_json,requested_by,created_at,started_at,finished_at,\
+    next_attempt_at";
 fn run_of(r: &Row<'_>) -> rusqlite::Result<Vec<rusqlite::types::Value>> {
     (0..30)
         .map(|i| r.get::<_, rusqlite::types::Value>(i))
@@ -389,7 +394,10 @@ fn view_from(raw: ViewRaw) -> Result<StoredView, StorageError> {
     })
 }
 
-const OVERLAY_COLUMNS: &str = "id,repository_id,worktree_id,worktree_path,state,revision,base_generation_id,base_oid,head_oid,head_ref,capture_digest,branch_generation_id,worktree_generation_id,view_id,run_id,reason,created_at,updated_at,expires_at";
+const OVERLAY_COLUMNS: &str = "id,repository_id,worktree_id,worktree_path,state,revision,\
+    base_generation_id,base_oid,head_oid,head_ref,capture_digest,\
+    branch_generation_id,worktree_generation_id,view_id,run_id,reason,\
+    created_at,updated_at,expires_at";
 fn overlay_of(r: &Row<'_>) -> rusqlite::Result<Vec<rusqlite::types::Value>> {
     (0..19)
         .map(|i| r.get::<_, rusqlite::types::Value>(i))
@@ -637,7 +645,11 @@ macro_rules! index_reads {
             ) -> Result<Vec<StoredIndexRun>, StorageError> {
                 let n = page_limit(n)?;
                 let mut s = db(self.conn.prepare_cached(&format!(
-                    "SELECT {RUN_COLUMNS} FROM index_runs r WHERE ((state='Queued' AND next_attempt_at<=?1) OR (state='Running' AND lease_until<?1)) AND NOT EXISTS (SELECT 1 FROM index_runs b WHERE b.repository_id=r.repository_id AND b.state='Running' AND b.lease_until>=?1) ORDER BY created_at, id LIMIT ?2"
+                    "SELECT {RUN_COLUMNS} FROM index_runs r WHERE ((state='Queued' AND \
+                        next_attempt_at<=?1) OR (state='Running' AND lease_until<?1)) AND NOT \
+                        EXISTS (SELECT 1 FROM index_runs b WHERE \
+                        b.repository_id=r.repository_id AND b.state='Running' AND \
+                        b.lease_until>=?1) ORDER BY created_at, id LIMIT ?2"
                 )))?;
                 let rows = db(db(s.query_map(params![now_ms, n], run_of))?
                     .collect::<rusqlite::Result<Vec<_>>>())?;
@@ -698,7 +710,9 @@ macro_rules! index_reads {
             ) -> Result<Vec<StoredUnit>, StorageError> {
                 let n = page_limit(n)?;
                 let mut s = db(self.conn.prepare_cached(
-                    "SELECT generation_id,unit_key,content_digest,action,payload_json FROM source_units WHERE generation_id=?1 AND unit_key>?2 ORDER BY unit_key LIMIT ?3",
+                    "SELECT generation_id,unit_key,content_digest,action,payload_json FROM \
+                        source_units WHERE generation_id=?1 AND unit_key>?2 ORDER BY unit_key \
+                        LIMIT ?3",
                 ))?;
                 let rows = db(db(s.query_map(
                     params![generation.as_str(), after.unwrap_or(""), n],
@@ -738,7 +752,8 @@ macro_rules! index_reads {
                 unit_key: &str,
             ) -> Result<Vec<StoredEdge>, StorageError> {
                 let mut s = db(self.conn.prepare_cached(
-                    "SELECT unit_key,edge_id,source_node_id,target_node_id,kind,payload_json FROM graph_edges WHERE generation_id=?1 AND unit_key=?2 ORDER BY edge_id",
+                    "SELECT unit_key,edge_id,source_node_id,target_node_id,kind,payload_json \
+                        FROM graph_edges WHERE generation_id=?1 AND unit_key=?2 ORDER BY edge_id",
                 ))?;
                 let rows = db(db(s.query_map(params![generation.as_str(), unit_key], edge_of))?
                     .collect::<rusqlite::Result<Vec<_>>>())?;
@@ -766,10 +781,33 @@ macro_rules! index_reads {
             ) -> Result<Vec<StoredNode>, StorageError> {
                 let n = page_limit(n)?;
                 let mut s = db(self.conn.prepare_cached(
-                    "SELECT unit_key,node_id,kind,name,payload_json FROM graph_nodes WHERE generation_id=?1 AND json_extract(payload_json, '$.qualifiedName')=?2 ORDER BY unit_key,node_id LIMIT ?3",
+                    "SELECT unit_key,node_id,kind,name,payload_json FROM graph_nodes WHERE \
+                        generation_id=?1 AND json_extract(payload_json, '$.qualifiedName')=?2 \
+                        ORDER BY unit_key,node_id LIMIT ?3",
                 ))?;
                 let rows = db(db(s.query_map(params![generation.as_str(), qualified_name, n], node_of))?
                     .collect::<rusqlite::Result<Vec<_>>>())?;
+                rows.into_iter().map(node_from).collect()
+            }
+            fn nodes_qualified_after(
+                &self,
+                generation: &Id,
+                qualified_name: &str,
+                after: Option<(&str, &str)>,
+                n: u16,
+            ) -> Result<Vec<StoredNode>, StorageError> {
+                let n = page_limit(n)?;
+                let (unit, node) = after.unwrap_or(("", ""));
+                let mut s = db(self.conn.prepare_cached(
+                    "SELECT unit_key,node_id,kind,name,payload_json FROM graph_nodes WHERE \
+                        generation_id=?1 AND json_extract(payload_json, '$.qualifiedName')=?2 \
+                        AND (unit_key,node_id)>(?3,?4) ORDER BY unit_key,node_id LIMIT ?5",
+                ))?;
+                let rows = db(db(s.query_map(
+                    params![generation.as_str(), qualified_name, unit, node, n],
+                    node_of,
+                ))?
+                .collect::<rusqlite::Result<Vec<_>>>())?;
                 rows.into_iter().map(node_from).collect()
             }
             fn published(&self, repository: &Id) -> Result<Option<StoredPublished>, StorageError> {
@@ -835,7 +873,9 @@ macro_rules! index_reads {
             }
             fn overlays(&self, repository: &Id) -> Result<Vec<StoredOverlay>, StorageError> {
                 let mut s = db(self.conn.prepare_cached(&format!(
-                    "SELECT {OVERLAY_COLUMNS} FROM index_overlays WHERE repository_id=?1 ORDER BY state IN ('Expired','Unavailable'), worktree_id IS NULL, worktree_id, head_oid LIMIT 256"
+                    "SELECT {OVERLAY_COLUMNS} FROM index_overlays WHERE repository_id=?1 \
+                        ORDER BY state IN ('Expired','Unavailable'), worktree_id IS NULL, \
+                        worktree_id, head_oid LIMIT 256"
                 )))?;
                 let rows = db(db(s.query_map([repository.as_str()], overlay_of))?
                     .collect::<rusqlite::Result<Vec<_>>>())?;
@@ -848,7 +888,9 @@ macro_rules! index_reads {
             ) -> Result<Vec<StoredOverlay>, StorageError> {
                 let n = page_limit(n)?;
                 let mut s = db(self.conn.prepare_cached(&format!(
-                    "SELECT {OVERLAY_COLUMNS} FROM index_overlays WHERE state NOT IN ('Expired','Unavailable') AND expires_at<=?1 ORDER BY expires_at, id LIMIT ?2"
+                    "SELECT {OVERLAY_COLUMNS} FROM index_overlays WHERE state NOT IN \
+                        ('Expired','Unavailable') AND expires_at<=?1 ORDER BY expires_at, id \
+                        LIMIT ?2"
                 )))?;
                 let rows = db(db(s.query_map(params![now_ms, n], overlay_of))?
                     .collect::<rusqlite::Result<Vec<_>>>())?;
@@ -862,7 +904,13 @@ macro_rules! index_reads {
             ) -> Result<Vec<StoredOverlay>, StorageError> {
                 let n = page_limit(n)?;
                 let mut s = db(self.conn.prepare_cached(&format!(
-                    "SELECT {OVERLAY_COLUMNS} FROM (SELECT *, ROW_NUMBER() OVER (PARTITION BY repository_id ORDER BY updated_at DESC, id DESC) AS rank FROM index_overlays WHERE worktree_id IS NULL AND state IN ('Expired','Unavailable','Failed')) AS ended WHERE rank>?2 AND updated_at<=?1 AND view_id IS NULL AND NOT EXISTS (SELECT 1 FROM index_runs r WHERE r.overlay_id=ended.id AND r.state IN ('Queued','Running')) ORDER BY updated_at, id LIMIT ?3"
+                    "SELECT {OVERLAY_COLUMNS} FROM (SELECT *, ROW_NUMBER() OVER (PARTITION \
+                        BY repository_id ORDER BY updated_at DESC, id DESC) AS rank FROM \
+                        index_overlays WHERE worktree_id IS NULL AND state IN ('Expired',\
+                        'Unavailable','Failed')) AS ended WHERE rank>?2 AND updated_at<=?1 AND \
+                        view_id IS NULL AND NOT EXISTS (SELECT 1 FROM index_runs r WHERE \
+                        r.overlay_id=ended.id AND r.state IN ('Queued','Running')) ORDER BY \
+                        updated_at, id LIMIT ?3"
                 )))?;
                 let rows = db(db(s.query_map(params![ended_before_ms, keep, n], overlay_of))?
                     .collect::<rusqlite::Result<Vec<_>>>())?;
@@ -958,8 +1006,14 @@ impl IndexRepository for Unit<'_> {
             });
         }
         db(db(self.conn.prepare_cached(&format!(
-            "INSERT INTO repository_sources({SOURCE_COLUMNS}) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12) \
-             ON CONFLICT(repository_id) DO UPDATE SET section=excluded.section,section_root=excluded.section_root,location=excluded.location,state=excluded.state,head_oid=excluded.head_oid,head_ref=excluded.head_ref,object_format=excluded.object_format,remote_url=excluded.remote_url,revision=excluded.revision,observed_at=excluded.observed_at,default_ref=excluded.default_ref"
+            "INSERT INTO repository_sources({SOURCE_COLUMNS}) VALUES(?1,?2,?3,?4,?5,\
+                ?6,?7,?8,?9,?10,?11,?12) \
+                ON CONFLICT(repository_id) DO UPDATE SET section=excluded.section,\
+                section_root=excluded.section_root,location=excluded.location,\
+                state=excluded.state,head_oid=excluded.head_oid,\
+                head_ref=excluded.head_ref,object_format=excluded.object_format,\
+                remote_url=excluded.remote_url,revision=excluded.revision,\
+                observed_at=excluded.observed_at,default_ref=excluded.default_ref"
         )))?
         .execute(params![
             s.repository_id.as_str(),
@@ -1108,7 +1162,13 @@ impl IndexRepository for Unit<'_> {
                     && current.manifest == g.manifest
             }
             (GEN_SEALED, GEN_RETIRED) => {
-                let held: bool = db(self.conn.query_row("SELECT EXISTS(SELECT 1 FROM index_views v JOIN index_pins p ON p.view_id=v.id WHERE ?1 IN(v.baseline_id,v.branch_id,v.worktree_id) AND p.lease_until>?2)",params![g.id.as_str(),self.now],|r|r.get(0)))?;
+                let held: bool = db(self.conn.query_row(
+                    "SELECT EXISTS(SELECT 1 FROM index_views v JOIN index_pins p ON \
+                    p.view_id=v.id WHERE ?1 IN(v.baseline_id,v.branch_id,v.worktree_id) AND \
+                    p.lease_until>?2)",
+                    params![g.id.as_str(), self.now],
+                    |r| r.get(0),
+                ))?;
                 if held {
                     return Err(StorageError::Busy);
                 }
@@ -1247,7 +1307,9 @@ impl IndexRepository for Unit<'_> {
                 continue;
             }
             let n = db(db(self.conn.prepare_cached(
-                "INSERT INTO source_units(generation_id,unit_key,content_digest,action,payload_json) SELECT ?1,unit_key,content_digest,action,payload_json FROM source_units WHERE generation_id=?2 AND unit_key=?3",
+                "INSERT INTO source_units(generation_id,unit_key,content_digest,action,\
+                    payload_json) SELECT ?1,unit_key,content_digest,action,payload_json \
+                    FROM source_units WHERE generation_id=?2 AND unit_key=?3",
             ))?
             .execute(params![t, f, k]))?;
             if n == 0 {
@@ -1255,15 +1317,22 @@ impl IndexRepository for Unit<'_> {
             }
             copied += 1;
             db(db(self.conn.prepare_cached(
-                "INSERT INTO graph_nodes(generation_id,unit_key,node_id,kind,name,payload_json) SELECT ?1,unit_key,node_id,kind,name,payload_json FROM graph_nodes WHERE generation_id=?2 AND unit_key=?3",
+                "INSERT INTO graph_nodes(generation_id,unit_key,node_id,kind,name,\
+                    payload_json) SELECT ?1,unit_key,node_id,kind,name,payload_json FROM \
+                    graph_nodes WHERE generation_id=?2 AND unit_key=?3",
             ))?
             .execute(params![t, f, k]))?;
             db(db(self.conn.prepare_cached(
-                "INSERT INTO graph_edges(generation_id,unit_key,edge_id,source_node_id,target_node_id,kind,payload_json) SELECT ?1,unit_key,edge_id,source_node_id,target_node_id,kind,payload_json FROM graph_edges WHERE generation_id=?2 AND unit_key=?3",
+                "INSERT INTO graph_edges(generation_id,unit_key,edge_id,source_node_id,\
+                    target_node_id,kind,payload_json) SELECT ?1,unit_key,edge_id,\
+                    source_node_id,target_node_id,kind,payload_json FROM graph_edges WHERE \
+                    generation_id=?2 AND unit_key=?3",
             ))?
             .execute(params![t, f, k]))?;
             db(db(self.conn.prepare_cached(
-                "INSERT INTO index_batches(generation_id,unit_key,batch_key,payload_digest,row_count) SELECT ?1,unit_key,batch_key,payload_digest,row_count FROM index_batches WHERE generation_id=?2 AND unit_key=?3",
+                "INSERT INTO index_batches(generation_id,unit_key,batch_key,\
+                    payload_digest,row_count) SELECT ?1,unit_key,batch_key,payload_digest,\
+                    row_count FROM index_batches WHERE generation_id=?2 AND unit_key=?3",
             ))?
             .execute(params![t, f, k]))?;
         }
@@ -1576,8 +1645,17 @@ impl IndexRepository for Unit<'_> {
             }
         }
         db(db(self.conn.prepare_cached(&format!(
-            "INSERT INTO index_overlays({OVERLAY_COLUMNS}) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19) \
-             ON CONFLICT(id) DO UPDATE SET worktree_path=excluded.worktree_path,state=excluded.state,revision=excluded.revision,base_generation_id=excluded.base_generation_id,base_oid=excluded.base_oid,head_oid=excluded.head_oid,head_ref=excluded.head_ref,capture_digest=excluded.capture_digest,branch_generation_id=excluded.branch_generation_id,worktree_generation_id=excluded.worktree_generation_id,view_id=excluded.view_id,run_id=excluded.run_id,reason=excluded.reason,updated_at=excluded.updated_at,expires_at=excluded.expires_at"
+            "INSERT INTO index_overlays({OVERLAY_COLUMNS}) VALUES(?1,?2,?3,?4,?5,?6,\
+                ?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19) \
+                ON CONFLICT(id) DO UPDATE SET worktree_path=excluded.worktree_path,\
+                state=excluded.state,revision=excluded.revision,\
+                base_generation_id=excluded.base_generation_id,\
+                base_oid=excluded.base_oid,head_oid=excluded.head_oid,\
+                head_ref=excluded.head_ref,capture_digest=excluded.capture_digest,\
+                branch_generation_id=excluded.branch_generation_id,\
+                worktree_generation_id=excluded.worktree_generation_id,\
+                view_id=excluded.view_id,run_id=excluded.run_id,reason=excluded.reason,\
+                updated_at=excluded.updated_at,expires_at=excluded.expires_at"
         )))?
         .execute(rusqlite::params_from_iter([
             rusqlite::types::Value::from(o.id.as_str().to_owned()),
@@ -1586,13 +1664,22 @@ impl IndexRepository for Unit<'_> {
             o.worktree_path.clone().into(),
             o.state.clone().into(),
             o.revision.into(),
-            o.base_generation_id.as_ref().map(|x| x.as_str().to_owned()).into(),
+            o.base_generation_id
+                .as_ref()
+                .map(|x| x.as_str().to_owned())
+                .into(),
             o.base_oid.clone().into(),
             o.head_oid.clone().into(),
             o.head_ref.clone().into(),
             o.capture_digest.clone().into(),
-            o.branch_generation_id.as_ref().map(|x| x.as_str().to_owned()).into(),
-            o.worktree_generation_id.as_ref().map(|x| x.as_str().to_owned()).into(),
+            o.branch_generation_id
+                .as_ref()
+                .map(|x| x.as_str().to_owned())
+                .into(),
+            o.worktree_generation_id
+                .as_ref()
+                .map(|x| x.as_str().to_owned())
+                .into(),
             o.view_id.as_ref().map(|x| x.as_str().to_owned()).into(),
             o.run_id.as_ref().map(|x| x.as_str().to_owned()).into(),
             o.reason.clone().into(),
@@ -1654,10 +1741,20 @@ fn write_run(conn: &Connection, run: &StoredIndexRun, insert: bool) -> Result<()
     ];
     let sql = if insert {
         format!(
-            "INSERT INTO index_runs({RUN_COLUMNS}) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21,?22,?23,?24,?25,?26,?27,?28,?29,?30)"
+            "INSERT INTO index_runs({RUN_COLUMNS}) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,\
+                ?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21,?22,?23,?24,?25,?26,?27,\
+                ?28,?29,?30)"
         )
     } else {
-        "UPDATE index_runs SET batch_id=?2,kind=?3,repository_id=?4,project_id=?5,overlay_id=?6,state=?7,stage=?8,revision=?9,attempt=?10,max_attempts=?11,owner=?12,lease_until=?13,cancel_requested_at=?14,config_revision=?15,config_digest=?16,source_oid=?17,generation_id=?18,completed_units=?19,total_units=?20,output_view_id=?21,error_code=?22,error_message=?23,deterministic=?24,warnings_json=?25,requested_by=?26,created_at=?27,started_at=?28,finished_at=?29,next_attempt_at=?30 WHERE id=?1".to_owned()
+        "UPDATE index_runs SET batch_id=?2,kind=?3,repository_id=?4,\
+            project_id=?5,overlay_id=?6,state=?7,stage=?8,revision=?9,attempt=?10,\
+            max_attempts=?11,owner=?12,lease_until=?13,cancel_requested_at=?14,\
+            config_revision=?15,config_digest=?16,source_oid=?17,generation_id=?18,\
+            completed_units=?19,total_units=?20,output_view_id=?21,error_code=?22,\
+            error_message=?23,deterministic=?24,warnings_json=?25,requested_by=?26,\
+            created_at=?27,started_at=?28,finished_at=?29,next_attempt_at=?30 WHERE \
+            id=?1"
+            .to_owned()
     };
     let n = db(db(conn.prepare_cached(&sql))?.execute(rusqlite::params_from_iter(values)))?;
     if n != 1 {

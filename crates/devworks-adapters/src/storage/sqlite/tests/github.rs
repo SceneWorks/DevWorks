@@ -83,7 +83,14 @@ fn bind(
         remote_revision: "actual-provider-metadata".into(),
         url: canonical.url.clone(),
         head: None,
-        payload: json!({"requestedRemote":remote,"repository":{"node_id":canonical.remote_repository_id,"owner":{"login":canonical.owner},"name":canonical.name}}),
+        payload: json!({
+            "requestedRemote": remote,
+            "repository": {
+                "node_id": canonical.remote_repository_id,
+                "owner": {"login": canonical.owner},
+                "name": canonical.name
+            }
+        }),
         source_updated_at_ms: Some(T0),
         observed_at_ms: T0,
     };
@@ -164,7 +171,19 @@ fn triage(
     name: &str,
 ) -> Result<OperationId, StorageError> {
     let op = OperationId(id(name));
-    tx.operations().record_intent(NewOperation{id:op.clone(),root_id:None,assignment_id:None,capability:"github.triage".into(),schema_version:1,args_digest:"actual-intent".into(),payload:json!({"repositoryId":r.key.repository_id,"issueNumber":r.key.number,"sourceRevision":r.remote_revision})})?;
+    tx.operations().record_intent(NewOperation {
+        id: op.clone(),
+        root_id: None,
+        assignment_id: None,
+        capability: "github.triage".into(),
+        schema_version: 1,
+        args_digest: "actual-intent".into(),
+        payload: json!({
+            "repositoryId": r.key.repository_id,
+            "issueNumber": r.key.number,
+            "sourceRevision": r.remote_revision
+        }),
+    })?;
     Ok(op)
 }
 fn scope(project: Option<&str>) -> GithubScope {
@@ -473,7 +492,19 @@ fn resolution_ops(
     let mut ids = vec![];
     for kind in ["comment", "close"] {
         let op = OperationId(id(&format!("{suffix}-{kind}")));
-        tx.operations().record_intent(NewOperation{id:op.clone(),root_id:None,assignment_id:None,capability:format!("github.resolution.{kind}"),schema_version:1,args_digest:d.into(),payload:json!({"repositoryId":k.repository_id,"issueNumber":k.number,"completionDigest":d})})?;
+        tx.operations().record_intent(NewOperation {
+            id: op.clone(),
+            root_id: None,
+            assignment_id: None,
+            capability: format!("github.resolution.{kind}"),
+            schema_version: 1,
+            args_digest: d.into(),
+            payload: json!({
+                "repositoryId": k.repository_id,
+                "issueNumber": k.number,
+                "completionDigest": d
+            }),
+        })?;
         ids.push(op);
     }
     Ok((ids.remove(0), ids.remove(0)))
@@ -879,7 +910,14 @@ fn adjudication_artifact(
     tx: &mut dyn WriteTransaction,
     r: &StoredGithubObligationRetirement,
 ) -> Result<serde_json::Value, StorageError> {
-    let bytes=serde_json::to_vec(&json!({"reason":r.reason,"workId":r.work_id,"workRevision":r.work_revision,"observationId":r.observation_id,"source":"recorded controlled fixture"})).unwrap();
+    let bytes = serde_json::to_vec(&json!({
+        "reason": r.reason,
+        "workId": r.work_id,
+        "workRevision": r.work_revision,
+        "observationId": r.observation_id,
+        "source": "recorded controlled fixture"
+    }))
+    .unwrap();
     let digest = devworks_core::fingerprint::sha256_hex(&bytes);
     let blob = tx.artifacts().put_blob(
         &digest,
@@ -888,7 +926,22 @@ fn adjudication_artifact(
         "blobs/adjudication",
     )?;
     let actor = tx.store().host_actor.clone();
-    let provenance = json!({"principalKind":"Host","producedBy":actor,"derived":{"kind":"GithubObligationAdjudication","repositoryId":r.key.repository_id,"issueNumber":r.key.number,"workId":r.work_id,"workRevision":r.work_revision,"obligationRevision":r.obligation_revision,"operationId":r.operation_id,"observationId":r.observation_id,"reason":r.reason,"actorId":r.actor_id}});
+    let provenance = json!({
+        "principalKind": "Host",
+        "producedBy": actor,
+        "derived": {
+            "kind": "GithubObligationAdjudication",
+            "repositoryId": r.key.repository_id,
+            "issueNumber": r.key.number,
+            "workId": r.work_id,
+            "workRevision": r.work_revision,
+            "obligationRevision": r.obligation_revision,
+            "operationId": r.operation_id,
+            "observationId": r.observation_id,
+            "reason": r.reason,
+            "actorId": r.actor_id
+        }
+    });
     tx.artifacts().insert_artifact(&StoredArtifact {
         id: id("adjudication"),
         origin_project_id: Some(r.project_id.clone()),
@@ -915,30 +968,175 @@ fn adjudication_artifact(
         media_type: "application/json".into(),
         created_at_ms: T0,
         deleted_at_ms: None,
-        source: json!({"producedBy":actor,"principalKind":"Host","source":{"operationId":r.operation_id,"actorId":r.actor_id,"observationId":r.observation_id}}),
+        source: json!({
+            "producedBy": actor,
+            "principalKind": "Host",
+            "source": {
+                "operationId": r.operation_id,
+                "actorId": r.actor_id,
+                "observationId": r.observation_id
+            }
+        }),
     })?;
-    Ok(
-        json!({"artifactId":"adjudication","versionId":"adjudication-version","sha256":digest,"byteLength":bytes.len().to_string(),"mediaType":"application/json"}),
-    )
+    Ok(json!({
+        "artifactId": "adjudication",
+        "versionId": "adjudication-version",
+        "sha256": digest,
+        "byteLength": bytes.len().to_string(),
+        "mediaType": "application/json"
+    }))
 }
 #[test]
 fn adjudicated_obligation_retirement_preserves_history_and_invalidates_old_completion_without_mutating_work()
  {
     let h = Harness::new();
     let store = h.store();
-    run_write(&store,WriteOptions::fixture(),|tx|{
-  setup(tx)?;let issue=incoming(tx,"shared",88,"retirement-source")?;let a=task(tx,"misrouted-work","a")?;let b=task(tx,"right-work","b")?;tx.github().link_github_work(&issue.key,&a,1)?;tx.github().link_github_work(&issue.key,&b,1)?;let generation=tx.github().github_obligation_revision(&issue.key)?;
-  let digest="e".repeat(64);let(comment,close)=resolution_ops(tx,&issue.key,&digest,"old-scope")?;let completion=StoredGithubResolution{id:id("old-completion"),key:issue.key.clone(),state:"Draft".into(),completion_digest:digest,source_revision:issue.remote_revision.clone(),obligation_revision:generation,summary_digest:"f".repeat(64),comment_operation_id:comment,close_operation_id:close};tx.github().insert_github_resolution(&completion)?;
-  let original_actor=devworks_core::protocol::ActorId(id("original-agent"));tx.actors().register(&original_actor,devworks_core::context::PrincipalKind::Agent,"Original agent")?;
-  let op=OperationId(id("actual-adjudication"));tx.operations().record_intent(NewOperation{id:op.clone(),root_id:None,assignment_id:None,capability:"github.triage".into(),schema_version:1,args_digest:"adjudication".into(),payload:json!({"repositoryId":issue.key.repository_id,"issueNumber":issue.key.number,"sourceRevision":issue.remote_revision,"actorId":original_actor})})?;let attempt=tx.operations().begin_attempt(&op,1,AttemptBinding::default())?;tx.operations().transition(&op,2,Some(&attempt.fence()),OperationState::Dispatching,None)?;tx.operations().transition(&op,3,Some(&attempt.fence()),OperationState::ObservedComplete,Some(json!({"reason":"misrouted","source":"recorded controlled fixture"})))?;
-  let mut witness=StoredGithubObligationRetirement{id:id("retirement"),key:issue.key.clone(),work_id:a.clone(),project_id:ProjectId(id("a")),work_revision:1,obligation_revision:generation,reason:GithubObligationRetirementReason::Misrouted,operation_id:op,actor_id:original_actor,observation_id:issue.observation_id,adjudication_ref:json!({}),created_at_ms:T0};
-  assert!(tx.github().retire_github_work_link(&witness).is_err(),"a caller reason flag and operation alone do not supply an actual qualified adjudication witness");witness.adjudication_ref=adjudication_artifact(tx,&witness)?;
-  let before=tx.work().work(&a.0)?.unwrap();tx.github().retire_github_work_link(&witness)?;tx.github().retire_github_work_link(&witness)?;
-  assert_eq!(tx.github().github_adjudication_owner(&id("adjudication"),Some(&id("adjudication-version")))?.unwrap().actor_id,witness.actor_id);
-  assert_ne!(witness.actor_id,tx.artifacts().artifact(&id("adjudication"))?.unwrap().owner.unwrap(),"Host owns proof while the actual Agent remains attributed");
-  assert_eq!(tx.work().work(&a.0)?.unwrap(),before,"retirement neither deletes nor closes work or changes controls");
-  assert_eq!(tx.github().github_work_links(&issue.key,None,None,500)?.len(),1);assert_eq!(tx.github().github_related_work(&issue.key,None,None,500)?.len(),2);assert_eq!(tx.github().github_obligation_revision(&issue.key)?,generation+1);assert!(tx.github().seal_github_resolution(&completion.id,1).is_err());
-  assert_eq!(tx.github().github_obligation_retirements(&issue.key,Some(&ProjectId(id("a"))),None,500)?,vec![witness.clone()]);assert!(tx.github().github_obligation_retirements(&issue.key,Some(&ProjectId(id("b"))),None,500)?.is_empty());
-  let mut stale=witness;stale.reason=GithubObligationRetirementReason::UnstartedUnreproducible;assert!(tx.github().retire_github_work_link(&stale).is_err());Ok(())
- }).unwrap();
+    run_write(&store, WriteOptions::fixture(), |tx| {
+        setup(tx)?;
+        let issue = incoming(tx, "shared", 88, "retirement-source")?;
+        let a = task(tx, "misrouted-work", "a")?;
+        let b = task(tx, "right-work", "b")?;
+        tx.github().link_github_work(&issue.key, &a, 1)?;
+        tx.github().link_github_work(&issue.key, &b, 1)?;
+        let generation = tx.github().github_obligation_revision(&issue.key)?;
+        let digest = "e".repeat(64);
+        let (comment, close) = resolution_ops(tx, &issue.key, &digest, "old-scope")?;
+        let completion = StoredGithubResolution {
+            id: id("old-completion"),
+            key: issue.key.clone(),
+            state: "Draft".into(),
+            completion_digest: digest,
+            source_revision: issue.remote_revision.clone(),
+            obligation_revision: generation,
+            summary_digest: "f".repeat(64),
+            comment_operation_id: comment,
+            close_operation_id: close,
+        };
+        tx.github().insert_github_resolution(&completion)?;
+        let original_actor = devworks_core::protocol::ActorId(id("original-agent"));
+        tx.actors().register(
+            &original_actor,
+            devworks_core::context::PrincipalKind::Agent,
+            "Original agent",
+        )?;
+        let op = OperationId(id("actual-adjudication"));
+        tx.operations().record_intent(NewOperation {
+            id: op.clone(),
+            root_id: None,
+            assignment_id: None,
+            capability: "github.triage".into(),
+            schema_version: 1,
+            args_digest: "adjudication".into(),
+            payload: json!({
+                "repositoryId": issue.key.repository_id,
+                "issueNumber": issue.key.number,
+                "sourceRevision": issue.remote_revision,
+                "actorId": original_actor
+            }),
+        })?;
+        let attempt = tx
+            .operations()
+            .begin_attempt(&op, 1, AttemptBinding::default())?;
+        tx.operations().transition(
+            &op,
+            2,
+            Some(&attempt.fence()),
+            OperationState::Dispatching,
+            None,
+        )?;
+        tx.operations().transition(
+            &op,
+            3,
+            Some(&attempt.fence()),
+            OperationState::ObservedComplete,
+            Some(json!({
+                "reason": "misrouted",
+                "source": "recorded controlled fixture"
+            })),
+        )?;
+        let mut witness = StoredGithubObligationRetirement {
+            id: id("retirement"),
+            key: issue.key.clone(),
+            work_id: a.clone(),
+            project_id: ProjectId(id("a")),
+            work_revision: 1,
+            obligation_revision: generation,
+            reason: GithubObligationRetirementReason::Misrouted,
+            operation_id: op,
+            actor_id: original_actor,
+            observation_id: issue.observation_id,
+            adjudication_ref: json!({}),
+            created_at_ms: T0,
+        };
+        assert!(
+            tx.github().retire_github_work_link(&witness).is_err(),
+            "a caller reason flag and operation alone do not supply an actual \
+      qualified adjudication witness"
+        );
+        witness.adjudication_ref = adjudication_artifact(tx, &witness)?;
+        let before = tx.work().work(&a.0)?.unwrap();
+        tx.github().retire_github_work_link(&witness)?;
+        tx.github().retire_github_work_link(&witness)?;
+        assert_eq!(
+            tx.github()
+                .github_adjudication_owner(&id("adjudication"), Some(&id("adjudication-version")))?
+                .unwrap()
+                .actor_id,
+            witness.actor_id
+        );
+        assert_ne!(
+            witness.actor_id,
+            tx.artifacts()
+                .artifact(&id("adjudication"))?
+                .unwrap()
+                .owner
+                .unwrap(),
+            "Host owns proof while the actual Agent remains attributed"
+        );
+        assert_eq!(
+            tx.work().work(&a.0)?.unwrap(),
+            before,
+            "retirement neither deletes nor closes work or changes controls"
+        );
+        assert_eq!(
+            tx.github()
+                .github_work_links(&issue.key, None, None, 500)?
+                .len(),
+            1
+        );
+        assert_eq!(
+            tx.github()
+                .github_related_work(&issue.key, None, None, 500)?
+                .len(),
+            2
+        );
+        assert_eq!(
+            tx.github().github_obligation_revision(&issue.key)?,
+            generation + 1
+        );
+        assert!(
+            tx.github()
+                .seal_github_resolution(&completion.id, 1)
+                .is_err()
+        );
+        assert_eq!(
+            tx.github().github_obligation_retirements(
+                &issue.key,
+                Some(&ProjectId(id("a"))),
+                None,
+                500
+            )?,
+            vec![witness.clone()]
+        );
+        assert!(
+            tx.github()
+                .github_obligation_retirements(&issue.key, Some(&ProjectId(id("b"))), None, 500)?
+                .is_empty()
+        );
+        let mut stale = witness;
+        stale.reason = GithubObligationRetirementReason::UnstartedUnreproducible;
+        assert!(tx.github().retire_github_work_link(&stale).is_err());
+        Ok(())
+    })
+    .unwrap();
 }

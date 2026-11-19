@@ -3,6 +3,7 @@
 pub mod domain;
 pub mod endpoints;
 pub mod manifests;
+mod schema_refs;
 pub mod treesitter;
 
 use crate::fs::NativeFilesystem;

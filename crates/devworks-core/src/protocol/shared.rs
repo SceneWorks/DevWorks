@@ -85,7 +85,8 @@ impl JsonSchema for Counter {
         "Counter".into()
     }
     fn json_schema(_: &mut SchemaGenerator) -> Schema {
-        json_schema!({"type":"string","pattern":"^(0|[1-9][0-9]{0,18})$","description":"Canonical decimal 0..9223372036854775807. Typed range validation required."})
+        json_schema!({"type":"string","pattern":"^(0|[1-9][0-9]{0,18})$","description":"Canonical decimal 0..9223372036854775807. Typed range validation \
+            required."})
     }
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

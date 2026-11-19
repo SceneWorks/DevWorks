@@ -18,8 +18,9 @@
 //!   incompatible store opens read-only for diagnostics, never migrated or rewritten.
 //! * **No automatic backup (STORE-05/07/13).** Nothing here copies the store; manual backup and
 //!   restore extend [`StorageMaintenance`] in their own item.
-//! * **SQL stays here.** Repositories (module `repos`) are the only place statements exist. Nothing in
-//!   the public API exposes rusqlite types, rows, statements or a generic execute-SQL.
+//! * **SQL stays here.** Statements exist only in this module's files: `repos` and the per-family
+//!   repository files beside it, `migrations`, and the writer and connection setup. Nothing in the
+//!   public API exposes rusqlite types, rows, statements or a generic execute-SQL.
 //! * **Async facade.** [`write_async`] wraps the same admission with a Tokio `oneshot`; dropping
 //!   the future stops waiting but never rolls back an admitted job.
 mod agent_messages;
@@ -83,6 +84,7 @@ pub use seed::seed_migrated_store;
 
 use conn::{Role, db};
 use devworks_core::context::PrincipalKind;
+use devworks_core::locks::LockExt;
 use devworks_core::ports::storage::{
     AccessMode, ApplicationStore, Cancellation, CompatibilityReport, IntegrityReport, ReadOptions,
     ReadSnapshot, RuntimeIdentity, StorageError, StorageMaintenance, StoreInfo, Unavailable,
@@ -213,7 +215,7 @@ impl ReadPool {
         operation_deadline: Option<Instant>,
     ) -> Result<Connection, StorageError> {
         let deadline = Instant::now() + self.wait;
-        let mut idle = self.idle.lock().unwrap_or_else(|p| p.into_inner());
+        let mut idle = self.idle.locked();
         loop {
             if cancel.is_some_and(Cancellation::is_cancelled)
                 || operation_deadline.is_some_and(|until| Instant::now() >= until)
@@ -243,10 +245,7 @@ impl ReadPool {
         }
     }
     fn checkin(&self, conn: Connection) {
-        self.idle
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .push(conn);
+        self.idle.locked().push(conn);
         self.available.notify_one();
     }
 }
@@ -526,11 +525,7 @@ fn record_boot(
 impl Drop for SqliteStore {
     fn drop(&mut self) {
         // Readers first so the last connection to close is the writer (the only checkpointer).
-        self.readers
-            .idle
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .clear();
+        self.readers.idle.locked().clear();
         // The write owner releases the data root once it has closed the write connection.
         if let Some(mut w) = self.writer.take() {
             w.stop();

@@ -20,6 +20,7 @@ use devworks_core::authority::reads::ReadRoot;
 use devworks_core::authority::service::bind_principal;
 use devworks_core::context::{InvocationContext, PrincipalKind};
 use devworks_core::fingerprint::sha256_hex;
+use devworks_core::locks::LockExt;
 use devworks_core::ports::files::{ArtifactSources, ResolvedSource, SourceOrigin, SourceRefusal};
 use devworks_core::ports::packages::HostPlatform;
 use devworks_core::ports::packages::{
@@ -67,6 +68,8 @@ const WATCHDOG: Duration = Duration::from_secs(300);
 /// waits for it). A loaded machine launches each helper slowly (files re-verified, process
 /// spawned, handshake), and a restart budget's failure takes several launches.
 const PATIENCE: Duration = Duration::from_secs(60);
+/// A ceiling on a progress-bounded wait, so unrelated progress cannot keep it waiting forever.
+const WAIT_CEILING: Duration = Duration::from_secs(600);
 /// The handshake bound of a test of the startup timeout, whose helper never answers in time
 /// however loaded the machine is (load only delays an answer). Every other test gets
 /// [`config`]'s bound, which a loaded machine cannot miss.
@@ -81,13 +84,13 @@ struct Serial {
 }
 impl Drop for Serial {
     fn drop(&mut self) {
-        *self.done.0.lock().unwrap_or_else(|p| p.into_inner()) = true;
+        *self.done.0.locked() = true;
         self.done.1.notify_all();
     }
 }
 fn serial() -> Serial {
     static SERIAL: Mutex<()> = Mutex::new(());
-    let slot = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
+    let slot = SERIAL.locked();
     let done = Arc::new((Mutex::new(false), Condvar::new()));
     let (watched, test) = (
         done.clone(),
@@ -96,11 +99,7 @@ fn serial() -> Serial {
     std::thread::spawn(move || {
         let (finished, cv) = &*watched;
         let finished = cv
-            .wait_timeout_while(
-                finished.lock().unwrap_or_else(|p| p.into_inner()),
-                WATCHDOG,
-                |done| !*done,
-            )
+            .wait_timeout_while(finished.locked(), WATCHDOG, |done| !*done)
             .unwrap_or_else(|p| p.into_inner())
             .0;
         if !*finished {
@@ -200,6 +199,138 @@ impl IdSource for GatedIds {
     }
 }
 
+/// A model behind the host's provider transport: every request is answered with
+/// [`MODEL_WIRE`], and the requests are counted.
+#[derive(Default)]
+struct ScriptedModel(Mutex<Vec<devworks_core::ports::http::HttpRequest>>);
+const MODEL_WIRE: &str = "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"Sampled answer\"},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n";
+struct ModelStream {
+    head: devworks_core::ports::provider_http::ResponseHead,
+    body: Option<Vec<u8>>,
+}
+struct ModelClose;
+impl devworks_core::ports::provider_http::StreamCloser for ModelClose {
+    fn close(&self) -> Result<(), devworks_core::ports::provider_http::TransportError> {
+        Ok(())
+    }
+}
+impl devworks_core::ports::provider_http::HttpStream for ModelStream {
+    fn head(&self) -> &devworks_core::ports::provider_http::ResponseHead {
+        &self.head
+    }
+    fn closer(&self) -> Arc<dyn devworks_core::ports::provider_http::StreamCloser> {
+        Arc::new(ModelClose)
+    }
+    fn read(
+        &mut self,
+        out: &mut [u8],
+        _: &devworks_core::ports::storage::Cancellation,
+    ) -> Result<usize, devworks_core::ports::provider_http::TransportError> {
+        let Some(bytes) = self.body.take() else {
+            return Ok(0);
+        };
+        out[..bytes.len()].copy_from_slice(&bytes);
+        Ok(bytes.len())
+    }
+    fn close(&mut self) -> Result<(), devworks_core::ports::provider_http::TransportError> {
+        Ok(())
+    }
+}
+impl devworks_core::ports::provider_http::StreamingHttp for ScriptedModel {
+    fn open(
+        &self,
+        request: &devworks_core::ports::http::HttpRequest,
+        _: &devworks_core::ports::provider_http::StreamLimits,
+        _: &devworks_core::ports::storage::Cancellation,
+    ) -> Result<
+        Box<dyn devworks_core::ports::provider_http::HttpStream>,
+        devworks_core::ports::provider_http::TransportError,
+    > {
+        self.0.lock().unwrap().push(request.clone());
+        Ok(Box::new(ModelStream {
+            head: devworks_core::ports::provider_http::ResponseHead {
+                status: 200,
+                headers: vec![("content-type".into(), "text/event-stream".into())],
+            },
+            body: Some(MODEL_WIRE.as_bytes().to_vec()),
+        }))
+    }
+}
+struct FixedEntropy;
+impl devworks_core::ports::http::Entropy for FixedEntropy {
+    fn fill(&self, out: &mut [u8]) {
+        out.fill(7);
+    }
+}
+/// One connected local model, and the High tier pool that sessions without a pin route through.
+fn seed_model(store: &Arc<dyn ApplicationStore>) {
+    write(&**store, |tx| {
+        tx.router().put_connection(
+            &StoredConnection {
+                id: id("connection"),
+                name: "Scripted model".into(),
+                profile: "CompatibleChat".into(),
+                endpoint: "http://localhost:11434/v1".into(),
+                enabled: true,
+                local_free: true,
+                open_router: None,
+                credential_ref: None,
+                credential_revision: 0,
+                account_revision: 1,
+                refresh_operation_id: None,
+                credential_epoch: None,
+                lifecycle: "Connected".into(),
+                state_reason: None,
+                account_digest: None,
+                access_expires_at_ms: None,
+                risk: None,
+                discovered: Some(vec![DiscoveredModel {
+                    id: "fixture-model".into(),
+                    context_tokens: Some(10000),
+                }]),
+                discovered_at_ms: Some(0),
+                healthy: Some(true),
+                checked_at_ms: Some(0),
+                revision: 1,
+                created_at_ms: 0,
+                updated_at_ms: 0,
+            },
+            None,
+        )?;
+        tx.router().put_route_model(
+            &StoredRouteModel {
+                id: id("model"),
+                display_name: "Scripted model".into(),
+                endpoint_profile: "CompatibleChat".into(),
+                upstream_model_id: "fixture-model".into(),
+                enabled: true,
+                efforts: vec![],
+                image_input: false,
+                tools: true,
+                context_tokens: Some(10000),
+                connection_id: Some(id("connection")),
+                position: 1,
+                revision: 1,
+                updated_at_ms: 0,
+            },
+            None,
+        )?;
+        let key = "routing.tierHigh.members";
+        let schema = devworks_core::settings::catalog::descriptor(key)
+            .unwrap()
+            .schema_ref();
+        tx.configuration().append_revision(
+            &ConfigScope::Workspace,
+            "settings",
+            1,
+            1,
+            json!({"values": {key: {"schema": schema, "value": ["model"]}}}),
+        )?;
+        Ok(())
+    })
+    .unwrap();
+}
+
 const HELPER: &str = env!("CARGO_BIN_EXE_devworks-package-fixture");
 /// The consumer the tests register for availability announcements.
 const CODE_INTELLIGENCE: &str = "code-intelligence-test";
@@ -230,6 +361,9 @@ struct Spec {
     max_concurrent: u32,
     /// The declared effect of every tool contribution.
     effect: &'static str,
+    /// Contributions (by local name) declared as event handlers of the package availability
+    /// announcement instead of tools.
+    handlers: Vec<&'static str>,
 }
 impl Spec {
     fn new(package: &str, version: &str) -> Self {
@@ -255,6 +389,7 @@ impl Spec {
             config_schema: None,
             max_concurrent: 4,
             effect: "ReadCandidate",
+            handlers: vec![],
         }
     }
     fn ids(&self) -> Vec<String> {
@@ -311,19 +446,47 @@ fn bundle(spec: &Spec) -> (Vec<u8>, String) {
             .as_ref()
             .map_or("d".repeat(64), |d| sha256_hex(d)),
     );
-    let assets: Vec<Value> = config_doc
+    // The tools' input schema: an object with an optional `text`, shipped so an invocation's
+    // input can be verified against it.
+    let input_doc = json!({"type": "object", "properties": {"text": {"type": "string"}},
+        "additionalProperties": false});
+    let input_ref = schema(
+        &format!("{}/input", spec.package),
+        &sha256_hex(
+            devworks_core::jcs::canonicalize(&input_doc)
+                .unwrap()
+                .as_bytes(),
+        ),
+    );
+    let ids = spec.ids();
+    if !ids.is_empty() {
+        files.push((
+            "schemas/input.json".into(),
+            input_doc.to_string().into_bytes(),
+        ));
+    }
+    let mut assets: Vec<Value> = config_doc
         .iter()
         .map(|_| json!({"reference": config_ref, "path": "schemas/config.json"}))
         .collect();
+    if !ids.is_empty() {
+        assets.push(json!({"reference": input_ref, "path": "schemas/input.json"}));
+    }
     let contributions: Vec<Value> = spec
         .ids()
         .iter()
         .map(|id| {
-            json!({"kind": "Tool", "meta": {"id": id,
-                "inputSchema": schema(&format!("{}/input", spec.package), &"b".repeat(64)),
+            let meta = json!({"id": id,
+                "inputSchema": input_ref,
                 "outputSchema": schema(&format!("{}/output", spec.package), &"c".repeat(64)),
-                "helpTopic": "help", "required": false, "cancellation": "Cooperative"},
-                "requestedEffect": spec.effect})
+                "helpTopic": "help", "required": false, "cancellation": "Cooperative"});
+            let local = id.split('/').nth(1).unwrap_or_default();
+            if spec.handlers.contains(&local) {
+                json!({"kind": "EventHandler", "meta": meta, "eventSchemas": [
+                    schema(devworks_engine::package_host::events::AVAILABILITY_SCHEMA, &"d".repeat(64))]})
+            } else {
+                json!({"kind": "Tool", "meta": meta, "requestedEffect": spec.effect})
+            }
         })
         .collect();
     let manifest = json!({
@@ -453,6 +616,8 @@ struct App {
     host_ids: Arc<Gate>,
     /// Gates the identifiers of the package service's logs.
     log_ids: Arc<Gate>,
+    /// A scripted model behind the host's inference router, when a test composes inference.
+    model: Option<Arc<ScriptedModel>>,
 }
 fn config() -> HostConfig {
     HostConfig {
@@ -493,6 +658,14 @@ impl App {
     }
     fn probing(path: &std::path::Path) -> Self {
         Self::over(Harness::new(), Some(path.display().to_string()))
+    }
+    /// A booted app whose inference is routed to a scripted model.
+    fn with_model() -> Self {
+        let mut me = Self::unbooted(Harness::new(), None, None);
+        me.model = Some(Arc::new(ScriptedModel::default()));
+        seed_model(&me.store);
+        me.boot();
+        me
     }
     fn with_files(files: impl FnOnce(&Harness) -> Arc<dyn PackageFiles>) -> Self {
         let h = Harness::new();
@@ -560,6 +733,7 @@ impl App {
             shutdown_bound: None,
             host_ids: Arc::default(),
             log_ids,
+            model: None,
         };
         if me.probe_path.is_none() {
             me.runtimes.set(std::collections::BTreeMap::from([(
@@ -613,6 +787,18 @@ impl App {
             log_ids: Some(Arc::new(GatedIds(h.ids.clone(), self.log_ids.clone()))),
         };
         let mut config_rt = RuntimeConfig::new(id("dispatcher-1"));
+        let mut application = devworks_engine::ApplicationComposition::default();
+        if let Some(model) = &self.model {
+            application.connections = Some(devworks_engine::ConnectionPorts {
+                http: Arc::new(devworks_core::ports::http::NoNetwork),
+                secrets: Arc::new(devworks_core::ports::secrets::SessionSecrets::new()),
+                entropy: Arc::new(FixedEntropy),
+                endpoints: None,
+            });
+            application.router = Some(devworks_engine::RouterPorts::default());
+            config_rt.providers =
+                Some(devworks_engine::providers::driver::ProviderComposition::new(model.clone()));
+        }
         config_rt.collect_interval = Duration::from_secs(3600);
         config_rt.shutdown_bound = self.shutdown_bound.unwrap_or(Duration::from_secs(10));
         Composition {
@@ -632,7 +818,7 @@ impl App {
                 .unwrap_or_else(|| Arc::new(NativeProcessHost)),
             runs: devworks_engine::RunComposition::default(),
             knowledge: KnowledgeComposition::default(),
-            application: Default::default(),
+            application,
             web: None,
             power: Arc::new(NativePower),
             diagnostics: DiagnosticComposition::default(),
@@ -861,6 +1047,33 @@ impl App {
                 read(&*self.store, |s| s.packages().package(package)).and_then(|p| p.failure)
             );
             std::thread::sleep(Duration::from_millis(20));
+        }
+    }
+    /// Waits for the invocation's terminal reply while it keeps making progress: it fails once
+    /// no identifier is issued and no progress text arrives for [`PATIENCE`] (a stalled helper),
+    /// or after [`WAIT_CEILING`] however much unrelated progress continues. A loaded machine
+    /// launches the helper slowly, so no fixed deadline fits.
+    #[track_caller]
+    fn wait_progressing(
+        &self,
+        h: &devworks_engine::package_host::InvocationHandle,
+    ) -> Option<InvokeOutcome> {
+        let ids = self.h.ids.clone();
+        let signal = || {
+            let (texts, dropped) = h.progress();
+            ids.issued() + texts.len() as u64 + dropped as u64
+        };
+        let mut phase = DurableWork::start_with("invocation outcome", PATIENCE, signal);
+        let until = Instant::now() + WAIT_CEILING;
+        loop {
+            if let Some(o) = h.wait(Duration::from_millis(250)) {
+                return Some(o);
+            }
+            phase.check();
+            assert!(
+                Instant::now() < until,
+                "invocation did not finish within {WAIT_CEILING:?}"
+            );
         }
     }
     /// How many of the package's log records have `code` (durable: they stay once recorded).
@@ -2590,7 +2803,7 @@ fn a_quiescent_retry_announces_its_publication_before_admission_reopens() {
     // publication epoch must have advanced before this new-generation admission succeeds.
     assert!(host.publications() > announced);
     assert!(matches!(
-        finished(h.wait(Duration::from_secs(10))),
+        finished(a.wait_progressing(&h)),
         InvocationOutcome::Completed { .. }
     ));
     // It ran against the new generation (its pinned generation is current).
@@ -4669,3 +4882,6 @@ mod event_http_intents;
 
 #[path = "packages/artifact_io.rs"]
 mod artifact_io;
+
+#[path = "packages/person_and_event_dispatch.rs"]
+mod person_and_event_dispatch;

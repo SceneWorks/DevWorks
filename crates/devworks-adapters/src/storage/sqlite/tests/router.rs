@@ -2003,10 +2003,17 @@ fn pin_identity_migration_captures_only_upgrade_catalog_semantics_and_fences_old
     let old = SqliteStore::open_with(h.config(), &through24).unwrap();
     old.with_writer_connection(|c| {
         super::super::conn::db(c.execute_batch(
-            "INSERT INTO router_pins(session_id,pin_id,revision,model_id,connection_id,intent_json,requested_effort,effective_effort,capabilities_json,reason,updated_at)
-             VALUES('old-current','pin-current',1,'sol','conn-codex','{}','Default','Default','[]','Initial',1),
-                   ('old-missing','pin-missing',1,'removed','conn-codex','{}','Default','Default','[]','Initial',1);"))
-    }).unwrap();
+            "INSERT INTO router_pins(session_id,pin_id,revision,model_id,\
+                connection_id,intent_json,requested_effort,effective_effort,\
+                capabilities_json,reason,updated_at)
+             VALUES('old-current',\
+                'pin-current',1,'sol','conn-codex','{}','Default','Default','[]',\
+                'Initial',1),
+                   ('old-missing','pin-missing',1,\
+                'removed','conn-codex','{}','Default','Default','[]','Initial',1);",
+        ))
+    })
+    .unwrap();
     drop(old);
     let store = SqliteStore::open_with(h.config(), &super::through(25)).unwrap();
     let current = read_snapshot(&store, &ReadOptions::default(), |r| {

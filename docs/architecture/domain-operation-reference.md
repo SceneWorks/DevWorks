@@ -2,7 +2,7 @@
 
 2 November 2026 · Candidate schemas, not production service acceptance. This reference is generated from the same explicit source as the native DTOs and coverage register. Read [the normative contracts](domain-operation-contracts.html) for scope, admission, results, faults and recovery. Optional fields use `?T`; all ordinary records/actions reject unknown fields. `Items`, `NonEmpty`, `Rows`, `Page`, text, counters, money and descriptor-bound JSON are defined there.
 
-All 376 qualified operations have typed input/result candidates. Existing input selectors retain their earlier schemas. The host must apply selected operation/mode, current authority and semantic rules; schema validity alone cannot authorize or complete work.
+All 380 qualified operations have typed input/result candidates. Existing input selectors retain their earlier schemas. The host must apply selected operation/mode, current authority and semantic rules; schema validity alone cannot authorize or complete work.
 
 ## Operation families
 
@@ -158,7 +158,7 @@ All 376 qualified operations have typed input/result candidates. Existing input 
 | Operation | Mode and input fields | Typed result value |
 | --- | --- | --- |
 | `history.events` | **Query**<br>[Existing input schema](contracts/query-request.schema.json)<br>{'pointer': '/query/kind', 'equals': 'history.events'}<br><br>**Schema revisions** 1, 2, 3 ([revision 3 input](contracts/query-request.r3.schema.json)) | `HistoryPage<Event>` |
-| `history.work_lineage` | **Query**<br>`rootId`: `RootId`<br>`page`: `PageRequest`<br><br>**Schema revisions** 1, 2 ([revision 2 input](contracts/domain-request.r2.schema.json)) | `HistoryPage<LineageRecord>` |
+| `history.work_lineage` | **Query**<br>`rootId`: `RootId`<br>`page`: `PageRequest`<br><br>**Schema revisions** 1, 2, 3 ([revision 3 input](contracts/domain-request.r3.schema.json)) | `HistoryPage<LineageRecord>` |
 | `history.git_links` | **Query**<br>`rootId`: `RootId`<br>`page`: `PageRequest`<br><br>**Schema revisions** 1, 2, 3 ([revision 3 input](contracts/domain-request.r3.schema.json)) | `HistoryPage<AttributedGitLink>` |
 | `history.evidence_links` | **Query**<br>`rootId`: `RootId`<br>`page`: `PageRequest`<br><br>**Schema revisions** 1, 2 ([revision 2 input](contracts/domain-request.r2.schema.json)) | `HistoryPage<EvidenceLink>` |
 | `history.operation_status` | **Query**<br>[Existing input schema](contracts/query-request.schema.json)<br>{'pointer': '/query/kind', 'equals': 'history.operation_status'} | `OperationRef` |
@@ -239,6 +239,7 @@ All 376 qualified operations have typed input/result candidates. Existing input 
 | `schemas.connections` | **Query**<br>`scope`: `DataScope`<br>`page`: `PageRequest`<br><br>**Schema revisions** 1, 5 ([revision 5 input](contracts/domain-request.r5.schema.json)) | `Page<SchemaConnection>` |
 | `schemas.objects` | **Query**<br>`scope`: `DataScope`<br>`views`: `ViewSelection`<br>`connectionId`: `Id`<br>`kinds`: `Items<MetadataObjectKind>`<br>`parentId`: `?Id`<br>`text`: `?Text`<br>`page`: `PageRequest`<br>`objectId`: `?Id`<br><br>**Schema revisions** 1, 5 ([revision 5 input](contracts/domain-request.r5.schema.json)) | `Page<SchemaObject>` |
 | `schemas.relationships` | **Query**<br>`scope`: `DataScope`<br>`views`: `ViewSelection`<br>`connectionId`: `Id`<br>`objectIds`: `Items<Id>`<br>`page`: `PageRequest`<br><br>**Schema revisions** 1, 5 ([revision 5 input](contracts/domain-request.r5.schema.json)) | `Page<SchemaRelation>` |
+| `schemas.code_references` | **Query**<br>`scope`: `DataScope`<br>`views`: `ViewSelection`<br>`connectionId`: `Id`<br>`objectId`: `Id`<br>`page`: `PageRequest`<br><br>**Schema revisions** 8 ([revision 8 input](contracts/domain-request.r8.schema.json)) | `SchemaCodeReferencePage` |
 | `schemas.index` | **Command**<br>`connectionId`: `Id`<br>`expectedRevision`: `Revision`<br>`testOnly`: `?bool`<br>`scope`: `?DataScope`<br><br>**Schema revisions** 1, 5 ([revision 5 input](contracts/domain-request.r5.schema.json)) | `IndexRunRecord` |
 | `schemas.refresh` | **Command**<br>`connectionId`: `Id`<br>`expectedRevision`: `Revision`<br>`testOnly`: `?bool`<br>`scope`: `?DataScope`<br><br>**Schema revisions** 1, 5 ([revision 5 input](contracts/domain-request.r5.schema.json)) | `IndexRunRecord` |
 | `schemas.remove_index` | **Command**<br>`connectionId`: `Id`<br>`expectedRevision`: `Revision`<br><br>**Schema revisions** 1, 5 ([revision 5 input](contracts/domain-request.r5.schema.json)) | `MutationSummary` |
@@ -367,6 +368,7 @@ All 376 qualified operations have typed input/result candidates. Existing input 
 | `skills.propose` | **Command**<br>`instructionId`: `Id`<br>`expectedRevision`: `Revision`<br>`contentDigest`: `Digest` | `ProposalRecord` |
 | `skills.history` | **Query**<br>`instructionId`: `Id`<br>`page`: `PageRequest` | `Page<InstructionRecord>` |
 | `skills.rollback` | **Command**<br>`instructionId`: `Id`<br>`expectedRevision`: `Revision`<br>`targetRevision`: `Revision`<br>`proposalId`: `?Id` | `InstructionRecord` |
+| `skills.set_enabled` | **Command**<br>`instructionId`: `Id`<br>`expectedRevision`: `Revision`<br>`enabled`: `bool`<br><br>**Schema revisions** 8 ([revision 8 input](contracts/domain-request.r8.schema.json)) | `InstructionRecord` |
 
 ### Roles
 
@@ -556,10 +558,10 @@ All 376 qualified operations have typed input/result candidates. Existing input 
 
 | Operation | Mode and input fields | Typed result value |
 | --- | --- | --- |
-| `settings.read_effective` | **Query**<br>`scope`: `DataScope`<br>`keys`: `Items<Label>`<br>`page`: `PageRequest` | `Page<SettingEntry>` |
-| `settings.validate` | **Query**<br>`scope`: `DataScope`<br>`expectedRevision`: `Revision`<br>`entries`: `NonEmpty<SettingAssignment>` | `ValidationReport` |
-| `settings.save_revision` | **Command**<br>`scope`: `DataScope`<br>`expectedRevision`: `Revision`<br>`entries`: `NonEmpty<SettingAssignment>` | `Page<SettingEntry>` |
-| `settings.explain_source` | **Query**<br>`scope`: `DataScope`<br>`key`: `Label` | `Page<SettingEntry>` |
+| `settings.read_effective` | **Query**<br>`scope`: `DataScope`<br>`repositoryId`: `?Id`<br>`keys`: `Items<Label>`<br>`page`: `PageRequest`<br><br>**Schema revisions** 1, 8 ([revision 8 input](contracts/domain-request.r8.schema.json)) | `Page<SettingEntry>` |
+| `settings.validate` | **Query**<br>`scope`: `DataScope`<br>`repositoryId`: `?Id`<br>`expectedRevision`: `Revision`<br>`entries`: `NonEmpty<SettingAssignment>`<br><br>**Schema revisions** 1, 8 ([revision 8 input](contracts/domain-request.r8.schema.json)) | `ValidationReport` |
+| `settings.save_revision` | **Command**<br>`scope`: `DataScope`<br>`repositoryId`: `?Id`<br>`expectedRevision`: `Revision`<br>`entries`: `NonEmpty<SettingAssignment>`<br><br>**Schema revisions** 1, 8 ([revision 8 input](contracts/domain-request.r8.schema.json)) | `Page<SettingEntry>` |
+| `settings.explain_source` | **Query**<br>`scope`: `DataScope`<br>`repositoryId`: `?Id`<br>`key`: `Label`<br><br>**Schema revisions** 1, 8 ([revision 8 input](contracts/domain-request.r8.schema.json)) | `Page<SettingEntry>` |
 
 ### Router
 
@@ -616,6 +618,8 @@ All 376 qualified operations have typed input/result candidates. Existing input 
 | `addons.logs` | **Query**<br>`packageId`: `Id`<br>`afterSequence`: `Counter`<br>`page`: `PageRequest` | `Page<Diagnostic>` |
 | `addons.rollback` | **Command**<br>[Existing input schema](contracts/addon-command-request.schema.json)<br>{'pointer': '/command/kind', 'equals': 'Rollback'}<br><br>**Schema revisions** 1, 2, 3 ([revision 3 input](contracts/addon-command-request.schema.json)) | `PackageRecord` |
 | `addons.uninstall` | **Command**<br>[Existing input schema](contracts/addon-command-request.schema.json)<br>{'pointer': '/command/kind', 'equals': 'Uninstall'}<br><br>**Schema revisions** 1, 2, 3 ([revision 3 input](contracts/addon-command-request.schema.json)) | `PackageRecord` |
+| `addons.invoke` | **Command**<br>`packageId`: `Id`<br>`contributionId`: `Label`<br>`input`: `ArtifactRef`<br>`expectedDigest`: `?Digest`<br><br>**Schema revisions** 8 ([revision 8 input](contracts/domain-request.r8.schema.json)) | `PackageInvocation` |
+| `addons.invocation` | **Query**<br>`operationId`: `OperationId`<br><br>**Schema revisions** 8 ([revision 8 input](contracts/domain-request.r8.schema.json)) | `PackageInvocation` |
 
 ### Help
 
@@ -1112,6 +1116,11 @@ Reference names reused from earlier shared/provider/data contracts retain their 
 | `occurredAtMs` | `?Counter` · *revision 2+* |
 | `repositoryId` | `?Id` · *revision 2+* |
 | `revision` | `?Text` · *revision 2+* |
+| `actorAttribution` | `?ActorAttribution` · *revision 3+* |
+
+### ActorAttribution
+
+`Recorded`, `Unknown`.
 
 ### AgentRecord
 
@@ -1442,6 +1451,34 @@ Reference names reused from earlier shared/provider/data contracts retain their 
 | `toObjectId` | `Id` |
 | `relation` | `Label` |
 | `inferred` | `bool` |
+
+### SchemaCodeReference
+
+| Field | Type |
+| --- | --- |
+| `id` | `Id` |
+| `objectId` | `Id` |
+| `repositoryId` | `Id` |
+| `graphViewId` | `Id` |
+| `unitKey` | `GraphUnitKey` |
+| `nodeId` | `Id` |
+| `nodeName` | `Content` |
+| `nodeKind` | `Label` |
+| `edgeKind` | `Label` |
+| `table` | `Text` |
+| `column` | `?Text` |
+| `extractor` | `Label` |
+| `line` | `Counter` |
+| `snippet` | `Content` |
+| `statement` | `?Label` |
+
+### SchemaCodeReferencePage
+
+| Field | Type |
+| --- | --- |
+| `items` | `Rows<SchemaCodeReference>` |
+| `hasMore` | `bool` |
+| `nextCursor` | `?Cursor` |
 
 ### DbScalar
 
@@ -2193,6 +2230,7 @@ Reference names reused from earlier shared/provider/data contracts retain their 
 | `value` | `SchemaValue` |
 | `sourceScope` | `DataScope` |
 | `revision` | `Revision` |
+| `sourceRepositoryId` | `?Id` · *revision 8+* |
 
 ### ValidationIssue
 
@@ -3227,6 +3265,15 @@ Reference names reused from earlier shared/provider/data contracts retain their 
 | `source` | `Label` |
 | `hostTargetSupported` | `bool` |
 | `newer` | `bool` |
+
+### PackageInvocation
+
+| Field | Type |
+| --- | --- |
+| `operationId` | `OperationId` |
+| `state` | `OperationState` |
+| `artifacts` | `Items<ArtifactRef>` |
+| `failure` | `?Content` |
 
 ### IndexFreshnessState
 

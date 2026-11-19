@@ -13,6 +13,7 @@
 //!
 //! Nothing here decides a rule: every action is a framed command the gateway admits, and a
 //! refusal is shown as the use case recorded it.
+use crate::paged::Paged;
 use crate::theme;
 use crate::widgets::{self, Tone};
 use devworks_core::protocol::provider::ArtifactRef;
@@ -75,13 +76,14 @@ pub enum AddonsAction {
 /// The screen's state between frames.
 #[derive(Default)]
 pub struct AddonsScreen {
-    pub items: Vec<PackageRecord>,
-    pub loaded: bool,
-    pub error: Option<String>,
+    /// The installed and available packages: the catalog's pages are read to their end (up to
+    /// [`CATALOG_PAGES`]) and fenced by the registry revision they were read at.
+    pub catalog: Paged<PackageRecord>,
     /// The registry revision the list was read at (the lifecycle commands' expected revision).
     pub registry_revision: i64,
     pub selected: Option<String>,
-    pub logs: HashMap<String, Vec<Diagnostic>>,
+    /// Each package's log, read oldest first to its end (only the newest entries are kept).
+    pub logs: HashMap<String, Paged<Diagnostic>>,
     /// The outcome of the last action, shown above the detail.
     pub notice: Option<String>,
     /// Configuration being edited (JSON), per package.
@@ -96,11 +98,6 @@ pub struct AddonsScreen {
     pub awaiting: Option<(String, String)>,
     /// The field errors of the last refused configuration, per package.
     pub config_errors: HashMap<String, String>,
-    /// Log pages read so far while a package's logs are followed to their end.
-    pub logs_pending: HashMap<String, Vec<Diagnostic>>,
-    /// Catalog pages read so far (and the registry revision of the first) while the catalog is
-    /// followed to its end.
-    pub catalog_pending: Option<(Vec<PackageRecord>, i64)>,
 }
 
 pub fn availability_label(a: Option<&PackageAvailability>) -> (&'static str, Tone) {
@@ -143,7 +140,7 @@ fn list(
 impl AddonsScreen {
     pub fn selected(&self) -> Option<&PackageRecord> {
         let s = self.selected.as_deref()?;
-        self.items.iter().find(|r| r.id.as_str() == s)
+        self.catalog.items.iter().find(|r| r.id.as_str() == s)
     }
 
     pub fn ui(&mut self, ui: &mut Ui, online: Result<(), &str>, actions: &mut Vec<AddonsAction>) {
@@ -152,7 +149,8 @@ impl AddonsScreen {
             ui,
             widgets::Header {
                 title: "Add-ons",
-                summary: "Language packs and harness packages: availability, access, approval and logs.",
+                summary: "Language packs and harness packages: availability, access, approval and \
+                    logs.",
                 tabs: &[],
                 tab: 0,
             },
@@ -164,7 +162,10 @@ impl AddonsScreen {
                 }
                 if ui
                     .add_enabled(!st.0.busy, egui::Button::new("Install from file…"))
-                    .on_hover_text("Install a package bundle (.dwpkg). Installing it approves exactly its contents.")
+                    .on_hover_text(
+                        "Install a package bundle (.dwpkg). Installing it approves exactly its \
+                        contents.",
+                    )
                     .clicked()
                 {
                     st.1.push(AddonsAction::InstallFromFile(None));
@@ -179,7 +180,7 @@ impl AddonsScreen {
             ui.label(RichText::new(why).color(theme::MUTED));
             return;
         }
-        if let Some(e) = &self.error {
+        if let Some(e) = &self.catalog.error {
             widgets::chip(ui, format!("Could not load add-ons: {e}"), Tone::Bad);
         }
         if let Some(n) = &self.notice {
@@ -187,13 +188,16 @@ impl AddonsScreen {
         }
         widgets::caption(
             ui,
-            "A package helper is a separate process for failure containment, not an OS sandbox: it runs with your user account's rights. Approval and publisher trust record who published which exact contents and that you agreed to run them.",
+            "A package helper is a separate process for failure containment, not an \
+                OS sandbox: it runs with your user account's rights. Approval and \
+                publisher trust record who published which exact contents and that you \
+                agreed to run them.",
         );
-        if !self.loaded {
+        if !self.catalog.loaded {
             ui.label("Loading add-ons…");
             return;
         }
-        if self.items.is_empty() {
+        if self.catalog.items.is_empty() {
             ui.label(RichText::new("No add-ons installed").strong());
             ui.label("Install a language pack or harness package from a bundle file.");
             return;
@@ -207,6 +211,7 @@ impl AddonsScreen {
         ui.add_space(6.0);
         let filter = self.filter.to_lowercase();
         let rows: Vec<PackageRecord> = self
+            .catalog
             .items
             .iter()
             .filter(|r| filter.is_empty() || r.id.as_str().to_lowercase().contains(&filter))
@@ -452,7 +457,14 @@ impl AddonsScreen {
                     .color(theme::AMBER),
             );
             if let Some(pr) = &r.pending_proposal_id {
-                ui.label(RichText::new(format!("Proposed by an agent (proposal {}); approval binds to these exact contents.", pr.as_str())).color(theme::MUTED));
+                ui.label(
+                    RichText::new(format!(
+                        "Proposed by an agent (proposal {}); approval binds to these exact \
+                    contents.",
+                        pr.as_str()
+                    ))
+                    .color(theme::MUTED),
+                );
             }
             if let Some(bundle) = &r.pending_bundle
                 && ui.button(format!("Approve and activate {}", p.0)).clicked()
@@ -522,11 +534,22 @@ impl AddonsScreen {
         if r.signer_key.is_some() && r.installed == Some(true) {
             let mut trust = r.publisher_trusted == Some(true);
             if ui
-                .checkbox(&mut trust, "Trust this publisher's compatible signed updates")
-                .on_hover_text("Only newer stable versions of the same major, signed by the same key, needing no access beyond what is approved now, activate automatically. Contents an agent wrote always need your approval.")
+                .checkbox(
+                    &mut trust,
+                    "Trust this publisher's compatible signed updates",
+                )
+                .on_hover_text(
+                    "Only newer stable versions of the same major, signed by the same key, \
+                    needing no access beyond what is approved now, activate automatically. \
+                    Contents an agent wrote always need your approval.",
+                )
                 .changed()
             {
-                actions.push(AddonsAction::TrustPublisher { package: id.clone(), revision, trust });
+                actions.push(AddonsAction::TrustPublisher {
+                    package: id.clone(),
+                    revision,
+                    trust,
+                });
             }
         }
         // Pack configuration against its declared schema (an installed package's only).
@@ -651,7 +674,7 @@ impl AddonsScreen {
                 }
             });
         }
-        if let Some(entries) = self.logs.get(&id) {
+        if let Some(entries) = self.logs.get(&id).filter(|l| l.loaded).map(|l| &l.items) {
             ui.collapsing(format!("Logs ({})", entries.len()), |ui| {
                 egui::ScrollArea::vertical()
                     .id_salt("addon-logs")
@@ -684,13 +707,13 @@ use devworks_core::gateway::{CommandOutcome, QueryOutcome};
 use devworks_core::operations::{OperationInput as In, addons};
 use devworks_core::protocol::Revision;
 use devworks_core::protocol::addons::{AddonCommand, AddonCommandRequest};
+use devworks_core::protocol::helpers::packages::{
+    PROJECT_ENABLEMENT_SCHEMA, UPDATE_POLICY_SCHEMA, host_schema_ref,
+};
 use devworks_core::protocol::provider::SchemaRef;
 use devworks_core::protocol::records::SchemaValue;
 use devworks_core::protocol::results::OperationResult;
 use devworks_core::protocol::support::DynamicJson;
-use devworks_core::services::packages::{
-    PROJECT_ENABLEMENT_SCHEMA, UPDATE_POLICY_SCHEMA, host_schema_ref,
-};
 use serde_json::{Value, json};
 
 /// Media type of a package bundle artifact.
@@ -1169,9 +1192,14 @@ mod tests {
         h.run();
         h.get_by_label("Save project enablement").click();
         h.run();
-        assert!(
-            matches!(state.borrow().2.last(), Some(AddonsAction::ProjectEnablement { disabled, revision: 2, .. }) if disabled == &["project-a", "project-b", "project-c"])
-        );
+        assert!(matches!(
+            state.borrow().2.last(),
+            Some(AddonsAction::ProjectEnablement {
+                disabled,
+                revision: 2,
+                ..
+            }) if disabled == &["project-a", "project-b", "project-c"]
+        ));
     }
     #[test]
     fn saved_configuration_initializes_refreshes_and_fences_unsaved_edits() {

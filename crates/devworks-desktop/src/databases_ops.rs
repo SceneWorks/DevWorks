@@ -21,6 +21,8 @@ pub enum DatabasesSlot {
     DatabaseObjects(u64, bool),
     /// A relationship page (read sequence, appended).
     DatabaseRelations(u64, bool),
+    /// A page of the code that uses an object (read sequence, appended).
+    DatabaseCodeReferences(u64, bool),
     /// Staging a source's password before its configure command.
     DatabasePrepare,
     /// Preparing a certificate file before its `artifacts.save`.
@@ -93,6 +95,24 @@ impl ObjectsRead {
             },
         )))
     }
+}
+/// `schemas.code_references` of one object of a source, one page.
+pub fn code_references(
+    project: Option<&str>,
+    pin: &str,
+    connection: &Id,
+    object: &str,
+    cursor: Option<&str>,
+) -> Option<In> {
+    Some(In::Schemas(schemas::Input::CodeReferences(
+        schemas::CodeReferencesInput {
+            scope: frame::scope(project)?,
+            views: pinned(pin)?,
+            connection_id: connection.clone(),
+            object_id: frame::id(object)?,
+            page: page(cursor)?,
+        },
+    )))
 }
 /// `schemas.relationships` among the objects `ids` of one source.
 pub fn relationships(

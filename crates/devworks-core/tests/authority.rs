@@ -1554,3 +1554,115 @@ fn watchers_launch_and_stop_with_process_authority() {
         }
     ));
 }
+
+/// DW-326: who may prepare a project purge preview. A person and a rootless workspace
+/// coordinator prepare it; a root-bound agent (coordinator or worker) is refused project
+/// administration; confirming and executing the purge is human-only.
+#[test]
+fn project_purge_preview_is_open_to_person_and_rootless_coordinator_but_purge_is_human_only() {
+    use devworks_core::authority::policy::registered_tool_visibility;
+    use devworks_core::authority::{DenialReason, Verdict};
+    use devworks_core::context::{HostIngress, InvocationContext, PrincipalKind};
+    use devworks_core::ports::storage::PrincipalBinding;
+    use devworks_core::protocol::{ActorId, Counter, Id, ProjectId, Revision, RootId};
+    use devworks_core::registry::{Mode, find};
+
+    let store = common::MemoryStore::new(&["person", "agent"]);
+    let base = |actor: &str, kind| {
+        HostIngress::new(&store).context(
+            ActorId(Id::new(actor).unwrap()),
+            kind,
+            Id::new("purge-invocation").unwrap(),
+            Id::new("purge-ingress").unwrap(),
+            Counter::new(0).unwrap(),
+            Revision::new(1).unwrap(),
+        )
+    };
+    let project = ProjectId(Id::new("project-a").unwrap());
+    let person = base("person", PrincipalKind::Human);
+    let rootless =
+        base("agent", PrincipalKind::Agent).with_lineage(Some(project.clone()), None, None);
+    let root_bound = base("agent", PrincipalKind::Agent).with_lineage(
+        Some(project.clone()),
+        Some(RootId(Id::new("root-a").unwrap())),
+        None,
+    );
+    let no_project = base("agent", PrincipalKind::Agent);
+    let binding = |role, bound: Option<&ProjectId>| PrincipalBinding {
+        actor: ActorId(Id::new("agent").unwrap()),
+        kind: PrincipalKind::Agent,
+        role: Some(role),
+        project_id: bound.cloned(),
+        tool_families: None,
+        active: true,
+        revision: 1,
+        bound_by: ActorId(Id::new("owner").unwrap()),
+        updated_at_ms: 0,
+    };
+    let policy = EffectivePolicy {
+        profile: Some(AccessProfile::Full),
+        profile_source: None,
+        shell_tools: true,
+        web_tools: true,
+        web_fetch: true,
+        tool_overrides: Some(BTreeMap::new()),
+    };
+    let check = |ctx: &InvocationContext, bound: Option<&PrincipalBinding>, op: &str, mode| {
+        let descriptor = find(op).unwrap();
+        let selected = descriptor.binding(mode).unwrap();
+        registered_tool_visibility(ctx, bound, &policy, descriptor, selected, selected.effect)
+    };
+    let prepare = "projects.prepare_purge";
+    let purge = "projects.purge";
+
+    // A person may prepare and confirm.
+    for (op, mode) in [(prepare, Mode::Command), (purge, Mode::Command)] {
+        assert_eq!(
+            check(&person, None, op, mode),
+            Verdict::Allow,
+            "person {op}"
+        );
+    }
+    // A rootless workspace coordinator prepares the read-only preview but cannot purge.
+    let coordinator = binding(AgentRole::WorkspaceCoordinator, Some(&project));
+    assert_eq!(
+        check(&rootless, Some(&coordinator), prepare, Mode::Command),
+        Verdict::Allow
+    );
+    assert_eq!(
+        check(&rootless, Some(&coordinator), purge, Mode::Command),
+        Verdict::Deny(DenialReason::HumanOnly)
+    );
+    // A root-bound agent, coordinator or worker, may not administer projects.
+    for role in [AgentRole::WorkspaceCoordinator, AgentRole::Worker] {
+        let bound = binding(role, Some(&project));
+        for op in [prepare, purge] {
+            assert_eq!(
+                check(&root_bound, Some(&bound), op, Mode::Command),
+                Verdict::Deny(DenialReason::OutOfAssignmentScope),
+                "{role:?} {op}"
+            );
+        }
+    }
+    // An agent with no project binding passes policy for the preview (the service then
+    // refuses an unknown project); a binding to another project is refused.
+    let unbound_project = binding(AgentRole::WorkspaceCoordinator, None);
+    assert_eq!(
+        check(&no_project, Some(&unbound_project), prepare, Mode::Command),
+        Verdict::Allow
+    );
+    let elsewhere = binding(
+        AgentRole::WorkspaceCoordinator,
+        Some(&ProjectId(Id::new("project-b").unwrap())),
+    );
+    assert_eq!(
+        check(&rootless, Some(&elsewhere), prepare, Mode::Command),
+        Verdict::Deny(DenialReason::OutOfProjectScope)
+    );
+    // A read-only reviewer never prepares one.
+    let reviewer = binding(AgentRole::CodeReviewer, Some(&project));
+    assert_eq!(
+        check(&rootless, Some(&reviewer), prepare, Mode::Command),
+        Verdict::Deny(DenialReason::ReadOnlyRole)
+    );
+}

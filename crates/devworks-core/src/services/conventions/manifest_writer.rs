@@ -52,7 +52,9 @@ pub(in crate::services::conventions) fn header(
 ) -> io::Result<String> {
     let order = sort_order.map_or_else(String::new, |order| format!(",\"sortOrder\":{order}"));
     Ok(format!(
-        "{{\"format\":\"devworks-convention\",\"version\":1,\"slug\":{},\"title\":{},\"parentPath\":{}{order},\"lifecycle\":{},\"applicability\":{},\"markdown\":",
+        "{{\"format\":\"devworks-convention\",\"version\":1,\"slug\":{},\
+            \"title\":{},\"parentPath\":{}{order},\"lifecycle\":{},\
+            \"applicability\":{},\"markdown\":",
         quoted(&slug)?,
         quoted(&title)?,
         quoted(&parent_path)?,
@@ -311,7 +313,14 @@ mod tests {
         )
         .unwrap();
         let expected = format!(
-            "{{\"format\":\"devworks-convention\",\"version\":1,\"slug\":\"s\",\"title\":\"T\",\"parentPath\":[\"p\"],\"sortOrder\":3,\"lifecycle\":\"Active\",\"applicability\":[\"rust\"],\"markdown\":{{\"sha256\":\"{digest}\",\"byteLength\":\"{}\",\"text\":\"a\\\"b\\\\c\\u000a\"}},\"resources\":[{{\"key\":\"k\",\"name\":\"n.bin\",\"mediaType\":\"x/y\",\"lifecycle\":\"Retired\",\"sha256\":\"{data_digest}\",\"byteLength\":\"2\",\"base64\":\"AQI=\"}}]}}",
+            "{{\"format\":\"devworks-convention\",\"version\":1,\"slug\":\"s\",\
+                \"title\":\"T\",\"parentPath\":[\"p\"],\"sortOrder\":3,\
+                \"lifecycle\":\"Active\",\"applicability\":[\"rust\"],\
+                \"markdown\":{{\"sha256\":\"{digest}\",\"byteLength\":\"{}\",\
+                \"text\":\"a\\\"b\\\\c\\u000a\"}},\"resources\":[{{\"key\":\"k\",\
+                \"name\":\"n.bin\",\"mediaType\":\"x/y\",\"lifecycle\":\"Retired\",\
+                \"sha256\":\"{data_digest}\",\"byteLength\":\"2\",\
+                \"base64\":\"AQI=\"}}]}}",
             body.len()
         );
         assert_eq!(String::from_utf8(out).unwrap(), expected);

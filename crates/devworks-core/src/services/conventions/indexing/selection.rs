@@ -410,26 +410,83 @@ impl IndexService {
                 next.clone(),
                 self.native_available(),
             );
-            let committed=self.write_options(WriteOptions{cancellation:Some(cancel.clone()),deadline_ms:deadline,..WriteOptions::host_state()},move|tx|{
-    let mut saved=saved;
-    let context=check(tx,&op,&source)?;
-    for scope in scopes {
-     if let DataScope::Project{project_id}=&scope && tx.projects().project(project_id)?.is_none_or(|p|p.lifecycle!="Active"){continue;}
-     let child=narrow(tx,&context,&scope)?;
-     let scoped=access::scope_in(tx,&child,Some(&scope),true).map_err(|_|StorageError::ScopeDenied)?;
-     let revision=tx.conventions().convention_scope_revision(&scoped.exact)?;
-     let fingerprint=crate::fingerprint::sha256_hex(format!("{}:{}:{}",source.event_id.0.as_str(),source.selection_revision,serde_json::to_string(&scope).expect("typed scope")).as_bytes());
-     let fences=commands::source_fences(tx,&child)?;
-     IndexService::enqueue_with(tx,&child,(IndexTarget::All{scope:scope.clone(),scope_revision:revision},scope),fences,EnqueueIdentity{fingerprint:&fingerprint,selection:Some((&source.event_id,source.selection_revision))},available)?;
-     saved.scopes=saved.scopes.checked_add(1).ok_or_else(||invalid("selection scope count overflow"))?;
-    }
-    let attempt=op.latest_attempt().ok_or_else(||invalid("selection attempt missing"))?;tx.operations().observe(&op.id,attempt.attempt_no,json!({"selectionFanoutPage":saved}))?;
-    if saved.done{tx.operations().observe(&op.id,attempt.attempt_no,json!({"conventionPublication":{"operationId":op.id,"scopes":saved.scopes}}))?;}Ok(saved)
-   })?;
+            let committed = self.write_options(
+                WriteOptions {
+                    cancellation: Some(cancel.clone()),
+                    deadline_ms: deadline,
+                    ..WriteOptions::host_state()
+                },
+                move |tx| {
+                    let mut saved = saved;
+                    let context = check(tx, &op, &source)?;
+                    for scope in scopes {
+                        if let DataScope::Project { project_id } = &scope
+                            && tx
+                                .projects()
+                                .project(project_id)?
+                                .is_none_or(|p| p.lifecycle != "Active")
+                        {
+                            continue;
+                        }
+                        let child = narrow(tx, &context, &scope)?;
+                        let scoped = access::scope_in(tx, &child, Some(&scope), true)
+                            .map_err(|_| StorageError::ScopeDenied)?;
+                        let revision = tx.conventions().convention_scope_revision(&scoped.exact)?;
+                        let fingerprint = crate::fingerprint::sha256_hex(
+                            format!(
+                                "{}:{}:{}",
+                                source.event_id.0.as_str(),
+                                source.selection_revision,
+                                serde_json::to_string(&scope).expect("typed scope")
+                            )
+                            .as_bytes(),
+                        );
+                        let fences = commands::source_fences(tx, &child)?;
+                        IndexService::enqueue_with(
+                            tx,
+                            &child,
+                            (
+                                IndexTarget::All {
+                                    scope: scope.clone(),
+                                    scope_revision: revision,
+                                },
+                                scope,
+                            ),
+                            fences,
+                            EnqueueIdentity {
+                                fingerprint: &fingerprint,
+                                selection: Some((&source.event_id, source.selection_revision)),
+                            },
+                            available,
+                        )?;
+                        saved.scopes = saved
+                            .scopes
+                            .checked_add(1)
+                            .ok_or_else(|| invalid("selection scope count overflow"))?;
+                    }
+                    let attempt = op
+                        .latest_attempt()
+                        .ok_or_else(|| invalid("selection attempt missing"))?;
+                    tx.operations().observe(
+                        &op.id,
+                        attempt.attempt_no,
+                        json!({"selectionFanoutPage": saved}),
+                    )?;
+                    if saved.done {
+                        tx.operations().observe(
+                            &op.id,
+                            attempt.attempt_no,
+                            json!({"conventionPublication": {"operationId": op.id, "scopes": saved.scopes}}),
+                        )?;
+                    }
+                    Ok(saved)
+                },
+            )?;
             if committed.done {
-                return Ok(IndexOutcome::Completed(
-                    json!({"operationId":operation.id,"scopes":committed.scopes}),
-                ));
+                return Ok(IndexOutcome::Completed(json!({
+                    "operationId": operation.id,
+                    "scopes": committed.scopes
+                })));
             }
             progress = committed;
         }

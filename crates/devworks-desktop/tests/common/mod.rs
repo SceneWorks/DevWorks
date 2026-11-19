@@ -3,6 +3,7 @@
 //! `egui_kittest`, and scripted native dialogs. No window, GPU, inference or network.
 #![allow(dead_code)]
 use devworks_adapters::storage::sqlite::{DATABASE_FILE, seed_migrated_store};
+use devworks_core::locks::LockExt;
 use devworks_core::ports::{IdKind, IdSource};
 use devworks_desktop::backend::Backend;
 use devworks_desktop::host::{DesktopConfig, Engine};
@@ -30,7 +31,7 @@ static NATIVE_CASES: (Mutex<usize>, std::sync::Condvar) =
 const NATIVE_CASE_LIMIT: usize = 2;
 
 pub fn native_runtime_case() -> NativeRuntimeCase {
-    let mut active = NATIVE_CASES.0.lock().unwrap_or_else(|p| p.into_inner());
+    let mut active = NATIVE_CASES.0.locked();
     while *active >= NATIVE_CASE_LIMIT {
         active = NATIVE_CASES
             .1
@@ -42,7 +43,7 @@ pub fn native_runtime_case() -> NativeRuntimeCase {
 }
 impl Drop for NativeRuntimeCase {
     fn drop(&mut self) {
-        let mut active = NATIVE_CASES.0.lock().unwrap_or_else(|p| p.into_inner());
+        let mut active = NATIVE_CASES.0.locked();
         *active -= 1;
         NATIVE_CASES.1.notify_one();
     }
@@ -134,6 +135,9 @@ pub fn config(root: &Path) -> DesktopConfig {
         devworks_core::ports::secrets::SessionSecrets::new(),
     ));
     c.http = Some(Arc::new(devworks_core::ports::http::NoNetwork));
+    // Nor a docker, podman or container CLI on the host: Settings probes them, and a Docker
+    // Desktop `docker version` can take the full probe timeout.
+    c.container_search_path = Some(Arc::new(|| Some(std::ffi::OsString::new())));
     c
 }
 
@@ -759,6 +763,45 @@ pub fn wait_for_screen_help(engine: &Engine, root: &Root, screen: &str, topic: &
     }
 }
 
+/// Longest [`wait_progressing`] tolerates [`Root::write_progress`] standing still.
+pub const STALL_BOUND: Duration = Duration::from_secs(120);
+/// Ceiling on a whole [`wait_progressing`], so unrelated endless progress cannot hang a test.
+pub const PROGRESS_CEILING: Duration = Duration::from_secs(600);
+
+/// Polls `poll` every 5 ms until it returns `Ok`. For a wait on background Help generation,
+/// whose length is a count of durable commits and so grows with machine load. It fails with
+/// the latest `Err` text once `root`'s [`Root::write_progress`] stops advancing for
+/// [`STALL_BOUND`], or after [`PROGRESS_CEILING`] in all.
+pub fn wait_progressing<T>(
+    root: &Root,
+    what: &str,
+    mut poll: impl FnMut() -> Result<T, String>,
+) -> T {
+    let started = std::time::Instant::now();
+    let mut seen = root.write_progress();
+    let mut progressed = started;
+    loop {
+        let waiting = match poll() {
+            Ok(value) => return value,
+            Err(waiting) => waiting,
+        };
+        let now = root.write_progress();
+        if now != seen {
+            seen = now;
+            progressed = std::time::Instant::now();
+        }
+        assert!(
+            progressed.elapsed() < STALL_BOUND,
+            "{what} never completed (no progress for {STALL_BOUND:?}); latest: {waiting}"
+        );
+        assert!(
+            started.elapsed() < PROGRESS_CEILING,
+            "{what} never completed within {PROGRESS_CEILING:?}; latest: {waiting}"
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
 pub fn step_until(h: &mut Harness<'_, Shell>, what: &str, done: impl Fn(&Shell) -> bool) {
     step_until_progressing(h, what, || 0, done);
 }
@@ -792,14 +835,14 @@ pub fn step_until_progressing(
             h.state().route(),
             h.state().help.scope,
             h.state().help.selected,
-            h.state().help.loading,
+            h.state().help.topics.loading(),
             h.state().help.reading,
-            h.state().help.error,
+            h.state().help.topics.error,
             h.state().help.read_error,
             h.state().help.notice,
             h.state().databases.selected,
             h.state().databases.busy,
-            h.state().databases.loading,
+            h.state().databases.connections.loading(),
             h.state().databases.error,
             h.state().databases.notice,
             h.state().databases.connections
@@ -813,10 +856,10 @@ pub fn step_until_progressing(
 pub fn listed_sessions(backend: &dyn Backend) -> Vec<String> {
     devworks_desktop::ops::sessions(backend.query(
         "sessions.list",
-        &devworks_desktop::ops::sessions_list(backend),
+        &devworks_desktop::ops::sessions_list(backend, None),
     ))
     .unwrap()
-    .0
+    .items
     .into_iter()
     .map(|s| s.id.as_str().to_owned())
     .collect()

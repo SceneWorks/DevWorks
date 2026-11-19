@@ -164,7 +164,11 @@ fn write(
     db(c.execute(&q, params_from_iter(values)))?;
     Ok(())
 }
-const ATTEMPT_COLS: &str = "attempt_id,request_id,operation_id,attempt_number,project_id,feature_id,work_id,assignment_id,execution_root_id,execution_id,session_id,job_run_id,actor_id,role,purpose,catalog_model_id,connection_id,endpoint_profile,access_mode,provider_model_id,pricing_snapshot_json,state,revision,created_at";
+const ATTEMPT_COLS: &str = "attempt_id,request_id,operation_id,attempt_number,project_id,feature_id,\
+    work_id,assignment_id,execution_root_id,execution_id,session_id,\
+    job_run_id,actor_id,role,purpose,catalog_model_id,connection_id,\
+    endpoint_profile,access_mode,provider_model_id,pricing_snapshot_json,\
+    state,revision,created_at";
 fn decode_attempt(v: &Value) -> Result<StoredInferenceAttempt, StorageError> {
     Ok(StoredInferenceAttempt {
         attempt_id: field(v, "attempt_id")?,
@@ -265,7 +269,8 @@ fn write_observation(
         2,
     )
 }
-const BALANCE_COLS: &str = "attempt_id,revision,priced_micro_usd,reserved_micro_usd,classification,monetary_complete,incomplete,unknown_tail,local_quiescent,summary_json";
+const BALANCE_COLS: &str = "attempt_id,revision,priced_micro_usd,reserved_micro_usd,classification,\
+    monetary_complete,incomplete,unknown_tail,local_quiescent,summary_json";
 fn decode_balance(v: &Value) -> Result<StoredAttemptBalance, StorageError> {
     Ok(StoredAttemptBalance {
         attempt_id: field(v, "attempt_id")?,
@@ -329,7 +334,9 @@ fn write_budget(c: &Connection, r: &StoredFeatureBudget, update: bool) -> Result
         1,
     )
 }
-const ORIGIN_COLS: &str = "source_kind,source_id,attempt_id,request_id,project_id,feature_id,work_id,session_id,job_run_id,payload_json,recorded_at,priced_micro_usd,classification,monetary_complete,incomplete,unknown_tail,committed_seq";
+const ORIGIN_COLS: &str = "source_kind,source_id,attempt_id,request_id,project_id,feature_id,\
+    work_id,session_id,job_run_id,payload_json,recorded_at,priced_micro_usd,\
+    classification,monetary_complete,incomplete,unknown_tail,committed_seq";
 fn decode_origin(v: &Value) -> Result<StoredUsageOrigin, StorageError> {
     Ok(StoredUsageOrigin {
         source_kind: field(v, "source_kind")?,
@@ -532,7 +539,16 @@ fn observation(
     id: &Id,
     key: &str,
 ) -> Result<Option<StoredUsageObservation>, StorageError> {
-    Ok(rows(c,&format!("SELECT {OBSERVATION_COLS} FROM usage_observations WHERE attempt_id=?1 AND observation_key=?2"),params![id.as_str(),key],decode_observation)?.pop())
+    Ok(rows(
+        c,
+        &format!(
+            "SELECT {OBSERVATION_COLS} FROM usage_observations WHERE attempt_id=?1 \
+        AND observation_key=?2"
+        ),
+        params![id.as_str(), key],
+        decode_observation,
+    )?
+    .pop())
 }
 fn balance(c: &Connection, id: &Id) -> Result<Option<StoredAttemptBalance>, StorageError> {
     Ok(rows(
@@ -580,7 +596,16 @@ fn status(c: &Connection, p: &str) -> Result<Option<StoredPriceStatus>, StorageE
     .pop())
 }
 fn price_override(c: &Connection, id: &Id) -> Result<Option<StoredPriceOverride>, StorageError> {
-    Ok(rows(c,&format!("SELECT {PRICE_OVERRIDE_COLS} FROM usage_price_overrides WHERE model_id=?1 ORDER BY revision DESC LIMIT 1"),[id.as_str()],decode_price_override)?.pop())
+    Ok(rows(
+        c,
+        &format!(
+            "SELECT {PRICE_OVERRIDE_COLS} FROM usage_price_overrides WHERE \
+        model_id=?1 ORDER BY revision DESC LIMIT 1"
+        ),
+        [id.as_str()],
+        decode_price_override,
+    )?
+    .pop())
 }
 fn override_history(
     c: &Connection,
@@ -674,18 +699,52 @@ fn exact_aggregate<T>(result: rusqlite::Result<T>) -> Result<T, StorageError> {
     }
 }
 fn feature_totals(c: &Connection, id: &Id) -> Result<StoredFeatureUsageTotals, StorageError> {
-    let mut out=exact_aggregate(c.query_row(
-        "SELECT count(*), coalesce(sum(b.priced_micro_usd),0),coalesce(sum(b.reserved_micro_usd),0),
-         coalesce(sum(CASE WHEN b.classification='ReportedCharge' THEN b.priced_micro_usd ELSE 0 END),0),
-         coalesce(sum(CASE WHEN b.classification IN ('ConfiguredEstimate','OfficialEstimate','SubscriptionApiEquivalent') THEN b.priced_micro_usd ELSE 0 END),0),
-         coalesce(sum(b.classification='LocalFree'),0),coalesce(sum(b.classification='Untracked'),0),
-         coalesce(sum(coalesce(b.monetary_complete,0)=0),0),coalesce(sum(b.unknown_tail=1),0),
-         coalesce(sum(b.incomplete=1 OR b.unknown_tail=1),0)
-         FROM usage_attempts a LEFT JOIN usage_attempt_balances b ON b.attempt_id=a.attempt_id WHERE a.feature_id=?1",
-        [id.as_str()],|r|Ok(StoredFeatureUsageTotals{attempts:r.get(0)?,spent_micro_usd:r.get(1)?,reserved_micro_usd:r.get(2)?,reported_micro_usd:r.get(3)?,estimated_micro_usd:r.get(4)?,local_free_attempts:r.get(5)?,untracked_attempts:r.get(6)?,monetary_incomplete_attempts:r.get(7)?,unknown_tail_attempts:r.get(8)?,incomplete_attempts:r.get(9)?,..StoredFeatureUsageTotals::default()})))?;
-    let(legacy,untracked,subtotal)=exact_aggregate(c.query_row(
-        "SELECT count(*),coalesce(sum(classification='Untracked'),0),coalesce(sum(priced_micro_usd),0)
-         FROM usage_origins WHERE feature_id=?1 AND attempt_id IS NULL AND source_kind IN ('SessionUsage','JobUsage')",[id.as_str()],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?))))?;
+    let mut out = exact_aggregate(c.query_row(
+        "SELECT count(*), coalesce(sum(b.priced_micro_usd),0),\
+            coalesce(sum(b.reserved_micro_usd),0),
+         coalesce(sum(CASE WHEN \
+            b.classification='ReportedCharge' THEN b.priced_micro_usd ELSE 0 END),\
+            0),
+         coalesce(sum(CASE WHEN b.classification IN \
+            ('ConfiguredEstimate','OfficialEstimate','SubscriptionApiEquivalent') \
+            THEN b.priced_micro_usd ELSE 0 END),0),
+         \
+            coalesce(sum(b.classification='LocalFree'),0),\
+            coalesce(sum(b.classification='Untracked'),0),
+         \
+            coalesce(sum(coalesce(b.monetary_complete,0)=0),0),\
+            coalesce(sum(b.unknown_tail=1),0),
+         coalesce(sum(b.incomplete=1 \
+            OR b.unknown_tail=1),0)
+         FROM usage_attempts a LEFT JOIN \
+            usage_attempt_balances b ON b.attempt_id=a.attempt_id WHERE \
+            a.feature_id=?1",
+        [id.as_str()],
+        |r| {
+            Ok(StoredFeatureUsageTotals {
+                attempts: r.get(0)?,
+                spent_micro_usd: r.get(1)?,
+                reserved_micro_usd: r.get(2)?,
+                reported_micro_usd: r.get(3)?,
+                estimated_micro_usd: r.get(4)?,
+                local_free_attempts: r.get(5)?,
+                untracked_attempts: r.get(6)?,
+                monetary_incomplete_attempts: r.get(7)?,
+                unknown_tail_attempts: r.get(8)?,
+                incomplete_attempts: r.get(9)?,
+                ..StoredFeatureUsageTotals::default()
+            })
+        },
+    ))?;
+    let (legacy, untracked, subtotal) = exact_aggregate(c.query_row(
+        "SELECT count(*),coalesce(sum(classification='Untracked'),0),\
+            coalesce(sum(priced_micro_usd),0)
+         FROM usage_origins WHERE \
+            feature_id=?1 AND attempt_id IS NULL AND source_kind IN ('SessionUsage',\
+            'JobUsage')",
+        [id.as_str()],
+        |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+    ))?;
     out.legacy_usage_facts = legacy;
     out.legacy_untracked_facts = untracked;
     out.legacy_observation_micro_usd = subtotal;
@@ -693,7 +752,12 @@ fn feature_totals(c: &Connection, id: &Id) -> Result<StoredFeatureUsageTotals, S
 }
 /// The attribute filters of a [`UsageAttemptFilter`] over attempt alias `a`, as ?3..?13
 /// (project, feature, work, assignment, session, job, -, -, actor, model, connection, purpose).
-const ATTEMPT_FILTER: &str = "(?3 IS NULL OR a.project_id=?3) AND (?4 IS NULL OR a.feature_id=?4) AND (?5 IS NULL OR a.work_id=?5) AND (?6 IS NULL OR a.assignment_id=?6) AND (?7 IS NULL OR a.session_id=?7) AND (?8 IS NULL OR a.job_run_id=?8) AND (?10 IS NULL OR a.actor_id=?10) AND (?11 IS NULL OR a.catalog_model_id=?11) AND (?12 IS NULL OR a.connection_id=?12) AND (?13 IS NULL OR a.purpose=?13)";
+const ATTEMPT_FILTER: &str = "(?3 IS NULL OR a.project_id=?3) AND (?4 IS NULL OR a.feature_id=?4) AND \
+    (?5 IS NULL OR a.work_id=?5) AND (?6 IS NULL OR a.assignment_id=?6) AND \
+    (?7 IS NULL OR a.session_id=?7) AND (?8 IS NULL OR a.job_run_id=?8) AND \
+    (?10 IS NULL OR a.actor_id=?10) AND (?11 IS NULL OR \
+    a.catalog_model_id=?11) AND (?12 IS NULL OR a.connection_id=?12) AND \
+    (?13 IS NULL OR a.purpose=?13)";
 fn attempt_columns() -> String {
     ATTEMPT_COLS
         .split(',')
@@ -718,7 +782,9 @@ fn attempts_between(
     rows(
         c,
         &format!(
-            "SELECT {} FROM usage_attempts a WHERE (a.created_at,a.attempt_id)>(?1,?2) AND a.created_at<?9 AND {ATTEMPT_FILTER} ORDER BY a.created_at,a.attempt_id LIMIT ?14",
+            "SELECT {} FROM usage_attempts a WHERE (a.created_at,a.attempt_id)>(?1,\
+                ?2) AND a.created_at<?9 AND {ATTEMPT_FILTER} ORDER BY a.created_at,\
+                a.attempt_id LIMIT ?14",
             attempt_columns()
         ),
         params![
@@ -759,7 +825,12 @@ fn late_attempts(
     rows(
         c,
         &format!(
-            "SELECT r.created_at AS request_created_at,{} FROM router_requests r CROSS JOIN usage_attempts a ON a.request_id=r.request_id WHERE (r.created_at,r.request_id)>=(?1,?15) AND ((r.created_at,r.request_id)>(?1,?15) OR a.attempt_id>?2) AND r.created_at<?9 AND a.created_at>=?9 AND {ATTEMPT_FILTER} ORDER BY r.created_at,r.request_id,a.attempt_id LIMIT ?14",
+            "SELECT r.created_at AS request_created_at,{} FROM router_requests r \
+                CROSS JOIN usage_attempts a ON a.request_id=r.request_id WHERE \
+                (r.created_at,r.request_id)>=(?1,?15) AND ((r.created_at,\
+                r.request_id)>(?1,?15) OR a.attempt_id>?2) AND r.created_at<?9 AND \
+                a.created_at>=?9 AND {ATTEMPT_FILTER} ORDER BY r.created_at,\
+                r.request_id,a.attempt_id LIMIT ?14",
             attempt_columns()
         ),
         params![
@@ -795,7 +866,10 @@ fn origins_between(
     rows(
         c,
         &format!(
-            "SELECT {ORIGIN_COLS} FROM usage_origins WHERE (recorded_at,source_kind,source_id)>(?1,?2,?3) AND recorded_at<?4 AND (?5 IS NULL OR project_id=?5) AND (?6 IS NULL OR feature_id=?6) AND (?7 IS NULL OR source_kind=?7) ORDER BY recorded_at,source_kind,source_id LIMIT ?8"
+            "SELECT {ORIGIN_COLS} FROM usage_origins WHERE (recorded_at,source_kind,\
+                source_id)>(?1,?2,?3) AND recorded_at<?4 AND (?5 IS NULL OR \
+                project_id=?5) AND (?6 IS NULL OR feature_id=?6) AND (?7 IS NULL OR \
+                source_kind=?7) ORDER BY recorded_at,source_kind,source_id LIMIT ?8"
         ),
         params![
             at,
@@ -810,31 +884,255 @@ fn origins_between(
         decode_origin,
     )
 }
-macro_rules! usage_reads{($t:ty)=>{impl UsageRead for $t{
- fn inference_attempts_between(&self,f:&UsageAttemptFilter,after:Option<&(i64,Id)>,limit:u16)->Result<Vec<StoredInferenceAttempt>,StorageError>{attempts_between(self.conn,f,after,limit)}
- fn late_inference_attempts(&self,f:&UsageAttemptFilter,after:Option<&(i64,Id,Id)>,limit:u16)->Result<Vec<(i64,StoredInferenceAttempt)>,StorageError>{late_attempts(self.conn,f,after,limit)}
- fn usage_origins_between(&self,f:&UsageOriginFilter,after:Option<&(i64,String,String)>,limit:u16)->Result<Vec<StoredUsageOrigin>,StorageError>{origins_between(self.conn,f,after,limit)}
- fn inference_attempt(&self,id:&Id)->Result<Option<StoredInferenceAttempt>,StorageError>{attempt(self.conn,id)}
- fn inference_attempts(&self,f:&UsageAttemptFilter,after:Option<&Id>,limit:u16)->Result<Vec<StoredInferenceAttempt>,StorageError>{range(f.start_ms,f.end_ms)?;rows(self.conn,&format!("SELECT {ATTEMPT_COLS} FROM usage_attempts WHERE attempt_id>?1 AND (?2 IS NULL OR project_id=?2) AND (?3 IS NULL OR feature_id=?3) AND (?4 IS NULL OR work_id=?4) AND (?5 IS NULL OR assignment_id=?5) AND (?6 IS NULL OR session_id=?6) AND (?7 IS NULL OR job_run_id=?7) AND (?8 IS NULL OR created_at>=?8) AND (?9 IS NULL OR created_at<?9) AND (?10 IS NULL OR actor_id=?10) AND (?11 IS NULL OR catalog_model_id=?11) AND (?12 IS NULL OR connection_id=?12) AND (?13 IS NULL OR purpose=?13) ORDER BY attempt_id LIMIT ?14"),params![after.map_or("",Id::as_str),f.project_id.as_ref().map(|v|v.0.as_str()),f.feature_id.as_ref().map(Id::as_str),f.work_id.as_ref().map(Id::as_str),f.assignment_id.as_ref().map(|v|v.0.as_str()),f.session_id.as_ref().map(Id::as_str),f.job_run_id.as_ref().map(Id::as_str),f.start_ms,f.end_ms,f.actor_id.as_ref().map(|v|v.0.as_str()),f.model_id.as_ref().map(Id::as_str),f.connection_id.as_ref().map(Id::as_str),f.purpose,page_limit(limit)?],decode_attempt)}
- fn unquiesced_attempts(&self,after:Option<&Id>,limit:u16)->Result<Vec<StoredInferenceAttempt>,StorageError>{let cols=attempt_columns();rows(self.conn,&format!("SELECT {cols} FROM usage_attempt_balances b JOIN usage_attempts a ON a.attempt_id=b.attempt_id WHERE b.local_quiescent=0 AND b.attempt_id>?1 ORDER BY b.attempt_id LIMIT ?2"),params![after.map_or("",Id::as_str),page_limit(limit)?],decode_attempt)}
- fn usage_observation(&self,id:&Id,key:&str)->Result<Option<StoredUsageObservation>,StorageError>{observation(self.conn,id,key)}
- fn usage_observations(&self,id:&Id,after:Option<i64>,limit:u16)->Result<Vec<StoredUsageObservation>,StorageError>{nonnegative(after)?;rows(self.conn,&format!("SELECT {OBSERVATION_COLS} FROM usage_observations WHERE attempt_id=?1 AND sequence>?2 ORDER BY sequence LIMIT ?3"),params![id.as_str(),after.unwrap_or(0),page_limit(limit)?],decode_observation)}
- fn attempt_balance(&self,id:&Id)->Result<Option<StoredAttemptBalance>,StorageError>{balance(self.conn,id)}
- fn feature_budget(&self,id:&Id)->Result<Option<StoredFeatureBudget>,StorageError>{budget(self.conn,id)}
- fn feature_usage_totals(&self,id:&Id)->Result<StoredFeatureUsageTotals,StorageError>{feature_totals(self.conn,id)}
- fn usage_origins(&self,f:&UsageOriginFilter,after:Option<&str>,limit:u16)->Result<Vec<StoredUsageOrigin>,StorageError>{range(f.start_ms,f.end_ms)?;let key:Option<(String,String)>=after.map(|s|serde_json::from_str(s).map_err(|_|invalid("invalid usage origin cursor"))).transpose()?;let(k,i)=key.as_ref().map_or(("",""),|(k,i)|(k.as_str(),i.as_str()));rows(self.conn,&format!("SELECT {ORIGIN_COLS} FROM usage_origins WHERE (source_kind,source_id)>(?1,?2) AND (?3 IS NULL OR project_id=?3) AND (?4 IS NULL OR feature_id=?4) AND (?5 IS NULL OR recorded_at>=?5) AND (?6 IS NULL OR recorded_at<?6) AND (?7 IS NULL OR source_kind=?7) ORDER BY source_kind,source_id LIMIT ?8"),params![k,i,f.project_id.as_ref().map(|v|v.0.as_str()),f.feature_id.as_ref().map(Id::as_str),f.start_ms,f.end_ms,f.kind,page_limit(limit)?],decode_origin)}
- fn usage_origin(&self,kind:&str,id:&str)->Result<Option<StoredUsageOrigin>,StorageError>{origin(self.conn,kind,id)}
- fn usage_changes(&self,feature:Option<&Id>,after:Option<&Id>,limit:u16)->Result<Vec<StoredUsageChange>,StorageError>{rows(self.conn,&format!("SELECT {CHANGE_COLS} FROM usage_changes WHERE event_id>?1 AND (?2 IS NULL OR feature_id=?2) ORDER BY event_id LIMIT ?3"),params![after.map_or("",Id::as_str),feature.map(Id::as_str),page_limit(limit)?],decode_change)}
- fn usage_bootstrap(&self)->Result<StoredUsageBootstrap,StorageError>{bootstrap(self.conn)}
- fn price_revision(&self)->Result<i64,StorageError>{price_revision(self.conn)}
- fn price_snapshots(&self,provider:Option<&str>,after:Option<&Id>,limit:u16)->Result<Vec<StoredPriceSnapshot>,StorageError>{if let Some(p)=provider{bounded(p,128)?;}rows(self.conn,&format!("SELECT {SNAPSHOT_COLS} FROM usage_price_snapshots WHERE id>?1 AND (?2 IS NULL OR provider=?2) ORDER BY id LIMIT ?3"),params![after.map_or("",Id::as_str),provider,page_limit(limit)?],decode_snapshot)}
- fn price_snapshot(&self,id:&Id)->Result<Option<StoredPriceSnapshot>,StorageError>{snapshot(self.conn,id)}
- fn current_price_snapshot(&self,p:&str)->Result<Option<StoredPriceSnapshot>,StorageError>{status(self.conn,p)?.and_then(|s|s.current_snapshot_id).map(|id|snapshot(self.conn,&id)).transpose().map(Option::flatten)}
- fn price_status(&self,p:&str)->Result<Option<StoredPriceStatus>,StorageError>{status(self.conn,p)}
- fn price_override_history(&self,model:Option<&Id>,after:Option<&PriceOverridePosition>,limit:u16)->Result<Vec<StoredPriceOverride>,StorageError>{override_history(self.conn,model,after,limit)}
- fn price_override(&self,id:&Id)->Result<Option<StoredPriceOverride>,StorageError>{price_override(self.conn,id)}
- fn price_override_revision(&self,id:&Id)->Result<i64,StorageError>{Ok(price_override(self.conn,id)?.map_or(1,|v|v.revision))}
-}};}
+macro_rules! usage_reads {
+    ($t:ty) => {
+        impl UsageRead for $t {
+            fn inference_attempts_between(
+                &self,
+                f: &UsageAttemptFilter,
+                after: Option<&(i64, Id)>,
+                limit: u16,
+            ) -> Result<Vec<StoredInferenceAttempt>, StorageError> {
+                attempts_between(self.conn, f, after, limit)
+            }
+            fn late_inference_attempts(
+                &self,
+                f: &UsageAttemptFilter,
+                after: Option<&(i64, Id, Id)>,
+                limit: u16,
+            ) -> Result<Vec<(i64, StoredInferenceAttempt)>, StorageError> {
+                late_attempts(self.conn, f, after, limit)
+            }
+            fn usage_origins_between(
+                &self,
+                f: &UsageOriginFilter,
+                after: Option<&(i64, String, String)>,
+                limit: u16,
+            ) -> Result<Vec<StoredUsageOrigin>, StorageError> {
+                origins_between(self.conn, f, after, limit)
+            }
+            fn inference_attempt(
+                &self,
+                id: &Id,
+            ) -> Result<Option<StoredInferenceAttempt>, StorageError> {
+                attempt(self.conn, id)
+            }
+            fn inference_attempts(
+                &self,
+                f: &UsageAttemptFilter,
+                after: Option<&Id>,
+                limit: u16,
+            ) -> Result<Vec<StoredInferenceAttempt>, StorageError> {
+                range(f.start_ms, f.end_ms)?;
+                rows(
+                    self.conn,
+                    &format!(
+                        "SELECT {ATTEMPT_COLS} FROM usage_attempts WHERE attempt_id>?1 AND (?2 \
+     IS NULL OR project_id=?2) AND (?3 IS NULL OR feature_id=?3) AND (?4 IS \
+     NULL OR work_id=?4) AND (?5 IS NULL OR assignment_id=?5) AND (?6 IS \
+     NULL OR session_id=?6) AND (?7 IS NULL OR job_run_id=?7) AND (?8 IS \
+     NULL OR created_at>=?8) AND (?9 IS NULL OR created_at<?9) AND (?10 IS \
+     NULL OR actor_id=?10) AND (?11 IS NULL OR catalog_model_id=?11) AND \
+     (?12 IS NULL OR connection_id=?12) AND (?13 IS NULL OR purpose=?13) \
+     ORDER BY attempt_id LIMIT ?14"
+                    ),
+                    params![
+                        after.map_or("", Id::as_str),
+                        f.project_id.as_ref().map(|v| v.0.as_str()),
+                        f.feature_id.as_ref().map(Id::as_str),
+                        f.work_id.as_ref().map(Id::as_str),
+                        f.assignment_id.as_ref().map(|v| v.0.as_str()),
+                        f.session_id.as_ref().map(Id::as_str),
+                        f.job_run_id.as_ref().map(Id::as_str),
+                        f.start_ms,
+                        f.end_ms,
+                        f.actor_id.as_ref().map(|v| v.0.as_str()),
+                        f.model_id.as_ref().map(Id::as_str),
+                        f.connection_id.as_ref().map(Id::as_str),
+                        f.purpose,
+                        page_limit(limit)?
+                    ],
+                    decode_attempt,
+                )
+            }
+            fn unquiesced_attempts(
+                &self,
+                after: Option<&Id>,
+                limit: u16,
+            ) -> Result<Vec<StoredInferenceAttempt>, StorageError> {
+                let cols = attempt_columns();
+                rows(
+                    self.conn,
+                    &format!(
+                        "SELECT {cols} FROM usage_attempt_balances b JOIN usage_attempts a ON \
+     a.attempt_id=b.attempt_id WHERE b.local_quiescent=0 AND b.attempt_id>?1 \
+     ORDER BY b.attempt_id LIMIT ?2"
+                    ),
+                    params![after.map_or("", Id::as_str), page_limit(limit)?],
+                    decode_attempt,
+                )
+            }
+            fn usage_observation(
+                &self,
+                id: &Id,
+                key: &str,
+            ) -> Result<Option<StoredUsageObservation>, StorageError> {
+                observation(self.conn, id, key)
+            }
+            fn usage_observations(
+                &self,
+                id: &Id,
+                after: Option<i64>,
+                limit: u16,
+            ) -> Result<Vec<StoredUsageObservation>, StorageError> {
+                nonnegative(after)?;
+                rows(
+                    self.conn,
+                    &format!(
+                        "SELECT {OBSERVATION_COLS} FROM usage_observations WHERE attempt_id=?1 \
+     AND sequence>?2 ORDER BY sequence LIMIT ?3"
+                    ),
+                    params![id.as_str(), after.unwrap_or(0), page_limit(limit)?],
+                    decode_observation,
+                )
+            }
+            fn attempt_balance(
+                &self,
+                id: &Id,
+            ) -> Result<Option<StoredAttemptBalance>, StorageError> {
+                balance(self.conn, id)
+            }
+            fn feature_budget(&self, id: &Id) -> Result<Option<StoredFeatureBudget>, StorageError> {
+                budget(self.conn, id)
+            }
+            fn feature_usage_totals(
+                &self,
+                id: &Id,
+            ) -> Result<StoredFeatureUsageTotals, StorageError> {
+                feature_totals(self.conn, id)
+            }
+            fn usage_origins(
+                &self,
+                f: &UsageOriginFilter,
+                after: Option<&str>,
+                limit: u16,
+            ) -> Result<Vec<StoredUsageOrigin>, StorageError> {
+                range(f.start_ms, f.end_ms)?;
+                let key: Option<(String, String)> = after
+                    .map(|s| {
+                        serde_json::from_str(s).map_err(|_| invalid("invalid usage origin cursor"))
+                    })
+                    .transpose()?;
+                let (k, i) = key
+                    .as_ref()
+                    .map_or(("", ""), |(k, i)| (k.as_str(), i.as_str()));
+                rows(
+                    self.conn,
+                    &format!(
+                        "SELECT {ORIGIN_COLS} FROM usage_origins WHERE (source_kind,\
+     source_id)>(?1,?2) AND (?3 IS NULL OR project_id=?3) AND (?4 IS NULL OR \
+     feature_id=?4) AND (?5 IS NULL OR recorded_at>=?5) AND (?6 IS NULL OR \
+     recorded_at<?6) AND (?7 IS NULL OR source_kind=?7) ORDER BY source_kind,\
+     source_id LIMIT ?8"
+                    ),
+                    params![
+                        k,
+                        i,
+                        f.project_id.as_ref().map(|v| v.0.as_str()),
+                        f.feature_id.as_ref().map(Id::as_str),
+                        f.start_ms,
+                        f.end_ms,
+                        f.kind,
+                        page_limit(limit)?
+                    ],
+                    decode_origin,
+                )
+            }
+            fn usage_origin(
+                &self,
+                kind: &str,
+                id: &str,
+            ) -> Result<Option<StoredUsageOrigin>, StorageError> {
+                origin(self.conn, kind, id)
+            }
+            fn usage_changes(
+                &self,
+                feature: Option<&Id>,
+                after: Option<&Id>,
+                limit: u16,
+            ) -> Result<Vec<StoredUsageChange>, StorageError> {
+                rows(
+                    self.conn,
+                    &format!(
+                        "SELECT {CHANGE_COLS} FROM usage_changes WHERE event_id>?1 AND (?2 IS \
+     NULL OR feature_id=?2) ORDER BY event_id LIMIT ?3"
+                    ),
+                    params![
+                        after.map_or("", Id::as_str),
+                        feature.map(Id::as_str),
+                        page_limit(limit)?
+                    ],
+                    decode_change,
+                )
+            }
+            fn usage_bootstrap(&self) -> Result<StoredUsageBootstrap, StorageError> {
+                bootstrap(self.conn)
+            }
+            fn price_revision(&self) -> Result<i64, StorageError> {
+                price_revision(self.conn)
+            }
+            fn price_snapshots(
+                &self,
+                provider: Option<&str>,
+                after: Option<&Id>,
+                limit: u16,
+            ) -> Result<Vec<StoredPriceSnapshot>, StorageError> {
+                if let Some(p) = provider {
+                    bounded(p, 128)?;
+                }
+                rows(
+                    self.conn,
+                    &format!(
+                        "SELECT {SNAPSHOT_COLS} FROM usage_price_snapshots WHERE id>?1 AND (?2 \
+     IS NULL OR provider=?2) ORDER BY id LIMIT ?3"
+                    ),
+                    params![after.map_or("", Id::as_str), provider, page_limit(limit)?],
+                    decode_snapshot,
+                )
+            }
+            fn price_snapshot(&self, id: &Id) -> Result<Option<StoredPriceSnapshot>, StorageError> {
+                snapshot(self.conn, id)
+            }
+            fn current_price_snapshot(
+                &self,
+                p: &str,
+            ) -> Result<Option<StoredPriceSnapshot>, StorageError> {
+                status(self.conn, p)?
+                    .and_then(|s| s.current_snapshot_id)
+                    .map(|id| snapshot(self.conn, &id))
+                    .transpose()
+                    .map(Option::flatten)
+            }
+            fn price_status(&self, p: &str) -> Result<Option<StoredPriceStatus>, StorageError> {
+                status(self.conn, p)
+            }
+            fn price_override_history(
+                &self,
+                model: Option<&Id>,
+                after: Option<&PriceOverridePosition>,
+                limit: u16,
+            ) -> Result<Vec<StoredPriceOverride>, StorageError> {
+                override_history(self.conn, model, after, limit)
+            }
+            fn price_override(&self, id: &Id) -> Result<Option<StoredPriceOverride>, StorageError> {
+                price_override(self.conn, id)
+            }
+            fn price_override_revision(&self, id: &Id) -> Result<i64, StorageError> {
+                Ok(price_override(self.conn, id)?.map_or(1, |v| v.revision))
+            }
+        }
+    };
+}
 usage_reads!(Unit<'_>);
 usage_reads!(Snapshot<'_>);
 fn missing(kind: &'static str, id: &Id) -> StorageError {
@@ -1301,7 +1599,11 @@ impl UsageRepository for Unit<'_> {
         }
         let a = attempt(self.conn, attempt_id)?.ok_or_else(|| missing("attempt", attempt_id))?;
         validate_origin_binding(&o, &a)?;
-        db(self.conn.execute("UPDATE usage_origins SET attempt_id=?1 WHERE source_kind=?2 AND source_id=?3 AND attempt_id IS NULL",params![attempt_id.as_str(),kind,id]))?;
+        db(self.conn.execute(
+            "UPDATE usage_origins SET attempt_id=?1 WHERE source_kind=?2 AND \
+            source_id=?3 AND attempt_id IS NULL",
+            params![attempt_id.as_str(), kind, id],
+        ))?;
         Ok(())
     }
     fn append_usage_change(&mut self, r: &StoredUsageChange) -> Result<(), StorageError> {
@@ -1379,7 +1681,25 @@ impl UsageRepository for Unit<'_> {
             return Err(invalid("router bootstrap cursor never moves backwards"));
         }
         nonnegative(r.completed_at_ms)?;
-        db(self.conn.execute("UPDATE usage_bootstrap SET revision=?1,phase=?2,session_sequence=?3,session_source=?4,session_id=?5,job_run_id=?6,job_seq=?7,source_sequence=?8,processed=?9,completed_at=?10,router_after=?11 WHERE singleton=1",params![r.revision,r.phase,r.session_after.as_ref().map(|s|s.sequence),r.session_after.as_ref().map(|s|s.source),r.session_after.as_ref().map(|s|s.id.as_str()),r.job_after.as_ref().map(|s|s.run_id.as_str()),r.job_after.as_ref().map(|s|s.seq),r.source_sequence,r.processed,r.completed_at_ms,r.router_after.as_ref().map(Id::as_str)]))?;
+        db(self.conn.execute(
+            "UPDATE usage_bootstrap SET revision=?1,phase=?2,session_sequence=?3,\
+            session_source=?4,session_id=?5,job_run_id=?6,job_seq=?7,\
+            source_sequence=?8,processed=?9,completed_at=?10,router_after=?11 WHERE \
+            singleton=1",
+            params![
+                r.revision,
+                r.phase,
+                r.session_after.as_ref().map(|s| s.sequence),
+                r.session_after.as_ref().map(|s| s.source),
+                r.session_after.as_ref().map(|s| s.id.as_str()),
+                r.job_after.as_ref().map(|s| s.run_id.as_str()),
+                r.job_after.as_ref().map(|s| s.seq),
+                r.source_sequence,
+                r.processed,
+                r.completed_at_ms,
+                r.router_after.as_ref().map(Id::as_str)
+            ],
+        ))?;
         Ok(())
     }
     fn advance_price_revision(&mut self, expected: i64) -> Result<i64, StorageError> {

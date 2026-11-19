@@ -1,5 +1,6 @@
 //! Host-only text previews. These are neither transcript entries nor provider-native state.
 //! Only the owned sink publishes them; finalized transcripts remain the replay authority.
+use devworks_core::locks::LockExt;
 use devworks_core::{
     ports::storage::StorageError,
     protocol::{AttemptId, Id},
@@ -25,14 +26,10 @@ pub struct LiveTurn {
 pub(crate) struct LiveTurns(Mutex<BTreeMap<String, LiveTurn>>);
 impl LiveTurns {
     pub fn clear(&self) {
-        self.0.lock().unwrap_or_else(|p| p.into_inner()).clear();
+        self.0.locked().clear();
     }
     pub fn snapshot(&self, session: &Id) -> Option<LiveTurn> {
-        self.0
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .get(session.as_str())
-            .cloned()
+        self.0.locked().get(session.as_str()).cloned()
     }
     pub fn text(
         &self,
@@ -41,7 +38,7 @@ impl LiveTurns {
         epoch: i64,
         text: &str,
     ) -> Result<(), StorageError> {
-        let mut turns = self.0.lock().unwrap_or_else(|p| p.into_inner());
+        let mut turns = self.0.locked();
         if let Some(turn) = turns.get(session.as_str())
             && ((turn.attempt_id != *attempt && turn.finalized_through.is_none())
                 || (turn.attempt_id == *attempt
@@ -114,11 +111,7 @@ impl LiveTurns {
         Ok(())
     }
     pub fn finalize(&self, session: &Id, attempt: &AttemptId, sequence: i64) {
-        if let Some(turn) = self
-            .0
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .get_mut(session.as_str())
+        if let Some(turn) = self.0.locked().get_mut(session.as_str())
             && turn.attempt_id == *attempt
         {
             turn.finalized_through = Some(sequence);
@@ -126,7 +119,7 @@ impl LiveTurns {
         }
     }
     pub fn discard(&self, session: &Id, attempt: &AttemptId) {
-        let mut turns = self.0.lock().unwrap_or_else(|p| p.into_inner());
+        let mut turns = self.0.locked();
         if turns
             .get(session.as_str())
             .is_some_and(|turn| turn.attempt_id == *attempt && turn.finalized_through.is_none())

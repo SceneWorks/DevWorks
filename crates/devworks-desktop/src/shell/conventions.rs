@@ -1,6 +1,7 @@
 //! The native manager submits only the convention owner's scoped commands and reads.
 use super::*;
 use crate::frame;
+use crate::paged::{Applied, Page};
 use crate::{
     conventions_ops::{self as cop, ConventionsSlot},
     conventions_screen::{self as cv, ConventionsScreen, Scope, Target},
@@ -72,11 +73,69 @@ impl Screen for ConventionsScreen {
                 Scope::Workspace => "",
             };
             {
-                let draft = |d: &crate::conventions_screen::Draft| json!({"title":d.title,"slug":d.slug,"base":d.base,"anchor":d.anchor,"markdown":*d.markdown,"raw":*d.raw,"parent":d.parent,"path":d.parent_path,"applicability":d.applicability,"editorState":format!("{d:?}")});
+                let draft = |d: &crate::conventions_screen::Draft| {
+                    json!({
+                        "title": d.title,
+                        "slug": d.slug,
+                        "base": d.base,
+                        "anchor": d.anchor,
+                        "markdown": *d.markdown,
+                        "raw": *d.raw,
+                        "parent": d.parent,
+                        "path": d.parent_path,
+                        "applicability": d.applicability,
+                        "editorState": format!("{d:?}")
+                    })
+                };
                 put(
                     p,
                     "conventions",
-                    json!({"new":state.new_draft.as_ref().map(draft),"drafts":state.drafts.iter().map(|(id,d)|(id,draft(d))).collect::<BTreeMap<_,_>>(),"query":state.text,"slug":state.slug_input,"path":state.path_input,"upload":state.upload.as_ref().map(|d|json!({"base":d.base,"path":d.path.to_string_lossy(),"name":d.name,"mediaType":d.media_type})),"resources":state.resource_drafts.iter().map(|(k,d)|(k,json!({"record":d.resource,"base":d.base,"name":d.name,"mediaType":d.media_type,"retired":d.retired,"replacement":d.replacement.as_ref().map(|p|p.to_string_lossy())}))).collect::<BTreeMap<_,_>>(),"moves":state.move_drafts.iter().map(|(k,d)|(k,json!({"base":d.base,"anchor":d.anchor,"scope":d.scope,"parent":d.parent,"order":d.order}))).collect::<BTreeMap<_,_>>()}),
+                    json!({
+                        "new": state.new_draft.as_ref().map(draft),
+                        "drafts": state
+                            .drafts
+                            .iter()
+                            .map(|(id, d)| (id, draft(d)))
+                            .collect::<BTreeMap<_, _>>(),
+                        "query": state.text,
+                        "slug": state.slug_input,
+                        "path": state.path_input,
+                        "upload": state.upload.as_ref().map(|d| json!({
+                            "base": d.base,
+                            "path": d.path.to_string_lossy(),
+                            "name": d.name,
+                            "mediaType": d.media_type
+                        })),
+                        "resources": state
+                            .resource_drafts
+                            .iter()
+                            .map(|(k, d)| (
+                                k,
+                                json!({
+                                    "record": d.resource,
+                                    "base": d.base,
+                                    "name": d.name,
+                                    "mediaType": d.media_type,
+                                    "retired": d.retired,
+                                    "replacement": d.replacement.as_ref().map(|p| p.to_string_lossy())
+                                })
+                            ))
+                            .collect::<BTreeMap<_, _>>(),
+                        "moves": state
+                            .move_drafts
+                            .iter()
+                            .map(|(k, d)| (
+                                k,
+                                json!({
+                                    "base": d.base,
+                                    "anchor": d.anchor,
+                                    "scope": d.scope,
+                                    "parent": d.parent,
+                                    "order": d.order
+                                })
+                            ))
+                            .collect::<BTreeMap<_, _>>()
+                    }),
                 );
             }
         }
@@ -143,7 +202,7 @@ impl ConventionsCtl<'_, '_> {
         let key = scope.key();
         let (generation, input, operation) = {
             let state = self.conventions.states.entry(scope.clone()).or_default();
-            if state.listing || (append && state.next.is_none()) {
+            if state.list.loading() || (append && !state.list.more()) {
                 return;
             }
             if search && state.search_recovery.is_some() {
@@ -153,15 +212,21 @@ impl ConventionsCtl<'_, '_> {
                 ));
                 return;
             }
-            state.list_generation = state.list_generation.wrapping_add(1);
-            state.listing = true;
+            let Some(fetch) = (if append {
+                state.list.more_page()
+            } else {
+                Some(state.list.reload())
+            }) else {
+                return;
+            };
+            let generation = fetch.generation;
             let input = if append {
                 let Some(snapshot) = &state.query_snapshot else {
-                    state.listing = false;
+                    state.list.abandon(generation);
                     return;
                 };
-                state
-                    .next
+                fetch
+                    .cursor
                     .as_deref()
                     .and_then(|cursor| cop::at_cursor(snapshot, cursor))
             } else if search {
@@ -170,14 +235,14 @@ impl ConventionsCtl<'_, '_> {
                 cop::list(&scope, &state.applicability, state.lifecycle, state.order)
             };
             if !append && let Some(input) = &input {
-                state.pending_listing = Some((state.list_generation, input.clone()));
+                state.pending_listing = Some((generation, input.clone()));
             }
             let operation = if search {
                 "conventions.search"
             } else {
                 "conventions.list"
             };
-            (state.list_generation, input, operation)
+            (generation, input, operation)
         };
         let submitted = if search {
             if let Some(b) = self.backend() {
@@ -196,8 +261,58 @@ impl ConventionsCtl<'_, '_> {
         };
         if !submitted {
             let state = self.conventions.states.get_mut(&scope).expect("scope");
-            state.listing = false;
-            state.list_error = Some(
+            state.list.abandon(generation);
+            state.list.error = Some(
+                "Conventions cannot be read while offline or closing. Drafts are kept.".into(),
+            );
+        }
+    }
+    /// Reads the listing shown again (after a change, or Refresh): every page shown is read
+    /// again, in the query they were read with, so the pages the user loaded stay. A listing
+    /// whose query changed in the form, a search, or one not yet read starts from the first
+    /// page ([`load_conventions`](Self::load_conventions)).
+    fn reread_conventions(&mut self) {
+        let scope = self.conventions.scope.clone();
+        let same = self.conventions.states.get(&scope).is_some_and(|s| {
+            let form = cop::list(&scope, &s.applicability, s.lifecycle, s.order);
+            s.list.loaded
+                && !s.searched
+                && s.active_search.is_none()
+                && s.search_recovery.is_none()
+                && match (&s.query_snapshot, form) {
+                    (Some(shown), Some(form)) => format!("{shown:?}") == format!("{form:?}"),
+                    _ => false,
+                }
+        });
+        if !same {
+            self.load_conventions(false, false);
+            return;
+        }
+        let state = self.conventions.states.get_mut(&scope).expect("scope");
+        let fetch = state.list.refresh();
+        self.send_convention_list(&scope, &fetch);
+    }
+    /// Submits the request `fetch` names of the shown listing, in the query it was read with.
+    fn send_convention_list(&mut self, scope: &Scope, fetch: &crate::paged::Fetch) {
+        let key = scope.key();
+        let state = self.conventions.states.get_mut(scope).expect("scope");
+        let input = state
+            .query_snapshot
+            .as_ref()
+            .and_then(|shown| match fetch.cursor.as_deref() {
+                Some(cursor) => cop::at_cursor(shown, cursor),
+                None => Some(shown.clone()),
+            });
+        let generation = fetch.generation;
+        if !self.query(
+            ConventionsSlot::ConventionsList(key, generation, fetch.append(), false),
+            "Reading conventions",
+            "conventions.list",
+            move |b| cop::query(b, input),
+        ) {
+            let state = self.conventions.states.get_mut(scope).expect("scope");
+            state.list.abandon(generation);
+            state.list.error = Some(
                 "Conventions cannot be read while offline or closing. Drafts are kept.".into(),
             );
         }
@@ -214,14 +329,10 @@ impl ConventionsCtl<'_, '_> {
         state.reader.view = None;
         state.reader.error = None;
         state.detail_tab = 0;
-        state.versions.clear();
-        state.version_next = None;
-        state.version_generation = state.version_generation.wrapping_add(1);
-        state.version_loading = false;
-        state.resources.clear();
-        state.resource_next = None;
-        state.resource_generation = state.resource_generation.wrapping_add(1);
-        state.resource_loading = false;
+        state.versions.reset();
+        state.resources.reset();
+        state.resource_catalog.reset();
+        state.resource_read.reset();
         self.load_convention_passage();
     }
     fn load_convention_passage(&mut self) {
@@ -265,64 +376,79 @@ impl ConventionsCtl<'_, '_> {
     fn load_convention_versions(&mut self, append: bool) {
         let scope = self.conventions.scope.clone();
         let key = scope.key();
-        let (generation, input) = {
+        let (fetch, input) = {
             let s = self.conventions.states.entry(scope.clone()).or_default();
             let Some(record) = s.record().cloned() else {
                 return;
             };
-            if s.version_loading || (append && s.version_next.is_none()) {
+            let Some(fetch) = (if append {
+                s.versions.more_page()
+            } else if s.versions.loading() {
+                None
+            } else {
+                Some(s.versions.reload())
+            }) else {
                 return;
-            }
-            s.version_loading = true;
-            s.version_generation = s.version_generation.wrapping_add(1);
-            let cursor = s.version_next.as_deref().filter(|_| append);
-            (
-                s.version_generation,
-                cop::versions(&scope, &record.id, cursor),
-            )
+            };
+            let input = cop::versions(&scope, &record.id, fetch.cursor.as_deref());
+            (fetch, input)
         };
-        if !self.query(
-            ConventionsSlot::ConventionVersions(key, generation, append),
+        let slot = ConventionsSlot::ConventionVersions(key, fetch.generation, append);
+        let s = self.conventions.states.get_mut(&scope).expect("scope");
+        self.cx.paged(
+            &mut s.versions,
+            fetch,
+            slot,
             "Reading convention versions",
             "conventions.version",
-            move |b| cop::query(b, input),
-        ) {
-            self.conventions
-                .states
-                .get_mut(&scope)
-                .expect("scope")
-                .version_loading = false;
-        }
+            move |b, _| cop::query(b, input),
+        );
     }
     fn load_convention_resources(&mut self, append: bool) {
         let scope = self.conventions.scope.clone();
         let key = scope.key();
-        let (generation, input) = {
+        let (generation, input, mode) = {
             let s = self.conventions.states.entry(scope.clone()).or_default();
             let record = s.record().cloned();
-            if s.resource_loading
+            if s.resources_loading()
                 || (append && s.resource_query_snapshot.is_none())
-                || (append && s.resource_mode != 2 && s.resource_next.is_none())
+                || (append
+                    && s.resource_mode != 2
+                    && !(if s.resource_mode == 1 {
+                        s.resource_catalog.more()
+                    } else {
+                        s.resources.more()
+                    }))
                 || (s.resource_mode == 0 && record.is_none())
             {
                 return;
-            }
-            if !append {
-                s.resource_next = None;
             }
             if !append && s.resource_mode == 2 {
                 s.resource_document_cursors = vec![None];
                 s.resource_document = None;
             }
-            s.resource_loading = true;
-            s.resource_generation = s.resource_generation.wrapping_add(1);
+            // The attachments and the document catalog are two lists read by one request;
+            // a document read has no list.
+            s.resource_catalog.separate(1);
+            s.resource_read.separate(2);
+            let fetch = match (s.resource_mode, append) {
+                (1, true) => s.resource_catalog.more_page(),
+                (1, false) => Some(s.resource_catalog.reload()),
+                (0, true) => s.resources.more_page(),
+                (0, false) => Some(s.resources.reload()),
+                (_, _) => Some(s.resource_read.reload()),
+            };
+            let Some(fetch) = fetch else {
+                return;
+            };
             let input = if append {
                 let snapshot = s.resource_query_snapshot.clone().expect("captured query");
                 if s.resource_mode == 2 {
                     let cursor = s.resource_document_cursors.last().cloned().flatten();
                     cop::at_document_cursor(&snapshot, cursor.as_deref())
                 } else {
-                    s.resource_next
+                    fetch
+                        .cursor
                         .as_deref()
                         .and_then(|cursor| cop::at_cursor(&snapshot, cursor))
                 }
@@ -337,19 +463,21 @@ impl ConventionsCtl<'_, '_> {
                 s.resource_query_snapshot = input.clone();
                 input
             };
-            (s.resource_generation, input)
+            (fetch.generation, input, s.resource_mode)
         };
-        if !self.query(
+        let submitted = self.query(
             ConventionsSlot::ConventionResources(key, generation, append),
             "Reading convention resources",
             "conventions.resources",
             move |b| cop::query(b, input),
-        ) {
-            self.conventions
-                .states
-                .get_mut(&scope)
-                .expect("scope")
-                .resource_loading = false;
+        );
+        if !submitted {
+            let s = self.conventions.states.get_mut(&scope).expect("scope");
+            match mode {
+                1 => s.resource_catalog.abandon(generation),
+                2 => s.resource_read.abandon(generation),
+                _ => s.resources.abandon(generation),
+            };
         }
     }
     fn load_convention_parents(&mut self, append: bool) {
@@ -363,19 +491,27 @@ impl ConventionsCtl<'_, '_> {
             let Some(d) = s.move_drafts.get_mut(record.id.as_str()) else {
                 return;
             };
-            if append && d.next.is_none() {
+            let Some(fetch) = (if append {
+                d.choices.more_page()
+            } else {
+                Some(d.choices.reload())
+            }) else {
                 return;
-            }
+            };
+            // Loading parents is a change to the draft, as it always was.
             d.generation = d.generation.wrapping_add(1);
-            let input = cop::parents(&d.scope, d.next.as_deref().filter(|_| append));
-            (record.id.as_str().to_owned(), d.generation, input)
+            let input = cop::parents(&d.scope, fetch.cursor.as_deref());
+            (record.id.as_str().to_owned(), fetch.generation, input)
         };
-        self.query(
-            ConventionsSlot::ConventionParents(key, target, generation, append),
+        let submitted = self.query(
+            ConventionsSlot::ConventionParents(key, target.clone(), generation, append),
             "Reading destination conventions",
             "conventions.list",
             move |b| cop::query(b, input),
         );
+        if !submitted && let Some(d) = self.conventions.state_mut().move_drafts.get_mut(&target) {
+            d.choices.abandon(generation);
+        }
     }
     fn apply_conventions(
         &mut self,
@@ -385,7 +521,7 @@ impl ConventionsCtl<'_, '_> {
         let mut refresh_index_metadata = false;
         match (slot, reply) {
             (
-                ConventionsSlot::ConventionsList(key, generation, append, search),
+                ConventionsSlot::ConventionsList(key, generation, _, search),
                 Reply::Query(outcome),
             ) => {
                 let scope = self.convention_scope(&key)?;
@@ -462,15 +598,23 @@ impl ConventionsCtl<'_, '_> {
                         }
                     }
                 }
-                if s.list_generation != generation {
-                    return None;
-                }
-                s.listing = false;
                 match result {
                     Ok((revision, next, hits, items, retrieval)) => {
-                        if append && s.scope_revision.is_some_and(|old| old != revision) {
-                            s.list_error=Some("The convention listing changed while paging. Refresh for a current listing; drafts are kept.".into());
-                            return None;
+                        let rows = Page::new(items, next).fenced(revision.to_string());
+                        let applied = s.list.apply(generation, Ok(rows));
+                        match applied {
+                            Applied::Stale => return None,
+                            Applied::Fenced => {
+                                s.list.fail("The convention listing changed while paging. Refresh for a current \
+                                    listing; drafts are kept.");
+                                return None;
+                            }
+                            Applied::Continue(fetch) => {
+                                // A re-read of the listing needs its next page.
+                                self.send_convention_list(&scope, &fetch);
+                                return None;
+                            }
+                            _ => {}
                         }
                         if s.pending_listing
                             .as_ref()
@@ -478,29 +622,26 @@ impl ConventionsCtl<'_, '_> {
                         {
                             s.query_snapshot = s.pending_listing.take().map(|(_, body)| body);
                         }
-                        if !append {
-                            s.items.clear();
+                        if applied == Applied::Replaced {
                             s.hits.clear();
                         }
-                        s.items.extend(items);
                         s.hits.extend(hits);
                         s.retrieval = retrieval;
-                        s.next = next;
                         s.scope_revision = Some(revision);
                         s.source_scope_revision = source_scope_revision;
                         s.searched = search;
-                        s.loaded = true;
                         s.available = true;
-                        s.list_error = None;
                     }
                     Err(error) => {
+                        if s.list.apply(generation, Err(error.describe())) == Applied::Stale {
+                            return None;
+                        }
                         if s.pending_listing
                             .as_ref()
                             .is_some_and(|(g, _)| *g == generation)
                         {
                             s.pending_listing = None;
                         }
-                        s.list_error = Some(error.describe());
                         if matches!(error, Failure::NoUseCase(_)) {
                             s.available = false;
                         }
@@ -520,12 +661,13 @@ impl ConventionsCtl<'_, '_> {
                 {
                     state.active_search = None;
                 }
-                if state.list_generation == generation {
-                    state.listing = false;
-                    state.list_error = Some(format!(
-                        "The search result is not confirmed: {error}. Confirm the original search before retrying."
-                    ));
-                }
+                state.list.apply(
+                    generation,
+                    Err(format!(
+                        "The search result is not confirmed: {error}. Confirm the original \
+                            search before retrying."
+                    )),
+                );
             }
             (ConventionsSlot::ConventionRead(key, generation), Reply::Query(outcome)) => {
                 let scope = self.convention_scope(&key)?;
@@ -544,7 +686,8 @@ impl ConventionsCtl<'_, '_> {
                                 .revision
                                 .is_some_and(|revision| revision != view.convention.revision.get())
                         {
-                            s.reader.error=Some("The source revision changed while reading. Refresh explicitly before combining source passages.".into());
+                            s.reader.error=Some("The source revision changed while reading. Refresh explicitly before \
+                                combining source passages.".into());
                             return None;
                         }
                         target.id = view.convention.id.as_str().into();
@@ -557,120 +700,109 @@ impl ConventionsCtl<'_, '_> {
                     Err(error) => s.reader.error = Some(error.describe()),
                 }
             }
-            (
-                ConventionsSlot::ConventionVersions(key, generation, append),
-                Reply::Query(outcome),
-            ) => {
+            (ConventionsSlot::ConventionVersions(key, generation, _), Reply::Query(outcome)) => {
                 let scope = self.convention_scope(&key)?;
                 let s = self.conventions.states.get_mut(&scope).expect("scope");
-                if generation != s.version_generation {
-                    return None;
-                }
-                s.version_loading = false;
-                match cop::page(outcome) {
-                    Ok(page) => {
-                        if append
-                            && s.version_scope_revision
-                                .is_some_and(|old| old != page.scope_revision.get())
-                        {
-                            s.notice=Some((Tone::Attention,"The version listing changed. Load versions again without discarding your draft.".into()));
+                let page = cop::page(outcome).map(|page| {
+                    Page::new(page.items.0, page.next_cursor.map(|c| c.0))
+                        .fenced(page.scope_revision.get().to_string())
+                });
+                match page {
+                    Ok(page) => match s.versions.apply(generation, Ok(page)) {
+                        Applied::Stale => return None,
+                        Applied::Fenced => {
+                            s.notice=Some((Tone::Attention,"The version listing changed. Load versions again without discarding \
+                                your draft.".into()));
                             return None;
                         }
-                        if !append {
-                            s.versions.clear();
+                        _ => {}
+                    },
+                    Err(error) => {
+                        if s.versions.apply(generation, Err(error.describe())) != Applied::Stale {
+                            s.notice = Some((Tone::Attention, error.describe()));
                         }
-                        s.versions.extend(page.items.0);
-                        s.version_next = page.next_cursor.map(|c| c.0);
-                        s.version_scope_revision = Some(page.scope_revision.get());
                     }
-                    Err(error) => s.notice = Some((Tone::Attention, error.describe())),
                 }
             }
-            (
-                ConventionsSlot::ConventionResources(key, generation, append),
-                Reply::Query(outcome),
-            ) => {
+            (ConventionsSlot::ConventionResources(key, generation, _), Reply::Query(outcome)) => {
                 let scope = self.convention_scope(&key)?;
                 let s = self.conventions.states.get_mut(&scope).expect("scope");
-                if generation != s.resource_generation {
-                    return None;
-                }
-                s.resource_loading = false;
                 match cop::resources(outcome) {
-                    Ok(view) => {
-                        let (revision, next) = match view {
-                            ConventionResourcesView::Attachments { page } => {
-                                if append
-                                    && s.resource_scope_revision
-                                        .is_some_and(|old| old != page.scope_revision.get())
-                                {
-                                    s.notice=Some((Tone::Attention,"The resource listing changed. Load it again; drafts are kept.".into()));
-                                    return None;
-                                }
-                                if !append {
-                                    s.resources.clear();
-                                }
-                                s.resources.extend(page.items.0);
-                                (
-                                    Some(page.scope_revision.get()),
-                                    page.next_cursor.map(|c| c.0),
-                                )
+                    Ok(ConventionResourcesView::Attachments { page }) => {
+                        let rows = Page::new(page.items.0, page.next_cursor.map(|c| c.0))
+                            .fenced(page.scope_revision.get().to_string());
+                        match s.resources.apply(generation, Ok(rows)) {
+                            Applied::Stale => return None,
+                            Applied::Fenced => {
+                                s.notice = Some((
+                                    Tone::Attention,
+                                    "The resource listing changed. Load it again; drafts are kept."
+                                        .into(),
+                                ));
+                                return None;
                             }
-                            ConventionResourcesView::Catalog { page } => {
-                                if append
-                                    && s.resource_scope_revision
-                                        .is_some_and(|old| old != page.scope_revision.get())
-                                {
-                                    s.notice=Some((Tone::Attention,"The document catalog changed. Load it again; drafts are kept.".into()));
-                                    return None;
-                                }
-                                if !append {
-                                    s.resource_catalog.clear();
-                                }
-                                s.resource_catalog.extend(page.items.0);
-                                (
-                                    Some(page.scope_revision.get()),
-                                    page.next_cursor.map(|c| c.0),
-                                )
-                            }
-                            ConventionResourcesView::Document { view } => {
-                                s.resource_document = Some(view);
-                                (None, None)
-                            }
-                        };
-                        s.resource_next = next;
-                        s.resource_scope_revision = revision;
+                            _ => {}
+                        }
                     }
-                    Err(error) => s.notice = Some((Tone::Attention, error.describe())),
+                    Ok(ConventionResourcesView::Catalog { page }) => {
+                        let rows = Page::new(page.items.0, page.next_cursor.map(|c| c.0))
+                            .fenced(page.scope_revision.get().to_string());
+                        match s.resource_catalog.apply(generation, Ok(rows)) {
+                            Applied::Stale => return None,
+                            Applied::Fenced => {
+                                s.notice = Some((
+                                    Tone::Attention,
+                                    "The document catalog changed. Load it again; drafts are kept."
+                                        .into(),
+                                ));
+                                return None;
+                            }
+                            _ => {}
+                        }
+                    }
+                    Ok(ConventionResourcesView::Document { view }) => {
+                        // A document read has no list; it ends the request that asked for it.
+                        if s.resource_read.end(generation) {
+                            s.resource_document = Some(view);
+                        }
+                    }
+                    Err(error) => {
+                        // The lists' generations are apart, so only the read that asked fails.
+                        let message = error.describe();
+                        let stale = s.resources.apply(generation, Err(message.clone()))
+                            == Applied::Stale
+                            && s.resource_catalog.apply(generation, Err(message.clone()))
+                                == Applied::Stale
+                            && !s.resource_read.end(generation);
+                        if !stale {
+                            s.notice = Some((Tone::Attention, error.describe()));
+                        }
+                    }
                 }
             }
-            (
-                ConventionsSlot::ConventionParents(key, id, generation, append),
-                Reply::Query(outcome),
-            ) => {
+            (ConventionsSlot::ConventionParents(key, id, generation, _), Reply::Query(outcome)) => {
                 let scope = self.convention_scope(&key)?;
                 let s = self.conventions.states.get_mut(&scope).expect("scope");
                 let d = s.move_drafts.get_mut(&id)?;
-                if generation != d.generation {
-                    return None;
-                }
-                match cop::page(outcome) {
-                    Ok(page) => {
-                        if append
-                            && d.scope_revision
-                                .is_some_and(|old| old != page.scope_revision.get())
-                        {
-                            s.notice=Some((Tone::Attention,"The destination listing changed. Load parents again; this move draft is kept.".into()));
+                let page = cop::page(outcome).map(|page| {
+                    Page::new(page.items.0, page.next_cursor.map(|c| c.0))
+                        .fenced(page.scope_revision.get().to_string())
+                });
+                match page {
+                    Ok(page) => match d.choices.apply(generation, Ok(page)) {
+                        Applied::Stale => return None,
+                        Applied::Fenced => {
+                            s.notice=Some((Tone::Attention,"The destination listing changed. Load parents again; this move draft is \
+                                kept.".into()));
                             return None;
                         }
-                        d.scope_revision = Some(page.scope_revision.get());
-                        if !append {
-                            d.choices.clear();
+                        _ => {}
+                    },
+                    Err(error) => {
+                        if d.choices.apply(generation, Err(error.describe())) != Applied::Stale {
+                            s.notice = Some((Tone::Attention, error.describe()));
                         }
-                        d.choices.extend(page.items.0);
-                        d.next = page.next_cursor.map(|c| c.0);
                     }
-                    Err(error) => s.notice = Some((Tone::Attention, error.describe())),
                 }
             }
             (ConventionsSlot::ConventionEditor(key, id, identity), Reply::Task(result)) => {
@@ -738,7 +870,8 @@ impl ConventionsCtl<'_, '_> {
                             draft.busy = false;
                             draft.error = Some(
                                 if matches!(status.phase, ConventionOperationPhase::Completed) {
-                                    "The import completed. Its published record is available in the refreshed listing; this draft is retained for comparison.".into()
+                                    "The import completed. Its published record is available in the \
+                                        refreshed listing; this draft is retained for comparison.".into()
                                 } else {
                                     "The operation did not complete. This draft is retained.".into()
                                 },
@@ -799,7 +932,13 @@ impl ConventionsCtl<'_, '_> {
             },
             (ConventionsSlot::ConventionArtifact(key, token), Reply::Command(outcome)) => {
                 if is_unknown(&outcome) {
-                    self.fail_convention_pipeline(&key,&token,"The source save outcome is unknown. Confirm outcomes reuses the exact original save request; the draft is kept.".into());
+                    self.fail_convention_pipeline(
+                        &key,
+                        &token,
+                        "The source save outcome is unknown. Confirm outcomes reuses the exact \
+                        original save request; the draft is kept."
+                            .into(),
+                    );
                     if let Some(scope) = self.convention_scope(&key) {
                         let identity = self
                             .conventions
@@ -1048,7 +1187,12 @@ impl ConventionsCtl<'_, '_> {
                     operation,
                     "Accepted; current operation status has not been read yet.".into(),
                 );
-                state.notice=Some((Tone::Good,"The convention operation was accepted. Its owning operation determines completion.".into()));
+                state.notice = Some((
+                    Tone::Good,
+                    "The convention operation was accepted. Its owning operation determines \
+                    completion."
+                        .into(),
+                ));
             }
             Ok(change) => {
                 let record = match change {
@@ -1133,13 +1277,22 @@ impl ConventionsCtl<'_, '_> {
                         section: None,
                     });
                 state.confirm_delete = None;
-                state.list_generation = state.list_generation.wrapping_add(1);
-                state.listing = false;
+                state.list.abandon(state.list.generation());
                 state.notice = Some((
                     Tone::Good,
                     record.as_ref().map_or_else(
                         || {
-                            if submission.as_ref().is_some_and(|c|c.operation=="conventions.retire"&&c.target.is_none()) {"Cancellation request recorded. Inspect the operation for its final state.".into()} else {"Convention change confirmed. Refresh to inspect the current records.".into()}
+                            let retired = submission
+                                .as_ref()
+                                .is_some_and(|c| c.operation == "conventions.retire" && c.target.is_none());
+                            if retired {
+                                "Cancellation request recorded. Inspect the operation for its final \
+                                 state."
+                                    .into()
+                            } else {
+                                "Convention change confirmed. Refresh to inspect the current records."
+                                    .into()
+                            }
                         },
                         |r| {
                             format!(
@@ -1151,7 +1304,7 @@ impl ConventionsCtl<'_, '_> {
                     ),
                 ));
                 if self.conventions.scope == scope {
-                    self.load_conventions(false, false);
+                    self.reread_conventions();
                     if let Some(target) = refresh_target {
                         self.read_convention(target, false);
                     }
@@ -1229,13 +1382,13 @@ impl ConventionsCtl<'_, '_> {
                 if !self
                     .conventions
                     .state()
-                    .is_some_and(|s| s.loaded || s.listing)
+                    .is_some_and(|s| s.list.loaded || s.list.loading())
                 {
                     self.load_conventions(false, false);
                 }
             }
             cv::Action::Refresh => {
-                self.load_conventions(false, false);
+                self.reread_conventions();
                 if let Some(mut target) = self
                     .conventions
                     .state()
@@ -1612,8 +1765,12 @@ impl ConventionsCtl<'_, '_> {
     fn import_convention_path(&mut self, path: std::path::PathBuf) {
         use crate::conventions_transfer::{Pipeline, StagedFile};
         if self.conventions.state().is_some_and(|s| s.busy) {
-            self.conventions.state_mut().notice = Some((Tone::Attention,
-                "The current convention change must be confirmed before importing another manifest.".into()));
+            self.conventions.state_mut().notice = Some((
+                Tone::Attention,
+                "The current convention change must be confirmed before importing \
+                    another manifest."
+                    .into(),
+            ));
             return;
         }
         let scope = self.conventions.scope.clone();
@@ -1754,7 +1911,7 @@ impl ConventionsCtl<'_, '_> {
                 let s = self.conventions.state_mut();
                 let base = s.record().cloned();
                 if let Some(id) = &s.resource_editor
-                    && let Some(current) = s.resources.iter().find(|r| r.id.as_str() == id)
+                    && let Some(current) = s.resources.items.iter().find(|r| r.id.as_str() == id)
                     && let Some(d) = s.resource_drafts.get_mut(id)
                 {
                     d.resource = current.clone();
@@ -1857,7 +2014,8 @@ impl ConventionsCtl<'_, '_> {
             crate::conventions_transfer::resource_edit(&scope, &base, content, change)
         }) else {
             self.convention_notice(
-                "The resource name or type is outside the convention owner's limits; nothing was changed."
+                "The resource name or type is outside the convention owner's limits; \
+                    nothing was changed."
                     .into(),
             );
             return;
@@ -1902,7 +2060,7 @@ impl ConventionsCtl<'_, '_> {
         if self
             .conventions
             .state()
-            .is_none_or(|s| !s.loaded && !s.listing && s.list_error.is_none())
+            .is_none_or(|s| !s.list.loaded && !s.list.loading() && s.list.error.is_none())
         {
             self.load_conventions(false, false);
         }
@@ -1983,7 +2141,20 @@ impl ConventionsScreen {
             .filter(|(_, s)| !s.operation_ids.is_empty())
             .map(|(scope, s)| serde_json::json!({"scope":scope,"ids":s.operation_ids}))
             .collect();
-        let searches:Vec<_>=self.states.iter().filter(|(_,s)|s.search_recovery.is_some()||s.last_search.is_some()).map(|(scope,s)|serde_json::json!({"scope":scope,"recovery":s.search_recovery,"last":s.last_search,"preparation":s.search_preparation,"earlier":s.previous_searches})).collect();
+        let searches: Vec<_> = self
+            .states
+            .iter()
+            .filter(|(_, s)| s.search_recovery.is_some() || s.last_search.is_some())
+            .map(|(scope, s)| {
+                serde_json::json!({
+                    "scope": scope,
+                    "recovery": s.search_recovery,
+                    "last": s.last_search,
+                    "preparation": s.search_preparation,
+                    "earlier": s.previous_searches
+                })
+            })
+            .collect();
         if self.pipelines.is_empty()
             && self.submissions.is_empty()
             && operations.is_empty()
@@ -2112,7 +2283,7 @@ impl ConventionsCtl<'_, '_> {
             },
             &recovery.frame,
         ) else {
-            state.list_error =
+            state.list.error =
                 Some("The saved search frame is unreadable; no new search was sent.".into());
             return;
         };
@@ -2120,15 +2291,13 @@ impl ConventionsCtl<'_, '_> {
         let old = state.query_snapshot.as_ref().and_then(cop::first_page);
         let append =
             recovery.append && state.searched && old.is_some() && old == cop::first_page(&input);
-        state.list_generation = state.list_generation.wrapping_add(1);
-        let generation = state.list_generation;
+        let generation = state.list.resume(append).generation;
         state.pending_listing = Some((generation, input));
-        state.listing = true;
-        state.list_error = None;
+        state.list.error = None;
         if !self.dispatch_convention_search(scope.clone(), generation, append, recovery.frame) {
             let s = self.conventions.states.get_mut(&scope).expect("scope");
-            s.listing = false;
-            s.list_error =
+            s.list.abandon(generation);
+            s.list.error =
                 Some("The original search cannot be confirmed while offline or closing.".into());
         }
     }

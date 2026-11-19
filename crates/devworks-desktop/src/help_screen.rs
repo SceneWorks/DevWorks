@@ -1,6 +1,7 @@
 //! Native, read-only Help workspace. All content, versions and permission facts are supplied
 //! by HelpService; search and passage navigation never access the network or infer authority.
 use crate::{
+    paged::Paged,
     route::Route,
     theme,
     widgets::{self, Tone},
@@ -25,18 +26,15 @@ impl Default for HelpScope {
 pub struct HelpScreen {
     pub query: String,
     pub scope: HelpScope,
-    pub topics: Vec<HelpTopicSummary>,
-    pub next_cursor: Option<String>,
-    pub loaded: bool,
-    pub loading: bool,
-    pub error: Option<String>,
+    /// The topics: a search or context read, then each More Help topics page. Its fence is the
+    /// catalog snapshot the rows came from.
+    pub topics: Paged<HelpTopicSummary>,
     pub snapshot: Option<HelpSnapshot>,
     pub selected: Option<(String, String)>,
     pub read: Option<HelpReadView>,
     pub reading: bool,
     pub read_error: Option<String>,
     pub read_cursors: Vec<Option<String>>,
-    pub list_generation: u64,
     pub read_generation: u64,
     pub back: Option<Route>,
     pub generating: bool,
@@ -80,7 +78,7 @@ impl HelpScreen {
                 }
                 if ui
                     .add_enabled(
-                        online.is_ok() && !state.0.loading,
+                        online.is_ok() && !state.0.topics.loading(),
                         egui::Button::new("Refresh Help"),
                     )
                     .clicked()
@@ -105,17 +103,17 @@ impl HelpScreen {
             let enter = input.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
             if ui
                 .add_enabled(
-                    online.is_ok() && !self.loading,
+                    online.is_ok() && !self.topics.loading(),
                     egui::Button::new("Search Help"),
                 )
                 .clicked()
-                || enter && online.is_ok() && !self.loading
+                || enter && online.is_ok() && !self.topics.loading()
             {
                 actions.push(HelpAction::Search);
             }
             if ui
                 .add_enabled(
-                    online.is_ok() && !self.loading,
+                    online.is_ok() && !self.topics.loading(),
                     egui::Button::new("All Help topics"),
                 )
                 .clicked()
@@ -180,12 +178,12 @@ impl HelpScreen {
         ui.add_space(8.0);
         ui.horizontal(|ui| {
             ui.set_min_height(20.0);
-            if self.loading || self.reading {
+            if self.topics.loading() || self.reading {
                 ui.spinner();
             }
             widgets::caption(
                 ui,
-                if self.loading {
+                if self.topics.loading() {
                     "Searching local documentation…"
                 } else if self.reading {
                     "Reading the selected passage…"
@@ -238,17 +236,17 @@ impl HelpScreen {
                 ui.label(RichText::new(format!("{id} · {version}")).strong());
             }
         }
-        if let Some(error) = &self.error {
+        if let Some(error) = &self.topics.error {
             ui.colored_label(theme::RED, error);
         }
-        if self.loaded && self.topics.is_empty() {
+        if self.topics.loaded && self.topics.items.is_empty() {
             ui.label("No matching local documentation. Try another search.");
         }
         egui::ScrollArea::vertical()
             .id_salt("help-results")
             .max_height((ui.available_height() - 40.0).max(80.0))
             .show(ui, |ui| {
-                for topic in &self.topics {
+                for topic in &self.topics.items {
                     ui.scope_builder(
                         egui::UiBuilder::new().scope_id(egui::Id::unique((
                             "help-topic",
@@ -295,10 +293,10 @@ impl HelpScreen {
                     );
                 }
             });
-        if self.next_cursor.is_some()
+        if self.topics.more()
             && ui
                 .add_enabled(
-                    online && !self.loading,
+                    online && !self.topics.loading(),
                     egui::Button::new("More Help topics"),
                 )
                 .clicked()
@@ -398,7 +396,7 @@ impl HelpScreen {
                     }) = &topic.provenance
                         && ui
                             .add_enabled(
-                                online && !self.loading,
+                                online && !self.topics.loading(),
                                 egui::Button::new("All guides for this package"),
                             )
                             .clicked()
@@ -468,8 +466,14 @@ impl HelpScreen {
                                         capability.effect.0,
                                         capability.owner.0
                                     ));
-                                    widgets::chip(ui, if capability.available { "Registered" } else { "Unavailable" }, if capability.available { Tone::Neutral } else { Tone::Attention });
-                                    widgets::caption(ui, "Each request still checks its target, action, permissions and required approval.");
+                                    let (label, tone) = if capability.available {
+                                        ("Registered", Tone::Neutral)
+                                    } else {
+                                        ("Unavailable", Tone::Attention)
+                                    };
+                                    widgets::chip(ui, label, tone);
+                                    widgets::caption(ui, "Each request still checks its target, action, permissions and required \
+                                        approval.");
                                     if let Some(reason) = &capability.unavailable_reason {
                                         ui.label(&reason.0);
                                     }

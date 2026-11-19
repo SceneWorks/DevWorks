@@ -65,7 +65,8 @@ use serde_json::json;
 use std::collections::BTreeMap;
 
 /// Residual risk always attached to a command the parser did not fully explain.
-pub const RESIDUAL_RISK: &str = "Arbitrary programs and scripts are not proven harmless by command inspection; with Full access they run with your user rights.";
+pub const RESIDUAL_RISK: &str = "Arbitrary programs and scripts are not proven harmless by command \
+    inspection; with Full access they run with your user rights.";
 
 #[derive(Debug)]
 pub enum ShellAssessment {
@@ -93,6 +94,7 @@ pub struct DeclaredEffect {
 }
 
 /// Opaque MCP/package tools with declared destructive intent and unresolved targets are held.
+#[cfg(any(test, feature = "test-support"))]
 pub fn assess_declared(
     effect: &DeclaredEffect,
     working_directory: Option<&str>,

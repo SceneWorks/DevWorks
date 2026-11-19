@@ -224,6 +224,7 @@
       "schemas.connections",
       "schemas.objects",
       "schemas.relationships",
+      "schemas.code_references",
       "schemas.index",
       "schemas.refresh",
       "schemas.remove_index",
@@ -585,7 +586,8 @@
       "skills.draft",
       "skills.propose",
       "skills.history",
-      "skills.rollback"
+      "skills.rollback",
+      "skills.set_enabled"
     ]
   },
   {

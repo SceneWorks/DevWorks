@@ -1976,7 +1976,8 @@ impl destructive::FilesystemResolver for Interfering {
             self.fired.store(true, Ordering::SeqCst);
             std::fs::create_dir_all(format!("{nested}/.git")).unwrap();
             self.sql(format!(
-                "INSERT INTO repositories(id,canonical_location,revision) VALUES('repo-n','{nested}',1)"
+                "INSERT INTO repositories(id,canonical_location,revision) \
+                    VALUES('repo-n','{nested}',1)"
             ));
         }
         if self.add_membership && !self.fired.load(Ordering::SeqCst) && self.authorized() {
@@ -3555,10 +3556,36 @@ fn package_activation_requires_an_exact_native_grant_in_project_scope() {
         ),
         (
             "addons.configure",
-            json!({"kind":"addons.configure","packageId":"pack-a","expectedRevision":"1","config":{"schema":{"schemaId":"pack-a/config","revision":"1","sha256":"a".repeat(64)},"value":{}}}),
+            json!({
+                "kind": "addons.configure",
+                "packageId": "pack-a",
+                "expectedRevision": "1",
+                "config": {
+                    "schema": {
+                        "schemaId": "pack-a/config",
+                        "revision": "1",
+                        "sha256": "a".repeat(64)
+                    },
+                    "value": {}
+                }
+            }),
         ),
     ] {
-        let frame = if op == "addons.configure" { json!({"protocol":"1.0-draft.1","mode":"Command","requestKey":"native-pack","body":command}) } else { json!({"protocol":"1.0-draft.1","requestKey":"native-pack","command":command}) }.to_string();
+        let frame = if op == "addons.configure" {
+            json!({
+                "protocol": "1.0-draft.1",
+                "mode": "Command",
+                "requestKey": "native-pack",
+                "body": command
+            })
+        } else {
+            json!({
+                "protocol": "1.0-draft.1",
+                "requestKey": "native-pack",
+                "command": command
+            })
+        }
+        .to_string();
         assert_eq!(
             reason(decide(&fx, &agent, op, Mode::Command, &frame)),
             Some(DenialReason::EnforcementUnavailable),

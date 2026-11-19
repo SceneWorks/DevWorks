@@ -1,5 +1,6 @@
 //! Count local phases through their writer acknowledgements, without holding a lock while
 //! waiting for a writer that may consult the same lifecycle state. Network never holds a phase.
+use crate::locks::LockExt;
 use crate::ports::storage::{
     ApplicationStore, StorageError, WriteOptions, WriteTransaction, run_write,
 };
@@ -19,7 +20,7 @@ pub struct LocalPhase {
 }
 impl PublicationFence {
     pub fn enter(self: &Arc<Self>) -> Result<LocalPhase, StorageError> {
-        let mut state = self.state.lock().unwrap_or_else(|p| p.into_inner());
+        let mut state = self.state.locked();
         if state.closed {
             return Err(StorageError::Cancelled);
         }
@@ -29,13 +30,13 @@ impl PublicationFence {
         })
     }
     pub fn is_closed(&self) -> bool {
-        self.state.lock().unwrap_or_else(|p| p.into_inner()).closed
+        self.state.locked().closed
     }
     pub fn begin_close(&self) {
-        self.state.lock().unwrap_or_else(|p| p.into_inner()).closed = true;
+        self.state.locked().closed = true;
     }
     pub fn drain(&self) {
-        let mut state = self.state.lock().unwrap_or_else(|p| p.into_inner());
+        let mut state = self.state.locked();
         while state.active != 0 {
             state = self.changed.wait(state).unwrap_or_else(|p| p.into_inner());
         }
@@ -67,7 +68,7 @@ impl PublicationFence {
 }
 impl Drop for LocalPhase {
     fn drop(&mut self) {
-        let mut state = self.fence.state.lock().unwrap_or_else(|p| p.into_inner());
+        let mut state = self.fence.state.locked();
         state.active -= 1;
         self.fence.changed.notify_all();
     }

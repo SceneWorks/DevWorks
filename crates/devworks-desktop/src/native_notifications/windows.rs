@@ -69,7 +69,11 @@ fn unavailable(error: impl std::fmt::Display) -> OsNotificationPermission {
 }
 pub(super) fn permission(_request: bool) -> OsNotificationPermission {
     let Some(id) = identity() else {
-        return OsNotificationPermission::Unavailable("Windows notifications require the installed app's package or registered AppUserModelID; this process has neither".into());
+        return OsNotificationPermission::Unavailable(
+            "Windows notifications require the installed app's package or registered \
+            AppUserModelID; this process has neither"
+                .into(),
+        );
     };
     let _apartment = match Apartment::new() {
         Ok(a) => a,
@@ -113,7 +117,13 @@ pub(super) fn submit(notification: &OsNotification) -> OsDeliveryOutcome {
     };
     let created = (|| -> windows::core::Result<_> {
         let xml = XmlDocument::new()?;
-        xml.LoadXml(&HSTRING::from(format!("<toast><visual><binding template=\"ToastGeneric\"><text>{}</text><text>{}</text></binding></visual></toast>", xml_text(&preview(&notification.title, 128)), xml_text(&preview(&notification.body, 512)))))?;
+        xml.LoadXml(&HSTRING::from(format!(
+            "<toast><visual><binding \
+            template=\"ToastGeneric\"><text>{}</text><text>{}</text></binding></visu\
+            al></toast>",
+            xml_text(&preview(&notification.title, 128)),
+            xml_text(&preview(&notification.body, 512))
+        )))?;
         let toast = ToastNotification::CreateToastNotification(&xml)?;
         let key = sha256_hex(notification.notification_id.as_str().as_bytes());
         toast.SetTag(&HSTRING::from(&key[..16]))?;

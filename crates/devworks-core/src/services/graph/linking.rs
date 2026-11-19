@@ -178,6 +178,18 @@ impl IndexRead for BoundedIndex<'_> {
                 .nodes_qualified(generation, qualified_name, limit)?,
         )
     }
+    fn nodes_qualified_after(
+        &self,
+        generation: &Id,
+        qualified_name: &str,
+        after: Option<(&str, &str)>,
+        limit: u16,
+    ) -> Result<Vec<StoredNode>, StorageError> {
+        self.nodes(
+            self.read
+                .nodes_qualified_after(generation, qualified_name, after, limit)?,
+        )
+    }
 }
 
 pub(super) fn link(

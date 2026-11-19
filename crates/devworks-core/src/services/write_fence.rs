@@ -5,6 +5,7 @@
 //! each admitted unit has finished, so no write outlives the close. The stop flag is an atomic
 //! (not state behind the lock), so asking whether the fence is closed never waits, even inside
 //! a unit that holds the read side while a close is queued.
+use crate::locks::{LockExt, RwLockExt};
 use crate::ports::storage::{
     ApplicationStore, StorageError, WriteOptions, WriteTransaction, run_write,
 };
@@ -27,7 +28,7 @@ impl WriteFence {
     /// [`Self::stop`], then waits for every admitted unit's commit acknowledgment.
     pub fn close(&self) {
         self.stop();
-        drop(self.units.write().unwrap_or_else(|p| p.into_inner()));
+        drop(self.units.write_locked());
     }
     /// Whether the fence refuses new units. Volatile host previews must disappear when
     /// shutdown fences the owned producer, even when an unclosed transport still holds its
@@ -39,16 +40,10 @@ impl WriteFence {
     /// admission unit's fence is released, including the gap before a producer installs its
     /// cancellation token. Shutdown never scans settled history.
     pub fn admitted(&self) -> HashSet<Id> {
-        self.admitted
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .clone()
+        self.admitted.locked().clone()
     }
     pub fn forget_closed(&self, id: &Id) {
-        self.admitted
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .remove(id);
+        self.admitted.locked().remove(id);
     }
     /// Trusted host publication preparation may stage bounded local artifacts under this fence.
     /// Never call a provider, network transport or package process inside this closure.
@@ -56,7 +51,7 @@ impl WriteFence {
         &self,
         work: impl FnOnce() -> Result<T, StorageError>,
     ) -> Result<T, StorageError> {
-        let admitted = self.units.read().unwrap_or_else(|p| p.into_inner());
+        let admitted = self.units.read_locked();
         if self.is_closed() {
             return Err(StorageError::Cancelled);
         }
@@ -85,16 +80,13 @@ impl WriteFence {
         T: Send + 'static,
         F: FnOnce(&mut dyn WriteTransaction) -> Result<T, StorageError> + Send + 'static,
     {
-        let unit = self.units.read().unwrap_or_else(|p| p.into_inner());
+        let unit = self.units.read_locked();
         if self.is_closed() {
             return Err(StorageError::Cancelled);
         }
         let result = run_write(store, WriteOptions::observed(), work);
         if let Some(id) = result.as_ref().ok().and_then(attempt) {
-            self.admitted
-                .lock()
-                .unwrap_or_else(|p| p.into_inner())
-                .insert(id);
+            self.admitted.locked().insert(id);
         }
         drop(unit);
         result

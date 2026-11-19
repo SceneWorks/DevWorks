@@ -11,11 +11,11 @@ pub fn frames() -> Vec<(&'static str, Vec<u8>)> {
     vec![
         (
             "instructions_discover_first",
-            iop::query(b, iop::discover(None)),
+            iop::query(b, iop::discover(None, None)),
         ),
         (
             "instructions_discover_cursor",
-            iop::query(b, iop::discover(Some("cursor-1"))),
+            iop::query(b, iop::discover(None, Some("cursor-1"))),
         ),
         (
             "instructions_role_read",
@@ -43,13 +43,13 @@ pub fn frames() -> Vec<(&'static str, Vec<u8>)> {
         ),
         (
             "instructions_skill_draft_new",
-            iop::command(b, iop::draft(Kind::Skill, None, "lint", &content)),
+            iop::command(b, iop::draft(Kind::Skill, None, None, "lint", &content)),
         ),
         (
             "instructions_skill_draft_update",
             iop::command(
                 b,
-                iop::draft(Kind::Skill, Some(("skill-1", 7)), "lint", &content),
+                iop::draft(Kind::Skill, None, Some(("skill-1", 7)), "lint", &content),
             ),
         ),
         (
@@ -58,11 +58,27 @@ pub fn frames() -> Vec<(&'static str, Vec<u8>)> {
                 b,
                 iop::draft(
                     Kind::Role,
+                    None,
                     Some(("role-worker", 2)),
                     "Implementation agent role",
                     &content,
                 ),
             ),
+        ),
+        (
+            "instructions_discover_project",
+            iop::query(b, iop::discover(Some("project-a"), None)),
+        ),
+        (
+            "instructions_skill_draft_project",
+            iop::command(
+                b,
+                iop::draft(Kind::Skill, Some("project-a"), None, "lint", &content),
+            ),
+        ),
+        (
+            "instructions_skill_set_enabled",
+            iop::command(b, iop::set_enabled("skill-1", 3, false)),
         ),
         (
             "instructions_skill_rollback",

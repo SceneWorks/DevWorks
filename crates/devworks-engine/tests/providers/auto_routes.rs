@@ -45,7 +45,6 @@ fn attempt(
         provider_model_id: None,
         connection_id: route.connection_id.clone(),
         endpoint_profile: route.endpoint_profile,
-        access_mode: "Api".into(),
         service_tier: None,
         input_tokens: Some(10),
         cache_write_ttl_ms: None,

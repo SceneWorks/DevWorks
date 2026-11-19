@@ -1,4 +1,5 @@
 use super::*;
+use devworks_core::locks::LockExt;
 
 #[test]
 fn native_price_more_gesture_survives_same_frame_catalog_hint_without_replacing_partial_page() {
@@ -31,12 +32,12 @@ fn native_price_more_gesture_survives_same_frame_catalog_hint_without_replacing_
     let _writer = WriterHold::new(engine.host().runtime().store().clone());
     press(&mut h, "Apply price catalog filters");
 
-    let before_rows = h.state().usage.prices.as_ref().unwrap().items.0.len();
-    assert!(before_rows < 105 && h.state().usage.prices.as_ref().unwrap().has_more);
+    let before_rows = h.state().usage.price_view().unwrap().items.0.len();
+    assert!(before_rows < 105 && h.state().usage.price_view().unwrap().has_more);
     h.get_by_role_and_label(Role::Button, "Load more price rows")
         .scroll_to_me();
     settle(&mut h);
-    let before_generation = h.state().usage.price_generation;
+    let before_generation = h.state().usage.prices.generation();
     let target = h
         .get_by_role_and_label(Role::Button, "Load more price rows")
         .rect();
@@ -65,9 +66,12 @@ fn native_price_more_gesture_survives_same_frame_catalog_hint_without_replacing_
     h.get_by_role_and_label(Role::Button, "Load more price rows")
         .click();
     h.step();
+    // Only the cursor append started (one request more): a background revalidation did not
+    // start a first-page read that would replace the loaded page set in the gesture frame.
+    let append_generation = h.state().usage.prices.generation();
     assert_eq!(
-        h.state().usage.price_generation,
-        before_generation,
+        append_generation,
+        before_generation + 1,
         "background revalidation cannot supersede the cursor's loaded page set in the gesture frame"
     );
     assert!(
@@ -75,7 +79,7 @@ fn native_price_more_gesture_survives_same_frame_catalog_hint_without_replacing_
             .client()
             .unwrap()
             .is_pending(&devworks_desktop::backend::Slot::Usage(
-                devworks_desktop::usage_ops::UsageSlot::Prices(before_generation, true)
+                devworks_desktop::usage_ops::UsageSlot::Prices(append_generation, true)
             )),
         "the single pointer gesture must submit its cursor append"
     );
@@ -88,8 +92,8 @@ fn native_price_more_gesture_survives_same_frame_catalog_hint_without_replacing_
     );
     gate.open();
     settle(&mut h);
-    assert_eq!(h.state().usage.prices.as_ref().unwrap().items.0.len(), 105);
-    assert_eq!(h.state().usage.price_pages, 2);
+    assert_eq!(h.state().usage.price_view().unwrap().items.0.len(), 105);
+    assert_eq!(h.state().usage.prices.pages(), 2);
     assert_eq!(
         devworks_core::ports::storage::read_snapshot(
             &**engine.host().runtime().store(),
@@ -99,6 +103,71 @@ fn native_price_more_gesture_survives_same_frame_catalog_hint_without_replacing_
         .unwrap(),
         sequence,
         "the continuation used the identical authoritative snapshot"
+    );
+}
+
+#[test]
+fn native_price_re_read_after_a_saved_override_keeps_the_pages_load_more_added() {
+    let _case = native_runtime_case();
+    let root = Root::new("usage-price-reread-pages");
+    let engine = start(&root);
+    startup::settled(&engine, &root);
+    let b = engine.backend();
+    let model = "reread-paged-model";
+    ops::configured(b.command("router.configure",&ops::router_configure(&*b, serde_json::from_value(json!({"kind":"Model","model":{"id":model,"displayName":"Re-read paged model","endpointProfile":"CompatibleChat","upstreamModelId":"fixture/reread-paged","enabled":true,"tierMemberships":[],"efforts":[],"imageInput":false,"tools":false,"revision":"1"}})).unwrap()))).unwrap();
+    let tariffs=(0..105).map(|i|json!({"upstreamModelId":"fixture/reread-paged","serviceTier":format!("service-{i:03}"),"modality":"Text","chargeKind":"Input","unit":"Token","units":"1000000","amountUsd":"1"})).collect::<Vec<_>>();
+    uops::overridden(b.command("router.price_override",&uops::command(&*b, command_input("router.price_override", json!({"modelId":model,"expectedRevision":"1","change":{"kind":"Set","tariffs":tariffs}}))))).unwrap();
+    let gate = Gate::new("router.price_status");
+    let mut h = harness(
+        shell_with(Ok(gate.over(b.clone())), &root, Script::default(), None),
+        1800.0,
+        1800.0,
+    );
+    settle(&mut h);
+    h.state_mut().navigate(Route::Usage);
+    settle(&mut h);
+    press(&mut h, "Prices");
+    {
+        // The continuation needs one unchanged real event snapshot.
+        let _writer = WriterHold::new(engine.host().runtime().store().clone());
+        press(&mut h, "Apply price catalog filters");
+        assert!(h.state().usage.price_view().unwrap().has_more);
+        press(&mut h, "Load more price rows");
+        assert_eq!(h.state().usage.price_view().unwrap().items.0.len(), 105);
+        assert_eq!(h.state().usage.prices.pages(), 2);
+    }
+    // Saving an override re-reads the applied catalog: both pages are read again and joined
+    // into one view, so the rows (and the editor they allow) stay.
+    press(&mut h, &format!("Edit tariff override for {model}"));
+    // The re-read's first request waits at the gate until the save's own writes are done and
+    // the writer slot is held, so both pages are read at one event snapshot.
+    h.get_by_role_and_label(Role::Button, "Save tariff override")
+        .scroll_to_me();
+    settle(&mut h);
+    gate.close();
+    h.get_by_role_and_label(Role::Button, "Save tariff override")
+        .click();
+    let deadline = std::time::Instant::now() + SETTLE_BOUND;
+    while !gate.has_waiter() {
+        h.step();
+        assert!(std::time::Instant::now() < deadline, "the first request");
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    let writer = WriterHold::new(engine.host().runtime().store().clone());
+    gate.open();
+    step_until(&mut h, "the saved override", |s| {
+        !s.usage.price_busy && s.usage.price_draft.is_none()
+    });
+    step_until(&mut h, "the re-read", |s| !s.usage.prices.loading());
+    drop(writer);
+    assert_eq!(h.state().usage.prices.pages(), 2);
+    let view = h.state().usage.price_view().unwrap();
+    assert!(!view.has_more);
+    assert_eq!(view.items.0.len(), 105);
+    assert!(
+        h.state().usage.price_error.is_none(),
+        "{:?}",
+        h.state().usage.price_error
     );
 }
 
@@ -171,7 +240,7 @@ impl WriterHold {
         let worker = std::thread::spawn(move || {
             run_write(&*store, options, move |_| {
                 entered.send(()).map_err(|_| StorageError::Cancelled)?;
-                let mut open = gate.0.lock().unwrap_or_else(|p| p.into_inner());
+                let mut open = gate.0.locked();
                 while !*open {
                     open = gate.1.wait(open).unwrap_or_else(|p| p.into_inner());
                 }
@@ -192,7 +261,7 @@ impl WriterHold {
 impl Drop for WriterHold {
     fn drop(&mut self) {
         self.cancel.cancel();
-        *self.release.0.lock().unwrap_or_else(|p| p.into_inner()) = true;
+        *self.release.0.locked() = true;
         self.release.1.notify_one();
         let result = self.worker.take().expect("owned writer worker").join();
         if !std::thread::panicking() {

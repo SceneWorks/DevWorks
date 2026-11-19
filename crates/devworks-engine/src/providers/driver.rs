@@ -5,8 +5,9 @@ use super::{
     source::NativeProviderSource,
 };
 use crate::usage::UsageRuntime;
+use devworks_core::locks::LockExt;
 use devworks_core::{
-    context::InvocationContext,
+    context::{InvocationContext, PrincipalKind},
     fingerprint::sha256_hex,
     ports::{
         provider_http::{StreamLimits, StreamingHttp},
@@ -63,6 +64,7 @@ impl ProviderComposition {
     }
     /// Host-composed repository source used by direct native provider owners. Boot installs
     /// its registered indexing source automatically.
+    #[cfg(any(test, feature = "test-support"))]
     pub fn with_repository_source(
         mut self,
         store: Arc<dyn ApplicationStore>,
@@ -124,7 +126,9 @@ pub struct NativeInvocation {
 #[derive(Clone)]
 pub struct NestedToolInference {
     pub tool_operation: devworks_core::protocol::OperationId,
-    pub call: ToolCallKey,
+    /// The agent's dispatching tool call; `None` for a package invocation a person or an event
+    /// handler started, which runs in that person's package inference session.
+    pub call: Option<ToolCallKey>,
 }
 pub struct ProviderInvocation {
     pub accounting: DriveOutcome,
@@ -184,7 +188,11 @@ impl NativePreparation {
                             == request.admission_key
                     {
                         let captured = devworks_core::services::usage::accounting::snapshot(&row)?;
-                        let expected=match &captured.selection {devworks_core::services::router::accounting::AttemptSelection::NativeGeneration{route,..}=>route.as_ref(),selection=>selection};
+                        use devworks_core::services::router::accounting::AttemptSelection;
+                        let expected = match &captured.selection {
+                            AttemptSelection::NativeGeneration { route, .. } => route.as_ref(),
+                            selection => selection,
+                        };
                         if serde_json::to_value(expected).ok()
                             != serde_json::to_value(&request.selection).ok()
                         {
@@ -363,9 +371,6 @@ impl NativeProviders {
     /// intersects these with the CURRENT registered model/profile/account and current policy.
     pub fn capability_registrations(&self) -> &[Capabilities] {
         &self.composition.capabilities
-    }
-    pub fn embedding_registrations(&self) -> &[EmbeddingRegistration] {
-        &self.composition.embedding_spaces
     }
     /// Trusted native UI read only. The host must authorize the session under its current
     /// user context before serving this preview; generic gateway/tools cannot publish it.
@@ -745,17 +750,32 @@ impl NativeProviders {
         let result = if matches!(accounting, DriveOutcome::AlreadyDispatched) {
             self.recorded_result(&request_id, &admission_key)?
         } else {
-            result.lock().unwrap_or_else(|p| p.into_inner()).clone()
+            result.locked().clone()
         };
         Ok(ProviderInvocation { accounting, result })
     }
     /// The nested request's tool call must still be dispatching for this principal and session.
+    /// A person's or event handler's package invocation has no tool call: its session must be
+    /// that person's package inference session.
     fn require_dispatching_call(
         &self,
         context: &InvocationContext,
         session_id: &Id,
         nested: &NestedToolInference,
     ) -> Result<(), StorageError> {
+        let Some(call) = &nested.call else {
+            let session = read_snapshot(self.store.as_ref(), &ReadOptions::default(), |read| {
+                read.sessions().session(session_id)
+            })?
+            .ok_or(StorageError::ScopeDenied)?;
+            return if context.principal_kind() == PrincipalKind::Human
+                && crate::package_host::inference::is_person_session(&session, context.principal())
+            {
+                Ok(())
+            } else {
+                Err(StorageError::ScopeDenied)
+            };
+        };
         let operation = read_snapshot(self.store.as_ref(), &ReadOptions::default(), |read| {
             read.operations().operation(&nested.tool_operation)
         })?
@@ -766,7 +786,7 @@ impl NativeProviders {
             || operation.state != devworks_core::protocol::OperationState::Dispatching
             || payload.get("principal") != Some(&serde_json::json!(context.principal()))
             || payload.get("sessionId") != Some(&serde_json::json!(session_id))
-            || payload.get("call") != Some(&serde_json::json!(nested.call))
+            || payload.get("call") != Some(&serde_json::json!(call))
         {
             return Err(StorageError::ScopeDenied);
         }
@@ -976,7 +996,6 @@ impl NativeProviders {
                 provider_model_id: Some(registration.upstream_model_id.clone()),
                 connection_id: connection.id,
                 endpoint_profile: "Embedding".into(),
-                access_mode: "Api".into(),
                 service_tier: None,
                 input_tokens: None,
                 cache_write_ttl_ms: None,
@@ -1305,7 +1324,7 @@ impl OwnedInferenceSource for LazySource {
                     Ok(())
                 })
         }));
-        *self.shared.lock().unwrap_or_else(|p| p.into_inner()) = Some(prepared);
+        *self.shared.locked() = Some(prepared);
         let result = source.start_cancellable(attempt, cancellation);
         self.inner = Some(source);
         result
@@ -1342,11 +1361,7 @@ struct LazySink {
 impl LazySink {
     fn get(&mut self) -> Result<Option<&mut ProviderSink>, StorageError> {
         if self.inner.is_none()
-            && let Some(prepared) = self
-                .shared
-                .lock()
-                .unwrap_or_else(|p| p.into_inner())
-                .clone()
+            && let Some(prepared) = self.shared.locked().clone()
         {
             let embedding = match &self.request.input {
                 InferenceInput::Embedding {

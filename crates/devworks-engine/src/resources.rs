@@ -12,6 +12,7 @@
 //!   `Shutdown` reconciliation.
 use crate::store;
 use crate::workers::Ticker;
+use devworks_core::locks::LockExt;
 use devworks_core::ports::Clock;
 use devworks_core::ports::storage::WriteOptions;
 use devworks_core::ports::storage::{ApplicationStore, StorageError, StoredResource};
@@ -86,7 +87,7 @@ impl Housekeeper {
         let wall = self.clock.now_ms().get();
         let mono = Instant::now();
         let woke = {
-            let mut last = self.last.lock().unwrap_or_else(|p| p.into_inner());
+            let mut last = self.last.locked();
             let woke = last.is_some_and(|(m0, w0)| {
                 let mono_ms =
                     i64::try_from(mono.duration_since(m0).as_millis()).unwrap_or(i64::MAX);

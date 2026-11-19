@@ -39,7 +39,9 @@ fn package_id(p: &str) -> Result<(), StorageError> {
     Ok(())
 }
 
-const PACKAGE: &str = "package_id,revision,enabled,installed,active_digest,predecessor_digest,pending_digest,state_generation,config_json,config_revision,trust_json,failure_json,created_at,updated_at";
+const PACKAGE: &str = "package_id,revision,enabled,installed,active_digest,predecessor_digest,\
+    pending_digest,state_generation,config_json,config_revision,trust_json,\
+    failure_json,created_at,updated_at";
 type PackageRaw = (
     String,
     i64,
@@ -118,7 +120,9 @@ fn packages(
     rows.into_iter().map(package_of).collect()
 }
 
-const VERSION: &str = "package_id,manifest_digest,bundle_digest,version,publisher_id,signer_key,inspection_json,provenance_json,phase,waits_json,approval_json,created_at,updated_at";
+const VERSION: &str = "package_id,manifest_digest,bundle_digest,version,publisher_id,\
+    signer_key,inspection_json,provenance_json,phase,waits_json,\
+    approval_json,created_at,updated_at";
 type VersionRaw = (
     String,
     String,
@@ -185,13 +189,17 @@ fn version(
 fn versions(conn: &Connection, pkg: &str) -> Result<Vec<StoredPackageVersion>, StorageError> {
     let rows: Vec<VersionRaw> = db(conn
         .prepare_cached(&format!(
-            "SELECT * FROM (SELECT {VERSION} FROM package_versions WHERE package_id=?1 ORDER BY created_at DESC, manifest_digest DESC LIMIT 512) ORDER BY created_at, manifest_digest"
+            "SELECT * FROM (SELECT {VERSION} FROM package_versions WHERE \
+                package_id=?1 ORDER BY created_at DESC, manifest_digest DESC LIMIT 512) \
+                ORDER BY created_at, manifest_digest"
         ))
         .and_then(|mut s| s.query_map([pkg], version_row)?.collect()))?;
     rows.into_iter().map(version_of).collect()
 }
 
-const PROPOSAL: &str = "id,revision,package_id,manifest_digest,bundle_digest,version,state,base_package_id,originator,origin_json,summary_json,decided_by,decided_at,decision_json,created_at";
+const PROPOSAL: &str = "id,revision,package_id,manifest_digest,bundle_digest,version,state,\
+    base_package_id,originator,origin_json,summary_json,decided_by,\
+    decided_at,decision_json,created_at";
 type ProposalRaw = (
     String,
     i64,
@@ -280,7 +288,9 @@ fn generation(
 ) -> Result<Option<StoredStateGeneration>, StorageError> {
     db(conn
         .prepare_cached(
-            "SELECT package_id,generation,manifest_digest,schema_digest,seeded_from,seed_revision,created_at FROM package_state_generations WHERE package_id=?1 AND generation=?2",
+            "SELECT package_id,generation,manifest_digest,schema_digest,seeded_from,\
+                seed_revision,created_at FROM package_state_generations WHERE \
+                package_id=?1 AND generation=?2",
         )
         .and_then(|mut s| {
             s.query_row(params![pkg, g], |r| {
@@ -540,7 +550,11 @@ impl PackageRegistry for Unit<'_> {
     ) -> Result<StoredPackage, StorageError> {
         check_package(p)?;
         let changed = db(self.conn.execute(
-            "UPDATE packages SET revision=revision+1,enabled=?3,installed=?4,active_digest=?5,predecessor_digest=?6,pending_digest=?7,state_generation=?8,config_json=?9,config_revision=?10,trust_json=?11,failure_json=?12,updated_at=max(created_at,?13) WHERE package_id=?1 AND revision=?2",
+            "UPDATE packages SET revision=revision+1,enabled=?3,installed=?4,\
+                active_digest=?5,predecessor_digest=?6,pending_digest=?7,\
+                state_generation=?8,config_json=?9,config_revision=?10,trust_json=?11,\
+                failure_json=?12,updated_at=max(created_at,?13) WHERE package_id=?1 AND \
+                revision=?2",
             params![
                 p.package_id,
                 expected_revision,
@@ -742,11 +756,17 @@ impl PackageRegistry for Unit<'_> {
         }
         // Retain the retiring generation's final live state.
         db(self.conn.execute(
-            "UPDATE package_state_generations SET retained_revision=(SELECT revision FROM package_handler_state h WHERE h.package_id=?1),retained_state_json=(SELECT state_json FROM package_handler_state h WHERE h.package_id=?1) WHERE package_id=?1 AND generation=(SELECT generation FROM package_handler_state h WHERE h.package_id=?1)",
+            "UPDATE package_state_generations SET retained_revision=(SELECT revision \
+                FROM package_handler_state h WHERE h.package_id=?1),\
+                retained_state_json=(SELECT state_json FROM package_handler_state h \
+                WHERE h.package_id=?1) WHERE package_id=?1 AND generation=(SELECT \
+                generation FROM package_handler_state h WHERE h.package_id=?1)",
             [&g.package_id],
         ))?;
         db(self.conn.execute(
-            "INSERT INTO package_state_generations(package_id,generation,manifest_digest,schema_digest,seeded_from,seed_revision,created_at) VALUES(?1,?2,?3,?4,?5,?6,?7)",
+            "INSERT INTO package_state_generations(package_id,generation,\
+                manifest_digest,schema_digest,seeded_from,seed_revision,created_at) \
+                VALUES(?1,?2,?3,?4,?5,?6,?7)",
             params![
                 g.package_id,
                 g.generation,
@@ -767,7 +787,10 @@ impl PackageRegistry for Unit<'_> {
         let state = state.cloned().unwrap_or(Value::Null);
         // (The live handler state of the new generation.)
         db(self.conn.execute(
-            "INSERT INTO package_handler_state(package_id,generation,revision,state_json) VALUES(?1,?2,?3,?4) ON CONFLICT(package_id) DO UPDATE SET generation=excluded.generation,revision=excluded.revision,state_json=excluded.state_json",
+            "INSERT INTO package_handler_state(package_id,generation,revision,\
+                state_json) VALUES(?1,?2,?3,?4) ON CONFLICT(package_id) DO UPDATE SET \
+                generation=excluded.generation,revision=excluded.revision,\
+                state_json=excluded.state_json",
             params![g.package_id, g.generation, revision, text(&state)],
         ))?;
         Ok(())
@@ -783,14 +806,21 @@ impl PackageRegistry for Unit<'_> {
             object("index", i)?;
         }
         db(self.conn.execute(
-            "INSERT INTO package_indexes(source_key,location,public_key,status,index_json,error,fetched_at) VALUES(?1,?2,?3,?4,?5,?6,?7) ON CONFLICT(source_key) DO UPDATE SET location=excluded.location,public_key=excluded.public_key,status=excluded.status,index_json=excluded.index_json,error=excluded.error,fetched_at=excluded.fetched_at",
+            "INSERT INTO package_indexes(source_key,location,public_key,status,\
+                index_json,error,fetched_at) VALUES(?1,?2,?3,?4,?5,?6,?7) ON \
+                CONFLICT(source_key) DO UPDATE SET location=excluded.location,\
+                public_key=excluded.public_key,status=excluded.status,\
+                index_json=excluded.index_json,error=excluded.error,\
+                fetched_at=excluded.fetched_at",
             params![
                 x.source_key,
                 x.location,
                 x.public_key,
                 x.status,
                 x.index.as_ref().map(text),
-                x.error.as_deref().map(|e| e.chars().take(4096).collect::<String>()),
+                x.error
+                    .as_deref()
+                    .map(|e| e.chars().take(4096).collect::<String>()),
                 x.fetched_at_ms,
             ],
         ))?;
@@ -815,7 +845,10 @@ impl PackageRegistry for Unit<'_> {
             digest("observed digest", d)?;
         }
         db(self.conn.execute(
-            "INSERT INTO package_observations(package_id,availability,version,digest,revision) VALUES(?1,?2,?3,?4,1) ON CONFLICT(package_id) DO UPDATE SET availability=excluded.availability,version=excluded.version,digest=excluded.digest,revision=revision+1",
+            "INSERT INTO package_observations(package_id,availability,version,digest,\
+                revision) VALUES(?1,?2,?3,?4,1) ON CONFLICT(package_id) DO UPDATE SET \
+                availability=excluded.availability,version=excluded.version,\
+                digest=excluded.digest,revision=revision+1",
             params![o.package_id, o.availability, o.version, o.digest],
         ))?;
         Ok(())

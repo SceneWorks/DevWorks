@@ -2,6 +2,7 @@
 //! This driver executes injected metadata sources, never synthesizes provider inference.
 use crate::workers::Ticker;
 use crate::{dispatch::first, store};
+use devworks_core::locks::LockExt;
 use devworks_core::ports::process::ProcessHost;
 use devworks_core::ports::storage::*;
 use devworks_core::protocol::Id;
@@ -146,7 +147,7 @@ impl UsageRuntime {
         })?;
         let cancellation = Cancellation::new();
         {
-            let mut active = self.active.lock().unwrap_or_else(|p| p.into_inner());
+            let mut active = self.active.locked();
             if self.ticker.is_stopped() {
                 return Err(StorageError::Cancelled);
             }
@@ -263,7 +264,7 @@ impl UsageRuntime {
             )
         })?;
         {
-            let _active = self.active.lock().unwrap_or_else(|p| p.into_inner());
+            let _active = self.active.locked();
             if self.ticker.is_stopped() {
                 return Err(StorageError::Cancelled);
             }
@@ -280,26 +281,55 @@ impl UsageRuntime {
         let preparing = Preparing(runtime.clone());
         owned_thread(move || {
             let _preparing = preparing;
-            if cancellation.as_ref().is_some_and(Cancellation::is_cancelled) { return Err(StorageError::Cancelled); }
-            if let Some(preparation)=preparation {
-                let refreshed=preparation.prepare(&context,&logical,&request)?;
-                if let Some(refreshed)=refreshed {
-                    if let Some(selection)=refreshed.recorded_selection { request.selection=selection; }
-                    if let Some(effort)=refreshed.native_effort {
-                        use devworks_core::services::router::accounting::AttemptSelection;
-                        let route=match request.selection {AttemptSelection::NativeGeneration{route,..}=>*route,other=>other};
-                        if matches!(route, AttemptSelection::Conversation{..}) {
-                            request.selection=AttemptSelection::NativeGeneration {route:Box::new(route),requested_effort:effort.requested.map(|x|x.as_str().into()),effective_effort:effort.effective.map(|x|x.as_str().into())};
-                        }else{return Err(StorageError::ScopeDenied);}
+            if cancellation
+                .as_ref()
+                .is_some_and(Cancellation::is_cancelled)
+            {
+                return Err(StorageError::Cancelled);
+            }
+            if let Some(preparation) = preparation {
+                let refreshed = preparation.prepare(&context, &logical, &request)?;
+                if let Some(refreshed) = refreshed {
+                    if let Some(selection) = refreshed.recorded_selection {
+                        request.selection = selection;
                     }
-                    request.quote=refreshed.quote;
-                    request.price_generation=refreshed.price_generation;
-                    request.override_revision=refreshed.override_revision;
-                    if let devworks_core::services::router::accounting::AttemptSelection::Embedding {connection_revision,..}=&mut request.selection { *connection_revision=refreshed.connection_revision; }
+                    use devworks_core::services::router::accounting::AttemptSelection;
+                    if let Some(effort) = refreshed.native_effort {
+                        let route = match request.selection {
+                            AttemptSelection::NativeGeneration { route, .. } => *route,
+                            other => other,
+                        };
+                        if matches!(route, AttemptSelection::Conversation { .. }) {
+                            request.selection = AttemptSelection::NativeGeneration {
+                                route: Box::new(route),
+                                requested_effort: effort.requested.map(|x| x.as_str().into()),
+                                effective_effort: effort.effective.map(|x| x.as_str().into()),
+                            };
+                        } else {
+                            return Err(StorageError::ScopeDenied);
+                        }
+                    }
+                    request.quote = refreshed.quote;
+                    request.price_generation = refreshed.price_generation;
+                    request.override_revision = refreshed.override_revision;
+                    if let AttemptSelection::Embedding {
+                        connection_revision,
+                        ..
+                    } = &mut request.selection
+                    {
+                        *connection_revision = refreshed.connection_revision;
+                    }
                 }
             }
-            if runtime.ticker.is_stopped() || cancellation.as_ref().is_some_and(Cancellation::is_cancelled) { return Err(StorageError::Cancelled); }
-            let admission = host.admit_fenced(context, logical, category, request, source_fences)?;
+            if runtime.ticker.is_stopped()
+                || cancellation
+                    .as_ref()
+                    .is_some_and(Cancellation::is_cancelled)
+            {
+                return Err(StorageError::Cancelled);
+            }
+            let admission =
+                host.admit_fenced(context, logical, category, request, source_fences)?;
             let attempt = match admission {
                 devworks_core::services::usage::accounting::Admission::Admitted {
                     attempt, ..
@@ -308,7 +338,7 @@ impl UsageRuntime {
             };
             let cancellation = cancellation.unwrap_or_else(Cancellation::new);
             {
-                let mut active = runtime.active.lock().unwrap_or_else(|p| p.into_inner());
+                let mut active = runtime.active.locked();
                 match active.entry(attempt.attempt_id.clone()) {
                     std::collections::hash_map::Entry::Occupied(_) => {
                         return Ok(DriveOutcome::AlreadyDispatched);
@@ -337,7 +367,7 @@ impl UsageRuntime {
             host.drive_with_sink(attempt.attempt_id, source, sink, cancellation)
         })
         .await
-        .unwrap_or_else(|e|Err(e.storage()))
+        .unwrap_or_else(|e| Err(e.storage()))
     }
 
     fn retired(&self, id: &Id) {
@@ -353,15 +383,9 @@ impl UsageRuntime {
             if let Some(host) = &self.host {
                 let _ = host.retain_unclosed(id.clone());
             }
-            self.uncertain
-                .lock()
-                .unwrap_or_else(|p| p.into_inner())
-                .insert(id.clone());
+            self.uncertain.locked().insert(id.clone());
         }
-        self.active
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .remove(id);
+        self.active.locked().remove(id);
         self.changed.notify_one();
     }
     async fn write<T, F>(&self, work: F) -> Result<T, StorageError>
@@ -396,20 +420,8 @@ impl UsageRuntime {
             })?;
         let pending_preparations = self.preparing.load(Ordering::SeqCst);
         let mut ids = self.fence.admitted();
-        ids.extend(
-            self.uncertain
-                .lock()
-                .unwrap_or_else(|p| p.into_inner())
-                .iter()
-                .cloned(),
-        );
-        ids.extend(
-            self.active
-                .lock()
-                .unwrap_or_else(|p| p.into_inner())
-                .keys()
-                .cloned(),
-        );
+        ids.extend(self.uncertain.locked().iter().cloned());
+        ids.extend(self.active.locked().keys().cloned());
         let unclosed = store::read(&self.store, move |s| {
             let mut unclosed = Vec::new();
             for id in ids {
@@ -431,7 +443,7 @@ impl UsageRuntime {
         })
     }
     pub fn stop(&self) {
-        let active = self.active.lock().unwrap_or_else(|p| p.into_inner());
+        let active = self.active.locked();
         self.ticker.stop();
         for cancellation in active.values() {
             cancellation.cancel();
@@ -442,13 +454,7 @@ impl UsageRuntime {
         let _tick = self.ticking.lock().await;
         loop {
             let changed = self.changed.notified();
-            if self
-                .active
-                .lock()
-                .unwrap_or_else(|p| p.into_inner())
-                .is_empty()
-                && self.preparing.load(Ordering::SeqCst) == 0
-            {
+            if self.active.locked().is_empty() && self.preparing.load(Ordering::SeqCst) == 0 {
                 break;
             }
             changed.await;
@@ -461,8 +467,7 @@ impl UsageRuntime {
         }
         let active = self
             .active
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
+            .locked()
             .iter()
             .map(|(id, c)| (id.clone(), c.clone()))
             .collect::<Vec<_>>();
@@ -499,7 +504,7 @@ impl UsageRuntime {
             .write(move |tx| ingest::bootstrap_page(tx, PAGE))
             .await?;
         let (after, complete) = {
-            let r = self.recovery.lock().unwrap_or_else(|p| p.into_inner());
+            let r = self.recovery.locked();
             (r.after.clone(), r.complete)
         };
         let mut recovery_more = false;
@@ -530,11 +535,8 @@ impl UsageRuntime {
             let progress = self
                 .write(move |tx| host::apply_recovery(tx, &control, prepared))
                 .await?;
-            self.uncertain
-                .lock()
-                .unwrap_or_else(|p| p.into_inner())
-                .extend(progress.unclosed);
-            let mut r = self.recovery.lock().unwrap_or_else(|p| p.into_inner());
+            self.uncertain.locked().extend(progress.unclosed);
+            let mut r = self.recovery.locked();
             r.unresolved += progress.unresolved;
             recovery_more = progress.visited.len() == usize::from(PAGE);
             if recovery_more {
@@ -551,11 +553,7 @@ impl UsageRuntime {
             indexing_complete: page.complete,
             recovery_complete,
             recovery_more,
-            unresolved: self
-                .uncertain
-                .lock()
-                .unwrap_or_else(|p| p.into_inner())
-                .len(),
+            unresolved: self.uncertain.locked().len(),
             cancelled,
         })
     }
@@ -608,7 +606,8 @@ impl OwnedThreadFailure {
             ),
             Self::Lost => StorageError::unavailable(
                 Unavailable::HandlerPanicked,
-                "owned inference worker ended without acknowledgement; accounting remains recoverable",
+                "owned inference worker ended without acknowledgement; accounting \
+                    remains recoverable",
             ),
         }
     }

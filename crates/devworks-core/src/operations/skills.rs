@@ -89,6 +89,20 @@ pub struct DraftInput {
     pub expected_revision: Option<Revision>,
     pub name: Label,
     pub content: ArtifactRef,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Content", extend("x-since" = 8))]
+    pub rationale: Option<Content>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Items<Id>", extend("x-since" = 8))]
+    pub lesson_ids: Option<Items<Id>>,
 }
 impl Check for DraftInput {
     fn check(&self) -> Result<(), String> {
@@ -97,11 +111,20 @@ impl Check for DraftInput {
         self.expected_revision.check()?;
         self.name.check()?;
         self.content.check()?;
+        self.rationale.check()?;
+        self.lesson_ids.check()?;
         Ok(())
     }
 }
 impl Revisioned for DraftInput {
-    fn retain_revision(&mut self, _: u32) {}
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 8 {
+            self.rationale = None;
+        }
+        if revision < 8 {
+            self.lesson_ids = None;
+        }
+    }
 }
 
 /// `skills.propose` Command input.
@@ -165,6 +188,26 @@ impl Revisioned for RollbackInput {
     fn retain_revision(&mut self, _: u32) {}
 }
 
+/// `skills.set_enabled` Command input.
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SetEnabledInput {
+    pub instruction_id: Id,
+    pub expected_revision: Revision,
+    pub enabled: bool,
+}
+impl Check for SetEnabledInput {
+    fn check(&self) -> Result<(), String> {
+        self.instruction_id.check()?;
+        self.expected_revision.check()?;
+        self.enabled.check()?;
+        Ok(())
+    }
+}
+impl Revisioned for SetEnabledInput {
+    fn retain_revision(&mut self, _: u32) {}
+}
+
 /// An admitted input of the `skills` family, built only for the selected operation and mode.
 #[derive(Clone, Debug)]
 pub enum Input {
@@ -182,6 +225,8 @@ pub enum Input {
     History(HistoryInput),
     /// `skills.rollback` (Command).
     Rollback(RollbackInput),
+    /// `skills.set_enabled` (Command).
+    SetEnabled(SetEnabledInput),
 }
 impl Input {
     pub fn operation(&self) -> &'static str {
@@ -193,6 +238,7 @@ impl Input {
             Self::Propose(_) => "skills.propose",
             Self::History(_) => "skills.history",
             Self::Rollback(_) => "skills.rollback",
+            Self::SetEnabled(_) => "skills.set_enabled",
         }
     }
     pub fn mode(&self) -> Mode {
@@ -204,6 +250,7 @@ impl Input {
             Self::Propose(_) => Mode::Command,
             Self::History(_) => Mode::Query,
             Self::Rollback(_) => Mode::Command,
+            Self::SetEnabled(_) => Mode::Command,
         }
     }
     /// The `/body` members of this input, without the `kind` discriminator.
@@ -216,6 +263,7 @@ impl Input {
             Self::Propose(i) => serde_json::to_value(i),
             Self::History(i) => serde_json::to_value(i),
             Self::Rollback(i) => serde_json::to_value(i),
+            Self::SetEnabled(i) => serde_json::to_value(i),
         }
     }
 }

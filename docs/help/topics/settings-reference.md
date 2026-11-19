@@ -1,6 +1,6 @@
 # Complete settings reference
 
-This local reference is maintained against the app’s actual settings catalog. Workspace-only keys cannot be overridden by a project. Inherited keys resolve Workspace → Project; clearing a project override restores inheritance. Defaults are defaults, not evidence that a runtime is installed.
+This local reference is maintained against the app’s actual settings catalog. Workspace-only keys cannot be overridden by a project. Inherited keys resolve Workspace → Project; clearing a project override restores inheritance. Delivery keys also resolve through a repository of the project (Workspace → Project → Repository), and a repository’s value applies to delivery in that repository only; the mandatory review is a harness protection that no scope, a repository included, can change. Defaults are defaults, not evidence that a runtime is installed.
 
 Adoption: Immediate applies on save; NextSafeStep waits for the next safe context boundary; NextAdmission affects later admitted work; NewClonesOnly affects new repository clones. HarnessEnforced values are visible policies, not editable relaxations. Agent proposals and current authority still apply.
 
@@ -323,7 +323,7 @@ Not yet active: automatic issue triage is not built yet, so this value changes n
 Auto-Merge.
 
 - Default: `true`
-- Scope: Workspace → Project
+- Scope: Workspace → Project → Repository
 - Adoption: NextAdmission
 - Policy: Configurable
 - Section: Delivery
@@ -347,7 +347,7 @@ Every delivery is reviewed before merge. A harness protection, not an override v
 Review fix cycles.
 
 - Default: `3`
-- Scope: Workspace → Project
+- Scope: Workspace → Project → Repository
 - Adoption: NextAdmission
 - Policy: Configurable
 - Section: Delivery
@@ -395,7 +395,7 @@ Longest a polling watcher (a probe command) keeps checking before it ends TimedO
 Automated review wait (seconds).
 
 - Default: `900`
-- Scope: Workspace → Project
+- Scope: Workspace → Project → Repository
 - Adoption: NextAdmission
 - Policy: Configurable
 - Section: Delivery

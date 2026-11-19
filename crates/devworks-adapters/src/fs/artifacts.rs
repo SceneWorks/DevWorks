@@ -39,6 +39,7 @@
 //!   are atomic and survive a crash once its log is flushed, which write-through forces for the
 //!   rename), but a newly created directory's own entry is not separately forced to disk.
 use devworks_core::authority::destructive::FileIdentity;
+use devworks_core::locks::LockExt;
 use devworks_core::ports::files::{ArtifactFiles, FileFault, PublishedBlob};
 use sha2::{Digest as _, Sha256};
 use std::collections::HashMap;
@@ -397,8 +398,7 @@ impl NativeArtifactFiles {
 
     fn forget(&self, digest: &str, generation: &str) {
         self.verified
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
+            .locked()
             .remove(&(digest.to_owned(), generation.to_owned()));
     }
 
@@ -430,13 +430,7 @@ impl NativeArtifactFiles {
         }
         let key = (digest.to_owned(), generation.to_owned());
         let known = remember
-            .then(|| {
-                self.verified
-                    .lock()
-                    .unwrap_or_else(|p| p.into_inner())
-                    .get(&key)
-                    .copied()
-            })
+            .then(|| self.verified.locked().get(&key).copied())
             .flatten();
         if known != Some(before) {
             let mut hash = Sha256::new();
@@ -469,10 +463,7 @@ impl NativeArtifactFiles {
             // Remember it only if the handle did not change while it was hashed.
             let after = stamp(&file).map_err(fault)?;
             if remember && after == before && before.settled(verified_at) {
-                self.verified
-                    .lock()
-                    .unwrap_or_else(|p| p.into_inner())
-                    .insert(key, before);
+                self.verified.locked().insert(key, before);
             }
             file.seek(SeekFrom::Start(0)).map_err(fault)?;
         }

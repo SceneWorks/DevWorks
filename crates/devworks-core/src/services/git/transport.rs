@@ -75,7 +75,12 @@ impl GitService {
             return Err(refused());
         }
         let mut config = String::from(
-            "[core]\n bare = true\n fsmonitor = \n hooksPath = /dev/null\n[protocol]\n version = 2\n allow = never\n[protocol \"https\"]\n allow = always\n[protocol \"ssh\"]\n allow = always\n[protocol \"file\"]\n allow = always\n[http]\n followRedirects = false\n[maintenance]\n auto = false\n[gc]\n auto = 0\n[push]\n gpgSign = false\n",
+            "[core]\n bare = true\n fsmonitor = \n hooksPath = \
+                /dev/null\n[protocol]\n version = 2\n allow = never\n[protocol \
+                \"https\"]\n allow = always\n[protocol \"ssh\"]\n allow = \
+                always\n[protocol \"file\"]\n allow = always\n[http]\n followRedirects \
+                = false\n[maintenance]\n auto = false\n[gc]\n auto = 0\n[push]\n \
+                gpgSign = false\n",
         );
         let mut auth = Vec::new();
         for parts in fields.as_chunks::<3>().0 {

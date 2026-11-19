@@ -1,0 +1,115 @@
+---
+title: Outgoing MCP client - configuration, connections, catalog and sampling (implemented)
+---
+classDiagram
+  direction LR
+  class McpClientService {
+    ids: Arc dyn IdSource
+    native: OnceLock Native
+    mcp.servers .capabilities .resources .prompts (QueryHandler)
+    mcp.configure .select_tools .classify_tool (CommandHandler)
+    mcp.connect .discover .disable .remove (CommandHandler)
+    +install_remote(store, remote, validator, artifacts)
+    +install_sampler(sampler)
+    +selected_tool_materials(ctx, snapshot)
+    +queue_selected_tool(ctx, call, alias, arguments) OperationId
+    +authorize_sampling(origin, ordinal) SamplingGrant
+    +execute(op) McpEffectOutcome
+    +observe(op) McpEffectOutcome
+    +publish_remote_catalog()
+  }
+  class Native {
+    store: Arc dyn ApplicationStore
+    remote: Arc dyn McpRemote
+    validator: Arc dyn SchemaValidator
+    artifacts: Arc ArtifactService
+  }
+  class StoredServer {
+    server config at one scoped revision
+    transport, disabled, sampling selection
+    catalog and selected capabilities
+    credential_ref names a secret, never its value
+  }
+  class McpToolMaterial {
+    alias, schema, wire_name
+    server_id, server_revision, catalog_revision
+  }
+  class SamplingGrant {
+    context, operation_id, attempt_id
+    call: ToolCallKey, fences
+  }
+  class McpRemote {
+    <<trait>>
+    connect, discover, call_tool
+    call_tool_with_origin, read_resource, get_prompt
+    install_sampler, disconnect, disconnect_if
+    missing_runtime
+  }
+  class McpSampler {
+    <<trait>>
+    +sample(origin, SamplingCall, cancel) SampledText
+  }
+  class McpTransport {
+    <<enum>>
+    Stdio process
+    Http endpoint and credential_ref
+  }
+  class NativeMcpClients {
+    <<adapter>>
+    supervisor: Arc ProcessSupervisor
+    bindings, secrets, filesystem, protected_roots
+    sessions: one slot and lock per server
+    sampler: shared OnceLock
+  }
+  class McpWireSession {
+    <<adapter>>
+    rmcp RunningService
+    owned process guard for stdio
+  }
+  class SamplingClient {
+    <<adapter, rmcp ClientHandler>>
+    advertises sampling only when selected
+    accepts it only during an attributed call
+    caps samples per call, text only
+  }
+  class EngineSampler {
+    <<engine>>
+    Weak McpClientService, Weak NativeProviders
+    store, artifacts, router
+  }
+  class McpSampling {
+    <<engine>>
+    +plan(grant, call) NativeInvocation
+    +sample(grant, call, cancel) SampledText
+    session pin, router, budget, artifact result
+  }
+  class McpEffects {
+    <<engine consumer mcp_effects>>
+    max 4 attempts
+    execute and observe
+  }
+  class ToolTurn {
+    <<engine tool_turn>>
+    calls queue_selected_tool for a selected mcp tool
+  }
+  class McpComposition {
+    <<engine config>>
+    validator and remote factory
+  }
+  McpClientService *-- Native
+  McpClientService ..> StoredServer : scoped configuration revisions
+  McpClientService ..> McpToolMaterial : selected tools only
+  McpClientService ..> SamplingGrant : rebuilt from the tool call journal
+  Native o-- McpRemote
+  StoredServer *-- McpTransport
+  NativeMcpClients ..|> McpRemote
+  NativeMcpClients *-- McpWireSession
+  McpWireSession *-- SamplingClient
+  SamplingClient ..> McpSampler : sample during a call
+  EngineSampler ..|> McpSampler
+  EngineSampler ..> McpClientService : authorize_sampling
+  EngineSampler ..> McpSampling
+  McpEffects o-- McpClientService
+  ToolTurn ..> McpClientService
+  McpComposition ..> NativeMcpClients : factory built at boot
+  note for McpClientService "No approval prompt lives in this service. A tool runs only when a person selected it (mcp.select_tools) and current authority fences still hold. Sampling needs the human sampling selection. The incoming MCP server is not built"

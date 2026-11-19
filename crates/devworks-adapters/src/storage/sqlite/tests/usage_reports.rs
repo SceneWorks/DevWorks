@@ -38,7 +38,14 @@ fn seed(h: &Harness) -> SqliteStore {
         ],
     )
     .unwrap();
-    raw.execute("INSERT INTO router_connections(id,name,profile,endpoint,credential_revision,lifecycle,revision,created_at,updated_at) VALUES('connection','Actual transport','OpenAiResponses','https://example.test',0,'Disconnected',1,?1,?1)",[T0]).unwrap();
+    raw.execute(
+        "INSERT INTO router_connections(id,name,profile,endpoint,\
+        credential_revision,lifecycle,revision,created_at,updated_at) \
+        VALUES('connection','Actual transport','OpenAiResponses',\
+        'https://example.test',0,'Disconnected',1,?1,?1)",
+        [T0],
+    )
+    .unwrap();
     drop(raw);
     run_write(&s, WriteOptions::fixture(), |tx| {
         while !ingest::bootstrap_page(tx, 64)?.complete {}
@@ -69,8 +76,25 @@ fn query(s: &SqliteStore, i: &UsageInput) -> Value {
 fn request(h: &Harness, name: &str, category: &str, time: i64) {
     let raw = h.raw();
     let operation = format!("op-{name}");
-    raw.execute("INSERT INTO operations(id,capability,schema_version,args_digest,payload_json,state,revision,created_at) VALUES(?1,'router.request',1,?2,?3,'Preflighted',1,?4)",rusqlite::params![operation,"a".repeat(64),json!({"reportCategory":category}).to_string(),time]).unwrap();
-    raw.execute("INSERT INTO router_requests(request_id,operation_id,purpose,project_id,model_id,connection_id,created_at) VALUES(?1,?2,'Conversation','project-a','sol','connection',?3)",rusqlite::params![name,operation,time]).unwrap();
+    raw.execute(
+        "INSERT INTO operations(id,capability,schema_version,args_digest,\
+        payload_json,state,revision,created_at) VALUES(?1,'router.request',1,?2,\
+        ?3,'Preflighted',1,?4)",
+        rusqlite::params![
+            operation,
+            "a".repeat(64),
+            json!({"reportCategory":category}).to_string(),
+            time
+        ],
+    )
+    .unwrap();
+    raw.execute(
+        "INSERT INTO router_requests(request_id,operation_id,purpose,project_id,\
+        model_id,connection_id,created_at) VALUES(?1,?2,'Conversation',\
+        'project-a','sol','connection',?3)",
+        rusqlite::params![name, operation, time],
+    )
+    .unwrap();
 }
 fn attempt(
     h: &Harness,
@@ -82,8 +106,47 @@ fn attempt(
 ) {
     let (input, output, amount) = measurement;
     let op = format!("op-{request}");
-    h.raw().execute("INSERT INTO operation_attempts(id,operation_id,attempt_no,boot_id,state,observations_json) VALUES(?1,?2,?3,?4,'Preflighted','[]')",rusqlite::params![name,op,number,s.info().boot_id.unwrap().as_str()]).unwrap();
-    let snapshot:AdmittedSnapshot=serde_json::from_value(json!({"admission_key":name,"intent_digest":"a".repeat(64),"quote":{"classification":"OfficialEstimate","connection_revision":1,"currency":"USD","rates":null,"tariffs":[]},"query":{"catalog_model_id":"sol","provider_model_id":"gpt-6.1-sol","connection_id":"connection","endpoint_profile":"OpenAiResponses","access_mode":"ApiKey","required_modalities":["Text"]},"price_generation":1,"override_revision":1,"pricing":{"input_semantics":"Inclusive","cache_read_possible":false,"cache_write_possible":false},"selection":{"Conversation":{"intent":{"kind":"Model","modelId":"sol"},"effort":"Default","required_capabilities":[]}},"admitted_boot_id":s.info().boot_id,"cache_diagnostics":[]})).unwrap();
+    h.raw()
+        .execute(
+            "INSERT INTO operation_attempts(id,operation_id,attempt_no,boot_id,state,\
+        observations_json) VALUES(?1,?2,?3,?4,'Preflighted','[]')",
+            rusqlite::params![name, op, number, s.info().boot_id.unwrap().as_str()],
+        )
+        .unwrap();
+    let snapshot: AdmittedSnapshot = serde_json::from_value(json!({
+        "admission_key": name,
+        "intent_digest": "a".repeat(64),
+        "quote": {
+            "classification": "OfficialEstimate",
+            "connection_revision": 1,
+            "currency": "USD",
+            "rates": null,
+            "tariffs": []
+        },
+        "query": {
+            "catalog_model_id": "sol",
+            "provider_model_id": "gpt-6.1-sol",
+            "connection_id": "connection",
+            "endpoint_profile": "OpenAiResponses",
+            "access_mode": "ApiKey",
+            "required_modalities": ["Text"]
+        },
+        "price_generation": 1,
+        "override_revision": 1,
+        "pricing": {
+            "input_semantics": "Inclusive",
+            "cache_read_possible": false,
+            "cache_write_possible": false
+        },
+        "selection": {"Conversation": {
+            "intent": {"kind": "Model", "modelId": "sol"},
+            "effort": "Default",
+            "required_capabilities": []
+        }},
+        "admitted_boot_id": s.info().boot_id,
+        "cache_diagnostics": []
+    }))
+    .unwrap();
     let mut summary = BalanceSummary::default();
     summary.meter.quantities.input_tokens = input;
     summary.meter.quantities.output_tokens = output;
@@ -262,7 +325,22 @@ fn legacy_observations_are_retained_separately_without_an_invented_attempt_or_ac
             &s,
             &format!("observation-{n}"),
             "SessionUsage",
-            json!({"version":1,"item":{"requestId":"request-old","purpose":"Compaction","modelId":"sol","inputTokens":"9","outputTokens":"1","cacheReadTokens":"0","cacheWriteTokens":"0","amountUsd":"0.2","priceKind":"Estimated","priceOrigin":"OfficialSnapshot","incomplete":false}}),
+            json!({
+                "version": 1,
+                "item": {
+                    "requestId": "request-old",
+                    "purpose": "Compaction",
+                    "modelId": "sol",
+                    "inputTokens": "9",
+                    "outputTokens": "1",
+                    "cacheReadTokens": "0",
+                    "cacheWriteTokens": "0",
+                    "amountUsd": "0.2",
+                    "priceKind": "Estimated",
+                    "priceOrigin": "OfficialSnapshot",
+                    "incomplete": false
+                }
+            }),
             T0,
             Some(200_000),
             Some(id("request-old")),
@@ -538,7 +616,17 @@ fn served_model_is_captured_separately_from_catalog_identity_and_legacy_fallback
         &s,
         "old-model",
         "SessionUsage",
-        json!({"version":1,"item":{"purpose":"Title","modelId":"old-recorded-model","inputTokens":"2","outputTokens":"1","cacheReadTokens":"0","cacheWriteTokens":"0"}}),
+        json!({
+            "version": 1,
+            "item": {
+                "purpose": "Title",
+                "modelId": "old-recorded-model",
+                "inputTokens": "2",
+                "outputTokens": "1",
+                "cacheReadTokens": "0",
+                "cacheWriteTokens": "0"
+            }
+        }),
         T0,
         None,
         None,
@@ -808,7 +896,17 @@ fn feature_reports_do_not_fill_missing_historical_ownership_from_a_current_paren
         &s,
         "old-unowned",
         "SessionUsage",
-        json!({"version":1,"item":{"purpose":"Conversation","modelId":"sol","inputTokens":"9","outputTokens":"1","cacheReadTokens":"0","cacheWriteTokens":"0"}}),
+        json!({
+            "version": 1,
+            "item": {
+                "purpose": "Conversation",
+                "modelId": "sol",
+                "inputTokens": "9",
+                "outputTokens": "1",
+                "cacheReadTokens": "0",
+                "cacheWriteTokens": "0"
+            }
+        }),
         T0,
         Some(100),
         Some(id("old-request")),

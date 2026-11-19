@@ -11,6 +11,7 @@ use crate::runtime::{
 };
 use devworks_core::context::InvocationContext;
 use devworks_core::gateway::{CommandOutcome, QueryOutcome};
+use devworks_core::locks::LockExt;
 use devworks_core::ports::storage::{ApplicationStore, Cancellation, WriteOptions};
 use devworks_core::ports::storage::{StorageError, Unavailable};
 use devworks_core::protocol::Id;
@@ -343,7 +344,7 @@ impl TurnEngine {
                                 Err(error) => done(Err(error)),
                             }
                         };
-                        results.lock().unwrap_or_else(|p| p.into_inner())[index] = Some(result);
+                        results.locked()[index] = Some(result);
                     }
                 });
             }
@@ -722,6 +723,28 @@ impl TurnEngine {
         .verify(ctx, context, targets)
     }
 
+    /// The project whose skills an invocation is offered: its own, else its session's.
+    pub(crate) fn skill_project(
+        &self,
+        ctx: &InvocationContext,
+    ) -> Result<Option<devworks_core::protocol::ProjectId>, StorageError> {
+        if let Some(project) = ctx.project_id() {
+            return Ok(Some(project.clone()));
+        }
+        let Some(session_id) = ctx.session_id() else {
+            return Ok(None);
+        };
+        devworks_core::ports::storage::read_snapshot(
+            self.store.as_ref(),
+            &devworks_core::ports::storage::ReadOptions::default(),
+            |read| {
+                Ok(read
+                    .sessions()
+                    .session(session_id)?
+                    .and_then(|s| s.project_id))
+            },
+        )
+    }
     /// Compose the effective instruction prefix and its exact source stamps for one provider
     /// request. The trusted turn caller supplies its authorized repository and target paths;
     /// an empty path set means repository-root guidance only.
@@ -769,7 +792,7 @@ impl TurnEngine {
         }
         let base = match crate::instruction_guard::InstructionGuard::new(self.store.clone(), None)
             .with_skills(self.instructions.clone())
-            .current_skills()?
+            .current_skills(self.skill_project(ctx)?.as_ref())?
         {
             Some(stamp) => devworks_core::providers::instructions::bind_skills(base, stamp)
                 .map_err(|e| StorageError::InvalidRecord(format!("skill binding: {e:?}")))?,

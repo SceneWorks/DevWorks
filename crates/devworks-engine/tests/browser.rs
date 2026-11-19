@@ -19,6 +19,7 @@ use devworks_adapters::process::NativeProcessHost;
 use devworks_core::authority::HostAuthority;
 use devworks_core::authority::service::bind_principal;
 use devworks_core::context::{InvocationContext, PrincipalKind};
+use devworks_core::locks::LockExt;
 use devworks_core::ports::browser::MAX_TARGETS;
 use devworks_core::ports::browser::{
     BrowserAsset, BrowserFault, BrowserPlatform, CdpTransport, Profile, Qualification,
@@ -1586,7 +1587,7 @@ fn requests(b: &Arc<Mutex<FakeBrowser>>, method: &str) -> usize {
 
 #[test]
 fn a_session_is_launched_driven_inspected_and_closed_through_the_process_owner() {
-    let _serial = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
+    let _serial = SERIAL.locked();
     let fx = Fx::new();
     let user = fx.user.clone();
     let session = fx.create(&user, workspace());
@@ -1830,7 +1831,7 @@ fn a_session_is_launched_driven_inspected_and_closed_through_the_process_owner()
 
 #[test]
 fn asynchronous_navigation_returns_a_revision_for_nonmutating_inspection_recovery() {
-    let _serial = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
+    let _serial = SERIAL.locked();
     let fx = Fx::new();
     let user = fx.user.clone();
     let session = fx.create(&user, workspace());
@@ -1861,7 +1862,7 @@ fn asynchronous_navigation_returns_a_revision_for_nonmutating_inspection_recover
 
 #[test]
 fn stale_frame_document_and_node_references_are_refused_never_retargeted() {
-    let _serial = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
+    let _serial = SERIAL.locked();
     let fx = Fx::new();
     let user = fx.user.clone();
     let session = fx.create(&user, workspace());
@@ -1966,7 +1967,7 @@ fn stale_frame_document_and_node_references_are_refused_never_retargeted() {
 
 #[test]
 fn popups_dialogs_downloads_and_permissions_are_qualified() {
-    let _serial = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
+    let _serial = SERIAL.locked();
     let fx = Fx::new();
     let user = fx.user.clone();
     let session = fx.create(&user, workspace());
@@ -2093,7 +2094,7 @@ fn assert_popup(fx: &Fx, user: &InvocationContext, session: &Id, popup: BrowserS
 
 #[test]
 fn uploads_materialize_only_exact_artifacts_the_caller_may_see() {
-    let _serial = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
+    let _serial = SERIAL.locked();
     let fx = Fx::new();
     fx.opt_in_agent_browser_tools();
     let user = fx.user.clone();
@@ -2205,7 +2206,7 @@ fn uploads_materialize_only_exact_artifacts_the_caller_may_see() {
 
 #[test]
 fn an_unknown_input_outcome_holds_the_session_until_a_person_resolves_it() {
-    let _serial = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
+    let _serial = SERIAL.locked();
     let fx = Fx::new();
     let user = fx.user.clone();
     fx.platform
@@ -2290,7 +2291,7 @@ fn an_unknown_input_outcome_holds_the_session_until_a_person_resolves_it() {
 
 #[test]
 fn a_lost_connection_during_input_is_unknown_and_settles_the_crashed_session() {
-    let _serial = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
+    let _serial = SERIAL.locked();
     let fx = Fx::new();
     let user = fx.user.clone();
     let session = fx.create(&user, workspace());
@@ -2321,7 +2322,7 @@ fn a_lost_connection_during_input_is_unknown_and_settles_the_crashed_session() {
 
 #[test]
 fn an_exited_browser_is_detected_and_its_session_settled() {
-    let _serial = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
+    let _serial = SERIAL.locked();
     let fx = Fx::new();
     let user = fx.user.clone();
     let session = fx.create(&user, workspace());
@@ -2361,7 +2362,7 @@ fn an_exited_browser_is_detected_and_its_session_settled() {
 
 #[test]
 fn reviewers_cannot_use_the_browser_and_only_the_owner_or_a_person_drives_a_session() {
-    let _serial = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
+    let _serial = SERIAL.locked();
     let fx = Fx::new();
     fx.opt_in_agent_browser_tools();
     let user = fx.user.clone();
@@ -2428,7 +2429,7 @@ fn reviewers_cannot_use_the_browser_and_only_the_owner_or_a_person_drives_a_sess
 
 #[test]
 fn a_missing_or_unqualified_browser_is_a_visible_limitation_never_a_session() {
-    let _serial = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
+    let _serial = SERIAL.locked();
     let fx = Fx::new();
     let user = fx.user.clone();
     for (asset, code) in [
@@ -2508,7 +2509,7 @@ fn a_missing_or_unqualified_browser_is_a_visible_limitation_never_a_session() {
 
 #[test]
 fn shutdown_closes_sessions_and_boot_recovery_settles_an_earlier_boots_sessions() {
-    let _serial = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
+    let _serial = SERIAL.locked();
     let fx = Fx::new();
     let user = fx.user.clone();
     let closed = fx.create(&user, workspace());
@@ -2582,7 +2583,7 @@ fn git_fx() -> (Fx, Arc<devworks_core::services::git::GitService>) {
 /// composed does not wait out the shutdown bound for it.
 #[test]
 fn shutdown_with_git_composed_joins_the_git_loop_without_waiting_out_the_bound() {
-    let _serial = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
+    let _serial = SERIAL.locked();
     let (mut fx, git) = git_fx();
     // Only shutdown or dropping the runtime stops the Git loop.
     assert!(!git.is_stopped());
@@ -2599,7 +2600,7 @@ fn shutdown_with_git_composed_joins_the_git_loop_without_waiting_out_the_bound()
 /// Dropping the runtime without `shutdown` ends the Git loop too.
 #[test]
 fn dropping_the_runtime_with_git_composed_stops_the_git_loop() {
-    let _serial = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
+    let _serial = SERIAL.locked();
     let (mut fx, git) = git_fx();
     // Only shutdown or dropping the runtime stops the Git loop.
     assert!(!git.is_stopped());
@@ -2612,7 +2613,7 @@ fn dropping_the_runtime_with_git_composed_stops_the_git_loop() {
 /// deadline, so it can neither delay the hold nor keep shutdown from finishing.
 #[test]
 fn a_blocked_browser_close_never_delays_the_hold_and_is_abandoned_at_the_shutdown_bound() {
-    let _serial = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
+    let _serial = SERIAL.locked();
     let h = Harness::new();
     let platform = Arc::new(FakePlatform::new(&h.root));
     let rt = runtime();
@@ -2679,7 +2680,7 @@ fn a_blocked_browser_close_never_delays_the_hold_and_is_abandoned_at_the_shutdow
 
 #[test]
 fn closing_a_session_while_it_starts_never_leaves_a_browser_running() {
-    let _serial = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
+    let _serial = SERIAL.locked();
     let fx = Fx::new();
     let user = fx.user.clone();
     let create = fx.accepted(
@@ -2786,7 +2787,7 @@ fn fx_with(browser: BrowserConfig) -> Fx {
 
 #[test]
 fn a_close_during_launch_stops_the_launched_tree_before_it_settles_closed() {
-    let _serial = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
+    let _serial = SERIAL.locked();
     let fx = Fx::new();
     let user = fx.user.clone();
     let (session, create, close, gate) = close_while_launching(&fx, &user);
@@ -2807,7 +2808,7 @@ fn a_close_during_launch_stops_the_launched_tree_before_it_settles_closed() {
 
 #[test]
 fn a_close_during_launch_whose_stop_is_unverified_stays_uncertain_with_its_profile() {
-    let _serial = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
+    let _serial = SERIAL.locked();
     let fx = fx_with(quick_stop());
     let user = fx.user.clone();
     let (session, create, close, gate) = close_while_launching(&fx, &user);
@@ -2841,7 +2842,7 @@ fn a_close_during_launch_whose_stop_is_unverified_stays_uncertain_with_its_profi
 
 #[test]
 fn a_close_during_a_launch_that_fails_settles_closed_with_nothing_running() {
-    let _serial = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
+    let _serial = SERIAL.locked();
     let fx = Fx::new();
     let user = fx.user.clone();
     let (session, create, close, gate) = close_while_launching(&fx, &user);
@@ -2860,7 +2861,7 @@ fn a_close_during_a_launch_that_fails_settles_closed_with_nothing_running() {
 
 #[test]
 fn boot_recovery_finishes_a_close_requested_while_the_browser_was_launching() {
-    let _serial = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
+    let _serial = SERIAL.locked();
     let fx = Fx::new();
     let user = fx.user.clone();
     let gone = fx.create(&user, workspace());
@@ -2905,7 +2906,7 @@ fn boot_recovery_finishes_a_close_requested_while_the_browser_was_launching() {
 
 #[test]
 fn actions_run_in_commit_order_and_a_failed_one_does_not_block_the_next() {
-    let _serial = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
+    let _serial = SERIAL.locked();
     let fx = Fx::new();
     let user = fx.user.clone();
     let session = fx.create(&user, workspace());
@@ -2955,7 +2956,7 @@ fn actions_run_in_commit_order_and_a_failed_one_does_not_block_the_next() {
 
 #[test]
 fn an_action_waits_for_its_predecessor_to_settle_before_anything_is_sent() {
-    let _serial = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
+    let _serial = SERIAL.locked();
     let fx = Fx::new();
     let user = fx.user.clone();
     let session = fx.create(&user, workspace());
@@ -3002,7 +3003,7 @@ fn an_action_waits_for_its_predecessor_to_settle_before_anything_is_sent() {
 
 #[test]
 fn out_of_process_frames_are_inspected_driven_and_revisioned_on_their_own_session() {
-    let _serial = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
+    let _serial = SERIAL.locked();
     let fx = Fx::new();
     let user = fx.user.clone();
     let session = fx.create(&user, workspace());
@@ -3124,7 +3125,7 @@ fn failed_kind(c: OperationCompletion) -> String {
 
 #[test]
 fn a_scroll_reaches_the_requested_frame_or_is_refused_where_it_cannot() {
-    let _serial = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
+    let _serial = SERIAL.locked();
     let fx = Fx::new();
     let user = fx.user.clone();
     let session = fx.create(&user, workspace());
@@ -3187,7 +3188,7 @@ fn a_scroll_reaches_the_requested_frame_or_is_refused_where_it_cannot() {
 
 #[test]
 fn a_key_reaches_only_the_frame_holding_keyboard_focus() {
-    let _serial = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
+    let _serial = SERIAL.locked();
     let fx = Fx::new();
     let user = fx.user.clone();
     let session = fx.create(&user, workspace());
@@ -3217,7 +3218,7 @@ fn a_key_reaches_only_the_frame_holding_keyboard_focus() {
 
 #[test]
 fn a_long_multibyte_file_name_is_staged_within_the_platform_name_bound() {
-    let _serial = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
+    let _serial = SERIAL.locked();
     let fx = Fx::new();
     let user = fx.user.clone();
     let session = fx.create(&user, workspace());
@@ -3259,7 +3260,7 @@ fn a_long_multibyte_file_name_is_staged_within_the_platform_name_bound() {
 
 #[test]
 fn actions_waiting_on_a_predecessor_hold_no_dispatch_capacity_so_close_is_never_starved() {
-    let _serial = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
+    let _serial = SERIAL.locked();
     let h = Harness::new();
     let platform = Arc::new(FakePlatform::new(&h.root));
     let real: Arc<dyn BrowserPlatform> = platform.clone();
@@ -3319,7 +3320,7 @@ fn actions_waiting_on_a_predecessor_hold_no_dispatch_capacity_so_close_is_never_
 
 #[test]
 fn an_action_never_overtakes_a_predecessor_that_outlasts_the_order_bound() {
-    let _serial = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
+    let _serial = SERIAL.locked();
     let h = Harness::new();
     let platform = Arc::new(FakePlatform::new(&h.root));
     let real: Arc<dyn BrowserPlatform> = platform.clone();
@@ -3401,7 +3402,7 @@ fn an_action_never_overtakes_a_predecessor_that_outlasts_the_order_bound() {
 
 #[test]
 fn a_closed_project_starts_no_browser_session() {
-    let _serial = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
+    let _serial = SERIAL.locked();
     let fx = Fx::new();
     let user = fx.user.clone();
     let c = rusqlite::Connection::open(fx.h().root.join("workspace.sqlite")).unwrap();
@@ -3431,7 +3432,7 @@ fn a_closed_project_starts_no_browser_session() {
 
 #[test]
 fn a_close_is_never_held_by_a_pause_of_the_sessions_root() {
-    let _serial = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
+    let _serial = SERIAL.locked();
     let fx = Fx::new();
     let user = fx.user.clone();
     let run = |op: &str, command: Value| {
@@ -3477,7 +3478,7 @@ fn a_close_is_never_held_by_a_pause_of_the_sessions_root() {
 
 #[test]
 fn a_notice_page_never_skips_an_observation_published_meanwhile() {
-    let _serial = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
+    let _serial = SERIAL.locked();
     let fx = Fx::new();
     let user = fx.user.clone();
     let session = fx.create(&user, workspace());
@@ -3559,7 +3560,7 @@ fn a_notice_page_never_skips_an_observation_published_meanwhile() {
 
 #[test]
 fn close_ends_an_action_waiting_on_an_unanswered_call_without_waiting_for_it() {
-    let _serial = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
+    let _serial = SERIAL.locked();
     let h = Harness::new();
     let platform = Arc::new(FakePlatform::new(&h.root));
     let real: Arc<dyn BrowserPlatform> = platform.clone();
@@ -3601,7 +3602,7 @@ fn close_ends_an_action_waiting_on_an_unanswered_call_without_waiting_for_it() {
 
 #[test]
 fn input_into_a_frame_follows_its_owners_css_transform() {
-    let _serial = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
+    let _serial = SERIAL.locked();
     let fx = Fx::new();
     let user = fx.user.clone();
     let session = fx.create(&user, workspace());
@@ -3634,7 +3635,7 @@ fn input_into_a_frame_follows_its_owners_css_transform() {
 
 #[test]
 fn a_session_never_holds_more_targets_than_it_can_record() {
-    let _serial = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
+    let _serial = SERIAL.locked();
     let fx = Fx::new();
     let user = fx.user.clone();
     let session = fx.create(&user, workspace());
@@ -3687,7 +3688,7 @@ fn a_session_never_holds_more_targets_than_it_can_record() {
 
 #[test]
 fn a_page_with_more_frames_than_registered_is_snapshotted_with_its_list_cut() {
-    let _serial = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
+    let _serial = SERIAL.locked();
     let fx = Fx::new();
     let user = fx.user.clone();
     let session = fx.create(&user, workspace());
@@ -3726,7 +3727,7 @@ fn a_page_with_more_frames_than_registered_is_snapshotted_with_its_list_cut() {
 /// the replacement document.
 #[test]
 fn input_is_never_sent_into_a_document_that_replaced_its_target_during_a_query() {
-    let _serial = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
+    let _serial = SERIAL.locked();
     let fx = Fx::new();
     let user = fx.user.clone();
     let session = fx.create(&user, workspace());
@@ -3792,7 +3793,7 @@ fn input_is_never_sent_into_a_document_that_replaced_its_target_during_a_query()
 
 #[test]
 fn navigation_during_pointer_move_stops_the_click_before_press_and_release() {
-    let _serial = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
+    let _serial = SERIAL.locked();
     let fx = Fx::new();
     let user = fx.user.clone();
     let session = fx.create(&user, workspace());
@@ -3825,7 +3826,7 @@ fn navigation_during_pointer_move_stops_the_click_before_press_and_release() {
 
 #[test]
 fn a_click_is_never_sent_to_whatever_covers_its_node() {
-    let _serial = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
+    let _serial = SERIAL.locked();
     let fx = Fx::new();
     let user = fx.user.clone();
     let session = fx.create(&user, workspace());
@@ -3861,7 +3862,7 @@ fn a_click_is_never_sent_to_whatever_covers_its_node() {
 
 #[test]
 fn text_is_never_typed_when_its_node_does_not_keep_focus() {
-    let _serial = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
+    let _serial = SERIAL.locked();
     let fx = Fx::new();
     let user = fx.user.clone();
     let session = fx.create(&user, workspace());
@@ -3882,7 +3883,7 @@ fn text_is_never_typed_when_its_node_does_not_keep_focus() {
 
 #[test]
 fn an_older_target_list_is_never_recorded_over_a_newer_one() {
-    let _serial = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
+    let _serial = SERIAL.locked();
     let fx = Fx::new();
     let user = fx.user.clone();
     let session = fx.create(&user, workspace());
@@ -3900,7 +3901,7 @@ fn an_older_target_list_is_never_recorded_over_a_newer_one() {
 
 #[test]
 fn a_click_is_hit_tested_the_way_pointer_input_is_routed() {
-    let _serial = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
+    let _serial = SERIAL.locked();
     let fx = Fx::new();
     let user = fx.user.clone();
     let session = fx.create(&user, workspace());
@@ -3947,7 +3948,7 @@ fn a_click_is_hit_tested_the_way_pointer_input_is_routed() {
 
 #[test]
 fn local_documents_are_never_loaded_or_read_through_an_owned_browser() {
-    let _serial = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
+    let _serial = SERIAL.locked();
     let fx = Fx::new();
     let user = fx.user.clone();
     let session = fx.create(&user, workspace());
@@ -4039,7 +4040,7 @@ fn local_documents_are_never_loaded_or_read_through_an_owned_browser() {
 
 #[test]
 fn the_egress_policy_refuses_metadata_and_private_destinations_on_every_request() {
-    let _serial = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
+    let _serial = SERIAL.locked();
     let fx = Fx::new();
     let user = fx.user.clone();
     let session = fx.create(&user, workspace());
@@ -4174,7 +4175,7 @@ fn tunnel(proxy: std::net::SocketAddr, target: &str) -> (String, std::net::TcpSt
 
 #[test]
 fn every_browser_connection_goes_through_its_proxy_which_refuses_websockets_to_refused_addresses() {
-    let _serial = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
+    let _serial = SERIAL.locked();
     let fx = Fx::new();
     let user = fx.user.clone();
     let session = fx.create(&user, workspace());
@@ -4285,7 +4286,7 @@ fn every_browser_connection_goes_through_its_proxy_which_refuses_websockets_to_r
 
 #[test]
 fn an_attached_worker_worklet_frame_or_popup_runs_only_after_its_requests_are_intercepted() {
-    let _serial = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
+    let _serial = SERIAL.locked();
     let fx = Fx::new();
     let user = fx.user.clone();
     let session = fx.create(&user, workspace());
@@ -4339,7 +4340,7 @@ fn an_attached_worker_worklet_frame_or_popup_runs_only_after_its_requests_are_in
 
 #[test]
 fn a_browser_whose_main_process_exits_is_settled_while_its_helpers_linger() {
-    let _serial = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
+    let _serial = SERIAL.locked();
     let fx = Fx::new();
     let user = fx.user.clone();
     let session = fx.create(&user, workspace());
@@ -4415,7 +4416,7 @@ fn set_workspace(store: &dyn ApplicationStore, key: &'static str, value: Value) 
 
 #[test]
 fn a_failed_predecessor_never_releases_actions_queued_behind_an_unknown_one() {
-    let _serial = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
+    let _serial = SERIAL.locked();
     let fx = Fx::new();
     let user = fx.user.clone();
     let session = fx.create(&user, workspace());
@@ -4468,7 +4469,7 @@ fn a_failed_predecessor_never_releases_actions_queued_behind_an_unknown_one() {
 
 #[test]
 fn a_reference_into_another_session_is_refused_even_when_its_ids_collide() {
-    let _serial = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
+    let _serial = SERIAL.locked();
     let fx = Fx::new();
     let user = fx.user.clone();
     let a = fx.create(&user, workspace());
@@ -4509,7 +4510,7 @@ fn a_reference_into_another_session_is_refused_even_when_its_ids_collide() {
 
 #[test]
 fn concurrent_evidence_publications_cannot_exceed_the_storage_limit() {
-    let _serial = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
+    let _serial = SERIAL.locked();
     let fx = Fx::new();
     let user = fx.user.clone();
     let store = fx.app().store().clone();
@@ -4576,7 +4577,7 @@ fn concurrent_evidence_publications_cannot_exceed_the_storage_limit() {
 
 #[test]
 fn a_failure_after_the_navigation_was_sent_is_an_unknown_outcome() {
-    let _serial = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
+    let _serial = SERIAL.locked();
     let fx = Fx::new();
     let user = fx.user.clone();
     let session = fx.create(&user, workspace());
@@ -4599,7 +4600,7 @@ fn a_failure_after_the_navigation_was_sent_is_an_unknown_outcome() {
 
 #[test]
 fn notifications_stay_pending_when_their_publication_fails() {
-    let _serial = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
+    let _serial = SERIAL.locked();
     let fx = Fx::new();
     let user = fx.user.clone();
     let session = fx.create(&user, workspace());
@@ -4632,7 +4633,7 @@ fn notifications_stay_pending_when_their_publication_fails() {
 
 #[test]
 fn the_largest_notification_page_stays_within_the_repository_bound() {
-    let _serial = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
+    let _serial = SERIAL.locked();
     let fx = Fx::new();
     let user = fx.user.clone();
     let session = fx.create(&user, workspace());
@@ -4651,7 +4652,7 @@ fn the_largest_notification_page_stays_within_the_repository_bound() {
 
 #[test]
 fn a_queued_action_of_a_revoked_owner_is_never_performed() {
-    let _serial = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
+    let _serial = SERIAL.locked();
     let fx = Fx::new();
     fx.opt_in_agent_browser_tools();
     let user = fx.user.clone();
@@ -4717,7 +4718,7 @@ fn a_queued_action_of_a_revoked_owner_is_never_performed() {
 #[test]
 fn evidence_of_a_principal_revoked_before_the_write_publishes_nothing() {
     use devworks_core::services::artifacts::evidence::EvidenceFailure;
-    let _serial = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
+    let _serial = SERIAL.locked();
     let fx = Fx::new();
     fx.opt_in_agent_browser_tools();
     let user = fx.user.clone();
@@ -4914,7 +4915,7 @@ fn publish_while_authority_changes(
 
 #[test]
 fn evidence_of_a_principal_revoked_after_the_content_is_flushed_publishes_nothing() {
-    let _serial = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
+    let _serial = SERIAL.locked();
     let fx = Fx::new();
     fx.opt_in_agent_browser_tools();
     for (name, as_invocation) in [("agent-m1", false), ("agent-m2", true)] {
@@ -4928,7 +4929,7 @@ fn evidence_of_a_principal_revoked_after_the_content_is_flushed_publishes_nothin
 
 #[test]
 fn evidence_of_a_principal_re_bound_after_the_content_is_flushed_publishes_nothing() {
-    let _serial = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
+    let _serial = SERIAL.locked();
     let fx = Fx::new();
     fx.opt_in_agent_browser_tools();
     // The binding stays active but is a different revision: both gates refuse.
@@ -4942,7 +4943,7 @@ fn evidence_of_a_principal_re_bound_after_the_content_is_flushed_publishes_nothi
 
 #[test]
 fn recovery_finds_a_tree_launched_before_its_session_recorded_it() {
-    let _serial = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
+    let _serial = SERIAL.locked();
     let fx = Fx::new();
     let user = fx.user.clone();
     let session = fx.create(&user, workspace());
@@ -5018,7 +5019,7 @@ fn forget_process_id(fx: &Fx, session: &Id) {
 
 #[test]
 fn an_uncertain_session_without_a_recorded_tree_is_never_closed_unverified() {
-    let _serial = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
+    let _serial = SERIAL.locked();
     let fx = Fx::new();
     let user = fx.user.clone();
     let session = fx.create(&user, workspace());
@@ -5049,7 +5050,7 @@ fn an_uncertain_session_without_a_recorded_tree_is_never_closed_unverified() {
 /// holds.
 #[test]
 fn browser_reads_answer_over_a_store_with_a_single_reader() {
-    let _serial = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
+    let _serial = SERIAL.locked();
     let h = Harness::new();
     h.readers.store(1, std::sync::atomic::Ordering::SeqCst);
     let platform = Arc::new(FakePlatform::new(&h.root));
@@ -5107,7 +5108,7 @@ fn browser_reads_answer_over_a_store_with_a_single_reader() {
 
 #[test]
 fn navigation_without_a_target_registers_a_new_one_and_artifact_pages_are_staged() {
-    let _serial = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
+    let _serial = SERIAL.locked();
     let fx = Fx::new();
     let user = fx.user.clone();
     let session = fx.create(&user, workspace());
@@ -5193,7 +5194,7 @@ fn navigation_without_a_target_registers_a_new_one_and_artifact_pages_are_staged
 #[test]
 #[ignore = "needs an installed Chromium-family browser; run with --ignored"]
 fn an_installed_browser_end_to_end_when_opted_in() {
-    let _serial = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
+    let _serial = SERIAL.locked();
     let h = Harness::new();
     let configured = std::env::var_os("DEVWORKS_BROWSER").map(PathBuf::from);
     let native = Arc::new(NativeBrowserPlatform::new(&h.root, configured));
@@ -5571,7 +5572,7 @@ fn an_installed_browser_end_to_end_when_opted_in() {
 
 #[test]
 fn hover_cannot_redirect_a_click_to_a_same_document_cover() {
-    let _serial = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
+    let _serial = SERIAL.locked();
     let fx = Fx::new();
     let user = fx.user.clone();
     let session = fx.create(&user, workspace());
@@ -5600,7 +5601,7 @@ fn hover_cannot_redirect_a_click_to_a_same_document_cover() {
 
 #[test]
 fn cancelling_an_undispatched_close_allows_replacement_cleanup() {
-    let _serial = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
+    let _serial = SERIAL.locked();
     let fx = Fx::new();
     let user = fx.user.clone();
     let session = fx.create(&user, workspace());
@@ -5788,7 +5789,7 @@ fn installed_browser_records_real_worktree_provenance_when_opted_in() {
     browser_source_case(true, false);
 }
 fn browser_source_case(native: bool, missing_load: bool) {
-    let _serial = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
+    let _serial = SERIAL.locked();
     let h = Harness::new();
     let tree = h.root.join("tested-owned/tree");
     let platform = Arc::new(FakePlatform::new(&h.root));
@@ -6289,7 +6290,7 @@ fn udp_probes(stun: u16, quic: u16) -> Vec<Value> {
 #[test]
 #[ignore = "needs an installed Chrome; run with --ignored"]
 fn real_chrome_keeps_every_connection_in_the_egress_proxy() {
-    let _serial = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
+    let _serial = SERIAL.locked();
     let h = Harness::new();
     let configured = std::env::var_os("DEVWORKS_BROWSER").map(PathBuf::from);
     let log = Arc::new(EgressLog::default());

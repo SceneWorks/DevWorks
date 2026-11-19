@@ -228,7 +228,9 @@ pub(super) fn run_case(writer_race: bool) {
             }
             assert!(
                 std::time::Instant::now() < startup_deadline,
-                "independent startup owners did not settle: Help={help:?}; receipts={receipts:?}; bootstrap={bootstrap:?}; drafts={drafts}; accounted={accounted}"
+                "independent startup owners did not settle: Help={help:?}; \
+                    receipts={receipts:?}; bootstrap={bootstrap:?}; drafts={drafts}; \
+                    accounted={accounted}"
             );
             std::thread::sleep(Duration::from_millis(5));
         }
@@ -348,7 +350,6 @@ pub(super) fn run_case(writer_race: bool) {
                 provider_model_id: Some("native-metadata-source".into()),
                 connection_id: id("usage-connection"),
                 endpoint_profile: "CodexSubscriptionResponses".into(),
-                access_mode: "Subscription".into(),
                 service_tier: None,
                 input_tokens: Some(10),
                 cache_write_ttl_ms: None,

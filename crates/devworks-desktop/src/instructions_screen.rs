@@ -3,9 +3,10 @@
 //! and change is a gateway operation the shell submits for this panel; agent proposals are
 //! decided in Approvals, never here.
 use crate::instructions_ops::{self as iop, Kind, Origin, State};
+use crate::paged::{Fetch, Paged};
 use crate::theme;
 use crate::widgets::{self, Tone, ViewState, chip};
-use devworks_core::protocol::records::{InstructionRecord, SkillResource};
+use devworks_core::protocol::records::{InstructionRecord, ProjectRecord, SkillResource};
 use devworks_core::settings::catalog::AgentRole;
 use eframe::egui::{self, RichText, Ui};
 use std::collections::BTreeMap;
@@ -21,8 +22,11 @@ pub enum InstructionAction {
     /// Load the text of one revision (from the loaded history) of the selected item.
     View(i64),
     /// A human draft: `target` is `(instructionId, latest revision)`, `None` a new harness skill.
+    /// `project` is the project whose own skill store the skill lives in (`None`: the
+    /// workspace); an existing item is saved in its own scope.
     Save {
         kind: Kind,
+        project: Option<String>,
         target: Option<(String, i64)>,
         name: String,
         text: String,
@@ -33,6 +37,12 @@ pub enum InstructionAction {
         id: String,
         expected: i64,
         target: i64,
+    },
+    /// Turn a skill off or on; `expected` is its latest revision.
+    SetEnabled {
+        id: String,
+        expected: i64,
+        enabled: bool,
     },
     OpenApprovals,
 }
@@ -50,30 +60,24 @@ pub struct Selection {
 
 #[derive(Default)]
 pub struct Detail {
-    /// Fences history replies (and everything on a new selection).
-    pub generation: u64,
-    /// Fences text replies on their own, so viewing another revision never strands the
-    /// history or resource listing in flight.
+    /// Fences the text reply (one document, not a list) on its own, so viewing another
+    /// revision never strands the history or resource listing in flight.
     pub text_generation: u64,
-    /// Fences resource listing replies on their own.
-    pub resources_generation: u64,
-    /// The revision the resource listing belongs to (its pages continue with it).
+    /// The revision the resource listing belongs to (its pages are requested with it).
     pub resources_revision: Option<i64>,
-    /// `None` while loading.
-    pub history: Option<Result<Vec<InstructionRecord>, String>>,
-    pub history_gathering: Vec<InstructionRecord>,
+    /// The selected item's history, every page read before it shows.
+    pub history: Paged<InstructionRecord>,
     /// The revision whose text is shown and its text (`None` while loading).
     pub shown: Option<i64>,
     pub text: Option<Result<String, String>>,
-    pub resources: Option<Result<Vec<SkillResource>, String>>,
-    pub resources_gathering: Vec<SkillResource>,
+    pub resources: Paged<SkillResource>,
     /// The text and resources wait for the history: they load from its current revision, so
     /// the shown text and the save's expected revision come from one observation.
     pub follow_history: bool,
 }
 impl Detail {
     pub fn latest(&self) -> Option<i64> {
-        match &self.history {
+        match self.history.result() {
             Some(Ok(h)) => iop::latest_revision(h),
             _ => None,
         }
@@ -87,7 +91,11 @@ pub struct Pending {
     pub kind: Kind,
     /// The draft (target, name) and its text, or `None` for a restore.
     pub draft: Option<(Option<(String, i64)>, String)>,
+    /// The project the draft is scoped to (`None`: the workspace).
+    pub project: Option<String>,
     pub stage: Stage,
+    /// `Some(enabled)` for a skill switched off or on.
+    pub toggle: Option<bool>,
     /// The staged text file, owned until its `artifacts.save` has a definite outcome.
     pub staged: Option<PathBuf>,
 }
@@ -103,10 +111,8 @@ pub enum Stage {
 #[derive(Default)]
 pub struct InstructionsPanel {
     pub requested: bool,
-    pub skills_generation: u64,
-    /// `None` while the first discovery is loading.
-    pub skills: Option<Result<Vec<InstructionRecord>, String>>,
-    pub skills_gathering: Vec<InstructionRecord>,
+    /// The discovered skills: the workspace's, then each active project's, read as one list.
+    pub skills: Paged<InstructionRecord>,
     /// Active role records by role item ID (absent while loading).
     pub roles: BTreeMap<String, Result<InstructionRecord, String>>,
     pub selected: Option<Selection>,
@@ -115,6 +121,19 @@ pub struct InstructionsPanel {
     pub editor: Option<Editor>,
     /// A new harness skill being written (name, text).
     pub new_skill: Option<(String, String)>,
+    /// The project the new skill is for (`None`: the workspace, every project).
+    pub new_skill_project: Option<String>,
+    /// The projects a skill can be scoped to, as the shell last read them (id, name).
+    pub projects: Vec<(String, String)>,
+    /// Every active project, gathered page by page by this panel (the shell's own list holds
+    /// only the pages the Projects screen has shown).
+    pub all_projects: Paged<ProjectRecord>,
+    /// The workspace's discovery request, held until the project list is complete.
+    pub held_discovery: Option<Fetch>,
+    /// Projects whose own skills the running discovery has still to read, and the one it is
+    /// reading now.
+    pub discover_queue: Vec<String>,
+    pub discover_project: Option<String>,
     pub pending: Option<Pending>,
     pub message: Option<(Tone, String)>,
     pub sequence: u64,
@@ -139,11 +158,16 @@ impl InstructionsPanel {
     }
     /// Selects an item and resets its detail (a new generation fences older replies).
     pub fn select(&mut self, selection: Selection) {
-        let generation = self.detail.generation.wrapping_add(1);
+        // The lists keep their request counters, so a reply to the previous item's read stays
+        // refused.
+        let mut history = std::mem::take(&mut self.detail.history);
+        let mut resources = std::mem::take(&mut self.detail.resources);
+        history.reset();
+        resources.reset();
         self.detail = Detail {
-            generation,
+            history,
+            resources,
             text_generation: self.detail.text_generation.wrapping_add(1),
-            resources_generation: self.detail.resources_generation.wrapping_add(1),
             shown: Some(selection.record.revision.get()),
             ..Detail::default()
         };
@@ -171,6 +195,12 @@ impl InstructionsPanel {
     fn busy(&self) -> bool {
         self.pending.is_some()
     }
+    fn project_name(&self, id: &str) -> String {
+        self.projects
+            .iter()
+            .find(|(p, _)| p == id)
+            .map_or_else(|| id.to_owned(), |(_, name)| name.clone())
+    }
 
     pub fn ui(&mut self, ui: &mut Ui, online: bool, actions: &mut Vec<InstructionAction>) {
         egui::Frame::new()
@@ -189,7 +219,9 @@ impl InstructionsPanel {
                 widgets::caption(
                     ui,
                     "Shared skills: ~/.agents/skills (never written here). Harness skills: \
-                     <data folder>/skills.",
+                     <data folder>/skills. Project skills: <data folder>/project-skills/<project>, \
+                     offered only to agents working in that project; a project skill takes \
+                     precedence over a workspace skill of the same name there.",
                 );
                 widgets::caption(
                     ui,
@@ -265,7 +297,7 @@ impl InstructionsPanel {
             }
         });
         self.new_skill_ui(ui, actions);
-        match &self.skills {
+        match self.skills.result() {
             None => {
                 widgets::state_block(
                     ui,
@@ -311,6 +343,13 @@ impl InstructionsPanel {
                             pick = Some(record.clone());
                         }
                         status_chips(ui, &s, record.revision.get(), true);
+                        if let Some(project) = iop::record_project(record) {
+                            chip(
+                                ui,
+                                format!("Project: {}", self.project_name(&project)),
+                                Tone::Neutral,
+                            );
+                        }
                         if let Some(loc) = iop::location(record) {
                             widgets::caption(ui, loc);
                         }
@@ -326,6 +365,8 @@ impl InstructionsPanel {
 
     fn new_skill_ui(&mut self, ui: &mut Ui, actions: &mut Vec<InstructionAction>) {
         let busy = self.busy();
+        let projects = &self.projects;
+        let project = &mut self.new_skill_project;
         let Some((name, text)) = &mut self.new_skill else {
             return;
         };
@@ -338,9 +379,36 @@ impl InstructionsPanel {
                 ui.label("New harness skill");
                 widgets::caption(
                     ui,
-                    "The name is the skill's directory under <data folder>/skills (one path \
-                     segment).",
+                    "The name is the skill's directory under <data folder>/skills, or under \
+                     the project's own folder for a project skill (one path segment).",
                 );
+                let chosen = |p: &Option<String>| match p {
+                    None => "Workspace (every project)".to_owned(),
+                    Some(id) => projects
+                        .iter()
+                        .find(|(pid, _)| pid == id)
+                        .map_or_else(|| id.clone(), |(_, n)| format!("Project: {n}")),
+                };
+                let r = egui::ComboBox::from_label("Skill scope")
+                    .selected_text(chosen(project))
+                    .show_ui(ui, |ui| {
+                        ui.selectable_value(project, None, "Workspace (every project)");
+                        for (id, name) in projects.iter() {
+                            ui.selectable_value(
+                                project,
+                                Some(id.clone()),
+                                format!("Project: {name}"),
+                            );
+                        }
+                    });
+                labelled(r.response, egui::Role::ComboBox, "Skill scope");
+                if project.is_some() {
+                    widgets::caption(
+                        ui,
+                        "Only agents working in this project are offered it, and it takes \
+                         precedence there over a workspace skill of the same name.",
+                    );
+                }
                 let r = ui.add(egui::TextEdit::singleline(name).hint_text("skill-name"));
                 labelled(r, egui::Role::TextInput, "New skill name");
                 let r = ui.add(
@@ -365,6 +433,7 @@ impl InstructionsPanel {
                     {
                         actions.push(InstructionAction::Save {
                             kind: Kind::Skill,
+                            project: project.clone(),
                             target: None,
                             name: name.clone(),
                             text: text.clone(),
@@ -377,6 +446,7 @@ impl InstructionsPanel {
             });
         if close {
             self.new_skill = None;
+            self.new_skill_project = None;
         }
     }
 
@@ -451,11 +521,39 @@ impl InstructionsPanel {
             );
         }
         let latest = self.detail.latest();
+        if sel.kind == Kind::Skill {
+            let label = if status.disabled {
+                "Enable skill"
+            } else {
+                "Disable skill"
+            };
+            ui.horizontal_wrapped(|ui| {
+                if ui
+                    .add_enabled(!busy && latest.is_some(), egui::Button::new(label))
+                    .clicked()
+                    && let Some(expected) = latest
+                {
+                    actions.push(InstructionAction::SetEnabled {
+                        id: sel.id.clone(),
+                        expected,
+                        enabled: status.disabled,
+                    });
+                }
+                widgets::caption(
+                    ui,
+                    if status.disabled {
+                        "Disabled: agents are not offered this skill. Its history is kept."
+                    } else {
+                        "Disabling keeps the skill and its history but stops offering it to agents."
+                    },
+                );
+            });
+        }
 
         // History
         ui.add_space(4.0);
         ui.label(RichText::new("History").strong());
-        match &self.detail.history {
+        match self.detail.history.result() {
             None => {
                 widgets::state_block(
                     ui,
@@ -499,6 +597,18 @@ impl InstructionsPanel {
                         }
                         if s.active {
                             chip(ui, "active", Tone::Accent);
+                        }
+                        if let Some(outcome) = iop::approval_outcome(record) {
+                            chip(ui, outcome, Tone::Neutral);
+                        }
+                        if let Some(who) = iop::made_by(record) {
+                            widgets::caption(ui, who);
+                        }
+                        if let Some(why) = &record.rationale {
+                            widgets::caption(ui, format!("Why: {}", why.0));
+                        }
+                        if let Some(lessons) = iop::learned_from(record) {
+                            widgets::caption(ui, lessons);
                         }
                         if self.detail.shown == Some(revision) {
                             widgets::caption(ui, "shown");
@@ -636,6 +746,7 @@ impl InstructionsPanel {
                 if ui.add_enabled(enabled, egui::Button::new("Save")).clicked() {
                     actions.push(InstructionAction::Save {
                         kind: sel.kind,
+                        project: iop::record_project(&sel.record),
                         target: Some((sel.id.clone(), base)),
                         name: sel.draft_name.clone(),
                         text: text.clone(),
@@ -659,6 +770,7 @@ impl InstructionsPanel {
             {
                 actions.push(InstructionAction::Save {
                     kind: Kind::Role,
+                    project: None,
                     target: Some((sel.id.clone(), expected)),
                     name: sel.draft_name.clone(),
                     text: default,
@@ -673,7 +785,7 @@ impl InstructionsPanel {
         if sel.kind == Kind::Skill {
             ui.add_space(4.0);
             ui.label(RichText::new("Resources").strong());
-            match &self.detail.resources {
+            match self.detail.resources.result() {
                 None => {
                     widgets::state_block(
                         ui,
@@ -791,12 +903,12 @@ mod tests {
     fn a_save_expects_the_revision_its_edit_began_from() {
         let mut panel = InstructionsPanel {
             requested: true,
-            skills: Some(Ok(vec![rec(2)])),
+            skills: Paged::from_items(vec![rec(2)]),
             ..InstructionsPanel::default()
         };
         panel.select(InstructionsPanel::skill_selection(&rec(1)));
         // A refresh has since loaded revision 2, recorded elsewhere while the edit was open.
-        panel.detail.history = Some(Ok(vec![rec(2), rec(1)]));
+        panel.detail.history = Paged::from_items(vec![rec(2), rec(1)]);
         panel.detail.text = Some(Ok("revision 2".into()));
         panel.editor = Some(Editor {
             text: "edited from revision 1".into(),
@@ -827,5 +939,70 @@ mod tests {
             })
             .collect();
         assert_eq!(saves, [("skill-1".to_owned(), 1)]);
+    }
+
+    fn saves_after_clicking(mut panel: InstructionsPanel, button: &str) -> Vec<Option<String>> {
+        panel.requested = true;
+        panel.skills = Paged::from_items(vec![]);
+        let mut harness = egui_kittest::Harness::builder()
+            .with_size(egui::vec2(1200.0, 2400.0))
+            .build_ui_state(
+                |ui, state: &mut (InstructionsPanel, Vec<InstructionAction>)| {
+                    let (panel, actions) = state;
+                    panel.ui(ui, true, actions);
+                },
+                (panel, Vec::new()),
+            );
+        harness.run_steps(2);
+        harness
+            .get_by_role_and_label(egui::accesskit::Role::Button, button)
+            .click();
+        harness.run_steps(2);
+        harness
+            .state()
+            .1
+            .iter()
+            .filter_map(|a| match a {
+                InstructionAction::Save { project, .. } => Some(project.clone()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_new_skill_is_saved_for_the_chosen_project() {
+        let panel = |project: Option<&str>| InstructionsPanel {
+            new_skill: Some(("deploy".into(), "Deploy.".into())),
+            new_skill_project: project.map(str::to_owned),
+            projects: vec![("project-a".into(), "Project A".into())],
+            ..InstructionsPanel::default()
+        };
+        assert_eq!(
+            saves_after_clicking(panel(Some("project-a")), "Create skill"),
+            [Some("project-a".to_owned())]
+        );
+        assert_eq!(saves_after_clicking(panel(None), "Create skill"), [None]);
+    }
+
+    #[test]
+    fn an_existing_project_skill_is_saved_in_its_own_project() {
+        let mut record = rec(1);
+        record.scope = devworks_core::protocol::data::DataScope::Project {
+            project_id: devworks_core::protocol::ProjectId(
+                devworks_core::protocol::Id::new("project-a").unwrap(),
+            ),
+        };
+        let mut panel = InstructionsPanel::default();
+        panel.select(InstructionsPanel::skill_selection(&record));
+        panel.detail.history = Paged::from_items(vec![record]);
+        panel.detail.text = Some(Ok("text".into()));
+        panel.editor = Some(Editor {
+            text: "edited".into(),
+            base: 1,
+        });
+        assert_eq!(
+            saves_after_clicking(panel, "Save"),
+            [Some("project-a".to_owned())]
+        );
     }
 }

@@ -16,11 +16,18 @@ use super::StorageError;
 use crate::protocol::{ActorId, Id, ProjectId};
 use serde_json::Value;
 
-/// Where a configuration document applies. Inheritance runs Workspace → Project.
+/// Where a configuration document applies. Inheritance runs Workspace → Project → Repository.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum ConfigScope {
     Workspace,
     Project(ProjectId),
+    /// One repository of one project. The project qualifies it because a repository can belong
+    /// to several projects, and a repository's values never apply to delivery in another
+    /// project; the project's purge removes them with the project.
+    Repository {
+        project: ProjectId,
+        repository: Id,
+    },
 }
 impl From<&crate::protocol::data::DataScope> for ConfigScope {
     fn from(scope: &crate::protocol::data::DataScope) -> Self {
@@ -36,18 +43,42 @@ impl From<&ConfigScope> for crate::protocol::data::DataScope {
     fn from(scope: &ConfigScope) -> Self {
         match scope {
             ConfigScope::Workspace => Self::Workspace,
-            ConfigScope::Project(project_id) => Self::Project {
+            ConfigScope::Project(project_id)
+            | ConfigScope::Repository {
+                project: project_id,
+                ..
+            } => Self::Project {
                 project_id: project_id.clone(),
             },
         }
     }
 }
 impl ConfigScope {
-    /// Stable storage key: `workspace` or `project:<id>`. Opaque IDs cannot contain `:`.
+    /// The scope an operation addresses: the data scope, narrowed to one of the project's
+    /// repositories when `repository` is given. A workspace scope cannot be narrowed.
+    pub fn addressed(
+        scope: &crate::protocol::data::DataScope,
+        repository: Option<&Id>,
+    ) -> Result<Self, &'static str> {
+        match (Self::from(scope), repository) {
+            (scope, None) => Ok(scope),
+            (Self::Project(project), Some(repository)) => Ok(Self::Repository {
+                project,
+                repository: repository.clone(),
+            }),
+            _ => Err("a repository scope needs its project"),
+        }
+    }
+    /// Stable storage key: `workspace`, `project:<id>` or `repository:<project id>:<repository
+    /// id>`. Opaque IDs cannot contain `:`.
     pub fn key(&self) -> String {
         match self {
             Self::Workspace => "workspace".into(),
             Self::Project(p) => format!("project:{}", p.0.as_str()),
+            Self::Repository {
+                project,
+                repository,
+            } => format!("repository:{}:{}", project.0.as_str(), repository.as_str()),
         }
     }
     pub fn from_key(key: &str) -> Option<Self> {
@@ -56,20 +87,37 @@ impl ConfigScope {
             _ => key
                 .strip_prefix("project:")
                 .and_then(|id| Id::new(id).ok())
-                .map(|id| Self::Project(ProjectId(id))),
+                .map(|id| Self::Project(ProjectId(id)))
+                .or_else(|| {
+                    let (project, repository) = key.strip_prefix("repository:")?.split_once(':')?;
+                    Some(Self::Repository {
+                        project: ProjectId(Id::new(project).ok()?),
+                        repository: Id::new(repository).ok()?,
+                    })
+                }),
         }
     }
-    /// Identifier used to address the scope in faults (`workspace` or the project ID).
+    /// Identifier used to address the scope in faults (`workspace`, the project ID or the
+    /// repository ID).
     pub fn target_id(&self) -> Id {
         match self {
             Self::Workspace => Id::new("workspace").expect("static id"),
             Self::Project(p) => p.0.clone(),
+            Self::Repository { repository, .. } => repository.clone(),
         }
     }
+    /// The project the scope belongs to (a repository scope belongs to its project).
     pub fn project_id(&self) -> Option<&ProjectId> {
         match self {
             Self::Workspace => None,
             Self::Project(p) => Some(p),
+            Self::Repository { project, .. } => Some(project),
+        }
+    }
+    pub fn repository_id(&self) -> Option<&Id> {
+        match self {
+            Self::Repository { repository, .. } => Some(repository),
+            _ => None,
         }
     }
 }

@@ -14,6 +14,8 @@ use crate::{
 pub enum InstructionsSlot {
     /// Settings → Roles and skills: a discovery page (load generation).
     InstructionSkills(u64),
+    /// A page of the complete active project list the panel gathers (load generation).
+    InstructionProjects(u64),
     /// The active record of one role (role item ID).
     InstructionRole(String),
     /// A history page of the selected item (detail generation).
@@ -30,6 +32,9 @@ pub enum InstructionsSlot {
     InstructionCommand(u64),
 }
 screen_slot!(InstructionsSlot, Instructions);
+use devworks_core::protocol::helpers::instructions::{
+    HARNESS_ROOT_ID, MAX_TEXT_BYTES, SHARED_ROOT_ID, role_item_id,
+};
 use devworks_core::{
     gateway::{CommandOutcome, QueryOutcome},
     operations::{OperationInput as In, roles, skills},
@@ -37,11 +42,12 @@ use devworks_core::{
         DomainErrorCode,
         data::DataScope,
         provider::ArtifactRef,
-        records::{InstructionRecord, PageRequest, SkillResource, SkillResourcePageResult},
+        records::{
+            ApprovalState, InstructionRecord, PageRequest, SkillResource, SkillResourcePageResult,
+        },
         results::OperationResult,
         support::BoundedList,
     },
-    services::instructions::{HARNESS_ROOT_ID, MAX_TEXT_BYTES, SHARED_ROOT_ID, role_item_id},
     settings::catalog::AgentRole,
 };
 use std::path::PathBuf;
@@ -62,12 +68,6 @@ impl Kind {
         match self {
             Self::Skill => "skills",
             Self::Role => "roles",
-        }
-    }
-    pub fn read_op(self) -> &'static str {
-        match self {
-            Self::Skill => "skills.read",
-            Self::Role => "roles.read",
         }
     }
     pub fn history_op(self) -> &'static str {
@@ -215,6 +215,12 @@ pub fn confirmable(record: &InstructionRecord) -> bool {
 /// Where a skill's files are, for display (`root` caption + relative directory).
 pub fn location(record: &InstructionRecord) -> Option<String> {
     let path = record.source_path.as_ref()?;
+    if let Some(project) = record_project(record) {
+        return Some(format!(
+            "<data folder>/project-skills/{project}/{}",
+            path.relative.0
+        ));
+    }
     let root = match path.root_id.as_str() {
         SHARED_ROOT_ID => "~/.agents/skills".to_owned(),
         HARNESS_ROOT_ID => "<data folder>/skills".to_owned(),
@@ -271,9 +277,17 @@ pub fn role_title(role: AgentRole) -> &'static str {
 fn page(cursor: Option<&str>) -> Option<PageRequest> {
     frame::page(u32::from(PAGE), cursor)
 }
-pub fn discover(cursor: Option<&str>) -> Option<In> {
+/// The project a record is scoped to (`None`: the workspace).
+pub fn record_project(record: &InstructionRecord) -> Option<String> {
+    match &record.scope {
+        DataScope::Project { project_id } => Some(project_id.0.as_str().to_owned()),
+        _ => None,
+    }
+}
+/// A discovery page: the workspace's skills, or (`project`) that project's own with them.
+pub fn discover(project: Option<&str>, cursor: Option<&str>) -> Option<In> {
     Some(In::Skills(skills::Input::Discover(skills::DiscoverInput {
-        scope: DataScope::Workspace,
+        scope: frame::scope(project)?,
         root_ids: BoundedList(Vec::new()),
         page: page(cursor)?,
     })))
@@ -315,9 +329,10 @@ pub fn read_resources(id: &str, revision: i64, cursor: Option<&str>) -> Option<I
     )))
 }
 /// A human draft. `target` is `(instructionId, latest revision)`; `None` creates a new
-/// harness skill named `name`.
+/// harness skill named `name`, in `project`'s own store when one is given.
 pub fn draft(
     kind: Kind,
+    project: Option<&str>,
     target: Option<(&str, i64)>,
     name: &str,
     content: &ArtifactRef,
@@ -327,22 +342,36 @@ pub fn draft(
         None => (None, None),
     };
     let (name, content) = (frame::text(name)?, content.clone());
+    let scope = frame::scope(project)?;
     Some(match kind {
         Kind::Skill => In::Skills(skills::Input::Draft(skills::DraftInput {
-            scope: DataScope::Workspace,
+            scope,
             instruction_id,
             expected_revision,
             name,
             content,
+            rationale: None,
+            lesson_ids: None,
         })),
         Kind::Role => In::Roles(roles::Input::Draft(roles::DraftInput {
-            scope: DataScope::Workspace,
+            scope,
             instruction_id,
             expected_revision,
             name,
             content,
+            rationale: None,
+            lesson_ids: None,
         })),
     })
+}
+pub fn set_enabled(id: &str, expected: i64, enabled: bool) -> Option<In> {
+    Some(In::Skills(skills::Input::SetEnabled(
+        skills::SetEnabledInput {
+            instruction_id: frame::id(id)?,
+            expected_revision: frame::number(expected)?,
+            enabled,
+        },
+    )))
 }
 pub fn rollback(kind: Kind, id: &str, expected: i64, target: i64) -> Option<In> {
     let instruction_id = frame::id(id)?;
@@ -370,6 +399,46 @@ pub fn query(b: &dyn Backend, input: impl Into<Option<In>>) -> Vec<u8> {
 }
 pub fn command(b: &dyn Backend, input: impl Into<Option<In>>) -> Vec<u8> {
     frame::build(b, Negotiate::Latest, input.into())
+}
+
+/// Who made a revision and in which session, as a history row shows it (`None` when the
+/// reply carries no author, as at an earlier revision).
+pub fn made_by(record: &InstructionRecord) -> Option<String> {
+    let author = &record.author.as_ref()?.0;
+    Some(match &record.session_id {
+        Some(session) => format!(
+            "Made by {} in session {}",
+            author.as_str(),
+            session.as_str()
+        ),
+        None => format!("Made by {}", author.as_str()),
+    })
+}
+/// The lessons a revision came from, as a history row shows them (`None` when it names none, or
+/// when the reply carries no lessons, as at an earlier revision).
+pub fn learned_from(record: &InstructionRecord) -> Option<String> {
+    let lessons = &record.lesson_ids.as_ref()?.0;
+    (!lessons.is_empty()).then(|| {
+        format!(
+            "From lessons {}",
+            lessons
+                .iter()
+                .map(|l| l.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
+        )
+    })
+}
+/// The outcome of the approval staged for a revision; `None` when none was (a person's own
+/// save, a confirmed disk change, or a draft not yet proposed).
+pub fn approval_outcome(record: &InstructionRecord) -> Option<&'static str> {
+    Some(match record.approval_outcome.as_ref()? {
+        ApprovalState::Pending => "approval pending",
+        ApprovalState::Approved => "approval approved",
+        ApprovalState::Rejected => "approval rejected",
+        ApprovalState::Superseded => "approval superseded",
+        ApprovalState::Expired => "approval expired",
+    })
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -422,6 +491,7 @@ pub fn changed(outcome: CommandOutcome) -> Result<InstructionRecord, Failure> {
     match ops::command_result(outcome)? {
         OperationResult::SkillsDraft { value }
         | OperationResult::SkillsRollback { value }
+        | OperationResult::SkillsSetEnabled { value }
         | OperationResult::RolesDraft { value }
         | OperationResult::RolesRollback { value } => Ok(value),
         other => Err(ops::unexpected("Instruction change", &other)),
@@ -430,9 +500,6 @@ pub fn changed(outcome: CommandOutcome) -> Result<InstructionRecord, Failure> {
 /// A stale `expectedRevision`: the item moved since it was loaded.
 pub fn is_conflict(failure: &Failure) -> bool {
     matches!(failure, Failure::Refused(f) if f.code == DomainErrorCode::RevisionConflict)
-}
-pub fn is_not_found(failure: &Failure) -> bool {
-    matches!(failure, Failure::Refused(f) if f.code == DomainErrorCode::NotFound)
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -589,24 +656,67 @@ mod tests {
     }
 
     #[test]
+    fn a_history_row_says_who_made_it_and_how_its_approval_ended() {
+        let mut row = serde_json::to_value(rec(2, false, &["state:proposed"])).unwrap();
+        assert_eq!(made_by(&rec(2, false, &[])), None);
+        row["author"] = json!("agent-a");
+        row["sessionId"] = json!("session-a");
+        row["approvalOutcome"] = json!("Pending");
+        let row: InstructionRecord = serde_json::from_value(row).unwrap();
+        assert_eq!(
+            made_by(&row).unwrap(),
+            "Made by agent-a in session session-a"
+        );
+        assert_eq!(approval_outcome(&row), Some("approval pending"));
+        assert_eq!(learned_from(&row), None);
+        let mut row = serde_json::to_value(&row).unwrap();
+        row["lessonIds"] = json!(["claim-a", "claim-b"]);
+        let row: InstructionRecord = serde_json::from_value(row).unwrap();
+        assert_eq!(learned_from(&row).unwrap(), "From lessons claim-a, claim-b");
+        assert_eq!(approval_outcome(&rec(1, true, &[])), None);
+    }
+
+    #[test]
     fn bodies_use_camel_case_and_decimal_revisions() {
         let body = |input: Option<In>| input.expect("a typed input").body().expect("a body");
         let content: ArtifactRef = rec(1, true, &[]).content;
-        let b = body(draft(Kind::Skill, Some(("skill-1", 7)), "lint", &content));
+        let b = body(draft(
+            Kind::Skill,
+            None,
+            Some(("skill-1", 7)),
+            "lint",
+            &content,
+        ));
         assert_eq!(b["instructionId"], "skill-1");
         assert_eq!(b["expectedRevision"], "7");
         assert_eq!(b["scope"]["kind"], "Workspace");
         assert_eq!(b["content"]["artifactId"], "art-1");
-        let new = body(draft(Kind::Role, None, "fresh", &content));
+        let new = body(draft(Kind::Role, None, None, "fresh", &content));
         assert!(new.get("instructionId").is_none() && new.get("expectedRevision").is_none());
+        let scoped = body(draft(
+            Kind::Skill,
+            Some("project-a"),
+            None,
+            "fresh",
+            &content,
+        ));
+        assert_eq!(
+            scoped["scope"],
+            json!({"kind": "Project", "projectId": "project-a"})
+        );
         let r = body(rollback(Kind::Role, "role-worker", 4, 1));
         assert_eq!(r["expectedRevision"], "4");
         assert_eq!(r["targetRevision"], "1");
-        let d = body(discover(Some("c1")));
+        let d = body(discover(None, Some("c1")));
         assert_eq!(d["page"]["limit"], json!(PAGE));
         assert!(d["page"]["limit"].is_u64(), "page limit is a JSON integer");
         assert_eq!(d["page"]["cursor"], "c1");
         assert_eq!(d["rootIds"], json!([]));
+        assert_eq!(d["scope"]["kind"], "Workspace");
+        assert_eq!(
+            body(discover(Some("project-a"), None))["scope"]["projectId"],
+            "project-a"
+        );
         assert_eq!(body(read(Kind::Skill, "x", Some(2)))["revision"], "2");
         assert!(body(read(Kind::Role, "x", None)).get("revision").is_none());
         assert_eq!(body(read_resources("x", 3, None))["revision"], "3");

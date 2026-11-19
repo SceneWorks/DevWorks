@@ -31,11 +31,12 @@ use devworks_core::authority::HostRoles;
 use devworks_core::authority::destructive::ProtectedRoots;
 use devworks_core::context::{HostIngress, InvocationContext, PrincipalKind};
 use devworks_core::gateway::{CommandOutcome, QueryOutcome};
+use devworks_core::locks::LockExt;
 use devworks_core::ports::diagnostics::StorageHealthProbe;
 use devworks_core::ports::http::HttpTransport;
 use devworks_core::ports::packages::{HostPlatform, RuntimeCache};
 use devworks_core::ports::router::ConnectionDirectory;
-use devworks_core::ports::secrets::{Secret, SecretResolver, SecretStore, SwitchableSecrets};
+use devworks_core::ports::secrets::{Secret, SecretStore, SwitchableSecrets};
 use devworks_core::ports::storage::{
     ApplicationStore, ReadOptions, StorageError, WriteOptions, read_snapshot, run_write,
 };
@@ -141,6 +142,10 @@ pub struct DesktopConfig {
     /// The user's shared skill folder read in place (`~/.agents/skills` by default); `None`
     /// reads no shared skills. Harness skills always live under `<data_root>/skills`.
     pub shared_skills: Option<PathBuf>,
+    /// The search path the container CLIs (`docker`, `podman`, `container`) resolve against.
+    /// `None` (production) is the process `PATH`. Tests pass an empty path so opening Settings
+    /// never runs a host container CLI; process tools keep resolving from `PATH` either way.
+    pub container_search_path: Option<devworks_core::services::process::executables::SearchPath>,
 }
 impl std::fmt::Debug for DesktopConfig {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -176,6 +181,7 @@ impl DesktopConfig {
             shared_skills: std::env::var_os("HOME")
                 .or_else(|| std::env::var_os("USERPROFILE"))
                 .map(|home| PathBuf::from(home).join(".agents").join("skills")),
+            container_search_path: None,
         }
     }
 }
@@ -183,7 +189,9 @@ impl DesktopConfig {
 /// Container backends select only their own CLI among the configured executables.
 const CONTAINER_EXECUTABLES: &[&str] = &["docker", "podman", "container"];
 
-/// What every command launch is checked against: the application data folder and both skill
+use devworks_adapters::fs::skills::PROJECT_SKILLS_DIR as PROJECT_SKILLS;
+
+/// What every command launch is checked against: the application data folder and the skill
 /// folders, so an agent's command can never write a skill change that sync would observe.
 pub(crate) fn protected_roots(config: &DesktopConfig) -> ProtectedRoots {
     ProtectedRoots::new(
@@ -192,9 +200,13 @@ pub(crate) fn protected_roots(config: &DesktopConfig) -> ProtectedRoots {
         Some(config.data_root.display().to_string()),
     )
     .with_skill_roots(
-        std::iter::once(config.data_root.join("skills"))
-            .chain(config.shared_skills.clone())
-            .map(|p| p.display().to_string()),
+        [
+            config.data_root.join("skills"),
+            config.data_root.join(PROJECT_SKILLS),
+        ]
+        .into_iter()
+        .chain(config.shared_skills.clone())
+        .map(|p| p.display().to_string()),
     )
 }
 
@@ -276,11 +288,6 @@ impl Host {
     /// The human invocation context every UI request is admitted with.
     pub fn user(&self) -> &InvocationContext {
         &self.ctx
-    }
-    /// The production [`SecretResolver`] for settings secret references (the same OS secret
-    /// store the provider connections use).
-    pub fn secret_resolver(&self) -> Arc<dyn SecretResolver> {
-        self.connections.clone()
     }
 }
 
@@ -447,9 +454,10 @@ async fn compose(
     runtime_config.shutdown_bound = config.shutdown_bound;
     runtime_config.instructions = Some(devworks_engine::runtime::InstructionComposition {
         source: Arc::new(NativeSourceTree::new()),
-        files: Arc::new(devworks_adapters::fs::skills::NativeSkillFiles::new(
-            config.data_root.join("skills"),
-        )),
+        files: Arc::new(
+            devworks_adapters::fs::skills::NativeSkillFiles::new(config.data_root.join("skills"))
+                .with_projects(config.data_root.join(PROJECT_SKILLS)),
+        ),
         roots: devworks_core::services::instructions::SkillRoots {
             shared: config.shared_skills.clone(),
             harness: config.data_root.join("skills"),
@@ -466,7 +474,17 @@ async fn compose(
             store.clone(),
         ),
     );
-    let container_bindings = container_bindings(config, executables.clone())
+    // Container CLIs share that resolver unless the configuration names a search path of its own.
+    let container_executables = match config.container_search_path.clone() {
+        Some(path) => Arc::new(
+            devworks_core::services::process::executables::PathExecutables::from_settings_on(
+                store.clone(),
+                path,
+            ),
+        ),
+        None => executables.clone(),
+    };
+    let container_bindings = container_bindings(config, container_executables)
         .map_err(|reason| StartError::Thread(reason.into()))?;
     let container_private_files = Arc::new(
         devworks_adapters::containers::NativeRegistryAuth::new(
@@ -811,9 +829,7 @@ impl Engine {
                     let waker = host.waker.clone();
                     let forward = tokio::spawn(async move {
                         while hints.changed().await.is_ok() {
-                            if let Some(w) =
-                                waker.lock().unwrap_or_else(|p| p.into_inner()).as_ref()
-                            {
+                            if let Some(w) = waker.locked().as_ref() {
                                 w();
                             }
                         }
@@ -1164,7 +1180,7 @@ impl Backend for DesktopBackend {
         Some(self.host.runtime.dispatcher().subscribe())
     }
     fn set_waker(&self, waker: Waker) {
-        *self.host.waker.lock().unwrap_or_else(|p| p.into_inner()) = Some(waker);
+        *self.host.waker.locked() = Some(waker);
     }
     fn token(&self, prefix: &str) -> String {
         self.host.ids.token(prefix)

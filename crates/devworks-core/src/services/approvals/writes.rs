@@ -123,7 +123,13 @@ impl ApprovalService {
                 if model::hash(&serde_json::to_value(payload).unwrap()) != i.content_digest.0 {
                     return Err(invalid("content_digest"));
                 }
-                let binding = json!({"featureId":feature_id,"finding":finding,"assessmentRevision":r.revision,"assessmentDigest":model::hash(&r.body),"restoreEpoch":ctx.restore_epoch()});
+                let binding = json!({
+                    "featureId": feature_id,
+                    "finding": finding,
+                    "assessmentRevision": r.revision,
+                    "assessmentDigest": model::hash(&r.body),
+                    "restoreEpoch": ctx.restore_epoch()
+                });
                 let mut proposal = i.clone();
                 proposal.summary = crate::services::kernel::content(
                     finding
@@ -457,7 +463,19 @@ pub(crate) fn stage_saved_as(
         ctx,
         &input,
         preview.scope.clone(),
-        json!({"content":i.payload,"reviewed":preview.reviewed,"binding":preview.binding,"authority":authority,"invocation":super::save_context(ctx),"operationPreview":{"effect":format!("{:?}",request.effect),"targetIds":request.targets,"projectIds":request.project_targets,"requestDigest":request.fingerprint.as_str()}}),
+        json!({
+            "content": i.payload,
+            "reviewed": preview.reviewed,
+            "binding": preview.binding,
+            "authority": authority,
+            "invocation": super::save_context(ctx),
+            "operationPreview": {
+                "effect": format!("{:?}", request.effect),
+                "targetIds": request.targets,
+                "projectIds": request.project_targets,
+                "requestDigest": request.fingerprint.as_str()
+            }
+        }),
         id,
     )
 }
@@ -538,8 +556,22 @@ pub(crate) fn authority_binding(
 ) -> Result<Value, StorageError> {
     let policy =
         crate::authority::policy::resolve_policy(tx.configuration(), ctx.project_id())?.digest();
-    let principal=tx.authority().principal(ctx.principal())?.map(|p|json!({"revision":p.revision,"active":p.active,"kind":p.kind.as_str(),"role":p.role.map(|r|r.as_str()),"projectId":p.project_id,"tools":p.tool_families}));
-    Ok(
-        json!({"policyDigest":policy,"principal":principal,"projectId":ctx.project_id(),"rootId":ctx.root_id(),"assignmentId":ctx.assignment_id(),"restoreEpoch":ctx.restore_epoch()}),
-    )
+    let principal = tx.authority().principal(ctx.principal())?.map(|p| {
+        json!({
+            "revision": p.revision,
+            "active": p.active,
+            "kind": p.kind.as_str(),
+            "role": p.role.map(|r| r.as_str()),
+            "projectId": p.project_id,
+            "tools": p.tool_families
+        })
+    });
+    Ok(json!({
+        "policyDigest": policy,
+        "principal": principal,
+        "projectId": ctx.project_id(),
+        "rootId": ctx.root_id(),
+        "assignmentId": ctx.assignment_id(),
+        "restoreEpoch": ctx.restore_epoch()
+    }))
 }

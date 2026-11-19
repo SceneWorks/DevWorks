@@ -6,6 +6,7 @@ use crate::{
     help_screen::{HelpAction, HelpScope, HelpScreen},
     memory::RouteMemory,
     ops::Failure,
+    paged::{Applied, Page},
     route::Route,
     screen::{Cx, Screen, ScreenContext, ScreenId},
     widgets::Tone,
@@ -14,6 +15,15 @@ use devworks_core::protocol::OperationState;
 use devworks_core::protocol::records::{HelpAvailability, HelpReadView, HelpSnapshot};
 use eframe::egui::Ui;
 use std::time::Duration;
+
+/// The catalog snapshot a topic page was read from: a page that continues another one must come
+/// from the same.
+fn snapshot_fence(snapshot: &HelpSnapshot) -> String {
+    format!(
+        "{:?}|{:?}|{}",
+        snapshot.help_revision, snapshot.registry_revision, snapshot.app_version.0
+    )
+}
 
 impl Shell {
     /// Opens Help on the topics of `screen` (a screen or settings-category ID).
@@ -27,12 +37,12 @@ impl Screen for HelpScreen {
     type Slot = HelpSlot;
     const ID: ScreenId = ScreenId::Help;
     fn load(&mut self, cx: &mut Cx, _route: Route) {
-        if !self.loaded && !self.loading {
+        if !self.topics.loaded && !self.topics.loading() {
             self.refresh_help(cx);
         }
     }
     fn refresh(&mut self, cx: &mut Cx, _route: Route) {
-        if !self.loading {
+        if !self.topics.loading() {
             self.probe_help(cx);
         }
     }
@@ -69,35 +79,40 @@ impl HelpScreen {
         self.reading = false;
         self.load_help_topics(cx, false);
     }
+    /// Reads the topics of the scope from the first page (it was opened, searched or changed).
     fn load_help_topics(&mut self, cx: &mut Cx, append: bool) {
-        if append && self.next_cursor.is_none() {
-            return;
-        }
-        self.list_generation = self.list_generation.wrapping_add(1);
-        let generation = self.list_generation;
-        let cursor = append.then(|| self.next_cursor.clone()).flatten();
+        let fetch = if append {
+            let Some(fetch) = self.topics.more_page() else {
+                return;
+            };
+            fetch
+        } else {
+            self.topics.reload()
+        };
+        self.send_help_topics(cx, fetch);
+    }
+    fn send_help_topics(&mut self, cx: &mut Cx, fetch: crate::paged::Fetch) {
+        let append = fetch.append();
         let scope = self.scope.clone();
         let operation = match scope {
             HelpScope::Search(_) => "help.search",
             HelpScope::Screen(_) => "help.topic_for_screen",
             HelpScope::Package { .. } => "help.package_guides",
         };
-        self.error = None;
-        self.loading = true;
-        if !cx.query(
-            HelpSlot::HelpTopics(generation, append),
+        self.topics.error = None;
+        let slot = HelpSlot::HelpTopics(fetch.generation, append);
+        cx.paged(
+            &mut self.topics,
+            fetch,
+            slot,
             "Loading local Help topics",
             operation,
-            move |b| match scope {
-                HelpScope::Search(query) => help_ops::search(b, &query, cursor.as_deref()),
-                HelpScope::Screen(screen) => help_ops::context(b, &screen, cursor.as_deref()),
-                HelpScope::Package { id, version } => {
-                    help_ops::guides(b, &id, &version, cursor.as_deref())
-                }
+            move |b, cursor| match scope {
+                HelpScope::Search(query) => help_ops::search(b, &query, cursor),
+                HelpScope::Screen(screen) => help_ops::context(b, &screen, cursor),
+                HelpScope::Package { id, version } => help_ops::guides(b, &id, &version, cursor),
             },
-        ) {
-            self.loading = false;
-        }
+        );
     }
     fn read_help_passage(&mut self, cx: &mut Cx) {
         let Some((topic, version)) = self.selected.clone() else {
@@ -123,33 +138,38 @@ impl HelpScreen {
         self.read = None;
         self.read_help_passage(cx);
     }
+    /// Reads the same scope again: every page shown is re-read, so the rows the user loaded
+    /// stay. A page from another catalog snapshot than the first ends the read as it ends
+    /// paging, with the prompt to refresh.
     fn refresh_help(&mut self, cx: &mut Cx) {
-        if !self.loading {
-            self.load_help_topics(cx, false);
+        if !self.topics.loading() {
+            let fetch = self.topics.reread();
+            self.send_help_topics(cx, fetch);
         }
     }
     fn probe_help(&mut self, cx: &mut Cx) {
-        self.list_generation = self.list_generation.wrapping_add(1);
-        let generation = self.list_generation;
+        // The probe reads the first page only to learn the catalog's state; it never replaces
+        // the rows, but it supersedes a topics request still in flight.
+        let fetch = self.topics.probe();
         let scope = self.scope.clone();
         let operation = match scope {
             HelpScope::Search(_) => "help.search",
             HelpScope::Screen(_) => "help.topic_for_screen",
             HelpScope::Package { .. } => "help.package_guides",
         };
-        self.loading = true;
-        if !cx.query(
-            HelpSlot::HelpProbe(generation),
+        let slot = HelpSlot::HelpProbe(fetch.generation);
+        cx.paged(
+            &mut self.topics,
+            fetch,
+            slot,
             "Checking local Help status",
             operation,
-            move |b| match scope {
+            move |b, _| match scope {
                 HelpScope::Search(query) => help_ops::search(b, &query, None),
                 HelpScope::Screen(screen) => help_ops::context(b, &screen, None),
                 HelpScope::Package { id, version } => help_ops::guides(b, &id, &version, None),
             },
-        ) {
-            self.loading = false;
-        }
+        );
     }
     fn help_snapshot(&mut self, snapshot: HelpSnapshot) {
         if self.snapshot.as_ref().is_some_and(|old| {
@@ -186,28 +206,29 @@ impl HelpScreen {
     }
     fn apply_reply(&mut self, cx: &mut Cx, slot: HelpSlot, reply: Reply) {
         match (slot, reply) {
-            (HelpSlot::HelpTopics(generation, _) | HelpSlot::HelpProbe(generation), _)
-                if generation != self.list_generation => {}
             (HelpSlot::HelpRead(generation), _) if generation != self.read_generation => {}
-            (HelpSlot::HelpTopics(_, append), Reply::Query(outcome)) => {
-                self.loading = false;
+            (HelpSlot::HelpTopics(generation, _), Reply::Query(outcome)) => {
                 match help_ops::topics(outcome) {
                     Ok(page) => {
-                        if append
-                            && self.snapshot.as_ref().is_some_and(|old| {
-                                old.help_revision != page.snapshot.help_revision
-                                    || old.registry_revision != page.snapshot.registry_revision
-                                    || old.app_version.0 != page.snapshot.app_version.0
-                            })
-                        {
-                            self.error = Some("Local documentation changed while paging. Refresh Help to load a consistent catalog.".into());
-                            return;
-                        }
                         let changed = self.snapshot.as_ref().is_some_and(|old| {
                             old.help_revision != page.snapshot.help_revision
                                 || old.registry_revision != page.snapshot.registry_revision
                                 || old.app_version.0 != page.snapshot.app_version.0
                         });
+                        let rows = Page::new(page.items.0, page.next_cursor.map(|cursor| cursor.0))
+                            .fenced(snapshot_fence(&page.snapshot));
+                        match self.topics.apply(generation, Ok(rows)) {
+                            Applied::Stale => return,
+                            Applied::Fenced => {
+                                self.topics.fail("Local documentation changed while paging. Refresh Help to load a consistent catalog.");
+                                return;
+                            }
+                            Applied::Continue(fetch) => {
+                                self.send_help_topics(cx, fetch);
+                                return;
+                            }
+                            _ => {}
+                        }
                         self.notice = (!matches!(page.availability, HelpAvailability::Available))
                             .then(|| {
                                 format!(
@@ -221,33 +242,28 @@ impl HelpScreen {
                                 )
                             });
                         self.help_snapshot(page.snapshot);
-                        if append {
-                            self.topics.extend(page.items.0);
-                        } else {
-                            self.topics = page.items.0;
-                        }
-                        self.next_cursor = page.next_cursor.map(|cursor| cursor.0);
-                        self.loaded = true;
                         if matches!(self.scope, HelpScope::Screen(_))
                             && self.selected.is_none()
-                            && let Some(topic) = self.topics.first()
+                            && let Some(topic) = self.topics.items.first()
                         {
-                            self.select_help_topic(
-                                cx,
-                                topic.id.as_str().to_owned(),
-                                topic.version.0.clone(),
-                            );
+                            let (id, version) =
+                                (topic.id.as_str().to_owned(), topic.version.0.clone());
+                            self.select_help_topic(cx, id, version);
                         } else if changed && self.selected.is_some() && !self.reading {
                             // Ask the owner about the inspected exact version; never silently
                             // replace it with another installed package/app version.
                             self.read_help_passage(cx);
                         }
                     }
-                    Err(error) => self.error = Some(error.describe()),
+                    Err(error) => {
+                        self.topics.apply(generation, Err(error.describe()));
+                    }
                 }
             }
-            (HelpSlot::HelpProbe(_), Reply::Query(outcome)) => {
-                self.loading = false;
+            (HelpSlot::HelpProbe(generation), Reply::Query(outcome)) => {
+                if !self.topics.end(generation) {
+                    return;
+                }
                 match help_ops::topics(outcome) {
                     Ok(page) => {
                         let changed = self.snapshot.as_ref().is_some_and(|old| {
@@ -255,26 +271,25 @@ impl HelpScreen {
                                 || old.registry_revision != page.snapshot.registry_revision
                                 || old.app_version.0 != page.snapshot.app_version.0
                         });
-                        self.help_snapshot(page.snapshot);
-                        self.error = None;
+                        self.help_snapshot(page.snapshot.clone());
+                        self.topics.error = None;
                         // Initial publication can finish after the first empty catalog reply.
                         // Adopt the owner's first results, while preserving any existing page
                         // or inspected version when later generations change the catalog.
-                        let initial = self.topics.is_empty() && !page.items.0.is_empty();
+                        let initial = self.topics.items.is_empty() && !page.items.0.is_empty();
                         if initial {
                             self.notice = None;
-                            self.topics = page.items.0;
-                            self.next_cursor = page.next_cursor.map(|cursor| cursor.0);
-                            self.loaded = true;
+                            self.topics.adopt(
+                                Page::new(page.items.0, page.next_cursor.map(|cursor| cursor.0))
+                                    .fenced(snapshot_fence(&page.snapshot)),
+                            );
                             if matches!(self.scope, HelpScope::Screen(_))
                                 && self.selected.is_none()
-                                && let Some(topic) = self.topics.first()
+                                && let Some(topic) = self.topics.items.first()
                             {
-                                self.select_help_topic(
-                                    cx,
-                                    topic.id.as_str().to_owned(),
-                                    topic.version.0.clone(),
-                                );
+                                let (id, version) =
+                                    (topic.id.as_str().to_owned(), topic.version.0.clone());
+                                self.select_help_topic(cx, id, version);
                             }
                         }
                         if !matches!(page.availability, HelpAvailability::Available) {
@@ -287,13 +302,14 @@ impl HelpScreen {
                                 )
                             ));
                         } else if changed && !initial {
-                            self.notice = Some("Local documentation changed. Refresh Help for current search results; inspected topics keep their exact version references.".into());
+                            self.notice = Some("Local documentation changed. Refresh Help for current search results; \
+                                inspected topics keep their exact version references.".into());
                         }
                         if changed && self.selected.is_some() && !self.reading {
                             self.read_help_passage(cx);
                         }
                     }
-                    Err(error) => self.error = Some(error.describe()),
+                    Err(error) => self.topics.error = Some(error.describe()),
                 }
             }
             (HelpSlot::HelpRead(_), Reply::Query(outcome)) => {
@@ -344,7 +360,12 @@ impl HelpScreen {
                 Err(Failure::Unknown) => {
                     self.generation_unknown = true;
                     self.generating = true;
-                    self.generation_notice = Some((Tone::Attention, "Generation outcome not confirmed. Use Confirm outcomes to check the original request; it will not run twice.".into()));
+                    self.generation_notice = Some((
+                        Tone::Attention,
+                        "Generation outcome not confirmed. Use Confirm outcomes to check the \
+                        original request; it will not run twice."
+                            .into(),
+                    ));
                 }
                 Err(error) => {
                     self.generating = false;

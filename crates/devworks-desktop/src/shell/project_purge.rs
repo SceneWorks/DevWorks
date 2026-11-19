@@ -118,13 +118,21 @@ impl PurgeCtl<'_, '_> {
         let Some(m) = self.purge.manifest.clone() else {
             return;
         };
-        let next = self.purge.next.clone();
+        let Some(fetch) = (if self.purge.entries.loaded {
+            self.purge.entries.more_page()
+        } else {
+            Some(self.purge.entries.reload())
+        }) else {
+            return;
+        };
         self.purge.busy = true;
-        self.query(
+        self.cx.paged(
+            &mut self.purge.entries,
+            fetch,
             PurgeSlot::PurgePage,
             "Reading deletion manifest",
             "projects.purge_manifest",
-            move |b| ops::purge_manifest_page(b, &m, next.as_deref()),
+            move |b, cursor| ops::purge_manifest_page(b, &m, cursor),
         );
     }
     fn apply_purge(&mut self, slot: PurgeSlot, reply: Reply) -> Option<(PurgeSlot, Reply)> {
@@ -144,9 +152,7 @@ impl PurgeCtl<'_, '_> {
                     .reviews
                     .insert(value.project_id.0.as_str().into(), json!(value));
                 self.purge.manifest = Some(value);
-                self.purge.entries.clear();
-                self.purge.next = None;
-                self.purge.loaded = false;
+                self.purge.entries.reset();
                 self.load_purge_page();
             }
             Ok(OperationResult::ProjectsPurgeManifest { value }) => {
@@ -156,10 +162,29 @@ impl PurgeCtl<'_, '_> {
                     self.purge.error = Some("The manifest changed. Prepare it again.".into());
                     return None;
                 }
+                let fence = format!(
+                    "{}|{}",
+                    value.manifest.digest.as_str(),
+                    value.manifest.revision.as_str()
+                );
+                let next = value
+                    .entries
+                    .next_cursor
+                    .map(|c| c.0)
+                    .filter(|_| value.entries.has_more);
+                let page = Page::new(value.entries.items.0, next).fenced(fence);
+                match self.purge.entries.apply_current(Ok(page)) {
+                    Applied::Fenced => {
+                        self.purge
+                            .entries
+                            .fail("The manifest changed. Prepare it again.");
+                        self.purge.error = Some("The manifest changed. Prepare it again.".into());
+                        return None;
+                    }
+                    Applied::Stale => return None,
+                    _ => {}
+                }
                 self.purge.manifest = Some(value.manifest);
-                self.purge.entries.extend(value.entries.items.0);
-                self.purge.next = value.entries.next_cursor.map(|c| c.0);
-                self.purge.loaded = !value.entries.has_more;
             }
             Ok(OperationResult::ProjectsPurge { value })
             | Ok(OperationResult::ProjectsPurgeStatus { value }) => {
@@ -174,7 +199,12 @@ impl PurgeCtl<'_, '_> {
                 }
             }
             Ok(r) => self.purge.error = Some(format!("Unexpected result from {}", r.operation())),
-            Err(e) => self.purge.error = Some(e.describe()),
+            Err(e) => {
+                if matches!(slot, PurgeSlot::PurgePage) {
+                    self.purge.entries.apply_current(Err(e.describe()));
+                }
+                self.purge.error = Some(e.describe());
+            }
         }
         None
     }

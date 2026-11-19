@@ -41,13 +41,24 @@ use crate::protocol::EventId;
 use crate::protocol::records::PackageAvailability;
 use crate::settings::catalog::{PACKAGE_INDEX_SOURCES_KEY, descriptor};
 use crate::settings::model::{chain, current_chain};
-use serde_json::{Value, json};
+use serde_json::json;
 use std::collections::BTreeMap;
 
 /// History aggregate of availability announcements.
 pub const AVAILABILITY_AGGREGATE: &str = "package_availability";
 /// History event kind of an availability or active-version change.
 pub const AVAILABILITY_CHANGED: &str = "PackageAvailabilityChanged";
+
+/// The ingress namespace of the contexts event handlers' committed effect intents run under.
+pub const EVENT_INTENT_INGRESS: &str = "package-intents";
+
+/// The package whose event handler caused an announcement, and how many handler-caused
+/// announcements precede it (the cascade depth). An announcement no handler caused has none.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct EventOrigin {
+    pub package_id: String,
+    pub depth: u64,
+}
 
 /// The configured index sources (effective workspace value; none by default).
 pub fn index_sources(read: &dyn ConfigurationRead) -> Result<Vec<IndexSource>, StorageError> {
@@ -139,6 +150,18 @@ impl PackageService {
         tx: &mut dyn WriteTransaction,
         cause: &str,
     ) -> Result<usize, StorageError> {
+        self.observe_from(tx, cause, None)
+    }
+
+    /// [`Self::observe`] for a change an event handler's effect intent caused: the announcement
+    /// carries `origin` (`originPackageId`, and the cascade `depth`) so the router can bound
+    /// handler-caused cascades.
+    pub fn observe_from(
+        &self,
+        tx: &mut dyn WriteTransaction,
+        cause: &str,
+        origin: Option<&EventOrigin>,
+    ) -> Result<usize, StorageError> {
         let read: &dyn PackageRegistryRead = &*tx.packages();
         let reg = view::load(read)?;
         let registry_revision = read.registry_revision()?;
@@ -176,7 +199,7 @@ impl PackageService {
                 .observation(&now.package_id)?
                 .map_or(1, |o| o.revision);
             let event = EventId(tx.new_id(IdKind::Event));
-            let payload = json!({
+            let mut payload = json!({
                 "packageId": now.package_id,
                 "fromVersion": before.as_ref().and_then(|b| b.version.clone()),
                 "toVersion": now.version,
@@ -188,6 +211,10 @@ impl PackageService {
                 "detail": why,
                 "registryRevision": registry_revision,
             });
+            if let Some(origin) = origin {
+                payload["originPackageId"] = json!(origin.package_id);
+                payload["depth"] = json!(origin.depth);
+            }
             tx.history().append(NewEvent {
                 id: event.clone(),
                 actor: actor.clone(),
@@ -218,6 +245,28 @@ impl PackageService {
             }
         }
         Ok(changes.len())
+    }
+
+    /// The event handler whose committed effect intent `ctx` runs, when it does: its package and
+    /// the depth its announcements carry (one beyond the delivery that committed the intent).
+    pub(super) fn event_origin(
+        tx: &mut dyn WriteTransaction,
+        ctx: &crate::context::InvocationContext,
+    ) -> Result<Option<EventOrigin>, StorageError> {
+        if ctx.ingress_namespace().as_str() != EVENT_INTENT_INGRESS {
+            return Ok(None);
+        }
+        let operation = crate::protocol::OperationId(ctx.invocation_id().clone());
+        Ok(tx
+            .operations()
+            .operation(&operation)?
+            .filter(|op| op.capability.starts_with("package.broker."))
+            .and_then(|op| {
+                Some(EventOrigin {
+                    package_id: op.payload["packageId"].as_str()?.to_owned(),
+                    depth: op.payload["eventDepth"].as_u64().unwrap_or(0) + 1,
+                })
+            }))
     }
 
     /// [`Self::observe`] in its own unit of work (host passes).
@@ -318,11 +367,6 @@ impl PackageService {
             tx.packages().retain_indexes(&keys)
         })
     }
-}
-
-/// The index entry fields of an offer (catalog projection).
-pub fn offer_json(o: &Offer) -> Value {
-    json!({"source": o.source, "publisherId": o.publisher_id, "entry": o.entry})
 }
 
 /// Whether `entry` runs on `host_target`.

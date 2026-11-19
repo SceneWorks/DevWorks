@@ -96,7 +96,9 @@ fn work_of(raw: WorkRaw) -> Result<WorkRoot, StorageError> {
     })
 }
 
-const SESSION_COLUMNS: &str = "s.id,s.conversation_id,s.agent_id,s.project_id,s.root_id,s.title,s.context_epoch,s.revision,s.created_by,s.created_at,s.closed_at,s.closed_by,s.next_seq,s.checkpoint_seq";
+const SESSION_COLUMNS: &str = "s.id,s.conversation_id,s.agent_id,s.project_id,s.root_id,s.title,\
+    s.context_epoch,s.revision,s.created_by,s.created_at,s.closed_at,\
+    s.closed_by,s.next_seq,s.checkpoint_seq";
 type SessionRaw = (
     String,
     String,
@@ -201,7 +203,9 @@ fn sessions(
                 OR (?5=3 AND s.project_id=?1 AND s.root_id=?7) OR (?5=4 AND s.id=?8))
          AND (?6=0 OR (?6=1 AND s.closed_at IS NOT NULL) OR (?6=2 AND s.closed_at IS NULL))
          AND (?2 IS NULL OR s.created_at<?2 OR (s.created_at=?2 AND s.id<?3))
-         ORDER BY s.created_at DESC,s.id DESC LIMIT ?4"
+         AND substr(s.id,1,{prefix_len})<>'{HOST_SESSION_PREFIX}'
+         ORDER BY s.created_at DESC,s.id DESC LIMIT ?4",
+        prefix_len = HOST_SESSION_PREFIX.len()
     )))?;
     let rows = db(stmt.query_map(
         params![
@@ -423,7 +427,10 @@ fn context_sources(
         i64,
     );
     let mut stmt = db(conn.prepare_cached(
-        "SELECT session_id,epoch,ordinal,source_id,kind,source_revision,artifact_json,token_estimate,disposition,seq FROM session_context_sources WHERE session_id=?1 AND epoch=?2 AND ordinal>?3 ORDER BY ordinal LIMIT ?4",
+        "SELECT session_id,epoch,ordinal,source_id,kind,source_revision,\
+            artifact_json,token_estimate,disposition,seq FROM \
+            session_context_sources WHERE session_id=?1 AND epoch=?2 AND ordinal>?3 \
+            ORDER BY ordinal LIMIT ?4",
     ))?;
     let rows = db(
         stmt.query_map(params![session.as_str(), epoch, after, n], |r| {
@@ -576,7 +583,9 @@ fn usage(
         .collect()
 }
 
-const LINK_COLUMNS: &str = "id,project_id,root_id,kind,target_kind,target_id,parent_id,supersedes_id,actor_id,event_id,seq,repository_id,revision,summary,body_json,created_at";
+const LINK_COLUMNS: &str = "id,project_id,root_id,kind,target_kind,target_id,parent_id,\
+    supersedes_id,actor_id,event_id,seq,repository_id,revision,summary,\
+    body_json,created_at";
 type LinkRaw = (
     String,
     String,
@@ -1365,18 +1374,34 @@ impl SessionRepository for Unit<'_> {
         ))?;
         if schema_version < 44 {
             db(db(self.conn.prepare_cached(
-                "INSERT INTO sessions(id,conversation_id,agent_id,root_id,context_epoch,revision,pin_json,project_id,title,created_by,created_at,closed_at,closed_by,next_seq,checkpoint_seq) VALUES(?1,?2,?3,?4,?5,?6,NULL,?7,?8,?9,?10,?11,?12,?13,?14)",
-            ))?.execute(params![
-                s.id.as_str(), s.conversation_id.as_str(), s.agent_id.0.as_str(),
-                s.root_id.as_ref().map(|r| r.0.as_str()), s.context_epoch, s.revision,
-                s.project_id.as_ref().map(|p| p.0.as_str()), s.title,
-                s.created_by.0.as_str(), s.created_at_ms, s.closed_at_ms,
-                s.closed_by.as_ref().map(|a| a.0.as_str()), s.next_sequence, s.checkpoint_sequence,
+                "INSERT INTO sessions(id,conversation_id,agent_id,root_id,context_epoch,\
+                    revision,pin_json,project_id,title,created_by,created_at,closed_at,\
+                    closed_by,next_seq,checkpoint_seq) VALUES(?1,?2,?3,?4,?5,?6,NULL,?7,?8,\
+                    ?9,?10,?11,?12,?13,?14)",
+            ))?
+            .execute(params![
+                s.id.as_str(),
+                s.conversation_id.as_str(),
+                s.agent_id.0.as_str(),
+                s.root_id.as_ref().map(|r| r.0.as_str()),
+                s.context_epoch,
+                s.revision,
+                s.project_id.as_ref().map(|p| p.0.as_str()),
+                s.title,
+                s.created_by.0.as_str(),
+                s.created_at_ms,
+                s.closed_at_ms,
+                s.closed_by.as_ref().map(|a| a.0.as_str()),
+                s.next_sequence,
+                s.checkpoint_sequence,
             ]))?;
             return Ok(());
         }
         db(db(self.conn.prepare_cached(
-            "INSERT INTO sessions(id,conversation_id,agent_id,root_id,context_epoch,revision,pin_json,project_id,title,created_by,created_at,closed_at,closed_by,next_seq,checkpoint_seq,repository_ids_json) VALUES(?1,?2,?3,?4,?5,?6,NULL,?7,?8,?9,?10,?11,?12,?13,?14,?15)",
+            "INSERT INTO sessions(id,conversation_id,agent_id,root_id,context_epoch,\
+                revision,pin_json,project_id,title,created_by,created_at,closed_at,\
+                closed_by,next_seq,checkpoint_seq,repository_ids_json) VALUES(?1,?2,?3,\
+                ?4,?5,?6,NULL,?7,?8,?9,?10,?11,?12,?13,?14,?15)",
         ))?
         .execute(params![
             s.id.as_str(),
@@ -1473,7 +1498,9 @@ impl SessionRepository for Unit<'_> {
             });
         }
         db(db(self.conn.prepare_cached(
-            "INSERT INTO transcript_chunks(session_id,seq,kind,payload_json,entry_id,batch_id,context_epoch,actor_id,created_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9)",
+            "INSERT INTO transcript_chunks(session_id,seq,kind,payload_json,entry_id,\
+                batch_id,context_epoch,actor_id,created_at) VALUES(?1,?2,?3,?4,?5,?6,?7,\
+                ?8,?9)",
         ))?
         .execute(params![
             e.session_id.as_str(),
@@ -1557,7 +1584,9 @@ impl SessionRepository for Unit<'_> {
         }
         // Written once: the slot is only filled while it is empty.
         let n = db(db(self.conn.prepare_cached(
-            "UPDATE session_tool_calls SET response_seq=?4,outcome=?5,operation_id=?6 WHERE session_id=?1 AND attempt_id=?2 AND native_call_id=?3 AND response_seq IS NULL",
+            "UPDATE session_tool_calls SET response_seq=?4,outcome=?5,\
+                operation_id=?6 WHERE session_id=?1 AND attempt_id=?2 AND \
+                native_call_id=?3 AND response_seq IS NULL",
         ))?
         .execute(params![
             c.session_id.as_str(),
@@ -1624,11 +1653,36 @@ impl SessionRepository for Unit<'_> {
         let artifact = json_text(&head.artifact);
         let changed = match expected_revision {
             Some(expected) => db(db(self.conn.prepare_cached(
-                "UPDATE session_provider_context_heads SET context_epoch=?2,observed_sequence=?3,kind=?4,attempt_id=?5,binding_json=?6,artifact_json=?7,revision=?8 WHERE session_id=?1 AND revision=?9",
-            ))?.execute(params![head.session_id.as_str(),head.context_epoch,head.observed_sequence,head.kind,head.attempt_id.as_ref().map(Id::as_str),binding,artifact,head.revision,expected]))?,
+                "UPDATE session_provider_context_heads SET context_epoch=?2,\
+                    observed_sequence=?3,kind=?4,attempt_id=?5,binding_json=?6,\
+                    artifact_json=?7,revision=?8 WHERE session_id=?1 AND revision=?9",
+            ))?
+            .execute(params![
+                head.session_id.as_str(),
+                head.context_epoch,
+                head.observed_sequence,
+                head.kind,
+                head.attempt_id.as_ref().map(Id::as_str),
+                binding,
+                artifact,
+                head.revision,
+                expected
+            ]))?,
             None => db(db(self.conn.prepare_cached(
-                "INSERT INTO session_provider_context_heads(session_id,context_epoch,observed_sequence,kind,attempt_id,binding_json,artifact_json,revision) VALUES(?1,?2,?3,?4,?5,?6,?7,?8)",
-            ))?.execute(params![head.session_id.as_str(),head.context_epoch,head.observed_sequence,head.kind,head.attempt_id.as_ref().map(Id::as_str),binding,artifact,head.revision]))?,
+                "INSERT INTO session_provider_context_heads(session_id,context_epoch,\
+                    observed_sequence,kind,attempt_id,binding_json,artifact_json,revision) \
+                    VALUES(?1,?2,?3,?4,?5,?6,?7,?8)",
+            ))?
+            .execute(params![
+                head.session_id.as_str(),
+                head.context_epoch,
+                head.observed_sequence,
+                head.kind,
+                head.attempt_id.as_ref().map(Id::as_str),
+                binding,
+                artifact,
+                head.revision
+            ]))?,
         };
         if changed != 1 {
             return Err(StorageError::ScopeDenied);
@@ -1639,7 +1693,9 @@ impl SessionRepository for Unit<'_> {
     fn insert_context_source(&mut self, s: &StoredContextSource) -> Result<(), StorageError> {
         text("context source kind", &s.kind, 256)?;
         db(db(self.conn.prepare_cached(
-            "INSERT INTO session_context_sources(session_id,epoch,ordinal,source_id,kind,source_revision,artifact_json,token_estimate,disposition,seq) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)",
+            "INSERT INTO session_context_sources(session_id,epoch,ordinal,source_id,\
+                kind,source_revision,artifact_json,token_estimate,disposition,seq) \
+                VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)",
         ))?
         .execute(params![
             s.session_id.as_str(),

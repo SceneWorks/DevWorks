@@ -178,6 +178,7 @@ pub fn unit_nodes(
 
 /// The edges visible for `key` in the view, each with whether its target resolves in the same
 /// view (`false`: report it unresolved).
+#[cfg(any(test, feature = "test-support"))]
 pub fn unit_edges(
     read: &dyn IndexRead,
     view: &ViewLayers,
@@ -217,6 +218,7 @@ pub fn unit_edges(
 }
 
 /// Every visible unit key of the view, by key (bounded paging over each layer).
+#[cfg(any(test, feature = "test-support"))]
 pub fn visible_units(
     read: &dyn IndexRead,
     view: &ViewLayers,

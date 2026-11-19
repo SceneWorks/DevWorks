@@ -27,6 +27,7 @@
 use super::identity_at;
 use devworks_core::authority::reads::ReadRoot;
 use devworks_core::context::{InvocationContext, PrincipalKind};
+use devworks_core::locks::LockExt;
 use devworks_core::ports::files::{ArtifactSources, ResolvedSource, SourceOrigin, SourceRefusal};
 use devworks_core::ports::{Clock, IdKind, IdSource};
 use devworks_core::protocol::data::ArtifactSource;
@@ -119,12 +120,7 @@ impl HostArtifactSources {
     }
     /// Revokes handles only. Uploaded inputs and Git work-output files are never removed.
     pub fn revoke_project(&self, project: &ProjectId) {
-        for map in self
-            .handles
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .values_mut()
-        {
+        for map in self.handles.locked().values_mut() {
             map.retain(|_, h| h.project.as_ref() != Some(project));
         }
     }
@@ -142,7 +138,7 @@ impl HostArtifactSources {
             return Err(IssueRefusal::Invalid("project content was purged"));
         }
         let now = self.clock.now_ms().get();
-        let mut all = self.handles.lock().unwrap_or_else(|p| p.into_inner());
+        let mut all = self.handles.locked();
         let map = all.entry(kind).or_default();
         map.retain(|_, h| h.expires_at_ms.is_none_or(|t| t > now));
         if map.contains_key(id.as_str()) {
@@ -301,12 +297,7 @@ impl HostArtifactSources {
 
     /// Withdraws a handle of every kind with this ID (its owning record went away).
     pub fn revoke(&self, handle: &Id) {
-        for map in self
-            .handles
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .values_mut()
-        {
+        for map in self.handles.locked().values_mut() {
             map.remove(handle.as_str());
         }
     }
@@ -332,7 +323,7 @@ impl ArtifactSources for HostArtifactSources {
         };
         let now = self.clock.now_ms().get();
         let handle = {
-            let mut all = self.handles.lock().unwrap_or_else(|p| p.into_inner());
+            let mut all = self.handles.locked();
             let map = all.entry(kind).or_default();
             map.retain(|_, h| h.expires_at_ms.is_none_or(|t| t > now));
             map.get(id.as_str()).cloned()

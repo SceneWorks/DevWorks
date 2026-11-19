@@ -78,6 +78,11 @@ const POLICY_DOCUMENTS: &[PolicyDocument] = &[
         Tables,
         "schema61-extension.json"
     ),
+    policy_document!(
+        "instructionRevisionLessonExtension",
+        Tables,
+        "schema62-extension.json"
+    ),
 ];
 /// The SHA-256 of each policy document, by its digest key.
 fn document_digests() -> BTreeMap<&'static str, String> {
@@ -347,13 +352,17 @@ fn content_partitions(
     for (table, condition, action, reason) in [
         (
             "artifacts",
-            "retention='Explicit' AND scope_kind='Project' AND current_project_id=?1 AND NOT EXISTS(SELECT 1 FROM artifact_shares s WHERE s.artifact_id=artifacts.id AND s.project_id<>?1)",
+            "retention='Explicit' AND scope_kind='Project' AND current_project_id=?1 \
+                AND NOT EXISTS(SELECT 1 FROM artifact_shares s WHERE \
+                s.artifact_id=artifacts.id AND s.project_id<>?1)",
             Action::Delete,
             Reason::OwnedProjectRecords,
         ),
         (
             "artifacts",
-            "retention='Explicit' AND scope_kind='Project' AND current_project_id=?1 AND EXISTS(SELECT 1 FROM artifact_shares s WHERE s.artifact_id=artifacts.id AND s.project_id<>?1)",
+            "retention='Explicit' AND scope_kind='Project' AND current_project_id=?1 \
+                AND EXISTS(SELECT 1 FROM artifact_shares s WHERE \
+                s.artifact_id=artifacts.id AND s.project_id<>?1)",
             Action::Keep,
             Reason::SharedContent,
         ),
@@ -494,7 +503,9 @@ pub(in crate::storage::sqlite) fn planning_with_client_keepers(
     unresolved_keys(
         conn,
         project,
-        "SELECT actor_id,scope_key,idempotency_key FROM command_receipts WHERE command_kind='projects.create' AND json_extract(result_json,'$.receipt.decision.result.value.id')=?1",
+        "SELECT actor_id,scope_key,idempotency_key FROM command_receipts WHERE \
+            command_kind='projects.create' AND json_extract(result_json,\
+            '$.receipt.decision.result.value.id')=?1",
         "command_receipts",
         Unresolved::AutomaticSnapshot,
         &mut unresolved,
@@ -644,11 +655,21 @@ pub(in crate::storage::sqlite) fn planning_with_client_keepers(
             scrub_columns(table).map(|columns| (table, minimal_identity(table), columns))
         })
         .collect::<Vec<_>>();
-    let digest=devworks_core::fingerprint::sha256_hex(serde_json::to_string(&serde_json::json!({
-        "format":"dw83-ownership-assessment-v2","project":project,
-        "policyDocuments":document_digests(),
-        "scrubPolicy":scrub_policy,"clientKeepers":super::client_keepers::digest(keepers),"selection":snapshot.policy_digest,"rows":business_rows,"references":references,"unresolved":unresolved
-    })).map_err(|_|unmapped_policy())?.as_bytes());
+    let digest = devworks_core::fingerprint::sha256_hex(
+        serde_json::to_string(&serde_json::json!({
+            "format": "dw83-ownership-assessment-v2",
+            "project": project,
+            "policyDocuments": document_digests(),
+            "scrubPolicy": scrub_policy,
+            "clientKeepers": super::client_keepers::digest(keepers),
+            "selection": snapshot.policy_digest,
+            "rows": business_rows,
+            "references": references,
+            "unresolved": unresolved
+        }))
+        .map_err(|_| unmapped_policy())?
+        .as_bytes(),
+    );
     Ok(Some(ProjectPurgePlanning {
         snapshot,
         digest,

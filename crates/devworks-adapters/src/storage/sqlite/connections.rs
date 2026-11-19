@@ -51,7 +51,12 @@ const QUESTION_TYPES: [&str; 4] = ["choice", "noul", "score", "box"];
 // ---------------------------------------------------------------------------------------------
 // Connections
 
-const CONNECTION_COLUMNS: &str = "id,name,profile,endpoint,credential_ref,credential_revision,credential_epoch,lifecycle,state_reason,account_digest,access_expires_at,risk_notice_sha256,risk_binding,risk_restore_epoch,risk_accepted_by,risk_accepted_at,discovered_json,discovered_at,healthy,checked_at,revision,created_at,updated_at,enabled,open_router_json,local_free,account_revision,refresh_operation_id";
+const CONNECTION_COLUMNS: &str = "id,name,profile,endpoint,credential_ref,credential_revision,\
+    credential_epoch,lifecycle,state_reason,account_digest,\
+    access_expires_at,risk_notice_sha256,risk_binding,risk_restore_epoch,\
+    risk_accepted_by,risk_accepted_at,discovered_json,discovered_at,healthy,\
+    checked_at,revision,created_at,updated_at,enabled,open_router_json,\
+    local_free,account_revision,refresh_operation_id";
 
 struct RawConnection {
     id: String,
@@ -339,18 +344,36 @@ pub(super) fn put_connection(
         .as_ref()
         .map_or(c.created_at_ms, |p| p.created_at_ms);
     db(conn.execute(
-        "INSERT INTO router_connections(id,name,profile,endpoint,credential_ref,credential_revision,credential_epoch,lifecycle,state_reason,account_digest,access_expires_at,risk_notice_sha256,risk_binding,risk_restore_epoch,risk_accepted_by,risk_accepted_at,discovered_json,discovered_at,healthy,checked_at,revision,created_at,updated_at,enabled,open_router_json,local_free,account_revision,refresh_operation_id) \
-         VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21,?22,?23,?25,?26,?27,?28,?29) \
-         ON CONFLICT(id) DO UPDATE SET name=excluded.name, profile=excluded.profile, endpoint=excluded.endpoint, \
-         credential_ref=excluded.credential_ref, credential_revision=excluded.credential_revision, \
-         credential_epoch=excluded.credential_epoch, lifecycle=excluded.lifecycle, state_reason=excluded.state_reason, \
-         account_digest=excluded.account_digest, access_expires_at=excluded.access_expires_at, \
-         risk_notice_sha256=excluded.risk_notice_sha256, risk_binding=excluded.risk_binding, \
-         risk_restore_epoch=excluded.risk_restore_epoch, risk_accepted_by=excluded.risk_accepted_by, \
-         risk_accepted_at=excluded.risk_accepted_at, discovered_json=excluded.discovered_json, \
-         discovered_at=excluded.discovered_at, healthy=excluded.healthy, checked_at=excluded.checked_at, \
-         revision=excluded.revision, updated_at=excluded.updated_at, enabled=excluded.enabled, \
-         open_router_json=excluded.open_router_json, local_free=excluded.local_free, account_revision=excluded.account_revision,refresh_operation_id=excluded.refresh_operation_id WHERE revision=?24",
+        "INSERT INTO router_connections(id,name,profile,endpoint,credential_ref,\
+            credential_revision,credential_epoch,lifecycle,state_reason,\
+            account_digest,access_expires_at,risk_notice_sha256,risk_binding,\
+            risk_restore_epoch,risk_accepted_by,risk_accepted_at,discovered_json,\
+            discovered_at,healthy,checked_at,revision,created_at,updated_at,enabled,\
+            open_router_json,local_free,account_revision,refresh_operation_id) \
+            VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,\
+            ?19,?20,?21,?22,?23,?25,?26,?27,?28,?29) \
+            ON CONFLICT(id) DO UPDATE SET name=excluded.name, \
+            profile=excluded.profile, endpoint=excluded.endpoint, \
+            credential_ref=excluded.credential_ref, \
+            credential_revision=excluded.credential_revision, \
+            credential_epoch=excluded.credential_epoch, \
+            lifecycle=excluded.lifecycle, state_reason=excluded.state_reason, \
+            account_digest=excluded.account_digest, \
+            access_expires_at=excluded.access_expires_at, \
+            risk_notice_sha256=excluded.risk_notice_sha256, \
+            risk_binding=excluded.risk_binding, \
+            risk_restore_epoch=excluded.risk_restore_epoch, \
+            risk_accepted_by=excluded.risk_accepted_by, \
+            risk_accepted_at=excluded.risk_accepted_at, \
+            discovered_json=excluded.discovered_json, \
+            discovered_at=excluded.discovered_at, healthy=excluded.healthy, \
+            checked_at=excluded.checked_at, \
+            revision=excluded.revision, updated_at=excluded.updated_at, \
+            enabled=excluded.enabled, \
+            open_router_json=excluded.open_router_json, \
+            local_free=excluded.local_free, \
+            account_revision=excluded.account_revision,\
+            refresh_operation_id=excluded.refresh_operation_id WHERE revision=?24",
         params![
             c.id.as_str(),
             c.name,
@@ -380,7 +403,7 @@ pub(super) fn put_connection(
             c.open_router,
             c.local_free,
             c.account_revision,
-            c.refresh_operation_id.as_ref().map(|v|v.0.as_str()),
+            c.refresh_operation_id.as_ref().map(|v| v.0.as_str()),
         ],
     ))?;
     db(conn.execute(
@@ -430,7 +453,9 @@ pub(super) fn delete_connection(
 // ---------------------------------------------------------------------------------------------
 // Decision models
 
-const DECISION_COLUMNS: &str = "id,display_name,connection_id,upstream_model_id,question_types_json,accepts_images,accepts_videos,enabled,extension_schemas_json,result_schema_json,revision,updated_at";
+const DECISION_COLUMNS: &str = "id,display_name,connection_id,upstream_model_id,question_types_json,\
+    accepts_images,accepts_videos,enabled,extension_schemas_json,\
+    result_schema_json,revision,updated_at";
 
 fn decision_of(r: &Row<'_>) -> rusqlite::Result<RawDecision> {
     Ok((
@@ -565,13 +590,20 @@ pub(super) fn put_decision_model(
     )?;
     let types = serde_json::to_string(&m.question_types).map_err(|e| invalid(e.to_string()))?;
     db(conn.execute(
-        "INSERT INTO router_decision_models(id,display_name,connection_id,upstream_model_id,question_types_json,accepts_images,accepts_videos,enabled,extension_schemas_json,result_schema_json,revision,updated_at) \
-         VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12) \
-         ON CONFLICT(id) DO UPDATE SET display_name=excluded.display_name, connection_id=excluded.connection_id, \
-         upstream_model_id=excluded.upstream_model_id, question_types_json=excluded.question_types_json, \
-         accepts_images=excluded.accepts_images, accepts_videos=excluded.accepts_videos, enabled=excluded.enabled, \
-         extension_schemas_json=excluded.extension_schemas_json, result_schema_json=excluded.result_schema_json, \
-         revision=excluded.revision, updated_at=excluded.updated_at WHERE revision=?13",
+        "INSERT INTO router_decision_models(id,display_name,connection_id,\
+            upstream_model_id,question_types_json,accepts_images,accepts_videos,\
+            enabled,extension_schemas_json,result_schema_json,revision,updated_at) \
+            VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12) \
+            ON CONFLICT(id) DO UPDATE SET display_name=excluded.display_name, \
+            connection_id=excluded.connection_id, \
+            upstream_model_id=excluded.upstream_model_id, \
+            question_types_json=excluded.question_types_json, \
+            accepts_images=excluded.accepts_images, \
+            accepts_videos=excluded.accepts_videos, enabled=excluded.enabled, \
+            extension_schemas_json=excluded.extension_schemas_json, \
+            result_schema_json=excluded.result_schema_json, \
+            revision=excluded.revision, updated_at=excluded.updated_at WHERE \
+            revision=?13",
         params![
             m.id.as_str(),
             m.display_name,

@@ -5,6 +5,7 @@ use crate::store;
 use crate::workers::Ticker;
 use devworks_core::context::InvocationContext;
 use devworks_core::gateway::CommandOutcome;
+use devworks_core::locks::RwLockExt;
 use devworks_core::ports::storage::{ApplicationStore, Cancellation, StorageError, WriteOptions};
 use devworks_core::protocol::Id;
 use devworks_core::services::approvals::{ApprovalService, ResumePreparation};
@@ -83,10 +84,6 @@ impl ResumeDispatcher {
             settled,
         })
     }
-    /// Sets what runs after each settled readmission (at most once).
-    pub fn on_settled(&self, settled: Settled) {
-        let _ = self.settled.set(settled);
-    }
     pub fn notify(&self) {
         self.ticker.notify();
     }
@@ -135,7 +132,7 @@ impl ResumeDispatcher {
                 notification_after.clone(),
             );
             let next = tokio::task::spawn_blocking(move || {
-                let closed = fence.read().unwrap_or_else(|p| p.into_inner());
+                let closed = fence.read_locked();
                 if *closed || stopping.load(Ordering::SeqCst) {
                     return Ok(None);
                 }
@@ -182,7 +179,7 @@ impl ResumeDispatcher {
                     self.settled.get().cloned(),
                 );
                 let result = tokio::task::spawn_blocking(move || {
-                    let closed = fence.read().unwrap_or_else(|p| p.into_inner());
+                    let closed = fence.read_locked();
                     if *closed || stopping.load(Ordering::SeqCst) {
                         return Ok(Step::Stopped);
                     }

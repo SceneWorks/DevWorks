@@ -66,6 +66,7 @@ pub(crate) fn max_bytes_query(backend: &dyn Backend) -> Vec<u8> {
         Some(In::Settings(settings::Input::ReadEffective(
             settings::ReadEffectiveInput {
                 scope: DataScope::Workspace,
+                repository_id: None,
                 keys: frame::texts(&[ARTIFACT_MAX_FILE_KEY.to_owned()])?,
                 page: frame::page(1, None)?,
             },

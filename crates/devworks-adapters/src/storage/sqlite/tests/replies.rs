@@ -774,7 +774,9 @@ fn a_failed_rebuild_migration_leaves_nothing_and_restores_foreign_keys() {
     drop(SqliteStore::open_with(h.config(), &before).unwrap());
     // A rebuild that would leave a dangling reference, and one whose SQL fails part way.
     for sql in [
-        "CREATE TABLE fixture_rebuild(id TEXT PRIMARY KEY) STRICT; INSERT INTO artifact_versions VALUES('dangling','no-artifact',1,'no-blob','text/plain',1,NULL,'{}');",
+        "CREATE TABLE fixture_rebuild(id TEXT PRIMARY KEY) STRICT; INSERT INTO \
+            artifact_versions VALUES('dangling','no-artifact',1,'no-blob',\
+            'text/plain',1,NULL,'{}');",
         "CREATE TABLE fixture_rebuild(id TEXT PRIMARY KEY) STRICT; INSERT INTO no_such_table VALUES(1);",
     ] {
         let mut migrations = before.clone();
@@ -1397,14 +1399,33 @@ fn the_reply_migration_rebuilds_artifacts_and_backfills_earlier_receipts() {
     let c = h.raw();
     c.execute_batch(
         "INSERT INTO actors VALUES('user-a','human','user-a');
-         INSERT INTO projects VALUES('project-a','A','Active',1,1,1);
-         INSERT INTO blobs(digest,byte_count,relative_path,state,generation) VALUES('aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',1,'artifacts/x','Present','g');
-         INSERT INTO artifacts(id,origin_project_id,origin_work_id,title,revision,current_project_id,scope_revision,current_version_id,state,created_at) VALUES('artifact-old','project-a',NULL,'Old',1,'project-a',1,NULL,'Live',1);
-         INSERT INTO artifact_versions VALUES('version-old','artifact-old',1,'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa','text/plain',1,NULL,'{}');
-         UPDATE artifacts SET current_version_id='version-old' WHERE id='artifact-old';
-         INSERT INTO artifact_shares VALUES('artifact-old','project-a');
-         INSERT INTO events(id,actor_id,project_id,aggregate_kind,aggregate_id,aggregate_revision,kind,created_at,payload_json) VALUES('event-old','user-a',NULL,'command','command-old',1,'CommandDecided',1,'{}');
-         INSERT INTO command_receipts VALUES('user-a','scope/0/ui','key-old','sessions.start','d',NULL,'{\"receipt\":{\"commandId\":\"command-old\"}}',5);",
+         INSERT \
+            INTO projects VALUES('project-a','A','Active',1,1,1);
+         INSERT \
+            INTO blobs(digest,byte_count,relative_path,state,generation) \
+            VALUES('aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\
+            ',1,'artifacts/x','Present','g');
+         INSERT INTO artifacts(id,\
+            origin_project_id,origin_work_id,title,revision,current_project_id,\
+            scope_revision,current_version_id,state,created_at) \
+            VALUES('artifact-old','project-a',NULL,'Old',1,'project-a',1,NULL,\
+            'Live',1);
+         INSERT INTO artifact_versions VALUES('version-old',\
+            'artifact-old',1,\
+            'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',\
+            'text/plain',1,NULL,'{}');
+         UPDATE artifacts SET \
+            current_version_id='version-old' WHERE id='artifact-old';
+         \
+            INSERT INTO artifact_shares VALUES('artifact-old',\
+            'project-a');
+         INSERT INTO events(id,actor_id,project_id,\
+            aggregate_kind,aggregate_id,aggregate_revision,kind,created_at,\
+            payload_json) VALUES('event-old','user-a',NULL,'command','command-old',\
+            1,'CommandDecided',1,'{}');
+         INSERT INTO command_receipts \
+            VALUES('user-a','scope/0/ui','key-old','sessions.start','d',NULL,\
+            '{\"receipt\":{\"commandId\":\"command-old\"}}',5);",
     )
     .unwrap();
     drop(c);
@@ -1444,7 +1465,9 @@ fn the_reply_migration_rebuilds_artifacts_and_backfills_earlier_receipts() {
     );
     // Child tables still enforce their references to the rebuilt table.
     for orphan in [
-        "INSERT INTO artifact_versions VALUES('version-x','no-artifact',1,'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa','text/plain',1,NULL,'{}')",
+        "INSERT INTO artifact_versions VALUES('version-x','no-artifact',1,\
+            'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',\
+            'text/plain',1,NULL,'{}')",
         "INSERT INTO artifact_shares VALUES('no-artifact','project-a')",
         "INSERT INTO artifact_tags VALUES('no-artifact','t')",
     ] {

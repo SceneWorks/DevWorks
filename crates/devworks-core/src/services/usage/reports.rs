@@ -429,7 +429,20 @@ fn recorded_path(
 }
 
 fn tariff_json(t: &crate::ports::usage::PublishedTariff) -> Value {
-    json!({"upstreamModelId":t.upstream_model_id,"serviceTier":t.service_tier,"contextLowerExclusive":optional(t.context_lower_exclusive),"contextUpperInclusive":optional(t.context_upper_inclusive),"modality":t.modality,"chargeKind":t.charge_kind,"cacheTtlSeconds":optional(t.cache_ttl_seconds),"unit":t.unit,"units":t.units.to_string(),"amountUsd":t.amount_usd,"region":t.region,"endpointProfile":t.endpoint_profile})
+    json!({
+        "upstreamModelId": t.upstream_model_id,
+        "serviceTier": t.service_tier,
+        "contextLowerExclusive": optional(t.context_lower_exclusive),
+        "contextUpperInclusive": optional(t.context_upper_inclusive),
+        "modality": t.modality,
+        "chargeKind": t.charge_kind,
+        "cacheTtlSeconds": optional(t.cache_ttl_seconds),
+        "unit": t.unit,
+        "units": t.units.to_string(),
+        "amountUsd": t.amount_usd,
+        "region": t.region,
+        "endpointProfile": t.endpoint_profile
+    })
 }
 fn cost(
     classification: Option<CostClassification>,
@@ -451,9 +464,28 @@ fn cost(
     };
     let (kind, origin) = classification.map_or(UNKNOWN_PRICE, CostClassification::price);
     let name = classification.map_or("Unknown", CostClassification::as_str);
-    json!({"priceKind":kind,"priceOrigin":origin,"amountMicroUsd":optional(amount),"currency":reported.map(|r|r.currency.as_str()).or(quote.map(|q|q.currency.as_str())),"originalAmount":reported.map(|r|r.amount.as_str()),"classification":name,"priceSnapshotId":quote.and_then(|q|q.snapshot_id.as_ref()),"priceRevision":optional(quote.and_then(|q|q.price_revision)),"overrideRevision":optional(quote.and_then(|q|q.override_revision)),"subscriptionEquivalent":classification==Some(CostClassification::SubscriptionApiEquivalent),"incomplete":incomplete,"untrackedReason":reason,"tariffs":quote.map(|q|q.tariffs.iter().map(tariff_json).collect::<Vec<_>>()).unwrap_or_default(),"monetaryComplete":complete})
+    json!({
+        "priceKind": kind,
+        "priceOrigin": origin,
+        "amountMicroUsd": optional(amount),
+        "currency": reported
+            .map(|r| r.currency.as_str())
+            .or(quote.map(|q| q.currency.as_str())),
+        "originalAmount": reported.map(|r| r.amount.as_str()),
+        "classification": name,
+        "priceSnapshotId": quote.and_then(|q| q.snapshot_id.as_ref()),
+        "priceRevision": optional(quote.and_then(|q| q.price_revision)),
+        "overrideRevision": optional(quote.and_then(|q| q.override_revision)),
+        "subscriptionEquivalent": classification == Some(CostClassification::SubscriptionApiEquivalent),
+        "incomplete": incomplete,
+        "untrackedReason": reason,
+        "tariffs": quote
+            .map(|q| q.tariffs.iter().map(tariff_json).collect::<Vec<_>>())
+            .unwrap_or_default(),
+        "monetaryComplete": complete
+    })
 }
-fn attempt(read: &dyn ReadSnapshot, a: StoredInferenceAttempt, gaps: &mut Gaps) -> SResult<Fact> {
+fn attempt(read: &dyn ReadSnapshot, a: StoredInferenceAttempt) -> SResult<Fact> {
     let admitted = accounting::snapshot(&a)?;
     let balance = read.usage().attempt_balance(&a.attempt_id)?;
     let summary = balance
@@ -493,20 +525,62 @@ fn attempt(read: &dyn ReadSnapshot, a: StoredInferenceAttempt, gaps: &mut Gaps) 
             .map_err(|_| invalid("usage_meter"))?
     };
     let provider = provider(&a.endpoint_profile, &a.connection_id);
-    if balance.as_ref().is_none_or(|b| !b.monetary_complete) {
-        gaps.add("monetary-coverage-incomplete");
-    }
-    if balance.as_ref().is_none_or(|b| b.incomplete) {
-        gaps.add("usage-observation-incomplete");
-    }
-    if balance.as_ref().is_some_and(|b| b.unknown_tail) {
-        gaps.add("remote-outcome-unknown");
-    }
     let b = balance.as_ref();
     let classification = b.map(|b| b.classification);
-    let mut row = json!({"id":a.attempt_id,"requestId":a.request_id,"attemptId":a.attempt_id,"attemptNumber":a.attempt_number.to_string(),"sourceKind":"InferenceAttempt","sourceId":a.attempt_id,"actorId":a.actor_id,"projectId":a.project_id,"featureId":a.feature_id,"workId":a.work_id,"assignmentId":a.assignment_id,"sessionId":a.session_id,"jobRunId":a.job_run_id,"operationId":a.operation_id});
-    row.as_object_mut().expect("object").extend(json!({"purpose":a.purpose,"role":a.role,"providerId":provider,"connectionId":a.connection_id,"modelId":a.catalog_model_id,"resolvedModelId":a.provider_model_id,"startedAtMs":a.created_at_ms.to_string(),"finishedAtMs":optional(summary.finished_at_ms),"state":a.state.as_str()}).as_object().expect("object").clone());
-    row.as_object_mut().expect("object").extend(json!({"inputTokens":optional(input),"uncachedInputTokens":optional(uncached),"outputTokens":optional(q.output_tokens),"cacheReadTokens":optional(q.cached_read_tokens),"cacheWriteTokens":optional(q.cache_write_tokens),"cacheReadMicroUsd":optional(cache_read_cost),"cacheWriteMicroUsd":optional(cache_write_cost),"inputSemantics":match admitted.pricing.input_semantics {InputSemantics::Inclusive=>"Inclusive",InputSemantics::Disjoint=>"Disjoint",InputSemantics::Unknown=>"Unknown"},"unknownTail":b.is_some_and(|b|b.unknown_tail),"reasoningTokens":optional(q.reasoning_tokens),"connectionRevision":optional(admitted.quote.connection_revision)}).as_object().expect("object").clone());
+    let mut row = json!({
+        "id": a.attempt_id,
+        "requestId": a.request_id,
+        "attemptId": a.attempt_id,
+        "attemptNumber": a.attempt_number.to_string(),
+        "sourceKind": "InferenceAttempt",
+        "sourceId": a.attempt_id,
+        "actorId": a.actor_id,
+        "projectId": a.project_id,
+        "featureId": a.feature_id,
+        "workId": a.work_id,
+        "assignmentId": a.assignment_id,
+        "sessionId": a.session_id,
+        "jobRunId": a.job_run_id,
+        "operationId": a.operation_id
+    });
+    row.as_object_mut().expect("object").extend(
+        json!({
+            "purpose": a.purpose,
+            "role": a.role,
+            "providerId": provider,
+            "connectionId": a.connection_id,
+            "modelId": a.catalog_model_id,
+            "resolvedModelId": a.provider_model_id,
+            "startedAtMs": a.created_at_ms.to_string(),
+            "finishedAtMs": optional(summary.finished_at_ms),
+            "state": a.state.as_str()
+        })
+        .as_object()
+        .expect("object")
+        .clone(),
+    );
+    row.as_object_mut().expect("object").extend(
+        json!({
+            "inputTokens": optional(input),
+            "uncachedInputTokens": optional(uncached),
+            "outputTokens": optional(q.output_tokens),
+            "cacheReadTokens": optional(q.cached_read_tokens),
+            "cacheWriteTokens": optional(q.cache_write_tokens),
+            "cacheReadMicroUsd": optional(cache_read_cost),
+            "cacheWriteMicroUsd": optional(cache_write_cost),
+            "inputSemantics": match admitted.pricing.input_semantics {
+                InputSemantics::Inclusive => "Inclusive",
+                InputSemantics::Disjoint => "Disjoint",
+                InputSemantics::Unknown => "Unknown",
+            },
+            "unknownTail": b.is_some_and(|b| b.unknown_tail),
+            "reasoningTokens": optional(q.reasoning_tokens),
+            "connectionRevision": optional(admitted.quote.connection_revision)
+        })
+        .as_object()
+        .expect("object")
+        .clone(),
+    );
     row["cost"] = cost(
         classification,
         b.and_then(|b| b.priced_micro_usd),
@@ -517,7 +591,21 @@ fn attempt(read: &dyn ReadSnapshot, a: StoredInferenceAttempt, gaps: &mut Gaps) 
     );
     let mut diagnostics = admitted.cache_diagnostics.clone();
     if cache_read_cost.is_some() || cache_write_cost.is_some() {
-        diagnostics.push(UsageCacheDiagnostic{kind:BoundedText("CacheCostBasis".into()),inferred:true,detail:Some(BoundedText("Cache component costs are estimates from the admitted tariff; provider-reported total remains independent".into())),source_revision:admitted.quote.price_revision.map(Revision::new).transpose().map_err(|_|invalid("usage_price_revision"))?});
+        diagnostics.push(UsageCacheDiagnostic {
+            kind: BoundedText("CacheCostBasis".into()),
+            inferred: true,
+            detail: Some(BoundedText(
+                "Cache component costs are estimates from the admitted tariff; \
+            provider-reported total remains independent"
+                    .into(),
+            )),
+            source_revision: admitted
+                .quote
+                .price_revision
+                .map(Revision::new)
+                .transpose()
+                .map_err(|_| invalid("usage_price_revision"))?,
+        });
     }
     if cache_conflict {
         diagnostics.push(UsageCacheDiagnostic {
@@ -531,7 +619,18 @@ fn attempt(read: &dyn ReadSnapshot, a: StoredInferenceAttempt, gaps: &mut Gaps) 
     }
     row["cacheDiagnostics"] =
         serde_json::to_value(&diagnostics).map_err(|e| corrupt(&e.to_string()))?;
-    row["unitQuantities"]=json!(q.additional.iter().map(|u|json!({"modality":u.modality,"chargeKind":u.charge_kind,"unit":u.unit,"cacheWriteTtlMs":optional(u.cache_write_ttl_ms),"quantity":u.quantity.to_string()})).collect::<Vec<_>>());
+    row["unitQuantities"] = json!(
+        q.additional
+            .iter()
+            .map(|u| json!({
+                "modality": u.modality,
+                "chargeKind": u.charge_kind,
+                "unit": u.unit,
+                "cacheWriteTtlMs": optional(u.cache_write_ttl_ms),
+                "quantity": u.quantity.to_string()
+            }))
+            .collect::<Vec<_>>()
+    );
     let record = wire(row)?;
     Ok(Fact {
         key: format!("Attempt:{}", a.attempt_id.as_str()),
@@ -655,10 +754,44 @@ fn origin(read: &dyn ReadSnapshot, o: StoredUsageOrigin, gaps: &mut Gaps) -> SRe
             gaps.add("legacy-request-identity-unrecorded");
         }
         let (kind, origin) = o.classification.price();
-        let c = json!({"priceKind":kind,"priceOrigin":origin,"amountMicroUsd":optional(o.priced_micro_usd),"currency":o.priced_micro_usd.map(|_|"USD"),"originalAmount":v.get("amountUsd"),"priceRevision":v.get("priceRevision"),"classification":o.classification.as_str(),"subscriptionEquivalent":o.classification==CostClassification::SubscriptionApiEquivalent,"incomplete":o.incomplete,"untrackedReason":"Historical observation has no proven attempt identity","tariffs":[],"monetaryComplete":false});
-        Some(wire(
-            json!({"id":reference,"requestId":request,"sourceKind":o.source_kind,"sourceId":reference,"actorId":user,"projectId":o.project_id,"featureId":o.feature_id,"workId":o.work_id,"sessionId":o.session_id,"jobRunId":o.job_run_id,"purpose":purpose.as_deref().unwrap_or("Unknown"),"modelId":model,"startedAtMs":o.recorded_at_ms.to_string(),"state":"HistoricalObservation","inputTokens":optional(input),"outputTokens":optional(output),"cacheReadTokens":optional(number(v,"cacheReadTokens")),"cacheWriteTokens":optional(number(v,"cacheWriteTokens")),"cost":c,"cacheDiagnostics":[],"unknownTail":o.unknown_tail,"unitQuantities":[]}),
-        )?)
+        let c = json!({
+            "priceKind": kind,
+            "priceOrigin": origin,
+            "amountMicroUsd": optional(o.priced_micro_usd),
+            "currency": o.priced_micro_usd.map(|_| "USD"),
+            "originalAmount": v.get("amountUsd"),
+            "priceRevision": v.get("priceRevision"),
+            "classification": o.classification.as_str(),
+            "subscriptionEquivalent": o.classification == CostClassification::SubscriptionApiEquivalent,
+            "incomplete": o.incomplete,
+            "untrackedReason": "Historical observation has no proven attempt identity",
+            "tariffs": [],
+            "monetaryComplete": false
+        });
+        Some(wire(json!({
+            "id": reference,
+            "requestId": request,
+            "sourceKind": o.source_kind,
+            "sourceId": reference,
+            "actorId": user,
+            "projectId": o.project_id,
+            "featureId": o.feature_id,
+            "workId": o.work_id,
+            "sessionId": o.session_id,
+            "jobRunId": o.job_run_id,
+            "purpose": purpose.as_deref().unwrap_or("Unknown"),
+            "modelId": model,
+            "startedAtMs": o.recorded_at_ms.to_string(),
+            "state": "HistoricalObservation",
+            "inputTokens": optional(input),
+            "outputTokens": optional(output),
+            "cacheReadTokens": optional(number(v, "cacheReadTokens")),
+            "cacheWriteTokens": optional(number(v, "cacheWriteTokens")),
+            "cost": c,
+            "cacheDiagnostics": [],
+            "unknownTail": o.unknown_tail,
+            "unitQuantities": []
+        }))?)
     } else {
         None
     };
@@ -826,7 +959,7 @@ fn collect(read: &dyn ReadSnapshot, q: &Query, gaps: &mut Gaps) -> SResult<Vec<F
                 None
             };
             if q.in_range(a.created_at_ms) || logical_time.is_some_and(|at| q.in_range(at)) {
-                facts.push(attempt(read, a, &mut Gaps::default())?);
+                facts.push(attempt(read, a)?);
             }
         }
         Ok(())
@@ -914,7 +1047,22 @@ fn totals(facts: &[&Fact], gaps: &mut Gaps) -> SResult<UsageTotals> {
             gaps.add("legacy-observations-not-incurred-spend");
         }
     }
-    wire(json!({"attempts":values[0].to_string(),"trackedMicroUsd":values[1].to_string(),"reportedMicroUsd":values[2].to_string(),"estimatedMicroUsd":values[3].to_string(),"reservedMicroUsd":values[4].to_string(),"localFreeAttempts":values[5].to_string(),"untrackedAttempts":values[6].to_string(),"unknownTailAttempts":values[7].to_string(),"incompleteAttempts":values[8].to_string(),"monetaryIncompleteAttempts":values[9].to_string(),"legacyUsageFacts":values[10].to_string(),"legacyUntrackedFacts":values[11].to_string(),"legacyObservationMicroUsd":values[12].to_string()})).map_err(Into::into)
+    wire(json!({
+        "attempts": values[0].to_string(),
+        "trackedMicroUsd": values[1].to_string(),
+        "reportedMicroUsd": values[2].to_string(),
+        "estimatedMicroUsd": values[3].to_string(),
+        "reservedMicroUsd": values[4].to_string(),
+        "localFreeAttempts": values[5].to_string(),
+        "untrackedAttempts": values[6].to_string(),
+        "unknownTailAttempts": values[7].to_string(),
+        "incompleteAttempts": values[8].to_string(),
+        "monetaryIncompleteAttempts": values[9].to_string(),
+        "legacyUsageFacts": values[10].to_string(),
+        "legacyUntrackedFacts": values[11].to_string(),
+        "legacyObservationMicroUsd": values[12].to_string()
+    }))
+    .map_err(Into::into)
 }
 /// A usage position: the resolved date range the listing started with, then the row offset.
 fn cursor_range(position: &str) -> Result<(i64, i64, usize), StorageError> {

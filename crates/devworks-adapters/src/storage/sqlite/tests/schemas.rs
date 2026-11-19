@@ -9,7 +9,44 @@ fn id(s: &str) -> Id {
     Id::new(s).unwrap()
 }
 fn source(name: &str, shared: bool) -> StoredSchemaSource {
-    StoredSchemaSource{configuration_revision:1,connection:serde_json::from_value(json!({"id":name,"revision":"1","name":name,"engine":"Sqlite","state":"Enabled","writesEnabled":false,"metadataOnly":true,"ownerId":"host","config":{"name":name,"engine":"Sqlite","endpoint":"/tmp/metadata-fixture.sqlite","catalogs":[],"schemas":[],"includePatterns":[],"excludePatterns":[],"writesEnabled":false,"enabled":true,"workspaceExposed":shared,"projectAccess":[{"projectId":"metadata-project","metadataEnabled":shared,"dataReadEnabled":false,"dataWriteEnabled":false}],"exposureMode":"SchemaOnly","authentication":"File"}})).unwrap(),owner_id:ActorId(id("host")),deleted:false,created_at_ms:T0,updated_at_ms:T0}
+    StoredSchemaSource {
+        configuration_revision: 1,
+        connection: serde_json::from_value(json!({
+            "id": name,
+            "revision": "1",
+            "name": name,
+            "engine": "Sqlite",
+            "state": "Enabled",
+            "writesEnabled": false,
+            "metadataOnly": true,
+            "ownerId": "host",
+            "config": {
+                "name": name,
+                "engine": "Sqlite",
+                "endpoint": "/tmp/metadata-fixture.sqlite",
+                "catalogs": [],
+                "schemas": [],
+                "includePatterns": [],
+                "excludePatterns": [],
+                "writesEnabled": false,
+                "enabled": true,
+                "workspaceExposed": shared,
+                "projectAccess": [{
+                    "projectId": "metadata-project",
+                    "metadataEnabled": shared,
+                    "dataReadEnabled": false,
+                    "dataWriteEnabled": false
+                }],
+                "exposureMode": "SchemaOnly",
+                "authentication": "File"
+            }
+        }))
+        .unwrap(),
+        owner_id: ActorId(id("host")),
+        deleted: false,
+        created_at_ms: T0,
+        updated_at_ms: T0,
+    }
 }
 #[test]
 fn purge_planning_schema_leases_require_closed_body_and_matching_storage_columns() {
@@ -259,7 +296,27 @@ fn hidden_staging_seals_atomically_and_exact_publication_survives_index_removal(
         })
     })
     .unwrap();
-    let object:SchemaObject=serde_json::from_value(json!({"id":"object-table","viewId":"schema-view","kind":"Table","qualifiedName":"fixture.public.parent","coverage":{"state":"Complete","gaps":[],"moreGaps":false},"metadata":{"name":"parent","catalog":"fixture","schema":"public","columnNames":[],"referencedColumns":[],"parameters":[],"definitionSql":"CREATE TABLE parent(id INT)"}})).unwrap();
+    let object: SchemaObject = serde_json::from_value(json!({
+        "id": "object-table",
+        "viewId": "schema-view",
+        "kind": "Table",
+        "qualifiedName": "fixture.public.parent",
+        "coverage": {
+            "state": "Complete",
+            "gaps": [],
+            "moreGaps": false
+        },
+        "metadata": {
+            "name": "parent",
+            "catalog": "fixture",
+            "schema": "public",
+            "columnNames": [],
+            "referencedColumns": [],
+            "parameters": [],
+            "definitionSql": "CREATE TABLE parent(id INT)"
+        }
+    }))
+    .unwrap();
     let v = view.clone();
     run_write(&s, WriteOptions::fixture(), move |tx| {
         tx.schemas().append_schema_rows(&v, &[object], &[])
@@ -282,7 +339,18 @@ fn hidden_staging_seals_atomically_and_exact_publication_survives_index_removal(
         .unwrap()
         .is_empty()
     );
-    let result:IndexRunRecord=serde_json::from_value(json!({"id":"schema-operation","revision":"1","repositoryIds":[],"stage":"CompletedMetadata","state":"ObservedComplete","completedUnits":"1","totalUnits":"1","outputViews":["schema-view"],"diagnostics":[]})).unwrap();
+    let result: IndexRunRecord = serde_json::from_value(json!({
+        "id": "schema-operation",
+        "revision": "1",
+        "repositoryIds": [],
+        "stage": "CompletedMetadata",
+        "state": "ObservedComplete",
+        "completedUnits": "1",
+        "totalUnits": "1",
+        "outputViews": ["schema-view"],
+        "diagnostics": []
+    }))
+    .unwrap();
     let witness = StoredSchemaPublication {
         operation_id: op.clone(),
         connection_id: source_id.clone(),
@@ -440,7 +508,12 @@ fn schema_seed_humans(h: &Harness, s: &super::SqliteStore) {
     .unwrap();
     let raw = h.raw();
     for p in ["metadata-project", "other-project"] {
-        raw.execute("INSERT INTO projects(id,title,lifecycle,revision,scope_revision,created_at) VALUES(?1,?1,'Active',1,1,?2)", rusqlite::params![p,T0]).unwrap();
+        raw.execute(
+            "INSERT INTO projects(id,title,lifecycle,revision,scope_revision,\
+            created_at) VALUES(?1,?1,'Active',1,1,?2)",
+            rusqlite::params![p, T0],
+        )
+        .unwrap();
     }
 }
 #[test]
@@ -490,9 +563,12 @@ fn native_gateway_source_configuration_replays_and_refuses_stale_or_foreign_edit
         "schemas.configure",
         edit.clone(),
     );
-    assert!(
-        matches!(changed, DomainDecision::Applied { result: OperationResult::SchemasConfigure { value } } if value.revision.get() == 2 && value.name.0 == "Changed source")
-    );
+    assert!(matches!(
+        changed,
+        DomainDecision::Applied {
+            result: OperationResult::SchemasConfigure { value },
+        } if value.revision.get() == 2 && value.name.0 == "Changed source"
+    ));
     let stale = schema_command(
         &h,
         &s,
@@ -532,12 +608,21 @@ fn native_gateway_shared_pages_redact_other_projects_and_expire_after_access_cha
                 let config = row.connection.config.as_mut().unwrap();
                 config.credential_ref = Some(id("private-password-handle"));
                 config.username = Some(serde_json::from_value(json!("private-login")).unwrap());
-                config.project_access.as_mut().unwrap().0.push(serde_json::from_value(json!({"projectId":"other-project","metadataEnabled":true,"dataReadEnabled":true,"dataWriteEnabled":false})).unwrap());
+                config.project_access.as_mut().unwrap().0.push(
+                    serde_json::from_value(json!({
+                        "projectId": "other-project",
+                        "metadataEnabled": true,
+                        "dataReadEnabled": true,
+                        "dataWriteEnabled": false
+                    }))
+                    .unwrap(),
+                );
             }
             tx.schemas().create_schema_source(&row)?;
         }
         Ok(())
-    }).unwrap();
+    })
+    .unwrap();
     let body =
         json!({"scope":{"kind":"Project","projectId":"metadata-project"},"page":{"limit":1}});
     let first = schema_query(&h, &s, "schema-other", "schemas.connections", body.clone());
@@ -562,9 +647,13 @@ fn native_gateway_shared_pages_redact_other_projects_and_expire_after_access_cha
     let mut next = body.clone();
     next["page"]["cursor"] = json!(first.next_cursor.unwrap());
     let second = schema_query(&h, &s, "schema-other", "schemas.connections", next.clone());
-    assert!(
-        matches!(second, DomainQueryReply::Result { result: OperationResult::SchemasConnections { value }, .. } if !value.has_more && value.items.0[0].id == id("d-shared"))
-    );
+    assert!(matches!(
+        second,
+        DomainQueryReply::Result {
+            result: OperationResult::SchemasConnections { value },
+            ..
+        } if !value.has_more && value.items.0[0].id == id("d-shared")
+    ));
     run_write(&s, WriteOptions::fixture(), |tx| {
         let mut row = tx.schemas().schema_source(&id("d-shared"))?.unwrap();
         row.connection.revision = Revision::new(2).unwrap();
@@ -583,7 +672,16 @@ fn native_gateway_shared_pages_redact_other_projects_and_expire_after_access_cha
         &s,
         "schema-other",
         "schemas.objects",
-        json!({"scope":{"kind":"Project","projectId":"metadata-project"},"views":{"kind":"SchemaPublished","connectionIds":["b-shared"]},"connectionId":"b-shared","kinds":[],"page":{"limit":10}}),
+        json!({
+            "scope": {"kind": "Project", "projectId": "metadata-project"},
+            "views": {
+                "kind": "SchemaPublished",
+                "connectionIds": ["b-shared"]
+            },
+            "connectionId": "b-shared",
+            "kinds": [],
+            "page": {"limit": 10}
+        }),
     );
     assert!(
         matches!(unpublished, DomainQueryReply::Rejected { fault, .. } if fault.code == devworks_core::protocol::DomainErrorCode::ViewUnavailable)
@@ -649,7 +747,17 @@ fn native_password_intake_binds_human_and_purpose_and_reconciles_only_unused_han
     let command = |key: &str, handle: &Id| {
         let mut config = config.clone();
         config["credentialRef"] = json!(handle);
-        let frame = json!({"protocol":"1.0-draft.1","mode":"Command","schemaRevision":5,"requestKey":key,"body":{"kind":"schemas.configure","scope":{"kind":"Workspace"},"config":config}});
+        let frame = json!({
+            "protocol": "1.0-draft.1",
+            "mode": "Command",
+            "schemaRevision": 5,
+            "requestKey": key,
+            "body": {
+                "kind": "schemas.configure",
+                "scope": {"kind": "Workspace"},
+                "config": config
+            }
+        });
         match gateway
             .command(
                 &owner,
@@ -857,7 +965,15 @@ fn native_metadata_worker_recovers_staging_publishes_no_rows_and_observes_after_
     let s = std::sync::Arc::new(h.store());
     schema_seed_humans(&h, &s);
     let path = h.root.join("source-fixture.sqlite");
-    rusqlite::Connection::open(&path).unwrap().execute_batch("CREATE TABLE parent(id INTEGER PRIMARY KEY, label TEXT DEFAULT 'catalog_default'); CREATE TABLE child(id INT, parent_id INT REFERENCES parent(id)); CREATE INDEX child_parent ON child(parent_id); INSERT INTO parent VALUES(1,'SOURCE_ROW_SENTINEL_NEVER_INDEX');").unwrap();
+    rusqlite::Connection::open(&path)
+        .unwrap()
+        .execute_batch(
+            "CREATE TABLE parent(id INTEGER PRIMARY KEY, label TEXT DEFAULT \
+        'catalog_default'); CREATE TABLE child(id INT, parent_id INT REFERENCES \
+        parent(id)); CREATE INDEX child_parent ON child(parent_id); INSERT INTO \
+        parent VALUES(1,'SOURCE_ROW_SENTINEL_NEVER_INDEX');",
+        )
+        .unwrap();
     let reader = std::sync::Arc::new(CountingMetadata(std::sync::atomic::AtomicUsize::new(0)));
     let owner = metadata_owner(&h, s.clone(), reader.clone());
     let mut config =
@@ -1053,9 +1169,12 @@ fn native_metadata_source_revocation_cancels_queued_work_and_can_be_reenabled() 
         "schemas.configure",
         json!({"scope":{"kind":"Workspace"},"connectionId":source.id,"expectedRevision":"2","config":disabled}),
     );
-    assert!(
-        matches!(changed,DomainDecision::Applied{result:OperationResult::SchemasConfigure{value}} if value.active_operation_id.is_none() && value.revision.get()==3)
-    );
+    assert!(matches!(
+        changed,
+        DomainDecision::Applied {
+            result: OperationResult::SchemasConfigure { value },
+        } if value.active_operation_id.is_none() && value.revision.get() == 3
+    ));
     let cancelled = read_snapshot(&*s, &ReadOptions::default(), |r| r.queue().entry(&delivery))
         .unwrap()
         .unwrap();
@@ -1069,9 +1188,12 @@ fn native_metadata_source_revocation_cancels_queued_work_and_can_be_reenabled() 
         "schemas.configure",
         json!({"scope":{"kind":"Workspace"},"connectionId":source.id,"expectedRevision":"3","config":config}),
     );
-    assert!(
-        matches!(restored,DomainDecision::Applied{result:OperationResult::SchemasConfigure{value}} if value.active_operation_id.is_none() && value.revision.get()==4)
-    );
+    assert!(matches!(
+        restored,
+        DomainDecision::Applied {
+            result: OperationResult::SchemasConfigure { value },
+        } if value.active_operation_id.is_none() && value.revision.get() == 4
+    ));
 }
 
 #[test]
@@ -1427,9 +1549,21 @@ fn native_schema_pins_keep_captured_views_but_never_extend_expiry_or_access() {
         .unwrap()
         .is_empty()
     );
-    assert!(
-        matches!(query("schema-owner", "schemas.objects", json!({"scope":{"kind":"Workspace"},"views":{"kind":"Exact","viewIds":[retired]},"connectionId":created.id,"kinds":[],"page":{"limit":10}})), DomainQueryReply::Rejected { fault, .. } if fault.code == devworks_core::protocol::DomainErrorCode::ViewUnavailable)
-    );
+    assert!(matches!(
+        query(
+            "schema-owner",
+            "schemas.objects",
+            json!({
+                "scope": {"kind": "Workspace"},
+                "views": {"kind": "Exact", "viewIds": [retired]},
+                "connectionId": created.id,
+                "kinds": [],
+                "page": {"limit": 10}
+            }),
+        ),
+        DomainQueryReply::Rejected { fault, .. }
+            if fault.code == devworks_core::protocol::DomainErrorCode::ViewUnavailable
+    ));
     assert!(
         run_write(&*s, WriteOptions::fixture(), move |tx| tx
             .schemas()
@@ -1527,9 +1661,24 @@ impl devworks_core::ports::database::MetadataReader for CertificateCustodyReader
         self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         Box::pin(async {
             Ok(devworks_core::ports::database::MetadataSnapshot {
-            profile:serde_json::from_value(json!({"driver":"RecordedCertificateCustody","serverVersion":"fixture","authentication":"Password","tls":"Recorded; transport qualification separate","readOnlyBoundary":"No target connection in custody fixture","supportedMetadata":[],"unsupportedMetadata":[],"limitations":["Authority/certificate custody only; not server or TLS qualification"]})).unwrap(),
-            coverage:serde_json::from_value(json!({"state":"Complete","gaps":[],"moreGaps":false})).unwrap(),objects:vec![],relationships:vec![],
-        })
+                profile: serde_json::from_value(json!({
+                    "driver": "RecordedCertificateCustody",
+                    "serverVersion": "fixture",
+                    "authentication": "Password",
+                    "tls": "Recorded; transport qualification separate",
+                    "readOnlyBoundary": "No target connection in custody fixture",
+                    "supportedMetadata": [],
+                    "unsupportedMetadata": [],
+                    "limitations": ["Authority/certificate custody only; not server or TLS qualification"]
+                }))
+                .unwrap(),
+                coverage: serde_json::from_value(
+                    json!({"state":"Complete","gaps":[],"moreGaps":false}),
+                )
+                .unwrap(),
+                objects: vec![],
+                relationships: vec![],
+            })
         })
     }
 }
@@ -1549,7 +1698,9 @@ fn shared_schema_ca_custody_preserves_agent_and_never_grants_original_artifact_a
     schema_seed_humans(&h, &s);
     // A structurally bounded certificate block; actual X509/server qualification is the
     // explicitly dispatched real-network suite, not this recorded-port custody case.
-    let pem=b"-----BEGIN CERTIFICATE-----\nY2VydGlmaWNhdGUtY3VzdG9keS1maXh0dXJl\n-----END CERTIFICATE-----\n".to_vec();
+    let pem = b"-----BEGIN CERTIFICATE-----\nY2VydGlmaWNhdGUtY3VzdG9keS1maXh0dXJl\n-----\
+        END CERTIFICATE-----\n"
+        .to_vec();
     let reader = Arc::new(CertificateCustodyReader {
         expected: pem.clone(),
         calls: Default::default(),
@@ -1609,7 +1760,20 @@ fn shared_schema_ca_custody_preserves_agent_and_never_grants_original_artifact_a
     config["username"] = json!("metadata_reader");
     config["tls"] = json!("VerifyFull");
     config["caCertificate"] = json!(reference);
-    config["projectAccess"] = json!([{"projectId":"metadata-project","metadataEnabled":true,"dataReadEnabled":false,"dataWriteEnabled":false},{"projectId":"other-project","metadataEnabled":true,"dataReadEnabled":false,"dataWriteEnabled":false}]);
+    config["projectAccess"] = json!([
+        {
+            "projectId": "metadata-project",
+            "metadataEnabled": true,
+            "dataReadEnabled": false,
+            "dataWriteEnabled": false
+        },
+        {
+            "projectId": "other-project",
+            "metadataEnabled": true,
+            "dataReadEnabled": false,
+            "dataWriteEnabled": false
+        }
+    ]);
     let create_body = json!({"scope":{"kind":"Workspace"},"config":config});
     let made = owner_command(
         &h,
@@ -1644,9 +1808,19 @@ fn shared_schema_ca_custody_preserves_agent_and_never_grants_original_artifact_a
         tx.artifacts().update_artifact(&a)
     })
     .unwrap();
-    assert!(
-        matches!(owner_command(&h,&s,service.clone(),"certificate-create","schemas.configure",create_body),DomainDecision::Applied{result:OperationResult::SchemasConfigure{value}} if value.id==created.id)
-    );
+    assert!(matches!(
+        owner_command(
+            &h,
+            &s,
+            service.clone(),
+            "certificate-create",
+            "schemas.configure",
+            create_body,
+        ),
+        DomainDecision::Applied {
+            result: OperationResult::SchemasConfigure { value },
+        } if value.id == created.id
+    ));
     assert!(
         artifacts
             .read_exact(&*s, &agent, &reference, 1048576)
@@ -1662,7 +1836,18 @@ fn shared_schema_ca_custody_preserves_agent_and_never_grants_original_artifact_a
         store: &*s,
         ids: &*h.ids,
     };
-    let frame = json!({"protocol":"1.0-draft.1","mode":"Command","schemaRevision":5,"requestKey":"certificate-agent-index","body":{"kind":"schemas.index","connectionId":created.id,"expectedRevision":created.revision,"scope":{"kind":"Project","projectId":"other-project"}}});
+    let frame = json!({
+        "protocol": "1.0-draft.1",
+        "mode": "Command",
+        "schemaRevision": 5,
+        "requestKey": "certificate-agent-index",
+        "body": {
+            "kind": "schemas.index",
+            "connectionId": created.id,
+            "expectedRevision": created.revision,
+            "scope": {"kind": "Project", "projectId": "other-project"}
+        }
+    });
     let reply = gateway
         .command(
             &agent,
@@ -1942,7 +2127,17 @@ fn certificate_copy_rechecks_original_artifact_after_preparation_before_commit()
         store: &gate,
         ids: &*h.ids,
     };
-    let frame = json!({"protocol":"1.0-draft.1","mode":"Command","schemaRevision":5,"requestKey":"revoked-ca-configure","body":{"kind":"schemas.configure","scope":{"kind":"Workspace"},"config":config}});
+    let frame = json!({
+        "protocol": "1.0-draft.1",
+        "mode": "Command",
+        "schemaRevision": 5,
+        "requestKey": "revoked-ca-configure",
+        "body": {
+            "kind": "schemas.configure",
+            "scope": {"kind": "Workspace"},
+            "config": config
+        }
+    });
     let reply = gateway
         .command(
             &schema_context(&s, "schema-owner"),
@@ -1952,7 +2147,11 @@ fn certificate_copy_rechecks_original_artifact_after_preparation_before_commit()
         )
         .unwrap();
     assert!(
-        matches!(reply,devworks_core::protocol::CommandReply::Recorded{receipt,..} if matches!(&receipt.decision,DomainDecision::Refused{fault} if fault.code==devworks_core::protocol::DomainErrorCode::SourceChanged))
+        matches!(reply,devworks_core::protocol::CommandReply::Recorded{receipt,..} if matches!(
+            &receipt.decision,
+            DomainDecision::Refused { fault }
+                if fault.code == devworks_core::protocol::DomainErrorCode::SourceChanged
+        ))
     );
     assert!(!gate.armed.load(Ordering::SeqCst));
     assert_eq!(
@@ -2118,13 +2317,27 @@ fn native_review7_generic_queue_cancellation_releases_source_without_losing_publ
         store: &*s,
         ids: &*h.ids,
     };
-    let frame=json!({"protocol":"1.0-draft.1","mode":"Command","schemaRevision":1,"requestKey":"generic-cancel-resolution","body":{"kind":"queue.resolve","deliveryId":entry.id,"expectedRevision":entry.revision.to_string(),"expectedFence":entry.generation.to_string(),"resolution":"CancelBeforeDispatch","reason":"Cancel an undispatched metadata probe"}}).to_string();
+    let frame = json!({
+        "protocol": "1.0-draft.1",
+        "mode": "Command",
+        "schemaRevision": 1,
+        "requestKey": "generic-cancel-resolution",
+        "body": {
+            "kind": "queue.resolve",
+            "deliveryId": entry.id,
+            "expectedRevision": entry.revision.to_string(),
+            "expectedFence": entry.generation.to_string(),
+            "resolution": "CancelBeforeDispatch",
+            "reason": "Cancel an undispatched metadata probe"
+        }
+    })
+    .to_string();
     let reply = gateway
         .command(
             &schema_context(&s, "schema-owner"),
             "queue.resolve",
             frame.as_bytes(),
-            std::sync::Arc::new(devworks_core::services::queue::QueueService),
+            std::sync::Arc::new(devworks_core::services::queue_service()),
         )
         .unwrap();
     assert!(
@@ -2244,7 +2457,17 @@ fn native_schema_pin_preparation_survives_a_clock_tick_after_writer_admission() 
         store: store.as_ref(),
         ids: h.ids.as_ref(),
     };
-    let frame = json!({"protocol":"1.0-draft.1","mode":"Query","schemaRevision":5,"queryId":"clock-pin","body":{"kind":"schemas.connections","scope":{"kind":"Workspace"},"page":{"limit":100}}});
+    let frame = json!({
+        "protocol": "1.0-draft.1",
+        "mode": "Query",
+        "schemaRevision": 5,
+        "queryId": "clock-pin",
+        "body": {
+            "kind": "schemas.connections",
+            "scope": {"kind": "Workspace"},
+            "page": {"limit": 100}
+        }
+    });
     let query = || {
         gateway
             .query(
@@ -2339,7 +2562,23 @@ fn purge_planning_shared_source_access_keeps_independent_configuration_and_opera
         )
         .unwrap();
     let mut shared = source("independent-shared-source", true);
-    shared.connection.config.as_mut().unwrap().project_access=Some(serde_json::from_value(json!([{"projectId":"metadata-project","metadataEnabled":true,"dataReadEnabled":false,"dataWriteEnabled":false},{"projectId":"other-project","metadataEnabled":true,"dataReadEnabled":false,"dataWriteEnabled":false}])).unwrap());
+    shared.connection.config.as_mut().unwrap().project_access = Some(
+        serde_json::from_value(json!([
+            {
+                "projectId": "metadata-project",
+                "metadataEnabled": true,
+                "dataReadEnabled": false,
+                "dataWriteEnabled": false
+            },
+            {
+                "projectId": "other-project",
+                "metadataEnabled": true,
+                "dataReadEnabled": false,
+                "dataWriteEnabled": false
+            }
+        ]))
+        .unwrap(),
+    );
     shared.connection.active_operation_id = Some(id("source-purge-operation"));
     let saved = shared.clone();
     run_write(&s, WriteOptions::fixture(), move |tx| {

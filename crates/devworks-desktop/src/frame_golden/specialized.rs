@@ -61,8 +61,11 @@ pub fn frames() -> Vec<(&'static str, Vec<u8>)> {
             "delete_unsent_attachment",
             ops::delete_unsent_attachment(b, &artifact),
         ),
-        ("workspace_artifacts", ops::workspace_artifacts(b)),
-        ("project_artifacts", ops::project_artifacts(b, "project-a")),
+        ("workspace_artifacts", ops::workspace_artifacts(b, None)),
+        (
+            "project_artifacts",
+            ops::project_artifacts(b, "project-a", None),
+        ),
         (
             "prompt_artifacts_workspace",
             ops::prompt_artifacts(b, None, None),

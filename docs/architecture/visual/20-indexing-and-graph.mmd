@@ -1,0 +1,109 @@
+---
+title: Indexing runs and graph queries - services, ports and adapters (implemented)
+---
+classDiagram
+  direction LR
+  class IndexCoordinator {
+    env: Arc IndexEnv
+    indexing.discover .status .runs (queries)
+    indexing.index .reindex .refresh_overlay (commands, record one run per repository)
+    indexing.retire_view .cancel .configure_sources
+  }
+  class IndexEnv {
+    store / clock / ids
+    artifacts: Option ArtifactService
+    diagnostics: Option DiagnosticService
+    enrichers: RwLock Vec SemanticEnricher
+    settings: IndexSettings
+    +register_enricher()
+  }
+  class IndexWorker {
+    owner unique per boot
+    +claim() +execute(run) +recover()
+    +housekeeping(true, stop)
+    +cancel_local(run) +stop_all()
+  }
+  class Housekeeping {
+    expired and stale overlays, refreshes_queued
+    reclaimed_rows, expired_read_pins
+    retired_read_views, linked_views
+  }
+  class discover {
+    <<fn>>
+    scan(env, ctx, only, stop) DiscoveryReport
+  }
+  class Git {
+    runner: HelperRunner
+    program / deadline / stop
+  }
+  class IndexSupervisor {
+    config: IndexingConfig max_runs 2, tick 2 s
+    discovery every 15 min and at boot
+    housekeeping every 60 s
+    +run() +recover() +notify() +cancelled(run)
+    +stop(deadline) abandons runs to recovery
+    status: IndexingStatus
+  }
+  class SourceTree { <<trait>> }
+  class StructuralParser { <<trait>> }
+  class SemanticEnricher {
+    <<trait>>
+    none registered by the desktop host
+  }
+  class HelperRunner { <<trait>> }
+  class SupervisedHelpers {
+    <<core>>
+    runs Git through ProcessSupervisor
+  }
+  class NativeSourceTree { <<adapter>> }
+  class TreeSitterParser {
+    <<adapter>>
+    structural languages plus text fallback
+    manifests, endpoints, schema_refs, domain parsers
+  }
+  class GraphService {
+    store / clock / ids / artifacts
+    indexing: Option IndexEnv
+    code.search .architecture .dependency .impact .source .traverse
+    code.graph_scope_status .overview .nodes_by_file .node_detail .file_impact
+    code.graph_schema .call_path .data_lineage .consumers .publishers .snippet
+    code.repository_dependencies, repositories.nodes
+    code.set_trust (CommandHandler)
+  }
+  class RunState {
+    <<IndexRunState>>
+    Queued Running Succeeded Failed Cancelled
+    kinds Index Reindex Overlay
+  }
+  class PublishedGeneration {
+    immutable view, moved by compare-and-set
+    overlays: branch layer and worktree layer
+  }
+  class Runtime {
+    <<engine boot>>
+    builds IndexEnv, IndexWorker, IndexSupervisor
+    Loop index supervision
+    with_indexing only when IndexComposition is set
+    with_graph always
+  }
+  IndexCoordinator o-- IndexEnv
+  GraphService o-- IndexEnv : optional, for source capture
+  IndexEnv o-- SourceTree
+  IndexEnv o-- StructuralParser
+  IndexEnv o-- HelperRunner
+  IndexEnv o-- SemanticEnricher
+  NativeSourceTree ..|> SourceTree
+  TreeSitterParser ..|> StructuralParser
+  SupervisedHelpers ..|> HelperRunner
+  IndexWorker o-- IndexEnv
+  IndexWorker ..> RunState : claim, checkpoint, retry up to 3 attempts
+  IndexWorker ..> Git : resolves commit, lists tree, reads blobs
+  IndexWorker ..> Housekeeping : returns
+  IndexWorker ..> PublishedGeneration : publishes in one write
+  IndexSupervisor o-- IndexWorker
+  IndexSupervisor ..> discover : interval scan
+  Git o-- HelperRunner
+  GraphService ..> PublishedGeneration : exact view reads
+  Runtime *-- IndexSupervisor
+  Runtime ..> IndexCoordinator : registers indexing.*
+  Runtime ..> GraphService : registers code.*

@@ -1223,6 +1223,7 @@ impl ControlService {
 
     /// The live assignments of `root` that are eligible for `purpose` now (CONTROL-13: Continue
     /// makes eligible descendants runnable; each keeps its own blockers).
+    #[cfg(any(test, feature = "test-support"))]
     pub fn runnable_assignments(
         &self,
         runs: &dyn RunRead,

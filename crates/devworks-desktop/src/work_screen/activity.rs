@@ -1,9 +1,9 @@
 //! The Activity feed: one line per project change, newest first.
 use crate::shell::work::*;
 use crate::widgets::{self, ViewState};
+use devworks_core::protocol::helpers::work::fold;
 use devworks_core::protocol::records::{WorkKind, WorkRecord};
 use devworks_core::protocol::{BlockerChange, ControlReason, Event, EventBody, EventSubject};
-use devworks_core::services::work::fold;
 use eframe::egui::{self, Ui};
 use std::collections::BTreeMap;
 /// What an Activity event is and what it says, from its body.
@@ -143,8 +143,8 @@ pub(crate) fn activity(
         return;
     }
     let items = &feed.items;
-    let more = feed.more;
-    let loading = feed.loading;
+    let more = feed.more();
+    let loading = feed.loading();
     let a = &work.activity;
     let titles: BTreeMap<String, &WorkRecord> = work
         .features

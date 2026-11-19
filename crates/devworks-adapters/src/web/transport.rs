@@ -77,6 +77,7 @@ impl NativeTransport {
 
     /// The transport with another way to open connections (tests simulate refused, blackholed
     /// and slow networks with it; production uses the system connect).
+    #[cfg(any(test, feature = "test-support"))]
     pub fn with_connector(mut self, connector: Connector) -> Self {
         self.connector = connector;
         self

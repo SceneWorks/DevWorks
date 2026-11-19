@@ -37,6 +37,12 @@ def append_metadata_cases(case, sample, request, artifact):
     relation = sample('SchemaRelation')
     relation.update(id='schema-relation', viewId='schema-view', fromObjectId='schema-object',
                     toObjectId='schema-parent', relation='FOREIGN_KEY', inferred=False)
+    reference = sample('SchemaCodeReference')
+    reference.update(id='code-reference', objectId='schema-object', repositoryId='repo-a',
+                     graphViewId='view-a', unitKey='src/orders.py', nodeId='node-a', nodeName='load',
+                     nodeKind='Function', edgeKind='USES_COLUMN', table='public.child', column='parent_id',
+                     extractor='sql-literal', line='12', snippet='SELECT parent_id FROM public.child',
+                     statement='select')
     operations = ['schemas.connections','schemas.objects','schemas.relationships','schemas.index',
                   'schemas.refresh','schemas.remove_index','schemas.configure','database.configure_sensitive_columns']
     for name in operations:
@@ -62,6 +68,17 @@ def append_metadata_cases(case, sample, request, artifact):
         case('dw36-r5-result-'+name,'operation-result.r5',output)
         if name in ['schemas.connections','schemas.objects','schemas.configure']:
             case('dw36-before5-result-'+name,'operation-result.r4',output,False,False)
+    # `schemas.code_references` begins at revision 8; revision 5 does not admit it.
+    frame = request('schemas.code_references','Query')
+    frame['schemaRevision'] = 8
+    body = frame['body']
+    body['connectionId'] = 'schema-connection'
+    body['views'] = dict(kind='SchemaPublished',connectionIds=['schema-connection'])
+    case('dw297-r8-admission-schemas.code_references','domain-request.r8',frame)
+    before = copy.deepcopy(frame); before['schemaRevision'] = 5
+    case('dw297-before8-schemas.code_references','domain-request.r5',before,False,False)
+    output = dict(kind='schemas.code_references',value=dict(items=[reference],hasMore=False))
+    case('dw297-r8-result-schemas.code_references','operation-result.r8',output)
     for engine in ['Sqlite','MariaDb','MySql','Postgres','SqlServer']:
         frame=request('schemas.configure','Command');frame['schemaRevision']=5
         configured=copy.deepcopy(config);configured['engine']=engine

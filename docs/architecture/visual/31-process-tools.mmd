@@ -1,0 +1,93 @@
+---
+title: Process tools - registered executables, journaled execute, cancel and installs (implemented)
+---
+classDiagram
+  direction LR
+  class ProcessToolService {
+    store, processes, authority, secrets
+    bindings: ToolBindings, fs, protected_roots, ids
+    live_output, live_matches, live_tails, monitoring
+    process.execute .cancel .install_project_dependencies (CommandHandler)
+    process.request_system_install (CommandHandler)
+    process.output (QueryHandler)
+    +execute(op) EffectOutcome
+    +execute_detached(op) EffectOutcome
+    +observe(op) EffectOutcome
+    +record_execute(ctx, fingerprint, spec, origin, tx)
+    +request_cancel(ctx, process_id, tx)
+    +live_tail(process_id)
+    +completion()
+  }
+  class ToolBindings {
+    executables, roots, credentials
+    path_executables, install_environments
+    +resolve(spec, project) NativeProcessSpec
+    +resolve_launch(name) program and arg0
+    +resolve_registered_path()
+    rechecks exact files before launch
+  }
+  class BindingRefusal {
+    <<enum>>
+    UnknownExecutable UnknownRoot OutOfProject
+    ChangedExecutable ChangedRoot UnknownCredential
+    UnsupportedProfile ScriptsRequired NoInstallHome
+    and manifest and repository refusals
+  }
+  class PathExecutables {
+    names from tools.processExecutables
+    resolved on PATH at first selection
+  }
+  class ExecuteJob {
+    frozen principal, project, root, fingerprint
+    spec: ProcessSpec, tail_bytes
+    watch: Option WatchOrigin
+  }
+  class ExecuteOrigin {
+    <<enum>>
+    Tool
+    Watch tail_bytes, requested, pattern
+  }
+  class InstallJob {
+    repository, manifest digest, allowScripts
+    script-free by default, private install home
+  }
+  class ProcessSupervisor {
+    preflight, launch_reserved, poll, take_output
+    hold_cancel, probe_recorded
+  }
+  class ProcessSpec { program, args, cwd, env, profile }
+  class ProposalRecord {
+    system install proposal
+    state Pending, no command runs
+  }
+  class EffectConsumers {
+    <<engine consumers>>
+    process_tool_effects max 2, 4 attempts
+    process_tool_cancellations
+    watch_process_effects
+  }
+  class WatchService {
+    uses process tools to launch watched runs
+  }
+  class ContainerService { backend CLIs launch through the supervisor }
+  class NativeMcpClients { stdio MCP servers launch through the supervisor }
+  class ProcessToolComposition {
+    <<engine config>>
+    bindings, filesystem, protected_roots
+  }
+  ProcessToolService *-- ToolBindings
+  ProcessToolService o-- ProcessSupervisor
+  ProcessToolService ..> ExecuteJob : frozen in the operation payload
+  ProcessToolService ..> InstallJob : install_plan
+  ProcessToolService ..> ExecuteOrigin : tool or watcher launch
+  ProcessToolService ..> ProposalRecord : request_system_install
+  ToolBindings ..> BindingRefusal
+  ToolBindings o-- PathExecutables
+  ToolBindings ..> ProcessSpec : binds registered paths
+  ProcessSupervisor ..> ProcessSpec
+  EffectConsumers o-- ProcessToolService
+  WatchService o-- ProcessToolService
+  ContainerService ..> ToolBindings : shares the registry
+  NativeMcpClients ..> ToolBindings : shares the registry
+  ProcessToolComposition ..> ProcessToolService : runtime boot builds
+  note for ToolBindings "Only the Full profile runs. Project and Confined are refused, not upgraded: no confined launcher is qualified. Full is ambient execution with user rights, not a sandbox"

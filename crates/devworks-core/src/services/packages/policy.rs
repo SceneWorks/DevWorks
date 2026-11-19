@@ -553,15 +553,52 @@ mod closure_tests {
     }
     fn entry(id: &str, dependencies: &[String]) -> (StoredPackage, Option<StoredPackageVersion>) {
         let digest = sha256_hex(id.as_bytes());
-        let facts = json!({"packageId": id, "version": "1.0.0", "publisherId": "acme",
-            "manifestDigest": digest, "bundleDigest": digest, "signerKey": null,
-            "protocolMin": [1,0], "protocolMax": [1,0], "minimumHostVersion": "0.1.0",
-            "targets": [{"targetTriple": "test-target", "entrypoint": "helper"}],
-            "files": [{"path": "helper", "sha256": "a".repeat(64), "byteLength": 1, "executable": true}],
-            "dependencies": dependencies.iter().map(|d| json!({"packageId": d, "versionRequirement": "^1", "manifestDigest": sha256_hex(d.as_bytes()), "required": true})).collect::<Vec<_>>(),
-            "runtimes": [{"runtimeId": "counter", "versionRequirement": "^1", "required": true}],
-            "access": [], "contributions": [], "stateSchema": {}, "configurationSchema": {},
-            "limits": {"maxConcurrent": 1, "queueCapacity": 1, "maxMemoryBytes": 1048576, "streamCreditBytes": 4096}, "helpFile": "help.md"});
+        let facts = json!({
+            "packageId": id,
+            "version": "1.0.0",
+            "publisherId": "acme",
+            "manifestDigest": digest,
+            "bundleDigest": digest,
+            "signerKey": null,
+            "protocolMin": [1, 0],
+            "protocolMax": [1, 0],
+            "minimumHostVersion": "0.1.0",
+            "targets": [{
+                "targetTriple": "test-target",
+                "entrypoint": "helper"
+            }],
+            "files": [{
+                "path": "helper",
+                "sha256": "a".repeat(64),
+                "byteLength": 1,
+                "executable": true
+            }],
+            "dependencies": dependencies
+                .iter()
+                .map(|d| json!({
+                    "packageId": d,
+                    "versionRequirement": "^1",
+                    "manifestDigest": sha256_hex(d.as_bytes()),
+                    "required": true
+                }))
+                .collect::<Vec<_>>(),
+            "runtimes": [{
+                "runtimeId": "counter",
+                "versionRequirement": "^1",
+                "required": true
+            }],
+            "access": [],
+            "contributions": [],
+            "stateSchema": {},
+            "configurationSchema": {},
+            "limits": {
+                "maxConcurrent": 1,
+                "queueCapacity": 1,
+                "maxMemoryBytes": 1048576,
+                "streamCreditBytes": 4096
+            },
+            "helpFile": "help.md"
+        });
         let p = StoredPackage {
             package_id: id.into(),
             revision: 1,

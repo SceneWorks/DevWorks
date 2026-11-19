@@ -136,7 +136,18 @@ fn insert_effect(
             0,
         ),
     };
-    db(conn.execute("INSERT INTO project_purge_effects(manifest_id,id,kind,owner_digest,body_json,byte_count,state) VALUES(?1,?2,?3,?4,?5,?6,'Pending')",params![manifest.as_str(),sha256_hex(body.as_bytes()),kind,digest,body,bytes]))?;
+    db(conn.execute(
+        "INSERT INTO project_purge_effects(manifest_id,id,kind,owner_digest,\
+        body_json,byte_count,state) VALUES(?1,?2,?3,?4,?5,?6,'Pending')",
+        params![
+            manifest.as_str(),
+            sha256_hex(body.as_bytes()),
+            kind,
+            digest,
+            body,
+            bytes
+        ],
+    ))?;
     Ok(())
 }
 
@@ -211,7 +222,17 @@ pub(in crate::storage::sqlite) fn apply(
         }
     }
     let payload = serde_json::json!({"projectId":project,"manifestId":reviewed.manifest.id});
-    db(conn.execute("INSERT INTO operations(id,capability,schema_version,args_digest,payload_json,state,revision,created_at) VALUES(?1,'projects.purge',1,?2,?3,'IntentRecorded',1,?4)",params![operation.0.as_str(),sha256_hex(payload.to_string().as_bytes()),payload.to_string(),now]))?;
+    db(conn.execute(
+        "INSERT INTO operations(id,capability,schema_version,args_digest,\
+        payload_json,state,revision,created_at) VALUES(?1,'projects.purge',1,?2,\
+        ?3,'IntentRecorded',1,?4)",
+        params![
+            operation.0.as_str(),
+            sha256_hex(payload.to_string().as_bytes()),
+            payload.to_string(),
+            now
+        ],
+    ))?;
     let mut manifest = reviewed.manifest.clone();
     manifest.operation_id = Some(operation);
     manifest.phase = PurgePhase::RemovingBytes;
@@ -317,12 +338,37 @@ pub(in crate::storage::sqlite) fn apply(
                 )?,
             }
             if target.row.reason == Reason::MinimalDeletedIdentity {
-                db(conn.execute("INSERT INTO project_purged_subjects(table_name,key_digest,project_id,manifest_id,identity_json) VALUES(?1,?2,?3,?4,?5) ON CONFLICT(table_name,key_digest) DO NOTHING",params![target.row.table.as_str(),target.row.key_digest,project.0.as_str(),manifest.id.as_str(),serde_json::json!({"label":"Deleted","table":target.row.table,"keyDigest":target.row.key_digest}).to_string()]))?;
+                db(conn.execute(
+                    "INSERT INTO project_purged_subjects(table_name,key_digest,project_id,\
+                    manifest_id,identity_json) VALUES(?1,?2,?3,?4,?5) ON \
+                    CONFLICT(table_name,key_digest) DO NOTHING",
+                    params![
+                        target.row.table.as_str(),
+                        target.row.key_digest,
+                        project.0.as_str(),
+                        manifest.id.as_str(),
+                        serde_json::json!({
+                            "label": "Deleted",
+                            "table": target.row.table,
+                            "keyDigest": target.row.key_digest
+                        })
+                        .to_string()
+                    ],
+                ))?;
             }
         }
         Ok(())
     })?;
-    db(conn.execute("UPDATE project_purge_manifests SET revision=?2,phase='RemovingBytes',operation_id=?3,body_json=?4 WHERE id=?1 AND phase='Prepared'",params![manifest.id.as_str(),manifest.revision.get(),manifest.operation_id.as_ref().map(|o|o.0.as_str()),serde_json::to_string(&manifest).map_err(|_|invalid("purge manifest"))?]))?;
+    db(conn.execute(
+        "UPDATE project_purge_manifests SET revision=?2,phase='RemovingBytes',\
+        operation_id=?3,body_json=?4 WHERE id=?1 AND phase='Prepared'",
+        params![
+            manifest.id.as_str(),
+            manifest.revision.get(),
+            manifest.operation_id.as_ref().map(|o| o.0.as_str()),
+            serde_json::to_string(&manifest).map_err(|_| invalid("purge manifest"))?
+        ],
+    ))?;
     // All cycles and immutable exceptions are checked before the encompassing unit commits.
     let broken: bool = db(conn.query_row(
         "SELECT EXISTS(SELECT 1 FROM pragma_foreign_key_check)",

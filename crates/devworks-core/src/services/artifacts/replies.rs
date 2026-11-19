@@ -83,6 +83,7 @@ use super::{
 use crate::context::ReceiptIdentity;
 use crate::fingerprint::sha256_hex;
 pub use crate::kernel::reply_intent::{REPLY_AGGREGATE, REPLY_CONSUMER, record_intent};
+use crate::locks::LockExt;
 use crate::ports::Preparation;
 use crate::ports::files::{ArtifactFiles, FileFault, SourceOrigin};
 use crate::ports::storage::{
@@ -115,6 +116,41 @@ fn names_decision(event: &crate::ports::storage::EventRecord, intent: &Intent) -
         && event.aggregate_kind == "command"
         && event.aggregate_id == intent.command_id.0.as_str()
         && &event.actor == intent.identity.actor_id()
+}
+
+/// Fault target kind of a resolution that would abandon a receipt's mandatory reply
+/// (`Conflict`, retry `Never`): cancelling a [`REPLY_CONSUMER`] delivery, or acknowledging one
+/// as poison while it can still be honoured.
+pub const REPLY_REQUIRED: &str = "receipt_reply_required";
+
+/// The queue hook of [`REPLY_CONSUMER`]: a receipt's reply is mandatory, so its delivery is never
+/// cancelled, and is dismissed only when it can never be honoured (it is not a publication
+/// intent, or does not name its receipt's decision). Any other failed reply is retried
+/// (`queue.retry`), never abandoned.
+pub struct ReplyQueueHook;
+
+impl crate::services::queue::ConsumerHook for ReplyQueueHook {
+    fn consumer(&self) -> &'static str {
+        REPLY_CONSUMER
+    }
+
+    fn refuse(
+        &self,
+        tx: &mut dyn WriteTransaction,
+        entry: &QueueEntry,
+        resolution: &crate::protocol::records::QueueResolution,
+    ) -> Result<Option<&'static str>, StorageError> {
+        use crate::protocol::records::QueueResolution as R;
+        let abandons = match resolution {
+            R::CancelBeforeDispatch => true,
+            R::AcknowledgePoison => {
+                entry.state == crate::ports::storage::QueueState::Failed
+                    && !unhonourable(tx, entry)?
+            }
+            R::Retry | R::Reconcile => false,
+        };
+        Ok(abandons.then_some(REPLY_REQUIRED))
+    }
 }
 
 /// Whether a [`REPLY_CONSUMER`] delivery can never be honoured: its payload is not a publication
@@ -259,7 +295,7 @@ impl ReceiptReplies {
         descriptor: &'static OperationDescriptor,
         revision: SchemaRevision,
     ) -> Option<SchemaRef> {
-        let mut cache = self.schemas.lock().unwrap_or_else(|p| p.into_inner());
+        let mut cache = self.schemas.locked();
         if let Some(s) = cache.get(&(descriptor.name, revision)) {
             return Some(s.clone());
         }

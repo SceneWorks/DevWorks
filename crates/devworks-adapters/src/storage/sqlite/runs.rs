@@ -81,7 +81,9 @@ fn inherited_requirements(conn: &Connection, work: &RootId) -> Result<Vec<Id>, S
 // ---------------------------------------------------------------------------------------------
 // Root controls
 
-const CONTROL_COLUMNS: &str = "root_id,desired_state,revision,current_generation,restart_boot_id,instruction_revision,adopted_plan_revision,stop_epoch,stop_operation_id,reactivate,updated_at,stop_generation";
+const CONTROL_COLUMNS: &str = "root_id,desired_state,revision,current_generation,restart_boot_id,\
+    instruction_revision,adopted_plan_revision,stop_epoch,stop_operation_id,\
+    reactivate,updated_at,stop_generation";
 fn control_of(r: &Row<'_>) -> rusqlite::Result<ControlRaw> {
     Ok((
         r.get(0)?,
@@ -148,7 +150,10 @@ fn controls(
 // ---------------------------------------------------------------------------------------------
 // Activations
 
-const ACTIVATION_COLUMNS: &str = "id,root_id,boot_id,generation,phase,purpose,owner_id,lease_until,owner_epoch,revision,attempts,ready_at,created_at,stop_cause,stop_requested_at,stop_acknowledged_at,stopped_at,outcome,detail,plan_revision";
+const ACTIVATION_COLUMNS: &str = "id,root_id,boot_id,generation,phase,purpose,owner_id,lease_until,\
+    owner_epoch,revision,attempts,ready_at,created_at,stop_cause,\
+    stop_requested_at,stop_acknowledged_at,stopped_at,outcome,detail,\
+    plan_revision";
 type ActivationRaw = (
     (String, String, String, i64, String, String, Option<String>),
     (Option<i64>, i64, i64, i64, i64, i64),
@@ -299,7 +304,8 @@ fn write_activation(
 // ---------------------------------------------------------------------------------------------
 // Blockers
 
-const BLOCKER_COLUMNS: &str = "id,root_id,assignment_id,operation_id,cause,origin_id,origin_revision,state,revision,reason,clearance_json,created_at,cleared_at,cleared_by";
+const BLOCKER_COLUMNS: &str = "id,root_id,assignment_id,operation_id,cause,origin_id,origin_revision,\
+    state,revision,reason,clearance_json,created_at,cleared_at,cleared_by";
 type BlockerRaw = (
     (
         String,
@@ -390,7 +396,9 @@ fn state_name(s: BlockerState) -> &'static str {
 // ---------------------------------------------------------------------------------------------
 // Assignments
 
-const ASSIGNMENT_COLUMNS: &str = "id,root_id,work_id,parent_id,session_id,execution_id,state,generation,slot_held,revision,checkpoint_json,scope_key,scope_digest,plan_revision,instruction_revision,created_at,purpose";
+const ASSIGNMENT_COLUMNS: &str = "id,root_id,work_id,parent_id,session_id,execution_id,state,generation,\
+    slot_held,revision,checkpoint_json,scope_key,scope_digest,plan_revision,\
+    instruction_revision,created_at,purpose";
 type AssignmentRaw = (
     (
         String,
@@ -481,7 +489,9 @@ fn assignments(
 // ---------------------------------------------------------------------------------------------
 // Instructions and turns
 
-const INSTRUCTION_COLUMNS: &str = "id,root_id,seq,actor_id,message,attachments_json,control_revision,instruction_revision,stage,received_at,acknowledged_at,acknowledged_by,incorporated_at,disposition_json,session_id,transcript_entry_id,revision";
+const INSTRUCTION_COLUMNS: &str = "id,root_id,seq,actor_id,message,attachments_json,control_revision,\
+    instruction_revision,stage,received_at,acknowledged_at,acknowledged_by,\
+    incorporated_at,disposition_json,session_id,transcript_entry_id,revision";
 type InstructionRaw = (
     (
         String,
@@ -573,7 +583,8 @@ fn turns(
     p: impl rusqlite::Params,
 ) -> Result<Vec<StoredTurn>, StorageError> {
     let mut s = db(conn.prepare_cached(&format!(
-        "SELECT session_id,turn_id,assignment_id,execution_id,owner_epoch,boot_id,started_at FROM session_turns WHERE {filter}"
+        "SELECT session_id,turn_id,assignment_id,execution_id,owner_epoch,\
+            boot_id,started_at FROM session_turns WHERE {filter}"
     )))?;
     let raw: Vec<(String, String, String, String, i64, String, i64)> =
         db(db(s.query_map(p, |r| {
@@ -615,31 +626,76 @@ const LIVE_ASSIGNMENT: &str = "state IN ('Ready','Active','Waiting')";
 macro_rules! run_reads {
     ($t:ty) => {
         impl RunRead for $t {
-            fn agent_assignment_context(&self, assignment: &AssignmentId) -> Result<Option<StoredAgentAssignmentContext>, StorageError> {
+            fn agent_assignment_context(
+                &self,
+                assignment: &AssignmentId,
+            ) -> Result<Option<StoredAgentAssignmentContext>, StorageError> {
                 agent_messages::agent_assignment_context(self.conn, assignment)
             }
             fn agent_message(&self, id: &Id) -> Result<Option<StoredAgentMessage>, StorageError> {
                 agent_messages::message(self.conn, id)
             }
-            fn agent_message_by_key(&self, project: &ProjectId, sender: &ActorId, key: &str) -> Result<Option<StoredAgentMessage>, StorageError> {
+            fn agent_message_by_key(
+                &self,
+                project: &ProjectId,
+                sender: &ActorId,
+                key: &str,
+            ) -> Result<Option<StoredAgentMessage>, StorageError> {
                 agent_messages::by_key(self.conn, project, sender, key)
             }
-            fn agent_messages(&self, project: &ProjectId, before: Option<&Id>, limit: u16) -> Result<Vec<StoredAgentMessage>, StorageError> {
+            fn agent_messages(
+                &self,
+                project: &ProjectId,
+                before: Option<&Id>,
+                limit: u16,
+            ) -> Result<Vec<StoredAgentMessage>, StorageError> {
                 agent_messages::messages(self.conn, project, before, limit)
             }
-            fn unhanded_direct_deliveries(&self, project: &ProjectId, after: i64, limit: u16) -> Result<Vec<(StoredAgentDelivery, StoredAgentMessage)>, StorageError> {
+            fn unhanded_direct_deliveries(
+                &self,
+                project: &ProjectId,
+                after: i64,
+                limit: u16,
+            ) -> Result<Vec<(StoredAgentDelivery, StoredAgentMessage)>, StorageError> {
                 agent_messages::unhanded_direct_deliveries(self.conn, project, after, limit)
             }
-            fn agent_message_history(&self, filter: &AgentMessageHistoryFilter<'_>) -> Result<Vec<(i64, StoredAgentMessage)>, StorageError> {
+            fn agent_message_history(
+                &self,
+                filter: &AgentMessageHistoryFilter<'_>,
+            ) -> Result<Vec<(i64, StoredAgentMessage)>, StorageError> {
                 agent_messages::message_history(self.conn, filter)
             }
-            fn agent_assignment_thread(&self, project: &ProjectId, assignment: &AssignmentId, direction: &str, unacknowledged_only: bool, before: Option<&Id>, limit: u16) -> Result<Vec<(StoredAgentMessage, Option<StoredAgentDelivery>)>, StorageError> {
-                agent_messages::assignment_thread(self.conn, project, assignment, direction, unacknowledged_only, before, limit)
+            fn agent_assignment_thread(
+                &self,
+                project: &ProjectId,
+                assignment: &AssignmentId,
+                direction: &str,
+                unacknowledged_only: bool,
+                before: Option<&Id>,
+                limit: u16,
+            ) -> Result<Vec<(StoredAgentMessage, Option<StoredAgentDelivery>)>, StorageError> {
+                agent_messages::assignment_thread(
+                    self.conn,
+                    project,
+                    assignment,
+                    direction,
+                    unacknowledged_only,
+                    before,
+                    limit,
+                )
             }
-            fn agent_delivery(&self, message: &Id, recipient: Option<&AssignmentId>) -> Result<Option<StoredAgentDelivery>, StorageError> {
+            fn agent_delivery(
+                &self,
+                message: &Id,
+                recipient: Option<&AssignmentId>,
+            ) -> Result<Option<StoredAgentDelivery>, StorageError> {
                 agent_messages::delivery(self.conn, message, recipient)
             }
-            fn agent_session_delivery(&self, message: &Id, session: &Id) -> Result<Option<StoredAgentDelivery>, StorageError> {
+            fn agent_session_delivery(
+                &self,
+                message: &Id,
+                session: &Id,
+            ) -> Result<Option<StoredAgentDelivery>, StorageError> {
                 agent_messages::session_delivery(self.conn, message, session)
             }
             fn agent_recipient_count(&self, message: &Id) -> Result<usize, StorageError> {
@@ -651,16 +707,42 @@ macro_rules! run_reads {
             fn open_blocking_question(&self, item: &RootId) -> Result<bool, StorageError> {
                 agent_messages::open_blocking_question(self.conn, item)
             }
-            fn agent_inbox(&self, project: &ProjectId, recipient: Option<&AssignmentId>, after: i64, include_read: bool, limit: u16) -> Result<Vec<(StoredAgentDelivery, StoredAgentMessage)>, StorageError> {
+            fn agent_inbox(
+                &self,
+                project: &ProjectId,
+                recipient: Option<&AssignmentId>,
+                after: i64,
+                include_read: bool,
+                limit: u16,
+            ) -> Result<Vec<(StoredAgentDelivery, StoredAgentMessage)>, StorageError> {
                 agent_messages::inbox(self.conn, project, recipient, after, include_read, limit)
             }
-            fn agent_session_inbox(&self, project: &ProjectId, session: &Id, after: i64, include_read: bool, limit: u16) -> Result<Vec<(StoredAgentDelivery, StoredAgentMessage)>, StorageError> {
-                agent_messages::session_inbox(self.conn, project, session, after, include_read, limit)
+            fn agent_session_inbox(
+                &self,
+                project: &ProjectId,
+                session: &Id,
+                after: i64,
+                include_read: bool,
+                limit: u16,
+            ) -> Result<Vec<(StoredAgentDelivery, StoredAgentMessage)>, StorageError> {
+                agent_messages::session_inbox(
+                    self.conn,
+                    project,
+                    session,
+                    after,
+                    include_read,
+                    limit,
+                )
             }
             fn agent_delivery_head(&self) -> Result<i64, StorageError> {
                 agent_messages::delivery_head(self.conn)
             }
-            fn agent_message_events(&self, project: &ProjectId, after: i64, limit: u16) -> Result<Vec<StoredAgentMessageEvent>, StorageError> {
+            fn agent_message_events(
+                &self,
+                project: &ProjectId,
+                after: i64,
+                limit: u16,
+            ) -> Result<Vec<StoredAgentMessageEvent>, StorageError> {
                 agent_messages::events(self.conn, project, after, limit)
             }
             fn agent_event_head(&self) -> Result<i64, StorageError> {
@@ -682,7 +764,10 @@ macro_rules! run_reads {
                 let n = page_limit(n)?;
                 controls(
                     self.conn,
-                    "stop_operation_id IS NOT NULL AND root_id>?1 AND EXISTS(SELECT 1 FROM operations o WHERE o.id=stop_operation_id AND o.state NOT IN ('ObservedComplete','Failed','CancelledBeforeDispatch')) ORDER BY root_id LIMIT ?2",
+                    "stop_operation_id IS NOT NULL AND root_id>?1 AND EXISTS(SELECT 1 FROM \
+                        operations o WHERE o.id=stop_operation_id AND o.state NOT IN \
+                        ('ObservedComplete','Failed','CancelledBeforeDispatch')) ORDER BY \
+                        root_id LIMIT ?2",
                     params![after.map_or("", |r| r.0.as_str()), n],
                 )
             }
@@ -716,12 +801,14 @@ macro_rules! run_reads {
                     // absent; a root's activations page by descending generation.
                     ActivationFilter::Root(root) => activations(
                         self.conn,
-                        "root_id=?1 AND (?2='' OR generation<(SELECT generation FROM executions WHERE id=?2)) ORDER BY generation DESC LIMIT ?3",
+                        "root_id=?1 AND (?2='' OR generation<(SELECT generation FROM executions \
+                            WHERE id=?2)) ORDER BY generation DESC LIMIT ?3",
                         params![root.0.as_str(), after, n],
                     ),
                     ActivationFilter::Claimable { boot, now_ms } => activations(
                         self.conn,
-                        "phase='Pending' AND boot_id=?1 AND ready_at<=?2 AND id>?3 ORDER BY id LIMIT ?4",
+                        "phase='Pending' AND boot_id=?1 AND ready_at<=?2 AND id>?3 ORDER BY id \
+                            LIMIT ?4",
                         params![boot.as_str(), now_ms, after, n],
                     ),
                     ActivationFilter::LivePriorBoots(boot) => activations(
@@ -737,7 +824,9 @@ macro_rules! run_reads {
                 }
             }
             fn blocker(&self, id: &Id) -> Result<Option<StoredBlocker>, StorageError> {
-                Ok(blockers(self.conn, "id=?1", [id.as_str()])?.into_iter().next())
+                Ok(blockers(self.conn, "id=?1", [id.as_str()])?
+                    .into_iter()
+                    .next())
             }
             fn blockers(
                 &self,
@@ -756,7 +845,8 @@ macro_rules! run_reads {
                     BlockerFilter::Assignment(a) => ("assignment_id=?1", a.0.as_str()),
                     BlockerFilter::Operation(o) => ("operation_id=?1", o.0.as_str()),
                     BlockerFilter::RootLevelCause(c) => (
-                        "cause=?1 AND root_id IS NOT NULL AND assignment_id IS NULL AND operation_id IS NULL",
+                        "cause=?1 AND root_id IS NOT NULL AND assignment_id IS NULL AND \
+                            operation_id IS NULL",
                         c.as_str(),
                     ),
                 };
@@ -766,17 +856,35 @@ macro_rules! run_reads {
                     params![subject, after, n],
                 )
             }
-            fn inference_quiescent(&self,root:&RootId)->Result<bool,StorageError>{
-                db(self.conn.query_row("SELECT NOT EXISTS(SELECT 1 FROM usage_attempts a LEFT JOIN usage_attempt_balances b ON b.attempt_id=a.attempt_id WHERE a.execution_root_id=?1 AND coalesce(b.local_quiescent,0)=0)",[root.0.as_str()],|r|r.get(0)))
+            fn inference_quiescent(&self, root: &RootId) -> Result<bool, StorageError> {
+                db(self.conn.query_row(
+                    "SELECT NOT EXISTS(SELECT 1 FROM usage_attempts a LEFT JOIN \
+                    usage_attempt_balances b ON b.attempt_id=a.attempt_id WHERE \
+                    a.execution_root_id=?1 AND coalesce(b.local_quiescent,0)=0)",
+                    [root.0.as_str()],
+                    |r| r.get(0),
+                ))
             }
-            fn assignment_handoff_quiescent(&self,assignment:&AssignmentId)->Result<bool,StorageError>{
-                super::handoff::quiescent(self.conn,assignment)
+            fn assignment_handoff_quiescent(
+                &self,
+                assignment: &AssignmentId,
+            ) -> Result<bool, StorageError> {
+                super::handoff::quiescent(self.conn, assignment)
             }
-            fn work_inherited_requirements(&self,work:&RootId)->Result<Vec<Id>,StorageError>{
-                inherited_requirements(self.conn,work)
+            fn work_inherited_requirements(&self, work: &RootId) -> Result<Vec<Id>, StorageError> {
+                inherited_requirements(self.conn, work)
             }
-            fn live_assignment_for_work(&self,work:&RootId)->Result<Option<StoredAssignment>,StorageError>{
-                Ok(assignments(self.conn,&format!("work_id=?1 AND purpose='Primary' AND {LIVE_ASSIGNMENT} LIMIT 1"),[work.0.as_str()])?.into_iter().next())
+            fn live_assignment_for_work(
+                &self,
+                work: &RootId,
+            ) -> Result<Option<StoredAssignment>, StorageError> {
+                Ok(assignments(
+                    self.conn,
+                    &format!("work_id=?1 AND purpose='Primary' AND {LIVE_ASSIGNMENT} LIMIT 1"),
+                    [work.0.as_str()],
+                )?
+                .into_iter()
+                .next())
             }
             fn assignment(
                 &self,
@@ -843,7 +951,8 @@ macro_rules! run_reads {
                 let raw: Option<(i64, Option<String>, Option<i64>)> = db(self
                     .conn
                     .query_row(
-                        "SELECT revision,approved_plan_json,pending_revision FROM feature_plans WHERE feature_id=?1",
+                        "SELECT revision,approved_plan_json,pending_revision FROM feature_plans \
+                            WHERE feature_id=?1",
                         [feature.0.as_str()],
                         |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
                     )
@@ -858,8 +967,8 @@ macro_rules! run_reads {
                     .map_err(|e| {
                         StorageError::unavailable(Unavailable::Corrupt, format!("stored plan: {e}"))
                     })?;
-                let readiness = super::work::readiness_of(self.conn, &feature.0)?
-                    .map(|r| (r.revision, r.body));
+                let readiness =
+                    super::work::readiness_of(self.conn, &feature.0)?.map(|r| (r.revision, r.body));
                 Ok(Some(StoredPlanState {
                     revision,
                     approved: approved_plan.is_some(),
@@ -868,10 +977,7 @@ macro_rules! run_reads {
                     readiness,
                 }))
             }
-            fn work_parent(
-                &self,
-                work: &RootId,
-            ) -> Result<Option<Option<RootId>>, StorageError> {
+            fn work_parent(&self, work: &RootId) -> Result<Option<Option<RootId>>, StorageError> {
                 let raw: Option<Option<String>> = db(self
                     .conn
                     .query_row(
@@ -921,7 +1027,9 @@ macro_rules! run_reads {
                 let n = page_limit(n)?;
                 Ok(ids(
                     self.conn,
-                    "SELECT id FROM work_items WHERE project_id=?1 AND (kind='feature' OR parent_feature_id IS NULL OR EXISTS(SELECT 1 FROM root_controls rc WHERE rc.root_id=work_items.id)) AND id>?2 ORDER BY id LIMIT ?3",
+                    "SELECT id FROM work_items WHERE project_id=?1 AND (kind='feature' OR \
+                        parent_feature_id IS NULL OR EXISTS(SELECT 1 FROM root_controls rc \
+                        WHERE rc.root_id=work_items.id)) AND id>?2 ORDER BY id LIMIT ?3",
                     params![project.0.as_str(), after.map_or("", |r| r.0.as_str()), n],
                 )?
                 .into_iter()
@@ -937,7 +1045,8 @@ macro_rules! run_reads {
                 let n = page_limit(n)?;
                 ids(
                     self.conn,
-                    "SELECT id FROM queue_entries WHERE root_id=?1 AND state IN ('Ready','Claimed','Reconciling','Failed') AND id>?2 ORDER BY id LIMIT ?3",
+                    "SELECT id FROM queue_entries WHERE root_id=?1 AND state IN ('Ready',\
+                        'Claimed','Reconciling','Failed') AND id>?2 ORDER BY id LIMIT ?3",
                     params![root.0.as_str(), after.map_or("", Id::as_str), n],
                 )
             }
@@ -964,7 +1073,8 @@ fn coverage(
     n: i64,
 ) -> Result<Vec<StoredStopCoverage>, StorageError> {
     let mut s = db(conn.prepare_cached(
-        "SELECT root_id,generation,reactivate FROM stop_coverage WHERE operation_id=?1 AND root_id>?2 ORDER BY root_id LIMIT ?3",
+        "SELECT root_id,generation,reactivate FROM stop_coverage WHERE \
+            operation_id=?1 AND root_id>?2 ORDER BY root_id LIMIT ?3",
     ))?;
     let raw: Vec<(String, i64, bool)> = db(db(s
         .query_map(params![op.0.as_str(), after, n], |r| {
@@ -1046,7 +1156,10 @@ impl RunRepository for Unit<'_> {
             return Err(duplicate("root_control", c.root_id.0.as_str()));
         }
         db(self.conn.execute(
-            &format!("INSERT INTO root_controls({CONTROL_COLUMNS}) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12)"),
+            &format!(
+                "INSERT INTO root_controls({CONTROL_COLUMNS}) VALUES(?1,?2,?3,?4,?5,?6,\
+                ?7,?8,?9,?10,?11,?12)"
+            ),
             params![
                 c.root_id.0.as_str(),
                 c.desired.as_str(),
@@ -1091,7 +1204,11 @@ impl RunRepository for Unit<'_> {
             ));
         }
         db(self.conn.execute(
-            "UPDATE root_controls SET desired_state=?2,revision=?3,current_generation=?4,restart_boot_id=?5,instruction_revision=?6,adopted_plan_revision=?7,stop_epoch=?8,stop_operation_id=?9,reactivate=?10,updated_at=?11,stop_generation=?13 WHERE root_id=?1 AND revision=?12",
+            "UPDATE root_controls SET desired_state=?2,revision=?3,\
+                current_generation=?4,restart_boot_id=?5,instruction_revision=?6,\
+                adopted_plan_revision=?7,stop_epoch=?8,stop_operation_id=?9,\
+                reactivate=?10,updated_at=?11,stop_generation=?13 WHERE root_id=?1 AND \
+                revision=?12",
             params![
                 c.root_id.0.as_str(),
                 c.desired.as_str(),
@@ -1118,7 +1235,10 @@ impl RunRepository for Unit<'_> {
         write_activation(
             self.conn,
             a,
-            &format!("INSERT INTO executions({ACTIVATION_COLUMNS}) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20)"),
+            &format!(
+                "INSERT INTO executions({ACTIVATION_COLUMNS}) VALUES(?1,?2,?3,?4,?5,?6,\
+                ?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20)"
+            ),
             None,
         )
         .map(|_| ())
@@ -1159,7 +1279,11 @@ impl RunRepository for Unit<'_> {
         write_activation(
             self.conn,
             a,
-            "UPDATE executions SET root_id=?2,boot_id=?3,generation=?4,phase=?5,purpose=?6,owner_id=?7,lease_until=?8,owner_epoch=?9,revision=?10,attempts=?11,ready_at=?12,created_at=?13,stop_cause=?14,stop_requested_at=?15,stop_acknowledged_at=?16,stopped_at=?17,outcome=?18,detail=?19,plan_revision=?20 WHERE id=?1 AND revision=?21",
+            "UPDATE executions SET root_id=?2,boot_id=?3,generation=?4,phase=?5,\
+                purpose=?6,owner_id=?7,lease_until=?8,owner_epoch=?9,revision=?10,\
+                attempts=?11,ready_at=?12,created_at=?13,stop_cause=?14,\
+                stop_requested_at=?15,stop_acknowledged_at=?16,stopped_at=?17,\
+                outcome=?18,detail=?19,plan_revision=?20 WHERE id=?1 AND revision=?21",
             Some(expected),
         )
         .map(|_| ())
@@ -1176,7 +1300,10 @@ impl RunRepository for Unit<'_> {
             return Err(invalid("a blocker names its root, assignment or operation"));
         }
         db(self.conn.execute(
-            &format!("INSERT INTO blockers({BLOCKER_COLUMNS}) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14)"),
+            &format!(
+                "INSERT INTO blockers({BLOCKER_COLUMNS}) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,\
+                ?9,?10,?11,?12,?13,?14)"
+            ),
             params![
                 b.id.as_str(),
                 b.root_id.as_ref().map(|r| r.0.as_str()),
@@ -1225,7 +1352,8 @@ impl RunRepository for Unit<'_> {
             ));
         }
         db(self.conn.execute(
-            "UPDATE blockers SET state=?2,revision=?3,reason=?4,clearance_json=?5,cleared_at=?6,cleared_by=?7 WHERE id=?1 AND revision=?8",
+            "UPDATE blockers SET state=?2,revision=?3,reason=?4,clearance_json=?5,\
+                cleared_at=?6,cleared_by=?7 WHERE id=?1 AND revision=?8",
             params![
                 b.id.as_str(),
                 state_name(b.state),
@@ -1250,7 +1378,10 @@ impl RunRepository for Unit<'_> {
             bounded("scope key", k, 256)?;
         }
         db(self.conn.execute(
-            &format!("INSERT INTO assignments({ASSIGNMENT_COLUMNS}) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17)"),
+            &format!(
+                "INSERT INTO assignments({ASSIGNMENT_COLUMNS}) VALUES(?1,?2,?3,?4,?5,?6,\
+                ?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17)"
+            ),
             params![
                 a.id.0.as_str(),
                 a.root_id.0.as_str(),
@@ -1307,7 +1438,10 @@ impl RunRepository for Unit<'_> {
             ));
         }
         db(self.conn.execute(
-            "UPDATE assignments SET session_id=?2,execution_id=?3,state=?4,generation=?5,slot_held=?6,revision=?7,checkpoint_json=?8,scope_key=?9,scope_digest=?10,plan_revision=?11,instruction_revision=?12 WHERE id=?1 AND revision=?13",
+            "UPDATE assignments SET session_id=?2,execution_id=?3,state=?4,\
+                generation=?5,slot_held=?6,revision=?7,checkpoint_json=?8,scope_key=?9,\
+                scope_digest=?10,plan_revision=?11,instruction_revision=?12 WHERE id=?1 \
+                AND revision=?13",
             params![
                 a.id.0.as_str(),
                 a.session_id.as_str(),
@@ -1349,7 +1483,10 @@ impl RunRepository for Unit<'_> {
             ));
         }
         db(self.conn.execute(
-            &format!("INSERT INTO run_instructions({INSTRUCTION_COLUMNS}) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17)"),
+            &format!(
+                "INSERT INTO run_instructions({INSTRUCTION_COLUMNS}) VALUES(?1,?2,?3,?4,\
+                ?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17)"
+            ),
             params![
                 i.id.as_str(),
                 i.root_id.0.as_str(),
@@ -1405,7 +1542,9 @@ impl RunRepository for Unit<'_> {
             ));
         }
         db(self.conn.execute(
-            "UPDATE run_instructions SET stage=?2,acknowledged_at=?3,acknowledged_by=?4,incorporated_at=?5,disposition_json=?6,session_id=?7,transcript_entry_id=?8,revision=?9 WHERE id=?1 AND revision=?10",
+            "UPDATE run_instructions SET stage=?2,acknowledged_at=?3,\
+                acknowledged_by=?4,incorporated_at=?5,disposition_json=?6,session_id=?7,\
+                transcript_entry_id=?8,revision=?9 WHERE id=?1 AND revision=?10",
             params![
                 i.id.as_str(),
                 i.stage.as_str(),
@@ -1426,7 +1565,8 @@ impl RunRepository for Unit<'_> {
             return Err(duplicate("session_turn", t.session_id.as_str()));
         }
         db(self.conn.execute(
-            "INSERT INTO session_turns(session_id,turn_id,assignment_id,execution_id,owner_epoch,boot_id,started_at) VALUES(?1,?2,?3,?4,?5,?6,?7)",
+            "INSERT INTO session_turns(session_id,turn_id,assignment_id,execution_id,\
+                owner_epoch,boot_id,started_at) VALUES(?1,?2,?3,?4,?5,?6,?7)",
             params![
                 t.session_id.as_str(),
                 t.turn_id.as_str(),
@@ -1459,7 +1599,9 @@ impl RunRepository for Unit<'_> {
             ));
         }
         db(self.conn.execute(
-            "INSERT INTO stop_coverage(operation_id,root_id,generation,reactivate) VALUES(?1,?2,?3,?4) ON CONFLICT(operation_id,root_id) DO UPDATE SET generation=excluded.generation,reactivate=excluded.reactivate",
+            "INSERT INTO stop_coverage(operation_id,root_id,generation,reactivate) \
+                VALUES(?1,?2,?3,?4) ON CONFLICT(operation_id,root_id) DO UPDATE SET \
+                generation=excluded.generation,reactivate=excluded.reactivate",
             params![
                 c.operation_id.0.as_str(),
                 c.root_id.0.as_str(),

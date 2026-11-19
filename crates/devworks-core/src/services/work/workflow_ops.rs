@@ -387,7 +387,12 @@ impl WorkService {
             ctx,
             &i.project_id,
             "WorkflowStatusRemoved",
-            json!({"statusId":before.id,"destinationStatusId":destination.id,"affectedWorkCount":affected.len(),"affectedWorkDigest":i.expected_affected_work_digest}),
+            json!({
+                "statusId": before.id,
+                "destinationStatusId": destination.id,
+                "affectedWorkCount": affected.len(),
+                "affectedWorkDigest": i.expected_affected_work_digest
+            }),
         )?;
         Ok(DomainDecision::Applied {
             result: OperationResult::WorkflowsReassignAndRemove {

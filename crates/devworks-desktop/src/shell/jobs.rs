@@ -6,6 +6,7 @@ use crate::jobs_ops::JobsSlot;
 pub use crate::jobs_screen::*;
 use crate::memory::RouteMemory;
 use crate::ops::{self, Failure, JobChange, JobCommand};
+use crate::paged::Applied;
 use crate::route::Route;
 use crate::screen::{Cx, Screen, ScreenContext, ScreenId, controller};
 use crate::theme;
@@ -29,7 +30,7 @@ impl Screen for JobsUi {
     }
     /// Run status moves while the screen is open (claims, runs, cancellations).
     fn refresh(&mut self, cx: &mut Cx, _route: Route) {
-        if !cx.pending(&JobsSlot::JobsList) && self.list_refresh.is_none() {
+        if !cx.pending(&JobsSlot::JobsList) && !self.list.loading() {
             JobsCtl { jobs: self, cx }.load_jobs();
         }
     }
@@ -80,16 +81,23 @@ impl JobsUi {
 
 impl JobsCtl<'_, '_> {
     fn load_jobs(&mut self) {
-        let scope = self.jobs.scope.clone();
-        self.query(
-            JobsSlot::JobsList,
-            "Loading scheduled jobs",
-            "jobs.list",
-            move |b| ops::jobs_list(b, scope.as_deref()),
-        );
+        // A refresh re-reads every page shown (or asked for), so an expanded list stays so.
+        let fetch = self.jobs.list.refresh();
+        self.send_jobs(fetch, JobsSlot::JobsList, "Loading scheduled jobs");
         if let Some(j) = self.jobs.selected.clone() {
             self.load_job(&j);
         }
+    }
+    fn send_jobs(&mut self, fetch: crate::paged::Fetch, slot: JobsSlot, label: &str) {
+        let scope = self.jobs.scope.clone();
+        self.cx.paged(
+            &mut self.jobs.list,
+            fetch,
+            slot,
+            label,
+            "jobs.list",
+            move |b, cursor| ops::jobs_list_after(b, scope.as_deref(), cursor),
+        );
     }
     /// The run status of a project's jobs, for its sidebar on All projects.
     fn load_project_jobs(&mut self, project: &str) {
@@ -100,20 +108,6 @@ impl JobsCtl<'_, '_> {
             "jobs.list",
             move |b| ops::jobs_list(b, Some(&p)),
         );
-    }
-    /// Reads the next page of the jobs refresh `generation`, after `cursor`.
-    fn refresh_next_jobs(&mut self, generation: u64, cursor: String) {
-        let scope = self.jobs.scope.clone();
-        let submitted = self.query(
-            JobsSlot::JobsRefresh(generation),
-            "Loading scheduled jobs",
-            "jobs.list",
-            move |b| ops::jobs_list_after(b, scope.as_deref(), Some(&cursor)),
-        );
-        if !submitted {
-            // Offline or closing: the shown list stays as it was.
-            self.jobs.list_refresh = None;
-        }
     }
     fn load_job(&mut self, job: &str) {
         let j = job.to_owned();
@@ -129,17 +123,9 @@ impl JobsCtl<'_, '_> {
             match a {
                 JobAction::Reload => self.load_jobs(),
                 JobAction::MoreJobs => {
-                    let (scope, Some(cursor)) =
-                        (self.jobs.scope.clone(), self.jobs.list_cursor.clone())
-                    else {
-                        continue;
-                    };
-                    let slot = JobsSlot::JobsMore(self.jobs.list_generation);
-                    if self.query(slot, "Loading more jobs", "jobs.list", move |b| {
-                        ops::jobs_list_after(b, scope.as_deref(), Some(&cursor))
-                    }) {
-                        self.jobs.list_requested_pages =
-                            self.jobs.list_requested_pages.max(self.jobs.list_pages + 1);
+                    if let Some(fetch) = self.jobs.list.more_page() {
+                        let slot = JobsSlot::JobsMore(fetch.generation);
+                        self.send_jobs(fetch, slot, "Loading more jobs");
                     }
                 }
                 JobAction::Scope(s) => {
@@ -151,38 +137,46 @@ impl JobsCtl<'_, '_> {
                     self.load_job(&id);
                 }
                 JobAction::OlderRuns => {
-                    let (Some(job), Some(cursor)) = (
-                        self.jobs.selected.clone(),
-                        self.jobs.older_cursor.clone().or_else(|| {
-                            self.jobs
-                                .inspection
-                                .as_ref()
-                                .and_then(|i| i.runs_next_cursor.as_ref())
-                                .map(|c| c.0.clone())
-                        }),
-                    ) else {
+                    let Some(job) = self.jobs.selected.clone() else {
                         continue;
                     };
-                    self.query(
-                        JobsSlot::JobHistory(job.clone()),
+                    // The first older page continues after the cursor the inspection carries.
+                    let fetch = if self.jobs.older.loaded {
+                        self.jobs.older.more_page()
+                    } else {
+                        self.jobs
+                            .inspection
+                            .as_ref()
+                            .and_then(|i| i.runs_next_cursor.as_ref())
+                            .map(|c| c.0.clone())
+                            .map(|cursor| self.jobs.older.continue_from(cursor))
+                    };
+                    let Some(fetch) = fetch else {
+                        continue;
+                    };
+                    let slot = JobsSlot::JobHistory(job.clone());
+                    self.cx.paged(
+                        &mut self.jobs.older,
+                        fetch,
+                        slot,
                         "Loading older runs",
                         "jobs.inspect",
-                        move |b| ops::jobs_inspect(b, &job, Some(&cursor)),
+                        move |b, cursor| ops::jobs_inspect(b, &job, cursor),
                     );
                 }
                 JobAction::MorePrompts(project) => {
-                    if let Some(cursor) = self
+                    if self
                         .jobs
                         .prompt_pages
                         .get(&project)
-                        .and_then(|p| p.cursor.clone())
+                        .is_some_and(|p| p.more())
                     {
-                        self.load_prompt_page(project, Some(cursor));
+                        self.load_prompt_page(project, true);
                     }
                 }
                 JobAction::RetryPrompts(project) => {
                     self.jobs.prompt_pages.remove(&project);
-                    self.load_prompt_page(project, None);
+                    self.load_prompt_page(project, false);
                 }
                 JobAction::NewJob => {
                     self.jobs.capabilities = self
@@ -263,6 +257,21 @@ impl JobsCtl<'_, '_> {
         }
     }
 
+    /// Applies one page of the jobs list: of the request `generation` named, or of the newest
+    /// first-page request. A refresh that needs a further page asks for it.
+    fn jobs_page_applied(
+        &mut self,
+        generation: Option<u64>,
+        page: Result<crate::paged::Page<devworks_core::protocol::records::JobRecord>, String>,
+    ) {
+        let key = |j: &devworks_core::protocol::records::JobRecord| j.id.as_str().to_owned();
+        let generation = generation.unwrap_or_else(|| self.jobs.list.generation());
+        if let Applied::Continue(fetch) = self.jobs.list.apply_unique(generation, page, key) {
+            let slot = JobsSlot::JobsRefresh(fetch.generation);
+            self.send_jobs(fetch, slot, "Loading scheduled jobs");
+        }
+    }
+
     /// Applies a jobs reply; anything else is handed back.
     fn apply_jobs(
         &mut self,
@@ -271,68 +280,18 @@ impl JobsCtl<'_, '_> {
     ) -> Option<(JobsSlot, crate::backend::Reply)> {
         use crate::backend::Reply;
         match (slot, reply) {
-            (JobsSlot::JobsList, Reply::Query(q)) => match ops::jobs_page(q) {
-                // More pages are shown or requested: read them before replacing the list,
-                // including a More jobs response that this refresh will make stale.
-                Ok((items, Some(cursor)))
-                    if self.jobs.list_pages.max(self.jobs.list_requested_pages) > 1 =>
-                {
-                    let generation = self.jobs.generation();
-                    self.jobs.list_refresh = Some(ListRefresh {
-                        generation,
-                        pages: 1,
-                        items,
-                    });
-                    self.refresh_next_jobs(generation, cursor);
-                }
-                Ok((items, cursor)) => self.jobs.show_list(items, cursor, 1),
-                Err(e) => {
-                    self.jobs.list_refresh = None;
-                    self.jobs.list.error = Some(e.describe());
-                }
-            },
-            (JobsSlot::JobsRefresh(g), reply) => {
-                if self.jobs.list_refresh.as_ref().map(|r| r.generation) != Some(g) {
-                    return None;
-                }
+            (JobsSlot::JobsList, Reply::Query(q)) => {
+                let page = ops::jobs_page(q).map_err(|e| e.describe());
+                self.jobs_page_applied(None, page);
+            }
+            // A page of a list since replaced continues none of it: the list refuses it.
+            (JobsSlot::JobsRefresh(g) | JobsSlot::JobsMore(g), reply) => {
                 let page = match reply {
                     Reply::Query(q) => ops::jobs_page(q).map_err(|e| e.describe()),
                     _ => Err("the jobs list could not be read".into()),
                 };
-                match page {
-                    Ok((items, cursor)) => {
-                        let mut refresh = self.jobs.list_refresh.take()?;
-                        append_jobs(&mut refresh.items, items);
-                        refresh.pages += 1;
-                        // Include pages requested while this refresh was in flight.
-                        match cursor {
-                            Some(c)
-                                if refresh.pages
-                                    < self.jobs.list_pages.max(self.jobs.list_requested_pages) =>
-                            {
-                                self.jobs.list_refresh = Some(refresh);
-                                self.refresh_next_jobs(g, c);
-                            }
-                            cursor => self.jobs.show_list(refresh.items, cursor, refresh.pages),
-                        }
-                    }
-                    Err(e) => {
-                        self.jobs.list_refresh = None;
-                        self.jobs.list.error = Some(e);
-                    }
-                }
+                self.jobs_page_applied(Some(g), page);
             }
-            // A page asked for a list since replaced continues none of it.
-            (JobsSlot::JobsMore(g), Reply::Query(_)) if g != self.jobs.list_generation => {}
-            (JobsSlot::JobsMore(_), Reply::Query(q)) => match ops::jobs_page(q) {
-                Ok((items, cursor)) => {
-                    append_jobs(&mut self.jobs.list.items, items);
-                    self.jobs.list.more = cursor.is_some();
-                    self.jobs.list_cursor = cursor;
-                    self.jobs.list_pages += 1;
-                }
-                Err(e) => self.jobs.list.error = Some(e.describe()),
-            },
             (JobsSlot::ProjectJobs(p), Reply::Query(q)) => {
                 let line = match ops::jobs(q) {
                     Ok((items, more)) => status_line(&items, more),
@@ -366,13 +325,13 @@ impl JobsCtl<'_, '_> {
                         // Older pages already loaded continue after the previous first page:
                         // runs that moved off the refreshed first page join them, so none falls
                         // into a gap at the boundary.
-                        if self.jobs.older_cursor.is_some()
+                        if self.jobs.older.loaded
                             && let Some(before) = &self.jobs.inspection
                         {
                             reconcile_history(
                                 before.runs.as_ref().map_or(&[][..], |r| &r.0[..]),
                                 i.runs.as_ref().map_or(&[][..], |r| &r.0[..]),
-                                &mut self.jobs.older,
+                                &mut self.jobs.older.items,
                             );
                         }
                         self.jobs.inspection = Some(i);
@@ -388,24 +347,14 @@ impl JobsCtl<'_, '_> {
                 if generation != self.jobs.prompt_generation || self.jobs.form.is_none() {
                     return None;
                 }
-                let page = self.jobs.prompt_pages.entry(project).or_default();
-                page.loading = false;
-                match ops::prompt_artifact_page(q) {
-                    Ok((items, cursor)) => {
-                        for item in items {
-                            if !page
-                                .items
-                                .iter()
-                                .any(|old| old.artifact.artifact_id == item.artifact.artifact_id)
-                            {
-                                page.items.push(item);
-                            }
-                        }
-                        page.cursor = cursor;
-                        page.error = None;
-                    }
-                    Err(error) => page.error = Some(error.describe()),
-                }
+                let page = ops::prompt_artifact_page(q)
+                    .map(|(items, next)| crate::paged::Page::new(items, next))
+                    .map_err(|e| e.describe());
+                let list = self.jobs.prompt_pages.entry(project).or_default();
+                // Prompts listed on two pages (the list moved between reads) show once.
+                list.apply_current_unique(page, |item| {
+                    item.artifact.artifact_id.as_str().to_owned()
+                });
             }
             (JobsSlot::JobActiveRun(j), Reply::Query(q)) => {
                 if self.jobs.selected.as_deref() != Some(j.as_str()) {
@@ -432,16 +381,16 @@ impl JobsCtl<'_, '_> {
                 }
                 match ops::job_inspection(q) {
                     Ok(i) => {
+                        let runs = i.runs.map(|r| r.0).unwrap_or_default();
+                        let next = i.runs_next_cursor.map(|c| c.0);
                         self.jobs
                             .older
-                            .extend(i.runs.map(|r| r.0).unwrap_or_default());
-                        self.jobs.older_cursor = i.runs_next_cursor.map(|c| c.0);
-                        if self.jobs.older_cursor.is_none() {
-                            // The last page: nothing more to load.
-                            self.jobs.older_cursor = Some(String::new());
-                        }
+                            .apply_current(Ok(crate::paged::Page::new(runs, next)));
                     }
-                    Err(e) => self.jobs.inspection_error = Some(e.describe()),
+                    Err(e) => {
+                        self.jobs.older.apply_current(Err(e.describe()));
+                        self.jobs.inspection_error = Some(e.describe());
+                    }
                 }
             }
             (slot @ (JobsSlot::JobCommand(_) | JobsSlot::JobCreate), Reply::Command(c)) => {
@@ -528,7 +477,7 @@ impl JobsCtl<'_, '_> {
             .then(|| target.to_owned())
         })
     }
-    fn load_prompt_page(&mut self, project: Option<String>, cursor: Option<String>) {
+    fn load_prompt_page(&mut self, project: Option<String>, append: bool) {
         if self.jobs.form.is_none() {
             return;
         }
@@ -536,11 +485,24 @@ impl JobsCtl<'_, '_> {
         if self.pending(&slot) {
             return;
         }
+        let list = self.jobs.prompt_pages.entry(project.clone()).or_default();
+        let Some(fetch) = (if append {
+            list.more_page()
+        } else {
+            Some(list.reload())
+        }) else {
+            return;
+        };
         let scope = project.clone();
-        if self.query(slot, "Loading saved prompts", "artifacts.list", move |b| {
-            ops::prompt_artifacts(b, scope.as_deref(), cursor.as_deref())
-        }) {
-            self.jobs.prompt_pages.entry(project).or_default().loading = true;
+        if let Some(list) = self.jobs.prompt_pages.get_mut(&project) {
+            self.cx.paged(
+                list,
+                fetch,
+                slot,
+                "Loading saved prompts",
+                "artifacts.list",
+                move |b, cursor| ops::prompt_artifacts(b, scope.as_deref(), cursor),
+            );
         }
     }
     fn load_prompt_candidates(&mut self) {
@@ -553,7 +515,7 @@ impl JobsCtl<'_, '_> {
         }
         for scope in scopes {
             if !self.jobs.prompt_pages.contains_key(&scope) {
-                self.load_prompt_page(scope, None);
+                self.load_prompt_page(scope, false);
             }
         }
     }
@@ -660,24 +622,24 @@ impl JobsCtl<'_, '_> {
                             } else {
                                 "workspace"
                             };
-                            if page.loading {
+                            if page.loading() {
                                 widgets::caption(ui, format!("Loading {name} prompts…"));
                             }
                             if let Some(error) = &page.error {
                                 widgets::caption(ui, error);
                                 if ui
                                     .add_enabled(
-                                        !page.loading,
+                                        !page.loading(),
                                         egui::Button::new(format!("Reload {name} prompts")),
                                     )
                                     .clicked()
                                 {
                                     st.1.push(JobAction::RetryPrompts(scope.clone()));
                                 }
-                            } else if page.cursor.is_some()
+                            } else if page.more()
                                 && ui
                                     .add_enabled(
-                                        !page.loading,
+                                        !page.loading(),
                                         egui::Button::new(format!("Load more {name} prompts")),
                                     )
                                     .clicked()

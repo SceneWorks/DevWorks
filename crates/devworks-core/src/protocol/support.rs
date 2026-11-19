@@ -128,7 +128,9 @@ impl JsonSchema for GraphUnitKey {
         "GraphUnitKey".into()
     }
     fn json_schema(_: &mut SchemaGenerator) -> Schema {
-        json_schema!({"type":"string","minLength":1,"maxLength":4096,"description":"Exact canonical indexed unit: / for root, /path for a directory, or a relative file path; no backslashes, drive prefixes, empty/dot/dot-dot segments or NUL."})
+        json_schema!({"type":"string","minLength":1,"maxLength":4096,"description":"Exact canonical indexed unit: / for root, /path for a directory, or a \
+            relative file path; no backslashes, drive prefixes, empty/dot/dot-dot \
+            segments or NUL."})
     }
 }
 impl Check for GraphUnitKey {
@@ -318,13 +320,40 @@ pub fn gated_member<'de, D: Deserializer<'de>, T: Deserialize<'de>>(
         .ok_or_else(|| D::Error::custom("a revision-gated member is omitted, never null"))
 }
 macro_rules! int_bound {($n:ident,$lo:expr,$hi:expr)=>{
- #[derive(Clone,Debug,Serialize)]#[serde(transparent)]pub struct $n(u32);
- impl<'de> Deserialize<'de> for $n{fn deserialize<D:Deserializer<'de>>(d:D)->Result<Self,D::Error>{let x=u32::deserialize(d)?;if !($lo..=$hi).contains(&x){return Err(D::Error::custom("integer bound"))}Ok(Self(x))}}
- impl JsonSchema for $n{fn schema_name()->Cow<'static,str>{stringify!($n).into()}fn json_schema(_: &mut SchemaGenerator)->Schema{json_schema!({"type":"integer","minimum":$lo,"maximum":$hi})}}
- impl Check for $n{fn check(&self)->Result<(),String>{Ok(())}}
- impl $n{pub fn get(&self)->u32{self.0}
-  /// The value when it lies within the contract bound.
-  pub fn new(x:u32)->Option<Self>{($lo..=$hi).contains(&x).then_some(Self(x))}}
+    #[derive(Clone, Debug, Serialize)]
+    #[serde(transparent)]
+    pub struct $n(u32);
+    impl<'de> Deserialize<'de> for $n {
+        fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+            let x = u32::deserialize(d)?;
+            if !($lo..=$hi).contains(&x) {
+                return Err(D::Error::custom("integer bound"));
+            }
+            Ok(Self(x))
+        }
+    }
+    impl JsonSchema for $n {
+        fn schema_name() -> Cow<'static, str> {
+            stringify!($n).into()
+        }
+        fn json_schema(_: &mut SchemaGenerator) -> Schema {
+            json_schema!({"type":"integer","minimum":$lo,"maximum":$hi})
+        }
+    }
+    impl Check for $n {
+        fn check(&self) -> Result<(), String> {
+            Ok(())
+        }
+    }
+    impl $n {
+        pub fn get(&self) -> u32 {
+            self.0
+        }
+        /// The value when it lies within the contract bound.
+        pub fn new(x: u32) -> Option<Self> {
+            ($lo..=$hi).contains(&x).then_some(Self(x))
+        }
+    }
 };}
 int_bound!(Limit, 1, 500);
 int_bound!(Depth, 0, 32);
@@ -333,10 +362,31 @@ int_bound!(ByteLimit, 1, 1048576);
 // A briefing's estimated-token cap (`sessions.briefing` `budgetTokens`, schema revision 2).
 int_bound!(TokenBudget, 1, 1000000);
 macro_rules! text_rule {($n:ident,$pattern:expr,$validate:expr)=>{
- #[derive(Clone,Debug,Serialize)]#[serde(transparent)]pub struct $n(pub String);
- impl<'de> Deserialize<'de> for $n{fn deserialize<D:Deserializer<'de>>(d:D)->Result<Self,D::Error>{let s=String::deserialize(d)?;if !($validate)(&s){return Err(D::Error::custom(concat!("invalid ",stringify!($n))))}Ok(Self(s))}}
- impl JsonSchema for $n{fn schema_name()->Cow<'static,str>{stringify!($n).into()}fn json_schema(_: &mut SchemaGenerator)->Schema{json_schema!({"type":"string","minLength":1,"maxLength":4096,"pattern":$pattern})}}
- impl Check for $n{fn check(&self)->Result<(),String>{Ok(())}}
+    #[derive(Clone, Debug, Serialize)]
+    #[serde(transparent)]
+    pub struct $n(pub String);
+    impl<'de> Deserialize<'de> for $n {
+        fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+            let s = String::deserialize(d)?;
+            if !($validate)(&s) {
+                return Err(D::Error::custom(concat!("invalid ", stringify!($n))));
+            }
+            Ok(Self(s))
+        }
+    }
+    impl JsonSchema for $n {
+        fn schema_name() -> Cow<'static, str> {
+            stringify!($n).into()
+        }
+        fn json_schema(_: &mut SchemaGenerator) -> Schema {
+            json_schema!({"type":"string","minLength":1,"maxLength":4096,"pattern":$pattern})
+        }
+    }
+    impl Check for $n {
+        fn check(&self) -> Result<(), String> {
+            Ok(())
+        }
+    }
 };}
 text_rule!(Url, "^https?://[^\\s]+$", |s: &str| s.len() <= 4096
     && (s.starts_with("https://") || s.starts_with("http://"))
@@ -492,7 +542,10 @@ impl JsonSchema for SavedCommandInput {
         "SavedCommandInput".into()
     }
     fn json_schema(_: &mut SchemaGenerator) -> Schema {
-        json_schema!({"type":"object","not":{"required":["kind"]},"description":"Closed selected-operation argument object, bounded by the existing 1MiB/100-container frame ceiling; no aggregate DynamicJson node limit. The actual selected admission rechecks operation schema, inner JSON bounds and authority. Outer proposal framing remains unchanged."})
+        json_schema!({"type":"object","not":{"required":["kind"]},"description":"Closed selected-operation argument object, bounded by the existing \
+            1MiB/100-container frame ceiling; no aggregate DynamicJson node limit. \
+            The actual selected admission rechecks operation schema, inner JSON \
+            bounds and authority. Outer proposal framing remains unchanged."})
     }
 }
 impl Check for SavedCommandInput {
@@ -539,7 +592,9 @@ impl JsonSchema for DynamicJson {
         "BoundedUntrustedJson".into()
     }
     fn json_schema(_: &mut SchemaGenerator) -> Schema {
-        json_schema!({"description":"Purpose-specific untrusted JSON: at most512KiB,depth64,nodes10000; descriptor payloads additionally require declared schema validation before use. Not an operation or authority escape hatch."})
+        json_schema!({"description":"Purpose-specific untrusted JSON: at most512KiB,depth64,nodes10000; \
+            descriptor payloads additionally require declared schema validation \
+            before use. Not an operation or authority escape hatch."})
     }
 }
 impl Check for DynamicJson {

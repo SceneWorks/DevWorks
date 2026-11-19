@@ -340,13 +340,13 @@ fn polling_keeps_every_loaded_page() {
     click_nav(&mut h, "Watchers");
     shown(&mut h, "watch-54 tests passed");
     assert!(!has_text(&h, "watch-00 tests passed"));
-    click(&mut h, Role::Button, "More watchers");
+    click(&mut h, Role::Button, "Load more");
     shown(&mut h, "watch-00 tests passed");
     // Past the poll interval the list has been read again, all 55 rows at once.
     std::thread::sleep(WATCH_POLL + Duration::from_millis(500));
     h.step();
     settle(&mut h);
-    assert!(h.state().watchers.all.items.len() == 55);
+    assert!(h.state().watchers.all.rows.items.len() == 55);
     assert!(has_text(&h, "watch-00 tests passed"));
     h.state_mut().on_exit();
 }

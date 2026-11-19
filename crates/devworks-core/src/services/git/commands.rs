@@ -7,6 +7,7 @@ use super::*;
 use crate::authority::destructive::EntryKind;
 use crate::context::PrincipalKind;
 use crate::gateway::AdmittedCommand;
+use crate::locks::RwLockExt;
 use crate::ports::storage::*;
 use crate::ports::{AuthorityFence, CommandHandler, Decided, HandlerFailure};
 use crate::protocol::data::GitCommand;
@@ -351,11 +352,7 @@ impl GitService {
         let reviewed_binding =
             crate::services::approvals::owner_preview::approved_binding(tx, ctx, command)?;
         if let Some(binding) = &reviewed_binding {
-            let control = self
-                .approval_control
-                .read()
-                .unwrap_or_else(|p| p.into_inner())
-                .clone();
+            let control = self.approval_control.read_locked().clone();
             crate::services::approvals::owner_preview::recheck_control(
                 tx,
                 ctx,
@@ -588,10 +585,47 @@ impl GitService {
         })?;
         if let Some(previous_owner) = previous_owner {
             let event = EventId(tx.new_id(IdKind::Event));
-            tx.history().append(NewEvent { id: event, actor: ctx.principal().clone(), project_id: Some(work.project_id.clone()), root_id: Some(RootId(work.id.clone())), operation_id: Some(op.clone()), aggregate_kind: "git_ownership".into(), aggregate_id: tree.id.as_str().into(), aggregate_revision: tree.ownership_revision, kind: "GitWorktreeOwnershipTransferred".into(), payload: json!({"repositoryId":tree.repository_id,"workId":tree.work_id,"worktreeId":tree.id,"previousOwner":previous_owner,"owner":tree.owner,"ownershipRevision":tree.ownership_revision,"path":tree.path,"branch":tree.branch}) })?;
+            tx.history().append(NewEvent {
+                id: event,
+                actor: ctx.principal().clone(),
+                project_id: Some(work.project_id.clone()),
+                root_id: Some(RootId(work.id.clone())),
+                operation_id: Some(op.clone()),
+                aggregate_kind: "git_ownership".into(),
+                aggregate_id: tree.id.as_str().into(),
+                aggregate_revision: tree.ownership_revision,
+                kind: "GitWorktreeOwnershipTransferred".into(),
+                payload: json!({
+                    "repositoryId": tree.repository_id,
+                    "workId": tree.work_id,
+                    "worktreeId": tree.id,
+                    "previousOwner": previous_owner,
+                    "owner": tree.owner,
+                    "ownershipRevision": tree.ownership_revision,
+                    "path": tree.path,
+                    "branch": tree.branch
+                }),
+            })?;
         }
         let event = EventId(tx.new_id(IdKind::Event));
-        tx.history().append(NewEvent { id: event.clone(), actor: ctx.principal().clone(), project_id: Some(work.project_id), root_id: ctx.root_id().cloned(), operation_id: Some(op.clone()), aggregate_kind: "git_worktree".into(), aggregate_id: tree.id.as_str().into(), aggregate_revision: tree.revision, kind: "GitWriteRequested".into(), payload: json!({"repositoryId":tree.repository_id,"workId":tree.work_id,"worktreeId":tree.id,"branch":tree.branch,"expectedHead":tree.head}) })?;
+        tx.history().append(NewEvent {
+            id: event.clone(),
+            actor: ctx.principal().clone(),
+            project_id: Some(work.project_id),
+            root_id: ctx.root_id().cloned(),
+            operation_id: Some(op.clone()),
+            aggregate_kind: "git_worktree".into(),
+            aggregate_id: tree.id.as_str().into(),
+            aggregate_revision: tree.revision,
+            kind: "GitWriteRequested".into(),
+            payload: json!({
+                "repositoryId": tree.repository_id,
+                "workId": tree.work_id,
+                "worktreeId": tree.id,
+                "branch": tree.branch,
+                "expectedHead": tree.head
+            }),
+        })?;
 
         let now = tx.now_ms();
         tx.queue().enqueue(NewQueueEntry {
@@ -816,7 +850,25 @@ impl GitService {
             updated.revision += 1;
             tx.git().update_git_worktree(&updated, current.revision)?;
             let id = EventId(tx.new_id(IdKind::Event));
-            let sequence = tx.history().append(NewEvent { id: id.clone(), actor: j.actor.clone(), project_id: Some(j.project.clone()), root_id: j.root.clone(), operation_id: Some(op.clone()), aggregate_kind: "git_worktree".into(), aggregate_id: updated.id.as_str().into(), aggregate_revision: updated.revision, kind: "GitWriteObserved".into(), payload: json!({"repositoryId":updated.repository_id,"workId":updated.work_id,"worktreeId":updated.id,"path":updated.path,"branch":updated.branch,"head":head}) })?;
+            let sequence = tx.history().append(NewEvent {
+                id: id.clone(),
+                actor: j.actor.clone(),
+                project_id: Some(j.project.clone()),
+                root_id: j.root.clone(),
+                operation_id: Some(op.clone()),
+                aggregate_kind: "git_worktree".into(),
+                aggregate_id: updated.id.as_str().into(),
+                aggregate_revision: updated.revision,
+                kind: "GitWriteObserved".into(),
+                payload: json!({
+                    "repositoryId": updated.repository_id,
+                    "workId": updated.work_id,
+                    "worktreeId": updated.id,
+                    "path": updated.path,
+                    "branch": updated.branch,
+                    "head": head
+                }),
+            })?;
             let mut roots = vec![RootId(updated.work_id.clone())];
             if let Some(feature) = &j.feature_id {
                 roots.push(RootId(feature.clone()));
@@ -824,7 +876,30 @@ impl GitService {
             for root in roots {
                 let link = tx.new_id(IdKind::Link);
                 let now = tx.now_ms();
-                tx.sessions().insert_link(&StoredLink { id: link, project_id: j.project.clone(), root_id: root, kind: "git".into(), target_kind: "git_worktree".into(), target_id: updated.id.as_str().into(), parent_id: None, supersedes_id: None, actor: j.actor.clone(), event_id: id.0.clone(), sequence, repository_id: Some(updated.repository_id.clone()), revision: Some(head.hex.clone()), summary: format!("{} at {}", updated.branch, updated.path), body: json!({"agentSessionId":j.session,"worktreeId":updated.id,"path":updated.path,"branch":updated.branch,"head":head}), created_at_ms: now })?;
+                tx.sessions().insert_link(&StoredLink {
+                    id: link,
+                    project_id: j.project.clone(),
+                    root_id: root,
+                    kind: "git".into(),
+                    target_kind: "git_worktree".into(),
+                    target_id: updated.id.as_str().into(),
+                    parent_id: None,
+                    supersedes_id: None,
+                    actor: j.actor.clone(),
+                    event_id: id.0.clone(),
+                    sequence,
+                    repository_id: Some(updated.repository_id.clone()),
+                    revision: Some(head.hex.clone()),
+                    summary: format!("{} at {}", updated.branch, updated.path),
+                    body: json!({
+                        "agentSessionId": j.session,
+                        "worktreeId": updated.id,
+                        "path": updated.path,
+                        "branch": updated.branch,
+                        "head": head
+                    }),
+                    created_at_ms: now,
+                })?;
             }
             Ok(())
         });
@@ -931,7 +1006,22 @@ impl GitService {
             }
             tx.git().update_git_worktree(&tree, prior)?;
             let event = EventId(tx.new_id(IdKind::Event));
-            tx.history().append(NewEvent { id: event, actor: job.actor.clone(), project_id: Some(job.project.clone()), root_id: job.root.clone(), operation_id: Some(operation.clone()), aggregate_kind: "git_worktree".into(), aggregate_id: tree.id.as_str().into(), aggregate_revision: tree.revision, kind: "GitWriteRefusedBeforeDispatch".into(), payload: json!({"repositoryId":tree.repository_id,"workId":tree.work_id,"reason":reason}) })?;
+            tx.history().append(NewEvent {
+                id: event,
+                actor: job.actor.clone(),
+                project_id: Some(job.project.clone()),
+                root_id: job.root.clone(),
+                operation_id: Some(operation.clone()),
+                aggregate_kind: "git_worktree".into(),
+                aggregate_id: tree.id.as_str().into(),
+                aggregate_revision: tree.revision,
+                kind: "GitWriteRefusedBeforeDispatch".into(),
+                payload: json!({
+                    "repositoryId": tree.repository_id,
+                    "workId": tree.work_id,
+                    "reason": reason
+                }),
+            })?;
             Ok(())
         })
     }
@@ -1248,8 +1338,19 @@ impl GitService {
             let repository = read_snapshot(&*self.store, &ReadOptions::default(), |s| {
                 s.projects().repository(&job.tree.repository_id)
             });
-            if !matches!(repository, Ok(Some(repository)) if self.verify_target(&git, &Target { repository: repository.clone(), worktree: Some(job.tree.clone()) }).is_ok())
-            {
+            if !matches!(
+                repository,
+                Ok(Some(repository))
+                    if self
+                        .verify_target(
+                            &git,
+                            &Target {
+                                repository: repository.clone(),
+                                worktree: Some(job.tree.clone()),
+                            },
+                        )
+                        .is_ok()
+            ) {
                 return EffectOutcome::Unknown(
                     "physical Git identity cannot be verified for recovery".into(),
                 );
@@ -1283,7 +1384,18 @@ impl GitService {
                     s.projects().repository(&job.tree.repository_id)
                 });
                 observed.head == job.tree.head.hex
-                    && matches!(repository, Ok(Some(repository)) if git.worktrees(Path::new(&repository.location)).is_ok_and(|trees| trees.iter().any(|tree| self.same_worktree_path(Path::new(&tree.path), path) && tree.branch.as_deref() == Some(&job.tree.branch))))
+                    && matches!(
+                        repository,
+                        Ok(Some(repository))
+                            if git.worktrees(Path::new(&repository.location)).is_ok_and(
+                                |trees| {
+                                    trees.iter().any(|tree| {
+                                        self.same_worktree_path(Path::new(&tree.path), path)
+                                            && tree.branch.as_deref() == Some(&job.tree.branch)
+                                    })
+                                },
+                            )
+                    )
             }
             Action::Inspect => true,
             Action::Commit { message, expected } => {

@@ -53,6 +53,7 @@ impl EvalService {
     /// Host-only automatic grading entry point. Selection/activation of suites is owned by
     /// suite management; the host supplies an already authorized immutable measurement.
     /// The deterministic identity makes crash recovery and repeated terminal observations safe.
+    #[cfg(any(test, feature = "test-support"))]
     pub fn grade_automatically(
         &self,
         store: &dyn ApplicationStore,

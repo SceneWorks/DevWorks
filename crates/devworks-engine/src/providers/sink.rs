@@ -1,4 +1,5 @@
 //! Trusted native output persistence. Provider bytes are data, never a storage callback.
+use devworks_core::locks::LockExt;
 use devworks_core::{
     context::InvocationContext,
     ports::{IdKind, storage::*},
@@ -183,7 +184,14 @@ impl ProviderSink {
         if self.evidence.is_empty() {
             return Ok(());
         }
-        let bytes=serde_json::to_vec(&json!({"version":1,"requestId":attempt.request_id,"attemptId":attempt.attempt_id,"binding":self.prepared.identity.binding,"observations":self.evidence})).map_err(|_|invalid("provider evidence JSON"))?;
+        let bytes = serde_json::to_vec(&json!({
+            "version": 1,
+            "requestId": attempt.request_id,
+            "attemptId": attempt.attempt_id,
+            "binding": self.prepared.identity.binding,
+            "observations": self.evidence
+        }))
+        .map_err(|_| invalid("provider evidence JSON"))?;
         self.artifact(
             attempt,
             &bytes,
@@ -328,28 +336,77 @@ impl ProviderSink {
         let source_context = self.source_context.clone();
         let artifact_kind = match kind {
             ArtifactKind::Evidence => "ProviderEvidence",
-            ArtifactKind::NativeContinuation => "ProviderNativeContinuation",
+            ArtifactKind::NativeContinuation => {
+                devworks_core::services::artifacts::derivation::DerivedKind::ProviderNativeContinuation
+                    .as_str()
+            }
             ArtifactKind::CompactionSummary => "ProviderCompactionSummary",
             ArtifactKind::SampledText => "ProviderSampledText",
         };
         fence.publication(|| {
             // Existing artifact staging journals and file publication run off the DB writer.
-            let staged=service.stage_host_bytes(store.as_ref(),bytes,json!({"kind":"ProviderOutput","requestId":attempt.request_id,"attemptId":attempt.attempt_id}))?
-                .map_err(|_|invalid("provider artifact staging failed"))?;
-            let pending=staged.clone(); let service_in=service.clone();
-            let committed=run_write(store.as_ref(),WriteOptions::observed(),move|tx| {
-                validate(tx,&context,&attempt)?;
-                validate_binding(tx,&binding)?;
-                let scope=attempt.project_id.clone().map_or(ArtifactScope::Workspace,ArtifactScope::Project);
-                let version=service_in.commit_host_bytes_in_scope(tx,&pending, devworks_core::services::artifacts::host::HostArtifactPublication {title:&title,media_type:&media_type,provenance:json!({"kind":artifact_kind,"nativeBinding":binding,"requestId":attempt.request_id,"attemptId":attempt.attempt_id,"actorId":attempt.actor_id,"sessionId":attempt.session_id,"sourceContext":source_context,"workId":attempt.work_id,"dispatch":accounting::snapshot(&attempt)?.dispatch}),
-                    scope,owner:attempt.actor_id.clone()})?;
-                let reference=version_ref(&version);
-                let event=EventId(tx.new_id(IdKind::Event));
-                tx.history().append(NewEvent {id:event,actor:attempt.actor_id.clone(),project_id:attempt.project_id.clone(),root_id:attempt.execution_root_id.clone(),operation_id:Some(attempt.operation_id.clone()),
-                    aggregate_kind:"provider_output".into(),aggregate_id:attempt.attempt_id.as_str().into(),aggregate_revision:1,kind:"ProviderArtifactRecorded".into(),payload:json!({"artifact":reference,"mediaType":media_type,"requestId":attempt.request_id})})?;
+            let staged = service
+                .stage_host_bytes(
+                    store.as_ref(),
+                    bytes,
+                    json!({
+                        "kind": "ProviderOutput",
+                        "requestId": attempt.request_id,
+                        "attemptId": attempt.attempt_id
+                    }),
+                )?
+                .map_err(|_| invalid("provider artifact staging failed"))?;
+            let pending = staged.clone();
+            let service_in = service.clone();
+            let committed = run_write(store.as_ref(), WriteOptions::observed(), move |tx| {
+                validate(tx, &context, &attempt)?;
+                validate_binding(tx, &binding)?;
+                let scope = attempt
+                    .project_id
+                    .clone()
+                    .map_or(ArtifactScope::Workspace, ArtifactScope::Project);
+                let version = service_in.commit_host_bytes_in_scope(
+                    tx,
+                    &pending,
+                    devworks_core::services::artifacts::host::HostArtifactPublication {
+                        title: &title,
+                        media_type: &media_type,
+                        provenance: json!({
+                            "kind": artifact_kind,
+                            "nativeBinding": binding,
+                            "requestId": attempt.request_id,
+                            "attemptId": attempt.attempt_id,
+                            "actorId": attempt.actor_id,
+                            "sessionId": attempt.session_id,
+                            "sourceContext": source_context,
+                            "workId": attempt.work_id,
+                            "dispatch": accounting::snapshot(&attempt)?.dispatch
+                        }),
+                        scope,
+                        owner: attempt.actor_id.clone(),
+                    },
+                )?;
+                let reference = version_ref(&version);
+                let event = EventId(tx.new_id(IdKind::Event));
+                tx.history().append(NewEvent {
+                    id: event,
+                    actor: attempt.actor_id.clone(),
+                    project_id: attempt.project_id.clone(),
+                    root_id: attempt.execution_root_id.clone(),
+                    operation_id: Some(attempt.operation_id.clone()),
+                    aggregate_kind: "provider_output".into(),
+                    aggregate_id: attempt.attempt_id.as_str().into(),
+                    aggregate_revision: 1,
+                    kind: "ProviderArtifactRecorded".into(),
+                    payload: json!({
+                        "artifact": reference,
+                        "mediaType": media_type,
+                        "requestId": attempt.request_id
+                    }),
+                })?;
                 Ok(reference)
             });
-            service.settle_host_bytes(store.as_ref(),&staged,committed.is_ok());
+            service.settle_host_bytes(store.as_ref(), &staged, committed.is_ok());
             committed
         })
     }
@@ -557,7 +614,11 @@ impl OwnedInferenceSink for ProviderSink {
             .and_then(|(_, v)| devworks_core::providers::limits::retry_after(now, v));
         self.evidence(
             attempt,
-            json!({"kind":"host_http_response","status":head.status,"headers":head.headers}),
+            json!({
+                "kind": "host_http_response",
+                "status": head.status,
+                "headers": head.headers
+            }),
             fence,
         )?;
         self.access = Some(head.access);
@@ -633,7 +694,16 @@ impl OwnedInferenceSink for ProviderSink {
                         devworks_core::providers::limits::body_reset(&observation.value, now)
                             .or(self.retry_at);
                 }
-                self.evidence(attempt,json!({"kind":observation.kind,"ordinal":observation.ordinal,"rawJson":observation.raw_json,"replay":format!("{:?}",observation.replay)}),fence)?;
+                self.evidence(
+                    attempt,
+                    json!({
+                        "kind": observation.kind,
+                        "ordinal": observation.ordinal,
+                        "rawJson": observation.raw_json,
+                        "replay": format!("{:?}", observation.replay)
+                    }),
+                    fence,
+                )?;
                 if let Some(value) = observation
                     .continuation
                     .filter(|_| self.detached == Detached::No)
@@ -665,7 +735,16 @@ impl OwnedInferenceSink for ProviderSink {
                 }
             }
             DecodedFrame::Usage { observation } => {
-                self.evidence(attempt,json!({"kind":"usage","rawJson":observation.raw_json,"inputSemantics":format!("{:?}",observation.input_semantics),"validationErrors":observation.validation_errors}),fence)?;
+                self.evidence(
+                    attempt,
+                    json!({
+                        "kind": "usage",
+                        "rawJson": observation.raw_json,
+                        "inputSemantics": format!("{:?}", observation.input_semantics),
+                        "validationErrors": observation.validation_errors
+                    }),
+                    fence,
+                )?;
             }
             DecodedFrame::Embedding { index, vector } => {
                 let Some((space, inputs)) = &self.embedding else {
@@ -683,10 +762,19 @@ impl OwnedInferenceSink for ProviderSink {
                 model,
                 generation_id,
             } => {
-                let bytes =
-                    serde_json::to_vec(&json!({"model":model,"generationId":generation_id}))
-                        .map_err(|_| invalid("identity JSON"))?;
-                self.evidence(attempt,json!({"kind":"reported_identity","rawJson":String::from_utf8(bytes).map_err(|_|invalid("identity UTF8"))?}),fence)?;
+                let bytes = serde_json::to_vec(&json!({
+                    "model": model,
+                    "generationId": generation_id
+                }))
+                .map_err(|_| invalid("identity JSON"))?;
+                self.evidence(
+                    attempt,
+                    json!({
+                        "kind": "reported_identity",
+                        "rawJson": String::from_utf8(bytes).map_err(|_| invalid("identity UTF8"))?
+                    }),
+                    fence,
+                )?;
             }
             DecodedFrame::Error { error } => {
                 self.entitlement_refused |= matches!(
@@ -698,18 +786,26 @@ impl OwnedInferenceSink for ProviderSink {
                     devworks_core::providers::decode::DecodeErrorKind::Cooldown
                         | devworks_core::providers::decode::DecodeErrorKind::Overloaded
                 );
-                self.result
-                    .lock()
-                    .unwrap_or_else(|p| p.into_inner())
-                    .faults
-                    .push(format!(
-                        "{:?}:{}",
-                        error.kind,
-                        error.code.as_deref().unwrap_or("provider_error")
-                    ));
+                self.result.locked().faults.push(format!(
+                    "{:?}:{}",
+                    error.kind,
+                    error.code.as_deref().unwrap_or("provider_error")
+                ));
 
-                let bytes=serde_json::to_vec(&json!({"kind":format!("{:?}",error.kind),"code":error.code,"message":error.message})).map_err(|_|invalid("error JSON"))?;
-                self.evidence(attempt,json!({"kind":"error","rawJson":String::from_utf8(bytes).map_err(|_|invalid("error UTF8"))?}),fence)?;
+                let bytes = serde_json::to_vec(&json!({
+                    "kind": format!("{:?}", error.kind),
+                    "code": error.code,
+                    "message": error.message
+                }))
+                .map_err(|_| invalid("error JSON"))?;
+                self.evidence(
+                    attempt,
+                    json!({
+                        "kind": "error",
+                        "rawJson": String::from_utf8(bytes).map_err(|_| invalid("error UTF8"))?
+                    }),
+                    fence,
+                )?;
             }
             DecodedFrame::Heartbeat => {}
             DecodedFrame::Terminal { .. } => {
@@ -726,7 +822,7 @@ impl OwnedInferenceSink for ProviderSink {
     ) -> Result<(), StorageError> {
         self.finish_output(attempt, outcome, fence)?;
         let result = {
-            let mut result = self.result.lock().unwrap_or_else(|p| p.into_inner());
+            let mut result = self.result.locked();
             result.attempt_id = Some(AttemptId(attempt.attempt_id.clone()));
             result.binding = Some(self.prepared.identity.binding.clone());
             result.turn_start_sequence = self.turn_start_sequence;
@@ -737,11 +833,32 @@ impl OwnedInferenceSink for ProviderSink {
         let context = self.context.clone();
         let current = attempt.clone();
         let store = self.store.clone();
-        fence.write(store.as_ref(),move|tx| {
-            validate(tx,&context,&current)?;
-            let event=EventId(tx.new_id(IdKind::Event));
-            tx.history().append(NewEvent {id:event,actor:current.actor_id,project_id:current.project_id,root_id:current.execution_root_id,operation_id:Some(current.operation_id),aggregate_kind:"provider_result".into(),aggregate_id:current.attempt_id.as_str().into(),aggregate_revision:1,kind:"ProviderResultRecorded".into(),
-                payload:json!({"outcome":result.outcome.map(|o|o.label()),"attemptId":result.attempt_id,"binding":result.binding,"turnStartSequence":result.turn_start_sequence,"sourceContext":result.source_context,"instructionTargets":result.instruction_targets,"vectorArtifacts":result.vector_artifacts,"resultArtifact":result.result_artifact,"faults":result.faults,"retryAtMs":result.retry_at_ms})})?;
+        fence.write(store.as_ref(), move |tx| {
+            validate(tx, &context, &current)?;
+            let event = EventId(tx.new_id(IdKind::Event));
+            tx.history().append(NewEvent {
+                id: event,
+                actor: current.actor_id,
+                project_id: current.project_id,
+                root_id: current.execution_root_id,
+                operation_id: Some(current.operation_id),
+                aggregate_kind: "provider_result".into(),
+                aggregate_id: current.attempt_id.as_str().into(),
+                aggregate_revision: 1,
+                kind: "ProviderResultRecorded".into(),
+                payload: json!({
+                    "outcome": result.outcome.map(|o| o.label()),
+                    "attemptId": result.attempt_id,
+                    "binding": result.binding,
+                    "turnStartSequence": result.turn_start_sequence,
+                    "sourceContext": result.source_context,
+                    "instructionTargets": result.instruction_targets,
+                    "vectorArtifacts": result.vector_artifacts,
+                    "resultArtifact": result.result_artifact,
+                    "faults": result.faults,
+                    "retryAtMs": result.retry_at_ms
+                }),
+            })?;
             Ok(())
         })
     }
@@ -797,10 +914,7 @@ impl ProviderSink {
                     }
                     Ok(())
                 })?;
-                self.result
-                    .lock()
-                    .unwrap_or_else(|p| p.into_inner())
-                    .retry_at_ms = Some(until_ms);
+                self.result.locked().retry_at_ms = Some(until_ms);
             }
         }
         if let Some((space, inputs)) = &self.embedding {
@@ -816,9 +930,30 @@ impl ProviderSink {
                     .values()
                     .map(|vector| vector.iter().flat_map(|v| v.to_le_bytes()).collect())
                     .collect();
-                let descriptors:Vec<_>=vector_bytes.iter().enumerate().map(|(index,bytes)|json!({"index":index,"sha256":devworks_core::fingerprint::sha256_hex(bytes),"byteCount":bytes.len()})).collect();
-                let manifest=serde_json::to_vec(&json!({"version":1,"kind":"EmbeddingResult","space":space,"dimensions":dimensions,"requestId":attempt.request_id,"attemptId":attempt.attempt_id,
-                    "binding":self.prepared.identity.binding,"registration":accounting::snapshot(attempt)?.selection,"inputs":inputs,"vectors":descriptors})).map_err(|_|invalid("embedding result JSON"))?;
+                let descriptors: Vec<_> = vector_bytes
+                    .iter()
+                    .enumerate()
+                    .map(|(index, bytes)| {
+                        json!({
+                            "index": index,
+                            "sha256": devworks_core::fingerprint::sha256_hex(bytes),
+                            "byteCount": bytes.len()
+                        })
+                    })
+                    .collect();
+                let manifest = serde_json::to_vec(&json!({
+                    "version": 1,
+                    "kind": "EmbeddingResult",
+                    "space": space,
+                    "dimensions": dimensions,
+                    "requestId": attempt.request_id,
+                    "attemptId": attempt.attempt_id,
+                    "binding": self.prepared.identity.binding,
+                    "registration": accounting::snapshot(attempt)?.selection,
+                    "inputs": inputs,
+                    "vectors": descriptors
+                }))
+                .map_err(|_| invalid("embedding result JSON"))?;
                 let mut bytes = vector_bytes;
                 bytes.push(manifest);
                 let service = self.artifacts.clone();
@@ -826,49 +961,100 @@ impl ProviderSink {
                 let context = self.context.clone();
                 let current = attempt.clone();
                 let binding = self.prepared.identity.binding.clone();
-                let mut published=fence.publication(|| {
-                    let mut staged=Vec::new();
+                let mut published = fence.publication(|| {
+                    let mut staged = Vec::new();
                     for bytes in &bytes {
-                        match service.stage_host_bytes(store.as_ref(),bytes,json!({"kind":"EmbeddingResult","requestId":current.request_id,"attemptId":current.attempt_id}))? {
-                            Ok(file)=>staged.push(file),
-                            Err(_)=>{for file in &staged {service.settle_host_bytes(store.as_ref(),file,false);}return Err(invalid("embedding staging failed"));}
+                        match service.stage_host_bytes(
+                            store.as_ref(),
+                            bytes,
+                            json!({
+                                "kind": "EmbeddingResult",
+                                "requestId": current.request_id,
+                                "attemptId": current.attempt_id
+                            }),
+                        )? {
+                            Ok(file) => staged.push(file),
+                            Err(_) => {
+                                for file in &staged {
+                                    service.settle_host_bytes(store.as_ref(), file, false);
+                                }
+                                return Err(invalid("embedding staging failed"));
+                            }
                         }
                     }
-                    let pending=staged.clone();let native=service.clone();
-                    let committed=run_write(store.as_ref(),WriteOptions::settlement(),move|tx| {
-                        validate(tx,&context,&current)?;
-                        validate_binding(tx,&binding)?;
-                        let mut references=Vec::new();
-                        for (index,file) in pending.iter().enumerate() {
-                            let version=native.commit_host_bytes_in_scope(tx,file,devworks_core::services::artifacts::host::HostArtifactPublication {
-                                title:if index+1==pending.len(){"Provider embedding result"}else{"Provider embedding vector"},
-                                media_type:if index+1==pending.len(){"application/vnd.devworks.embedding-result+json"}else{"application/vnd.devworks.float32-le"},
-                                provenance:json!({"requestId":current.request_id,"attemptId":current.attempt_id,"inputIndex":index,"binding":binding}),
-                                scope:current.project_id.clone().map_or(ArtifactScope::Workspace,ArtifactScope::Project),owner:current.actor_id.clone(),
+                    let pending = staged.clone();
+                    let native = service.clone();
+                    let committed =
+                        run_write(store.as_ref(), WriteOptions::settlement(), move |tx| {
+                            validate(tx, &context, &current)?;
+                            validate_binding(tx, &binding)?;
+                            use devworks_core::services::artifacts::host::HostArtifactPublication;
+                            let mut references = Vec::new();
+                            for (index, file) in pending.iter().enumerate() {
+                                let version = native.commit_host_bytes_in_scope(
+                                    tx,
+                                    file,
+                                    HostArtifactPublication {
+                                        title: if index + 1 == pending.len() {
+                                            "Provider embedding result"
+                                        } else {
+                                            "Provider embedding vector"
+                                        },
+                                        media_type: if index + 1 == pending.len() {
+                                            "application/vnd.devworks.embedding-result+json"
+                                        } else {
+                                            "application/vnd.devworks.float32-le"
+                                        },
+                                        provenance: json!({
+                                            "requestId": current.request_id,
+                                            "attemptId": current.attempt_id,
+                                            "inputIndex": index,
+                                            "binding": binding
+                                        }),
+                                        scope: current.project_id.clone().map_or(
+                                            ArtifactScope::Workspace,
+                                            ArtifactScope::Project,
+                                        ),
+                                        owner: current.actor_id.clone(),
+                                    },
+                                )?;
+                                references.push(version_ref(&version));
+                            }
+                            let event = EventId(tx.new_id(IdKind::Event));
+                            tx.history().append(NewEvent {
+                                id: event,
+                                actor: current.actor_id,
+                                project_id: current.project_id,
+                                root_id: current.execution_root_id,
+                                operation_id: Some(current.operation_id),
+                                aggregate_kind: "provider_output".into(),
+                                aggregate_id: current.attempt_id.as_str().into(),
+                                aggregate_revision: 1,
+                                kind: "ProviderEmbeddingResultRecorded".into(),
+                                payload: json!({
+                                    "requestId": current.request_id,
+                                    "attemptId": current.attempt_id,
+                                    "binding": binding,
+                                    "artifacts": references
+                                }),
                             })?;
-                            references.push(version_ref(&version));
-                        }
-                        let event=EventId(tx.new_id(IdKind::Event));
-                        tx.history().append(NewEvent {id:event,actor:current.actor_id,project_id:current.project_id,root_id:current.execution_root_id,operation_id:Some(current.operation_id),aggregate_kind:"provider_output".into(),aggregate_id:current.attempt_id.as_str().into(),aggregate_revision:1,
-                            kind:"ProviderEmbeddingResultRecorded".into(),payload:json!({"requestId":current.request_id,"attemptId":current.attempt_id,"binding":binding,"artifacts":references})})?;
-                        Ok(references)
-                    });
-                    for file in &staged {service.settle_host_bytes(store.as_ref(),file,committed.is_ok());}
+                            Ok(references)
+                        });
+                    for file in &staged {
+                        service.settle_host_bytes(store.as_ref(), file, committed.is_ok());
+                    }
                     committed
                 })?;
                 let result = published
                     .pop()
                     .ok_or_else(|| invalid("missing embedding manifest"))?;
                 let artifacts = published;
-                let mut channel = self.result.lock().unwrap_or_else(|p| p.into_inner());
+                let mut channel = self.result.locked();
                 channel.vector_artifacts = artifacts;
                 channel.result_artifact = Some(result);
                 channel.outcome = Some(outcome);
             } else {
-                self.result
-                    .lock()
-                    .unwrap_or_else(|p| p.into_inner())
-                    .outcome = Some(outcome);
+                self.result.locked().outcome = Some(outcome);
             }
             return Ok(());
         }
@@ -906,15 +1092,9 @@ impl ProviderSink {
                     kind,
                     fence,
                 )?;
-                self.result
-                    .lock()
-                    .unwrap_or_else(|p| p.into_inner())
-                    .result_artifact = Some(artifact);
+                self.result.locked().result_artifact = Some(artifact);
             }
-            self.result
-                .lock()
-                .unwrap_or_else(|p| p.into_inner())
-                .outcome = Some(outcome);
+            self.result.locked().outcome = Some(outcome);
             return Ok(());
         }
         let terminal = match outcome {
@@ -956,10 +1136,7 @@ impl ProviderSink {
                 Ok(())
             })?;
         }
-        self.result
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .outcome = Some(outcome);
+        self.result.locked().outcome = Some(outcome);
         Ok(())
     }
 }

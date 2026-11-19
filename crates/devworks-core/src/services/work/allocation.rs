@@ -123,9 +123,25 @@ fn change(
     next.fence += 1;
     tx.work().update_allocation_claim(&next, c.revision)?;
     let id = crate::protocol::EventId(tx.new_id(IdKind::Event));
-    tx.history().append(NewEvent { id, actor: actor.clone(), project_id: Some(c.project_id.clone()), root_id: Some(c.root_id.clone()), operation_id: None,
-        aggregate_kind: "allocation_claim".into(), aggregate_id: c.id.as_str().into(), aggregate_revision: next.revision,
-        kind: format!("Allocation{}", state.as_str()), payload: json!({"claimId": c.id, "workId":c.work_id,"rootId":c.root_id,"fence":next.fence,"ownerId":c.owner_id,"sessionId":c.session_id}) })?;
+    tx.history().append(NewEvent {
+        id,
+        actor: actor.clone(),
+        project_id: Some(c.project_id.clone()),
+        root_id: Some(c.root_id.clone()),
+        operation_id: None,
+        aggregate_kind: "allocation_claim".into(),
+        aggregate_id: c.id.as_str().into(),
+        aggregate_revision: next.revision,
+        kind: format!("Allocation{}", state.as_str()),
+        payload: json!({
+            "claimId": c.id,
+            "workId": c.work_id,
+            "rootId": c.root_id,
+            "fence": next.fence,
+            "ownerId": c.owner_id,
+            "sessionId": c.session_id
+        }),
+    })?;
     Ok(next)
 }
 fn wire(c: &StoredAllocationClaim, now: i64) -> AllocationClaimRecord {
@@ -779,7 +795,14 @@ impl WorkService {
                 ctx,
                 &w,
                 "WorkAllocated",
-                json!({"claimId":claim.id,"fence":claim.fence,"ownerId":claim.owner_id,"sessionId":claim.session_id,"queueRevision":current,"invocationId":claim.invocation_id}),
+                json!({
+                    "claimId": claim.id,
+                    "fence": claim.fence,
+                    "ownerId": claim.owner_id,
+                    "sessionId": claim.session_id,
+                    "queueRevision": current,
+                    "invocationId": claim.invocation_id
+                }),
             )?;
             let value = selection(
                 tx,
@@ -1076,8 +1099,23 @@ pub fn transfer(
         next.fence += 1;
         tx.work().update_allocation_claim(&next, c.revision)?;
         let id = crate::protocol::EventId(tx.new_id(IdKind::Event));
-        tx.history().append(NewEvent{id,actor:actor.clone(),project_id:Some(w.project_id.clone()),root_id:Some(c.root_id),operation_id:None,aggregate_kind:"allocation_claim".into(),aggregate_id:c.id.as_str().into(),aggregate_revision:next.revision,
-            kind:"AllocationTransferred".into(),payload:json!({"workId":work,"executionId":execution,"sessionId":next.session_id,"fence":next.fence})})?;
+        tx.history().append(NewEvent {
+            id,
+            actor: actor.clone(),
+            project_id: Some(w.project_id.clone()),
+            root_id: Some(c.root_id),
+            operation_id: None,
+            aggregate_kind: "allocation_claim".into(),
+            aggregate_id: c.id.as_str().into(),
+            aggregate_revision: next.revision,
+            kind: "AllocationTransferred".into(),
+            payload: json!({
+                "workId": work,
+                "executionId": execution,
+                "sessionId": next.session_id,
+                "fence": next.fence
+            }),
+        })?;
     }
     Ok(())
 }
@@ -1248,7 +1286,15 @@ fn replay_identity(
         return Err(invalid("idempotency_key", None));
     }
     let scope = json!({"actor":ctx.principal(),"session":ctx.session_id(),"ingress":ctx.ingress_namespace(),"project":project,"key":key});
-    let intent = json!({"project":project,"feature":feature.map(|f|&f.id),"leaseMs":lease,"repository":filters.repository_id,"taskType":filters.task_type,"label":filters.label.as_ref().map(|l|l.to_lowercase()),"another":filters.another});
+    let intent = json!({
+        "project": project,
+        "feature": feature.map(|f| &f.id),
+        "leaseMs": lease,
+        "repository": filters.repository_id,
+        "taskType": filters.task_type,
+        "label": filters.label.as_ref().map(|l| l.to_lowercase()),
+        "another": filters.another
+    });
     let digest = |value: &serde_json::Value| {
         crate::fingerprint::canonical_digest(value).map_err(|_| invalid("allocation_intent", None))
     };

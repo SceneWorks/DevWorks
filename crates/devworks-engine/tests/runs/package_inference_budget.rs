@@ -13,7 +13,9 @@ use devworks_core::services::artifacts::ArtifactService;
 use devworks_core::services::router::connections::ConnectionService;
 use devworks_core::services::usage::budget;
 use devworks_engine::mcp_sampling::McpSampling;
-use devworks_engine::package_host::inference::{PackageInferenceRequest, grant_for, infer};
+use devworks_engine::package_host::inference::{
+    PackageInferenceRequest, grant_for, infer, person_grant,
+};
 use devworks_engine::providers::{
     driver::{NativeProviders, ProviderComposition},
     schemas::RegisteredSchemas,
@@ -47,6 +49,52 @@ fn limit(f: &Fx, input: FeatureBudgetInput) {
         let work = tx.work().work(&id("root-f"))?.unwrap();
         budget::configure(tx, &work, &ActorId(id("user-a")), &input).map(|_| ())
     });
+}
+
+fn compose(
+    f: &Fx,
+    router: &Arc<devworks_core::services::router::InferenceRouter>,
+) -> (
+    Arc<ArtifactService>,
+    Arc<UsageRuntime>,
+    Arc<CountHttp>,
+    Arc<NativeProviders>,
+) {
+    let artifacts = Arc::new(ArtifactService::new(
+        Arc::new(NativeArtifactFiles::new(
+            f.h.root.clone(),
+            f.h.root.with_extension("cache"),
+        )),
+        Arc::new(HostArtifactSources::new(f.h.clock(), f.h.ids.clone())),
+        Arc::new(NativeFilesystem::new()),
+        f.h.clock(),
+        f.h.ids.clone(),
+    ));
+    let connections = Arc::new(ConnectionService::new(
+        f.h.ids.clone(),
+        f.h.clock(),
+        f.store.clone(),
+        Arc::new(NoNetwork),
+        Arc::new(SessionSecrets::new()),
+        Arc::new(Entropy),
+    ));
+    let usage = UsageRuntime::new(f.store.clone(), f.service.clone(), Some(router.clone()));
+    let schemas = Arc::new(RegisteredSchemas::new(
+        f.store.clone(),
+        f.use_cases.clone().with_router(router.clone()),
+        None,
+        artifacts.clone(),
+    ));
+    let http = Arc::new(CountHttp(AtomicUsize::new(0)));
+    let driver = NativeProviders::new(
+        f.store.clone(),
+        artifacts.clone(),
+        connections,
+        usage.clone(),
+        schemas,
+        ProviderComposition::new(http.clone()),
+    );
+    (artifacts, usage, http, driver)
 }
 
 fn request(text: &str) -> PackageInferenceRequest {
@@ -176,40 +224,7 @@ fn feature_budget_refuses_package_inference_before_transport_and_bills_no_attemp
         });
         let grant = grant_for(&*f.store, &OperationId(id("package-tool-call")))
             .expect("the feature agent's tool call");
-        let artifacts = Arc::new(ArtifactService::new(
-            Arc::new(NativeArtifactFiles::new(
-                f.h.root.clone(),
-                f.h.root.with_extension("cache"),
-            )),
-            Arc::new(HostArtifactSources::new(f.h.clock(), f.h.ids.clone())),
-            Arc::new(NativeFilesystem::new()),
-            f.h.clock(),
-            f.h.ids.clone(),
-        ));
-        let connections = Arc::new(ConnectionService::new(
-            f.h.ids.clone(),
-            f.h.clock(),
-            f.store.clone(),
-            Arc::new(NoNetwork),
-            Arc::new(SessionSecrets::new()),
-            Arc::new(Entropy),
-        ));
-        let usage = UsageRuntime::new(f.store.clone(), f.service.clone(), Some(router.clone()));
-        let schemas = Arc::new(RegisteredSchemas::new(
-            f.store.clone(),
-            f.use_cases.clone().with_router(router.clone()),
-            None,
-            artifacts.clone(),
-        ));
-        let http = Arc::new(CountHttp(AtomicUsize::new(0)));
-        let driver = NativeProviders::new(
-            f.store.clone(),
-            artifacts.clone(),
-            connections,
-            usage.clone(),
-            schemas,
-            ProviderComposition::new(http.clone()),
-        );
+        let (artifacts, usage, http, driver) = compose(&f, &router);
         let run = |action: &'static str| {
             let (store, artifacts, driver, router, grant) = (
                 f.store.clone(),
@@ -278,6 +293,117 @@ fn feature_budget_refuses_package_inference_before_transport_and_bills_no_attemp
             1,
             "no usage attempt is billed for refused package inference"
         );
+        usage.stop();
+        usage.drain().await;
+    }));
+}
+
+#[test]
+fn feature_budget_refuses_a_persons_package_inference_before_transport() {
+    let _native_case = native_runtime_case();
+    runtime().block_on(within("package inference person budget", async {
+        let f = Fx::new();
+        let router = router(&f);
+        applied(&f.start(&f.user, "root-f", 1, 1));
+        // The person's invocation has no session pin: it routes through the High tier pool.
+        f.tx(|_, tx| {
+            let key = "routing.tierHigh.members";
+            let schema = devworks_core::settings::catalog::descriptor(key)
+                .unwrap()
+                .schema_ref();
+            tx.configuration()
+                .append_revision(
+                    &devworks_core::ports::storage::ConfigScope::Workspace,
+                    "settings",
+                    1,
+                    1,
+                    json!({"values": {key: {"schema": schema, "value": ["usage-model"]}}}),
+                )
+                .map(|_| ())
+        });
+        let (artifacts, usage, http, driver) = compose(&f, &router);
+        let person = f.user.clone().with_lineage(
+            Some(devworks_core::protocol::ProjectId(id("project-a"))),
+            Some(RootId(id("root-f"))),
+            None,
+        );
+        let grant = person_grant(
+            &*f.store,
+            &person,
+            &OperationId(person.invocation_id().clone()),
+        )
+        .expect("the person's grant for the feature's work item");
+        let run = |action: &'static str| {
+            let (store, artifacts, driver, router, grant) = (
+                f.store.clone(),
+                artifacts.clone(),
+                driver.clone(),
+                router.clone(),
+                grant.clone(),
+            );
+            async move {
+                infer(
+                    store,
+                    artifacts,
+                    driver,
+                    router,
+                    &grant,
+                    action,
+                    &request("Summarize"),
+                    None,
+                )
+                .await
+            }
+        };
+        let attempts = |f: &Fx| {
+            read(&*f.store, |s| {
+                s.usage()
+                    .inference_attempts(&UsageAttemptFilter::default(), None, 64)
+            })
+        };
+
+        // Without a cap the call reaches the provider transport once (the fixture transport
+        // then fails before sending anything), billed to the person against the feature.
+        assert!(run("first").await.is_err());
+        assert_eq!(http.0.load(Ordering::SeqCst), 1);
+        let first = attempts(&f);
+        assert_eq!(first.len(), 1);
+        assert_eq!(first[0].actor_id, ActorId(id("user-a")));
+        assert_eq!(first[0].work_id, Some(id("root-f")));
+
+        limit(
+            &f,
+            FeatureBudgetInput::Limit {
+                micro_usd: devworks_core::protocol::Counter::new(0).unwrap(),
+            },
+        );
+        let planned = McpSampling::for_package(
+            f.store.clone(),
+            artifacts.clone(),
+            driver.clone(),
+            router.clone(),
+            "second".into(),
+        )
+        .plan(&grant, &request("Summarize").sampling_call().unwrap())
+        .expect("planned package inference");
+        assert_eq!(planned.attempt.work_id, Some(id("root-f")));
+        let produced = driver.produce_cancellable(planned, None).await.unwrap();
+        let refusal = format!("{:?}", produced.accounting);
+        assert!(
+            matches!(produced.accounting, DriveOutcome::Refused(_))
+                && refusal.contains("BudgetContinue"),
+            "{refusal}"
+        );
+        // Refused at admission: no provider request after the cap, from the planned call or a
+        // retry through the whole path.
+        assert_eq!(http.0.load(Ordering::SeqCst), 1);
+        assert!(run("third").await.is_err());
+        assert_eq!(
+            http.0.load(Ordering::SeqCst),
+            1,
+            "a reached cap sends no provider request"
+        );
+        assert_eq!(attempts(&f).len(), 1);
         usage.stop();
         usage.drain().await;
     }));

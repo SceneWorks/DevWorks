@@ -247,6 +247,7 @@
         "connections",
         "objects",
         "relationships",
+        "code_references",
         "index",
         "refresh",
         "remove_index",
@@ -381,7 +382,8 @@
         "draft",
         "propose",
         "history",
-        "rollback"
+        "rollback",
+        "set_enabled"
       ],
       "effectAndAuthority": "Harness precedence; agent changes need exact-version human approval",
       "status": "Proposed; exact command/tool schemas require review"
@@ -648,7 +650,9 @@
         "propose",
         "logs",
         "rollback",
-        "uninstall"
+        "uninstall",
+        "invoke",
+        "invocation"
       ],
       "effectAndAuthority": "Version/digest-bound activation approval for agent-authored packages; declared effect classification",
       "status": "Proposed; exact command/tool schemas require review"

@@ -1,3 +1,4 @@
+use devworks_core::locks::LockExt;
 use devworks_core::ports::storage::{
     ApplicationStore, ReadOptions, ReadSnapshot, StorageError, StoreInfo, WriteJob, WriteOptions,
     WriteTransaction,
@@ -50,7 +51,7 @@ impl LoseAcks {
     /// `commits` it commits; without, it is rolled back unrun. `then_fail_read` makes the read
     /// after it fail with `Busy`.
     pub fn lose_next(&self, writes_before: usize, commits: bool, then_fail_read: bool) {
-        *self.plan.lock().unwrap() = Plan::Next {
+        *self.plan.locked() = Plan::Next {
             skip: writes_before,
             commits,
             then_fail_read,
@@ -59,7 +60,7 @@ impl LoseAcks {
     /// Loses the acknowledgment of the `n`-th confirmed commit from now; the ones before it
     /// are acknowledged normally.
     pub fn lose_nth_commit(&self, n: usize) {
-        *self.plan.lock().unwrap() = Plan::NthCommit(n);
+        *self.plan.locked() = Plan::NthCommit(n);
     }
     /// Loses the acknowledgment of the first committed write for which `hit` answers true. `hit`
     /// runs after the job, inside its transaction, and sees what the job wrote.
@@ -81,19 +82,19 @@ impl LoseAcks {
         + Sync
         + 'static,
     ) {
-        *self.plan.lock().unwrap() = Plan::When(Arc::new(probe));
+        *self.plan.locked() = Plan::When(Arc::new(probe));
     }
     /// Cancels a plan that has not fired.
     pub fn disarm(&self) {
-        *self.plan.lock().unwrap() = Plan::Idle;
+        *self.plan.locked() = Plan::Idle;
     }
     /// Whether a plan is waiting to fire.
     pub fn armed(&self) -> bool {
-        !matches!(*self.plan.lock().unwrap(), Plan::Idle)
+        !matches!(*self.plan.locked(), Plan::Idle)
     }
     /// Fails the next read with `error`.
     pub fn fail_next_read(&self, error: StorageError) {
-        *self.read_failure.lock().unwrap() = Some(error);
+        *self.read_failure.locked() = Some(error);
     }
     /// Acknowledgments lost so far.
     pub fn lost(&self) -> usize {
@@ -141,7 +142,7 @@ impl WriteJob for Counting {
     fn finish(self: Box<Self>, outcome: Result<(), StorageError>) {
         let mut lose = false;
         if outcome.is_ok() {
-            let mut plan = self.plan.lock().unwrap();
+            let mut plan = self.plan.locked();
             if let Plan::NthCommit(n) = &mut *plan {
                 if *n <= 1 {
                     *plan = Plan::Idle;
@@ -177,7 +178,7 @@ impl WriteJob for Probing {
         })?;
         ran?;
         if hit {
-            let mut plan = self.plan.lock().unwrap();
+            let mut plan = self.plan.locked();
             if matches!(*plan, Plan::When(_)) {
                 *plan = Plan::Idle;
                 self.hit = true;
@@ -205,7 +206,7 @@ impl ApplicationStore for LoseAcks {
         job: Box<dyn WriteJob>,
     ) -> Result<(), StorageError> {
         let (plan, lost) = (self.plan.clone(), self.lost.clone());
-        let mut guard = self.plan.lock().unwrap();
+        let mut guard = self.plan.locked();
         let wrapped: Box<dyn WriteJob> = match &mut *guard {
             Plan::Idle => job,
             Plan::Next { skip, .. } if *skip > 0 => {
@@ -220,7 +221,7 @@ impl ApplicationStore for LoseAcks {
                 let (commits, then_fail_read) = (*commits, *then_fail_read);
                 *guard = Plan::Idle;
                 if then_fail_read {
-                    *self.read_failure.lock().unwrap() = Some(StorageError::Busy);
+                    *self.read_failure.locked() = Some(StorageError::Busy);
                 }
                 if commits {
                     Box::new(Lose { inner: job, lost })
@@ -249,7 +250,7 @@ impl ApplicationStore for LoseAcks {
         options: &ReadOptions,
         work: &mut dyn FnMut(&dyn ReadSnapshot) -> Result<(), StorageError>,
     ) -> Result<(), StorageError> {
-        if let Some(error) = self.read_failure.lock().unwrap().take() {
+        if let Some(error) = self.read_failure.locked().take() {
             return Err(error);
         }
         self.inner.read(options, work)

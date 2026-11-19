@@ -64,7 +64,7 @@ fn open(b: Arc<dyn Backend>, root: &Root, files: Files) -> Ui {
         click(&mut h, Role::Button, "Conventions");
     }
     step_until(&mut h, "registered convention listing", |s| {
-        s.conventions.state().is_some_and(|v| v.loaded)
+        s.conventions.state().is_some_and(|v| v.list.loaded)
     });
     assert!(h.state().conventions.state().unwrap().available);
     h
@@ -321,8 +321,8 @@ fn native_registered_creation_edit_versions_and_source_exports_are_lossless() {
     click(&mut h, Role::Button, "Versions");
     click(&mut h, Role::Button, "Load convention versions");
     let state = h.state().conventions.state().unwrap();
-    assert_eq!(state.versions.len(), 2);
-    assert_eq!(state.versions[0].id, first.id);
+    assert_eq!(state.versions.items.len(), 2);
+    assert_eq!(state.versions.items[0].id, first.id);
     click(&mut h, Role::Button, "Inspect version 1 · Native source");
     assert_eq!(
         h.state()
@@ -523,6 +523,7 @@ fn native_registered_unknown_artifact_save_recovers_exact_pipeline_after_reopen(
     let state = h.state().conventions.state().unwrap();
     assert_eq!(
         state
+            .list
             .items
             .iter()
             .filter(|r| r.slug.0 == "recover-source")
@@ -551,7 +552,15 @@ fn native_registered_resource_bytes_lifecycle_and_deletion_use_exact_owner_revis
     select(&mut h, "Resource guide");
     click(&mut h, Role::Button, "Resources");
     click(&mut h, Role::Button, "Load convention resources");
-    assert!(h.state().conventions.state().unwrap().resources.is_empty());
+    assert!(
+        h.state()
+            .conventions
+            .state()
+            .unwrap()
+            .resources
+            .items
+            .is_empty()
+    );
     let bytes = b"\0\xff\x01binary\r\n".repeat(7000);
     let path = root.file("binary-resource.bin", &bytes);
     files.picked.files.lock().unwrap().push(vec![path]);
@@ -569,7 +578,7 @@ fn native_registered_resource_bytes_lifecycle_and_deletion_use_exact_owner_revis
     settle(&mut h);
     click(&mut h, Role::Button, "Resources");
     click(&mut h, Role::Button, "Load convention resources");
-    let first = h.state().conventions.state().unwrap().resources[0].clone();
+    let first = h.state().conventions.state().unwrap().resources.items[0].clone();
     assert_eq!(first.media_type.0, media);
     assert_eq!(first.content.byte_length.get(), bytes.len() as i64);
     assert_eq!(first.content.media_type, "application/octet-stream");
@@ -591,7 +600,7 @@ fn native_registered_resource_bytes_lifecycle_and_deletion_use_exact_owner_revis
     settle(&mut h);
     click(&mut h, Role::Button, "Resources");
     click(&mut h, Role::Button, "Load convention resources");
-    let changed = h.state().conventions.state().unwrap().resources[0].clone();
+    let changed = h.state().conventions.state().unwrap().resources.items[0].clone();
     assert_eq!(changed.id, first.id);
     assert_eq!(changed.name.0, "Renamed attachment");
     assert!(changed.media_type.0.is_empty());
@@ -625,7 +634,7 @@ fn native_registered_resource_bytes_lifecycle_and_deletion_use_exact_owner_revis
     settle(&mut h);
     click(&mut h, Role::Button, "Resources");
     click(&mut h, Role::Button, "Load convention resources");
-    let replaced = h.state().conventions.state().unwrap().resources[0].clone();
+    let replaced = h.state().conventions.state().unwrap().resources.items[0].clone();
     assert_eq!(replaced.id, first.id);
     assert!(
         replaced.media_type.0.is_empty(),
@@ -652,6 +661,7 @@ fn native_registered_resource_bytes_lifecycle_and_deletion_use_exact_owner_revis
         .state()
         .unwrap()
         .resources
+        .items
         .iter()
         .find(|r| r.id == first.id)
         .unwrap();
@@ -749,6 +759,7 @@ fn native_registered_applicability_retirement_and_virtual_document_resources_rem
             .state()
             .unwrap()
             .resource_catalog
+            .items
             .len(),
         1
     );
@@ -776,7 +787,7 @@ fn native_registered_applicability_retirement_and_virtual_document_resources_rem
     click(&mut h, Role::Button, "Confirm convention deletion");
     settle(&mut h);
     click(&mut h, Role::Button, "Refresh conventions");
-    assert!(h.state().conventions.state().unwrap().items.is_empty());
+    assert!(h.state().conventions.state().unwrap().list.items.is_empty());
 }
 
 #[test]
@@ -823,7 +834,7 @@ fn native_registered_hierarchical_move_preserves_subtree_scope_and_independent_d
     step_until(&mut h, "subtree move confirmed", |s| {
         s.conventions
             .state()
-            .is_some_and(|v| !v.busy && v.items.is_empty())
+            .is_some_and(|v| !v.busy && v.list.items.is_empty())
     });
     let draft = h
         .state()
@@ -841,7 +852,7 @@ fn native_registered_hierarchical_move_preserves_subtree_scope_and_independent_d
     step_until(&mut h, "actual project-scoped subtree listing", |s| {
         s.conventions
             .state()
-            .is_some_and(|v| v.loaded && v.items.len() == 2)
+            .is_some_and(|v| v.list.loaded && v.list.items.len() == 2)
     });
     assert_eq!(
         h.state().conventions.scope,
@@ -1472,11 +1483,12 @@ fn native_search_cancel_reaches_owned_transport_and_keeps_unknown_custody_after_
     let state = h.state().conventions.state().unwrap();
     assert!(
         state
-            .list_error
+            .list
+            .error
             .as_ref()
             .is_some_and(|e| e.contains("CursorExpired")),
         "changed source must refuse before a new paid admission: {:?}",
-        state.list_error
+        state.list.error
     );
     assert_eq!(
         state.search_preparation.as_ref().unwrap().1.operation_id,

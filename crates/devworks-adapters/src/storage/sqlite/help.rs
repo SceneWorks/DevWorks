@@ -21,7 +21,23 @@ fn text(value: &str, min: usize, max: usize) -> bool {
     !value.contains('\0') && (min..=max).contains(&value.chars().count())
 }
 fn head(conn: &Connection) -> Result<StoredHelpHead, StorageError> {
-    let row = db(conn.query_row("SELECT revision,app_version,registry_revision,source_digest,generation_id,generation_operation_id,updated_at FROM help_head WHERE singleton=1",[],|r| Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get::<_,Option<String>>(4)?,r.get::<_,Option<String>>(5)?,r.get(6)?))))?;
+    let row = db(conn.query_row(
+        "SELECT revision,app_version,registry_revision,source_digest,\
+        generation_id,generation_operation_id,updated_at FROM help_head WHERE \
+        singleton=1",
+        [],
+        |r| {
+            Ok((
+                r.get(0)?,
+                r.get(1)?,
+                r.get(2)?,
+                r.get(3)?,
+                r.get::<_, Option<String>>(4)?,
+                r.get::<_, Option<String>>(5)?,
+                r.get(6)?,
+            ))
+        },
+    ))?;
     Ok(StoredHelpHead {
         revision: row.0,
         app_version: row.1,
@@ -85,7 +101,10 @@ fn operation(conn: &Connection, operation: &OperationId) -> Result<String, Stora
         }),
     }
 }
-const TOPIC_COLUMNS: &str = "t.generation_id,t.id,t.version,t.title,t.content_digest,t.content_ref_json,t.provenance_json,t.related_operations_json,t.screen_ids_json,t.source_kind,t.package_id,t.manifest_digest,t.character_count,t.topic_revision,t.availability,t.reason";
+const TOPIC_COLUMNS: &str = "t.generation_id,t.id,t.version,t.title,t.content_digest,\
+    t.content_ref_json,t.provenance_json,t.related_operations_json,\
+    t.screen_ids_json,t.source_kind,t.package_id,t.manifest_digest,\
+    t.character_count,t.topic_revision,t.availability,t.reason";
 struct RawTopic {
     generation_id: String,
     id: String,
@@ -129,7 +148,10 @@ fn topics<P: rusqlite::Params>(
     tail: &str,
     p: P,
 ) -> Result<Vec<StoredHelpTopic>, StorageError> {
-    let mut stmt=db(conn.prepare_cached(&format!("SELECT {TOPIC_COLUMNS} FROM help_topics t JOIN help_generations g ON g.id=t.generation_id WHERE {tail}")))?;
+    let mut stmt = db(conn.prepare_cached(&format!(
+        "SELECT {TOPIC_COLUMNS} FROM help_topics t JOIN help_generations g ON \
+        g.id=t.generation_id WHERE {tail}"
+    )))?;
     let rows = db(db(stmt.query_map(p, topic_row))?.collect::<rusqlite::Result<Vec<_>>>())?;
     rows.into_iter()
         .map(|r| {
@@ -225,7 +247,23 @@ fn load_content(
     conn: &Connection,
     digest: &str,
 ) -> Result<Option<StoredHelpContent>, StorageError> {
-    let row=db(conn.query_row("SELECT byte_count,character_count,indexed_bytes,index_complete,search_text,offsets_json FROM help_contents WHERE digest=?1",[digest],|r|Ok((r.get::<_,i64>(0)?,r.get(1)?,r.get::<_,i64>(2)?,r.get(3)?,r.get(4)?,r.get::<_,String>(5)?))).optional())?;
+    let row = db(conn
+        .query_row(
+            "SELECT byte_count,character_count,indexed_bytes,index_complete,\
+        search_text,offsets_json FROM help_contents WHERE digest=?1",
+            [digest],
+            |r| {
+                Ok((
+                    r.get::<_, i64>(0)?,
+                    r.get(1)?,
+                    r.get::<_, i64>(2)?,
+                    r.get(3)?,
+                    r.get(4)?,
+                    r.get::<_, String>(5)?,
+                ))
+            },
+        )
+        .optional())?;
     row.map(|r| {
         let c = StoredHelpContent {
             digest: digest.into(),
@@ -247,56 +285,154 @@ macro_rules! help_reads {
             fn help_head(&self) -> Result<StoredHelpHead, StorageError> {
                 head(self.conn)
             }
-            fn help_generation_operation(&self, generation: &Id) -> Result<Option<OperationId>, StorageError> {
+            fn help_generation_operation(
+                &self,
+                generation: &Id,
+            ) -> Result<Option<OperationId>, StorageError> {
                 let operation: Option<String> = db(self.conn.query_row(
-                    "SELECT operation_id FROM help_generations WHERE id=?1 AND state='Published'",
-                    [generation.as_str()], |r| r.get(0)
-                ).optional())?;
-                operation.map(id_of).transpose().map(|value| value.map(OperationId))
+                            "SELECT operation_id FROM help_generations WHERE id=?1 AND state='Published'",
+                            [generation.as_str()], |r| r.get(0)
+                        ).optional())?;
+                operation
+                    .map(id_of)
+                    .transpose()
+                    .map(|value| value.map(OperationId))
             }
-            fn help_drafts(&self, after: Option<&Id>, limit: u16) -> Result<Vec<StoredHelpDraft>, StorageError> {
+            fn help_drafts(
+                &self,
+                after: Option<&Id>,
+                limit: u16,
+            ) -> Result<Vec<StoredHelpDraft>, StorageError> {
                 page_limit(limit)?;
                 let mut stmt = db(self.conn.prepare_cached(
-                    "SELECT id,operation_id FROM help_generations WHERE state='Draft' AND id>?1 ORDER BY id LIMIT ?2"
+                    "SELECT id,operation_id FROM help_generations WHERE state='Draft' AND \
+                        id>?1 ORDER BY id LIMIT ?2",
                 ))?;
                 let rows = db(db(stmt.query_map(
                     params![after.map_or("", Id::as_str), i64::from(limit)],
-                    |r| Ok((r.get::<_,String>(0)?, r.get::<_,String>(1)?))
-                ))?.collect::<rusqlite::Result<Vec<_>>>())?;
-                rows.into_iter().map(|(g,o)| Ok(StoredHelpDraft {
-                    generation_id: id_of(g)?, operation_id: OperationId(id_of(o)?)
-                })).collect()
+                    |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)),
+                ))?
+                .collect::<rusqlite::Result<Vec<_>>>())?;
+                rows.into_iter()
+                    .map(|(g, o)| {
+                        Ok(StoredHelpDraft {
+                            generation_id: id_of(g)?,
+                            operation_id: OperationId(id_of(o)?),
+                        })
+                    })
+                    .collect()
             }
-            fn help_topic(&self, generation: &Id, id: &Id) -> Result<Option<StoredHelpTopic>, StorageError> {
-                Ok(topics(self.conn, "g.state='Published' AND t.generation_id=?1 AND t.id=?2",
-                    params![generation.as_str(), id.as_str()])?.into_iter().next())
+            fn help_topic(
+                &self,
+                generation: &Id,
+                id: &Id,
+            ) -> Result<Option<StoredHelpTopic>, StorageError> {
+                Ok(topics(
+                    self.conn,
+                    "g.state='Published' AND t.generation_id=?1 AND t.id=?2",
+                    params![generation.as_str(), id.as_str()],
+                )?
+                .into_iter()
+                .next())
             }
-            fn help_topics(&self, generation: &Id, filter: &HelpFilter, after: Option<&Id>, limit: u16) -> Result<Vec<StoredHelpTopic>, StorageError> {
+            fn help_topics(
+                &self,
+                generation: &Id,
+                filter: &HelpFilter,
+                after: Option<&Id>,
+                limit: u16,
+            ) -> Result<Vec<StoredHelpTopic>, StorageError> {
                 page_limit(limit)?;
-                if filter.query.as_ref().is_some_and(|q| !text(q,1,4096) || *q != q.to_lowercase())
-                    || filter.screen_id.as_ref().is_some_and(|s| !text(s,1,256))
+                if filter
+                    .query
+                    .as_ref()
+                    .is_some_and(|q| !text(q, 1, 4096) || *q != q.to_lowercase())
+                    || filter.screen_id.as_ref().is_some_and(|s| !text(s, 1, 256))
                 {
                     return Err(invalid("invalid Help filter"));
                 }
-                let mut tail = String::from("g.state='Published' AND t.generation_id=?1 AND t.id>?2");
-                if filter.query.is_some() { tail.push_str(" AND instr(t.title_search||char(10)||coalesce((SELECT c.search_text FROM help_contents c WHERE c.digest=t.content_key),''),?3)>0"); }
-                if filter.screen_id.is_some() { tail.push_str(" AND EXISTS(SELECT 1 FROM help_topic_screens s WHERE s.generation_id=t.generation_id AND s.topic_id=t.id AND s.screen_id=?4)"); }
-                if filter.package_id.is_some() { tail.push_str(" AND t.package_id=?5"); }
+                let mut tail =
+                    String::from("g.state='Published' AND t.generation_id=?1 AND t.id>?2");
+                if filter.query.is_some() {
+                    tail.push_str(
+                        " AND instr(t.title_search||char(10)||coalesce((SELECT c.search_text \
+                    FROM help_contents c WHERE c.digest=t.content_key),''),?3)>0",
+                    );
+                }
+                if filter.screen_id.is_some() {
+                    tail.push_str(" AND EXISTS(SELECT 1 FROM help_topic_screens s WHERE \
+                    s.generation_id=t.generation_id AND s.topic_id=t.id AND s.screen_id=?4)");
+                }
+                if filter.package_id.is_some() {
+                    tail.push_str(" AND t.package_id=?5");
+                }
                 tail.push_str(" ORDER BY t.id LIMIT ?6");
-                topics(self.conn, &tail, params![generation.as_str(), after.map_or("",Id::as_str), filter.query, filter.screen_id, filter.package_id.as_ref().map(Id::as_str), i64::from(limit)])
+                topics(
+                    self.conn,
+                    &tail,
+                    params![
+                        generation.as_str(),
+                        after.map_or("", Id::as_str),
+                        filter.query,
+                        filter.screen_id,
+                        filter.package_id.as_ref().map(Id::as_str),
+                        i64::from(limit)
+                    ],
+                )
             }
-            fn help_content(&self,digest:&str)->Result<Option<StoredHelpContent>,StorageError>{load_content(self.conn,digest)}
-            fn help_content_reference(&self,digest:&str)->Result<Option<Value>,StorageError>{
-                let reference:Option<String>=db(self.conn.query_row("SELECT t.content_ref_json FROM help_topics t JOIN help_generations g ON g.id=t.generation_id JOIN artifact_versions v ON v.id=t.version_id JOIN artifacts a ON a.id=t.artifact_id JOIN blobs b ON b.digest=t.content_digest WHERE t.content_digest=?1 AND t.availability='Available' AND g.state='Published' AND a.state='Live' AND v.deleted_at IS NULL AND b.state='Present' ORDER BY t.generation_id,t.id LIMIT 1",[digest],|r|r.get(0)).optional())?;
+            fn help_content(
+                &self,
+                digest: &str,
+            ) -> Result<Option<StoredHelpContent>, StorageError> {
+                load_content(self.conn, digest)
+            }
+            fn help_content_reference(&self, digest: &str) -> Result<Option<Value>, StorageError> {
+                let reference:Option<String>=db(self.conn.query_row("SELECT t.content_ref_json FROM help_topics t JOIN help_generations g ON \
+                    g.id=t.generation_id JOIN artifact_versions v ON v.id=t.version_id JOIN \
+                    artifacts a ON a.id=t.artifact_id JOIN blobs b ON \
+                    b.digest=t.content_digest WHERE t.content_digest=?1 AND \
+                    t.availability='Available' AND g.state='Published' AND a.state='Live' \
+                    AND v.deleted_at IS NULL AND b.state='Present' ORDER BY t.generation_id,\
+                    t.id LIMIT 1",[digest],|r|r.get(0)).optional())?;
                 reference.as_deref().map(json).transpose()
             }
-            fn help_passage_source(&self,generation:&Id,id:&Id,offset:i64,chars:u32)->Result<Option<StoredHelpPassage>,StorageError>{
-                if offset<0||chars==0||chars>MAX_HELP_PASSAGE_CHARS {return Err(invalid("Help passage bounds invalid"));}
-                let Some(topic)=self.help_topic(generation,id)?.filter(|t|t.availability=="Available") else{return Ok(None);};
-                let c=load_content(self.conn,&topic.content_digest)?.ok_or_else(||corrupt("Help content projection missing"))?;
-                if offset>c.character_count {return Err(invalid("Help passage offset exceeds content"));}
-                let checkpoint=c.offsets.iter().rev().find(|p|p.character_offset<=offset).expect("initial offset").clone();
-                Ok(Some(StoredHelpPassage {content_ref:topic.content_ref.ok_or_else(||corrupt("Help reference missing"))?,content_digest:c.digest,byte_count:c.byte_count,character_count:c.character_count,checkpoint}))
+            fn help_passage_source(
+                &self,
+                generation: &Id,
+                id: &Id,
+                offset: i64,
+                chars: u32,
+            ) -> Result<Option<StoredHelpPassage>, StorageError> {
+                if offset < 0 || chars == 0 || chars > MAX_HELP_PASSAGE_CHARS {
+                    return Err(invalid("Help passage bounds invalid"));
+                }
+                let Some(topic) = self
+                    .help_topic(generation, id)?
+                    .filter(|t| t.availability == "Available")
+                else {
+                    return Ok(None);
+                };
+                let c = load_content(self.conn, &topic.content_digest)?
+                    .ok_or_else(|| corrupt("Help content projection missing"))?;
+                if offset > c.character_count {
+                    return Err(invalid("Help passage offset exceeds content"));
+                }
+                let checkpoint = c
+                    .offsets
+                    .iter()
+                    .rev()
+                    .find(|p| p.character_offset <= offset)
+                    .expect("initial offset")
+                    .clone();
+                Ok(Some(StoredHelpPassage {
+                    content_ref: topic
+                        .content_ref
+                        .ok_or_else(|| corrupt("Help reference missing"))?,
+                    content_digest: c.digest,
+                    byte_count: c.byte_count,
+                    character_count: c.character_count,
+                    checkpoint,
+                }))
             }
         }
     };
@@ -361,7 +497,24 @@ fn validate_document(
         {
             return Err(invalid("Help artifact reference differs from its body"));
         }
-        let real:bool=db(conn.query_row("SELECT EXISTS(SELECT 1 FROM artifact_versions v JOIN artifacts a ON a.id=v.artifact_id JOIN blobs b ON b.digest=v.blob_digest WHERE v.id=?1 AND v.artifact_id=?2 AND v.blob_digest=?3 AND v.media_type=?4 AND v.deleted_at IS NULL AND a.state='Live' AND b.byte_count=?5 AND b.state='Present' AND json_extract(v.source_json,'$.source.helpIndexDigest')=?6)",params![reference.version_id.as_str(),reference.artifact_id.as_str(),reference.sha256.as_str(),reference.media_type,reference.byte_length.get(),c.commitment().map_err(|_|invalid("Help index commitment"))?],|r|r.get(0)))?;
+        let real: bool = db(conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM artifact_versions v JOIN artifacts a ON \
+            a.id=v.artifact_id JOIN blobs b ON b.digest=v.blob_digest WHERE v.id=?1 \
+            AND v.artifact_id=?2 AND v.blob_digest=?3 AND v.media_type=?4 AND \
+            v.deleted_at IS NULL AND a.state='Live' AND b.byte_count=?5 AND \
+            b.state='Present' AND json_extract(v.source_json,\
+            '$.source.helpIndexDigest')=?6)",
+            params![
+                reference.version_id.as_str(),
+                reference.artifact_id.as_str(),
+                reference.sha256.as_str(),
+                reference.media_type,
+                reference.byte_length.get(),
+                c.commitment()
+                    .map_err(|_| invalid("Help index commitment"))?
+            ],
+            |r| r.get(0),
+        ))?;
         if !real {
             return Err(invalid(
                 "Help artifact reference is not a committed live version",
@@ -420,15 +573,39 @@ fn generation(conn: &Connection, id: &Id) -> Result<Option<(String, String)>, St
 // its document was prepared. This reads indexed metadata, never guide bodies or files.
 fn references_live(conn: &Connection, generation: &Id) -> Result<bool, StorageError> {
     db(conn.query_row(
-        "SELECT NOT EXISTS(SELECT 1 FROM help_topics t WHERE t.generation_id=?1 AND t.availability='Available' AND NOT EXISTS(SELECT 1 FROM artifact_versions v JOIN artifacts a ON a.id=v.artifact_id JOIN blobs b ON b.digest=v.blob_digest WHERE v.id=t.version_id AND v.artifact_id=t.artifact_id AND v.id=json_extract(t.content_ref_json,'$.versionId') AND a.id=json_extract(t.content_ref_json,'$.artifactId') AND v.blob_digest=t.content_digest AND v.blob_digest=json_extract(t.content_ref_json,'$.sha256') AND v.media_type=json_extract(t.content_ref_json,'$.mediaType') AND v.deleted_at IS NULL AND a.state='Live' AND b.byte_count=CAST(json_extract(t.content_ref_json,'$.byteLength') AS INTEGER) AND b.state='Present'))",
-        [generation.as_str()], |r| r.get(0)
+        "SELECT NOT EXISTS(SELECT 1 FROM help_topics t WHERE t.generation_id=?1 \
+            AND t.availability='Available' AND NOT EXISTS(SELECT 1 FROM \
+            artifact_versions v JOIN artifacts a ON a.id=v.artifact_id JOIN blobs b \
+            ON b.digest=v.blob_digest WHERE v.id=t.version_id AND \
+            v.artifact_id=t.artifact_id AND v.id=json_extract(t.content_ref_json,\
+            '$.versionId') AND a.id=json_extract(t.content_ref_json,'$.artifactId') \
+            AND v.blob_digest=t.content_digest AND \
+            v.blob_digest=json_extract(t.content_ref_json,'$.sha256') AND \
+            v.media_type=json_extract(t.content_ref_json,'$.mediaType') AND \
+            v.deleted_at IS NULL AND a.state='Live' AND \
+            b.byte_count=CAST(json_extract(t.content_ref_json,'$.byteLength') AS \
+            INTEGER) AND b.state='Present'))",
+        [generation.as_str()],
+        |r| r.get(0),
     ))
 }
 // Staging handles and output revisions are not source identity. Each digest was checked
 // against actual guide bytes before staging; a no-op preserves the published references.
 fn equal_topics(conn: &Connection, a: &Id, b: &Id) -> Result<bool, StorageError> {
-    let fields = "id,version,title,content_digest,provenance_json,related_operations_json,screen_ids_json,source_kind,package_id,manifest_digest,availability,reason,character_count";
-    db(conn.query_row(&format!("SELECT NOT EXISTS(SELECT {fields} FROM help_topics WHERE generation_id=?1 EXCEPT SELECT {fields} FROM help_topics WHERE generation_id=?2) AND NOT EXISTS(SELECT {fields} FROM help_topics WHERE generation_id=?2 EXCEPT SELECT {fields} FROM help_topics WHERE generation_id=?1)"),params![a.as_str(),b.as_str()],|r|r.get(0)))
+    let fields = "id,version,title,content_digest,provenance_json,related_operations_json,\
+        screen_ids_json,source_kind,package_id,manifest_digest,availability,\
+        reason,character_count";
+    db(conn.query_row(
+        &format!(
+            "SELECT NOT EXISTS(SELECT {fields} FROM help_topics WHERE \
+        generation_id=?1 EXCEPT SELECT {fields} FROM help_topics WHERE \
+        generation_id=?2) AND NOT EXISTS(SELECT {fields} FROM help_topics WHERE \
+        generation_id=?2 EXCEPT SELECT {fields} FROM help_topics WHERE \
+        generation_id=?1)"
+        ),
+        params![a.as_str(), b.as_str()],
+        |r| r.get(0),
+    ))
 }
 impl HelpRepository for Unit<'_> {
     fn set_help_generation_operation(
@@ -508,17 +685,64 @@ impl HelpRepository for Unit<'_> {
                 })
             };
         }
-        db(self.conn.execute("INSERT INTO help_generations(id,operation_id,state) VALUES(?1,?2,'Draft') ON CONFLICT(id) DO NOTHING",params![t.generation_id.as_str(),op.0.as_str()]))?;
+        db(self.conn.execute(
+            "INSERT INTO help_generations(id,operation_id,state) VALUES(?1,?2,\
+            'Draft') ON CONFLICT(id) DO NOTHING",
+            params![t.generation_id.as_str(), op.0.as_str()],
+        ))?;
         if let Some(c) = &document.content {
             if let Some(old) = load_content(self.conn, &c.digest)? {
                 if old != *c {
                     return Err(invalid("same Help content digest has different projection"));
                 }
             } else {
-                db(self.conn.execute("INSERT INTO help_contents(digest,byte_count,character_count,indexed_bytes,index_complete,search_text,offsets_json) VALUES(?1,?2,?3,?4,?5,?6,?7)",params![c.digest,c.byte_count as i64,c.character_count,c.indexed_bytes as i64,c.index_complete,c.search_text,serde_json::to_string(&c.offsets).map_err(|_|invalid("Help offsets JSON"))?]))?;
+                db(self.conn.execute(
+                    "INSERT INTO help_contents(digest,byte_count,character_count,\
+                    indexed_bytes,index_complete,search_text,offsets_json) VALUES(?1,?2,?3,\
+                    ?4,?5,?6,?7)",
+                    params![
+                        c.digest,
+                        c.byte_count as i64,
+                        c.character_count,
+                        c.indexed_bytes as i64,
+                        c.index_complete,
+                        c.search_text,
+                        serde_json::to_string(&c.offsets)
+                            .map_err(|_| invalid("Help offsets JSON"))?
+                    ],
+                ))?;
             }
         }
-        db(self.conn.execute("INSERT INTO help_topics(generation_id,id,version,title,content_digest,content_ref_json,artifact_id,version_id,provenance_json,related_operations_json,screen_ids_json,source_kind,package_id,manifest_digest,availability,reason,character_count,topic_revision,content_key,title_search) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20)",params![t.generation_id.as_str(),t.id.as_str(),t.version,t.title,t.content_digest,content,reference.as_ref().map(|r|r.artifact_id.as_str()),reference.as_ref().map(|r|r.version_id.as_str()),provenance,operations,screens,t.source_kind,t.package_id.as_ref().map(Id::as_str),t.manifest_digest,t.availability,t.reason,t.character_count,t.topic_revision,document.content.as_ref().map(|c|c.digest.as_str()),t.title.to_lowercase()]))?;
+        db(self.conn.execute(
+            "INSERT INTO help_topics(generation_id,id,version,title,content_digest,\
+            content_ref_json,artifact_id,version_id,provenance_json,\
+            related_operations_json,screen_ids_json,source_kind,package_id,\
+            manifest_digest,availability,reason,character_count,topic_revision,\
+            content_key,title_search) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,\
+            ?13,?14,?15,?16,?17,?18,?19,?20)",
+            params![
+                t.generation_id.as_str(),
+                t.id.as_str(),
+                t.version,
+                t.title,
+                t.content_digest,
+                content,
+                reference.as_ref().map(|r| r.artifact_id.as_str()),
+                reference.as_ref().map(|r| r.version_id.as_str()),
+                provenance,
+                operations,
+                screens,
+                t.source_kind,
+                t.package_id.as_ref().map(Id::as_str),
+                t.manifest_digest,
+                t.availability,
+                t.reason,
+                t.character_count,
+                t.topic_revision,
+                document.content.as_ref().map(|c| c.digest.as_str()),
+                t.title.to_lowercase()
+            ],
+        ))?;
         for screen in &t.screen_ids {
             db(self.conn.execute(
                 "INSERT INTO help_topic_screens(generation_id,topic_id,screen_id) VALUES(?1,?2,?3)",
@@ -600,9 +824,38 @@ impl HelpRepository for Unit<'_> {
         if generation(self.conn, gen_id)?.is_some_and(|(state, _)| state != "Draft") {
             return Err(invalid("published Help generations cannot be replaced"));
         }
-        db(self.conn.execute("INSERT INTO help_generations(id,operation_id,state) VALUES(?1,?2,'Draft') ON CONFLICT(id) DO NOTHING",params![gen_id.as_str(),op.0.as_str()]))?;
-        db(self.conn.execute("UPDATE help_generations SET state='Published',app_version=?2,registry_revision=?3,source_digest=?4,help_revision=?5,published_at=?6 WHERE id=?1",params![gen_id.as_str(),new.app_version,new.registry_revision,new.source_digest,new.revision,new.updated_at_ms]))?;
-        db(self.conn.execute("UPDATE help_head SET revision=?1,app_version=?2,registry_revision=?3,source_digest=?4,generation_id=?5,generation_operation_id=?6,updated_at=?7 WHERE singleton=1",params![new.revision,new.app_version,new.registry_revision,new.source_digest,gen_id.as_str(),op.0.as_str(),new.updated_at_ms]))?;
+        db(self.conn.execute(
+            "INSERT INTO help_generations(id,operation_id,state) VALUES(?1,?2,\
+            'Draft') ON CONFLICT(id) DO NOTHING",
+            params![gen_id.as_str(), op.0.as_str()],
+        ))?;
+        db(self.conn.execute(
+            "UPDATE help_generations SET state='Published',app_version=?2,\
+            registry_revision=?3,source_digest=?4,help_revision=?5,published_at=?6 \
+            WHERE id=?1",
+            params![
+                gen_id.as_str(),
+                new.app_version,
+                new.registry_revision,
+                new.source_digest,
+                new.revision,
+                new.updated_at_ms
+            ],
+        ))?;
+        db(self.conn.execute(
+            "UPDATE help_head SET revision=?1,app_version=?2,registry_revision=?3,\
+            source_digest=?4,generation_id=?5,generation_operation_id=?6,\
+            updated_at=?7 WHERE singleton=1",
+            params![
+                new.revision,
+                new.app_version,
+                new.registry_revision,
+                new.source_digest,
+                gen_id.as_str(),
+                op.0.as_str(),
+                new.updated_at_ms
+            ],
+        ))?;
         head(self.conn)
     }
     fn discard_help_draft(
@@ -629,9 +882,17 @@ impl HelpRepository for Unit<'_> {
             .into_iter()
             .map(|t| t.content_digest)
             .collect::<Vec<_>>();
-        db(self.conn.execute("DELETE FROM help_topics WHERE generation_id=?1 AND id IN (SELECT id FROM help_topics WHERE generation_id=?1 ORDER BY id LIMIT ?2)",params![gen_id.as_str(),i64::from(limit)]))?;
+        db(self.conn.execute(
+            "DELETE FROM help_topics WHERE generation_id=?1 AND id IN (SELECT id \
+            FROM help_topics WHERE generation_id=?1 ORDER BY id LIMIT ?2)",
+            params![gen_id.as_str(), i64::from(limit)],
+        ))?;
         for digest in retired {
-            db(self.conn.execute("DELETE FROM help_contents WHERE digest=?1 AND NOT EXISTS(SELECT 1 FROM help_topics WHERE content_key=?1)",[digest]))?;
+            db(self.conn.execute(
+                "DELETE FROM help_contents WHERE digest=?1 AND NOT EXISTS(SELECT 1 FROM \
+                help_topics WHERE content_key=?1)",
+                [digest],
+            ))?;
         }
         let remains: bool = db(self.conn.query_row(
             "SELECT EXISTS(SELECT 1 FROM help_topics WHERE generation_id=?1)",

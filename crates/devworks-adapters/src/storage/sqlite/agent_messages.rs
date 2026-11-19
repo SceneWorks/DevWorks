@@ -8,15 +8,25 @@ use devworks_core::ports::storage::{
 use devworks_core::protocol::{ActorId, AssignmentId, Id, ProjectId, RootId};
 use rusqlite::{Connection, OptionalExtension, Row, params};
 
-const MESSAGE_COLUMNS: &str = "id,project_id,root_id,channel,from_assignment_id,to_assignment_id,message_class,body,attachments_json,in_reply_to_id,state,blocking,idempotency_key,revision,created_at,resolved_at,from_actor_id,target_item_id,target_feature_id,resource_name,target_session_id,to_human,sender_session_id,resolved_by_actor_id,resolved_by_session_id";
-const DELIVERY_COLUMNS: &str = "sequence,message_id,project_id,recipient_assignment_id,recipient_human,state,revision,delivered_at,read_at,recipient_session_id,handed_over,resolved_at,handed_to_session_id";
+const MESSAGE_COLUMNS: &str = "id,project_id,root_id,channel,from_assignment_id,to_assignment_id,\
+    message_class,body,attachments_json,in_reply_to_id,state,blocking,\
+    idempotency_key,revision,created_at,resolved_at,from_actor_id,\
+    target_item_id,target_feature_id,resource_name,target_session_id,\
+    to_human,sender_session_id,resolved_by_actor_id,resolved_by_session_id";
+const DELIVERY_COLUMNS: &str = "sequence,message_id,project_id,recipient_assignment_id,recipient_human,\
+    state,revision,delivered_at,read_at,recipient_session_id,handed_over,\
+    resolved_at,handed_to_session_id";
 const EVENT_COLUMNS: &str = "sequence,project_id,message_id,kind,actor_id,recipient_assignment_id,created_at,recipient_session_id,recipient_human";
 
 pub(super) fn agent_assignment_context(
     conn: &Connection,
     assignment: &AssignmentId,
 ) -> Result<Option<StoredAgentAssignmentContext>, StorageError> {
-    let mut stmt = db(conn.prepare("SELECT assignment_id,project_id,role_id,role_instructions,role_revisions_json,brief,task_ids_json,source_checkpoint_id,created_at FROM agent_assignment_context WHERE assignment_id=?1"))?;
+    let mut stmt = db(conn.prepare(
+        "SELECT assignment_id,project_id,role_id,role_instructions,\
+        role_revisions_json,brief,task_ids_json,source_checkpoint_id,created_at \
+        FROM agent_assignment_context WHERE assignment_id=?1",
+    ))?;
     let mut rows = db(stmt.query([assignment.0.as_str()]))?;
     let Some(row) = db(rows.next())? else {
         return Ok(None);
@@ -46,8 +56,20 @@ pub(super) fn insert_agent_assignment_context(
         return Err(StorageError::ScopeDenied);
     }
     db(conn.execute(
-        "INSERT INTO agent_assignment_context(assignment_id,project_id,role_id,role_instructions,role_revisions_json,brief,task_ids_json,source_checkpoint_id,created_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9)",
-        params![context.assignment_id.0.as_str(),context.project_id.0.as_str(),context.role_id.as_str(),context.role_instructions,context.role_revisions.to_string(),context.brief,context.task_ids.to_string(),context.source_checkpoint_id.as_ref().map(Id::as_str),context.created_at_ms],
+        "INSERT INTO agent_assignment_context(assignment_id,project_id,role_id,\
+            role_instructions,role_revisions_json,brief,task_ids_json,\
+            source_checkpoint_id,created_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9)",
+        params![
+            context.assignment_id.0.as_str(),
+            context.project_id.0.as_str(),
+            context.role_id.as_str(),
+            context.role_instructions,
+            context.role_revisions.to_string(),
+            context.brief,
+            context.task_ids.to_string(),
+            context.source_checkpoint_id.as_ref().map(Id::as_str),
+            context.created_at_ms
+        ],
     ))?;
     Ok(())
 }
@@ -198,7 +220,11 @@ pub(super) fn messages(
         }
         None => (i64::MAX, "~"),
     };
-    let mut stmt = db(conn.prepare(&format!("SELECT {MESSAGE_COLUMNS} FROM agent_messages WHERE project_id=?1 AND (created_at<?2 OR (created_at=?2 AND id<?3)) ORDER BY created_at DESC,id DESC LIMIT ?4")))?;
+    let mut stmt = db(conn.prepare(&format!(
+        "SELECT {MESSAGE_COLUMNS} FROM agent_messages WHERE project_id=?1 AND \
+        (created_at<?2 OR (created_at=?2 AND id<?3)) ORDER BY created_at DESC,\
+        id DESC LIMIT ?4"
+    )))?;
     let mut rows = db(stmt.query(params![project.0.as_str(), time, key, page_limit(limit)?]))?;
     let mut out = Vec::new();
     while let Some(row) = db(rows.next())? {
@@ -216,7 +242,12 @@ pub(super) fn unhanded_direct_deliveries(
         return Err(StorageError::CursorExpired);
     }
     let mut stmt = db(conn.prepare(&format!(
-        "SELECT {DELIVERY_COLUMNS} FROM agent_message_deliveries WHERE project_id=?1 AND sequence>?2 AND handed_to_session_id IS NULL AND recipient_session_id IS NOT NULL AND EXISTS (SELECT 1 FROM agent_messages m WHERE m.id=message_id AND m.project_id=?1 AND m.target_item_id IS NULL AND m.target_session_id IS NOT NULL) ORDER BY sequence LIMIT ?3"
+        "SELECT {DELIVERY_COLUMNS} FROM agent_message_deliveries WHERE \
+            project_id=?1 AND sequence>?2 AND handed_to_session_id IS NULL AND \
+            recipient_session_id IS NOT NULL AND EXISTS (SELECT 1 FROM \
+            agent_messages m WHERE m.id=message_id AND m.project_id=?1 AND \
+            m.target_item_id IS NULL AND m.target_session_id IS NOT NULL) ORDER BY \
+            sequence LIMIT ?3"
     )))?;
     let mut rows = db(stmt.query(params![project.0.as_str(), after, page_limit(limit)?]))?;
     let mut deliveries = Vec::new();
@@ -239,7 +270,12 @@ pub(super) fn session_activity_at(
     session: &Id,
 ) -> Result<Option<i64>, StorageError> {
     db(conn.query_row(
-        "SELECT max(at) FROM (SELECT created_at AS at FROM agent_messages WHERE sender_session_id=?1 UNION ALL SELECT delivered_at AS at FROM agent_message_deliveries WHERE recipient_session_id=?1 AND delivered_at IS NOT NULL UNION ALL SELECT read_at AS at FROM agent_message_deliveries WHERE recipient_session_id=?1 AND read_at IS NOT NULL)",
+        "SELECT max(at) FROM (SELECT created_at AS at FROM agent_messages WHERE \
+            sender_session_id=?1 UNION ALL SELECT delivered_at AS at FROM \
+            agent_message_deliveries WHERE recipient_session_id=?1 AND delivered_at \
+            IS NOT NULL UNION ALL SELECT read_at AS at FROM \
+            agent_message_deliveries WHERE recipient_session_id=?1 AND read_at IS \
+            NOT NULL)",
         [session.as_str()],
         |row| row.get(0),
     ))
@@ -254,7 +290,14 @@ pub(super) fn message_history(
         ));
     }
     let mut stmt = db(conn.prepare(
-        "SELECT e.sequence,e.message_id FROM agent_message_events e JOIN agent_messages m ON m.id=e.message_id WHERE e.kind='Posted' AND e.project_id=?1 AND m.project_id=?1 AND m.message_class IN ('Info','Question','Request','Blocker','Announcement') AND (?2 IS NULL OR m.channel=?2) AND (?3 IS NULL OR m.target_item_id=?3) AND (?4 IS NULL OR m.target_feature_id=?4) AND (?5 IS NULL OR m.resource_name=?5) AND (NOT ?6 OR m.state='Open') AND (NOT ?7 OR m.to_human=1) AND (?8 IS NULL OR e.sequence<?8) ORDER BY e.sequence DESC LIMIT ?9",
+        "SELECT e.sequence,e.message_id FROM agent_message_events e JOIN \
+            agent_messages m ON m.id=e.message_id WHERE e.kind='Posted' AND \
+            e.project_id=?1 AND m.project_id=?1 AND m.message_class IN ('Info',\
+            'Question','Request','Blocker','Announcement') AND (?2 IS NULL OR \
+            m.channel=?2) AND (?3 IS NULL OR m.target_item_id=?3) AND (?4 IS NULL \
+            OR m.target_feature_id=?4) AND (?5 IS NULL OR m.resource_name=?5) AND \
+            (NOT ?6 OR m.state='Open') AND (NOT ?7 OR m.to_human=1) AND (?8 IS NULL \
+            OR e.sequence<?8) ORDER BY e.sequence DESC LIMIT ?9",
     ))?;
     let mut rows = db(stmt.query(params![
         filter.project.0.as_str(),
@@ -307,8 +350,16 @@ pub(super) fn assignment_thread(
         }
         None => (i64::MAX, "~"),
     };
-    let mut stmt=db(conn.prepare(
-        "SELECT m.id FROM agent_messages m JOIN agent_message_deliveries d ON d.message_id=m.id AND d.recipient_assignment_id=m.to_assignment_id AND d.recipient_session_id IS NULL WHERE m.project_id=?1 AND m.channel='Assignment' AND ((?3='Inbound' AND m.to_assignment_id=?2) OR (?3='Outbound' AND m.from_assignment_id=?2) OR (?3='Both' AND (m.to_assignment_id=?2 OR m.from_assignment_id=?2))) AND (NOT ?4 OR d.state IN ('Pending','Delivered')) AND (m.created_at<?5 OR (m.created_at=?5 AND m.id<?6)) ORDER BY m.created_at DESC,m.id DESC LIMIT ?7"
+    let mut stmt = db(conn.prepare(
+        "SELECT m.id FROM agent_messages m JOIN agent_message_deliveries d ON \
+            d.message_id=m.id AND d.recipient_assignment_id=m.to_assignment_id AND \
+            d.recipient_session_id IS NULL WHERE m.project_id=?1 AND \
+            m.channel='Assignment' AND ((?3='Inbound' AND m.to_assignment_id=?2) OR \
+            (?3='Outbound' AND m.from_assignment_id=?2) OR (?3='Both' AND \
+            (m.to_assignment_id=?2 OR m.from_assignment_id=?2))) AND (NOT ?4 OR \
+            d.state IN ('Pending','Delivered')) AND (m.created_at<?5 OR \
+            (m.created_at=?5 AND m.id<?6)) ORDER BY m.created_at DESC,m.id DESC \
+            LIMIT ?7",
     ))?;
     let mut rows = db(stmt.query(params![
         project.0.as_str(),
@@ -342,7 +393,11 @@ pub(super) fn delivery(
     message: &Id,
     recipient: Option<&AssignmentId>,
 ) -> Result<Option<StoredAgentDelivery>, StorageError> {
-    let mut stmt = db(conn.prepare(&format!("SELECT {DELIVERY_COLUMNS} FROM agent_message_deliveries WHERE message_id=?1 AND recipient_assignment_id IS ?2 AND recipient_session_id IS NULL")))?;
+    let mut stmt = db(conn.prepare(&format!(
+        "SELECT {DELIVERY_COLUMNS} FROM agent_message_deliveries WHERE \
+        message_id=?1 AND recipient_assignment_id IS ?2 AND \
+        recipient_session_id IS NULL"
+    )))?;
     let mut rows = db(stmt.query(params![message.as_str(), recipient.map(|a| a.0.as_str())]))?;
     match db(rows.next())? {
         Some(row) => delivery_row(row).map(Some),
@@ -374,7 +429,12 @@ pub(super) fn inbox(
             "negative delivery cursor".into(),
         ));
     }
-    let mut stmt = db(conn.prepare(&format!("SELECT {DELIVERY_COLUMNS} FROM agent_message_deliveries WHERE project_id=?1 AND recipient_assignment_id IS ?2 AND recipient_session_id IS NULL AND sequence>?3 AND (?4 OR state IN ('Pending','Delivered')) ORDER BY sequence LIMIT ?5")))?;
+    let mut stmt = db(conn.prepare(&format!(
+        "SELECT {DELIVERY_COLUMNS} FROM agent_message_deliveries WHERE \
+        project_id=?1 AND recipient_assignment_id IS ?2 AND \
+        recipient_session_id IS NULL AND sequence>?3 AND (?4 OR state IN \
+        ('Pending','Delivered')) ORDER BY sequence LIMIT ?5"
+    )))?;
     let mut rows = db(stmt.query(params![
         project.0.as_str(),
         recipient.map(|a| a.0.as_str()),
@@ -410,7 +470,11 @@ pub(super) fn session_inbox(
             "negative delivery cursor".into(),
         ));
     }
-    let mut stmt = db(conn.prepare(&format!("SELECT {DELIVERY_COLUMNS} FROM agent_message_deliveries WHERE project_id=?1 AND recipient_session_id=?2 AND sequence>?3 AND (?4 OR state IN ('Pending','Delivered')) ORDER BY sequence LIMIT ?5")))?;
+    let mut stmt = db(conn.prepare(&format!(
+        "SELECT {DELIVERY_COLUMNS} FROM agent_message_deliveries WHERE \
+        project_id=?1 AND recipient_session_id=?2 AND sequence>?3 AND (?4 OR \
+        state IN ('Pending','Delivered')) ORDER BY sequence LIMIT ?5"
+    )))?;
     let mut rows = db(stmt.query(params![
         project.0.as_str(),
         session.as_str(),
@@ -468,7 +532,10 @@ pub(super) fn events(
     if after < 0 {
         return Err(StorageError::InvalidRecord("negative event cursor".into()));
     }
-    let mut stmt = db(conn.prepare(&format!("SELECT {EVENT_COLUMNS} FROM agent_message_events WHERE project_id=?1 AND sequence>?2 ORDER BY sequence LIMIT ?3")))?;
+    let mut stmt = db(conn.prepare(&format!(
+        "SELECT {EVENT_COLUMNS} FROM agent_message_events WHERE project_id=?1 \
+        AND sequence>?2 ORDER BY sequence LIMIT ?3"
+    )))?;
     let mut rows = db(stmt.query(params![project.0.as_str(), after, page_limit(limit)?]))?;
     let mut out = Vec::new();
     while let Some(row) = db(rows.next())? {
@@ -588,8 +655,41 @@ pub(super) fn insert_message(
         return Err(StorageError::ScopeDenied);
     }
     db(conn.execute(
-        "INSERT INTO agent_messages(id,project_id,root_id,channel,from_assignment_id,to_assignment_id,message_class,body,attachments_json,in_reply_to_id,state,blocking,idempotency_key,revision,created_at,resolved_at,from_actor_id,target_item_id,target_feature_id,resource_name,target_session_id,to_human,sender_session_id,resolved_by_actor_id,resolved_by_session_id) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21,?22,?23,?24,?25)",
-        params![m.id.as_str(),m.project_id.0.as_str(),m.root_id.as_ref().map(|r|r.0.as_str()),m.channel,m.from_assignment_id.as_ref().map(|a|a.0.as_str()),m.to_assignment_id.as_ref().map(|a|a.0.as_str()),m.message_class,m.body,m.attachments.to_string(),m.in_reply_to_id.as_ref().map(Id::as_str),m.state,m.blocking,m.idempotency_key,m.revision,m.created_at_ms,m.resolved_at_ms,m.from_actor_id.0.as_str(),m.target_item_id.as_ref().map(|r|r.0.as_str()),m.target_feature_id.as_ref().map(|r|r.0.as_str()),m.resource_name,m.target_session_id.as_ref().map(Id::as_str),m.to_human,m.sender_session_id.as_ref().map(Id::as_str),m.resolved_by_actor_id.as_ref().map(|a|a.0.as_str()),m.resolved_by_session_id.as_ref().map(Id::as_str)]
+        "INSERT INTO agent_messages(id,project_id,root_id,channel,\
+            from_assignment_id,to_assignment_id,message_class,body,attachments_json,\
+            in_reply_to_id,state,blocking,idempotency_key,revision,created_at,\
+            resolved_at,from_actor_id,target_item_id,target_feature_id,\
+            resource_name,target_session_id,to_human,sender_session_id,\
+            resolved_by_actor_id,resolved_by_session_id) VALUES(?1,?2,?3,?4,?5,?6,\
+            ?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21,?22,?23,?24,\
+            ?25)",
+        params![
+            m.id.as_str(),
+            m.project_id.0.as_str(),
+            m.root_id.as_ref().map(|r| r.0.as_str()),
+            m.channel,
+            m.from_assignment_id.as_ref().map(|a| a.0.as_str()),
+            m.to_assignment_id.as_ref().map(|a| a.0.as_str()),
+            m.message_class,
+            m.body,
+            m.attachments.to_string(),
+            m.in_reply_to_id.as_ref().map(Id::as_str),
+            m.state,
+            m.blocking,
+            m.idempotency_key,
+            m.revision,
+            m.created_at_ms,
+            m.resolved_at_ms,
+            m.from_actor_id.0.as_str(),
+            m.target_item_id.as_ref().map(|r| r.0.as_str()),
+            m.target_feature_id.as_ref().map(|r| r.0.as_str()),
+            m.resource_name,
+            m.target_session_id.as_ref().map(Id::as_str),
+            m.to_human,
+            m.sender_session_id.as_ref().map(Id::as_str),
+            m.resolved_by_actor_id.as_ref().map(|a| a.0.as_str()),
+            m.resolved_by_session_id.as_ref().map(Id::as_str)
+        ],
     ))?;
     Ok(())
 }
@@ -691,7 +791,27 @@ pub(super) fn insert_delivery(
         return Err(StorageError::ScopeDenied);
     }
     advance_head(conn, "delivery", d.sequence)?;
-    db(conn.execute("INSERT INTO agent_message_deliveries(sequence,message_id,project_id,recipient_assignment_id,recipient_human,state,revision,delivered_at,read_at,recipient_session_id,handed_over,resolved_at,handed_to_session_id) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13)",params![d.sequence,d.message_id.as_str(),d.project_id.0.as_str(),d.recipient_assignment_id.as_ref().map(|a|a.0.as_str()),d.recipient_human,d.state.as_str(),d.revision,d.delivered_at_ms,d.read_at_ms,d.recipient_session_id.as_ref().map(Id::as_str),d.handed_over,d.resolved_at_ms,d.handed_to_session_id.as_ref().map(Id::as_str)]))?;
+    db(conn.execute(
+        "INSERT INTO agent_message_deliveries(sequence,message_id,project_id,\
+        recipient_assignment_id,recipient_human,state,revision,delivered_at,\
+        read_at,recipient_session_id,handed_over,resolved_at,\
+        handed_to_session_id) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13)",
+        params![
+            d.sequence,
+            d.message_id.as_str(),
+            d.project_id.0.as_str(),
+            d.recipient_assignment_id.as_ref().map(|a| a.0.as_str()),
+            d.recipient_human,
+            d.state.as_str(),
+            d.revision,
+            d.delivered_at_ms,
+            d.read_at_ms,
+            d.recipient_session_id.as_ref().map(Id::as_str),
+            d.handed_over,
+            d.resolved_at_ms,
+            d.handed_to_session_id.as_ref().map(Id::as_str)
+        ],
+    ))?;
     Ok(())
 }
 pub(super) fn update_delivery(
@@ -762,7 +882,22 @@ pub(super) fn update_delivery(
             "illegal agent delivery transition".into(),
         ));
     }
-    db(conn.execute("UPDATE agent_message_deliveries SET state=?2,revision=?3,delivered_at=?4,read_at=?5,resolved_at=?7,handed_over=?8,handed_to_session_id=?9 WHERE sequence=?1 AND revision=?6",params![d.sequence,d.state.as_str(),d.revision,d.delivered_at_ms,d.read_at_ms,expected,d.resolved_at_ms,d.handed_over,d.handed_to_session_id.as_ref().map(Id::as_str)]))?;
+    db(conn.execute(
+        "UPDATE agent_message_deliveries SET state=?2,revision=?3,\
+        delivered_at=?4,read_at=?5,resolved_at=?7,handed_over=?8,\
+        handed_to_session_id=?9 WHERE sequence=?1 AND revision=?6",
+        params![
+            d.sequence,
+            d.state.as_str(),
+            d.revision,
+            d.delivered_at_ms,
+            d.read_at_ms,
+            expected,
+            d.resolved_at_ms,
+            d.handed_over,
+            d.handed_to_session_id.as_ref().map(Id::as_str)
+        ],
+    ))?;
     Ok(())
 }
 pub(super) fn insert_event(
@@ -796,6 +931,21 @@ pub(super) fn insert_event(
         return Err(StorageError::ScopeDenied);
     }
     advance_head(conn, "event", e.sequence)?;
-    db(conn.execute("INSERT INTO agent_message_events(sequence,project_id,message_id,kind,actor_id,recipient_assignment_id,created_at,recipient_session_id,recipient_human) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9)",params![e.sequence,e.project_id.0.as_str(),e.message_id.as_str(),e.kind,e.actor_id.0.as_str(),e.recipient_assignment_id.as_ref().map(|a|a.0.as_str()),e.created_at_ms,e.recipient_session_id.as_ref().map(Id::as_str),e.recipient_human]))?;
+    db(conn.execute(
+        "INSERT INTO agent_message_events(sequence,project_id,message_id,kind,\
+        actor_id,recipient_assignment_id,created_at,recipient_session_id,\
+        recipient_human) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9)",
+        params![
+            e.sequence,
+            e.project_id.0.as_str(),
+            e.message_id.as_str(),
+            e.kind,
+            e.actor_id.0.as_str(),
+            e.recipient_assignment_id.as_ref().map(|a| a.0.as_str()),
+            e.created_at_ms,
+            e.recipient_session_id.as_ref().map(Id::as_str),
+            e.recipient_human
+        ],
+    ))?;
     Ok(())
 }

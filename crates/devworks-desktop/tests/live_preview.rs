@@ -254,7 +254,6 @@ fn start_producer(engine: &Engine, session: Id) -> std::thread::JoinHandle<()> {
         provider_model_id: Some("fixture-model".into()),
         connection_id: id("connection"),
         endpoint_profile: "CompatibleChat".into(),
-        access_mode: "Api".into(),
         service_tier: None,
         input_tokens: Some(10),
         cache_write_ttl_ms: None,

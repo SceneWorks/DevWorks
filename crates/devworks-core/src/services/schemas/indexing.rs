@@ -1,6 +1,7 @@
 //! Durable metadata capture. Target I/O is outside the writer; every local phase rechecks
 //! the captured source, authority and operation attempt before publishing an immutable view.
 use super::{SchemaService, access};
+use crate::locks::LockExt;
 use crate::{
     context::InvocationContext,
     gateway::AdmittedCommand,
@@ -74,6 +75,27 @@ pub(crate) fn settle_cancelled(
         tx.schemas().revise_schema_source(&source, expected)?;
     }
     Ok(())
+}
+
+/// The queue hook of [`EFFECT_CONSUMER`]: a cancellation before dispatch settles the schema
+/// source in the same writer unit.
+pub struct QueueHook;
+
+impl crate::services::queue::ConsumerHook for QueueHook {
+    fn consumer(&self) -> &'static str {
+        EFFECT_CONSUMER
+    }
+
+    fn cancelled(
+        &self,
+        tx: &mut dyn WriteTransaction,
+        entry: &crate::ports::storage::QueueEntry,
+    ) -> Result<(), StorageError> {
+        match &entry.operation_id {
+            Some(operation) => settle_cancelled(tx, operation),
+            None => Ok(()),
+        }
+    }
 }
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -151,7 +173,7 @@ impl SchemaService {
     pub fn stop(&self) {
         if let Some(r) = &self.runtime {
             r.closed.begin_close();
-            for token in r.active.lock().unwrap_or_else(|p| p.into_inner()).values() {
+            for token in r.active.locked().values() {
                 token.cancel();
             }
             r.closed.drain();
@@ -387,7 +409,7 @@ impl SchemaService {
             return Ok(SchemaOutcome::Completed(json!(done.result)));
         }
         {
-            let mut active = runtime.active.lock().unwrap_or_else(|p| p.into_inner());
+            let mut active = runtime.active.locked();
             if runtime.closed.is_closed() || cancel.is_cancelled() {
                 return Err(StorageError::Cancelled);
             }
@@ -548,18 +570,55 @@ impl SchemaService {
         }
         let total = objects.len();
         let (operation, job2) = (op.clone(), job.clone());
-        self.metadata_write(op,&job,cancel,move|tx,mut source,_|{
+        self.metadata_write(op, &job, cancel, move |tx, mut source, _| {
             // Re-reading the witness inside the serialized final writer prevents an uncertain
             // acknowledgement from manufacturing a second publication.
-            if let Some(done)=tx.schemas().schema_publication(&operation.id)?{return Ok(SchemaOutcome::Completed(json!(done.result)));}
-            let expected=source.connection.revision.get();
-            if !job2.test_only {tx.schemas().seal_schema_view(&view)?;source.connection.current_view_id=Some(view.clone());source.connection.last_synced_at_ms=Some(crate::protocol::Counter::new(tx.now_ms()).map_err(|_|invalid())?);source.connection.coverage=Some(snapshot.coverage);}
-            source.connection.profile=Some(snapshot.profile);source.connection.last_error=None;source.connection.active_operation_id=None;source.connection.revision=source.connection.revision.checked_next().ok_or_else(invalid)?;source.updated_at_ms=tx.now_ms();
-            tx.schemas().revise_schema_source(&source,expected)?;
-            let result:IndexRunRecord=serde_json::from_value(json!({"id":operation.id.0,"revision":"1","repositoryIds":[],"stage":if job2.test_only{"ConnectionTest"}else{"MetadataPublished"},"state":"ObservedComplete","completedUnits":total.to_string(),"totalUnits":total.to_string(),"outputViews":if job2.test_only{vec![]}else{vec![view]},"diagnostics":[]})).map_err(|_|invalid())?;
-            result.check().map_err(|_|invalid())?;
-            let published_at=tx.now_ms();
-            tx.schemas().record_schema_publication(&StoredSchemaPublication{operation_id:operation.id,connection_id:job2.connection_id,result:result.clone(),created_at_ms:published_at})?;
+            if let Some(done) = tx.schemas().schema_publication(&operation.id)? {
+                return Ok(SchemaOutcome::Completed(json!(done.result)));
+            }
+            let expected = source.connection.revision.get();
+            if !job2.test_only {
+                tx.schemas().seal_schema_view(&view)?;
+                source.connection.current_view_id = Some(view.clone());
+                source.connection.last_synced_at_ms =
+                    Some(crate::protocol::Counter::new(tx.now_ms()).map_err(|_| invalid())?);
+                source.connection.coverage = Some(snapshot.coverage);
+            }
+            source.connection.profile = Some(snapshot.profile);
+            source.connection.last_error = None;
+            source.connection.active_operation_id = None;
+            source.connection.revision = source
+                .connection
+                .revision
+                .checked_next()
+                .ok_or_else(invalid)?;
+            source.updated_at_ms = tx.now_ms();
+            tx.schemas().revise_schema_source(&source, expected)?;
+            let result: IndexRunRecord = serde_json::from_value(json!({
+                "id": operation.id.0,
+                "revision": "1",
+                "repositoryIds": [],
+                "stage": if job2.test_only {
+                    "ConnectionTest"
+                } else {
+                    "MetadataPublished"
+                },
+                "state": "ObservedComplete",
+                "completedUnits": total.to_string(),
+                "totalUnits": total.to_string(),
+                "outputViews": if job2.test_only { vec![] } else { vec![view] },
+                "diagnostics": []
+            }))
+            .map_err(|_| invalid())?;
+            result.check().map_err(|_| invalid())?;
+            let published_at = tx.now_ms();
+            tx.schemas()
+                .record_schema_publication(&StoredSchemaPublication {
+                    operation_id: operation.id,
+                    connection_id: job2.connection_id,
+                    result: result.clone(),
+                    created_at_ms: published_at,
+                })?;
             Ok(SchemaOutcome::Completed(json!(result)))
         })
     }
@@ -570,11 +629,7 @@ struct Active<'a> {
 }
 impl Drop for Active<'_> {
     fn drop(&mut self) {
-        self.runtime
-            .active
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .remove(&self.id);
+        self.runtime.active.locked().remove(&self.id);
     }
 }
 fn current(

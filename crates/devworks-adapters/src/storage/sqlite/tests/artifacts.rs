@@ -5408,8 +5408,22 @@ fn purge_planning_blob_generations_preserve_surviving_versions_and_unproved_pins
     );
     // An unknown legacy source carrying a typed version reference is a hold,
     // never permission to remove its bytes while its owning format is unresolved.
-    let legacy = json!({"configuration_revision":1,"connection":{"id":"legacy-independent-source","revision":"1","config":{"caCertificate":private.artifact}},"owner_id":"user-a"});
-    fx.h.raw().execute("INSERT INTO schema_sources(id,revision,configuration_revision,owner_id,deleted,body_json) VALUES('legacy-independent-source',1,1,'user-a',0,?1)",[legacy.to_string()]).unwrap();
+    let legacy = json!({
+        "configuration_revision": 1,
+        "connection": {
+            "id": "legacy-independent-source",
+            "revision": "1",
+            "config": {"caCertificate": private.artifact}
+        },
+        "owner_id": "user-a"
+    });
+    fx.h.raw()
+        .execute(
+            "INSERT INTO schema_sources(id,revision,configuration_revision,owner_id,\
+        deleted,body_json) VALUES('legacy-independent-source',1,1,'user-a',0,?1)",
+            [legacy.to_string()],
+        )
+        .unwrap();
     let legacy_plan = assess();
     assert!(
         legacy_plan
@@ -5481,8 +5495,32 @@ fn purge_planning_minimal_control_publication_does_not_stale_business_review() {
         .unwrap()
     };
     let before = assess();
-    let manifest=serde_json::from_value(json!({"id":"minimal-control-manifest","projectId":"project-a","revision":"1","projectRevision":"1","digest":"a".repeat(64),"phase":"Prepared","recordCount":"2","managedByteCount":"0","keptRecordCount":"1","keptByteCount":"0","pendingEffects":"0","createdAtMs":T0.to_string()})).unwrap();
-    let frame = json!({"protocol":"1.0-draft.1","mode":"Command","schemaRevision":6,"requestKey":"minimal-control-preview","body":{"kind":"projects.prepare_purge","projectId":"project-a","expectedRevision":"1"}});
+    let manifest = serde_json::from_value(json!({
+        "id": "minimal-control-manifest",
+        "projectId": "project-a",
+        "revision": "1",
+        "projectRevision": "1",
+        "digest": "a".repeat(64),
+        "phase": "Prepared",
+        "recordCount": "2",
+        "managedByteCount": "0",
+        "keptRecordCount": "1",
+        "keptByteCount": "0",
+        "pendingEffects": "0",
+        "createdAtMs": T0.to_string()
+    }))
+    .unwrap();
+    let frame = json!({
+        "protocol": "1.0-draft.1",
+        "mode": "Command",
+        "schemaRevision": 6,
+        "requestKey": "minimal-control-preview",
+        "body": {
+            "kind": "projects.prepare_purge",
+            "projectId": "project-a",
+            "expectedRevision": "1"
+        }
+    });
     let authority = fx.authority();
     let gateway = Gateway {
         authority: &authority,
@@ -5926,6 +5964,162 @@ fn purge_planning_kept_artifact_subjects_retain_minimal_assignment_resource_and_
             })
             .unwrap();
     assert_eq!(violations, 0);
+}
+
+/// Purging project A removes the links between its lessons or skills and the workspace's, child
+/// first, without a foreign-key error and without touching the workspace skill, its revision or
+/// the workspace lesson.
+#[test]
+fn executed_project_purge_removes_lesson_links_across_the_workspace_boundary() {
+    use devworks_core::services::projects::purge::PurgeCoordinator;
+    use devworks_core::{
+        operations::projects::{PreparePurgeInput, PurgeInput},
+        ports::project_purge::*,
+    };
+    struct EmptyClient;
+    impl ProjectPurgeClient for EmptyClient {
+        fn inspect(
+            &self,
+            _: &ProjectPurgeClientScope,
+        ) -> Result<PurgeClientSnapshot, PurgeFileFault> {
+            Ok(PurgeClientSnapshot {
+                digest: "e".repeat(64),
+                surviving_artifacts: vec![],
+                pending: false,
+                removing_drafts: 0,
+                confirmation_ready: true,
+                surviving_paths: vec![],
+            })
+        }
+        fn remove_reviewed(
+            &self,
+            _: &ProjectPurgeClientScope,
+            digest: &str,
+        ) -> Result<(), PurgeFileFault> {
+            if digest == "e".repeat(64) {
+                Ok(())
+            } else {
+                Err(PurgeFileFault::Changed)
+            }
+        }
+    }
+    let fx = Fx::new();
+    let c = fx.h.raw();
+    for (lesson, project) in [("lesson-ws", None), ("lesson-a", Some("project-a"))] {
+        let scope = project.map_or("workspace".to_owned(), |p| format!("project:{p}"));
+        c.execute(
+            "INSERT INTO knowledge_entities(id,scope_key,project_id,revision,label,\
+            entity_type,aliases_json,canonical_key,author_id,created_at,updated_at) \
+            VALUES(?1,?2,?3,1,?1,'topic','[]',?1,'user-a',1,1)",
+            rusqlite::params![format!("entity-{lesson}"), scope, project],
+        )
+        .unwrap();
+        c.execute(
+            "INSERT INTO knowledge_claims(id,scope_key,project_id,revision,kind,\
+            entry_kind,lifecycle,subject_id,predicate,author_id,created_at,\
+            updated_at,body_json,rule_state,lesson_source) VALUES(?1,?2,?3,1,\
+            'Lesson','Lesson','Active',?4,'lesson','user-a',1,1,'{}','Candidate',\
+            'Prompt')",
+            rusqlite::params![lesson, scope, project, format!("entity-{lesson}")],
+        )
+        .unwrap();
+    }
+    for (skill, project) in [("skill-ws", None), ("skill-a", Some("project-a"))] {
+        let scope = project.map_or("workspace".to_owned(), |p| format!("project:{p}"));
+        c.execute(
+            "INSERT INTO instructions(id,kind,name,scope_key,project_id,origin,\
+            root_path,source_path,latest_revision,active_revision,enabled,present,\
+            version,created_at,updated_at,confined_project_id) VALUES(?1,'Skill',?1,\
+            ?2,?3,'Harness','/r',?4,1,1,1,1,1,0,0,NULL)",
+            rusqlite::params![skill, scope, project, format!("/r/{skill}")],
+        )
+        .unwrap();
+        c.execute(
+            "INSERT INTO instruction_revisions(instruction_id,revision,content_json,\
+            content_digest,state,author,origin_json,resources_json,\
+            applicability_json,created_at,confined_project_id) VALUES(?1,1,'{}',?2,\
+            'Approved','user-a','{}','[]','[]',0,NULL)",
+            rusqlite::params![skill, "a".repeat(64)],
+        )
+        .unwrap();
+    }
+    for (skill, lesson) in [("skill-ws", "lesson-a"), ("skill-a", "lesson-ws")] {
+        c.execute("INSERT INTO instruction_revision_lessons(instruction_id,revision,lesson_id) VALUES(?1,1,?2)",
+            rusqlite::params![skill, lesson]).unwrap();
+    }
+    c.execute(
+        "UPDATE projects SET lifecycle='Deleted' WHERE id='project-a'",
+        [],
+    )
+    .unwrap();
+    let files = Arc::new(
+        crate::fs::purge::NativeProjectPurgeFiles::new(
+            fx.h.root.path().to_path_buf(),
+            fx.h.root.path().with_extension("cache"),
+        )
+        .with_read_fence(fx.svc.clone()),
+    );
+    let coordinator = Arc::new(PurgeCoordinator::new(
+        fx.store.clone(),
+        fx.h.ids.clone(),
+        files,
+        Arc::new(EmptyClient),
+    ));
+    let (svc, ctx) = (coordinator.clone(), fx.user());
+    let reviewed = fx.write(move |tx| {
+        svc.prepare(
+            tx,
+            &ctx,
+            &PreparePurgeInput {
+                project_id: project("project-a"),
+                expected_revision: Revision::new(1).unwrap(),
+            },
+        )
+        .map_err(|e| StorageError::InvalidRecord(format!("{e:?}")))
+    });
+    let input = PurgeInput {
+        project_id: project("project-a"),
+        manifest_id: reviewed.id.clone(),
+        expected_revision: reviewed.revision.clone(),
+        expected_digest: reviewed.digest.clone(),
+        expected_project_revision: reviewed.project_revision.clone(),
+        confirm: true,
+    };
+    let ctx = HostIngress::new(&*fx.store)
+        .project_purge_context(&fx.user(), &input)
+        .unwrap();
+    fx.write(move |tx| {
+        let permit = coordinator
+            .authorize(tx, &ctx, &input)
+            .map_err(|e| StorageError::InvalidRecord(format!("{e:?}")))?;
+        tx.projects().apply_project_purge(&permit)
+    });
+    let count = |sql: &str| -> i64 { fx.h.raw().query_row(sql, [], |r| r.get(0)).unwrap() };
+    assert_eq!(
+        count("SELECT count(*) FROM instruction_revision_lessons"),
+        0
+    );
+    assert_eq!(
+        count("SELECT count(*) FROM instructions WHERE id='skill-ws'"),
+        1
+    );
+    assert_eq!(
+        count("SELECT count(*) FROM instruction_revisions WHERE instruction_id='skill-ws'"),
+        1
+    );
+    assert_eq!(
+        count("SELECT count(*) FROM knowledge_claims WHERE id='lesson-ws'"),
+        1
+    );
+    assert_eq!(
+        count("SELECT count(*) FROM instructions WHERE id='skill-a'"),
+        0
+    );
+    assert_eq!(
+        count("SELECT count(*) FROM knowledge_claims WHERE id='lesson-a'"),
+        0
+    );
+    assert_eq!(count("SELECT count(*) FROM pragma_foreign_key_check"), 0);
 }
 
 #[test]

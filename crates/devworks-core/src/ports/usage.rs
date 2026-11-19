@@ -71,7 +71,6 @@ pub struct PriceQuery {
     pub provider_model_id: Option<String>,
     pub connection_id: Id,
     pub endpoint_profile: String,
-    pub access_mode: String,
     pub service_tier: Option<String>,
     pub input_tokens: Option<i64>,
     pub cache_write_ttl_ms: Option<i64>,
@@ -219,7 +218,17 @@ mod quote_compatibility {
     use serde_json::json;
     #[test]
     fn old_immutable_quote_json_does_not_gain_a_publication_witness() {
-        let old = json!({"classification":"Untracked","connection_revision":2,"snapshot_id":null,"price_revision":null,"override_revision":1,"currency":"USD","rates":null,"tariffs":[],"untracked_reason":"official_catalog_unavailable"});
+        let old = json!({
+            "classification": "Untracked",
+            "connection_revision": 2,
+            "snapshot_id": null,
+            "price_revision": null,
+            "override_revision": 1,
+            "currency": "USD",
+            "rates": null,
+            "tariffs": [],
+            "untracked_reason": "official_catalog_unavailable"
+        });
         let quote: PriceQuote = serde_json::from_value(old.clone()).unwrap();
         assert!(quote.publication_provider.is_none());
         assert_eq!(serde_json::to_value(quote).unwrap(), old);

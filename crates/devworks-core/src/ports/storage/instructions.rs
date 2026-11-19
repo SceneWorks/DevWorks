@@ -184,6 +184,17 @@ pub trait InstructionRead {
         &self,
         approval_id: &Id,
     ) -> Result<Option<StoredInstructionRevision>, StorageError>;
+    /// The lessons (Knowledge claim ids) a revision came from, in id order.
+    fn instruction_revision_lessons(&self, id: &Id, revision: i64)
+    -> Result<Vec<Id>, StorageError>;
+    /// The revisions that name a lesson, as `(instruction id, revision)` in that order, at most
+    /// `limit`, after the pair `after` when given.
+    fn lesson_instruction_revisions(
+        &self,
+        lesson: &Id,
+        after: Option<(&Id, i64)>,
+        limit: u16,
+    ) -> Result<Vec<(Id, i64)>, StorageError>;
 }
 
 pub trait InstructionRepository: InstructionRead {
@@ -219,5 +230,13 @@ pub trait InstructionRepository: InstructionRead {
         id: &Id,
         revision: i64,
         content: &Value,
+    ) -> Result<(), StorageError>;
+    /// Records the lessons a just-inserted revision came from. Each must be a Knowledge claim
+    /// that exists; the revision's visibility rules are the caller's.
+    fn link_instruction_revision_lessons(
+        &mut self,
+        id: &Id,
+        revision: i64,
+        lessons: &[Id],
     ) -> Result<(), StorageError>;
 }

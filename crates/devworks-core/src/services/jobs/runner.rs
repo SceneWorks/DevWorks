@@ -70,8 +70,8 @@ use crate::protocol::provider::ArtifactRef;
 use crate::protocol::records::{EffortName, JobDefinition, RouteIntent};
 use crate::protocol::results::{DomainCommandReply, DomainDecision};
 use crate::protocol::{
-    ActorId, CommandReply, Counter, Id, OperationId, OperationState, ProjectId, Rejection,
-    RequestKey, Revision, RootId,
+    ActorId, CommandReply, Id, OperationId, OperationState, ProjectId, Rejection, RequestKey,
+    Revision, RootId,
 };
 use crate::services::runs::recovery::LifecycleHooks;
 use crate::settings::catalog::AgentRole;
@@ -558,7 +558,9 @@ pub trait InferenceJobs: Send + Sync {
 #[derive(Clone, Copy, Debug, Default)]
 pub struct NoInferencePipeline;
 /// The visible reason of a scheduled inference run in a build without the pipeline.
-pub const NO_PIPELINE: &str = "Scheduled inference is not available in this build: the coordinator turn pipeline and provider connections are not installed. Nothing was sent to a model.";
+pub const NO_PIPELINE: &str = "Scheduled inference is not available in this build: the coordinator \
+    turn pipeline and provider connections are not installed. Nothing was \
+    sent to a model.";
 impl InferenceJobs for NoInferencePipeline {
     fn availability(&self) -> Result<(), String> {
         Err(NO_PIPELINE.into())
@@ -2280,11 +2282,6 @@ fn requeued(run: &StoredJobRun) -> String {
     } else {
         "Queued".into()
     }
-}
-
-/// The counter value of a stored integer (re-exported for the engine's reports).
-pub fn as_counter(n: i64) -> Counter {
-    counter(n)
 }
 
 /// A run's operation record (for the engine's process stops).

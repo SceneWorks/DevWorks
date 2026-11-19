@@ -205,7 +205,7 @@ mod tests {
         let scope = super::super::tests::scope();
         let mut memory = Memory::default();
         let schema =
-            serde_json::to_value(devworks_core::services::conventions::model::manifest_schema())
+            serde_json::to_value(devworks_core::protocol::helpers::conventions::manifest_schema())
                 .unwrap();
         let pipeline = |owner: Value, path: &str| {
             json!({

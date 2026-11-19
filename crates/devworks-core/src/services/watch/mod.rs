@@ -7,6 +7,7 @@
 use crate::authority::shell::{CommandVerdict, record_verdict};
 use crate::context::{InvocationContext, PrincipalKind};
 use crate::gateway::{AdmittedCommand, AdmittedQuery};
+use crate::locks::LockExt;
 use crate::operations::{OperationInput, watch as ops};
 use crate::ports::process::{Probe, ProcessSpec as NativeProcessSpec};
 use crate::ports::storage::{
@@ -206,10 +207,7 @@ impl WatchService {
             for watcher in &page {
                 if self.advance(watcher)? {
                     settled += 1;
-                    self.last_polled
-                        .lock()
-                        .unwrap_or_else(std::sync::PoisonError::into_inner)
-                        .remove(&watcher.id);
+                    self.last_polled.locked().remove(&watcher.id);
                 }
             }
             if page.len() < usize::from(PAGE) {
@@ -231,10 +229,7 @@ impl WatchService {
             backup_settings(read.configuration())
         })?;
         {
-            let mut last = self
-                .last_backup_ms
-                .lock()
-                .unwrap_or_else(|p| p.into_inner());
+            let mut last = self.last_backup_ms.locked();
             let Some(since) = *last else {
                 *last = Some(now);
                 return Ok(None);
@@ -567,10 +562,7 @@ impl WatchService {
         let owner_ended = read_snapshot(&*self.store, &ReadOptions::default(), |read| {
             owner_ended(read.sessions(), read.projects(), watcher)
         })?;
-        self.last_polled
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .insert(watcher.id.clone(), now);
+        self.last_polled.locked().insert(watcher.id.clone(), now);
         if owner_ended.is_some() {
             let id = watcher.id.clone();
             let step = run_write(&*self.store, WriteOptions::host_state(), move |tx| {
@@ -806,8 +798,7 @@ impl WatchService {
         record.owner = owner_of(read, watcher)?;
         record.last_polled_at_ms = self
             .last_polled
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .locked()
             .get(&watcher.id)
             .copied()
             .map(counter);
@@ -1328,25 +1319,6 @@ impl QueryHandler for WatchService {
             result,
         })
     }
-}
-
-/// The events an in-flight turn carries: delivered to its session before the turn began and
-/// acknowledged only when it completes.
-pub fn turn_input(
-    read: &dyn ReadSnapshot,
-    session: &Id,
-    turn: &Id,
-) -> Result<Vec<StoredWatchEvent>, StorageError> {
-    Ok(read
-        .watchers()
-        .watch_events(
-            session,
-            &[WatchEventState::Delivered],
-            crate::ports::storage::MAX_PAGE,
-        )?
-        .into_iter()
-        .filter(|event| event.carried_turn_id.as_ref() == Some(turn))
-        .collect())
 }
 
 /// What one write step did to an open watcher.

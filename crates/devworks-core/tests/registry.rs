@@ -31,13 +31,13 @@ fn registry_matches_implementation_plan_and_family_register() {
         .map(|o| (o["operation"].as_str().unwrap(), o))
         .collect();
 
-    assert_eq!(registry::all().len(), 376);
+    assert_eq!(registry::all().len(), 380);
     assert_eq!(registry::all().len(), planned.len());
     assert_eq!(
         registry::all().len() as u64,
         register["operationCount"].as_u64().unwrap()
     );
-    assert_eq!(plan["counts"]["operations"].as_u64().unwrap(), 376);
+    assert_eq!(plan["counts"]["operations"].as_u64().unwrap(), 380);
     assert_eq!(
         registry::families().len() as u64,
         register["familyCount"].as_u64().unwrap()
@@ -159,7 +159,7 @@ fn every_binding_publishes_strict_input_and_result_schemas() {
             count += 1;
         }
     }
-    assert_eq!(count, 381);
+    assert_eq!(count, 385);
 }
 
 /// Every property name declared anywhere in a schema, sorted (the envelope's own negotiated
@@ -277,6 +277,7 @@ fn schema_revisions_match_the_register_and_each_revision_has_its_own_schemas() {
             "approvals.inspect",
             "approvals.propose",
             "approvals.record_human_decision",
+            "approvals.review_queue",
             "notifications.list",
             "notifications.read",
             "notifications.acknowledge",
@@ -333,6 +334,7 @@ fn schema_revisions_match_the_register_and_each_revision_has_its_own_schemas() {
             "browser.screenshot",
             "browser.sessions",
             "browser.upload",
+            "dreaming.instructions",
             "dreaming.revert",
             "git.pull_request",
             "history.command_receipt",
@@ -398,6 +400,10 @@ fn schema_revisions_match_the_register_and_each_revision_has_its_own_schemas() {
             "next_work.claim_feature_task",
             "next_work.inspect_claim",
             "next_work.release_claim",
+            "roles.draft",
+            "roles.history",
+            "roles.read",
+            "roles.rollback",
             "router.availability",
             "router.catalog",
             "router.pin",
@@ -419,7 +425,16 @@ fn schema_revisions_match_the_register_and_each_revision_has_its_own_schemas() {
             "sessions.list",
             "sessions.start",
             "sessions.transcript",
+            "settings.explain_source",
+            "settings.read_effective",
+            "settings.save_revision",
+            "settings.validate",
+            "skills.discover",
+            "skills.draft",
+            "skills.history",
+            "skills.read",
             "skills.resources",
+            "skills.rollback",
             "web.fetch",
             "web.search",
             "workspace.diagnostics",
