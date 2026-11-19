@@ -713,6 +713,15 @@ pub const MIGRATIONS: &[Migration] = &[
         expected_sha256: "4348986bcf858ecf1989b6554f3ba3c31bf40cf754363a4a8e35758aa6c848e6",
         rebuilds_tables: false,
     },
+    // Older readers ignore the new column. Older writers cannot keep it in sync with offsets.
+    Migration {
+        version: 63,
+        minimum_reader: 57,
+        minimum_writer: 63,
+        sql: include_str!("migrations/0063_watcher_file_scan.sql"),
+        expected_sha256: "231e7cc738901c470870a1bf210371febea4ea30d836e73b3d2cf85c02cea09d",
+        rebuilds_tables: false,
+    },
 ];
 /// Recorded checksum of migration 17; a test fails if the shipped text changes.
 pub const MIGRATION_0017_SHA256: &str =

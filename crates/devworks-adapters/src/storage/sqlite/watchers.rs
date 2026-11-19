@@ -13,7 +13,7 @@ const WATCHER_COLUMNS: &str = "id,revision,phase,source_kind,project_id,session_
     probe_interval_ms,probe_exit_code,probe_output_pattern,probe_runs,\
     probe_next_run_at,due_at,expires_at,match_pattern,match_each,\
     match_min_interval_ms,match_scanned,match_pending,match_total,\
-    match_last_event_at,file_path";
+    match_last_event_at,file_path,file_scan_json";
 
 #[allow(clippy::type_complexity)]
 fn watcher_row(row: &Row<'_>) -> rusqlite::Result<WatcherRow> {
@@ -55,6 +55,7 @@ fn watcher_row(row: &Row<'_>) -> rusqlite::Result<WatcherRow> {
         match_total: row.get(34)?,
         match_last_event_at: row.get(35)?,
         file_path: row.get(36)?,
+        file_scan_json: row.get(37)?,
     })
 }
 struct WatcherRow {
@@ -95,9 +96,16 @@ struct WatcherRow {
     match_total: i64,
     match_last_event_at: Option<i64>,
     file_path: Option<String>,
+    file_scan_json: Option<String>,
 }
 impl WatcherRow {
     fn into_stored(self) -> Result<StoredWatcher, StorageError> {
+        let file_scan = self
+            .file_scan_json
+            .as_deref()
+            .map(serde_json::from_str)
+            .transpose()
+            .map_err(|_| corrupt("watcher file scan progress"))?;
         Ok(StoredWatcher {
             id: id_of(self.id)?,
             revision: self.revision,
@@ -144,6 +152,7 @@ impl WatcherRow {
                 each: self.match_each,
                 min_interval_ms: self.match_min_interval_ms,
                 scanned: self.match_scanned,
+                file_scan,
                 pending: self.match_pending,
                 total: self.match_total,
                 last_event_at_ms: self.match_last_event_at,
@@ -387,12 +396,19 @@ fn check(watcher: &StoredWatcher) -> Result<(), StorageError> {
     }
     Ok(())
 }
-fn write_params(w: &StoredWatcher) -> Vec<rusqlite::types::Value> {
+fn write_params(w: &StoredWatcher) -> Result<Vec<rusqlite::types::Value>, StorageError> {
     use rusqlite::types::Value;
     let text = |s: &str| Value::Text(s.to_owned());
     let opt = |s: Option<&str>| s.map_or(Value::Null, |s| Value::Text(s.to_owned()));
     let int = |n: Option<i64>| n.map_or(Value::Null, Value::Integer);
-    vec![
+    let file_scan_json = w
+        .matching
+        .as_ref()
+        .and_then(|rule| rule.file_scan)
+        .map(|scan| serde_json::to_string(&scan))
+        .transpose()
+        .map_err(|_| invalid("watcher file scan progress cannot be serialized"))?;
+    Ok(vec![
         text(w.id.as_str()),
         Value::Integer(w.revision),
         text(w.phase.as_str()),
@@ -430,7 +446,8 @@ fn write_params(w: &StoredWatcher) -> Vec<rusqlite::types::Value> {
         Value::Integer(w.matching.as_ref().map_or(0, |m| m.total)),
         int(w.matching.as_ref().and_then(|m| m.last_event_at_ms)),
         opt(w.file_path.as_deref()),
-    ]
+        opt(file_scan_json.as_deref()),
+    ])
 }
 
 impl WatcherRepository for Unit<'_> {
@@ -448,15 +465,15 @@ impl WatcherRepository for Unit<'_> {
         db(self.conn.execute(
             &format!(
                 "INSERT INTO watchers({WATCHER_COLUMNS}) VALUES({})",
-                placeholders(1, 37)
+                placeholders(1, 38)
             ),
-            params_from_iter(write_params(watcher)),
+            params_from_iter(write_params(watcher)?),
         ))?;
         Ok(())
     }
     fn update_watcher(&mut self, watcher: &StoredWatcher) -> Result<(), StorageError> {
         check(watcher)?;
-        let mut values = write_params(watcher);
+        let mut values = write_params(watcher)?;
         values.push(rusqlite::types::Value::Integer(watcher.revision - 1));
         let changed = db(self.conn.execute(
             "UPDATE watchers SET revision=?2,phase=?3,source_kind=?4,project_id=?5,\
@@ -468,8 +485,8 @@ impl WatcherRepository for Unit<'_> {
                 probe_output_pattern=?25,probe_runs=?26,probe_next_run_at=?27,\
                 due_at=?28,expires_at=?29,match_pattern=?30,match_each=?31,\
                 match_min_interval_ms=?32,match_scanned=?33,match_pending=?34,\
-                match_total=?35,match_last_event_at=?36,file_path=?37 WHERE id=?1 AND \
-                revision=?38",
+                match_total=?35,match_last_event_at=?36,file_path=?37,file_scan_json=?38 WHERE id=?1 AND \
+                revision=?39",
             params_from_iter(values),
         ))?;
         if changed != 1 {
