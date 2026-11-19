@@ -78,7 +78,10 @@ fn decide(
     key: &str,
 ) -> DomainDecision {
     let mut frame: Value = serde_json::from_slice(&frame("Command", op, body, key)).unwrap();
-    if matches!(op, "process.execute" | "git.worktree") {
+    if matches!(
+        op,
+        "process.execute" | "git.worktree" | "containers.start" | "containers.exec"
+    ) {
         // These operations negotiate only their first schema revision.
         frame.as_object_mut().unwrap().remove("schemaRevision");
     }
@@ -296,6 +299,23 @@ fn planning_feature_agents_need_current_readiness_for_git_commit_and_process_exe
         },
         github_http: None,
     });
+    let private_files = Arc::new(
+        devworks_adapters::containers::NativeRegistryAuth::new(fx.h.root.join("container-auth"))
+            .unwrap(),
+    );
+    composition.config.containers = Some(devworks_engine::runtime::ContainerComposition {
+        bindings: ToolBindings::new([], []).unwrap(),
+        filesystem: Arc::new(NativeFilesystem::new()),
+        protected_roots: ProtectedRoots::new(Vec::new(), Vec::new(), None),
+        secrets: Arc::new(devworks_core::ports::secrets::SessionSecrets::new()),
+        registry_auth: private_files.clone(),
+        workload_environment: private_files,
+        host: devworks_core::services::containers::probe::HostPlatform {
+            os: std::env::consts::OS,
+            arch: std::env::consts::ARCH,
+            macos_major: 26,
+        },
+    });
     runtime().block_on(async {
         let app = boot(composition).await.unwrap();
         applied(&fx.start(&fx.user, "root-f", 1, 1));
@@ -342,9 +362,18 @@ fn planning_feature_agents_need_current_readiness_for_git_commit_and_process_exe
             "environment": [], "profile": "Full", "timeoutMs": "10000", "outputLimitBytes": "4096",
         });
         let process = |key: &str| decide(&app, &agent, "process.execute", json!({"spec": spec}), key);
+        let container_start = |key: &str| decide(&app, &agent, "containers.start", json!({
+            "containerId": "missing-container", "expectedRevision": "1",
+        }), key);
+        let container_exec = |key: &str| decide(&app, &agent, "containers.exec", json!({
+            "containerId": "missing-container", "expectedRevision": "1",
+            "command": ["true"], "environment": [], "timeoutMs": "10000",
+        }), key);
         let missing = [
             commit("missing-commit"),
             process("missing-process"),
+            container_start("missing-ready-container-start"),
+            container_exec("missing-ready-container-exec"),
             decide(&app, &agent, "watch.create", json!({"process": spec}), "missing-watch"),
             decide(&app, &agent, "watch.create", json!({"probe": {
                 "process": spec, "intervalMs": "1000", "condition": {},
@@ -376,42 +405,63 @@ fn planning_feature_agents_need_current_readiness_for_git_commit_and_process_exe
         let accepted = process("ready-process");
         assert_eq!(settled(&app, accepted.clone()).await, OperationState::ObservedComplete);
 
+        // Once ready, the requests reach the real container service, which rejects the
+        // nonexistent fixture ID before starting any local container or contacting a runtime.
+        for result in [
+            container_start("ready-container-start"),
+            container_exec("ready-container-exec"),
+        ] {
+            assert!(matches!(&result, DomainDecision::Refused { fault }
+                if fault.code == DomainErrorCode::NotFound), "{result:?}");
+        }
+
         // A queued launch can encounter a newer assessment before the dispatcher begins it.
         // Exercise the real queue gate while the write owner controls that ordering.
         let gate = RunGate::new(fx.service.clone(), None);
         let assignment = agent.assignment_id().cloned();
         fx.tx(move |_, tx| {
-            let operation = OperationId(id("queued-readiness-process"));
-            tx.operations().record_intent(NewOperation {
-                id: operation.clone(),
-                root_id: Some(rid("root-f")),
-                assignment_id: assignment,
-                capability: "process.execute".into(),
-                schema_version: 1,
-                args_digest: "a".repeat(64),
-                payload: json!({"kind": "Agent"}),
-            })?;
-            let event_id = event(tx, "Changed")?;
-            let entry_id = id("queued-readiness-entry");
-            tx.queue().enqueue(NewQueueEntry {
-                id: entry_id.clone(),
-                consumer: devworks_core::services::process::tools::EFFECT_CONSUMER.into(),
-                event_id,
-                root_id: Some(rid("root-f")),
-                operation_id: Some(operation),
-                partition: None,
-                priority: 0,
-                ready_at_ms: T0 + 60_000,
-                payload: json!({}),
-            })?;
-            let entry = tx.queue().entry(&entry_id)?.unwrap();
-            assert!(gate.may_dispatch(tx, &entry)?);
+            let effects = [
+                ("process.execute", devworks_core::services::process::tools::EFFECT_CONSUMER),
+                ("containers.start", devworks_core::services::containers::EFFECT_CONSUMER),
+                ("containers.exec", devworks_core::services::containers::EFFECT_CONSUMER),
+            ];
+            let mut entries = Vec::new();
+            for (index, (capability, consumer)) in effects.into_iter().enumerate() {
+                let operation = OperationId(id(&format!("queued-readiness-effect-{index}")));
+                tx.operations().record_intent(NewOperation {
+                    id: operation.clone(),
+                    root_id: Some(rid("root-f")),
+                    assignment_id: assignment.clone(),
+                    capability: capability.into(),
+                    schema_version: 1,
+                    args_digest: "a".repeat(64),
+                    payload: json!({"kind": "Agent"}),
+                })?;
+                let event_id = event(tx, "Changed")?;
+                let entry_id = id(&format!("queued-readiness-entry-{index}"));
+                tx.queue().enqueue(NewQueueEntry {
+                    id: entry_id.clone(),
+                    consumer: consumer.into(),
+                    event_id,
+                    root_id: Some(rid("root-f")),
+                    operation_id: Some(operation),
+                    partition: None,
+                    priority: 0,
+                    ready_at_ms: T0 + 60_000,
+                    payload: json!({}),
+                })?;
+                let entry = tx.queue().entry(&entry_id)?.unwrap();
+                assert!(gate.may_dispatch(tx, &entry)?);
+                entries.push(entry);
+            }
             let mut stale = tx.work().readiness(&id("root-f"))?.unwrap();
             stale.revision += 1;
             stale.body["active"]["units"] = json!({});
             tx.work().put_readiness(&stale, Some(1))?;
-            assert!(!gate.may_dispatch(tx, &entry)?);
-            assert!(!gate.may_resume(tx, &entry)?);
+            for entry in entries {
+                assert!(!gate.may_dispatch(tx, &entry)?);
+                assert!(!gate.may_resume(tx, &entry)?);
+            }
             Ok(())
         });
         let replay = process("ready-process");

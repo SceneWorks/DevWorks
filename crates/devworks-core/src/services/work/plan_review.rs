@@ -19,6 +19,7 @@ pub struct ReviewTarget {
     pub digest: String,
     pub draft: PlanDraft,
     required: bool,
+    pending: bool,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -84,6 +85,7 @@ fn targets(read: &dyn WorkRead, feature: &Id) -> Result<Vec<ReviewTarget>, Stora
             digest: active.digest,
             draft: active.draft,
             required: active.review_required,
+            pending: false,
         })
         .into_iter()
         .chain(
@@ -94,6 +96,7 @@ fn targets(read: &dyn WorkRead, feature: &Id) -> Result<Vec<ReviewTarget>, Stora
                     digest: pending.digest,
                     draft: pending.draft,
                     required: pending.review_required,
+                    pending: true,
                 }),
         )
         .collect())
@@ -168,7 +171,7 @@ pub fn next_target(
         if reviews.iter().any(|review| {
             review.units == units
                 && current_sources(review, Some(&views))
-                && dispositions_recorded(&slots, review)
+                && dispositions_recorded(&slots, review, target.pending)
         }) {
             continue;
         }
@@ -285,7 +288,7 @@ pub fn attach(
         Some(previous)
             if previous.units.get(FEATURE_UNIT) == units.get(FEATURE_UNIT)
                 && current_sources(previous, Some(&source_views))
-                && dispositions_recorded(&slots, previous) =>
+                && dispositions_recorded(&slots, previous, target.pending) =>
         {
             units
                 .iter()
@@ -518,13 +521,15 @@ pub(crate) fn review_holds(
     if !substantive(&active.draft) || (!active.review_required && slots.plan_reviews.is_empty()) {
         return false;
     }
-    if slots.plan_reviews.iter().any(|review| {
-        review.plan_revision == active.plan_revision
-            && review.plan_digest == active.digest
-            && matches!(review.outcome, ReviewOutcome::Complete { .. })
-            && current_sources(review, published_views)
-    }) {
-        return false;
+    if let Some(review) = for_plan(slots, active.plan_revision, &active.digest)
+        && matches!(review.outcome, ReviewOutcome::Complete { .. })
+        && current_sources(review, published_views)
+    {
+        // An adopted revision can carry an assessment written for its predecessor. Matching
+        // scope hashes cannot release affected work before this report is dispositioned in
+        // the active assessment, irrespective of that assessment's original plan digest.
+        return review.affected_units.iter().any(|unit| unit == key)
+            && !dispositions_recorded(slots, review, false);
     }
     // Starting review of a pending replacement leaves an already accepted legacy plan active.
     if !active.review_required
@@ -539,7 +544,7 @@ pub(crate) fn review_holds(
         return false;
     }
     !slots.plan_reviews.iter().any(|review| {
-        dispositions_recorded(slots, review)
+        dispositions_recorded(slots, review, false)
             && current_sources(review, published_views)
             && review
                 .units
@@ -557,13 +562,26 @@ pub(crate) fn report_matches(evidence: &ArtifactRef, report: &ArtifactRef) -> bo
         && evidence.media_type == report.media_type
 }
 
-fn dispositions_recorded(slots: &Slots, review: &PlanReview) -> bool {
+fn dispositions_recorded(slots: &Slots, review: &PlanReview, allow_pending: bool) -> bool {
+    dispositions_in(
+        slots
+            .active
+            .iter()
+            .chain(slots.pending.iter().filter(|_| allow_pending)),
+        review,
+    )
+}
+
+fn dispositions_in<'a>(
+    assessments: impl Iterator<Item = &'a super::readiness::Assessment> + Clone,
+    review: &PlanReview,
+) -> bool {
     let ReviewOutcome::Complete { report, findings } = &review.outcome else {
         return false;
     };
     (0..*findings).all(|index| {
         let id = finding_id(&review.session, index);
-        slots.active.iter().chain(&slots.pending).any(|assessment| {
+        assessments.clone().any(|assessment| {
             assessment.findings.iter().any(|finding| {
                 finding.id == id
                     && finding
@@ -689,6 +707,85 @@ mod tests {
         assert!(
             changed_scope
                 .unit(Some("E2"))
+                .unwrap()
+                .readiness
+                .is_current()
+        );
+
+        // A revision that only changed its budget retains the previous scope hashes. A
+        // fresh review after source drift can return findings while that assessment is still
+        // stored under the old digest. Only its affected units must wait for disposition.
+        let mut carried = slots.clone();
+        let successor = ActivePlan {
+            plan_revision: 2,
+            digest: "c".repeat(64),
+            draft: {
+                let mut draft = changed.draft.clone();
+                draft.requirements.0[0].statement.0 = "Writes use the old contract".into();
+                draft
+            },
+            proposal_id: id("budget-only-approval"),
+            review_required: true,
+        };
+        let review = &mut carried.plan_reviews[0];
+        review.plan_revision = successor.plan_revision;
+        review.plan_digest.clone_from(&successor.digest);
+        review.source_phase = true;
+        review.source_views = vec![id("new-source")];
+        review.affected_units = vec!["E1".into()];
+        review.outcome = ReviewOutcome::Complete {
+            report: successor.draft.content.clone(),
+            findings: 1,
+        };
+        let source_session = review.session.clone();
+        let carried_scope = |slots: &Slots| {
+            super::super::readiness::scope_plan(
+                &serde_json::to_value(&successor).unwrap(),
+                None,
+                Some(&(2, slots.value())),
+                &[id("new-source")],
+            )
+            .unwrap()
+        };
+        assert!(
+            !carried_scope(&carried)
+                .unit(Some("E1"))
+                .unwrap()
+                .readiness
+                .is_current()
+        );
+        assert!(
+            carried_scope(&carried)
+                .unit(Some("E2"))
+                .unwrap()
+                .readiness
+                .is_current()
+        );
+
+        let disposition = serde_json::from_value(json!({
+            "id": finding_id(&source_session, 0), "disposition": "ResolvedDecision",
+            "state": "Resolved", "blocking": false, "prerequisite": false,
+            "requirementIds": ["E1"], "affectedWorkIds": [],
+            "summary": "Verified the change", "missing": "", "consequence": "",
+            "attempts": [], "insufficiency": "", "closureCondition": "",
+            "decision": "The contract remains valid", "confidence": "High",
+            "evidence": [successor.draft.content], "closureEvidence": []
+        }))
+        .unwrap();
+        let mut pending = carried.active.clone().unwrap();
+        pending.findings.push(disposition);
+        carried.pending = Some(pending.clone());
+        assert!(
+            !carried_scope(&carried)
+                .unit(Some("E1"))
+                .unwrap()
+                .readiness
+                .is_current()
+        );
+        carried.active = Some(pending);
+        assert!(
+            carried_scope(&carried)
+                .unit(Some("E1"))
                 .unwrap()
                 .readiness
                 .is_current()

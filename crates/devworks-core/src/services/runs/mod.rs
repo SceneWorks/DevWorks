@@ -741,6 +741,8 @@ fn implementation_effect(capability: &str) -> bool {
             | "git.integrate"
             | "process.execute"
             | "process.install_project_dependencies"
+            | "containers.start"
+            | "containers.exec"
     )
 }
 
@@ -780,7 +782,10 @@ impl ControlService {
         use crate::services::process::tools::{EFFECT_CONSUMER, WATCH_CONSUMER};
         if !matches!(
             entry.consumer.as_str(),
-            crate::services::git::EFFECT_CONSUMER | EFFECT_CONSUMER | WATCH_CONSUMER
+            crate::services::git::EFFECT_CONSUMER
+                | crate::services::containers::EFFECT_CONSUMER
+                | EFFECT_CONSUMER
+                | WATCH_CONSUMER
         ) {
             return Ok(true);
         }

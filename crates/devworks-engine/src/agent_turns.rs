@@ -189,24 +189,25 @@ async fn drive_agent_turn(
     )
     .await;
     if is_plan_reviewer(&coordinator) && !cancellation.is_cancelled() {
-        let mut report =
-            result.and_then(|_| crate::plan_review::report(&engine, &ctx).map_err(Into::into));
+        let mut report = review_report(&engine, &ctx, result).await;
         if report.as_ref().is_ok_and(|report| report.needs_source) {
             report = match crate::plan_review::enable_sources(&engine, &ctx).await {
-                Ok(()) => run_native_loop(
-                    &engine,
-                    &ctx,
-                    &coordinator,
-                    None,
-                    Stop {
-                        cancellation: &cancellation,
-                        stopped: stopped.clone(),
-                    },
-                    &mut retry_at_ms,
-                    &mut credentials_rejected,
-                )
-                .await
-                .and_then(|_| crate::plan_review::report(&engine, &ctx).map_err(Into::into)),
+                Ok(()) => {
+                    let result = run_native_loop(
+                        &engine,
+                        &ctx,
+                        &coordinator,
+                        None,
+                        Stop {
+                            cancellation: &cancellation,
+                            stopped: stopped.clone(),
+                        },
+                        &mut retry_at_ms,
+                        &mut credentials_rejected,
+                    )
+                    .await;
+                    review_report(&engine, &ctx, result).await
+                }
                 Err(error) => Err(error.into()),
             };
         }
@@ -279,6 +280,15 @@ async fn drive_agent_turn(
         )),
         Err(error) => turn_failure(error),
     }
+}
+
+async fn review_report(
+    engine: &TurnEngine,
+    ctx: &InvocationContext,
+    result: Result<(), TurnError>,
+) -> Result<devworks_core::services::work::plan_review::Report, TurnError> {
+    result?;
+    Ok(crate::plan_review::report(engine, ctx).await?)
 }
 
 pub(crate) fn is_plan_reviewer(agent: &AgentRecord) -> bool {
@@ -387,10 +397,15 @@ async fn run_native_loop(
         if cancellation.is_cancelled() {
             return Err(StorageError::Cancelled.into());
         }
-        if is_plan_reviewer(agent)
-            && !crate::plan_review::attempt_is_current(engine.store().as_ref(), ctx)?
-        {
-            return Err(StorageError::ScopeDenied.into());
+        if is_plan_reviewer(agent) {
+            let reviewer = ctx.clone();
+            let current = store::read(engine.store(), move |snapshot| {
+                crate::plan_review::attempt_is_current_in(snapshot, &reviewer)
+            })
+            .await?;
+            if !current {
+                return Err(StorageError::ScopeDenied.into());
+            }
         }
         if let Some(agents) = review_agents
             && crate::plan_review::schedule(engine, agents, ctx, &mut stop.stopped, false).await?
@@ -401,24 +416,37 @@ async fn run_native_loop(
         let (mut head, mut binding, observed_sequence) = match recovered.take() {
             Some(value) => value,
             None => {
-                let tools_required = !engine
-                    .providers()
-                    .ok_or(StorageError::ScopeDenied)?
-                    .schemas()
-                    .selected_agent_tools(ctx)?
-                    .is_empty();
-                let needs_images =
-                    context_has_images(&initial_context(engine.store().as_ref(), ctx, agent)?);
-                let route = route_context_head(
-                    engine,
-                    ctx,
-                    session_id,
-                    0,
-                    None,
-                    tools_required,
-                    needs_images,
-                )?;
-                let (head, binding) = publish_first_context(engine, ctx, agent, &route)?;
+                let (engine, ctx, agent, session) = (
+                    engine.clone(),
+                    ctx.clone(),
+                    agent.clone(),
+                    session_id.clone(),
+                );
+                let (head, binding) = tokio::task::spawn_blocking(move || {
+                    let tools_required = !engine
+                        .providers()
+                        .ok_or(StorageError::ScopeDenied)?
+                        .schemas()
+                        .selected_agent_tools(&ctx)?
+                        .is_empty();
+                    let needs_images = context_has_images(&initial_context(
+                        engine.store().as_ref(),
+                        &ctx,
+                        &agent,
+                    )?);
+                    let route = route_context_head(
+                        &engine,
+                        &ctx,
+                        &session,
+                        0,
+                        None,
+                        tools_required,
+                        needs_images,
+                    )?;
+                    Ok::<_, TurnError>(publish_first_context(&engine, &ctx, &agent, &route)?)
+                })
+                .await
+                .map_err(|error| TurnError::Worker(format!("initial context worker: {error}")))??;
                 (head, binding, 0)
             }
         };
@@ -518,51 +546,23 @@ async fn run_native_loop(
             continue;
         }
         wait_for_running_mcp_calls(engine, ctx, session_id, cancellation).await?;
-        head = engine.refresh_native_tool_context(ctx, session_id, &head)?;
-        let selected_count = engine
-            .providers()
-            .ok_or(StorageError::ScopeDenied)?
-            .schemas()
-            .selected_agent_tools(ctx)?
-            .len();
-        let tools_required = selected_count != 0;
-        let windows = tool_window_count(selected_count);
+        let (prepared_head, prepared_binding, route, windows) = {
+            let (engine, ctx, session, head, is_reviewer) = (
+                engine.clone(),
+                ctx.clone(),
+                session_id.clone(),
+                head,
+                is_plan_reviewer(agent),
+            );
+            tokio::task::spawn_blocking(move || {
+                prepare_generation_context(&engine, &ctx, &session, head, binding, is_reviewer)
+            })
+            .await
+            .map_err(|error| TurnError::Worker(format!("generation context worker: {error}")))??
+        };
+        head = prepared_head;
+        binding = prepared_binding;
         window %= windows;
-        let needs_images = context_head_has_images(engine, ctx, &head)?;
-        let route = route_context_head(
-            engine,
-            ctx,
-            session_id,
-            binding.context_epoch.get(),
-            Some(head.sha256.as_str()),
-            tools_required,
-            needs_images,
-        )?;
-        let next = binding_for_route(engine, &route, binding.context_epoch.get())?;
-        if next.connection_id != binding.connection_id
-            || next.model_id != binding.model_id
-            || next.account_revision != binding.account_revision
-            || next.endpoint_profile != binding.endpoint_profile
-        {
-            let epoch = binding
-                .context_epoch
-                .get()
-                .checked_add(1)
-                .ok_or(StorageError::ScopeDenied)?;
-            let next = NativeBinding {
-                context_epoch: Counter::new(epoch).map_err(|_| StorageError::ScopeDenied)?,
-                ..next
-            };
-            head = engine.change_provider_epoch(ctx, session_id, &head, &binding, &next)?;
-            binding = next;
-        }
-        if !is_plan_reviewer(agent) {
-            head = engine.adopt_instruction_epoch(ctx, session_id, &head, &binding, &[])?;
-        }
-        binding = engine
-            .recover_native_context_head(ctx, session_id)?
-            .ok_or(StorageError::ScopeDenied)?
-            .1;
         if !is_plan_reviewer(agent) {
             acknowledge_native_instructions(engine, ctx, agent).await?;
         }
@@ -596,7 +596,15 @@ async fn run_native_loop(
             recovered = engine.recover_native_context_head(ctx, session_id)?;
             continue;
         }
-        let invocation = plan_generation_window(engine, ctx, &route, &binding, &head, window)?;
+        let invocation = {
+            let (engine, ctx, binding, head) =
+                (engine.clone(), ctx.clone(), binding.clone(), head.clone());
+            tokio::task::spawn_blocking(move || {
+                plan_generation_window(&engine, &ctx, &route, &binding, &head, window)
+            })
+            .await
+            .map_err(|error| TurnError::Worker(format!("generation request worker: {error}")))??
+        };
         let attempt = (
             invocation.request.request_id.clone(),
             head.version_id.clone(),
@@ -734,6 +742,61 @@ async fn wait_for_linked_effects(
         }
         tokio::time::sleep(std::time::Duration::from_millis(500)).await;
     }
+}
+
+fn prepare_generation_context(
+    engine: &TurnEngine,
+    ctx: &InvocationContext,
+    session_id: &Id,
+    mut head: ArtifactRef,
+    mut binding: NativeBinding,
+    is_reviewer: bool,
+) -> Result<(ArtifactRef, NativeBinding, RouteChoice, usize), TurnError> {
+    head = engine.refresh_native_tool_context(ctx, session_id, &head)?;
+    let selected_count = engine
+        .providers()
+        .ok_or(StorageError::ScopeDenied)?
+        .schemas()
+        .selected_agent_tools(ctx)?
+        .len();
+    let tools_required = selected_count != 0;
+    let windows = tool_window_count(selected_count);
+    let needs_images = context_head_has_images(engine, ctx, &head)?;
+    let route = route_context_head(
+        engine,
+        ctx,
+        session_id,
+        binding.context_epoch.get(),
+        Some(head.sha256.as_str()),
+        tools_required,
+        needs_images,
+    )?;
+    let next = binding_for_route(engine, &route, binding.context_epoch.get())?;
+    if next.connection_id != binding.connection_id
+        || next.model_id != binding.model_id
+        || next.account_revision != binding.account_revision
+        || next.endpoint_profile != binding.endpoint_profile
+    {
+        let epoch = binding
+            .context_epoch
+            .get()
+            .checked_add(1)
+            .ok_or(StorageError::ScopeDenied)?;
+        let next = NativeBinding {
+            context_epoch: Counter::new(epoch).map_err(|_| StorageError::ScopeDenied)?,
+            ..next
+        };
+        head = engine.change_provider_epoch(ctx, session_id, &head, &binding, &next)?;
+        binding = next;
+    }
+    if !is_reviewer {
+        head = engine.adopt_instruction_epoch(ctx, session_id, &head, &binding, &[])?;
+    }
+    binding = engine
+        .recover_native_context_head(ctx, session_id)?
+        .ok_or(StorageError::ScopeDenied)?
+        .1;
+    Ok((head, binding, route, windows))
 }
 
 /// An external MCP tool answers within its own call deadline, so the next provider request

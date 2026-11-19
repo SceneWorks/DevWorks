@@ -3,8 +3,8 @@ use crate::{store, turn_engine::TurnEngine};
 use devworks_core::context::{HostIngress, InvocationContext, PrincipalKind};
 use devworks_core::ports::IdKind;
 use devworks_core::ports::storage::{
-    ApplicationStore, ArtifactScope, ReadOptions, StorageError, WorkRead, WriteOptions,
-    WriteTransaction, read_snapshot,
+    ApplicationStore, ArtifactScope, ReadOptions, ReadSnapshot, StorageError, WorkRead,
+    WriteOptions, WriteTransaction, read_snapshot,
 };
 use devworks_core::protocol::provider::{TranscriptBody, UserContent};
 use devworks_core::protocol::{Counter, Id, Revision, RootId};
@@ -71,19 +71,25 @@ pub(crate) fn attempt_is_current(
     ctx: &InvocationContext,
 ) -> Result<bool, StorageError> {
     read_snapshot(store, &ReadOptions::default(), |snapshot| {
-        let Some((activation, epoch)) = ctx.activation() else {
-            return Ok(false);
-        };
-        Ok(binding(snapshot.work(), ctx)?.is_some_and(|(review, _)| {
-            review.actor == *ctx.principal()
-                && matches!(review.outcome, ReviewOutcome::Running)
-                && review.activation == *activation
-                && review.owner_epoch == epoch
-        }) && snapshot.runs().activation(activation)?.is_some_and(|a| {
-            a.owner_epoch == epoch
-                && a.phase == devworks_core::ports::storage::ActivationPhase::Running
-        }))
+        attempt_is_current_in(snapshot, ctx)
     })
+}
+
+pub(crate) fn attempt_is_current_in(
+    snapshot: &dyn ReadSnapshot,
+    ctx: &InvocationContext,
+) -> Result<bool, StorageError> {
+    let Some((activation, epoch)) = ctx.activation() else {
+        return Ok(false);
+    };
+    Ok(binding(snapshot.work(), ctx)?.is_some_and(|(review, _)| {
+        review.actor == *ctx.principal()
+            && matches!(review.outcome, ReviewOutcome::Running)
+            && review.activation == *activation
+            && review.owner_epoch == epoch
+    }) && snapshot.runs().activation(activation)?.is_some_and(|a| {
+        a.owner_epoch == epoch && a.phase == devworks_core::ports::storage::ActivationPhase::Running
+    }))
 }
 
 pub(crate) fn bind_prompt(
@@ -194,10 +200,15 @@ pub(crate) async fn schedule(
             return Ok(None);
         }
         loop {
-            let review = read_snapshot(engine.store().as_ref(), &ReadOptions::default(), |s| {
-                plan_review::target_for_assignment(s.work(), &root.0, &child)
-            })?;
-            match review.map(|(review, _)| review.outcome) {
+            let (feature, child) = (feature.clone(), child.clone());
+            let outcome = store::read(engine.store(), move |s| {
+                Ok(
+                    plan_review::target_for_assignment(s.work(), &feature, &child)?
+                        .map(|(review, _)| review.outcome),
+                )
+            })
+            .await?;
+            match outcome {
                 Some(ReviewOutcome::Running) => {}
                 Some(ReviewOutcome::Complete { .. }) => return Ok(Some(true)),
                 Some(ReviewOutcome::Failed { .. }) => return Ok(Some(false)),
@@ -211,17 +222,21 @@ pub(crate) async fn schedule(
     }
 }
 
-pub(crate) fn report(engine: &TurnEngine, ctx: &InvocationContext) -> Result<Report, StorageError> {
-    let session = ctx.session_id().ok_or(StorageError::ScopeDenied)?;
-    let text = read_snapshot(engine.store().as_ref(), &ReadOptions::default(), |s| {
+pub(crate) async fn report(
+    engine: &TurnEngine,
+    ctx: &InvocationContext,
+) -> Result<Report, StorageError> {
+    let session = ctx.session_id().cloned().ok_or(StorageError::ScopeDenied)?;
+    let actor = ctx.principal().clone();
+    let text = store::read(engine.store(), move |s| {
         let mut after = 0;
         let mut last = None;
         loop {
-            let entries = s.sessions().entries(session, after, 100)?;
+            let entries = s.sessions().entries(&session, after, 100)?;
             let more = entries.len() == 100;
             for entry in entries {
                 after = entry.sequence;
-                if entry.kind == "AssistantAttempt" && entry.actor == *ctx.principal() {
+                if entry.kind == "AssistantAttempt" && entry.actor == actor {
                     let body: TranscriptBody =
                         serde_json::from_value(entry.body).map_err(|_| {
                             StorageError::InvalidRecord("invalid review transcript".into())
@@ -240,7 +255,8 @@ pub(crate) fn report(engine: &TurnEngine, ctx: &InvocationContext) -> Result<Rep
                 return Ok(last);
             }
         }
-    })?
+    })
+    .await?
     .ok_or_else(|| StorageError::InvalidRecord("the reviewer returned no report".into()))?;
     let report: Report = serde_json::from_str(text.trim()).map_err(|_| {
         StorageError::InvalidRecord(
@@ -334,56 +350,15 @@ pub(crate) async fn settle(
     let ctx = ctx.clone();
     let failure = match result {
         Ok(report) if !report.needs_source => {
-            let session = ctx.session_id().ok_or(StorageError::ScopeDenied)?;
-            let redactor = devworks_core::authority::redact::Redactor::new();
-            let findings: Vec<_> = report
-                .findings
-                .iter()
-                .enumerate()
-                .map(|(index, finding)| {
-                    json!({
-                        "id": plan_review::finding_id(session, index),
-                        "concern": redactor.redact_text(&finding.concern),
-                        "consequence": redactor.redact_text(&finding.consequence),
-                        "acceptanceCase": redactor.redact_text(&finding.acceptance_case),
-                    })
-                })
-                .collect();
-            let bytes = json!({"findings": findings}).to_string().into_bytes();
-            let count = findings.len();
-            let (report_ctx, report_host) = (ctx.clone(), host.clone());
-            let published = engine.artifacts().publish_evidence(
-                engine.store().as_ref(),
-                Evidence {
-                    scope: ArtifactScope::Project(
-                        ctx.project_id().ok_or(StorageError::ScopeDenied)?.clone(),
-                    ),
-                    producer: ctx.principal().clone(),
-                    principal_kind: "Agent".into(),
-                    agent_session: ctx.session_id().cloned(),
-                    root: ctx.root_id().cloned(),
-                    assignment: ctx.assignment_id().cloned(),
-                    title: "Independent plan review".into(),
-                    media_type: "application/json".into(),
-                    tags: vec![],
-                    source: json!({"kind":"PlanReviewReport"}),
-                },
-                &bytes,
-                move |tx, reference| {
-                    let notice = format!(
-                        "The independent plan review completed with {count} material findings. Read artifact {} at version {}. In the readiness assessment, record a disposition for every finding using its supplied ID and the report as evidence. Check findings against the plan and code before escalating.",
-                        reference.artifact_id.as_str(), reference.version_id.as_str(),
-                    );
-                    record(tx, &report_ctx, &report_host, ReviewOutcome::Complete {
-                        report: reference.clone(), findings: count,
-                    }, notice)?
-                        .then_some(())
-                        .ok_or(StorageError::ScopeDenied)
-                },
-            );
-            match published {
-                Ok(_) => return Ok(()),
-                Err(error) => format!("Could not record the independent plan review: {error:?}"),
+            let (engine, review_ctx, review_host) = (engine.clone(), ctx.clone(), host.clone());
+            match tokio::task::spawn_blocking(move || {
+                publish_report(&engine, &review_ctx, &review_host, report)
+            })
+            .await
+            {
+                Ok(Ok(())) => return Ok(()),
+                Ok(Err(error)) => error.to_string(),
+                Err(error) => format!("The plan review report worker failed: {error}"),
             }
         }
         Ok(_) => "The reviewer could not resolve the required source evidence.".into(),
@@ -407,6 +382,63 @@ pub(crate) async fn settle(
         Ok(())
     })
     .await
+}
+
+fn publish_report(
+    engine: &TurnEngine,
+    ctx: &InvocationContext,
+    host: &InvocationContext,
+    report: Report,
+) -> Result<(), StorageError> {
+    let session = ctx.session_id().ok_or(StorageError::ScopeDenied)?;
+    let redactor = devworks_core::authority::redact::Redactor::new();
+    let findings: Vec<_> = report
+        .findings
+        .iter()
+        .enumerate()
+        .map(|(index, finding)| {
+            json!({
+                "id": plan_review::finding_id(session, index),
+                "concern": redactor.redact_text(&finding.concern),
+                "consequence": redactor.redact_text(&finding.consequence),
+                "acceptanceCase": redactor.redact_text(&finding.acceptance_case),
+            })
+        })
+        .collect();
+    let bytes = json!({"findings": findings}).to_string().into_bytes();
+    let count = findings.len();
+    let (report_ctx, report_host) = (ctx.clone(), host.clone());
+    engine.artifacts().publish_evidence(
+        engine.store().as_ref(),
+        Evidence {
+            scope: ArtifactScope::Project(
+                ctx.project_id().ok_or(StorageError::ScopeDenied)?.clone(),
+            ),
+            producer: ctx.principal().clone(),
+            principal_kind: "Agent".into(),
+            agent_session: ctx.session_id().cloned(),
+            root: ctx.root_id().cloned(),
+            assignment: ctx.assignment_id().cloned(),
+            title: "Independent plan review".into(),
+            media_type: "application/json".into(),
+            tags: vec![],
+            source: json!({"kind":"PlanReviewReport"}),
+        },
+        &bytes,
+        move |tx, reference| {
+            let notice = format!(
+                "The independent plan review completed with {count} material findings. Read artifact {} at version {}. In the readiness assessment, record a disposition for every finding using its supplied ID and the report as evidence. Check findings against the plan and code before escalating.",
+                reference.artifact_id.as_str(), reference.version_id.as_str(),
+            );
+            record(tx, &report_ctx, &report_host, ReviewOutcome::Complete {
+                report: reference.clone(), findings: count,
+            }, notice)?
+                .then_some(())
+                .ok_or(StorageError::ScopeDenied)
+        },
+    )
+    .map(|_| ())
+    .map_err(|error| StorageError::InvalidRecord(format!("Could not record the independent plan review: {error:?}")))
 }
 
 fn record(
