@@ -426,6 +426,11 @@ mod coordinator_wait {
     fn native_coordinator_reviews_source_drift_while_awaiting_its_own_effect() {
         let _native_case = native_runtime_case();
         let fx = Fx::new();
+        // macOS CI's Cargo scratch directory links to the runner's RAM disk.
+        let work = fx.h.root.join("registered-work");
+        std::fs::create_dir_all(work.join("capacity-work")).unwrap();
+        let work_alias = fx.h.root.join("registered-work-alias");
+        std::os::unix::fs::symlink(&work, &work_alias).unwrap();
         runtime().block_on(async {
             let (final_request, mut requests) = mpsc::unbounded_channel();
             let (release, signal) = std::sync::mpsc::sync_channel(1);
@@ -452,7 +457,7 @@ mod coordinator_wait {
                     [RegisteredExecutable { id: id("shell"), path: "/bin/sh".into() }],
                     [RegisteredWorkingRoot {
                         id: id("work"), project: Some(ProjectId(id("project-a"))),
-                        path: fx.h.root.clone(),
+                        path: work_alias.canonicalize().unwrap(),
                     }],
                 ).unwrap(),
                 filesystem: Arc::new(NativeFilesystem::new()),
@@ -471,7 +476,6 @@ mod coordinator_wait {
                 enrichers: vec![],
             });
             std::fs::create_dir(fx.h.root.join("review-source")).unwrap();
-            std::fs::create_dir(fx.h.root.join("capacity-work")).unwrap();
             let app = Arc::new(boot(composed).await.unwrap());
             // Keep the accepted process delivery queued until the test has published source drift.
             app.dispatcher().stop();
@@ -497,11 +501,22 @@ mod coordinator_wait {
             };
             let accepted = tokio::time::timeout(Duration::from_secs(12), requests.recv()).await
                 .unwrap_or_else(|_| panic!("coordinator never acknowledged the queued effect: {}", describe())).unwrap();
-            assert!(accepted.contains("operationId"), "{accepted}");
-            let operation = read(&*fx.store, |s| s.operations().operations_for_capability(
-                "process.execute", &[OperationState::IntentRecorded], None, 1,
-            )).into_iter().next().unwrap_or_else(|| panic!("the accepted process intent is absent: {accepted}"));
-            assert!(accepted.contains(operation.id.0.as_str()), "{accepted}");
+            let request: Value = serde_json::from_str(&accepted).unwrap();
+            let tool = request["messages"].as_array().unwrap().iter()
+                .find(|message| message["role"] == "tool" && message["tool_call_id"] == "queued-process")
+                .expect("the coordinator sees the queued process tool result");
+            // The receipt precedes the human-readable delivery status.
+            let result = tool["content"].as_str().unwrap().lines().next().unwrap();
+            let reply: DomainCommandReply = serde_json::from_str(result)
+                .unwrap_or_else(|_| panic!("the process tool should return an accepted receipt: {result}"));
+            let CommandReply::Recorded { receipt, .. } = reply else {
+                panic!("the process tool should record a receipt, got {reply:?}");
+            };
+            let DomainDecision::Accepted { operation_id } = receipt.decision else {
+                panic!("the process tool should be accepted, got {:?}", receipt.decision);
+            };
+            let operation = read(&*fx.store, |s| s.operations().operation(&operation_id)).unwrap();
+            assert_eq!(operation.capability, "process.execute");
             assert_eq!(operation.state, OperationState::IntentRecorded);
             let entry = read(&*fx.store, |s| s.queue().deliveries(&DeliveryFilter {
                 consumer: None, operation_id: Some(operation.id.clone()),
