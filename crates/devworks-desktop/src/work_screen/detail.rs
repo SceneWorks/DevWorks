@@ -208,7 +208,9 @@ pub(crate) fn feature_detail(
                     actions.push(Action::RequestApproval(f.clone()));
                 }
             }
-            plan_form(ui, work, f, project_repos, enabled, actions);
+            ui.push_id(("feature-plan", f.id.as_str()), |ui| {
+                plan_form(ui, work, f, project_repos, enabled, actions);
+            });
             ui.add_space(8.0);
             ui.label(RichText::new("Readiness").strong());
             settled_finding_history(ui, work, f.id.as_str(), actions);

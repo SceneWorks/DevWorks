@@ -955,30 +955,35 @@ fn save_plan_now(
         })
         .expect("the feature row")
         .click();
-    // The control is disabled while the selected feature's read is in flight, which under load
-    // outlasts a fixed frame count; uploads of earlier saves may stay in flight meanwhile.
+    // Detail refresh can temporarily disable the button or move it below the viewport.
+    // Keep rendering and use the current enabled control without waiting for earlier uploads.
     let deadline = std::time::Instant::now() + SETTLE_BOUND;
     while h
-        .query_by_role_and_label(Role::Button, "Edit plan")
-        .is_none_or(|b| b.accesskit_node().is_disabled())
+        .state()
+        .work
+        .plan
+        .as_ref()
+        .is_none_or(|p| p.snapshot.title.0 != title)
     {
         assert!(
             std::time::Instant::now() < deadline,
-            "the Edit plan control never became available"
+            "the plan editor for {title} never opened"
         );
+        if let Some(button) = h
+            .query_by_role_and_label(Role::Button, "Edit plan")
+            .filter(|node| !node.accesskit_node().is_disabled())
+        {
+            button.scroll_to_me();
+            h.step();
+            if let Some(button) = h
+                .query_by_role_and_label(Role::Button, "Edit plan")
+                .filter(|node| !node.accesskit_node().is_disabled())
+            {
+                button.click_accesskit();
+            }
+        }
         h.step();
     }
-    // An accessibility action, not a pointer click: the detail's layout may still move as
-    // its read lands, and a click at last frame's position would miss the control.
-    h.get_by_role_and_label(Role::Button, "Edit plan")
-        .click_accesskit();
-    // Another feature's editor may still be open while its save uploads.
-    step_until(h, "the plan editor opens", |s| {
-        s.work
-            .plan
-            .as_ref()
-            .is_some_and(|p| p.snapshot.title.0 == title)
-    });
     {
         let form = h
             .state_mut()
