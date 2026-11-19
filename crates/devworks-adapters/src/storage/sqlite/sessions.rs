@@ -739,7 +739,8 @@ fn lineage(
            UNION ALL SELECT seq,1,id FROM history_links WHERE root_id=?1
            UNION ALL SELECT seq,2,id FROM events WHERE root_id=?1
              AND (aggregate_kind IN ({LINEAGE_EVENT_AGGREGATES})
-                  OR (aggregate_kind='feature_readiness' AND kind='ReadinessFindingArchived'))
+                  OR (aggregate_kind='feature_readiness'
+                      AND kind IN ('ReadinessFindingArchived','ReadinessFindingArchiveContinued')))
          ) WHERE seq>?2 OR (seq=?2 AND (src>?3 OR (src=?3 AND id>?4)))
          ORDER BY seq,src,id LIMIT ?5"
     );

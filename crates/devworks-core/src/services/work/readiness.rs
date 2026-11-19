@@ -46,6 +46,7 @@ use std::collections::{BTreeMap, BTreeSet};
 /// History aggregate of a feature's readiness (`aggregate_id` = feature ID).
 pub const READINESS_AGGREGATE: &str = "feature_readiness";
 pub const FINDING_ARCHIVED: &str = "ReadinessFindingArchived";
+pub const FINDING_ARCHIVE_CONTINUED: &str = "ReadinessFindingArchiveContinued";
 const FINDING_LIMIT: usize = 128;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -624,7 +625,7 @@ fn record(
     revision: i64,
     kind: &str,
     payload: Value,
-) -> Result<(), StorageError> {
+) -> Result<EventId, StorageError> {
     let mut payload = payload;
     if let Some(m) = payload.as_object_mut() {
         m.insert(
@@ -634,7 +635,7 @@ fn record(
     }
     let id = EventId(tx.new_id(IdKind::Event));
     tx.history().append(NewEvent {
-        id,
+        id: id.clone(),
         actor: ctx.principal().clone(),
         project_id: Some(feature.project_id.clone()),
         root_id: Some(RootId(feature.id.clone())),
@@ -645,7 +646,7 @@ fn record(
         kind: kind.into(),
         payload,
     })?;
-    Ok(())
+    Ok(id)
 }
 
 fn bound_findings(
@@ -702,7 +703,25 @@ fn archive_finding(
         plan_digest: assessment.plan_digest.clone(),
         finding,
     };
-    record(
+    let text = archive_text(&entry, assessment.reviewed_pending, &assessment.assessed_by);
+    // A lineage summary can hold 65536 characters. Leave room for the continuation labels
+    // and give every part its own committed sequence so a page cannot skip part of a finding.
+    let mut text = text.as_str();
+    let mut summaries = Vec::new();
+    while let Some((offset, _)) = text.char_indices().nth(60_000) {
+        let (part, rest) = text.split_at(offset);
+        summaries.push(part);
+        text = rest;
+    }
+    summaries.push(text);
+    let mut first = summaries[0].to_owned();
+    if summaries.len() > 1 {
+        first.push_str(&format!(
+            "\nContinued in {} history records.",
+            summaries.len() - 1
+        ));
+    }
+    let root = record(
         tx,
         ctx,
         feature,
@@ -710,14 +729,108 @@ fn archive_finding(
         FINDING_ARCHIVED,
         json!({
             "finding": entry.finding,
+            "findingId": entry.finding.id,
+            "summary": first,
             "planRevision": entry.plan_revision,
             "planDigest": entry.plan_digest,
             "reviewedPending": assessment.reviewed_pending,
             "assessedBy": assessment.assessed_by,
         }),
     )?;
+    for (index, part) in summaries.iter().enumerate().skip(1) {
+        record(
+            tx,
+            ctx,
+            feature,
+            revision,
+            FINDING_ARCHIVE_CONTINUED,
+            json!({
+                "archiveId": root.0,
+                "findingId": entry.finding.id,
+                "summary": format!(
+                    "Finding {} (part {} of {})\n{part}", entry.finding.id.as_str(), index + 1, summaries.len()
+                ),
+            }),
+        )?;
+    }
     archive.insert(entry.finding.id.as_str().to_owned(), entry);
     Ok(())
+}
+
+fn archive_text(archive: &ArchivedFinding, pending: bool, assessor: &ActorId) -> String {
+    let finding = &archive.finding;
+    let state = match finding.state {
+        FindingState::Resolved => "Resolved",
+        FindingState::RiskAccepted => "Risk accepted",
+        FindingState::Open => unreachable!("only settled findings are archived"),
+    };
+    let generation = if pending { "Pending" } else { "Active" };
+    let disposition = match finding.disposition {
+        ReadinessDisposition::ResolvedDecision => "Resolved decision",
+        ReadinessDisposition::BoundedInvestigation => "Bounded investigation",
+        ReadinessDisposition::NeedsUserDecision => "Needs a user decision",
+    };
+    let mut summary = format!(
+        "{state} finding {}\n{generation} plan revision {}\nPlan digest {}\nAssessed by {}\n{disposition}",
+        finding.id.as_str(),
+        archive.plan_revision,
+        archive.plan_digest,
+        assessor.0.as_str(),
+    );
+    if let Some(scope) = &finding.scope_key {
+        summary.push_str(&format!("\nScope — {}", scope.as_str()));
+    }
+    for (label, ids) in [
+        ("Requirements", &finding.requirement_ids.0),
+        ("Affected work", &finding.affected_work_ids.0),
+    ] {
+        if !ids.is_empty() {
+            let ids = ids.iter().map(Id::as_str).collect::<Vec<_>>().join(", ");
+            summary.push_str(&format!("\n{label} — {ids}"));
+        }
+    }
+    if finding.blocking {
+        summary.push_str("\nBlocking finding");
+    }
+    if finding.prerequisite {
+        summary.push_str("\nPrerequisite finding");
+    }
+    summary.push_str(&format!("\n{}", finding.summary.0));
+    for (label, field) in [
+        ("Missing", Some(&finding.missing)),
+        ("Consequence", Some(&finding.consequence)),
+        ("Why more work was needed", Some(&finding.insufficiency)),
+        ("Closure condition", Some(&finding.closure_condition)),
+        ("Decision", finding.decision.as_ref()),
+        ("Objective", finding.objective.as_ref()),
+        ("Limits", finding.limits.as_ref()),
+        ("Question", finding.question.as_ref()),
+        ("Recommendation", finding.recommendation.as_ref()),
+        ("Resolution", finding.closure_note.as_ref()),
+    ] {
+        if let Some(text) = field.filter(|text| !text.0.is_empty()) {
+            summary.push_str(&format!("\n{label} — {}", text.0));
+        }
+    }
+    if let Some(confidence) = &finding.confidence {
+        summary.push_str(&format!("\nConfidence — {confidence:?}"));
+    }
+    for attempt in &finding.attempts.0 {
+        summary.push_str(&format!("\nAttempt — {}", attempt.0));
+    }
+    for (label, evidence) in [
+        ("Evidence", &finding.evidence.0),
+        ("Closure evidence", &finding.closure_evidence.0),
+    ] {
+        for item in evidence {
+            summary.push_str(&format!(
+                "\n{label} — {} at {}",
+                item.artifact_id.as_str(),
+                item.version_id.as_str()
+            ));
+        }
+    }
+    summary
 }
 
 /// Applies a `features.edit` readiness change to `feature` (inside the edit's unit of work).
@@ -1352,12 +1465,9 @@ pub(crate) fn record_adoption(
         }) {
             let mut promoted = pending;
             promoted.reviewed_pending = false;
-            slots
-                .active_archive
-                .extend(pending_archive.into_iter().filter(|(_, entry)| {
-                    entry.plan_revision == promoted.plan_revision
-                        && entry.plan_digest == promoted.plan_digest
-                }));
+            // Settled identities inherited by the pending assessment still constrain
+            // reopens after adoption. Exact review evidence is checked separately.
+            slots.active_archive.extend(pending_archive);
             // Approval never closes a finding: carry open gates, and preserve predecessor
             // dispositions that the promoted draft does not carry in its current view.
             if let Some(old) = &slots.active {

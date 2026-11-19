@@ -211,9 +211,7 @@ pub(crate) fn feature_detail(
             plan_form(ui, work, f, project_repos, enabled, actions);
             ui.add_space(8.0);
             ui.label(RichText::new("Readiness").strong());
-            if f.readiness.is_some() || f.pending_readiness.is_some() {
-                settled_finding_history(ui, work, f.id.as_str(), actions);
-            }
+            settled_finding_history(ui, work, f.id.as_str(), actions);
             if let Some(p) = &f.pending_readiness {
                 let open = p
                     .findings

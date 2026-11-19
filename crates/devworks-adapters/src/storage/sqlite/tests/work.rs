@@ -14,10 +14,11 @@ use devworks_core::context::{HostIngress, InvocationContext, PrincipalKind};
 use devworks_core::gateway::Gateway;
 use devworks_core::ports::storage::*;
 use devworks_core::protocol::provider::ArtifactRef;
-use devworks_core::protocol::records::{ProjectRecord, WorkRecord};
+use devworks_core::protocol::records::{LineageRecord, ProjectRecord, WorkRecord};
 use devworks_core::protocol::results::{
     DomainCommandReply, DomainDecision, DomainQueryReply, OperationResult,
 };
+use devworks_core::protocol::support::HistoryPage;
 use devworks_core::protocol::{
     ActorId, CommandReply, Counter, DomainErrorCode, DomainFault, Id, ProjectId, Revision, RootId,
 };
@@ -1424,6 +1425,31 @@ fn reassess(c: &Coverage, findings: Vec<Value>) -> DomainCommandReply {
     )
 }
 
+fn finding_lineage(
+    c: &Coverage,
+    ctx: &InvocationContext,
+    limit: u16,
+    cursor: Option<&str>,
+) -> HistoryPage<LineageRecord> {
+    let mut page = json!({"limit": limit});
+    if let Some(cursor) = cursor {
+        page["cursor"] = json!(cursor);
+    }
+    let lineage = c.fx.query(
+        ctx,
+        "history.work_lineage",
+        json!({"rootId": c.f.id, "page": page}),
+    );
+    let DomainQueryReply::Result {
+        result: OperationResult::HistoryWorkLineage { value },
+        ..
+    } = lineage
+    else {
+        panic!("expected work lineage, got {lineage:?}");
+    };
+    value
+}
+
 #[test]
 fn a_new_assessment_at_capacity_archives_settled_findings_and_reopens_only_with_evidence() {
     let (c, _) = Coverage::new(&["Pay"], &[0]);
@@ -1436,22 +1462,8 @@ fn a_new_assessment_at_capacity_archives_settled_findings_and_reopens_only_with_
     assert!(!findings.iter().any(|f| f.id.as_str() == "S127"));
 
     for ctx in [c.fx.user(), c.fx.agent()] {
-        let lineage = c.fx.query(
-            &ctx,
-            "history.work_lineage",
-            json!({
-                "rootId": c.f.id,
-                "page": {"limit": 100}
-            }),
-        );
-        let DomainQueryReply::Result {
-            result: OperationResult::HistoryWorkLineage { value },
-            ..
-        } = lineage
-        else {
-            panic!("expected work lineage, got {lineage:?}");
-        };
-        let archived = value
+        let lineage = finding_lineage(&c, &ctx, 100, None);
+        let archived = lineage
             .items
             .0
             .iter()
@@ -1477,6 +1489,69 @@ fn a_new_assessment_at_capacity_archives_settled_findings_and_reopens_only_with_
     let fault = refused(reassess(&c, vec![open_finding(127)]));
     assert_eq!(kind_of(&fault), "settled_without_new_evidence");
     assert_eq!(c.revision(), revision);
+}
+
+#[test]
+fn long_archived_findings_keep_their_provenance_closure_and_evidence_across_pages() {
+    let (c, _) = Coverage::new(&["Pay"], &[0]);
+    applied(reassess(&c, (0..128).map(open_finding).collect()));
+    let mut settled = settled_finding(128);
+    let long_summary = "é".repeat(65_536);
+    let long_closure = "Closed after ".to_owned() + &"x".repeat(65_520) + "ok!";
+    settled["summary"] = json!(long_summary);
+    settled["closureNote"] = json!(long_closure);
+    settled["scopeKey"] = json!("E1");
+    settled["requirementIds"] = json!(["E1"]);
+    settled["closureEvidence"] = json!([&c.doc]);
+    for index in 128..134 {
+        settled["id"] = json!(format!("S{index}"));
+        applied(reassess(&c, vec![settled.clone()]));
+    }
+
+    // A requested 500-row page still fits into one wire frame and offers a continuation.
+    let first_page = finding_lineage(&c, &c.fx.agent(), 500, None);
+    assert!(first_page.has_more);
+    assert!(
+        serde_json::to_vec(&first_page).unwrap().len() < devworks_core::framing::MAX_FRAME_BYTES
+    );
+
+    // One record per page exercises the committed sequence between every continuation.
+    let ctx = c.fx.agent();
+    let mut cursor = None;
+    let mut archive = None;
+    let mut text = String::new();
+    loop {
+        let page = finding_lineage(&c, &ctx, 1, cursor.as_deref());
+        for record in page.items.0 {
+            if record.related_id.as_str() != "S128" {
+                continue;
+            }
+            assert_eq!(record.kind.0, "readiness_finding");
+            if let Some(first) = &archive {
+                assert_eq!(record.parent_id.as_ref(), Some(first));
+                let (_, continuation) = record.summary.0.split_once('\n').unwrap();
+                text.push_str(continuation);
+            } else {
+                archive = Some(record.id);
+                let (initial, _) = record.summary.0.rsplit_once("\nContinued in ").unwrap();
+                text.push_str(initial);
+            }
+        }
+        cursor = page.next_cursor.map(|c| c.0);
+        if cursor.is_none() {
+            break;
+        }
+    }
+    assert!(text.contains("Active plan revision"));
+    assert!(text.contains("Plan digest"));
+    assert!(text.contains("Scope — E1"));
+    assert!(text.contains(&long_summary));
+    assert!(text.contains(&long_closure));
+    assert!(text.contains(&format!(
+        "Closure evidence — {} at {}",
+        c.doc.artifact_id.as_str(),
+        c.doc.version_id.as_str()
+    )));
 }
 
 #[test]
@@ -1551,6 +1626,72 @@ fn carrying_a_gate_at_capacity_preserves_the_pending_archive_on_adoption() {
     // The exact pending assessment's archived disposition still counts after adoption.
     let fault = refused(reassess(&c, vec![open_finding(127)]));
     assert_eq!(kind_of(&fault), "settled_without_new_evidence");
+}
+
+#[test]
+fn an_accepted_risk_from_an_earlier_pending_revision_stays_known_after_adoption() {
+    let (c, cards) = Coverage::new(&["Pay", "Wallet"], &[0]);
+    let first = c
+        .edit_plan(&c.fx.fresh(&c.f), &[&cards[1]])
+        .pending_plan
+        .unwrap();
+    let first_digest = plan_digest(&first.draft);
+    let mut findings: Vec<_> = (0..127).map(settled_finding).collect();
+    findings.push(open_finding(127));
+    applied(assess_plan(
+        &c,
+        first.revision.as_str(),
+        &first_digest,
+        findings,
+    ));
+    let feature_id = c.f.id.clone();
+    let human = c.fx.user();
+    let revision = c.revision().unwrap().parse().unwrap();
+    c.fx.write(move |tx| {
+        accept_finding_risk(
+            tx,
+            &human,
+            &feature_id,
+            &id("S127"),
+            revision,
+            "Risk accepted for testing",
+        )
+        .map_err(|error| StorageError::InvalidRecord(format!("{error:?}")))
+    });
+    applied(assess_plan(
+        &c,
+        first.revision.as_str(),
+        &first_digest,
+        vec![settled_finding(128)],
+    ));
+    let lineage = finding_lineage(&c, &c.fx.user(), 100, None);
+    let archived = lineage
+        .items
+        .0
+        .iter()
+        .find(|r| r.related_id.as_str() == "S127")
+        .unwrap();
+    assert!(archived.summary.0.contains(&format!(
+        "Pending plan revision {}",
+        first.revision.as_str()
+    )));
+    assert!(archived.summary.0.contains(&first_digest));
+    assert!(archived.summary.0.contains("Risk accepted finding S127"));
+    assert!(archived.summary.0.contains("Risk accepted for testing"));
+
+    let feature = c.edit_plan(&c.fx.fresh(&c.f), &[&cards[0], &cards[1]]);
+    let next = feature.pending_plan.as_ref().unwrap();
+    let next_digest = plan_digest(&next.draft);
+    assert_ne!(next_digest, first_digest);
+    c.assess(&feature, next.revision.as_str(), next_digest);
+    c.decide(true);
+
+    let fault = refused(reassess(&c, vec![open_finding(127)]));
+    assert_eq!(kind_of(&fault), "settled_without_new_evidence");
+    let mut reopened = open_finding(127);
+    reopened["evidence"] = json!([&c.doc]);
+    let shown = work_of(applied(reassess(&c, vec![reopened])));
+    assert_eq!(Coverage::open_ids(&shown.readiness.unwrap()), ["S127"]);
 }
 
 #[test]
