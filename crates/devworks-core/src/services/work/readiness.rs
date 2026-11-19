@@ -20,8 +20,8 @@
 //! active plan with no open blocking finding — and is reported apart from plan approval; no
 //! caller asserts it, and approving a plan never closes a finding. Re-assessing an unchanged plan
 //! cannot add a blocker or reopen a settled finding without new evidence; settled findings an
-//! assessment leaves out are kept. A blocking finding closes with a closure note and, for anyone
-//! but the user, evidence; a human may accept a finding's identified risk through the approvals
+//! assessment leaves out are kept in readiness or its history. A blocking finding closes with a
+//! closure note and, for anyone but the user, evidence; a human may accept a finding's identified risk through the approvals
 //! item's decision seam ([`accept_finding_risk`]), which never waives a missing prerequisite.
 use super::model::{FEATURE_UNIT, active_of, dropped, pending_of, plan_units};
 use super::{R, check_artifact, conflict, invalid, not_found, refuse, stale, visible_feature};
@@ -45,6 +45,16 @@ use std::collections::{BTreeMap, BTreeSet};
 
 /// History aggregate of a feature's readiness (`aggregate_id` = feature ID).
 pub const READINESS_AGGREGATE: &str = "feature_readiness";
+pub const FINDING_ARCHIVED: &str = "ReadinessFindingArchived";
+const FINDING_LIMIT: usize = 128;
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ArchivedFinding {
+    plan_revision: i64,
+    plan_digest: String,
+    finding: ReadinessFinding,
+}
 
 /// The stored body of an assessment.
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -84,6 +94,10 @@ pub struct Slots {
     /// Independent plan reviews live beside the coordinator's assessments.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(crate) plan_reviews: Vec<super::plan_review::PlanReview>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub(crate) active_archive: BTreeMap<String, ArchivedFinding>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub(crate) pending_archive: BTreeMap<String, ArchivedFinding>,
 }
 impl Slots {
     pub fn of(v: &Value) -> Self {
@@ -91,6 +105,14 @@ impl Slots {
     }
     pub(crate) fn value(&self) -> Value {
         serde_json::to_value(self).unwrap_or_else(|_| json!({}))
+    }
+    pub(crate) fn archived_finding(&self, id: &Id, pending: bool) -> Option<&ReadinessFinding> {
+        let archive = if pending {
+            &self.pending_archive
+        } else {
+            &self.active_archive
+        };
+        archive.get(id.as_str()).map(|record| &record.finding)
     }
 }
 
@@ -284,7 +306,7 @@ fn project(
         stale_scope_keys: BoundedList(stale.into_iter().take(128).collect()),
         ready,
         summary: content(&a.summary),
-        findings: BoundedList(a.findings.iter().take(128).cloned().collect()),
+        findings: BoundedList(a.findings.iter().take(FINDING_LIMIT).cloned().collect()),
         assessed_by: a.assessed_by.clone(),
         assessed_at_ms: counter(a.assessed_at_ms),
     })
@@ -626,6 +648,78 @@ fn record(
     Ok(())
 }
 
+fn bound_findings(
+    tx: &mut dyn WriteTransaction,
+    ctx: &InvocationContext,
+    feature: &StoredWork,
+    revision: i64,
+    assessment: &mut Assessment,
+    archive: &mut BTreeMap<String, ArchivedFinding>,
+) -> R<()> {
+    let open = assessment
+        .findings
+        .iter()
+        .filter(|finding| matches!(finding.state, FindingState::Open))
+        .count();
+    if open > FINDING_LIMIT {
+        return Err(invalid("finding_limit", Some(&feature.id)));
+    }
+    let mut remaining_settled = FINDING_LIMIT - open;
+    let mut displaced = Vec::new();
+    assessment.findings.retain(|finding| {
+        if matches!(finding.state, FindingState::Open) {
+            return true;
+        }
+        if remaining_settled > 0 {
+            remaining_settled -= 1;
+            true
+        } else {
+            displaced.push(finding.clone());
+            false
+        }
+    });
+    for finding in displaced {
+        archive_finding(tx, ctx, feature, revision, assessment, finding, archive)?;
+    }
+    // Current statements supersede the archive's lookup copy. The journal keeps older versions.
+    for finding in &assessment.findings {
+        archive.remove(finding.id.as_str());
+    }
+    Ok(())
+}
+
+fn archive_finding(
+    tx: &mut dyn WriteTransaction,
+    ctx: &InvocationContext,
+    feature: &StoredWork,
+    revision: i64,
+    assessment: &Assessment,
+    finding: ReadinessFinding,
+    archive: &mut BTreeMap<String, ArchivedFinding>,
+) -> R<()> {
+    let entry = ArchivedFinding {
+        plan_revision: assessment.plan_revision,
+        plan_digest: assessment.plan_digest.clone(),
+        finding,
+    };
+    record(
+        tx,
+        ctx,
+        feature,
+        revision,
+        FINDING_ARCHIVED,
+        json!({
+            "finding": entry.finding,
+            "planRevision": entry.plan_revision,
+            "planDigest": entry.plan_digest,
+            "reviewedPending": assessment.reviewed_pending,
+            "assessedBy": assessment.assessed_by,
+        }),
+    )?;
+    archive.insert(entry.finding.id.as_str().to_owned(), entry);
+    Ok(())
+}
+
 /// Applies a `features.edit` readiness change to `feature` (inside the edit's unit of work).
 pub(crate) fn apply_change(
     tx: &mut dyn WriteTransaction,
@@ -685,6 +779,13 @@ pub(crate) fn apply_change(
             } else {
                 slots.active.clone()
             };
+            let archived = |id: &Id| {
+                slots.archived_finding(id, reviewed_pending).or_else(|| {
+                    reviewed_pending
+                        .then(|| slots.archived_finding(id, false))
+                        .flatten()
+                })
+            };
             let requirements: BTreeSet<String> = draft
                 .requirements
                 .0
@@ -698,7 +799,8 @@ pub(crate) fn apply_change(
             for f in &findings.0 {
                 let stored = previous
                     .as_ref()
-                    .and_then(|p| p.findings.iter().find(|o| o.id == f.id));
+                    .and_then(|p| p.findings.iter().find(|o| o.id == f.id))
+                    .or_else(|| archived(&f.id));
                 // A settled finding repeated unchanged is kept as it is (a human's risk
                 // acceptance included); anything else is validated as a new statement.
                 if stored.is_some_and(|o| same_finding(o, f)) {
@@ -720,7 +822,11 @@ pub(crate) fn apply_change(
                 // evidence (AGENT-20).
                 let same_plan = prev.plan_digest == digest;
                 for f in &findings.0 {
-                    let old = prev.findings.iter().find(|o| o.id == f.id);
+                    let old = prev
+                        .findings
+                        .iter()
+                        .find(|o| o.id == f.id)
+                        .or_else(|| archived(&f.id));
                     let new_evidence = match old {
                         Some(o) => !evidence_keys(f).is_subset(&evidence_keys(o)),
                         None => !f.evidence.0.is_empty(),
@@ -746,9 +852,6 @@ pub(crate) fn apply_change(
                 // validated closure or a human's finding-specific risk acceptance).
                 for o in &prev.findings {
                     if !out.iter().any(|f| f.id == o.id) {
-                        if out.len() >= 128 {
-                            return Err(invalid("finding_limit", Some(&o.id)));
-                        }
                         out.push(o.clone());
                     }
                 }
@@ -759,17 +862,22 @@ pub(crate) fn apply_change(
             {
                 for index in 0..*findings {
                     let id = super::plan_review::finding_id(&review.session, index);
-                    if !out.iter().any(|finding| {
-                        finding.id == id
-                            && finding.evidence.0.iter().any(|evidence| {
-                                super::plan_review::report_matches(evidence, report)
-                            })
+                    let finding = out
+                        .iter()
+                        .find(|finding| finding.id == id)
+                        .or_else(|| slots.archived_finding(&id, reviewed_pending));
+                    if !finding.is_some_and(|finding| {
+                        finding
+                            .evidence
+                            .0
+                            .iter()
+                            .any(|evidence| super::plan_review::report_matches(evidence, report))
                     }) {
                         return Err(conflict("plan_review_finding_needs_disposition", &id));
                     }
                 }
             }
-            let body = Assessment {
+            let mut body = Assessment {
                 id: previous
                     .as_ref()
                     .map(|p| p.id.clone())
@@ -786,16 +894,31 @@ pub(crate) fn apply_change(
             let revision = current_rev.map_or(1, |r| r + 1);
             let mut next = slots.clone();
             if reviewed_pending {
+                bound_findings(
+                    tx,
+                    ctx,
+                    feature,
+                    revision,
+                    &mut body,
+                    &mut next.pending_archive,
+                )?;
                 next.pending = Some(body.clone());
             } else {
+                bound_findings(
+                    tx,
+                    ctx,
+                    feature,
+                    revision,
+                    &mut body,
+                    &mut next.active_archive,
+                )?;
                 next.active = Some(body.clone());
                 // A finding the active plan's assessment opens or widens also holds the pending
                 // replacement, so adopting it cannot drop the finding.
                 if let Some(p) = next.pending.as_mut()
                     && carry_open(&body, p)?
-                    && p.findings.len() > 128
                 {
-                    return Err(invalid("finding_limit", Some(&feature.id)));
+                    bound_findings(tx, ctx, feature, revision, p, &mut next.pending_archive)?;
                 }
             }
             tx.work().put_readiness(
@@ -879,7 +1002,9 @@ pub(crate) fn apply_change(
                 let known = [slots.active.as_ref(), slots.pending.as_ref()]
                     .into_iter()
                     .flatten()
-                    .any(|b| b.findings.iter().any(|f| &f.id == finding_id));
+                    .any(|b| b.findings.iter().any(|f| &f.id == finding_id))
+                    || next.archived_finding(finding_id, false).is_some()
+                    || next.archived_finding(finding_id, true).is_some();
                 return Err(if known {
                     conflict("finding_settled", finding_id)
                 } else {
@@ -943,7 +1068,7 @@ fn uncovered_by(
 }
 
 /// The ID stem of the coverage findings of requirement `r` lost through `card`; each departure
-/// is its own occurrence (`<stem>-<n>`).
+/// is its own occurrence (`<stem>-<id>`).
 fn coverage_stem(r: &Id, card: &Id) -> String {
     format!(
         "coverage-{}",
@@ -974,11 +1099,8 @@ fn of_stem(f: &ReadinessFinding, stem: &str) -> bool {
 /// finding is recorded and the earlier one keeps its closure; while an occurrence is still open
 /// the same departure adds none. It closes as any finding does (`CloseFinding`). Without a
 /// stored assessment of a generation nothing of it is ready to begin with, and its first
-/// assessment reviews the plan as it is. An assessment already holding its limit of findings
-/// (128, the wire bound; settled ones are kept as history) cannot take the finding, so the
-/// membership change is refused (`finding_limit`) rather than leave the requirement unguarded,
-/// as every other path that must add a finding at the limit is. Returns the requirements either
-/// generation lost.
+/// assessment reviews the plan as it is. At the wire limit excess settled findings move to
+/// history. If the open findings alone exceed the limit, the membership change is refused.
 pub(crate) fn coverage_lost(
     tx: &mut dyn WriteTransaction,
     ctx: &InvocationContext,
@@ -1016,17 +1138,9 @@ pub(crate) fn coverage_lost(
         if (in_active && open(bodies[0])) || (!in_active && open(bodies[1])) {
             continue;
         }
-        let occurrence = bodies
-            .iter()
-            .flatten()
-            .flat_map(|b| b.findings.iter())
-            .filter(|f| of_stem(f, &stem))
-            .map(|f| f.id.as_str().to_owned())
-            .collect::<BTreeSet<_>>()
-            .len()
-            + 1;
-        let id =
-            Id::new(format!("{stem}-{occurrence}")).map_err(|_| invalid("finding_id", None))?;
+        let occurrence = tx.new_id(IdKind::Link);
+        let id = Id::new(format!("{stem}-{}", occurrence.as_str()))
+            .map_err(|_| invalid("finding_id", None))?;
         let finding: ReadinessFinding = serde_json::from_value(json!({
             "id": id.as_str(),
             "disposition": "NeedsUserDecision",
@@ -1063,12 +1177,7 @@ pub(crate) fn coverage_lost(
             if !holds {
                 continue;
             }
-            // A required finding is never dropped: at the assessment's finding limit the
-            // membership change is refused, and nothing of it is written.
-            if body.findings.len() >= 128 {
-                return Err(invalid("finding_limit", Some(&feature.id)));
-            }
-            body.findings.push(finding.clone());
+            body.findings.insert(0, finding.clone());
             recorded = true;
         }
         if recorded {
@@ -1079,6 +1188,19 @@ pub(crate) fn coverage_lost(
         return Ok(uncovered);
     }
     let revision = stored.revision + 1;
+    if let Some(active) = &mut next.active {
+        bound_findings(tx, ctx, feature, revision, active, &mut next.active_archive)?;
+    }
+    if let Some(pending) = &mut next.pending {
+        bound_findings(
+            tx,
+            ctx,
+            feature,
+            revision,
+            pending,
+            &mut next.pending_archive,
+        )?;
+    }
     tx.work().put_readiness(
         &StoredReadiness {
             feature_id: feature.id.clone(),
@@ -1223,21 +1345,48 @@ pub(crate) fn record_adoption(
         .feature_plan(&feature.id)?
         .and_then(|s| active_of(s.approved.as_ref()));
     if let Some(pending) = slots.pending.take() {
+        let revision = stored.revision + 1;
+        let pending_archive = std::mem::take(&mut slots.pending_archive);
         if adopted.as_ref().is_some_and(|a| {
             a.plan_revision == pending.plan_revision && a.digest == pending.plan_digest
         }) {
             let mut promoted = pending;
             promoted.reviewed_pending = false;
-            // Approval never closes a finding (AGENT-20): one still open in the replaced
-            // plan's assessment stays open in the adopted one.
-            // At the finding limit the adoption is refused rather than carry a finding the
-            // assessment cannot hold (it would fall out of every bounded view of it).
-            if let Some(old) = &slots.active
-                && carry_open(old, &mut promoted)?
-                && promoted.findings.len() > 128
-            {
-                return Err(invalid("finding_limit", Some(&feature.id)));
+            slots
+                .active_archive
+                .extend(pending_archive.into_iter().filter(|(_, entry)| {
+                    entry.plan_revision == promoted.plan_revision
+                        && entry.plan_digest == promoted.plan_digest
+                }));
+            // Approval never closes a finding: carry open gates, and preserve predecessor
+            // dispositions that the promoted draft does not carry in its current view.
+            if let Some(old) = &slots.active {
+                carry_open(old, &mut promoted)?;
+                for finding in &old.findings {
+                    if !matches!(finding.state, FindingState::Open)
+                        && !promoted.findings.iter().any(|other| other.id == finding.id)
+                        && !slots.active_archive.contains_key(finding.id.as_str())
+                    {
+                        archive_finding(
+                            tx,
+                            ctx,
+                            feature,
+                            revision,
+                            old,
+                            finding.clone(),
+                            &mut slots.active_archive,
+                        )?;
+                    }
+                }
             }
+            bound_findings(
+                tx,
+                ctx,
+                feature,
+                revision,
+                &mut promoted,
+                &mut slots.active_archive,
+            )?;
             slots.active = Some(promoted);
         }
         let next = StoredReadiness {

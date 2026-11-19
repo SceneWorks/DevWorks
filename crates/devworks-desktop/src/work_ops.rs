@@ -54,6 +54,7 @@ pub enum WorkSlot {
     /// One work item's current record (readiness included).
     WorkDetail(String),
     WorkGit(String),
+    ReadinessHistory(String, u64),
     WorkGitInspect(String, String),
     /// A change of one work item (one at a time per item).
     WorkCommand(String),
@@ -443,6 +444,29 @@ pub fn run_changed(outcome: CommandOutcome) -> Result<RootSnapshot, Failure> {
         | OperationResult::RunsPause { value }
         | OperationResult::RunsContinue { value } => Ok(value),
         other => Err(unexpected("run control", &other)),
+    }
+}
+
+pub fn readiness_history(backend: &dyn Backend, root: &str, cursor: Option<&str>) -> Vec<u8> {
+    frame::with(backend, Negotiate::Latest, || {
+        Some(In::History(history::Input::WorkLineage(
+            history::WorkLineageInput {
+                root_id: RootId(frame::id(root)?),
+                page: frame::page(50, cursor)?,
+            },
+        )))
+    })
+}
+
+pub fn readiness_history_result(
+    outcome: QueryOutcome,
+) -> Result<
+    devworks_core::protocol::support::HistoryPage<devworks_core::protocol::records::LineageRecord>,
+    Failure,
+> {
+    match query_result(outcome)? {
+        (OperationResult::HistoryWorkLineage { value }, _) => Ok(value),
+        (other, _) => Err(unexpected("history.work_lineage", &other)),
     }
 }
 

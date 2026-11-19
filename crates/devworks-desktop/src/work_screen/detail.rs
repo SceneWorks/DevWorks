@@ -211,6 +211,9 @@ pub(crate) fn feature_detail(
             plan_form(ui, work, f, project_repos, enabled, actions);
             ui.add_space(8.0);
             ui.label(RichText::new("Readiness").strong());
+            if f.readiness.is_some() || f.pending_readiness.is_some() {
+                settled_finding_history(ui, work, f.id.as_str(), actions);
+            }
             if let Some(p) = &f.pending_readiness {
                 let open = p
                     .findings
@@ -1219,6 +1222,36 @@ pub(crate) fn card_detail(
                     }
                 });
         });
+}
+
+fn settled_finding_history(ui: &mut Ui, work: &WorkUi, root: &str, actions: &mut Vec<Action>) {
+    let Some(history) = work.readiness_history.get(root) else {
+        if ui.button("Show settled findings history").clicked() {
+            actions.push(Action::ReadinessHistory(root.to_owned(), false));
+        }
+        return;
+    };
+    if let Some(error) = &history.error {
+        widgets::caption(ui, error);
+    }
+    if history.loading() {
+        ui.spinner();
+    }
+    if history.loaded {
+        ui.label(RichText::new("Settled findings history").strong());
+        for finding in &history.items {
+            ui.label(&finding.summary.0);
+        }
+        if history.items.is_empty() && !history.more() {
+            widgets::caption(ui, "No archived findings.");
+        }
+        if history.more() && ui.button("Load more finding history").clicked() {
+            actions.push(Action::ReadinessHistory(root.to_owned(), true));
+        }
+    }
+    if ui.button("Refresh finding history").clicked() {
+        actions.push(Action::ReadinessHistory(root.to_owned(), false));
+    }
 }
 
 pub(crate) fn source_control(ui: &mut Ui, work: &WorkUi, root: &str, actions: &mut Vec<Action>) {
