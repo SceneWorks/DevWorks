@@ -498,8 +498,10 @@ mod coordinator_wait {
             let accepted = tokio::time::timeout(Duration::from_secs(12), requests.recv()).await
                 .unwrap_or_else(|_| panic!("coordinator never acknowledged the queued effect: {}", describe())).unwrap();
             assert!(accepted.contains("operationId"), "{accepted}");
-            let operation = read(&*fx.store, |s| s.operations().unresolved(20))
-                .into_iter().find(|operation| operation.capability == "process.execute").unwrap();
+            let operation = read(&*fx.store, |s| s.operations().operations_for_capability(
+                "process.execute", &[OperationState::IntentRecorded], None, 1,
+            )).into_iter().next().unwrap_or_else(|| panic!("the accepted process intent is absent: {accepted}"));
+            assert!(accepted.contains(operation.id.0.as_str()), "{accepted}");
             assert_eq!(operation.state, OperationState::IntentRecorded);
             let entry = read(&*fx.store, |s| s.queue().deliveries(&DeliveryFilter {
                 consumer: None, operation_id: Some(operation.id.clone()),
