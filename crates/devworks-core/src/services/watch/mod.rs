@@ -9,7 +9,9 @@ use crate::context::{InvocationContext, PrincipalKind};
 use crate::gateway::{AdmittedCommand, AdmittedQuery};
 use crate::locks::LockExt;
 use crate::operations::{OperationInput, watch as ops};
-use crate::ports::process::{Probe, ProcessSpec as NativeProcessSpec};
+use crate::ports::process::{
+    ExternalProcessStatus, NativeIdentity, Probe, ProcessHost, ProcessSpec as NativeProcessSpec,
+};
 use crate::ports::storage::{
     ApplicationStore, ArtifactScope, ConfigScope, ConfigurationRead, MAX_WATCH_TAIL_BYTES,
     NewEvent, OperationRecord, ProcessPhase, ReadOptions, ReadSnapshot, StorageError,
@@ -52,7 +54,9 @@ use serde_json::{Value, json};
 use std::collections::HashMap;
 use std::sync::Arc;
 
+mod attached;
 mod file_scan;
+use attached::{Attachments, PreparedAttachment};
 use file_scan::{FileScan, scan_file};
 
 /// Store bound on an event body (`watcher_events.payload_json`), with room for its envelope.
@@ -72,6 +76,7 @@ type PreparedLaunch = Result<Prepped, BindingRefusal>;
 enum Prepped {
     Launch(Option<(NativeProcessSpec, CommandVerdict)>),
     File(std::path::PathBuf),
+    Attached(PreparedAttachment),
 }
 /// Least time between two match events when the watcher sets none.
 const DEFAULT_MATCH_INTERVAL_MS: i64 = 30_000;
@@ -119,6 +124,7 @@ pub struct WatchTick {
 pub struct WatchService {
     store: Arc<dyn ApplicationStore>,
     processes: Arc<ProcessToolService>,
+    attachments: Attachments,
     artifacts: Arc<ArtifactService>,
     ids: Arc<dyn IdSource>,
     clock: Arc<dyn Clock>,
@@ -145,6 +151,7 @@ impl WatchService {
     pub fn new(
         store: Arc<dyn ApplicationStore>,
         processes: Arc<ProcessToolService>,
+        process_host: Arc<dyn ProcessHost>,
         artifacts: Arc<ArtifactService>,
         ids: Arc<dyn IdSource>,
         clock: Arc<dyn Clock>,
@@ -152,6 +159,7 @@ impl WatchService {
         Self {
             store,
             processes,
+            attachments: Attachments::new(process_host),
             artifacts,
             ids,
             clock,
@@ -198,25 +206,29 @@ impl WatchService {
     /// Returns how many watchers it settled.
     pub fn settle_observed(&self) -> Result<usize, StorageError> {
         let mut settled = 0;
+        let mut missing = self.attachments.snapshot();
         let mut after: Option<Id> = None;
         loop {
             let page = read_snapshot(&*self.store, &ReadOptions::default(), |read| {
                 read.watchers().open_watchers(after.as_ref(), PAGE)
             })?;
             let Some(last) = page.last() else {
-                return Ok(settled);
+                break;
             };
             after = Some(last.id.clone());
             for watcher in &page {
+                missing.remove(&watcher.id);
                 if self.advance(watcher)? {
                     settled += 1;
                     self.last_polled.locked().remove(&watcher.id);
                 }
             }
             if page.len() < usize::from(PAGE) {
-                return Ok(settled);
+                break;
             }
         }
+        self.attachments.forget_missing(missing);
+        Ok(settled)
     }
 
     /// Runs the watcher backup check when it is due (WATCH-12): when it is on, its interval has
@@ -325,6 +337,9 @@ impl WatchService {
     /// Checks one open watcher's source by the backup path; returns why its owner must be
     /// reminded, if it must. An outcome found here is settled (and later delivered as a backup).
     fn backup_check(&self, watcher: &StoredWatcher) -> Result<Option<&'static str>, StorageError> {
+        if let Some(identity) = &watcher.attached_process {
+            return self.backup_attachment(watcher, identity);
+        }
         let now = self.clock.now_ms().get();
         // A probe past its lifetime ends TimedOut, stalled or not: no reminder for it.
         if watcher.expires_at_ms.is_some_and(|end| now >= end) {
@@ -515,6 +530,8 @@ impl WatchService {
         stopped: &std::collections::HashSet<Id>,
         deadline: std::time::Instant,
     ) -> Result<usize, StorageError> {
+        // The durable records remain open. Reopening acquires new read-only registrations.
+        self.attachments.close();
         let mut changed = 0;
         let mut after: Option<Id> = None;
         loop {
@@ -572,7 +589,11 @@ impl WatchService {
             if let Step::Expired(Some(run)) = &step {
                 self.processes.stop_watched_run(&run.0);
             }
+            self.attachments.forget(&watcher.id);
             return Ok(false);
+        }
+        if let Some(identity) = &watcher.attached_process {
+            return self.advance_attachment(watcher, identity);
         }
         let observed = read_snapshot(&*self.store, &ReadOptions::default(), |read| {
             let Some(operation_id) = &watcher.process_operation_id else {
@@ -843,6 +864,13 @@ impl WatchService {
                     return refuse(tx, DomainErrorCode::PermissionDenied, "process_preflight");
                 }
             }
+            Some(Ok(Prepped::Attached(prepared))) => match prepared {
+                Ok(_) => {}
+                Err(ExternalProcessStatus::Unavailable) => {
+                    return refuse(tx, DomainErrorCode::PermissionDenied, "attached_process");
+                }
+                _ => return refuse(tx, DomainErrorCode::NotFound, "attached_process"),
+            },
             Some(Ok(Prepped::Launch(None))) => {}
             Some(Err(reason)) => return decided(tx, Err(binding_refusal(*reason).into())),
             None => return refuse(tx, DomainErrorCode::Conflict, "watch_preparation"),
@@ -913,8 +941,18 @@ impl WatchService {
             expires_at_ms: None,
             matching,
             file_path: None,
+            attached_process: None,
         };
-        if input.file.is_some() {
+        if let Some(attached) = &input.attached_process {
+            let lifetime = match input.max_lifetime_ms.as_ref() {
+                Some(ms) => ms.get(),
+                None => max_lifetime_default(tx.configuration(), ctx.project_id())?,
+            };
+            watcher.source_kind = "AttachedProcess".into();
+            watcher.tail_bytes = 0;
+            watcher.expires_at_ms = Some(now.saturating_add(lifetime));
+            watcher.attached_process = Some(attachment_identity(attached));
+        } else if input.file.is_some() {
             let Some(path) = file_path.take() else {
                 return refuse(tx, DomainErrorCode::Conflict, "watch_preparation");
             };
@@ -1117,6 +1155,14 @@ impl WatchService {
     }
 }
 
+fn attachment_identity(input: &crate::protocol::records::WatchAttachedProcess) -> NativeIdentity {
+    NativeIdentity {
+        pid: input.pid,
+        birth: input.birth_token.0.clone(),
+        group: None,
+    }
+}
+
 impl CommandHandler for WatchService {
     fn prepare(
         &self,
@@ -1132,12 +1178,15 @@ impl CommandHandler for WatchService {
                     .process
                     .as_ref()
                     .or(input.probe.as_ref().map(|p| &p.process));
-                let prepared: PreparedLaunch = match &input.file {
-                    Some(file) => self
+                let prepared: PreparedLaunch = match (&input.attached_process, &input.file) {
+                    (Some(attached), _) => Ok(Prepped::Attached(
+                        self.attachments.prepare(&attachment_identity(attached)),
+                    )),
+                    (None, Some(file)) => self
                         .processes
                         .resolve_watched_file(&file.path, ctx)
                         .map(Prepped::File),
-                    None => spec
+                    (None, None) => spec
                         .map(|spec| {
                             let bound = self.processes.bind_spec(spec, ctx)?;
                             let verdict = self
@@ -1153,6 +1202,32 @@ impl CommandHandler for WatchService {
             }
             _ => None,
         })
+    }
+
+    fn settle(
+        &self,
+        _ctx: &InvocationContext,
+        prepared: Option<&Prepared>,
+        reply: Option<&crate::protocol::results::DomainCommandReply>,
+        _env: &Preparation<'_>,
+    ) {
+        let Some(Ok(Prepped::Attached(Ok(watch)))) =
+            prepared.and_then(|value| value.get::<PreparedLaunch>())
+        else {
+            return;
+        };
+        if let Some(crate::protocol::CommandReply::Recorded {
+            receipt,
+            replayed: false,
+            ..
+        }) = reply
+            && let DomainDecision::Applied {
+                result: OperationResult::WatchCreate { value },
+            } = &receipt.decision
+            && let Some(watch) = watch.locked().take()
+        {
+            self.attachments.register(value.id.clone(), watch);
+        }
     }
 
     fn decide(
@@ -2240,6 +2315,7 @@ fn outcome_kind(kind: &str) -> WatchOutcomeKind {
         "Failed" => WatchOutcomeKind::Failed,
         "Cancelled" => WatchOutcomeKind::Cancelled,
         "TimedOut" => WatchOutcomeKind::TimedOut,
+        "Exited" => WatchOutcomeKind::Exited,
         "Interrupted" => WatchOutcomeKind::Interrupted,
         "Lost" => WatchOutcomeKind::Lost,
         _ => WatchOutcomeKind::Uncertain,
@@ -2343,6 +2419,7 @@ fn record_of(
             "Probe" => WatchSourceKind::Probe,
             "Timer" => WatchSourceKind::Timer,
             "File" => WatchSourceKind::File,
+            "AttachedProcess" => WatchSourceKind::AttachedProcess,
             _ => WatchSourceKind::Process,
         },
         process: watcher.process_operation_id.as_ref().and_then(|op| {
@@ -2351,6 +2428,7 @@ fn record_of(
                 executable_ref: Id::new(watcher.executable_ref.clone()?).ok()?,
             })
         }),
+        attached_pid: watcher.attached_process.as_ref().map(|a| a.pid),
         probe: watcher.probe.as_ref().map(|p| WatchProbeStatus {
             interval_ms: counter(p.interval_ms),
             runs: counter(p.runs),
@@ -2420,6 +2498,13 @@ fn notice_text(event: &StoredWatchEvent) -> String {
         "File" => (
             "its file watch end".to_owned(),
             "a file under the project's registered root".to_owned(),
+        ),
+        "AttachedProcess" => (
+            "its attached process end".to_owned(),
+            format!(
+                "external process PID {}",
+                n("/attachedPid").unwrap_or_default()
+            ),
         ),
         "Probe" => (
             "its probe end".to_owned(),
@@ -2569,6 +2654,7 @@ mod tests {
             expires_at_ms: None,
             matching: None,
             file_path: None,
+            attached_process: None,
         }
     }
 

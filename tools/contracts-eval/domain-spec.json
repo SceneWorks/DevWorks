@@ -6542,8 +6542,11 @@
         "Process",
         "Probe",
         "Timer",
-        "File"
-      ]
+        "File",
+        "AttachedProcess"
+      ],
+      "introducedVariants": {"AttachedProcess": 9},
+      "fallbackVariants": {"AttachedProcess": "Process"}
     },
     "WatchOutcomeKind": {
       "kind": "enum",
@@ -6554,8 +6557,18 @@
         "TimedOut",
         "Interrupted",
         "Lost",
-        "Uncertain"
-      ]
+        "Uncertain",
+        "Exited"
+      ],
+      "introducedVariants": {"Exited": 9},
+      "fallbackVariants": {"Exited": "Uncertain"}
+    },
+    "WatchAttachedProcess": {
+      "kind": "record",
+      "fields": {
+        "pid": "u32",
+        "birth_token": "Label"
+      }
     },
     "WatchOutcome": {
       "kind": "record",
@@ -6665,6 +6678,7 @@
         "state": "WatcherState",
         "source_kind": "WatchSourceKind",
         "process": "?WatchProcessSource",
+        "attached_pid": "?u32",
         "probe": "?WatchProbeStatus",
         "due_at_ms": "?Counter",
         "expires_at_ms": "?Counter",
@@ -6682,7 +6696,8 @@
         "output_truncated": "bool",
         "stop_requested": "bool",
         "event": "?WatchEvent"
-      }
+      },
+      "since": {"attached_pid": 9}
     }
   },
   "operations": {
@@ -11444,14 +11459,16 @@
         "probe": "?WatchProbe",
         "timer": "?WatchTimer",
         "file": "?WatchFile",
+        "attached_process": "?WatchAttachedProcess",
         "matching": "?WatchMatch",
         "tail_bytes": "?ByteLimit",
         "max_lifetime_ms": "?Counter"
       },
+      "since": {"attached_process": 9},
       "result": "WatcherRecord",
       "effect": "External",
       "authority": "Scoped",
-      "rules": "Exactly one source. A process is launched through the process.execute domain service (same bindings, preflight, native grant and output bounds) and the watcher answers before it exits. A probe runs its command through the same service every interval, backing off after each run whose exit code and output do not meet its condition, until one does; it ends TimedOut at its maximum lifetime (max_lifetime_ms, else the watch.maxLifetimeMs setting, 24 hours by default). A timer fires at an absolute time or after a delay. A `matching` rule is a regular expression over a launched process's output or over a file (a file watcher needs one): the first match completes the watcher, or with `each` every match is reported in intermediate events coalesced to at most one per minimum interval, each carrying its match count, until the source ends (a file watcher ends at its maximum lifetime or when cancelled). Process and probe commands pass the shell preflight at creation. Requires an owning session; the settled outcome is delivered to that session's input as a host-only watcher message. Reviewer roles may create only observing watchers (timers) and cannot launch a process through a watcher.",
+      "rules": "Exactly one source. A process is launched through the process.execute domain service (same bindings, preflight, native grant and output bounds) and the watcher answers before it exits. A probe runs its command through the same service every interval, backing off after each run whose exit code and output do not meet its condition, until one does; it ends TimedOut at its maximum lifetime (max_lifetime_ms, else the watch.maxLifetimeMs setting, 24 hours by default). A timer fires at an absolute time or after a delay. A `matching` rule is a regular expression over a launched process's output or over a file (a file watcher needs one): the first match completes the watcher, or with `each` every match is reported in intermediate events coalesced to at most one per minimum interval, each carrying its match count, until the source ends (a file watcher ends at its maximum lifetime or when cancelled). Process and probe commands pass the shell preflight at creation. Requires an owning session; the settled outcome is delivered to that session's input as a host-only watcher message. Revision 9 permits read-only observation of an external process given its PID and birth token. An attached process can have a maximum lifetime and reports Exited with a status only when observed. Reviewer roles may create observing watchers and cannot launch a process through a watcher.",
       "introducedRevision": 8
     },
     "watch.list": {
@@ -12514,16 +12531,20 @@
       3
     ],
     "watch.create": [
-      8
+      8,
+      9
     ],
     "watch.list": [
-      8
+      8,
+      9
     ],
     "watch.inspect": [
-      8
+      8,
+      9
     ],
     "watch.cancel": [
-      8
+      8,
+      9
     ]
   },
   "familyRules": {

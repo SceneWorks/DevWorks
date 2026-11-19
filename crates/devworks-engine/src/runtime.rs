@@ -664,7 +664,7 @@ async fn build(composition: Composition, core: CoreServices) -> Result<Engine, B
     // step 4.
     let supervisor = Arc::new(ProcessSupervisor::new(
         store.clone(),
-        process_host,
+        process_host.clone(),
         resources.clone(),
     ));
     if let (Some(service), Some(composition)) = (use_cases.mcp_service(), config.mcp.as_ref()) {
@@ -838,6 +838,7 @@ async fn build(composition: Composition, core: CoreServices) -> Result<Engine, B
                 devworks_core::services::watch::WatchService::new(
                     store.clone(),
                     service.clone(),
+                    process_host.clone(),
                     artifacts.clone(),
                     ids.clone(),
                     clock.clone(),

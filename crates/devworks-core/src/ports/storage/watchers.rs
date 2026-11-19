@@ -58,7 +58,7 @@ pub struct StoredWatcher {
     pub id: Id,
     pub revision: i64,
     pub phase: WatcherPhase,
-    /// `Process`, `Probe` or `Timer`.
+    /// The persisted watcher source kind.
     pub source_kind: String,
     pub project_id: Option<ProjectId>,
     pub session_id: Id,
@@ -87,6 +87,8 @@ pub struct StoredWatcher {
     pub matching: Option<StoredMatch>,
     /// The watched file (`File` only), resolved when the watcher was created.
     pub file_path: Option<String>,
+    /// The external process identity. It confers observation only and has no group.
+    pub attached_process: Option<crate::ports::process::NativeIdentity>,
 }
 
 /// A watcher's match rule and its progress through the source.

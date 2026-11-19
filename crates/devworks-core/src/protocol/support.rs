@@ -13,6 +13,7 @@ checked_leaf!(
     DomainErrorCode,
     bool,
     i32,
+    u32,
     Id,
     Revision,
     Counter,

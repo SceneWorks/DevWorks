@@ -9,15 +9,16 @@ The outcome is only what was observed: Succeeded (exit code 0), Failed (another 
 A watcher takes exactly one source:
 
 - **Process.** The behavior described above.
+- **Attached process.** In schema revision 9, pass `attachedProcess` with the running process's `pid` and `birthToken`. DevWorks resumes watching that identity after restart and reports Exited with an exit code when available, or Exited with unknown status. You can cancel the watcher and leave the process running.
 - **Probe.** DevWorks runs a command, then runs it again after an interval, waiting twice as long after each failed run up to eight intervals, until a run meets the condition: an exit code (0 by default) and, optionally, an output pattern. The watcher then reports Succeeded with the number of runs. A run that cannot start, or is lost or uncertain, ends the watcher with that outcome.
 - **Timer.** It fires at a time or after a delay and reports Succeeded. A timer starts nothing, so every role can create and cancel one.
 - **File.** DevWorks reads the lines of one regular file inside a registered root and looks for a pattern. The file may not exist yet.
 
 A process or file watcher can also count matches of a regular expression. Without `each`, the first match completes the watcher. With `each`, matches are reported together, at most once per minimum interval (30 seconds by default), and each report carries its count. The final outcome includes any matches not yet reported, so none is lost. A file watcher ends at its maximum lifetime or when you cancel it.
 
-A probe or file watcher always ends. Its maximum lifetime is set on the watcher or comes from `watch.maxLifetimeMs` (24 hours by default, workspace or project). When it passes, the watcher reports TimedOut and stops a run in flight.
+A probe, file or attached-process watcher always ends. Its maximum lifetime is set on the watcher or comes from `watch.maxLifetimeMs` (24 hours by default, workspace or project). When it passes, the watcher reports TimedOut and stops any run it launched that is still in flight.
 
-A watcher follows its owner. If the owning session ends, or the project is archived or deleted, the watcher is cancelled, its process is stopped and nothing is delivered. While the owner is paused or held, events wait and arrive in order after Continue. At shutdown, a process DevWorks stopped is reported Interrupted. A probe runs again after you reopen the app and continue, and a timer that came due while the app was closed fires once.
+A watcher follows its owner. If the owning session ends, or the project is archived or deleted, the watcher is cancelled, any process it launched is stopped, and nothing is delivered. While the owner is paused or held, events wait and arrive in order after Continue. At shutdown, a process DevWorks stopped is reported Interrupted. A probe runs again after you reopen the app and continue, and a timer that came due while the app was closed fires once.
 
 A backup check runs on the watcher timer when `watch.backupEnabled` is on (the default), at the interval in `watch.backupIntervalMs` (15 minutes by default, at least 1 minute). It settles outcomes the main pass missed, reports a process the system says is gone as Lost, and delivers any message still waiting. A message sent this way starts with "Backup delivery" and is recorded in History and Diagnostics. It also reminds you about a probe that has not run for twice its interval.
 

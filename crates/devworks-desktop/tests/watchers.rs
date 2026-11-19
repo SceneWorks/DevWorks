@@ -65,6 +65,7 @@ fn timer(
         expires_at_ms: None,
         matching: None,
         file_path: None,
+        attached_process: None,
     }
 }
 

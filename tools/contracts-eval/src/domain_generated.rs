@@ -18143,9 +18143,25 @@ pub enum WatchSourceKind {
     Probe,
     Timer,
     File,
+    #[schemars(extend("x-since" = 9))]
+    AttachedProcess,
 }
 impl Check for WatchSourceKind {
     fn check(&self) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+impl Revisioned for WatchSourceKind {
+    fn retain_revision(&mut self, revision: u32) {
+        if matches!(self, Self::AttachedProcess) && revision < 9 {
+            *self = Self::Process;
+        }
+    }
+    fn check_revision(&self, revision: u32) -> Result<(), String> {
+        if matches!(self, Self::AttachedProcess) && revision < 9 {
+            return Err("enum variant predates its introduction: AttachedProcess".into());
+        }
         Ok(())
     }
 }
@@ -18159,9 +18175,43 @@ pub enum WatchOutcomeKind {
     Interrupted,
     Lost,
     Uncertain,
+    #[schemars(extend("x-since" = 9))]
+    Exited,
 }
 impl Check for WatchOutcomeKind {
     fn check(&self) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+impl Revisioned for WatchOutcomeKind {
+    fn retain_revision(&mut self, revision: u32) {
+        if matches!(self, Self::Exited) && revision < 9 {
+            *self = Self::Uncertain;
+        }
+    }
+    fn check_revision(&self, revision: u32) -> Result<(), String> {
+        if matches!(self, Self::Exited) && revision < 9 {
+            return Err("enum variant predates its introduction: Exited".into());
+        }
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WatchAttachedProcess {
+    pub pid: u32,
+    pub birth_token: Label,
+}
+impl Check for WatchAttachedProcess {
+    fn check(&self) -> Result<(), String> {
+        self.pid.check()?;
+        self.birth_token.check()?;
+        super::domain_rules::record(
+            "WatchAttachedProcess",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
         Ok(())
     }
 }
@@ -18187,6 +18237,16 @@ impl Check for WatchOutcome {
             "WatchOutcome",
             &serde_json::to_value(self).map_err(|e| e.to_string())?,
         )?;
+        Ok(())
+    }
+}
+
+impl Revisioned for WatchOutcome {
+    fn retain_revision(&mut self, revision: u32) {
+        self.kind.retain_revision(revision);
+    }
+    fn check_revision(&self, revision: u32) -> Result<(), String> {
+        self.kind.check_revision(revision)?;
         Ok(())
     }
 }
@@ -18395,6 +18455,16 @@ impl Check for WatcherPage {
     }
 }
 
+impl Revisioned for WatcherPage {
+    fn retain_revision(&mut self, revision: u32) {
+        self.items.retain_revision(revision);
+    }
+    fn check_revision(&self, revision: u32) -> Result<(), String> {
+        self.items.check_revision(revision)?;
+        Ok(())
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct WatchOwner {
@@ -18435,6 +18505,13 @@ pub struct WatcherRecord {
     pub source_kind: WatchSourceKind,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub process: Option<WatchProcessSource>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "u32", extend("x-since" = 9))]
+    pub attached_pid: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub probe: Option<WatchProbeStatus>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -18472,6 +18549,7 @@ impl Check for WatcherRecord {
         self.state.check()?;
         self.source_kind.check()?;
         self.process.check()?;
+        self.attached_pid.check()?;
         self.probe.check()?;
         self.due_at_ms.check()?;
         self.expires_at_ms.check()?;
@@ -18493,6 +18571,21 @@ impl Check for WatcherRecord {
             "WatcherRecord",
             &serde_json::to_value(self).map_err(|e| e.to_string())?,
         )?;
+        Ok(())
+    }
+}
+
+impl Revisioned for WatcherRecord {
+    fn retain_revision(&mut self, revision: u32) {
+        self.source_kind.retain_revision(revision);
+        if revision < 9 {
+            self.attached_pid = None;
+        }
+        self.outcome.retain_revision(revision);
+    }
+    fn check_revision(&self, revision: u32) -> Result<(), String> {
+        self.source_kind.check_revision(revision)?;
+        self.outcome.check_revision(revision)?;
         Ok(())
     }
 }
@@ -23633,6 +23726,13 @@ pub enum DomainCommand {
         timer: Option<WatchTimer>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         file: Option<WatchFile>,
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "gated_member"
+        )]
+        #[schemars(with = "WatchAttachedProcess", extend("x-since" = 9))]
+        attached_process: Option<WatchAttachedProcess>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         matching: Option<WatchMatch>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -25805,6 +25905,7 @@ impl Check for DomainCommand {
                 probe,
                 timer,
                 file,
+                attached_process,
                 matching,
                 tail_bytes,
                 max_lifetime_ms,
@@ -25813,6 +25914,7 @@ impl Check for DomainCommand {
                 probe.check()?;
                 timer.check()?;
                 file.check()?;
+                attached_process.check()?;
                 matching.check()?;
                 tail_bytes.check()?;
                 max_lifetime_ms.check()?;
@@ -26264,6 +26366,13 @@ impl Revisioned for DomainCommand {
             Self::TasksPrioritize { placement, .. } => {
                 if revision < 2 {
                     *placement = None;
+                }
+            }
+            Self::WatchCreate {
+                attached_process, ..
+            } => {
+                if revision < 9 {
+                    *attached_process = None;
                 }
             }
             _ => {}
@@ -28094,6 +28203,10 @@ impl Revisioned for OperationResult {
             Self::ApprovalsReviewQueue { value } => value.retain_revision(revision),
             Self::NotificationsMarkRead { value } => value.retain_revision(revision),
             Self::RouterEmbeddingSpaces { value } => value.retain_revision(revision),
+            Self::WatchCreate { value } => value.retain_revision(revision),
+            Self::WatchList { value } => value.retain_revision(revision),
+            Self::WatchInspect { value } => value.retain_revision(revision),
+            Self::WatchCancel { value } => value.retain_revision(revision),
             Self::HistoryCommandReceipt { value } => value.retain_revision(revision),
             Self::HistoryEvents { value } => value.retain_revision(revision),
             Self::SessionsAppendMessage { value } => value.retain_revision(revision),
@@ -28226,6 +28339,10 @@ impl Revisioned for OperationResult {
             Self::HelpTopicForScreen { value } => value.check_revision(revision),
             Self::HelpPackageGuides { value } => value.check_revision(revision),
             Self::RepositoriesNodes { value } => value.check_revision(revision),
+            Self::WatchCreate { value } => value.check_revision(revision),
+            Self::WatchList { value } => value.check_revision(revision),
+            Self::WatchInspect { value } => value.check_revision(revision),
+            Self::WatchCancel { value } => value.check_revision(revision),
             Self::CodeSearch { value } => value.check_revision(revision),
             Self::CodeArchitecture { value } => value.check_revision(revision),
             Self::CodeDependency { value } => value.check_revision(revision),

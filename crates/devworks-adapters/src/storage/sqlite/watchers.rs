@@ -2,6 +2,7 @@
 use super::conn::db;
 use super::repos::{Snapshot, Unit};
 use super::support::{corrupt, id_of, invalid, page_limit};
+use devworks_core::ports::process::NativeIdentity;
 use devworks_core::ports::storage::*;
 use devworks_core::protocol::{ActorId, Id, OperationId, ProjectId};
 use rusqlite::{Connection, Row, params, params_from_iter};
@@ -13,7 +14,7 @@ const WATCHER_COLUMNS: &str = "id,revision,phase,source_kind,project_id,session_
     probe_interval_ms,probe_exit_code,probe_output_pattern,probe_runs,\
     probe_next_run_at,due_at,expires_at,match_pattern,match_each,\
     match_min_interval_ms,match_scanned,match_pending,match_total,\
-    match_last_event_at,file_path,file_scan_json";
+    match_last_event_at,file_path,file_scan_json,attached_pid,attached_birth";
 
 #[allow(clippy::type_complexity)]
 fn watcher_row(row: &Row<'_>) -> rusqlite::Result<WatcherRow> {
@@ -56,6 +57,8 @@ fn watcher_row(row: &Row<'_>) -> rusqlite::Result<WatcherRow> {
         match_last_event_at: row.get(35)?,
         file_path: row.get(36)?,
         file_scan_json: row.get(37)?,
+        attached_pid: row.get(38)?,
+        attached_birth: row.get(39)?,
     })
 }
 struct WatcherRow {
@@ -97,6 +100,8 @@ struct WatcherRow {
     match_last_event_at: Option<i64>,
     file_path: Option<String>,
     file_scan_json: Option<String>,
+    attached_pid: Option<i64>,
+    attached_birth: Option<String>,
 }
 impl WatcherRow {
     fn into_stored(self) -> Result<StoredWatcher, StorageError> {
@@ -106,6 +111,15 @@ impl WatcherRow {
             .map(serde_json::from_str)
             .transpose()
             .map_err(|_| corrupt("watcher file scan progress"))?;
+        let attached_process = match (self.attached_pid, self.attached_birth) {
+            (Some(pid), Some(birth)) => Some(NativeIdentity {
+                pid: u32::try_from(pid).map_err(|_| corrupt("external process pid"))?,
+                birth,
+                group: None,
+            }),
+            (None, None) => None,
+            _ => return Err(corrupt("incomplete external process identity")),
+        };
         Ok(StoredWatcher {
             id: id_of(self.id)?,
             revision: self.revision,
@@ -158,6 +172,7 @@ impl WatcherRow {
                 last_event_at_ms: self.match_last_event_at,
             }),
             file_path: self.file_path,
+            attached_process,
         })
     }
 }
@@ -394,6 +409,13 @@ fn check(watcher: &StoredWatcher) -> Result<(), StorageError> {
     {
         return Err(invalid("watcher output tail exceeds its bound"));
     }
+    if watcher
+        .attached_process
+        .as_ref()
+        .is_some_and(|a| a.group.is_some())
+    {
+        return Err(invalid("an attached watcher cannot own a process group"));
+    }
     Ok(())
 }
 fn write_params(w: &StoredWatcher) -> Result<Vec<rusqlite::types::Value>, StorageError> {
@@ -447,6 +469,8 @@ fn write_params(w: &StoredWatcher) -> Result<Vec<rusqlite::types::Value>, Storag
         int(w.matching.as_ref().and_then(|m| m.last_event_at_ms)),
         opt(w.file_path.as_deref()),
         opt(file_scan_json.as_deref()),
+        int(w.attached_process.as_ref().map(|a| i64::from(a.pid))),
+        opt(w.attached_process.as_ref().map(|a| a.birth.as_str())),
     ])
 }
 
@@ -465,7 +489,7 @@ impl WatcherRepository for Unit<'_> {
         db(self.conn.execute(
             &format!(
                 "INSERT INTO watchers({WATCHER_COLUMNS}) VALUES({})",
-                placeholders(1, 38)
+                placeholders(1, 40)
             ),
             params_from_iter(write_params(watcher)?),
         ))?;
@@ -485,8 +509,9 @@ impl WatcherRepository for Unit<'_> {
                 probe_output_pattern=?25,probe_runs=?26,probe_next_run_at=?27,\
                 due_at=?28,expires_at=?29,match_pattern=?30,match_each=?31,\
                 match_min_interval_ms=?32,match_scanned=?33,match_pending=?34,\
-                match_total=?35,match_last_event_at=?36,file_path=?37,file_scan_json=?38 WHERE id=?1 AND \
-                revision=?39",
+                match_total=?35,match_last_event_at=?36,file_path=?37,file_scan_json=?38,\
+                attached_pid=?39,attached_birth=?40 WHERE id=?1 AND \
+                revision=?41",
             params_from_iter(values),
         ))?;
         if changed != 1 {

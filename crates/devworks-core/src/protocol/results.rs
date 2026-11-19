@@ -1775,6 +1775,10 @@ impl Revisioned for OperationResult {
             Self::WorkspaceLogs { value } => value.retain_revision(revision),
             Self::WorkspaceRecordDiagnostic { value } => value.retain_revision(revision),
             Self::RepositoriesNodes { value } => value.retain_revision(revision),
+            Self::WatchCreate { value } => value.retain_revision(revision),
+            Self::WatchList { value } => value.retain_revision(revision),
+            Self::WatchInspect { value } => value.retain_revision(revision),
+            Self::WatchCancel { value } => value.retain_revision(revision),
             _ => {}
         }
     }
@@ -1894,6 +1898,10 @@ impl Revisioned for OperationResult {
             Self::HelpTopicForScreen { value } => value.check_revision(revision),
             Self::HelpPackageGuides { value } => value.check_revision(revision),
             Self::RepositoriesNodes { value } => value.check_revision(revision),
+            Self::WatchCreate { value } => value.check_revision(revision),
+            Self::WatchList { value } => value.check_revision(revision),
+            Self::WatchInspect { value } => value.check_revision(revision),
+            Self::WatchCancel { value } => value.check_revision(revision),
             _ => Ok(()),
         }
     }
