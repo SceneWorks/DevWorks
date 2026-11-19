@@ -1676,12 +1676,17 @@ fn a_feature_shows_settled_findings_evicted_from_its_current_assessment() {
             .iter()
             .any(|f| f.id.as_str() == "S127")
     );
+    // The feature detail can have no visible assessment after a pending plan is discarded.
+    // History still has to open from that view.
+    let mut feature = feature;
+    feature.readiness = None;
     h.state_mut()
         .work
         .detail
         .insert(feature.id.as_str().to_owned(), feature);
     click(&mut h, Role::Button, "Show settled findings history");
     assert!(has_text(&h, "Resolved finding S127"));
+    assert!(has_text(&h, "Active plan revision"));
     assert!(has_text(&h, "Confirmed on native checkout"));
 }
 
