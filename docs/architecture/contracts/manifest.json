@@ -330,6 +330,10 @@
       "sha256": "cf4bec41c17e52109480ed29e046f5f6c5bf92f9bbf89a46e48d353562c3c812"
     },
     {
+      "file": "package-manifest.r3.schema.json",
+      "sha256": "093b8d8a432fb364569b4a739dbd3e0517521df6add4d772c70d5127223a1e08"
+    },
+    {
       "file": "package-manifest.schema.json",
       "sha256": "7f5989387bc31c599cb97ffe0b43dc52227aa2e36c075c54be55e69d6edd8b21"
     },

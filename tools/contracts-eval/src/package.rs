@@ -138,6 +138,11 @@ impl UiNode {
         Ok(())
     }
 }
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub enum SemanticSourceMode {
+    Repository,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "kind", rename_all_fields = "camelCase", deny_unknown_fields)]
 pub enum Contribution {
@@ -146,6 +151,9 @@ pub enum Contribution {
         #[schemars(length(min = 1, max = 32))]
         languages: Vec<Id>,
         format: IndexFormat,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[schemars(extend("x-since" = 3))]
+        source_mode: Option<SemanticSourceMode>,
     },
     Tool {
         meta: ContributionMeta,

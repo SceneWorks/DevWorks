@@ -61,7 +61,7 @@ use crate::settings::catalog::{OVERLAY_RECORD_RETENTION_DAYS_KEY, OVERLAY_RECORD
 use serde_json::json;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::Ordering;
+use std::sync::{Arc, atomic::Ordering};
 
 /// Most changed paths one worktree capture reads (each bounded by the size limit).
 pub const MAX_LOCAL_CHANGES: usize = 20_000;
@@ -517,7 +517,19 @@ pub(crate) fn refresh(
         // already matched) and the configuration it was built under.
         let moved = super::status::overlay_config_moved(tx.indexing(), o, &effective.digest)?;
         let member_projects = tx.projects().repository_projects(&r.id)?;
-        let mut semantic_changed = false;
+        let planned =
+            super::worker::semantic::registry_binding(tx.packages(), &effective, &member_projects)?;
+        let recorded = o
+            .view_id
+            .as_ref()
+            .map(|id| tx.indexing().view(id))
+            .transpose()?
+            .flatten();
+        let mut semantic_changed = recorded
+            .as_ref()
+            .and_then(|view| view.coverage["semanticBinding"].as_str())
+            .unwrap_or("")
+            != planned;
         for id in [&o.branch_generation_id, &o.worktree_generation_id]
             .into_iter()
             .flatten()
@@ -1015,15 +1027,28 @@ pub(crate) fn execute(exec: &mut Exec<'_>) -> Result<(), Stop> {
             format!("{p:?} is not a safe relative UTF-8 path; skipped"),
         );
     }
-    let (cfg, base_view) = read_snapshot(&*env.store, &ReadOptions::default(), |s| {
-        Ok((
-            effective_config(s.indexing(), s.projects(), &repo_id)?,
-            s.indexing().published(&repo_id)?,
-        ))
-    })
-    .map_err(Stop::storage)?;
-    exec.semantic_packs =
-        super::worker::semantic::select(&env, &cfg, &repo_id).map_err(Stop::storage)?;
+    let (cfg, base_view, semantic_binding, base_binding) =
+        read_snapshot(&*env.store, &ReadOptions::default(), |s| {
+            let config = effective_config(s.indexing(), s.projects(), &repo_id)?;
+            let projects = s.projects().repository_projects(&repo_id)?;
+            let binding =
+                super::worker::semantic::registry_binding(s.packages(), &config, &projects)?;
+            let base = s.indexing().generation(&snap.base_generation)?;
+            let base_binding = base
+                .as_ref()
+                .and_then(|generation| generation.manifest["semanticRegistryBinding"].as_str())
+                .unwrap_or("")
+                .to_owned();
+            Ok((
+                config,
+                s.indexing().published(&repo_id)?,
+                binding,
+                base_binding,
+            ))
+        })
+        .map_err(Stop::storage)?;
+    exec.semantic_packs = super::worker::semantic::select(&env, &cfg, &repo_id, &semantic_binding)?;
+    let refresh_semantics = semantic_binding != base_binding;
     let base_pointer = base_view.map_or(0, |p| p.revision);
     let root = PathBuf::from(&snap.worktree_path);
     let head = snap.head_oid.clone();
@@ -1071,21 +1096,26 @@ pub(crate) fn execute(exec: &mut Exec<'_>) -> Result<(), Stop> {
         env.source.case_insensitive(&root),
     )
     .map_err(Stop::storage)?;
-    if let Some(h) = head
-        .as_ref()
-        .filter(|h| **h != snap.base_oid || ref_overlay || !reconciled.is_empty())
-    {
+    if let Some(h) = head.as_ref().filter(|h| {
+        **h != snap.base_oid || ref_overlay || !reconciled.is_empty() || refresh_semantics
+    }) {
         exec.stage("branch")?;
         let mut changes = diff;
         changes.extend(reconciled.iter().cloned());
-        let (units, groups) = layer_units(
+        let packs = exec.semantic_packs.clone();
+        let (units, groups, plan) = layer_units(
             &env,
             &cfg,
             &head_entries,
             &changes,
+            LayerSemantics {
+                packs: &packs,
+                refresh: refresh_semantics,
+            },
             &mut exec.warnings,
             env.source.case_insensitive(&root),
         );
+        prepare_layer_semantics(exec, &root, h, None, &units, &plan, None, &stop)?;
         let stored = new_layer(exec, &repo_id, LAYER_BRANCH, h, &snap, &layers)?;
         exec.shares.clear();
         let groups: BTreeMap<&'static str, Vec<&PlanUnit>> = groups
@@ -1158,11 +1188,16 @@ pub(crate) fn execute(exec: &mut Exec<'_>) -> Result<(), Stop> {
         )
         .map_err(Stop::storage)?;
         local_changes.extend(reconciled);
-        let (units, groups) = layer_units(
+        let packs = exec.semantic_packs.clone();
+        let (units, groups, plan) = layer_units(
             &env,
             &cfg,
             &composed,
             &local_changes,
+            LayerSemantics {
+                packs: &packs,
+                refresh: false,
+            },
             &mut exec.warnings,
             env.source.case_insensitive(&root),
         );
@@ -1177,6 +1212,16 @@ pub(crate) fn execute(exec: &mut Exec<'_>) -> Result<(), Stop> {
                     .map(|c| (l.path.clone(), c.digest.clone()))
             })
             .collect();
+        prepare_layer_semantics(
+            exec,
+            &root,
+            head.as_deref().unwrap_or_default(),
+            Some(&capture),
+            &units,
+            &plan,
+            Some(&expected),
+            &stop,
+        )?;
         exec.shares.clear();
         let groups: BTreeMap<&'static str, Vec<&PlanUnit>> = groups
             .iter()
@@ -1223,6 +1268,11 @@ pub(crate) fn execute(exec: &mut Exec<'_>) -> Result<(), Stop> {
     let snap2 = snap.clone();
     let ttl = env.settings.overlay_ttl_ms;
     let published = exec.fenced(WritePriority::Authoritative, move |tx, r| {
+        let config = effective_config_tx(tx, &repo2)?;
+        let projects = tx.projects().repository_projects(&repo2)?;
+        if config.digest != cfg.digest || super::worker::semantic::registry_binding(tx.packages(), &config, &projects)? != semantic_binding {
+            return Ok(Err("the index configuration or semantic package changed during the build"));
+        }
         let current = tx.indexing().published(&repo2)?;
         if current.as_ref().map_or(0, |p| p.revision) != base_pointer {
             return Ok(Err(
@@ -1255,6 +1305,7 @@ pub(crate) fn execute(exec: &mut Exec<'_>) -> Result<(), Stop> {
                 "base": snap2.base_oid, "head": snap2.head_oid, "headRef": snap2.head_ref,
                 "worktreeId": o.worktree_id.as_ref().map(Id::as_str), "captureDigest": snap2.capture_digest,
                 "configDigest": cfg.digest,
+                "semanticBinding": semantic_binding,
                 "sourceRevision": o.revision + 1,
                 "overlayId": o.id,
                 "expiresAtMs": tx.now_ms().saturating_add(ttl),
@@ -1461,14 +1512,59 @@ fn composed_inventory(
 
 /// The units of one layer: changed files (replaced or deleted) and the directories they affect,
 /// planned over the layer's full tree.
+#[allow(clippy::too_many_arguments)]
+fn prepare_layer_semantics(
+    exec: &mut Exec<'_>,
+    root: &Path,
+    commit: &str,
+    capture: Option<&str>,
+    units: &[LayerUnit],
+    plan: &[PlanUnit],
+    local: Option<&BTreeMap<String, String>>,
+    stop: &(dyn Fn() -> bool + Sync),
+) -> Result<(), Stop> {
+    use super::worker::semantic;
+    exec.repository_semantics.clear();
+    if units.iter().any(|unit| {
+        matches!(
+            unit,
+            LayerUnit::Replace(unit) if semantic::repository_unit(&exec.semantic_packs, unit)
+        )
+    }) {
+        semantic::prepare_repository(
+            exec,
+            semantic::SemanticBatch {
+                root,
+                commit,
+                capture,
+                files: &[],
+            },
+            plan,
+            local,
+            stop,
+        )?;
+    }
+    Ok(())
+}
+
+struct LayerSemantics<'a> {
+    packs: &'a [Arc<dyn crate::ports::indexing::SemanticEnricher>],
+    refresh: bool,
+}
+
 fn layer_units(
     env: &IndexEnv,
     cfg: &EffectiveConfig,
     tree: &[TreeEntry],
     changes: &[Change],
+    semantics: LayerSemantics<'_>,
     warnings: &mut Vec<RunWarning>,
     case_insensitive: bool,
-) -> (Vec<LayerUnit>, BTreeMap<&'static str, Vec<PlanUnit>>) {
+) -> (
+    Vec<LayerUnit>,
+    BTreeMap<&'static str, Vec<PlanUnit>>,
+    Vec<PlanUnit>,
+) {
     let mut renamed: BTreeMap<String, String> = BTreeMap::new();
     let mut changed: BTreeSet<String> = BTreeSet::new();
     for c in changes {
@@ -1512,15 +1608,29 @@ fn layer_units(
         .map(|u| u.key.clone())
         .filter(|k| !changed.contains(k))
         .collect();
+    let semantic: BTreeSet<String> = by_key
+        .values()
+        .filter(|unit| {
+            (semantics.refresh || !changes.is_empty())
+                && super::worker::semantic::repository_unit(semantics.packs, unit)
+        })
+        .map(|unit| unit.key.clone())
+        .filter(|key| !changed.contains(key) && !regrouped.contains(key))
+        .collect();
     let mut out = Vec::new();
-    for key in changed.iter().chain(dirs.iter()).chain(regrouped.iter()) {
+    for key in changed
+        .iter()
+        .chain(dirs.iter())
+        .chain(regrouped.iter())
+        .chain(semantic.iter())
+    {
         match by_key.get(key) {
             Some(u) => out.push(LayerUnit::Replace(u.clone())),
             // Deleted, renamed away or now excluded: masks the lower layers.
             None => out.push(LayerUnit::Delete(key.clone())),
         }
     }
-    (out, groups)
+    (out, groups, by_key.into_values().collect())
 }
 
 #[derive(Clone, Debug)]

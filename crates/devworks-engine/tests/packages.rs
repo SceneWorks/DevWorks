@@ -8,6 +8,8 @@
 mod common;
 #[path = "packages/contributions.rs"]
 mod contributions;
+#[path = "packages/rust_pack.rs"]
+mod rust_pack;
 #[path = "packages/workflow.rs"]
 mod workflow;
 use common::*;
