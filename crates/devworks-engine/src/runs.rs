@@ -60,7 +60,8 @@ impl RunGate {
         entry: &QueueEntry,
     ) -> Result<bool, StorageError> {
         match &entry.root_id {
-            Some(root) => self.service.root_permits_dispatch(tx, root),
+            Some(root) => Ok(self.service.root_permits_dispatch(tx, root)?
+                && self.service.permits_implementation_delivery(tx, entry)?),
             None => Ok(true),
         }
     }

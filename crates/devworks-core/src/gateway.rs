@@ -470,12 +470,24 @@ impl Gateway<'_> {
         handler: Arc<dyn CommandHandler>,
         options: WriteOptions,
     ) -> CommandOutcome {
+        self.command_for_run(ctx, operation, raw, handler, options, None)
+    }
+
+    pub(crate) fn command_for_run(
+        &self,
+        ctx: &InvocationContext,
+        operation: &str,
+        raw: &[u8],
+        handler: Arc<dyn CommandHandler>,
+        options: WriteOptions,
+        control: Option<Arc<crate::services::runs::ControlService>>,
+    ) -> CommandOutcome {
         let prepared =
             match self.prepare_command(ctx, operation, raw, handler, options, Waiting::Block) {
                 Ok((prepared, _)) => prepared,
                 Err(outcome) => return outcome,
             };
-        self.finish_command(ctx, prepared)
+        self.finish_command(ctx, prepared, control)
     }
 
     /// Prepare a selected retained receive outside the runtime's shutdown admission fence.
@@ -562,7 +574,7 @@ impl Gateway<'_> {
         ctx: &InvocationContext,
         prepared: PreparedReceive,
     ) -> CommandOutcome {
-        self.finish_command(ctx, prepared.0)
+        self.finish_command(ctx, prepared.0, None)
     }
 
     fn prepare_command(
@@ -697,6 +709,7 @@ impl Gateway<'_> {
         &self,
         ctx: &InvocationContext,
         prepared_command: CommandPreparation,
+        control: Option<Arc<crate::services::runs::ControlService>>,
     ) -> CommandOutcome {
         let CommandPreparation {
             admitted,
@@ -727,6 +740,7 @@ impl Gateway<'_> {
                 &authorization,
                 ingress,
                 &*handler,
+                control.as_deref(),
             )
         });
         let reply = match outcome {
@@ -948,6 +962,7 @@ fn unit_of_work(
     authorization: &Authorization,
     ingress: Option<ActorId>,
     handler: &dyn CommandHandler,
+    control: Option<&crate::services::runs::ControlService>,
 ) -> Result<Unit, StorageError> {
     let store = tx.store();
     if &store.store_id != ctx.store_id() || store.restore_epoch != ctx.restore_epoch().get() {
@@ -1034,7 +1049,20 @@ fn unit_of_work(
     // view of the transaction that cannot record receipts or command history (ARCH-02). Any
     // savepoint it leaves open is discarded when this outer savepoint is unwound.
     let savepoint = tx.savepoint()?;
-    let outcome = handler.decide(ctx, command, &mut HandlerTx::new(tx, ingress));
+    let outcome = match crate::services::runs::implementation_tool_refusal(
+        tx,
+        ctx,
+        command.input(),
+        control,
+    )? {
+        Some(refusal) => Ok(Decided {
+            decision: DomainDecision::Refused {
+                fault: refusal.fault(CorrelationId(tx.new_id(IdKind::Correlation))),
+            },
+            operation_id: None,
+        }),
+        None => handler.decide(ctx, command, &mut HandlerTx::new(tx, ingress)),
+    };
     let decided = match outcome {
         Ok(mut decided) => {
             if let Err(e) = check_decision(command, &decided) {

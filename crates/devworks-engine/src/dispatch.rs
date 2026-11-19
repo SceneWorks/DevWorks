@@ -1569,7 +1569,7 @@ fn root_gate(
     let after = tx.queue().hold_for_eligibility(
         &e.id,
         &fence,
-        "the root does not permit dispatch (paused, held or stopped)",
+        "the root does not permit dispatch (paused, held, stopped or awaiting implementation readiness)",
     )?;
     Ok(Some(Step::Settled(after.state)))
 }

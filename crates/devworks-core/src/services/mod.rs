@@ -88,6 +88,7 @@ pub struct UseCases {
     inference_router: Option<Arc<router::InferenceRouter>>,
     connection_service: Option<Arc<router::connections::ConnectionService>>,
     mcp_service: Option<Arc<mcp::McpClientService>>,
+    run_control: Option<Arc<runs::ControlService>>,
     /// Signalled when a command commits, so a waiting `agents.receive` looks again at once.
     delivery_wake: Option<Arc<crate::ports::storage::Wake>>,
 }
@@ -280,6 +281,7 @@ impl UseCases {
         for op in runs::OPERATIONS {
             self.register(op, Some(service.clone()), Some(service.clone()));
         }
+        self.run_control = Some(service);
         self
     }
 
@@ -576,7 +578,14 @@ impl UseCases {
     ) -> CommandOutcome {
         match self.commands.get(operation) {
             Some(handler) => {
-                let outcome = gateway.command_with(ctx, operation, raw, handler.clone(), options);
+                let outcome = gateway.command_for_run(
+                    ctx,
+                    operation,
+                    raw,
+                    handler.clone(),
+                    options,
+                    self.run_control.clone(),
+                );
                 self.signal_commit(&outcome);
                 outcome
             }

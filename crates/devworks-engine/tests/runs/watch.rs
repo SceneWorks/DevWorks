@@ -158,7 +158,7 @@ pub(super) fn agent_context(
 
 /// Claims the root's current activation and binds the primary agent's context to it (after a
 /// restart the earlier boot's activation is no longer the one that may run a turn).
-fn bind(
+pub(super) fn bind(
     fx: &Fx,
     owner: &str,
 ) -> (
