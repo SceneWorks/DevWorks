@@ -336,7 +336,7 @@ impl RunSupervisor {
     pub fn set_dispatcher_wakeup(&self, wakeup: Wakeup) {
         *self.dispatcher.locked() = Some(wakeup);
     }
-    fn wake_dispatcher(&self) {
+    pub(crate) fn wake_dispatcher(&self) {
         if let Some(w) = self.dispatcher.locked().as_ref() {
             w.wake();
         }

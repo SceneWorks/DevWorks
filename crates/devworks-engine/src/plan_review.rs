@@ -142,6 +142,24 @@ pub(crate) fn bind_prompt(
     Ok(prompt)
 }
 
+pub(crate) enum ScheduleResult {
+    Idle,
+    Complete,
+    Failed { independent_scope: bool },
+}
+
+/// Wake on a durable commit or a stop. The fallback covers compositions without commit signals.
+pub(crate) async fn wait_for_change(
+    commits: &mut watch::Receiver<u64>,
+    stop: &mut watch::Receiver<bool>,
+) -> Result<(), StorageError> {
+    tokio::select! {
+        _ = commits.changed() => Ok(()),
+        _ = stop.wait_for(|stopped| *stopped) => Err(StorageError::Cancelled),
+        _ = tokio::time::sleep(std::time::Duration::from_millis(500)) => Ok(()),
+    }
+}
+
 /// Start the isolated child before the coordinator proceeds into unreviewed scope.
 /// Existing ready scope can keep working while a review is in progress.
 pub(crate) async fn schedule(
@@ -150,13 +168,17 @@ pub(crate) async fn schedule(
     ctx: &InvocationContext,
     stop: &mut watch::Receiver<bool>,
     wait_for_review: bool,
-) -> Result<Option<bool>, StorageError> {
+) -> Result<ScheduleResult, StorageError> {
+    let mut commits = engine.commit_changes();
     let (Some(root), Some((activation, owner_epoch))) = (ctx.root_id(), ctx.activation()) else {
         return Err(StorageError::ScopeDenied);
     };
     let feature = root.0.clone();
     let activation = activation.clone();
     loop {
+        if *stop.borrow() {
+            return Err(StorageError::Cancelled);
+        }
         let scheduled = store::write(engine.store(), WriteOptions::host_state(), {
             let (feature, activation, agents, parent) = (
                 feature.clone(),
@@ -194,12 +216,13 @@ pub(crate) async fn schedule(
         })
         .await?;
         let Some((child, independent_scope)) = scheduled else {
-            return Ok(None);
+            return Ok(ScheduleResult::Idle);
         };
         if independent_scope && !wait_for_review {
-            return Ok(None);
+            return Ok(ScheduleResult::Idle);
         }
         loop {
+            commits.borrow_and_update();
             let (feature, child) = (feature.clone(), child.clone());
             let outcome = store::read(engine.store(), move |s| {
                 Ok(
@@ -210,14 +233,13 @@ pub(crate) async fn schedule(
             .await?;
             match outcome {
                 Some(ReviewOutcome::Running) => {}
-                Some(ReviewOutcome::Complete { .. }) => return Ok(Some(true)),
-                Some(ReviewOutcome::Failed { .. }) => return Ok(Some(false)),
+                Some(ReviewOutcome::Complete { .. }) => return Ok(ScheduleResult::Complete),
+                Some(ReviewOutcome::Failed { .. }) => {
+                    return Ok(ScheduleResult::Failed { independent_scope });
+                }
                 None => break,
             }
-            tokio::select! {
-                _ = tokio::time::sleep(std::time::Duration::from_millis(100)) => {},
-                _ = stop.changed() => return Err(StorageError::Cancelled),
-            }
+            wait_for_change(&mut commits, stop).await?;
         }
     }
 }
@@ -350,13 +372,17 @@ pub(crate) async fn settle(
     let ctx = ctx.clone();
     let failure = match result {
         Ok(report) if !report.needs_source => {
-            let (engine, review_ctx, review_host) = (engine.clone(), ctx.clone(), host.clone());
+            let (publisher, review_ctx, review_host) = (engine.clone(), ctx.clone(), host.clone());
             match tokio::task::spawn_blocking(move || {
-                publish_report(&engine, &review_ctx, &review_host, report)
+                publish_report(&publisher, &review_ctx, &review_host, report)
             })
             .await
             {
-                Ok(Ok(())) => return Ok(()),
+                Ok(Ok(())) => {
+                    // A successful review can alone release already-held implementation jobs.
+                    engine.runs().wake_dispatcher();
+                    return Ok(());
+                }
                 Ok(Err(error)) => error.to_string(),
                 Err(error) => format!("The plan review report worker failed: {error}"),
             }

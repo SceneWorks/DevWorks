@@ -9,6 +9,8 @@ use devworks_core::services::usage::accounting::AttemptEnd;
 
 #[derive(Debug)]
 pub enum TurnError {
+    /// The feature's review failed and the coordinator must preserve held work for Continue.
+    PlanReviewUnavailable { independent_scope: bool },
     /// A store read or write failed, including an artifact read (see [`artifact_read_fault`]).
     Store(StorageError),
     /// The provider attempt ended without a settled continuation. `faults` are the recorded
@@ -38,6 +40,7 @@ impl TurnError {
     /// Repeating the turn may succeed: the activation retries with backoff.
     pub fn retryable(&self) -> bool {
         match self {
+            Self::PlanReviewUnavailable { .. } => false,
             Self::Store(error) => storage_retryable(error),
             Self::Provider { outcome, faults } => provider_retryable(*outcome, faults),
             Self::Command { retry, .. } => *retry != RetryAdvice::Never,

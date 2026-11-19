@@ -473,6 +473,37 @@ pub(crate) fn for_plan<'a>(
         .find(|r| r.plan_revision == revision && r.plan_digest == digest)
 }
 
+/// Current independent reports whose findings still need a readiness disposition.
+pub fn reports_needing_disposition(
+    read: &dyn WorkRead,
+    index: &dyn IndexRead,
+    feature: &Id,
+    include_pending: bool,
+) -> Result<Vec<Id>, StorageError> {
+    let Some(record) = read.readiness(feature)? else {
+        return Ok(Vec::new());
+    };
+    let slots = Slots::of(&record.body);
+    let mut reports = Vec::new();
+    for target in targets(read, feature)? {
+        if target.pending && !include_pending {
+            continue;
+        }
+        if let Some(review) = for_plan(&slots, target.revision, &target.digest)
+            && let ReviewOutcome::Complete { report, .. } = &review.outcome
+            && !dispositions_recorded(&slots, review, target.pending)
+            && (!review.source_phase
+                || current_sources(
+                    review,
+                    Some(&published_views(index, &target.draft.repository_ids.0)?),
+                ))
+        {
+            reports.push(report.version_id.clone());
+        }
+    }
+    Ok(reports)
+}
+
 impl PlanReview {
     pub(crate) fn summary(&self) -> String {
         match &self.outcome {
