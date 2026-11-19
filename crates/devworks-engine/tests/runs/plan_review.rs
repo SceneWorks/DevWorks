@@ -104,7 +104,7 @@ impl StreamingHttp for ReviewWire {
 }
 
 fn route(fx: &Fx, app: &devworks_engine::Runtime) {
-    super::watch_tests::seed_route(fx);
+    seed_local_route(fx);
     let frame = json!({
         "mode": "Command", "protocol": PROTOCOL, "schemaRevision": 3, "requestKey": "review-route",
         "body": {"kind": "router.configure", "action": {"kind": "Tier", "tier": "High",
@@ -120,7 +120,7 @@ fn route(fx: &Fx, app: &devworks_engine::Runtime) {
     );
 }
 
-fn seed_source(fx: &Fx, app: &devworks_engine::Runtime) {
+pub(super) fn seed_source(fx: &Fx, app: &devworks_engine::Runtime) {
     let repo = id("review-repository");
     let location =
         fx.h.root

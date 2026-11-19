@@ -80,7 +80,11 @@ fn decide(
     let mut frame: Value = serde_json::from_slice(&frame("Command", op, body, key)).unwrap();
     if matches!(
         op,
-        "process.execute" | "git.worktree" | "containers.start" | "containers.exec"
+        "process.execute"
+            | "git.worktree"
+            | "containers.build"
+            | "containers.start"
+            | "containers.exec"
     ) {
         // These operations negotiate only their first schema revision.
         frame.as_object_mut().unwrap().remove("schemaRevision");
@@ -362,6 +366,11 @@ fn planning_feature_agents_need_current_readiness_for_git_commit_and_process_exe
             "environment": [], "profile": "Full", "timeoutMs": "10000", "outputLimitBytes": "4096",
         });
         let process = |key: &str| decide(&app, &agent, "process.execute", json!({"spec": spec}), key);
+        let container_build = |key: &str| decide(&app, &agent, "containers.build", json!({
+            "engineId": "docker", "projectId": "project-a",
+            "context": {"rootId": "install-repository", "relative": "work"},
+            "definition": message, "tag": "readiness-test:latest",
+        }), key);
         let container_start = |key: &str| decide(&app, &agent, "containers.start", json!({
             "containerId": "missing-container", "expectedRevision": "1",
         }), key);
@@ -372,6 +381,7 @@ fn planning_feature_agents_need_current_readiness_for_git_commit_and_process_exe
         let missing = [
             commit("missing-commit"),
             process("missing-process"),
+            container_build("missing-ready-container-build"),
             container_start("missing-ready-container-start"),
             container_exec("missing-ready-container-exec"),
             decide(&app, &agent, "watch.create", json!({"process": spec}), "missing-watch"),
@@ -422,6 +432,7 @@ fn planning_feature_agents_need_current_readiness_for_git_commit_and_process_exe
         fx.tx(move |_, tx| {
             let effects = [
                 ("process.execute", devworks_core::services::process::tools::EFFECT_CONSUMER),
+                ("containers.build", devworks_core::services::containers::EFFECT_CONSUMER),
                 ("containers.start", devworks_core::services::containers::EFFECT_CONSUMER),
                 ("containers.exec", devworks_core::services::containers::EFFECT_CONSUMER),
             ];

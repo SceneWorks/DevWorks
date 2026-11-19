@@ -11,7 +11,6 @@ use crate::protocol::records::{
 use crate::protocol::support::{BoundedList, BoundedText};
 use crate::protocol::{Counter, Id, OperationState};
 use crate::services::kernel::{content, counter, label, rev};
-use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
 
@@ -33,35 +32,7 @@ pub fn search_key(title: &str, description: &str) -> String {
     k.chars().take(200_000).collect()
 }
 
-/// The active approved plan as the slot stores it.
-#[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ActivePlan {
-    pub draft: PlanDraft,
-    pub digest: String,
-    /// The slot revision of the pending draft that was approved.
-    pub plan_revision: i64,
-    pub proposal_id: Id,
-    #[serde(default)]
-    pub review_required: bool,
-}
-/// The pending revision as the slot stores it.
-#[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct PendingPlan {
-    pub draft: PlanDraft,
-    pub digest: String,
-    #[serde(default)]
-    pub review_required: bool,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub budget: Option<crate::protocol::records::FeatureBudgetInput>,
-}
-pub fn active_of(v: Option<&Value>) -> Option<ActivePlan> {
-    v.and_then(|v| serde_json::from_value(v.clone()).ok())
-}
-pub fn pending_of(v: Option<&Value>) -> Option<PendingPlan> {
-    v.and_then(|v| serde_json::from_value(v.clone()).ok())
-}
+pub use crate::kernel::work_plan::{ActivePlan, PendingPlan, active_of, pending_of};
 
 fn digest_of(v: &Value) -> String {
     crate::fingerprint::canonical_digest_or_text(v)

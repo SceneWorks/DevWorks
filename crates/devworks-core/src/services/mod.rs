@@ -578,13 +578,16 @@ impl UseCases {
     ) -> CommandOutcome {
         match self.commands.get(operation) {
             Some(handler) => {
-                let outcome = gateway.command_for_run(
+                let control = self.run_control.clone();
+                let outcome = gateway.command_checked(
                     ctx,
                     operation,
                     raw,
                     handler.clone(),
                     options,
-                    self.run_control.clone(),
+                    Some(Arc::new(move |tx, ctx, input| {
+                        runs::implementation_tool_refusal(tx, ctx, input, control.as_deref())
+                    })),
                 );
                 self.signal_commit(&outcome);
                 outcome

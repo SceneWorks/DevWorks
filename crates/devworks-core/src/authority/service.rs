@@ -805,7 +805,7 @@ pub(crate) fn decide_in(
     let binding = bound(s, ctx).map_err(unavailable)?;
     if binding.as_ref().and_then(|binding| binding.role)
         == Some(crate::settings::catalog::AgentRole::PlanReviewer)
-        && !crate::services::work::plan_review::query_isolated(s.work(), ctx, request.input)
+        && !crate::kernel::work_plan::query_isolated(s.work(), ctx, request.input)
             .map_err(unavailable)?
     {
         return Err(deny(DenialReason::OutOfAssignmentScope));

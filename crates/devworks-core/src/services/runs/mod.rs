@@ -741,6 +741,7 @@ fn implementation_effect(capability: &str) -> bool {
             | "git.integrate"
             | "process.execute"
             | "process.install_project_dependencies"
+            | "containers.build"
             | "containers.start"
             | "containers.exec"
     )

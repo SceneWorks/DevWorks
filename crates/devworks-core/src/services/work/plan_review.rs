@@ -1,59 +1,20 @@
 //! Host-owned independent review evidence, recorded beside feature readiness.
-use super::model::{ActivePlan, FEATURE_UNIT, active_of, pending_of, plan_units};
+use super::model::{ActivePlan, FEATURE_UNIT, plan_units};
 use super::readiness::Slots;
 use crate::context::{InvocationContext, PrincipalKind};
+pub use crate::kernel::work_plan::{
+    PlanReview, ReviewOutcome, ReviewTarget, target_for_assignment,
+};
+use crate::kernel::work_plan::{same_plan, targets};
 use crate::ports::IdKind;
 use crate::ports::storage::{
     IndexRead, NewEvent, StorageError, StoredReadiness, WorkRead, WriteTransaction,
 };
 use crate::protocol::provider::ArtifactRef;
 use crate::protocol::records::PlanDraft;
-use crate::protocol::{ActorId, AssignmentId, EventId, Id};
+use crate::protocol::{AssignmentId, EventId, Id};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use std::collections::BTreeMap;
-
-#[derive(Clone, Debug)]
-pub struct ReviewTarget {
-    pub revision: i64,
-    pub digest: String,
-    pub draft: PlanDraft,
-    required: bool,
-    pending: bool,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct PlanReview {
-    pub plan_revision: i64,
-    pub plan_digest: String,
-    pub assignment: AssignmentId,
-    pub session: Id,
-    pub actor: ActorId,
-    pub started_at_ms: i64,
-    pub activation: Id,
-    pub owner_epoch: i64,
-    pub units: BTreeMap<String, String>,
-    pub affected_units: Vec<String>,
-    #[serde(default)]
-    pub source_views: Vec<Id>,
-    #[serde(default)]
-    pub source_phase: bool,
-    pub outcome: ReviewOutcome,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(tag = "kind", rename_all_fields = "camelCase")]
-pub enum ReviewOutcome {
-    Running,
-    Failed {
-        reason: String,
-    },
-    Complete {
-        report: ArtifactRef,
-        findings: usize,
-    },
-}
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -73,37 +34,6 @@ pub struct Finding {
 pub fn finding_id(session: &Id, index: usize) -> Id {
     let digest = crate::fingerprint::sha256_hex(format!("{}/{index}", session.as_str()).as_bytes());
     Id::new(format!("prf-{}", &digest[..32])).expect("finding identifier")
-}
-
-fn targets(read: &dyn WorkRead, feature: &Id) -> Result<Vec<ReviewTarget>, StorageError> {
-    let Some(slot) = read.feature_plan(feature)? else {
-        return Ok(Vec::new());
-    };
-    Ok(active_of(slot.approved.as_ref())
-        .map(|active| ReviewTarget {
-            revision: active.plan_revision,
-            digest: active.digest,
-            draft: active.draft,
-            required: active.review_required,
-            pending: false,
-        })
-        .into_iter()
-        .chain(
-            pending_of(slot.pending.as_ref())
-                .zip(slot.pending_revision)
-                .map(|(pending, revision)| ReviewTarget {
-                    revision,
-                    digest: pending.digest,
-                    draft: pending.draft,
-                    required: pending.review_required,
-                    pending: true,
-                }),
-        )
-        .collect())
-}
-
-fn same_plan(review: &PlanReview, target: &ReviewTarget) -> bool {
-    review.plan_revision == target.revision && review.plan_digest == target.digest
 }
 
 pub(crate) fn substantive(draft: &PlanDraft) -> bool {
@@ -191,27 +121,6 @@ pub fn next_target(
         return Ok(Some((target, None)));
     }
     Ok(None)
-}
-
-pub fn target_for_assignment(
-    read: &dyn WorkRead,
-    feature: &Id,
-    assignment: &AssignmentId,
-) -> Result<Option<(PlanReview, ReviewTarget)>, StorageError> {
-    let Some(record) = read.readiness(feature)? else {
-        return Ok(None);
-    };
-    let Some(review) = Slots::of(&record.body)
-        .plan_reviews
-        .into_iter()
-        .find(|review| &review.assignment == assignment)
-    else {
-        return Ok(None);
-    };
-    Ok(targets(read, feature)?
-        .into_iter()
-        .find(|target| same_plan(&review, target))
-        .map(|target| (review, target)))
 }
 
 /// Recovery can rebind a durable child to a new launch. An independent review
@@ -340,41 +249,6 @@ pub fn begin_source_phase(
         review.source_phase = true;
         Some("PlanReviewSourcesEnabled")
     })
-}
-
-/// A review's only source reads address exact, host-captured views of the plan repositories.
-pub(crate) fn query_isolated(
-    read: &dyn WorkRead,
-    ctx: &InvocationContext,
-    input: &crate::operations::OperationInput,
-) -> Result<bool, StorageError> {
-    use crate::operations::{OperationInput, code};
-    use crate::protocol::{
-        data::{DataScope, GraphQuery, ViewSelection},
-        records::CodeSourceSelection,
-    };
-    let (Some(root), Some(assignment), Some(session)) =
-        (ctx.root_id(), ctx.assignment_id(), ctx.session_id())
-    else {
-        return Ok(false);
-    };
-    let Some((review, target)) = target_for_assignment(read, &root.0, assignment)? else {
-        return Ok(false);
-    };
-    let OperationInput::Code(code::Input::Source(request)) = input else {
-        return Ok(false);
-    };
-    Ok(review.session == *session
-        && review.actor == *ctx.principal()
-        && ctx.activation() == Some((&review.activation, review.owner_epoch))
-        && review.source_phase
-        && matches!(review.outcome, ReviewOutcome::Running)
-        && matches!(&request.scope, DataScope::Project { project_id } if Some(project_id) == ctx.project_id())
-        && matches!(&request.view, Some(ViewSelection::Exact { view_ids })
-            if !view_ids.is_empty() && view_ids.iter().all(|id| review.source_views.contains(id)))
-        && matches!(&request.query, GraphQuery::Source { selection: Some(CodeSourceSelection::File { repository_id, .. }), .. }
-            if target.draft.repository_ids.0.contains(repository_id))
-        && request.current.is_none())
 }
 
 /// The child owns only its own review result. Superseded plans, assignments and activations
@@ -618,6 +492,7 @@ impl PlanReview {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::protocol::ActorId;
     use crate::services::work::{model::plan_digest, readiness::Assessment};
 
     fn id(value: &str) -> Id {
