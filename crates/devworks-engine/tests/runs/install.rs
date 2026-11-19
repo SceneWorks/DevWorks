@@ -238,16 +238,9 @@ fn planning_feature_agents_need_current_readiness_for_git_commit_and_process_exe
         String::from_utf8(output.stdout).unwrap().trim().to_owned()
     };
     git(&["init", "-b", "main"]);
-    git(&[
-        "-c",
-        "user.name=Fixture",
-        "-c",
-        "user.email=fixture@example.invalid",
-        "commit",
-        "--allow-empty",
-        "-m",
-        "Initial",
-    ]);
+    git(&["config", "user.name", "Fixture"]);
+    git(&["config", "user.email", "fixture@example.invalid"]);
+    git(&["commit", "--allow-empty", "-m", "Initial"]);
     let head = GitOid {
         format: ObjectFormat::Sha1,
         hex: git(&["rev-parse", "HEAD"]),
