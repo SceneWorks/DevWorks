@@ -184,6 +184,7 @@ impl PackageService {
             "project":ctx.project_id(), "root":ctx.root_id(), "workflow":i.workflow_id,
         }))
         .map_err(|error| StorageError::InvalidRecord(format!("workflow identity: {error:?}")))?;
+        let mut prior_step = None;
         if let Some(previous) = latest_run(tx, &workflow_key)? {
             let prior: RunWorkflowInput =
                 serde_json::from_value(previous.payload["workflow"].clone()).map_err(|_| {
@@ -225,8 +226,22 @@ impl PackageService {
             {
                 return Err(conflict("workflow_binding", i.workflow_id.as_str()).into());
             }
-            if unsettled(tx, &previous)? {
+            let prior_operation = recorded_operation(tx, &previous)?;
+            if unsettled(tx, &prior_operation)? {
                 return Err(conflict("workflow_in_flight", i.workflow_id.as_str()).into());
+            }
+            if prior_operation.state == crate::protocol::OperationState::Failed
+                && prior.input.artifact_id == i.input.artifact_id
+                && prior.input.version_id == i.input.version_id
+                && prior.input.sha256 == i.input.sha256
+                && prior.manifest_digest == i.manifest_digest
+            {
+                prior_step = prior_operation
+                    .attempts
+                    .iter()
+                    .rev()
+                    .flat_map(|attempt| attempt.observations.iter().rev())
+                    .find_map(|observation| observation.get("workflowStep").cloned());
             }
         }
         let mut fences = command.authorization().fences().to_vec();
@@ -244,7 +259,7 @@ impl PackageService {
             "projectId": ctx.project_id(), "rootId": ctx.root_id(),
             "assignmentId": ctx.assignment_id(), "fences": fences, "call": null,
             "activation": ctx.activation(), "workflow": i, "workflowKey": workflow_key,
-            "workflowVersions": versions,
+            "workflowVersions": versions, "priorStep": prior_step,
             "restoreEpoch": ctx.restore_epoch(),
         });
         let request_digest = crate::fingerprint::canonical_digest(&payload)
@@ -274,15 +289,23 @@ fn latest_run(
     }
 }
 
-fn unsettled(tx: &mut dyn WriteTransaction, run: &EventRecord) -> Result<bool, StorageError> {
+fn recorded_operation(
+    tx: &mut dyn WriteTransaction,
+    run: &EventRecord,
+) -> Result<crate::ports::storage::OperationRecord, StorageError> {
     let operation = run
         .operation_id
         .as_ref()
         .ok_or_else(|| StorageError::InvalidRecord("the workflow has no operation".into()))?;
-    let record = tx
-        .operations()
+    tx.operations()
         .operation(operation)?
-        .ok_or_else(|| StorageError::InvalidRecord("the workflow operation is missing".into()))?;
+        .ok_or_else(|| StorageError::InvalidRecord("the workflow operation is missing".into()))
+}
+
+fn unsettled(
+    tx: &mut dyn WriteTransaction,
+    record: &crate::ports::storage::OperationRecord,
+) -> Result<bool, StorageError> {
     if crate::ports::storage::is_terminal(record.state) {
         return Ok(false);
     }

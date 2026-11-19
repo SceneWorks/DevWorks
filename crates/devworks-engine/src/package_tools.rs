@@ -427,7 +427,7 @@ fn execute(
         if op.payload["restoreEpoch"].as_str() != Some(info.restore_epoch.to_string().as_str()) {
             return EffectResult::Failed("the workflow's store was restored".into());
         }
-        return host.execute_workflow(&ctx, &op.id, &delivery, workflow);
+        return host.execute_workflow(&ctx, op, &delivery, workflow);
     }
     let scope = match &request.project_id {
         Some(project) => match wire::Id::try_from(project.0.as_str().to_owned()) {

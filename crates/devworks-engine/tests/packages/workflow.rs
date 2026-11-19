@@ -92,6 +92,22 @@ fn a_workflow_waits_for_the_exact_selected_gates_and_retains_source_bound_eviden
     );
     assert_eq!(failure.state, OperationState::Failed, "{failure:?}");
     assert_eq!(failure.payload["workflow"]["requiredGates"], gates);
+    let step = failure.attempts[0]
+        .observations
+        .iter()
+        .find_map(|observation| observation.get("workflowStep"))
+        .expect("recorded step");
+    let failed_gate_retry = await_result(
+        &a,
+        operation_for(&a, &ctx, &changed, &digest, gates.clone()),
+    );
+    assert_eq!(
+        failed_gate_retry.state,
+        OperationState::Failed,
+        "{failed_gate_retry:?}"
+    );
+    assert_eq!(&failed_gate_retry.payload["priorStep"], step);
+
     let retry = await_result(&a, operation_for(&a, &ctx, &input, &digest, gates.clone()));
     assert_eq!(retry.state, OperationState::ObservedComplete, "{retry:?}");
 

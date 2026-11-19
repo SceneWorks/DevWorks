@@ -8,9 +8,11 @@ use crate::dispatch::EffectResult;
 use devworks_core::context::InvocationContext;
 use devworks_core::operations::addons::RunWorkflowInput;
 use devworks_core::ports::packages::Inspection;
-use devworks_core::ports::storage::{ReadOptions, read_snapshot};
+use devworks_core::ports::storage::{
+    OperationRecord, ReadOptions, StorageError, WriteOptions, read_snapshot, run_write,
+};
 use devworks_core::protocol::provider::ArtifactRef;
-use devworks_core::protocol::{Id, OperationId};
+use devworks_core::protocol::{Id, OperationId, OperationState};
 use devworks_extension_protocol::package::{
     Contribution, ContributionEvent, ContributionMeta, InvocationOutcome, WorkflowRole,
 };
@@ -55,11 +57,11 @@ impl PackageHost {
     pub(crate) fn execute_workflow(
         &self,
         principal: &InvocationContext,
-        operation: &OperationId,
+        record: &OperationRecord,
         delivery: &Id,
         plan: &RunWorkflowInput,
     ) -> EffectResult {
-        match self.execute_bound_workflow(principal, operation, delivery, plan) {
+        match self.execute_bound_workflow(principal, record, delivery, plan) {
             Ok(evidence) => EffectResult::Completed(evidence),
             Err(WorkflowFailure::Failed(cause)) => EffectResult::Failed(cause),
             Err(WorkflowFailure::Unknown(cause)) => EffectResult::Unknown(cause),
@@ -70,10 +72,11 @@ impl PackageHost {
     fn execute_bound_workflow(
         &self,
         principal: &InvocationContext,
-        operation: &OperationId,
+        record: &OperationRecord,
         delivery: &Id,
         plan: &RunWorkflowInput,
     ) -> Result<Value, WorkflowFailure> {
+        let operation = &record.id;
         let stopped = || {
             read_snapshot(&*self.store, &ReadOptions::default(), |read| {
                 Ok(read.queue().entry(delivery)?.is_none_or(|entry| {
@@ -89,20 +92,38 @@ impl PackageHost {
         }
         let source = self.workflow_json(principal, &plan.input)?;
         let deadline = Instant::now() + BUDGET;
-        let step = self.run_workflow_target(
-            principal,
-            operation,
-            Target {
-                package: plan.package_id.as_str(),
-                contribution: plan.contribution_id.0.as_str(),
-                digest: plan.manifest_digest.as_str(),
-            },
-            &plan.input,
-            &source,
-            InvocationKind::WorkflowStep,
-            deadline,
-            &stopped,
-        )?;
+        let step = if let Some(prior) = record
+            .payload
+            .get("priorStep")
+            .filter(|value| !value.is_null())
+        {
+            let result =
+                serde_json::from_value(prior.clone()).map_err(|error| error.to_string())?;
+            let document = self
+                .workflow_json(principal, &result)
+                .map_err(WorkflowFailure::Unknown)?;
+            ResultSet {
+                result,
+                document,
+                evidence: Vec::new(),
+            }
+        } else {
+            self.run_workflow_target(
+                principal,
+                operation,
+                Target {
+                    package: plan.package_id.as_str(),
+                    contribution: plan.contribution_id.0.as_str(),
+                    digest: plan.manifest_digest.as_str(),
+                },
+                &plan.input,
+                &source,
+                InvocationKind::WorkflowStep,
+                deadline,
+                &stopped,
+            )?
+        };
+        self.record_step(record, &step.result)?;
         let mut artifacts = vec![step.result.clone()];
         let mut gates = Vec::new();
         for gate in &plan.required_gates.0 {
@@ -168,6 +189,32 @@ impl PackageHost {
             json!({"outcome": "Completed", "artifacts": artifacts, "source": plan.input,
             "step": step.result, "requiredGates": gates}),
         )
+    }
+
+    fn record_step(
+        &self,
+        record: &OperationRecord,
+        result: &ArtifactRef,
+    ) -> Result<(), WorkflowFailure> {
+        let id = record.id.clone();
+        let fence = record.latest_attempt().map(|attempt| attempt.fence());
+        let result = result.clone();
+        run_write(&*self.store, WriteOptions::settlement(), move |tx| {
+            let current = tx
+                .operations()
+                .operation(&id)?
+                .ok_or_else(|| StorageError::InvalidRecord("missing workflow operation".into()))?;
+            let attempt = current
+                .latest_attempt()
+                .ok_or_else(|| StorageError::InvalidRecord("missing workflow attempt".into()))?;
+            if current.state != OperationState::Dispatching || Some(attempt.fence()) != fence {
+                return Err(StorageError::ScopeDenied);
+            }
+            tx.operations()
+                .observe(&id, attempt.attempt_no, json!({"workflowStep":result}))
+        })
+        .map_err(|error| WorkflowFailure::Unknown(format!("workflow step receipt: {error}")))?;
+        Ok(())
     }
 
     #[allow(clippy::too_many_arguments)]
