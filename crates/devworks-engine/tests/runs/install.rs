@@ -257,6 +257,7 @@ fn planning_feature_agents_need_current_readiness_for_git_commit_and_process_exe
         digest: digest.clone(),
         plan_revision: 1,
         proposal_id: id("approved-fixture"),
+        review_required: false,
     })
     .unwrap();
     fx.tx(move |_, tx| {

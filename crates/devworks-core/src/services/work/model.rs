@@ -42,6 +42,8 @@ pub struct ActivePlan {
     /// The slot revision of the pending draft that was approved.
     pub plan_revision: i64,
     pub proposal_id: Id,
+    #[serde(default)]
+    pub review_required: bool,
 }
 /// The pending revision as the slot stores it.
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -49,6 +51,8 @@ pub struct ActivePlan {
 pub struct PendingPlan {
     pub draft: PlanDraft,
     pub digest: String,
+    #[serde(default)]
+    pub review_required: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub budget: Option<crate::protocol::records::FeatureBudgetInput>,
 }

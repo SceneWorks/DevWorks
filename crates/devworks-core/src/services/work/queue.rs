@@ -126,7 +126,7 @@ fn queue_in(
             let slot = read.feature_plan(&w.id)?;
             (
                 active_of(slot.as_ref().and_then(|s| s.approved.as_ref())).is_some(),
-                super::readiness::assessment(read, &w)?,
+                super::readiness::assessment(read, &w, None)?,
             )
         } else {
             (false, None)

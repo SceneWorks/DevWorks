@@ -304,6 +304,7 @@ fn save_pending(
     draft: &PlanDraft,
     budget: Option<&crate::protocol::records::FeatureBudgetInput>,
     clear_budget_proposal: bool,
+    native_plan_review: bool,
 ) -> R<(StoredFeaturePlan, Option<Id>)> {
     let before = slot(tx, &f.id)?;
     let budget = if clear_budget_proposal {
@@ -324,6 +325,7 @@ fn save_pending(
             draft: draft.clone(),
             digest,
             budget,
+            review_required: native_plan_review && super::plan_review::substantive(draft),
         })
         .map_err(|e| invalid_record(&e.to_string()))?,
     );
@@ -427,6 +429,7 @@ impl WorkService {
                     None
                 },
                 false,
+                self.native_plan_review,
             )?;
         }
         if !budget_requires_approval && let Some(budget) = budget {
@@ -678,7 +681,14 @@ impl WorkService {
                     self.documents.as_deref(),
                 )?;
                 // Saving a draft never touches the active plan or its approval.
-                let (_, superseded) = save_pending(tx, &f, &draft, fd.budget.as_ref(), false)?;
+                let (_, superseded) = save_pending(
+                    tx,
+                    &f,
+                    &draft,
+                    fd.budget.as_ref(),
+                    false,
+                    self.native_plan_review,
+                )?;
                 let mut next = f.clone();
                 let mut brief = WorkBrief::of(&f)?;
                 let metadata_changed = apply_metadata(
@@ -1076,6 +1086,7 @@ impl WorkService {
             &draft,
             i.budget.as_ref(),
             i.clear_budget_proposal == Some(true),
+            self.native_plan_review,
         )?;
         if after_slot.revision == before.revision {
             return Ok(DomainDecision::NoChange {
@@ -1243,6 +1254,7 @@ pub fn decide_plan_approval(
             digest: pending.digest.clone(),
             plan_revision: p.plan_revision,
             proposal_id: p.id.clone(),
+            review_required: pending.review_required,
         };
         let mut next = s.clone();
         next.revision = s.revision + 1;

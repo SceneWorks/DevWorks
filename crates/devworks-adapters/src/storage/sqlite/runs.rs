@@ -44,6 +44,36 @@ fn bounded(field: &str, s: &str, max: usize) -> Result<(), StorageError> {
     Ok(())
 }
 
+fn prerequisite_requirements(conn: &Connection, work: &RootId) -> Result<Vec<Id>, StorageError> {
+    let mut statement = db(conn.prepare_cached(
+        "WITH RECURSIVE prerequisites(id) AS (
+            SELECT id FROM work_items WHERE id=?1
+            UNION
+            SELECT dep.prerequisite_id FROM prerequisites p
+                JOIN work_dependencies dep ON dep.work_id=p.id
+                JOIN work_items prerequisite ON prerequisite.id=dep.prerequisite_id
+            WHERE prerequisite.parent_feature_id=(
+                SELECT parent_feature_id FROM work_items WHERE id=?1
+            )
+        )
+        SELECT id FROM prerequisites WHERE id<>?1 ORDER BY id",
+    ))?;
+    let ids = db(
+        db(statement.query_map([work.0.as_str()], |row| row.get::<_, String>(0)))?
+            .collect::<rusqlite::Result<Vec<_>>>(),
+    )?;
+    let mut all = inherited_requirements(conn, work)?;
+    let mut seen: std::collections::HashSet<_> = all.iter().cloned().collect();
+    for prerequisite in ids {
+        for requirement in inherited_requirements(conn, &RootId(id_of(prerequisite)?))? {
+            if seen.insert(requirement.clone()) {
+                all.push(requirement);
+            }
+        }
+    }
+    Ok(all)
+}
+
 fn inherited_requirements(conn: &Connection, work: &RootId) -> Result<Vec<Id>, StorageError> {
     let value: Option<String> = db(conn
         .query_row(
@@ -872,7 +902,7 @@ macro_rules! run_reads {
                 super::handoff::quiescent(self.conn, assignment)
             }
             fn work_inherited_requirements(&self, work: &RootId) -> Result<Vec<Id>, StorageError> {
-                inherited_requirements(self.conn, work)
+                prerequisite_requirements(self.conn, work)
             }
             fn live_assignment_for_work(
                 &self,
@@ -969,12 +999,23 @@ macro_rules! run_reads {
                     })?;
                 let readiness =
                     super::work::readiness_of(self.conn, &feature.0)?.map(|r| (r.revision, r.body));
+                let published_plan_views = if let Some(plan) =
+                    devworks_core::services::work::model::active_of(approved_plan.as_ref())
+                {
+                    devworks_core::services::work::plan_review::published_views(
+                        self,
+                        &plan.draft.repository_ids.0,
+                    )?
+                } else {
+                    Vec::new()
+                };
                 Ok(Some(StoredPlanState {
                     revision,
                     approved: approved_plan.is_some(),
                     pending_revision,
                     approved_plan,
                     readiness,
+                    published_plan_views,
                 }))
             }
             fn work_parent(&self, work: &RootId) -> Result<Option<Option<RootId>>, StorageError> {

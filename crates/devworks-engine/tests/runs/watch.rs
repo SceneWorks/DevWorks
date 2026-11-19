@@ -198,6 +198,7 @@ pub(super) fn bind(
 }
 
 fn route(fx: &Fx, session: &Id) {
+    seed_route(fx);
     let pin = StoredPin {
         session_id: session.clone(),
         pin_id: id("watch-pin"),
@@ -218,6 +219,10 @@ fn route(fx: &Fx, session: &Id) {
         reason: "Initial".into(),
         updated_at_ms: 0,
     };
+    fx.tx(move |_, tx| tx.router().put_session_pin(&pin, None));
+}
+
+pub(super) fn seed_route(fx: &Fx) {
     fx.tx(move |_, tx| {
         tx.router().put_connection(
             &StoredConnection {
@@ -266,7 +271,6 @@ fn route(fx: &Fx, session: &Id) {
             },
             None,
         )?;
-        tx.router().put_session_pin(&pin, None)?;
         Ok(())
     });
 }

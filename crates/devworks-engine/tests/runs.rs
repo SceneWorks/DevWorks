@@ -8703,3 +8703,6 @@ mod compaction;
 mod epoch_request;
 #[path = "runs/failure_notifications.rs"]
 mod failure_notifications;
+
+#[path = "runs/plan_review.rs"]
+mod plan_review_tests;

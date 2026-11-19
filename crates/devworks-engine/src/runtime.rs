@@ -890,6 +890,7 @@ async fn build(composition: Composition, core: CoreServices) -> Result<Engine, B
         WorkService::new(ids.clone(), control.clone())
             .with_staged_plans(artifacts.clone())
             .with_plan_documents(artifacts.clone())
+            .with_native_plan_review()
             .with_clock(clock.clone()),
     );
     let mut projects = ProjectService::new(ids.clone(), control.clone()).with_work(work.clone());

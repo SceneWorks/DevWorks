@@ -1508,6 +1508,132 @@ fn decision_text(
 }
 
 #[test]
+fn feature_start_shows_why_independent_plan_review_could_not_run() {
+    let root = Root::new("work-native-review-no-route");
+    let engine = start(&root);
+    let backend = engine.backend();
+    let mut h = harness(shell(&engine, &root, Script::default()), 1600.0, 1300.0);
+    settle(&mut h);
+    let feature = initial_approved_plan(&engine, &*backend, &mut h);
+    h.state_mut().work.plan = None;
+    if h.query_by_role_and_label(Role::Button, "Start").is_none() {
+        click(&mut h, Role::Button, "Show run controls");
+    }
+    click(&mut h, Role::Button, "Start");
+    let until = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    let failed = loop {
+        let work = wops::work_record(backend.query(
+            "features.get",
+            &wops::work_get(&*backend, wops::Family::Features, feature.id.as_str()),
+        ))
+        .unwrap();
+        if let Some(readiness) = work.readiness
+            && readiness
+                .summary
+                .0
+                .contains("Independent plan review failed")
+        {
+            assert!(!readiness.ready);
+            break readiness.id;
+        }
+        assert!(
+            std::time::Instant::now() < until,
+            "the reviewer failure is recorded"
+        );
+        h.step();
+        std::thread::sleep(std::time::Duration::from_millis(25));
+    };
+    click(&mut h, Role::Button, "Refresh");
+    assert!(has_text(&h, "Independent plan review failed"));
+    assert!(has_text(&h, "Start or Continue to retry"));
+
+    drop(h);
+    drop(backend);
+    engine.shutdown().unwrap();
+    let engine = start(&root);
+    let backend = engine.backend();
+    let fetch = || {
+        wops::work_record(backend.query(
+            "features.get",
+            &wops::work_get(&*backend, wops::Family::Features, feature.id.as_str()),
+        ))
+        .unwrap()
+        .readiness
+        .unwrap()
+    };
+    assert_eq!(
+        fetch().id,
+        failed,
+        "the failure survives reopening DevWorks"
+    );
+    let mut h = harness(shell(&engine, &root, Script::default()), 1600.0, 1300.0);
+    h.state_mut()
+        .select_project(Some(feature.project_id.0.as_str().into()));
+    h.state_mut().navigate(Route::Features);
+    settle(&mut h);
+    click_row(&mut h, "Checkout  ·");
+    if h.query_by_role_and_label(Role::Button, "Start").is_none() {
+        click(&mut h, Role::Button, "Show run controls");
+    }
+    let retry = if h
+        .query_by_role_and_label(Role::Button, "Continue")
+        .is_some_and(|button| !button.accesskit_node().is_disabled())
+    {
+        "Continue"
+    } else {
+        "Start"
+    };
+    click(&mut h, Role::Button, retry);
+    let until = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    loop {
+        let current = fetch();
+        if current.id != failed && current.summary.0.contains("Independent plan review failed") {
+            assert!(!current.ready);
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < until,
+            "retry creates a fresh attempt after reopening"
+        );
+        h.step();
+        std::thread::sleep(std::time::Duration::from_millis(25));
+    }
+}
+
+fn seed_completed_plan_review(engine: &devworks_desktop::host::Engine, feature: &WorkRecord) {
+    use devworks_core::ports::storage::{StoredReadiness, WriteOptions, run_write};
+    use devworks_core::services::work::model::{active_of, plan_units};
+    let feature_id = feature.id.clone();
+    run_write(
+        engine.host().runtime().store().as_ref(),
+        WriteOptions::host_state(),
+        move |tx| {
+            let plan = tx.work().feature_plan(&feature_id)?.unwrap();
+            let active = active_of(plan.approved.as_ref()).unwrap();
+            // These tests start at the post-review step and exercise unrelated desktop behavior.
+            let units = plan_units(&active.draft);
+            let body = json!({"planReviews": [{
+                "planRevision": active.plan_revision, "planDigest": active.digest,
+                "assignment": "completed-review", "session": "completed-review-session",
+                "actor": "completed-reviewer", "startedAtMs": tx.now_ms(),
+                "activation": "completed-review-activation", "ownerEpoch": 1,
+                "units": units, "affectedUnits": [],
+                "outcome": {"kind": "Complete", "report": active.draft.content, "findings": 0},
+            }]});
+            tx.work().put_readiness(
+                &StoredReadiness {
+                    feature_id,
+                    revision: 1,
+                    body,
+                },
+                None,
+            )
+        },
+    )
+    .unwrap();
+}
+
+#[test]
 fn refreshing_a_cached_feature_shows_independent_readiness_changes() {
     let root = Root::new("readiness-after-unlink");
     let engine = start(&root);
@@ -1551,12 +1677,13 @@ fn refreshing_a_cached_feature_shows_independent_readiness_changes() {
         "acceptance":f.acceptance,"acceptanceTests":f.acceptance_tests.map(|x| x.0).unwrap_or_default()}}),
     );
     let f = approve_plan(&engine, &*backend, &f);
+    seed_completed_plan_review(&engine, &f);
     let approval = f.approval.as_ref().unwrap();
     let f = command(
         &*backend,
         "features.edit",
         json!({"workId":f.id,"expectedRevision":f.revision,
-        "changes":{"readiness":{"kind":"Assess","planRevision":approval.plan_revision,
+        "changes":{"readiness":{"kind":"Assess","expectedAssessmentRevision":"1","planRevision":approval.plan_revision,
         "planDigest":approval.plan_digest,"summary":"Ready to implement","findings":[]}}}),
     );
     assert!(f.readiness.as_ref().unwrap().ready);
@@ -2053,12 +2180,13 @@ fn next_task_selects_within_the_approved_assessed_feature_without_starting_it() 
         "acceptance":feature.acceptance,"acceptanceTests":feature.acceptance_tests.map(|a|a.0).unwrap_or_default()}}),
     );
     let feature = approve_plan(&engine, &*backend, &feature);
+    seed_completed_plan_review(&engine, &feature);
     let approval = feature.approval.as_ref().unwrap();
     let feature = command(
         &*backend,
         "features.edit",
         json!({"workId":feature.id,"expectedRevision":feature.revision,
-        "changes":{"statusId":default_status_id(&feature.project_id,"ready"),"readiness":{"kind":"Assess","planRevision":approval.plan_revision,"planDigest":approval.plan_digest,
+        "changes":{"statusId":default_status_id(&feature.project_id,"ready"),"readiness":{"kind":"Assess","expectedAssessmentRevision":"1","planRevision":approval.plan_revision,"planDigest":approval.plan_digest,
         "summary":"Ready to implement the approved feature","findings":[]}}}),
     );
     h.state_mut()

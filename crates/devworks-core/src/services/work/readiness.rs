@@ -81,12 +81,15 @@ pub struct Slots {
     pub active: Option<Assessment>,
     #[serde(default)]
     pub pending: Option<Assessment>,
+    /// Independent plan reviews live beside the coordinator's assessments.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(crate) plan_reviews: Vec<super::plan_review::PlanReview>,
 }
 impl Slots {
     pub fn of(v: &Value) -> Self {
         serde_json::from_value(v.clone()).unwrap_or_default()
     }
-    fn value(&self) -> Value {
+    pub(crate) fn value(&self) -> Value {
         serde_json::to_value(self).unwrap_or_else(|_| json!({}))
     }
 }
@@ -125,6 +128,7 @@ fn stale_units(
 pub fn assessment(
     read: &dyn WorkRead,
     feature: &StoredWork,
+    published_views: Option<&[Id]>,
 ) -> Result<Option<ReadinessAssessment>, StorageError> {
     if feature.kind != FEATURE {
         return Ok(None);
@@ -132,9 +136,7 @@ pub fn assessment(
     let Some(stored) = read.readiness(&feature.id)? else {
         return Ok(None);
     };
-    let Some(a) = Slots::of(&stored.body).active else {
-        return Ok(None);
-    };
+    let slots = Slots::of(&stored.body);
     let active = read
         .feature_plan(&feature.id)?
         .and_then(|s| active_of(s.approved.as_ref()));
@@ -142,7 +144,35 @@ pub fn assessment(
         .as_ref()
         .map(|a| plan_units(&a.draft))
         .unwrap_or_default();
-    project(feature, &a, stored.revision, &current, active.is_some()).map(Some)
+    let review = active
+        .as_ref()
+        .and_then(|a| super::plan_review::for_plan(&slots, a.plan_revision, &a.digest));
+    let review_hold = active.as_ref().is_some_and(|a| {
+        let global = current.get(FEATURE_UNIT).map_or("", String::as_str);
+        current.iter().any(|(key, digest)| {
+            super::plan_review::review_holds(&slots, a, key, digest, global, published_views)
+        })
+    });
+    let mut result = project_assessment(
+        feature,
+        slots.active.clone(),
+        review,
+        stored.revision,
+        &current,
+        active.is_some() && !review_hold,
+        false,
+    )?;
+    if review.is_some_and(|review| !super::plan_review::current_sources(review, published_views))
+        && let Some(assessment) = &mut result
+    {
+        assessment.freshness = ReadinessFreshness::Stale;
+        assessment.summary = content(&format!(
+            "The source reviewed has changed. Start or Continue to review the current source.
+{}",
+            assessment.summary.0,
+        ));
+    }
+    Ok(result)
 }
 
 /// The wire assessment of `feature`'s pending replacement draft (with freshness against that
@@ -157,15 +187,61 @@ pub fn pending_assessment(
     let Some(stored) = read.readiness(&feature.id)? else {
         return Ok(None);
     };
-    let Some(a) = Slots::of(&stored.body).pending else {
-        return Ok(None);
-    };
-    let current = read
+    let slots = Slots::of(&stored.body);
+    let pending = read
         .feature_plan(&feature.id)?
-        .and_then(|s| pending_of(s.pending.as_ref()))
-        .map(|p| plan_units(&p.draft))
+        .and_then(|s| pending_of(s.pending.as_ref()).zip(s.pending_revision));
+    let current = pending
+        .as_ref()
+        .map(|(p, _)| plan_units(&p.draft))
         .unwrap_or_default();
-    project(feature, &a, stored.revision, &current, false).map(Some)
+    let review = pending
+        .as_ref()
+        .and_then(|(p, revision)| super::plan_review::for_plan(&slots, *revision, &p.digest));
+    project_assessment(
+        feature,
+        slots.pending.clone(),
+        review,
+        stored.revision,
+        &current,
+        false,
+        true,
+    )
+}
+
+fn project_assessment(
+    feature: &StoredWork,
+    assessment: Option<Assessment>,
+    review: Option<&super::plan_review::PlanReview>,
+    revision: i64,
+    current: &BTreeMap<String, String>,
+    gates: bool,
+    pending: bool,
+) -> Result<Option<ReadinessAssessment>, StorageError> {
+    let mut assessment = match (assessment, review) {
+        (Some(assessment), _) => assessment,
+        (None, Some(review)) => Assessment {
+            id: review.assignment.0.clone(),
+            plan_revision: review.plan_revision,
+            plan_digest: review.plan_digest.clone(),
+            reviewed_pending: pending,
+            units: BTreeMap::new(),
+            summary: String::new(),
+            findings: Vec::new(),
+            assessed_by: review.actor.clone(),
+            assessed_at_ms: review.started_at_ms,
+        },
+        (None, None) => return Ok(None),
+    };
+    if let Some(review) = review {
+        let status = review.summary();
+        assessment.summary = if assessment.summary.is_empty() {
+            status
+        } else {
+            format!("{status}\n{}", assessment.summary)
+        };
+    }
+    project(feature, &assessment, revision, current, gates).map(Some)
 }
 
 /// The wire form of one assessment, fresh against `current` units; ready only when it can gate
@@ -221,34 +297,49 @@ pub fn scope_plan(
     approved: &Value,
     pending_revision: Option<i64>,
     readiness: Option<&(i64, Value)>,
+    published_views: &[Id],
 ) -> Option<PlanState> {
     let active = active_of(Some(approved))?;
     let units = plan_units(&active.draft);
-    let assessment = readiness.and_then(|(r, v)| Assessment::of(v).map(|a| (*r, a)));
+    let slots = readiness
+        .map(|(_, value)| Slots::of(value))
+        .unwrap_or_default();
+    let assessment = readiness.and_then(|(r, _)| slots.active.as_ref().map(|a| (*r, a)));
     let unit = |key: &str, digest: &String| -> ScopeUnit {
-        let readiness = match &assessment {
-            None => Readiness::Missing,
-            Some((r, a)) => {
-                // A finding that names the work it gates holds only that work (enforced at
-                // dispatch by [`gating_finding`], AGENT-19); only a finding of a whole scope
-                // (or of the feature-wide outcome) holds a scope unit.
-                let blocking = a.findings.iter().find(|f| {
-                    open_blocking(f)
-                        && f.affected_work_ids.0.is_empty()
-                        && (f.scope_key.is_none()
-                            || f.scope_key.as_ref().is_some_and(|k| k.as_str() == key))
-                });
-                if a.units.get(key) != Some(digest) {
-                    Readiness::Stale {
-                        assessment_revision: *r,
-                    }
-                } else if let Some(f) = blocking {
-                    Readiness::Blocked {
-                        finding: f.id.as_str().to_owned(),
-                    }
-                } else {
-                    Readiness::Current {
-                        assessment_revision: *r,
+        let readiness = if super::plan_review::review_holds(
+            &slots,
+            &active,
+            key,
+            digest,
+            units.get(FEATURE_UNIT).map_or("", String::as_str),
+            Some(published_views),
+        ) {
+            Readiness::Missing
+        } else {
+            match &assessment {
+                None => Readiness::Missing,
+                Some((r, a)) => {
+                    // A finding that names the work it gates holds only that work (enforced at
+                    // dispatch by [`gating_finding`], AGENT-19); only a finding of a whole scope
+                    // (or of the feature-wide outcome) holds a scope unit.
+                    let blocking = a.findings.iter().find(|f| {
+                        open_blocking(f)
+                            && f.affected_work_ids.0.is_empty()
+                            && (f.scope_key.is_none()
+                                || f.scope_key.as_ref().is_some_and(|k| k.as_str() == key))
+                    });
+                    if a.units.get(key) != Some(digest) {
+                        Readiness::Stale {
+                            assessment_revision: *r,
+                        }
+                    } else if let Some(f) = blocking {
+                        Readiness::Blocked {
+                            finding: f.id.as_str().to_owned(),
+                        }
+                    } else {
+                        Readiness::Current {
+                            assessment_revision: *r,
+                        }
                     }
                 }
             }
@@ -659,6 +750,22 @@ pub(crate) fn apply_change(
                             return Err(invalid("finding_limit", Some(&o.id)));
                         }
                         out.push(o.clone());
+                    }
+                }
+            }
+            if let Some(review) = super::plan_review::for_plan(&slots, plan_revision.get(), &digest)
+                && let super::plan_review::ReviewOutcome::Complete { report, findings } =
+                    &review.outcome
+            {
+                for index in 0..*findings {
+                    let id = super::plan_review::finding_id(&review.session, index);
+                    if !out.iter().any(|finding| {
+                        finding.id == id
+                            && finding.evidence.0.iter().any(|evidence| {
+                                super::plan_review::report_matches(evidence, report)
+                            })
+                    }) {
+                        return Err(conflict("plan_review_finding_needs_disposition", &id));
                     }
                 }
             }
@@ -1090,7 +1197,7 @@ pub fn accept_finding_risk(
         "ReadinessRiskAccepted",
         json!({"findingId": finding_id.as_str(), "rationale": rationale}),
     )?;
-    let shown = match assessment(tx.work(), &feature)? {
+    let shown = match assessment(tx.work(), &feature, None)? {
         Some(a) => Some(a),
         None => pending_assessment(tx.work(), &feature)?,
     };

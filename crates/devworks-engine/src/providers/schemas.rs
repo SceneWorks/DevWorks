@@ -106,9 +106,19 @@ impl RegisteredSchemas {
         let selected = read_snapshot(self.store.as_ref(), &ReadOptions::default(), |snapshot| {
             current_context(snapshot, ctx)?;
             let principal = snapshot.authority().principal(ctx.principal())?;
+            let plan_reviewer = principal.as_ref().and_then(|p| p.role)
+                == Some(devworks_core::settings::catalog::AgentRole::PlanReviewer);
+            let source_enabled = if plan_reviewer {
+                crate::plan_review::source_enabled(snapshot.work(), ctx)?
+            } else {
+                false
+            };
             let effective = policy::resolve_policy(snapshot.configuration(), ctx.project_id())?;
             let mut selected = Vec::new();
             for descriptor in registry::all() {
+                if plan_reviewer && !(source_enabled && descriptor.name == "code.source") {
+                    continue;
+                }
                 if ctx.assignment_id().is_some() && descriptor.name.starts_with("indexing.") {
                     continue;
                 }
@@ -203,7 +213,9 @@ impl RegisteredSchemas {
         ctx: &InvocationContext,
     ) -> Result<Vec<ToolSchema>, StorageError> {
         let mut tools = self.selected_builtins(ctx)?;
-        if self.cases.mcp_service().is_some() {
+        if self.cases.mcp_service().is_some()
+            && !crate::plan_review::isolated_role(self.store.as_ref(), ctx)?
+        {
             tools.extend(self.selected_mcp_tools(ctx)?);
         }
         tools.sort_by(|a, b| {

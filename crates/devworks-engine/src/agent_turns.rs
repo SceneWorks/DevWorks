@@ -86,7 +86,9 @@ impl AgentTurnExecutor for NativeAgentTurnExecutor {
             // The turn holds the runtime for its whole run, as before: the engine's handles
             // alone do not keep the runtime's workers alive.
             let engine = runtime.turn_engine().clone();
-            let end = drive_agent_turn(engine, context, coordinator, stop).await;
+            let end =
+                drive_agent_turn(engine, runtime.agents().clone(), context, coordinator, stop)
+                    .await;
             drop(runtime);
             end
         })
@@ -106,6 +108,7 @@ fn cancelled() -> LaunchEnd {
 
 async fn drive_agent_turn(
     engine: TurnEngine,
+    agents: Arc<devworks_core::services::agents::AgentService>,
     ctx: InvocationContext,
     coordinator: AgentRecord,
     mut stop: watch::Receiver<bool>,
@@ -123,8 +126,25 @@ async fn drive_agent_turn(
         return turn_failure(StorageError::ScopeDenied);
     };
     let activation_id = activation_id.clone();
-    if let Err(error) = acknowledge_native_instructions(&engine, &ctx, &coordinator).await {
+    if !is_plan_reviewer(&coordinator)
+        && let Err(error) = acknowledge_native_instructions(&engine, &ctx, &coordinator).await
+    {
         return turn_failure(error);
+    }
+    let is_feature_coordinator =
+        coordinator.role_id.as_str() == AgentRole::FeatureCoordinator.as_str();
+    if is_feature_coordinator {
+        match crate::plan_review::schedule(&engine, &agents, &ctx, &mut stop, false).await {
+            Ok(Some(false)) => {
+                return LaunchEnd::Finished {
+                    outcome: ActivationOutcome::Completed,
+                    detail: Some("implementation awaits a successful plan review".into()),
+                };
+            }
+            Ok(_) => {}
+            Err(StorageError::Cancelled) => return cancelled(),
+            Err(error) => return turn_failure(error),
+        }
     }
     let control = engine.runs().service().clone();
     let session = session_id.clone();
@@ -145,8 +165,9 @@ async fn drive_agent_turn(
     let signal = cancellation.clone();
     // Set after the cancellation, so a held call's wait ends as soon as the turn is stopped.
     let (stopped_tx, stopped) = watch::channel(false);
+    let mut stop_bridge = stop.clone();
     let bridge = tokio::spawn(async move {
-        while !*stop.borrow() && stop.changed().await.is_ok() {}
+        while !*stop_bridge.borrow() && stop_bridge.changed().await.is_ok() {}
         signal.cancel();
         stopped_tx.send_replace(true);
         // Keep the sender until the loop ends: a closed channel would end every wait at once.
@@ -154,18 +175,74 @@ async fn drive_agent_turn(
     });
     let mut retry_at_ms = None;
     let mut credentials_rejected = false;
-    let result = run_native_loop(
+    let mut result = run_native_loop(
         &engine,
         &ctx,
         &coordinator,
+        is_feature_coordinator.then_some(&agents),
         Stop {
             cancellation: &cancellation,
-            stopped,
+            stopped: stopped.clone(),
         },
         &mut retry_at_ms,
         &mut credentials_rejected,
     )
     .await;
+    if is_plan_reviewer(&coordinator) && !cancellation.is_cancelled() {
+        let mut report =
+            result.and_then(|_| crate::plan_review::report(&engine, &ctx).map_err(Into::into));
+        if report.as_ref().is_ok_and(|report| report.needs_source) {
+            report = match crate::plan_review::enable_sources(&engine, &ctx).await {
+                Ok(()) => run_native_loop(
+                    &engine,
+                    &ctx,
+                    &coordinator,
+                    None,
+                    Stop {
+                        cancellation: &cancellation,
+                        stopped: stopped.clone(),
+                    },
+                    &mut retry_at_ms,
+                    &mut credentials_rejected,
+                )
+                .await
+                .and_then(|_| crate::plan_review::report(&engine, &ctx).map_err(Into::into)),
+                Err(error) => Err(error.into()),
+            };
+        }
+        result = if cancellation.is_cancelled() {
+            Err(StorageError::Cancelled.into())
+        } else {
+            crate::plan_review::settle(
+                &engine,
+                &ctx,
+                report.map_err(|error| format!("Native plan review failed: {error:?}")),
+            )
+            .await
+            .map_err(Into::into)
+        };
+    } else if is_feature_coordinator && result.is_ok() && !cancellation.is_cancelled() {
+        // A coordinator may have authored the first draft during this turn.
+        result = match crate::plan_review::schedule(&engine, &agents, &ctx, &mut stop, true).await {
+            Ok(Some(true)) => {
+                run_native_loop(
+                    &engine,
+                    &ctx,
+                    &coordinator,
+                    Some(&agents),
+                    Stop {
+                        cancellation: &cancellation,
+                        stopped,
+                    },
+                    &mut retry_at_ms,
+                    &mut credentials_rejected,
+                )
+                .await
+            }
+            Ok(_) => Ok(()),
+            Err(error) => Err(error.into()),
+        };
+    }
     bridge.abort();
     let control = engine.runs().service().clone();
     let turn_id = turn.turn_id;
@@ -202,6 +279,10 @@ async fn drive_agent_turn(
         )),
         Err(error) => turn_failure(error),
     }
+}
+
+pub(crate) fn is_plan_reviewer(agent: &AgentRecord) -> bool {
+    agent.role_id.as_str() == AgentRole::PlanReviewer.as_str()
 }
 
 async fn acknowledge_native_instructions(
@@ -284,6 +365,7 @@ async fn run_native_loop(
     engine: &TurnEngine,
     ctx: &InvocationContext,
     agent: &AgentRecord,
+    review_agents: Option<&Arc<devworks_core::services::agents::AgentService>>,
     mut stop: Stop<'_>,
     retry_at_ms: &mut Option<i64>,
     credentials_rejected: &mut bool,
@@ -304,6 +386,17 @@ async fn run_native_loop(
     loop {
         if cancellation.is_cancelled() {
             return Err(StorageError::Cancelled.into());
+        }
+        if is_plan_reviewer(agent)
+            && !crate::plan_review::attempt_is_current(engine.store().as_ref(), ctx)?
+        {
+            return Err(StorageError::ScopeDenied.into());
+        }
+        if let Some(agents) = review_agents
+            && crate::plan_review::schedule(engine, agents, ctx, &mut stop.stopped, false).await?
+                == Some(false)
+        {
+            return Ok(());
         }
         let (mut head, mut binding, observed_sequence) = match recovered.take() {
             Some(value) => value,
@@ -463,15 +556,20 @@ async fn run_native_loop(
             head = engine.change_provider_epoch(ctx, session_id, &head, &binding, &next)?;
             binding = next;
         }
-        head = engine.adopt_instruction_epoch(ctx, session_id, &head, &binding, &[])?;
+        if !is_plan_reviewer(agent) {
+            head = engine.adopt_instruction_epoch(ctx, session_id, &head, &binding, &[])?;
+        }
         binding = engine
             .recover_native_context_head(ctx, session_id)?
             .ok_or(StorageError::ScopeDenied)?
             .1;
-        acknowledge_native_instructions(engine, ctx, agent).await?;
+        if !is_plan_reviewer(agent) {
+            acknowledge_native_instructions(engine, ctx, agent).await?;
+        }
         // A context this turn just compacted is sent as it is, even if it still reaches the
         // threshold: compacting it again could not shrink it.
-        if compacted.as_deref() != Some(head.sha256.as_str())
+        if !is_plan_reviewer(agent)
+            && compacted.as_deref() != Some(head.sha256.as_str())
             && compaction_due(engine, ctx, &route, &head, window)?
         {
             match compact(
@@ -1097,7 +1195,7 @@ pub fn route_context_head(
                 .is_some_and(|binding| {
                     binding.active
                         && binding.kind == PrincipalKind::Agent
-                        && binding.role == Some(AgentRole::CodeReviewer)
+                        && binding.role.is_some_and(AgentRole::read_only)
                 });
             match read.router().session_pin(session_id)? {
                 Some(pin) => Ok((
@@ -1296,6 +1394,9 @@ pub fn initial_context(
             }
             let tasks: Vec<Id> = serde_json::from_value(source.task_ids)
                 .map_err(|_| StorageError::InvalidRecord("stored task references".into()))?;
+            if is_plan_reviewer(agent) {
+                return Ok((source.role_instructions, source.brief, tasks, Vec::new()));
+            }
             let mut unlinked = Vec::new();
             let mut after = 0;
             loop {
@@ -1905,7 +2006,11 @@ pub fn publish_first_context(
     if binding.endpoint_profile != EndpointProfile::CodexSubscriptionResponses {
         prompt.parameters.max_output_tokens = Some(headroom as u32);
     }
-    let bound = engine.bind_provider_instructions(ctx, prompt, &[])?;
+    let bound = if is_plan_reviewer(agent) {
+        crate::plan_review::bind_prompt(engine, ctx, prompt)?
+    } else {
+        engine.bind_provider_instructions(ctx, prompt, &[])?
+    };
     let head = engine.publish_initial_native_context(ctx, session_id, &binding, &bound)?;
     Ok((head, binding))
 }
