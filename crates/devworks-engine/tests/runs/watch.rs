@@ -271,9 +271,14 @@ fn route(fx: &Fx, session: &Id) {
     });
 }
 
-pub(super) fn frame(mode: &str, op: &str, mut body: Value, key: &str) -> Vec<u8> {
+pub(super) fn frame(mode: &str, op: &str, body: Value, key: &str) -> Vec<u8> {
+    frame_at(mode, op, body, key, 8)
+}
+
+fn frame_at(mode: &str, op: &str, mut body: Value, key: &str, revision: u32) -> Vec<u8> {
     body["kind"] = json!(op);
-    let mut envelope = json!({"mode":mode,"protocol":"1.0-draft.1","schemaRevision":8,"body":body});
+    let mut envelope =
+        json!({"mode":mode,"protocol":"1.0-draft.1","schemaRevision":revision,"body":body});
     if mode == "Command" {
         envelope["requestKey"] = json!(key);
     } else {
@@ -298,15 +303,20 @@ fn command(app: &Runtime, ctx: &InvocationContext, op: &str, body: Value, key: &
 }
 
 fn inspect(app: &Runtime, ctx: &InvocationContext, watcher: &str) -> Value {
+    inspect_at(app, ctx, watcher, 8)
+}
+
+fn inspect_at(app: &Runtime, ctx: &InvocationContext, watcher: &str, revision: u32) -> Value {
     match app
         .query(
             ctx,
             "watch.inspect",
-            &frame(
+            &frame_at(
                 "Query",
                 "watch.inspect",
                 json!({"watcherId": watcher}),
                 "inspect",
+                revision,
             ),
         )
         .unwrap()
@@ -2716,6 +2726,173 @@ fn a_process_effect_with_an_unrecognised_principal_kind_is_refused() {
             }
             other => panic!("{other:?}"),
         }
+        app.shutdown().await;
+    });
+}
+
+/// An external process belongs to this fixture, outside DevWorks' process owner.
+struct ExternalChild(std::process::Child);
+impl ExternalChild {
+    fn spawn() -> Self {
+        Self(
+            std::process::Command::new("sh")
+                .args(["-c", "read gate; exit 7"])
+                .stdin(std::process::Stdio::piped())
+                .spawn()
+                .unwrap(),
+        )
+    }
+
+    fn identity(&self) -> devworks_core::ports::process::NativeIdentity {
+        devworks_adapters::process::NativeProcessHost::identity(self.0.id()).unwrap()
+    }
+
+    fn finish(&mut self) {
+        use std::io::Write;
+        self.0.stdin.take().unwrap().write_all(b"go\n").unwrap();
+        assert_eq!(self.0.wait().unwrap().code(), Some(7));
+    }
+}
+impl Drop for ExternalChild {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
+}
+
+#[test]
+fn an_attached_watcher_is_read_only_and_delivers_an_observed_external_exit() {
+    let _native_case = native_runtime_case();
+    let fx = Fx::new();
+    let work = fx.h.root.with_extension("watch-attached-work");
+    std::fs::create_dir_all(&work).unwrap();
+    let work = work.canonicalize().unwrap();
+    let mut child = ExternalChild::spawn();
+    let identity = child.identity();
+    runtime().block_on(async {
+        let (composed, _wired) = watch_composition(&fx, &work);
+        let app = Arc::new(boot(composed).await.unwrap());
+        let (ctx, _) = agent_context(&fx);
+        let session = ctx.session_id().unwrap().clone();
+        let create = |birth: &str, key: &str, revision| {
+            app.command(&ctx, "watch.create", &frame_at("Command", "watch.create",
+                json!({"attachedProcess":{"pid":identity.pid,"birthToken":birth}}), key, revision))
+                .unwrap()
+        };
+        let mut different = identity.birth.clone();
+        let last = different.pop().unwrap();
+        different.push(if last == '0' { '1' } else { '0' });
+        let refused = create(&different, "other-birth", 9);
+        assert!(matches!(refused, CommandReply::Recorded { receipt, .. }
+            if matches!(&receipt.decision, DomainDecision::Refused { fault } if fault.code == DomainErrorCode::NotFound)));
+        let malformed = create("not-a-birth-token", "malformed-birth", 9);
+        assert!(matches!(malformed, CommandReply::Recorded { receipt, .. }
+            if matches!(&receipt.decision, DomainDecision::Refused { fault } if fault.code == DomainErrorCode::InvalidArgument)));
+        let old = create(&identity.birth, "old-revision", 8);
+        assert!(matches!(old, CommandReply::Rejected { .. }), "{old:?}");
+        let watcher = applied(&create(&identity.birth, "attached", 9));
+        let watcher_id = watcher["id"].as_str().unwrap();
+        assert_eq!(watcher["sourceKind"], json!("AttachedProcess"));
+        assert_eq!(watcher["attachedPid"], json!(identity.pid));
+        let stop = app.command(&ctx, "watch.cancel", &frame_at("Command", "watch.cancel",
+            json!({"watcherId":watcher_id,"expectedRevision":watcher["revision"],"stopProcess":true}),
+            "stop-external", 9)).unwrap();
+        assert!(matches!(stop, CommandReply::Recorded { receipt, .. }
+            if matches!(receipt.decision, DomainDecision::Refused { .. })));
+        assert!(child.0.try_wait().unwrap().is_none());
+        let watchers = app.watchers().unwrap();
+        assert_eq!(watchers.settle().unwrap(), 0);
+        child.finish();
+        settle_all(&app, &ctx, &[watcher_id]).await;
+        let record = inspect_at(&app, &ctx, watcher_id, 9);
+        assert_eq!(record["outcome"]["kind"], json!("Exited"), "{record}");
+        assert!(record["outcome"].get("exitCode").is_none(), "{record}");
+        assert_eq!(record["outcome"]["detail"], json!("exit status unknown"));
+        let legacy = inspect(&app, &ctx, watcher_id);
+        assert_eq!(legacy["sourceKind"], json!("Process"));
+        assert!(legacy.get("attachedPid").is_none());
+        assert_eq!(legacy["outcome"]["kind"], json!("Uncertain"));
+        assert_eq!(watchers.deliver().unwrap(), 1);
+        let delivered = notices(&fx, &session);
+        let artifact = serde_json::from_value(delivered[0]["artifact"].clone()).unwrap();
+        let (bytes, _) = app.artifacts().read_exact(app.store().as_ref(), &ctx, &artifact, 8_000).unwrap();
+        let notice = String::from_utf8_lossy(&bytes);
+        assert!(notice.contains(&format!("external process PID {}", identity.pid)), "{notice}");
+        assert!(notice.contains("exit status unknown"), "{notice}");
+        app.shutdown().await;
+    });
+}
+
+#[test]
+fn an_attached_watcher_survives_restart_and_backup_checks_the_original_pid_and_birth() {
+    let _native_case = native_runtime_case();
+    let fx = Fx::new();
+    let work = fx.h.root.with_extension("watch-attached-recovery-work");
+    std::fs::create_dir_all(&work).unwrap();
+    let work = work.canonicalize().unwrap();
+    let mut child = ExternalChild::spawn();
+    let identity = child.identity();
+    let mut exits_offline = ExternalChild::spawn();
+    runtime().block_on(async {
+        let (composed, _wired) = watch_composition(&fx, &work);
+        let app = Arc::new(boot(composed).await.unwrap());
+        let (ctx, _) = agent_context(&fx);
+        let session = ctx.session_id().unwrap().clone();
+        let create = |key, target: &devworks_core::ports::process::NativeIdentity| applied(&app.command(&ctx, "watch.create", &frame_at("Command", "watch.create",
+            json!({"attachedProcess":{"pid":target.pid,"birthToken":target.birth}}), key, 9)).unwrap());
+        let original = create("attached-backup", &identity);
+        let replaced = create("attached-reused", &identity);
+        let offline = create("attached-offline", &exits_offline.identity());
+        let offline_id = offline["id"].as_str().unwrap();
+        let original_id = original["id"].as_str().unwrap();
+        let replaced_id = id(replaced["id"].as_str().unwrap());
+        app.watchers().unwrap().settle().unwrap();
+        app.shutdown().await;
+        drop(app);
+        assert!(child.0.try_wait().unwrap().is_none(), "shutdown cannot stop an external process");
+
+        exits_offline.finish();
+
+        // Simulate PID reuse across the restart by restoring a record with another birth.
+        let simulated_id = replaced_id.clone();
+        fx.tx(move |_, tx| {
+            let mut row = tx.watchers().watcher(&simulated_id)?.unwrap();
+            let birth = &mut row.attached_process.as_mut().unwrap().birth;
+            let last = birth.pop().unwrap();
+            birth.push(if last == '0' { '1' } else { '0' });
+            row.revision += 1;
+            tx.watchers().update_watcher(&row)
+        });
+        let (composed, _wired) = watch_composition(&fx, &work);
+        let app = Arc::new(boot(composed).await.unwrap());
+        applied(&fx.resume(&fx.user, "root-i"));
+        let (ctx, _) = bind(&fx, "coordinator-reattached");
+        let watchers = app.watchers().unwrap();
+        settle_all(&app, &ctx, &[offline_id]).await;
+        let offline = inspect_at(&app, &ctx, offline_id, 9);
+        assert_eq!(offline["outcome"]["kind"], json!("Exited"), "{offline}");
+        assert_eq!(offline["outcome"]["detail"], json!("exit status unknown"));
+        assert_eq!(watchers.deliver().unwrap(), 1);
+        assert_eq!(inspect_at(&app, &ctx, original_id, 9)["state"], json!("Active"));
+        assert_eq!(inspect_at(&app, &ctx, replaced_id.as_str(), 9)["state"], json!("Active"));
+        assert_eq!(watchers.backup_if_due().unwrap(), None);
+        fx.h.advance(900_000);
+        let pass = watchers.backup_if_due().unwrap().unwrap();
+        assert_eq!(pass.reminded, 1, "an independent probe notices the replaced PID");
+        assert_eq!(pass.caught, 0);
+        assert_eq!(inspect_at(&app, &ctx, replaced_id.as_str(), 9)["state"], json!("Active"));
+        let stopped = inspect_at(&app, &ctx, replaced_id.as_str(), 9);
+        applied(&app.command(&ctx, "watch.cancel", &frame_at("Command", "watch.cancel",
+            json!({"watcherId":replaced_id.as_str(),"expectedRevision":stopped["revision"],"stopProcess":false}), "cancel-reused", 9)).unwrap());
+        child.finish();
+        fx.h.advance(900_000);
+        let pass = watchers.backup_if_due().unwrap().unwrap();
+        assert_eq!(pass.caught, 1, "the backup path settles without a primary pass");
+        let record = inspect_at(&app, &ctx, original_id, 9);
+        assert_eq!(record["outcome"]["kind"], json!("Exited"), "{record}");
+        assert_eq!(record["event"]["state"], json!("Delivered"));
+        assert_eq!(watcher_events_of(&app, &session, original_id).len(), 1);
+        assert_eq!(watchers.deliver().unwrap(), 0);
         app.shutdown().await;
     });
 }

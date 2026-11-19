@@ -18138,9 +18138,25 @@ pub enum WatchSourceKind {
     Probe,
     Timer,
     File,
+    #[schemars(extend("x-since" = 9))]
+    AttachedProcess,
 }
 impl Check for WatchSourceKind {
     fn check(&self) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+impl Revisioned for WatchSourceKind {
+    fn retain_revision(&mut self, revision: u32) {
+        if matches!(self, Self::AttachedProcess) && revision < 9 {
+            *self = Self::Process;
+        }
+    }
+    fn check_revision(&self, revision: u32) -> Result<(), String> {
+        if matches!(self, Self::AttachedProcess) && revision < 9 {
+            return Err("enum variant predates its introduction: AttachedProcess".into());
+        }
         Ok(())
     }
 }
@@ -18154,9 +18170,43 @@ pub enum WatchOutcomeKind {
     Interrupted,
     Lost,
     Uncertain,
+    #[schemars(extend("x-since" = 9))]
+    Exited,
 }
 impl Check for WatchOutcomeKind {
     fn check(&self) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+impl Revisioned for WatchOutcomeKind {
+    fn retain_revision(&mut self, revision: u32) {
+        if matches!(self, Self::Exited) && revision < 9 {
+            *self = Self::Uncertain;
+        }
+    }
+    fn check_revision(&self, revision: u32) -> Result<(), String> {
+        if matches!(self, Self::Exited) && revision < 9 {
+            return Err("enum variant predates its introduction: Exited".into());
+        }
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WatchAttachedProcess {
+    pub pid: u32,
+    pub birth_token: Label,
+}
+impl Check for WatchAttachedProcess {
+    fn check(&self) -> Result<(), String> {
+        self.pid.check()?;
+        self.birth_token.check()?;
+        crate::protocol::rules::record(
+            "WatchAttachedProcess",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
         Ok(())
     }
 }
@@ -18182,6 +18232,16 @@ impl Check for WatchOutcome {
             "WatchOutcome",
             &serde_json::to_value(self).map_err(|e| e.to_string())?,
         )?;
+        Ok(())
+    }
+}
+
+impl Revisioned for WatchOutcome {
+    fn retain_revision(&mut self, revision: u32) {
+        self.kind.retain_revision(revision);
+    }
+    fn check_revision(&self, revision: u32) -> Result<(), String> {
+        self.kind.check_revision(revision)?;
         Ok(())
     }
 }
@@ -18390,6 +18450,16 @@ impl Check for WatcherPage {
     }
 }
 
+impl Revisioned for WatcherPage {
+    fn retain_revision(&mut self, revision: u32) {
+        self.items.retain_revision(revision);
+    }
+    fn check_revision(&self, revision: u32) -> Result<(), String> {
+        self.items.check_revision(revision)?;
+        Ok(())
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct WatchOwner {
@@ -18430,6 +18500,13 @@ pub struct WatcherRecord {
     pub source_kind: WatchSourceKind,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub process: Option<WatchProcessSource>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "u32", extend("x-since" = 9))]
+    pub attached_pid: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub probe: Option<WatchProbeStatus>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -18467,6 +18544,7 @@ impl Check for WatcherRecord {
         self.state.check()?;
         self.source_kind.check()?;
         self.process.check()?;
+        self.attached_pid.check()?;
         self.probe.check()?;
         self.due_at_ms.check()?;
         self.expires_at_ms.check()?;
@@ -18488,6 +18566,21 @@ impl Check for WatcherRecord {
             "WatcherRecord",
             &serde_json::to_value(self).map_err(|e| e.to_string())?,
         )?;
+        Ok(())
+    }
+}
+
+impl Revisioned for WatcherRecord {
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 9 {
+            self.attached_pid = None;
+        }
+        self.source_kind.retain_revision(revision);
+        self.outcome.retain_revision(revision);
+    }
+    fn check_revision(&self, revision: u32) -> Result<(), String> {
+        self.source_kind.check_revision(revision)?;
+        self.outcome.check_revision(revision)?;
         Ok(())
     }
 }

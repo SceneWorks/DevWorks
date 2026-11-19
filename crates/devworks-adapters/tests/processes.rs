@@ -4506,3 +4506,82 @@ fn required_child_policy_refuses_a_set_id_program_before_any_target_effect() {
     ));
     assert!(!std::path::Path::new(&marker).exists());
 }
+
+#[test]
+fn an_external_process_watch_only_reports_exit_from_its_verified_registration() {
+    use devworks_core::ports::process::{ExternalProcessStatus as Status, NativeIdentity};
+    use std::io::Write;
+    use std::process::{Child, Command, Stdio};
+
+    struct ChildGuard(Child);
+    impl Drop for ChildGuard {
+        fn drop(&mut self) {
+            let _ = self.0.kill();
+            let _ = self.0.wait();
+        }
+    }
+
+    let _serial = serial();
+    #[cfg(unix)]
+    let mut command = {
+        let mut command = Command::new("sh");
+        command.args(["-c", "read gate; exit 7"]);
+        command
+    };
+    #[cfg(windows)]
+    let mut command = {
+        let mut command = Command::new("cmd");
+        command.args(["/d", "/c", "set /p wait= & exit /b 7"]);
+        command
+    };
+    let mut child = ChildGuard(
+        command
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap(),
+    );
+    let identity = NativeProcessHost::identity(child.0.id()).expect("native birth token");
+    let host = NativeProcessHost;
+    assert_eq!(host.inspect_external(&identity), Status::Running);
+    let malformed = NativeIdentity {
+        birth: "not-a-birth-token".into(),
+        ..identity.clone()
+    };
+    assert!(matches!(
+        host.watch_external(&malformed),
+        Err(Status::InvalidIdentity)
+    ));
+    let mut wrong = identity.clone();
+    let last = wrong.birth.pop().unwrap();
+    wrong.birth.push(if last == '0' { '1' } else { '0' });
+    assert_eq!(host.inspect_external(&wrong), Status::Different);
+    assert!(matches!(
+        host.watch_external(&wrong),
+        Err(Status::Different)
+    ));
+
+    let mut registration = host.watch_external(&identity).expect("native registration");
+    assert_eq!(registration.poll_exit().unwrap(), None);
+    drop(host.watch_external(&identity).expect("second registration"));
+    assert!(
+        child.0.try_wait().unwrap().is_none(),
+        "dropping a watch does not stop its process"
+    );
+
+    child.0.stdin.take().unwrap().write_all(b"go\n").unwrap();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let exit = loop {
+        if let Some(exit) = registration.poll_exit().unwrap() {
+            break exit;
+        }
+        assert!(Instant::now() < deadline, "no native exit notification");
+        std::thread::sleep(Duration::from_millis(10));
+    };
+    assert_eq!(child.0.wait().unwrap().code(), Some(7));
+    #[cfg(unix)]
+    assert_eq!(exit.exit_code, None);
+    #[cfg(windows)]
+    assert_eq!(exit.exit_code, Some(7));
+}

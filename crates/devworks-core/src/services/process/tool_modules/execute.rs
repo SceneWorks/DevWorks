@@ -294,6 +294,7 @@ impl ProcessToolService {
                     probe: None,
                     timer: None,
                     file: None,
+                    attached_process: None,
                     matching: None,
                     max_lifetime_ms: None,
                     tail_bytes: origin

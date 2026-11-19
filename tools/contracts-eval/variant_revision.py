@@ -15,11 +15,19 @@ def containing(types):
     for name, definition in types.items():
         introduced = definition.get('introducedVariants', {})
         if introduced:
-            if definition['kind'] != 'union':
-                raise ValueError(f'{name}: introducedVariants requires a union')
+            kind = definition['kind']
+            choices = definition.get('variants') if kind == 'union' else definition.get('values')
+            if kind not in ('union', 'enum'):
+                raise ValueError(f'{name}: introducedVariants requires a union or enum')
             for variant, revision in introduced.items():
-                if variant not in definition['variants'] or type(revision) is not int or revision < 2:
+                if variant not in choices or type(revision) is not int or revision < 2:
                     raise ValueError(f'{name}: invalid introduced variant {variant}')
+            fallbacks = definition.get('fallbackVariants', {})
+            if fallbacks and (kind != 'enum' or not all(
+                v in introduced and old in choices and old not in introduced
+                for v, old in fallbacks.items()
+            )):
+                raise ValueError(f'{name}: enum fallbacks must name variants available in earlier revisions')
             found.add(name)
     while True:
         grown = found | {name for name, d in types.items() if any(
@@ -37,6 +45,10 @@ def calls(fields, found, prefix='self.'):
 def method(definition, found):
     if definition['kind'] == 'record':
         body = calls(definition['fields'], found)
+    elif definition['kind'] == 'enum':
+        guards = [f'if matches!(self, Self::{v}) && revision < {r} {{return Err("enum variant predates its introduction: {v}".into());}}'
+                  for v, r in definition.get('introducedVariants', {}).items()]
+        body = ''.join(guards)
     else:
         arms = [f'Self::{v}{{..}} if revision<{revision}=>{{return Err("union variant predates its introduction: {v}".into());}},'
                 for v, revision in definition.get('introducedVariants', {}).items()]
@@ -53,3 +65,25 @@ def method(definition, found):
 def extend(implementation, definition, found):
     check = method(definition, found)
     return implementation[:-1] + check + '}' if check else implementation
+
+
+def enum_members(definition, pascal):
+    for value in definition['values']:
+        since = definition.get('introducedVariants', {}).get(value)
+        if since:
+            yield f'    #[schemars(extend("x-since" = {since}))]'
+        if not value[0].isupper():
+            yield f'    #[serde(rename = "{value}")]'
+        yield f'    {pascal(value)},'
+
+
+def enum_projection(name, definition, found):
+    since = definition.get('introducedVariants', {})
+    fallbacks = definition.get('fallbackVariants', {})
+    if not since:
+        return ''
+    retain = ''.join(f'if matches!(self, Self::{v}) && revision < {since[v]} {{*self = Self::{old};}}'
+                     for v, old in fallbacks.items())
+    check = method(definition, found)
+    parameter = 'revision' if retain else '_revision'
+    return f'impl Revisioned for {name} {{fn retain_revision(&mut self, {parameter}:u32){{{retain}}}{check}}}'

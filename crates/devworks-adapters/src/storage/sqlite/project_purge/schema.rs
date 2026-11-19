@@ -56,8 +56,10 @@ type Definitions = Vec<(String, String, String, Option<String>)>;
 /// foreign key to instruction_revisions and one to knowledge_claims, and no other table changes.
 /// Migration 63 adds file scan progress to watchers. The watcher retains its existing project
 /// and session ownership. The new column adds no reference to another row.
+/// Migration 64 adds the PID and birth token of an attached process to its watcher row.
+/// Those scalars add no ownership edge and the existing project and session policy still applies.
 pub(super) const REVIEWED_SCHEMA_SHA256: &str =
-    "a6bd0b588f47b675472fa142791b0a8b8b2f716658547c3bc834dad8ab71e02e";
+    "ac7388090f7d99a4f23bfa08e91b4666f424a45ba6fef3104ee9761b104b6d72";
 
 fn definitions(conn: &Connection) -> Result<Definitions, StorageError> {
     let mut statement = db(conn.prepare(
