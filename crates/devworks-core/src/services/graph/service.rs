@@ -567,7 +567,9 @@ impl GraphService {
                         && crate::services::indexing::status::semantic_stale(
                             read.packages(),
                             &generation.manifest,
-                            ctx.project_id(),
+                            &read
+                                .projects()
+                                .repository_projects(&generation.repository_id)?,
                         )?
                     {
                         gaps.push("stale_semantic_package");
@@ -933,7 +935,9 @@ fn resolved(
             if crate::services::indexing::status::semantic_stale(
                 read.packages(),
                 &generation.manifest,
-                None,
+                &read
+                    .projects()
+                    .repository_projects(&generation.repository_id)?,
             )? {
                 gaps.push("stale_semantic_package".into());
             }

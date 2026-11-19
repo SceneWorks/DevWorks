@@ -207,7 +207,10 @@ impl<'a> Reader<'a> {
                     || crate::services::indexing::status::semantic_stale(
                         self.read.packages(),
                         &generation.manifest,
-                        None,
+                        &self
+                            .read
+                            .projects()
+                            .repository_projects(&generation.repository_id)?,
                     )?
                 {
                     return Ok(false);

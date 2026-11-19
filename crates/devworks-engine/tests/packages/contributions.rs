@@ -50,6 +50,14 @@ fn only_source_bound_context_suggestions_pass_for_the_selected_phase() {
     spec.context_hooks = true;
     package(a.install(&a.user, &spec));
     a.ready("context-pack");
+    let mut broken = Spec::new("broken-context", "1.0.0");
+    broken.contributions = vec!["context-assemble"];
+    broken.context_hooks = true;
+    package(a.install(&a.user, &broken));
+    a.ready("broken-context");
+    let unrelated_bundle = a.save(&a.user, b"this is not the installed bundle");
+    super::compact_inspection::store_compact(&a, "broken-context", Some(&unrelated_bundle));
+
     let context = ProviderContext {
         version: 1,
         instructions: vec![],
@@ -93,9 +101,10 @@ fn native_and_scip_packages_publish_semantic_rows_in_a_real_index_generation() {
     let repository = a.sources.join("semantic-repository");
     std::fs::create_dir(&repository).unwrap();
     std::fs::write(repository.join("fixture.rs"), "fn a() {}\n").unwrap();
+    std::fs::write(repository.join("omitted.rs"), "fn b() {}\n").unwrap();
     for args in [
         vec!["init", "-q"],
-        vec!["add", "fixture.rs"],
+        vec!["add", "fixture.rs", "omitted.rs"],
         vec!["commit", "-q", "-m", "fixture"],
     ] {
         let git = std::process::Command::new("git")
@@ -218,7 +227,17 @@ fn native_and_scip_packages_publish_semantic_rows_in_a_real_index_generation() {
     );
     assert_eq!(generation.manifest["packs"].as_array().unwrap().len(), 2);
     assert_eq!(generation.manifest["coverage"]["state"], "Partial");
-    package(a.simple(&a.user, "addons.disable", "Disable", "pack-native"));
+    let member_repo = repo.clone();
+    write(&*a.store, move |tx| {
+        tx.projects()
+            .set_members(&ProjectId(id("project-a")), &[member_repo])
+    })
+    .unwrap();
+    let configuration = json!({"kind":"addons.configure","packageId":"pack-native",
+        "expectedRevision":a.record("pack-native").revision.get().to_string(),
+        "config":{"schema":host_schema_ref(PROJECT_ENABLEMENT_SCHEMA).unwrap(),
+            "value":{"disabledProjects":["project-a"]}}});
+    package(a.domain(&a.user, "addons.configure", configuration));
     let status = json!({"mode":"Query","protocol":"1.0-draft.1","queryId":"stale-semantic-status",
         "schemaRevision":2,"body":{"kind":"indexing.status","repositoryId":repo}});
     let DomainQueryReply::Result {
@@ -240,4 +259,29 @@ fn native_and_scip_packages_publish_semantic_rows_in_a_real_index_generation() {
             .iter()
             .any(|label| label.0 == "semantic-package-changed")
     );
+    execute(
+        "indexing.index",
+        json!({"scope":{"kind":"Workspace"},"repositoryIds":[repo],
+        "expectedSourceRevision":revision(),"views":{"kind":"Published","repositoryIds":[repo]}}),
+    );
+    let until = Instant::now() + PATIENCE;
+    loop {
+        let current = read(&*a.store, |snapshot| {
+            let index = snapshot.indexing();
+            let pointer = index.published(&repo)?.unwrap();
+            let view = index.view(&pointer.view_id)?.unwrap();
+            index.generation(&view.baseline_id)
+        })
+        .expect("published generation");
+        if current.id != generation.id {
+            assert_eq!(current.manifest["packs"].as_array().unwrap().len(), 1);
+            assert_eq!(current.manifest["packs"][0]["id"], "pack-scip");
+            break;
+        }
+        assert!(
+            Instant::now() < until,
+            "reindex never omitted the disabled package"
+        );
+        super::event_intents::drive(&a, Duration::from_millis(25));
+    }
 }

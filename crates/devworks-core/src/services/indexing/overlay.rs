@@ -516,6 +516,7 @@ pub(crate) fn refresh(
         // The reuse identity is the snapshot (a ref overlay's is its commit, which `existing`
         // already matched) and the configuration it was built under.
         let moved = super::status::overlay_config_moved(tx.indexing(), o, &effective.digest)?;
+        let member_projects = tx.projects().repository_projects(&r.id)?;
         let mut semantic_changed = false;
         for id in [&o.branch_generation_id, &o.worktree_generation_id]
             .into_iter()
@@ -525,7 +526,7 @@ pub(crate) fn refresh(
                 semantic_changed |= super::status::semantic_stale(
                     tx.packages(),
                     &layer.manifest,
-                    ctx.project_id(),
+                    &member_projects,
                 )?;
             }
         }
@@ -1021,7 +1022,8 @@ pub(crate) fn execute(exec: &mut Exec<'_>) -> Result<(), Stop> {
         ))
     })
     .map_err(Stop::storage)?;
-    exec.semantic_packs = super::worker::semantic::select(&env, &cfg);
+    exec.semantic_packs =
+        super::worker::semantic::select(&env, &cfg, &repo_id).map_err(Stop::storage)?;
     let base_pointer = base_view.map_or(0, |p| p.revision);
     let root = PathBuf::from(&snap.worktree_path);
     let head = snap.head_oid.clone();

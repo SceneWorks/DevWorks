@@ -92,6 +92,8 @@ fn a_workflow_waits_for_the_exact_selected_gates_and_retains_source_bound_eviden
     );
     assert_eq!(failure.state, OperationState::Failed, "{failure:?}");
     assert_eq!(failure.payload["workflow"]["requiredGates"], gates);
+    let retry = await_result(&a, operation_for(&a, &ctx, &input, &digest, gates.clone()));
+    assert_eq!(retry.state, OperationState::ObservedComplete, "{retry:?}");
 
     assert_eq!(
         refused(operation_for(&a, &ctx, &input, &digest, json!([]))).0,
@@ -102,6 +104,35 @@ fn a_workflow_waits_for_the_exact_selected_gates_and_retains_source_bound_eviden
     assert_eq!(
         refused(operation_for(&a, &ctx, &input, &digest, stale)).0,
         DomainErrorCode::NotFound
+    );
+
+    spec.version = "1.1.0".into();
+    let newer = digest_of(&package(a.update(&a.user, &spec)));
+    a.ready("workflow-pack");
+    let mut gates = gates;
+    gates[0]["manifestDigest"] = json!(newer);
+    let digest = newer;
+    let updated = await_result(&a, operation_for(&a, &ctx, &input, &digest, gates.clone()));
+    assert_eq!(
+        updated.state,
+        OperationState::ObservedComplete,
+        "{updated:?}"
+    );
+    assert_eq!(
+        updated.payload["workflowVersions"]["workflow-pack"],
+        "1.1.0"
+    );
+    assert_ne!(updated.id, retry.id);
+
+    let unknown = a.save(&ctx, br#"{"text":"unknown"}"#);
+    let held = await_result(
+        &a,
+        operation_for(&a, &ctx, &unknown, &digest, gates.clone()),
+    );
+    assert_eq!(held.state, OperationState::OutcomeUnknown, "{held:?}");
+    assert_eq!(
+        refused(operation_for(&a, &ctx, &input, &digest, gates)).0,
+        DomainErrorCode::Conflict
     );
 }
 

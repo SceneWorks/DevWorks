@@ -6,14 +6,15 @@ use crate::gateway::AdmittedCommand;
 use crate::operations::addons::RunWorkflowInput;
 use crate::ports::Preparation;
 use crate::ports::storage::{
-    PackageRegistryRead, StorageError, StoredPackageVersion, WriteTransaction,
+    EventFilter, EventRecord, MAX_PAGE, PackageRegistryRead, QueueState, StorageError,
+    StoredPackageVersion, WriteTransaction,
 };
 use crate::protocol::results::DomainDecision;
-use crate::protocol::{DomainErrorCode, Id};
+use crate::protocol::{DomainErrorCode, Id, ProjectId};
 use crate::services::artifacts::exact_reference_readable_in;
 use crate::services::kernel::{Failure, Refusal};
 use serde_json::json;
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 pub const OPERATION: &str = "addons.run_workflow";
 pub const MAX_GATES: usize = 16;
@@ -43,6 +44,7 @@ fn targets(i: &RunWorkflowInput) -> impl Iterator<Item = Target<'_>> {
 fn eligible(
     registry: &dyn PackageRegistryRead,
     target: &Target<'_>,
+    project: Option<&ProjectId>,
 ) -> Result<Option<StoredPackageVersion>, StorageError> {
     let id = target.package.as_str();
     let Some(record) = registry.package(id)? else {
@@ -51,15 +53,18 @@ fn eligible(
     if !record.installed
         || !record.enabled
         || record.active_digest.as_deref() != Some(target.digest)
+        || project.is_some_and(|project| policy::project_disabled(&record, project.0.as_str()))
     {
         return Ok(None);
     }
     let version = registry.package_version(id, target.digest)?;
     Ok(version.filter(|version| {
-        version
-            .approval
-            .as_ref()
-            .is_some_and(|approval| approval["kind"] == "Person")
+        version.approval.as_ref().is_some_and(|approval| {
+            matches!(
+                approval["kind"].as_str(),
+                Some("Person" | "TrustedPublisher")
+            )
+        })
     }))
 }
 
@@ -95,7 +100,8 @@ impl PackageService {
         };
         let unavailable = (DomainErrorCode::NotFound, "workflow_contribution");
         for target in targets(i) {
-            let Some(version) = env.read(|s| eligible(s.packages(), &target))? else {
+            let Some(version) = env.read(|s| eligible(s.packages(), &target, ctx.project_id()))?
+            else {
                 return Ok(Err(unavailable));
             };
             let Some(mut inspection) = policy::inspection(&version) else {
@@ -165,10 +171,11 @@ impl PackageService {
             }
             _ => return Err(conflict("package_version", i.package_id.as_str()).into()),
         }
+        let mut versions = BTreeMap::new();
         for target in targets(i) {
-            if eligible(tx.packages(), &target)?.is_none() {
-                return Err(not_found("workflow_contribution", target.contribution).into());
-            }
+            let version = eligible(tx.packages(), &target, ctx.project_id())?
+                .ok_or_else(|| not_found("workflow_contribution", target.contribution))?;
+            versions.insert(target.package.as_str(), version.version);
         }
         if !exact_reference_readable_in(tx, ctx, &i.input)? {
             return Err(invalid("input").into());
@@ -177,35 +184,50 @@ impl PackageService {
             "project":ctx.project_id(), "root":ctx.root_id(), "workflow":i.workflow_id,
         }))
         .map_err(|error| StorageError::InvalidRecord(format!("workflow identity: {error:?}")))?;
-        let first = tx
-            .history()
-            .page(
-                &crate::ports::storage::EventFilter::Aggregate {
-                    kind: "package_workflow".into(),
-                    id: workflow_key.clone(),
-                },
-                0,
-                1,
-            )?
-            .events
-            .into_iter()
-            .next();
-        if let Some(first) = first {
-            let prior: RunWorkflowInput = serde_json::from_value(first.payload["workflow"].clone())
-                .map_err(|_| {
+        if let Some(previous) = latest_run(tx, &workflow_key)? {
+            let prior: RunWorkflowInput =
+                serde_json::from_value(previous.payload["workflow"].clone()).map_err(|_| {
                     StorageError::InvalidRecord("invalid recorded workflow binding".into())
                 })?;
+            let unchanged_or_newer = |package: &Id, old_digest: &str, new_digest: &str| {
+                if old_digest == new_digest {
+                    return true;
+                }
+                let before = previous.payload["workflowVersions"][package.as_str()]
+                    .as_str()
+                    .and_then(|version| semver::Version::parse(version).ok());
+                let after = versions
+                    .get(package.as_str())
+                    .and_then(|version| semver::Version::parse(version).ok());
+                before
+                    .zip(after)
+                    .is_some_and(|(before, after)| after.cmp_precedence(&before).is_gt())
+            };
+            let keeps_required_gates = prior.required_gates.0.iter().all(|old| {
+                i.required_gates.0.iter().any(|current| {
+                    old.package_id == current.package_id
+                        && old.contribution_id.0 == current.contribution_id.0
+                        && unchanged_or_newer(
+                            &old.package_id,
+                            &old.manifest_digest.0,
+                            &current.manifest_digest.0,
+                        )
+                })
+            });
             if prior.package_id != i.package_id
                 || prior.contribution_id.0 != i.contribution_id.0
-                || prior.manifest_digest != i.manifest_digest
-                || serde_json::to_value(&prior.required_gates).ok()
-                    != serde_json::to_value(&i.required_gates).ok()
+                || !unchanged_or_newer(
+                    &i.package_id,
+                    &prior.manifest_digest.0,
+                    &i.manifest_digest.0,
+                )
+                || !keeps_required_gates
             {
                 return Err(conflict("workflow_binding", i.workflow_id.as_str()).into());
             }
-        }
-        if unsettled(tx, &workflow_key)? {
-            return Err(conflict("workflow_in_flight", i.workflow_id.as_str()).into());
+            if unsettled(tx, &previous)? {
+                return Err(conflict("workflow_in_flight", i.workflow_id.as_str()).into());
+            }
         }
         let mut fences = command.authorization().fences().to_vec();
         let digest =
@@ -222,6 +244,7 @@ impl PackageService {
             "projectId": ctx.project_id(), "rootId": ctx.root_id(),
             "assignmentId": ctx.assignment_id(), "fences": fences, "call": null,
             "activation": ctx.activation(), "workflow": i, "workflowKey": workflow_key,
+            "workflowVersions": versions,
             "restoreEpoch": ctx.restore_epoch(),
         });
         let request_digest = crate::fingerprint::canonical_digest(&payload)
@@ -233,27 +256,77 @@ impl PackageService {
     }
 }
 
-fn unsettled(tx: &mut dyn WriteTransaction, workflow: &str) -> Result<bool, StorageError> {
-    let filter = crate::ports::storage::DeliveryFilter {
-        consumer: Some(invoke::CONSUMER.into()),
-        operation_id: None,
+fn latest_run(
+    tx: &mut dyn WriteTransaction,
+    workflow: &str,
+) -> Result<Option<EventRecord>, StorageError> {
+    let filter = EventFilter::Aggregate {
+        kind: "package_workflow".into(),
+        id: workflow.into(),
     };
-    let mut cursor = None;
+    let mut cursor = 0;
     loop {
-        let page =
-            tx.queue()
-                .deliveries(&filter, cursor.as_ref(), crate::ports::storage::MAX_PAGE)?;
-        if page.entries.iter().any(|entry| {
-            entry.payload["workflowKey"].as_str() == Some(workflow)
-                && !matches!(entry.state, crate::ports::storage::QueueState::Failed)
-        }) {
-            return Ok(true);
+        let mut page = tx.history().page(&filter, cursor, MAX_PAGE)?;
+        if !page.has_more {
+            return Ok(page.events.pop());
         }
-        cursor = page.next;
-        if cursor.is_none() {
+        cursor = page.next_after;
+    }
+}
+
+fn unsettled(tx: &mut dyn WriteTransaction, run: &EventRecord) -> Result<bool, StorageError> {
+    let operation = run
+        .operation_id
+        .as_ref()
+        .ok_or_else(|| StorageError::InvalidRecord("the workflow has no operation".into()))?;
+    let record = tx
+        .operations()
+        .operation(operation)?
+        .ok_or_else(|| StorageError::InvalidRecord("the workflow operation is missing".into()))?;
+    if crate::ports::storage::is_terminal(record.state) {
+        return Ok(false);
+    }
+    let entry: Id = serde_json::from_value(record.payload["deliveryId"].clone())
+        .map_err(|_| StorageError::InvalidRecord("invalid workflow delivery identity".into()))?;
+    Ok(!tx.queue().entry(&entry)?.is_some_and(|entry| {
+        matches!(entry.state, QueueState::Failed | QueueState::Dismissed)
+            && record.state == crate::protocol::OperationState::RetryPending
+    }))
+}
+
+/// Rechecks package approval, scope and all exact artifact references at settlement.
+pub fn evidence_current(
+    tx: &mut dyn WriteTransaction,
+    ctx: &InvocationContext,
+    plan: &RunWorkflowInput,
+    evidence: &serde_json::Value,
+) -> Result<bool, StorageError> {
+    for target in targets(plan) {
+        if eligible(tx.packages(), &target, ctx.project_id())?.is_none() {
             return Ok(false);
         }
     }
+    if !exact_reference_readable_in(tx, ctx, &plan.input)? {
+        return Ok(false);
+    }
+    let Some(results) = evidence["artifacts"].as_array() else {
+        return Ok(false);
+    };
+    for reference in results.iter().chain(
+        evidence["requiredGates"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .map(|gate| &gate["result"]),
+    ) {
+        let Ok(reference) = serde_json::from_value(reference.clone()) else {
+            return Ok(false);
+        };
+        if !exact_reference_readable_in(tx, ctx, &reference)? {
+            return Ok(false);
+        }
+    }
+    Ok(true)
 }
 
 /// Requests cancellation of the exact queue entry attached to a workflow operation.

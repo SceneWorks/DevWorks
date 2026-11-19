@@ -165,6 +165,16 @@ pub type ReadyFuture = Pin<Box<dyn Future<Output = ()> + Send>>;
 pub trait EffectExecutor: Send + Sync {
     /// Performs the effect of a `Dispatching` operation once.
     fn execute(&self, operation: OperationRecord) -> EffectFuture;
+    /// Checks whether an observed completion still meets its publication requirements inside
+    /// the same transaction that records the outcome. A rejected result will settle as failed.
+    fn completion_current(
+        &self,
+        _tx: &mut dyn WriteTransaction,
+        _operation: &OperationRecord,
+        _evidence: &Value,
+    ) -> Result<bool, StorageError> {
+        Ok(true)
+    }
     /// Observes the target for an operation whose outcome is unknown using its saved identity;
     /// it must not perform the effect.
     fn observe(&self, operation: OperationRecord) -> EffectFuture;
@@ -1361,6 +1371,15 @@ impl Dispatcher {
                 .operations()
                 .operation(&operation.id)?
                 .ok_or_else(|| invalid("operation vanished"))?;
+            let result = match &result {
+                EffectResult::Completed(evidence)
+                    if op.state == OperationState::Dispatching
+                        && !executor.completion_current(tx, &op, evidence)? =>
+                {
+                    EffectResult::Failed("completion evidence is no longer current".into())
+                }
+                _ => result,
+            };
             let (to, note) = observation(&result);
             let to = to.unwrap_or(OperationState::OutcomeUnknown);
             if op.state == OperationState::Dispatching {

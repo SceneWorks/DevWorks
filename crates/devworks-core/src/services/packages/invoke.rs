@@ -283,6 +283,7 @@ pub(super) fn queue_invocation(
         "contributionId": payload["contributionId"],
         "digest": payload["digest"],
         "workflow": payload["workflow"],
+        "workflowVersions": payload["workflowVersions"],
     });
     tx.operations().record_intent(NewOperation {
         id: operation.clone(),

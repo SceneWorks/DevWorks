@@ -266,11 +266,7 @@ impl SemanticEnricher for Pack {
                 scip_units(&bytes, request.files)
             }
         }?;
-        if !host
-            .active_contributions(request.principal, "Semantic")?
-            .iter()
-            .any(|version| version.package_id == *package && version.manifest_digest == *digest)
-        {
+        if !host.contribution_current(request.principal, "Semantic", (package, digest))? {
             return Err("the producer version changed before the index could be accepted".into());
         }
         Ok(result)
@@ -297,25 +293,7 @@ fn scip_units(bytes: &[u8], sources: &[EnrichmentSource<'_>]) -> Result<Vec<Enri
     let mut result = Vec::new();
     for (&path, &(document, text)) in &documents {
         let lines = source_lines(text);
-        let mut unit = Enrichment {
-            unit_key: path.to_owned(),
-            nodes: vec![ExtractedNode {
-                kind: "File".into(),
-                name: path.rsplit('/').next().unwrap_or(path).into(),
-                qualified_name: path.into(),
-                span: Span {
-                    start_line: 1,
-                    start_column: 1,
-                    end_line: 1,
-                    end_column: 1,
-                    start_byte: 0,
-                    end_byte: 0,
-                },
-                parent: None,
-                properties: Map::new(),
-            }],
-            edges: Vec::new(),
-        };
+        let mut unit = file_unit(path);
         let metadata: BTreeMap<_, _> = document
             .symbols
             .iter()
@@ -442,7 +420,35 @@ fn scip_units(bytes: &[u8], sources: &[EnrichmentSource<'_>]) -> Result<Vec<Enri
             }
         }
     }
+    result.extend(
+        sources
+            .iter()
+            .filter(|source| !documents.contains_key(source.unit))
+            .map(|source| file_unit(source.unit)),
+    );
     Ok(result)
+}
+
+fn file_unit(path: &str) -> Enrichment {
+    Enrichment {
+        unit_key: path.to_owned(),
+        nodes: vec![ExtractedNode {
+            kind: "File".into(),
+            name: path.rsplit('/').next().unwrap_or(path).into(),
+            qualified_name: path.into(),
+            span: Span {
+                start_line: 1,
+                start_column: 1,
+                end_line: 1,
+                end_column: 1,
+                start_byte: 0,
+                end_byte: 0,
+            },
+            parent: None,
+            properties: Map::new(),
+        }],
+        edges: Vec::new(),
+    }
 }
 
 fn source_lines(source: &str) -> Vec<(usize, &str)> {

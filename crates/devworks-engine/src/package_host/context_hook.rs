@@ -27,6 +27,16 @@ impl PackageHost {
         phase: HookPhase,
         context: &ProviderContext,
     ) -> Vec<String> {
+        self.context_suggestions_until(principal, phase, context, &|| false)
+    }
+
+    pub(crate) fn context_suggestions_until(
+        &self,
+        principal: &InvocationContext,
+        phase: HookPhase,
+        context: &ProviderContext,
+        stopped: &dyn Fn() -> bool,
+    ) -> Vec<String> {
         let phase_name = |phase: &HookPhase| match phase {
             HookPhase::Assemble => "Assemble",
             HookPhase::Compact => "Compact",
@@ -86,11 +96,11 @@ impl PackageHost {
         let mut suggestions = Vec::new();
         let deadline = Instant::now() + HOOK_BUDGET;
         for (_, inspection, meta) in selected.into_iter().take(MAX_HOOKS) {
-            if Instant::now() >= deadline {
+            if stopped() || Instant::now() >= deadline {
                 break;
             }
             let hook_deadline = deadline.min(Instant::now() + HOOK_DEADLINE);
-            match self.run_hook(principal, inspection, &meta, &input, hook_deadline) {
+            match self.run_hook(principal, inspection, &meta, &input, hook_deadline, stopped) {
                 Ok(suggestion) => suggestions.push(suggestion),
                 Err(error) => self.service.record_log(
                     &inspection.package_id,
@@ -111,6 +121,7 @@ impl PackageHost {
         meta: &ContributionMeta,
         input: &Value,
         deadline: Instant,
+        stopped: &dyn Fn() -> bool,
     ) -> Result<String, String> {
         let input_digest = input["contextDigest"]
             .as_str()
@@ -148,11 +159,22 @@ impl PackageHost {
                 expected_digest: Some(manifest.clone()),
             })
             .map_err(|error| format!("context helper could not run: {error:?}"))?;
+        let outcome = loop {
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if stopped() || remaining.is_zero() {
+                handle.cancel();
+                return Err(
+                    "the context helper did not complete within its active deadline".into(),
+                );
+            }
+            if let Some(outcome) = handle.wait(remaining.min(Duration::from_millis(100))) {
+                break outcome;
+            }
+        };
         if !matches!(
-            handle.wait(deadline.saturating_duration_since(Instant::now())),
-            Some(InvokeOutcome::Finished(InvocationOutcome::Completed { .. }))
+            outcome,
+            InvokeOutcome::Finished(InvocationOutcome::Completed { .. })
         ) {
-            handle.cancel();
             return Err("the context helper did not complete".into());
         }
         let (events, dropped) = handle.events();
@@ -194,11 +216,7 @@ impl PackageHost {
             .and_then(Value::as_str)
             .filter(|text| !text.trim().is_empty() && text.len() <= MAX_TEXT)
             .ok_or("the context proposal must carry bounded, nonempty text")?;
-        if !self
-            .active_contributions(principal, "ContextHook")?
-            .iter()
-            .any(|active| active.package_id == *package && active.manifest_digest == *manifest)
-        {
+        if !self.contribution_current(principal, "ContextHook", (package, manifest))? {
             return Err("the context hook's version is no longer active".into());
         }
         Ok(format!(

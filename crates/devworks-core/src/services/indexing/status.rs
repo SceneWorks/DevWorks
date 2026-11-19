@@ -306,29 +306,35 @@ pub fn overlay_status(
     })
 }
 
+/// Repository generations are shared. A project's explicit disable stops package enrichment for
+/// the shared repository while allowing the structural index and other packages to run.
+pub(crate) fn semantic_disabled(
+    registry: &dyn PackageRegistryRead,
+    id: &str,
+    projects: &[crate::protocol::ProjectId],
+) -> Result<bool, StorageError> {
+    Ok(registry.package(id)?.is_some_and(|record| {
+        projects.iter().any(|project| {
+            crate::services::packages::policy::project_disabled(&record, project.0.as_str())
+        })
+    }))
+}
+
 /// Historical rows remain readable. Current graph results describe a changed package as stale.
 pub(crate) fn semantic_stale(
-    packages: &dyn PackageRegistryRead,
+    registry: &dyn PackageRegistryRead,
     manifest: &Value,
-    project: Option<&crate::protocol::ProjectId>,
+    projects: &[crate::protocol::ProjectId],
 ) -> Result<bool, StorageError> {
     for pack in manifest["packs"].as_array().into_iter().flatten() {
         let (Some(id), Some(digest)) = (pack["id"].as_str(), pack["manifestDigest"].as_str())
         else {
             continue;
         };
-        let active = packages.package(id)?.is_some_and(|record| {
-            record.installed
-                && record.enabled
-                && record.active_digest.as_deref() == Some(digest)
-                && project.is_none_or(|project| {
-                    !crate::services::packages::policy::project_disabled(
-                        &record,
-                        project.0.as_str(),
-                    )
-                })
+        let active = registry.package(id)?.is_some_and(|record| {
+            record.installed && record.enabled && record.active_digest.as_deref() == Some(digest)
         });
-        if !active {
+        if !active || semantic_disabled(registry, id, projects)? {
             return Ok(true);
         }
     }
@@ -386,8 +392,9 @@ pub fn status(
     if generation.is_some() && !config_current {
         reasons.push("configuration-changed".into());
     }
+    let member_projects = read.projects().repository_projects(repository)?;
     if let Some(generation) = &generation
-        && semantic_stale(read.packages(), &generation.manifest, ctx.project_id())?
+        && semantic_stale(read.packages(), &generation.manifest, &member_projects)?
     {
         reasons.push("semantic-package-changed".into());
     }
@@ -545,7 +552,8 @@ pub fn status(
     }
     for id in ids {
         let found = installed.iter().find(|d| d.id == id);
-        let enabled = effective.packages.contains(&id);
+        let disabled = semantic_disabled(read.packages(), &id, &member_projects)?;
+        let enabled = effective.packages.contains(&id) && !disabled;
         let (state, note, languages) = match (&found, enabled) {
             (None, _) => (
                 SemanticPackState::NotInstalled,
@@ -555,7 +563,13 @@ pub fn status(
                 ),
                 Vec::new(),
             ),
-            (Some(d), false) => (SemanticPackState::Disabled, None, d.languages.clone()),
+            (Some(d), false) => (
+                SemanticPackState::Disabled,
+                disabled.then(|| {
+                    "a member project disabled this package for the shared repository".into()
+                }),
+                d.languages.clone(),
+            ),
             (Some(d), true) if !d.missing.is_empty() => (
                 SemanticPackState::Unavailable,
                 Some(format!("missing prerequisites: {}", d.missing.join(", "))),

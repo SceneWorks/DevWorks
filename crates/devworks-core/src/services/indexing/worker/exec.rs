@@ -514,7 +514,7 @@ impl Exec<'_> {
                 "an exclusion now names this repository",
             ));
         }
-        self.semantic_packs = semantic::select(&env, &cfg);
+        self.semantic_packs = semantic::select(&env, &cfg, &repo_id).map_err(Stop::storage)?;
         let semantic_binding = semantic::binding(&self.semantic_packs);
         let pointer = previous.as_ref().map_or(0, |(_, r)| *r);
         let parent = previous

@@ -12969,7 +12969,7 @@
     "addons.rollback": {"assignmentScope": "project", "nativeExecution": true, "approvalRequired": false, "humanOnly": false},
     "addons.uninstall": {"assignmentScope": "project", "nativeExecution": false, "approvalRequired": false, "humanOnly": false},
     "addons.read_content": {"assignmentScope": "project", "nativeExecution": false, "approvalRequired": false, "humanOnly": false},
-    "addons.run_workflow": {"assignmentScope": "root", "nativeExecution": true, "approvalRequired": false, "humanOnly": false},
+    "addons.run_workflow": {"assignmentScope": "coordinator", "nativeExecution": true, "approvalRequired": false, "humanOnly": false},
     "addons.invoke": {"assignmentScope": "project", "nativeExecution": true, "approvalRequired": false, "humanOnly": true},
     "addons.invocation": {"assignmentScope": "project", "nativeExecution": false, "approvalRequired": false, "humanOnly": true},
     "help.search": {"assignmentScope": "project", "nativeExecution": false, "approvalRequired": false, "humanOnly": false},

@@ -8997,7 +8997,7 @@ pub(super) static CATALOG: [OperationDescriptor; 382] = [
         native_execution: true,
         approval_required: false,
         human_only: false,
-        assignment_scope: AssignmentScope::Root,
+        assignment_scope: AssignmentScope::Coordinator,
     },
     OperationDescriptor {
         name: "addons.read_content",

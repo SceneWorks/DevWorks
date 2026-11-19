@@ -6,8 +6,8 @@ use super::policy::{
 };
 use crate::context::{InvocationContext, PrincipalKind};
 use crate::operations::{
-    OperationInput, approvals, artifacts, browser, features, git, history, issues, knowledge,
-    next_work, runs, sessions, tasks,
+    OperationInput, addons, approvals, artifacts, browser, features, git, history, issues,
+    knowledge, next_work, runs, sessions, tasks,
 };
 use crate::ports::storage::{
     ApplicationStore, AuthorityGrant, AuthorityRead, ConfigurationRead, GrantKind, GrantRecord,
@@ -543,6 +543,9 @@ fn agent_assignment_scope(
                 // Receipt identity binds actor, ingress and scope to the requesting principal.
                 history::Input::CommandReceipt(_) => true,
             }
+        }
+        OperationInput::Addons(addons::Input::RunWorkflow(input)) => {
+            coordinator && readable_artifact(&input.input.artifact_id, &input.input.version_id)?
         }
         // Jobs have project scope and no root or assignment owner. Active assignments cannot
         // use project-wide scheduler operations through their ambient agent authority.

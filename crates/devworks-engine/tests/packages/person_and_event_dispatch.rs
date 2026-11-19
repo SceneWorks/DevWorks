@@ -699,6 +699,6 @@ fn an_approved_codec_encodes_and_decodes_through_the_owned_router_attempt() {
     let requests = a.model.as_ref().unwrap().0.lock().unwrap();
     assert_eq!(requests.len(), 1, "{recorded:?}");
     let body: Value = serde_json::from_slice(requests[0].body.as_deref().unwrap()).unwrap();
-    assert_eq!(body["fixture_codec"], true);
+    assert_eq!(body["x-devworks-fixture"], true);
     assert_eq!(body["model"], "fixture-model");
 }

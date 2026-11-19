@@ -14,14 +14,30 @@ pub(crate) struct SemanticBatch<'a> {
     pub files: &'a [EnrichmentSource<'a>],
 }
 
-pub(crate) fn select(env: &IndexEnv, config: &EffectiveConfig) -> Vec<Arc<dyn SemanticEnricher>> {
-    env.enrichers()
-        .into_iter()
-        .filter(|pack| {
+pub(crate) fn select(
+    env: &IndexEnv,
+    config: &EffectiveConfig,
+    repository: &Id,
+) -> Result<Vec<Arc<dyn SemanticEnricher>>, StorageError> {
+    let candidates = env.enrichers();
+    read_snapshot(&*env.store, &ReadOptions::default(), |read| {
+        let projects = read.projects().repository_projects(repository)?;
+        let mut selected = Vec::new();
+        for pack in &candidates {
             let descriptor = pack.descriptor();
-            config.packages.contains(&descriptor.id) && descriptor.missing.is_empty()
-        })
-        .collect()
+            if config.packages.contains(&descriptor.id)
+                && descriptor.missing.is_empty()
+                && !crate::services::indexing::status::semantic_disabled(
+                    read.packages(),
+                    &descriptor.id,
+                    &projects,
+                )?
+            {
+                selected.push(pack.clone());
+            }
+        }
+        Ok(selected)
+    })
 }
 
 pub(crate) fn binding(packs: &[Arc<dyn SemanticEnricher>]) -> String {

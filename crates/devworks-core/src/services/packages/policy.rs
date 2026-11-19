@@ -529,6 +529,15 @@ pub fn parse_wait(s: &str) -> Option<PackageWaitReason> {
     })
 }
 
+/// Whether the package was disabled for the named project.
+pub fn project_disabled(package: &StoredPackage, project: &str) -> bool {
+    package
+        .config
+        .as_ref()
+        .and_then(|config| config["disabledProjects"].as_array())
+        .is_some_and(|disabled| disabled.iter().any(|entry| entry.as_str() == Some(project)))
+}
+
 #[cfg(test)]
 mod closure_tests {
     use super::*;
@@ -719,13 +728,4 @@ mod closure_tests {
             assert!(why.contains("too deep or cyclic"), "{why}");
         }
     }
-}
-
-/// Whether the package was disabled for the named project.
-pub fn project_disabled(package: &StoredPackage, project: &str) -> bool {
-    package
-        .config
-        .as_ref()
-        .and_then(|config| config["disabledProjects"].as_array())
-        .is_some_and(|disabled| disabled.iter().any(|entry| entry.as_str() == Some(project)))
 }

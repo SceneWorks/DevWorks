@@ -32,6 +32,8 @@ pub(crate) struct PackageCodec {
     principal: InvocationContext,
     inspection: Inspection,
     meta: ContributionMeta,
+    input_schema: Value,
+    output_schema: Value,
     sequence: u64,
     calls: BTreeSet<String>,
 }
@@ -45,13 +47,11 @@ impl PackageHost {
         let connection = &prepared.identity.binding.connection_id;
         let scope = format!("provider:{}:{:?}", connection.as_str(), prepared.profile);
         let installed = self
-            .active_contributions(principal, "Provider")
+            .contribution_candidates(principal, "Provider", Some(&scope), None)
             .map_err(invalid)?;
         let mut selected = None;
-        for inspection in installed
-            .into_iter()
-            .filter(|version| version.access.contains(&scope))
-        {
+        for version in installed {
+            let inspection = self.verified_inspection(&version).map_err(invalid)?;
             for entry in &inspection.contributions {
                 let Some(Contribution::Provider {
                     meta,
@@ -80,6 +80,12 @@ impl PackageHost {
                 selected = Some(PackageCodec {
                     host: self.clone(),
                     principal: principal.clone(),
+                    input_schema: self
+                        .contribution_schema(&inspection, &meta.input_schema)
+                        .map_err(invalid)?,
+                    output_schema: self
+                        .contribution_schema(&inspection, &meta.output_schema)
+                        .map_err(invalid)?,
                     inspection: inspection.clone(),
                     meta,
                     sequence: 0,
@@ -94,13 +100,15 @@ impl PackageHost {
 impl PackageCodec {
     pub(crate) fn current(&self) -> Result<(), StorageError> {
         self.host
-            .active_contributions(&self.principal, "Provider")
+            .contribution_current(
+                &self.principal,
+                "Provider",
+                (
+                    &self.inspection.package_id,
+                    &self.inspection.manifest_digest,
+                ),
+            )
             .map_err(invalid)?
-            .iter()
-            .any(|version| {
-                version.package_id == self.inspection.package_id
-                    && version.manifest_digest == self.inspection.manifest_digest
-            })
             .then_some(())
             .ok_or(StorageError::ScopeDenied)
     }
@@ -122,14 +130,10 @@ impl PackageCodec {
         if bytes.len() as u64 > MAX_CODEC_BYTES {
             return Err(invalid("the codec input exceeds its bound"));
         }
-        let expected = self
-            .host
-            .contribution_schema(&self.inspection, &self.meta.input_schema)
-            .map_err(invalid)?;
         self.host
             .service
             .validator()
-            .validate(&expected, &request)
+            .validate(&self.input_schema, &request)
             .map_err(|_| invalid("the codec input does not match its exact schema"))?;
         let input = self
             .host
@@ -164,9 +168,13 @@ impl PackageCodec {
             .map_err(|error| invalid(format!("the selected codec is unavailable: {error:?}")))?;
         let limit = Instant::now() + budget;
         loop {
-            if cancellation.is_cancelled() || Instant::now() >= limit {
+            if cancellation.is_cancelled() {
                 handle.cancel();
                 return Err(StorageError::Cancelled);
+            }
+            if Instant::now() >= limit {
+                handle.cancel();
+                return Err(invalid("the codec exceeded its response deadline"));
             }
             if let Some(outcome) = handle.wait(Duration::from_millis(150)) {
                 let InvokeOutcome::Finished(InvocationOutcome::Completed { artifacts }) = outcome
@@ -205,6 +213,13 @@ impl PackageCodec {
             admitted
                 .iter()
                 .all(|(key, value)| encoded.get(key) == Some(value))
+                && encoded.keys().all(|key| {
+                    admitted.contains_key(key)
+                        || (matches!(
+                            prepared.profile,
+                            devworks_core::protocol::provider::EndpointProfile::CompatibleChat
+                        ) && key.starts_with("x-devworks-"))
+                })
         }) {
             return Err(invalid(
                 "the codec changed the already admitted request semantics",
@@ -379,14 +394,10 @@ impl PackageCodec {
     }
 
     fn validate_output(&self, value: &Value) -> Result<(), StorageError> {
-        let schema = self
-            .host
-            .contribution_schema(&self.inspection, &self.meta.output_schema)
-            .map_err(invalid)?;
         self.host
             .service
             .validator()
-            .validate(&schema, value)
+            .validate(&self.output_schema, value)
             .map_err(|_| invalid("the codec output does not match its exact schema"))
     }
 

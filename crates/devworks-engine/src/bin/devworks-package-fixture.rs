@@ -509,6 +509,7 @@ fn invoke(st: Arc<State>, id: Value, inv: Value, cancel: mpsc::Receiver<()>, pac
                 use scip::types::{Document, Index, Occurrence, SymbolRole};
                 let docs = files
                     .iter()
+                    .filter(|file| file["unit"] != "omitted.rs")
                     .map(|file| Document {
                         relative_path: file["unit"].as_str().unwrap().into(),
                         occurrences: vec![Occurrence {
@@ -589,7 +590,7 @@ fn invoke(st: Arc<State>, id: Value, inv: Value, cancel: mpsc::Receiver<()>, pac
             let input = read_input(&call, &inv);
             if input["payload"]["kind"] == "Encode" {
                 let mut body = input["payload"]["body"].clone();
-                body["fixture_codec"] = json!(true);
+                body["x-devworks-fixture"] = json!(true);
                 let output = publish_json(&call, &json!({"body":body}));
                 finished(
                     &st,
@@ -642,6 +643,15 @@ fn invoke(st: Arc<State>, id: Value, inv: Value, cancel: mpsc::Receiver<()>, pac
                 .and_then(base64url_decode)
                 .and_then(|bytes| serde_json::from_slice(&bytes).ok())
                 .unwrap_or(Value::Null);
+            if name == "workflow-step" && input["text"] == "unknown" {
+                finished(
+                    &st,
+                    &id,
+                    &inv,
+                    json!({"kind":"OutcomeUnknown","operationId":inv["operationId"]}),
+                );
+                return;
+            }
             let result = br#"{"outcome":"Checked"}"#;
             call(
                 "append-result",

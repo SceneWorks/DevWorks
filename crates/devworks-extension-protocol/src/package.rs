@@ -169,7 +169,7 @@ pub enum Contribution {
         event_schemas: Vec<SchemaRef>,
         /// Exact, mode-qualified application commands this handler may propose as intents.
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
-        #[schemars(length(max = 32))]
+        #[schemars(length(max = 32), extend("x-since" = 2))]
         intent_commands: Vec<QualifiedId>,
     },
     ContextHook {

@@ -164,13 +164,15 @@ impl PackageHost {
         committed.map_err(|error| error.to_string())
     }
 
-    pub(super) fn active_contributions(
+    pub(super) fn contribution_candidates(
         &self,
         principal: &InvocationContext,
         kind: &str,
-    ) -> Result<Vec<Inspection>, String> {
+        access: Option<&str>,
+        identity: Option<(&str, &str)>,
+    ) -> Result<Vec<StoredPackageVersion>, String> {
         let store = self.store.info();
-        let candidates = read_snapshot(&*self.store, &ReadOptions::default(), |snapshot| {
+        read_snapshot(&*self.store, &ReadOptions::default(), |snapshot| {
             if !current_scope(&store, snapshot.authority(), principal)?
                 || snapshot.actors().actor_kind(principal.principal())?
                     != Some(principal.principal_kind())
@@ -187,6 +189,11 @@ impl PackageHost {
                 .values()
                 .filter_map(|(record, version)| {
                     let version = version.as_ref()?;
+                    if identity.is_some_and(|(package, digest)| {
+                        record.package_id != package || version.manifest_digest != digest
+                    }) {
+                        return None;
+                    }
                     let enabled = principal
                         .project_id()
                         .is_none_or(|project| !project_disabled(record, project.0.as_str()));
@@ -197,7 +204,13 @@ impl PackageHost {
                     if !enabled || !ready {
                         return None;
                     }
-                    policy::inspection(version)?
+                    let inspection = policy::inspection(version)?;
+                    if access.is_some_and(|access| {
+                        !inspection.access.iter().any(|entry| entry == access)
+                    }) {
+                        return None;
+                    }
+                    inspection
                         .contributions
                         .iter()
                         .any(|entry| entry.kind == kind)
@@ -205,10 +218,41 @@ impl PackageHost {
                 })
                 .collect::<Vec<_>>())
         })
-        .map_err(|error| error.to_string())?;
-        candidates
-            .iter()
-            .map(|version| self.verified_inspection(version))
-            .collect()
+        .map_err(|error| error.to_string())
+    }
+
+    pub(super) fn active_contributions(
+        &self,
+        principal: &InvocationContext,
+        kind: &str,
+    ) -> Result<Vec<Inspection>, String> {
+        let candidates = self.contribution_candidates(principal, kind, None, None)?;
+        Ok(candidates
+            .into_iter()
+            .filter_map(|version| match self.verified_inspection(&version) {
+                Ok(inspection) => Some(inspection),
+                Err(error) => {
+                    self.service.record_log(
+                        &version.package_id,
+                        devworks_core::protocol::records::Severity::Warning,
+                        "PackageContributionUnavailable",
+                        "The installed package contribution could not be verified",
+                        Some(error),
+                    );
+                    None
+                }
+            })
+            .collect())
+    }
+
+    pub(super) fn contribution_current(
+        &self,
+        principal: &InvocationContext,
+        kind: &str,
+        identity: (&str, &str),
+    ) -> Result<bool, String> {
+        Ok(!self
+            .contribution_candidates(principal, kind, None, Some(identity))?
+            .is_empty())
     }
 }
