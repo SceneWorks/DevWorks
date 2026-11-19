@@ -9,10 +9,18 @@
 - Keep each non-feature PR at or under 5000 hand-written changed lines. The `PR size` workflow enforces this (`tools/pr-size/check.py`); files marked `linguist-generated` in `.gitattributes` are not counted, and PRs from `feature/*` branches are not checked.
 - Every item still needs its own tests and acceptance report. Land incomplete capabilities unwired (not reachable from the UI or agent tools) rather than holding a long-lived draft PR.
 
-## Review guidelines
+## Code review rules
 
-- Skip files marked `linguist-generated` in `.gitattributes` (contract schemas and fixtures under `docs/architecture/contracts/`, recorded output under `docs/architecture/validation/`, `@generated` Rust from `tools/core-codegen/generate.py`, `domain_generated.rs`, lockfiles). Review their sources instead: `tools/contracts-eval/domain-spec.json`, `docs/architecture/contracts/family-coverage.json` and the generators.
-- Report only defects introduced by this PR's hand-written changes. Do not report pre-existing issues or hardening ideas outside the diff.
+Apply these rules to automated and human PR reviews.
+
+- Report only defects introduced by the PR's hand-written changes. Skip files marked `linguist-generated` in `.gitattributes`, including generated contracts, fixtures, Rust, and lockfiles. Review the inputs and generators that produce them, including `tools/contracts-eval/domain-spec.json` and `docs/architecture/contracts/family-coverage.json` where applicable.
+- Trace changed behavior from its normal entry points, such as the desktop UI, agent tools, MCP, or scheduled jobs, through affected callers and operation contracts. Check compatibility with existing inputs, saved data, and supported contract revisions. Follow failure, cancellation, and retry paths through any state changes. If an important regression lacks coverage, name the specific case a test should exercise.
+- Look for an existing shared implementation before accepting a new path. Flag copied logic, parallel implementations, and fixes limited to one caller when the shared implementation can handle the behavior. Cite the shared path and name the behavior that could diverge.
+- For model and provider changes, check that requests use the shared inference router for validation, model selection, admission, retries, and usage accounting where applicable. Check that cancellation and failures propagate to the job or session that owns the request. Keep provider-specific authentication, wire formats, streaming, and error translation behind existing adapter interfaces. Reuse existing download and loading paths if the change manages local models. Prefer extending the shared path when it lacks required behavior. A separate path needs a concrete model or provider constraint and should keep common behavior in shared code.
+- Respect the boundary between core services, ports, and adapters. Keep one owner for each piece of shared state and check that changes go through that owner's operations and transactions. Flag obsolete branches or fallbacks left by the change when they can route callers through stale behavior or obscure the active path.
+- Trace affected trust boundaries, including MCP and extension requests, tool calls through the broker, and file and network access. Flag missing authorization, unchecked paths or URLs, secrets in logs or persisted diagnostics, and invalid inputs that bypass shared validation.
+- Check the cost of changed hot paths. Flag repeated database queries, graph traversal, file reads or hashing, provider requests or downloads, blocking I/O on async executor threads, large buffer copies, and unbounded concurrency when they have a concrete impact.
+- Anchor each finding to a changed line. Explain the concrete failure or maintenance risk, suggest the smallest practical fix, and match severity to the impact. State what would verify any material uncertainty.
 
 <!-- dev-host -->
 ## Host storage (dev-host)
