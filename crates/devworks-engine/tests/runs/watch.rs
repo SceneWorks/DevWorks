@@ -2785,6 +2785,9 @@ fn an_attached_watcher_is_read_only_and_delivers_an_observed_external_exit() {
         let refused = create(&different, "other-birth", 9);
         assert!(matches!(refused, CommandReply::Recorded { receipt, .. }
             if matches!(&receipt.decision, DomainDecision::Refused { fault } if fault.code == DomainErrorCode::NotFound)));
+        let malformed = create("not-a-birth-token", "malformed-birth", 9);
+        assert!(matches!(malformed, CommandReply::Recorded { receipt, .. }
+            if matches!(&receipt.decision, DomainDecision::Refused { fault } if fault.code == DomainErrorCode::InvalidArgument)));
         let old = create(&identity.birth, "old-revision", 8);
         assert!(matches!(old, CommandReply::Rejected { .. }), "{old:?}");
         let watcher = applied(&create(&identity.birth, "attached", 9));

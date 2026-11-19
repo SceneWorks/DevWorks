@@ -183,6 +183,7 @@ pub enum ExternalProcessStatus {
     Missing,
     /// The PID belongs to another process. Observations of it say nothing about this watch.
     Different,
+    InvalidIdentity,
     Unavailable,
 }
 

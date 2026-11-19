@@ -4509,7 +4509,7 @@ fn required_child_policy_refuses_a_set_id_program_before_any_target_effect() {
 
 #[test]
 fn an_external_process_watch_only_reports_exit_from_its_verified_registration() {
-    use devworks_core::ports::process::ExternalProcessStatus as Status;
+    use devworks_core::ports::process::{ExternalProcessStatus as Status, NativeIdentity};
     use std::io::Write;
     use std::process::{Child, Command, Stdio};
 
@@ -4545,6 +4545,14 @@ fn an_external_process_watch_only_reports_exit_from_its_verified_registration() 
     let identity = NativeProcessHost::identity(child.0.id()).expect("native birth token");
     let host = NativeProcessHost;
     assert_eq!(host.inspect_external(&identity), Status::Running);
+    let malformed = NativeIdentity {
+        birth: "not-a-birth-token".into(),
+        ..identity.clone()
+    };
+    assert!(matches!(
+        host.watch_external(&malformed),
+        Err(Status::InvalidIdentity)
+    ));
     let mut wrong = identity.clone();
     let last = wrong.birth.pop().unwrap();
     wrong.birth.push(if last == '0' { '1' } else { '0' });
@@ -4554,16 +4562,9 @@ fn an_external_process_watch_only_reports_exit_from_its_verified_registration() 
         Err(Status::Different)
     ));
 
-    let mut registration = host
-        .watch_external(&identity)
-        .ok()
-        .expect("native registration");
+    let mut registration = host.watch_external(&identity).expect("native registration");
     assert_eq!(registration.poll_exit().unwrap(), None);
-    drop(
-        host.watch_external(&identity)
-            .ok()
-            .expect("second registration"),
-    );
+    drop(host.watch_external(&identity).expect("second registration"));
     assert!(
         child.0.try_wait().unwrap().is_none(),
         "dropping a watch does not stop its process"

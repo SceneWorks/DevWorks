@@ -866,6 +866,9 @@ impl WatchService {
             }
             Some(Ok(Prepped::Attached(prepared))) => match prepared {
                 Ok(_) => {}
+                Err(ExternalProcessStatus::InvalidIdentity) => {
+                    return refuse(tx, DomainErrorCode::InvalidArgument, "attached_process");
+                }
                 Err(ExternalProcessStatus::Unavailable) => {
                     return refuse(tx, DomainErrorCode::PermissionDenied, "attached_process");
                 }

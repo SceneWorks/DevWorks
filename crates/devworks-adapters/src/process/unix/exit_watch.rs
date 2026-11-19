@@ -9,10 +9,10 @@ use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 
 pub(in crate::process) fn inspect_external(identity: &NativeIdentity) -> Status {
     let Ok(pid) = libc::pid_t::try_from(identity.pid) else {
-        return Status::Unavailable;
+        return Status::InvalidIdentity;
     };
     if pid <= 0 || !valid_recorded_birth(&identity.birth) {
-        return Status::Unavailable;
+        return Status::InvalidIdentity;
     }
     match observed_start_time(pid, true) {
         Ok(Some(birth)) if birth != identity.birth => return Status::Different,

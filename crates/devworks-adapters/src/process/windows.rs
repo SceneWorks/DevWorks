@@ -383,6 +383,7 @@ impl Drop for JobTree {
 enum OpenError {
     Missing,
     Different,
+    InvalidIdentity,
     Unavailable(String),
 }
 
@@ -408,9 +409,7 @@ fn verified_handle(identity: &NativeIdentity, access: u32) -> Result<Owned, Open
         .parse::<u64>()
         .is_ok_and(|n| n.to_string() == identity.birth)
     {
-        return Err(OpenError::Unavailable(
-            "the recorded start time was unavailable".into(),
-        ));
+        return Err(OpenError::InvalidIdentity);
     }
     let handle = open_process(identity.pid, access)?;
     match creation_time(handle.0) {
@@ -425,6 +424,9 @@ fn verified_handle(identity: &NativeIdentity, access: u32) -> Result<Owned, Open
 fn open_verified(identity: &NativeIdentity, access: u32) -> Result<Owned, Probe> {
     verified_handle(identity, access).map_err(|error| match error {
         OpenError::Missing | OpenError::Different => Probe::Gone,
+        OpenError::InvalidIdentity => {
+            Probe::Unknown("the recorded start time was unavailable".into())
+        }
         OpenError::Unavailable(reason) => Probe::Unknown(reason),
     })
 }
@@ -474,11 +476,15 @@ impl ExternalProcessWatch for ExitWatch {
 pub(super) fn watch_external(
     identity: &NativeIdentity,
 ) -> Result<Box<dyn ExternalProcessWatch>, ExternalProcessStatus> {
+    if identity.pid == 0 {
+        return Err(ExternalProcessStatus::InvalidIdentity);
+    }
     verified_handle(identity, PROCESS_SYNCHRONIZE)
         .map(|handle| Box::new(ExitWatch(handle)) as Box<dyn ExternalProcessWatch>)
         .map_err(|error| match error {
             OpenError::Missing => ExternalProcessStatus::Missing,
             OpenError::Different => ExternalProcessStatus::Different,
+            OpenError::InvalidIdentity => ExternalProcessStatus::InvalidIdentity,
             OpenError::Unavailable(_) => ExternalProcessStatus::Unavailable,
         })
 }
