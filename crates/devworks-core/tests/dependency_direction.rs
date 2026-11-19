@@ -423,10 +423,15 @@ const ALLOWED: &[(&str, [usize; 4], &str)] = &[
         "monotonic timers of the process owner's bounded waits",
     ),
     (
+        "services/watch/file_scan.rs",
+        [3, 0, 0, 0],
+        "bounded reads and identity checks for a user-selected regular file outside the \
+         port roots, opened without following symlinks or blocking on a FIFO on Unix",
+    ),
+    (
         "services/watch/mod.rs",
-        [3, 0, 2, 0],
-        "reads the tail of a watched log file with a no-follow, non-blocking open (the file \
-         is the user's, outside every port's root); plus monotonic pass deadlines",
+        [0, 0, 2, 0],
+        "monotonic deadlines for watcher passes",
     ),
     (
         "services/web/fetch.rs",
