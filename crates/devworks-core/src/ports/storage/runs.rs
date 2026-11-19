@@ -661,6 +661,13 @@ pub trait RunRead {
         after: Option<&AssignmentId>,
         limit: u16,
     ) -> Result<Vec<StoredAssignment>, StorageError>;
+    /// Root-owned child assignments with the given stored role, used to account for dedicated slots.
+    fn child_assignments_with_role(
+        &self,
+        root: &RootId,
+        role_id: &str,
+        live_only: bool,
+    ) -> Result<Vec<AssignmentId>, StorageError>;
     fn instruction(&self, id: &Id) -> Result<Option<StoredInstruction>, StorageError>;
     /// The root's instructions with sequence greater than `after_seq`, in order.
     fn instructions(

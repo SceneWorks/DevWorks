@@ -1102,26 +1102,27 @@ impl AgentService {
         if !plan_review {
             retained::handover_direct(tx, &session.id)?;
         }
-        let assignment = self
-            .runs
-            .register_child_assignment(
-                tx,
-                ctx.principal(),
-                NewRunAssignment {
-                    root: root.id.clone(),
-                    work: input
-                        .task_ids
-                        .0
-                        .first()
-                        .cloned()
-                        .map(crate::protocol::RootId)
-                        .unwrap_or_else(|| root.id.clone()),
-                    parent: Some(parent),
-                    session: session.id,
-                    scope_key: None,
-                },
-            )?
-            .map_err(fenced)?;
+        let assignment = NewRunAssignment {
+            root: root.id.clone(),
+            work: input
+                .task_ids
+                .0
+                .first()
+                .cloned()
+                .map(crate::protocol::RootId)
+                .unwrap_or_else(|| root.id.clone()),
+            parent: Some(parent),
+            session: session.id,
+            scope_key: None,
+        };
+        let assignment = if plan_review {
+            self.runs
+                .register_plan_review_assignment(tx, ctx.principal(), assignment)
+        } else {
+            self.runs
+                .register_child_assignment(tx, ctx.principal(), assignment)
+        }?
+        .map_err(fenced)?;
         tx.runs().insert_agent_assignment_context(&StoredAgentAssignmentContext {
             assignment_id:assignment.id.clone(),project_id:root.project_id.clone(),
             role_id,role_instructions,

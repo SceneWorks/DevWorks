@@ -14,7 +14,9 @@ use devworks_core::protocol::{AssignmentId, Counter, DomainErrorCode, Id, Revisi
 use devworks_core::services::agents::AgentService;
 use devworks_core::services::kernel::Failure;
 use devworks_core::services::runs::root_assignments;
-use devworks_core::services::runs::substrate::{ActivationFailure, Fenced};
+use devworks_core::services::runs::substrate::{
+    ActivationFailure, Fenced, PLAN_REVIEW_SLOTS, plan_review_assignments,
+};
 use std::collections::{HashMap, HashSet};
 use std::future::Future;
 use std::pin::Pin;
@@ -307,10 +309,14 @@ async fn supervise_children(
                     snapshot.configuration(),
                     &work.project_id,
                 )?;
-                Ok((root_assignments(snapshot.runs(), &target_root, true)?, cap))
+                Ok((
+                    root_assignments(snapshot.runs(), &target_root, true)?,
+                    plan_review_assignments(snapshot.runs(), &target_root, true)?,
+                    cap,
+                ))
             })
             .await;
-            let (assignments, cap) = match read {
+            let (assignments, reviews, cap) = match read {
                 Ok(result) => result,
                 Err(error) => {
                     fatal = Some(failed(error));
@@ -354,16 +360,27 @@ async fn supervise_children(
             if fatal.is_some() {
                 continue;
             }
-            let active = live_children.iter().filter(|child| child.slot_held).count();
-            let launching = live_children
-                .iter()
-                .filter(|child| {
-                    running.contains(&child.id) && child.state != AssignmentState::Active
-                })
-                .count();
-            let mut available = cap.saturating_sub(active + launching);
+            let mut worker_slots = cap;
+            let mut review_slots = PLAN_REVIEW_SLOTS;
             for child in &live_children {
-                if available == 0
+                if child.slot_held
+                    || (running.contains(&child.id) && child.state != AssignmentState::Active)
+                {
+                    let slots = if reviews.contains(&child.id) {
+                        &mut review_slots
+                    } else {
+                        &mut worker_slots
+                    };
+                    *slots = slots.saturating_sub(1);
+                }
+            }
+            for child in &live_children {
+                let available = if reviews.contains(&child.id) {
+                    &mut review_slots
+                } else {
+                    &mut worker_slots
+                };
+                if *available == 0
                     || !matches!(
                         child.state,
                         AssignmentState::Ready | AssignmentState::Waiting
@@ -375,7 +392,7 @@ async fn supervise_children(
                 {
                     continue;
                 }
-                available -= 1;
+                *available -= 1;
                 let worker = launcher.clone();
                 let id = child.id.clone();
                 let activation = activation_id.clone();

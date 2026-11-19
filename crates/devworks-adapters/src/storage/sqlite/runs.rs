@@ -939,6 +939,28 @@ macro_rules! run_reads {
                     params![root.0.as_str(), after.map_or("", |a| a.0.as_str()), n],
                 )
             }
+            fn child_assignments_with_role(
+                &self,
+                root: &RootId,
+                role_id: &str,
+                live_only: bool,
+            ) -> Result<Vec<AssignmentId>, StorageError> {
+                let live = if live_only {
+                    "AND assignments.state IN ('Ready','Active','Waiting')"
+                } else {
+                    ""
+                };
+                ids(
+                    self.conn,
+                    &format!(
+                        "SELECT assignments.id FROM assignments \
+                         JOIN agent_assignment_context AS context ON context.assignment_id=assignments.id \
+                         WHERE assignments.root_id=?1 AND assignments.purpose='Child' AND context.role_id=?2 {live}"
+                    ),
+                    params![root.0.as_str(), role_id],
+                )
+                .map(|ids| ids.into_iter().map(AssignmentId).collect())
+            }
             fn instruction(&self, id: &Id) -> Result<Option<StoredInstruction>, StorageError> {
                 Ok(instructions(self.conn, "id=?1", [id.as_str()])?
                     .into_iter()
