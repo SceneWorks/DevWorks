@@ -477,7 +477,7 @@ mod coordinator_wait {
             app.dispatcher().stop();
             super::super::plan_review_tests::seed_source(&fx, &app);
             seed_reviewed_plan(&fx, &app);
-            super::super::watch_tests::seed_route(&fx);
+            seed_local_route(&fx);
             let frame = json!({
                 "mode": "Command", "protocol": PROTOCOL, "schemaRevision": 3, "requestKey": fx.key(),
                 "body": {"kind": "router.configure", "action": {"kind": "Tier", "tier": "High",
