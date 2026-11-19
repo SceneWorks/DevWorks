@@ -1696,6 +1696,27 @@ fn the_first_output_match_completes_a_process_watcher() {
             "{record}"
         );
         assert_eq!(counter_at(&record, "/matches"), Some(1), "{record}");
+        let matched_line = "the server is READY";
+        assert!(
+            record["outputTail"]
+                .as_str()
+                .unwrap_or_default()
+                .contains(matched_line),
+            "{record}"
+        );
+        let session = ctx.session_id().unwrap().clone();
+        app.watchers().unwrap().deliver().unwrap();
+        let delivered = notices(&fx, &session);
+        assert_eq!(delivered.len(), 1, "{delivered:?}");
+        let artifact = serde_json::from_value(delivered[0]["artifact"].clone()).unwrap();
+        let (notice, _) = app
+            .artifacts()
+            .read_exact(app.store().as_ref(), &ctx, &artifact, 8_000)
+            .unwrap();
+        assert!(
+            String::from_utf8_lossy(&notice).contains(matched_line),
+            "{delivered:?}"
+        );
         let process = watcher["process"]["processId"].as_str().unwrap();
         let tree = read(&**app.store(), |s| s.resources().process(&id(process))).unwrap();
         assert_eq!(
@@ -1703,6 +1724,60 @@ fn the_first_output_match_completes_a_process_watcher() {
             ProcessPhase::Running,
             "the process keeps running"
         );
+        app.shutdown().await;
+    });
+}
+
+#[test]
+fn a_process_match_observed_after_exit_keeps_the_final_tail() {
+    let _native_case = native_runtime_case();
+    let fx = Fx::new();
+    let work = fx.h.root.with_extension("watch-final-match-work");
+    std::fs::create_dir_all(work.join("work")).unwrap();
+    let work = work.canonicalize().unwrap();
+    runtime().block_on(async {
+        let (composed, _wired) = watch_composition(&fx, &work);
+        let app = Arc::new(boot(composed).await.unwrap());
+        let (ctx, _) = agent_context(&fx);
+        let watcher = create_matching(
+            &app,
+            &ctx,
+            "printf 'server READY'; exit 3",
+            json!({"pattern": "READY", "each": false}),
+            "w-ready-after-exit",
+        );
+        let process = id(watcher["process"]["processId"].as_str().unwrap());
+        let tools = app.process_tools().unwrap();
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        loop {
+            let recorded = read(&**app.store(), |s| {
+                s.operations().operation(&OperationId(process.clone()))
+            })
+            .is_some_and(|op| {
+                op.attempts
+                    .iter()
+                    .flat_map(|a| &a.observations)
+                    .any(|o| o.get("watchOutcome").is_some())
+            });
+            if recorded && tools.live_tail(&process).is_none() {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "process did not finish"
+            );
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        let watcher_id = watcher["id"].as_str().unwrap();
+        settle_all(&app, &ctx, &[watcher_id]).await;
+        let record = inspect(&app, &ctx, watcher_id);
+        assert_eq!(record["outcome"]["kind"], json!("Succeeded"), "{record}");
+        assert_eq!(
+            record["outcome"]["detail"],
+            json!("the pattern matched"),
+            "{record}"
+        );
+        assert_eq!(record["outputTail"], json!("server READY"), "{record}");
         app.shutdown().await;
     });
 }
@@ -1772,6 +1847,103 @@ fn a_file_match_completes_or_reports_each_coalesced_match() {
         assert_eq!(counts, vec![Some(3), Some(3)], "the next report carries all three");
         assert_eq!(inspect(&app, &ctx, each_id)["state"], json!("Active"), "still watching");
         assert_eq!(counter_at(&inspect(&app, &ctx, each_id), "/matches"), Some(6));
+        app.shutdown().await;
+    });
+}
+
+#[test]
+fn file_watchers_report_an_unterminated_match_once() {
+    let _native_case = native_runtime_case();
+    let fx = Fx::new();
+    let work = fx.h.root.with_extension("watch-file-unterminated-work");
+    std::fs::create_dir_all(work.join("work")).unwrap();
+    let work = work.canonicalize().unwrap();
+    let log = work.join("work/status");
+    std::fs::write(&log, b"READY").unwrap();
+    runtime().block_on(async {
+        let (composed, _wired) = watch_composition(&fx, &work);
+        let app = Arc::new(boot(composed).await.unwrap());
+        let (ctx, _) = agent_context(&fx);
+        let watchers = app.watchers().unwrap();
+        let file = json!({"path": {"rootId": "watch-root", "relative": "work/status"}});
+        let first = command(&app, &ctx, "watch.create",
+            json!({"file": file, "matching": {"pattern": "READY", "each": false}}), "w-status-first");
+        let each = command(&app, &ctx, "watch.create",
+            json!({"file": file, "matching": {"pattern": "READY", "each": true, "minIntervalMs": "1000"}}), "w-status-each");
+        let first_id = first["id"].as_str().unwrap();
+        let each_id = each["id"].as_str().unwrap();
+        watchers.settle().unwrap();
+        let record = inspect(&app, &ctx, first_id);
+        assert_eq!(record["outcome"]["kind"], json!("Succeeded"), "{record}");
+        let session = ctx.session_id().unwrap().clone();
+        assert_eq!(watcher_events_of(&app, &session, each_id)[0].0, Some(1));
+
+        fx.h.advance(1000);
+        watchers.settle().unwrap();
+        assert_eq!(watcher_events_of(&app, &session, each_id).len(), 1);
+        use std::io::Write;
+        let mut file = std::fs::OpenOptions::new().append(true).open(&log).unwrap();
+        file.write_all(b"\n").unwrap();
+        watchers.settle().unwrap();
+        assert_eq!(watcher_events_of(&app, &session, each_id).len(), 1);
+        file.write_all(b"REA").unwrap();
+        watchers.settle().unwrap();
+        file.write_all(b"DY\n").unwrap();
+        watchers.settle().unwrap();
+        let events = watcher_events_of(&app, &session, each_id);
+        assert_eq!(events.iter().map(|e| e.0).collect::<Vec<_>>(), vec![Some(1), Some(1)]);
+        assert_eq!(counter_at(&inspect(&app, &ctx, each_id), "/matches"), Some(2));
+        app.shutdown().await;
+    });
+}
+
+#[test]
+fn file_watchers_scan_equal_and_larger_replacements_from_the_start() {
+    let _native_case = native_runtime_case();
+    let fx = Fx::new();
+    let work = fx.h.root.with_extension("watch-file-rotation-work");
+    std::fs::create_dir_all(work.join("work")).unwrap();
+    let work = work.canonicalize().unwrap();
+    let log = work.join("work/app.log");
+    std::fs::write(&log, b"wait\nwait\n").unwrap();
+    runtime().block_on(async {
+        let (composed, _wired) = watch_composition(&fx, &work);
+        let app = Arc::new(boot(composed).await.unwrap());
+        let (ctx, _) = agent_context(&fx);
+        let watchers = app.watchers().unwrap();
+        let watcher = command(
+            &app,
+            &ctx,
+            "watch.create",
+            json!({
+                "file": {"path": {"rootId": "watch-root", "relative": "work/app.log"}},
+                "matching": {"pattern": "done", "each": true, "minIntervalMs": "1000"}
+            }),
+            "w-rotation",
+        );
+        let watcher_id = watcher["id"].as_str().unwrap();
+        watchers.settle().unwrap();
+        assert_eq!(
+            counter_at(&inspect(&app, &ctx, watcher_id), "/matches").unwrap_or(0),
+            0
+        );
+
+        std::fs::rename(&log, log.with_extension("log.1")).unwrap();
+        std::fs::write(&log, b"done\ndone\n").unwrap();
+        watchers.settle().unwrap();
+        assert_eq!(
+            counter_at(&inspect(&app, &ctx, watcher_id), "/matches"),
+            Some(2)
+        );
+
+        std::fs::rename(&log, log.with_extension("log.2")).unwrap();
+        std::fs::write(&log, b"done\ndone\ndone\n").unwrap();
+        fx.h.advance(1000);
+        watchers.settle().unwrap();
+        assert_eq!(
+            counter_at(&inspect(&app, &ctx, watcher_id), "/matches"),
+            Some(5)
+        );
         app.shutdown().await;
     });
 }

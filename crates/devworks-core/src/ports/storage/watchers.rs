@@ -97,14 +97,26 @@ pub struct StoredMatch {
     pub each: bool,
     /// Least time between two match events.
     pub min_interval_ms: Option<i64>,
-    /// Bytes of the source already scanned (complete lines only).
+    /// File bytes consumed through the last completed line or bounded scan window.
     pub scanned: i64,
+    /// File-specific progress, absent for process watches and older stored file watches.
+    pub file_scan: Option<StoredFileScan>,
     /// Matches found but not yet reported in an event.
     pub pending: i64,
     /// Matches found in all.
     pub total: i64,
     /// When the last match event was recorded.
     pub last_event_at_ms: Option<i64>,
+}
+
+/// Identity and provisional progress beyond a file watcher's committed scan offset.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct StoredFileScan {
+    pub identity: crate::authority::destructive::FileIdentity,
+    /// Bytes read including the current unterminated line.
+    pub read_through: i64,
+    /// End of the last reported match in that line's decoded text.
+    pub last_match_end: Option<usize>,
 }
 
 /// A probe watcher's command, condition and schedule. Its current run (if any) is the watcher's

@@ -54,3 +54,7 @@ devworks-test-support = { path = "../devworks-test-support" }
 # Opening a watched file without blocking on a FIFO; version already resolved in the workspace.
 libc = "=0.2.191"
 
+[target.'cfg(windows)'.dependencies]
+# Obtain the watched object's identity from its open file handle.
+windows-sys = { version = "=0.61.2", features = ["Win32_Storage_FileSystem"] }
+

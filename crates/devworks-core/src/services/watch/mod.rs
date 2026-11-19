@@ -39,7 +39,7 @@ use crate::services::diagnostics::{DiagnosticService, LogEntry};
 use crate::services::kernel::{Refusal, counter, decided, query_fault, rev};
 use crate::services::process::STOPPED_ON_REQUEST;
 use crate::services::process::tools::{
-    BindingRefusal, ExecuteOrigin, MatchCounter, ProcessToolService, binding_refusal,
+    BindingRefusal, ExecuteOrigin, ProcessToolService, binding_refusal,
 };
 use crate::services::runs::ControlService;
 use crate::services::sessions::transcript::{BatchOutcome, SessionBatch, SessionWriter};
@@ -51,6 +51,9 @@ use base64::Engine;
 use serde_json::{Value, json};
 use std::collections::HashMap;
 use std::sync::Arc;
+
+mod file_scan;
+use file_scan::{FileScan, scan_file};
 
 /// Store bound on an event body (`watcher_events.payload_json`), with room for its envelope.
 const MAX_EVENT_PAYLOAD_BYTES: usize = 200_000;
@@ -479,30 +482,28 @@ impl WatchService {
         committed
     }
 
-    /// The matches found since the watcher last recorded them: the running process's count so
-    /// far, or the complete lines appended to the file since its scanned offset.
+    /// Reads new file matches or the running process's current match count. For first-match
+    /// runs the live tail is already redacted by the process service.
     fn match_update(&self, watcher: &StoredWatcher) -> Option<MatchUpdate> {
         let rule = watcher.matching.as_ref()?;
-        match watcher.source_kind.as_str() {
-            "File" => {
-                let path = watcher.file_path.as_deref()?;
-                let (to, found) = scan_file(path, rule.scanned, &rule.pattern)?;
-                (to != rule.scanned).then_some(MatchUpdate {
-                    from: rule.scanned,
-                    to,
-                    total: rule.total + found,
-                })
-            }
-            _ => {
-                let run = watcher.process_operation_id.as_ref()?;
-                let total = self.processes.live_match_count(&run.0)?;
-                (total > rule.total).then_some(MatchUpdate {
-                    from: rule.scanned,
-                    to: rule.scanned,
-                    total,
-                })
-            }
+        if watcher.source_kind == "File" {
+            let path = watcher.file_path.as_deref()?;
+            let scan = scan_file(path, rule.scanned, rule.file_scan, &rule.pattern)?;
+            return Some(MatchUpdate::File {
+                revision: watcher.revision,
+                scan,
+            });
         }
+        let run = watcher.process_operation_id.as_ref()?;
+        let total = self.processes.live_match_count(&run.0)?;
+        (total > rule.total).then(|| MatchUpdate::Process {
+            total,
+            tail: if rule.each {
+                None
+            } else {
+                self.processes.live_tail(&run.0)
+            },
+        })
     }
 
     /// The last pass of an orderly shutdown, after owned process trees were stopped (WATCH-08):
@@ -866,6 +867,7 @@ impl WatchService {
                             .map_or(DEFAULT_MATCH_INTERVAL_MS, |ms| ms.get()),
                     ),
                     scanned: 0,
+                    file_scan: None,
                     pending: 0,
                     total: 0,
                     last_event_at_ms: None,
@@ -1566,30 +1568,8 @@ fn step_in(
         return Ok(Step::Nothing);
     }
     let now = tx.now_ms();
-    // Matches first: a first-match watcher completes on its first, an each-match watcher records
-    // them and reports them no more often than its minimum interval.
-    // A pass that settles the watcher reports no intermediate event first: its pending matches
-    // ride on the outcome, so the outcome is never delivered ahead of a report saying the
-    // source is still watched. An intermediate report does not end the pass otherwise.
-    let ending = match watcher.source_kind.as_str() {
-        "File" => watcher.expires_at_ms.is_some_and(|end| now >= end),
-        "Process" => match watcher.process_operation_id.clone() {
-            Some(run) => match tx.operations().operation(&run)? {
-                Some(operation) => {
-                    let process = tx.resources().process(&run.0)?;
-                    observe(&watcher, &operation, process.as_ref(), monitoring).is_some()
-                }
-                None => false,
-            },
-            None => false,
-        },
-        _ => false,
-    };
-    if watcher.matching.is_some()
-        && let Some(Step::Settled) = matches_in(tx, &mut watcher, update, now, !ending)?
-    {
-        return Ok(Step::Settled);
-    }
+    // Apply matches before settlement. On an ending pass, coalesced matches ride on the
+    // outcome so a still-watching report can never arrive after the watcher ends.
     match watcher.source_kind.as_str() {
         "Timer" => {
             if watcher.due_at_ms.is_none_or(|due| now < due) {
@@ -1602,7 +1582,11 @@ fn step_in(
         }
         "Probe" => probe_step_in(tx, watcher, monitoring, processes, now),
         "File" => {
-            if watcher.expires_at_ms.is_none_or(|end| now < end) {
+            let ending = watcher.expires_at_ms.is_some_and(|end| now >= end);
+            if let Some(Step::Settled) = matches_in(tx, &mut watcher, update, now, !ending)? {
+                return Ok(Step::Settled);
+            }
+            if !ending {
                 return Ok(Step::Advanced);
             }
             let duration = Some((now - watcher.created_at_ms).max(0));
@@ -1623,22 +1607,24 @@ fn step_in(
                 return Ok(Step::Nothing);
             };
             let process = tx.resources().process(&operation_id.0)?;
-            let Some(observed) = observe(&watcher, &operation, process.as_ref(), monitoring) else {
+            let observed = observe(&watcher, &operation, process.as_ref(), monitoring);
+            // The final count includes bytes written after the live snapshot. If the process
+            // finished meanwhile, its redacted final tail is available with that count.
+            let update = match (&observed, final_matches(&operation)) {
+                (Some(observed), Some(total)) => Some(MatchUpdate::Process {
+                    total,
+                    tail: observed.tail.clone().map(|tail| (tail, observed.truncated)),
+                }),
+                _ => update,
+            };
+            if let Some(Step::Settled) =
+                matches_in(tx, &mut watcher, update, now, observed.is_none())?
+            {
+                return Ok(Step::Settled);
+            }
+            let Some(observed) = observed else {
                 return Ok(Step::Nothing);
             };
-            // The final count covers the output after the last pass read the live count.
-            if let (Some(rule), Some(total)) = (&watcher.matching, final_matches(&operation))
-                && total > rule.total
-            {
-                let update = MatchUpdate {
-                    from: rule.scanned,
-                    to: rule.scanned,
-                    total,
-                };
-                if let Some(step) = matches_in(tx, &mut watcher, Some(update), now, false)? {
-                    return Ok(step);
-                }
-            }
             let mut ended = observed.outcome;
             if watcher.matching.as_ref().is_some_and(|m| !m.each) {
                 let detail = match ended.detail.take() {
@@ -1767,13 +1753,16 @@ fn probe_step_in(
     Ok(Step::Advanced)
 }
 
-/// Matches found since a watcher last recorded them: its new total, and for a file the bytes
-/// scanned (complete lines) from `from` to `to`.
-#[derive(Clone, Copy, Debug)]
-struct MatchUpdate {
-    from: i64,
-    to: i64,
-    total: i64,
+/// A source observation made outside the store transaction.
+enum MatchUpdate {
+    File {
+        revision: i64,
+        scan: FileScan,
+    },
+    Process {
+        total: i64,
+        tail: Option<(Vec<u8>, bool)>,
+    },
 }
 
 /// Applies `update` to `watcher`'s match rule and records what it calls for: `Some(step)` when
@@ -1789,31 +1778,36 @@ fn matches_in(
     let Some(mut rule) = watcher.matching.clone() else {
         return Ok(None);
     };
-    let mut changed = false;
-    // Read outside this write: applied only if nothing recorded them meanwhile.
-    if let Some(update) = update
-        && update.from == rule.scanned
-        && update.total >= rule.total
-        && (update.total > rule.total || update.to != rule.scanned)
-    {
-        rule.pending += update.total - rule.total;
-        rule.total = update.total;
-        rule.scanned = update.to;
-        changed = true;
-    }
+    let (changed, tail) = match update {
+        // An older poll cannot overwrite a scan recorded by another pass.
+        Some(MatchUpdate::File { revision, scan }) if revision == watcher.revision => {
+            rule.pending += scan.found;
+            rule.total += scan.found;
+            rule.scanned = scan.scanned;
+            rule.file_scan = Some(scan.progress);
+            (true, None)
+        }
+        Some(MatchUpdate::Process { total, tail }) if total > rule.total => {
+            rule.pending += total - rule.total;
+            rule.total = total;
+            (true, tail)
+        }
+        _ => (false, None),
+    };
     if !rule.each && rule.total > 0 {
         rule.pending = 0;
         watcher.matching = Some(rule);
         let duration = Some((now - watcher.created_at_ms).max(0));
         let run = watcher.process_operation_id.clone();
         let matched = outcome("Succeeded", None, None, Some("the pattern matched"));
+        let (tail, truncated) = tail.map_or((None, false), |(bytes, cut)| (Some(bytes), cut));
         finish_in(
             tx,
             watcher.clone(),
             matched,
             duration,
-            None,
-            false,
+            tail,
+            truncated,
             run.as_ref(),
         )?;
         return Ok(Some(Step::Settled));
@@ -1872,56 +1866,6 @@ fn final_matches(operation: &OperationRecord) -> Option<i64> {
             .rev()
             .find_map(|o| o.pointer("/watchOutcome/matches").and_then(Value::as_i64))
     })
-}
-
-/// The matches of `pattern` in the complete lines appended to the file at `path` since byte
-/// `from` (from the start again if the file shrank): the offset scanned to, and the count.
-/// `None` while the file cannot be read (it may not exist yet).
-fn scan_file(path: &str, from: i64, pattern: &str) -> Option<(i64, i64)> {
-    use std::io::{Read, Seek, SeekFrom};
-    const MAX_READ: u64 = 16 * 1024 * 1024;
-    // The path was resolved under its registered root (directory canonical, no symlink); it
-    // must still resolve to itself, so a symlink placed there later cannot lead outside.
-    if std::fs::canonicalize(path).ok()? != std::path::Path::new(path) {
-        return None;
-    }
-    // Only a regular file is read, opened without blocking (a FIFO with no writer would stall
-    // every watcher's pass); the opened file is checked again.
-    if !std::fs::symlink_metadata(path).ok()?.file_type().is_file() {
-        return None;
-    }
-    let mut options = std::fs::OpenOptions::new();
-    options.read(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.custom_flags(libc::O_NONBLOCK);
-    }
-    let mut file = options.open(path).ok()?;
-    let metadata = file.metadata().ok()?;
-    if !metadata.is_file() {
-        return None;
-    }
-    let len = i64::try_from(metadata.len()).ok()?;
-    let from = if len < from { 0 } else { from };
-    if len == from {
-        return Some((from, 0));
-    }
-    file.seek(SeekFrom::Start(from as u64)).ok()?;
-    let mut bytes = Vec::new();
-    file.take(((len - from) as u64).min(MAX_READ))
-        .read_to_end(&mut bytes)
-        .ok()?;
-    let end = match bytes.iter().rposition(|b| *b == b'\n') {
-        Some(i) => i + 1,
-        // A line longer than one read is counted in pieces, so the scan moves past it.
-        None if bytes.len() as u64 == MAX_READ => bytes.len(),
-        None => return Some((from, 0)),
-    };
-    let mut counter = MatchCounter::new(pattern)?;
-    counter.feed(&bytes[..end]);
-    counter.finish();
-    Some((from + end as i64, counter.count()))
 }
 
 /// Whether a completed probe run meets its condition: the required exit code (0 when neither a
@@ -2785,14 +2729,55 @@ mod tests {
         bytes.extend_from_slice(b"\nERROR here\n");
         std::fs::write(&path, &bytes).unwrap();
         let path = path.to_string_lossy().into_owned();
-        let (to, found) = scan_file(&path, 0, "ERROR").unwrap();
+        let scan = scan_file(&path, 0, None, "ERROR").unwrap();
         assert_eq!(
-            (to, found),
+            (scan.scanned, scan.found),
             (16 * 1024 * 1024, 0),
             "the oversized window is passed"
         );
-        let (end, found) = scan_file(&path, to, "ERROR").unwrap();
-        assert_eq!((end, found), (bytes.len() as i64, 1));
+        let scan = scan_file(&path, scan.scanned, Some(scan.progress), "ERROR").unwrap();
+        assert_eq!((scan.scanned, scan.found), (bytes.len() as i64, 1));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_file_scan_checks_an_unconsumed_line_after_a_same_size_rewrite() {
+        let dir = scratch("rewrite");
+        let path = dir.join("status");
+        std::fs::write(&path, b"WAIT!").unwrap();
+        let path_text = path.to_str().unwrap();
+        let first = scan_file(path_text, 0, None, "READY").unwrap();
+        assert_eq!(first.found, 0);
+        assert_eq!(
+            scan_file(path_text, first.scanned, Some(first.progress), "READY"),
+            None
+        );
+
+        std::fs::write(&path, b"READY").unwrap();
+        let second = scan_file(path_text, first.scanned, Some(first.progress), "READY").unwrap();
+        assert_eq!(second.found, 1);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_file_scan_resets_its_offset_for_equal_and_larger_replacements() {
+        let dir = scratch("replacement");
+        let path = dir.join("watch.log");
+        std::fs::write(&path, b"wait\nwait\n").unwrap();
+        let path_text = path.to_str().unwrap();
+        let first = scan_file(path_text, 0, None, "done").unwrap();
+        assert_eq!(first.scanned, 10);
+        assert_eq!(first.found, 0);
+
+        std::fs::rename(&path, dir.join("watch.log.1")).unwrap();
+        std::fs::write(&path, b"done\ndone\n").unwrap();
+        let second = scan_file(path_text, first.scanned, Some(first.progress), "done").unwrap();
+        assert_eq!(second.found, 2);
+
+        std::fs::rename(&path, dir.join("watch.log.2")).unwrap();
+        std::fs::write(&path, b"done\ndone\ndone\n").unwrap();
+        let third = scan_file(path_text, second.scanned, Some(second.progress), "done").unwrap();
+        assert_eq!(third.found, 3);
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -2806,7 +2791,7 @@ mod tests {
         let link = dir.join("link.log");
         std::os::unix::fs::symlink(&outside, &link).unwrap();
         assert_eq!(
-            scan_file(&link.to_string_lossy(), 0, "ERROR"),
+            scan_file(&link.to_string_lossy(), 0, None, "ERROR"),
             None,
             "symlink refused"
         );
@@ -2818,7 +2803,7 @@ mod tests {
         assert!(status.success());
         // Returns at once (no writer would block an ordinary open).
         assert_eq!(
-            scan_file(&fifo.to_string_lossy(), 0, "ERROR"),
+            scan_file(&fifo.to_string_lossy(), 0, None, "ERROR"),
             None,
             "FIFO refused"
         );

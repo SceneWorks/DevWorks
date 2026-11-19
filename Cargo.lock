@@ -1272,6 +1272,7 @@ dependencies = [
  "sha2 0.11.1",
  "toml",
  "url",
+ "windows-sys 0.61.2",
  "yaml-rust2",
 ]
 
