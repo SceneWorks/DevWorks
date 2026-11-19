@@ -1337,6 +1337,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "devworks-rust-pack"
+version = "0.1.0"
+dependencies = [
+ "base64 0.22.1",
+ "devworks-adapters",
+ "devworks-core",
+ "devworks-extension-protocol",
+ "ed25519-dalek",
+ "libc",
+ "protobuf",
+ "scip",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "toml",
+]
+
+[[package]]
 name = "devworks-test-support"
 version = "0.1.0"
 dependencies = [

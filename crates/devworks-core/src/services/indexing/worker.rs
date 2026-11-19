@@ -283,6 +283,7 @@ impl IndexWorker {
             warnings: run.warnings.clone(),
             shares: BTreeMap::new(),
             semantic_packs: Vec::new(),
+            repository_semantics: Vec::new(),
         };
         exec.log(
             "claimed",

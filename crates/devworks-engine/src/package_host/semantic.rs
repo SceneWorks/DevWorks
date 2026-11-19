@@ -28,6 +28,7 @@ struct Pack {
     inspection: Inspection,
     meta: ContributionMeta,
     format: IndexFormat,
+    repository_source: bool,
     languages: Vec<String>,
 }
 
@@ -52,6 +53,7 @@ impl SemanticCatalog for PackageSemantics {
                 let Some(Contribution::Semantic {
                     meta,
                     format,
+                    source_mode,
                     languages,
                 }) = contribution
                     .verified_descriptor()
@@ -73,6 +75,7 @@ impl SemanticCatalog for PackageSemantics {
                     inspection: inspection.clone(),
                     meta,
                     format,
+                    repository_source: source_mode.is_some(),
                     languages: languages.iter().map(|id| id.as_str().to_owned()).collect(),
                 }));
             }
@@ -120,6 +123,11 @@ impl SemanticCatalog for PackageSemantics {
                     id: inspection.package_id.clone(),
                     name: inspection.package_id,
                     version: inspection.version,
+                    repository_source: inspection.contributions.iter().any(|entry| {
+                        entry
+                            .verified_descriptor()
+                            .is_some_and(|value| value["sourceMode"] == "Repository")
+                    }),
                     manifest_digest: Some(inspection.manifest_digest),
                     languages: languages.into_iter().collect(),
                     missing: if ready { Vec::new() } else { vec![reason] },
@@ -141,6 +149,7 @@ impl SemanticEnricher for Pack {
                 self.inspection.manifest_digest,
                 self.meta.id.as_str()
             ),
+            repository_source: self.repository_source,
             manifest_digest: Some(self.inspection.manifest_digest.clone()),
             missing: Vec::new(),
         }
@@ -157,8 +166,11 @@ impl SemanticEnricher for Pack {
             let text = std::str::from_utf8(file.bytes).map_err(|_| "source is not UTF-8")?;
             files.push(json!({"unit":file.unit,"language":file.language,"sha256":sha256_hex(file.bytes),"text":text}));
         }
-        let source = json!({"repositoryId":request.repository_id,"commit":request.commit,
+        let mut source = json!({"repositoryId":request.repository_id,"commit":request.commit,
             "captureDigest":request.capture_digest,"files":files});
+        if self.repository_source {
+            source["sourceMode"] = json!("Repository");
+        }
         let bytes = serde_json::to_vec(&source).map_err(|error| error.to_string())?;
         if bytes.len() as u64 > MAX_BYTES {
             return Err("the source batch exceeds the semantic artifact bound".into());
@@ -198,13 +210,13 @@ impl SemanticEnricher for Pack {
                 return Err("semantic indexing stopped before completion".into());
             }
             if let Some(outcome) = handle.wait(Duration::from_millis(200)) {
-                if !matches!(
-                    outcome,
-                    InvokeOutcome::Finished(InvocationOutcome::Completed { .. })
-                ) {
-                    return Err("the semantic helper did not complete".into());
+                match outcome {
+                    InvokeOutcome::Finished(InvocationOutcome::Completed { .. }) => break,
+                    InvokeOutcome::Finished(InvocationOutcome::Failed { code }) => {
+                        return Err(format!("semantic helper: {}", code.as_str()));
+                    }
+                    _ => return Err("the semantic helper did not complete".into()),
                 }
-                break;
             }
         }
         let (events, dropped) = handle.events();
@@ -263,7 +275,17 @@ impl SemanticEnricher for Pack {
                     .map_err(
                         |_| "the SCIP index reference does not match the declared output schema",
                     )?;
-                scip_units(&bytes, request.files)
+                let selected: Vec<_> = request
+                    .files
+                    .iter()
+                    .filter(|file| {
+                        self.languages
+                            .iter()
+                            .any(|language| language == file.language)
+                    })
+                    .cloned()
+                    .collect();
+                scip_units(&bytes, &selected)
             }
         }?;
         if !host.contribution_current(request.principal, "Semantic", (package, digest))? {

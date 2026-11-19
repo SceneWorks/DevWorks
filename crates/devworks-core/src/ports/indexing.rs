@@ -285,6 +285,8 @@ pub struct PackDescriptor {
     pub version: String,
     /// Exact approved manifest for a managed package.
     pub manifest_digest: Option<String>,
+    /// Needs context from the whole source capture, rather than independent file batches.
+    pub repository_source: bool,
     /// Toolchain prerequisites it found missing (empty: ready).
     pub missing: Vec<String>,
 }

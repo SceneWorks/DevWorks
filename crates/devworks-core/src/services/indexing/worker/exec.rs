@@ -27,6 +27,7 @@ pub(crate) struct Exec<'a> {
     /// staged (see [`group_members`]).
     pub shares: BTreeMap<String, FileExtract>,
     pub semantic_packs: Vec<Arc<dyn crate::ports::indexing::SemanticEnricher>>,
+    pub repository_semantics: Vec<semantic::RepositoryResult>,
 }
 
 impl Exec<'_> {
@@ -516,6 +517,11 @@ impl Exec<'_> {
         }
         self.semantic_packs = semantic::select(&env, &cfg, &repo_id).map_err(Stop::storage)?;
         let semantic_binding = semantic::binding(&self.semantic_packs);
+        let registry_binding = read_snapshot(&*env.store, &ReadOptions::default(), |read| {
+            let projects = read.projects().repository_projects(&repo_id)?;
+            semantic::registry_binding(read.packages(), &cfg, &projects)
+        })
+        .map_err(Stop::storage)?;
         let pointer = previous.as_ref().map_or(0, |(_, r)| *r);
         let parent = previous
             .as_ref()
@@ -571,6 +577,13 @@ impl Exec<'_> {
                 && p.manifest.get("extractorVersion").and_then(Value::as_i64)
                     == Some(EXTRACTOR_VERSION)
         });
+        let reuse_repository_semantics = reusable.is_some_and(|parent| {
+            parent.source_digest == head && !semantic::incomplete(&parent.manifest["coverage"])
+        });
+        let repository_semantics = self
+            .semantic_packs
+            .iter()
+            .any(|pack| pack.descriptor().repository_source);
         let total = units.len() as i64;
         let plan_digest = digest(&[
             &head,
@@ -584,16 +597,18 @@ impl Exec<'_> {
         ]);
         // The staging generation: the checkpoint of an earlier attempt when its plan still holds.
         let existing = match &self.run.generation_id {
-            Some(g) => read_snapshot(&*env.store, &ReadOptions::default(), |s| {
-                s.indexing().generation(g)
-            })
-            .map_err(Stop::storage)?
-            .filter(|g| {
-                g.state == GEN_STAGING
-                    && g.manifest.get("planDigest").and_then(Value::as_str)
-                        == Some(plan_digest.as_str())
-            }),
-            None => None,
+            Some(g) if !repository_semantics => {
+                read_snapshot(&*env.store, &ReadOptions::default(), |s| {
+                    s.indexing().generation(g)
+                })
+                .map_err(Stop::storage)?
+                .filter(|g| {
+                    g.state == GEN_STAGING
+                        && g.manifest.get("planDigest").and_then(Value::as_str)
+                            == Some(plan_digest.as_str())
+                })
+            }
+            _ => None,
         };
         let generation = match existing {
             Some(g) => g.id,
@@ -613,6 +628,7 @@ impl Exec<'_> {
                         "configDigest": cfg.digest, "configRevision": self.run.config_revision,
                         "extractorVersion": EXTRACTOR_VERSION, "planDigest": plan_digest,
                         "semanticBinding": semantic_binding,
+                        "semanticRegistryBinding": registry_binding,
                     }),
                 };
                 let id = stored.id.clone();
@@ -670,7 +686,13 @@ impl Exec<'_> {
                         && lang.as_deref() == u.language
                         && (env.artifacts.is_none() || u.oid.is_none() || *captured)
                 });
-            if same && u.previous.is_none() && !regroup.contains(u.key.as_str()) {
+            let rebuild_repository_semantics =
+                !reuse_repository_semantics && semantic::repository_unit(&self.semantic_packs, u);
+            if same
+                && u.previous.is_none()
+                && !regroup.contains(u.key.as_str())
+                && !rebuild_repository_semantics
+            {
                 inherit.push(u.key.clone());
             } else {
                 extract.push(u);
@@ -682,6 +704,23 @@ impl Exec<'_> {
             .filter(|(_, m)| m.iter().any(|u| pending.contains(u.key.as_str())))
             .collect();
         self.group_shares(&dir, &repo.name, &needed, None, &stop)?;
+        if extract
+            .iter()
+            .any(|unit| semantic::repository_unit(&self.semantic_packs, unit))
+        {
+            semantic::prepare_repository(
+                self,
+                semantic::SemanticBatch {
+                    root: &dir,
+                    commit: &head,
+                    capture: None,
+                    files: &[],
+                },
+                &units,
+                None,
+                &stop,
+            )?;
+        }
         let mut done = staged.len() as i64;
         if let Some(p) = reusable {
             for chunk in inherit.chunks(500) {
