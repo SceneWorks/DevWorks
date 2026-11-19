@@ -338,6 +338,13 @@ fn execute(
     if op.state != OperationState::Dispatching || op.capability != CAPABILITY {
         return EffectResult::Failed("not a dispatched package tool invocation".into());
     }
+    let workflow = match op.payload.get("workflow") {
+        Some(value) => match serde_json::from_value(value.clone()) {
+            Ok(workflow) => Some(workflow),
+            Err(_) => return EffectResult::Failed("invalid package workflow invocation".into()),
+        },
+        None => None,
+    };
     let Some(request) = Request::from_json(&op.payload) else {
         return EffectResult::Failed("invalid package tool invocation".into());
     };
@@ -392,14 +399,18 @@ fn execute(
         }
         let Some(session_id) = &request.session_id else {
             // A person's invocation has no session; the person must still be a registered human.
-            return Ok(kind == PrincipalKind::Human
-                && s.actors().actor_kind(&request.principal)? == Some(PrincipalKind::Human));
+            return Ok((kind == PrincipalKind::Human
+                || (kind == PrincipalKind::Host
+                    && workflow.is_some()
+                    && request.principal == info.host_actor))
+                && s.actors().actor_kind(&request.principal)? == Some(kind));
         };
         let session = s.sessions().session(session_id)?;
         Ok(session.is_some_and(|session| {
             !session.closed()
                 && session.agent_id == request.principal
                 && session.project_id == request.project_id
+                && (workflow.is_none() || session.root_id == request.root_id)
         }))
     });
     match current {
@@ -408,6 +419,15 @@ fn execute(
             return EffectResult::Failed("the call's authority or session changed".into());
         }
         Err(e) => return EffectResult::NotApplied(format!("{e:?}")),
+    }
+    if let Some(workflow) = &workflow {
+        let Ok(delivery) = serde_json::from_value(op.payload["deliveryId"].clone()) else {
+            return EffectResult::Failed("invalid workflow delivery binding".into());
+        };
+        if op.payload["restoreEpoch"].as_str() != Some(info.restore_epoch.to_string().as_str()) {
+            return EffectResult::Failed("the workflow's store was restored".into());
+        }
+        return host.execute_workflow(&ctx, op, &delivery, workflow);
     }
     let scope = match &request.project_id {
         Some(project) => match wire::Id::try_from(project.0.as_str().to_owned()) {
@@ -476,6 +496,78 @@ impl EffectExecutor for Effects {
                 Err(_) => EffectResult::Unknown("the package tool invocation panicked".into()),
             }
         })
+    }
+
+    fn completion_current(
+        &self,
+        tx: &mut dyn WriteTransaction,
+        operation: &OperationRecord,
+        evidence: &Value,
+    ) -> Result<bool, StorageError> {
+        let Some(plan) = operation.payload.get("workflow") else {
+            return Ok(true);
+        };
+        let plan = serde_json::from_value(plan.clone()).map_err(|error| {
+            StorageError::InvalidRecord(format!("workflow binding at settlement: {error}"))
+        })?;
+        let request = Request::from_json(&operation.payload)
+            .ok_or_else(|| StorageError::InvalidRecord("invalid workflow attribution".into()))?;
+        let kind = match request.principal_kind.as_str() {
+            "Agent" => PrincipalKind::Agent,
+            "Host" => PrincipalKind::Host,
+            "Human" => PrincipalKind::Human,
+            _ => return Ok(false),
+        };
+        let epoch = serde_json::from_value(operation.payload["restoreEpoch"].clone())
+            .map_err(|_| StorageError::InvalidRecord("invalid workflow store epoch".into()))?;
+        let context = HostIngress::new(&*self.store)
+            .context(
+                request.principal.clone(),
+                kind,
+                operation.id.0.clone(),
+                Id::new("package-tools").expect("static ingress"),
+                epoch,
+                Revision::new(1).expect("valid revision"),
+            )
+            .with_lineage(
+                request.project_id.clone(),
+                request.root_id.clone(),
+                request.assignment_id.clone(),
+            );
+        let authorization = Authorization::direct().fenced_by(request.fences);
+        if !devworks_core::authority::service::authorization_holds_in(tx, &context, &authorization)?
+            || tx.actors().actor_kind(&request.principal)? != Some(kind)
+        {
+            return Ok(false);
+        }
+        if let Some(id) = &request.session_id
+            && tx.sessions().session(id)?.is_none_or(|session| {
+                session.closed()
+                    || session.agent_id != request.principal
+                    || session.project_id != request.project_id
+                    || session.root_id != request.root_id
+            })
+        {
+            return Ok(false);
+        }
+        if let Some(id) = &request.assignment_id
+            && tx.runs().assignment(id)?.is_none_or(|assignment| {
+                !assignment.state.is_live()
+                    || assignment.parent_id.is_some()
+                    || Some(&assignment.root_id) != request.root_id.as_ref()
+                    || Some(&assignment.session_id) != request.session_id.as_ref()
+            })
+        {
+            return Ok(false);
+        }
+        let delivery: Id = serde_json::from_value(operation.payload["deliveryId"].clone())
+            .map_err(|_| StorageError::InvalidRecord("invalid workflow delivery binding".into()))?;
+        if tx.queue().entry(&delivery)?.is_none_or(|entry| {
+            entry.cancel_requested || entry.operation_id.as_ref() != Some(&operation.id)
+        }) {
+            return Ok(false);
+        }
+        devworks_core::services::packages::workflow::evidence_current(tx, &context, &plan, evidence)
     }
 
     fn observe(&self, _operation: OperationRecord) -> EffectFuture {

@@ -17,3 +17,7 @@ Read only the admitted source snapshot/registered worktree. Emit the declared fo
 Use small fixture repositories to test source edits, deletions, renamed files, invalid input, cancellation, missing prerequisites and stale source. Test one-shot producer I/O separately from the interactive package process protocol; their framing/lifetime need not be identical. Ordinary tests must not run model inference.
 
 Install and configure through [Add-ons](help:addons), inspect actual [Indexing](help:indexing) runs, and consult [Manifest](help:sdk-manifest) and [Protocol](help:sdk-protocol) before advertising a pack as supported.
+
+For configured semantic packages, the indexing worker sends an exact batch of eligible source text with its repository ID, commit, optional worktree capture digest, and each file's unit, language, and digest. Return one `SemanticIndex` event naming that invocation's source snapshot and an index artifact. A Native index contains a `units` list with each unit's definitions and relationships. Scip uses a binary SCIP index and a declared output schema for its `format`, `index`, and `sourceSnapshot` references. The worker checks paths and ranges against the captured source before publishing the generation. A failure appears in indexing coverage.
+
+If a project disables a semantic package for a repository shared with other projects, the next index build omits that package for the shared repository. Earlier results carry a stale package warning. Structural indexing and other eligible packages can continue.

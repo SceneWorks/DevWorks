@@ -207,6 +207,32 @@ pub trait Backend: Send + Sync {
     fn fetch_index_bundle(&self, _package: &str, _digest: &str) -> Result<PathBuf, String> {
         Err("packages are not available here".into())
     }
+    fn package_views(
+        &self,
+        _package: &str,
+        _digest: &str,
+    ) -> Result<devworks_engine::package_host::native_ui::NativeViews, String> {
+        Err("package views are not available here".into())
+    }
+    fn load_package_view_data(
+        &self,
+        _package: &str,
+        _digest: &str,
+        _view: &str,
+        _form: &serde_json::Value,
+    ) -> Result<devworks_engine::package_host::native_ui::ViewData, String> {
+        Err("package view data is not available here".into())
+    }
+    fn prepare_package_view_action(
+        &self,
+        _package: &str,
+        _digest: &str,
+        _view: &str,
+        _action: &str,
+        _form: &serde_json::Value,
+    ) -> Result<devworks_core::protocol::provider::ArtifactRef, String> {
+        Err("package view actions are not available here".into())
+    }
     /// The index source configuration of the workspace (or a project) section, read for the
     /// form that edits it through `indexing.configure_sources` (none without indexing).
     fn index_sources(
@@ -374,7 +400,9 @@ pub enum TaskOutput {
         value: serde_json::Value,
     },
     /// A prepared command frame (attachment, provider or package), not admitted yet.
-    Prepared { frame: Vec<u8> },
+    Prepared {
+        frame: Vec<u8>,
+    },
     /// A downloaded bundle stays owned until its artifact-save command is confirmed.
     PackagePrepared {
         frame: Vec<u8>,
@@ -387,7 +415,10 @@ pub enum TaskOutput {
         frame: Vec<u8>,
     },
     /// A decoded preview image (RGBA, unmultiplied).
-    Preview { size: [usize; 2], rgba: Vec<u8> },
+    Preview {
+        size: [usize; 2],
+        rgba: Vec<u8>,
+    },
     /// An authorized, volatile provider response snapshot.
     TextPreview(Option<devworks_engine::providers::live::LiveTurn>),
     /// A bounded convention editor or transfer task.
@@ -396,6 +427,11 @@ pub enum TaskOutput {
     Instruction(crate::instructions_ops::TaskResult),
     /// Package runtimes and indexes were refreshed.
     Refreshed,
+    PackageViews {
+        views: devworks_engine::package_host::native_ui::NativeViews,
+        images: std::collections::BTreeMap<String, eframe::egui::ColorImage>,
+    },
+    PackageViewData(devworks_engine::package_host::native_ui::ViewData),
     /// The text of an MCP resource or prompt a person opened in Settings.
     McpContent(String),
     /// What deleting a repository's folder would remove, for the person to review.

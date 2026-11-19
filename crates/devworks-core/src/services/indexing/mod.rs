@@ -90,7 +90,7 @@ use crate::fingerprint::sha256_hex;
 use crate::gateway::{AdmittedCommand, AdmittedQuery};
 use crate::locks::RwLockExt;
 use crate::operations::{OperationInput, indexing as iops};
-use crate::ports::indexing::{SemanticEnricher, SourceTree, StructuralParser};
+use crate::ports::indexing::{SemanticCatalog, SemanticEnricher, SourceTree, StructuralParser};
 use crate::ports::storage::*;
 use crate::ports::{
     Clock, CommandHandler, Decided, HandlerFailure, IdKind, IdSource, Preparation, Prepared,
@@ -207,6 +207,7 @@ pub struct IndexEnv {
     pub diagnostics: Option<Arc<DiagnosticService>>,
     /// Installed semantic language packs (items 24–27 register here).
     pub enrichers: RwLock<Vec<Arc<dyn SemanticEnricher>>>,
+    pub package_semantics: std::sync::OnceLock<Arc<dyn SemanticCatalog>>,
     pub settings: IndexSettings,
 }
 impl IndexEnv {
@@ -218,7 +219,11 @@ impl IndexEnv {
         self.enrichers.write_locked().push(enricher);
     }
     pub fn enrichers(&self) -> Vec<Arc<dyn SemanticEnricher>> {
-        self.enrichers.read_locked().clone()
+        let mut installed = self.enrichers.read_locked().clone();
+        if let Some(packages) = self.package_semantics.get() {
+            installed.extend(packages.enrichers());
+        }
+        installed
     }
     /// The host invocation helper processes of `project`'s work are launched under (the process
     /// owner fences it by the project's archival).

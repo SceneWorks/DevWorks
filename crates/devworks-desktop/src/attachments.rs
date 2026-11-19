@@ -385,6 +385,8 @@ mod tests {
             | TaskOutput::Prepared { .. }
             | TaskOutput::SettingSecret { .. }
             | TaskOutput::PackagePrepared { .. }
+            | TaskOutput::PackageViews { .. }
+            | TaskOutput::PackageViewData(_)
             | TaskOutput::Refreshed
             | TaskOutput::TextPreview(_)
             | TaskOutput::Convention(_)

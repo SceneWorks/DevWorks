@@ -1024,6 +1024,7 @@ async fn build(composition: Composition, core: CoreServices) -> Result<Engine, B
             ids: ids.clone(),
             artifacts: Some(artifacts.clone()),
             diagnostics: Some(diagnostics.clone()),
+            package_semantics: Default::default(),
             enrichers: std::sync::RwLock::new(ix.enrichers),
             settings: ix.settings,
         });
@@ -1574,6 +1575,14 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
             .unwrap_or_else(|_| Err(panicked("package review recovery")))
             .map_err(BootError::Packages)
             .map_err(failed)?;
+    }
+    if let (Some(host), Some(providers)) = (&package_host, &providers) {
+        let _ = providers.package_codecs.set(Arc::downgrade(host));
+    }
+    if let (Some(host), Some(indexing)) = (&package_host, &index_supervisor) {
+        let _ = indexing.env().package_semantics.set(Arc::new(
+            crate::package_host::semantic::PackageSemantics(Arc::downgrade(host)),
+        ));
     }
     // The last recovery steps that can stop boot run before any task starts, so a failure here
     // leaves nothing delivering or holding the store.

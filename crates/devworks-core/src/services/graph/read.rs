@@ -203,7 +203,16 @@ impl<'a> Reader<'a> {
                     .ok_or_else(|| super::scope::unavailable(Some(id.clone())))?;
                 let (state, _) =
                     crate::services::indexing::status::manifest_coverage(&generation.manifest);
-                if !matches!(state, crate::protocol::data::CoverageState::Complete) {
+                if !matches!(state, crate::protocol::data::CoverageState::Complete)
+                    || crate::services::indexing::status::semantic_stale(
+                        self.read.packages(),
+                        &generation.manifest,
+                        &self
+                            .read
+                            .projects()
+                            .repository_projects(&generation.repository_id)?,
+                    )?
+                {
                     return Ok(false);
                 }
             }

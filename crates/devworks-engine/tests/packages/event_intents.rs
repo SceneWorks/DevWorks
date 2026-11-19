@@ -180,6 +180,37 @@ fn target_actors(a: &App) -> Vec<String> {
 }
 
 #[test]
+fn a_dispatched_event_handler_can_commit_its_exact_approved_application_command() {
+    let _s = serial();
+    let a = App::new();
+    let mut handler = Spec::new("signed-intent", "1.0.0");
+    handler.contributions = vec!["react"];
+    handler.handlers = vec!["react"];
+    handler.intent_commands = vec!["devworks-command/addons.disable"];
+    let path = std::env::temp_dir().join("devworks-fixture-signed-intent-react.json");
+    let script = json!({"applicationIntent": {
+        "triggerPackage": "trigger-pack", "targetPackage": "target-pack",
+        "operation": "devworks-command/addons.disable",
+        "inputSchema": input_schema("addons.disable", Mode::Command, Some(2))
+    }});
+    std::fs::write(&path, script.to_string()).unwrap();
+    package(a.install(&a.user, &Spec::new("target-pack", "1.0.0")));
+    package(a.install(&a.user, &handler));
+    a.ready("signed-intent");
+    package(a.install(&a.user, &Spec::new("trigger-pack", "1.0.0")));
+    let done = settled(&a, OperationState::ObservedComplete);
+    let _ = std::fs::remove_file(path);
+    assert_eq!(done.payload["contributionId"], "signed-intent/react");
+    assert!(!a.record("target-pack").enabled);
+    assert_eq!(done.attempts.len(), 1);
+    assert!(
+        target_actors(&a)
+            .iter()
+            .any(|event| event.ends_with(":user-a"))
+    );
+}
+
+#[test]
 fn a_committed_intent_runs_once_as_the_approving_person_and_never_again_after_restart() {
     let _s = serial();
     let mut a = App::new();

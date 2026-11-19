@@ -1372,9 +1372,9 @@ pub fn release_backup(tx: &mut dyn WriteTransaction, holder: &Id) -> Result<i64,
     tx.artifacts().release_pins(holder)
 }
 
-/// Fresh, exact source visibility used when a Human copies certificate input into a
-/// connection definition. This is a validation predicate, not an artifact read grant.
-pub(crate) fn exact_reference_readable_in(
+/// Checks live version identity and current visibility inside the transaction that uses it.
+/// This predicate does not grant access to read or publish bytes.
+pub fn exact_reference_readable_in(
     tx: &mut dyn WriteTransaction,
     ctx: &InvocationContext,
     reference: &ArtifactRef,

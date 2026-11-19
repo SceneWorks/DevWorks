@@ -91,13 +91,15 @@ class SchemaRevisionRules(unittest.TestCase):
             'agents.history', 'agents.events', 'skills.resources', *MCP,
             'watch.create', 'watch.list', 'watch.inspect', 'watch.cancel', 'containers.create',
             'process.install_project_dependencies', 'skills.set_enabled',
-            'addons.invoke', 'addons.invocation',
+            'addons.invoke', 'addons.invocation', 'addons.read_content', 'addons.run_workflow',
             'settings.read_effective', 'settings.validate', 'settings.save_revision',
             'settings.explain_source', 'dreaming.instructions', 'skills.discover', 'skills.read',
             'skills.draft', 'skills.history', 'skills.rollback', 'roles.read', 'roles.draft',
             'roles.history', 'roles.rollback', 'sessions.transcript'})
         for name in MCP:
             self.assertEqual(carried[name], {8})
+        for name in ('addons.read_content', 'addons.run_workflow'):
+            self.assertEqual(carried[name], {9})
         for name in ('agents.post', 'agents.receive', 'agents.ack', 'agents.history', 'agents.events'):
             self.assertEqual(carried[name], {7})
         for name in ('watch.create', 'watch.list', 'watch.inspect', 'watch.cancel',

@@ -24,6 +24,8 @@ required-features = ["test-support"]
 [dependencies]
 devworks-core = { path = "../devworks-core" }
 devworks-extension-protocol = { path = "../devworks-extension-protocol" }
+protobuf = "=3.7.2"
+scip = "=0.10.0"
 semver.workspace = true
 serde_json.workspace = true
 tokio = { version = "=1.54.1", default-features = false, features = ["sync", "time", "rt", "macros"] }

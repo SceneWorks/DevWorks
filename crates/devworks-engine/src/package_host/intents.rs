@@ -224,13 +224,7 @@ fn execute(
         };
     };
     let admitted = match broker::admit(&grants, operation.as_str(), input_schema) {
-        Ok(a) if !a.descriptor.human_only => a,
-        Ok(_) => {
-            return refused(
-                Refusal::OutsideGrant,
-                "a package intent never runs a human-only operation",
-            );
-        }
+        Ok(a) => a,
         Err(e) => return refused(Refusal::OutsideGrant, &e.message),
     };
     let Ok(reference) =

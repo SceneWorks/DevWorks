@@ -167,6 +167,10 @@ pub enum Contribution {
         meta: ContributionMeta,
         #[schemars(length(min = 1, max = 32))]
         event_schemas: Vec<SchemaRef>,
+        /// Exact, mode-qualified application commands this handler may propose as intents.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        #[schemars(length(max = 32), extend("x-since" = 2))]
+        intent_commands: Vec<QualifiedId>,
     },
     ContextHook {
         meta: ContributionMeta,
@@ -377,10 +381,23 @@ impl PackageManifest {
                 {
                     return Err("invalid language set");
                 }
-                Contribution::EventHandler { event_schemas, .. }
-                    if event_schemas.is_empty() || event_schemas.len() > 32 =>
-                {
-                    return Err("invalid event schemas");
+                Contribution::EventHandler {
+                    event_schemas,
+                    intent_commands,
+                    ..
+                } => {
+                    if event_schemas.is_empty() || event_schemas.len() > 32 {
+                        return Err("invalid event schemas");
+                    }
+                    let mut registered = HashSet::new();
+                    if intent_commands.len() > 32
+                        || !intent_commands.iter().all(|command| {
+                            command.as_str().starts_with("devworks-command/")
+                                && registered.insert(command.as_str())
+                        })
+                    {
+                        return Err("invalid event intent commands");
+                    }
                 }
                 Contribution::Provider {
                     profiles,
@@ -538,6 +555,9 @@ pub enum BrokerCall {
 }
 /// Largest decoded chunk one `ArtifactRead` answers or one `ArtifactAppend` carries.
 pub const ARTIFACT_CHUNK_BYTES: usize = 256 * 1024;
+/// Feature reported in `Initialized` by a helper that grants credit for artifact reads.
+/// Its `StreamCredit.streamId` names the artifact version, and grants start at sequence one.
+pub const ARTIFACT_READ_CREDIT: &str = "artifact-read-credit";
 /// Longest base64url text of one chunk.
 pub const ARTIFACT_CHUNK_TEXT: usize = 349_528;
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]

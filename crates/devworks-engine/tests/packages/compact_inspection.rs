@@ -10,7 +10,7 @@ use devworks_engine::package_host::InstanceStatus;
 
 /// Rewrites `package`'s stored version the way an older install stored it: no contribution
 /// descriptors and no schema assets; `source` (when given) replaces the retained bundle.
-fn store_compact(a: &App, package: &str, source: Option<&Value>) {
+pub(super) fn store_compact(a: &App, package: &str, source: Option<&Value>) {
     let raw = rusqlite::Connection::open(a.h.root.join("workspace.sqlite")).unwrap();
     let (inspection, provenance): (String, String) = raw
         .query_row(

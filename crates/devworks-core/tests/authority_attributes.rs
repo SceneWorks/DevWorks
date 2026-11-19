@@ -100,10 +100,12 @@ enum InputCheck {
     Assignment,
 }
 fn old_input_check(op: &str) -> InputCheck {
-    if matches!(
-        family(op),
-        "tasks" | "features" | "issues" | "next_work" | "runs" | "history" | "indexing"
-    ) {
+    if op == "addons.run_workflow"
+        || matches!(
+            family(op),
+            "tasks" | "features" | "issues" | "next_work" | "runs" | "history" | "indexing"
+        )
+    {
         InputCheck::Root
     } else if matches!(family(op), "artifacts" | "jobs" | "approvals")
         || matches!(
@@ -141,7 +143,7 @@ fn command_only(d: &OperationDescriptor) -> bool {
 
 /// The recorded native-execution decisions that changed behaviour (each now needs a reviewed
 /// native grant under Project scope). `git.pull_request` was reviewed and stays non-native.
-const NEWLY_NATIVE: [&str; 7] = [
+const NEWLY_NATIVE: [&str; 8] = [
     "git.integrate",
     "git.cleanup",
     "desktop.input",
@@ -149,6 +151,7 @@ const NEWLY_NATIVE: [&str; 7] = [
     "database.execute_write",
     "database.apply_migration",
     "database.direct_schema_change",
+    "addons.run_workflow",
 ];
 
 #[test]
@@ -180,7 +183,7 @@ fn descriptor_attributes_reproduce_the_former_name_lists() {
         );
         assert_eq!(
             scope == AssignmentScope::Coordinator,
-            OLD_WORKER_DENIED.contains(&op),
+            OLD_WORKER_DENIED.contains(&op) || op == "addons.run_workflow",
             "{op} coordinator only"
         );
         // The administration rule only ever refused commands.

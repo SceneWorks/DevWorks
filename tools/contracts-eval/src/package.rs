@@ -162,6 +162,9 @@ pub enum Contribution {
         meta: ContributionMeta,
         #[schemars(length(min = 1, max = 32))]
         event_schemas: Vec<SchemaRef>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        #[schemars(length(max = 32), extend("x-since" = 2))]
+        intent_commands: Vec<QualifiedId>,
     },
     ContextHook {
         meta: ContributionMeta,
