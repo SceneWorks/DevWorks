@@ -1,9 +1,11 @@
 use crate::snapshot::Source;
 use protobuf::Message;
 use scip::types::Index;
+use serde::Deserialize;
+use std::collections::BTreeSet;
 use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
@@ -62,20 +64,26 @@ pub(crate) fn stop_group() -> ! {
 }
 
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
-fn memory() -> Result<u64, Failure> {
+fn group_members(members: &mut [libc::pid_t]) -> Result<usize, Failure> {
     if !owned_group() {
         return Err("unowned-process-group".into());
     }
-    let mut members = [0 as libc::pid_t; 128];
-    let bytes = std::mem::size_of_val(&members)
+    let bytes = std::mem::size_of_val(members)
         .try_into()
         .expect("fixed buffer");
-    // SAFETY: the process group is the helper's own, and members is a writable PID array.
+    // SAFETY: the group is the helper's own, and members is a writable PID array.
     let count =
         unsafe { libc::proc_listpgrppids(libc::getpid(), members.as_mut_ptr().cast(), bytes) };
-    let Ok(count) = usize::try_from(count) else {
-        return Err(Failure::stop("process-observation-failed"));
-    };
+    usize::try_from(count)
+        .ok()
+        .filter(|count| *count <= members.len())
+        .ok_or(Failure::stop("process-observation-failed"))
+}
+
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+fn memory() -> Result<u64, Failure> {
+    let mut members = [0; 128];
+    let count = group_members(&mut members)?;
     if count == 0 || count >= members.len() {
         return Err(Failure::stop("compiler-process-budget"));
     }
@@ -106,6 +114,42 @@ fn memory() -> Result<u64, Failure> {
     Err("unsupported-rust-pack-target".into())
 }
 
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+fn stop_compiler_children(child: &mut Child) {
+    let deadline = Instant::now() + Duration::from_millis(800);
+    // Leave the helper alive to remove its scratch directory and send the broker outcome.
+    let leader = unsafe { libc::getpid() };
+    loop {
+        let _ = child.try_wait();
+        let mut members = [0; 256];
+        let Ok(count) = group_members(&mut members) else {
+            break;
+        };
+        let mut found_child = false;
+        for pid in members[..count].iter().copied() {
+            if pid != leader && pid > 0 && unsafe { libc::getpgid(pid) == leader } {
+                found_child = true;
+                // SAFETY: this PID was reported in the helper's live owned group and still
+                // belongs to that group. The helper itself is excluded.
+                unsafe { libc::kill(pid, libc::SIGKILL) };
+            }
+        }
+        if !found_child {
+            return;
+        }
+        if Instant::now() >= deadline {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    stop_group();
+}
+
+#[cfg(not(all(target_os = "macos", target_arch = "aarch64")))]
+fn stop_compiler_children(_child: &mut Child) {
+    stop_group();
+}
+
 fn budget(
     deadline: Instant,
     cancelled: &AtomicBool,
@@ -131,16 +175,19 @@ fn run(
 ) -> Result<(), Failure> {
     budget(deadline, cancelled, memory)?;
     let mut child = command.stdin(Stdio::null()).spawn().map_err(|_| failure)?;
-    loop {
+    let result = loop {
         match child.try_wait() {
-            Ok(Some(status)) if status.success() => return Ok(()),
-            Ok(Some(_)) => return Err(Failure::stop(failure)),
+            Ok(Some(status)) if status.success() => break Ok(()),
+            Ok(Some(_)) | Err(_) => break Err(Failure::stop(failure)),
             Ok(None) => {}
-            Err(_) => return Err(Failure::stop(failure)),
         }
-        budget(deadline, cancelled, memory)?;
+        if let Err(error) = budget(deadline, cancelled, memory) {
+            break Err(error);
+        }
         std::thread::sleep(SAMPLE);
-    }
+    };
+    stop_compiler_children(&mut child);
+    result
 }
 
 fn private_scratch() -> Result<tempfile::TempDir, Failure> {
@@ -249,6 +296,49 @@ fn command(program: &Path, bin: &Path, private: &Path) -> Result<Command, Failur
     Ok(command)
 }
 
+#[derive(Deserialize)]
+struct CargoWorkspace {
+    workspace_root: PathBuf,
+    packages: Vec<CargoPackage>,
+}
+
+#[derive(Deserialize)]
+struct CargoPackage {
+    manifest_path: PathBuf,
+}
+
+fn project_metadata(
+    cargo_check: &mut Command,
+    output: &Path,
+    deadline: Instant,
+    cancelled: &AtomicBool,
+) -> Result<CargoWorkspace, Failure> {
+    run(
+        cargo_check
+            .args([
+                "metadata",
+                "--offline",
+                "--no-deps",
+                "--format-version",
+                "1",
+            ])
+            .stdout(std::fs::File::create(output).map_err(|_| "scratch-write")?),
+        deadline,
+        cancelled,
+        "offline-cargo-metadata-failed",
+    )?;
+    let mut bytes = Vec::new();
+    std::fs::File::open(output)
+        .map_err(|_| "cargo-metadata-missing")?
+        .take(MAX_INDEX + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|_| "cargo-metadata-unreadable")?;
+    if bytes.len() as u64 > MAX_INDEX {
+        return Err("cargo-metadata-budget".into());
+    }
+    serde_json::from_slice(&bytes).map_err(|_| "invalid-cargo-metadata".into())
+}
+
 pub(crate) fn index(
     source: &Source,
     cancelled: &AtomicBool,
@@ -285,7 +375,8 @@ pub(crate) fn index(
     }
 
     let projects = source.materialize(&repository)?;
-    source.copy_cached_dependencies(&original_home, &private.join("cargo"))?;
+    let cargo_home = private.join("cargo");
+    let metadata_path = private.join("cargo-metadata");
     let settings = private.join("analyzer.json");
     let cargo = bin.join("cargo");
     let config = serde_json::json!({
@@ -302,15 +393,39 @@ pub(crate) fn index(
     std::fs::write(&settings, config.to_string()).map_err(|_| "scratch-write")?;
     let expected = source.rust_files();
     let mut merged = Index::default();
-    let mut paths = std::collections::BTreeSet::new();
+    let mut paths = BTreeSet::new();
+    let mut roots = BTreeSet::new();
+    let mut workspace_manifests = BTreeSet::new();
     let mut result_bytes = 0u64;
     for project in projects {
-        let root = repository.join(&project);
+        let candidate = repository.join(project);
+        if workspace_manifests.contains(&candidate.join("Cargo.toml")) {
+            continue;
+        }
+        let metadata = project_metadata(
+            command(&cargo, &bin, private)?.current_dir(&candidate),
+            &metadata_path,
+            deadline,
+            cancelled,
+        )?;
+        let root = metadata.workspace_root;
+        let project = root
+            .strip_prefix(&repository)
+            .map_err(|_| "cargo-path-outside-source")?;
+        for member in metadata.packages {
+            if !member.manifest_path.starts_with(&repository) {
+                return Err("cargo-path-outside-source".into());
+            }
+            workspace_manifests.insert(member.manifest_path);
+        }
+        if !roots.insert(root.clone()) {
+            continue;
+        }
         let mut cargo_check = command(&cargo, &bin, private)?;
         cargo_check
             .current_dir(&root)
             .args(["metadata", "--offline", "--format-version", "1"]);
-        if root.join("Cargo.lock").is_file() {
+        if source.copy_cached_dependencies(project, &original_home, &cargo_home)? {
             cargo_check.arg("--locked");
         }
         run(
@@ -346,6 +461,8 @@ pub(crate) fn index(
             return Err("scip-output-budget".into());
         }
         std::fs::remove_file(output).map_err(|_| "scratch-write")?;
+        std::fs::remove_dir_all(&cargo_home).map_err(|_| "scratch-write")?;
+        std::fs::create_dir(&cargo_home).map_err(|_| "scratch-write")?;
         let mut index = Index::parse_from_bytes(&bytes).map_err(|_| "invalid-scip")?;
         for document in &mut index.documents {
             let location = project.join(&document.relative_path);

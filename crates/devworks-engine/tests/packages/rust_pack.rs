@@ -102,17 +102,17 @@ fn overlay(app: &App, repository: &Id) -> StoredGeneration {
     }
 }
 
-fn index(app: &App, repository: &Id) {
+fn index(app: &App, repository: &Id, operation: &str) {
     let revision = source_revision(app);
     let frame = json!({
         "protocol":"1.0-draft.1","mode":"Command","requestKey":app.key("rust-pack-index"),
-        "body":{"kind":"indexing.index","scope":{"kind":"Workspace"},
+        "body":{"kind":operation,"scope":{"kind":"Workspace"},
             "repositoryIds":[repository],"expectedSourceRevision":revision,
             "views":{"kind":"Published","repositoryIds":[repository]}}
     });
     applied(
         app.app()
-            .command(&app.user, "indexing.index", frame.to_string().as_bytes())
+            .command(&app.user, operation, frame.to_string().as_bytes())
             .unwrap(),
     );
 }
@@ -183,14 +183,37 @@ fn native_rust_pack_indexes_a_cargo_workspace_and_fences_changed_deleted_and_fai
     let root = app.sources.join("rust-workspace");
     std::fs::create_dir_all(root.join("app/src")).unwrap();
     std::fs::create_dir_all(root.join("shared/src")).unwrap();
+    std::fs::create_dir_all(root.join("nested/src")).unwrap();
+    std::fs::create_dir_all(root.join("macros/src")).unwrap();
+    std::fs::create_dir_all(root.join("tests/fixtures/invalid")).unwrap();
+    std::fs::write(root.join("tests/fixtures/invalid/Cargo.toml"), "[not valid").unwrap();
+    let build_marker = app.sources.join("build-script-ran");
+    let macro_marker = app.sources.join("proc-macro-ran");
+    std::fs::write(
+        root.join("app/build.rs"),
+        format!("fn main() {{ std::fs::write({build_marker:?}, \"ran\").unwrap(); }}"),
+    )
+    .unwrap();
+    std::fs::write(
+        root.join("macros/src/lib.rs"),
+        format!(
+            concat!(
+                "use proc_macro::TokenStream;",
+                "#[proc_macro] pub fn qualification_probe(_input: TokenStream) -> TokenStream {{",
+                "std::fs::write({:?}, \"ran\").unwrap(); TokenStream::new() }}",
+            ),
+            macro_marker
+        ),
+    )
+    .unwrap();
     for (path, content) in [
         (
             "Cargo.toml",
-            "[workspace]\nresolver='3'\nmembers=['app','shared']\n",
+            "[workspace]\nresolver='3'\nmembers=['app','shared','macros']\nexclude=['nested']\n",
         ),
         (
             "app/Cargo.toml",
-            "[package]\nname='fixture-app'\nversion='1.2.3'\nedition='2024'\n[dependencies]\nfixture-shared={path='../shared'}\n",
+            "[package]\nname='fixture-app'\nversion='1.2.3'\nedition='2024'\nexclude=['/ci']\n[dependencies]\nfixture-shared={path='../shared'}\nfixture-macros={path='../macros'}\n",
         ),
         (
             "shared/Cargo.toml",
@@ -198,17 +221,22 @@ fn native_rust_pack_indexes_a_cargo_workspace_and_fences_changed_deleted_and_fai
         ),
         (
             "app/src/lib.rs",
-            "pub fn caller() -> u32 { fixture_shared::stable_value() }\n",
+            "fixture_macros::qualification_probe!();\npub fn caller() -> u32 { fixture_shared::stable_value() }\n",
         ),
         (
-            "app/build.rs",
-            "fn main() { panic!(\"the semantic helper executed the repository build script\"); }\n",
+            "macros/Cargo.toml",
+            "[package]\nname='fixture-macros'\nversion='0.4.1'\nedition='2024'\n[lib]\nproc-macro=true\n",
         ),
         (
             "shared/src/lib.rs",
             "pub fn stable_value() -> u32 { 3 }\nmod removed;\n",
         ),
         ("shared/src/removed.rs", "pub fn obsolete() {}\n"),
+        (
+            "nested/Cargo.toml",
+            "[package]\nname='fixture-nested'\nversion='7.8.9'\nedition='2024'\n",
+        ),
+        ("nested/src/lib.rs", "pub fn nested_value() {}\n"),
     ] {
         std::fs::write(root.join(path), content).unwrap();
     }
@@ -240,7 +268,7 @@ fn native_rust_pack_indexes_a_cargo_workspace_and_fences_changed_deleted_and_fai
         .id
         .clone();
 
-    index(&app, &repository);
+    index(&app, &repository, "indexing.index");
     let initial = published(&app, &repository, None);
     assert_eq!(
         initial.manifest["packs"][0]["id"], "devworks-rust-semantic",
@@ -270,10 +298,28 @@ fn native_rust_pack_indexes_a_cargo_workspace_and_fences_changed_deleted_and_fai
         }),
         "{initial_edges:?}"
     );
+    let nested_nodes = read(&*app.store, |snapshot| {
+        snapshot.indexing().nodes(&initial.id, "nested/src/lib.rs")
+    });
+    assert!(
+        nested_nodes.iter().any(|node| {
+            node.payload["qualifiedName"].as_str().is_some_and(|name| {
+                name.contains("fixture-nested")
+                    && name.contains("7.8.9")
+                    && name.contains("nested_value")
+            })
+        }),
+        "{nested_nodes:?}"
+    );
     let compiled = invocations(&app);
     assert_eq!(compiled, 1, "one compiler invocation per captured layer");
+    assert!(!build_marker.exists(), "the pack executed a build script");
+    assert!(
+        !macro_marker.exists(),
+        "the pack executed a procedural macro"
+    );
 
-    index(&app, &repository);
+    index(&app, &repository, "indexing.index");
     let reused = published(&app, &repository, Some(&initial.id));
     assert_eq!(
         reused.manifest["packs"], initial.manifest["packs"],
@@ -317,7 +363,7 @@ fn native_rust_pack_indexes_a_cargo_workspace_and_fences_changed_deleted_and_fai
     );
     assert_eq!(published(&app, &repository, None).id, reused.id);
 
-    index(&app, &repository);
+    index(&app, &repository, "indexing.index");
     let changed = published(&app, &repository, Some(&reused.id));
     assert_eq!(
         changed.manifest["packs"][0]["id"], "devworks-rust-semantic",
@@ -350,17 +396,42 @@ fn native_rust_pack_indexes_a_cargo_workspace_and_fences_changed_deleted_and_fai
     std::fs::write(root.join("app/Cargo.toml"), "[package]\nname='fixture-app'\nversion='1.2.3'\nedition='2024'\n[dependencies]\nfixture-shared={path='../../outside'}\n").unwrap();
     git(&root, &["add", "-A"]);
     git(&root, &["commit", "-qm", "invalid dependency path"]);
-    index(&app, &repository);
+    let before_failure = invocations(&app);
+    index(&app, &repository, "indexing.index");
     let failed_pack = published(&app, &repository, Some(&changed.id));
+    assert_eq!(
+        invocations(&app),
+        before_failure + 1,
+        "one attempt for a deterministic pack failure"
+    );
     assert_eq!(
         failed_pack.manifest["coverage"]["state"], "Partial",
         "{failed_pack:?}"
     );
     assert_eq!(failed_pack.manifest["packs"], json!([]));
+    index(&app, &repository, "indexing.index");
+    let reused_failure = published(&app, &repository, Some(&failed_pack.id));
+    assert_eq!(
+        invocations(&app),
+        before_failure + 1,
+        "ordinary refresh reuses the recorded failure"
+    );
+    assert_eq!(
+        reused_failure.manifest["coverage"],
+        failed_pack.manifest["coverage"]
+    );
+    index(&app, &repository, "indexing.reindex");
+    let explicit_rebuild = published(&app, &repository, Some(&reused_failure.id));
+    assert_eq!(
+        invocations(&app),
+        before_failure + 2,
+        "explicit rebuild retries the compiler once"
+    );
+    assert_eq!(explicit_rebuild.manifest["coverage"]["state"], "Partial");
     let nodes = read(&*app.store, |snapshot| {
         snapshot
             .indexing()
-            .nodes(&failed_pack.id, "shared/src/lib.rs")
+            .nodes(&explicit_rebuild.id, "shared/src/lib.rs")
     });
     assert!(
         nodes.iter().any(|node| node.name == "renamed_value"),

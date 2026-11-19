@@ -1,4 +1,4 @@
-use super::{CONTRIBUTION, PACKAGE, compiler::TOOLCHAIN};
+use super::{CONTRIBUTION, PACKAGE};
 use devworks_adapters::packages::{BundleInspector, host_target_triple, write_bundle};
 use devworks_core::{fingerprint::sha256_hex, ports::packages::PackageInspector};
 use ed25519_dalek::SigningKey;
@@ -37,9 +37,7 @@ fn build(helper: &[u8], key: Option<&SigningKey>) -> Result<Vec<u8>, String> {
         "packageId":PACKAGE, "publisherId":"devworks", "version":MANIFEST_VERSION,
         "protocolMin":{"major":1,"minor":0},"protocolMax":{"major":1,"minor":0},
         "minimumHostVersion":"0.1.0","dependencies":[],
-        "runtimes":[{"runtimeId":"rustup","versionRequirement":">=1","required":true},
-            {"runtimeId":"cargo","versionRequirement":format!("={TOOLCHAIN}"),"required":true},
-            {"runtimeId":"rust-analyzer","versionRequirement":format!("={TOOLCHAIN}"),"required":true}],
+        "runtimes":[{"runtimeId":"rustup","versionRequirement":">=1","required":true}],
         "schemaAssets":[{"reference":source,"path":"schemas/source.json"},
             {"reference":index,"path":"schemas/index.json"},{"reference":empty,"path":"schemas/empty.json"}],
         "requestedLimits":{"maxConcurrent":1,"queueCapacity":2,"maxMemoryBytes":"2147483648","streamCreditBytes":262144},
@@ -47,7 +45,7 @@ fn build(helper: &[u8], key: Option<&SigningKey>) -> Result<Vec<u8>, String> {
         "files":files.iter().map(|(name,bytes)|json!({"path":name,
             "sha256":sha256_hex(bytes),"byteLength":bytes.len().to_string()})).collect::<Vec<_>>(),
         "stateSchema":empty,"configurationSchema":empty,"helpFile":"help.md",
-        "requestedPermissions":[{"kind":"WorktreeRead"},{"kind":"Process","runtimeId":"rust-analyzer"}],
+        "requestedPermissions":[{"kind":"WorktreeRead"},{"kind":"Process","runtimeId":"rustup"}],
         "contributions":[{"kind":"Semantic","sourceMode":"Repository","languages":["rust"],"format":"Scip",
             "meta":{"id":CONTRIBUTION,"inputSchema":source,"outputSchema":index,
                 "helpTopic":"index","required":true,"cancellation":"Cooperative"}}]

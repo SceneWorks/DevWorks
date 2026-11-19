@@ -47,6 +47,8 @@ fn wait_path(path: &Path) {
 fn run(cancel: bool) {
     let fixtures = tempfile::tempdir().unwrap();
     let home = fixtures.path();
+    let scratch = home.join("scratch");
+    std::fs::create_dir(&scratch).unwrap();
     let bin = home.join("toolchain/bin");
     let marker = home.join("running-cargo");
     file(
@@ -82,7 +84,7 @@ fn run(cancel: bool) {
     spec.env = vec![
         ("HOME".into(), home.to_string_lossy().into_owned()),
         ("PATH".into(), bin.to_string_lossy().into_owned()),
-        ("TMPDIR".into(), home.to_string_lossy().into_owned()),
+        ("TMPDIR".into(), scratch.to_string_lossy().into_owned()),
     ];
     spec.capture_output = true;
     spec.pipe_stdin = true;
@@ -178,6 +180,8 @@ fn run(cancel: bool) {
         std::thread::sleep(Duration::from_millis(20));
     }
     listener.join().unwrap();
+    let leftover: Vec<_> = std::fs::read_dir(&scratch).unwrap().collect();
+    assert!(leftover.is_empty(), "{leftover:?}");
     assert!(
         rx.try_iter()
             .all(|frame| frame["method"] != "package.event")

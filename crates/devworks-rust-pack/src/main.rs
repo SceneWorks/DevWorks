@@ -284,7 +284,11 @@ fn worker(channel: Arc<Channel>, job: Arc<Job>, sequence: Arc<Mutex<u64>>) {
             failure.stop_group,
         ),
     };
-    job.finished.store(true, Ordering::Release);
+    // Keep the job active until group teardown on failure. If the host closes its pipe while
+    // the fault is being delivered, the protocol thread must also reap the owned group.
+    if !terminate {
+        job.finished.store(true, Ordering::Release);
+    }
     let _ = job.outcome(&channel, outcome);
     if terminate {
         compiler::stop_group();
@@ -317,6 +321,19 @@ impl State {
     }
 }
 
+// The worker reaps the compiler and unlinks its scratch files on cancellation. Keep a hard
+// process-group stop as the bound if broker I/O or an uninterruptible child delays it.
+fn stop_job(job: &Job) {
+    job.cancelled.store(true, Ordering::Release);
+    let deadline = Instant::now() + Duration::from_secs(2);
+    while !job.finished.load(Ordering::Acquire) {
+        if Instant::now() >= deadline {
+            compiler::stop_group();
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
 fn serve() -> Result<(), Failure> {
     let channel = Arc::new(Channel {
         output: Mutex::new(io::stdout()),
@@ -328,8 +345,15 @@ fn serve() -> Result<(), Failure> {
     loop {
         let frame = match read_frame(&mut input, MAX_FRAME_BYTES) {
             Ok(frame) => frame,
-            Err(FrameError::Closed) if state.running().is_none() => return Ok(()),
-            Err(_) => return Err("host-stream-closed".into()),
+            Err(error) => {
+                if let Some(job) = state.running() {
+                    stop_job(job);
+                }
+                return match error {
+                    FrameError::Closed => Ok(()),
+                    _ => Err("host-stream-closed".into()),
+                };
+            }
         };
         let value = devworks_core::framing::parse(&frame).map_err(|_| "invalid-host-frame")?;
         if value.get("method").is_none() {
@@ -422,8 +446,8 @@ fn serve() -> Result<(), Failure> {
             HostRequest::Shutdown { id, params, .. } => {
                 state.current(&params.process_session_id)?;
                 channel.reply(id, RpcResult::ShutdownAcknowledged)?;
-                if state.running().is_some() {
-                    compiler::stop_group();
+                if let Some(job) = state.running() {
+                    stop_job(job);
                 }
                 return Ok(());
             }

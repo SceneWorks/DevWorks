@@ -19,15 +19,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 /// Runtimes probed whether or not a package declares them yet.
-pub const KNOWN_RUNTIMES: [&str; 7] = [
-    "dotnet",
-    "node",
-    "swift",
-    "cargo",
-    "rustc",
-    "rustup",
-    "rust-analyzer",
-];
+pub const KNOWN_RUNTIMES: [&str; 6] = ["dotnet", "node", "swift", "cargo", "rustc", "rustup"];
 
 /// The index ports.
 pub struct IndexPorts {

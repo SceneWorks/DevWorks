@@ -19,10 +19,14 @@ pub(crate) fn select(
     env: &IndexEnv,
     config: &EffectiveConfig,
     repository: &Id,
-) -> Result<Vec<Arc<dyn SemanticEnricher>>, StorageError> {
+    expected_binding: &str,
+) -> Result<Vec<Arc<dyn SemanticEnricher>>, Stop> {
     let candidates = env.enrichers();
     read_snapshot(&*env.store, &ReadOptions::default(), |read| {
         let projects = read.projects().repository_projects(repository)?;
+        if registry_binding(read.packages(), config, &projects)? != expected_binding {
+            return Ok(None);
+        }
         let mut selected = Vec::new();
         for pack in &candidates {
             let descriptor = pack.descriptor();
@@ -37,7 +41,14 @@ pub(crate) fn select(
                 selected.push(pack.clone());
             }
         }
-        Ok(selected)
+        Ok(Some(selected))
+    })
+    .map_err(Stop::storage)?
+    .ok_or_else(|| {
+        Stop::transient(
+            "semantic_package_changed",
+            "the semantic packages changed while the index was planned",
+        )
     })
 }
 
@@ -60,15 +71,6 @@ pub(crate) fn registry_binding(
         }
     }
     Ok(bindings.join(","))
-}
-
-pub(crate) fn incomplete(coverage: &Value) -> bool {
-    coverage["gaps"].as_array().is_some_and(|gaps| {
-        gaps.iter().any(|gap| {
-            gap.as_str()
-                .is_some_and(|gap| gap.starts_with("incomplete-semantic-"))
-        })
-    })
 }
 
 pub(crate) fn binding(packs: &[Arc<dyn SemanticEnricher>]) -> String {
@@ -211,6 +213,9 @@ pub(crate) fn prepare_repository(
                 stop,
             )
         };
+        if stop() {
+            return Err(Stop::Cancelled);
+        }
         note_failure(exec, &descriptor, &proposals);
         prepared.push(RepositoryResult {
             descriptor,

@@ -6,6 +6,8 @@ use std::path::{Component, Path, PathBuf};
 const MAX_SOURCE_FILES: usize = 4096;
 const MAX_SOURCE_BYTES: usize = 4 * 1024 * 1024;
 const MAX_CACHE_BYTES: u64 = 128 * 1024 * 1024;
+// Default crates.io sparse index for the pinned Cargo toolchain.
+const CRATES_IO_CACHE: &str = "index.crates.io-1949cf8c6b5b557f";
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -92,9 +94,17 @@ impl Source {
             let relative = Path::new(&file.unit);
             if relative.file_name().and_then(|name| name.to_str()) == Some("Cargo.toml") {
                 let directory = relative.parent().ok_or("invalid-manifest")?;
-                let value: toml::Value =
-                    toml::from_str(&file.text).map_err(|_| "invalid-manifest")?;
-                verify_manifest_routes(directory, &value)?;
+                let validated = toml::from_str(&file.text)
+                    .map_err(|_| "invalid-manifest")
+                    .and_then(|value| verify_manifest(directory, &value));
+                if let Err(error) = validated {
+                    if directory.as_os_str().is_empty() {
+                        return Err(error);
+                    }
+                    // Nested test fixtures can use invalid Cargo syntax intentionally. If a
+                    // real workspace depends on this manifest, Cargo will report it missing.
+                    continue;
+                }
                 projects.push(directory.to_path_buf());
             }
             let path = destination.join(relative);
@@ -109,76 +119,64 @@ impl Source {
                 .map_err(|_| "scratch-write")?;
         }
         projects.sort();
-        let mut roots: Vec<PathBuf> = Vec::new();
-        for project in projects {
-            if !roots.iter().any(|parent| project.starts_with(parent)) {
-                roots.push(project);
-            }
-        }
-        if roots.is_empty() {
+        if projects.is_empty() {
             Err("cargo-manifest-missing")
         } else {
-            Ok(roots)
+            Ok(projects)
         }
     }
 
     pub(crate) fn copy_cached_dependencies(
         &self,
+        workspace: &Path,
         original_home: &Path,
         cargo_home: &Path,
-    ) -> Result<(), &'static str> {
+    ) -> Result<bool, &'static str> {
         let mut dependencies = BTreeSet::new();
-        for lock in self.files.iter().filter(|file| {
-            file.language == Language::Cargo && file.unit.rsplit('/').next() == Some("Cargo.lock")
-        }) {
-            let lock: Lockfile = toml::from_str(&lock.text).map_err(|_| "invalid-cargo-lock")?;
-            for package in lock.package {
-                match package.source.as_deref() {
-                    None => {}
-                    Some("registry+https://github.com/rust-lang/crates.io-index") => {
-                        if !package
-                            .name
-                            .bytes()
-                            .all(|c| c.is_ascii_alphanumeric() || c == b'_' || c == b'-')
-                            || package.name.is_empty()
-                            || package.name.len() > 64
-                            || !valid_version(&package.version)
-                        {
-                            return Err("invalid-cargo-lock");
-                        }
-                        dependencies.insert((package.name, package.version));
+        let lock_path = workspace.join("Cargo.lock");
+        let Some(lock) = self
+            .files
+            .iter()
+            .find(|file| Path::new(&file.unit) == lock_path)
+        else {
+            return Ok(false);
+        };
+        let lock: Lockfile = toml::from_str(&lock.text).map_err(|_| "invalid-cargo-lock")?;
+        for package in lock.package {
+            match package.source.as_deref() {
+                None => {}
+                Some("registry+https://github.com/rust-lang/crates.io-index") => {
+                    if !package
+                        .name
+                        .bytes()
+                        .all(|c| c.is_ascii_alphanumeric() || c == b'_' || c == b'-')
+                        || package.name.is_empty()
+                        || package.name.len() > 64
+                        || !valid_version(&package.version)
+                    {
+                        return Err("invalid-cargo-lock");
                     }
-                    Some(_) => return Err("unsupported-offline-dependency"),
+                    dependencies.insert((package.name, package.version));
                 }
+                Some(_) => return Err("unsupported-offline-dependency"),
             }
         }
         if dependencies.is_empty() {
-            return Ok(());
+            return Ok(true);
         }
         let registry = original_home.join(".cargo/registry");
-        let indices =
-            std::fs::read_dir(registry.join("index")).map_err(|_| "offline-dependency-missing")?;
-        let expected = indices
-            .filter_map(Result::ok)
-            .find_map(|entry| {
-                let name = entry.file_name().into_string().ok()?;
-                (name.starts_with("index.crates.io-") && entry.file_type().ok()?.is_dir())
-                    .then_some(name)
-            })
-            .ok_or("offline-dependency-missing")?;
         let mut copied = 0;
         let mut indices = BTreeSet::new();
         for (name, version) in dependencies {
-            let name = name.to_ascii_lowercase();
             let index = PathBuf::from("index")
-                .join(&expected)
+                .join(CRATES_IO_CACHE)
                 .join(".cache")
-                .join(sparse_path(&name));
+                .join(sparse_path(&name.to_ascii_lowercase()));
             if indices.insert(index.clone()) {
                 copy_regular(&registry, &cargo_home.join("registry"), &index, &mut copied)?;
             }
             let archive = PathBuf::from("cache")
-                .join(&expected)
+                .join(CRATES_IO_CACHE)
                 .join(format!("{name}-{version}.crate"));
             copy_regular(
                 &registry,
@@ -190,9 +188,12 @@ impl Source {
         copy_regular(
             &registry,
             &cargo_home.join("registry"),
-            &PathBuf::from("index").join(expected).join("config.json"),
+            &PathBuf::from("index")
+                .join(CRATES_IO_CACHE)
+                .join("config.json"),
             &mut copied,
-        )
+        )?;
+        Ok(true)
     }
 }
 
@@ -294,6 +295,26 @@ fn contained(directory: &Path, route: &str) -> bool {
         })
 }
 
+fn verify_manifest(directory: &Path, value: &toml::Value) -> Result<(), &'static str> {
+    if let Some(workspace) = value.get("workspace") {
+        for key in ["members", "exclude", "default-members"] {
+            if workspace
+                .get(key)
+                .and_then(toml::Value::as_array)
+                .is_some_and(|items| {
+                    items.iter().any(|item| {
+                        item.as_str()
+                            .is_some_and(|route| !contained(directory, route))
+                    })
+                })
+            {
+                return Err("cargo-path-outside-source");
+            }
+        }
+    }
+    verify_manifest_routes(directory, value)
+}
+
 fn verify_manifest_routes(directory: &Path, value: &toml::Value) -> Result<(), &'static str> {
     match value {
         toml::Value::Table(table) => {
@@ -304,16 +325,6 @@ fn verify_manifest_routes(directory: &Path, value: &toml::Value) -> Result<(), &
                         "path" | "workspace" | "build" | "readme" | "license-file"
                     )
                     && !contained(directory, route)
-                {
-                    return Err("cargo-path-outside-source");
-                }
-                if matches!(key.as_str(), "members" | "exclude" | "default-members")
-                    && nested.as_array().is_some_and(|items| {
-                        items.iter().any(|item| {
-                            item.as_str()
-                                .is_some_and(|route| !contained(directory, route))
-                        })
-                    })
                 {
                     return Err("cargo-path-outside-source");
                 }
@@ -335,6 +346,61 @@ fn verify_manifest_routes(directory: &Path, value: &toml::Value) -> Result<(), &
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn workspace_paths_and_package_exclusion_globs_have_distinct_rules() {
+        let package = toml::from_str("[package]\nexclude=['/ci']").unwrap();
+        assert_eq!(verify_manifest(Path::new(""), &package), Ok(()));
+        let workspace = toml::from_str("[workspace]\nmembers=['/outside']").unwrap();
+        assert_eq!(
+            verify_manifest(Path::new(""), &workspace),
+            Err("cargo-path-outside-source")
+        );
+    }
+
+    #[test]
+    fn locked_cache_uses_the_pinned_sparse_index_and_original_archive_name() {
+        let home = tempfile::tempdir().unwrap();
+        let output = tempfile::tempdir().unwrap();
+        let registry = home.path().join(".cargo/registry");
+        std::fs::create_dir_all(registry.join("index/index.crates.io-6f17d22bba15001f")).unwrap();
+        let index = registry.join("index").join(CRATES_IO_CACHE);
+        let cache = registry.join("cache").join(CRATES_IO_CACHE);
+        std::fs::create_dir_all(index.join(".cache/in/fl")).unwrap();
+        std::fs::create_dir_all(&cache).unwrap();
+        std::fs::write(index.join("config.json"), b"index config").unwrap();
+        std::fs::write(index.join(".cache/in/fl/inflector"), b"index entry").unwrap();
+        std::fs::write(cache.join("Inflector-0.11.4.crate"), b"archive fixture").unwrap();
+        let text = "[[package]]\nname='Inflector'\nversion='0.11.4'\nsource='registry+https://github.com/rust-lang/crates.io-index'";
+        let source = Source::parse(
+            serde_json::json!({
+                "repositoryId": "repo", "commit": "a".repeat(40), "captureDigest": null,
+                "sourceMode": "Repository", "files": [{
+                    "unit": "Cargo.lock", "language": "cargo", "text": text,
+                    "sha256": sha256_hex(text.as_bytes())
+                }]
+            })
+            .to_string()
+            .as_bytes(),
+        )
+        .unwrap();
+        assert!(
+            source
+                .copy_cached_dependencies(Path::new(""), home.path(), output.path())
+                .unwrap()
+        );
+        let archive = output
+            .path()
+            .join("registry/cache")
+            .join(CRATES_IO_CACHE)
+            .join("Inflector-0.11.4.crate");
+        assert_eq!(std::fs::read(archive).unwrap(), b"archive fixture");
+        assert!(
+            !source
+                .copy_cached_dependencies(Path::new("nested"), home.path(), output.path())
+                .unwrap()
+        );
+    }
+
     #[test]
     fn cargo_sibling_dependency_stays_in_snapshot() {
         let manifest: toml::Value =

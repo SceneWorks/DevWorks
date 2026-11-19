@@ -535,13 +535,11 @@ pub(crate) fn refresh(
             .flatten()
         {
             if let Some(layer) = tx.indexing().generation(id)? {
-                semantic_changed |=
-                    super::worker::semantic::incomplete(&layer.manifest["coverage"])
-                        || super::status::semantic_stale(
-                            tx.packages(),
-                            &layer.manifest,
-                            &member_projects,
-                        )?;
+                semantic_changed |= super::status::semantic_stale(
+                    tx.packages(),
+                    &layer.manifest,
+                    &member_projects,
+                )?;
             }
         }
         let state = super::status::effective_overlay_state(o, base.as_ref(), now, moved);
@@ -1049,8 +1047,8 @@ pub(crate) fn execute(exec: &mut Exec<'_>) -> Result<(), Stop> {
             ))
         })
         .map_err(Stop::storage)?;
-    exec.semantic_packs =
-        super::worker::semantic::select(&env, &cfg, &repo_id).map_err(Stop::storage)?;
+    exec.semantic_packs = super::worker::semantic::select(&env, &cfg, &repo_id, &semantic_binding)?;
+    let refresh_semantics = semantic_binding != base_binding;
     let base_pointer = base_view.map_or(0, |p| p.revision);
     let root = PathBuf::from(&snap.worktree_path);
     let head = snap.head_oid.clone();
@@ -1099,10 +1097,7 @@ pub(crate) fn execute(exec: &mut Exec<'_>) -> Result<(), Stop> {
     )
     .map_err(Stop::storage)?;
     if let Some(h) = head.as_ref().filter(|h| {
-        **h != snap.base_oid
-            || ref_overlay
-            || !reconciled.is_empty()
-            || semantic_binding != base_binding
+        **h != snap.base_oid || ref_overlay || !reconciled.is_empty() || refresh_semantics
     }) {
         exec.stage("branch")?;
         let mut changes = diff;
@@ -1113,8 +1108,10 @@ pub(crate) fn execute(exec: &mut Exec<'_>) -> Result<(), Stop> {
             &cfg,
             &head_entries,
             &changes,
-            &packs,
-            semantic_binding != base_binding,
+            LayerSemantics {
+                packs: &packs,
+                refresh: refresh_semantics,
+            },
             &mut exec.warnings,
             env.source.case_insensitive(&root),
         );
@@ -1197,8 +1194,10 @@ pub(crate) fn execute(exec: &mut Exec<'_>) -> Result<(), Stop> {
             &cfg,
             &composed,
             &local_changes,
-            &packs,
-            false,
+            LayerSemantics {
+                packs: &packs,
+                refresh: false,
+            },
             &mut exec.warnings,
             env.source.case_insensitive(&root),
         );
@@ -1548,13 +1547,17 @@ fn prepare_layer_semantics(
     Ok(())
 }
 
+struct LayerSemantics<'a> {
+    packs: &'a [Arc<dyn crate::ports::indexing::SemanticEnricher>],
+    refresh: bool,
+}
+
 fn layer_units(
     env: &IndexEnv,
     cfg: &EffectiveConfig,
     tree: &[TreeEntry],
     changes: &[Change],
-    semantic_packs: &[Arc<dyn crate::ports::indexing::SemanticEnricher>],
-    semantic_changed: bool,
+    semantics: LayerSemantics<'_>,
     warnings: &mut Vec<RunWarning>,
     case_insensitive: bool,
 ) -> (
@@ -1608,8 +1611,8 @@ fn layer_units(
     let semantic: BTreeSet<String> = by_key
         .values()
         .filter(|unit| {
-            (semantic_changed || !changes.is_empty())
-                && super::worker::semantic::repository_unit(semantic_packs, unit)
+            (semantics.refresh || !changes.is_empty())
+                && super::worker::semantic::repository_unit(semantics.packs, unit)
         })
         .map(|unit| unit.key.clone())
         .filter(|key| !changed.contains(key) && !regrouped.contains(key))

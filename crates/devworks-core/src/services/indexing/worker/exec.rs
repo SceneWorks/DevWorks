@@ -515,13 +515,13 @@ impl Exec<'_> {
                 "an exclusion now names this repository",
             ));
         }
-        self.semantic_packs = semantic::select(&env, &cfg, &repo_id).map_err(Stop::storage)?;
-        let semantic_binding = semantic::binding(&self.semantic_packs);
         let registry_binding = read_snapshot(&*env.store, &ReadOptions::default(), |read| {
             let projects = read.projects().repository_projects(&repo_id)?;
             semantic::registry_binding(read.packages(), &cfg, &projects)
         })
         .map_err(Stop::storage)?;
+        self.semantic_packs = semantic::select(&env, &cfg, &repo_id, &registry_binding)?;
+        let semantic_binding = semantic::binding(&self.semantic_packs);
         let pointer = previous.as_ref().map_or(0, |(_, r)| *r);
         let parent = previous
             .as_ref()
@@ -574,12 +574,14 @@ impl Exec<'_> {
                     .and_then(Value::as_str)
                     .unwrap_or("")
                     == semantic_binding
+                && p.manifest["semanticRegistryBinding"].as_str().unwrap_or("") == registry_binding
                 && p.manifest.get("extractorVersion").and_then(Value::as_i64)
                     == Some(EXTRACTOR_VERSION)
         });
-        let reuse_repository_semantics = reusable.is_some_and(|parent| {
-            parent.source_digest == head && !semantic::incomplete(&parent.manifest["coverage"])
-        });
+        // Identical immutable inputs reuse all rows, including any recorded coverage gap.
+        // An explicit reindex bypasses reuse after a missing runtime or cache is repaired.
+        let reuse_repository_semantics =
+            reusable.is_some_and(|parent| parent.source_digest == head);
         let repository_semantics = self
             .semantic_packs
             .iter()
@@ -594,6 +596,7 @@ impl Exec<'_> {
             &pointer.to_string(),
             &self.run.kind,
             &semantic_binding,
+            &registry_binding,
         ]);
         // The staging generation: the checkpoint of an earlier attempt when its plan still holds.
         let existing = match &self.run.generation_id {
@@ -951,13 +954,27 @@ impl Exec<'_> {
             if current != pointer {
                 // Another publication (or an index removal) moved the pointer since this plan:
                 // never overwrite it. The generation is abandoned and the run re-plans.
-                return Ok(Err(current));
+                return Ok(Err(Stop::transient(
+                    "pointer_moved",
+                    format!("the published view moved (revision {current}) while this generation was built"),
+                )));
             }
             let stored = tx
                 .indexing()
                 .generation(&g)?
                 .filter(|x| x.state == GEN_SEALED)
                 .ok_or(StorageError::NotFound { kind: "index_generation", id: g.as_str().to_owned() })?;
+            let config = super::super::effective_config_tx(tx, &repo)?;
+            let projects = tx.projects().repository_projects(&repo)?;
+            if stored.manifest["configDigest"].as_str() != Some(config.digest.as_str())
+                || stored.manifest["semanticRegistryBinding"].as_str().unwrap_or("")
+                    != semantic::registry_binding(tx.packages(), &config, &projects)?
+            {
+                return Ok(Err(Stop::transient(
+                    "index_configuration_changed",
+                    "the index configuration or semantic package changed during the build",
+                )));
+            }
             let (state, gaps) = super::super::status::manifest_coverage(&stored.manifest);
             let coverage_name = match state {
                 crate::protocol::data::CoverageState::Complete => "Complete",
@@ -1054,12 +1071,7 @@ impl Exec<'_> {
         });
         match result {
             Ok(Ok(())) => Ok(()),
-            Ok(Err(moved)) => Err(Stop::transient(
-                "pointer_moved",
-                format!(
-                    "the published view moved (revision {moved}) while this generation was built"
-                ),
-            )),
+            Ok(Err(stop)) => Err(stop),
             // A lease renewal inside the fenced write: the run is no longer ours.
             Err(Stop::Lost) => Err(Stop::Lost),
             Err(s) => Err(s),
