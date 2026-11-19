@@ -115,6 +115,9 @@ pub struct StoredFileScan {
     pub identity: crate::authority::destructive::FileIdentity,
     /// Bytes read including the current unterminated line.
     pub read_through: i64,
+    /// Last observed modification time, used to skip unchanged unterminated lines.
+    #[serde(default)]
+    pub modified_at: Option<std::time::Duration>,
     /// End of the last reported match in that line's decoded text.
     pub last_match_end: Option<usize>,
 }

@@ -2754,6 +2754,16 @@ mod tests {
         );
 
         std::fs::write(&path, b"READY").unwrap();
+        // Give the two observations distinct times even on a coarse filesystem clock.
+        let modified = std::time::UNIX_EPOCH
+            + first.progress.modified_at.unwrap()
+            + std::time::Duration::from_secs(2);
+        std::fs::File::options()
+            .write(true)
+            .open(&path)
+            .unwrap()
+            .set_modified(modified)
+            .unwrap();
         let second = scan_file(path_text, first.scanned, Some(first.progress), "READY").unwrap();
         assert_eq!(second.found, 1);
         let _ = std::fs::remove_dir_all(&dir);

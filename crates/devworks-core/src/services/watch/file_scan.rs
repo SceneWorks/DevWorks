@@ -4,6 +4,7 @@ use regex::Regex;
 use std::fs::{File, Metadata, OpenOptions};
 use std::io::{Read, Seek, SeekFrom};
 use std::path::Path;
+use std::time::UNIX_EPOCH;
 
 #[derive(Debug, PartialEq, Eq)]
 pub(super) struct FileScan {
@@ -44,11 +45,21 @@ pub(super) fn scan_file(
     }
     let identity = file_identity(&file, &metadata)?;
     let len = i64::try_from(metadata.len()).ok()?;
+    let modified_at = metadata
+        .modified()
+        .ok()
+        .and_then(|time| time.duration_since(UNIX_EPOCH).ok());
     let previous_offset = scanned;
     let (mut scanned, mut last_match_end) = match progress {
         Some(old) if old.identity != identity || len < old.read_through => (0, None),
-        // A writer may finish or overwrite the unconsumed line without growing the file.
-        Some(old) if len == scanned && len == old.read_through => return None,
+        // A writer may finish or overwrite an unconsumed line without growing the file.
+        Some(old)
+            if len == old.read_through
+                && (len == scanned
+                    || (modified_at.is_some() && modified_at == old.modified_at)) =>
+        {
+            return None;
+        }
         Some(old) => (scanned, old.last_match_end),
         // Upgraded watchers retain their previous complete-line offset.
         None if len < scanned => (0, None),
@@ -97,6 +108,7 @@ pub(super) fn scan_file(
     let next = StoredFileScan {
         identity,
         read_through,
+        modified_at,
         last_match_end,
     };
     (scanned != previous_offset || progress != Some(next)).then_some(FileScan {
