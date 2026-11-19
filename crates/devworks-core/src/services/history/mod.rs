@@ -88,8 +88,8 @@ use crate::context::{InvocationContext, ReceiptIdentity};
 use crate::gateway::AdmittedQuery;
 use crate::operations::{OperationInput, history as ops};
 use crate::ports::storage::{
-    HistoryScope, LedgerEntry, LineageRow, MAX_PAGE, NewEvent, ReadSnapshot, SequenceKey,
-    StorageError, StoredInvocation, StoredLink, UsageFact, WorkRoot, WriteTransaction,
+    EventRecord, HistoryScope, LedgerEntry, LineageRow, MAX_PAGE, NewEvent, ReadSnapshot,
+    SequenceKey, StorageError, StoredInvocation, StoredLink, UsageFact, WorkRoot, WriteTransaction,
 };
 use crate::ports::{IdKind, IdSource, QueryAnswer, QueryHandler};
 use crate::protocol::data::GitOid;
@@ -389,6 +389,64 @@ struct GitBody {
     pull_request_url: Option<String>,
     agent_session_id: Option<Value>,
     head: GitOid,
+}
+
+fn archived_readiness_lineage(event: EventRecord) -> Result<LineageRecord, Failure> {
+    use crate::protocol::records::{FindingState, ReadinessFinding};
+
+    let finding: ReadinessFinding = serde_json::from_value(event.payload["finding"].clone())
+        .map_err(|_| stored("archived readiness finding"))?;
+    let state = match finding.state {
+        FindingState::Resolved => "Resolved",
+        FindingState::RiskAccepted => "Risk accepted",
+        FindingState::Open => return Err(stored("open finding in readiness archive")),
+    };
+    let mut summary = format!(
+        "{state} finding {}\n{}",
+        finding.id.as_str(),
+        finding.summary.0
+    );
+    for (label, field) in [
+        ("Missing", Some(&finding.missing)),
+        ("Consequence", Some(&finding.consequence)),
+        ("Why more work was needed", Some(&finding.insufficiency)),
+        ("Closure condition", Some(&finding.closure_condition)),
+        ("Decision", finding.decision.as_ref()),
+        ("Objective", finding.objective.as_ref()),
+        ("Limits", finding.limits.as_ref()),
+        ("Question", finding.question.as_ref()),
+        ("Recommendation", finding.recommendation.as_ref()),
+        ("Resolution", finding.closure_note.as_ref()),
+    ] {
+        if let Some(text) = field.filter(|text| !text.0.is_empty()) {
+            summary.push_str(&format!("\n{label} — {}", text.0));
+        }
+    }
+    if let Some(confidence) = finding.confidence {
+        summary.push_str(&format!("\nConfidence — {confidence:?}"));
+    }
+    for attempt in &finding.attempts.0 {
+        summary.push_str(&format!("\nAttempt — {}", attempt.0));
+    }
+    for evidence in finding.evidence.0.iter().chain(&finding.closure_evidence.0) {
+        summary.push_str(&format!(
+            "\nEvidence — {} at {}",
+            evidence.artifact_id.as_str(),
+            evidence.version_id.as_str()
+        ));
+    }
+    Ok(LineageRecord {
+        id: event.id.0,
+        parent_id: None,
+        kind: label("readiness_finding", "event"),
+        related_id: finding.id,
+        summary: content(&summary),
+        actor_id: Some(event.actor),
+        actor_attribution: Some(ActorAttribution::Recorded),
+        occurred_at_ms: Some(counter(event.created_at_ms)),
+        repository_id: None,
+        revision: None,
+    })
 }
 
 fn stored(what: &str) -> Failure {
@@ -715,6 +773,11 @@ impl HistoryService {
                 }
             }
             LineageRow::Event { event, .. } => {
+                if event.aggregate_kind == crate::services::work::readiness::READINESS_AGGREGATE
+                    && event.kind == crate::services::work::readiness::FINDING_ARCHIVED
+                {
+                    return archived_readiness_lineage(event);
+                }
                 let (kind, what) = match event.aggregate_kind.as_str() {
                     "command" => (
                         "command",

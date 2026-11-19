@@ -1634,6 +1634,58 @@ fn seed_completed_plan_review(engine: &devworks_desktop::host::Engine, feature: 
 }
 
 #[test]
+fn a_feature_shows_settled_findings_evicted_from_its_current_assessment() {
+    let root = Root::new("settled-readiness-history");
+    let engine = start(&root);
+    let backend = engine.backend();
+    let mut h = harness(shell(&engine, &root, Script::default()), 1600.0, 1300.0);
+    settle(&mut h);
+    let feature = initial_approved_plan(&engine, &*backend, &mut h);
+    h.state_mut().work.plan = None;
+    seed_completed_plan_review(&engine, &feature);
+    let settled = |i: usize| {
+        json!({"id": format!("S{i}"), "disposition": "ResolvedDecision",
+        "blocking": false, "prerequisite": false, "state": "Resolved", "requirementIds": [],
+        "affectedWorkIds": [], "summary": format!("Checked case {i}"), "missing": "",
+        "consequence": "", "attempts": [], "insufficiency": "", "closureCondition": "",
+        "decision": "Confirmed on native checkout", "confidence": "High", "evidence": [],
+        "closureEvidence": []})
+    };
+    let assess = |feature: &WorkRecord, revision: &str, findings: Vec<_>| {
+        let approval = feature.approval.as_ref().unwrap();
+        command(
+            &*backend,
+            "features.edit",
+            json!({
+                "workId": feature.id, "expectedRevision": feature.revision,
+                "changes": {"readiness": {"kind": "Assess", "expectedAssessmentRevision": revision,
+                    "planRevision": approval.plan_revision, "planDigest": approval.plan_digest,
+                    "summary": "Checkout reviewed", "findings": findings}},
+            }),
+        )
+    };
+    let feature = assess(&feature, "1", (0..128).map(settled).collect());
+    let feature = assess(&feature, "2", vec![settled(128)]);
+    assert!(
+        !feature
+            .readiness
+            .as_ref()
+            .unwrap()
+            .findings
+            .0
+            .iter()
+            .any(|f| f.id.as_str() == "S127")
+    );
+    h.state_mut()
+        .work
+        .detail
+        .insert(feature.id.as_str().to_owned(), feature);
+    click(&mut h, Role::Button, "Show settled findings history");
+    assert!(has_text(&h, "Resolved finding S127"));
+    assert!(has_text(&h, "Confirmed on native checkout"));
+}
+
+#[test]
 fn refreshing_a_cached_feature_shows_independent_readiness_changes() {
     let root = Root::new("readiness-after-unlink");
     let engine = start(&root);

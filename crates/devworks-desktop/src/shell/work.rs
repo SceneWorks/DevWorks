@@ -108,6 +108,8 @@ pub struct WorkUi {
     pub activity: Activity,
     /// Current records of opened features (readiness at schema revision 2).
     pub detail: BTreeMap<String, WorkRecord>,
+    pub(crate) readiness_history:
+        BTreeMap<String, Paged<devworks_core::protocol::records::LineageRecord>>,
     /// Each root's source-control links: a re-read keeps the list on screen until every page
     /// arrived, so a refresh never shifts the controls beneath it.
     pub git: BTreeMap<String, Paged<devworks_core::protocol::records::AttributedGitLink>>,
@@ -310,6 +312,7 @@ pub(crate) enum Action {
     SelectCard(Option<String>),
     OpenDetail(String),
     RefreshGit(String),
+    ReadinessHistory(String, bool),
     InspectGit(String, String),
     OpenGitSession(String),
 }

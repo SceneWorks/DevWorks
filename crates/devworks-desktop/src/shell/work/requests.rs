@@ -298,6 +298,38 @@ impl WorkCtl<'_, '_> {
         );
     }
 
+    pub(super) fn load_readiness_history(&mut self, root: &str, more: bool) {
+        let list = self
+            .work
+            .readiness_history
+            .entry(root.to_owned())
+            .or_default();
+        let fetch = if more {
+            list.more_page()
+        } else {
+            Some(list.reread())
+        };
+        if let Some(fetch) = fetch {
+            self.request_readiness_history(root, fetch);
+        }
+    }
+
+    pub(super) fn request_readiness_history(&mut self, root: &str, fetch: Fetch) {
+        let Some(list) = self.work.readiness_history.get_mut(root) else {
+            return;
+        };
+        let root = root.to_owned();
+        let slot = WorkSlot::ReadinessHistory(root.clone(), fetch.generation);
+        self.cx.paged(
+            list,
+            fetch,
+            slot,
+            "Reading settled finding history",
+            "history.work_lineage",
+            move |be, cursor| wops::readiness_history(be, &root, cursor),
+        );
+    }
+
     /// Reads the root's source-control links: a first read shows its spinner, a re-read keeps
     /// the shown list until every page is read.
     pub(super) fn load_git_links(&mut self, work: &str) {

@@ -209,6 +209,26 @@ impl WorkCtl<'_, '_> {
                     .git_inspections
                     .insert(tree, ops::git_inspected(q).map_err(|e| e.describe()));
             }
+            (WorkSlot::ReadinessHistory(id, generation), Reply::Query(q)) => {
+                let page = wops::readiness_history_result(q)
+                    .map(|page| {
+                        Page::new(
+                            page.items
+                                .0
+                                .into_iter()
+                                .filter(|row| row.kind.0 == "readiness_finding")
+                                .collect(),
+                            page.next_cursor.map(|c| c.0),
+                        )
+                    })
+                    .map_err(|e| e.describe());
+                if let Some(list) = self.work.readiness_history.get_mut(&id)
+                    && let Applied::Continue(fetch) =
+                        list.apply_unique(generation, page, |row| row.id.as_str().to_owned())
+                {
+                    self.request_readiness_history(&id, fetch);
+                }
+            }
             (WorkSlot::WorkGit(id), Reply::Query(q)) => {
                 let page = wops::git_links_result(q)
                     .map(|page| Page::new(page.items.0, page.next_cursor.map(|c| c.0)))
