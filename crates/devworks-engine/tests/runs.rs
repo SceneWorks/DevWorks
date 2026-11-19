@@ -8759,3 +8759,5 @@ mod failure_notifications;
 
 #[path = "runs/plan_review.rs"]
 mod plan_review_tests;
+#[path = "runs/review_capacity.rs"]
+mod review_capacity_tests;
