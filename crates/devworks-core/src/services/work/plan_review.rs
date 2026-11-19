@@ -563,34 +563,28 @@ pub(crate) fn report_matches(evidence: &ArtifactRef, report: &ArtifactRef) -> bo
 }
 
 fn dispositions_recorded(slots: &Slots, review: &PlanReview, allow_pending: bool) -> bool {
-    dispositions_in(
-        slots
-            .active
-            .iter()
-            .chain(slots.pending.iter().filter(|_| allow_pending)),
-        review,
-    )
-}
-
-fn dispositions_in<'a>(
-    assessments: impl Iterator<Item = &'a super::readiness::Assessment> + Clone,
-    review: &PlanReview,
-) -> bool {
     let ReviewOutcome::Complete { report, findings } = &review.outcome else {
         return false;
     };
     (0..*findings).all(|index| {
         let id = finding_id(&review.session, index);
-        assessments.clone().any(|assessment| {
-            assessment.findings.iter().any(|finding| {
-                finding.id == id
-                    && finding
-                        .evidence
-                        .0
-                        .iter()
-                        .any(|evidence| report_matches(evidence, report))
+        [(false, &slots.active), (true, &slots.pending)]
+            .into_iter()
+            .filter(|(pending, _)| !pending || allow_pending)
+            .any(|(pending, assessment)| {
+                assessment
+                    .iter()
+                    .flat_map(|assessment| &assessment.findings)
+                    .chain(slots.archived_finding(&id, pending))
+                    .any(|finding| {
+                        finding.id == id
+                            && finding
+                                .evidence
+                                .0
+                                .iter()
+                                .any(|evidence| report_matches(evidence, report))
+                    })
             })
-        })
     })
 }
 
@@ -658,7 +652,6 @@ mod tests {
                 assessed_by: ActorId(id("coordinator")),
                 assessed_at_ms: 0,
             }),
-            pending: None,
             plan_reviews: vec![PlanReview {
                 plan_revision: 1,
                 plan_digest: digest,
@@ -677,6 +670,7 @@ mod tests {
                     findings: 0,
                 },
             }],
+            ..Slots::default()
         };
         plan.requirements.0[0].statement.0 = "Writes use the revised contract".into();
         let changed = ActivePlan {
@@ -785,6 +779,33 @@ mod tests {
         carried.active = Some(pending);
         assert!(
             carried_scope(&carried)
+                .unit(Some("E1"))
+                .unwrap()
+                .readiness
+                .is_current()
+        );
+
+        let disposition = carried.active.as_mut().unwrap().findings.pop().unwrap();
+        carried.pending = None;
+        let archived = json!({
+            disposition.id.as_str(): {
+                "planRevision": successor.plan_revision,
+                "planDigest": successor.digest,
+                "finding": disposition
+            }
+        });
+        let mut stored = carried.value();
+        stored["pendingArchive"] = archived.clone();
+        assert!(
+            !carried_scope(&Slots::of(&stored))
+                .unit(Some("E1"))
+                .unwrap()
+                .readiness
+                .is_current()
+        );
+        stored["activeArchive"] = archived;
+        assert!(
+            carried_scope(&Slots::of(&stored))
                 .unit(Some("E1"))
                 .unwrap()
                 .readiness
