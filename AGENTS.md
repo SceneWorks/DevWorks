@@ -9,7 +9,7 @@
 - Keep each non-feature PR at or under 5000 hand-written changed lines. The `PR size` workflow enforces this (`tools/pr-size/check.py`); files marked `linguist-generated` in `.gitattributes` are not counted, and PRs from `feature/*` branches are not checked.
 - Every item still needs its own tests and acceptance report. Land incomplete capabilities unwired (not reachable from the UI or agent tools) rather than holding a long-lived draft PR.
 
-## Code review rules
+## Code Review Rules
 
 Apply these rules to automated and human PR reviews.
 
