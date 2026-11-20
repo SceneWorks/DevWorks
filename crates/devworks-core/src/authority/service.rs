@@ -1068,6 +1068,10 @@ fn fences_hold_with_context(
                     crate::services::router::embedding_spaces::resolve_selected_in(tx, ctx)?;
                 current.binding().is_some() && current.source_digest() == source_digest
             }
+            AuthorityFence::DocumentVision { settings_witness } => {
+                let current = crate::services::documents::vision::policy(tx.configuration())?;
+                current.enabled && current.witness == *settings_witness
+            }
             AuthorityFence::Policy { project_id, digest } => {
                 policy_holds(tx.configuration(), project_id.as_ref(), digest)?
             }
@@ -1124,6 +1128,10 @@ pub fn authorization_holds(
                 crate::services::documents::indexing::embedding_fence_read(s, run, *generation)?
             }
             AuthorityFence::QualifiedEmbedding { .. } => false,
+            AuthorityFence::DocumentVision { settings_witness } => {
+                let current = crate::services::documents::vision::policy(s.configuration())?;
+                current.enabled && current.witness == *settings_witness
+            }
             AuthorityFence::Policy { project_id, digest } => {
                 policy_holds(s.configuration(), project_id.as_ref(), digest)?
             }

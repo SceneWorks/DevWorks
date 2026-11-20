@@ -4,6 +4,7 @@ pub mod extraction;
 pub mod indexing;
 pub mod pdf;
 mod retrieval;
+pub mod vision;
 
 use crate::{
     context::InvocationContext,
@@ -175,9 +176,12 @@ impl DocumentLibrary {
                     tx,
                     ctx,
                     command,
-                    &input.document_id,
-                    &input.version_id,
-                    &input.expected_revision,
+                    indexing::IndexRequest {
+                        document: &input.document_id,
+                        version: &input.version_id,
+                        expected: &input.expected_revision,
+                        reextract: input.reextract.unwrap_or(false),
+                    },
                 )?;
                 (OperationResult::DocumentsIndex { value }, true)
             }
@@ -187,9 +191,12 @@ impl DocumentLibrary {
                     tx,
                     ctx,
                     command,
-                    &input.document_id,
-                    &input.version_id,
-                    &input.expected_revision,
+                    indexing::IndexRequest {
+                        document: &input.document_id,
+                        version: &input.version_id,
+                        expected: &input.expected_revision,
+                        reextract: false,
+                    },
                 )?;
                 (OperationResult::DocumentsRetry { value }, true)
             }

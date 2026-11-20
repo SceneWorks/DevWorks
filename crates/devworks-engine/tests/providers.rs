@@ -2939,3 +2939,5 @@ mod mcp_end_to_end;
 
 #[path = "providers/document_embeddings.rs"]
 mod document_embeddings;
+#[path = "providers/document_vision.rs"]
+mod document_vision;

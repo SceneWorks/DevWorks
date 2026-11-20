@@ -9,6 +9,7 @@ use devworks_core::{
     services::documents::{
         extraction::{ExtractionControl, ExtractionInput},
         indexing::DocumentProcessor,
+        vision::VisionTarget,
     },
 };
 use devworks_desktop::document_extraction::NativeDocumentProcessor;
@@ -66,6 +67,31 @@ fn document_index_processor_preserves_pdf_and_word_source_locators() {
         pdf.blocks[0].citation.locator,
         Locator::Pdf { page: 1 }
     ));
+    assert!(matches!(
+        pdf.vision_targets.as_slice(),
+        [VisionTarget::Pdf { page: 2 }]
+    ));
+    let mut rendered = 0;
+    processor
+        .render_vision(
+            ExtractionInput {
+                version: &reference,
+                revision: &revision,
+                bytes: MIXED,
+            },
+            &pdf.vision_targets,
+            &control,
+            &mut |target, raster| {
+                let raster = raster.expect("actual PDF page raster");
+                assert!(matches!(target, VisionTarget::Pdf { page: 2 }));
+                assert!(raster.validate(target));
+                assert!(!raster.png.is_empty());
+                rendered += 1;
+                Ok(())
+            },
+        )
+        .unwrap();
+    assert_eq!(rendered, 1);
     let encrypted = processor
         .extract(
             ExtractionInput {
@@ -101,4 +127,61 @@ fn document_index_processor_preserves_pdf_and_word_source_locators() {
         block.citation.locator,
         Locator::Docx { .. }
     )));
+}
+
+#[test]
+fn word_vision_renders_only_supported_image_only_placements() {
+    use devworks_core::protocol::data::{CoverageState, Locator};
+    // The same embedded PNG occurs beside direct text, by itself, and cropped by half.
+    let bytes = include_bytes!("fixtures/docx/mixed-vision.docx");
+    let processor = NativeDocumentProcessor::beside_desktop(
+        Path::new(env!("CARGO_BIN_EXE_devworks-desktop")),
+        Arc::new(NativeProcessHost),
+    )
+    .unwrap();
+    let mut reference = exact(bytes);
+    reference.media_type =
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document".into();
+    let revision = processor.revision();
+    let input = ExtractionInput {
+        version: &reference,
+        revision: &revision,
+        bytes,
+    };
+    let control = ExtractionControl {
+        deadline: Instant::now() + Duration::from_secs(10),
+        cancelled: &|| false,
+    };
+    let indexed = processor.extract(input, &control).unwrap();
+    assert_eq!(indexed.blocks.len(), 1);
+    assert_eq!(indexed.blocks[0].text, "With visible text");
+    assert_eq!(indexed.coverage.state, CoverageState::Partial);
+    assert!(matches!(
+        indexed.vision_targets.as_slice(),
+        [VisionTarget::Word {
+            locator: Locator::Docx { paragraph: 2, .. },
+            placement: 2,
+            ..
+        }]
+    ));
+    let mut captured = false;
+    processor
+        .render_vision(
+            ExtractionInput {
+                version: &reference,
+                revision: &revision,
+                bytes,
+            },
+            &indexed.vision_targets,
+            &control,
+            &mut |target, raster| {
+                let raster = raster.expect("actual Word raster");
+                assert!(raster.validate(target));
+                assert_eq!((raster.width, raster.height), (2, 1));
+                captured = true;
+                Ok(())
+            },
+        )
+        .unwrap();
+    assert!(captured);
 }

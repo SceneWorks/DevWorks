@@ -53,6 +53,7 @@ impl DocumentProcessor for Processor {
             .map_err(|failure| id(&format!("Text{failure:?}")))?;
         Ok(DocumentExtraction {
             blocks,
+            vision_targets: vec![],
             coverage: Coverage {
                 state: CoverageState::Complete,
                 gaps: vec![],

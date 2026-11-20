@@ -18,6 +18,8 @@ pub enum DerivedKind {
     ConventionEmbeddingInput,
     DocumentEmbeddingInput,
     DocumentEmbeddingOutput,
+    DocumentVisionInput,
+    DocumentVisionOutput,
     ProviderNativeContinuation,
 }
 
@@ -34,6 +36,8 @@ impl DerivedKind {
             Self::ConventionEmbeddingInput => "ConventionEmbeddingInput",
             Self::DocumentEmbeddingInput => "DocumentEmbeddingInput",
             Self::DocumentEmbeddingOutput => "DocumentEmbeddingOutput",
+            Self::DocumentVisionInput => "DocumentVisionInput",
+            Self::DocumentVisionOutput => "DocumentVisionOutput",
             Self::ProviderNativeContinuation => "ProviderNativeContinuation",
         }
     }
@@ -49,6 +53,8 @@ impl DerivedKind {
             Self::ConventionEmbeddingInput,
             Self::DocumentEmbeddingInput,
             Self::DocumentEmbeddingOutput,
+            Self::DocumentVisionInput,
+            Self::DocumentVisionOutput,
             Self::ProviderNativeContinuation,
         ]
         .into_iter()
@@ -79,11 +85,14 @@ impl DerivedKind {
         matches!(self, Self::HelpTopic | Self::Instruction)
     }
 
-    /// Native embedding custody tied to an exact managed document version.
-    pub fn is_document_embedding(self) -> bool {
+    /// Native inference material tied to an exact managed document version.
+    pub fn is_document_custody(self) -> bool {
         matches!(
             self,
-            Self::DocumentEmbeddingInput | Self::DocumentEmbeddingOutput
+            Self::DocumentEmbeddingInput
+                | Self::DocumentEmbeddingOutput
+                | Self::DocumentVisionInput
+                | Self::DocumentVisionOutput
         )
     }
 

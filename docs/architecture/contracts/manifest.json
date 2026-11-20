@@ -178,6 +178,10 @@
       "sha256": "d5d028ad3a719cf662e7e6337e0be67cfd82e14796b22925c4297b53782aaab8"
     },
     {
+      "file": "domain-request.r12.schema.json",
+      "sha256": "b0a150b3faee12f38a4613b6abb4bee7cb0309a25e26a4825de57c0c60468feb"
+    },
+    {
       "file": "domain-request.r2.schema.json",
       "sha256": "3cad78ba53390ac59ccc5ff554ceba98f3a0e16ef0fdb0e4e9c8b28ab38cba97"
     },

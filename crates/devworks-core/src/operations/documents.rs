@@ -73,17 +73,29 @@ pub struct IndexInput {
     pub document_id: Id,
     pub version_id: Id,
     pub expected_revision: Revision,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "bool", extend("x-since" = 12))]
+    pub reextract: Option<bool>,
 }
 impl Check for IndexInput {
     fn check(&self) -> Result<(), String> {
         self.document_id.check()?;
         self.version_id.check()?;
         self.expected_revision.check()?;
+        self.reextract.check()?;
         Ok(())
     }
 }
 impl Revisioned for IndexInput {
-    fn retain_revision(&mut self, _: u32) {}
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 12 {
+            self.reextract = None;
+        }
+    }
 }
 
 /// `documents.retry` Command input.

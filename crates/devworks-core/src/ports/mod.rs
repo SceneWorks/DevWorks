@@ -170,6 +170,8 @@ pub enum AuthorityFence {
     DocumentIndex { run: Id, generation: i64 },
     /// Qualified selection required at native embedding admission and egress.
     QualifiedEmbedding { source_digest: String },
+    /// The owner enabled routed document vision under this exact Settings revision.
+    DocumentVision { settings_witness: String },
     /// Digest of the access-relevant effective policy of the invocation's scope.
     Policy {
         project_id: Option<ProjectId>,

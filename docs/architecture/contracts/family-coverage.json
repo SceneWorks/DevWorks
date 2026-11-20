@@ -9497,11 +9497,19 @@
               "queryReplySchema": null,
               "commandReplySchema": "domain-command-reply.schema.json",
               "completionSchema": "operation-completion.schema.json"
+            },
+            {
+              "revision": 12,
+              "inputSchema": "domain-request.r12.schema.json",
+              "resultSchema": "operation-result.r11.schema.json",
+              "queryReplySchema": null,
+              "commandReplySchema": "domain-command-reply.r11.schema.json",
+              "completionSchema": "operation-completion.r11.schema.json"
             }
           ],
           "authority": "Scoped",
           "effect": "Inference",
-          "semanticRules": "Native extraction first; scan vision/embedding uses router and ordinary usage/feature budget attribution. Failed/canceled old version cannot publish current results.",
+          "semanticRules": "Native extraction first; scan vision/embedding uses router and ordinary usage/feature budget attribution. Matching extraction is reused unless reextract is explicitly true. Unsettled previous attempts keep their original custody. Failed/canceled old version cannot publish current results.",
           "familyRules": "All imported versions retained until explicit deletion. Exact version/page/locator citations; missing current source never selects an older version.",
           "admission": "Validate protocol, strict fields and selected operation/mode first; derive host principal, current scope/role/grants, then apply command receipt and dispatch policy. Payload IDs are references, not authority.",
           "errorSchema": "DomainFault in domain-query-reply or domain-command-reply; shared pre-admission rejections and legacy specialized control replies remain available",

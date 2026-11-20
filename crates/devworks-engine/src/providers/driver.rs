@@ -509,14 +509,54 @@ impl NativeProviders {
                 ));
             }
         }
+        use devworks_core::services::router::Purpose;
         let compaction = matches!(request.purpose, InferencePurpose::Compaction);
-        let detached = compaction || nested.is_some();
-        if compaction != (logical.purpose == devworks_core::services::router::Purpose::Compaction)
+        let vision = matches!(request.purpose, InferencePurpose::Vision);
+        let detached = compaction || vision || nested.is_some();
+        if compaction != (logical.purpose == Purpose::Compaction)
+            || vision != (logical.purpose == Purpose::Vision)
             || (detached
                 && !matches!(&request.input, InferenceInput::Generation { tools, .. } if tools.is_empty()))
-            || (compaction && nested.is_some())
+            || ((compaction || vision) && nested.is_some())
         {
             return Err(StorageError::ScopeDenied);
+        }
+        if vision {
+            let Attribution::Service {
+                operation_id,
+                project_id,
+            } = &request.attribution
+            else {
+                return Err(StorageError::ScopeDenied);
+            };
+            let InferenceInput::Generation {
+                session_id,
+                requires_images: true,
+                ..
+            } = &request.input
+            else {
+                return Err(StorageError::ScopeDenied);
+            };
+            // The service operation addresses a detached request without a conversation.
+            // Its actual session, when present, remains attached to accounting and authority.
+            if project_id.as_ref() != context.project_id()
+                || logical.session_id.as_ref() != context.session_id()
+                || session_id != context.session_id().unwrap_or(&operation_id.0)
+                || !source_fences.iter().any(|fence| {
+                    matches!(
+                        fence,
+                        devworks_core::ports::AuthorityFence::DocumentIndex { .. }
+                    )
+                })
+                || !source_fences.iter().any(|fence| {
+                    matches!(
+                        fence,
+                        devworks_core::ports::AuthorityFence::DocumentVision { .. }
+                    )
+                })
+            {
+                return Err(StorageError::ScopeDenied);
+            }
         }
         let mut turn_start_sequence = None;
         let mut context_head_fence = None;
@@ -525,6 +565,7 @@ impl NativeProviders {
             context: source,
             ..
         } = &request.input
+            && !vision
         {
             let owner = read_snapshot(self.store.as_ref(), &ReadOptions::default(), |read| {
                 read.sessions()
@@ -568,6 +609,7 @@ impl NativeProviders {
         }
         if let InferenceInput::Generation { session_id, .. } = &request.input
             && nested.is_none()
+            && !vision
             && !crate::tool_turn::pending_calls(self.store.as_ref(), &context, session_id)?
                 .is_empty()
         {
@@ -610,6 +652,7 @@ impl NativeProviders {
         } = &request.input
             && context_epoch.get() > 0
             && nested.is_none()
+            && !vision
         {
             // The epoch is host-published provenance, not a guess from a cache miss. Record
             // its reason on the attributed attempt without copying prompt or tool material.
@@ -724,6 +767,12 @@ impl NativeProviders {
             document_index: source_fences.iter().find_map(|fence| match fence {
                 devworks_core::ports::AuthorityFence::DocumentIndex { run, generation } => {
                     Some((run.clone(), *generation))
+                }
+                _ => None,
+            }),
+            document_vision_witness: source_fences.iter().find_map(|fence| match fence {
+                devworks_core::ports::AuthorityFence::DocumentVision { settings_witness } => {
+                    Some(settings_witness.clone())
                 }
                 _ => None,
             }),
@@ -1154,9 +1203,18 @@ impl NativeProviders {
                 context_epoch,
                 ..
             } => {
-                if attempt.session_id.as_ref() != Some(session_id)
-                    || bound.context_epoch != Some(context_epoch.get())
-                {
+                let vision = matches!(request.purpose, InferencePurpose::Vision);
+                let session_matches = attempt.session_id.as_ref() == Some(session_id)
+                    || (vision
+                        && attempt.session_id.is_none()
+                        && matches!(&request.attribution, Attribution::Service { operation_id, .. }
+                            if &operation_id.0 == session_id));
+                let epoch_matches = if vision {
+                    bound.context_epoch.unwrap_or(0) == context_epoch.get()
+                } else {
+                    bound.context_epoch == Some(context_epoch.get())
+                };
+                if !session_matches || !epoch_matches {
                     return Err(StorageError::ScopeDenied);
                 }
                 context_epoch.clone()
@@ -1201,7 +1259,7 @@ impl NativeProviders {
             context,
             schemas: self.schemas.as_ref(),
         };
-        let prepared = encode::prepare(
+        let mut prepared = encode::prepare(
             identity,
             request,
             &capabilities,
@@ -1214,6 +1272,9 @@ impl NativeProviders {
             },
         )
         .map_err(|_| invalid("provider request materialization refused"))?;
+        if matches!(request.purpose, InferencePurpose::Vision) {
+            prepared.session_key = None;
+        }
         Ok((prepared, connection))
     }
 }
@@ -1362,6 +1423,7 @@ struct LazySink {
     context: InvocationContext,
     request: InferenceRequest,
     document_index: Option<(devworks_core::protocol::Id, i64)>,
+    document_vision_witness: Option<String>,
     instruction_targets: Option<InstructionTargets>,
     shared: SharedPrepared,
     result: ResultChannel,
@@ -1402,6 +1464,7 @@ impl LazySink {
                         InferenceInput::Embedding { .. } => None,
                     },
                     document_index: self.document_index.clone(),
+                    document_vision_witness: self.document_vision_witness.clone(),
                     instruction_targets: self.instruction_targets.clone(),
                 },
                 embedding,
@@ -1411,6 +1474,8 @@ impl LazySink {
             self.inner = Some(
                 if matches!(self.request.purpose, InferencePurpose::Compaction) {
                     sink.with_compaction()
+                } else if matches!(self.request.purpose, InferencePurpose::Vision) {
+                    sink.with_document_vision()
                 } else if self.detached {
                     sink.with_sampled_text()
                 } else {

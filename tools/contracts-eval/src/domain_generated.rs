@@ -22767,6 +22767,13 @@ pub enum DomainCommand {
         document_id: Id,
         version_id: Id,
         expected_revision: Revision,
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "gated_member"
+        )]
+        #[schemars(with = "bool", extend("x-since" = 12))]
+        reextract: Option<bool>,
     },
     #[serde(rename = "documents.retry")]
     DocumentsRetry {
@@ -24929,10 +24936,12 @@ impl Check for DomainCommand {
                 document_id,
                 version_id,
                 expected_revision,
+                reextract,
             } => {
                 document_id.check()?;
                 version_id.check()?;
                 expected_revision.check()?;
+                reextract.check()?;
             }
             Self::DocumentsRetry {
                 document_id,
@@ -26193,6 +26202,11 @@ impl Revisioned for DomainCommand {
                 }
                 if revision < 2 {
                     *reason = None;
+                }
+            }
+            Self::DocumentsIndex { reextract, .. } => {
+                if revision < 12 {
+                    *reextract = None;
                 }
             }
             Self::ConventionsEdit {

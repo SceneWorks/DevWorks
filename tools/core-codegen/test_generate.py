@@ -45,7 +45,7 @@ class SchemaRevisionRules(unittest.TestCase):
             'artifacts.save', 'artifacts.list', 'history.events', 'history.work_lineage',
             'documents.import', 'documents.list', 'documents.read', 'documents.share', 'documents.move',
             'documents.disable_retrieval', 'documents.remove_index',
-            'documents.resolve_citation',
+            'documents.resolve_citation', 'documents.index',
             'approvals.list', 'approvals.inspect', 'approvals.propose', 'approvals.record_human_decision',
             'approvals.review_queue', 'notifications.list', 'notifications.read',
             'notifications.acknowledge', 'notifications.mark_read',
