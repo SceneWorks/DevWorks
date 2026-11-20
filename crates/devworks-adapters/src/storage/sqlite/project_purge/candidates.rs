@@ -194,6 +194,7 @@ pub(super) fn selection(project: &ProjectId) -> Result<Selection, StorageError> 
         .ok_or_else(|| invalid("purge candidate predicates"))?
         .clone();
     predicates.insert("projects".into(), Value::String("id=?1".into()));
+    predicates.insert("analysis_runs".into(), Value::String("scope_key=?1".into()));
     predicates.insert(
         "project_details".into(),
         Value::String("project_id=?1".into()),

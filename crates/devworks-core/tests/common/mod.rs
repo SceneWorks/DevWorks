@@ -407,6 +407,9 @@ impl ReadSnapshot for MemSnapshot {
     fn indexing(&self) -> &dyn IndexRead {
         &self.unsupported
     }
+    fn analysis(&self) -> &dyn AnalysisRead {
+        &self.unsupported
+    }
     fn graph(&self) -> &dyn GraphRead {
         &self.unsupported
     }
@@ -556,6 +559,9 @@ impl WriteTransaction for MemTx<'_> {
         &mut self.unsupported
     }
     fn indexing(&mut self) -> &mut dyn IndexRepository {
+        &mut self.unsupported
+    }
+    fn analysis(&mut self) -> &mut dyn AnalysisRepository {
         &mut self.unsupported
     }
     fn graph(&mut self) -> &mut dyn GraphRepository {

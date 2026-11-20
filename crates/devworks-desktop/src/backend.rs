@@ -616,6 +616,7 @@ pub enum TaskOutput {
         status: Box<devworks_core::protocol::records::McpInboundStatus>,
         clients: Vec<devworks_core::protocol::records::McpClientAccess>,
     },
+    AnalysisEvidence(String),
     /// What deleting a repository's folder would remove, for the person to review.
     RepositoryDeletionPreview(Box<devworks_core::authority::deletion::DeletionPreview>),
     /// The outcome of a confirmed repository folder deletion.

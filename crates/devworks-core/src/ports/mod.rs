@@ -166,6 +166,8 @@ pub struct GrantUse {
 pub enum AuthorityFence {
     /// Current incoming MCP registration, credential, and exact target scope.
     ExternalMcp(Box<crate::services::mcp_inbound::AccessFence>),
+    /// A saved analysis subject whose owning operation must still be in dispatch.
+    AnalysisRequest { operation: OperationId, request: Id },
     /// Current durable task-branch ownership and repository membership.
     GitWorktree { id: Id, digest: String },
     /// The principal binding revision authority resolved.

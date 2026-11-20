@@ -460,16 +460,19 @@ impl Exec<'_> {
         let stopping = &self.w.stopping;
         let stop = move || stop_flag.load(Ordering::SeqCst) || stopping.load(Ordering::SeqCst);
         let git = git_for(&env, &ctx, &stop);
-        let head = match remote {
-            Some((target, true)) => {
-                git.fetch_index_source(&dir, &target.registered_remote, &target.head)
-                    .map_err(|_| Stop::transient("github_source", "the observed GitHub commit is unavailable through the registered Git remote"))?
-            }
+        let (head, head_ref) = match remote {
+            Some((target, true)) => (git.fetch_index_source(&dir, &target.registered_remote, &target.head)
+                .map_err(|_| Stop::transient("github_source", "the observed GitHub commit is unavailable through the registered Git remote"))?, None),
             Some((_, false)) => {
                 return Err(Stop::det("github_binding_changed", "the GitHub source binding is no longer current"));
             }
-            None => git.head(&dir).map_err(Stop::git)?
-                .ok_or_else(|| Stop::det("no_commit", "the repository has no commit to index"))?,
+            None => {
+                let observed = git.head_observation(&dir).map_err(|error| match error {
+                    GitFault::Unborn => Stop::det("no_commit", "the repository has no commit to index"),
+                    other => Stop::git(other),
+                })?;
+                (observed.head, observed.branch)
+            }
         };
         let format = git.object_format(&dir).map_err(Stop::git)?;
         let h = head.clone();
@@ -773,7 +776,7 @@ impl Exec<'_> {
         .unwrap_or_default();
         let texts = stage_texts(&env, &repo_id, readme_bytes, summary);
         let staged_files: Vec<_> = texts.iter().map(|t| t.2.clone()).collect();
-        let published = self.publish_baseline(&generation, &head, pointer, texts);
+        let published = self.publish_baseline(&generation, &head, head_ref, pointer, texts);
         if let Some(a) = &env.artifacts {
             for f in &staged_files {
                 a.settle_host_bytes(&*env.store, f, published.is_ok());
@@ -911,6 +914,7 @@ impl Exec<'_> {
         &mut self,
         generation: &Id,
         head: &str,
+        head_ref: Option<String>,
         pointer: i64,
         texts: Vec<(TextKind, String, crate::services::artifacts::StagedFile)>,
     ) -> Result<(), Stop> {
@@ -949,7 +953,7 @@ impl Exec<'_> {
                 branch_id: None,
                 worktree_id: None,
                 coverage: json!({"state": coverage_name, "gaps": gaps, "commit": head,
-                    "sourceRevision": pointer + 1,
+                    "headRef": head_ref, "sourceRevision": pointer + 1,
                     "configDigest": stored.manifest.get("configDigest")}),
             };
             tx.indexing().insert_view(&view)?;
@@ -1015,7 +1019,7 @@ impl Exec<'_> {
             r.owner = None;
             r.lease_until_ms = None;
             let host = tx.store().host_actor.clone();
-            history(
+            let published_event = super::super::history_event(
                 tx,
                 &host,
                 r.project_id.as_ref(),
@@ -1027,6 +1031,16 @@ impl Exec<'_> {
                     "principalKind": "Host",
                 }),
             )?;
+            if env.settings.analysis_events {
+                let delivery = tx.new_id(IdKind::QueueEntry);
+                tx.queue().enqueue(NewQueueEntry {
+                    id: delivery,
+                    consumer: crate::services::graph::repository_analysis::INDEX_CONSUMER.into(),
+                    event_id: published_event, root_id: None, operation_id: None,
+                    partition: None, priority: 0, ready_at_ms: now,
+                    payload: json!({"repositoryId": repo, "viewId": view_id}),
+                })?;
+            }
             Ok(Ok(()))
         });
         match result {

@@ -254,13 +254,13 @@ pub enum OperationResult {
     #[serde(rename = "analysis.health")]
     AnalysisHealth { value: AnalysisRecord },
     #[serde(rename = "analysis.cross_repo_links")]
-    AnalysisCrossRepoLinks { value: Page<MetricRecord> },
+    AnalysisCrossRepoLinks { value: AnalysisMetricPageResult },
     #[serde(rename = "analysis.community_analysis")]
     AnalysisCommunityAnalysis { value: AnalysisRecord },
     #[serde(rename = "analysis.status")]
     AnalysisStatus { value: AnalysisRecord },
     #[serde(rename = "analysis.clusters")]
-    AnalysisClusters { value: Page<ClusterRecord> },
+    AnalysisClusters { value: AnalysisClusterPageResult },
     #[serde(rename = "analysis.cluster_detail")]
     AnalysisClusterDetail { value: ClusterRecord },
     #[serde(rename = "analysis.link_and_detect")]
@@ -270,19 +270,19 @@ pub enum OperationResult {
     #[serde(rename = "analysis.security")]
     AnalysisSecurity { value: AnalysisRecord },
     #[serde(rename = "analysis.metrics")]
-    AnalysisMetrics { value: Page<MetricRecord> },
+    AnalysisMetrics { value: AnalysisMetricPageResult },
     #[serde(rename = "analysis.hotspots")]
-    AnalysisHotspots { value: Page<MetricRecord> },
+    AnalysisHotspots { value: AnalysisMetricPageResult },
     #[serde(rename = "analysis.reanalyze")]
     AnalysisReanalyze { value: AnalysisRecord },
     #[serde(rename = "analysis.synthesize")]
     AnalysisSynthesize { value: AnalysisRecord },
     #[serde(rename = "analysis.fleet_health")]
-    AnalysisFleetHealth { value: Page<MetricRecord> },
+    AnalysisFleetHealth { value: AnalysisMetricPageResult },
     #[serde(rename = "analysis.archival_candidates")]
-    AnalysisArchivalCandidates { value: Page<MetricRecord> },
+    AnalysisArchivalCandidates { value: AnalysisMetricPageResult },
     #[serde(rename = "analysis.file_hotspot")]
-    AnalysisFileHotspot { value: Page<MetricRecord> },
+    AnalysisFileHotspot { value: AnalysisMetricPageResult },
     #[serde(rename = "schemas.connections")]
     SchemasConnections { value: Page<SchemaConnection> },
     #[serde(rename = "schemas.objects")]
@@ -1709,6 +1709,22 @@ impl Revisioned for OperationResult {
             Self::CodeSnippet { value } => value.retain_revision(revision),
             Self::CodeRepositoryDependencies { value } => value.retain_revision(revision),
             Self::IndexingStatus { value } => value.retain_revision(revision),
+            Self::AnalysisHealth { value } => value.retain_revision(revision),
+            Self::AnalysisCrossRepoLinks { value } => value.retain_revision(revision),
+            Self::AnalysisCommunityAnalysis { value } => value.retain_revision(revision),
+            Self::AnalysisStatus { value } => value.retain_revision(revision),
+            Self::AnalysisClusters { value } => value.retain_revision(revision),
+            Self::AnalysisClusterDetail { value } => value.retain_revision(revision),
+            Self::AnalysisLinkAndDetect { value } => value.retain_revision(revision),
+            Self::AnalysisProcessBatch { value } => value.retain_revision(revision),
+            Self::AnalysisSecurity { value } => value.retain_revision(revision),
+            Self::AnalysisMetrics { value } => value.retain_revision(revision),
+            Self::AnalysisHotspots { value } => value.retain_revision(revision),
+            Self::AnalysisReanalyze { value } => value.retain_revision(revision),
+            Self::AnalysisSynthesize { value } => value.retain_revision(revision),
+            Self::AnalysisFleetHealth { value } => value.retain_revision(revision),
+            Self::AnalysisArchivalCandidates { value } => value.retain_revision(revision),
+            Self::AnalysisFileHotspot { value } => value.retain_revision(revision),
             Self::SchemasConnections { value } => value.retain_revision(revision),
             Self::SchemasObjects { value } => value.retain_revision(revision),
             Self::SchemasConfigure { value } => value.retain_revision(revision),
@@ -1972,6 +1988,13 @@ impl Revisioned for OperationResult {
             Self::CodePublishers { value } => value.check_revision(revision),
             Self::CodeSnippet { value } => value.check_revision(revision),
             Self::CodeRepositoryDependencies { value } => value.check_revision(revision),
+            Self::AnalysisCrossRepoLinks { value } => value.check_revision(revision),
+            Self::AnalysisClusters { value } => value.check_revision(revision),
+            Self::AnalysisMetrics { value } => value.check_revision(revision),
+            Self::AnalysisHotspots { value } => value.check_revision(revision),
+            Self::AnalysisFleetHealth { value } => value.check_revision(revision),
+            Self::AnalysisArchivalCandidates { value } => value.check_revision(revision),
+            Self::AnalysisFileHotspot { value } => value.check_revision(revision),
             Self::DreamingRevert { value } => value.check_revision(revision),
             Self::DocumentsImport { value } => value.check_revision(revision),
             Self::DocumentsList { value } => value.check_revision(revision),

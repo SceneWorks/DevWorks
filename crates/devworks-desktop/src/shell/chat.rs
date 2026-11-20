@@ -1881,6 +1881,7 @@ impl ChatCtl<'_, '_> {
                         | TaskOutput::WorkImportReport(_)
                         | TaskOutput::SystemOneCompletion(_)
                         | TaskOutput::IncomingMcp { .. }
+                        | TaskOutput::AnalysisEvidence(_)
                         | TaskOutput::RepositoryDeletionPreview(_)
                         | TaskOutput::RepositoryDeleted(_)
                         | TaskOutput::WorkspaceArchive(_)
@@ -1965,6 +1966,7 @@ impl ChatCtl<'_, '_> {
                             | TaskOutput::WorkImportReport(_)
                             | TaskOutput::SystemOneCompletion(_)
                             | TaskOutput::IncomingMcp { .. }
+                            | TaskOutput::AnalysisEvidence(_)
                             | TaskOutput::RepositoryDeletionPreview(_)
                             | TaskOutput::RepositoryDeleted(_)
                             | TaskOutput::WorkspaceArchive(_)

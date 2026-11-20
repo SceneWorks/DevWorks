@@ -15475,5 +15475,229 @@
     "raw": "{\"kind\":\"github.poll_status\",\"value\":{\"repositoryId\":\"id-a\",\"endpoints\":[{\"endpoint\":\"fixture\",\"state\":\"fixture\",\"nextPollAtMs\":\"0\"}],\"intake\":{\"items\":[{\"remoteIssueNumber\":\"1\",\"sourceRevision\":\"fixture\",\"state\":\"fixture\",\"url\":\"https://github.com/Acme/kit/issues/42\"}],\"hasMore\":false},\"intervalSeconds\":\"1\",\"nextAdmissionAtMs\":\"0\"}}",
     "typedValid": false,
     "schemaValid": false
+  },
+  {
+    "id": "dw13-r3-admission-analysis.health-Query",
+    "entry": "domain-request.r3",
+    "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"analysis.health\",\"scope\":{\"kind\":\"Workspace\"},\"views\":{\"kind\":\"Published\",\"repositoryIds\":[\"repo-a\"]},\"page\":{\"limit\":20},\"filters\":[]},\"schemaRevision\":3}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "dw13-r3-binding-analysis.health",
+    "entry": "operation-result.r3",
+    "raw": "{\"kind\":\"analysis.health\",\"value\":{\"id\":\"id-a\",\"revision\":\"1\",\"views\":{\"kind\":\"Published\",\"repositoryIds\":[\"repo-a\"]},\"kind\":\"fixture\",\"state\":\"ObservedComplete\",\"coverage\":{\"state\":\"Complete\",\"gaps\":[],\"moreGaps\":false}}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "dw13-r3-admission-analysis.cross_repo_links-Query",
+    "entry": "domain-request.r3",
+    "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"analysis.cross_repo_links\",\"scope\":{\"kind\":\"Workspace\"},\"views\":{\"kind\":\"Published\",\"repositoryIds\":[\"repo-a\"]},\"page\":{\"limit\":20},\"filters\":[]},\"schemaRevision\":3}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "dw13-r3-binding-analysis.cross_repo_links",
+    "entry": "operation-result.r3",
+    "raw": "{\"kind\":\"analysis.cross_repo_links\",\"value\":{\"items\":[],\"hasMore\":false,\"observation\":{\"availability\":\"Available\",\"bindings\":[],\"coverage\":{\"state\":\"Complete\",\"gaps\":[],\"moreGaps\":false},\"diagnostics\":[]}}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "dw13-r3-admission-analysis.status-Query",
+    "entry": "domain-request.r3",
+    "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"analysis.status\",\"scope\":{\"kind\":\"Workspace\"},\"views\":{\"kind\":\"Published\",\"repositoryIds\":[\"repo-a\"]},\"page\":{\"limit\":20},\"filters\":[]},\"schemaRevision\":3}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "dw13-r3-binding-analysis.status",
+    "entry": "operation-result.r3",
+    "raw": "{\"kind\":\"analysis.status\",\"value\":{\"id\":\"id-a\",\"revision\":\"1\",\"views\":{\"kind\":\"Published\",\"repositoryIds\":[\"repo-a\"]},\"kind\":\"fixture\",\"state\":\"ObservedComplete\",\"coverage\":{\"state\":\"Complete\",\"gaps\":[],\"moreGaps\":false}}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "dw13-r3-admission-analysis.clusters-Query",
+    "entry": "domain-request.r3",
+    "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"analysis.clusters\",\"scope\":{\"kind\":\"Workspace\"},\"views\":{\"kind\":\"Published\",\"repositoryIds\":[\"repo-a\"]},\"page\":{\"limit\":20},\"filters\":[]},\"schemaRevision\":3}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "dw13-r3-binding-analysis.clusters",
+    "entry": "operation-result.r3",
+    "raw": "{\"kind\":\"analysis.clusters\",\"value\":{\"items\":[],\"hasMore\":false,\"observation\":{\"availability\":\"Available\",\"bindings\":[],\"coverage\":{\"state\":\"Complete\",\"gaps\":[],\"moreGaps\":false},\"diagnostics\":[]}}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "dw13-r3-admission-analysis.cluster_detail-Query",
+    "entry": "domain-request.r3",
+    "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"analysis.cluster_detail\",\"scope\":{\"kind\":\"Workspace\"},\"views\":{\"kind\":\"Published\",\"repositoryIds\":[\"repo-a\"]},\"page\":{\"limit\":20},\"clusterId\":\"id-a\",\"filters\":[]},\"schemaRevision\":3}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "dw13-r3-binding-analysis.cluster_detail",
+    "entry": "operation-result.r3",
+    "raw": "{\"kind\":\"analysis.cluster_detail\",\"value\":{\"id\":\"id-a\",\"viewId\":\"id-a\",\"name\":\"fixture\",\"memberNodeIds\":[],\"score\":0.5}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "dw13-r3-admission-analysis.security-Query",
+    "entry": "domain-request.r3",
+    "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"analysis.security\",\"scope\":{\"kind\":\"Workspace\"},\"views\":{\"kind\":\"Published\",\"repositoryIds\":[\"repo-a\"]},\"page\":{\"limit\":20},\"filters\":[]},\"schemaRevision\":3}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "dw13-r3-binding-analysis.security",
+    "entry": "operation-result.r3",
+    "raw": "{\"kind\":\"analysis.security\",\"value\":{\"id\":\"id-a\",\"revision\":\"1\",\"views\":{\"kind\":\"Published\",\"repositoryIds\":[\"repo-a\"]},\"kind\":\"fixture\",\"state\":\"ObservedComplete\",\"coverage\":{\"state\":\"Complete\",\"gaps\":[],\"moreGaps\":false}}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "dw13-r3-admission-analysis.metrics-Query",
+    "entry": "domain-request.r3",
+    "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"analysis.metrics\",\"scope\":{\"kind\":\"Workspace\"},\"views\":{\"kind\":\"Published\",\"repositoryIds\":[\"repo-a\"]},\"page\":{\"limit\":20},\"filters\":[]},\"schemaRevision\":3}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "dw13-r3-binding-analysis.metrics",
+    "entry": "operation-result.r3",
+    "raw": "{\"kind\":\"analysis.metrics\",\"value\":{\"items\":[],\"hasMore\":false,\"observation\":{\"availability\":\"Available\",\"bindings\":[],\"coverage\":{\"state\":\"Complete\",\"gaps\":[],\"moreGaps\":false},\"diagnostics\":[]}}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "dw13-r3-admission-analysis.hotspots-Query",
+    "entry": "domain-request.r3",
+    "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"analysis.hotspots\",\"scope\":{\"kind\":\"Workspace\"},\"views\":{\"kind\":\"Published\",\"repositoryIds\":[\"repo-a\"]},\"page\":{\"limit\":20},\"filters\":[]},\"schemaRevision\":3}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "dw13-r3-binding-analysis.hotspots",
+    "entry": "operation-result.r3",
+    "raw": "{\"kind\":\"analysis.hotspots\",\"value\":{\"items\":[],\"hasMore\":false,\"observation\":{\"availability\":\"Available\",\"bindings\":[],\"coverage\":{\"state\":\"Complete\",\"gaps\":[],\"moreGaps\":false},\"diagnostics\":[]}}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "dw13-r3-admission-analysis.fleet_health-Query",
+    "entry": "domain-request.r3",
+    "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"analysis.fleet_health\",\"scope\":{\"kind\":\"Workspace\"},\"views\":{\"kind\":\"Published\",\"repositoryIds\":[\"repo-a\"]},\"page\":{\"limit\":20},\"filters\":[]},\"schemaRevision\":3}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "dw13-r3-binding-analysis.fleet_health",
+    "entry": "operation-result.r3",
+    "raw": "{\"kind\":\"analysis.fleet_health\",\"value\":{\"items\":[],\"hasMore\":false,\"observation\":{\"availability\":\"Available\",\"bindings\":[],\"coverage\":{\"state\":\"Complete\",\"gaps\":[],\"moreGaps\":false},\"diagnostics\":[]}}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "dw13-r3-admission-analysis.archival_candidates-Query",
+    "entry": "domain-request.r3",
+    "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"analysis.archival_candidates\",\"scope\":{\"kind\":\"Workspace\"},\"views\":{\"kind\":\"Published\",\"repositoryIds\":[\"repo-a\"]},\"page\":{\"limit\":20},\"filters\":[]},\"schemaRevision\":3}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "dw13-r3-binding-analysis.archival_candidates",
+    "entry": "operation-result.r3",
+    "raw": "{\"kind\":\"analysis.archival_candidates\",\"value\":{\"items\":[],\"hasMore\":false,\"observation\":{\"availability\":\"Available\",\"bindings\":[],\"coverage\":{\"state\":\"Complete\",\"gaps\":[],\"moreGaps\":false},\"diagnostics\":[]}}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "dw13-r3-admission-analysis.file_hotspot-Query",
+    "entry": "domain-request.r3",
+    "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"analysis.file_hotspot\",\"scope\":{\"kind\":\"Workspace\"},\"views\":{\"kind\":\"Published\",\"repositoryIds\":[\"repo-a\"]},\"page\":{\"limit\":20},\"path\":\"src/main.rs\",\"filters\":[]},\"schemaRevision\":3}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "dw13-r3-binding-analysis.file_hotspot",
+    "entry": "operation-result.r3",
+    "raw": "{\"kind\":\"analysis.file_hotspot\",\"value\":{\"items\":[],\"hasMore\":false,\"observation\":{\"availability\":\"Available\",\"bindings\":[],\"coverage\":{\"state\":\"Complete\",\"gaps\":[],\"moreGaps\":false},\"diagnostics\":[]}}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "dw13-r3-admission-analysis.community_analysis-Command",
+    "entry": "domain-request.r3",
+    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"analysis.community_analysis\",\"scope\":{\"kind\":\"Workspace\"},\"views\":{\"kind\":\"Published\",\"repositoryIds\":[\"repo-a\"]},\"expectedSourceRevision\":\"1\",\"nodeIds\":[],\"batchLimit\":20},\"schemaRevision\":3}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "dw13-r3-binding-analysis.community_analysis",
+    "entry": "operation-result.r3",
+    "raw": "{\"kind\":\"analysis.community_analysis\",\"value\":{\"id\":\"id-a\",\"revision\":\"1\",\"views\":{\"kind\":\"Published\",\"repositoryIds\":[\"repo-a\"]},\"kind\":\"fixture\",\"state\":\"ObservedComplete\",\"coverage\":{\"state\":\"Complete\",\"gaps\":[],\"moreGaps\":false}}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "dw13-r3-admission-analysis.link_and_detect-Command",
+    "entry": "domain-request.r3",
+    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"analysis.link_and_detect\",\"scope\":{\"kind\":\"Workspace\"},\"views\":{\"kind\":\"Published\",\"repositoryIds\":[\"repo-a\"]},\"expectedSourceRevision\":\"1\",\"nodeIds\":[],\"batchLimit\":20},\"schemaRevision\":3}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "dw13-r3-binding-analysis.link_and_detect",
+    "entry": "operation-result.r3",
+    "raw": "{\"kind\":\"analysis.link_and_detect\",\"value\":{\"id\":\"id-a\",\"revision\":\"1\",\"views\":{\"kind\":\"Published\",\"repositoryIds\":[\"repo-a\"]},\"kind\":\"fixture\",\"state\":\"ObservedComplete\",\"coverage\":{\"state\":\"Complete\",\"gaps\":[],\"moreGaps\":false}}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "dw13-r3-admission-analysis.process_batch-Command",
+    "entry": "domain-request.r3",
+    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"analysis.process_batch\",\"scope\":{\"kind\":\"Workspace\"},\"views\":{\"kind\":\"Published\",\"repositoryIds\":[\"repo-a\"]},\"expectedSourceRevision\":\"1\",\"nodeIds\":[],\"batchLimit\":20},\"schemaRevision\":3}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "dw13-r3-binding-analysis.process_batch",
+    "entry": "operation-result.r3",
+    "raw": "{\"kind\":\"analysis.process_batch\",\"value\":{\"id\":\"id-a\",\"revision\":\"1\",\"views\":{\"kind\":\"Published\",\"repositoryIds\":[\"repo-a\"]},\"kind\":\"fixture\",\"state\":\"ObservedComplete\",\"coverage\":{\"state\":\"Complete\",\"gaps\":[],\"moreGaps\":false}}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "dw13-r3-admission-analysis.reanalyze-Command",
+    "entry": "domain-request.r3",
+    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"analysis.reanalyze\",\"scope\":{\"kind\":\"Workspace\"},\"views\":{\"kind\":\"Published\",\"repositoryIds\":[\"repo-a\"]},\"expectedSourceRevision\":\"1\",\"nodeIds\":[],\"batchLimit\":20},\"schemaRevision\":3}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "dw13-r3-binding-analysis.reanalyze",
+    "entry": "operation-result.r3",
+    "raw": "{\"kind\":\"analysis.reanalyze\",\"value\":{\"id\":\"id-a\",\"revision\":\"1\",\"views\":{\"kind\":\"Published\",\"repositoryIds\":[\"repo-a\"]},\"kind\":\"fixture\",\"state\":\"ObservedComplete\",\"coverage\":{\"state\":\"Complete\",\"gaps\":[],\"moreGaps\":false}}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "dw13-r3-admission-analysis.synthesize-Command",
+    "entry": "domain-request.r3",
+    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"analysis.synthesize\",\"scope\":{\"kind\":\"Workspace\"},\"views\":{\"kind\":\"Published\",\"repositoryIds\":[\"repo-a\"]},\"expectedSourceRevision\":\"1\",\"nodeIds\":[],\"batchLimit\":20},\"schemaRevision\":3}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "dw13-r3-binding-analysis.synthesize",
+    "entry": "operation-result.r3",
+    "raw": "{\"kind\":\"analysis.synthesize\",\"value\":{\"id\":\"id-a\",\"revision\":\"1\",\"views\":{\"kind\":\"Published\",\"repositoryIds\":[\"repo-a\"]},\"kind\":\"fixture\",\"state\":\"ObservedComplete\",\"coverage\":{\"state\":\"Complete\",\"gaps\":[],\"moreGaps\":false}}}",
+    "typedValid": true,
+    "schemaValid": true
   }
 ]

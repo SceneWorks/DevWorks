@@ -147,6 +147,7 @@ pub struct NestedToolInference {
     /// The agent's dispatching tool call; `None` for a package invocation a person or an event
     /// handler started, which runs in that person's package inference session.
     pub call: Option<ToolCallKey>,
+    pub analysis_request: Option<Id>,
 }
 pub struct ProviderInvocation {
     pub accounting: DriveOutcome,
@@ -926,6 +927,21 @@ impl NativeProviders {
         session_id: &Id,
         nested: &NestedToolInference,
     ) -> Result<(), StorageError> {
+        if let Some(request) = &nested.analysis_request {
+            return if nested.call.is_none()
+                && read_snapshot(self.store.as_ref(), &ReadOptions::default(), |read| {
+                    devworks_core::services::graph::repository_analysis::authorize_model_request(
+                        read,
+                        context,
+                        &nested.tool_operation,
+                        request,
+                    )
+                })? {
+                Ok(())
+            } else {
+                Err(StorageError::ScopeDenied)
+            };
+        }
         let Some(call) = &nested.call else {
             let session = read_snapshot(self.store.as_ref(), &ReadOptions::default(), |read| {
                 read.sessions().session(session_id)

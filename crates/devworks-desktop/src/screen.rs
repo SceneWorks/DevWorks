@@ -117,6 +117,7 @@ pub enum Effect {
     ReviewPurge(ProjectRecord),
     /// Opens a repository's graph (its ID and name).
     OpenGraph(String, String),
+    OpenFleetAnalysis,
     /// Opens a repository's graph on the detail of one of its nodes.
     OpenGraphNode {
         repository: String,

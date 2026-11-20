@@ -18,6 +18,7 @@ mod modules;
 pub use modules::node_lookup_parity;
 mod properties;
 mod read;
+pub mod repository_analysis;
 mod scan;
 pub(crate) mod schema_refs;
 #[doc(hidden)]

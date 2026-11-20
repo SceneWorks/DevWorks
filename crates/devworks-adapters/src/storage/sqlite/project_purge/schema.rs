@@ -81,6 +81,7 @@ use rusqlite::Connection;
 /// its parent run. Workspace/base records remain independent.
 /// Migration 77 adds coordinator document transfer proposals. Guarded purge owns each deletion,
 /// with custody tied to either participating project and to the retained artifact.
+/// Migration 78 adds repository analysis runs with their existing project or workspace scope.
 pub(super) const REVIEWED_SCHEMA_SHA256: &str =
     "1c0702568a9c7ed9effc00ddaee6fb7e2bf32d672c6fae8562703d8332fc900b";
 

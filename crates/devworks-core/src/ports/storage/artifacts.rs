@@ -363,6 +363,15 @@ pub trait ArtifactRead {
     /// repository (not deleted) one of whose published views binds the artifact as its README
     /// or structural summary text, in ID order.
     fn repository_text_readers(&self, artifact: &Id) -> Result<Vec<ProjectId>, StorageError>;
+    /// Whether a host analysis artifact still binds a readable exact run in its original scope.
+    fn analysis_artifact_available(
+        &self,
+        artifact: &Id,
+        run: &Id,
+        project: Option<&ProjectId>,
+        worktree: Option<(&Id, i64)>,
+        restore_epoch: i64,
+    ) -> Result<bool, StorageError>;
     /// Links of every version of `artifact`.
     fn links(&self, artifact: &Id) -> Result<Vec<ArtifactLink>, StorageError>;
     /// Links pointing at `subject` (navigation from work to its artifacts), at most 500.

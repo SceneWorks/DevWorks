@@ -1204,9 +1204,28 @@ async fn build(composition: Composition, core: CoreServices) -> Result<Engine, B
     if let Some(worker) = &workspace_replies {
         consumers.push(worker.consumer());
     }
+    let analysis = indexing.as_ref().map(|_| {
+        let service = Arc::new(
+            devworks_core::services::graph::repository_analysis::AnalysisService::new(
+                store.clone(),
+                artifacts.clone(),
+                ids.clone(),
+                core.web_ports
+                    .as_ref()
+                    .map(|web| (web.resolver.clone(), web.transport.clone())),
+            ),
+        );
+        consumers.push(crate::repository_analysis::consumer(
+            store.clone(),
+            service.clone(),
+        ));
+        consumers.push(crate::repository_analysis::index_consumer(service.clone()));
+        service
+    });
     let run_owner = config.dispatcher.owner.clone();
     // Indexing runs its Git helpers through this same process owner.
-    let index_supervisor = indexing.map(|ix| {
+    let index_supervisor = indexing.map(|mut ix| {
+        ix.settings.analysis_events = analysis.is_some();
         let env = Arc::new(devworks_core::services::indexing::IndexEnv {
             store: store.clone(),
             parser: ix.parser,
@@ -1306,6 +1325,16 @@ async fn build(composition: Composition, core: CoreServices) -> Result<Engine, B
         )
         .with_indexing(index_supervisor.as_ref().map(|ix| ix.env().clone())),
     ));
+    let use_cases = if let (Some(service), Some(index)) = (&analysis, &index_supervisor) {
+        if !service.install_indexing(index.env().clone())
+            || !index.install_analysis(service.clone())
+        {
+            return Err(BootError::Composition(StorageError::ScopeDenied));
+        }
+        use_cases.with_repository_analysis(service.clone())
+    } else {
+        use_cases
+    };
     // Native jobs may run only the maintenance commands this composition can execute.
     let jobs = Arc::new(
         JobService::new(NativeCatalog::qualified(&use_cases), config.jobs)
@@ -1414,6 +1443,18 @@ async fn build(composition: Composition, core: CoreServices) -> Result<Engine, B
         }
         None => None,
     };
+    if let (Some(service), Some(provider), Some(router)) =
+        (&analysis, &providers, use_cases.inference_router())
+        && !service.install_model(Arc::new(crate::repository_analysis::Model {
+            store: store.clone(),
+            artifacts: artifacts.clone(),
+            providers: Arc::downgrade(provider),
+            router,
+            runtime: tokio::runtime::Handle::current(),
+        }))
+    {
+        return Err(BootError::Composition(StorageError::ScopeDenied));
+    }
     if let (Some(provider), Some(service), Some(router), Some(_)) = (
         &providers,
         use_cases.mcp_service(),

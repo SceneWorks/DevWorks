@@ -1071,6 +1071,11 @@ fn fences_hold_with_context(
     for fence in fences {
         let holds = match fence {
             AuthorityFence::ExternalMcp(fence) => fence.holds_in(tx)?,
+            AuthorityFence::AnalysisRequest { operation, request } => {
+                crate::services::graph::repository_analysis::dispatch_binding_in(
+                    tx, operation, request,
+                )?
+            }
             AuthorityFence::GitWorktree { id, digest } => {
                 super::git::witness_in(tx, id)?.as_ref() == Some(digest)
             }
@@ -1161,6 +1166,11 @@ fn authority_holds_on_read(
                 fence.publication_holds(s)?
             }
             AuthorityFence::ExternalMcp(fence) => fence.holds(s)?,
+            AuthorityFence::AnalysisRequest { operation, request } => {
+                crate::services::graph::repository_analysis::dispatch_binding_snapshot(
+                    s, operation, request,
+                )?
+            }
             AuthorityFence::GitWorktree { id, digest } => {
                 super::git::witness(s, id)?.as_ref() == Some(digest)
             }

@@ -599,3 +599,63 @@ fn work_import_input(
         && artifact.provenance["derived"]["kind"] == WORK_IMPORT_INPUT
         && artifact.provenance["derived"]["operationId"] == json!(operation)
 }
+impl ArtifactService {
+    /// Analysis retention only touches its own unreferenced, unmodified host artifact.
+    pub(crate) fn analysis_report_removable(
+        &self,
+        tx: &mut dyn WriteTransaction,
+        reference: &crate::protocol::provider::ArtifactRef,
+        run: &crate::protocol::Id,
+    ) -> Result<bool, StorageError> {
+        let Some(artifact) = tx.artifacts().artifact(&reference.artifact_id)? else {
+            return Ok(true);
+        };
+        if artifact.state == ArtifactState::Deleted {
+            return Ok(true);
+        }
+        if artifact.provenance["derived"]["purpose"] != "repository_analysis"
+            || artifact.provenance["derived"]["runId"] != json!(run)
+            || artifact.provenance["producedBy"].as_str() != Some(tx.store().host_actor.0.as_str())
+            || artifact.current_version_id.as_ref() != Some(&reference.version_id)
+            || self.readers.holds(reference.sha256.as_str())
+            || !tx.artifacts().links(&artifact.id)?.is_empty()
+            || !tx.artifacts().shares(&artifact.id)?.is_empty()
+            || tx.artifacts().pinned(reference.sha256.as_str())?
+        {
+            return Ok(false);
+        }
+        let versions = tx.artifacts().versions(&artifact.id)?;
+        Ok(
+            versions.iter().filter(|version| version.live()).count() == 1
+                && versions.iter().any(|version| {
+                    version.id == reference.version_id
+                        && version.blob_digest == reference.sha256.as_str()
+                        && version.live()
+                }),
+        )
+    }
+
+    pub(crate) fn retire_analysis_report(
+        &self,
+        tx: &mut dyn WriteTransaction,
+        reference: &crate::protocol::provider::ArtifactRef,
+        run: &crate::protocol::Id,
+    ) -> Result<(), StorageError> {
+        if !self.analysis_report_removable(tx, reference, run)? {
+            return Err(StorageError::Busy);
+        }
+        let Some(mut artifact) = tx.artifacts().artifact(&reference.artifact_id)? else {
+            return Ok(());
+        };
+        if artifact.state == ArtifactState::Deleted {
+            return Ok(());
+        }
+        let now = tx.now_ms();
+        tx.artifacts()
+            .tombstone_version(&reference.version_id, now)?;
+        super::release_blob(tx, reference.sha256.as_str())?;
+        self.retire(tx, &mut artifact)?;
+        artifact.revision += 1;
+        tx.artifacts().update_artifact(&artifact)
+    }
+}

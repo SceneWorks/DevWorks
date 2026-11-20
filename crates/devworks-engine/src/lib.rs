@@ -207,6 +207,7 @@
 pub mod agent_inbox;
 pub mod agent_supervisor;
 pub mod agent_turns;
+mod analysis_tools;
 pub mod approvals;
 mod auto_routing;
 pub mod browser;
@@ -284,3 +285,4 @@ pub mod schemas;
 
 mod workspace_reply;
 pub use workspace_reply::WorkspaceReplyStatus;
+mod repository_analysis;

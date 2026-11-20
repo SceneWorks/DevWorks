@@ -25,6 +25,7 @@
 //!   the future stops waiting but never rolls back an admitted job.
 mod agent_messages;
 mod allocations;
+mod analysis;
 mod artifacts;
 mod authority;
 mod browser;
