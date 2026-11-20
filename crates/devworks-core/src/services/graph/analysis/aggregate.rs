@@ -19,7 +19,7 @@ impl Aggregate {
     pub fn scan(reader: &mut Reader<'_>) -> Result<Self, Failure> {
         let mut out = Self::default();
         let scope = reader.scope().clone();
-        scan::edges(
+        scan::composed_edges(
             reader.read,
             &scope,
             &reader.selected.layers,

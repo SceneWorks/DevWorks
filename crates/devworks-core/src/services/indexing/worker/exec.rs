@@ -452,10 +452,12 @@ impl Exec<'_> {
         let stopping = &self.w.stopping;
         let stop = move || stop_flag.load(Ordering::SeqCst) || stopping.load(Ordering::SeqCst);
         let git = git_for(&env, &ctx, &stop);
-        let head = git
-            .head(&dir)
-            .map_err(Stop::git)?
-            .ok_or_else(|| Stop::det("no_commit", "the repository has no commit to index"))?;
+        let observed = git.head_observation(&dir).map_err(|error| match error {
+            GitFault::Unborn => Stop::det("no_commit", "the repository has no commit to index"),
+            other => Stop::git(other),
+        })?;
+        let head = observed.head;
+        let head_ref = observed.branch;
         let format = git.object_format(&dir).map_err(Stop::git)?;
         let h = head.clone();
         self.fenced(WritePriority::Authoritative, move |_, r| {
@@ -800,7 +802,7 @@ impl Exec<'_> {
         .unwrap_or_default();
         let texts = stage_texts(&env, &repo_id, readme_bytes, summary);
         let staged_files: Vec<_> = texts.iter().map(|t| t.2.clone()).collect();
-        let published = self.publish_baseline(&generation, &head, pointer, texts);
+        let published = self.publish_baseline(&generation, &head, head_ref, pointer, texts);
         if let Some(a) = &env.artifacts {
             for f in &staged_files {
                 a.settle_host_bytes(&*env.store, f, published.is_ok());
@@ -939,6 +941,7 @@ impl Exec<'_> {
         &mut self,
         generation: &Id,
         head: &str,
+        head_ref: Option<String>,
         pointer: i64,
         texts: Vec<(TextKind, String, crate::services::artifacts::StagedFile)>,
     ) -> Result<(), Stop> {
@@ -991,7 +994,7 @@ impl Exec<'_> {
                 branch_id: None,
                 worktree_id: None,
                 coverage: json!({"state": coverage_name, "gaps": gaps, "commit": head,
-                    "sourceRevision": pointer + 1,
+                    "headRef": head_ref, "sourceRevision": pointer + 1,
                     "configDigest": stored.manifest.get("configDigest")}),
             };
             tx.indexing().insert_view(&view)?;
@@ -1057,7 +1060,7 @@ impl Exec<'_> {
             r.owner = None;
             r.lease_until_ms = None;
             let host = tx.store().host_actor.clone();
-            history(
+            let published_event = super::super::history_event(
                 tx,
                 &host,
                 r.project_id.as_ref(),
@@ -1069,6 +1072,16 @@ impl Exec<'_> {
                     "principalKind": "Host",
                 }),
             )?;
+            if env.settings.analysis_events {
+                let delivery = tx.new_id(IdKind::QueueEntry);
+                tx.queue().enqueue(NewQueueEntry {
+                    id: delivery,
+                    consumer: crate::services::graph::repository_analysis::INDEX_CONSUMER.into(),
+                    event_id: published_event, root_id: None, operation_id: None,
+                    partition: None, priority: 0, ready_at_ms: now,
+                    payload: json!({"repositoryId": repo, "viewId": view_id}),
+                })?;
+            }
             Ok(Ok(()))
         });
         match result {

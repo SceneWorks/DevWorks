@@ -911,7 +911,11 @@
         "kind": "Label",
         "state": "OperationState",
         "report": "?ArtifactRef",
-        "coverage": "Coverage"
+        "coverage": "Coverage",
+        "observation": "?AnalysisObservation"
+      },
+      "since": {
+        "observation": 3
       }
     },
     "ClusterRecord": {
@@ -921,7 +925,11 @@
         "view_id": "Id",
         "name": "Label",
         "member_node_ids": "Items<Id>",
-        "score": "Finite"
+        "score": "Finite",
+        "details": "?AnalysisClusterDetails"
+      },
+      "since": {
+        "details": 3
       }
     },
     "MetricRecord": {
@@ -933,6 +941,317 @@
         "source_id": "Id",
         "inferred": "bool"
       }
+    },
+    "AnalysisAvailability": {
+      "kind": "enum",
+      "values": [
+        "Available",
+        "NoData",
+        "Pending",
+        "Stale",
+        "Partial",
+        "Failed",
+        "Unavailable"
+      ]
+    },
+    "AnalysisLinkMode": {
+      "kind": "enum",
+      "values": [
+        "LinksOnly",
+        "LinksAndCommunities"
+      ]
+    },
+    "AnalysisRefreshMode": {
+      "kind": "enum",
+      "values": [
+        "VitalsOnly",
+        "WithProjectAnalysis",
+        "WithSynthesis"
+      ]
+    },
+    "AnalysisClusterProjection": {
+      "kind": "enum",
+      "values": [
+        "Overview",
+        "Graph"
+      ]
+    },
+    "AnalysisViewBinding": {
+      "kind": "record",
+      "fields": {
+        "repository_id": "Id",
+        "view_id": "Id",
+        "view_digest": "Digest",
+        "snapshot": "RepositorySnapshot"
+      }
+    },
+    "AnalysisPhaseStatus": {
+      "kind": "record",
+      "fields": {
+        "phase": "Label",
+        "state": "OperationState",
+        "diagnostic": "?Label",
+        "completed_at_ms": "?Counter"
+      }
+    },
+    "AnalysisTrendPoint": {
+      "kind": "record",
+      "fields": {
+        "view": "AnalysisViewBinding",
+        "computed_at_ms": "Counter",
+        "base_score": "Finite",
+        "adjusted_score": "?Finite"
+      }
+    },
+    "AnalysisFileMetrics": {
+      "kind": "record",
+      "fields": {
+        "health": "Finite",
+        "risk": "Finite",
+        "concern": "Finite",
+        "trust": "Finite",
+        "complexity": "Counter",
+        "max_nesting": "Counter",
+        "deep_lines": "Counter",
+        "function_count": "Counter",
+        "longest_function": "Counter",
+        "branches": "Counter",
+        "lines_added_90d": "Counter",
+        "lines_removed_90d": "Counter",
+        "changes_90d": "Counter",
+        "churn_30d": "Finite",
+        "churn_90d": "Finite",
+        "churn_365d": "Finite",
+        "last_change_at_ms": "?Counter",
+        "bug_fix_ratio": "Finite",
+        "recurring_churn": "Finite",
+        "coupling_strength": "Finite",
+        "coupling_partners": "Counter",
+        "truck_factor": "Counter",
+        "lint_errors": "?Counter",
+        "lint_warnings": "?Counter",
+        "role": "Label",
+        "dotnet_project": "?Label"
+      }
+    },
+    "AnalysisHealthSummary": {
+      "kind": "record",
+      "fields": {
+        "repository_id": "Id",
+        "view_id": "Id",
+        "dotnet_project": "?Label",
+        "base_score": "Finite",
+        "adjusted_score": "?Finite",
+        "files": "Counter",
+        "hotspots": "Counter",
+        "alerts": "Counter"
+      }
+    },
+    "AnalysisSecuritySummary": {
+      "kind": "record",
+      "fields": {
+        "repository_id": "Id",
+        "view_id": "Id",
+        "score": "Finite",
+        "complete": "bool",
+        "critical": "Counter",
+        "high": "Counter",
+        "medium": "Counter",
+        "low": "Counter",
+        "scanned_files": "Counter"
+      }
+    },
+    "AnalysisNarrative": {
+      "kind": "record",
+      "fields": {
+        "repository_id": "Id",
+        "view_id": "Id",
+        "project": "?Label",
+        "summary": "Content",
+        "confidence": "Label",
+        "model": "Label",
+        "computed_at_ms": "Counter",
+        "evidence": "ArtifactRef"
+      }
+    },
+    "AnalysisObservation": {
+      "kind": "record",
+      "fields": {
+        "availability": "AnalysisAvailability",
+        "bindings": "Rows<AnalysisViewBinding>",
+        "computed_at_ms": "?Counter",
+        "coverage": "Coverage",
+        "diagnostics": "Items<Label>",
+        "phases": "?Items<AnalysisPhaseStatus>",
+        "base_score": "?Finite",
+        "adjusted_score": "?Finite",
+        "trends": "?Items<AnalysisTrendPoint>",
+        "related_work_ids": "?Items<Id>",
+        "top_hotspots": "?Rows<AnalysisMetricItem>",
+        "health": "?Rows<AnalysisHealthSummary>",
+        "security": "?Rows<AnalysisSecuritySummary>",
+        "next_cursor": "?Cursor",
+        "has_more": "?bool",
+        "missing_repositories": "?Rows<Id>",
+        "indexed_bindings": "?Rows<AnalysisViewBinding>",
+        "narratives": "?Rows<AnalysisNarrative>"
+      }
+    },
+    "AnalysisLinkEndpoint": {
+      "kind": "record",
+      "fields": {
+        "repository_id": "Id",
+        "view_id": "Id",
+        "node_id": "Id"
+      }
+    },
+    "AnalysisLinkEvidence": {
+      "kind": "record",
+      "fields": {
+        "relationship": "Label",
+        "source": "AnalysisLinkEndpoint",
+        "target": "?AnalysisLinkEndpoint",
+        "target_label": "?Label",
+        "resolution": "Label",
+        "confidence": "Finite",
+        "matched_by": "Label"
+      }
+    },
+    "AnalysisMetricItem": {
+      "kind": "record",
+      "fields": {
+        "metric": "MetricRecord",
+        "repository_id": "Id",
+        "view_id": "Id",
+        "path": "?RelativePath",
+        "computed_at_ms": "?Counter",
+        "namespace": "?Label",
+        "language": "?Label",
+        "language_indexed": "?bool",
+        "history_coverage": "?Label",
+        "link": "?AnalysisLinkEvidence",
+        "file_metrics": "?AnalysisFileMetrics"
+      }
+    },
+    "AnalysisFleetTotals": {
+      "kind": "record",
+      "fields": {
+        "repository_count": "Counter",
+        "average_health": "?Finite",
+        "hotspot_count": "Counter",
+        "alert_count": "Counter",
+        "below_hotspot": "Counter",
+        "below_alert": "Counter"
+      }
+    },
+    "AnalysisMetricPage": {
+      "kind": "record",
+      "fields": {
+        "items": "Rows<AnalysisMetricItem>",
+        "next_cursor": "?Cursor",
+        "has_more": "bool",
+        "observation": "AnalysisObservation",
+        "fleet": "?AnalysisFleetTotals",
+        "found": "?bool",
+        "language": "?Label",
+        "language_indexed": "?bool"
+      }
+    },
+    "AnalysisMetricPageResult": {
+      "kind": "versioned",
+      "legacy": "Page<MetricRecord>",
+      "current": "AnalysisMetricPage",
+      "revision": 3,
+      "projection": "page_field",
+      "itemField": "metric",
+      "earlierName": "Page"
+    },
+    "AnalysisClusterMember": {
+      "kind": "record",
+      "fields": {
+        "repository_id": "Id",
+        "view_id": "Id",
+        "name": "Label",
+        "centrality": "Finite",
+        "internal_edges": "Counter",
+        "external_edges": "Counter",
+        "foundational": "?bool",
+        "source_group": "?Label",
+        "language": "?Label",
+        "framework": "?Label",
+        "cluster_id": "?Id"
+      }
+    },
+    "AnalysisClusterConnection": {
+      "kind": "record",
+      "fields": {
+        "cluster_id": "Id",
+        "edge_count": "Counter",
+        "types": "Items<Label>"
+      }
+    },
+    "AnalysisClusterDetails": {
+      "kind": "record",
+      "fields": {
+        "legacy_ordinal": "Counter",
+        "internal_edges": "Counter",
+        "external_edges": "Counter",
+        "density": "Finite",
+        "members": "Rows<AnalysisClusterMember>",
+        "bridges": "Items<Id>",
+        "connections": "Rows<AnalysisClusterConnection>",
+        "next_cursor": "?Cursor",
+        "has_more": "?bool"
+      }
+    },
+    "AnalysisClusterItem": {
+      "kind": "record",
+      "fields": {
+        "cluster": "ClusterRecord"
+      }
+    },
+    "AnalysisClusterRelationshipCount": {
+      "kind": "record",
+      "fields": {
+        "relationship": "Label",
+        "count": "Counter"
+      }
+    },
+    "AnalysisClusterGraphEdge": {
+      "kind": "record",
+      "fields": {
+        "source_repository_id": "Id",
+        "source_view_id": "Id",
+        "target_repository_id": "Id",
+        "target_view_id": "Id",
+        "edge_count": "Counter",
+        "relationship_counts": "Items<AnalysisClusterRelationshipCount>",
+        "cross_cluster": "bool"
+      }
+    },
+    "AnalysisClusterPage": {
+      "kind": "record",
+      "fields": {
+        "items": "Rows<AnalysisClusterItem>",
+        "next_cursor": "?Cursor",
+        "has_more": "bool",
+        "observation": "AnalysisObservation",
+        "modularity": "?Finite",
+        "total_repositories": "?Counter",
+        "clustered_repositories": "?Counter",
+        "repositories": "?Rows<AnalysisClusterMember>",
+        "links": "?Rows<AnalysisLinkEvidence>",
+        "graph_edges": "?Rows<AnalysisClusterGraphEdge>"
+      }
+    },
+    "AnalysisClusterPageResult": {
+      "kind": "versioned",
+      "legacy": "Page<ClusterRecord>",
+      "current": "AnalysisClusterPage",
+      "revision": 3,
+      "projection": "page_field",
+      "itemField": "cluster",
+      "earlierName": "Page"
     },
     "SchemaConnection": {
       "kind": "record",
@@ -7790,12 +8109,18 @@
         "scope": "DataScope",
         "views": "ViewSelection",
         "page": "PageRequest",
-        "filters": "Items<Label>"
+        "filters": "Items<Label>",
+        "top_hotspots": "?Limit",
+        "run_id": "?Id"
       },
       "result": "AnalysisRecord",
       "effect": "Local",
       "authority": "Scoped",
-      "rules": "Exact views and scope precede traversal/ranking; paths bind to selected source view. Kind-specific selectors validated before dispatch, no raw query language."
+      "rules": "Exact views and scope precede traversal/ranking; paths bind to selected source view. Kind-specific selectors validated before dispatch, no raw query language.",
+      "since": {
+        "top_hotspots": 3,
+        "run_id": 3
+      }
     },
     "analysis.cross_repo_links": {
       "operation": "analysis.cross_repo_links",
@@ -7806,7 +8131,7 @@
         "page": "PageRequest",
         "filters": "Items<Label>"
       },
-      "result": "Page<MetricRecord>",
+      "result": "AnalysisMetricPageResult",
       "effect": "Local",
       "authority": "Scoped",
       "rules": "Exact views and scope precede traversal/ranking; paths bind to selected source view. Kind-specific selectors validated before dispatch, no raw query language."
@@ -7818,12 +8143,16 @@
         "scope": "DataScope",
         "views": "ViewSelection",
         "page": "PageRequest",
-        "filters": "Items<Label>"
+        "filters": "Items<Label>",
+        "run_id": "?Id"
       },
       "result": "AnalysisRecord",
       "effect": "Local",
       "authority": "Scoped",
-      "rules": "Exact views and scope precede traversal/ranking; paths bind to selected source view. Kind-specific selectors validated before dispatch, no raw query language."
+      "rules": "Exact views and scope precede traversal/ranking; paths bind to selected source view. Kind-specific selectors validated before dispatch, no raw query language.",
+      "since": {
+        "run_id": 3
+      }
     },
     "analysis.clusters": {
       "operation": "analysis.clusters",
@@ -7832,12 +8161,16 @@
         "scope": "DataScope",
         "views": "ViewSelection",
         "page": "PageRequest",
-        "filters": "Items<Label>"
+        "filters": "Items<Label>",
+        "projection": "?AnalysisClusterProjection"
       },
-      "result": "Page<ClusterRecord>",
+      "result": "AnalysisClusterPageResult",
       "effect": "Local",
       "authority": "Scoped",
-      "rules": "Exact views and scope precede traversal/ranking; paths bind to selected source view. Kind-specific selectors validated before dispatch, no raw query language."
+      "rules": "Exact views and scope precede traversal/ranking; paths bind to selected source view. Kind-specific selectors validated before dispatch, no raw query language.",
+      "since": {
+        "projection": 3
+      }
     },
     "analysis.cluster_detail": {
       "operation": "analysis.cluster_detail",
@@ -7847,12 +8180,16 @@
         "views": "ViewSelection",
         "page": "PageRequest",
         "cluster_id": "Id",
-        "filters": "Items<Label>"
+        "filters": "Items<Label>",
+        "legacy_ordinal": "?Counter"
       },
       "result": "ClusterRecord",
       "effect": "Local",
       "authority": "Scoped",
-      "rules": "Exact views and scope precede traversal/ranking; paths bind to selected source view. Kind-specific selectors validated before dispatch, no raw query language."
+      "rules": "Exact views and scope precede traversal/ranking; paths bind to selected source view. Kind-specific selectors validated before dispatch, no raw query language.",
+      "since": {
+        "legacy_ordinal": 3
+      }
     },
     "analysis.security": {
       "operation": "analysis.security",
@@ -7861,12 +8198,16 @@
         "scope": "DataScope",
         "views": "ViewSelection",
         "page": "PageRequest",
-        "filters": "Items<Label>"
+        "filters": "Items<Label>",
+        "run_id": "?Id"
       },
       "result": "AnalysisRecord",
       "effect": "Local",
       "authority": "Scoped",
-      "rules": "Exact views and scope precede traversal/ranking; paths bind to selected source view. Kind-specific selectors validated before dispatch, no raw query language."
+      "rules": "Exact views and scope precede traversal/ranking; paths bind to selected source view. Kind-specific selectors validated before dispatch, no raw query language.",
+      "since": {
+        "run_id": 3
+      }
     },
     "analysis.metrics": {
       "operation": "analysis.metrics",
@@ -7875,12 +8216,16 @@
         "scope": "DataScope",
         "views": "ViewSelection",
         "page": "PageRequest",
-        "filters": "Items<Label>"
+        "filters": "Items<Label>",
+        "dotnet_project": "?Label"
       },
-      "result": "Page<MetricRecord>",
+      "result": "AnalysisMetricPageResult",
       "effect": "Local",
       "authority": "Scoped",
-      "rules": "Exact views and scope precede traversal/ranking; paths bind to selected source view. Kind-specific selectors validated before dispatch, no raw query language."
+      "rules": "Exact views and scope precede traversal/ranking; paths bind to selected source view. Kind-specific selectors validated before dispatch, no raw query language.",
+      "since": {
+        "dotnet_project": 3
+      }
     },
     "analysis.hotspots": {
       "operation": "analysis.hotspots",
@@ -7891,7 +8236,7 @@
         "page": "PageRequest",
         "filters": "Items<Label>"
       },
-      "result": "Page<MetricRecord>",
+      "result": "AnalysisMetricPageResult",
       "effect": "Local",
       "authority": "Scoped",
       "rules": "Exact views and scope precede traversal/ranking; paths bind to selected source view. Kind-specific selectors validated before dispatch, no raw query language."
@@ -7903,12 +8248,16 @@
         "scope": "DataScope",
         "views": "ViewSelection",
         "page": "PageRequest",
-        "filters": "Items<Label>"
+        "filters": "Items<Label>",
+        "max_health": "?Finite"
       },
-      "result": "Page<MetricRecord>",
+      "result": "AnalysisMetricPageResult",
       "effect": "Local",
       "authority": "Scoped",
-      "rules": "Exact views and scope precede traversal/ranking; paths bind to selected source view. Kind-specific selectors validated before dispatch, no raw query language."
+      "rules": "Exact views and scope precede traversal/ranking; paths bind to selected source view. Kind-specific selectors validated before dispatch, no raw query language.",
+      "since": {
+        "max_health": 3
+      }
     },
     "analysis.archival_candidates": {
       "operation": "analysis.archival_candidates",
@@ -7919,7 +8268,7 @@
         "page": "PageRequest",
         "filters": "Items<Label>"
       },
-      "result": "Page<MetricRecord>",
+      "result": "AnalysisMetricPageResult",
       "effect": "Local",
       "authority": "Scoped",
       "rules": "Exact views and scope precede traversal/ranking; paths bind to selected source view. Kind-specific selectors validated before dispatch, no raw query language."
@@ -7934,7 +8283,7 @@
         "path": "RelativePath",
         "filters": "Items<Label>"
       },
-      "result": "Page<MetricRecord>",
+      "result": "AnalysisMetricPageResult",
       "effect": "Local",
       "authority": "Scoped",
       "rules": "Exact views and scope precede traversal/ranking; paths bind to selected source view. Kind-specific selectors validated before dispatch, no raw query language."
@@ -7964,12 +8313,16 @@
         "expected_source_revision": "Revision",
         "node_ids": "Items<Id>",
         "batch_limit": "Limit",
-        "resume_run_id": "?Id"
+        "resume_run_id": "?Id",
+        "link_mode": "?AnalysisLinkMode"
       },
       "result": "AnalysisRecord",
       "effect": "Journaled",
       "authority": "Scoped",
-      "rules": "Stage checkpoint and declared structural/semantic coverage. Resume exact saved stage/views; model-assisted purposes use router attribution and ordinary authority."
+      "rules": "Stage checkpoint and declared structural/semantic coverage. Resume exact saved stage/views; model-assisted purposes use router attribution and ordinary authority.",
+      "since": {
+        "link_mode": 3
+      }
     },
     "analysis.process_batch": {
       "operation": "analysis.process_batch",
@@ -7996,12 +8349,18 @@
         "expected_source_revision": "Revision",
         "node_ids": "Items<Id>",
         "batch_limit": "Limit",
-        "resume_run_id": "?Id"
+        "resume_run_id": "?Id",
+        "refresh_mode": "?AnalysisRefreshMode",
+        "include_all_source": "?bool"
       },
       "result": "AnalysisRecord",
       "effect": "Journaled",
       "authority": "Scoped",
-      "rules": "Stage checkpoint and declared structural/semantic coverage. Resume exact saved stage/views; model-assisted purposes use router attribution and ordinary authority."
+      "rules": "Stage checkpoint and declared structural/semantic coverage. Resume exact saved stage/views; model-assisted purposes use router attribution and ordinary authority.",
+      "since": {
+        "refresh_mode": 3,
+        "include_all_source": 3
+      }
     },
     "analysis.synthesize": {
       "operation": "analysis.synthesize",
@@ -11623,6 +11982,23 @@
     "code.repository_dependencies": "GraphPage"
   },
   "schemaRevisions": {
+    "analysis.health": [1, 3],
+    "analysis.cross_repo_links": [1, 3],
+    "analysis.status": [1, 3],
+    "analysis.clusters": [1, 3],
+    "analysis.cluster_detail": [1, 3],
+    "analysis.security": [1, 3],
+    "analysis.metrics": [1, 3],
+    "analysis.hotspots": [1, 3],
+    "analysis.fleet_health": [1, 3],
+    "analysis.archival_candidates": [1, 3],
+    "analysis.file_hotspot": [1, 3],
+    "analysis.community_analysis": [1, 3],
+    "analysis.link_and_detect": [1, 3],
+    "analysis.process_batch": [1, 3],
+    "analysis.reanalyze": [1, 3],
+    "analysis.synthesize": [1, 3],
+
     "artifacts.save": [
       1,
       2,

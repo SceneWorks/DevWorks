@@ -1,6 +1,8 @@
 //! The actual owned producer, SQLite accounting, current connection owner, artifacts and
 //! SessionWriter. Controlled transport bytes exercise native protocols without model execution.
 mod common;
+#[path = "providers/repository_analysis.rs"]
+mod repository_analysis;
 use common::*;
 use devworks_adapters::fs::{
     NativeFilesystem, artifacts::NativeArtifactFiles, sources::HostArtifactSources,

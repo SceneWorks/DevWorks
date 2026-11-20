@@ -12,7 +12,8 @@ use devworks_extension_protocol::package::{
     Contribution, ContributionEvent, ContributionMeta, IndexFormat, InvocationOutcome,
 };
 use protobuf::Message;
-use scip::types::{Index, Occurrence, PositionEncoding, SymbolRole};
+use scip::types::symbol_information::Kind as ScipKind;
+use scip::types::{Index, Occurrence, PositionEncoding, SymbolInformation, SymbolRole};
 use serde_json::{Map, json};
 use std::collections::BTreeMap;
 use std::sync::{Arc, Weak};
@@ -421,10 +422,25 @@ fn scip_units(bytes: &[u8], sources: &[EnrichmentSource<'_>]) -> Result<Vec<Enri
         }
     }
     let mut found = BTreeMap::new();
+    let mut kinds: BTreeMap<_, _> = index
+        .external_symbols
+        .iter()
+        .map(|info| (info.symbol.as_str(), info))
+        .collect();
+    for (document, _) in documents.values() {
+        for info in &document.symbols {
+            if !scip::symbol::is_local_symbol(&info.symbol) {
+                kinds.insert(info.symbol.as_str(), info);
+            }
+        }
+    }
+    let mut owners = BTreeMap::new();
     let mut result = Vec::new();
     for (&path, &(document, text)) in &documents {
         let lines = source_lines(text);
         let mut unit = file_unit(path);
+        let rust = path.ends_with(".rs");
+        let mut definitions = Vec::new();
         let metadata: BTreeMap<_, _> = document
             .symbols
             .iter()
@@ -458,11 +474,29 @@ fn scip_units(bytes: &[u8], sources: &[EnrichmentSource<'_>]) -> Result<Vec<Enri
             found
                 .entry(scoped)
                 .or_insert((path, kind.clone(), symbol.clone()));
-            let properties = json!({"symbol":symbol,"roles":occurrence.symbol_roles,
+            let mut properties = json!({"symbol":symbol,"roles":occurrence.symbol_roles,
                 "documentation":info.map(|info| &info.documentation)})
             .as_object()
             .cloned()
             .expect("object");
+            if rust {
+                let local = scip::symbol::is_local_symbol(symbol);
+                properties.insert("source".into(), json!("scip"));
+                properties.insert(
+                    if local {
+                        "scip_local_symbol"
+                    } else {
+                        "scip_symbol"
+                    }
+                    .into(),
+                    json!(symbol),
+                );
+                let encoding = document.position_encoding.enum_value_or_default();
+                let extent = scip_enclosing_span(occurrence, &lines, encoding).unwrap_or(span);
+                if extent.start_byte <= span.start_byte && extent.end_byte >= span.end_byte {
+                    definitions.push((extent, unit.nodes.len()));
+                }
+            }
             unit.nodes.push(ExtractedNode {
                 kind,
                 name: label.to_owned(),
@@ -472,13 +506,18 @@ fn scip_units(bytes: &[u8], sources: &[EnrichmentSource<'_>]) -> Result<Vec<Enri
                 properties,
             });
         }
+        if rust {
+            definitions.sort_by_key(|(span, _)| span.start_byte);
+            owners.insert(path, definitions);
+        }
         result.push(unit);
     }
     for unit in &mut result {
         let (document, text) = documents[unit.unit_key.as_str()];
         let lines = source_lines(text);
+        let path = unit.unit_key.clone();
         let endpoint = |symbol: &str| {
-            let scoped = scip::symbol::is_local_symbol(symbol).then_some(unit.unit_key.as_str());
+            let scoped = scip::symbol::is_local_symbol(symbol).then_some(path.as_str());
             match found.get(&(scoped, symbol)) {
                 Some((unit, kind, qualified_name)) => (
                     EdgeTarget::Node {
@@ -494,6 +533,7 @@ fn scip_units(bytes: &[u8], sources: &[EnrichmentSource<'_>]) -> Result<Vec<Enri
                 ),
             }
         };
+        let mut rust_refs = Vec::new();
         for occurrence in &document.occurrences {
             if occurrence.symbol.is_empty()
                 || occurrence.symbol_roles & SymbolRole::Definition as i32 != 0
@@ -510,6 +550,9 @@ fn scip_units(bytes: &[u8], sources: &[EnrichmentSource<'_>]) -> Result<Vec<Enri
                 .as_object()
                 .cloned()
                 .expect("object");
+            if owners.contains_key(path.as_str()) {
+                rust_refs.push((span, occurrence.symbol.as_str(), occurrence.symbol_roles));
+            }
             unit.edges.push(ExtractedEdge {
                 kind: "REFERENCES".into(),
                 source: 0,
@@ -518,6 +561,74 @@ fn scip_units(bytes: &[u8], sources: &[EnrichmentSource<'_>]) -> Result<Vec<Enri
                 confidence: 1.0,
                 properties,
             });
+        }
+        let mut external = BTreeMap::new();
+        if let Some(definitions) = owners.get(path.as_str()) {
+            // Retain the generic SCIP references above. The Rust graph also needs the
+            // innermost enclosing definition and a typed, stable target for each reference.
+            rust_refs.sort_by_key(|(span, ..)| span.start_byte);
+            let mut definitions = definitions.iter().peekable();
+            let mut containing = std::collections::BinaryHeap::new();
+            for (span, symbol, roles) in rust_refs {
+                while let Some((definition, source)) =
+                    definitions.next_if(|(definition, _)| definition.start_byte <= span.start_byte)
+                {
+                    containing.push((
+                        std::cmp::Reverse((definition.end_byte - definition.start_byte, *source)),
+                        definition.end_byte,
+                    ));
+                }
+                while containing
+                    .peek()
+                    .is_some_and(|(_, end)| *end < span.start_byte)
+                {
+                    containing.pop();
+                }
+                let source = containing
+                    .peek()
+                    .filter(|(_, end)| *end >= span.end_byte)
+                    .map_or(0, |(std::cmp::Reverse((_, source)), _)| *source);
+                if unit.nodes[source].qualified_name == symbol {
+                    continue;
+                }
+                let info = kinds.get(symbol).copied();
+                let (target, resolution) = endpoint(symbol);
+                let target = rust_scip_target(unit, &mut external, symbol, span, target, info);
+                let Some(target) = target else { continue };
+                let kind = if info.is_some_and(|info| {
+                    matches!(
+                        info.kind.enum_value_or_default(),
+                        ScipKind::Class
+                            | ScipKind::Struct
+                            | ScipKind::Enum
+                            | ScipKind::Trait
+                            | ScipKind::Interface
+                            | ScipKind::Protocol
+                            | ScipKind::Type
+                            | ScipKind::TypeAlias
+                            | ScipKind::Union
+                    )
+                }) {
+                    "USES_TYPE"
+                } else {
+                    "CALLS"
+                };
+                unit.edges.push(ExtractedEdge {
+                    kind: kind.into(),
+                    source,
+                    target,
+                    resolution: if resolution == Resolution::Unresolved {
+                        Resolution::Inferred
+                    } else {
+                        resolution
+                    },
+                    confidence: 0.85,
+                    properties: json!({"source":"scip", "span":span, "roles":roles})
+                        .as_object()
+                        .unwrap()
+                        .clone(),
+                });
+            }
         }
         for info in &document.symbols {
             let Some(source) = unit
@@ -539,7 +650,24 @@ fn scip_units(bytes: &[u8], sources: &[EnrichmentSource<'_>]) -> Result<Vec<Enri
                 } else {
                     continue;
                 };
-                let (target, resolution) = endpoint(&relation.symbol);
+                let (mut target, mut resolution) = endpoint(&relation.symbol);
+                if path.ends_with(".rs") && relation.is_implementation {
+                    let span = unit.nodes[source].span;
+                    let Some(exact) = rust_scip_target(
+                        unit,
+                        &mut external,
+                        &relation.symbol,
+                        span,
+                        target,
+                        kinds.get(relation.symbol.as_str()).copied(),
+                    ) else {
+                        continue;
+                    };
+                    target = exact;
+                    if resolution == Resolution::Unresolved {
+                        resolution = Resolution::Inferred;
+                    }
+                }
                 unit.edges.push(ExtractedEdge {
                     kind: kind.into(),
                     source,
@@ -558,6 +686,41 @@ fn scip_units(bytes: &[u8], sources: &[EnrichmentSource<'_>]) -> Result<Vec<Enri
             .map(|source| file_unit(source.unit)),
     );
     Ok(result)
+}
+
+fn rust_scip_target<'a>(
+    unit: &mut Enrichment,
+    external: &mut BTreeMap<&'a str, usize>,
+    symbol: &'a str,
+    span: Span,
+    target: EdgeTarget,
+    info: Option<&SymbolInformation>,
+) -> Option<EdgeTarget> {
+    if !matches!(target, EdgeTarget::Symbol(_)) {
+        return Some(target);
+    }
+    if scip::symbol::is_local_symbol(symbol) || symbol.trim().is_empty() {
+        return None;
+    }
+    let index = *external.entry(symbol).or_insert_with(|| {
+        let index = unit.nodes.len();
+        unit.nodes.push(ExtractedNode {
+            kind: "ExternalSymbol".into(),
+            name: info
+                .filter(|info| !info.display_name.is_empty())
+                .map_or(symbol, |info| info.display_name.as_str())
+                .into(),
+            qualified_name: symbol.into(),
+            span,
+            parent: Some(0),
+            properties: json!({"source":"scip", "scip_symbol":symbol,"scip_external":true})
+                .as_object()
+                .unwrap()
+                .clone(),
+        });
+        index
+    });
+    Some(EdgeTarget::Local(index))
 }
 
 fn file_unit(path: &str) -> Enrichment {
@@ -599,7 +762,7 @@ fn scip_span(
     lines: &[(usize, &str)],
     encoding: PositionEncoding,
 ) -> Result<Span, String> {
-    let (start_line, start, end_line, end) = if occurrence.has_single_line_range() {
+    let range = if occurrence.has_single_line_range() {
         let range = occurrence.single_line_range();
         (
             range.line,
@@ -622,6 +785,45 @@ fn scip_span(
             _ => return Err("SCIP occurrence range has an invalid shape".into()),
         }
     };
+    scip_range(range, lines, encoding)
+}
+
+fn scip_enclosing_span(
+    occurrence: &Occurrence,
+    lines: &[(usize, &str)],
+    encoding: PositionEncoding,
+) -> Option<Span> {
+    let range = if occurrence.has_single_line_enclosing_range() {
+        let range = occurrence.single_line_enclosing_range();
+        (
+            range.line,
+            range.start_character,
+            range.line,
+            range.end_character,
+        )
+    } else if occurrence.has_multi_line_enclosing_range() {
+        let range = occurrence.multi_line_enclosing_range();
+        (
+            range.start_line,
+            range.start_character,
+            range.end_line,
+            range.end_character,
+        )
+    } else {
+        match occurrence.enclosing_range.as_slice() {
+            [line, start, end] => (*line, *start, *line, *end),
+            [start_line, start, end_line, end] => (*start_line, *start, *end_line, *end),
+            _ => return None,
+        }
+    };
+    scip_range(range, lines, encoding).ok()
+}
+
+fn scip_range(
+    (start_line, start, end_line, end): (i32, i32, i32, i32),
+    lines: &[(usize, &str)],
+    encoding: PositionEncoding,
+) -> Result<Span, String> {
     let position = |line: i32, column: i32| -> Option<(u32, u32)> {
         let line = usize::try_from(line).ok()?;
         let column = usize::try_from(column).ok()?;
@@ -665,4 +867,90 @@ fn scip_span(
         start_byte,
         end_byte,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use scip::types::Document;
+
+    #[test]
+    fn rust_scip_preserves_typed_global_endpoints_and_document_local_identity() {
+        let caller = "rust-analyzer cargo client 1.0.0 client/caller().";
+        let provider = "rust-analyzer cargo provider 1.0.0 provider/serve().";
+        let message = "rust-analyzer cargo provider 1.0.0 provider/Message#";
+        let text = "fn caller() { serve(Message); let local = 1; }";
+        let occurrence = |symbol: &str, range: Vec<i32>, definition| Occurrence {
+            symbol: symbol.into(),
+            range,
+            symbol_roles: if definition {
+                SymbolRole::Definition as i32
+            } else {
+                0
+            },
+            ..Default::default()
+        };
+        let mut definition = occurrence(caller, vec![0, 3, 9], true);
+        definition.enclosing_range = vec![0, 0, text.len() as i32];
+        let index = Index {
+            documents: vec![Document {
+                relative_path: "src/lib.rs".into(),
+                occurrences: vec![
+                    definition,
+                    occurrence(provider, vec![0, 14, 19], false),
+                    occurrence(message, vec![0, 20, 27], false),
+                    occurrence("local 1", vec![0, 34, 39], true),
+                    occurrence("local 2", vec![0, 42, 43], false),
+                ],
+                symbols: vec![SymbolInformation {
+                    symbol: caller.into(),
+                    display_name: "caller".into(),
+                    kind: ScipKind::Function.into(),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }],
+            external_symbols: vec![SymbolInformation {
+                symbol: message.into(),
+                kind: ScipKind::Struct.into(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let source = EnrichmentSource {
+            unit: "src/lib.rs",
+            language: "rust",
+            bytes: text.as_bytes(),
+        };
+        let units = scip_units(&index.write_to_bytes().unwrap(), &[source]).unwrap();
+        let unit = &units[0];
+        assert_eq!(unit.nodes[1].properties["scip_symbol"], caller);
+        let local = unit
+            .nodes
+            .iter()
+            .find(|node| node.qualified_name == "local 1")
+            .unwrap();
+        assert_eq!(local.properties["scip_local_symbol"], "local 1");
+        assert!(!local.properties.contains_key("scip_symbol"));
+        assert!(
+            !unit
+                .nodes
+                .iter()
+                .any(|node| node.qualified_name == "local 2")
+        );
+        for (kind, symbol) in [("CALLS", provider), ("USES_TYPE", message)] {
+            assert!(
+                unit.edges.iter().any(|edge| {
+                    let EdgeTarget::Local(target) = edge.target else {
+                        return false;
+                    };
+                    edge.kind == kind
+                        && edge.source == 1
+                        && unit.nodes[target].kind == "ExternalSymbol"
+                        && unit.nodes[target].properties["scip_symbol"] == symbol
+                }),
+                "missing {kind} {symbol}"
+            );
+        }
+    }
 }

@@ -434,6 +434,7 @@ pub enum TaskOutput {
     PackageViewData(devworks_engine::package_host::native_ui::ViewData),
     /// The text of an MCP resource or prompt a person opened in Settings.
     McpContent(String),
+    AnalysisEvidence(String),
     /// What deleting a repository's folder would remove, for the person to review.
     RepositoryDeletionPreview(Box<devworks_core::authority::deletion::DeletionPreview>),
     /// The outcome of a confirmed repository folder deletion.

@@ -1031,6 +1031,11 @@ pub fn fences_hold(
 ) -> Result<bool, StorageError> {
     for fence in fences {
         let holds = match fence {
+            AuthorityFence::AnalysisRequest { operation, request } => {
+                crate::services::graph::repository_analysis::dispatch_binding_in(
+                    tx, operation, request,
+                )?
+            }
             AuthorityFence::GitWorktree { id, digest } => {
                 super::git::witness_in(tx, id)?.as_ref() == Some(digest)
             }
@@ -1083,6 +1088,11 @@ pub fn authorization_holds(
 ) -> Result<bool, StorageError> {
     for fence in authorization.fences() {
         let holds = match fence {
+            AuthorityFence::AnalysisRequest { operation, request } => {
+                crate::services::graph::repository_analysis::dispatch_binding_snapshot(
+                    s, operation, request,
+                )?
+            }
             AuthorityFence::GitWorktree { id, digest } => {
                 super::git::witness(s, id)?.as_ref() == Some(digest)
             }

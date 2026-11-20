@@ -1803,6 +1803,7 @@ impl ChatCtl<'_, '_> {
                         | TaskOutput::Convention(_)
                         | TaskOutput::Instruction(_)
                         | TaskOutput::McpContent(_)
+                        | TaskOutput::AnalysisEvidence(_)
                         | TaskOutput::RepositoryDeletionPreview(_)
                         | TaskOutput::RepositoryDeleted(_),
                     ) => AttachState::Failed("unexpected reply".into()),
@@ -1876,6 +1877,7 @@ impl ChatCtl<'_, '_> {
                             | TaskOutput::Convention(_)
                             | TaskOutput::Instruction(_)
                             | TaskOutput::McpContent(_)
+                            | TaskOutput::AnalysisEvidence(_)
                             | TaskOutput::RepositoryDeletionPreview(_)
                             | TaskOutput::RepositoryDeleted(_),
                         ) => {}

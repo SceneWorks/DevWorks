@@ -457,11 +457,17 @@ fn subject_exists(
 // Help backing bodies remain point-readable and retained, but are not user/work outputs.
 // Bind the SQL classification to the actual store host, not a title/tag/caller-selected value.
 impl Snapshot<'_> {
+    fn artifact_now_ms(&self) -> i64 {
+        self.stamp.now_ms
+    }
     fn artifact_host_actor(&self) -> &ActorId {
         self.host_actor
     }
 }
 impl Unit<'_> {
+    fn artifact_now_ms(&self) -> i64 {
+        self.now
+    }
     fn artifact_host_actor(&self) -> &ActorId {
         &self.info.host_actor
     }
@@ -534,6 +540,47 @@ macro_rules! artifact_reads {
                 let rows = db(db(s.query_map([artifact.as_str()], |r| r.get::<_, String>(0)))?
                     .collect::<rusqlite::Result<Vec<_>>>())?;
                 rows.into_iter().map(|p| id_of(p).map(ProjectId)).collect()
+            }
+            fn analysis_artifact_available(
+                &self, artifact: &Id, run: &Id, project: Option<&ProjectId>,
+                worktree: Option<(&Id, i64)>, restore_epoch: i64,
+            ) -> Result<bool, StorageError> {
+                use devworks_core::protocol::data::DataScope;
+                use devworks_core::ports::storage::{AnalysisRead, GitRead, ProjectRead};
+                let Some(run) = self.analysis_run(run)? else { return Ok(false) };
+                let original_project = match &run.intent.scope {
+                    DataScope::Workspace => None,
+                    DataScope::Project { project_id } => Some(project_id),
+                };
+                if original_project != project || run.owner.restore_epoch != restore_epoch
+                    || !run.phases.iter().any(|phase| phase.report.as_ref()
+                        .is_some_and(|report| &report.artifact_id == artifact))
+                    || run.intent.witnesses.iter().any(|witness| witness.expires_at_ms
+                        .is_some_and(|expiry| expiry <= self.artifact_now_ms()))
+                {
+                    return Ok(false);
+                }
+                let members = project.map(|project| self.members(project)).transpose()?;
+                for repository in run.intent.views.iter().map(|view| &view.repository_id)
+                    .chain(run.intent.unavailable.iter().map(|view| &view.repository_id))
+                {
+                    if self.repository(repository)?.is_none_or(|row| row.lifecycle == "Deleted")
+                        || members.as_ref().is_some_and(|members| !members.contains(repository))
+                    {
+                        return Ok(false);
+                    }
+                }
+                for view in &run.intent.views {
+                    if let Some(id) = view.snapshot.worktree_id.as_ref() {
+                        let Some((owned, revision)) = worktree else { return Ok(false) };
+                        if id != owned || self.git_worktree(id)?.is_none_or(|row| row.removed
+                            || row.ownership_revision != revision || row.repository_id != view.repository_id)
+                        {
+                            return Ok(false);
+                        }
+                    }
+                }
+                Ok(true)
             }
             fn links(&self, artifact: &Id) -> Result<Vec<ArtifactLink>, StorageError> {
                 links(self.conn, artifact)

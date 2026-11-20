@@ -1,4 +1,5 @@
 //! The current selected-operation and installed-package registry, never caller schema bytes.
+use crate::analysis_tools::{self, Alias};
 use devworks_core::{
     authority::policy::{self, Verdict},
     context::InvocationContext,
@@ -159,6 +160,14 @@ impl RegisteredSchemas {
                 Ok(tool)
             })
             .collect::<Result<Vec<_>, _>>()?;
+        let aliases = analysis_tools::selected(&tools)
+            .map(|alias| {
+                alias
+                    .tool()
+                    .map_err(|_| StorageError::InvalidRecord("invalid analysis tool schema".into()))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        tools.extend(aliases);
         tools.sort_by(|a, b| {
             a.capability_id
                 .as_str()
@@ -263,6 +272,24 @@ impl RegisteredSchemas {
             }
         }
         None
+    }
+    pub(crate) fn selected_analysis_alias(
+        &self,
+        ctx: &InvocationContext,
+        alias: Alias,
+        reference: &SchemaRef,
+    ) -> Result<ToolSchema, ProviderError> {
+        let expected = alias.tool()?;
+        if !equal(&expected.input_schema, reference) {
+            return Err(ProviderError::MaterialUnavailable);
+        }
+        self.selected_builtins(ctx)
+            .map_err(|_| ProviderError::MaterialUnavailable)?
+            .into_iter()
+            .find(|tool| {
+                tool.capability_id == expected.capability_id && equal(&tool.input_schema, reference)
+            })
+            .ok_or(ProviderError::MaterialUnavailable)
     }
     fn registered(&self, op: &str, mode: Mode) -> bool {
         match mode {
@@ -534,6 +561,10 @@ impl SchemaDocuments for RegisteredSchemas {
         ctx: &InvocationContext,
         reference: &SchemaRef,
     ) -> Result<Value, ProviderError> {
+        if let Some(alias) = Alias::from_schema(reference.schema_id.as_str()) {
+            self.selected_analysis_alias(ctx, alias, reference)?;
+            return Ok(alias.document());
+        }
         if reference.schema_id.as_str().starts_with("mcp/") {
             return self
                 .selected_mcp_materials(ctx)?
@@ -552,6 +583,20 @@ impl SchemaDocuments for RegisteredSchemas {
         ctx: &InvocationContext,
         alias: &ToolSchema,
     ) -> Result<PreparedTool, ProviderError> {
+        if let Some(analysis) = Alias::from_capability(alias.capability_id.as_str()) {
+            let expected = self.selected_analysis_alias(ctx, analysis, &alias.input_schema)?;
+            if expected.wire_name != alias.wire_name {
+                return Err(ProviderError::MaterialUnavailable);
+            }
+            let schema = analysis.document();
+            return Ok(PreparedTool {
+                wire_name: alias.wire_name.clone(),
+                capability_id: alias.capability_id.clone(),
+                input_schema: alias.input_schema.clone(),
+                description: schema["description"].as_str().map(str::to_owned),
+                schema,
+            });
+        }
         if alias.capability_id.as_str().starts_with("mcp/") {
             let material = self
                 .selected_mcp_materials(ctx)?

@@ -1140,6 +1140,15 @@ impl ProjectsCtl<'_, '_> {
             names,
             indexing: lists.indexing,
         };
+        if ui
+            .add_enabled(
+                online.is_ok() && !view.source.items.is_empty(),
+                egui::Button::new("Fleet analysis"),
+            )
+            .clicked()
+        {
+            self.effects.push(crate::screen::Effect::OpenFleetAnalysis);
+        }
         let (reload, link) =
             self.projects
                 .repositories(ui, &view, &mut mem, self.cx.scrolls, &mut actions);

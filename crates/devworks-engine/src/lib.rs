@@ -207,6 +207,7 @@
 pub mod agent_inbox;
 pub mod agent_supervisor;
 pub mod agent_turns;
+mod analysis_tools;
 pub mod approvals;
 pub mod browser;
 mod compaction;
@@ -272,3 +273,5 @@ pub mod providers;
 pub mod conventions_import;
 
 pub mod schemas;
+
+mod repository_analysis;
