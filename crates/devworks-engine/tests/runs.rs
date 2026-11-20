@@ -141,6 +141,59 @@ fn seed(h: &Harness) {
     c.execute_batch(&sql).unwrap();
 }
 
+fn seed_local_route(fx: &Fx) {
+    fx.tx(move |_, tx| {
+        tx.router().put_connection(
+            &StoredConnection {
+                id: id("watch-connection"),
+                name: "Fixture".into(),
+                profile: "CompatibleChat".into(),
+                endpoint: "http://localhost:11434/v1".into(),
+                enabled: true,
+                local_free: true,
+                open_router: None,
+                credential_ref: None,
+                credential_revision: 0,
+                credential_epoch: None,
+                lifecycle: "Connected".into(),
+                state_reason: None,
+                account_revision: 1,
+                refresh_operation_id: None,
+                account_digest: None,
+                access_expires_at_ms: None,
+                risk: None,
+                discovered: None,
+                discovered_at_ms: None,
+                healthy: Some(true),
+                checked_at_ms: Some(0),
+                revision: 1,
+                created_at_ms: 0,
+                updated_at_ms: 0,
+            },
+            None,
+        )?;
+        tx.router().put_route_model(
+            &StoredRouteModel {
+                id: id("watch-model"),
+                display_name: "Fixture model".into(),
+                endpoint_profile: "CompatibleChat".into(),
+                upstream_model_id: "fixture-model".into(),
+                enabled: true,
+                efforts: vec![],
+                image_input: false,
+                tools: true,
+                context_tokens: Some(16_000),
+                connection_id: Some(id("watch-connection")),
+                position: 1,
+                revision: 1,
+                updated_at_ms: 0,
+            },
+            None,
+        )?;
+        Ok(())
+    });
+}
+
 /// The one store, control service and gateway the tests drive.
 struct Fx {
     h: Harness,
@@ -8703,3 +8756,8 @@ mod compaction;
 mod epoch_request;
 #[path = "runs/failure_notifications.rs"]
 mod failure_notifications;
+
+#[path = "runs/plan_review.rs"]
+mod plan_review_tests;
+#[path = "runs/review_capacity.rs"]
+mod review_capacity_tests;

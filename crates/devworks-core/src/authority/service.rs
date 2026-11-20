@@ -803,6 +803,13 @@ pub(crate) fn decide_in(
         return Err(deny(DenialReason::UnregisteredPrincipal));
     }
     let binding = bound(s, ctx).map_err(unavailable)?;
+    if binding.as_ref().and_then(|binding| binding.role)
+        == Some(crate::settings::catalog::AgentRole::PlanReviewer)
+        && !crate::kernel::work_plan::query_isolated(s.work(), ctx, request.input)
+            .map_err(unavailable)?
+    {
+        return Err(deny(DenialReason::OutOfAssignmentScope));
+    }
     let policy = resolve_policy(s.configuration(), ctx.project_id()).map_err(unavailable)?;
     // A pushed ref is also protected when it is its repository's default branch.
     let protected_branches =

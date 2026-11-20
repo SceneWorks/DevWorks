@@ -33,7 +33,7 @@ use crate::admission::{self, AdmissionError, CallerKey, Refusal, Selection};
 use crate::authority::AuthorityCapability;
 use crate::context::{InvocationContext, PrincipalKind, ReceiptIdentity};
 use crate::fingerprint::{self, Fingerprint};
-use crate::kernel::failure::storage_fault;
+use crate::kernel::failure::{Refusal as UseCaseRefusal, storage_fault};
 use crate::operations::OperationInput;
 use crate::ports::storage::{
     ActorRegistry, ArtifactRepository, AuthorityGrant, AuthorityLedger, AuthorityRead,
@@ -470,12 +470,24 @@ impl Gateway<'_> {
         handler: Arc<dyn CommandHandler>,
         options: WriteOptions,
     ) -> CommandOutcome {
+        self.command_checked(ctx, operation, raw, handler, options, None)
+    }
+
+    pub(crate) fn command_checked(
+        &self,
+        ctx: &InvocationContext,
+        operation: &str,
+        raw: &[u8],
+        handler: Arc<dyn CommandHandler>,
+        options: WriteOptions,
+        check: Option<Arc<CommandCheck>>,
+    ) -> CommandOutcome {
         let prepared =
             match self.prepare_command(ctx, operation, raw, handler, options, Waiting::Block) {
                 Ok((prepared, _)) => prepared,
                 Err(outcome) => return outcome,
             };
-        self.finish_command(ctx, prepared)
+        self.finish_command(ctx, prepared, check)
     }
 
     /// Prepare a selected retained receive outside the runtime's shutdown admission fence.
@@ -562,7 +574,7 @@ impl Gateway<'_> {
         ctx: &InvocationContext,
         prepared: PreparedReceive,
     ) -> CommandOutcome {
-        self.finish_command(ctx, prepared.0)
+        self.finish_command(ctx, prepared.0, None)
     }
 
     fn prepare_command(
@@ -697,6 +709,7 @@ impl Gateway<'_> {
         &self,
         ctx: &InvocationContext,
         prepared_command: CommandPreparation,
+        check: Option<Arc<CommandCheck>>,
     ) -> CommandOutcome {
         let CommandPreparation {
             admitted,
@@ -727,6 +740,7 @@ impl Gateway<'_> {
                 &authorization,
                 ingress,
                 &*handler,
+                check.as_deref(),
             )
         });
         let reply = match outcome {
@@ -940,6 +954,15 @@ fn command_retry(e: &StorageError) -> RetryAdvice {
     }
 }
 
+/// A host command check that runs against the same transaction and repositories as the use case.
+pub(crate) type CommandCheck = dyn Fn(
+        &mut dyn WriteTransaction,
+        &InvocationContext,
+        &OperationInput,
+    ) -> Result<Option<UseCaseRefusal>, StorageError>
+    + Send
+    + Sync;
+
 /// The command's write unit of work. Runs on the sole write owner inside one transaction.
 fn unit_of_work(
     tx: &mut dyn WriteTransaction,
@@ -948,6 +971,7 @@ fn unit_of_work(
     authorization: &Authorization,
     ingress: Option<ActorId>,
     handler: &dyn CommandHandler,
+    check: Option<&CommandCheck>,
 ) -> Result<Unit, StorageError> {
     let store = tx.store();
     if &store.store_id != ctx.store_id() || store.restore_epoch != ctx.restore_epoch().get() {
@@ -1034,7 +1058,20 @@ fn unit_of_work(
     // view of the transaction that cannot record receipts or command history (ARCH-02). Any
     // savepoint it leaves open is discarded when this outer savepoint is unwound.
     let savepoint = tx.savepoint()?;
-    let outcome = handler.decide(ctx, command, &mut HandlerTx::new(tx, ingress));
+    let mut handler_tx = HandlerTx::new(tx, ingress);
+    let refusal = check
+        .map(|check| check(&mut handler_tx, ctx, command.input()))
+        .transpose()?
+        .flatten();
+    let outcome = match refusal {
+        Some(refusal) => Ok(Decided {
+            decision: DomainDecision::Refused {
+                fault: refusal.fault(CorrelationId(tx.new_id(IdKind::Correlation))),
+            },
+            operation_id: None,
+        }),
+        None => handler.decide(ctx, command, &mut handler_tx),
+    };
     let decided = match outcome {
         Ok(mut decided) => {
             if let Err(e) = check_decision(command, &decided) {

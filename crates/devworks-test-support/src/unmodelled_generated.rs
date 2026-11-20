@@ -3020,6 +3020,14 @@ impl RunRead for Unmodelled {
     ) -> Result<Vec<StoredAssignment>, StorageError> {
         unmodelled()
     }
+    fn child_assignments_with_role(
+        &self,
+        _: &RootId,
+        _: &str,
+        _: bool,
+    ) -> Result<Vec<AssignmentId>, StorageError> {
+        unmodelled()
+    }
     fn instruction(&self, _: &Id) -> Result<Option<StoredInstruction>, StorageError> {
         unmodelled()
     }

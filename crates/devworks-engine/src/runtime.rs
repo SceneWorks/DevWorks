@@ -890,6 +890,7 @@ async fn build(composition: Composition, core: CoreServices) -> Result<Engine, B
         WorkService::new(ids.clone(), control.clone())
             .with_staged_plans(artifacts.clone())
             .with_plan_documents(artifacts.clone())
+            .with_native_plan_review()
             .with_clock(clock.clone()),
     );
     let mut projects = ProjectService::new(ids.clone(), control.clone()).with_work(work.clone());
@@ -1644,6 +1645,7 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
     };
     #[cfg(any(test, feature = "test-support"))]
     let polling_marks = (stored.clone(), delivered.clone());
+    let turn_commits = stored.clone();
     let commits = {
         let (passes, fallback) = (polling_passes.clone(), config.polling_interval);
         let registered = polling_loops.clone();
@@ -2150,6 +2152,7 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
         instructions: instructions.clone(),
         indexing: index_supervisor.clone(),
         admitter: admitter.clone(),
+        commits: turn_commits,
     };
     Ok(Runtime {
         store,

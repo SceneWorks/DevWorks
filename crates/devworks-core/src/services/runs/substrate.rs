@@ -15,12 +15,28 @@ use super::{
 use crate::ports::IdKind;
 use crate::ports::storage::{
     ActivationFilter, ActivationOutcome, ActivationPhase, ActivationPurpose, AssignmentPurpose,
-    AssignmentState, BlockerFilter, DesiredExecution, HoldCause, InstructionStage, StopCause,
-    StorageError, StoredActivation, StoredAssignment, StoredInstruction, StoredTurn, WorkRoot,
-    WriteTransaction,
+    AssignmentState, BlockerFilter, DesiredExecution, HoldCause, InstructionStage, RunRead,
+    StopCause, StorageError, StoredActivation, StoredAssignment, StoredInstruction, StoredTurn,
+    WorkRoot, WriteTransaction,
 };
 use crate::protocol::{ActorId, AssignmentId, Id, OperationId, ProjectId, RootId};
+use crate::settings::catalog::AgentRole;
 use serde_json::{Value, json};
+use std::collections::HashSet;
+
+/// Independent review can unblock work whose ordinary worker slot remains occupied.
+pub const PLAN_REVIEW_SLOTS: usize = 1;
+
+pub fn plan_review_assignments(
+    runs: &dyn RunRead,
+    root: &RootId,
+    live_only: bool,
+) -> Result<HashSet<AssignmentId>, StorageError> {
+    Ok(runs
+        .child_assignments_with_role(root, AgentRole::PlanReviewer.as_str(), live_only)?
+        .into_iter()
+        .collect())
+}
 
 /// Why a supervisor, broker or delegation call was refused. Nothing was written.
 #[derive(Clone, Debug)]
@@ -814,7 +830,7 @@ impl ControlService {
         actor: &ActorId,
         new: NewRunAssignment,
     ) -> Gate<StoredAssignment> {
-        self.register_assignment_with_purpose(tx, actor, new, AssignmentPurpose::Primary)
+        self.register_assignment_with_purpose(tx, actor, new, AssignmentPurpose::Primary, false)
     }
 
     /// Registers a scoped descendant without taking the root issue's primary work ownership.
@@ -825,12 +841,16 @@ impl ControlService {
         actor: &ActorId,
         new: NewRunAssignment,
     ) -> Gate<StoredAssignment> {
-        if new.parent.is_none() {
-            return Ok(Err(Fenced::Invalid(
-                "a child assignment needs a parent".into(),
-            )));
-        }
-        self.register_assignment_with_purpose(tx, actor, new, AssignmentPurpose::Child)
+        self.register_assignment_with_purpose(tx, actor, new, AssignmentPurpose::Child, false)
+    }
+
+    pub(crate) fn register_plan_review_assignment(
+        &self,
+        tx: &mut dyn WriteTransaction,
+        actor: &ActorId,
+        new: NewRunAssignment,
+    ) -> Gate<StoredAssignment> {
+        self.register_assignment_with_purpose(tx, actor, new, AssignmentPurpose::Child, true)
     }
 
     fn register_assignment_with_purpose(
@@ -839,7 +859,13 @@ impl ControlService {
         actor: &ActorId,
         new: NewRunAssignment,
         purpose: AssignmentPurpose,
+        plan_review: bool,
     ) -> Gate<StoredAssignment> {
+        if purpose == AssignmentPurpose::Child && new.parent.is_none() {
+            return Ok(Err(Fenced::Invalid(
+                "a child assignment needs a parent".into(),
+            )));
+        }
         let Some(root) = work_root(tx, &new.root)? else {
             return Ok(Err(Fenced::NotFound("root")));
         };
@@ -875,19 +901,20 @@ impl ControlService {
         if purpose == AssignmentPurpose::Child {
             // Limit queued children as well as active slots. A finite lifetime bound also stops
             // repeated completed-child fan-out; both limits belong to this root, not the app.
-            let allowance =
-                crate::settings::service::max_subagents(tx.configuration(), &root.project_id)?;
+            let allowance = if plan_review {
+                PLAN_REVIEW_SLOTS
+            } else {
+                crate::settings::service::max_subagents(tx.configuration(), &root.project_id)?
+            };
             let total_limit = allowance.max(256);
             let outstanding_limit = allowance.saturating_mul(2).min(total_limit);
+            let reviews = plan_review_assignments(tx.runs(), &root.id, false)?;
             let assignments = root_assignments(tx.runs(), &root.id, false)?;
-            let total = assignments
-                .iter()
-                .filter(|a| a.purpose == AssignmentPurpose::Child)
-                .count();
-            let outstanding = assignments
-                .iter()
-                .filter(|a| a.purpose == AssignmentPurpose::Child && a.state.is_live())
-                .count();
+            let children = assignments.iter().filter(|a| {
+                a.purpose == AssignmentPurpose::Child && reviews.contains(&a.id) == plan_review
+            });
+            let total = children.clone().count();
+            let outstanding = children.filter(|a| a.state.is_live()).count();
             if total >= total_limit || outstanding >= outstanding_limit {
                 return Ok(Err(Fenced::Invalid(format!(
                     "the root's child assignment limit is reached ({outstanding_limit} outstanding, {total_limit} total)"
@@ -1032,17 +1059,26 @@ impl ControlService {
         after.state = state;
         if state == AssignmentState::Active && a.parent_id.is_some() {
             if a.state != AssignmentState::Active {
-                let limit =
-                    crate::settings::service::max_subagents(tx.configuration(), &root.project_id)?;
+                let reviews = plan_review_assignments(tx.runs(), &root.id, true)?;
+                let plan_review = reviews.contains(&a.id);
+                let limit = if plan_review {
+                    PLAN_REVIEW_SLOTS
+                } else {
+                    crate::settings::service::max_subagents(tx.configuration(), &root.project_id)?
+                };
                 let occupied = root_assignments(tx.runs(), &root.id, true)?
                     .into_iter()
                     .filter(|other| {
-                        other.id != a.id && other.parent_id.is_some() && other.slot_held
+                        other.id != a.id
+                            && other.parent_id.is_some()
+                            && other.slot_held
+                            && reviews.contains(&other.id) == plan_review
                     })
                     .count();
                 if occupied >= limit {
+                    let kind = if plan_review { " for plan review" } else { "" };
                     return Ok(Err(Fenced::Invalid(format!(
-                        "the root's subagent allowance ({limit}) is occupied"
+                        "the root's subagent allowance{kind} ({limit}) is occupied"
                     ))));
                 }
             }

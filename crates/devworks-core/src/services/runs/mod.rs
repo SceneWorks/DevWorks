@@ -677,6 +677,142 @@ pub enum Gate {
     /// The assignment is missing, ended, moved, superseded or awaits a redirect acknowledgment.
     Assignment,
 }
+
+/// Guard new implementation commands at the same write boundary as their receipt and effects.
+/// The operation's purpose controls admission, even when the owning activation can still plan.
+pub(crate) fn implementation_tool_refusal(
+    tx: &mut dyn WriteTransaction,
+    ctx: &InvocationContext,
+    operation: &OperationInput,
+    control: Option<&ControlService>,
+) -> Result<Option<Refusal>, StorageError> {
+    let implementation = match operation {
+        // The process and probe variants enqueue the same process effects as process.execute.
+        OperationInput::Watch(crate::operations::watch::Input::Create(input)) => {
+            input.process.is_some() || input.probe.is_some()
+        }
+        _ => implementation_effect(operation.operation()),
+    };
+    if ctx.principal_kind() != PrincipalKind::Agent || !implementation {
+        return Ok(None);
+    }
+    let Some(root_id) = ctx.root_id() else {
+        return Ok(None);
+    };
+    let scope = control.map_or(&RecordedScope as &dyn ExecutionScope, |control| {
+        control.scope.as_ref()
+    });
+    let Some(eligibility) =
+        implementation_eligibility(scope, tx, root_id, ctx.assignment_id().cloned())?
+    else {
+        return Ok(None);
+    };
+    let Some(condition) = eligibility.conditions.first() else {
+        return Ok(None);
+    };
+    let kind = if matches!(condition.gate, Gate::Readiness { .. } | Gate::Plan) {
+        "readiness"
+    } else {
+        "implementation"
+    };
+    let mut refusal = Refusal::new(
+        DomainErrorCode::DependencyBlocked,
+        kind,
+        Some(root_id.0.clone()),
+    )
+    .retry(RetryAdvice::AfterBlockerClears);
+    let mut seen = std::collections::BTreeSet::new();
+    refusal.blockers = eligibility
+        .conditions
+        .into_iter()
+        .filter(|condition| seen.insert(condition.hold_id.as_str().to_owned()))
+        .map(|condition| HoldId(condition.hold_id))
+        .take(LISTED_BLOCKERS)
+        .collect();
+    Ok(Some(refusal))
+}
+
+fn implementation_effect(capability: &str) -> bool {
+    matches!(
+        capability,
+        "git.commit"
+            | "git.push"
+            | "git.pull_request"
+            | "git.integrate"
+            | "process.execute"
+            | "process.install_project_dependencies"
+            | "containers.build"
+            | "containers.start"
+            | "containers.exec"
+    )
+}
+
+fn implementation_eligibility(
+    scope: &dyn ExecutionScope,
+    tx: &mut dyn WriteTransaction,
+    root: &RootId,
+    assignment: Option<AssignmentId>,
+) -> Result<Option<Eligibility>, StorageError> {
+    let root = tx
+        .sessions()
+        .work_root(root)?
+        .ok_or(StorageError::ScopeDenied)?;
+    if !is_feature(&root) && is_run_root(&root) {
+        return Ok(None);
+    }
+    let target = assignment.map_or(Target::Root, Target::Assignment);
+    ControlService::evaluate_scope(
+        scope,
+        tx.runs(),
+        &root,
+        &target,
+        ActivationPurpose::Implementation,
+    )
+    .map(Some)
+}
+
+impl ControlService {
+    /// Refresh readiness before launching an accepted effect. A previous command receipt stays
+    /// valid, and a delivery whose effect may have run still has to be reconciled.
+    pub fn permits_implementation_delivery(
+        &self,
+        tx: &mut dyn WriteTransaction,
+        entry: &crate::ports::storage::QueueEntry,
+    ) -> Result<bool, StorageError> {
+        use crate::ports::storage::cancellable_before_dispatch;
+        use crate::services::process::tools::{EFFECT_CONSUMER, WATCH_CONSUMER};
+        if !matches!(
+            entry.consumer.as_str(),
+            crate::services::git::EFFECT_CONSUMER
+                | crate::services::containers::EFFECT_CONSUMER
+                | EFFECT_CONSUMER
+                | WATCH_CONSUMER
+        ) {
+            return Ok(true);
+        }
+        let Some(id) = &entry.operation_id else {
+            return Ok(true);
+        };
+        let Some(operation) = tx.operations().operation(id)? else {
+            return Ok(true);
+        };
+        if !cancellable_before_dispatch(operation.state)
+            || !implementation_effect(&operation.capability)
+            || operation.payload.get("kind").and_then(Value::as_str)
+                != Some(PrincipalKind::Agent.as_str())
+        {
+            return Ok(true);
+        }
+        let Some(root) = operation.root_id.as_ref() else {
+            return Ok(true);
+        };
+        Ok(
+            implementation_eligibility(self.scope.as_ref(), tx, root, operation.assignment_id)?
+                .is_none_or(|eligibility| eligibility.eligible),
+        )
+    }
+}
+
 impl Gate {
     fn readiness(r: &scope::Readiness) -> Self {
         Self::Readiness {
@@ -845,8 +981,18 @@ impl ControlService {
         target: &Target,
         purpose: ActivationPurpose,
     ) -> Result<Eligibility, StorageError> {
+        Self::evaluate_scope(self.scope.as_ref(), runs, root, target, purpose)
+    }
+
+    fn evaluate_scope(
+        scope: &dyn ExecutionScope,
+        runs: &dyn RunRead,
+        root: &WorkRoot,
+        target: &Target,
+        purpose: ActivationPurpose,
+    ) -> Result<Eligibility, StorageError> {
         let control = control_of(runs, &root.id)?;
-        let plan = self.scope.plan(runs, root)?;
+        let plan = scope.plan(runs, root)?;
         let mut c: Vec<Condition> = Vec::new();
         let root_subject = Subject::Root(root.id.clone());
         if runs
@@ -922,14 +1068,9 @@ impl ControlService {
                 };
                 prerequisite_gate(runs, f, Subject::Root(f.clone()), &mut c)?;
                 repository_gate(runs, f, &root.id, root_subject.clone(), &mut c)?;
-                inherited_scope_gate(
-                    runs,
-                    &self.scope.plan(runs, &feature)?,
-                    &root.id,
-                    root_subject.clone(),
-                    &mut c,
-                )?;
-                match self.scope.plan(runs, &feature)? {
+                let feature_plan = scope.plan(runs, &feature)?;
+                inherited_scope_gate(runs, &feature_plan, &root.id, root_subject.clone(), &mut c)?;
+                match feature_plan {
                     PlanState::Approved { feature: unit, .. } if unit.readiness.is_current() => {}
                     PlanState::Approved { feature: unit, revision, .. } => c.push(derived(
                         "feature-readiness",

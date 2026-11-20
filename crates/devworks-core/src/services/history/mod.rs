@@ -88,8 +88,8 @@ use crate::context::{InvocationContext, ReceiptIdentity};
 use crate::gateway::AdmittedQuery;
 use crate::operations::{OperationInput, history as ops};
 use crate::ports::storage::{
-    HistoryScope, LedgerEntry, LineageRow, MAX_PAGE, NewEvent, ReadSnapshot, SequenceKey,
-    StorageError, StoredInvocation, StoredLink, UsageFact, WorkRoot, WriteTransaction,
+    EventRecord, HistoryScope, LedgerEntry, LineageRow, MAX_PAGE, NewEvent, ReadSnapshot,
+    SequenceKey, StorageError, StoredInvocation, StoredLink, UsageFact, WorkRoot, WriteTransaction,
 };
 use crate::ports::{IdKind, IdSource, QueryAnswer, QueryHandler};
 use crate::protocol::data::GitOid;
@@ -391,6 +391,35 @@ struct GitBody {
     head: GitOid,
 }
 
+fn archived_readiness_lineage(event: EventRecord) -> Result<LineageRecord, Failure> {
+    let id = |key| -> Result<Id, Failure> {
+        let value = event.payload[key]
+            .as_str()
+            .ok_or_else(|| stored("readiness finding history ID"))?;
+        Id::new(value).map_err(|_| stored("readiness finding history ID"))
+    };
+    let parent_id = if event.kind == crate::services::work::readiness::FINDING_ARCHIVE_CONTINUED {
+        Some(id("archiveId")?)
+    } else {
+        None
+    };
+    let summary = event.payload["summary"]
+        .as_str()
+        .ok_or_else(|| stored("archived readiness finding text"))?;
+    Ok(LineageRecord {
+        id: event.id.0,
+        parent_id,
+        kind: label("readiness_finding", "event"),
+        related_id: id("findingId")?,
+        summary: content(summary),
+        actor_id: Some(event.actor),
+        actor_attribution: Some(ActorAttribution::Recorded),
+        occurred_at_ms: Some(counter(event.created_at_ms)),
+        repository_id: None,
+        revision: None,
+    })
+}
+
 fn stored(what: &str) -> Failure {
     StorageError::IncompatibleSchema(format!("stored {what}")).into()
 }
@@ -496,14 +525,21 @@ impl HistoryService {
         limit: u16,
         fetch: impl Fn(Option<&SequenceKey>, u16) -> Result<Vec<(SequenceKey, T)>, Failure>,
     ) -> Result<Paged<T>, Failure> {
-        let after = cursor
-            .map(|c| binding.decode(c).and_then(|p| parse_key(&p)))
-            .transpose()?;
+        let rows = Self::keyed_page(binding, cursor, limit, fetch)?;
+        Self::finish_page(binding, cursor, rows)
+    }
+
+    fn keyed_page<T>(
+        binding: &CursorBinding,
+        cursor: Option<&str>,
+        limit: u16,
+        fetch: impl Fn(Option<&SequenceKey>, u16) -> Result<Vec<(SequenceKey, T)>, Failure>,
+    ) -> Result<cursor::Paged<(SequenceKey, T)>, Failure> {
         let request = PageRequest {
             limit: Limit::new(u32::from(limit.clamp(1, MAX_PAGE))).expect("page size"),
             cursor: cursor.map(|c| BoundedText(c.to_owned())),
         };
-        let rows = cursor::page(
+        cursor::page(
             binding,
             &request,
             |at, n| {
@@ -511,7 +547,17 @@ impl HistoryService {
                 fetch(at.as_ref(), n)
             },
             |(k, _)| key_position(k),
-        )?;
+        )
+    }
+
+    fn finish_page<T>(
+        binding: &CursorBinding,
+        cursor: Option<&str>,
+        rows: cursor::Paged<(SequenceKey, T)>,
+    ) -> Result<Paged<T>, Failure> {
+        let after = cursor
+            .map(|c| binding.decode(c).and_then(|p| parse_key(&p)))
+            .transpose()?;
         let next = rows.next_cursor.map(|c| c.0);
         let rows = rows.items;
         let covered = rows
@@ -715,6 +761,15 @@ impl HistoryService {
                 }
             }
             LineageRow::Event { event, .. } => {
+                if event.aggregate_kind == crate::services::work::readiness::READINESS_AGGREGATE
+                    && matches!(
+                        event.kind.as_str(),
+                        crate::services::work::readiness::FINDING_ARCHIVED
+                            | crate::services::work::readiness::FINDING_ARCHIVE_CONTINUED
+                    )
+                {
+                    return archived_readiness_lineage(event);
+                }
                 let (kind, what) = match event.aggregate_kind.as_str() {
                     "command" => (
                         "command",
@@ -771,9 +826,10 @@ impl HistoryService {
             root.scope_revision,
             revision,
         );
-        let paged = Self::page(
+        let cursor = input.page.cursor.as_ref().map(|c| c.0.as_str());
+        let rows = Self::keyed_page(
             &binding,
-            input.page.cursor.as_ref().map(|c| c.0.as_str()),
+            cursor,
             input.page.limit.get() as u16,
             |after, n| {
                 read.lineage(&root.id, after, n)?
@@ -784,9 +840,14 @@ impl HistoryService {
                     })
                     .collect()
             },
+        )?
+        .clip_to_frame(
+            &binding,
+            crate::framing::MAX_FRAME_BYTES - 16_384,
+            |(key, _)| key_position(key),
         )?;
         Ok(OperationResult::HistoryWorkLineage {
-            value: paged.history(),
+            value: Self::finish_page(&binding, cursor, rows)?.history(),
         })
     }
 

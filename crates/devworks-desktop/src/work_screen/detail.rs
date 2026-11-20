@@ -16,6 +16,53 @@ use eframe::egui::{self, RichText, Ui};
 use std::collections::{BTreeMap, BTreeSet};
 
 use super::*;
+fn run_controls(
+    ui: &mut Ui,
+    work: &WorkUi,
+    w: &WorkRecord,
+    enabled: bool,
+    actions: &mut Vec<Action>,
+) {
+    if let Some(s) = work.runs.get(w.id.as_str()).cloned() {
+        let held = s.blockers.items.iter().any(|b| wops::manual_hold(&b.cause));
+        widgets::caption(
+            ui,
+            format!(
+                "Execution: {:?}{}",
+                s.root.desired_state,
+                if held {
+                    " · paused until you continue it"
+                } else {
+                    ""
+                }
+            ),
+        );
+        ui.horizontal(|ui| {
+            if w.parent_id.is_none()
+                && ui
+                    .add_enabled(enabled, egui::Button::new("Start"))
+                    .clicked()
+            {
+                actions.push(Action::Run("runs.start", w.clone()));
+            }
+            if ui
+                .add_enabled(enabled, egui::Button::new("Pause"))
+                .clicked()
+            {
+                actions.push(Action::Run("runs.pause", w.clone()));
+            }
+            if ui
+                .add_enabled(enabled && held, egui::Button::new("Continue"))
+                .clicked()
+            {
+                actions.push(Action::Run("runs.continue", w.clone()));
+            }
+        });
+    } else if w.parent_id.is_none() && ui.button("Show run controls").clicked() {
+        actions.push(Action::Inspect(w.id.as_str().to_owned()));
+    }
+}
+
 /// Feature list tabs and Issues tabs.
 use crate::shell::work::*;
 
@@ -56,6 +103,7 @@ pub(crate) fn feature_detail(
                 ui.label(&f.description.0);
             }
             workflow::next_task(ui, work, f.id.as_str(), enabled, actions);
+            run_controls(ui, work, f, enabled, actions);
             source_control(ui, work, f.id.as_str(), actions);
             ui.add_space(6.0);
             // Approval and readiness are separate facts, shown apart.
@@ -160,9 +208,12 @@ pub(crate) fn feature_detail(
                     actions.push(Action::RequestApproval(f.clone()));
                 }
             }
-            plan_form(ui, work, f, project_repos, enabled, actions);
+            ui.push_id(("feature-plan", f.id.as_str()), |ui| {
+                plan_form(ui, work, f, project_repos, enabled, actions);
+            });
             ui.add_space(8.0);
             ui.label(RichText::new("Readiness").strong());
+            settled_finding_history(ui, work, f.id.as_str(), actions);
             if let Some(p) = &f.pending_readiness {
                 let open = p
                     .findings
@@ -173,12 +224,14 @@ pub(crate) fn feature_detail(
                 widgets::caption(
                     ui,
                     format!(
-                        "The pending draft (plan revision {}) is assessed by {}: {open} open \
-                        blocking finding(s). It gates nothing until the draft is approved.",
-                        p.plan_revision.as_str(),
-                        p.assessed_by.0.as_str()
+                        "Readiness for pending draft {} · {open} open blocking finding(s). \
+                        It takes effect when the draft is approved.",
+                        p.plan_revision.as_str()
                     ),
                 );
+                if !p.summary.0.is_empty() {
+                    ui.label(&p.summary.0);
+                }
             }
             match &f.readiness {
                 None => widgets::caption(
@@ -190,8 +243,7 @@ pub(crate) fn feature_detail(
                     widgets::caption(
                         ui,
                         format!(
-                            "Assessed by {} for plan revision {}{} · {}",
-                            r.assessed_by.0.as_str(),
+                            "Readiness for plan revision {}{} · {}",
                             r.plan_revision.as_str(),
                             if r.reviewed_pending {
                                 " (pending draft)"
@@ -1133,45 +1185,7 @@ pub(crate) fn card_detail(
             } else {
                 widgets::caption(ui, "An agent can be assigned while one is working on it.");
             }
-            // Run controls of a root (a standalone issue, or a card with controls of its own).
-            if let Some(s) = work.runs.get(w.id.as_str()).cloned() {
-                let held = s.blockers.items.iter().any(|b| wops::manual_hold(&b.cause));
-                widgets::caption(
-                    ui,
-                    format!(
-                        "Execution: {:?}{}",
-                        s.root.desired_state,
-                        if held {
-                            " · paused until you continue it"
-                        } else {
-                            ""
-                        }
-                    ),
-                );
-                ui.horizontal(|ui| {
-                    if w.parent_id.is_none()
-                        && ui
-                            .add_enabled(enabled, egui::Button::new("Start"))
-                            .clicked()
-                    {
-                        actions.push(Action::Run("runs.start", w.clone()));
-                    }
-                    if ui
-                        .add_enabled(enabled, egui::Button::new("Pause"))
-                        .clicked()
-                    {
-                        actions.push(Action::Run("runs.pause", w.clone()));
-                    }
-                    if ui
-                        .add_enabled(enabled && held, egui::Button::new("Continue"))
-                        .clicked()
-                    {
-                        actions.push(Action::Run("runs.continue", w.clone()));
-                    }
-                });
-            } else if w.parent_id.is_none() && ui.button("Show run controls").clicked() {
-                actions.push(Action::Inspect(w.id.as_str().to_owned()));
-            }
+            run_controls(ui, work, w, enabled, actions);
             ui.add_space(6.0);
             if ui.button("Show its history").clicked() {
                 actions.push(Action::ShowActivity(w.id.as_str().to_owned()));
@@ -1208,6 +1222,36 @@ pub(crate) fn card_detail(
                     }
                 });
         });
+}
+
+fn settled_finding_history(ui: &mut Ui, work: &WorkUi, root: &str, actions: &mut Vec<Action>) {
+    let Some(history) = work.readiness_history.get(root) else {
+        if ui.button("Show settled findings history").clicked() {
+            actions.push(Action::ReadinessHistory(root.to_owned(), false));
+        }
+        return;
+    };
+    if let Some(error) = &history.error {
+        widgets::caption(ui, error);
+    }
+    if history.loading() {
+        ui.spinner();
+    }
+    if history.loaded {
+        ui.label(RichText::new("Settled findings history").strong());
+        for finding in &history.items {
+            ui.label(&finding.summary.0);
+        }
+        if history.items.is_empty() && !history.more() {
+            widgets::caption(ui, "No archived findings.");
+        }
+        if history.more() && ui.button("Load more finding history").clicked() {
+            actions.push(Action::ReadinessHistory(root.to_owned(), true));
+        }
+    }
+    if ui.button("Refresh finding history").clicked() {
+        actions.push(Action::ReadinessHistory(root.to_owned(), false));
+    }
 }
 
 pub(crate) fn source_control(ui: &mut Ui, work: &WorkUi, root: &str, actions: &mut Vec<Action>) {

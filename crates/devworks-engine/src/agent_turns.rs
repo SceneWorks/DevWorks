@@ -4,8 +4,9 @@ use devworks_core::context::{HostIngress, InvocationContext, PrincipalKind};
 use devworks_core::fingerprint::sha256_hex;
 use devworks_core::ports::IdKind;
 use devworks_core::ports::storage::{
-    ActivationOutcome, ApplicationStore, ArtifactScope, AssignmentPurpose, AssignmentState,
-    Cancellation, ReadOptions, StorageError, StoredEpoch, WriteOptions, read_snapshot, run_write,
+    ActivationOutcome, ActivationPurpose, ApplicationStore, ArtifactScope, AssignmentPurpose,
+    AssignmentState, Cancellation, DeliveryFilter, ReadOptions, StorageError, StoredEpoch,
+    WriteOptions, read_snapshot, run_write,
 };
 use devworks_core::ports::usage::{PriceQuery, PriceResolver};
 use devworks_core::protocol::provider::{
@@ -27,6 +28,7 @@ use devworks_core::providers::context::{
     TextBlock,
 };
 use serde_json::{Value, json};
+use std::collections::HashSet;
 use std::sync::{Arc, Weak};
 use tokio::sync::watch;
 
@@ -46,12 +48,13 @@ use devworks_core::settings::catalog::AgentRole;
 
 use crate::Runtime;
 use crate::agent_supervisor::AgentTurnExecutor;
+use crate::plan_review::{self, ScheduleResult};
 use crate::providers::driver::NativeInvocation;
 use crate::runs::{LaunchEnd, LaunchFuture};
 use crate::store;
 use crate::turn_engine::TurnEngine;
 use crate::turn_error::{TurnError, artifact_read_fault};
-use devworks_core::services::runs::substrate::ActivationFailure;
+use devworks_core::services::runs::{Target, root_assignments, substrate::ActivationFailure};
 use devworks_core::services::usage::accounting::AttemptEnd;
 
 /// The desktop-owned turn driver holds only a weak runtime reference so the supervisor does not
@@ -86,7 +89,9 @@ impl AgentTurnExecutor for NativeAgentTurnExecutor {
             // The turn holds the runtime for its whole run, as before: the engine's handles
             // alone do not keep the runtime's workers alive.
             let engine = runtime.turn_engine().clone();
-            let end = drive_agent_turn(engine, context, coordinator, stop).await;
+            let end =
+                drive_agent_turn(engine, runtime.agents().clone(), context, coordinator, stop)
+                    .await;
             drop(runtime);
             end
         })
@@ -104,8 +109,16 @@ fn cancelled() -> LaunchEnd {
     }
 }
 
+fn awaiting_plan_review() -> LaunchEnd {
+    LaunchEnd::Finished {
+        outcome: ActivationOutcome::Interrupted,
+        detail: Some("implementation awaits a successful plan review".into()),
+    }
+}
+
 async fn drive_agent_turn(
     engine: TurnEngine,
+    agents: Arc<devworks_core::services::agents::AgentService>,
     ctx: InvocationContext,
     coordinator: AgentRecord,
     mut stop: watch::Receiver<bool>,
@@ -123,8 +136,20 @@ async fn drive_agent_turn(
         return turn_failure(StorageError::ScopeDenied);
     };
     let activation_id = activation_id.clone();
-    if let Err(error) = acknowledge_native_instructions(&engine, &ctx, &coordinator).await {
+    if !is_plan_reviewer(&coordinator)
+        && let Err(error) = acknowledge_native_instructions(&engine, &ctx, &coordinator).await
+    {
         return turn_failure(error);
+    }
+    let is_feature_coordinator =
+        coordinator.role_id.as_str() == AgentRole::FeatureCoordinator.as_str();
+    if is_feature_coordinator {
+        match plan_review::schedule(&engine, &agents, &ctx, &mut stop, false).await {
+            Ok(ScheduleResult::Failed { .. }) => return awaiting_plan_review(),
+            Ok(_) => {}
+            Err(StorageError::Cancelled) => return cancelled(),
+            Err(error) => return turn_failure(error),
+        }
     }
     let control = engine.runs().service().clone();
     let session = session_id.clone();
@@ -145,27 +170,152 @@ async fn drive_agent_turn(
     let signal = cancellation.clone();
     // Set after the cancellation, so a held call's wait ends as soon as the turn is stopped.
     let (stopped_tx, stopped) = watch::channel(false);
+    let mut stop_bridge = stop.clone();
     let bridge = tokio::spawn(async move {
-        while !*stop.borrow() && stop.changed().await.is_ok() {}
+        while !*stop_bridge.borrow() && stop_bridge.changed().await.is_ok() {}
         signal.cancel();
         stopped_tx.send_replace(true);
         // Keep the sender until the loop ends: a closed channel would end every wait at once.
         std::future::pending::<()>().await;
     });
+    let mut reviews = is_feature_coordinator.then(|| CoordinatorReview {
+        agents: &agents,
+        offered_reports: HashSet::new(),
+    });
     let mut retry_at_ms = None;
     let mut credentials_rejected = false;
-    let result = run_native_loop(
+    let mut result = run_native_loop(
         &engine,
         &ctx,
         &coordinator,
+        reviews.as_mut(),
         Stop {
             cancellation: &cancellation,
-            stopped,
+            stopped: stopped.clone(),
         },
         &mut retry_at_ms,
         &mut credentials_rejected,
     )
     .await;
+    if is_plan_reviewer(&coordinator) && !cancellation.is_cancelled() {
+        let mut report = review_report(&engine, &ctx, result).await;
+        if report.as_ref().is_ok_and(|report| report.needs_source) {
+            report = match crate::plan_review::enable_sources(&engine, &ctx).await {
+                Ok(()) => {
+                    let result = run_native_loop(
+                        &engine,
+                        &ctx,
+                        &coordinator,
+                        None,
+                        Stop {
+                            cancellation: &cancellation,
+                            stopped: stopped.clone(),
+                        },
+                        &mut retry_at_ms,
+                        &mut credentials_rejected,
+                    )
+                    .await;
+                    review_report(&engine, &ctx, result).await
+                }
+                Err(error) => Err(error.into()),
+            };
+        }
+        result = if cancellation.is_cancelled() {
+            Err(StorageError::Cancelled.into())
+        } else {
+            crate::plan_review::settle(
+                &engine,
+                &ctx,
+                report.map_err(|error| format!("Native plan review failed: {error:?}")),
+            )
+            .await
+            .map_err(Into::into)
+        };
+    } else if let Some(reviews) = reviews.as_mut() {
+        // The active coordinator still owns any review discovered while its children drain.
+        let mut commits = engine.commit_changes();
+        let mut drain_stop = stopped;
+        while !cancellation.is_cancelled() {
+            let own_effect_held = matches!(
+                result,
+                Err(TurnError::PlanReviewUnavailable {
+                    independent_scope: true
+                })
+            );
+            if result.is_err() && !own_effect_held {
+                break;
+            }
+            commits.borrow_and_update();
+            let scheduled =
+                plan_review::schedule(&engine, &agents, &ctx, &mut drain_stop, true).await;
+            let scheduled = match scheduled {
+                Ok(scheduled) => scheduled,
+                Err(error) => {
+                    result = Err(error.into());
+                    break;
+                }
+            };
+            if matches!(
+                scheduled,
+                ScheduleResult::Failed {
+                    independent_scope: false
+                }
+            ) {
+                result = Err(TurnError::PlanReviewUnavailable {
+                    independent_scope: false,
+                });
+                break;
+            }
+            match reviews.offer_reports(&engine, &ctx, true).await {
+                Ok(new_report) if new_report || matches!(scheduled, ScheduleResult::Complete) => {
+                    result = run_native_loop(
+                        &engine,
+                        &ctx,
+                        &coordinator,
+                        Some(reviews),
+                        Stop {
+                            cancellation: &cancellation,
+                            stopped: drain_stop.clone(),
+                        },
+                        &mut retry_at_ms,
+                        &mut credentials_rejected,
+                    )
+                    .await;
+                    continue;
+                }
+                Ok(_) => {}
+                Err(error) => {
+                    result = Err(error.into());
+                    break;
+                }
+            }
+            let review_failed = matches!(scheduled, ScheduleResult::Failed { .. });
+            match children_to_drain(&engine, &ctx, review_failed).await {
+                Ok(ChildrenToDrain { runnable: true, .. }) => {
+                    if let Err(error) =
+                        plan_review::wait_for_change(&mut commits, &mut drain_stop).await
+                    {
+                        result = Err(error.into());
+                        break;
+                    }
+                }
+                Ok(children) => {
+                    // Independent children have finished. Keep held children and their effects
+                    // attached to their sessions for the next activation rather than completing them.
+                    if children.held || own_effect_held {
+                        result = Err(TurnError::PlanReviewUnavailable {
+                            independent_scope: review_failed,
+                        });
+                    }
+                    break;
+                }
+                Err(error) => {
+                    result = Err(error.into());
+                    break;
+                }
+            }
+        }
+    }
     bridge.abort();
     let control = engine.runs().service().clone();
     let turn_id = turn.turn_id;
@@ -189,6 +339,7 @@ async fn drive_agent_turn(
             outcome: ActivationOutcome::Completed,
             detail: None,
         },
+        Err(TurnError::PlanReviewUnavailable { .. }) => awaiting_plan_review(),
         Err(error) if error.is_cancelled() && cancellation.is_cancelled() => cancelled(),
         Err(error) if retry_at_ms.is_some() => LaunchEnd::Failed(ActivationFailure::RateLimited {
             until_ms: retry_at_ms.expect("checked above"),
@@ -202,6 +353,19 @@ async fn drive_agent_turn(
         )),
         Err(error) => turn_failure(error),
     }
+}
+
+async fn review_report(
+    engine: &TurnEngine,
+    ctx: &InvocationContext,
+    result: Result<(), TurnError>,
+) -> Result<devworks_core::services::work::plan_review::Report, TurnError> {
+    result?;
+    Ok(crate::plan_review::report(engine, ctx).await?)
+}
+
+pub(crate) fn is_plan_reviewer(agent: &AgentRecord) -> bool {
+    agent.role_id.as_str() == AgentRole::PlanReviewer.as_str()
 }
 
 async fn acknowledge_native_instructions(
@@ -280,10 +444,39 @@ async fn wait_for_state_change(
 /// the third attempt only adds margin.
 const STALE_HEAD_ATTEMPTS: u32 = 3;
 
+struct CoordinatorReview<'a> {
+    agents: &'a Arc<devworks_core::services::agents::AgentService>,
+    offered_reports: HashSet<Id>,
+}
+
+impl CoordinatorReview<'_> {
+    async fn offer_reports(
+        &mut self,
+        engine: &TurnEngine,
+        ctx: &InvocationContext,
+        include_pending: bool,
+    ) -> Result<bool, StorageError> {
+        let feature = ctx.root_id().ok_or(StorageError::ScopeDenied)?.0.clone();
+        let reports = store::read(engine.store(), move |snapshot| {
+            devworks_core::services::work::plan_review::reports_needing_disposition(
+                snapshot.work(),
+                snapshot.indexing(),
+                &feature,
+                include_pending,
+            )
+        })
+        .await?;
+        let previous = self.offered_reports.len();
+        self.offered_reports.extend(reports);
+        Ok(self.offered_reports.len() > previous)
+    }
+}
+
 async fn run_native_loop(
     engine: &TurnEngine,
     ctx: &InvocationContext,
     agent: &AgentRecord,
+    mut review: Option<&mut CoordinatorReview<'_>>,
     mut stop: Stop<'_>,
     retry_at_ms: &mut Option<i64>,
     credentials_rejected: &mut bool,
@@ -305,27 +498,60 @@ async fn run_native_loop(
         if cancellation.is_cancelled() {
             return Err(StorageError::Cancelled.into());
         }
+        if is_plan_reviewer(agent) {
+            let reviewer = ctx.clone();
+            let current = store::read(engine.store(), move |snapshot| {
+                crate::plan_review::attempt_is_current_in(snapshot, &reviewer)
+            })
+            .await?;
+            if !current {
+                return Err(StorageError::ScopeDenied.into());
+            }
+        }
+        if let Some(review) = review.as_ref()
+            && matches!(
+                plan_review::schedule(engine, review.agents, ctx, &mut stop.stopped, false).await?,
+                ScheduleResult::Failed { .. }
+            )
+        {
+            return Err(TurnError::PlanReviewUnavailable {
+                independent_scope: false,
+            });
+        }
         let (mut head, mut binding, observed_sequence) = match recovered.take() {
             Some(value) => value,
             None => {
-                let tools_required = !engine
-                    .providers()
-                    .ok_or(StorageError::ScopeDenied)?
-                    .schemas()
-                    .selected_agent_tools(ctx)?
-                    .is_empty();
-                let needs_images =
-                    context_has_images(&initial_context(engine.store().as_ref(), ctx, agent)?);
-                let route = route_context_head(
-                    engine,
-                    ctx,
-                    session_id,
-                    0,
-                    None,
-                    tools_required,
-                    needs_images,
-                )?;
-                let (head, binding) = publish_first_context(engine, ctx, agent, &route)?;
+                let (engine, ctx, agent, session) = (
+                    engine.clone(),
+                    ctx.clone(),
+                    agent.clone(),
+                    session_id.clone(),
+                );
+                let (head, binding) = tokio::task::spawn_blocking(move || {
+                    let tools_required = !engine
+                        .providers()
+                        .ok_or(StorageError::ScopeDenied)?
+                        .schemas()
+                        .selected_agent_tools(&ctx)?
+                        .is_empty();
+                    let needs_images = context_has_images(&initial_context(
+                        engine.store().as_ref(),
+                        &ctx,
+                        &agent,
+                    )?);
+                    let route = route_context_head(
+                        &engine,
+                        &ctx,
+                        &session,
+                        0,
+                        None,
+                        tools_required,
+                        needs_images,
+                    )?;
+                    Ok::<_, TurnError>(publish_first_context(&engine, &ctx, &agent, &route)?)
+                })
+                .await
+                .map_err(|error| TurnError::Worker(format!("initial context worker: {error}")))??;
                 (head, binding, 0)
             }
         };
@@ -425,53 +651,30 @@ async fn run_native_loop(
             continue;
         }
         wait_for_running_mcp_calls(engine, ctx, session_id, cancellation).await?;
-        head = engine.refresh_native_tool_context(ctx, session_id, &head)?;
-        let selected_count = engine
-            .providers()
-            .ok_or(StorageError::ScopeDenied)?
-            .schemas()
-            .selected_agent_tools(ctx)?
-            .len();
-        let tools_required = selected_count != 0;
-        let windows = tool_window_count(selected_count);
+        let (prepared_head, prepared_binding, route, windows) = {
+            let (engine, ctx, session, head, is_reviewer) = (
+                engine.clone(),
+                ctx.clone(),
+                session_id.clone(),
+                head,
+                is_plan_reviewer(agent),
+            );
+            tokio::task::spawn_blocking(move || {
+                prepare_generation_context(&engine, &ctx, &session, head, binding, is_reviewer)
+            })
+            .await
+            .map_err(|error| TurnError::Worker(format!("generation context worker: {error}")))??
+        };
+        head = prepared_head;
+        binding = prepared_binding;
         window %= windows;
-        let needs_images = context_head_has_images(engine, ctx, &head)?;
-        let route = route_context_head(
-            engine,
-            ctx,
-            session_id,
-            binding.context_epoch.get(),
-            Some(head.sha256.as_str()),
-            tools_required,
-            needs_images,
-        )?;
-        let next = binding_for_route(engine, &route, binding.context_epoch.get())?;
-        if next.connection_id != binding.connection_id
-            || next.model_id != binding.model_id
-            || next.account_revision != binding.account_revision
-            || next.endpoint_profile != binding.endpoint_profile
-        {
-            let epoch = binding
-                .context_epoch
-                .get()
-                .checked_add(1)
-                .ok_or(StorageError::ScopeDenied)?;
-            let next = NativeBinding {
-                context_epoch: Counter::new(epoch).map_err(|_| StorageError::ScopeDenied)?,
-                ..next
-            };
-            head = engine.change_provider_epoch(ctx, session_id, &head, &binding, &next)?;
-            binding = next;
+        if !is_plan_reviewer(agent) {
+            acknowledge_native_instructions(engine, ctx, agent).await?;
         }
-        head = engine.adopt_instruction_epoch(ctx, session_id, &head, &binding, &[])?;
-        binding = engine
-            .recover_native_context_head(ctx, session_id)?
-            .ok_or(StorageError::ScopeDenied)?
-            .1;
-        acknowledge_native_instructions(engine, ctx, agent).await?;
         // A context this turn just compacted is sent as it is, even if it still reaches the
         // threshold: compacting it again could not shrink it.
-        if compacted.as_deref() != Some(head.sha256.as_str())
+        if !is_plan_reviewer(agent)
+            && compacted.as_deref() != Some(head.sha256.as_str())
             && compaction_due(engine, ctx, &route, &head, window)?
         {
             match compact(
@@ -498,7 +701,15 @@ async fn run_native_loop(
             recovered = engine.recover_native_context_head(ctx, session_id)?;
             continue;
         }
-        let invocation = plan_generation_window(engine, ctx, &route, &binding, &head, window)?;
+        let invocation = {
+            let (engine, ctx, binding, head) =
+                (engine.clone(), ctx.clone(), binding.clone(), head.clone());
+            tokio::task::spawn_blocking(move || {
+                plan_generation_window(&engine, &ctx, &route, &binding, &head, window)
+            })
+            .await
+            .map_err(|error| TurnError::Worker(format!("generation request worker: {error}")))??
+        };
         let attempt = (
             invocation.request.request_id.clone(),
             head.version_id.clone(),
@@ -555,7 +766,21 @@ async fn run_native_loop(
             Some(AttemptEnd::Completed) if progress.continuation.is_some() => {
                 completed_windows += 1;
                 if completed_windows >= windows {
-                    wait_for_linked_effects(engine, ctx, session_id, cancellation).await?;
+                    if wait_for_linked_effects(
+                        engine,
+                        ctx,
+                        session_id,
+                        review.as_deref_mut(),
+                        &mut stop,
+                    )
+                    .await?
+                    {
+                        // A review may have found a gap that needs the coordinator's disposition
+                        // before the same durable effect can dispatch.
+                        completed_windows = 0;
+                        recovered = engine.recover_native_context_head(ctx, session_id)?;
+                        continue;
+                    }
                     return Ok(());
                 }
                 window = (window + 1) % windows;
@@ -593,19 +818,95 @@ async fn run_native_loop(
     }
 }
 
+struct ChildrenToDrain {
+    runnable: bool,
+    held: bool,
+}
+
+async fn children_to_drain(
+    engine: &TurnEngine,
+    ctx: &InvocationContext,
+    independent_only: bool,
+) -> Result<ChildrenToDrain, StorageError> {
+    let root = ctx.root_id().cloned().ok_or(StorageError::ScopeDenied)?;
+    let control = engine.runs().service().clone();
+    store::read(engine.store(), move |snapshot| {
+        let work = snapshot
+            .sessions()
+            .work_root(&root)?
+            .ok_or(StorageError::ScopeDenied)?;
+        let mut held = false;
+        for assignment in root_assignments(snapshot.runs(), &root, true)? {
+            if assignment.purpose != AssignmentPurpose::Child {
+                continue;
+            }
+            if !independent_only
+                || control
+                    .evaluate(
+                        snapshot.runs(),
+                        &work,
+                        &Target::Assignment(assignment.id),
+                        ActivationPurpose::Implementation,
+                    )?
+                    .eligible
+            {
+                return Ok(ChildrenToDrain {
+                    runnable: true,
+                    held,
+                });
+            }
+            held = true;
+        }
+        Ok(ChildrenToDrain {
+            runnable: false,
+            held,
+        })
+    })
+    .await
+}
+
+async fn held_delivery(
+    engine: &TurnEngine,
+    pending: Vec<devworks_core::protocol::OperationId>,
+) -> Result<bool, StorageError> {
+    let control = engine.runs().service().clone();
+    store::write(engine.store(), WriteOptions::host_state(), move |tx| {
+        for operation_id in pending {
+            let page = tx.queue().deliveries(
+                &DeliveryFilter {
+                    consumer: None,
+                    operation_id: Some(operation_id),
+                },
+                None,
+                500,
+            )?;
+            for entry in page.entries {
+                if !control.permits_implementation_delivery(tx, &entry)? {
+                    return Ok(true);
+                }
+            }
+        }
+        Ok(false)
+    })
+    .await
+}
+
 async fn wait_for_linked_effects(
     engine: &TurnEngine,
     ctx: &InvocationContext,
     session_id: &Id,
-    cancellation: &Cancellation,
-) -> Result<(), StorageError> {
+    mut review: Option<&mut CoordinatorReview<'_>>,
+    stop: &mut Stop<'_>,
+) -> Result<bool, TurnError> {
+    let mut commits = engine.commit_changes();
     loop {
-        if cancellation.is_cancelled() {
-            return Err(StorageError::Cancelled);
+        if stop.cancellation.is_cancelled() {
+            return Err(StorageError::Cancelled.into());
         }
+        commits.borrow_and_update();
         let linked = crate::tool_turn::linked_operations(engine.store().as_ref(), ctx, session_id)?;
         let pending = read_snapshot(engine.store().as_ref(), &ReadOptions::default(), |read| {
-            let mut pending = false;
+            let mut pending = Vec::new();
             for call in &linked {
                 let Some(operation_id) = &call.operation_id else {
                     continue;
@@ -626,16 +927,84 @@ async fn wait_for_linked_effects(
                     | OperationState::Failed
                     | OperationState::CancelledBeforeDispatch
                     | OperationState::OutcomeUnknown => {}
-                    _ => pending = true,
+                    _ => pending.push(operation.id),
                 }
             }
             Ok(pending)
         })?;
-        if !pending {
-            return Ok(());
+        if pending.is_empty() {
+            return Ok(false);
         }
-        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+        if let Some(review) = review.as_deref_mut() {
+            let scheduled =
+                plan_review::schedule(engine, review.agents, ctx, &mut stop.stopped, true).await?;
+            if let ScheduleResult::Failed { independent_scope } = scheduled
+                && (!independent_scope || held_delivery(engine, pending).await?)
+            {
+                return Err(TurnError::PlanReviewUnavailable { independent_scope });
+            }
+            let new_report = review.offer_reports(engine, ctx, false).await?;
+            if new_report || matches!(scheduled, ScheduleResult::Complete) {
+                return Ok(true);
+            }
+        }
+        plan_review::wait_for_change(&mut commits, &mut stop.stopped).await?;
     }
+}
+
+fn prepare_generation_context(
+    engine: &TurnEngine,
+    ctx: &InvocationContext,
+    session_id: &Id,
+    mut head: ArtifactRef,
+    mut binding: NativeBinding,
+    is_reviewer: bool,
+) -> Result<(ArtifactRef, NativeBinding, RouteChoice, usize), TurnError> {
+    head = engine.refresh_native_tool_context(ctx, session_id, &head)?;
+    let selected_count = engine
+        .providers()
+        .ok_or(StorageError::ScopeDenied)?
+        .schemas()
+        .selected_agent_tools(ctx)?
+        .len();
+    let tools_required = selected_count != 0;
+    let windows = tool_window_count(selected_count);
+    let needs_images = context_head_has_images(engine, ctx, &head)?;
+    let route = route_context_head(
+        engine,
+        ctx,
+        session_id,
+        binding.context_epoch.get(),
+        Some(head.sha256.as_str()),
+        tools_required,
+        needs_images,
+    )?;
+    let next = binding_for_route(engine, &route, binding.context_epoch.get())?;
+    if next.connection_id != binding.connection_id
+        || next.model_id != binding.model_id
+        || next.account_revision != binding.account_revision
+        || next.endpoint_profile != binding.endpoint_profile
+    {
+        let epoch = binding
+            .context_epoch
+            .get()
+            .checked_add(1)
+            .ok_or(StorageError::ScopeDenied)?;
+        let next = NativeBinding {
+            context_epoch: Counter::new(epoch).map_err(|_| StorageError::ScopeDenied)?,
+            ..next
+        };
+        head = engine.change_provider_epoch(ctx, session_id, &head, &binding, &next)?;
+        binding = next;
+    }
+    if !is_reviewer {
+        head = engine.adopt_instruction_epoch(ctx, session_id, &head, &binding, &[])?;
+    }
+    binding = engine
+        .recover_native_context_head(ctx, session_id)?
+        .ok_or(StorageError::ScopeDenied)?
+        .1;
+    Ok((head, binding, route, windows))
 }
 
 /// An external MCP tool answers within its own call deadline, so the next provider request
@@ -1097,7 +1466,7 @@ pub fn route_context_head(
                 .is_some_and(|binding| {
                     binding.active
                         && binding.kind == PrincipalKind::Agent
-                        && binding.role == Some(AgentRole::CodeReviewer)
+                        && binding.role.is_some_and(AgentRole::read_only)
                 });
             match read.router().session_pin(session_id)? {
                 Some(pin) => Ok((
@@ -1296,6 +1665,9 @@ pub fn initial_context(
             }
             let tasks: Vec<Id> = serde_json::from_value(source.task_ids)
                 .map_err(|_| StorageError::InvalidRecord("stored task references".into()))?;
+            if is_plan_reviewer(agent) {
+                return Ok((source.role_instructions, source.brief, tasks, Vec::new()));
+            }
             let mut unlinked = Vec::new();
             let mut after = 0;
             loop {
@@ -1905,7 +2277,11 @@ pub fn publish_first_context(
     if binding.endpoint_profile != EndpointProfile::CodexSubscriptionResponses {
         prompt.parameters.max_output_tokens = Some(headroom as u32);
     }
-    let bound = engine.bind_provider_instructions(ctx, prompt, &[])?;
+    let bound = if is_plan_reviewer(agent) {
+        crate::plan_review::bind_prompt(engine, ctx, prompt)?
+    } else {
+        engine.bind_provider_instructions(ctx, prompt, &[])?
+    };
     let head = engine.publish_initial_native_context(ctx, session_id, &binding, &bound)?;
     Ok((head, binding))
 }
@@ -2010,12 +2386,6 @@ fn plan_request(
         identity.push(':');
         identity.push_str(head.version_id.as_str());
     }
-    let request_id = Id::new(format!(
-        "agent-{}-{}",
-        if compaction { "compaction" } else { "request" },
-        sha256_hex(identity.as_bytes())
-    ))
-    .map_err(|_| StorageError::ScopeDenied)?;
     let info = engine.store().info();
     let (
         query,
@@ -2027,6 +2397,7 @@ fn plan_request(
         work,
         headroom,
         required,
+        readiness_planning,
     ) = read_snapshot(engine.store().as_ref(), &ReadOptions::default(), |read| {
         let pin = read
             .router()
@@ -2087,8 +2458,33 @@ fn plan_request(
                 vec!["Text".into()]
             },
         };
-        let owner =
+        let mut owner =
             auxiliary::ownership(read, &info, ctx).map_err(|_| StorageError::ScopeDenied)?;
+        let mut readiness_planning = false;
+        if let Some(dispatch) = owner.dispatch.as_mut()
+            && dispatch.implementation
+        {
+            let role = read
+                .authority()
+                .principal(ctx.principal())?
+                .and_then(|p| p.role);
+            // These owned turns investigate readiness. Their actual tools still recheck
+            // implementation eligibility, and inference retains every owner and access fence.
+            readiness_planning = match role {
+                Some(AgentRole::PlanReviewer) => true,
+                Some(AgentRole::FeatureCoordinator) => {
+                    !devworks_core::services::work::plan_review::reports_needing_disposition(
+                        read.work(),
+                        read.indexing(),
+                        &root_id.0,
+                        false,
+                    )?
+                    .is_empty()
+                }
+                _ => false,
+            };
+            dispatch.implementation = !readiness_planning;
+        }
         let quote = CatalogPriceResolver.quote(read, &query)?;
         Ok((
             query,
@@ -2100,8 +2496,18 @@ fn plan_request(
             work,
             output_headroom(model.context_tokens),
             pin.required_capabilities,
+            readiness_planning,
         ))
     })?;
+    if readiness_planning {
+        identity.push_str(":readiness-planning");
+    }
+    let request_id = Id::new(format!(
+        "agent-{}-{}",
+        if compaction { "compaction" } else { "request" },
+        sha256_hex(identity.as_bytes())
+    ))
+    .map_err(|_| StorageError::ScopeDenied)?;
     let revision = |value: i64| Revision::new(value).map_err(|_| StorageError::ScopeDenied);
     let effort_name =
         serde_json::to_value(&route.requested_effort).map_err(|_| StorageError::ScopeDenied)?;

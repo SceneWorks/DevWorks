@@ -243,7 +243,7 @@ pub struct SessionPosition {
 }
 
 /// Keyset position in committed-sequence order: `(sequence, source, id)`.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, serde::Serialize)]
 pub struct SequenceKey {
     pub sequence: i64,
     /// 0 = work hierarchy, 1 = history link, 2 = event, 3 = usage.

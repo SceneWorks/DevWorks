@@ -143,8 +143,12 @@ pub(crate) fn snapshot_record(
     detail: Detail,
 ) -> Result<WorkRecord, StorageError> {
     let (readiness, pending_readiness) = if w.kind == FEATURE {
+        let plan = read.runs().feature_plan(&RootId(w.id.clone()))?;
+        let views = plan
+            .as_ref()
+            .map(|plan| plan.published_plan_views.as_slice());
         (
-            super::readiness::assessment(read.work(), w)?,
+            super::readiness::assessment(read.work(), w, views)?,
             super::readiness::pending_assessment(read.work(), w)?,
         )
     } else {
@@ -171,8 +175,12 @@ pub(crate) fn snapshot_record(
 pub(crate) fn tx_record(tx: &mut dyn WriteTransaction, w: &StoredWork) -> R<WorkRecord> {
     let live = live_attempt(tx.runs(), w)?;
     let (readiness, pending_readiness) = if w.kind == FEATURE {
+        let plan = tx.runs().feature_plan(&RootId(w.id.clone()))?;
+        let views = plan
+            .as_ref()
+            .map(|plan| plan.published_plan_views.as_slice());
         (
-            super::readiness::assessment(tx.work(), w)?,
+            super::readiness::assessment(tx.work(), w, views)?,
             super::readiness::pending_assessment(tx.work(), w)?,
         )
     } else {

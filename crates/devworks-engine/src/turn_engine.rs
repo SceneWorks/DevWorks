@@ -35,6 +35,7 @@ pub struct TurnEngine {
     pub(crate) instructions: Option<Arc<devworks_core::services::instructions::InstructionService>>,
     pub(crate) indexing: Option<Arc<IndexSupervisor>>,
     pub(crate) admitter: Arc<Admitter>,
+    pub(crate) commits: watch::Receiver<u64>,
 }
 
 impl TurnEngine {
@@ -63,6 +64,10 @@ impl TurnEngine {
     /// Changes each time an admitted command may have changed domain state.
     pub fn state_changes(&self) -> watch::Receiver<u64> {
         self.admitter.changes.subscribe()
+    }
+    /// Durable state changes, including host writes such as published source views.
+    pub(crate) fn commit_changes(&self) -> watch::Receiver<u64> {
+        self.commits.clone()
     }
     /// Reads through the gateway, as the runtime's query path does.
     pub fn query_with(

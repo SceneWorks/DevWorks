@@ -166,6 +166,7 @@ pub enum AgentRole {
     IssueCoordinator,
     Worker,
     CodeReviewer,
+    PlanReviewer,
     Dreaming,
     Scheduled,
 }
@@ -182,7 +183,7 @@ impl AgentRole {
     /// Harness policy of the role, independent of its instruction text: code reviewers are
     /// always read-only and can never write settings or propose changes.
     pub fn read_only(self) -> bool {
-        matches!(self, Self::CodeReviewer)
+        matches!(self, Self::CodeReviewer | Self::PlanReviewer)
     }
     /// Stable record name of the role (host authority bindings).
     pub fn as_str(self) -> &'static str {
@@ -192,11 +193,15 @@ impl AgentRole {
             Self::IssueCoordinator => "issueCoordinator",
             Self::Worker => "worker",
             Self::CodeReviewer => "codeReviewer",
+            Self::PlanReviewer => "planReviewer",
             Self::Dreaming => "dreaming",
             Self::Scheduled => "scheduled",
         }
     }
     pub fn parse(name: &str) -> Option<Self> {
+        if name == Self::PlanReviewer.as_str() {
+            return Some(Self::PlanReviewer);
+        }
         Self::ALL.into_iter().find(|r| r.as_str() == name)
     }
     pub fn instructions_key(self) -> &'static str {
@@ -206,6 +211,7 @@ impl AgentRole {
             Self::IssueCoordinator => "roles.issueCoordinator.instructions",
             Self::Worker => "roles.worker.instructions",
             Self::CodeReviewer => "roles.codeReviewer.instructions",
+            Self::PlanReviewer => "roles.planReviewer.instructions",
             Self::Dreaming => "roles.dreaming.instructions",
             Self::Scheduled => "roles.scheduled.instructions",
         }
@@ -217,6 +223,7 @@ impl AgentRole {
             Self::IssueCoordinator => "Issue coordinator instructions",
             Self::Worker => "Implementation agent instructions",
             Self::CodeReviewer => "Code review agent instructions",
+            Self::PlanReviewer => "Plan review agent instructions",
             Self::Dreaming => "Dreaming agent instructions",
             Self::Scheduled => "Scheduled agent instructions",
         }
