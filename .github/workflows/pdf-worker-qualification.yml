@@ -25,7 +25,7 @@ jobs:
   qualify:
     name: Native PDF worker (${{ matrix.target }})
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 55
+    timeout-minutes: ${{ matrix.timeout || 55 }}
     strategy:
       fail-fast: false
       matrix:
@@ -34,8 +34,12 @@ jobs:
             target: aarch64-apple-darwin
           - runner: macos-26-intel
             target: x86_64-apple-darwin
+            # The cold release build alone exhausted the original 55-minute job limit.
+            timeout: 110
           - runner: windows-2025
             target: x86_64-pc-windows-msvc
+            # The cold release build took 35 minutes before the separate test build.
+            timeout: 75
           - runner: windows-11-arm
             target: aarch64-pc-windows-msvc
           - runner: ubuntu-24.04
