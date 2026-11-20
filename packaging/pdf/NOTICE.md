@@ -12,6 +12,10 @@ downloaded PDFium library, operating-system PDF library lookup, or font-file loo
   fonts shipped in that crate. Copyright 2014 PDFium Authors. Original code copyright
   2014 Foxit Software Inc. The accompanying Foxit notice applies to those fonts.
 
-The package includes the exact Cargo lockfile as its dependency source and version manifest.
-The qualification report records the installed worker path within the target distribution,
+- [alloc-stdlib 0.2.4 upstream license](https://github.com/dropbox/rust-alloc-no-stdlib/blob/ae42d22078b98549e987d2f03d12df7b984fde47/LICENSE)
+  matches the source revision recorded in the published crate.
+
+The package includes the exact Cargo lockfile, a target-filtered PDF and raster dependency inventory
+with declared licenses, and the dependency-supplied license and copyright files. The inventory
+includes resolved dependencies that the linker may remove. The qualification report records the installed worker path within the target distribution,
 OS/architecture, binary digests, and compressed and installed lengths.

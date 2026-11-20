@@ -170,6 +170,27 @@ pub(super) fn spawn(spec: &ProcessSpec) -> Result<Box<dyn ProcessTree>, ProcessE
             ProcessError::Ownership(last_error("configure the job"))
         });
     }
+    if let Some(memory) = spec.memory_limit_bytes {
+        // SAFETY: the owned job and fully sized output hold the extended limit record.
+        let mut observed: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = unsafe { std::mem::zeroed() };
+        let read = unsafe {
+            QueryInformationJobObject(
+                job.0,
+                JobObjectExtendedLimitInformation,
+                (&mut observed as *mut JOBOBJECT_EXTENDED_LIMIT_INFORMATION).cast(),
+                std::mem::size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
+                std::ptr::null_mut(),
+            )
+        };
+        if read == 0
+            || observed.ProcessMemoryLimit != memory
+            || observed.BasicLimitInformation.LimitFlags & JOB_OBJECT_LIMIT_PROCESS_MEMORY == 0
+        {
+            return Err(ProcessError::EnforcementUnavailable(
+                "job memory ceiling readback failed".into(),
+            ));
+        }
+    }
     let mut cmd = Command::new(&spec.program);
     cmd.args(&spec.args);
     if spec.clear_env {

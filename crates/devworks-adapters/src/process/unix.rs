@@ -178,9 +178,17 @@ pub(super) fn spawn(spec: &ProcessSpec) -> Result<Box<dyn ProcessTree>, ProcessE
             // stack storage. No allocation or lock occurs before exec.
             unsafe {
                 cmd.pre_exec(move || {
-                    (libc::setrlimit(libc::RLIMIT_AS, &limit) == 0)
-                        .then_some(())
-                        .ok_or_else(std::io::Error::last_os_error)
+                    if libc::setrlimit(libc::RLIMIT_AS, &limit) != 0 {
+                        return Err(std::io::Error::last_os_error());
+                    }
+                    let mut observed = limit;
+                    if libc::getrlimit(libc::RLIMIT_AS, &mut observed) != 0 {
+                        return Err(std::io::Error::last_os_error());
+                    }
+                    if observed.rlim_cur != limit.rlim_cur || observed.rlim_max != limit.rlim_max {
+                        return Err(std::io::Error::from_raw_os_error(libc::EPERM));
+                    }
+                    Ok(())
                 });
             }
         }

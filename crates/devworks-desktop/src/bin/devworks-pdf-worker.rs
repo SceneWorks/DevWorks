@@ -7,7 +7,7 @@ use devworks_core::services::documents::{
 use std::{
     alloc::{GlobalAlloc, Layout, System},
     fs::File,
-    io::{self, Read, Write},
+    io::{self, BufWriter, Read, Write},
     process::ExitCode,
     sync::atomic::{AtomicUsize, Ordering},
     time::{Duration, Instant},
@@ -125,9 +125,24 @@ fn serve(mut input: File, mut output: File, fault: Option<Fault>) -> io::Result<
     if let Some(fault) = fault {
         match fault {
             #[cfg(feature = "test-support")]
-            Fault::Crash => std::process::exit(90),
+            Fault::Crash => {
+                #[cfg(unix)]
+                // SAFETY: this test child disables its own core dump before aborting.
+                unsafe {
+                    let limit = libc::rlimit {
+                        rlim_cur: 0,
+                        rlim_max: 0,
+                    };
+                    libc::setrlimit(libc::RLIMIT_CORE, &limit);
+                }
+                std::process::abort();
+            }
             #[cfg(feature = "test-support")]
-            Fault::Stall => std::thread::sleep(Duration::from_secs(WORKER_SECONDS)),
+            Fault::Stall => {
+                output.write_all(b"STAL")?;
+                output.flush()?;
+                std::thread::sleep(Duration::from_secs(WORKER_SECONDS));
+            }
         }
     }
     let control = ExtractionControl {
@@ -135,12 +150,13 @@ fn serve(mut input: File, mut output: File, fault: Option<Fault>) -> io::Result<
         cancelled: &|| false,
     };
     let reply = devworks_adapters::documents::pdf::process(bytes, operation, &control);
-    let mut bounded = BoundedOutput {
+    let bounded = BoundedOutput {
         output,
         remaining: operation.wire_limit(),
     };
-    serde_json::to_writer(&mut bounded, &reply).map_err(io::Error::other)?;
-    bounded.flush()
+    let mut buffered = BufWriter::with_capacity(64 * 1024, bounded);
+    serde_json::to_writer(&mut buffered, &reply).map_err(io::Error::other)?;
+    buffered.flush()
 }
 
 struct BoundedOutput {

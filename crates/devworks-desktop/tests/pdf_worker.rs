@@ -2,7 +2,10 @@
 use devworks_adapters::process::NativeProcessHost;
 use devworks_core::{
     fingerprint::sha256_hex,
-    ports::process::{NativeIdentity, Probe, ProcessError, ProcessHost, ProcessSpec, ProcessTree},
+    ports::process::{
+        ControlChannel, NativeIdentity, Probe, ProcessError, ProcessHost, ProcessSpec, ProcessTree,
+        TreeStatus,
+    },
     protocol::{
         Counter, Id, Revision,
         provider::{ArtifactRef, Digest},
@@ -14,9 +17,13 @@ use devworks_core::{
 };
 use devworks_engine::documents::pdf::PdfWorker;
 use std::{
+    io::{self, Read},
     path::PathBuf,
     process::Command,
-    sync::{Arc, Mutex},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, AtomicU64, Ordering},
+    },
     time::{Duration, Instant},
 };
 
@@ -188,6 +195,75 @@ fn source_identity_size_and_missing_worker_fail_before_publication() {
 struct FaultHost {
     mode: &'static str,
     child: Mutex<Option<NativeIdentity>>,
+    trace: Arc<FaultTrace>,
+}
+
+#[derive(Default)]
+struct FaultTrace {
+    stalled: AtomicBool,
+    resident_bytes: AtomicU64,
+}
+
+struct FaultTree {
+    inner: Box<dyn ProcessTree>,
+    trace: Arc<FaultTrace>,
+}
+struct PipeTrace {
+    inner: Box<dyn Read + Send>,
+    trace: Arc<FaultTrace>,
+    read: usize,
+}
+
+impl Read for PipeTrace {
+    fn read(&mut self, bytes: &mut [u8]) -> io::Result<usize> {
+        let count = self.inner.read(bytes)?;
+        for (index, byte) in bytes[..count].iter().enumerate() {
+            let at = self.read + index;
+            if at == 7 && *byte == b'L' {
+                // The first four bytes carry normal readiness; the next four are STAL,
+                // emitted only after the test child consumed the complete request.
+                self.trace.stalled.store(true, Ordering::SeqCst);
+            }
+        }
+        self.read += count;
+        Ok(count)
+    }
+}
+
+impl ProcessTree for FaultTree {
+    fn identity(&self) -> &NativeIdentity {
+        self.inner.identity()
+    }
+    fn request_stop(&mut self) -> Result<bool, ProcessError> {
+        self.inner.request_stop()
+    }
+    fn kill(&mut self) -> Result<(), ProcessError> {
+        self.inner.kill()
+    }
+    fn poll(&mut self) -> Result<TreeStatus, ProcessError> {
+        self.inner.poll()
+    }
+    fn take_output(&mut self) -> Option<(Box<dyn Read + Send>, Box<dyn Read + Send>)> {
+        self.inner.take_output()
+    }
+    fn take_control(&mut self) -> Option<ControlChannel> {
+        let (write, read) = self.inner.take_control()?;
+        Some((
+            write,
+            Box::new(PipeTrace {
+                inner: read,
+                trace: self.trace.clone(),
+                read: 0,
+            }),
+        ))
+    }
+    fn resident_memory_bytes(&self) -> Option<u64> {
+        let observed = self.inner.resident_memory_bytes();
+        if let Some(bytes) = observed {
+            self.trace.resident_bytes.fetch_max(bytes, Ordering::SeqCst);
+        }
+        observed
+    }
 }
 
 impl ProcessHost for FaultHost {
@@ -200,9 +276,15 @@ impl ProcessHost for FaultHost {
     fn spawn(&self, spec: &ProcessSpec) -> Result<Box<dyn ProcessTree>, ProcessError> {
         let mut spec = spec.clone();
         spec.args[0] = self.mode.into();
+        if cfg!(any(target_os = "linux", windows)) {
+            assert_eq!(spec.memory_limit_bytes, Some(512 * 1024 * 1024));
+        }
         let child = NativeProcessHost.spawn(&spec)?;
         *self.child.lock().unwrap() = Some(child.identity().clone());
-        Ok(child)
+        Ok(Box::new(FaultTree {
+            inner: child,
+            trace: self.trace.clone(),
+        }))
     }
     fn current_identity(&self) -> Option<NativeIdentity> {
         NativeProcessHost.current_identity()
@@ -227,11 +309,12 @@ fn native_crash_timeout_and_cancel_reap_the_worker() {
         let host = Arc::new(FaultHost {
             mode,
             child: Mutex::new(None),
+            trace: Arc::new(FaultTrace::default()),
         });
         let test_desktop = PathBuf::from(env!("CARGO_BIN_EXE_devworks-desktop"));
         let worker = PdfWorker::beside_desktop(&test_desktop, host.clone()).unwrap();
         let cancelled =
-            || expected == PdfFailure::Cancelled && host.child.lock().unwrap().is_some();
+            || expected == PdfFailure::Cancelled && host.trace.stalled.load(Ordering::SeqCst);
         let timeout = if expected == PdfFailure::Deadline {
             500
         } else {
@@ -241,6 +324,7 @@ fn native_crash_timeout_and_cancel_reap_the_worker() {
             deadline: Instant::now() + Duration::from_millis(timeout),
             cancelled: &cancelled,
         };
+        let started = Instant::now();
         let source = exact(MIXED);
         let error = worker
             .run(
@@ -254,6 +338,15 @@ fn native_crash_timeout_and_cancel_reap_the_worker() {
             )
             .unwrap_err();
         assert_eq!(error, expected);
+        assert!(started.elapsed() < Duration::from_secs(4));
+        if mode == "--test-pdf-stall" {
+            assert!(host.trace.stalled.load(Ordering::SeqCst));
+            if cfg!(target_os = "macos") {
+                let resident = host.trace.resident_bytes.load(Ordering::SeqCst);
+                assert!(resident > 0 && resident <= 512 * 1024 * 1024);
+                eprintln!("macOS owned worker resident sample: {resident} bytes");
+            }
+        }
         let child = host
             .child
             .lock()
@@ -315,7 +408,7 @@ fn native_pdf_font_rotation_blank_page_and_form_coverage() {
         panic!("expected page evidence");
     };
     assert_eq!(pages.len(), 3);
-    assert!(pages[0].text.contains("Café") && pages[0].text.contains("second column"));
+    assert_eq!(pages[0].text, "Café\nsecond column");
     assert_eq!(pages[0].coverage, PdfTextCoverage::Text);
     assert_eq!(pages[1].coverage, PdfTextCoverage::NeedsRaster);
     assert_eq!(pages[2].coverage, PdfTextCoverage::Partial);
@@ -351,5 +444,82 @@ fn native_page_tree_bound_returns_a_typed_failure() {
     assert_eq!(
         run(&worker(), &authored(&objects), PdfOperation::ReadPages).unwrap_err(),
         PdfFailure::PageLimit
+    );
+}
+
+#[test]
+fn empty_opening_password_still_returns_encrypted_refusal() {
+    let mut doc = lopdf::Document::load_mem(MIXED).unwrap();
+    let state = lopdf::EncryptionState::try_from(lopdf::EncryptionVersion::V2 {
+        document: &doc,
+        owner_password: "synthetic owner",
+        user_password: "",
+        key_length: 128,
+        permissions: lopdf::Permissions::empty(),
+    })
+    .unwrap();
+    doc.encrypt(&state).unwrap();
+    let mut bytes = Vec::new();
+    doc.save_to(&mut bytes).unwrap();
+    let automatically_opened = lopdf::Document::load_mem(&bytes).unwrap();
+    assert!(automatically_opened.was_encrypted() && !automatically_opened.is_encrypted());
+    assert_eq!(
+        run(&worker(), &bytes, PdfOperation::ReadPages).unwrap_err(),
+        PdfFailure::Encrypted
+    );
+}
+
+#[test]
+fn form_xobject_and_invalid_stream_are_explicit_partial_text() {
+    let form_text = "BT /F1 12 Tf 10 60 Td (form text) Tj ET";
+    let form = format!(
+        "<< /Type /XObject /Subtype /Form /BBox [0 0 100 100] /Resources << /Font << /F1 5 0 R >> >> /Length {} >>\nstream\n{form_text}\nendstream",
+        form_text.len(),
+    ).into_bytes();
+    let objects = [
+        b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+        b"<< /Type /Pages /Count 2 /Kids [3 0 R 4 0 R] >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 400 600] /Resources << /Font << /F1 5 0 R >> /XObject << /Form1 8 0 R >> >> /Contents 6 0 R >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 400 600] /Resources << /Font << /F1 5 0 R >> >> /Contents 7 0 R >>".to_vec(),
+        b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>".to_vec(),
+        stream(b"BT /F1 14 Tf 20 500 Td (direct text) Tj ET /Form1 Do"),
+        stream(b"BT /F1 14 Tf 20 500 Td (truncated result) Tj ET ]"),
+        form,
+    ];
+    let data = authored(&objects);
+    let worker = worker();
+    let PdfResult::Pages { pages } = run(&worker, &data, PdfOperation::ReadPages).unwrap() else {
+        panic!("expected partial page evidence");
+    };
+    assert_eq!(pages[0].coverage, PdfTextCoverage::Partial);
+    assert_eq!(pages[0].text, "direct text");
+    assert_eq!(pages[1].coverage, PdfTextCoverage::Partial);
+    assert!(pages[1].text.is_empty());
+    assert_eq!(
+        run(&worker, &data, PdfOperation::RenderPage(2)).unwrap_err(),
+        PdfFailure::Malformed
+    );
+}
+
+#[test]
+fn visible_page_with_render_omission_fails_the_complete_raster_contract() {
+    let invalid_jpg = b"invalid JPEG bytes";
+    let image = format!(
+        "<< /Type /XObject /Subtype /Image /Width 20 /Height 20 /BitsPerComponent 8 /ColorSpace /DeviceRGB /Filter /DCTDecode /Length {} >>\nstream\n",
+        invalid_jpg.len()
+    );
+    let mut image = image.into_bytes();
+    image.extend_from_slice(invalid_jpg);
+    image.extend_from_slice(b"\nendstream");
+    let objects = [
+        b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+        b"<< /Type /Pages /Count 1 /Kids [3 0 R] >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 400 600] /Resources << /XObject << /Im1 5 0 R >> >> /Contents 4 0 R >>".to_vec(),
+        stream(b"0 0 0 rg 20 20 100 100 re f q 100 0 0 100 200 200 cm /Im1 Do Q"),
+        image,
+    ];
+    assert_eq!(
+        run(&worker(), &authored(&objects), PdfOperation::RenderPage(1)).unwrap_err(),
+        PdfFailure::RenderUnsupported
     );
 }

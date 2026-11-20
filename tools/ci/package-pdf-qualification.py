@@ -11,8 +11,72 @@ import subprocess
 
 
 def digest(path: Path) -> str:
+    value = hashlib.sha256()
     with path.open("rb") as handle:
-        return hashlib.file_digest(handle, "sha256").hexdigest()
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            value.update(chunk)
+    return value.hexdigest()
+
+
+def dependency_notices(target: str, notices: Path) -> None:
+    """Package declared license terms and supplied notices for the target's runtime graph."""
+    metadata = json.loads(subprocess.check_output(
+        ["cargo", "metadata", "--locked", "--format-version", "1", "--filter-platform", target],
+        text=True,
+    ))
+    packages = {package["id"]: package for package in metadata["packages"]}
+    nodes = {node["id"]: node for node in metadata["resolve"]["nodes"]}
+    roots = {("lopdf", "0.47.0"), ("hayro", "0.9.0"), ("image", "0.25.10")}
+    pending = [package["id"] for package in packages.values()
+               if (package["name"], package["version"]) in roots]
+    if len(pending) != len(roots):
+        raise ValueError("PDF dependency roots diverged from the approved locks")
+    visited = set()
+    inventory = []
+    while pending:
+        package_id = pending.pop()
+        if package_id in visited:
+            continue
+        visited.add(package_id)
+        pending.extend(dep["pkg"] for dep in nodes[package_id]["deps"]
+                       if any(kind["kind"] is None for kind in dep["dep_kinds"]))
+        package = packages[package_id]
+        if package["source"] is None:
+            continue
+        if not package["license"] and not package["license_file"]:
+            raise ValueError(f"missing declared dependency license for {package['name']}")
+        root = Path(package["manifest_path"]).parent.resolve()
+        terms = [path for path in root.rglob("*")
+                 if path.is_file() and not path.is_symlink()
+                 and path.name.lower().startswith(("license", "copying", "copyright", "notice"))]
+        if package["license_file"]:
+            licensed_file = (root / package["license_file"]).resolve()
+            if licensed_file.is_file() and licensed_file.is_relative_to(root.resolve()):
+                terms.append(licensed_file)
+        local = notices / "dependencies" / f"{package['name']}-{package['version']}"
+        files = []
+        for term in sorted(set(terms)):
+            relative = term.relative_to(root)
+            destination = local / relative
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(term, destination)
+            files.append(str(destination.relative_to(notices)))
+        if not files and (package["name"], package["version"]) == ("alloc-stdlib", "0.2.4"):
+            files.append("LICENSE-alloc-stdlib-0.2.4")
+        if not files:
+            raise ValueError(f"missing source notices for {package['name']} {package['version']}")
+        inventory.append({
+            "crate": package["name"],
+            "version": package["version"],
+            "source": package["source"],
+            "license": package["license"],
+            "notices": files,
+        })
+    inventory.sort(key=lambda item: (item["crate"], item["version"]))
+    (notices / "dependencies.json").write_text(json.dumps(
+        {"target": target, "scope": "conservative Cargo PDF and raster runtime dependency graph", "crates": inventory},
+        indent=2,
+    ) + "\n", encoding="utf-8")
 
 
 def stage(binaries: Path, output: Path, target: str) -> Path:
@@ -33,6 +97,7 @@ def stage(binaries: Path, output: Path, target: str) -> Path:
     notices = (application / "Contents" / "Resources" if macos else package) / "notices"
     shutil.copytree(Path("packaging/pdf"), notices)
     shutil.copy2("Cargo.lock", notices)
+    dependency_notices(target, notices)
     if macos:
         with (application / "Contents" / "Info.plist").open("wb") as handle:
             plistlib.dump(
@@ -79,6 +144,7 @@ def stage(binaries: Path, output: Path, target: str) -> Path:
         "archiveBytes": archive.stat().st_size,
         "archiveSha256": digest(archive),
         "lockSha256": digest(notices / "Cargo.lock"),
+        "dependencyInventorySha256": digest(notices / "dependencies.json"),
     }
     report = json.dumps(evidence, indent=2)
     (output / "qualification.json").write_text(report + "\n", encoding="utf-8")

@@ -1,4 +1,6 @@
 //! Pure-Rust native backend. Entry points are confined to the owned document worker.
+mod text;
+
 use super::raster::{PngError, encode_png};
 use devworks_core::{
     fingerprint::sha256_hex,
@@ -15,6 +17,10 @@ use hayro::{
     hayro_syntax::Pdf, vello_cpu::color::palette::css::WHITE,
 };
 use lopdf::{Document, LoadOptions};
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering},
+};
 
 const STREAM_LIMIT: usize = 16 * 1024 * 1024;
 const PAGE_WIDTH: f32 = 800.0;
@@ -52,7 +58,7 @@ fn extract(
     )
     .map_err(|error| parse_error(&error))?;
     check(control)?;
-    if doc.is_encrypted() {
+    if doc.is_encrypted() || doc.was_encrypted() {
         return Err(PdfFailure::Encrypted);
     }
     // Stop the traverse once it crosses our page budget.
@@ -78,8 +84,9 @@ fn extract(
             let decoded = doc
                 .get_page_content_with_limit(page_id, STREAM_LIMIT)
                 .map_err(|error| parse_error(&error))?;
-            let no_marks = lopdf::content::Content::decode(&decoded)
-                .is_ok_and(|content| content.operations.is_empty())
+            let content = lopdf::content::Content::decode_strict(&decoded)
+                .map_err(|error| parse_error(&error))?;
+            let no_marks = content.operations.is_empty()
                 && doc
                     .get_page_annotations(page_id)
                     .is_ok_and(|annotations| annotations.is_empty());
@@ -100,22 +107,29 @@ fn read_pages(
     for (index, id) in doc.page_iter().enumerate() {
         check(control)?;
         let page = index as u32 + 1;
-        let content = doc.extract_text_with_limit(&[page], STREAM_LIMIT);
+        let content = text::page(doc, id, text_bytes, control);
         check(control)?;
         let mut coverage = PdfTextCoverage::Text;
         let text = match content {
-            Ok(text) => {
-                let text = normalize_text(&text, text_bytes, control).map_err(control_error)?;
-                if text.trim().is_empty() {
+            Ok((text, partial)) => {
+                let text = normalize_text(text.trim_end_matches('\n'), text_bytes, control)
+                    .map_err(control_error)?;
+                if partial {
+                    coverage = PdfTextCoverage::Partial;
+                    text
+                } else if text.trim().is_empty() {
                     coverage = PdfTextCoverage::NeedsRaster;
                     String::new()
                 } else {
                     text
                 }
             }
-            Err(error) if parse_error(&error) == PdfFailure::StreamLimit => {
-                return Err(PdfFailure::StreamLimit);
-            }
+            Err(
+                error @ (PdfFailure::StreamLimit
+                | PdfFailure::OutputLimit
+                | PdfFailure::Cancelled
+                | PdfFailure::Deadline),
+            ) => return Err(error),
             Err(_) => {
                 coverage = PdfTextCoverage::Partial;
                 String::new()
@@ -169,10 +183,16 @@ fn render_page(
     if scaled.0 == 0 || scaled.1 == 0 || u64::from(scaled.0) * u64::from(scaled.1) > PIXEL_LIMIT {
         return Err(PdfFailure::RenderLimit);
     }
+    let incomplete = Arc::new(AtomicBool::new(false));
+    let reported = incomplete.clone();
+    let settings = InterpreterSettings {
+        warning_sink: Arc::new(move |_| reported.store(true, Ordering::Relaxed)),
+        ..InterpreterSettings::default()
+    };
     let pixmap = hayro::render(
         source,
         &RenderCache::new(),
-        &InterpreterSettings::default(),
+        &settings,
         &RenderSettings::default(),
         &PixmapSettings {
             x_scale: scale,
@@ -181,13 +201,18 @@ fn render_page(
         },
     );
     check(control)?;
+    if incomplete.load(Ordering::Relaxed) {
+        return Err(PdfFailure::RenderUnsupported);
+    }
     if (u32::from(pixmap.width()), u32::from(pixmap.height())) != scaled {
         return Err(PdfFailure::RenderLimit);
     }
     let pixels = pixmap.data_as_u8_slice();
     let blank = pixels
-        .chunks_exact(4)
-        .all(|pixel| pixel == [255, 255, 255, 255]);
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .all(|pixel| *pixel == [255, 255, 255, 255]);
     let png = if blank {
         if !no_marks {
             return Err(PdfFailure::RenderUnsupported);

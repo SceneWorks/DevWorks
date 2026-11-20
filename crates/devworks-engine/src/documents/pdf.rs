@@ -13,7 +13,7 @@ use std::{
     path::{Path, PathBuf},
     sync::{
         Arc,
-        atomic::{AtomicUsize, Ordering},
+        atomic::{AtomicBool, AtomicUsize, Ordering},
         mpsc,
     },
     thread,
@@ -27,7 +27,8 @@ const POLL: Duration = Duration::from_millis(10);
 pub struct PdfWorker {
     program: PathBuf,
     process: Arc<dyn ProcessHost>,
-    active: AtomicUsize,
+    active: Arc<AtomicUsize>,
+    worker_unconfirmed: AtomicBool,
 }
 
 impl PdfWorker {
@@ -43,7 +44,8 @@ impl PdfWorker {
         Ok(Self {
             program,
             process,
-            active: AtomicUsize::new(0),
+            active: Arc::new(AtomicUsize::new(0)),
+            worker_unconfirmed: AtomicBool::new(false),
         })
     }
 
@@ -59,6 +61,9 @@ impl PdfWorker {
             deadline: control.deadline.min(cap),
         };
         check(&control)?;
+        if self.worker_unconfirmed.load(Ordering::Acquire) {
+            return Err(PdfFailure::CleanupUnconfirmed);
+        }
         if PdfOperation::from_number(operation.number())? != operation {
             return Err(PdfFailure::InvalidRequest);
         }
@@ -73,7 +78,7 @@ impl PdfWorker {
         if !std::fs::symlink_metadata(&self.program).is_ok_and(|metadata| metadata.is_file()) {
             return Err(PdfFailure::Unavailable);
         }
-        let _slot = Slot::take(&self.active)?;
+        let slot = Arc::new(Slot::take(self.active.clone())?);
         check(&control)?;
         let program = self
             .program
@@ -98,7 +103,19 @@ impl PdfWorker {
             .spawn(&spec)
             .map_err(|_| PdfFailure::Unavailable)?;
         let channel = child.take_control().ok_or(PdfFailure::Unavailable)?;
-        let reply = supervise(&mut *child, channel, source.bytes, operation, &control)?;
+        let reply = supervise(
+            child,
+            channel,
+            source.bytes.to_vec(),
+            operation,
+            &control,
+            slot,
+        )
+        .inspect_err(|error| {
+            if *error == PdfFailure::CleanupUnconfirmed {
+                self.worker_unconfirmed.store(true, Ordering::Release);
+            }
+        })?;
         check(&control)?;
         reply.validate(source.version.sha256.as_str(), operation)?;
         match reply.result {
@@ -108,10 +125,10 @@ impl PdfWorker {
     }
 }
 
-struct Slot<'a>(&'a AtomicUsize);
+struct Slot(Arc<AtomicUsize>);
 
-impl<'a> Slot<'a> {
-    fn take(active: &'a AtomicUsize) -> Result<Self, PdfFailure> {
+impl Slot {
+    fn take(active: Arc<AtomicUsize>) -> Result<Self, PdfFailure> {
         active
             .fetch_update(Ordering::Acquire, Ordering::Relaxed, |count| {
                 (count < 2).then_some(count + 1)
@@ -121,7 +138,7 @@ impl<'a> Slot<'a> {
     }
 }
 
-impl Drop for Slot<'_> {
+impl Drop for Slot {
     fn drop(&mut self) {
         self.0.fetch_sub(1, Ordering::Release);
     }
@@ -135,27 +152,43 @@ fn check(control: &ExtractionControl<'_>) -> Result<(), PdfFailure> {
 }
 
 fn supervise(
-    child: &mut dyn ProcessTree,
+    mut child: Box<dyn ProcessTree>,
     channel: ControlChannel,
-    bytes: &[u8],
+    bytes: Vec<u8>,
     operation: PdfOperation,
     control: &ExtractionControl<'_>,
+    slot: Arc<Slot>,
 ) -> Result<PdfReply, PdfFailure> {
-    thread::scope(|scope| {
-        let (send, recv) = mpsc::sync_channel(1);
-        scope.spawn(move || {
-            let _ = send.send(exchange(channel, bytes, operation));
+    let (send, recv) = mpsc::sync_channel(1);
+    let transport_slot = slot.clone();
+    // A broken OS pipe can outlive the tree. The transport retains a launch permit until its
+    // descriptors close, but the caller's deadline never depends on joining a blocking read.
+    let started = thread::Builder::new()
+        .name("devworks-pdf-pipe".into())
+        .spawn(move || {
+            let _permit = transport_slot;
+            let _ = send.send(exchange(channel, &bytes, operation));
         });
-        let result = wait_for_reply(child, &recv, control);
-        if result.is_err() {
-            let _ = child.kill();
-            let until = Instant::now() + Duration::from_secs(2);
-            while Instant::now() < until && child.poll().is_ok_and(|state| !state.empty) {
-                thread::sleep(POLL);
-            }
+    let result = match started {
+        Ok(_) => wait_for_reply(&mut *child, &recv, control),
+        Err(_) => Err(PdfFailure::Unavailable),
+    };
+    if result.is_err() && !stop_and_reap(&mut *child) {
+        return Err(PdfFailure::CleanupUnconfirmed);
+    }
+    result
+}
+
+fn stop_and_reap(child: &mut dyn ProcessTree) -> bool {
+    let _ = child.kill();
+    let until = Instant::now() + Duration::from_secs(2);
+    while Instant::now() < until {
+        if child.poll().is_ok_and(|state| state.empty) {
+            return true;
         }
-        result
-    })
+        thread::sleep(POLL);
+    }
+    false
 }
 
 fn wait_for_reply(

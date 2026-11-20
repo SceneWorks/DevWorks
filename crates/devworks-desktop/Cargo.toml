@@ -43,6 +43,7 @@ libc = "=0.2.191"
 test-support = []
 
 [dev-dependencies]
+lopdf = { version = "=0.47.0", default-features = false }
 tempfile = "=3.27.0"
 # Shared test doubles and seeding helpers (no production crate depends on it).
 devworks-test-support = { path = "../devworks-test-support" }

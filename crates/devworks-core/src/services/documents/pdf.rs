@@ -57,6 +57,7 @@ pub enum PdfFailure {
     Unavailable,
     Busy,
     Crashed,
+    CleanupUnconfirmed,
     Malformed,
     Encrypted,
     PageLimit,
