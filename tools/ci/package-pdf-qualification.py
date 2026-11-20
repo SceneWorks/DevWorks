@@ -8,6 +8,7 @@ from pathlib import Path
 import plistlib
 import shutil
 import subprocess
+import zipfile
 
 
 def digest(path: Path) -> str:
@@ -121,8 +122,16 @@ def stage(binaries: Path, output: Path, target: str) -> Path:
         subprocess.run(["ditto", "-c", "-k", "--sequesterRsrc", "--keepParent", application, archive], check=True)
         subprocess.run(["ditto", "-x", "-k", archive, installed], check=True)
         subprocess.run(["codesign", "--verify", "--deep", "--strict", installed / application.name], check=True)
+    elif windows:
+        archive = archive_name.with_suffix(".zip")
+        # Cargo registry archives can preserve Unix-epoch notice times. ZIP stores a DOS date.
+        with zipfile.ZipFile(archive, "w", zipfile.ZIP_DEFLATED, strict_timestamps=False) as bundle:
+            for member in sorted(package.rglob("*")):
+                if member.is_file():
+                    bundle.write(member, member.relative_to(package))
+        shutil.unpack_archive(archive, installed)
     else:
-        archive = Path(shutil.make_archive(str(archive_name), "zip" if windows else "gztar", package))
+        archive = Path(shutil.make_archive(str(archive_name), "gztar", package))
         shutil.unpack_archive(archive, installed)
     destination = installed / destination.relative_to(package)
     notices = installed / notices.relative_to(package)
