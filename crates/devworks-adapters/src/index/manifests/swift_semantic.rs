@@ -8,6 +8,7 @@ const UNSUPPORTED: &str = "swift-project-unsupported";
 #[derive(Debug)]
 pub struct SwiftPackageLayout {
     pub swift_version: String,
+    pub tools_version: (u16, u16),
     pub macos_version: Option<String>,
     pub packages: BTreeMap<String, String>,
     pub products: BTreeMap<String, Vec<String>>,
@@ -66,11 +67,17 @@ impl<'a> Expr<'a> {
         if end + 1 != self.masked.len() {
             return Err(UNSUPPORTED);
         }
-        Ok(split_top(self.masked, open + 1, end)
+        let mut items: Vec<_> = split_top(self.masked, open + 1, end)
             .into_iter()
             .map(|(a, b)| self.slice(a, b).trimmed())
-            .filter(|item| !item.masked.is_empty())
-            .collect())
+            .collect();
+        if items.last().is_some_and(|item| item.masked.is_empty()) {
+            items.pop();
+        }
+        if items.iter().any(|item| item.masked.is_empty()) {
+            return Err(UNSUPPORTED);
+        }
+        Ok(items)
     }
 
     fn array(self) -> Result<Vec<Self>, &'static str> {
@@ -216,6 +223,13 @@ fn target(expr: Expr<'_>) -> Result<SwiftTargetLayout, &'static str> {
     })
 }
 
+pub fn swift_has_main_attribute(content: &str) -> bool {
+    let (_, masked) = scan(content);
+    masked
+        .split(|byte| !byte.is_ascii_alphanumeric() && !matches!(byte, b'@' | b'_'))
+        .any(|token| token == b"@main")
+}
+
 pub fn swift_package_layout(content: &str) -> Result<SwiftPackageLayout, &'static str> {
     let tool_line = content.lines().next().ok_or(UNSUPPORTED)?.trim_start();
     let version = tool_line
@@ -225,26 +239,28 @@ pub fn swift_package_layout(content: &str) -> Result<SwiftPackageLayout, &'stati
         .strip_prefix("swift-tools-version:")
         .ok_or(UNSUPPORTED)?
         .trim();
-    let major = version
+    let components = version
         .split('.')
-        .next()
-        .filter(|major| matches!(*major, "5" | "6"))
-        .ok_or(UNSUPPORTED)?;
+        .map(str::parse::<u16>)
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|_| UNSUPPORTED)?;
+    let (major, minor) = match components.as_slice() {
+        [major, minor] | [major, minor, _] => (*major, *minor),
+        _ => return Err(UNSUPPORTED),
+    };
+    if !(5..=6).contains(&major) || (major, minor) > (6, 4) {
+        return Err(UNSUPPORTED);
+    }
     let (code, masked) = scan(content);
     let code = std::str::from_utf8(&code).map_err(|_| UNSUPPORTED)?;
     let visible = std::str::from_utf8(&masked).map_err(|_| UNSUPPORTED)?;
-    let start = visible
-        .find("Package(")
-        .or_else(|| visible.find("Package ("))
-        .ok_or(UNSUPPORTED)?;
-    let prefix = visible[..start].trim();
-    let (declaration, assignment) = prefix.split_once('=').ok_or(UNSUPPORTED)?;
+    let (declaration, _) = visible.split_once('=').ok_or(UNSUPPORTED)?;
     if declaration.split_whitespace().collect::<Vec<_>>()
         != ["import", "PackageDescription", "let", "package"]
-        || !assignment.trim().is_empty()
     {
         return Err(UNSUPPORTED);
     }
+    let start = declaration.len() + 1;
     let (name, fields) = Expr {
         code: &code[start..],
         masked: &masked[start..],
@@ -274,7 +290,8 @@ pub fn swift_package_layout(content: &str) -> Result<SwiftPackageLayout, &'stati
     };
     let choices = list(&fields, language)?;
     let swift_version = match choices.as_slice() {
-        [] => major,
+        [] if major == 5 => "5",
+        [] => "6",
         [mode] => match mode.code.trim() {
             ".v5" => "5",
             ".v6" => "6",
@@ -356,6 +373,7 @@ pub fn swift_package_layout(content: &str) -> Result<SwiftPackageLayout, &'stati
     }
     Ok(SwiftPackageLayout {
         swift_version,
+        tools_version: (major, minor),
         macos_version,
         packages,
         products,
@@ -400,6 +418,8 @@ mod tests {
     fn unsupported_manifest_expressions_are_explicit() {
         for body in [
             "Package(name: \"Pkg\", targets: makeTargets())",
+            "Package(name: \"Pkg\", targets: [.target(name: \"A\"),, .target(name: \"B\")])",
+            "Package(name: \"Pkg\", targets: [.macro(name: \"RepoMacros\")])",
             "Package(name: \"Pkg\", targets: [.target(name: \"Core\", path: selectedPath)])",
             "Package(name: \"Pkg\", targets: [.target(name: \"Core\", swiftSettings: [.unsafeFlags([\"-I\", \"other\"])])])",
             "Package(name: \"Pkg\", targets: [.testTarget(name: \"Test\", plugins: [.plugin(name: \"BuildCode\")])])",

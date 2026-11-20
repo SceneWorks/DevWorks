@@ -93,6 +93,23 @@ fn fixture_repository(app: &App, dir: &str, files: &[(&str, &str)]) -> (std::pat
             .set_members(&ProjectId(id("project-a")), &[member])
     })
     .unwrap();
+    // A project section inherits the default exclusions until it is configured.
+    // This fixture admits Sources/Kit/Build to exercise normal Swift files in that directory.
+    let config = json!({
+        "protocol":"1.0-draft.1","mode":"Command","requestKey":app.key("swift-configure-project"),
+        "body":{"kind":"indexing.configure_sources","scope":{"kind":"Project","projectId":"project-a"},
+            "expectedRevision":"1","config":{"structuralLanguages":[],"semanticPackageIds":[],
+                "excludePatterns":[],"maxFileBytes":"524288"}}
+    });
+    applied(
+        app.app()
+            .command(
+                &app.user,
+                "indexing.configure_sources",
+                config.to_string().as_bytes(),
+            )
+            .unwrap(),
+    );
     (root, repository)
 }
 
@@ -108,12 +125,13 @@ let package = Package(
     dependencies: [.package(name: "Local", path: "Packages/Local")],
     targets: [
         .target(name: "Kit", dependencies: [.product(name: "Shared", package: "Local")], exclude: ["Excluded.swift"]),
-        .target(name: "Client", dependencies: ["Kit"]),
-        .target(name: "Independent")
+        .executableTarget(name: "Client", dependencies: ["Kit"]),
+        .target(name: "Independent"),
+        .target(name: "Mixed")
     ]
 )
 "#;
-    const CLIENT: &str = "import Kit\r\n// café 🚀\r\n#sourceLocation(file: \"other.swift\", line: 500)\r\npublic func run() -> Int { Counter(value: 2).count(3) }\r\n#sourceLocation()\r\n";
+    const CLIENT: &str = "import Kit\r\n// café 🚀\r\n#sourceLocation(file: \"other.swift\", line: 500)\r\npublic func run() -> Int { Counter(value: 2).count(3) + packageValue() }\r\n#sourceLocation()\r\n@main struct Tool { static func main() { _ = run() } }\r\n";
     let (root, repository) = fixture_repository(
         &app,
         "swift-capture",
@@ -144,7 +162,16 @@ public struct Counter: Counting {
 extension Counter { public func extensionMember() -> Int { value } }
 "#,
             ),
+            (
+                "Sources/Kit/Build/Access.swift",
+                "package func packageValue() -> Int { 3 }\n",
+            ),
             ("Sources/Kit/Extra.swift", "public struct Extra {}\n"),
+            ("Sources/Mixed/Mixed.swift", "public struct Mixed {}\n"),
+            (
+                "Sources/Mixed/native.c",
+                "int native(void) { return 42; }\n",
+            ),
             ("Sources/Kit/Excluded.swift", "public struct Excluded {}\n"),
             ("Sources/Client/Entry.swift", CLIENT),
             (
@@ -161,37 +188,101 @@ extension Counter { public func extensionMember() -> Int { value } }
         |generation: &Id, path: &str| read(&*app.store, |s| s.indexing().nodes(generation, path));
     let edges =
         |generation: &Id, path: &str| read(&*app.store, |s| s.indexing().edges(generation, path));
-    let callee = nodes(&initial.id, "Sources/Kit/Counter.swift")
-        .into_iter()
+    let kit = nodes(&initial.id, "Sources/Kit/Counter.swift");
+    let callee = kit
+        .iter()
         .find(|node| {
             node.name == "count"
                 && node.payload["properties"]["usr"] == "s:3Kit7CounterV5countyS2iF"
         })
         .expect("Swift compiler Int overload");
+    let constructor = kit
+        .iter()
+        .find(|node| {
+            node.kind == "Constructor"
+                && node.payload["properties"]["semanticBasis"] == "swift-indexstore"
+        })
+        .expect("Swift compiler constructor");
+    let package_access = nodes(&initial.id, "Sources/Kit/Build/Access.swift")
+        .into_iter()
+        .find(|node| {
+            node.name == "packageValue"
+                && node.payload["properties"]["semanticBasis"] == "swift-indexstore"
+        })
+        .expect("package-access function under a Build directory");
+    let module = nodes(&initial.id, "Package.swift")
+        .into_iter()
+        .find(|node| node.name == "Kit" && node.kind == "Module")
+        .expect("structural SwiftPM module");
     let incoming = edges(&initial.id, "Sources/Client/Entry.swift");
-    assert!(
-        incoming.iter().any(|edge| edge.kind == "CALLS"
-            && edge.target_node_id == callee.node_id
-            && edge.payload["resolution"] == "Resolved"
-            && edge.payload["provenance"]["extractor"] == PACKAGE),
-        "{incoming:?}"
-    );
+    for expected in [
+        &callee.node_id,
+        &constructor.node_id,
+        &package_access.node_id,
+    ] {
+        assert!(
+            incoming.iter().any(|edge| edge.kind == "CALLS"
+                && &edge.target_node_id == expected
+                && edge.payload["resolution"] == "Resolved"
+                && edge.payload["provenance"]["extractor"] == PACKAGE),
+            "{expected:?}: {incoming:?}"
+        );
+    }
     assert!(
         incoming.iter().any(|edge| edge.kind == "IMPORTS"
+            && edge.target_node_id == module.node_id
             && edge.payload["resolution"] == "Resolved"
             && edge.payload["provenance"]["extractor"] == PACKAGE),
         "{incoming:?}"
     );
-    let caller = nodes(&initial.id, "Sources/Client/Entry.swift")
-        .into_iter()
+    let client = nodes(&initial.id, "Sources/Client/Entry.swift");
+    let caller = client
+        .iter()
         .find(|node| node.name == "run" && node.payload["properties"]["compilerTokenSpan"] == true)
         .unwrap();
-    let expected = CLIENT.find("run()").unwrap();
-    assert_eq!(caller.payload["span"]["startByte"], expected);
+    assert_eq!(
+        caller.payload["span"]["startByte"],
+        CLIENT.find("run()").unwrap()
+    );
+    assert!(
+        client
+            .iter()
+            .any(|node| node.name == "main"
+                && node.payload["properties"]["compilerTokenSpan"] == true)
+    );
+    let extension = kit
+        .iter()
+        .find(|node| {
+            node.kind == "Extension" && node.payload["properties"]["compilerTokenSpan"] == true
+        })
+        .unwrap();
+    let member = kit
+        .iter()
+        .find(|node| {
+            node.name == "extensionMember"
+                && node.payload["properties"]["compilerTokenSpan"] == true
+        })
+        .unwrap();
     let relations = edges(&initial.id, "Sources/Kit/Counter.swift");
+    assert!(relations.iter().any(|edge| edge.kind == "DEFINES_METHOD"
+        && edge.source_node_id == extension.node_id
+        && edge.target_node_id == member.node_id));
     for kind in ["IMPLEMENTS", "EXTENDS", "DEFINES_METHOD", "REFERENCES"] {
         assert!(relations.iter().any(|edge| edge.kind == kind
             && edge.payload["provenance"]["extractor"] == PACKAGE), "{kind}: {relations:?}");
+    }
+    let units = read(&*app.store, |s| s.indexing().units(&initial.id, None, 500));
+    for (path, reason) in [
+        ("Sources/Kit/Excluded.swift", "swift-source-excluded"),
+        ("Sources/Mixed/Mixed.swift", "swift-project-unsupported"),
+    ] {
+        assert!(
+            units.iter().any(|unit| unit.unit_key == path
+                && unit.payload["incomplete"]
+                    .as_array()
+                    .is_some_and(|gaps| gaps.iter().any(|gap| gap == reason))),
+            "{path} should report {reason}"
+        );
     }
     let foreign = edges(&initial.id, "Sources/Independent/Marker.swift");
     assert!(
@@ -231,6 +322,10 @@ extension Counter { public func extensionMember() -> Int { value } }
     index(&app, &repository, "indexing.index");
     let reused = published(&app, &repository, Some(&initial.id));
     assert_eq!(count, invocations(&app, PACKAGE));
+    index(&app, &repository, "indexing.reindex");
+    let reused = published(&app, &repository, Some(&reused.id));
+    assert!(invocations(&app, PACKAGE) > count);
+    assert_eq!(reused.manifest["packs"][0]["id"], PACKAGE);
     let worktree = read(&*app.store, |s| {
         Ok(s.indexing().worktrees(&repository)?[0].worktree_id.clone())
     });
@@ -326,6 +421,10 @@ let package"#);
     let stale = published(&app, &repository, Some(&fallback.id));
     assert_eq!(stale.manifest["packs"], json!([]));
     assert_eq!(before, invocations(&app, PACKAGE));
+    assert_eq!(
+        app.runtimes.observations().get(SDK_RUNTIME),
+        Some(&RuntimeObservation::Missing("swift-runtime-changed".into())),
+    );
 
     let host = app.app().packages().unwrap();
     assert_eq!(
@@ -360,7 +459,7 @@ fn native_swift_pack_qualifies_xctest_and_apple_macros_with_cold_cache() {
                 "Package.swift",
                 r#"// swift-tools-version:6.0
 import PackageDescription
-let package = Package(name: "Cold", platforms: [.macOS(.v14)], targets: [.testTarget(name: "NativeTests")])
+let package = Package(name: "Cold", platforms: [.macOS(.v14)], targets: [.testTarget(name: "NativeTests"), .target(name: "ExternalMacro")])
 "#,
             ),
             (
@@ -374,6 +473,13 @@ final class ProbeTests: XCTestCase { func testCount() { XCTAssertEqual(Counter()
 @Test func nativeMacroCase() { let value = 1; #expect(value == 1) }
 "#,
             ),
+            (
+                "Sources/ExternalMacro/Unavailable.swift",
+                r#"@freestanding(expression)
+public macro outside() -> Int = #externalMacro(module: "RepoMacros", type: "Canary")
+public let result = #outside()
+"#,
+            ),
         ],
     );
     let started = Instant::now();
@@ -381,6 +487,18 @@ final class ProbeTests: XCTestCase { func testCount() { XCTAssertEqual(Counter()
     let published = published(&app, &repository, None);
     let run = read(&*app.store, |s| s.indexing().run(&run)).unwrap();
     assert_eq!(published.manifest["packs"][0]["id"], PACKAGE, "{run:?}");
+    let units = read(&*app.store, |s| {
+        s.indexing().units(&published.id, None, 500)
+    });
+    assert!(
+        units.iter().any(
+            |unit| unit.unit_key == "Sources/ExternalMacro/Unavailable.swift"
+                && unit.payload["incomplete"]
+                    .to_string()
+                    .contains("swift-compiler-failed")
+        ),
+        "a repository-defined macro must remain unresolved"
+    );
     let nodes = read(&*app.store, |s| {
         s.indexing()
             .nodes(&published.id, "Tests/NativeTests/Probe.swift")
@@ -398,4 +516,77 @@ final class ProbeTests: XCTestCase { func testCount() { XCTAssertEqual(Counter()
         "signed cold Swift fixture completed in {:?}",
         started.elapsed()
     );
+}
+
+#[test]
+#[ignore = "requires the qualified Xcode installation and signed Swift pack on macOS arm64"]
+fn native_swift_pack_reports_input_and_output_bounds_with_structural_fallback() {
+    let _serial = serial();
+    let app = fixture_app();
+    let long_names: Vec<_> = (0..10)
+        .map(|file| {
+            let members = (0..375)
+                .map(|index| format!("    public func value_{index}() -> Int {{ 0 }}\n"))
+                .collect::<String>();
+            format!(
+                "public struct Type_{file}_{} {{\n{members}}}\n",
+                "a".repeat(1400)
+            )
+        })
+        .collect();
+    let paths: Vec<_> = (0..long_names.len())
+        .map(|i| format!("Sources/Big/Part{i}.swift"))
+        .collect();
+    let mut files = vec![(
+        "Package.swift",
+        "// swift-tools-version:6.0\nimport PackageDescription\nlet package = Package(name: \"Big\", targets: [.target(name: \"Big\")])\n",
+    )];
+    files.extend(
+        paths
+            .iter()
+            .zip(&long_names)
+            .map(|(path, source)| (path.as_str(), source.as_str())),
+    );
+    let (root, repository) = fixture_repository(&app, "swift-bounds", &files);
+    let run = index(&app, &repository, "indexing.index");
+    let limited = published(&app, &repository, None);
+    let inspect = |run: &Id| {
+        read(&*app.store, |s| s.indexing().run(run))
+            .unwrap()
+            .warnings
+    };
+    let warnings = inspect(&run);
+    assert!(
+        warnings
+            .iter()
+            .any(|w| w.message.contains("swift-output-budget")),
+        "{warnings:?}"
+    );
+    assert_eq!(limited.manifest["packs"], json!([]));
+    let nodes = read(&*app.store, |s| s.indexing().nodes(&limited.id, &paths[0]));
+    assert!(nodes.iter().any(|node| node.kind == "Function"));
+
+    // Each file stays within its individual cap. Collectively they exceed the batch budget.
+    let padding = format!("// {}\n", "a".repeat(400_000));
+    for part in 0..12 {
+        std::fs::write(
+            root.join(format!("Sources/Big/Padding{part}.swift")),
+            &padding,
+        )
+        .unwrap();
+    }
+    git(&root, &["add", "-A"]);
+    git(&root, &["commit", "-qm", "exceed aggregate Swift input"]);
+    let before = invocations(&app, PACKAGE);
+    let run = index(&app, &repository, "indexing.reindex");
+    let fallback = published(&app, &repository, Some(&limited.id));
+    let warnings = inspect(&run);
+    assert!(
+        warnings.iter().any(|w| w
+            .message
+            .contains("repository source exceeds the semantic input budget")),
+        "{warnings:?}"
+    );
+    assert_eq!(fallback.manifest["packs"], json!([]));
+    assert_eq!(invocations(&app, PACKAGE), before);
 }

@@ -131,10 +131,26 @@ fn bounded_source_path(key: &str) -> bool {
             .any(|segment| segment.eq_ignore_ascii_case("node_modules") || segment == ".git")
 }
 
+fn swift_path_context(language: &str, key: &str) -> bool {
+    language == SWIFT_CONTEXT
+        && (key.rsplit('/').next() == Some("project.pbxproj")
+            || crate::ports::packages::swift::foreign_input(key))
+}
+
 /// Context files are admitted in the same immutable capture and only for the language
 /// family that uses them. An explicit context tag distinguishes them from source results.
 fn repository_input(descriptor: &PackDescriptor, unit: &PlanUnit) -> Option<&'static str> {
-    if !source_unit(unit) || !descriptor.repository_source {
+    if !descriptor.repository_source {
+        return None;
+    }
+    if descriptor.id == crate::ports::packages::swift::PACKAGE
+        && !matches!(unit.mode, MODE_SUBMODULE | MODE_DIRECTORY)
+        && crate::ports::packages::swift::source_path(&unit.key)
+        && swift_path_context(SWIFT_CONTEXT, &unit.key)
+    {
+        return Some(SWIFT_CONTEXT);
+    }
+    if !source_unit(unit) {
         return None;
     }
     let typescript = ["typescript", "tsx", "javascript"]
@@ -164,9 +180,8 @@ fn repository_input(descriptor: &PackDescriptor, unit: &PlanUnit) -> Option<&'st
         if !crate::ports::packages::swift::source_path(&unit.key) {
             return None;
         }
-        if matches!(name, "Package.swift" | "project.pbxproj")
+        if name == "Package.swift"
             || (name.starts_with("Package@swift-") && name.ends_with(".swift"))
-            || crate::ports::packages::swift::foreign_input(name)
         {
             return Some(SWIFT_CONTEXT);
         }
@@ -216,26 +231,52 @@ pub(crate) fn prepare_repository(
         if !descriptor.repository_source {
             continue;
         }
-        let selected: Vec<_> = plan
+        let mut selected: Vec<_> = plan
             .iter()
             .filter_map(|unit| repository_input(&descriptor, unit).map(|language| (unit, language)))
             .collect();
+        if descriptor.id == crate::ports::packages::swift::PACKAGE {
+            let package_roots: Vec<_> = selected
+                .iter()
+                .map(|(unit, _)| unit.key.as_str())
+                .filter_map(|key| {
+                    (key == "Package.swift" || key.ends_with("/Package.swift"))
+                        .then(|| key.strip_suffix("Package.swift").expect("manifest suffix"))
+                })
+                .collect();
+            selected.retain(|(unit, language)| {
+                !crate::ports::packages::swift::foreign_input(&unit.key)
+                    || *language != SWIFT_CONTEXT
+                    || package_roots.iter().any(|root| unit.key.starts_with(root))
+            });
+        }
         if !selected
             .iter()
             .any(|(_, language)| supports(&descriptor, language))
         {
             continue;
         }
+        let has_content =
+            |(unit, language): &(&PlanUnit, &str)| !swift_path_context(language, &unit.key);
         let bytes = selected
             .iter()
+            .filter(|entry| has_content(entry))
             .fold(0u64, |sum, (unit, _)| sum.saturating_add(unit.size));
         let proposals = if selected.len() > MAX_REPOSITORY_FILES || bytes > MAX_REPOSITORY_BYTES {
             Err("repository source exceeds the semantic input budget".into())
         } else {
-            let mut contents = Vec::with_capacity(selected.len());
+            // Swift uses foreign/Xcode entries only to detect unsupported projects.
+            // Their captured path is sufficient and their contents stay out of the helper.
+            let mut contents: Vec<_> = selected
+                .iter()
+                .copied()
+                .filter(|entry| !has_content(entry))
+                .map(|entry| (entry, Vec::new()))
+                .collect();
             let committed: Vec<_> = selected
                 .iter()
                 .copied()
+                .filter(has_content)
                 .filter(|(unit, _)| !local.is_some_and(|local| local.contains_key(&unit.key)))
                 .collect();
             let oids: Vec<_> = committed
@@ -252,7 +293,7 @@ pub(crate) fn prepare_repository(
             for (unit, bytes) in committed.into_iter().zip(buffers) {
                 contents.push((unit, bytes));
             }
-            for (unit, language) in selected {
+            for (unit, language) in selected.into_iter().filter(has_content) {
                 if stop() {
                     return Err(Stop::Cancelled);
                 }
@@ -479,6 +520,7 @@ fn apply(
                     && matches!(
                         gap,
                         "swift-source-excluded"
+                            | "swift-project-unsupported"
                             | "swift-compiler-failed"
                             | "swift-dependency-unavailable"
                             | "swift-xcode-project-unsupported"

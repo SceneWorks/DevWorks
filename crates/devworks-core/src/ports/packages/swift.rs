@@ -101,31 +101,35 @@ fn sdk_settings(sdk: &Path) -> Result<(String, RuntimeExecutable), &'static str>
     Ok((sha256_hex(&contents), asset))
 }
 
+fn qualified_target(target_info: &str) -> Result<String, &'static str> {
+    let report =
+        crate::framing::parse(target_info.as_bytes()).map_err(|_| "swift-target-info-invalid")?;
+    if report["swiftCompilerTag"] != COMPILER_TAG
+        || !report["compilerVersion"]
+            .as_str()
+            .is_some_and(|v| v.starts_with("Apple Swift version 6.4.2 ("))
+    {
+        return Err("swift-toolchain-version-unqualified");
+    }
+    report["target"]["triple"]
+        .as_str()
+        .filter(|target| target.starts_with("arm64-apple-macosx") && target.len() <= 48)
+        .filter(|target| {
+            target["arm64-apple-macosx".len()..]
+                .split('.')
+                .all(|part| !part.is_empty() && part.bytes().all(|byte| byte.is_ascii_digit()))
+        })
+        .map(str::to_owned)
+        .ok_or("unsupported-swift-pack-target")
+}
+
 impl Runtime {
     /// Resolve the qualified installation selected by the system developer-tool lookup.
     pub fn detect(frontend: &Path, sdk: &Path, target_info: &str) -> Result<Self, &'static str> {
         if !cfg!(all(target_os = "macos", target_arch = "aarch64")) {
             return Err("unsupported-swift-pack-target");
         }
-        let report = crate::framing::parse(target_info.as_bytes())
-            .map_err(|_| "swift-target-info-invalid")?;
-        if report["swiftCompilerTag"] != COMPILER_TAG
-            || !report["compilerVersion"]
-                .as_str()
-                .is_some_and(|v| v.starts_with("Apple Swift version 6.4.2 ("))
-        {
-            return Err("swift-toolchain-version-unqualified");
-        }
-        let target = report["target"]["triple"]
-            .as_str()
-            .filter(|target| target.starts_with("arm64-apple-macosx") && target.len() <= 48)
-            .filter(|target| {
-                target["arm64-apple-macosx".len()..]
-                    .bytes()
-                    .all(|byte| byte.is_ascii_digit() || byte == b'.')
-            })
-            .ok_or("unsupported-swift-pack-target")?
-            .to_owned();
+        let target = qualified_target(target_info)?;
         Self::installation(frontend, sdk, target)
     }
 
@@ -239,16 +243,45 @@ pub fn source_path(path: &str) -> bool {
         && !path.contains(['\\', ':', '\0', '\n', '\r'])
         && path.split('/').all(|part| {
             !matches!(part, "" | "." | "..")
-                && [
-                    ".git",
-                    ".build",
-                    ".swiftpm",
-                    "build",
-                    "deriveddata",
-                    "node_modules",
-                    "vendor",
-                ]
-                .iter()
-                .all(|name| !part.eq_ignore_ascii_case(name))
+                && [".git", ".build", ".swiftpm", "deriveddata"]
+                    .iter()
+                    .all(|name| !part.eq_ignore_ascii_case(name))
         })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn swift_discovery_requires_the_qualified_apple_compiler_and_target() {
+        let report = |tag, triple| {
+            serde_json::json!({
+                "swiftCompilerTag": tag, "compilerVersion": "Apple Swift version 6.4.2 (fixture)",
+                "target": { "triple": triple }
+            })
+            .to_string()
+        };
+        let native = "arm64-apple-macosx27.0.0";
+        assert_eq!(
+            qualified_target(&report(COMPILER_TAG, native)),
+            Ok(native.into())
+        );
+        assert_eq!(
+            qualified_target(&report("swiftlang-6.5", native)),
+            Err("swift-toolchain-version-unqualified")
+        );
+        assert_eq!(
+            qualified_target("not json"),
+            Err("swift-target-info-invalid")
+        );
+        assert_eq!(
+            qualified_target(&report(COMPILER_TAG, "x86_64-apple-macosx27.0.0")),
+            Err("unsupported-swift-pack-target")
+        );
+        assert_eq!(
+            qualified_target(&report(COMPILER_TAG, "arm64-apple-macosx")),
+            Err("unsupported-swift-pack-target")
+        );
+    }
 }

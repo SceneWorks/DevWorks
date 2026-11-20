@@ -40,11 +40,14 @@ fn dotnet_runtime(host: &PackageHost) -> Option<dotnet::Runtime> {
 }
 
 fn swift_runtime(host: &PackageHost) -> Option<swift::Runtime> {
-    host.runtimes
-        .as_ref()?
-        .cache
-        .swift()
-        .filter(swift::Runtime::current)
+    let cache = &host.runtimes.as_ref()?.cache;
+    let runtime = cache.swift()?;
+    if runtime.current() {
+        Some(runtime)
+    } else {
+        cache.invalidate_swift(&runtime);
+        None
+    }
 }
 
 pub(crate) struct PackageSemantics(pub Weak<PackageHost>);

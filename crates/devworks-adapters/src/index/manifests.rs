@@ -17,7 +17,8 @@
 //! `scope: repository`.
 mod swift_semantic;
 pub use swift_semantic::{
-    SwiftDependency, SwiftPackageLayout, SwiftTargetLayout, swift_package_layout,
+    SwiftDependency, SwiftPackageLayout, SwiftTargetLayout, swift_has_main_attribute,
+    swift_package_layout,
 };
 
 use devworks_core::ports::indexing::{

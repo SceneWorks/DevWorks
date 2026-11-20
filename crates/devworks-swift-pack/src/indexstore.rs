@@ -1,6 +1,6 @@
 //! Minimal reader for the C API shipped with the qualified Apple toolchain.
 //! ABI declarations are from swiftlang/llvm-project clang/include/indexstore/indexstore.h.
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::ffi::{CString, c_char, c_uint, c_void};
 use std::path::{Path, PathBuf};
 use std::ptr;
@@ -195,6 +195,27 @@ fn store_name(value: CText) -> Result<CString, &'static str> {
     CString::new(text).map_err(|_| INVALID)
 }
 
+fn record_binding<'a>(
+    paths: &'a BTreeMap<PathBuf, String>,
+    seen: &mut BTreeMap<&'a str, CString>,
+    file: &Path,
+    record: &CString,
+) -> Result<Option<&'a str>, &'static str> {
+    let unit = paths.get(file).ok_or(INVALID)?.as_str();
+    match seen.get(unit) {
+        Some(current) if current == record => Ok(None),
+        Some(_) => Err(INVALID),
+        None => {
+            seen.insert(unit, record.clone());
+            Ok(Some(unit))
+        }
+    }
+}
+
+fn checked_roles(roles: u64) -> Result<u64, &'static str> {
+    (roles < 1 << 21).then_some(roles).ok_or(INVALID)
+}
+
 pub(crate) struct IndexStore(Api);
 
 impl IndexStore {
@@ -216,7 +237,7 @@ impl IndexStore {
             api.close_store,
         )?;
         let mut records = BTreeMap::new();
-        let mut seen = BTreeSet::new();
+        let mut seen = BTreeMap::new();
         apply(
             |context, f| unsafe { (api.units)(store.0, 1, context, f) },
             paths.len() + 128,
@@ -240,14 +261,12 @@ impl IndexStore {
                             return Ok(());
                         }
                         let file = unsafe { (api.dep_file)(dep) }.string()?;
-                        let key = paths.get(Path::new(&file)).ok_or(INVALID)?;
                         let record = store_name(unsafe { (api.dep_name)(dep) })?;
-                        if !seen.insert((key.clone(), record.clone())) {
+                        let Some(key) =
+                            record_binding(paths, &mut seen, Path::new(&file), &record)?
+                        else {
                             return Ok(());
-                        }
-                        if records.contains_key(key) {
-                            return Err(INVALID);
-                        }
+                        };
                         let handle = Handle::new(
                             unsafe { (api.open_record)(store.0, record.as_ptr(), ptr::null_mut()) },
                             api.close_record,
@@ -266,7 +285,7 @@ impl IndexStore {
                                     64,
                                     |rel| {
                                         relations.push((
-                                            unsafe { (api.relation_roles)(rel) },
+                                            checked_roles(unsafe { (api.relation_roles)(rel) })?,
                                             symbol(api, unsafe { (api.relation_symbol)(rel) })?,
                                         ));
                                         Ok(())
@@ -274,7 +293,7 @@ impl IndexStore {
                                 )?;
                                 items.push(Occurrence {
                                     symbol: symbol(api, unsafe { (api.occurrence_symbol)(occ) })?,
-                                    roles: unsafe { (api.occurrence_roles)(occ) },
+                                    roles: checked_roles(unsafe { (api.occurrence_roles)(occ) })?,
                                     line,
                                     column,
                                     relations,
@@ -283,7 +302,7 @@ impl IndexStore {
                             },
                         )?;
                         *remaining -= items.len();
-                        records.insert(key.clone(), items);
+                        records.insert(key.to_owned(), items);
                         Ok(())
                     },
                 )
@@ -295,4 +314,48 @@ impl IndexStore {
 
 pub(crate) fn occurrence_budget() -> usize {
     MAX_OCCURRENCES
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn swift_indexstore_refuses_unbounded_or_malformed_strings() {
+        let make = |bytes: &[u8]| {
+            CText {
+                data: bytes.as_ptr(),
+                length: bytes.len(),
+            }
+            .string()
+        };
+        assert_eq!(make(b"valid"), Ok("valid".into()));
+        assert_eq!(make(b"bad\0value"), Err(INVALID));
+        assert_eq!(make(&[0xff]), Err(INVALID));
+        assert_eq!(make(&[b'a'; 4097]), Err(INVALID));
+    }
+
+    #[test]
+    fn swift_indexstore_rejects_unbound_paths_and_conflicting_records() {
+        let path = PathBuf::from("capture/Sources/Example.swift");
+        let paths = BTreeMap::from([(path.clone(), "Sources/Example.swift".to_owned())]);
+        let mut seen = BTreeMap::new();
+        let record = CString::new("Example.swift-AA").unwrap();
+        let conflict = CString::new("Example.swift-BB").unwrap();
+        assert_eq!(
+            record_binding(&paths, &mut seen, &path, &record),
+            Ok(Some("Sources/Example.swift"))
+        );
+        assert_eq!(record_binding(&paths, &mut seen, &path, &record), Ok(None));
+        assert_eq!(
+            record_binding(&paths, &mut seen, &path, &conflict),
+            Err(INVALID)
+        );
+        assert_eq!(
+            record_binding(&paths, &mut seen, Path::new("another.swift"), &record),
+            Err(INVALID)
+        );
+        assert_eq!(checked_roles(1 << 20), Ok(1 << 20));
+        assert_eq!(checked_roles(1 << 21), Err(INVALID));
+    }
 }

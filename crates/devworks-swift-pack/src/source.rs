@@ -44,13 +44,40 @@ fn valid_file(file: &File) -> bool {
         return false;
     }
     let name = path.rsplit('/').next().unwrap_or(path);
-    let context = matches!(name, "Package.swift" | "project.pbxproj")
+    let marker = name == "project.pbxproj" || foreign_input(name);
+    let context = name == "Package.swift"
         || (name.starts_with("Package@swift-") && name.ends_with(".swift"))
-        || foreign_input(name);
+        || marker;
+    if marker && !file.text.is_empty() {
+        return false;
+    }
     match file.language.as_str() {
         "swift" => !context && name.to_ascii_lowercase().ends_with(".swift"),
         "swift-context" => context,
         _ => false,
+    }
+}
+
+fn valid_files(files: &[File]) -> bool {
+    if files.len() > MAX_FILES
+        || files.iter().map(|file| file.text.len()).sum::<usize>() > MAX_BYTES
+    {
+        return false;
+    }
+    let mut paths = BTreeSet::new();
+    files
+        .iter()
+        .all(|file| valid_file(file) && paths.insert(file.unit.to_lowercase()))
+        && files.iter().any(|file| file.language == "swift")
+}
+
+#[cfg(test)]
+pub(crate) fn fixture_file(unit: &str, language: &str, text: &str) -> File {
+    File {
+        unit: unit.into(),
+        language: language.into(),
+        sha256: sha256_hex(text.as_bytes()),
+        text: text.into(),
     }
 }
 
@@ -70,26 +97,42 @@ impl Source {
                 .capture_digest
                 .as_ref()
                 .is_some_and(|value| !hex(value, 64))
-            || source.files.is_empty()
-            || source.files.len() > MAX_FILES
-            || source
-                .files
-                .iter()
-                .map(|file| file.text.len())
-                .sum::<usize>()
-                > MAX_BYTES
-        {
-            return Err(invalid);
-        }
-        let mut paths = BTreeSet::new();
-        if !source
-            .files
-            .iter()
-            .all(|file| valid_file(file) && paths.insert(file.unit.to_lowercase()))
-            || !source.files.iter().any(|file| file.language == "swift")
+            || !valid_files(&source.files)
         {
             return Err(invalid);
         }
         Ok(source)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn swift_source_requires_bounded_and_distinct_captured_inputs() {
+        let swift = || fixture_file("Sources/Build/main.swift", "swift", "let number = 7");
+        let marker = fixture_file("Sources/Build/file.h", "swift-context", "");
+        assert!(valid_files(&[swift(), marker]));
+        let changed = File {
+            text: "let number = 8".into(),
+            ..swift()
+        };
+        assert!(!valid_files(&[changed]));
+        let alias = File {
+            unit: "Sources/build/main.swift".into(),
+            ..swift()
+        };
+        assert!(!valid_files(&[swift(), alias]));
+        let invalid = fixture_file("Sources/Build/file.h", "swift", "");
+        assert!(!valid_files(&[swift(), invalid]));
+        let foreign = fixture_file("Sources/Build/file.h", "swift-context", "source bytes");
+        assert!(!valid_files(&[swift(), foreign]));
+        let too_large = fixture_file("Other.swift", "swift", &"a".repeat(MAX_BYTES + 1));
+        assert!(!valid_files(&[too_large]));
+        let too_many: Vec<_> = (0..=MAX_FILES)
+            .map(|index| fixture_file(&format!("{index}.swift"), "swift", ""))
+            .collect();
+        assert!(!valid_files(&too_many));
     }
 }

@@ -1,7 +1,9 @@
-use crate::source::{File, Source};
+use crate::source::File;
 use devworks_adapters::index::manifests::{
-    SwiftDependency, SwiftPackageLayout, SwiftTargetLayout, swift_package_layout,
+    SwiftDependency, SwiftPackageLayout, SwiftTargetLayout, swift_has_main_attribute,
+    swift_package_layout,
 };
+use devworks_core::fingerprint::sha256_hex;
 use devworks_core::ports::packages::swift::{foreign_input, source_path};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
@@ -14,12 +16,14 @@ pub(crate) struct Module {
     pub name: String,
     pub id: String,
     pub manifest: Option<String>,
+    pub package_name: Option<String>,
     pub target_name: String,
     pub files: Vec<String>,
     pub swift_version: String,
     pub deployment: Option<String>,
     pub defines: Vec<String>,
-    pub executable: bool,
+    pub parse_as_library: bool,
+    pub mixed: bool,
     pub testing: bool,
     pub dependencies: BTreeSet<usize>,
     pub missing_dependency: bool,
@@ -113,13 +117,21 @@ fn source_matches(
         return Ok(false);
     }
     for exclude in &target.exclude {
-        if within(file, &join(root, exclude)?) {
+        let exclude = join(root, exclude)?;
+        if !within(&exclude, root) {
+            return Err(UNSUPPORTED);
+        }
+        if within(file, &exclude) {
             return Ok(false);
         }
     }
     if let Some(sources) = &target.sources {
         for source in sources {
-            if within(file, &join(root, source)?) {
+            let source = join(root, source)?;
+            if !within(&source, root) {
+                return Err(UNSUPPORTED);
+            }
+            if within(file, &source) {
                 return Ok(true);
             }
         }
@@ -155,8 +167,8 @@ fn target_dependencies<'a>(
 }
 
 impl Workspace {
-    pub(crate) fn build(source: &Source) -> Result<Self, &'static str> {
-        if source.files.iter().any(|file| {
+    pub(crate) fn build(files_in_capture: &[File]) -> Result<Self, &'static str> {
+        if files_in_capture.iter().any(|file| {
             file.language == "swift-context"
                 && file
                     .unit
@@ -166,14 +178,12 @@ impl Workspace {
         }) {
             return Err(UNSUPPORTED);
         }
-        let packages = source
-            .files
+        let packages = files_in_capture
             .iter()
             .filter(|file| is_manifest(file))
             .map(|file| Ok((file.unit.clone(), swift_package_layout(&file.text)?)))
             .collect::<Result<BTreeMap<_, _>, &'static str>>()?;
-        let xcode: BTreeSet<_> = source
-            .files
+        let xcode: BTreeSet<_> = files_in_capture
             .iter()
             .filter(|file| {
                 file.language == "swift-context" && file.unit.ends_with("project.pbxproj")
@@ -202,10 +212,15 @@ impl Workspace {
                 {
                     return Err(UNSUPPORTED);
                 }
-                let root = join(parent(manifest), &target.path)?;
+                let package_root = parent(manifest);
+                let root = join(package_root, &target.path)?;
+                if !within(&root, package_root) {
+                    return Err(UNSUPPORTED);
+                }
                 let mut files = Vec::new();
                 let mut mixed = false;
-                for file in &source.files {
+                let mut has_main_attribute = false;
+                for file in files_in_capture {
                     if !source_matches(target, &root, &file.unit)? {
                         continue;
                     }
@@ -216,24 +231,42 @@ impl Workspace {
                     if !owners.insert(file.unit.clone()) {
                         return Err(UNSUPPORTED);
                     }
+                    has_main_attribute |= swift_has_main_attribute(&file.text);
                     files.push(file.unit.clone());
                 }
+                let executable = target.kind != "testTarget"
+                    && (target.kind == "executableTarget"
+                        || files
+                            .iter()
+                            .any(|path| path.rsplit('/').next() == Some("main.swift")));
+                let package_name = (package.tools_version >= (5, 9)).then(|| {
+                    // Stable across checkouts. Distinct package roots never share package access.
+                    format!("devworks_{}", sha256_hex(manifest.as_bytes()))
+                });
                 modules.push(Module {
                     name,
                     id: format!("{manifest}#target:{}", target.name),
                     manifest: Some(manifest.clone()),
                     target_name: target.name.clone(),
-                    executable: target.kind == "executableTarget"
-                        || files
-                            .iter()
-                            .any(|path| path.rsplit('/').next() == Some("main.swift")),
+                    parse_as_library: !executable
+                        || (package.tools_version >= (5, 5)
+                            && files.len() == 1
+                            && has_main_attribute),
+                    package_name,
+                    mixed,
                     files,
                     swift_version: package.swift_version.clone(),
-                    deployment: package.macos_version.clone(),
+                    // SwiftPM uses the installed SDK's minimum for the qualified toolchain.
+                    deployment: Some(
+                        package
+                            .macos_version
+                            .clone()
+                            .unwrap_or_else(|| "12.0".into()),
+                    ),
                     defines: target.defines.clone(),
                     testing: target.kind == "testTarget",
                     dependencies: BTreeSet::new(),
-                    missing_dependency: mixed,
+                    missing_dependency: false,
                 });
             }
         }
@@ -260,8 +293,7 @@ impl Workspace {
         }
         let mut gaps = BTreeMap::new();
         let mut loose = Vec::new();
-        for file in source
-            .files
+        for file in files_in_capture
             .iter()
             .filter(|file| swift(file) && !owners.contains(&file.unit))
         {
@@ -288,9 +320,11 @@ impl Workspace {
                 id: "loose".into(),
                 manifest: None,
                 target_name: name.into(),
-                executable: loose
+                parse_as_library: !loose
                     .iter()
                     .any(|path| path.rsplit('/').next() == Some("main.swift")),
+                package_name: None,
+                mixed: false,
                 files: loose,
                 swift_version: "6".into(),
                 deployment: None,
@@ -341,5 +375,98 @@ impl Workspace {
             }
         }
         included
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::source::fixture_file;
+
+    fn manifest(path: &str, declaration: &str) -> File {
+        fixture_file(
+            path,
+            "swift-context",
+            &format!(
+                "// swift-tools-version:6.0\nimport PackageDescription\nlet package = {declaration}"
+            ),
+        )
+    }
+
+    #[test]
+    fn swift_workspace_binds_nested_products_and_reports_unselected_sources() {
+        let files = [
+            manifest(
+                "Root/Package.swift",
+                r#"Package(name: "Root",
+                dependencies: [.package(path: "../Dep")],
+                targets: [.executableTarget(name: "Tool", dependencies: [.product(name: "Core", package: "dep")], exclude: ["Omit.swift"])])"#,
+            ),
+            manifest(
+                "Dep/Package.swift",
+                r#"Package(name: "Dependency",
+                products: [.library(name: "Core", targets: ["Build"])], targets: [.target(name: "Build")])"#,
+            ),
+            fixture_file(
+                "Root/Sources/Tool/Tool.swift",
+                "swift",
+                "@main struct Tool {}",
+            ),
+            fixture_file("Root/Sources/Tool/Omit.swift", "swift", "struct Omitted {}"),
+            fixture_file(
+                "Dep/Sources/Build/Build.swift",
+                "swift",
+                "public struct Build {}",
+            ),
+            fixture_file("Other.swift", "swift", "let detached = 0"),
+            fixture_file("IDE/Project.xcodeproj/project.pbxproj", "swift-context", ""),
+            fixture_file("IDE/Sources/Tool.swift", "swift", "let xcode = 0"),
+        ];
+        let work = Workspace::build(&files).unwrap();
+        let ordered: Vec<_> = work
+            .order()
+            .unwrap()
+            .into_iter()
+            .map(|id| work.modules[id].name.as_str())
+            .collect();
+        assert_eq!(ordered, ["Build", "Tool", "DevWorksLooseSwift"]);
+        assert!(work.modules[1].parse_as_library);
+        assert_ne!(work.modules[0].package_name, work.modules[1].package_name);
+        assert_eq!(work.modules[1].deployment.as_deref(), Some("12.0"));
+        assert_eq!(
+            work.gaps["Root/Sources/Tool/Omit.swift"],
+            "swift-source-excluded"
+        );
+        assert_eq!(
+            work.gaps["IDE/Sources/Tool.swift"],
+            "swift-xcode-project-unsupported"
+        );
+    }
+
+    #[test]
+    fn swift_workspace_rejects_ambiguous_escaping_and_cyclic_layouts() {
+        for targets in [
+            r#".target(name: "A", path: "Src"), .target(name: "A", path: "Other")"#,
+            r#".target(name: "A", path: "Src"), .target(name: "B", path: "Src")"#,
+            r#".target(name: "A", path: "../outside")"#,
+            r#".target(name: "A", dependencies: ["B"]), .target(name: "B", dependencies: ["A"])"#,
+        ] {
+            let files = [
+                manifest(
+                    "Package.swift",
+                    &format!(r#"Package(name: "P", targets: [{targets}])"#),
+                ),
+                fixture_file("Src/Owned.swift", "swift", "struct Owned {}"),
+            ];
+            assert_eq!(
+                Workspace::build(&files).and_then(|workspace| workspace.order()),
+                Err(UNSUPPORTED),
+                "{targets}"
+            );
+        }
+        assert!(
+            Workspace::build(&[fixture_file("Package@swift-6.swift", "swift-context", "")])
+                .is_err()
+        );
     }
 }

@@ -462,6 +462,18 @@ impl RuntimeCache {
         self.seen.read_locked().swift.clone()
     }
 
+    /// Invalidate the checked witness without overwriting a concurrent discovery result.
+    pub fn invalidate_swift(&self, checked: &swift::Runtime) {
+        let mut cache = self.seen.write_locked();
+        if cache.swift.as_ref() == Some(checked) {
+            cache.swift = None;
+            cache.observations.insert(
+                swift::SDK_RUNTIME.into(),
+                RuntimeObservation::Missing("swift-runtime-changed".into()),
+            );
+        }
+    }
+
     /// How many probe passes have completed.
     pub fn passes(&self) -> u64 {
         self.refreshed_at.load(std::sync::atomic::Ordering::SeqCst)

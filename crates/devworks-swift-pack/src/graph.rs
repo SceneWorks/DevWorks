@@ -1,5 +1,5 @@
 use crate::indexstore::{Occurrence, Symbol};
-use crate::source::Source;
+use crate::source::File;
 use crate::workspace::Module;
 use devworks_core::ports::indexing::{
     EdgeTarget, Enrichment, ExtractedEdge, ExtractedNode, Resolution, Span,
@@ -43,7 +43,8 @@ fn symbol_kind(symbol: &Symbol) -> Option<&'static str> {
         13 => "Variable",
         14 => "Field",
         15 => "EnumCase",
-        16..=18 | 22..=24 => "Method",
+        16..=18 | 23..=24 => "Method",
+        22 => "Constructor",
         19..=21 => "Property",
         25 => "Parameter",
         _ => return None,
@@ -55,6 +56,40 @@ fn owner(item: &Occurrence, flags: u64) -> Option<&Symbol> {
         .iter()
         .find(|(roles, symbol)| roles & flags != 0 && !symbol.usr.is_empty())
         .map(|(_, symbol)| symbol)
+}
+
+fn definition_owner(item: &Occurrence) -> Option<&Symbol> {
+    owner(item, ACCESSOR_OF).or_else(|| owner(item, CHILD_OF))
+}
+
+fn parent_first<'a>(definitions: Vec<&'a Occurrence>) -> Result<Vec<&'a Occurrence>, &'static str> {
+    let locals: BTreeMap<_, _> = definitions
+        .iter()
+        .enumerate()
+        .map(|(index, item)| (item.symbol.usr.as_str(), index))
+        .collect();
+    let mut ordered = Vec::with_capacity(definitions.len());
+    let mut state = vec![0; definitions.len()];
+    let mut pending = Vec::new();
+    for start in 0..definitions.len() {
+        let mut next = Some(start);
+        while let Some(index) = next {
+            match state[index] {
+                1 => return Err(INVALID),
+                2 => break,
+                _ => {}
+            }
+            let item = definitions[index];
+            state[index] = 1;
+            pending.push(index);
+            next = definition_owner(item).and_then(|owner| locals.get(owner.usr.as_str()).copied());
+        }
+        while let Some(index) = pending.pop() {
+            state[index] = 2;
+            ordered.push(definitions[index]);
+        }
+    }
+    Ok(ordered)
 }
 
 fn use_owner(item: &Occurrence) -> Option<&Symbol> {
@@ -219,11 +254,11 @@ impl Graph<'_> {
         } else {
             properties.insert("compiler_bound_unpublished".into(), json!(true));
             let identity = if symbol.usr.is_empty() {
-                &symbol.name
+                format!("swift-unpublished:{}:{}", symbol.kind, symbol.name)
             } else {
-                &symbol.usr
+                symbol.usr.clone()
             };
-            (EdgeTarget::Symbol(identity.clone()), Resolution::Unresolved)
+            (EdgeTarget::Symbol(identity), Resolution::Unresolved)
         };
         ExtractedEdge {
             kind: kind.into(),
@@ -237,12 +272,13 @@ impl Graph<'_> {
 }
 
 pub(crate) fn project(
-    source: &Source,
+    repository: &str,
+    files: &[File],
     groups: &[(Module, BTreeMap<String, Vec<Occurrence>>)],
     gaps: &BTreeMap<String, String>,
 ) -> Result<Vec<Enrichment>, &'static str> {
     let mut graph = Graph {
-        repository: &source.repository_id,
+        repository,
         modules: groups
             .iter()
             .map(|(module, _)| (module.name.as_str(), module))
@@ -250,8 +286,7 @@ pub(crate) fn project(
         units: BTreeMap::new(),
         definitions: BTreeMap::new(),
     };
-    let files: BTreeMap<_, _> = source
-        .files
+    let files: BTreeMap<_, _> = files
         .iter()
         .filter(|file| file.language == "swift")
         .map(|file| (file.unit.as_str(), file))
@@ -313,7 +348,7 @@ pub(crate) fn project(
                 (a.line, a.column, &a.symbol.usr).cmp(&(b.line, b.column, &b.symbol.usr))
             });
             let mut locals = BTreeMap::<&str, usize>::new();
-            for item in definitions {
+            for item in parent_first(definitions)? {
                 let symbol = &item.symbol;
                 let name = symbol.name.split('(').next().unwrap_or(&symbol.name);
                 let name = if name.is_empty() { &symbol.name } else { name };
@@ -323,7 +358,7 @@ pub(crate) fn project(
                     return Err("swift-output-budget");
                 }
                 let index = unit.nodes.len();
-                let parent = owner(item, CHILD_OF | ACCESSOR_OF)
+                let parent = definition_owner(item)
                     .and_then(|parent| locals.get(parent.usr.as_str()))
                     .copied()
                     .unwrap_or(0);
@@ -333,7 +368,7 @@ pub(crate) fn project(
                     properties: metadata(json!({
                         "semanticBasis":"swift-indexstore","usr": symbol.usr,"displayName":symbol.name,
                         "module":module.name,"moduleIdentity":module.id,"sourceDigest":file.sha256,
-                        "roles":item.roles,"properties":symbol.properties,"subkind":symbol.subkind,
+                        "roles":item.roles,"properties":symbol.properties,"symbolKind":symbol.kind,"subkind":symbol.subkind,
                         "compilerTokenSpan":true, "is_test":symbol.properties & (1 << 3) != 0,
                     })),
                 });
@@ -349,7 +384,7 @@ pub(crate) fn project(
                         qualified_name,
                     });
                 unit.edges.push(ExtractedEdge {
-                    kind: if kind == "Method" {
+                    kind: if matches!(kind, "Method" | "Constructor") {
                         "DEFINES_METHOD"
                     } else {
                         "DEFINES"
@@ -459,5 +494,173 @@ mod tests {
         assert_eq!(span.end_column, 12);
         assert!(map.at(50, 1).is_err());
         assert!(map.at(2, 9).is_err()); // middle of the UTF-8 sequence for ï
+    }
+
+    #[test]
+    fn swift_projection_preserves_compiler_ownership_and_foreign_provenance() {
+        use crate::source::fixture_file;
+        use crate::workspace::Workspace;
+
+        let files = [
+            fixture_file(
+                "Package.swift",
+                "swift-context",
+                "// swift-tools-version:6.0\nimport PackageDescription\nlet package = Package(name: \"Fixture\", targets: [.target(name: \"A\"), .target(name: \"B\")])",
+            ),
+            fixture_file(
+                "Sources/A/Owner.swift",
+                "swift",
+                "Outer\nmethod\nproperty\nNested\ninit\nProtocol\nextension\n",
+            ),
+            fixture_file(
+                "Sources/B/Use.swift",
+                "swift",
+                "use\nmethod\nimport struct A.Outer\nNSObject\nprint\n",
+            ),
+        ];
+        let symbol = |kind, usr: &str, name: &str| Symbol {
+            kind,
+            subkind: 0,
+            properties: 0,
+            name: name.into(),
+            usr: usr.into(),
+        };
+        let outer = symbol(6, "s:outer", "Outer");
+        let nested = symbol(6, "s:nested", "Nested");
+        let method = symbol(16, "s:int-method", "method(_:)");
+        let method_overload = symbol(16, "s:string-method", "method(_:)");
+        let property = symbol(19, "s:z_property", "property");
+        let getter = symbol(16, "s:a_getter", "getter:property");
+        let constructor = symbol(22, "s:constructor", "init()");
+        let protocol = symbol(8, "s:protocol", "Protocol");
+        let extension = symbol(9, "s:extension", "extension");
+        let caller = symbol(12, "s:caller", "use()");
+        let occurrence = |symbol: &Symbol, roles, line, column, relations| Occurrence {
+            symbol: symbol.clone(),
+            roles,
+            line,
+            column,
+            relations,
+        };
+        let declaration = |symbol: &Symbol, line, parent: &Symbol| {
+            occurrence(
+                symbol,
+                DEFINITION,
+                line,
+                1,
+                vec![(CHILD_OF, parent.clone())],
+            )
+        };
+        let left = vec![
+            occurrence(&outer, DEFINITION, 1, 1, vec![]),
+            declaration(&method, 2, &outer),
+            declaration(&method_overload, 2, &outer),
+            occurrence(
+                &getter,
+                DEFINITION | IMPLICIT,
+                3,
+                1,
+                vec![(ACCESSOR_OF, property.clone()), (CHILD_OF, outer.clone())],
+            ),
+            declaration(&property, 3, &outer),
+            declaration(&nested, 4, &outer),
+            declaration(&constructor, 5, &nested),
+            occurrence(&protocol, DEFINITION, 6, 1, vec![]),
+            occurrence(&protocol, REFERENCE, 6, 1, vec![(BASE_OF, outer.clone())]),
+            occurrence(&extension, DEFINITION, 7, 1, vec![]),
+            occurrence(
+                &outer,
+                REFERENCE,
+                7,
+                1,
+                vec![(EXTENDED_BY, extension.clone())],
+            ),
+        ];
+        let right = vec![
+            occurrence(&caller, DEFINITION, 1, 1, vec![]),
+            occurrence(
+                &method,
+                REFERENCE | CALL,
+                2,
+                1,
+                vec![(CALLED_BY, caller.clone())],
+            ),
+            occurrence(&symbol(1, "", "A"), REFERENCE, 3, 15, vec![]),
+            occurrence(&outer, REFERENCE, 3, 17, vec![]),
+            occurrence(
+                &symbol(7, "c:objc(cs)NSObject", "NSObject"),
+                REFERENCE,
+                4,
+                1,
+                vec![(CONTAINED_BY, caller.clone())],
+            ),
+            occurrence(
+                &symbol(12, "s:swiftPrint", "print()"),
+                REFERENCE | CALL,
+                5,
+                1,
+                vec![(CALLED_BY, caller.clone())],
+            ),
+        ];
+        let workspace = Workspace::build(&files).unwrap();
+        let mut groups: Vec<_> = workspace
+            .modules
+            .into_iter()
+            .zip([left, right])
+            .map(|(module, items)| {
+                let key = module.files[0].clone();
+                (module, BTreeMap::from([(key, items)]))
+            })
+            .collect();
+        let graph = project("repo", &files, &groups, &BTreeMap::new()).unwrap();
+        let a = &graph[0];
+        let b = &graph[1];
+        let node = |symbol: &Symbol| {
+            a.nodes
+                .iter()
+                .position(|node| {
+                    node.properties.get("usr").and_then(Value::as_str) == Some(&symbol.usr)
+                })
+                .unwrap()
+        };
+        for (child, parent) in [
+            (&getter, &property),
+            (&nested, &outer),
+            (&constructor, &nested),
+            (&method, &outer),
+        ] {
+            assert_eq!(a.nodes[node(child)].parent, Some(node(parent)));
+        }
+        assert_eq!(a.nodes[node(&constructor)].kind, "Constructor");
+        assert!(a.edges.iter().any(|edge| edge.kind == "IMPLEMENTS"));
+        assert!(a.edges.iter().any(|edge| edge.kind == "EXTENDS"));
+        let call = b
+            .edges
+            .iter()
+            .find(|edge| edge.properties.get("usr").and_then(Value::as_str) == Some(&method.usr))
+            .unwrap();
+        assert_eq!(b.nodes[call.source].properties["usr"], caller.usr);
+        assert!(
+            matches!(&call.target, EdgeTarget::Node { qualified_name, .. } if qualified_name.ends_with(&method.usr))
+        );
+        assert!(b.edges.iter().any(|edge| edge.kind == "IMPORTS"
+            && matches!(&edge.target, EdgeTarget::Node { unit, kind, qualified_name } if unit == "Package.swift" && kind == "Module" && qualified_name == "repo:Package.swift#target:A")));
+        for usr in ["c:objc(cs)NSObject", "s:swiftPrint"] {
+            let edge = b
+                .edges
+                .iter()
+                .find(|edge| edge.properties.get("usr").and_then(Value::as_str) == Some(usr))
+                .unwrap();
+            assert_eq!(b.nodes[edge.source].properties["usr"], caller.usr);
+            assert_eq!(edge.properties["compiler_bound_unpublished"], true);
+            assert!(matches!(&edge.target, EdgeTarget::Symbol(symbol) if symbol == usr));
+            assert!(matches!(edge.resolution, Resolution::Unresolved));
+        }
+
+        groups[0].1.get_mut("Sources/A/Owner.swift").unwrap()[0].column = 100;
+        assert_eq!(
+            project("repo", &files, &groups, &BTreeMap::new()).unwrap_err(),
+            INVALID
+        );
     }
 }

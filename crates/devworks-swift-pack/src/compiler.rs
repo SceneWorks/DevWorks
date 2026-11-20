@@ -197,7 +197,10 @@ impl Work<'_> {
             if module.manifest.is_some() {
                 command.args(["-D", "SWIFT_PACKAGE"]);
             }
-            if !module.executable {
+            if let Some(name) = &module.package_name {
+                command.args(["-package-name", name]);
+            }
+            if module.parse_as_library {
                 command.arg("-parse-as-library");
             }
             if testable {
@@ -266,7 +269,7 @@ pub(crate) fn index(
     let deadline = Instant::now() + Duration::from_millis(u64::from(deadline_ms).min(45_000));
     let source = Source::parse(bytes)?;
     runtime_current(&source)?;
-    let mut workspace = Workspace::build(&source)?;
+    let mut workspace = Workspace::build(&source.files)?;
     let order = workspace.order()?;
     if order.is_empty() {
         return Err("swift-project-unsupported".into());
@@ -317,7 +320,9 @@ pub(crate) fn index(
     let mut succeeded = BTreeSet::new();
     for id in order {
         let module = &workspace.modules[id];
-        let gap = if module.missing_dependency
+        let gap = if module.mixed {
+            Some("swift-project-unsupported")
+        } else if module.missing_dependency
             || module.files.is_empty()
             || module
                 .dependencies
@@ -346,8 +351,14 @@ pub(crate) fn index(
     if succeeded.is_empty() {
         return Err(if workspace.gaps.values().any(|gap| gap == WORKER_FAILED) {
             WORKER_FAILED
-        } else {
+        } else if workspace
+            .gaps
+            .values()
+            .any(|gap| gap == "swift-dependency-unavailable")
+        {
             "swift-dependency-unavailable"
+        } else {
+            "swift-project-unsupported"
         }
         .into());
     }
@@ -442,14 +453,18 @@ fn decode_result(root: &Path) -> Result<(), Failure> {
         )?;
         groups.push((module, records));
     }
-    let units = graph::project(&source, &groups, &plan.gaps)?;
+    let units = graph::project(&source.repository_id, &source.files, &groups, &plan.gaps)?;
     let file = std::fs::File::create(root.join("output.json")).map_err(|_| INVALID)?;
     let mut output = Output {
         file,
         remaining: LIMIT,
         exceeded: false,
     };
-    if serde_json::to_writer(&mut output, &serde_json::json!({ "units": units })).is_err() {
+    #[derive(Serialize)]
+    struct ResultGraph {
+        units: Vec<Enrichment>,
+    }
+    if serde_json::to_writer(&mut output, &ResultGraph { units }).is_err() {
         return Err(if output.exceeded {
             "swift-output-budget"
         } else {

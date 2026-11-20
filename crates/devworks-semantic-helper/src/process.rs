@@ -245,4 +245,64 @@ mod tests {
         let cancelled = budget(until, &cancel, || Ok(0)).unwrap_err();
         assert_eq!(cancelled.code, "cancelled");
     }
+
+    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+    #[test]
+    fn swift_checked_process_preserves_exit_and_observes_a_cleaned_child() {
+        use std::os::unix::process::CommandExt;
+
+        const OWNED_TEST: &str = "DEVWORKS_TEST_OWNED_SEMANTIC_PROCESS";
+        if std::env::var_os(OWNED_TEST).is_none() {
+            let output = Command::new(std::env::current_exe().unwrap())
+                .args(["--exact", "process::tests::swift_checked_process_preserves_exit_and_observes_a_cleaned_child"])
+                .env(OWNED_TEST, "1")
+                .process_group(0)
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stdout)
+            );
+            return;
+        }
+        assert!(owned_group());
+        let cancel = AtomicBool::new(false);
+        let deadline = Instant::now() + Duration::from_secs(4);
+        let mut samples = Vec::new();
+        let status = run_checked(
+            Command::new("/usr/bin/false").arg(""),
+            deadline,
+            &cancel,
+            "failed",
+            || {
+                let mut members = [0; 16];
+                samples.push(group_members(&mut members)?);
+                Ok(())
+            },
+        )
+        .unwrap();
+        assert!(!status.success());
+        assert!(samples.len() >= 2);
+        assert_eq!(samples.last().copied(), Some(1));
+
+        let mut checks = 0;
+        let error = run_checked(
+            Command::new("/bin/sleep").arg("3"),
+            deadline,
+            &cancel,
+            "failed",
+            || {
+                checks += 1;
+                if checks > 1 {
+                    Err(Failure::stop("observer-refused"))
+                } else {
+                    Ok(())
+                }
+            },
+        )
+        .unwrap_err();
+        assert_eq!(error.code, "observer-refused");
+        assert_eq!(group_members(&mut [0; 16]).unwrap(), 1);
+    }
 }
