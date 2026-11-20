@@ -163,6 +163,26 @@ fn probed_node(output: &str) -> Option<(String, RuntimeExecutable)> {
     Some((version, executable))
 }
 
+fn swift_xcode_probe_failure(output: &str) -> &'static str {
+    let message = output.to_ascii_lowercase();
+    if message.contains("license")
+        || message.contains("first launch")
+        || message.contains("runfirstlaunch")
+    {
+        "swift-xcode-initialization-required"
+    } else {
+        "swift-xcode-discovery-failed"
+    }
+}
+
+fn swift_xcode_frontend(frontend: &Path) -> bool {
+    frontend.is_absolute()
+        && frontend.ancestors().nth(5).is_some_and(|root| {
+            frontend == root.join("Toolchains/XcodeDefault.xctoolchain/usr/bin/swift-frontend")
+                && root.ends_with("Contents/Developer")
+        })
+}
+
 impl PackageHost {
     /// Every runtime to probe: the known ones and every runtime a recorded version declares.
     fn declared_runtimes(&self) -> BTreeSet<String> {
@@ -355,12 +375,8 @@ impl PackageHost {
         ) {
             return Ok(text);
         }
-        let message = text.to_ascii_lowercase();
-        if runtime == swift::SDK_RUNTIME {
-            if message.contains("license") || message.contains("first launch") {
-                return Err("swift-xcode-initialization-required".into());
-            }
-            return Err("swift-xcode-discovery-failed".into());
+        if runtime == swift::SDK_RUNTIME || runtime == "swift" {
+            return Err(swift_xcode_probe_failure(&text).into());
         }
         Err(format!("`{runtime}` version probe failed"))
     }
@@ -394,17 +410,16 @@ impl PackageHost {
             "swift-frontend",
         ])?;
         let frontend = Path::new(frontend.trim());
-        let developer = frontend.ancestors().nth(5);
-        if !frontend.is_absolute()
-            || !developer.is_some_and(|root| {
-                frontend == root.join("Toolchains/XcodeDefault.xctoolchain/usr/bin/swift-frontend")
-                    && root
-                        .parent()
-                        .is_some_and(|parent| parent.ends_with("Contents"))
-            })
-        {
+        if !swift_xcode_frontend(frontend) {
             return Err("swift-full-xcode-required".into());
         }
+        probe(&["/usr/bin/xcodebuild", "-checkFirstLaunchStatus"]).map_err(|reason| {
+            if reason == "swift-xcode-discovery-failed" {
+                "swift-xcode-initialization-required".into()
+            } else {
+                reason
+            }
+        })?;
         let sdk = probe(&["/usr/bin/xcrun", "--sdk", "macosx", "--show-sdk-path"])?;
         let identity =
             RuntimeExecutable::inspect(frontend).map_err(|_| "swift-xcode-assets-unavailable")?;
@@ -454,16 +469,12 @@ impl PackageHost {
             None => RuntimeObservation::Missing(dotnet::SDK_UNAVAILABLE.into()),
         };
         seen.insert(dotnet::SDK_RUNTIME.into(), sdk);
-        let (sdk, swift) = match executables.contains_key("swift").then(|| self.swift_sdk()) {
-            Some(Ok(runtime)) => (
+        let (sdk, swift) = match self.swift_sdk() {
+            Ok(runtime) => (
                 RuntimeObservation::Found(swift::VERSION.into()),
                 Some(runtime),
             ),
-            Some(Err(reason)) => (RuntimeObservation::Missing(reason), None),
-            None => (
-                RuntimeObservation::Missing("swift-toolchain-unavailable".into()),
-                None,
-            ),
+            Err(reason) => (RuntimeObservation::Missing(reason), None),
         };
         seen.insert(swift::SDK_RUNTIME.into(), sdk);
         if self.is_stopping() {
@@ -550,5 +561,37 @@ impl PackageHost {
         ));
         std::fs::write(&path, &bytes).map_err(|e| e.to_string())?;
         Ok(path)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn swift_discovery_distinguishes_full_xcode_from_command_line_tools() {
+        let developer =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("Fixture.app/Contents/Developer");
+        assert!(swift_xcode_frontend(&developer.join(
+            "Toolchains/XcodeDefault.xctoolchain/usr/bin/swift-frontend"
+        )));
+        assert!(!swift_xcode_frontend(
+            &developer.join("usr/bin/swift-frontend")
+        ));
+        assert!(!swift_xcode_frontend(Path::new("swift-frontend")));
+        for output in [
+            "Agreeing to the Xcode license is required",
+            "First Launch failed",
+            "xcodebuild -runFirstLaunch",
+        ] {
+            assert_eq!(
+                swift_xcode_probe_failure(output),
+                "swift-xcode-initialization-required"
+            );
+        }
+        assert_eq!(
+            swift_xcode_probe_failure("SDK not found"),
+            "swift-xcode-discovery-failed"
+        );
     }
 }
