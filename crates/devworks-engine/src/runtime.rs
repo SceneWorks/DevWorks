@@ -987,6 +987,41 @@ async fn build(composition: Composition, core: CoreServices) -> Result<Engine, B
     } else {
         use_cases
     };
+    let systemone = match (
+        use_cases.inference_router(),
+        use_cases.connection_service(),
+        config.providers.as_ref(),
+    ) {
+        (Some(router), Some(connections), Some(provider)) => {
+            provider.systemone_validator.clone().map(|validator| {
+                Arc::new(crate::providers::systemone::SystemOne {
+                    store: store.clone(),
+                    artifacts: artifacts.clone(),
+                    decisions: Arc::new(
+                        devworks_core::services::router::decisions::DecisionService::new(
+                            router.clone(),
+                        ),
+                    ),
+                    router,
+                    connections,
+                    web: core.web.clone(),
+                    authority: authority.clone(),
+                    http: provider.http.clone(),
+                    validator,
+                    usage: usage.clone(),
+                    schemas: Default::default(),
+                    runtime: tokio::runtime::Handle::current(),
+                })
+            })
+        }
+        _ => None,
+    };
+    let use_cases = if let Some(systemone) = &systemone {
+        consumers.push(systemone.consumer());
+        use_cases.with_systemone(systemone.decisions.clone())
+    } else {
+        use_cases
+    };
     // No entry path bypasses root controls: every consumer's root-scoped work passes the
     // run-control gate (and its own port, if it has one).
     for c in &mut consumers {
@@ -1149,6 +1184,9 @@ async fn build(composition: Composition, core: CoreServices) -> Result<Engine, B
                 package_service.clone(),
                 artifacts.clone(),
             ));
+            if let Some(systemone) = &systemone {
+                let _ = systemone.schemas.set(schemas.clone());
+            }
             Some(crate::providers::driver::NativeProviders::new(
                 store.clone(),
                 artifacts.clone(),
@@ -2783,6 +2821,17 @@ impl Runtime {
 
     pub fn command(&self, ctx: &InvocationContext, operation: &str, raw: &[u8]) -> CommandOutcome {
         self.command_with(ctx, operation, raw, WriteOptions::command())
+    }
+
+    pub fn systemone_completion(
+        &self,
+        context: &InvocationContext,
+        id: &devworks_core::protocol::OperationId,
+    ) -> Result<
+        Option<devworks_core::protocol::results::OperationCompletion>,
+        Box<devworks_core::protocol::DomainFault>,
+    > {
+        crate::providers::systemone::completion(&*self.store, context, id)
     }
 
     /// Dedicated trusted native-human interaction. The ordinary command/tool path cannot

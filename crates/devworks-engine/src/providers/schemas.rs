@@ -546,6 +546,14 @@ impl SchemaDocuments for RegisteredSchemas {
         ctx: &InvocationContext,
         reference: &SchemaRef,
     ) -> Result<Value, ProviderError> {
+        let decision = devworks_core::providers::systemone::result_reference();
+        if reference.schema_id == decision.schema_id {
+            return if equal(reference, &decision) {
+                Ok(devworks_core::providers::systemone::result_document())
+            } else {
+                Err(ProviderError::MaterialUnavailable)
+            };
+        }
         if reference.schema_id.as_str().starts_with("mcp/") {
             return self
                 .selected_mcp_materials(ctx)?

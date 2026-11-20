@@ -2778,6 +2778,9 @@ impl RouterRead for Unmodelled {
     ) -> Result<Vec<StoredDecisionModel>, StorageError> {
         unmodelled()
     }
+    fn decision_pool_cursor(&self) -> Result<Option<Id>, StorageError> {
+        unmodelled()
+    }
     fn route_models(
         &self,
         _: Option<(i64, &str)>,
@@ -2806,6 +2809,9 @@ impl RouterRead for Unmodelled {
     }
 }
 impl RouterRepository for Unmodelled {
+    fn set_decision_pool_cursor(&mut self, _: &Id) -> Result<(), StorageError> {
+        unmodelled()
+    }
     fn put_route_model(
         &mut self,
         _: &StoredRouteModel,

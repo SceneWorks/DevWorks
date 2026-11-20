@@ -36,6 +36,8 @@ use std::sync::{Arc, Mutex};
 #[derive(Clone)]
 pub struct ProviderComposition {
     pub http: Arc<dyn StreamingHttp>,
+    pub(crate) systemone_validator:
+        Option<Arc<dyn devworks_core::ports::packages::SchemaValidator>>,
     /// Advanced controls require exact host-qualified model/profile metadata. Basic tool/image
     /// flags and efforts are intersected with the CURRENT registered catalog model facts.
     pub capabilities: Vec<Capabilities>,
@@ -56,11 +58,19 @@ impl ProviderComposition {
     pub fn new(http: Arc<dyn StreamingHttp>) -> Self {
         Self {
             http,
+            systemone_validator: None,
             capabilities: Vec::new(),
             embedding_spaces: Vec::new(),
             usage_semantics: Default::default(),
             instruction_guard: None,
         }
+    }
+    pub fn with_systemone_validator(
+        mut self,
+        validator: Arc<dyn devworks_core::ports::packages::SchemaValidator>,
+    ) -> Self {
+        self.systemone_validator = Some(validator);
+        self
     }
     /// Host-composed repository source used by direct native provider owners. Boot installs
     /// its registered indexing source automatically.

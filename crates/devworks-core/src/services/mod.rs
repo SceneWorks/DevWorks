@@ -300,6 +300,12 @@ impl UseCases {
         self.inference_router.clone()
     }
 
+    /// Installs decision writes only when the native host installed their owned consumer.
+    pub fn with_systemone(mut self, service: Arc<router::decisions::DecisionService>) -> Self {
+        self.register(router::decisions::OPERATION, None, Some(service));
+        self
+    }
+
     /// Canonical usage reports share the native gateway and its authority fences.
     pub fn with_usage(mut self, service: Arc<usage::UsageService>) -> Self {
         self.register("router.usage", Some(service), None);

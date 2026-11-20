@@ -544,14 +544,19 @@ async fn compose(
             native
         }),
     });
-    runtime_config.providers = Some(match config.providers.clone() {
-        Some(providers) => providers,
-        None => devworks_engine::providers::driver::ProviderComposition::new(Arc::new(
-            devworks_adapters::provider_stream::NativeStreamingHttp::new().map_err(|_| {
-                StartError::Thread("native inference HTTP client could not be initialized".into())
-            })?,
-        )),
-    });
+    runtime_config.providers = Some(
+        (match config.providers.clone() {
+            Some(providers) => providers,
+            None => devworks_engine::providers::driver::ProviderComposition::new(Arc::new(
+                devworks_adapters::provider_stream::NativeStreamingHttp::new().map_err(|_| {
+                    StartError::Thread(
+                        "native inference HTTP client could not be initialized".into(),
+                    )
+                })?,
+            )),
+        })
+        .with_systemone_validator(Arc::new(JsonSchemaValidator)),
+    );
     runtime_config.price_refresh = Some(devworks_engine::prices::PriceComposition::new(Arc::new(
         devworks_adapters::prices::OfficialPriceSource::new(http.clone()),
     )));
@@ -1064,6 +1069,17 @@ impl Backend for DesktopBackend {
             Some(service) => service.completion(&self.host.ctx, operation),
             None => Ok(None),
         }
+    }
+    fn systemone_completion(
+        &self,
+        operation: &devworks_core::protocol::OperationId,
+    ) -> Result<
+        Option<devworks_core::protocol::results::OperationCompletion>,
+        Box<devworks_core::protocol::DomainFault>,
+    > {
+        self.host
+            .runtime
+            .systemone_completion(&self.host.ctx, operation)
     }
     fn control_epoch(&self) -> ControlEpoch {
         self.host.runtime.desktop_control_epoch()

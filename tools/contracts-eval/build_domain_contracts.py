@@ -2,6 +2,7 @@
 from pathlib import Path
 import json,re,subprocess
 from domain_spec import TYPES,OPS,LEGACY_RESULTS,FAMILY_RULES
+from input_alternatives import alternatives
 from versioned_result import generate as gen_versioned
 from variant_revision import containing as variant_types, method as variant_method, calls as variant_calls
 ROOT=Path(__file__).resolve().parents[2]; OUT=ROOT/'tools/contracts-eval/src/domain_generated.rs'
@@ -100,7 +101,9 @@ for mode in ['Query','Command']:
  for n,d in OPS.items():
   if included(d,mode):
    one=d.get('exactlyOne',[]);fs=opfields(d,mode)
-   lines += [*( [f'    #[schemars(extend("x-since" = {d["introducedRevision"]}))]'] if d.get('introducedRevision',1)>1 else []), '    #[serde(rename = "'+n+'")] '+(choice(fs,one,opsince(d,mode),True,d.get('requiredSince')) if one else '')+pascal(n)+' {',enumfields(fs,opsince(d,mode),one,d.get('fieldSchema'),d.get('strictOptional',())),'    },']
+   constraint=choice(fs,one,opsince(d,mode),True,d.get('requiredSince')) if one else ''
+   if d.get('inputAlternatives'):constraint,one=alternatives(fs,d['inputAlternatives'],kind=True)
+   lines += [*( [f'    #[schemars(extend("x-since" = {d["introducedRevision"]}))]'] if d.get('introducedRevision',1)>1 else []), '    #[serde(rename = "'+n+'")] '+constraint+pascal(n)+' {',enumfields(fs,opsince(d,mode),one,d.get('fieldSchema'),d.get('strictOptional',())),'    },']
  lines += ['}',f'impl Domain{mode} {{pub fn operation(&self)->&\'static str {{match self {{']
  for n,d in OPS.items():
   if included(d,mode):lines.append(f' Self::{pascal(n)} {{..}} => "{n}",')

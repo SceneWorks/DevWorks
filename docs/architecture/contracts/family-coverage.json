@@ -10087,7 +10087,7 @@
             },
             {
               "revision": 4,
-              "inputSchema": "domain-request.r3.schema.json",
+              "inputSchema": "domain-request.r4.schema.json",
               "resultSchema": "operation-result.r4.schema.json",
               "queryReplySchema": "domain-query-reply.r4.schema.json",
               "commandReplySchema": null,
@@ -10257,7 +10257,7 @@
             },
             {
               "revision": 4,
-              "inputSchema": "domain-request.r3.schema.json",
+              "inputSchema": "domain-request.r4.schema.json",
               "resultSchema": "operation-result.r4.schema.json",
               "queryReplySchema": "domain-query-reply.r4.schema.json",
               "commandReplySchema": null,
@@ -10643,7 +10643,7 @@
             },
             {
               "revision": 4,
-              "inputSchema": "domain-request.r3.schema.json",
+              "inputSchema": "domain-request.r4.schema.json",
               "resultSchema": "operation-result.r4.schema.json",
               "queryReplySchema": "domain-query-reply.r4.schema.json",
               "commandReplySchema": null,
@@ -10759,7 +10759,7 @@
             },
             {
               "revision": 4,
-              "inputSchema": "domain-request.r3.schema.json",
+              "inputSchema": "domain-request.r4.schema.json",
               "resultSchema": "operation-result.r4.schema.json",
               "queryReplySchema": "domain-query-reply.r4.schema.json",
               "commandReplySchema": null,
@@ -15889,7 +15889,7 @@
             },
             {
               "revision": 4,
-              "inputSchema": "domain-request.r3.schema.json",
+              "inputSchema": "domain-request.r4.schema.json",
               "resultSchema": "operation-result.r4.schema.json",
               "queryReplySchema": "domain-query-reply.r4.schema.json",
               "commandReplySchema": null,
@@ -16442,6 +16442,14 @@
               "queryReplySchema": null,
               "commandReplySchema": "domain-command-reply.r3.schema.json",
               "completionSchema": "operation-completion.r3.schema.json"
+            },
+            {
+              "revision": 4,
+              "inputSchema": "domain-request.r4.schema.json",
+              "resultSchema": "operation-result.r4.schema.json",
+              "queryReplySchema": null,
+              "commandReplySchema": "domain-command-reply.r4.schema.json",
+              "completionSchema": "operation-completion.r4.schema.json"
             }
           ],
           "authority": "HumanConfiguration",
@@ -16476,7 +16484,7 @@
             "pointer": "/kind",
             "equals": "router.decision_models"
           },
-          "resultValueType": "Page<DecisionModel>",
+          "resultValueType": "Page<DecisionCatalogModel>",
           "queryReplySchema": "domain-query-reply.schema.json",
           "commandReplySchema": null,
           "completionSchema": null,
@@ -16488,11 +16496,19 @@
               "queryReplySchema": "domain-query-reply.schema.json",
               "commandReplySchema": null,
               "completionSchema": null
+            },
+            {
+              "revision": 4,
+              "inputSchema": "domain-request.r4.schema.json",
+              "resultSchema": "operation-result.r4.schema.json",
+              "queryReplySchema": "domain-query-reply.r4.schema.json",
+              "commandReplySchema": null,
+              "completionSchema": null
             }
           ],
           "authority": "Scoped",
           "effect": "Local",
-          "semanticRules": "",
+          "semanticRules": "Selectable results require a usable serving connection and enabled model and exclude active cooldowns. Inspection includes retained configured models. Revision 4 exposes current availability, reason and retry time without changing configuration. Authoritative omissions are scoped to the serving connection.",
           "familyRules": "Direct tiers/named/Auto and separate effort; durable pins, trusted capabilities, host attribution/price provenance and explicit unknown tails.",
           "admission": "Validate protocol, strict fields and selected operation/mode first; derive host principal, current scope/role/grants, then apply command receipt and dispatch policy. Payload IDs are references, not authority.",
           "errorSchema": "DomainFault in domain-query-reply or domain-command-reply; shared pre-admission rejections and legacy specialized control replies remain available",
@@ -16534,11 +16550,19 @@
               "queryReplySchema": null,
               "commandReplySchema": "domain-command-reply.schema.json",
               "completionSchema": "operation-completion.schema.json"
+            },
+            {
+              "revision": 4,
+              "inputSchema": "domain-request.r4.schema.json",
+              "resultSchema": "operation-result.r4.schema.json",
+              "queryReplySchema": null,
+              "commandReplySchema": "domain-command-reply.r4.schema.json",
+              "completionSchema": "operation-completion.r4.schema.json"
             }
           ],
           "authority": "Scoped",
           "effect": "Inference",
-          "semanticRules": "Host verifies attribution and model revision, supported question/media incl nested state parts, schema-bound extensions and output. Exact upstream/credential. Unknown request tail is not automatically retried; results/probabilities grant no execution/approval authority.",
+          "semanticRules": "Host verifies attribution and model revision, supported question/media including nested state and instruction parts, schema-bound extensions and output. Exact upstream/credential. Revision 4 selects the independent pool by usePool instead of modelId and expectedModelRevision. One new pool allocation advances rotation; explicit calls, retries and replays do not. Unknown request tail is not automatically retried; results/probabilities grant no execution/approval authority.",
           "familyRules": "Direct tiers/named/Auto and separate effort; durable pins, trusted capabilities, host attribution/price provenance and explicit unknown tails.",
           "admission": "Validate protocol, strict fields and selected operation/mode first; derive host principal, current scope/role/grants, then apply command receipt and dispatch policy. Payload IDs are references, not authority.",
           "errorSchema": "DomainFault in domain-query-reply or domain-command-reply; shared pre-admission rejections and legacy specialized control replies remain available",

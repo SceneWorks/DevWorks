@@ -219,6 +219,8 @@ pub struct StoredDecisionModel {
     pub extension_schemas: String,
     /// Canonical JSON of the result `SchemaRef`.
     pub result_schema: String,
+    /// Canonical JSON of the configured SystemOne limits and pool membership.
+    pub decision_policy: Option<String>,
     pub revision: i64,
     pub updated_at_ms: i64,
 }
@@ -241,6 +243,8 @@ pub trait RouterRead: super::EmbeddingRead {
         after: Option<&str>,
         limit: u16,
     ) -> Result<Vec<StoredDecisionModel>, StorageError>;
+    /// Most recent model allocated to a new logical decision from the independent pool.
+    fn decision_pool_cursor(&self) -> Result<Option<Id>, StorageError>;
     /// Models in display order (`position`, then ID), strictly after `after`, at most `limit`
     /// (1..=500).
     fn route_models(
@@ -263,6 +267,8 @@ pub trait RouterRead: super::EmbeddingRead {
 }
 
 pub trait RouterRepository: RouterRead + super::EmbeddingRepository {
+    /// Records one eligible model selection in the same transaction as the decision intent.
+    fn set_decision_pool_cursor(&mut self, model: &Id) -> Result<(), StorageError>;
     /// Inserts `model` at revision 1 (`expected_revision` `None`; an existing ID is
     /// [`StorageError::Duplicate`]) or replaces it at `expected_revision`, storing
     /// `expected_revision + 1`. A stale revision is [`StorageError::RevisionConflict`].

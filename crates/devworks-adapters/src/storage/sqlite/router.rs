@@ -343,6 +343,14 @@ macro_rules! router_reads {
             ) -> Result<Vec<StoredDecisionModel>, StorageError> {
                 super::connections::decision_models(self.conn, after, limit)
             }
+            fn decision_pool_cursor(&self) -> Result<Option<Id>, StorageError> {
+                let id: Option<String> = db(self.conn.query_row(
+                    "SELECT last_model_id FROM router_decision_pool WHERE singleton=1",
+                    [],
+                    |row| row.get(0),
+                ))?;
+                id.map(id_of).transpose()
+            }
             fn route_models(
                 &self,
                 after: Option<(i64, &str)>,
@@ -386,6 +394,16 @@ router_reads!(Snapshot<'_>);
 router_reads!(Unit<'_>);
 
 impl RouterRepository for Unit<'_> {
+    fn set_decision_pool_cursor(&mut self, model: &Id) -> Result<(), StorageError> {
+        let changed = db(self.conn.execute(
+            "UPDATE router_decision_pool SET last_model_id=?1 WHERE singleton=1",
+            [model.as_str()],
+        ))?;
+        if changed != 1 {
+            return Err(corrupt("decision pool cursor missing"));
+        }
+        Ok(())
+    }
     fn put_route_model(
         &mut self,
         m: &StoredRouteModel,

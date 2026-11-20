@@ -1844,6 +1844,49 @@ pub fn embedding_space_page(
 pub fn router_catalog_all(backend: &dyn Backend, cursor: Option<&str>) -> Vec<u8> {
     frame::with(backend, Negotiate::Latest, || router_catalog_input(cursor))
 }
+pub fn router_decision_models(backend: &dyn Backend, cursor: Option<&str>) -> Vec<u8> {
+    frame::with(backend, Negotiate::Latest, || {
+        Some(In::Router(router::Input::DecisionModels(
+            router::DecisionModelsInput {
+                page: frame::page(100, cursor)?,
+                include_disabled: true,
+            },
+        )))
+    })
+}
+
+pub fn router_decide(backend: &dyn Backend, input: router::DecideInput) -> Vec<u8> {
+    frame::build(
+        backend,
+        Negotiate::Latest,
+        Some(In::Router(router::Input::Decide(input))),
+    )
+}
+
+pub fn accepted_decision(
+    outcome: CommandOutcome,
+) -> Result<devworks_core::protocol::OperationId, Failure> {
+    match outcome.map_err(gateway)? {
+        CommandReply::Recorded { receipt, .. } => match receipt.decision {
+            DomainDecision::Accepted { operation_id } => Ok(operation_id),
+            DomainDecision::Refused { fault } => Err(Failure::Refused(fault)),
+            _ => Err(Failure::Other("Unexpected decision receipt".into())),
+        },
+        _ => Err(Failure::Other("Decision receipt was not confirmed".into())),
+    }
+}
+
+pub fn decision_model_records(
+    outcome: QueryOutcome,
+) -> Result<crate::paged::Page<devworks_core::protocol::records::DecisionCatalogModel>, Failure> {
+    match query_result(outcome)? {
+        (OperationResult::RouterDecisionModels { value }, _) => Ok(crate::paged::Page::new(
+            value.items.0,
+            value.next_cursor.map(|cursor| cursor.0),
+        )),
+        (other, _) => Err(unexpected("router.decision_models", &other)),
+    }
+}
 /// A `router.configure` command at the newest schema revision.
 pub fn router_configure(backend: &dyn Backend, action: RouterConfigAction) -> Vec<u8> {
     frame::build(

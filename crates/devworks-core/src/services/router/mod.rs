@@ -54,6 +54,8 @@
 //! `router.configure` (the provider-connection item) and to the routing settings.
 pub mod accounting;
 pub mod connections;
+mod decision_models;
+pub mod decisions;
 pub mod embedding_spaces;
 pub mod latest;
 pub mod select;
@@ -95,12 +97,13 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 /// The operations [`InferenceRouter`] is registered for.
-pub const OPERATIONS: [&str; 5] = [
+pub const OPERATIONS: [&str; 6] = [
     "router.catalog",
     "router.route",
     "router.pin",
     "router.availability",
     "router.request_status",
+    "router.decision_models",
 ];
 
 /// Tiers in selector order, with their membership setting.
@@ -1499,6 +1502,9 @@ impl QueryHandler for InferenceRouter {
             ops::Input::Catalog(i) => self.catalog(snapshot, ctx, i, query.schema_revision().0),
             ops::Input::Availability(i) => self.availability(snapshot, ctx, i),
             ops::Input::RequestStatus(i) => self.request_status(snapshot, ctx, i),
+            ops::Input::DecisionModels(i) => {
+                self.decision_models(snapshot, ctx, i, query.schema_revision().0)
+            }
             _ => {
                 Err(Refusal::new(DomainErrorCode::UnsupportedCapability, "operation", None).into())
             }

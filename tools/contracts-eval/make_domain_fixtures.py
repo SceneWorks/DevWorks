@@ -52,6 +52,8 @@ def request(name,mode):
  d=OPS[name];fs=d[mode.lower()+'Fields'] if d['mode']=='Hybrid' else d['fields']
  body={'kind':name,**{camel(n):sample(t) for n,t in fs.items() if not t.startswith('?')}}
  if d.get('exactlyOne'):m=d['exactlyOne'][0];body[camel(m)]=sample(fs[m][1:])
+ if d.get('inputAlternatives'):
+  for n in d['inputAlternatives'][0]['members']:body[camel(n)]=sample(fs[n][1:])
  if name=='git.diff':body['paths']=['src/name:part\\literal.rs']
  if name=='tasks.create':body['parentId']='feature-a'
  if name=='tasks.assign':body['clearAssignment']=True
@@ -243,6 +245,16 @@ for kind in ['Choice','Noul','Score','Box','Extension']:
  if kind=='Choice':question['criteria']=[{'name':'yes'},{'name':'no'}]
  if kind=='Score':question['criteria']=['low','high']
  obj['body']['questions']=[{'name':'fixture','question':question}];case('decision-'+kind,'domain-request',obj)
+_decision=copy.deepcopy(POS['decision-Noul']);_decision['schemaRevision']=4
+case('decision-current-exact','domain-request.r4',_decision)
+_decision['body'].pop('modelId');_decision['body'].pop('expectedModelRevision')
+_decision['body']['usePool']=True
+_decision['body']['questions'][0]['question']['instructionParts']=[{'type':'image_url','image_url':{'url':'https://fixture.invalid/photo.png'}}]
+case('decision-current-pool','domain-request.r4',_decision)
+case('decision-pool-reject-false','domain-request.r4',{**_decision,'body':{**_decision['body'],'usePool':False}},False,False)
+case('decision-pool-reject-model','domain-request.r4',{**_decision,'body':{**_decision['body'],'modelId':'jev'}},False,False)
+_decision['schemaRevision']=1
+case('decision-reject-pool-under-legacy-revision','domain-request',_decision,False,False)
 for key,t in [('entities','KnowledgeEntityDraft'),('evidence','SourceEvidence')]:
  obj=copy.deepcopy(POS['input-knowledge.record-Command']);obj['body']['batch']['claims']=[];obj['body']['batch'][key]=[sample(t)];case('knowledge-'+key+'-only','domain-request',obj)
 # Explicit price semantics: reported zero is distinct from local free and untracked.

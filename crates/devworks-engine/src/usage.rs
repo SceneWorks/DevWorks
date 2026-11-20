@@ -242,6 +242,24 @@ impl UsageRuntime {
         })
         .await
     }
+
+    pub(crate) async fn produce_decision(
+        self: &Arc<Self>,
+        production: crate::providers::systemone::DecisionProduction,
+    ) -> Result<DriveOutcome, StorageError> {
+        self.produce_prepared(Production {
+            source_fences: production.source_fences,
+            context: production.context,
+            logical: production.logical,
+            category: production.category,
+            request: production.request,
+            source: production.source,
+            sink: None,
+            preparation: None,
+            cancellation: Some(production.cancellation),
+        })
+        .await
+    }
     async fn produce_prepared(
         self: &Arc<Self>,
         production: Production,

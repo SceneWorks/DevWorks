@@ -722,6 +722,14 @@ pub const MIGRATIONS: &[Migration] = &[
         expected_sha256: "231e7cc738901c470870a1bf210371febea4ea30d836e73b3d2cf85c02cea09d",
         rebuilds_tables: false,
     },
+    Migration {
+        version: 64,
+        minimum_reader: 57,
+        minimum_writer: 64,
+        sql: include_str!("migrations/0064_systemone_pool.sql"),
+        expected_sha256: "1862c1bf4f8a16e13eb6c34c73515c8ad144fffebe64f7f6742adec95fec592a",
+        rebuilds_tables: false,
+    },
 ];
 /// Recorded checksum of migration 17; a test fails if the shipped text changes.
 pub const MIGRATION_0017_SHA256: &str =

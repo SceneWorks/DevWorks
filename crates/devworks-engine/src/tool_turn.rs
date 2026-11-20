@@ -2315,7 +2315,9 @@ fn record_observed_operation_update(
             .ok_or(StorageError::ScopeDenied)?;
         let remote_content = (matches!(
             operation.capability.as_str(),
-            "mcp.tool" | crate::package_tools::CAPABILITY
+            "mcp.tool"
+                | crate::package_tools::CAPABILITY
+                | devworks_core::services::router::decisions::OPERATION
         ) && operation.state == OperationState::ObservedComplete)
             .then(|| {
                 operation

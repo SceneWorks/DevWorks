@@ -69,9 +69,13 @@ pub enum AttemptSelection {
         registration_digest: String,
     },
     Decision {
-        question_type: String,
-        images: bool,
-        videos: bool,
+        model_revision: i64,
+        connection_revision: i64,
+        account_revision: i64,
+        credential_revision: i64,
+        endpoint_digest: String,
+        requirements: crate::providers::systemone::Requirements,
+        pooled: bool,
     },
 }
 
@@ -243,38 +247,33 @@ impl InferenceRouter {
                 }
             }
             AttemptSelection::Decision {
-                question_type,
-                images,
-                videos,
+                model_revision,
+                connection_revision,
+                account_revision,
+                credential_revision,
+                endpoint_digest,
+                requirements,
+                pooled,
             } => {
                 let Some(model) = tx.router().decision_model(&query.catalog_model_id)? else {
                     return Ok(Some("decision model is unavailable".into()));
                 };
-                let connection = connections
-                    .iter()
-                    .find(|connection| connection.id == model.connection_id);
                 let now = tx.now_ms();
-                let cooling = tx
-                    .router()
-                    .cooldowns()?
-                    .iter()
-                    .any(|cooldown| cooldown.model_id == model.id && cooldown.until_ms > now);
-                let eligible = !cooling
-                    && model.enabled
-                    && model.connection_id == query.connection_id
-                    && query.endpoint_profile == "SystemOne"
+                let cooldowns = select::active_cooldowns(&tx.router().cooldowns()?, now);
+                let connection = tx.router().connection(&model.connection_id)?;
+                let eligible = model.connection_id == query.connection_id
+                    && query.endpoint_profile == decision_models::PROFILE
                     && query.provider_model_id.as_ref() == Some(&model.upstream_model_id)
-                    && model.question_types.contains(question_type)
-                    && (!images || model.accepts_images)
-                    && (!videos || model.accepts_videos)
+                    && model.revision == *model_revision
                     && connection.is_some_and(|connection| {
-                        connection.profile == "SystemOne"
-                            && connection.state == crate::ports::router::ConnectionState::Connected
-                            && connection.permits(&model.upstream_model_id)
-                            && connection.discovered.as_ref().is_none_or(|ids| {
-                                select::lists(&connection.profile, ids, &model.upstream_model_id)
-                            })
-                    });
+                        connection.revision == *connection_revision
+                            && connection.account_revision == *account_revision
+                            && connection.credential_revision == *credential_revision
+                            && crate::fingerprint::sha256_hex(connection.endpoint.as_bytes())
+                                == *endpoint_digest
+                    })
+                    && decisions::supports(&model, requirements, *pooled)?
+                    && decision_models::availability(&model, &connections, &cooldowns).is_ok();
                 if !eligible {
                     return Ok(Some("decision model does not meet the current question, media or connection constraints".into()));
                 }
@@ -316,6 +315,13 @@ impl InferenceRouter {
         {
             return Ok(Admission::SourceChanged(
                 "embedding requires its qualified native route".into(),
+            ));
+        }
+        if (route.purpose == "Decision")
+            != matches!(request.selection.route(), AttemptSelection::Decision { .. })
+        {
+            return Ok(Admission::SourceChanged(
+                "decision inference requires its current native decision route".into(),
             ));
         }
         if route.purpose == "TierClassification"

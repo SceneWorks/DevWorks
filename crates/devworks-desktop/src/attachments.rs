@@ -390,6 +390,7 @@ mod tests {
             | TaskOutput::Convention(_)
             | TaskOutput::Instruction(_)
             | TaskOutput::McpContent(_)
+            | TaskOutput::SystemOneCompletion(_)
             | TaskOutput::RepositoryDeletionPreview(_)
             | TaskOutput::RepositoryDeleted(_) => {
                 panic!("expected a preview")

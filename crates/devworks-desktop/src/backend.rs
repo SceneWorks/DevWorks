@@ -87,6 +87,15 @@ pub trait Backend: Send + Sync {
     fn control_epoch(&self) -> ControlEpoch {
         ControlEpoch::UNKNOWN
     }
+    fn systemone_completion(
+        &self,
+        _operation: &devworks_core::protocol::OperationId,
+    ) -> Result<
+        Option<devworks_core::protocol::results::OperationCompletion>,
+        Box<devworks_core::protocol::DomainFault>,
+    > {
+        Ok(None)
+    }
     /// Trusted native user interaction only. Generic commands never select this ingress.
     /// `received` is the control state when the UI received the click.
     fn human_decision(&self, _frame: &[u8], _received: ControlEpoch) -> CommandOutcome {
@@ -374,7 +383,9 @@ pub enum TaskOutput {
         value: serde_json::Value,
     },
     /// A prepared command frame (attachment, provider or package), not admitted yet.
-    Prepared { frame: Vec<u8> },
+    Prepared {
+        frame: Vec<u8>,
+    },
     /// A downloaded bundle stays owned until its artifact-save command is confirmed.
     PackagePrepared {
         frame: Vec<u8>,
@@ -387,7 +398,10 @@ pub enum TaskOutput {
         frame: Vec<u8>,
     },
     /// A decoded preview image (RGBA, unmultiplied).
-    Preview { size: [usize; 2], rgba: Vec<u8> },
+    Preview {
+        size: [usize; 2],
+        rgba: Vec<u8>,
+    },
     /// An authorized, volatile provider response snapshot.
     TextPreview(Option<devworks_engine::providers::live::LiveTurn>),
     /// A bounded convention editor or transfer task.
@@ -398,6 +412,7 @@ pub enum TaskOutput {
     Refreshed,
     /// The text of an MCP resource or prompt a person opened in Settings.
     McpContent(String),
+    SystemOneCompletion(Box<Option<devworks_core::protocol::results::OperationCompletion>>),
     /// What deleting a repository's folder would remove, for the person to review.
     RepositoryDeletionPreview(Box<devworks_core::authority::deletion::DeletionPreview>),
     /// The outcome of a confirmed repository folder deletion.

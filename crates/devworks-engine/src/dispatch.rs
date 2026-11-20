@@ -61,8 +61,8 @@ use devworks_core::locks::LockExt;
 use devworks_core::ports::Clock;
 use devworks_core::ports::storage::WriteOptions;
 use devworks_core::ports::storage::{
-    ApplicationStore, AttemptBinding, DeliveryFilter, DeliveryKey, EventRecord, OperationRecord,
-    QueueEntry, QueueFence, QueueState, RecoveryOutcome, Settlement, StorageError,
+    ApplicationStore, AttemptBinding, Cancellation, DeliveryFilter, DeliveryKey, EventRecord,
+    OperationRecord, QueueEntry, QueueFence, QueueState, RecoveryOutcome, Settlement, StorageError,
     WriteTransaction, cancellation_applies, possibly_dispatched,
 };
 use devworks_core::protocol::{Id, OperationId, OperationState};
@@ -165,6 +165,17 @@ pub type ReadyFuture = Pin<Box<dyn Future<Output = ()> + Send>>;
 pub trait EffectExecutor: Send + Sync {
     /// Performs the effect of a `Dispatching` operation once.
     fn execute(&self, operation: OperationRecord) -> EffectFuture;
+    fn observes_delivery_cancellation(&self) -> bool {
+        false
+    }
+    /// Effects that own cancellable I/O can act on the delivery's durable cancellation.
+    fn execute_cancellable(
+        &self,
+        operation: OperationRecord,
+        _cancel: Cancellation,
+    ) -> EffectFuture {
+        self.execute(operation)
+    }
     /// Observes the target for an operation whose outcome is unknown using its saved identity;
     /// it must not perform the effect.
     fn observe(&self, operation: OperationRecord) -> EffectFuture;
@@ -1333,24 +1344,37 @@ impl Dispatcher {
         };
 
         // The effect runs outside any transaction; the lease is renewed while it runs.
-        let mut effect = executor.execute(operation.clone());
+        let cancellation = Cancellation::new();
+        let mut effect = executor.execute_cancellable(operation.clone(), cancellation.clone());
         let lease = self.inner.cfg.lease_ms;
         let every = Duration::from_millis(u64::try_from((lease / 3).max(1)).unwrap_or(1));
         let fence = claimed
             .fence()
             .ok_or_else(|| invalid("claimed entry without fence"))?;
         let result = loop {
-            match tokio::time::timeout(every, &mut effect).await {
-                Ok(r) => break r,
-                Err(_) => {
+            let check = async {
+                if executor.observes_delivery_cancellation() {
+                    let _ = first(self.inner.changed.notified(), tokio::time::sleep(every)).await;
+                } else {
+                    tokio::time::sleep(every).await;
+                }
+            };
+            match first(&mut effect, check).await {
+                Either::Left(result) => break result,
+                Either::Right(_) => {
                     let (id, f) = (claimed.id.clone(), fence.clone());
                     // A lost lease does not stop recording the outcome: the attempt fence still
                     // binds the operation, and the delivery is then reconciled, not replayed.
-                    let _ =
+                    let epoch = claimed.cancellation_epoch;
+                    let cancelled =
                         store::write(&self.inner.store, WriteOptions::settlement(), move |tx| {
-                            tx.queue().renew(&id, &f, lease)
+                            let entry = tx.queue().renew(&id, &f, lease)?;
+                            Ok(entry.cancel_requested || entry.cancellation_epoch != epoch)
                         })
                         .await;
+                    if matches!(cancelled, Ok(true)) || self.inner.stopping.load(Ordering::SeqCst) {
+                        cancellation.cancel();
+                    }
                 }
             }
         };

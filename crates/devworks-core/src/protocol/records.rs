@@ -6114,6 +6114,28 @@ impl Check for PriceRecord {
 
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DecisionPolicy {
+    pub pool_member: bool,
+    pub max_input_bytes: PositiveCounter,
+    pub max_question_count: PositiveCounter,
+    pub max_batch_bytes: PositiveCounter,
+}
+impl Check for DecisionPolicy {
+    fn check(&self) -> Result<(), String> {
+        self.pool_member.check()?;
+        self.max_input_bytes.check()?;
+        self.max_question_count.check()?;
+        self.max_batch_bytes.check()?;
+        crate::protocol::rules::record(
+            "DecisionPolicy",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct DecisionModel {
     pub id: Id,
     pub revision: Revision,
@@ -6126,6 +6148,13 @@ pub struct DecisionModel {
     pub enabled: bool,
     pub extension_question_schemas: Items<SchemaRef>,
     pub result_schema: SchemaRef,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "DecisionPolicy", extend("x-since" = 4))]
+    pub decision_policy: Option<DecisionPolicy>,
 }
 impl Check for DecisionModel {
     fn check(&self) -> Result<(), String> {
@@ -6140,11 +6169,106 @@ impl Check for DecisionModel {
         self.enabled.check()?;
         self.extension_question_schemas.check()?;
         self.result_schema.check()?;
+        self.decision_policy.check()?;
         crate::protocol::rules::record(
             "DecisionModel",
             &serde_json::to_value(self).map_err(|e| e.to_string())?,
         )?;
         Ok(())
+    }
+}
+
+impl Revisioned for DecisionModel {
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 4 {
+            self.decision_policy = None;
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[schemars(extend("x-earlier" = {"name": "DecisionModel", "before": 4}))]
+pub struct DecisionCatalogModel {
+    pub id: Id,
+    pub revision: Revision,
+    pub display_name: Label,
+    pub connection_id: Id,
+    pub upstream_model_id: Text,
+    pub question_types: Items<DecisionQuestionType>,
+    pub accepts_images: bool,
+    pub accepts_videos: bool,
+    pub enabled: bool,
+    pub extension_question_schemas: Items<SchemaRef>,
+    pub result_schema: SchemaRef,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "DecisionPolicy", extend("x-since" = 4))]
+    pub decision_policy: Option<DecisionPolicy>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "bool", extend("x-since" = 4))]
+    pub available: Option<bool>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Label", extend("x-since" = 4))]
+    pub availability_reason: Option<Label>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Counter", extend("x-since" = 4))]
+    pub retry_at_ms: Option<Counter>,
+}
+impl Check for DecisionCatalogModel {
+    fn check(&self) -> Result<(), String> {
+        self.id.check()?;
+        self.revision.check()?;
+        self.display_name.check()?;
+        self.connection_id.check()?;
+        self.upstream_model_id.check()?;
+        self.question_types.check()?;
+        self.accepts_images.check()?;
+        self.accepts_videos.check()?;
+        self.enabled.check()?;
+        self.extension_question_schemas.check()?;
+        self.result_schema.check()?;
+        self.decision_policy.check()?;
+        self.available.check()?;
+        self.availability_reason.check()?;
+        self.retry_at_ms.check()?;
+        crate::protocol::rules::record(
+            "DecisionCatalogModel",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+impl Revisioned for DecisionCatalogModel {
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 4 {
+            self.decision_policy = None;
+        }
+        if revision < 4 {
+            self.available = None;
+        }
+        if revision < 4 {
+            self.availability_reason = None;
+        }
+        if revision < 4 {
+            self.retry_at_ms = None;
+        }
     }
 }
 
@@ -6173,16 +6297,44 @@ pub enum DecisionQuestion {
     Choice {
         instructions: Content,
         criteria: NonEmpty<DecisionCriterion>,
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "gated_member"
+        )]
+        #[schemars(with = "DynamicJson", extend("x-since" = 4))]
+        instruction_parts: Option<DynamicJson>,
     },
     Noul {
         instructions: Content,
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "gated_member"
+        )]
+        #[schemars(with = "DynamicJson", extend("x-since" = 4))]
+        instruction_parts: Option<DynamicJson>,
     },
     Score {
         instructions: Content,
         criteria: NonEmpty<Label>,
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "gated_member"
+        )]
+        #[schemars(with = "DynamicJson", extend("x-since" = 4))]
+        instruction_parts: Option<DynamicJson>,
     },
     Box {
         instructions: Content,
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "gated_member"
+        )]
+        #[schemars(with = "DynamicJson", extend("x-since" = 4))]
+        instruction_parts: Option<DynamicJson>,
     },
     Extension {
         schema: SchemaRef,
@@ -6195,22 +6347,34 @@ impl Check for DecisionQuestion {
             Self::Choice {
                 instructions,
                 criteria,
+                instruction_parts,
             } => {
                 instructions.check()?;
                 criteria.check()?;
+                instruction_parts.check()?;
             }
-            Self::Noul { instructions } => {
+            Self::Noul {
+                instructions,
+                instruction_parts,
+            } => {
                 instructions.check()?;
+                instruction_parts.check()?;
             }
             Self::Score {
                 instructions,
                 criteria,
+                instruction_parts,
             } => {
                 instructions.check()?;
                 criteria.check()?;
+                instruction_parts.check()?;
             }
-            Self::Box { instructions } => {
+            Self::Box {
+                instructions,
+                instruction_parts,
+            } => {
                 instructions.check()?;
+                instruction_parts.check()?;
             }
             Self::Extension { schema, payload } => {
                 schema.check()?;
@@ -6218,6 +6382,34 @@ impl Check for DecisionQuestion {
             }
         }
         Ok(())
+    }
+}
+
+impl Revisioned for DecisionQuestion {
+    fn retain_revision(&mut self, revision: u32) {
+        match self {
+            Self::Choice {
+                instruction_parts, ..
+            } if revision < 4 => {
+                *instruction_parts = None;
+            }
+            Self::Noul {
+                instruction_parts, ..
+            } if revision < 4 => {
+                *instruction_parts = None;
+            }
+            Self::Score {
+                instruction_parts, ..
+            } if revision < 4 => {
+                *instruction_parts = None;
+            }
+            Self::Box {
+                instruction_parts, ..
+            } if revision < 4 => {
+                *instruction_parts = None;
+            }
+            _ => {}
+        }
     }
 }
 
@@ -6236,6 +6428,12 @@ impl Check for NamedQuestion {
             &serde_json::to_value(self).map_err(|e| e.to_string())?,
         )?;
         Ok(())
+    }
+}
+
+impl Revisioned for NamedQuestion {
+    fn retain_revision(&mut self, revision: u32) {
+        self.question.retain_revision(revision);
     }
 }
 
@@ -7778,6 +7976,9 @@ impl Revisioned for RouterConfigAction {
             Self::Model { model, .. } => {
                 model.retain_revision(revision);
             }
+            Self::DecisionModel { model, .. } => {
+                model.retain_revision(revision);
+            }
             _ => {}
         }
     }
@@ -8856,18 +9057,15 @@ impl Revisioned for ArtifactReadContent {
         match self {
             Self::Text {
                 tested_repository, ..
-            } => {
-                if revision < 4 {
-                    *tested_repository = None;
-                }
+            } if revision < 4 => {
+                *tested_repository = None;
             }
             Self::Binary {
                 tested_repository, ..
-            } => {
-                if revision < 4 {
-                    *tested_repository = None;
-                }
+            } if revision < 4 => {
+                *tested_repository = None;
             }
+            _ => {}
         }
     }
 }

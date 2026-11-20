@@ -654,7 +654,7 @@ pub enum OperationResult {
     #[serde(rename = "router.configure")]
     RouterConfigure { value: MutationSummary },
     #[serde(rename = "router.decision_models")]
-    RouterDecisionModels { value: Page<DecisionModel> },
+    RouterDecisionModels { value: Page<DecisionCatalogModel> },
     #[serde(rename = "router.decide")]
     RouterDecide { value: DecisionResult },
     #[schemars(extend("x-since" = 3))]
@@ -1749,6 +1749,7 @@ impl Revisioned for OperationResult {
             Self::RouterUsage { value } => value.retain_revision(revision),
             Self::RouterPriceStatus { value } => value.retain_revision(revision),
             Self::RouterPriceOverride { value } => value.retain_revision(revision),
+            Self::RouterDecisionModels { value } => value.retain_revision(revision),
             Self::RouterEmbeddingSpaces { value } => value.retain_revision(revision),
             Self::McpServers { value } => value.retain_revision(revision),
             Self::McpConfigure { value } => value.retain_revision(revision),

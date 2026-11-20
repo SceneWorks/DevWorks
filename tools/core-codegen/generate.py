@@ -27,6 +27,7 @@ REGISTER = json.loads((ROOT / 'docs/architecture/contracts/family-coverage.json'
 sys.path.insert(0, str(ROOT / 'tools/contracts-eval'))
 sys.path.insert(0, str(ROOT / 'tools/core-codegen'))
 import stubs
+from input_alternatives import alternatives
 from versioned_result import generate as gen_versioned
 from variant_revision import containing as variant_types, extend as variant_extend
 CORE = ROOT / 'crates/devworks-core/src'
@@ -245,9 +246,18 @@ def _revisioned(name, fs, since, rc, union_variants=None, variant_since=None):
                 revision, clear = single_gate.groups()
                 return '\n'.join([head, f'        if let {pattern} = self && revision < {revision} {{ {clear} }}', '    }', '}'])
             return '\n'.join([head, f'        if let {pattern} = self {calls}', '    }', '}'])
-        if len(arms) < len(union_variants):
-            arms.append('            _ => {}')
-        return '\n'.join([head, '        match self {', *arms, '        }', '    }', '}'])
+        guarded = []
+        for arm in arms:
+            pattern, calls = arm.split(' => ', 1)
+            single_gate = re.fullmatch(r'\{ if revision < (\d+) \{ (\*\w+ = None;) \} \}', calls)
+            if single_gate:
+                revision, clear = single_gate.groups()
+                guarded.append(f'{pattern} if revision < {revision} => {{ {clear} }}')
+            else:
+                guarded.append(arm)
+        if guarded != arms or len(arms) < len(union_variants):
+            guarded.append('            _ => {}')
+        return '\n'.join([head, '        match self {', *guarded, '        }', '    }', '}'])
     body = [f'        if revision < {since[n]} {{\n            self.{n} = None;\n        }}'
             + (f' else {{\n            self.{n}.retain_revision(revision);\n        }}' if tokens(fs[n]) & rc else '')
             for n in fs if n in since]
@@ -586,8 +596,12 @@ def gen_family(fam, ops):
             d = DOMAIN_OPS[o['operation']]
             since = {k: r for k, r in d.get('since', {}).items() if k in fs}
             one = d.get('exactlyOne', [])
+            constraint = choice(fs, one, since, d.get('requiredSince')) if one else ''
+            if d.get('inputAlternatives'):
+                constraint, one = alternatives(fs, d['inputAlternatives'])
+                constraint += '\n'
             out += [f'/// `{o["operation"]}` {mode} input.',
-                    RECORD + (choice(fs, one, since, d.get('requiredSince')) if one else '') + f'pub struct {ty} {{',
+                    RECORD + constraint + f'pub struct {ty} {{',
                     fields(fs, since=since, one=one, schema=d.get('fieldSchema'), strict=d.get('strictOptional',())), '}',
                     f'impl Check for {ty} {{', '    fn check(&self) -> Result<(), String> {', checks(fs),
                     '        Ok(())', '    }', '}', required_input_revision(revisioned(ty, fs, since, RC), d.get('requiredSince',{})), '']

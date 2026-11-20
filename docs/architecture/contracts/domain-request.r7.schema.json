@@ -1269,6 +1269,10 @@
         "connectionId": {
           "$ref": "#/$defs/Id"
         },
+        "decisionPolicy": {
+          "$ref": "#/$defs/DecisionPolicy",
+          "x-since": 4
+        },
         "displayName": {
           "$ref": "#/$defs/Text1To256"
         },
@@ -1309,6 +1313,30 @@
       ],
       "type": "object"
     },
+    "DecisionPolicy": {
+      "additionalProperties": false,
+      "properties": {
+        "maxBatchBytes": {
+          "$ref": "#/$defs/PositiveCounter"
+        },
+        "maxInputBytes": {
+          "$ref": "#/$defs/PositiveCounter"
+        },
+        "maxQuestionCount": {
+          "$ref": "#/$defs/PositiveCounter"
+        },
+        "poolMember": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "poolMember",
+        "maxInputBytes",
+        "maxQuestionCount",
+        "maxBatchBytes"
+      ],
+      "type": "object"
+    },
     "DecisionQuestion": {
       "oneOf": [
         {
@@ -1316,6 +1344,10 @@
           "properties": {
             "criteria": {
               "$ref": "#/$defs/List_DecisionCriterion_1_128"
+            },
+            "instructionParts": {
+              "$ref": "#/$defs/BoundedUntrustedJson",
+              "x-since": 4
             },
             "instructions": {
               "$ref": "#/$defs/Text0To65536"
@@ -1335,6 +1367,10 @@
         {
           "additionalProperties": false,
           "properties": {
+            "instructionParts": {
+              "$ref": "#/$defs/BoundedUntrustedJson",
+              "x-since": 4
+            },
             "instructions": {
               "$ref": "#/$defs/Text0To65536"
             },
@@ -1355,6 +1391,10 @@
             "criteria": {
               "$ref": "#/$defs/List_Text1To256_1_128"
             },
+            "instructionParts": {
+              "$ref": "#/$defs/BoundedUntrustedJson",
+              "x-since": 4
+            },
             "instructions": {
               "$ref": "#/$defs/Text0To65536"
             },
@@ -1373,6 +1413,10 @@
         {
           "additionalProperties": false,
           "properties": {
+            "instructionParts": {
+              "$ref": "#/$defs/BoundedUntrustedJson",
+              "x-since": 4
+            },
             "instructions": {
               "$ref": "#/$defs/Text0To65536"
             },
@@ -6270,6 +6314,56 @@
         },
         {
           "additionalProperties": false,
+          "oneOf": [
+            {
+              "not": {
+                "anyOf": [
+                  {
+                    "required": [
+                      "usePool"
+                    ]
+                  }
+                ]
+              },
+              "required": [
+                "kind",
+                "modelId",
+                "expectedModelRevision",
+                "state",
+                "questions",
+                "images",
+                "videos",
+                "timeoutMs"
+              ],
+              "x-since": 4
+            },
+            {
+              "not": {
+                "anyOf": [
+                  {
+                    "required": [
+                      "modelId"
+                    ]
+                  },
+                  {
+                    "required": [
+                      "expectedModelRevision"
+                    ]
+                  }
+                ]
+              },
+              "required": [
+                "kind",
+                "state",
+                "questions",
+                "images",
+                "videos",
+                "timeoutMs",
+                "usePool"
+              ],
+              "x-since": 4
+            }
+          ],
           "properties": {
             "expectedModelRevision": {
               "$ref": "#/$defs/Revision"
@@ -6293,14 +6387,17 @@
             "timeoutMs": {
               "$ref": "#/$defs/PositiveCounter"
             },
+            "usePool": {
+              "const": true,
+              "type": "boolean",
+              "x-since": 4
+            },
             "videos": {
               "$ref": "#/$defs/List_MediaRef_0_128"
             }
           },
           "required": [
             "kind",
-            "modelId",
-            "expectedModelRevision",
             "state",
             "questions",
             "images",
