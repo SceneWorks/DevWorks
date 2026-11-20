@@ -30,8 +30,9 @@ use crate::services::kernel::{Failure, counter};
 use jiff::{Timestamp, ToSpan, tz::TimeZone};
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     path::Path,
+    sync::Mutex,
     time::{Duration, Instant},
 };
 
@@ -165,7 +166,11 @@ impl RepositoryVitals {
     ) -> Result<AnalysisHealthSummary, Failure> {
         let health = project.map_or(&self.health, |(_, health)| health);
         let adjusted = security
-            .filter(|_| self.gaps.is_empty() && project.is_none())
+            .filter(|_| {
+                self.gaps
+                    .iter()
+                    .all(|gap| gap == "LintMeasurementsUnavailable")
+            })
             .map(|security| scores::round(health.base * 0.8 + security * 0.2, 10.0));
         Ok(AnalysisHealthSummary {
             repository_id: self.repository.clone(),
@@ -220,10 +225,53 @@ pub(in crate::services::graph::repository_analysis) fn history_inputs(
     Ok(inputs)
 }
 
+#[derive(Default)]
+pub(in crate::services::graph::repository_analysis) struct HistoryGate(Mutex<BTreeSet<String>>);
+
+struct HistoryLease<'a> {
+    gate: &'a HistoryGate,
+    repository: &'a str,
+}
+
+impl Drop for HistoryLease<'_> {
+    fn drop(&mut self) {
+        self.gate
+            .0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .remove(self.repository);
+    }
+}
+
+impl HistoryGate {
+    fn wait<'a>(
+        &'a self,
+        repository: &'a str,
+        stopped: &dyn Fn() -> bool,
+    ) -> Option<HistoryLease<'a>> {
+        while !stopped() {
+            if self
+                .0
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .insert(repository.to_owned())
+            {
+                return Some(HistoryLease {
+                    gate: self,
+                    repository,
+                });
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        None
+    }
+}
+
 pub(in crate::services::graph::repository_analysis) fn history_reads(
     claim: &Claim,
     index: &IndexEnv,
     inputs: BTreeMap<String, HistoryInput>,
+    gate: &HistoryGate,
     now_ms: i64,
     stopped: &(dyn Fn() -> bool + Sync),
 ) -> Result<BTreeMap<String, Result<GitHistory, &'static str>>, Failure> {
@@ -240,12 +288,16 @@ pub(in crate::services::graph::repository_analysis) fn history_reads(
     git.deadline = git.deadline.min(Duration::from_secs(30));
     let mut observed = BTreeMap::new();
     for (repository, input) in inputs {
-        let history = git.history(
-            Path::new(&input.location),
-            &input.oid,
-            since,
-            MAX_GIT_COMMITS,
-        );
+        let history = if let Some(_lease) = gate.wait(&repository, &stop) {
+            git.history(
+                Path::new(&input.location),
+                &input.oid,
+                since,
+                MAX_GIT_COMMITS,
+            )
+        } else {
+            Err(GitFault::Helper(HelperFault::Cancelled))
+        };
         let result = match history {
             Ok(history) => Ok(history),
             Err(GitFault::Helper(HelperFault::Cancelled)) if stopped() => {
@@ -322,6 +374,12 @@ pub(in crate::services::graph::repository_analysis) fn build(
             .into_iter()
             .map(|(project, scores)| (project, scores::aggregate(scores)))
             .collect();
+        if files
+            .iter()
+            .any(|file| file.lint_errors.is_none() && file.lint_warnings.is_none())
+        {
+            known.gaps.push("LintMeasurementsUnavailable".into());
+        }
         for generation in &layers.layers {
             let stored = read
                 .indexing()

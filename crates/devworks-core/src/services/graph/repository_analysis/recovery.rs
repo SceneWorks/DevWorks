@@ -54,7 +54,7 @@ fn recover(
                 .analysis_run(&work.run_id)?
                 .filter(|run| run.active_operation == operation.id)
                 .ok_or_else(selection::unavailable)?;
-            Selection::check_saved(read, &ctx, &run.intent.scope, &run, read.stamp().now_ms)?;
+            Selection::check_saved_authority(read, &ctx, &run.intent.scope, &run)?;
             Ok(run)
         })())
     })??;
@@ -103,23 +103,31 @@ fn recover(
     if remaining && resolved.is_empty() {
         return Ok(Execution::Unknown("provider outcome is still unknown"));
     }
-    let selected = read_snapshot(store.store.as_ref(), &ReadOptions::default(), |read| {
-        Ok(Selection::resolve(
-            read,
-            &ctx,
-            &run.intent.scope,
-            &crate::protocol::data::ViewSelection::Pinned {
-                pin_id: run.pin_id.clone(),
+    // Observing a prior provider request uses its original durable identity. The
+    // computation lease only authorizes restarting analysis against the live exact source.
+    let selected =
+        read_snapshot(
+            store.store.as_ref(),
+            &ReadOptions::default(),
+            |read| match Selection::resolve(
+                read,
+                &ctx,
+                &run.intent.scope,
+                &crate::protocol::data::ViewSelection::Pinned {
+                    pin_id: run.pin_id.clone(),
+                },
+                read.stamp().now_ms,
+            ) {
+                Ok(selected) => Ok((selected.binding_key == run.binding_key).then_some(selected)),
+                Err(Failure::Refused(_)) | Err(Failure::Storage(StorageError::ViewUnavailable)) => {
+                    Ok(None)
+                }
+                Err(error) => Err(error.into_storage()),
             },
-            read.stamp().now_ms,
-        ))
-    })??;
-    if selected.binding_key != run.binding_key {
-        return Err(selection::unavailable());
-    }
+        )?;
     let operation_id = operation.id.clone();
     let operation_rev = operation.revision;
-    run_write(
+    let can_retry = run_write(
         store.store.as_ref(),
         WriteOptions::settlement(),
         move |tx| {
@@ -137,16 +145,22 @@ fn recover(
             {
                 return Err(StorageError::ScopeDenied);
             }
-            selected
-                .validate_in(tx, &ctx)
+            Selection::validate_saved_authority_in(tx, &ctx, &run)
                 .map_err(Failure::into_storage)?;
             let now = tx.now_ms();
-            let pin = tx
-                .graph()
-                .graph_pin(&run.pin_id)?
-                .ok_or(StorageError::ScopeDenied)?;
-            super::super::lease::check_pin(&pin, &ctx, &run.intent.scope, now)
-                .map_err(Failure::into_storage)?;
+            let pin = tx.graph().graph_pin(&run.pin_id)?;
+            let can_retry = if let (Some(selected), Some(pin)) = (&selected, &pin) {
+                match super::super::lease::check_pin(pin, &ctx, &run.intent.scope, now)
+                    .and_then(|_| selected.validate_in(tx, &ctx))
+                {
+                    Ok(()) => true,
+                    Err(Failure::Refused(_))
+                    | Err(Failure::Storage(StorageError::ViewUnavailable)) => false,
+                    Err(error) => return Err(error.into_storage()),
+                }
+            } else {
+                false
+            };
             let mut next = run.clone();
             for result in resolved {
                 let phase = phase_store::phase_mut(&mut next, result.phase)?;
@@ -175,23 +189,36 @@ fn recover(
                 }
             }
             if !remaining {
-                next.state = OperationState::RetryPending;
-                for phase in next
-                    .phases
-                    .iter_mut()
-                    .filter(|phase| phase.state == OperationState::OutcomeUnknown)
-                {
-                    phase.state = OperationState::RetryPending;
-                    phase.diagnostic = None;
+                next.state = if can_retry {
+                    OperationState::RetryPending
+                } else {
+                    OperationState::Failed
+                };
+                for phase in next.phases.iter_mut().filter(|phase| {
+                    matches!(
+                        phase.state,
+                        OperationState::OutcomeUnknown | OperationState::Dispatching
+                    )
+                }) {
+                    phase.state = next.state;
+                    phase.diagnostic = (!can_retry).then(|| "AnalysisCaptureExpired".into());
+                    phase.finished_at_ms = (!can_retry).then_some(now);
+                }
+                if !can_retry && let Some(pin) = pin {
+                    tx.graph()
+                        .retire_graph_pin(&pin.id, &pin.owner_namespace, pin.revision)?;
                 }
             }
-            phase_store::advance(tx, &run, &mut next)
+            phase_store::advance(tx, &run, &mut next)?;
+            Ok(can_retry)
         },
     )?;
     Ok(if remaining {
         Execution::Unknown("some provider effects still require observation")
-    } else {
+    } else if can_retry {
         Execution::NotApplied("remaining phases may resume from observed checkpoints")
+    } else {
+        Execution::Failed("analysis capture expired after provider outcome was observed")
     })
 }
 

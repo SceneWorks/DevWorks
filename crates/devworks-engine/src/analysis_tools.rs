@@ -308,7 +308,6 @@ impl Alias {
                 let views = reader.fleet()?;
                 let id = args.get("clusterId").ok_or_else(invalid)?;
                 let mut selector = json!({"clusterId": id});
-                let mut selected = views.clone();
                 if let Some(ordinal) = id.as_i64().filter(|n| *n >= 0) {
                     // Freeze the view composition used to translate a legacy ordinal.
                     let OperationResult::AnalysisClusters {
@@ -329,19 +328,10 @@ impl Alias {
                         })
                         .ok_or_else(unavailable)?;
                     selector = json!({"clusterId": cluster.cluster.id, "legacyOrdinal": ordinal.to_string()});
-                    selected = ViewSelection::Exact {
-                        view_ids: page
-                            .observation
-                            .bindings
-                            .0
-                            .into_iter()
-                            .map(|binding| binding.view_id)
-                            .collect(),
-                    };
                 } else if id.as_str().is_none() {
                     return Err(invalid());
                 }
-                reader.analysis("analysis.cluster_detail", &selected, 50, selector)?
+                reader.analysis("analysis.cluster_detail", &views, 50, selector)?
             }
             _ => return Err(invalid()),
         };
@@ -465,7 +455,6 @@ impl Reader<'_> {
     }
 
     fn search(&self, args: &Value) -> Result<Value, StorageError> {
-        use devworks_core::protocol::data::GraphResult;
         let search = text(args, "search")?.filter(|text| !text.is_empty());
         let group = text(args, "group")?.filter(|text| !text.is_empty());
         let term = search
@@ -476,22 +465,8 @@ impl Reader<'_> {
             rows.retain(|repo| wildcard(pattern, &repo.name.0));
         }
         if let Some(group) = group {
-            let response = self.graph("code.overview", json!({"kind":"Overview"}), None)?;
-            let OperationResult::CodeOverview { value } = response else {
-                return Err(invalid());
-            };
-            let GraphResult::RepositoryOverview { value } = value.result else {
-                return Err(unavailable());
-            };
-            rows.retain(|row| {
-                value.repositories.0.iter().any(|repo| {
-                    repo.repository_id == row.id
-                        && repo
-                            .source_group
-                            .as_ref()
-                            .is_some_and(|value| value.0.eq_ignore_ascii_case(group))
-                })
-            });
+            let ids = self.repository_group(group)?;
+            rows.retain(|row| ids.contains(row.id.as_str()));
         }
         let size = number(args, "pageSize", 25, 128)? as usize;
         let page = number(args, "page", 1, READ_LIMIT as u64)? as usize;
@@ -502,6 +477,70 @@ impl Reader<'_> {
             .take(size)
             .collect::<Vec<_>>();
         Ok(json!({"items": rows, "page": page, "pageSize": size, "total": total}))
+    }
+
+    fn repository_group(
+        &self,
+        group: &str,
+    ) -> Result<std::collections::BTreeSet<String>, StorageError> {
+        use devworks_core::protocol::data::GraphResult;
+        let mut ids = std::collections::BTreeSet::new();
+        let mut pin = None;
+        let mut cursor = None;
+        for _ in 0..READ_LIMIT {
+            let mut input = json!({
+                "scope": self.scope(), "query": {"kind":"Overview"},
+                "limits": {"maxResults": 50, "maxVisited": 20000, "deadlineMs": 10000}
+            });
+            if let Some(pin) = &pin {
+                input["view"] = json!(pin);
+            } else {
+                input["current"] = json!(true);
+            }
+            if let Some(cursor) = cursor.take() {
+                input["cursor"] = Value::String(cursor);
+            }
+            let OperationResult::CodeOverview { value: page } =
+                self.query("code.overview", input)?
+            else {
+                return Err(invalid());
+            };
+            if pin.is_none() {
+                pin = page
+                    .view
+                    .map(|set| ViewSelection::Pinned { pin_id: set.pin_id });
+            }
+            let GraphResult::RepositoryOverview { value } = page.result else {
+                return Err(unavailable());
+            };
+            ids.extend(
+                value
+                    .repositories
+                    .0
+                    .into_iter()
+                    .filter(|repo| {
+                        repo.source_group
+                            .as_ref()
+                            .is_some_and(|value| value.0.eq_ignore_ascii_case(group))
+                    })
+                    .map(|repo| repo.repository_id.as_str().to_owned()),
+            );
+            cursor = page.next_cursor;
+            if cursor.is_none() {
+                if page
+                    .scope_coverage
+                    .is_some_and(|coverage| coverage.coverage.more_gaps)
+                {
+                    return Err(StorageError::InvalidRecord(
+                        "Source group coverage is incomplete".into(),
+                    ));
+                }
+                return Ok(ids);
+            }
+        }
+        Err(StorageError::InvalidRecord(
+            "Source group page limit reached".into(),
+        ))
     }
 
     fn views(&self, ids: &[Id]) -> Result<ViewSelection, StorageError> {
@@ -569,8 +608,13 @@ fn wildcard(pattern: &str, name: &str) -> bool {
 }
 
 fn text<'a>(args: &'a Value, field: &str) -> Result<Option<&'a str>, StorageError> {
+    let maximum = if field == "path" { 4096 } else { 256 };
     args.get(field)
-        .map(|v| v.as_str().ok_or_else(invalid))
+        .map(|v| {
+            v.as_str()
+                .filter(|value| value.len() <= maximum)
+                .ok_or_else(invalid)
+        })
         .transpose()
 }
 fn number(args: &Value, field: &str, default: u64, max: u64) -> Result<u64, StorageError> {

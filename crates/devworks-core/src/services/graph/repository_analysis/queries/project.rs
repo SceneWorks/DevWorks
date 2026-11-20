@@ -152,7 +152,7 @@ fn health(i: &Input<'_>, top: usize) -> Result<OperationResult, Failure> {
             .cloned()
             .collect(),
     ));
-    value.related_work_ids = Some(BoundedList(related_work(i)?));
+    value.related_work_ids = Some(BoundedList(related_work(i, None)?));
     if let Some(report) = &i.documents.vitals {
         let mut summaries = Vec::new();
         for row in report
@@ -164,7 +164,7 @@ fn health(i: &Input<'_>, top: usize) -> Result<OperationResult, Failure> {
                 security.and_then(|report| report.complete_score(&row.repository, &row.view));
             summaries.push(row.summary(None, security_score)?);
             for (project, score) in &row.projects {
-                summaries.push(row.summary(Some((project, score)), None)?);
+                summaries.push(row.summary(Some((project, score)), security_score)?);
             }
         }
         if summaries
@@ -208,11 +208,11 @@ fn health(i: &Input<'_>, top: usize) -> Result<OperationResult, Failure> {
     })
 }
 
-fn related_work(i: &Input<'_>) -> Result<Vec<Id>, Failure> {
-    let repositories = i
-        .plan
-        .selected
-        .views
+fn related_work(i: &Input<'_>, path: Option<&str>) -> Result<Vec<Id>, Failure> {
+    let bindings = i.report.map_or(i.plan.selected.views.as_slice(), |report| {
+        &report.run.intent.views
+    });
+    let repositories = bindings
         .iter()
         .filter(|view| i.filters.repository(&view.repository_id))
         .map(|view| view.repository_id.clone())
@@ -245,7 +245,57 @@ fn related_work(i: &Input<'_>) -> Result<Vec<Id>, Failure> {
         };
         for candidate in work.works(&filter, None, 16)? {
             match crate::services::work::visible_work(work, i.ctx, &candidate.id) {
-                Ok(card) if !ids.contains(&card.id) => ids.push(card.id),
+                Ok(card) if !ids.contains(&card.id) => {
+                    let brief = crate::kernel::work_brief::WorkBrief::of(&card)?;
+                    let touches = brief
+                        .touches
+                        .iter()
+                        .filter(|touch| repositories.contains(&touch.repository_id));
+                    let has_scoped_touches = touches.clone().next().is_some();
+                    let mut relevant = false;
+                    for touch in touches {
+                        let Some(binding) = bindings.iter().find(|binding| {
+                            binding.repository_id == touch.repository_id
+                                && touch
+                                    .view_id
+                                    .as_ref()
+                                    .is_none_or(|view| view == &binding.view_id)
+                        }) else {
+                            continue;
+                        };
+                        if let Some(path) = path {
+                            if touch.path.as_ref().is_some_and(|value| value.0 != path) {
+                                continue;
+                            }
+                            if let Some(node) = &touch.node_id {
+                                let graph = GraphScope {
+                                    views: vec![GraphViewBinding {
+                                        repository_id: binding.repository_id.clone(),
+                                        view_id: binding.view_id.clone(),
+                                        view_digest: binding.view_digest.as_str().to_owned(),
+                                    }],
+                                };
+                                let node = GraphNodeIdentity {
+                                    repository_id: touch.repository_id.clone(),
+                                    unit_key: path.to_owned(),
+                                    node_id: node.as_str().to_owned(),
+                                };
+                                match i.read.graph().graph_node(&graph, &node) {
+                                    Ok(Some(_)) => {}
+                                    Ok(None) | Err(StorageError::NotFound { .. }) => continue,
+                                    Err(error) => return Err(error.into()),
+                                }
+                            } else if touch.path.is_none() {
+                                continue;
+                            }
+                        }
+                        relevant = true;
+                        break;
+                    }
+                    if relevant || (!has_scoped_touches && path.is_none()) {
+                        ids.push(card.id);
+                    }
+                }
                 Ok(_) | Err(Failure::Refused(_)) => {}
                 Err(error) => return Err(error),
             }
@@ -342,23 +392,35 @@ fn file_metrics(
     path: Option<&str>,
     mode: &str,
 ) -> Result<OperationResult, Failure> {
-    if path.is_some()
-        && i.plan
-            .selected
+    if path.is_some() {
+        let selection = &i.plan.selected;
+        let repositories = selection
             .views
             .iter()
-            .filter(|view| i.filters.repository(&view.repository_id))
+            .map(|view| &view.repository_id)
+            .chain(
+                selection
+                    .unavailable
+                    .iter()
+                    .map(|entry| &entry.repository_id),
+            );
+        if repositories
+            .filter(|repository| i.filters.repository(repository))
             .count()
             != 1
-    {
-        return Err(invalid("file_hotspot_repository"));
+        {
+            return Err(invalid("file_hotspot_repository"));
+        }
     }
     let gaps = i
         .documents
         .vitals
         .as_ref()
         .map_or(&[][..], |report| &report.gaps);
-    let observation = i.observe(gaps).wire();
+    let mut observation = i.observe(gaps).wire();
+    if path.is_some() {
+        observation.related_work_ids = Some(BoundedList(related_work(i, path)?));
+    }
     let mut rows = Vec::new();
     if let Some(report) = &i.documents.vitals {
         for file in ranked(report, i.filters, project, path) {
@@ -390,6 +452,14 @@ fn file_metrics(
     })
 }
 
+fn effective_health(summary: &AnalysisHealthSummary) -> f64 {
+    summary
+        .adjusted_score
+        .as_ref()
+        .unwrap_or(&summary.base_score)
+        .get()
+}
+
 fn fleet(i: &Input<'_>, maximum: Option<&Finite>) -> Result<OperationResult, Failure> {
     let mut missing = i
         .plan
@@ -400,12 +470,14 @@ fn fleet(i: &Input<'_>, maximum: Option<&Finite>) -> Result<OperationResult, Fai
         .map(|entry| entry.repository_id.clone())
         .collect::<Vec<_>>();
     let mut measured = Vec::new();
+    let mut newest = None;
     for reading in &i.documents.fleet {
         if !i.filters.repository(&reading.binding.repository_id) {
             continue;
         }
         if let Some((summary, time)) = &reading.result {
-            if maximum.is_none_or(|max| summary.base_score.get() <= max.get()) {
+            newest = Some(newest.map_or(*time, |at: i64| at.max(*time)));
+            if maximum.is_none_or(|max| effective_health(summary) <= max.get()) {
                 measured.push((summary, *time));
             }
         } else {
@@ -413,9 +485,8 @@ fn fleet(i: &Input<'_>, maximum: Option<&Finite>) -> Result<OperationResult, Fai
         }
     }
     measured.sort_by(|(a, _), (b, _)| {
-        a.base_score
-            .get()
-            .total_cmp(&b.base_score.get())
+        effective_health(a)
+            .total_cmp(&effective_health(b))
             .then_with(|| a.repository_id.as_str().cmp(b.repository_id.as_str()))
     });
     let mut gaps = i.documents.measurement_gaps.clone();
@@ -423,7 +494,7 @@ fn fleet(i: &Input<'_>, maximum: Option<&Finite>) -> Result<OperationResult, Fai
         gaps.push("MissingRepositoryMetrics".into());
     }
     let mut observation = i.observe(&gaps).wire();
-    observation.availability = if measured.is_empty() {
+    observation.availability = if newest.is_none() {
         AnalysisAvailability::NoData
     } else if gaps.is_empty() {
         AnalysisAvailability::Available
@@ -435,11 +506,11 @@ fn fleet(i: &Input<'_>, maximum: Option<&Finite>) -> Result<OperationResult, Fai
         AnalysisAvailability::Available => crate::protocol::data::CoverageState::Complete,
         _ => crate::protocol::data::CoverageState::Partial,
     };
-    observation.computed_at_ms = measured.iter().map(|(_, at)| *at).max().map(counter);
+    observation.computed_at_ms = newest.map(counter);
     observation.missing_repositories = Some(BoundedList(missing));
     let total = measured
         .iter()
-        .map(|(summary, _)| summary.base_score.get())
+        .map(|(summary, _)| effective_health(summary))
         .sum::<f64>();
     let scored = measured.len() as i64;
     let average = (scored > 0)
@@ -463,13 +534,13 @@ fn fleet(i: &Input<'_>, maximum: Option<&Finite>) -> Result<OperationResult, Fai
         below_hotspot: counter(
             measured
                 .iter()
-                .filter(|(summary, _)| summary.base_score.get() < 4.0)
+                .filter(|(summary, _)| effective_health(summary) < 4.0)
                 .count() as i64,
         ),
         below_alert: counter(
             measured
                 .iter()
-                .filter(|(summary, _)| summary.base_score.get() < 2.5)
+                .filter(|(summary, _)| effective_health(summary) < 2.5)
                 .count() as i64,
         ),
     };
@@ -481,7 +552,7 @@ fn fleet(i: &Input<'_>, maximum: Option<&Finite>) -> Result<OperationResult, Fai
                 &summary.view_id,
                 "Health",
                 "score",
-                summary.base_score.get(),
+                effective_health(summary),
                 Some(*time),
             )
         })
@@ -539,8 +610,13 @@ fn archival(i: &Input<'_>) -> Result<OperationResult, Failure> {
             }
         }
     }
+    let mut observation = i.observe(&gaps).wire();
+    if i.filters.workspace_snapshots_stale && i.documents.links.is_some() {
+        observation.availability = AnalysisAvailability::Stale;
+        observation.coverage.state = crate::protocol::data::CoverageState::Partial;
+    }
     Ok(OperationResult::AnalysisArchivalCandidates {
-        value: i.metric_page(rows, i.observe(&gaps).wire(), None, None)?,
+        value: i.metric_page(rows, observation, None, None)?,
     })
 }
 

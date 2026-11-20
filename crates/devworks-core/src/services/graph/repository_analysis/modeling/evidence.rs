@@ -13,6 +13,8 @@ pub(super) struct ProjectNode {
     pub identity: GraphNodeIdentity,
     pub name: String,
     pub kind: String,
+    pub qualified_name: Option<String>,
+    pub recorded: serde_json::Value,
     pub span: Option<(usize, usize)>,
 }
 
@@ -26,8 +28,38 @@ impl ProjectNode {
             .and_then(|(start, end)| {
                 Some((usize::try_from(start).ok()?, usize::try_from(end).ok()?))
             });
+        let recorded = [
+            "visibility",
+            "modifiers",
+            "base_types",
+            "baseType",
+            "interfaces",
+            "receiver_owner",
+            "return_type",
+            "parameters",
+            "type",
+            "language",
+            "abi",
+            "framework",
+            "route",
+            "method",
+            "http_method",
+            "url_pattern",
+            "lifetime",
+            "event_type",
+            "schema",
+        ]
+        .into_iter()
+        .filter_map(|key| {
+            node.payload["properties"]
+                .get(key)
+                .map(|value| (key.to_owned(), value.clone()))
+        })
+        .collect::<serde_json::Map<String, serde_json::Value>>();
         Self {
             identity,
+            qualified_name: node.payload["qualifiedName"].as_str().map(str::to_owned),
+            recorded: serde_json::Value::Object(recorded),
             name: node.name.clone(),
             kind: node.kind.clone(),
             span: lines,
@@ -35,14 +67,26 @@ impl ProjectNode {
     }
 }
 
-pub(super) type Outbound = BTreeMap<(String, String), Vec<(String, String)>>;
+#[derive(Serialize)]
+pub(super) struct Relationship {
+    kind: String,
+    repository: Id,
+    node: String,
+}
+type Adjacency = BTreeMap<(String, String), Vec<Relationship>>;
+
+#[derive(Default)]
+pub(super) struct Relationships {
+    pub incoming: Adjacency,
+    pub outgoing: Adjacency,
+}
 
 pub(super) fn relationships(
     read: &dyn ReadSnapshot,
     selected: &Selection,
     budget: &mut Budget,
-) -> Result<Outbound, Failure> {
-    let mut edges = Outbound::new();
+) -> Result<Relationships, Failure> {
+    let mut edges = Relationships::default();
     scan::edges(
         read,
         &selected.graph_scope(),
@@ -51,16 +95,34 @@ pub(super) fn relationships(
         budget,
         |edge, budget| {
             if let Ok(edge) = edge {
-                let key = (
+                let from = (
                     edge.source.repository_id.as_str().to_owned(),
                     edge.source.node_id,
                 );
-                let target = edge.target.node_id;
+                let to = (
+                    edge.target.repository_id.as_str().to_owned(),
+                    edge.target.node_id,
+                );
                 let kind = edge.raw.edge.kind;
-                if !budget.retain(target.len() + kind.len() + key.0.len() + key.1.len() + 64) {
+                if !budget.retain(
+                    (from.0.len() + from.1.len() + to.0.len() + to.1.len() + kind.len() + 96) * 2,
+                ) {
                     return Ok(false);
                 }
-                edges.entry(key).or_default().push((kind, target));
+                edges
+                    .outgoing
+                    .entry(from.clone())
+                    .or_default()
+                    .push(Relationship {
+                        kind: kind.clone(),
+                        repository: edge.target.repository_id,
+                        node: to.1.clone(),
+                    });
+                edges.incoming.entry(to).or_default().push(Relationship {
+                    kind,
+                    repository: edge.source.repository_id,
+                    node: from.1,
+                });
             }
             Ok(true)
         },
@@ -124,7 +186,7 @@ pub(super) struct SourceEvidence<'a> {
     pub read: &'a dyn ReadSnapshot,
     pub artifacts: &'a ArtifactService,
     pub selected: &'a Selection,
-    pub outbound: &'a Outbound,
+    pub outbound: &'a Adjacency,
     pub all: bool,
     pub redactor: &'a Redactor,
     pub budget: &'a mut Budget,

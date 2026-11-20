@@ -113,6 +113,7 @@ pub fn queue_service() -> queue::QueueService {
     queue::QueueService::new(vec![
         Arc::new(artifacts::replies::ReplyQueueHook),
         Arc::new(schemas::indexing::QueueHook),
+        Arc::new(graph::repository_analysis::QueueHook),
     ])
 }
 

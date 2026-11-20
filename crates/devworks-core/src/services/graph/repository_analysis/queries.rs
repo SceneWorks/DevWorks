@@ -219,17 +219,26 @@ impl<'a> Request<'a> {
                 None,
                 256,
             )?;
-            filters.complete_workspace = active.len() < 256
-                && plan.selected.unavailable.is_empty()
-                && active
+            filters.complete_workspace = active.len() < 256 && plan.selected.unavailable.is_empty();
+            for repository in active.iter().filter(|repo| repo.lifecycle == "Active") {
+                let selected = plan
+                    .selected
+                    .views
                     .iter()
-                    .filter(|repo| repo.lifecycle == "Active")
-                    .all(|repo| {
-                        plan.selected
-                            .views
-                            .iter()
-                            .any(|view| view.repository_id == repo.id)
-                    });
+                    .find(|view| view.repository_id == repository.id);
+                if let Some(view) = selected {
+                    if read
+                        .indexing()
+                        .published(&repository.id)?
+                        .is_none_or(|pointer| pointer.view_id != view.view_id)
+                    {
+                        filters.workspace_snapshots_stale = true;
+                    }
+                } else {
+                    filters.complete_workspace = false;
+                }
+            }
+            filters.complete_workspace &= !filters.workspace_snapshots_stale;
         }
         Ok(filters)
     }
@@ -263,6 +272,7 @@ struct Filters {
     roles: BTreeSet<String>,
     relationships: BTreeSet<String>,
     complete_workspace: bool,
+    workspace_snapshots_stale: bool,
 }
 impl Filters {
     fn repository(&self, id: &Id) -> bool {

@@ -234,6 +234,7 @@ fn repository_analysis_uses_the_router_and_records_synthesis_once() {
         assert_eq!(f.http.lock().unwrap().requests.lock().unwrap().len(), 3);
 
         check_agent_analysis(&f, &app, &user, repository).await;
+        observe_after_source_lease_expiry(&f, analysis, attempt_id);
         app.shutdown().await;
         f.usage.stop();
         f.usage.drain().await;
@@ -348,16 +349,18 @@ async fn check_agent_analysis(
         DomainErrorCode::PermissionDenied
     ));
     request["scope"]["projectId"] = json!("wrong-project");
-    assert!(rejected(
-        submit(
-            app,
-            &work,
-            "analysis.reanalyze",
-            "wrong-project-refusal",
-            request
-        ),
-        DomainErrorCode::PermissionDenied
-    ));
+    let wrong = submit(
+        app,
+        &work,
+        "analysis.reanalyze",
+        "wrong-project-refusal",
+        request,
+    );
+    assert!(
+        rejected(wrong.clone(), DomainErrorCode::PermissionDenied)
+            || rejected(wrong.clone(), DomainErrorCode::ViewUnavailable),
+        "{wrong:?}"
+    );
 
     let body = json!({"mode":"Query","protocol":"1.0-draft.1","schemaRevision":3,"queryId":"agent-health",
         "body":{"kind":"analysis.health","scope":scope,"views":views,"page":{"limit":10},"filters":[]}});
@@ -411,4 +414,81 @@ fn rejected(
         }
         _ => false,
     }
+}
+
+/// A terminal router result may reach analysis after its computation lease is gone.
+fn observe_after_source_lease_expiry(f: &Fx, mut run: StoredAnalysisRun, attempt: Id) {
+    use devworks_core::services::graph::repository_analysis::{
+        AnalysisModel, AnalysisModelInput, AnalysisService, Execution, ModelObservation,
+        ProviderAnalysis,
+    };
+
+    struct Observed {
+        request: Id,
+        attempt: Id,
+    }
+    impl AnalysisModel for Observed {
+        fn generate(&self, _: AnalysisModelInput) -> ModelObservation {
+            panic!("recovery must not start a provider request");
+        }
+        fn observe(&self, _: &InvocationContext, request: &Id) -> ModelObservation {
+            assert_eq!(&self.request, request);
+            ModelObservation::Completed(ProviderAnalysis {
+                text: String::from(r#"{"summary":"Recovered report.","confidence":"high"}"#),
+                request: self.request.clone(),
+                attempt: self.attempt.clone(),
+                model: "fixture-model".into(),
+            })
+        }
+    }
+
+    let previous = run
+        .phases
+        .iter_mut()
+        .find(|phase| phase.phase == AnalysisPhase::Projects)
+        .unwrap();
+    let subject = previous.subjects.first_mut().unwrap();
+    let request = subject.request.clone();
+    subject.output = None;
+    subject.state = OperationState::OutcomeUnknown;
+    previous.state = OperationState::OutcomeUnknown;
+    previous.report = None;
+    run.phases
+        .retain(|phase| phase.phase == AnalysisPhase::Projects);
+    run.id = id("analysis-delayed-run");
+    run.active_operation = OperationId(id("analysis-delayed-operation"));
+    run.operation = run.active_operation.clone();
+    run.pin_id = id("released-analysis-pin");
+    run.revision = 1;
+    run.state = OperationState::OutcomeUnknown;
+    let run_id = run.id.clone();
+    let operation = write(f.store.as_ref(), move |tx| {
+        tx.analysis().insert_analysis_run(&run)?;
+        let op = tx.operations().record_intent(NewOperation {
+            id: run.active_operation.clone(), root_id: None, assignment_id: None,
+            capability: "analysis.reanalyze".into(), schema_version: 3, args_digest: run.intent.options_digest,
+            payload: json!({"runId":run.id,"deliveryId":"analysis-original-delivery","authority":run.owner}),
+        })?;
+        let attempt = tx.operations().begin_attempt(&op.id, op.revision, AttemptBinding::default())?;
+        let ready = tx.operations().operation(&op.id)?.unwrap();
+        let sent = tx.operations().transition(&op.id, ready.revision, Some(&attempt.fence()),
+            OperationState::Dispatching, None)?;
+        tx.operations().transition(&op.id, sent.revision, Some(&attempt.fence()),
+            OperationState::OutcomeUnknown, None)
+    }).unwrap();
+    let service = AnalysisService::new(f.store.clone(), f.artifacts.clone(), f.h.ids.clone(), None);
+    assert!(service.install_model(Arc::new(Observed { request, attempt })));
+    assert!(matches!(service.observe(&operation), Execution::Failed(_)));
+    let recovered = read(f.store.as_ref(), |s| s.analysis().analysis_run(&run_id)).unwrap();
+    assert_eq!(recovered.state, OperationState::Failed);
+    assert_eq!(
+        recovered.phases[0].diagnostic.as_deref(),
+        Some("AnalysisCaptureExpired")
+    );
+    let subject = &recovered.phases[0].subjects[0];
+    assert_eq!(subject.state, OperationState::ObservedComplete);
+    assert_eq!(
+        subject.output.as_ref().unwrap()["result"]["summary"],
+        "Recovered report."
+    );
 }

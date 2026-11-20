@@ -307,13 +307,24 @@ fn build_for(
                 },
             );
         }
-        if matches!(kind, "PUBLISHES" | "CONSUMES")
-            && let Some(event) = http::nonempty(properties, "event_type")
+        if matches!(kind, "PUBLISHES" | "CONSUMES") && concrete.is_none() {
+            let mut event = http::nonempty(properties, "event_type")
                 .or_else(|| http::nonempty(payload, "targetQualifiedName"))
-            && let Some(from) = caller(read, scope, raw, source.clone(), budget)?
-            && !messages.record(kind, event, from, budget)
-        {
-            return Ok(false);
+                .or_else(|| http::nonempty(payload, "targetName"))
+                .map(str::to_owned);
+            if event.is_none()
+                && let Some(target) = &target
+                && budget.visit()
+                && let Some(node) = read.graph().graph_node(scope, target)?
+            {
+                event = http::nonempty(&node.node.payload, "qualifiedName").map(str::to_owned);
+            }
+            if let Some(event) = event
+                && let Some(from) = caller(read, scope, raw, source.clone(), budget)?
+                && !messages.record(kind, &event, from, budget)
+            {
+                return Ok(false);
+            }
         }
         if let Some((from, to)) = concrete {
             let resolution = http::string(payload, "resolution").unwrap_or("Resolved");
@@ -381,13 +392,64 @@ fn build_for(
 
 /// Use the same derivation in graph exploration. The graph read has already checked every
 /// layer's authority and supplies its own work budget. Raw edges remain in the index.
+pub(in crate::services::graph) fn can_derive(edge: &Result<scan::Edge, scan::Unmapped>) -> bool {
+    let (raw, local) = match edge {
+        Ok(edge) => (
+            &edge.raw,
+            edge.source.repository_id == edge.target.repository_id,
+        ),
+        Err(edge) => (&edge.raw, false),
+    };
+    let props = &raw.edge.payload["properties"];
+    match raw.edge.kind.as_str() {
+        "HTTP_CALLS" => {
+            http::nonempty(props, "url_pattern").is_some() || http::boolean(props, "gateway_call")
+        }
+        "CONSUMES" | "PUBLISHES" => {
+            local
+                || http::nonempty(props, "event_type").is_some()
+                || http::nonempty(&raw.edge.payload, "targetQualifiedName").is_some()
+                || http::nonempty(&raw.edge.payload, "targetName").is_some()
+        }
+        "REFERENCES_PACKAGE" => local && raw.edge.unit_key.to_ascii_lowercase().ends_with("proj"),
+        "CALLS" | "USES_TYPE" | "IMPLEMENTS" | "RENDERS" | "INJECTS" => local,
+        _ => false,
+    }
+}
+
+pub(in crate::services::graph) fn can_add_incident(
+    raw: &GraphEdge,
+    target: Option<&crate::ports::storage::GraphNode>,
+) -> bool {
+    let properties = &raw.edge.payload["properties"];
+    match raw.edge.kind.as_str() {
+        "HTTP_CALLS" => {
+            http::nonempty(properties, "url_pattern").is_some()
+                || http::boolean(properties, "gateway_call")
+        }
+        "PUBLISHES" | "CONSUMES" => raw.edge.payload["targetRepositoryId"].is_null(),
+        "CALLS" | "USES_TYPE" | "IMPLEMENTS" | "RENDERS" | "INJECTS" => {
+            target.is_some_and(|node| node.node.kind == "ExternalSymbol")
+        }
+        _ => false,
+    }
+}
+
+pub(in crate::services::graph) fn can_target_incident(
+    node: &crate::ports::storage::GraphNode,
+) -> bool {
+    matches!(node.node.kind.as_str(), "Route" | "Repository") || super::symbols::has_export(node)
+}
+
+type GraphLinkKey = (dataset::Key, dataset::Key, String);
+
 pub(in crate::services::graph) fn graph_edges(
     read: &dyn ReadSnapshot,
     scope: &GraphScope,
     layers: &[ViewLayers],
     kinds: &[&str],
     budget: &mut Budget,
-    existing: &[scan::Edge],
+    mut seen: BTreeSet<GraphLinkKey>,
 ) -> Result<Vec<scan::Edge>, Failure> {
     if scope.views.len() < 2 || budget.exhausted.is_some() {
         return Ok(Vec::new());
@@ -397,39 +459,26 @@ pub(in crate::services::graph) fn graph_edges(
         return Ok(Vec::new());
     }
     let mut derived = Vec::new();
-    let mut seen = BTreeSet::new();
-    for edge in existing {
-        if edge.source.repository_id == edge.target.repository_id {
-            continue;
-        }
-        let pair = (
-            dataset::key(&edge.source),
-            dataset::key(&edge.target),
-            edge.raw.edge.kind.as_str(),
-        );
-        if !budget.retain(
-            pair.0.0.len()
-                + pair.0.1.len()
-                + pair.0.2.len()
-                + pair.1.0.len()
-                + pair.1.1.len()
-                + pair.1.2.len()
-                + pair.2.len()
-                + 96,
-        ) {
-            return Ok(derived);
-        }
-        seen.insert(pair);
-    }
     for link in &report.links {
         let Some(target) = &link.target else { continue };
+        if !matches!(
+            link.matched_by.as_str(),
+            "HttpRoute"
+                | "GatewayService"
+                | "MessageType"
+                | "ScipSymbol"
+                | "NpmExport"
+                | "NuGetPackageName"
+        ) {
+            continue;
+        }
         if !kinds.is_empty() && !kinds.contains(&link.kind.as_str()) {
             continue;
         }
         if !seen.insert((
             dataset::key(&link.source),
             dataset::key(target),
-            link.kind.as_str(),
+            link.kind.clone(),
         )) {
             continue;
         }

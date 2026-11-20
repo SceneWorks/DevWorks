@@ -268,7 +268,7 @@ pub(super) fn project_prompts(
     {
         return Err(selection::unavailable());
     }
-    let outbound = evidence::relationships(read, selected, budget)?;
+    let relationships = evidence::relationships(read, selected, budget)?;
     let maximum = usize::from(intent.batch_limit).min(MAX_PROJECTS);
     let partial =
         budget.exhausted.is_some() || groups.len() > maximum || !selected.unavailable.is_empty();
@@ -277,7 +277,7 @@ pub(super) fn project_prompts(
         read,
         artifacts,
         selected,
-        outbound: &outbound,
+        outbound: &relationships.outgoing,
         all: intent.include_all_source,
         redactor: &redactor,
         budget,
@@ -298,12 +298,17 @@ pub(super) fn project_prompts(
         );
         for row in &rows {
             let node = &row.identity;
-            let edges = outbound.get(&(repo.as_str().to_owned(), node.node_id.clone()));
+            let key = (repo.as_str().to_owned(), node.node_id.clone());
+            let outgoing = relationships.outgoing.get(&key);
+            let incoming = relationships.incoming.get(&key);
             let entry = json!({
                 "nodeId": node.node_id, "kind": row.kind,
                 "path": redactor.redact_text(&node.unit_key),
                 "name": redactor.redact_text(&row.name),
-                "relationships": edges.into_iter().flatten().take(16).collect::<Vec<_>>(),
+                "qualifiedName": row.qualified_name.as_deref().map(|name| redactor.redact_text(name)),
+                "recorded": redactor.redact_json(&row.recorded),
+                "outgoing": outgoing.into_iter().flatten().take(12).collect::<Vec<_>>(),
+                "incoming": incoming.into_iter().flatten().take(12).collect::<Vec<_>>(),
             }).to_string();
             if evidence.len() >= MAX_FIELDS || text.len() > MAX_PROMPT_BYTES / 2
                 || !evidence::append(&mut text, &entry)
@@ -311,7 +316,7 @@ pub(super) fn project_prompts(
                 clipped = true;
                 break;
             }
-            if edges.is_some_and(|edges| edges.len() > 16) {
+            if [outgoing, incoming].into_iter().flatten().any(|edges| edges.len() > 12) {
                 clipped = true;
             }
             evidence.push(node.clone());
@@ -352,6 +357,10 @@ pub(super) fn synthesis_prompt(
             "project": redactor.redact_text(&project.subject.name),
             "confidence": project.result.confidence,
             "summary": redactor.redact_text(&project.result.summary),
+            "endpoints": project.result.endpoints,
+            "services": project.result.services,
+            "externalDependencies": project.result.external_dependencies,
+            "databaseTables": project.result.database_tables,
         })
         .to_string();
         if append(&mut text, &entry) {

@@ -603,7 +603,7 @@ impl GraphCtl<'_, '_> {
         }
         self.graph
             .view()?
-            .or_else(|| Some(ViewSelection::Published { repository_ids }))
+            .or(Some(ViewSelection::Published { repository_ids }))
     }
 
     fn measurement_view(&self, view: devworks_core::protocol::Id) -> Option<ViewSelection> {
@@ -664,7 +664,36 @@ impl GraphCtl<'_, '_> {
                     return;
                 };
                 let scope = self.graph.scope();
-                let views = self.analysis_view();
+                let views = if matches!(
+                    command,
+                    analysis_screen::Command::AnalyzeProjects
+                        | analysis_screen::Command::Synthesize
+                ) {
+                    self.graph
+                        .pin
+                        .as_ref()
+                        .and_then(|pin| {
+                            pin.views.iter().find(|view| {
+                                view.snapshot.repository_id.as_str() == self.graph.repository
+                            })
+                        })
+                        .map_or_else(
+                            || {
+                                crate::frame::id(&self.graph.repository).map(|repository| {
+                                    ViewSelection::Published {
+                                        repository_ids: vec![repository],
+                                    }
+                                })
+                            },
+                            |view| {
+                                Some(ViewSelection::Exact {
+                                    view_ids: vec![view.view_id.clone()],
+                                })
+                            },
+                        )
+                } else {
+                    self.analysis_view()
+                };
                 if self.command(
                     GraphSlot::AnalysisCommand(self.analysis_key()),
                     "Requesting analysis",
