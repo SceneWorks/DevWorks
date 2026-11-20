@@ -99,6 +99,10 @@ tree-sitter-yaml = "=0.7.2"
 # (through the desktop's dependency tree), so they add no package. Pinned exactly. TOML is read
 # only (no writer) and keeps table order, as the retained Tomlyn reader does.
 quick-xml = "=0.41.0"
+# Native Word packages need stored/deflate reads. Encryption and other compression are refused.
+zip = { version = "=9.2.1", default-features = false, features = ["deflate-flate2-zlib-rs"] }
+# Identify encrypted Word packages without opening their streams.
+cfb = "=0.16.0"
 toml = { version = "=1.1.8", default-features = false, features = ["parse", "serde", "preserve_order"] }
 # The retained Terraform, ColdFusion and SQL-normalization extractors are regular-expression
 # scanners; their expressions are ported as written (leftmost-first semantics, as .NET's). Already

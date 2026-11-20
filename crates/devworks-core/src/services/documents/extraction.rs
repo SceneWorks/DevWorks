@@ -53,6 +53,22 @@ pub struct ExtractionInput<'a> {
     pub bytes: &'a [u8],
 }
 
+impl ExtractionInput<'_> {
+    /// Rechecks the length and digest of the already-authorized managed artifact.
+    pub fn verify(&self, max_bytes: usize) -> Result<(), ExtractionError> {
+        if self.bytes.len() > max_bytes {
+            return Err(ExtractionError::SourceTooLarge);
+        }
+        if self.version.validate().is_err()
+            || self.version.byte_length.get() != self.bytes.len() as i64
+            || self.version.sha256.as_str() != sha256_hex(self.bytes)
+        {
+            return Err(ExtractionError::SourceMismatch);
+        }
+        Ok(())
+    }
+}
+
 pub struct ExtractionControl<'a> {
     pub cancelled: &'a (dyn Fn() -> bool + Send + Sync),
     pub deadline: Instant,
@@ -102,20 +118,19 @@ pub struct ExtractedBlock {
 }
 
 impl ExtractedBlock {
-    fn text(
+    /// Creates one immutable passage with a source-local locator and stable ordinal.
+    /// The extractor owns text and locator bounds before it constructs a passage.
+    pub fn new(
         input: &ExtractionInput<'_>,
-        line_range: (u32, u32),
+        engine: &str,
+        locator: Locator,
         ordinal: usize,
         headings: Arc<[Heading]>,
         text: String,
     ) -> Self {
         let content_digest = sha256_hex(text.as_bytes());
-        let locator = Locator::Text {
-            first_line: line_range.0,
-            last_line: line_range.1,
-        };
         let identity = json!([
-            TEXT_ENGINE,
+            engine,
             input.version,
             input.revision,
             ordinal,
@@ -184,15 +199,7 @@ impl DocumentExtractor for TextExtractor {
     ) -> Result<Vec<ExtractedBlock>, ExtractionError> {
         use ExtractionError::*;
         control.check()?;
-        if input.bytes.len() > self.limits.input_bytes {
-            return Err(SourceTooLarge);
-        }
-        if input.version.validate().is_err()
-            || input.version.byte_length.get() != input.bytes.len() as i64
-            || input.version.sha256.as_str() != sha256_hex(input.bytes)
-        {
-            return Err(SourceMismatch);
-        }
+        input.verify(self.limits.input_bytes)?;
 
         let media = input.version.media_type.split(';').next().unwrap().trim();
         let markdown = match media.to_ascii_lowercase().as_str() {
@@ -200,8 +207,8 @@ impl DocumentExtractor for TextExtractor {
             "text/markdown" | "text/x-markdown" => true,
             _ => return Err(UnsupportedFormat),
         };
-        let decoded = decode(input.bytes, control)?;
-        let text = normalize(&decoded, self.limits.normalized_bytes, control)?;
+        let decoded = decode_text(input.bytes, control)?;
+        let text = normalize_text(&decoded, self.limits.normalized_bytes, control)?;
         if text.trim().is_empty() {
             return Err(Empty);
         }
@@ -215,7 +222,8 @@ impl DocumentExtractor for TextExtractor {
     }
 }
 
-fn decode<'a>(
+/// Decode UTF-8 or BOM-marked UTF-16 without changing source spelling.
+pub fn decode_text<'a>(
     bytes: &'a [u8],
     control: &ExtractionControl<'_>,
 ) -> Result<Cow<'a, str>, ExtractionError> {
@@ -254,7 +262,8 @@ fn decode<'a>(
         .map_err(|_| InvalidEncoding)
 }
 
-fn normalize(
+/// Normalize Unicode and line endings under the same resource checks as native plain text.
+pub fn normalize_text(
     decoded: &str,
     max_bytes: usize,
     control: &ExtractionControl<'_>,
@@ -460,9 +469,13 @@ impl TextChunker<'_> {
         if self.blocks.len() == self.limits.blocks {
             return Err(ExtractionError::BlockLimit);
         }
-        self.blocks.push(ExtractedBlock::text(
+        self.blocks.push(ExtractedBlock::new(
             self.input,
-            (self.first_line, self.last_line),
+            TEXT_ENGINE,
+            Locator::Text {
+                first_line: self.first_line,
+                last_line: self.last_line,
+            },
             self.blocks.len(),
             self.headings.clone(),
             text,
