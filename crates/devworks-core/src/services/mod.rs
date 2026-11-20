@@ -481,6 +481,19 @@ impl UseCases {
     }
 
     /// Registers the shared exact-view graph query and trust operators.
+    pub fn with_repository_analysis(
+        mut self,
+        service: Arc<graph::repository_analysis::AnalysisService>,
+    ) -> Self {
+        for operation in graph::repository_analysis::COMMANDS {
+            self.register(operation, None, Some(service.clone()));
+        }
+        for operation in graph::repository_analysis::QUERIES {
+            self.register(operation, Some(service.clone()), None);
+        }
+        self
+    }
+
     pub fn with_graph(mut self, service: Arc<graph::GraphService>) -> Self {
         for op in graph::OPERATIONS {
             self.register(op, Some(service.clone()), Some(service.clone()));

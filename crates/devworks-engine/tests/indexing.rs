@@ -8,6 +8,8 @@ mod common;
 mod graph_impact;
 #[path = "indexing/graph_source.rs"]
 mod graph_source;
+#[path = "indexing/repository_analysis.rs"]
+mod repository_analysis;
 
 use common::*;
 use devworks_adapters::fs::NativeFilesystem;

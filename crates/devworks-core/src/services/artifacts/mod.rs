@@ -347,6 +347,39 @@ pub(crate) fn visible_in(
     artifact: &StoredArtifact,
     project: Option<&ProjectId>,
 ) -> Result<bool, StorageError> {
+    if artifact.provenance["principalKind"] == "Host"
+        && artifact.provenance["derived"]["purpose"] == "repository_analysis"
+    {
+        let original = artifact.scope.project();
+        let allowed = match (&viewer.authorized, original, project) {
+            (Some(AuthorizedScope::Workspace), _, None) => true,
+            (Some(AuthorizedScope::Workspace), Some(owner), Some(selected)) => owner == selected,
+            (Some(AuthorizedScope::Project(bound)), Some(owner), selected) => {
+                bound == owner && selected.is_none_or(|selected| selected == bound)
+            }
+            _ => false,
+        };
+        let Some(run) = artifact.provenance["derived"]["runId"]
+            .as_str()
+            .and_then(|id| Id::new(id).ok())
+        else {
+            return Ok(false);
+        };
+        return if allowed {
+            read.analysis_artifact_available(
+                &artifact.id,
+                &run,
+                original,
+                viewer
+                    .ctx
+                    .worktree()
+                    .map(|tree| (tree.id(), tree.ownership_revision())),
+                viewer.ctx.restore_epoch().get(),
+            )
+        } else {
+            Ok(false)
+        };
+    }
     if artifact.retention == ArtifactRetention::Receipt {
         if !viewer.sees_owned(artifact.owner.as_ref()) {
             return Ok(false);

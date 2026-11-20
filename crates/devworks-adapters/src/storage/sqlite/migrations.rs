@@ -722,6 +722,15 @@ pub const MIGRATIONS: &[Migration] = &[
         expected_sha256: "231e7cc738901c470870a1bf210371febea4ea30d836e73b3d2cf85c02cea09d",
         rebuilds_tables: false,
     },
+    // Existing readers ignore this independent aggregate. Earlier writers do not update its rows.
+    Migration {
+        version: 64,
+        minimum_reader: 57,
+        minimum_writer: 63,
+        sql: include_str!("migrations/0064_analysis.sql"),
+        expected_sha256: "a604659ef41800df6389f9094fd42f27c15e4d7623d8718a9efae1c533d1ae01",
+        rebuilds_tables: false,
+    },
 ];
 /// Recorded checksum of migration 17; a test fails if the shipped text changes.
 pub const MIGRATION_0017_SHA256: &str =

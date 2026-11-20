@@ -171,6 +171,8 @@ pub struct IndexSettings {
     pub discovery_max_dirs: usize,
     /// Largest README published as a repository text.
     pub readme_max_bytes: usize,
+    /// This composition has the repository analysis consumer.
+    pub analysis_events: bool,
 }
 impl Default for IndexSettings {
     fn default() -> Self {
@@ -189,6 +191,7 @@ impl Default for IndexSettings {
             discovery_depth: 6,
             discovery_max_dirs: 20_000,
             readme_max_bytes: 1024 * 1024,
+            analysis_events: false,
         }
     }
 }
@@ -343,9 +346,20 @@ fn history(
     kind: &str,
     payload: Value,
 ) -> Result<(), StorageError> {
+    history_event(tx, actor, project, aggregate, kind, payload).map(|_| ())
+}
+
+fn history_event(
+    tx: &mut dyn WriteTransaction,
+    actor: &ActorId,
+    project: Option<&ProjectId>,
+    aggregate: (&str, &Id, i64),
+    kind: &str,
+    payload: Value,
+) -> Result<EventId, StorageError> {
     let id = EventId(tx.new_id(IdKind::Event));
     tx.history().append(NewEvent {
-        id,
+        id: id.clone(),
         actor: actor.clone(),
         project_id: project.cloned(),
         root_id: None,
@@ -356,7 +370,7 @@ fn history(
         kind: kind.into(),
         payload,
     })?;
-    Ok(())
+    Ok(id)
 }
 
 /// A new queued run.

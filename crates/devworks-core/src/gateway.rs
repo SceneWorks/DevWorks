@@ -1472,6 +1472,19 @@ impl ArtifactRead for HandlerTx<'_> {
             .artifacts()
             .repository_text_readers(artifact)
     }
+    fn analysis_artifact_available(
+        &self,
+        artifact: &Id,
+        run: &Id,
+        project: Option<&ProjectId>,
+        worktree: Option<(&Id, i64)>,
+        restore_epoch: i64,
+    ) -> Result<bool, StorageError> {
+        self.inner
+            .borrow_mut()
+            .artifacts()
+            .analysis_artifact_available(artifact, run, project, worktree, restore_epoch)
+    }
     fn links(&self, artifact: &Id) -> Result<Vec<ArtifactLink>, StorageError> {
         self.inner.borrow_mut().artifacts().links(artifact)
     }
@@ -1907,6 +1920,9 @@ impl WriteTransaction for HandlerTx<'_> {
     }
     fn indexing(&mut self) -> &mut dyn crate::ports::storage::IndexRepository {
         self.inner.get_mut().indexing()
+    }
+    fn analysis(&mut self) -> &mut dyn crate::ports::storage::AnalysisRepository {
+        self.inner.get_mut().analysis()
     }
     fn graph(&mut self) -> &mut dyn crate::ports::storage::GraphRepository {
         self.inner.get_mut().graph()

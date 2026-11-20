@@ -93,6 +93,10 @@ pub(super) fn edges(
         }
         Ok(true)
     })?;
+    let derived = super::repository_analysis::links::graph_edges(
+        read, scope, layers, kinds, budget, &linked,
+    )?;
+    linked.extend(derived);
     Ok(Edges { linked, unmapped })
 }
 

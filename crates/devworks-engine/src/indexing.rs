@@ -56,6 +56,9 @@ pub struct IndexingStatus {
 }
 
 pub struct IndexSupervisor {
+    analysis: std::sync::OnceLock<
+        Arc<devworks_core::services::graph::repository_analysis::AnalysisService>,
+    >,
     worker: Arc<IndexWorker>,
     config: IndexingConfig,
     ticker: Ticker,
@@ -70,6 +73,7 @@ impl IndexSupervisor {
         let discover_at_boot = config.discover_at_boot;
         let (status, _) = watch::channel(IndexingStatus::default());
         Arc::new(Self {
+            analysis: std::sync::OnceLock::new(),
             worker,
             config,
             ticker: Ticker::new(),
@@ -78,6 +82,12 @@ impl IndexSupervisor {
             tasks: Mutex::new(Vec::new()),
             status,
         })
+    }
+    pub(crate) fn install_analysis(
+        &self,
+        service: Arc<devworks_core::services::graph::repository_analysis::AnalysisService>,
+    ) -> bool {
+        self.analysis.set(service).is_ok()
     }
     pub fn worker(&self) -> &Arc<IndexWorker> {
         &self.worker
@@ -138,7 +148,11 @@ impl IndexSupervisor {
                 let me = self.clone();
                 let report = tokio::task::spawn_blocking(move || {
                     let stop = || me.ticker.is_stopped();
-                    w.housekeeping(true, &stop)
+                    let result = w.housekeeping(true, &stop)?;
+                    if let Some(analysis) = me.analysis.get() {
+                        analysis.maintain(&stop)?;
+                    }
+                    Ok::<_, StorageError>(result)
                 })
                 .await;
                 let report = match report {
