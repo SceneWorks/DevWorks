@@ -348,6 +348,14 @@ pub(crate) fn visible_in(
     artifact: &StoredArtifact,
     project: Option<&ProjectId>,
 ) -> Result<bool, StorageError> {
+    // Purge can keep a shared document's owner tombstone for lineage. Only a surviving
+    // project may use that ownership or a share to read its retained source.
+    if documents::is_document(artifact)
+        && let Some(project) = project
+        && !read.project_exists(project)?
+    {
+        return Ok(false);
+    }
     if artifact.provenance["principalKind"] == "Host"
         && let Some(kind) =
             DerivedKind::of(&artifact.provenance).filter(|kind| kind.is_document_custody())
