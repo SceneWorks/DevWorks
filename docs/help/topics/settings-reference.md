@@ -454,7 +454,7 @@ Extracts existing text directly. An image-capable model can transcribe scanned P
 
 Vision extraction models.
 
-- Default: `[]`
+- Default: `Vec::<String>::new()`
 - Scope: Workspace only
 - Adoption: NextAdmission
 - Policy: Configurable

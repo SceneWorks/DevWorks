@@ -62,8 +62,7 @@ impl Screen for KnowledgeScreen {
                 knowledge: self,
                 cx,
             };
-            ctl.load_documents(true);
-            ctl.read_document(false);
+            ctl.refresh_documents();
             return;
         }
         // A re-read covers every page the user loaded.
@@ -107,7 +106,8 @@ impl Screen for KnowledgeScreen {
         ctl.sync_knowledge_scope(&mut actions);
         let project = ctl.knowledge.project.clone();
         ctl.knowledge.documents.scope(project.as_deref());
-        ctl.knowledge.tab = ctl.routes.entry(Route::Knowledge).or_default().tab;
+        let previous_tab = ctl.routes.entry(Route::Knowledge).or_default().tab;
+        ctl.knowledge.tab = previous_tab;
         KnowledgeScreen::ui(
             ctl.knowledge,
             ui,
@@ -124,6 +124,14 @@ impl Screen for KnowledgeScreen {
             }
             ctl.document_actions(document_actions);
         } else {
+            if tab == 0
+                && previous_tab == documents_screen::TAB
+                && !actions
+                    .iter()
+                    .any(|action| matches!(action, KnowledgeAction::Search))
+            {
+                actions.push(KnowledgeAction::Search);
+            }
             ctl.knowledge_actions(actions);
         }
     }

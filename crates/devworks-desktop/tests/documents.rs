@@ -3,10 +3,19 @@ mod common;
 
 use common::*;
 use devworks_core::{
-    operations::{OperationInput, documents::Input},
-    protocol::{data::Citation, results::OperationResult},
+    operations::{
+        OperationInput,
+        documents::{ImportInput, Input},
+    },
+    protocol::{
+        data::{Citation, DataScope},
+        records::DocumentResult,
+        results::OperationResult,
+    },
 };
-use devworks_desktop::{documents_ops, frame, ops, route::Route, shell::Shell};
+use devworks_desktop::{
+    documents_ops, documents_screen::Change, frame, ops, route::Route, shell::Shell,
+};
 use eframe::egui::accesskit::Role;
 use egui_kittest::{Harness, kittest::Queryable};
 use std::sync::Arc;
@@ -83,6 +92,8 @@ fn document_dialog_index_search_replace_and_remove_preserve_exact_evidence() {
     assert!(has_text(&h, "No documents in this scope."));
     click(&mut h, Role::Button, "Import document…");
     assert!(has_text(&h, "Document imported."));
+    assert!(has_text(&h, "Original file · observations.md"));
+    assert!(has_text(&h, "Vision route · Unavailable"));
     let original = h
         .state()
         .knowledge
@@ -190,7 +201,10 @@ fn dropped_source_is_shared_and_moved_by_the_real_scope_controls() {
     h.state_mut()
         .select_project(Some(a.id.0.as_str().to_owned()));
     open_tab(&mut h);
+    h.state_mut().chat.coordinator_open = true;
     h.input_mut().dropped_files.push(Arc::new(Dropped(dropped)));
+    settle(&mut h);
+    h.state_mut().chat.coordinator_open = false;
     settle(&mut h);
     let exact = h
         .state()
@@ -201,6 +215,7 @@ fn dropped_source_is_shared_and_moved_by_the_real_scope_controls() {
         .expect("dropped original");
     click(&mut h, Role::Button, "Index document");
     wait_for_index(&mut h);
+    assert!(has_text(&h, "Owner · Archive A"));
     h.get_by_role_and_label(Role::ComboBox, "Destination project")
         .click();
     settle(&mut h);
@@ -208,6 +223,7 @@ fn dropped_source_is_shared_and_moved_by_the_real_scope_controls() {
     settle(&mut h);
     click(&mut h, Role::Button, "Share document");
     assert!(has_text(&h, "Document shared."));
+    assert!(has_text(&h, "Shared with Archive B"));
 
     h.state_mut()
         .select_project(Some(b.id.0.as_str().to_owned()));
@@ -230,7 +246,32 @@ fn dropped_source_is_shared_and_moved_by_the_real_scope_controls() {
     settle(&mut h);
     h.get_by_label("audit.txt").click();
     settle(&mut h);
+    let before_move = h.state().knowledge.documents.detail.clone().unwrap();
+    let stale_disable = || {
+        documents_ops::change(
+            &*backend,
+            Change::Disable,
+            before_move.clone(),
+            exact.clone(),
+            None,
+        )
+    };
     click(&mut h, Role::Button, "Move document");
+    assert!(
+        ops::command_result(backend.command_in_project(
+            &a.id,
+            "documents.disable_retrieval",
+            &stale_disable(),
+        ))
+        .is_err()
+    );
+    assert!(
+        ops::command_result(backend.command("documents.disable_retrieval", &stale_disable()))
+            .is_err()
+    );
+    let read = documents_ops::read(&*backend, exact.clone(), None);
+    assert!(ops::query_result(backend.query_in_project(&a.id, "documents.read", &read)).is_err());
+    assert!(ops::query_result(backend.query_in_project(&b.id, "documents.read", &read)).is_ok());
     assert!(has_text(&h, "Document moved."));
     assert!(h.state().knowledge.documents.list.items.is_empty());
     h.state_mut()
@@ -259,6 +300,96 @@ fn dropped_source_is_shared_and_moved_by_the_real_scope_controls() {
 }
 
 #[test]
+fn refresh_discards_cached_content_moved_out_of_general() {
+    let root = Root::new("documents-cached-scope");
+    let engine = start(&root);
+    let backend = engine.backend();
+    let target = ops::project_changed(backend.command(
+        "projects.create",
+        &ops::project_create(&*backend, "Project custody", "", &[]),
+    ))
+    .unwrap();
+    let script = Script::default();
+    let file = root.file("workspace.txt", b"Workspace-retained forest evidence.");
+    script.files.lock().unwrap().push(vec![file]);
+    let mut h = harness(shell(&engine, &root, script), 1440.0, 900.0);
+    settle(&mut h);
+    open_tab(&mut h);
+    click(&mut h, Role::Button, "Import document…");
+    click(&mut h, Role::Button, "Index document");
+    wait_for_index(&mut h);
+    let docs = &h.state().knowledge.documents;
+    let detail = docs.detail.clone().unwrap();
+    let exact = docs.selected.clone().unwrap();
+    type_search(&mut h, "forest");
+    click(&mut h, Role::Button, "Open citation · Line 1");
+    click(&mut h, Role::Button, "View original text");
+    assert!(h.state().knowledge.documents.citation.is_some());
+    assert!(h.state().knowledge.documents.original.is_some());
+
+    let change = documents_ops::change(&*backend, Change::Move, detail, exact, Some(target.id));
+    ops::command_result(backend.command("documents.move", &change)).unwrap();
+    h.state_mut().refresh_visible();
+    settle(&mut h);
+    let docs = &h.state().knowledge.documents;
+    assert!(docs.list.items.is_empty());
+    assert!(docs.selected.is_none() && docs.citation.is_none() && docs.original.is_none());
+    assert!(docs.results.as_ref().unwrap().passages.is_empty());
+    assert!(!has_text(&h, "Workspace-retained forest evidence."));
+}
+
+#[test]
+fn refresh_keeps_retained_versions_loaded_beyond_the_first_page() {
+    let root = Root::new("documents-version-pages");
+    let engine = start(&root);
+    let backend = engine.backend();
+    let script = Script::default();
+    let file = root.file("versions.txt", b"Exact retained version history.");
+    script.files.lock().unwrap().push(vec![file]);
+    let mut h = harness(shell(&engine, &root, script), 1440.0, 1550.0);
+    settle(&mut h);
+    open_tab(&mut h);
+    click(&mut h, Role::Button, "Import document…");
+    let mut detail = h.state().knowledge.documents.detail.clone().unwrap();
+    let source = detail.selected_version.clone().unwrap();
+    for _ in 0..20 {
+        let frame = frame::build(
+            &*backend,
+            frame::Negotiate::Latest,
+            Some(OperationInput::Documents(Input::Import(ImportInput {
+                scope: DataScope::Workspace,
+                title: detail.title,
+                source: source.clone(),
+                replace_document_id: Some(detail.id),
+                expected_revision: Some(detail.revision),
+            }))),
+        );
+        let OperationResult::DocumentsImport {
+            value: DocumentResult::Current(next),
+        } = ops::command_result(backend.command("documents.import", &frame)).unwrap()
+        else {
+            panic!("replacement must return the retained document");
+        };
+        detail = next;
+    }
+    h.state_mut().refresh_visible();
+    settle(&mut h);
+    let page = |shell: &Shell| {
+        let detail = shell.knowledge.documents.detail.as_ref().unwrap();
+        (
+            detail.retained_versions.0.len(),
+            detail.next_version_cursor.is_some(),
+        )
+    };
+    assert_eq!(page(h.state()), (20, true));
+    click(&mut h, Role::Button, "More versions");
+    assert_eq!(page(h.state()), (21, false));
+    h.state_mut().refresh_visible();
+    settle(&mut h);
+    assert_eq!(page(h.state()), (21, false));
+}
+
+#[test]
 fn a_lost_document_source_acknowledgement_is_confirmed_on_restart() {
     let root = Root::new("documents-source-receipt");
     let engine = start(&root);
@@ -283,6 +414,7 @@ fn a_lost_document_source_acknowledgement_is_confirmed_on_restart() {
     let original_keys = lossy.request_keys();
     assert_eq!(original_keys.len(), 4);
     h.state_mut().on_exit();
+    let pending = std::fs::read(root.memory()).unwrap();
     drop(h);
 
     let mut h = harness(
@@ -304,7 +436,24 @@ fn a_lost_document_source_acknowledgement_is_confirmed_on_restart() {
         ops::read_artifact_bytes(&*real, source).unwrap(),
         b"One exact imported copy."
     );
+    let imported = actual.id.clone();
+    h.state_mut().on_exit();
+    drop(h);
+    // The import committed, but a crash can leave the earlier source-save frame on disk.
+    std::fs::write(root.memory(), pending).unwrap();
+    let mut h = harness(
+        shell_with(Ok(lossy.clone()), &root, Script::default(), None),
+        1440.0,
+        900.0,
+    );
+    settle(&mut h);
+    h.state_mut().navigate(Route::Knowledge);
+    settle(&mut h);
+    let documents = &h.state().knowledge.documents;
+    assert_eq!(documents.list.items.len(), 1);
+    assert_eq!(documents.list.items[0].id, imported);
+    assert_eq!(documents.list.items[0].retained_version_count.get(), 1);
     let replay = lossy.request_keys();
-    assert!(replay.len() > original_keys.len());
+    assert!(replay.len() > original_keys.len() + 1);
     assert!(replay.iter().all(|key| key == &original_keys[0]));
 }

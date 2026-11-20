@@ -395,6 +395,13 @@ impl DocumentLibrary {
                     )?;
                     if query.schema_revision().0 >= ACTIVITY_REVISION && selected.live() {
                         detail.index_activity = activity::read(snapshot, ctx, &selected.id)?;
+                        detail.inspection = Some(activity::inspect(
+                            snapshot,
+                            ctx,
+                            &artifact,
+                            &selected,
+                            self.indexer.as_deref(),
+                        )?);
                     }
                     DocumentResult::Current(detail)
                 } else {
@@ -490,7 +497,7 @@ impl QueryHandler for DocumentLibrary {
         )
         .then_some(retrieval::check_publication as QueryPublicationCheck)
         .or_else(|| {
-            (query.schema_revision().0 >= ACTIVITY_REVISION
+            (query.schema_revision().0 >= DETAILS_REVISION
                 && matches!(
                     query.input(),
                     OperationInput::Documents(ops::Input::Read(_))
@@ -716,6 +723,7 @@ fn detail(
             more_gaps: false,
         },
         index_activity: None,
+        inspection: None,
     })
 }
 

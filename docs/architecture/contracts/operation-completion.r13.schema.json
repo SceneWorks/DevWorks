@@ -5387,6 +5387,10 @@
           "$ref": "#/$defs/DocumentIndexActivity",
           "x-since": 13
         },
+        "inspection": {
+          "$ref": "#/$defs/DocumentInspection",
+          "x-since": 13
+        },
         "nextVersionCursor": {
           "anyOf": [
             {
@@ -5581,6 +5585,78 @@
       ],
       "type": "object"
     },
+    "DocumentInspection": {
+      "additionalProperties": false,
+      "properties": {
+        "moreShares": {
+          "type": "boolean"
+        },
+        "moreVisionOccurrences": {
+          "type": "boolean"
+        },
+        "originalName": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Text1To256"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "originalSource": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Text1To256"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "shares": {
+          "$ref": "#/$defs/List_Id_0_128"
+        },
+        "tags": {
+          "$ref": "#/$defs/ArtifactTags"
+        },
+        "visionConnection": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Id"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "visionModel": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Id"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "visionOccurrences": {
+          "$ref": "#/$defs/List_DocumentVisionOccurrence_0_128"
+        },
+        "visionStatus": {
+          "$ref": "#/$defs/Id"
+        }
+      },
+      "required": [
+        "tags",
+        "shares",
+        "moreShares",
+        "visionStatus",
+        "visionOccurrences",
+        "moreVisionOccurrences"
+      ],
+      "type": "object"
+    },
     "DocumentLibraryPage": {
       "additionalProperties": false,
       "properties": {
@@ -5618,6 +5694,22 @@
     "DocumentResult": {
       "$ref": "#/$defs/DocumentDetail",
       "x-since": 10
+    },
+    "DocumentVisionOccurrence": {
+      "additionalProperties": false,
+      "properties": {
+        "location": {
+          "$ref": "#/$defs/Text1To256"
+        },
+        "status": {
+          "$ref": "#/$defs/Id"
+        }
+      },
+      "required": [
+        "location",
+        "status"
+      ],
+      "type": "object"
     },
     "DomainErrorCode": {
       "enum": [
@@ -10438,6 +10530,14 @@
     "List_DocumentIndexAttempt_0_128": {
       "items": {
         "$ref": "#/$defs/DocumentIndexAttempt"
+      },
+      "maxItems": 128,
+      "minItems": 0,
+      "type": "array"
+    },
+    "List_DocumentVisionOccurrence_0_128": {
+      "items": {
+        "$ref": "#/$defs/DocumentVisionOccurrence"
       },
       "maxItems": 128,
       "minItems": 0,

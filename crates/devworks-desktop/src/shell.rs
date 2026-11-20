@@ -1254,7 +1254,7 @@ impl Shell {
                 label: u.label.clone(),
                 operation: u.operation().to_owned(),
                 frame: u.frame().to_vec(),
-                dispatch: u.dispatch,
+                dispatch: u.dispatch.clone(),
             })
             .collect();
         let mut screens: BTreeMap<String, serde_json::Value> = self
@@ -1513,17 +1513,17 @@ impl Shell {
                 .collect()
         });
         if !dropped.is_empty() {
-            if conversation_visible {
+            if self.route == Route::Knowledge
+                && self.route_memory(Route::Knowledge).tab == crate::documents_screen::TAB
+            {
+                self.with_typed(|k: &mut KnowledgeScreen, cx| k.import_documents(cx, dropped));
+            } else if conversation_visible {
                 self.attach(dropped);
             } else if self.route == Route::Knowledge && self.route_memory(Route::Knowledge).tab == 2
             {
                 self.with_typed(|c: &mut crate::conventions_screen::ConventionsScreen, cx| {
                     c.import_dropped(cx, dropped)
                 });
-            } else if self.route == Route::Knowledge
-                && self.route_memory(Route::Knowledge).tab == crate::documents_screen::TAB
-            {
-                self.with_typed(|k: &mut KnowledgeScreen, cx| k.import_documents(cx, dropped));
             } else if self.route == Route::Knowledge {
                 // A file dropped on an entry view is previewed before import.
                 self.with_typed(|k: &mut KnowledgeScreen, cx| k.import_files(cx, dropped));

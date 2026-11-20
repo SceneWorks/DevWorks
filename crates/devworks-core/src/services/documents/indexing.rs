@@ -432,6 +432,20 @@ impl DocumentIndexer {
         *self.vision.write_locked() = Some(producer);
     }
 
+    pub(super) fn vision_route(
+        &self,
+        context: &InvocationContext,
+        read: &dyn crate::ports::storage::ReadSnapshot,
+    ) -> Result<Option<(Id, Id)>, StorageError> {
+        use crate::locks::RwLockExt;
+        self.vision
+            .read_locked()
+            .as_ref()
+            .map(|vision| vision.available_route(context, read))
+            .transpose()
+            .map(Option::flatten)
+    }
+
     pub(super) fn embeddings(&self) -> Option<&IndexService> {
         self.embeddings.as_deref()
     }
@@ -569,6 +583,7 @@ impl DocumentIndexer {
             latest: run.clone(),
             stage: DocumentIndexStage::Queued,
             diagnostic: None,
+            published_at_ms: prior.as_ref().and_then(|view| view.published_at_ms),
             published: prior.and_then(|view| view.published),
         })?;
         Ok(IndexRunRecord {
@@ -1046,6 +1061,7 @@ impl DocumentIndexer {
                 DocumentIndexStage::Partial
             };
             index.published = Some((claimed.id.clone(), extraction.revision));
+            index.published_at_ms = Some(tx.now_ms());
             index.diagnostic = diagnostic.clone();
             tx.documents().put_document_index(&index)?;
             if saved.current_version.as_ref() == Some(&saved.source.version_id) {

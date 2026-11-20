@@ -3446,6 +3446,62 @@ impl Check for DocumentIndexActivity {
 
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DocumentVisionOccurrence {
+    pub location: Label,
+    pub status: Id,
+}
+impl Check for DocumentVisionOccurrence {
+    fn check(&self) -> Result<(), String> {
+        self.location.check()?;
+        self.status.check()?;
+        crate::protocol::rules::record(
+            "DocumentVisionOccurrence",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DocumentInspection {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub original_name: Option<Label>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub original_source: Option<Label>,
+    pub tags: ArtifactTags,
+    pub shares: Items<ProjectId>,
+    pub more_shares: bool,
+    pub vision_status: Id,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vision_model: Option<Id>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vision_connection: Option<Id>,
+    pub vision_occurrences: Items<DocumentVisionOccurrence>,
+    pub more_vision_occurrences: bool,
+}
+impl Check for DocumentInspection {
+    fn check(&self) -> Result<(), String> {
+        self.original_name.check()?;
+        self.original_source.check()?;
+        self.tags.check()?;
+        self.shares.check()?;
+        self.more_shares.check()?;
+        self.vision_status.check()?;
+        self.vision_model.check()?;
+        self.vision_connection.check()?;
+        self.vision_occurrences.check()?;
+        self.more_vision_occurrences.check()?;
+        crate::protocol::rules::record(
+            "DocumentInspection",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct DocumentDetail {
     pub id: Id,
     pub revision: Revision,
@@ -3479,6 +3535,13 @@ pub struct DocumentDetail {
     )]
     #[schemars(with = "DocumentIndexActivity", extend("x-since" = 13))]
     pub index_activity: Option<DocumentIndexActivity>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "DocumentInspection", extend("x-since" = 13))]
+    pub inspection: Option<DocumentInspection>,
 }
 impl Check for DocumentDetail {
     fn check(&self) -> Result<(), String> {
@@ -3501,6 +3564,7 @@ impl Check for DocumentDetail {
         self.extraction_state.check()?;
         self.coverage.check()?;
         self.index_activity.check()?;
+        self.inspection.check()?;
         crate::protocol::rules::record(
             "DocumentDetail",
             &serde_json::to_value(self).map_err(|e| e.to_string())?,
@@ -3513,6 +3577,9 @@ impl Revisioned for DocumentDetail {
     fn retain_revision(&mut self, revision: u32) {
         if revision < 13 {
             self.index_activity = None;
+        }
+        if revision < 13 {
+            self.inspection = None;
         }
     }
 }

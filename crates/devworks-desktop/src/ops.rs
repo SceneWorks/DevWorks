@@ -703,13 +703,25 @@ pub fn artifact_read_after(
 /// The complete bytes of `artifact` through `artifacts.read` (paged by byte cursor, or a
 /// verified stream for non-text bytes), checked against the reference's length and digest.
 pub fn read_artifact_bytes(b: &dyn Backend, artifact: &ArtifactRef) -> Result<Vec<u8>, String> {
+    read_artifact_bytes_in(b, None, artifact)
+}
+
+pub(crate) fn read_artifact_bytes_in(
+    b: &dyn Backend,
+    project: Option<&ProjectId>,
+    artifact: &ArtifactRef,
+) -> Result<Vec<u8>, String> {
     use sha2::{Digest, Sha256};
     let expected = artifact.byte_length.get() as u64;
     let mut bytes: Vec<u8> = Vec::with_capacity(expected as usize);
     let mut cursor: Option<String> = None;
     loop {
         let frame = artifact_read_after(b, artifact, cursor.as_deref());
-        match read_content(b.query("artifacts.read", &frame)).map_err(|e| e.describe())? {
+        let reply = match project {
+            Some(project) => b.query_in_project(project, "artifacts.read", &frame),
+            None => b.query("artifacts.read", &frame),
+        };
+        match read_content(reply).map_err(|e| e.describe())? {
             devworks_core::protocol::records::ArtifactReadContent::Text {
                 content,
                 truncated,
@@ -730,7 +742,10 @@ pub fn read_artifact_bytes(b: &dyn Backend, artifact: &ArtifactRef) -> Result<Ve
                 cursor = Some(next);
             }
             devworks_core::protocol::records::ArtifactReadContent::Binary { stream_id, .. } => {
-                bytes = b.read_stream(&stream_id, expected)?;
+                bytes = match project {
+                    Some(project) => b.read_stream_in_project(project, &stream_id, expected)?,
+                    None => b.read_stream(&stream_id, expected)?,
+                };
                 break;
             }
         }

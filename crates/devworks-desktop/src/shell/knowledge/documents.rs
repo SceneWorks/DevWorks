@@ -4,14 +4,14 @@ use crate::{
     attachments,
     backend::{self, Reply, TaskOutput},
     documents_ops::{self, DocumentSlot},
-    documents_screen::{Action, ImportPlan, StagedImport, Upload},
+    documents_screen::{Action, Change, ImportPlan, StagedImport, Upload},
     frame,
     knowledge_ops::KnowledgeSlot,
     ops, paged,
     widgets::Tone,
 };
 use devworks_core::protocol::{
-    ProjectId,
+    Id, ProjectId,
     data::{CitationSource, DataScope, DocumentVersions, RetrievalMode},
     records::DocumentResult,
     results::OperationResult,
@@ -19,6 +19,60 @@ use devworks_core::protocol::{
 use std::path::{Path, PathBuf};
 
 impl KnowledgeCtl<'_, '_> {
+    fn document_project(&self) -> Option<ProjectId> {
+        self.knowledge
+            .documents
+            .project
+            .as_deref()
+            .and_then(frame::id)
+            .map(ProjectId)
+    }
+
+    fn query_document(
+        &mut self,
+        slot: DocumentSlot,
+        label: &str,
+        operation: &'static str,
+        frame: impl FnOnce(&dyn backend::Backend) -> Vec<u8>,
+    ) -> bool {
+        if self.online().is_err() {
+            return false;
+        }
+        let project = self.document_project();
+        self.client.as_deref_mut().is_some_and(|client| {
+            let body = frame(&**client.backend());
+            client.query_in(
+                project,
+                KnowledgeSlot::Documents(slot).into(),
+                label,
+                operation,
+                body,
+            )
+        })
+    }
+
+    fn command_document(
+        &mut self,
+        project: Option<ProjectId>,
+        label: &str,
+        operation: &'static str,
+        frame: impl FnOnce(&dyn backend::Backend) -> Vec<u8>,
+    ) -> bool {
+        if self.online().is_err() {
+            return false;
+        }
+        self.client.as_deref_mut().is_some_and(|client| {
+            let body = frame(&**client.backend());
+            client.command_in(
+                project,
+                KnowledgeSlot::Documents(DocumentSlot::Write).into(),
+                label,
+                operation,
+                body,
+            )
+        })
+    }
+
     pub(super) fn load_documents(&mut self, refresh: bool) {
         let documents = &mut self.knowledge.documents;
         if documents.list.loading() {
@@ -47,6 +101,74 @@ impl KnowledgeCtl<'_, '_> {
         );
     }
 
+    pub(super) fn refresh_documents(&mut self) {
+        self.load_documents(true);
+        let generation = self.knowledge.documents.read_generation;
+        if ![true, false].into_iter().any(|more| {
+            self.pending(&KnowledgeSlot::Documents(DocumentSlot::Read {
+                generation,
+                more,
+            }))
+        }) {
+            self.read_document(false);
+        }
+        self.verify_document_access();
+    }
+
+    fn verify_document_access(&mut self) {
+        let project = self.document_project();
+        let docs = &self.knowledge.documents;
+        let pending_content = [
+            DocumentSlot::Search(docs.search_generation),
+            DocumentSlot::Citation(docs.citation_generation),
+            DocumentSlot::Source(docs.source_generation),
+        ];
+        if docs.validating_access
+            || pending_content
+                .into_iter()
+                .any(|slot| self.pending(&KnowledgeSlot::Documents(slot)))
+        {
+            return;
+        }
+        let mut versions = Vec::new();
+        if let Some(results) = &docs.results {
+            for passage in &results.passages {
+                if let CitationSource::Managed { version, .. } = &passage.citation.source {
+                    versions.push(version.clone());
+                }
+            }
+        }
+        if let Some(source) = &docs.selected {
+            versions.push(source.clone());
+        }
+        if let Some(citation) = &docs.citation
+            && let CitationSource::Managed { version, .. } = &citation.citation.source
+        {
+            versions.push(version.clone());
+        }
+        if versions.is_empty() {
+            return;
+        }
+        let mut seen = std::collections::HashSet::new();
+        versions.retain(|source| seen.insert(source.version_id.clone()));
+        let generation = docs.visibility_generation;
+        let submitted = self.client.as_deref_mut().is_some_and(|client| {
+            client.task(
+                KnowledgeSlot::Documents(DocumentSlot::VerifyAccess(generation)).into(),
+                "Checking retained document access",
+                move |backend| {
+                    let visible = versions
+                        .into_iter()
+                        .filter(|source| source_authorized(backend, project.as_ref(), source))
+                        .map(|source| source.version_id)
+                        .collect();
+                    Ok(TaskOutput::DocumentAccess(visible))
+                },
+            )
+        });
+        self.knowledge.documents.validating_access = submitted;
+    }
+
     pub(super) fn read_document(&mut self, more: bool) {
         let documents = &mut self.knowledge.documents;
         let Some(version) = documents.selected.clone() else {
@@ -66,8 +188,8 @@ impl KnowledgeCtl<'_, '_> {
         };
         documents.read_generation += 1;
         let generation = documents.read_generation;
-        self.query(
-            KnowledgeSlot::Documents(DocumentSlot::Read { generation, more }),
+        self.query_document(
+            DocumentSlot::Read { generation, more },
             "Reading the exact document version",
             "documents.read",
             move |b| documents_ops::read(b, version, cursor),
@@ -82,10 +204,7 @@ impl KnowledgeCtl<'_, '_> {
                     self.knowledge.documents.scope(project.as_deref());
                     self.load_documents(false);
                 }
-                Action::Reload => {
-                    self.load_documents(true);
-                    self.read_document(false);
-                }
+                Action::Reload => self.refresh_documents(),
                 Action::More => {
                     if let Some(fetch) = self.knowledge.documents.list.more_page() {
                         self.send_documents(fetch);
@@ -107,19 +226,22 @@ impl KnowledgeCtl<'_, '_> {
                 Action::Follow(citation) => {
                     let documents = &mut self.knowledge.documents;
                     documents.citation = None;
+                    documents.visibility_changed();
                     documents.citation_generation += 1;
                     let generation = documents.citation_generation;
-                    self.query(
-                        KnowledgeSlot::Documents(DocumentSlot::Citation(generation)),
+                    self.query_document(
+                        DocumentSlot::Citation(generation),
                         "Resolving the exact citation",
                         "documents.resolve_citation",
                         move |b| documents_ops::follow(b, citation),
                     );
                 }
                 Action::ViewOriginal(version) => {
+                    self.knowledge.documents.visibility_changed();
                     let generation = self.knowledge.documents.source_generation;
+                    let project = self.document_project();
                     self.source_task(generation, "Reading the original text", move |b| {
-                        let bytes = ops::read_artifact_bytes(b, &version)?;
+                        let bytes = original_bytes(b, project.as_ref(), &version)?;
                         let text = String::from_utf8(bytes)
                             .map_err(|_| "The original is not UTF-8 text.")?;
                         let mut display = text.chars().take(32768).collect::<String>();
@@ -146,8 +268,9 @@ impl KnowledgeCtl<'_, '_> {
                         continue;
                     };
                     let generation = self.knowledge.documents.source_generation;
+                    let project = self.document_project();
                     self.source_task(generation, "Saving the original document", move |b| {
-                        let bytes = ops::read_artifact_bytes(b, &version)?;
+                        let bytes = original_bytes(b, project.as_ref(), &version)?;
                         let parent = path
                             .parent()
                             .ok_or_else(|| "The destination has no directory.".to_owned())?;
@@ -175,12 +298,14 @@ impl KnowledgeCtl<'_, '_> {
                         .and_then(frame::id)
                         .map(ProjectId);
                     let op = documents_ops::operation(change);
-                    let submitted = self.command(
-                        KnowledgeSlot::Documents(DocumentSlot::Write),
-                        change.label(),
-                        op,
-                        move |b| documents_ops::change(b, change, detail, version, target),
-                    );
+                    let project = if matches!(change, Change::Share | Change::Move) {
+                        None
+                    } else {
+                        self.document_project()
+                    };
+                    let submitted = self.command_document(project, change.label(), op, move |b| {
+                        documents_ops::change(b, change, detail, version, target)
+                    });
                     self.knowledge.documents.writing = submitted;
                 }
             }
@@ -236,13 +361,14 @@ impl KnowledgeCtl<'_, '_> {
             fallback: documents.hybrid && documents.fallback,
         };
         documents.search_generation += 1;
+        documents.visibility_changed();
         let generation = documents.search_generation;
         documents.results = None;
         documents.citation = None;
         documents.citation_generation += 1;
         documents.message = None;
-        self.query(
-            KnowledgeSlot::Documents(DocumentSlot::Search(generation)),
+        self.query_document(
+            DocumentSlot::Search(generation),
             "Searching managed documents",
             "documents.search",
             move |b| search.frame(b),
@@ -250,6 +376,13 @@ impl KnowledgeCtl<'_, '_> {
     }
 
     fn upload_document(&mut self, paths: Vec<PathBuf>, replacing: bool) {
+        if !self.projects.list.loaded {
+            self.document_message(
+                Tone::Attention,
+                "Wait for the project list before importing a document.",
+            );
+            return;
+        }
         let documents = &mut self.knowledge.documents;
         if documents.busy() {
             self.document_message(
@@ -384,10 +517,30 @@ impl KnowledgeCtl<'_, '_> {
                         },
                         _,
                     )) => {
-                        if more && let Some(previous) = self.knowledge.documents.detail.as_ref() {
-                            let mut retained = previous.retained_versions.0.clone();
-                            retained.append(&mut detail.retained_versions.0);
-                            detail.retained_versions.0 = retained;
+                        if self.knowledge.documents.project.is_none()
+                            && !matches!(detail.scope, DataScope::Workspace)
+                        {
+                            self.knowledge.documents.select(None);
+                            self.document_message(
+                                Tone::Attention,
+                                "This version moved to another scope.",
+                            );
+                            return;
+                        }
+                        if let Some(previous) = self.knowledge.documents.detail.as_ref()
+                            && previous.reference_revision == detail.reference_revision
+                            && previous.scope_revision == detail.scope_revision
+                        {
+                            if more {
+                                let mut retained = previous.retained_versions.0.clone();
+                                retained.append(&mut detail.retained_versions.0);
+                                detail.retained_versions.0 = retained;
+                            } else if previous.retained_versions.0.len()
+                                > detail.retained_versions.0.len()
+                            {
+                                detail.retained_versions = previous.retained_versions.clone();
+                                detail.next_version_cursor = previous.next_version_cursor.clone();
+                            }
                         }
                         self.knowledge.documents.detail = Some(detail);
                     }
@@ -452,6 +605,17 @@ impl KnowledgeCtl<'_, '_> {
                     _ => {}
                 }
             }
+            (
+                DocumentSlot::VerifyAccess(generation),
+                Reply::Task(Ok(TaskOutput::DocumentAccess(visible))),
+            ) if generation == self.knowledge.documents.visibility_generation => {
+                self.keep_visible_document_content(&visible);
+            }
+            (DocumentSlot::VerifyAccess(generation), Reply::Task(Err(_)))
+                if generation == self.knowledge.documents.visibility_generation =>
+            {
+                self.keep_visible_document_content(&[]);
+            }
             (DocumentSlot::Upload, Reply::Task(Ok(TaskOutput::Prepared { frame }))) => {
                 if let Some(Upload::Preparing(plan)) = self.knowledge.documents.upload.take() {
                     self.save_document_source(StagedImport { plan, frame });
@@ -470,11 +634,18 @@ impl KnowledgeCtl<'_, '_> {
                 match ops::saved_artifact(outcome) {
                     Ok(source) => {
                         let command_plan = plan.clone();
-                        let sent = self.command(
-                            KnowledgeSlot::Documents(DocumentSlot::Write),
+                        let save_frame = frame.clone();
+                        let project = match &plan.scope {
+                            DataScope::Project { project_id } => Some(project_id.clone()),
+                            DataScope::Workspace => None,
+                        };
+                        let sent = self.command_document(
+                            project,
                             "Importing the retained document",
                             "documents.import",
-                            move |b| documents_ops::import(b, command_plan, source.artifact),
+                            move |b| {
+                                documents_ops::import(b, command_plan, source.artifact, &save_frame)
+                            },
                         );
                         if sent {
                             self.knowledge.documents.writing = true;
@@ -493,6 +664,32 @@ impl KnowledgeCtl<'_, '_> {
             (DocumentSlot::Write, Reply::Command(reply)) => self.document_written(reply),
             _ => {}
         }
+    }
+
+    fn keep_visible_document_content(&mut self, visible: &[Id]) {
+        let docs = &mut self.knowledge.documents;
+        docs.validating_access = false;
+        let allowed = |citation: &devworks_core::protocol::data::Citation| {
+            matches!(&citation.source, CitationSource::Managed { version, .. }
+                if visible.contains(&version.version_id))
+        };
+        if let Some(results) = &mut docs.results {
+            results
+                .passages
+                .retain(|passage| allowed(&passage.citation));
+        }
+        let citation = docs
+            .citation
+            .take()
+            .filter(|value| allowed(&value.citation));
+        if docs
+            .selected
+            .as_ref()
+            .is_some_and(|source| !visible.contains(&source.version_id))
+        {
+            docs.select(None);
+        }
+        docs.citation = citation;
     }
 
     fn document_written(&mut self, reply: devworks_core::gateway::CommandOutcome) {
@@ -558,9 +755,46 @@ impl KnowledgeCtl<'_, '_> {
         documents.citation = None;
         documents.original = None;
         documents.source_generation += 1;
+        documents.visibility_changed();
         self.load_documents(false);
         self.read_document(false);
     }
+}
+
+fn source_authorized(
+    backend: &dyn backend::Backend,
+    project: Option<&ProjectId>,
+    source: &devworks_core::protocol::provider::ArtifactRef,
+) -> bool {
+    let frame = documents_ops::authorize_source(backend, source.clone());
+    let reply = match project {
+        Some(project) => backend.query_in_project(project, "documents.read", &frame),
+        None => backend.query("documents.read", &frame),
+    };
+    matches!(ops::query_result(reply),
+    Ok((OperationResult::DocumentsRead { value: DocumentResult::Current(detail) }, _))
+        if (project.is_some() || matches!(detail.scope, DataScope::Workspace))
+            && detail.selected_version.as_ref().is_some_and(|exact| {
+            exact.artifact_id == source.artifact_id && exact.version_id == source.version_id
+                && exact.sha256 == source.sha256 && exact.byte_length == source.byte_length
+                && exact.media_type == source.media_type
+        }))
+}
+
+fn original_bytes(
+    backend: &dyn backend::Backend,
+    project: Option<&ProjectId>,
+    source: &devworks_core::protocol::provider::ArtifactRef,
+) -> Result<Vec<u8>, String> {
+    let checked = || {
+        source_authorized(backend, project, source)
+            .then_some(())
+            .ok_or_else(|| "The original version is unavailable in this scope.".to_owned())
+    };
+    checked()?;
+    let bytes = ops::read_artifact_bytes_in(backend, project, source)?;
+    checked()?;
+    Ok(bytes)
 }
 
 fn media_type(path: &Path) -> Option<&'static str> {

@@ -13,8 +13,8 @@ use devworks_core::gateway::{CommandOutcome, QueryOutcome};
 use devworks_core::locks::LockExt;
 use devworks_core::ports::secrets::Secret;
 use devworks_core::protocol::CommandReply;
-use devworks_core::protocol::Id;
 use devworks_core::protocol::helpers::ControlEpoch;
+use devworks_core::protocol::{Id, ProjectId};
 use devworks_core::settings::view::Health;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -45,6 +45,35 @@ pub trait Backend: Send + Sync {
     }
     /// Admits a query frame for `operation` with the host-bound user context.
     fn query(&self, operation: &str, frame: &[u8]) -> QueryOutcome;
+    /// Uses the active native panel's narrower project lineage with the normal gateway.
+    fn query_in_project(
+        &self,
+        _project: &ProjectId,
+        operation: &str,
+        _frame: &[u8],
+    ) -> QueryOutcome {
+        Err(devworks_core::gateway::GatewayFailure::NoUseCase(
+            operation.into(),
+        ))
+    }
+    fn command_in_project(
+        &self,
+        _project: &ProjectId,
+        operation: &str,
+        _frame: &[u8],
+    ) -> CommandOutcome {
+        Err(devworks_core::gateway::GatewayFailure::NoUseCase(
+            operation.into(),
+        ))
+    }
+    fn read_stream_in_project(
+        &self,
+        _project: &ProjectId,
+        _stream: &Id,
+        _max: u64,
+    ) -> Result<Vec<u8>, String> {
+        Err("Project source access is unavailable".into())
+    }
     /// Only a host that forwards the token to the real gateway may advertise this seam.
     fn supports_query_cancellation(&self) -> bool {
         false
@@ -392,6 +421,8 @@ pub enum TaskOutput {
     TextPreview(Option<devworks_engine::providers::live::LiveTurn>),
     /// Exact original document text or a completed local export.
     DocumentSource(Option<String>),
+    /// Exact native document versions still visible in the panel scope.
+    DocumentAccess(Vec<Id>),
     /// A bounded convention editor or transfer task.
     Convention(crate::conventions_ops::TaskResult),
     /// Instruction text read or a staged draft (Roles and skills).
@@ -424,7 +455,7 @@ pub fn is_unknown(outcome: &CommandOutcome) -> bool {
 pub fn resolve_command(backend: &dyn Backend, operation: &str, frame: &[u8]) -> CommandOutcome {
     resolve_dispatched(
         backend,
-        CommandDispatch::Generic,
+        &CommandDispatch::Generic,
         operation,
         frame,
         ControlEpoch::UNKNOWN,
@@ -435,13 +466,14 @@ pub fn resolve_command(backend: &dyn Backend, operation: &str, frame: &[u8]) -> 
 /// only to the human-only dispatches).
 fn resolve_dispatched(
     backend: &dyn Backend,
-    dispatch: CommandDispatch,
+    dispatch: &CommandDispatch,
     operation: &str,
     frame: &[u8],
     received: ControlEpoch,
 ) -> CommandOutcome {
     let invoke = || match dispatch {
         CommandDispatch::Generic => backend.command(operation, frame),
+        CommandDispatch::Project(project) => backend.command_in_project(project, operation, frame),
         CommandDispatch::HumanDecision => backend.human_decision(frame, received),
         CommandDispatch::ProjectPurge => backend.confirm_project_purge(frame, received),
     };
@@ -470,11 +502,17 @@ fn resolve_dispatched(
     ) && let devworks_core::admission::CallerKey::Command(request_key) = decoded.key
     {
         let lookup = receipt_lookup(backend, &request_key);
+        let inspected = match dispatch {
+            CommandDispatch::Project(project) => {
+                backend.query_in_project(project, "history.command_receipt", &lookup)
+            }
+            _ => backend.query("history.command_receipt", &lookup),
+        };
         if let Ok(devworks_core::protocol::results::DomainQueryReply::Result {
             result:
                 devworks_core::protocol::results::OperationResult::HistoryCommandReceipt { value },
             ..
-        }) = backend.query("history.command_receipt", &lookup)
+        }) = inspected
             && value.request_key == request_key
             && let Some(purged) = value.purged
             && purged.request_digest.as_str() == decoded.fingerprint.as_str()
@@ -512,16 +550,18 @@ pub(crate) fn receipt_lookup(
 }
 
 /// The host ingress chosen by the native interaction, retained with exact retry frames.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum CommandDispatch {
     #[default]
     Generic,
+    Project(ProjectId),
     HumanDecision,
     ProjectPurge,
 }
 
 struct PendingQuery {
     operation: &'static str,
+    project: Option<ProjectId>,
     frame: Vec<u8>,
     options: Option<devworks_core::ports::storage::ReadOptions>,
 }
@@ -582,6 +622,19 @@ impl Unresolved {
             return None;
         }
         if dispatch == CommandDispatch::ProjectPurge && operation != "projects.purge" {
+            return None;
+        }
+        if matches!(dispatch, CommandDispatch::Project(_))
+            && !matches!(
+                operation,
+                "documents.import"
+                    | "documents.index"
+                    | "documents.retry"
+                    | "documents.disable_retrieval"
+                    | "documents.remove_index"
+                    | "indexing.cancel"
+            )
+        {
             return None;
         }
         // Restored disk state can resolve an existing receipt, but cannot create
@@ -821,11 +874,28 @@ impl Client {
         operation: &'static str,
         frame: Vec<u8>,
     ) -> bool {
+        self.query_in(None, slot, label, operation, frame)
+    }
+
+    pub(crate) fn query_in(
+        &mut self,
+        project: Option<ProjectId>,
+        slot: Slot,
+        label: &str,
+        operation: &'static str,
+        frame: Vec<u8>,
+    ) -> bool {
+        let scope = project.clone();
         let kept = frame.clone();
         let ticket = self.submit(
             slot,
             label,
-            Box::new(move |b| Reply::Query(b.query(operation, &frame))),
+            Box::new(move |b| {
+                Reply::Query(match &project {
+                    Some(project) => b.query_in_project(project, operation, &frame),
+                    None => b.query(operation, &frame),
+                })
+            }),
             None,
         );
         if let Some(ticket) = ticket
@@ -833,6 +903,7 @@ impl Client {
         {
             p.query = Some(PendingQuery {
                 operation,
+                project: scope,
                 frame: kept,
                 options: None,
             });
@@ -861,6 +932,7 @@ impl Client {
         {
             p.query = Some(PendingQuery {
                 operation,
+                project: None,
                 frame: kept,
                 options: Some(kept_options),
             });
@@ -880,7 +952,19 @@ impl Client {
         operation: &'static str,
         frame: Vec<u8>,
     ) -> bool {
-        self.dispatched_command(slot, label, operation, frame, CommandDispatch::Generic)
+        self.command_in(None, slot, label, operation, frame)
+    }
+
+    pub(crate) fn command_in(
+        &mut self,
+        project: Option<ProjectId>,
+        slot: Slot,
+        label: &str,
+        operation: &'static str,
+        frame: Vec<u8>,
+    ) -> bool {
+        let dispatch = project.map_or(CommandDispatch::Generic, CommandDispatch::Project);
+        self.dispatched_command(slot, label, operation, frame, dispatch)
     }
 
     /// Called only by the native approval decision controls, never generic command dispatch.
@@ -925,15 +1009,22 @@ impl Client {
         let kept = frame.clone();
         // Captured as the UI receives the interaction, before any worker runs it.
         let received = self.backend.control_epoch();
+        let live_dispatch = dispatch.clone();
         let job: Job = Box::new(move |b| {
-            Reply::Command(resolve_dispatched(b, dispatch, operation, &frame, received))
+            Reply::Command(resolve_dispatched(
+                b,
+                &live_dispatch,
+                operation,
+                &frame,
+                received,
+            ))
         });
         if self
             .submit(
                 slot.clone(),
                 label,
                 job,
-                Some((operation, kept.clone(), dispatch)),
+                Some((operation, kept.clone(), dispatch.clone())),
             )
             .is_some()
         {
@@ -976,7 +1067,7 @@ impl Client {
                     label: p.label.clone(),
                     operation,
                     frame: frame.clone(),
-                    dispatch: *dispatch,
+                    dispatch: dispatch.clone(),
                 });
             }
         }
@@ -1062,7 +1153,7 @@ impl Client {
                     label: p.label.clone(),
                     operation,
                     frame: frame.clone(),
-                    dispatch: *dispatch,
+                    dispatch: dispatch.clone(),
                 });
             }
             // Superseded by a newer request for the same slot: drop the stale reply.
@@ -1097,15 +1188,16 @@ impl Client {
                             q.operation,
                             q.frame.clone(),
                             q.options.clone(),
+                            q.project.clone(),
                         )
                     })
             })
             .collect::<Vec<_>>();
-        for (slot, label, op, frame, options) in queries {
+        for (slot, label, op, frame, options, project) in queries {
             if let Some(options) = options {
                 self.query_cancellable(slot, &label, op, frame, options);
             } else {
-                self.query(slot, &label, op, frame);
+                self.query_in(project, slot, &label, op, frame);
             }
         }
     }
@@ -1372,7 +1464,7 @@ mod human_dispatch_tests {
         assert!(matches!(
             resolve_dispatched(
                 &b,
-                CommandDispatch::HumanDecision,
+                &CommandDispatch::HumanDecision,
                 "approvals.record_human_decision",
                 b"exact",
                 ControlEpoch::QUIET
@@ -1387,7 +1479,7 @@ mod human_dispatch_tests {
         assert!(matches!(
             resolve_dispatched(
                 &b,
-                CommandDispatch::ProjectPurge,
+                &CommandDispatch::ProjectPurge,
                 "projects.purge",
                 b"exact",
                 ControlEpoch::QUIET
@@ -1422,7 +1514,7 @@ mod human_dispatch_tests {
         let backend = NoHuman::default();
         let _ = resolve_dispatched(
             &backend,
-            restored.dispatch,
+            &restored.dispatch,
             restored.operation(),
             restored.frame(),
             ControlEpoch::QUIET,
@@ -1433,6 +1525,44 @@ mod human_dispatch_tests {
             &[b"original exact frame".to_vec()]
         );
     }
+    #[test]
+    fn restored_document_dispatch_keeps_its_project_and_refuses_generic_fallback() {
+        use crate::{documents_ops::DocumentSlot, knowledge_ops::KnowledgeSlot};
+        let slot: Slot = KnowledgeSlot::Documents(DocumentSlot::Write).into();
+        let dispatch = CommandDispatch::Project(ProjectId(Id::new("project-documents").unwrap()));
+        let restored = Unresolved::restored_dispatch(
+            slot.clone(),
+            "import".into(),
+            "documents.import",
+            b"exact project frame".to_vec(),
+            dispatch.clone(),
+        )
+        .unwrap();
+        assert_eq!(restored.dispatch, dispatch);
+        let backend = NoHuman::default();
+        assert!(matches!(
+            resolve_dispatched(
+                &backend,
+                &restored.dispatch,
+                restored.operation(),
+                restored.frame(),
+                ControlEpoch::QUIET
+            ),
+            Err(devworks_core::gateway::GatewayFailure::NoUseCase(_))
+        ));
+        assert_eq!(backend.generic.load(Ordering::SeqCst), 0);
+        assert!(
+            Unresolved::restored_dispatch(
+                slot,
+                "other operation".into(),
+                "projects.purge",
+                vec![],
+                dispatch,
+            )
+            .is_none()
+        );
+    }
+
     #[test]
     fn restart_keeps_the_explicit_dispatch_and_never_upgrades_old_generic_frames() {
         let legacy = Unresolved::restored(

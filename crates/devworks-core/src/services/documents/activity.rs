@@ -1,5 +1,8 @@
 //! A projection of existing exact-version index history and metered attempts.
-use super::indexing::code;
+use super::{
+    indexing::{DocumentIndexer, code},
+    vision::{self, VisionOutcome},
+};
 use crate::{
     authority::reach::{Reach, reach},
     context::InvocationContext,
@@ -7,12 +10,18 @@ use crate::{
     operations::{OperationInput, documents as ops},
     ports::{
         QueryAnswer,
-        storage::{DocumentIndexStage, QueueState, ReadSnapshot, StorageError},
+        storage::{
+            DocumentIndexStage, QueueState, ReadSnapshot, StorageError, StoredArtifact,
+            StoredVersion,
+        },
     },
     protocol::{
         DomainErrorCode, Id,
-        data::ArtifactQuery,
-        records::{DocumentIndexActivity, DocumentIndexAttempt, DocumentResult},
+        data::{ArtifactQuery, ArtifactTags, Locator},
+        records::{
+            DocumentIndexActivity, DocumentIndexAttempt, DocumentInspection, DocumentResult,
+            DocumentVisionOccurrence,
+        },
         results::OperationResult,
         support::{BoundedList, BoundedText},
     },
@@ -45,6 +54,7 @@ pub(super) fn read(
         (_, Some(QueueState::Claimed)) if entry.as_ref().is_some_and(|e| e.cancel_requested) => {
             "Cancelling"
         }
+        (_, Some(QueueState::Claimed)) => "Indexing",
         (_, Some(QueueState::Failed | QueueState::Dismissed)) => "Failed",
         (_, Some(QueueState::Cancelled)) => "Cancelled",
         (stage, _) => match stage {
@@ -57,18 +67,13 @@ pub(super) fn read(
             DocumentIndexStage::Removed => "Removed",
         },
     };
-    let (indexed_at_ms, chunk_count) = match &index.published {
-        Some((delivery, revision)) => (
-            snapshot
-                .documents()
-                .document_publication_time(delivery)?
-                .map(counter),
-            snapshot
-                .documents()
-                .document_checkpoint(version, revision)?
-                .map(|checkpoint| counter(i64::from(checkpoint.blocks))),
-        ),
-        None => (None, None),
+    let indexed_at_ms = index.published_at_ms.map(counter);
+    let chunk_count = match &index.published {
+        Some((_, revision)) => snapshot
+            .documents()
+            .document_checkpoint(version, revision)?
+            .map(|checkpoint| counter(i64::from(checkpoint.blocks))),
+        None => None,
     };
     let mut ids =
         snapshot
@@ -88,6 +93,89 @@ pub(super) fn read(
         attempts: BoundedList(attempts),
         more_attempts,
     }))
+}
+
+pub(super) fn inspect(
+    snapshot: &dyn ReadSnapshot,
+    context: &InvocationContext,
+    artifact: &StoredArtifact,
+    version: &StoredVersion,
+    indexer: Option<&DocumentIndexer>,
+) -> Result<DocumentInspection, StorageError> {
+    const DISPLAY_LIMIT: usize = 128;
+    let source = &version.source;
+    let label = |value: &serde_json::Value| {
+        value
+            .as_str()
+            .filter(|s| !s.is_empty())
+            .map(|s| BoundedText(s.chars().take(256).collect()))
+    };
+    let original_name = label(&source["originalName"]);
+    let original_source = label(&source["originalSource"]["kind"])
+        .or_else(|| label(&source["originalSource"]))
+        .or_else(|| label(&source["kind"]));
+    let tags = ArtifactTags::new(snapshot.artifacts().tags(&artifact.id)?).map_err(invalid)?;
+    let mut shares = snapshot.artifacts().shares(&artifact.id)?;
+    if let Some(project) = context.project_id()
+        && artifact.scope.project() != Some(project)
+    {
+        shares.retain(|id| id == project);
+    }
+    let more_shares = shares.len() > DISPLAY_LIMIT;
+    shares.truncate(DISPLAY_LIMIT);
+    let policy = vision::policy(snapshot.configuration())?;
+    let route = match indexer {
+        Some(runtime) if policy.enabled => runtime.vision_route(context, snapshot)?,
+        _ => None,
+    };
+    let vision_status = if !policy.enabled {
+        "Disabled"
+    } else if route.is_some() {
+        "Available"
+    } else {
+        "Unavailable"
+    };
+    let (vision_model, vision_connection) = route.unzip();
+    let mut occurrences = snapshot
+        .documents()
+        .document_vision_occurrences(&version.id, DISPLAY_LIMIT + 1)?;
+    let more_vision_occurrences = occurrences.len() > DISPLAY_LIMIT;
+    occurrences.truncate(DISPLAY_LIMIT);
+    let vision_occurrences = occurrences
+        .into_iter()
+        .map(|(target, unit)| {
+            let location = match target.locator() {
+                Locator::Pdf { page } => format!("Page {page}"),
+                Locator::Docx {
+                    part, paragraph, ..
+                } => format!("{} · paragraph {paragraph}", part.as_str()),
+                _ => "Document image".into(),
+            };
+            let status = match unit.map(|unit| unit.outcome) {
+                None | Some(VisionOutcome::Ready) => code("NeedsExtraction"),
+                Some(VisionOutcome::Unknown) => code("OutcomeUnknown"),
+                Some(VisionOutcome::Blank) => code("BlankPage"),
+                Some(VisionOutcome::Complete { .. }) => code("VisionEvidenceSaved"),
+                Some(VisionOutcome::Failed { diagnostic }) => diagnostic,
+            };
+            DocumentVisionOccurrence {
+                location: BoundedText(location),
+                status,
+            }
+        })
+        .collect();
+    Ok(DocumentInspection {
+        original_name,
+        original_source,
+        tags,
+        shares: BoundedList(shares),
+        more_shares,
+        vision_status: code(vision_status),
+        vision_model,
+        vision_connection,
+        vision_occurrences: BoundedList(vision_occurrences),
+        more_vision_occurrences,
+    })
 }
 
 fn attempt(snapshot: &dyn ReadSnapshot, id: &Id) -> Result<DocumentIndexAttempt, StorageError> {

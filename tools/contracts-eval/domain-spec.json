@@ -1372,6 +1372,25 @@
         "more_attempts": "bool"
       }
     },
+    "DocumentVisionOccurrence": {
+      "kind": "record",
+      "fields": {"location": "Label", "status": "Id"}
+    },
+    "DocumentInspection": {
+      "kind": "record",
+      "fields": {
+        "original_name": "?Label",
+        "original_source": "?Label",
+        "tags": "ArtifactTags",
+        "shares": "Items<ProjectId>",
+        "more_shares": "bool",
+        "vision_status": "Id",
+        "vision_model": "?Id",
+        "vision_connection": "?Id",
+        "vision_occurrences": "Items<DocumentVisionOccurrence>",
+        "more_vision_occurrences": "bool"
+      }
+    },
     "DocumentDetail": {
       "kind": "record",
       "fields": {
@@ -1393,9 +1412,10 @@
         "retrieval_enabled": "bool",
         "extraction_state": "ItemState",
         "coverage": "Coverage",
-        "index_activity": "?DocumentIndexActivity"
+        "index_activity": "?DocumentIndexActivity",
+        "inspection": "?DocumentInspection"
       },
-      "since": {"index_activity": 13}
+      "since": {"index_activity": 13, "inspection": 13}
     },
     "DocumentLibraryPage": {
       "kind": "record",

@@ -27,6 +27,7 @@ pub struct DocumentIndexVersion {
     /// The published generation still available for this exact version, even after a failed
     /// replacement attempt. Generation and extraction revision are set or cleared together.
     pub published: Option<(Id, Revision)>,
+    pub published_at_ms: Option<i64>,
 }
 
 #[derive(Clone, Debug)]
@@ -92,8 +93,12 @@ pub trait DocumentRead {
     /// Explicit retrieval preference. Live documents default to enabled before their first index.
     fn document_retrieval_enabled(&self, artifact: &Id) -> Result<bool, StorageError>;
     fn document_index(&self, version: &Id) -> Result<Option<DocumentIndexVersion>, StorageError>;
-    /// History timestamp when the exact published delivery last made its index visible.
-    fn document_publication_time(&self, run: &Id) -> Result<Option<i64>, StorageError>;
+    /// Recent exact native scan occurrences and their durable outcomes for a visible version.
+    fn document_vision_occurrences(
+        &self,
+        version: &Id,
+        limit: usize,
+    ) -> Result<Vec<(VisionTarget, Option<VisionUnit>)>, StorageError>;
     /// Already source-bound vision or embedding attempts in the audience's authorized project.
     fn document_version_attempts(
         &self,

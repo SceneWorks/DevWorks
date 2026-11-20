@@ -98,6 +98,8 @@ pub struct DocumentsScreen {
     pub search_generation: u64,
     pub citation_generation: u64,
     pub source_generation: u64,
+    pub visibility_generation: u64,
+    pub validating_access: bool,
 }
 
 impl DocumentsScreen {
@@ -121,7 +123,13 @@ impl DocumentsScreen {
         self.citation = None;
         self.read_generation += 1;
         self.source_generation += 1;
+        self.visibility_changed();
         self.citation_generation += 1;
+    }
+
+    pub fn visibility_changed(&mut self) {
+        self.visibility_generation += 1;
+        self.validating_access = false;
     }
 
     pub fn busy(&self) -> bool {
@@ -201,7 +209,9 @@ impl DocumentsScreen {
         egui::ScrollArea::vertical()
             .id_salt("document-pane-results")
             .show(ui, |ui| {
-                if let Some(results) = &self.results {
+                if !self.validating_access
+                    && let Some(results) = &self.results
+                {
                     widgets::caption(
                         ui,
                         match results.effective_mode {
@@ -284,6 +294,10 @@ impl DocumentsScreen {
         actions: &mut Vec<Action>,
     ) {
         egui::ScrollArea::vertical().id_salt("document-pane-detail").show(ui, |ui| {
+            if self.validating_access {
+                ui.label("Checking access to retained sources…");
+                return;
+            }
             if let Some(citation) = &self.citation {
                 ui.heading("Exact citation");
                 widgets::caption(ui, locator(&citation.citation.locator));
@@ -306,6 +320,7 @@ impl DocumentsScreen {
                 ui.label("This version is unavailable.");
                 return;
             };
+            document_provenance(ui, detail, projects);
             widgets::caption(ui, format!("{} · {} bytes", version.media_type, version.byte_length.get()));
             widgets::caption(ui, format!("Version {}", version.version_id.as_str()));
             ui.label(version.sha256.as_str()).on_hover_text("Source SHA-256");
@@ -398,6 +413,66 @@ fn project_picker(
         })
         .response
         .widget_info(|| egui::WidgetInfo::labeled(egui::Role::ComboBox, true, label_text.clone()));
+}
+
+fn document_provenance(ui: &mut Ui, detail: &DocumentDetail, projects: &[(String, String)]) {
+    fn project_name<'a>(projects: &'a [(String, String)], id: &'a str) -> &'a str {
+        projects
+            .iter()
+            .find(|(key, _)| key == id)
+            .map_or(id, |(_, name)| name)
+    }
+    let owner = match &detail.scope {
+        DataScope::Workspace => GENERAL,
+        DataScope::Project { project_id } => project_name(projects, project_id.0.as_str()),
+    };
+    widgets::caption(ui, format!("Owner · {owner}"));
+    let Some(inspection) = &detail.inspection else {
+        return;
+    };
+    if let Some(name) = &inspection.original_name {
+        widgets::caption(ui, format!("Original file · {}", name.0));
+    }
+    if let Some(source) = &inspection.original_source {
+        widgets::caption(ui, format!("Source · {}", source.0));
+    }
+    if !inspection.tags.is_empty() {
+        widgets::caption(ui, format!("Tags · {}", inspection.tags.0.join(", ")));
+    }
+    if !inspection.shares.0.is_empty() {
+        let scopes: Vec<_> = inspection
+            .shares
+            .0
+            .iter()
+            .map(|project| project_name(projects, project.0.as_str()))
+            .collect();
+        widgets::caption(ui, format!("Shared with {}", scopes.join(", ")));
+    }
+    if inspection.more_shares {
+        widgets::caption(ui, "Additional projects share this document.");
+    }
+    let route = match (&inspection.vision_model, &inspection.vision_connection) {
+        (Some(model), Some(connection)) => format!(
+            "Vision route · {} · {}",
+            model.as_str(),
+            connection.as_str()
+        ),
+        _ => format!("Vision route · {}", inspection.vision_status.as_str()),
+    };
+    widgets::caption(ui, route);
+    if !inspection.vision_occurrences.0.is_empty() {
+        ui.collapsing("Scanned pages and images", |ui| {
+            for occurrence in &inspection.vision_occurrences.0 {
+                widgets::caption(
+                    ui,
+                    format!("{} · {}", occurrence.location.0, occurrence.status.as_str()),
+                );
+            }
+            if inspection.more_vision_occurrences {
+                widgets::caption(ui, "Additional scan occurrences are retained.");
+            }
+        });
+    }
 }
 
 fn document_status(ui: &mut Ui, detail: &DocumentDetail, projects: &[(String, String)]) {

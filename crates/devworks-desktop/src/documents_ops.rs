@@ -27,6 +27,7 @@ pub enum DocumentSlot {
     Upload,
     Write,
     Source(u64),
+    VerifyAccess(u64),
 }
 
 pub fn list(b: &dyn Backend, scope: DataScope, cursor: Option<&str>) -> Vec<u8> {
@@ -40,7 +41,25 @@ pub fn list(b: &dyn Backend, scope: DataScope, cursor: Option<&str>) -> Vec<u8> 
 }
 
 pub fn read(b: &dyn Backend, version: ArtifactRef, cursor: Option<String>) -> Vec<u8> {
-    frame::with(b, Negotiate::Latest, || {
+    read_in(b, version, cursor, Negotiate::Latest)
+}
+
+pub fn authorize_source(b: &dyn Backend, version: ArtifactRef) -> Vec<u8> {
+    read_in(
+        b,
+        version,
+        None,
+        Negotiate::pinned(10, "Exact source authority only"),
+    )
+}
+
+fn read_in(
+    b: &dyn Backend,
+    version: ArtifactRef,
+    cursor: Option<String>,
+    revision: Negotiate,
+) -> Vec<u8> {
+    frame::with(b, revision, || {
         Some(In::Documents(ops::Input::Read(ArtifactQueryRequest {
             protocol: frame::protocol(),
             query_id: frame::query_id(b)?,
@@ -54,17 +73,32 @@ pub fn read(b: &dyn Backend, version: ArtifactRef, cursor: Option<String>) -> Ve
     })
 }
 
-pub fn import(b: &dyn Backend, plan: ImportPlan, source: ArtifactRef) -> Vec<u8> {
-    frame::with(b, Negotiate::Latest, || {
-        let (replace_document_id, expected_revision) = plan.replacement.unzip();
-        Some(In::Documents(ops::Input::Import(ops::ImportInput {
-            scope: plan.scope,
-            title: frame::text(&plan.title)?,
-            source,
-            replace_document_id,
-            expected_revision,
-        })))
-    })
+pub fn import(
+    b: &dyn Backend,
+    plan: ImportPlan,
+    source: ArtifactRef,
+    save_frame: &[u8],
+) -> Vec<u8> {
+    // Keep this receipt identical if the upload journal is recovered after import committed.
+    let Ok(mut envelope) = serde_json::from_slice::<serde_json::Value>(&frame::with(
+        b,
+        Negotiate::pinned(10, "Stable import replay after upload"),
+        || {
+            let (replace_document_id, expected_revision) = plan.replacement.unzip();
+            Some(In::Documents(ops::Input::Import(ops::ImportInput {
+                scope: plan.scope,
+                title: frame::text(&plan.title)?,
+                source,
+                replace_document_id,
+                expected_revision,
+            })))
+        },
+    )) else {
+        return Vec::new();
+    };
+    let digest = devworks_core::fingerprint::sha256_hex(save_frame);
+    envelope["requestKey"] = serde_json::json!(format!("document-import-{digest}"));
+    serde_json::to_vec(&envelope).expect("document import envelope")
 }
 
 pub struct Search {
