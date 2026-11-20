@@ -874,6 +874,14 @@ impl DiagnosticRepository for Unmodelled {
     }
 }
 impl DocumentRead for Unmodelled {
+    fn document_corpus_digest(
+        &self,
+        _: &ArtifactScope,
+        _: Option<&ActorId>,
+        _: Option<&[Id]>,
+    ) -> Result<String, StorageError> {
+        unmodelled()
+    }
     fn document_retrieval_enabled(&self, _: &Id) -> Result<bool, StorageError> {
         unmodelled()
     }

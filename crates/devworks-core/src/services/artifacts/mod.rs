@@ -411,7 +411,7 @@ pub(crate) fn visible_in(
     {
         return Ok(false);
     }
-    Ok(match (project, &artifact.scope) {
+    let visible = match (project, &artifact.scope) {
         (None, ArtifactScope::Project(_)) => true,
         (None, ArtifactScope::Workspace) => viewer.sees_owned(artifact.owner.as_ref()),
         (Some(p), ArtifactScope::Project(owner)) => {
@@ -423,7 +423,14 @@ pub(crate) fn visible_in(
             read.shares(&artifact.id)?.contains(p)
                 || read.repository_text_readers(&artifact.id)?.contains(p)
         }
-    })
+    };
+    if visible
+        && let Some(evidence) =
+            crate::services::documents::evidence::DocumentEvidence::of_artifact(artifact)?
+    {
+        return evidence.visible_to(read, viewer);
+    }
+    Ok(visible)
 }
 
 /// A skill/role version captured by the host for the instruction owner.

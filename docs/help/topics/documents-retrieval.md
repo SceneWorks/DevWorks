@@ -20,4 +20,10 @@ Lexical search can work offline without embeddings. Hybrid/vector retrieval requ
 
 If semantic retrieval is unavailable, use the explicit lexical fallback when offered and report the mode. Do not label an unavailable score as zero or describe a partial scan as a complete corpus search. Refresh or rebuild through the owning operation when a source changes; do not edit managed index files directly.
 
+## Use document tools in an agent session
+
+Configured agents use the same document operations and project permissions as the library. An agent must explicitly import an authorized source artifact to add it to the library. Attaching a file in chat leaves it available as an attachment.
+
+A successful search or citation read records the exact passage, version, and locator in session and work history. Later requests reopen the saved evidence under current access. If a move or deletion removes access, the result appears as unavailable and its historical citation still identifies the original version. Compaction summarizes the conversation while leaving the exact document passages in session history.
+
 See [Knowledge](help:knowledge), [Artifacts](help:artifacts), [Indexing](help:indexing), and [Settings](help:settings-Knowledge).

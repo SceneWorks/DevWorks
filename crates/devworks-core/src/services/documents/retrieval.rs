@@ -13,8 +13,8 @@ use crate::{
     ports::{
         QueryAnswer,
         storage::{
-            ArtifactScope, DocumentCandidate, DocumentRankingQuery, DocumentVectorQuery,
-            ReadSnapshot, StorageError, StoredArtifact,
+            ArtifactRead, ArtifactScope, DocumentCandidate, DocumentRankingQuery, DocumentRead,
+            DocumentVectorQuery, ReadSnapshot, StorageError, StoredArtifact,
         },
     },
     protocol::{
@@ -215,7 +215,7 @@ pub(super) fn exact_indexes(
     };
     let mut ids = Vec::new();
     for source in versions {
-        visible_version(snapshot, viewer, Some(scope), source)?;
+        visible_version(snapshot.artifacts(), viewer, Some(scope), source)?;
         published(snapshot, source)?;
         if !ids.contains(&source.version_id) {
             ids.push(source.version_id.clone());
@@ -224,13 +224,12 @@ pub(super) fn exact_indexes(
     Ok(Some(ids))
 }
 
-fn visible_version(
-    snapshot: &dyn ReadSnapshot,
+pub(super) fn visible_version(
+    read: &dyn ArtifactRead,
     viewer: &Viewer<'_>,
     scope: Option<&ArtifactScope>,
     source: &ArtifactRef,
 ) -> Result<StoredArtifact, Failure> {
-    let read = snapshot.artifacts();
     let artifact =
         document_for(read, viewer, &source.artifact_id, false).map_err(|error| match error {
             Failure::Refused(_) => unavailable().into(),
@@ -270,9 +269,18 @@ pub(super) fn resolve(
     ctx: &InvocationContext,
     citation: &Citation,
 ) -> Result<ResolvedDocumentCitation, Failure> {
-    let checkpoint = retained_checkpoint(snapshot, ctx, citation)?;
-    let passage = snapshot
-        .documents()
+    let viewer = Viewer::resolve(snapshot.authority(), ctx)?;
+    let version = citation_version(citation)?;
+    visible_version(snapshot.artifacts(), &viewer, None, version)?;
+    resolve_passage(snapshot.documents(), citation)
+}
+
+pub(super) fn resolve_passage(
+    documents: &dyn DocumentRead,
+    citation: &Citation,
+) -> Result<ResolvedDocumentCitation, Failure> {
+    let checkpoint = retained_checkpoint(documents, citation)?;
+    let passage = documents
         .document_passage(&checkpoint, &citation.block_id)?
         .ok_or_else(unavailable)?;
     let same_citation = matches!(
@@ -288,11 +296,19 @@ pub(super) fn resolve(
     })
 }
 
-fn retained_checkpoint(
-    snapshot: &dyn ReadSnapshot,
-    ctx: &InvocationContext,
-    citation: &Citation,
-) -> Result<Id, Failure> {
+pub(super) fn citation_version(citation: &Citation) -> Result<&ArtifactRef, Failure> {
+    match &citation.source {
+        CitationSource::Managed { version, .. } => Ok(version),
+        _ => Err(Refusal::new(
+            DomainErrorCode::UnsupportedTarget,
+            "document_citation",
+            None,
+        )
+        .into()),
+    }
+}
+
+fn retained_checkpoint(documents: &dyn DocumentRead, citation: &Citation) -> Result<Id, Failure> {
     let CitationSource::Managed {
         version,
         extraction_revision,
@@ -305,10 +321,7 @@ fn retained_checkpoint(
         )
         .into());
     };
-    let viewer = Viewer::resolve(snapshot.authority(), ctx)?;
-    visible_version(snapshot, &viewer, None, version)?;
-    let checkpoint = snapshot
-        .documents()
+    let checkpoint = documents
         .document_checkpoint(&version.version_id, extraction_revision)?
         .filter(|value| value.source_digest == version.sha256.as_str())
         .ok_or_else(unavailable)?;
@@ -350,7 +363,12 @@ pub(super) fn check_publication(
         (
             OperationInput::Documents(ops::Input::ResolveCitation(request)),
             OperationResult::DocumentsResolveCitation { .. },
-        ) => retained_checkpoint(snapshot, ctx, &request.citation).map(|_| ()),
+        ) => (|| {
+            let viewer = Viewer::resolve(snapshot.authority(), ctx)?;
+            let source = citation_version(&request.citation)?;
+            visible_version(snapshot.artifacts(), &viewer, None, source)?;
+            retained_checkpoint(snapshot.documents(), &request.citation).map(|_| ())
+        })(),
         _ => Err(publication_denied().into()),
     };
     match checked {
@@ -385,7 +403,7 @@ fn check_result_scope(
         else {
             return Ok(false);
         };
-        visible_version(snapshot, &viewer, Some(&scope), version)?;
+        visible_version(snapshot.artifacts(), &viewer, Some(&scope), version)?;
         let (generation, revision) = published(snapshot, version)?;
         if candidate.block != passage.chunk_id
             || candidate.generation != generation

@@ -5,7 +5,7 @@ use super::{
     materialize::{self, Materials},
     *,
 };
-use crate::protocol::provider::{ArtifactRef, InferenceInput, InferenceRequest};
+use crate::protocol::provider::{ArtifactRef, InferenceInput, InferencePurpose, InferenceRequest};
 use crate::protocol::records::OpenRouterConstraints;
 use serde_json::{Value, json};
 
@@ -96,7 +96,7 @@ pub fn prepare(
                 return Err(ProviderError::InvalidInput("generation_binding"));
             }
             let bytes = materials.artifact(context, limits.context_bytes)?;
-            let context: ProviderContext = serde_json::from_slice(&bytes)
+            let mut context: ProviderContext = serde_json::from_slice(&bytes)
                 .map_err(|_| ProviderError::InvalidInput("provider_context"))?;
             context.validate()?;
             required_betas = context
@@ -114,6 +114,10 @@ pub fn prepare(
             let tools = materialize::tools(materials, tools, |tool| {
                 encoder.charge_json(&(&tool.schema, &tool.description, &tool.wire_name))
             })?;
+            encoder.materialize_document_results(
+                &mut context,
+                matches!(request.purpose, InferencePurpose::Compaction),
+            )?;
             let body = encoder.generation(
                 &context,
                 request,
@@ -470,6 +474,42 @@ impl Encoder<'_> {
         self.charge_json(&text)?;
         Ok(text)
     }
+    fn materialize_document_results(
+        &self,
+        context: &mut ProviderContext,
+        compacting: bool,
+    ) -> Result<(), ProviderError> {
+        for block in context
+            .messages
+            .iter_mut()
+            .flat_map(|message| &mut message.content)
+        {
+            if let ContentBlock::ToolResult {
+                content, is_error, ..
+            } = block
+            {
+                for result in content {
+                    if let ResultBlock::DocumentEvidence { artifact } = result {
+                        let text = if compacting {
+                            "Exact document evidence is stored in session history.".into()
+                        } else {
+                            match self.text(artifact, "document_evidence_utf8") {
+                                Ok(text) => text,
+                                Err(ProviderError::MaterialUnavailable) => {
+                                    *is_error = true;
+                                    "Document evidence is unavailable in the current scope.".into()
+                                }
+                                Err(error) => return Err(error),
+                            }
+                        };
+                        *result = ResultBlock::Text { text };
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
     fn arguments(&self, reference: &ArtifactRef) -> Result<String, ProviderError> {
         let text = self.text(reference, "tool_arguments")?;
         let value: Value = serde_json::from_str(&text)
@@ -859,6 +899,7 @@ impl Encoder<'_> {
                     if !matches!(m.role,MessageRole::User){return Err(ProviderError::InvalidInput("tool_result_role"));}
                     let blocks=content.iter().map(|v|match v{
                         ResultBlock::Text{text}=>Ok(json!({"type":"text","text":text})),
+                        ResultBlock::DocumentEvidence { .. } => Err(ProviderError::MaterialUnavailable),
                         ResultBlock::Image{artifact,detail}=>{
                             if detail.is_some(){return Err(ProviderError::Unsupported("messages_image_detail"));}
                             let(media_type,data)=self.image(artifact)?;
@@ -885,7 +926,7 @@ impl Encoder<'_> {
         content
             .iter()
             .filter_map(|v| match v {
-                ResultBlock::Text { .. } => None,
+                ResultBlock::Text { .. } | ResultBlock::DocumentEvidence { .. } => None,
                 ResultBlock::Image { artifact, detail } => Some((artifact, detail)),
             })
             .map(|(artifact, detail)| {

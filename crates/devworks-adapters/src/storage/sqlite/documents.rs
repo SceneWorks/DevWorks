@@ -19,6 +19,7 @@ use devworks_core::{
 use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Serialize, de::DeserializeOwned};
 use serde_json::Value;
+use sha2::{Digest, Sha256};
 use std::sync::Arc;
 
 fn encode(value: &impl Serialize) -> Result<String, StorageError> {
@@ -159,15 +160,18 @@ fn blocks(conn: &Connection, id: &Id) -> Result<Vec<ExtractedBlock>, StorageErro
     rows.map(|row| decode_passage(db(row)?)).collect()
 }
 
-// Both the population check and ranking use the same authorized published posting set.
+// Ranking and durable publication share the same authorized published corpus.
 const SCOPED_POSTINGS: &str = "
              FROM document_lexical_rows l JOIN document_extracted_blocks b ON b.id=l.block_id
              JOIN document_extractions e ON e.id=b.extraction_id
              JOIN document_index_versions i ON i.version_id=e.version_id AND i.published_revision=e.revision
-             JOIN artifact_versions v ON v.id=e.version_id
+";
+const SCOPED_DOCUMENTS: &str = "
+             JOIN artifact_versions v ON v.id=i.version_id
              JOIN artifacts a ON a.id=v.artifact_id
              LEFT JOIN document_retrieval_preferences p ON p.artifact_id=a.id
-            WHERE a.state='Live' AND a.retention='Explicit' AND v.deleted_at IS NULL
+            WHERE i.published_generation IS NOT NULL AND i.published_revision IS NOT NULL
+              AND a.state='Live' AND a.retention='Explicit' AND v.deleted_at IS NULL
               AND json_extract(a.provenance_json,'$.managedDocument')=1
               AND COALESCE(p.enabled,1)=1
               AND ((?1 IS NULL AND a.scope_kind='Workspace' AND (?2 IS NULL OR a.owner_actor_id=?2))
@@ -176,6 +180,42 @@ const SCOPED_POSTINGS: &str = "
                   AND (?2 IS NULL OR a.scope_kind='Workspace' OR a.owner_actor_id IS NULL OR a.owner_actor_id=?2)))
               AND ((?3 IS NULL AND v.id=a.current_version_id)
                   OR (?3 IS NOT NULL AND v.id IN (SELECT value FROM json_each(?3))))";
+
+fn corpus_digest(
+    conn: &Connection,
+    scope: &ArtifactScope,
+    owner: Option<&ActorId>,
+    exact_versions: Option<&[Id]>,
+) -> Result<String, StorageError> {
+    let exact = exact_versions.map(|ids| encode(&ids)).transpose()?;
+    let sql = format!(
+        "SELECT v.id,i.published_generation,i.published_revision
+           FROM document_index_versions i {SCOPED_DOCUMENTS}
+          ORDER BY v.id"
+    );
+    let mut statement = db(conn.prepare_cached(&sql))?;
+    let mut rows = db(statement.query(params![
+        scope.project().map(|p| p.0.as_str()),
+        owner.map(|a| a.0.as_str()),
+        exact,
+    ]))?;
+    let mut digest = Sha256::new();
+    while let Some(row) = db(rows.next())? {
+        let version: String = db(row.get(0))?;
+        let generation: String = db(row.get(1))?;
+        let revision: i64 = db(row.get(2))?;
+        digest.update(version.as_bytes());
+        digest.update([0]);
+        digest.update(generation.as_bytes());
+        digest.update([0]);
+        digest.update(revision.to_be_bytes());
+    }
+    Ok(digest
+        .finalize()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect())
+}
 
 fn has_vectors(
     conn: &Connection,
@@ -188,7 +228,7 @@ fn has_vectors(
     let sql = format!(
         "SELECT EXISTS (SELECT 1 FROM document_vectors d INDEXED BY document_vectors_space
            WHERE d.space_id=?4 AND EXISTS(
-             SELECT 1 {SCOPED_POSTINGS} AND l.block_id=d.block_id
+             SELECT 1 {SCOPED_POSTINGS} {SCOPED_DOCUMENTS} AND l.block_id=d.block_id
                AND EXISTS (SELECT 1 FROM document_embedding_runs r
                            WHERE r.extraction_id=e.id AND r.space_id=?4 AND r.complete=1)))"
     );
@@ -227,7 +267,7 @@ fn ranked(
         "WITH eligible AS MATERIALIZED (
            SELECT l.id AS posting, b.id AS block, e.id AS checkpoint, e.version_id,
                   b.ordinal, i.published_generation AS generation
-           {SCOPED_POSTINGS}
+           {SCOPED_POSTINGS} {SCOPED_DOCUMENTS}
               AND (?7 IS NULL OR json_array_length(?4)>0 OR EXISTS(
                     SELECT 1 FROM document_vectors d WHERE d.block_id=b.id AND d.space_id=?7
                       AND EXISTS(SELECT 1 FROM document_embedding_runs r
@@ -361,6 +401,11 @@ fn pending_space<'a>(
 macro_rules! document_reads {
     ($store:ty) => {
         impl DocumentRead for $store {
+            fn document_corpus_digest(
+                &self, scope: &ArtifactScope, owner: Option<&ActorId>, exact_versions: Option<&[Id]>,
+            ) -> Result<String, StorageError> {
+                corpus_digest(self.conn, scope, owner, exact_versions)
+            }
             fn document_retrieval_enabled(&self, id: &Id) -> Result<bool, StorageError> {
                 retrieval(self.conn, id)
             }
