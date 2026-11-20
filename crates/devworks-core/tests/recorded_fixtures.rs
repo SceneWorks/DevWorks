@@ -359,7 +359,7 @@ fn shared_operation_fixtures_match_recorded_outcomes() {
 
 #[test]
 fn domain_fixtures_match_recorded_outcomes() {
-    assert_eq!(run("domain-fixtures.json", 2082), 2082);
+    assert_eq!(run("domain-fixtures.json", 2091), 2091);
 }
 
 #[test]
@@ -460,7 +460,9 @@ fn every_catalog_input_has_a_positive_recorded_fixture_admitted_natively() {
     // .entity_bundle, .entity_graph, .claim_bundle, .expand_frontier, .query, .tagged_lessons and
     // approvals.review_queue); addons.invoke and addons.invocation arrive at revision 8;
     // router.catalog revision 4 (offeredEfforts) adds one.
-    assert_eq!(admitted.len(), 662);
+    // Document detail and exact citation opening cover seven revision-10 and one revision-11
+    // bindings alongside the original revision-1 document operations.
+    assert_eq!(admitted.len(), 670);
 }
 
 #[test]

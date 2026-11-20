@@ -3517,6 +3517,24 @@ impl Revisioned for DocumentListResult {
 
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ResolvedDocumentCitation {
+    pub citation: Citation,
+    pub text: Text,
+}
+impl Check for ResolvedDocumentCitation {
+    fn check(&self) -> Result<(), String> {
+        self.citation.check()?;
+        self.text.check()?;
+        crate::protocol::rules::record(
+            "ResolvedDocumentCitation",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct InstructionRecord {
     pub id: Id,
     pub revision: Revision,

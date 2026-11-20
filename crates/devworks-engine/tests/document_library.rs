@@ -2,6 +2,8 @@
 mod common;
 #[path = "document_library/indexing.rs"]
 mod indexing;
+#[path = "document_library/retrieval.rs"]
+mod retrieval;
 use common::*;
 use devworks_adapters::fs::{
     NativeFilesystem, artifacts::NativeArtifactFiles, sources::HostArtifactSources,
@@ -59,6 +61,7 @@ impl<'a> Fixture<'a> {
             .with_document_library(Arc::new(DocumentLibrary::new(
                 artifacts.clone(),
                 h.ids.clone(),
+                h.clock(),
             )));
         Self {
             h,

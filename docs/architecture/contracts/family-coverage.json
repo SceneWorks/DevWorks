@@ -1,10 +1,10 @@
 {
   "status": "All retained operation inputs and result tags have concrete candidates; not a public API freeze or production runtime coverage",
   "date": "2026-11-13",
-  "catalogSha256": "190bcb28c0f8f226fd0088cdc52a88e2087d69c58757faf8d0674efcc1e17ec0",
+  "catalogSha256": "f83c31fa00fabf48d9c07e3131f71d4dde4dd9ccc823d8150b39623bbabddac4",
   "familyCount": 50,
-  "operationCount": 380,
-  "concreteInputCandidates": 380,
+  "operationCount": 381,
+  "concreteInputCandidates": 381,
   "domainInputsPending": 0,
   "families": [
     {
@@ -9656,6 +9656,53 @@
           "authority": "Existing host authority contract",
           "effect": "Existing journaled command contract",
           "semanticRules": "Preserve existing concrete input/authority/receipt/recovery contract; selected result kind must match operation.",
+          "familyRules": "All imported versions retained until explicit deletion. Exact version/page/locator citations; missing current source never selects an older version.",
+          "admission": "Validate protocol, strict fields and selected operation/mode first; derive host principal, current scope/role/grants, then apply command receipt and dispatch policy. Payload IDs are references, not authority.",
+          "errorSchema": "DomainFault in domain-query-reply or domain-command-reply; shared pre-admission rejections and legacy specialized control replies remain available",
+          "recovery": "Read uses snapshot/cursor revalidation; local mutations replay receipt. Journaled/external/inference commands reconcile uncertain outcomes before retry. A retry hint never clears Pause/Continue/approval/budget holds.",
+          "status": "Concrete input/result candidate; actual service/authority behavior not implemented"
+        },
+        {
+          "introducedRevision": 11,
+          "operation": "documents.resolve_citation",
+          "inputSchema": "domain-request.schema.json",
+          "variant": "documents.resolve_citation",
+          "selectionConstraint": {
+            "pointer": "/body/kind",
+            "equals": "documents.resolve_citation"
+          },
+          "requestModes": [
+            "Query"
+          ],
+          "modePolicies": [
+            {
+              "mode": "Query",
+              "authority": "ScopedRead",
+              "effect": "ReadOnly or declared external read"
+            }
+          ],
+          "resultSchema": "operation-result.schema.json",
+          "resultSelectionConstraint": {
+            "pointer": "/kind",
+            "equals": "documents.resolve_citation"
+          },
+          "resultValueType": "ResolvedDocumentCitation",
+          "queryReplySchema": "domain-query-reply.schema.json",
+          "commandReplySchema": null,
+          "completionSchema": null,
+          "schemaRevisions": [
+            {
+              "revision": 11,
+              "inputSchema": "domain-request.r11.schema.json",
+              "resultSchema": "operation-result.r11.schema.json",
+              "queryReplySchema": "domain-query-reply.r11.schema.json",
+              "commandReplySchema": null,
+              "completionSchema": null
+            }
+          ],
+          "authority": "Scoped",
+          "effect": "ReadOnly",
+          "semanticRules": "Resolve a managed citation only under current artifact authority. Require the exact retained version, source digest and length, extraction revision, block identity, locator and passage digest.",
           "familyRules": "All imported versions retained until explicit deletion. Exact version/page/locator citations; missing current source never selects an older version.",
           "admission": "Validate protocol, strict fields and selected operation/mode first; derive host principal, current scope/role/grants, then apply command receipt and dispatch policy. Payload IDs are references, not authority.",
           "errorSchema": "DomainFault in domain-query-reply or domain-command-reply; shared pre-admission rejections and legacy specialized control replies remain available",

@@ -11,7 +11,8 @@ BASE={'Id':'id-a','Revision':'1','Counter':'0','ProjectId':'project-a','RootId':
  'Label':'fixture','Text':'fixture','DefaultValueText':'fixture','GraphUnitKey':'src/main.rs','GraphText':'fixture source','Content':'Fixture content','Cursor':'cursor-a','RelativePath':'src/main.rs','Url':'https://fixture.invalid/path','Money':'0','SignedCounter':'-1','PositiveCounter':'1','Finite':0.5,'Probability':0.5,'bool':False,'i32':1,'Limit':20,'Depth':2,'Port':8765,'ByteLimit':4096,'TokenBudget':1500,'ArtifactTags':['evidence'],'PathSet':['src/lib.rs'],'DynamicJson':{'input':'fixture'},'SavedCommandInput':{'input':'fixture'},
  'DataScope':{'kind':'Workspace'},'ViewSelection':{'kind':'Published','repositoryIds':['repo-a']},'Coverage':{'state':'Complete','gaps':[],'moreGaps':False},'Digest':'a'*64,'ArtifactRef':ART,'SchemaRef':{'schemaId':'fixture/object','revision':'1','sha256':'a'*64},'Attribution':{'kind':'Workspace','sessionId':'session-a'},'GitOid':{'format':'Sha1','hex':'a'*40},'ReadStamp':STAMP,'OperationState':'ObservedComplete',
  'RootControl':{'rootId':'root-a','revision':'1','desiredState':'Enabled'},'Blockers':{'items':[],'hasMore':False},'EligibilityTarget':{'kind':'root','id':'root-a'},'Purpose':'Planning',
- 'DeliveryBarrier':valid('delivery-barrier'),'DeliverySnapshot':valid('delivery-snapshot'),'GraphPage':valid('graph-page'),'RetrievalPage':valid('retrieval-page'),'TranscriptPage':valid('transcript-page'),'Event':valid('event')}
+ 'DeliveryBarrier':valid('delivery-barrier'),'DeliverySnapshot':valid('delivery-snapshot'),'GraphPage':valid('graph-page'),'RetrievalPage':valid('retrieval-page'),'TranscriptPage':valid('transcript-page'),'Event':valid('event'),
+ 'Citation':{'source':{'kind':'Managed','version':ART,'extractionRevision':'1'},'blockId':'block-a','contentDigest':'b'*64,'locator':{'kind':'Text','firstLine':1,'lastLine':1}}}
 def camel(s):return re.sub(r'_([a-z])',lambda m:m[1].upper(),s)
 def sample(t):
  if t.startswith('?'):return None
@@ -1368,5 +1369,11 @@ claim_skills={**claim_r2,'lesson':{**lesson_record,'skills':[{'instructionId':'s
 for name in ['knowledge.search','knowledge.tagged_lessons']:
  case('r8-result-'+name+'-skills','operation-result.r8',{'kind':name,'value':{'items':[claim_skills],'hasMore':False}})
  case('reject-r2-result-'+name+'-skills','operation-result.r2',{'kind':name,'value':{'items':[claim_skills],'hasMore':False}},False,False)
+# Revision 10 changes document results. Its request shapes still use the existing envelopes.
+for name,mode in [('documents.import','Command'),('documents.list','Query')]:
+ case('r10-input-'+name,'domain-request.r10',{**request(name,mode),'schemaRevision':10})
+case('r10-input-documents.read','artifact-query-request',{**recorded('artifact-query-Read'),'schemaRevision':10})
+for variant,name in [('Share','share'),('Move','move'),('DisableRetrieval','disable_retrieval'),('RemoveIndex','remove_index')]:
+ case('r10-input-documents.'+name,'artifact-command-request',{**recorded('artifact-'+variant),'schemaRevision':10})
 (D/'domain-fixtures.json').write_text(json.dumps(CASES,indent=2)+'\n')
 print(json.dumps({'fixtures':len(CASES),'positive':sum(c['typedValid'] for c in CASES),'negative':sum(not c['typedValid'] for c in CASES),'inputOperationModes':sum(2 if d['mode']=='Hybrid' else 1 for d in OPS.values()),'resultOperations':len(OPS)+len(LEGACY_RESULTS)}))

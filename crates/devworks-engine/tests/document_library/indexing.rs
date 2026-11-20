@@ -24,13 +24,13 @@ use std::{
     time::Duration,
 };
 
-struct Processor {
+pub(super) struct Processor {
     calls: AtomicUsize,
     revision: AtomicI64,
 }
 
 impl Processor {
-    fn new() -> Arc<Self> {
+    pub(super) fn new() -> Arc<Self> {
         Arc::new(Self {
             calls: AtomicUsize::new(0),
             revision: AtomicI64::new(1),
@@ -104,7 +104,7 @@ impl ApplicationStore for BeforePublish {
     }
 }
 
-fn indexed(
+pub(super) fn indexed(
     fixture: &mut Fixture<'_>,
     worker_store: Arc<dyn ApplicationStore>,
     processor: Arc<Processor>,
@@ -117,8 +117,12 @@ fn indexed(
     fixture.cases = UseCases::new()
         .with_artifacts(fixture.artifacts.clone())
         .with_document_library(Arc::new(
-            DocumentLibrary::new(fixture.artifacts.clone(), fixture.h.ids.clone())
-                .with_indexer(indexer.clone()),
+            DocumentLibrary::new(
+                fixture.artifacts.clone(),
+                fixture.h.ids.clone(),
+                fixture.h.clock(),
+            )
+            .with_indexer(indexer.clone()),
         ));
     indexer
 }
@@ -137,7 +141,7 @@ fn imported(fixture: &Fixture<'_>, note: &[u8]) -> DocumentDetail {
     imported_result(fixture.import(&fixture.scoped("document-a"), "import-notes", &source, None))
 }
 
-fn imported_result(reply: CommandReply<DomainDecision>) -> DocumentDetail {
+pub(super) fn imported_result(reply: CommandReply<DomainDecision>) -> DocumentDetail {
     let OperationResult::DocumentsImport {
         value: DocumentResult::Current(detail),
     } = applied(reply)
@@ -147,7 +151,7 @@ fn imported_result(reply: CommandReply<DomainDecision>) -> DocumentDetail {
     detail
 }
 
-fn index_frame(operation: &str, key: &str, doc: &DocumentDetail) -> Value {
+pub(super) fn index_frame(operation: &str, key: &str, doc: &DocumentDetail) -> Value {
     json!({
         "protocol":"1.0-draft.1","requestKey":key,"mode":"Command",
         "body":{"kind":operation,"documentId":doc.id,
@@ -161,7 +165,7 @@ fn cancel_frame(key: &str, run: &Id) -> Value {
         "command":{"kind":"Cancel","operationId":run}})
 }
 
-fn run_id(reply: CommandReply<DomainDecision>) -> (IndexRunRecord, bool) {
+pub(super) fn run_id(reply: CommandReply<DomainDecision>) -> (IndexRunRecord, bool) {
     let CommandReply::Recorded {
         receipt, replayed, ..
     } = reply
@@ -186,7 +190,7 @@ fn state(fixture: &Fixture<'_>, version: &Id) -> DocumentIndexVersion {
     .unwrap()
 }
 
-fn drive(fixture: &Fixture<'_>, indexer: Arc<DocumentIndexer>) {
+pub(super) fn drive(fixture: &Fixture<'_>, indexer: Arc<DocumentIndexer>) {
     let dispatcher = dispatcher(fixture.h, fixture.store.clone(), vec![consumer(indexer)]);
     runtime()
         .block_on(within("document dispatcher", dispatcher.run_until_idle()))
@@ -550,7 +554,7 @@ fn check_stale_source(change: StaleSource) {
     );
 }
 
-fn management_frame(kind: &str, request: &str, doc: &DocumentDetail) -> Value {
+pub(super) fn management_frame(kind: &str, request: &str, doc: &DocumentDetail) -> Value {
     json!({"protocol":"1.0-draft.1","schemaRevision":10,"requestKey":request,
         "command":{"kind":kind,"artifactId":doc.id,"expectedRevision":doc.revision}})
 }
@@ -656,6 +660,7 @@ fn purge_planning_preserves_a_shared_documents_extraction_and_index() {
             "document_extracted_blocks",
             "document_extractions",
             "document_index_versions",
+            "document_lexical_rows",
             "document_retrieval_preferences",
         ] {
             let rows: Vec<_> = plan.rows.iter().filter(|row| row.table == table).collect();

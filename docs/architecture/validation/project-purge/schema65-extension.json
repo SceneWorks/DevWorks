@@ -1,0 +1,44 @@
+{
+  "schema": 65,
+  "policy": "dw404-document-lexical-v1",
+  "additionalTables": [
+    {
+      "table": "document_lexical_rows",
+      "class": "artifact_and_derived_lineage",
+      "disposition": "owned_lineage",
+      "purpose": "A stable FTS identity follows the exact extracted block of one published version. Deleting the canonical row removes the FTS entry in the same transaction."
+    },
+    {
+      "table": "document_lexical_fts",
+      "class": "derived_fts_virtual",
+      "disposition": "virtual_owner_only",
+      "purpose": "Contentless FTS postings are maintained by the published lexical rows and are never independently selected for purge."
+    },
+    {
+      "table": "document_lexical_fts_config",
+      "class": "derived_fts_shadow",
+      "disposition": "virtual_owner_only",
+      "purpose": "FTS module configuration, with no independent rows to purge."
+    },
+    {
+      "table": "document_lexical_fts_data",
+      "class": "derived_fts_shadow",
+      "disposition": "virtual_owner_only",
+      "purpose": "FTS segments are maintained by the virtual module, including secure deletion of a removed entry."
+    },
+    {
+      "table": "document_lexical_fts_docsize",
+      "class": "derived_fts_shadow",
+      "disposition": "virtual_owner_only",
+      "purpose": "FTS document size rows follow the virtual table."
+    },
+    {
+      "table": "document_lexical_fts_idx",
+      "class": "derived_fts_shadow",
+      "disposition": "virtual_owner_only",
+      "purpose": "FTS segment index rows follow the virtual table."
+    }
+  ],
+  "readerFloor": 57,
+  "writerFloor": 65
+}
