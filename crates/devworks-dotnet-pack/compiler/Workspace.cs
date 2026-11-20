@@ -112,7 +112,7 @@ internal sealed class Workspace
             {
                 using var stream = new MemoryStream();
                 var emission = builds[target].Compilation.Emit(stream,
-                    options: new EmitOptions(metadataOnly: true, includePrivateMembers: false));
+                    options: new EmitOptions(metadataOnly: true, includePrivateMembers: true));
                 if (emission.Success)
                 {
                     if (stream.Length > 32 * 1024 * 1024 - emittedBytes) throw new OutputBudget();
@@ -160,7 +160,9 @@ internal sealed class Workspace
         var numbers = version.Split('_').Select(int.Parse).ToArray();
         return ["DEBUG", "TRACE", "NET", "NETCOREAPP", target, target + "_OR_GREATER",
             .. Enumerable.Range(5, Math.Max(0, numbers[0] - 5)).Select(x => "NET" + x + "_0_OR_GREATER"),
-            .. Enumerable.Range(0, 4).Select(x => "NETCOREAPP3_" + x + "_OR_GREATER")];
+            "NETCOREAPP1_0_OR_GREATER", "NETCOREAPP1_1_OR_GREATER", "NETCOREAPP2_0_OR_GREATER",
+            "NETCOREAPP2_1_OR_GREATER", "NETCOREAPP2_2_OR_GREATER", "NETCOREAPP3_0_OR_GREATER",
+            "NETCOREAPP3_1_OR_GREATER"];
     }
 
     private static Compilation CSharp(Project project, IEnumerable<MetadataReference> references)
@@ -186,6 +188,10 @@ internal sealed class Workspace
         if (imports.Count != 0)
             trees.Add(CS.CSharpSyntaxTree.ParseText(
                 string.Join('\n', imports.Distinct().Select(x => $"global using {x};")), parse));
+        if (project.FriendAssemblies.Count != 0)
+            trees.Add(CS.CSharpSyntaxTree.ParseText(string.Join('\n', project.FriendAssemblies.Select(
+                name => $"[assembly: global::System.Runtime.CompilerServices.InternalsVisibleTo(\"{name}\")]")), parse,
+                path: "<friend-assemblies>"));
         var nullable = project.Get("Nullable").ToLowerInvariant() switch
         {
             "" or "disable" => NullableContextOptions.Disable,
@@ -226,7 +232,11 @@ internal sealed class Workspace
         }
         var parse = new VB.VisualBasicParseOptions(version, preprocessorSymbols: constants);
         var trees = project.Sources.Select(file => VB.VisualBasicSyntaxTree.ParseText(
-            SourceText.From(file.Text), parse, file.Unit));
+            SourceText.From(file.Text), parse, file.Unit)).ToList();
+        if (project.FriendAssemblies.Count != 0)
+            trees.Add(VB.VisualBasicSyntaxTree.ParseText(string.Join('\n', project.FriendAssemblies.Select(
+                name => $"<Assembly: Global.System.Runtime.CompilerServices.InternalsVisibleTo(\"{name}\")>")), parse,
+                path: "<friend-assemblies>"));
         List<string> imports = [.. project.Imports];
         if (!project.Flag("DisableImplicitNamespaceImports"))
             imports.AddRange(["Microsoft.VisualBasic", "System", "System.Collections", "System.Collections.Generic",

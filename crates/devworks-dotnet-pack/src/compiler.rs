@@ -83,6 +83,7 @@ pub(crate) fn index(
             b"dotnet-project-unsupported" => "dotnet-project-unsupported",
             b"dotnet-runtime-changed" => "dotnet-runtime-changed",
             b"dotnet-output-budget" => "dotnet-output-budget",
+            b"compiler-memory-budget" => "compiler-memory-budget",
             _ => "invalid-dotnet-index",
         }
         .into());

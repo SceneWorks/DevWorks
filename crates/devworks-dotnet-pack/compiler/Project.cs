@@ -12,6 +12,7 @@ internal sealed class Project(string path, bool visualBasic)
     internal readonly List<(string Glob, bool Include)> CompileItems = [];
     internal readonly List<string> ProjectReferences = [];
     internal readonly List<string> Imports = [];
+    internal readonly List<string> FriendAssemblies = [];
     internal readonly List<CapturedFile> Sources = [];
     internal bool HasPackages, Web, AspNet;
     internal bool Loose => Path.StartsWith("loose:", StringComparison.Ordinal);
@@ -80,7 +81,7 @@ internal sealed class Project(string path, bool visualBasic)
                         continue;
                     }
                     if (group.Name == "PropertyGroup" && Informational.Contains(name)
-                        || group.Name == "ItemGroup" && name is "None" or "Content" or "EmbeddedResource")
+                        || group.Name == "ItemGroup" && name is "None" or "Content" or "EmbeddedResource" or "Folder")
                         continue;
                     if (group.HasAttributes || element.Name.NamespaceName != ""
                         || element.Descendants().Any()
@@ -106,6 +107,10 @@ internal sealed class Project(string path, bool visualBasic)
                             break;
                         case "FrameworkReference" when include == "Microsoft.AspNetCore.App" && remove == null:
                             AspNet = true;
+                            break;
+                        case "InternalsVisibleTo" when include != null && remove == null
+                            && Regex.IsMatch(include, @"\A[\w. -]+\z"):
+                            FriendAssemblies.Add(include);
                             break;
                         case "Using" when !VisualBasic && include != null && remove == null:
                         case "Import" when VisualBasic && include != null && remove == null:
@@ -136,7 +141,8 @@ internal sealed class Project(string path, bool visualBasic)
         "Description", "Version", "AssemblyVersion", "FileVersion", "Authors", "Company",
         "PackageId", "IsPackable", "IsTestProject", "TreatWarningsAsErrors", "NoWarn",
         "GenerateDocumentationFile", "WarningLevel", "Deterministic", "GenerateAssemblyInfo",
-        "DebugType", "Optimize", "ManagePackageVersionsCentrally",
+        "DebugType", "Optimize", "ManagePackageVersionsCentrally", "UserSecretsId",
+        "InvariantGlobalization",
     };
 
     private static string Normalize(string directory, string link, bool glob = false)

@@ -12,8 +12,8 @@ Enter the normal DevWorks dev-host build environment. Install SDK 10.0.202 for t
 dw_net_build="$(mktemp -d "${TMPDIR%/}/dotnet-pack.XXXXXXXX")"
 git archive HEAD crates/devworks-dotnet-pack | tar -x -C "$dw_net_build"
 dw_net_source="$dw_net_build/crates/devworks-dotnet-pack"
-dotnet test "$dw_net_source/tests/DevWorks.Dotnet.Tests.csproj"
-dotnet build "$dw_net_source/compiler/DevWorks.Dotnet.csproj" --configuration Release --output "$dw_net_build/compiler"
+(cd "$dw_net_source" && dotnet test tests/DevWorks.Dotnet.Tests.csproj --configuration Release)
+(cd "$dw_net_source" && dotnet build compiler/DevWorks.Dotnet.csproj --configuration Release --output "$dw_net_build/compiler")
 cargo build --locked --release -p devworks-dotnet-pack --features bundle
 dw_net_target="$(cargo metadata --locked --format-version 1 --no-deps |
   python3 -c 'import json, sys; print(json.load(sys.stdin)["target_directory"])')"

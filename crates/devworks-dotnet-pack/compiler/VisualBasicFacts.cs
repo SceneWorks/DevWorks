@@ -14,7 +14,7 @@ internal static class VisualBasicFacts
         if (symbol is IMethodSymbol method)
         {
             var body = syntax.Parent is V.MethodBlockBaseSyntax ? syntax.Parent : syntax;
-            props["cyclomatic_complexity"] = 1 + body.DescendantNodes().Count(Branch);
+            props["complexity"] = 1 + body.DescendantNodes().Count(Branch);
             if (method.GetAttributes().Any(a => Name(a) is "Fact" or "Theory" or "Test" or "TestMethod"))
                 props["is_test"] = true;
             if (method.MethodKind == MethodKind.Constructor)

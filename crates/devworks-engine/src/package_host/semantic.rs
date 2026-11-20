@@ -31,7 +31,12 @@ fn node_runtime(
 
 fn dotnet_runtime(host: &PackageHost) -> Option<dotnet::Runtime> {
     let (_, executable) = host.runtimes.as_ref()?.cache.executable("dotnet")?;
-    dotnet::Runtime::detect(&executable)
+    if devworks_core::ports::packages::RuntimeExecutable::inspect(&executable.program).ok()
+        != Some(executable.clone())
+    {
+        return None;
+    }
+    dotnet::Runtime::detect(&executable).ok()
 }
 
 pub(crate) struct PackageSemantics(pub Weak<PackageHost>);

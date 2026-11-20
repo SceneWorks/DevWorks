@@ -41,6 +41,10 @@ internal static class Program
         {
             File.WriteAllText(args[2], "dotnet-project-unsupported");
         }
+        catch (OutOfMemoryException)
+        {
+            File.WriteAllText(args[2], "compiler-memory-budget");
+        }
         catch (OutputBudget)
         {
             File.WriteAllText(args[2], "dotnet-output-budget");

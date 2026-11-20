@@ -139,7 +139,7 @@ internal sealed class Graph(Capture capture, Dictionary<AssemblyIdentity, string
                 else
                 {
                     target = new { symbol = rel.Key };
-                    rel.Properties["compiler_unresolved"] = true;
+                    rel.Properties[rel.Exact ? "compiler_bound_unpublished" : "compiler_unresolved"] = true;
                 }
                 edges.Add(new(rel.Kind, rel.From, target, resolution, rel.Confidence, rel.Properties));
             }
@@ -201,6 +201,7 @@ internal sealed class Graph(Capture capture, Dictionary<AssemblyIdentity, string
             }
             if (project.VisualBasic) VisualBasicFacts.Declaration(this, unit, model, syntax, symbol, i);
         }
+        AddSynthesizedMembers(unit, model.SyntaxTree);
         foreach (var syntax in root.DescendantNodes())
         {
             if (IsInvocation(syntax))
@@ -244,11 +245,46 @@ internal sealed class Graph(Capture capture, Dictionary<AssemblyIdentity, string
             else if (syntax is CS.IdentifierNameSyntax or VB.IdentifierNameSyntax)
             {
                 if (model.GetSymbolInfo(syntax).Symbol is { } binding
-                    && binding is IFieldSymbol or IPropertySymbol or INamedTypeSymbol)
+                    && binding is IFieldSymbol or IPropertySymbol or INamedTypeSymbol
+                    && Key(binding) != null)
                     Link(unit, unit.Parent(model.GetEnclosingSymbol(syntax.SpanStart)), binding, "REFERENCES", syntax.Span);
             }
         }
         if (!project.VisualBasic) RetainCSharp(unit, model, root);
+    }
+
+    private void AddSynthesizedMembers(Unit unit, SyntaxTree tree)
+    {
+        var localTypes = unit.Symbols.Where(entry => entry.Key is INamedTypeSymbol).ToArray();
+        foreach (var (symbol, parent) in localTypes)
+        {
+            var type = (INamedTypeSymbol)symbol;
+            var synthesized = type.InstanceConstructors.Where(ctor => ctor.IsImplicitlyDeclared
+                || ctor.DeclaringSyntaxReferences.Any(source =>
+                    source.GetSyntax() is CS.TypeDeclarationSyntax));
+            var positional = type.IsRecord
+                ? type.GetMembers().OfType<IPropertySymbol>().Where(property =>
+                    property.DeclaringSyntaxReferences.Any(source => source.GetSyntax() is CS.ParameterSyntax))
+                : [];
+            foreach (var member in synthesized.Cast<ISymbol>().Concat(positional))
+            {
+                if (unit.Symbols.ContainsKey(member) || Key(member) is not { } key) continue;
+                var location = member.Locations.FirstOrDefault(loc => loc.SourceTree == tree);
+                if (location == null && !member.IsImplicitlyDeclared) continue;
+                var info = unit.Properties();
+                info["symbol"] = member.ToDisplayString();
+                info["documentationId"] = member.GetDocumentationCommentId()!;
+                info["synthesized"] = true;
+                var kind = Kind(member)!;
+                var name = member is IMethodSymbol ? type.Name : member.Name;
+                var range = location == null ? unit.Nodes[parent].Span : unit.Range(location.SourceSpan);
+                var index = unit.Add(new(kind, name, key, range, parent, info), key);
+                unit.Symbols.Add(member, index);
+                if (!exact.TryGetValue(key, out var definitions)) exact[key] = definitions = [];
+                definitions.Add(new(unit, index));
+                unit.Local(member is IMethodSymbol ? "DEFINES_METHOD" : "DEFINES", parent, index, unit.Properties());
+            }
+        }
     }
 
     private static bool IsDeclaration(SyntaxNode node) => node is
@@ -341,12 +377,15 @@ internal sealed class Graph(Capture capture, Dictionary<AssemblyIdentity, string
         var text = model.SyntaxTree.GetText();
         foreach (var node in result.Nodes)
         {
-            var from = text.Lines[Math.Clamp(node.StartLine - 1, 0, text.Lines.Count - 1)].Start;
+            var line = text.Lines[Math.Clamp(node.StartLine - 1, 0, text.Lines.Count - 1)];
+            var from = line.Start;
+            var startLine = unit.Range(line.Span);
             var to = text.Lines[Math.Clamp(Math.Max(node.EndLine, node.StartLine) - 1,
                 0, text.Lines.Count - 1)].End;
             var candidates = unit.Aliases.GetValueOrDefault(node.QualifiedName, [])
                 .Where(i => unit.Nodes[i].Kind == node.Label.ToString()
-                    && unit.Nodes[i].Span.StartLine == node.StartLine).ToArray();
+                    && unit.Nodes[i].Span.StartByte >= startLine.StartByte
+                    && unit.Nodes[i].Span.StartByte <= startLine.EndByte).ToArray();
             if (candidates.Length == 1)
             {
                 foreach (var (key, value) in node.Properties) unit.Nodes[candidates[0]].Properties.TryAdd(key, value);
@@ -364,7 +403,6 @@ internal sealed class Graph(Capture capture, Dictionary<AssemblyIdentity, string
         foreach (var edge in result.Edges.Where(e => e.Type is not (EdgeType.CALLS or EdgeType.DEFINES_METHOD)))
         {
             var from = unit.Aliases.GetValueOrDefault(edge.SourceQN, []);
-            if (from.Count == 0) continue;
             var info = unit.Properties("retained-csharp");
             if (edge.Properties != null)
                 foreach (var (key, val) in edge.Properties) info[key] = val;

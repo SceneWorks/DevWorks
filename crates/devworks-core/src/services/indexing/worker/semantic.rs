@@ -145,13 +145,7 @@ fn repository_input(descriptor: &PackDescriptor, unit: &PlanUnit) -> Option<&'st
     // The frozen Next pass validates these configs together in its auxiliary program.
     let name = unit.key.rsplit('/').next().unwrap_or(&unit.key);
     if descriptor.id == crate::ports::packages::dotnet::PACKAGE {
-        if !bounded_source_path(&unit.key)
-            || unit.key.split('/').any(|part| {
-                ["bin", "obj"]
-                    .iter()
-                    .any(|skip| part.eq_ignore_ascii_case(skip))
-            })
-        {
+        if !crate::ports::packages::dotnet::source_path(&unit.key) {
             return None;
         }
         let lower = name.to_ascii_lowercase();

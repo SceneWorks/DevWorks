@@ -35,6 +35,7 @@ public class CompilerTests
             Imports System
             Imports System.Net.Http
             Imports Microsoft.AspNetCore.Mvc
+            Imports Fixture.Shared
             Imports SharedName = Fixture.Shared.Values
 
             Namespace ConsumerApp
@@ -89,6 +90,9 @@ public class CompilerTests
                         registry.ReceiveEndpoint("orders", Sub(e) e.Consumer(Of EntryController)())
                         bus.Publish(Of OrderMessage)(New OrderMessage())
                         Dim response = client.GetAsync("/api/status")
+                        Dim absent As MissingThing
+                        absent.Handle()
+                        Dim bumped = 42.Bump()
                         If response IsNot Nothing AndAlso True Then
                             Return SharedName.Answer(42)
                         ElseIf False Then
@@ -113,6 +117,9 @@ public class CompilerTests
             File("shared/Shared.csproj", """<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><TargetFramework>net10.0</TargetFramework></PropertyGroup></Project>"""),
             File("shared/Values.cs", """
                 namespace Fixture.Shared;
+                public static class Extensions {
+                    public static int Bump(this int value) => value + 1;
+                }
                 public static class Values {
                     public static int Answer(int value) => value;
                     public static string Answer(string value) => value;
@@ -137,7 +144,7 @@ public class CompilerTests
             Assert.Contains(edges, edge => Str(edge, "kind") == kind);
         var method = nodes.Single(node => Str(node, "name") == "Run");
         Assert.True(Props(method).GetProperty("is_test").GetBoolean());
-        Assert.Equal(5, Props(method).GetProperty("cyclomatic_complexity").GetInt32());
+        Assert.Equal(5, Props(method).GetProperty("complexity").GetInt32());
         var span = method.GetProperty("span");
         var bytes = Encoding.UTF8.GetBytes(source);
         Assert.StartsWith("<Fact, HttpGet", Encoding.UTF8.GetString(bytes, span.GetProperty("startByte").GetInt32(), 24));
@@ -145,8 +152,24 @@ public class CompilerTests
             .Select(edge => edge.GetProperty("target"))
             .Where(target => target.TryGetProperty("node", out _))
             .Select(target => target.GetProperty("node"))
-            .Single(target => Str(target, "unit") == "shared/Values.cs");
+            .Single(target => Str(target, "unit") == "shared/Values.cs"
+                && Str(target, "qualified_name").Contains(".Answer("));
         Assert.EndsWith("M:Fixture.Shared.Values.Answer(System.Int32)", Str(target, "qualified_name"));
+        Assert.Contains(edges, edge => Str(edge, "kind") == "CALLS" && Str(edge, "resolution") == "resolved"
+            && edge.GetProperty("target").TryGetProperty("node", out var extension)
+            && Str(extension, "qualified_name").EndsWith("M:Fixture.Shared.Extensions.Bump(System.Int32)"));
+        Assert.Contains(edges, edge => Str(edge, "kind") == "CALLS" && Str(edge, "resolution") == "resolved"
+            && edge.GetProperty("target").TryGetProperty("local", out var ctor)
+            && Str(Props(nodes[ctor.GetInt32()]), "documentationId").EndsWith(".OrderMessage.#ctor"));
+        Assert.Contains(edges, edge => Str(edge, "kind") == "IMPLEMENTS" && Str(edge, "resolution") == "resolved"
+            && edge.GetProperty("target").TryGetProperty("local", out var impl)
+            && Str(Props(nodes[impl.GetInt32()]), "documentationId").EndsWith(".IWork.Handle"));
+        Assert.Contains(edges, edge => Str(edge, "kind") == "CALLS" && Str(edge, "resolution") == "unresolved"
+            && edge.GetProperty("confidence").GetDouble() < 1 && Str(edge.GetProperty("target"), "symbol") == "Handle");
+        var service = Props(nodes.Single(node => Str(node, "kind") == "Service"));
+        Assert.Equal("Scoped", Str(service, "lifetime"));
+        Assert.EndsWith(".IWork", Str(service, "interface"));
+        Assert.EndsWith(".Work", Str(service, "implementation"));
         Assert.Contains(edges, edge => Str(edge, "kind") == "HTTP_CALLS"
             && Str(Props(edge), "url_pattern") == "/api/status");
         Assert.Contains(edges, edge => Str(edge, "kind") == "REGISTERS"
@@ -175,6 +198,55 @@ public class CompilerTests
         Assert.Contains(calls, edge => Str(edge, "resolution") == "resolved");
         Assert.Contains(calls, edge => Str(edge, "resolution") == "unresolved"
             && Props(edge).GetProperty("compiler_unresolved").GetBoolean());
+    }
+
+    [Fact]
+    public void RetainedCSharpFactsReachTheProjectedGraph()
+    {
+        var source = """
+            using Microsoft.AspNetCore.Mvc;
+            #if NETCOREAPP1_0_OR_GREATER && !NETCOREAPP3_2_OR_GREATER
+            namespace Fixture;
+            public class FactAttribute : System.Attribute {}
+            public interface IConsumer<T> {}
+            public interface IFoo {}
+            public class Foo : IFoo {}
+            public record OrderMessage(string Name);
+            public class Registry {
+                public void AddScoped<I, T>() {}
+            }
+            [Route("api/items")]
+            public class ItemsController : IConsumer<OrderMessage> {
+                [Fact, HttpGet("details")]
+                public string Query(Registry registry, bool next) {
+                    registry.AddScoped<IFoo, Foo>();
+                    return new OrderMessage(next ? "one" : "two").Name;
+                }
+            }
+            #endif
+            """.Replace("\n", "\r");
+        var unit = Index(Snapshot(
+            File("App.csproj", """
+                <Project Sdk="Microsoft.NET.Sdk">
+                  <PropertyGroup><TargetFramework>net10.0</TargetFramework></PropertyGroup>
+                  <ItemGroup><FrameworkReference Include="Microsoft.AspNetCore.App"/></ItemGroup>
+                </Project>
+                """),
+            File("Code.cs", source)))[0];
+        var nodes = Items(unit, "nodes");
+        var edges = Items(unit, "edges");
+        var method = Props(nodes.Single(node => Str(node, "name") == "Query"));
+        Assert.True(method.GetProperty("is_test").GetBoolean());
+        Assert.Equal(2, method.GetProperty("complexity").GetInt32());
+        Assert.Contains(nodes, node => Str(node, "kind") == "Route"
+            && Str(Props(node), "route_template").Contains("details"));
+        Assert.Contains(nodes, node => Str(node, "kind") == "Service"
+            && Str(Props(node), "lifetime") == "Scoped");
+        Assert.Contains(edges, edge => Str(edge, "kind") == "HANDLES");
+        Assert.Contains(edges, edge => Str(edge, "kind") == "CONSUMES");
+        Assert.Contains(edges, edge => Str(edge, "kind") == "REFERENCES" && Str(edge, "resolution") == "resolved"
+            && edge.GetProperty("target").TryGetProperty("local", out var target)
+            && Str(Props(nodes[target.GetInt32()]), "documentationId") == "P:Fixture.OrderMessage.Name");
     }
 
     [Theory]

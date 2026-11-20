@@ -372,11 +372,13 @@ impl PackageHost {
         if self.is_stopping() {
             return seen;
         }
-        let sdk = executables
-            .get("dotnet")
-            .and_then(dotnet::Runtime::detect)
-            .map(|runtime| RuntimeObservation::Found(runtime.sdk_version))
-            .unwrap_or_else(|| RuntimeObservation::Missing(dotnet::SDK_UNAVAILABLE.into()));
+        let sdk = match executables.get("dotnet") {
+            Some(executable) => match dotnet::Runtime::detect(executable) {
+                Ok(runtime) => RuntimeObservation::Found(runtime.sdk_version),
+                Err(reason) => RuntimeObservation::Missing(reason.into()),
+            },
+            None => RuntimeObservation::Missing(dotnet::SDK_UNAVAILABLE.into()),
+        };
         seen.insert(dotnet::SDK_RUNTIME.into(), sdk);
         ports.cache.set_probed(seen.clone(), executables);
         let _ = self.service.observe_now("RuntimeProbe");

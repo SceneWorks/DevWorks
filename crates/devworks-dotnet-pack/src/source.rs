@@ -1,5 +1,5 @@
 use devworks_core::fingerprint::sha256_hex;
-use devworks_core::ports::packages::dotnet::Runtime;
+use devworks_core::ports::packages::dotnet::{Runtime, source_path};
 use serde::Deserialize;
 use std::collections::BTreeSet;
 
@@ -40,16 +40,7 @@ fn hex(value: &str, length: usize) -> bool {
 
 fn valid_file(file: &File) -> bool {
     let path = &file.unit;
-    if path.len() > 240
-        || path.contains(['\\', ':', '\0'])
-        || path.split('/').any(|part| {
-            matches!(part, "" | "." | "..")
-                || [".git", "bin", "obj", "node_modules"]
-                    .iter()
-                    .any(|name| part.eq_ignore_ascii_case(name))
-        })
-        || file.sha256 != sha256_hex(file.text.as_bytes())
-    {
+    if !source_path(path) || file.sha256 != sha256_hex(file.text.as_bytes()) {
         return false;
     }
     let name = path.rsplit('/').next().unwrap_or(path).to_ascii_lowercase();
@@ -153,7 +144,11 @@ mod tests {
         let write = |name: &str, value: &str| {
             let path = staging.path().join(name);
             std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-            std::fs::write(&path, value).unwrap();
+            if name == "dotnet" || name.ends_with(".dylib") {
+                std::fs::write(&path, [0xcf, 0xfa, 0xed, 0xfe, 0x0c, 0, 0, 0x01]).unwrap();
+            } else {
+                std::fs::write(&path, value).unwrap();
+            }
         };
         for path in [
             "dotnet",

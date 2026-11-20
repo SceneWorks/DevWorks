@@ -3,8 +3,8 @@ use super::semantic_fixture::{
     configure, git, index, invocations, overlay, overlay_layer, published,
 };
 use super::*;
-use devworks_core::ports::packages::PackageInspector;
-use devworks_core::ports::packages::dotnet::{PACKAGE, SDK_RUNTIME};
+use devworks_core::ports::packages::dotnet::{PACKAGE, Runtime, SDK_RUNTIME};
+use devworks_core::ports::packages::{PackageInspector, RuntimeExecutable};
 use std::os::unix::fs::symlink;
 
 const CS_PROJECT: &str = r#"<Project Sdk="Microsoft.NET.Sdk">
@@ -14,6 +14,36 @@ const VB_PROJECT: &str = r#"<Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup><TargetFramework>net10.0</TargetFramework><RootNamespace>Client</RootNamespace></PropertyGroup>
   <ItemGroup><ProjectReference Include="../shared/Shared.csproj"/></ItemGroup>
 </Project>"#;
+
+fn copy_runtime_asset(file: &std::path::Path, from: &std::path::Path, to: &std::path::Path) {
+    let destination = to.join(file.strip_prefix(from).unwrap());
+    std::fs::create_dir_all(destination.parent().unwrap()).unwrap();
+    std::fs::copy(file, destination).unwrap();
+}
+
+fn isolated_runtime(program: &std::path::Path, root: &std::path::Path) -> Runtime {
+    let observed = Runtime::detect(&RuntimeExecutable::inspect(program).unwrap()).unwrap();
+    let from = program.parent().unwrap();
+    copy_runtime_asset(program, from, root);
+    for asset in &observed.witnesses {
+        copy_runtime_asset(&asset.program, from, root);
+    }
+    for entry in std::fs::read_dir(&observed.runtime_directory).unwrap() {
+        let path = entry.unwrap().path();
+        if path.is_file() {
+            copy_runtime_asset(&path, from, root);
+        }
+    }
+    for directory in observed.references.values() {
+        for entry in std::fs::read_dir(directory).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_file() {
+                copy_runtime_asset(&path, from, root);
+            }
+        }
+    }
+    Runtime::detect(&RuntimeExecutable::inspect(&root.join("dotnet")).unwrap()).unwrap()
+}
 
 #[test]
 #[ignore = "native macOS arm64 qualification requires the supported .NET SDK and a signed bundle"]
@@ -28,6 +58,9 @@ fn native_dotnet_pack_indexes_csharp_and_visual_basic() {
         .unwrap();
     let mut app = App::unbooted(Harness::new(), None, None);
     app.indexing = true;
+    let runtime_root = app.h.root.join("dotnet-installation");
+    let runtime = isolated_runtime(&dotnet, &runtime_root);
+    let dotnet = runtime.executable.program;
     let probe = app.h.root.join("dotnet-probe");
     std::fs::create_dir(&probe).unwrap();
     let selected = probe.join("dotnet");
@@ -49,6 +82,20 @@ fn native_dotnet_pack_indexes_csharp_and_visual_basic() {
         inspected.inspection.targets[0].target_triple,
         host_target_triple()
     );
+    for target in ["x86_64-pc-windows-msvc", "x86_64-unknown-linux-gnu"] {
+        let platform = HostPlatform {
+            target_triple: target.into(),
+            host_version: "0.1.0".into(),
+            protocol_major: 1,
+            protocol_minor: 0,
+        };
+        let reason = devworks_core::services::packages::policy::static_incompatibility(
+            &inspected.inspection,
+            &platform,
+        )
+        .unwrap();
+        assert!(reason.contains("No prebuilt helper") && reason.contains(target));
+    }
     let artifact = app.save(&app.user, &bytes);
     package(app.lifecycle(
         &app.user,
@@ -62,10 +109,14 @@ fn native_dotnet_pack_indexes_csharp_and_visual_basic() {
 
     let root = app.sources.join("mixed-dotnet");
     for (path, content) in [
+        (
+            "Directory.Build.props",
+            "<Project><PropertyGroup><DefineConstants>CAPTURED_CONTEXT</DefineConstants></PropertyGroup></Project>",
+        ),
         ("shared/Shared.csproj", CS_PROJECT),
         (
             "shared/Values.cs",
-            "namespace Fixture; public class Values { public static int Answer(int a) => a; public static string Answer(string a) => a; }\n",
+            "#if CAPTURED_CONTEXT\nnamespace Fixture; public class Values { public static int Answer(int a) => a; public static string Answer(string a) => a; }\n#endif\n",
         ),
         (
             "shared/Extra.cs",
@@ -179,6 +230,40 @@ fn native_dotnet_pack_indexes_csharp_and_visual_basic() {
     let reused = published(&app, &repository, Some(&initial.id));
     assert_eq!(invocations(&app, PACKAGE), count);
 
+    let host = app.app().packages().unwrap();
+    // .NET processes are real. Add a simulated newer SDK entry to the isolated inventory to
+    // test the binding change without modifying the machine's installed SDK.
+    let patch = runtime
+        .sdk_version
+        .rsplit_once('.')
+        .unwrap()
+        .1
+        .parse::<u32>()
+        .unwrap();
+    let alternate = format!("10.0.{}", patch + 1);
+    assert!(
+        patch < 299,
+        "the fixture needs room for a patch in the qualified band"
+    );
+    let alternate_sdk = runtime_root.join("sdk").join(&alternate);
+    std::fs::create_dir_all(&alternate_sdk).unwrap();
+    std::fs::copy(
+        runtime_root
+            .join("sdk")
+            .join(runtime.sdk_version)
+            .join("dotnet.dll"),
+        alternate_sdk.join("dotnet.dll"),
+    )
+    .unwrap();
+    assert_eq!(
+        host.refresh_runtimes()[SDK_RUNTIME],
+        RuntimeObservation::Found(alternate)
+    );
+    index(&app, &repository, "indexing.index");
+    let reused = published(&app, &repository, Some(&reused.id));
+    assert_eq!(reused.manifest["packs"][0]["id"], PACKAGE);
+    assert_eq!(invocations(&app, PACKAGE), count + 1);
+
     let worktree = read(&*app.store, |snapshot| {
         Ok(snapshot.indexing().worktrees(&repository)?[0]
             .worktree_id
@@ -228,9 +313,8 @@ fn native_dotnet_pack_indexes_csharp_and_visual_basic() {
     );
 
     // Build targets in captured XML are data. A build would create this marker in the fixture.
-    let unsupported = CS_PROJECT.replace("</Project>",
-        r#"<Target Name="Unexpected" BeforeTargets="BeforeBuild"><WriteLinesToFile File="canary" Lines="ran"/></Target></Project>"#);
-    std::fs::write(root.join("shared/Shared.csproj"), unsupported).unwrap();
+    let unsupported = r#"<Project><Target Name="Unexpected" BeforeTargets="BeforeBuild"><WriteLinesToFile File="canary" Lines="ran"/></Target></Project>"#;
+    std::fs::write(root.join("Directory.Build.targets"), unsupported).unwrap();
     git(&root, &["add", "-A"]);
     git(&root, &["commit", "-qm", "unsupported repository target"]);
     let failed_run = index(&app, &repository, "indexing.index");
@@ -251,7 +335,6 @@ fn native_dotnet_pack_indexes_csharp_and_visual_basic() {
             .any(|node| node.name == "Values")
     );
 
-    let host = app.app().packages().unwrap();
     std::fs::remove_file(&selected).unwrap();
     host.refresh_runtimes();
     let count = invocations(&app, PACKAGE);
@@ -267,7 +350,7 @@ fn native_dotnet_pack_indexes_csharp_and_visual_basic() {
     symlink(dotnet, selected).unwrap();
     host.refresh_runtimes();
     app.ready(PACKAGE);
-    std::fs::write(root.join("shared/Shared.csproj"), CS_PROJECT).unwrap();
+    std::fs::remove_file(root.join("Directory.Build.targets")).unwrap();
     git(&root, &["add", "-A"]);
     git(&root, &["commit", "-qm", "restore supported project"]);
     index(&app, &repository, "indexing.reindex");
@@ -276,4 +359,48 @@ fn native_dotnet_pack_indexes_csharp_and_visual_basic() {
         recovered.manifest["packs"][0]["id"], PACKAGE,
         "{recovered:?}"
     );
+
+    let count = invocations(&app, PACKAGE);
+    let source = format!("//{}\n", "x".repeat(480_000));
+    for number in 0..9 {
+        std::fs::write(root.join(format!("shared/Oversize{number}.cs")), &source).unwrap();
+    }
+    git(&root, &["add", "-A"]);
+    git(
+        &root,
+        &[
+            "commit",
+            "-qm",
+            "exceed the combined captured source budget",
+        ],
+    );
+    let over_budget = index(&app, &repository, "indexing.reindex");
+    let limited = published(&app, &repository, Some(&recovered.id));
+    let limited_run = read(&*app.store, |snapshot| {
+        snapshot.indexing().run(&over_budget)
+    })
+    .unwrap();
+    assert!(limited_run.warnings.iter().any(|warning| {
+        warning
+            .message
+            .contains("repository source exceeds the semantic input budget")
+    }));
+    assert_eq!(limited.manifest["packs"], json!([]));
+    assert_eq!(count, invocations(&app, PACKAGE));
+    assert!(
+        nodes(&limited.id, "shared/Renamed.cs")
+            .iter()
+            .any(|node| node.name == "Values")
+    );
+
+    package(app.simple(&app.user, "addons.disable", "Disable", PACKAGE));
+    index(&app, &repository, "indexing.index");
+    let disabled = published(&app, &repository, Some(&limited.id));
+    assert_eq!(disabled.manifest["packs"], json!([]));
+    assert!(
+        nodes(&disabled.id, "shared/Renamed.cs")
+            .iter()
+            .any(|node| node.name == "Values")
+    );
+    assert_eq!(count, invocations(&app, PACKAGE));
 }
