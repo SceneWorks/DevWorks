@@ -44,8 +44,11 @@ fn native_dotnet_pack_indexes_csharp_and_visual_basic() {
     let inspected = BundleInspector
         .inspect(&bytes)
         .expect("signed package inspection");
-    assert_eq!(inspected.targets.len(), 1);
-    assert_eq!(inspected.targets[0].target_triple, host_target_triple());
+    assert_eq!(inspected.inspection.targets.len(), 1);
+    assert_eq!(
+        inspected.inspection.targets[0].target_triple,
+        host_target_triple()
+    );
     let artifact = app.save(&app.user, &bytes);
     package(app.lifecycle(
         &app.user,
@@ -164,7 +167,11 @@ fn native_dotnet_pack_indexes_csharp_and_visual_basic() {
     };
     let ui = query(&app.user);
     assert!(ui.to_string().contains("Run"), "{ui}");
-    assert_eq!(ui, query(&agent));
+    let tool = query(&agent);
+    // The two principals receive their own graph leases.
+    assert_eq!(ui["value"]["result"], tool["value"]["result"]);
+    assert_eq!(ui["value"]["scopeCoverage"], tool["value"]["scopeCoverage"]);
+    assert_eq!(ui["value"]["view"]["views"], tool["value"]["view"]["views"]);
 
     let count = invocations(&app, PACKAGE);
     assert_eq!(count, 1);
