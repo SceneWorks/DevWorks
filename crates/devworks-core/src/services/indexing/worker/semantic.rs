@@ -109,6 +109,7 @@ fn source_unit(unit: &PlanUnit) -> bool {
 }
 
 const DOTNET_CONTEXT: &str = "dotnet-context";
+const SWIFT_CONTEXT: &str = "swift-context";
 const TYPESCRIPT_CONTEXT: &str = "typescript-context";
 
 fn typescript_context(key: &str) -> bool {
@@ -157,6 +158,17 @@ fn repository_input(descriptor: &PackDescriptor, unit: &PlanUnit) -> Option<&'st
             )
         {
             return Some(DOTNET_CONTEXT);
+        }
+    }
+    if descriptor.id == crate::ports::packages::swift::PACKAGE {
+        if !crate::ports::packages::swift::source_path(&unit.key) {
+            return None;
+        }
+        if matches!(name, "Package.swift" | "project.pbxproj")
+            || (name.starts_with("Package@swift-") && name.ends_with(".swift"))
+            || crate::ports::packages::swift::foreign_input(name)
+        {
+            return Some(SWIFT_CONTEXT);
         }
     }
     if typescript && matches!(name, "next.config.mjs" | "next.config.cjs") {
@@ -379,7 +391,12 @@ fn collect(
         let context: Vec<_> = batch
             .files
             .iter()
-            .filter(|file| descriptor.repository_source && file.language == TYPESCRIPT_CONTEXT)
+            .filter(|file| {
+                descriptor.repository_source
+                    && (file.language == TYPESCRIPT_CONTEXT
+                        || (descriptor.id == crate::ports::packages::swift::PACKAGE
+                            && file.language == SWIFT_CONTEXT))
+            })
             .cloned()
             .collect();
         validate(proposals, &selected, &context)
@@ -447,17 +464,25 @@ fn apply(
             None,
             &descriptor.id,
         );
-        if descriptor.id == crate::ports::packages::dotnet::PACKAGE
-            && let Some(gap) = proposal.nodes[0]
-                .properties
-                .get("coverageGap")
-                .and_then(Value::as_str)
-            && matches!(
-                gap,
-                "dotnet-source-excluded"
-                    | "dotnet-external-assemblies-unavailable"
-                    | "dotnet-project-reference-unavailable"
-            )
+        if let Some(gap) = proposal.nodes[0]
+            .properties
+            .get("coverageGap")
+            .and_then(Value::as_str)
+            && (descriptor.id == crate::ports::packages::dotnet::PACKAGE
+                && matches!(
+                    gap,
+                    "dotnet-source-excluded"
+                        | "dotnet-external-assemblies-unavailable"
+                        | "dotnet-project-reference-unavailable"
+                )
+                || descriptor.id == crate::ports::packages::swift::PACKAGE
+                    && matches!(
+                        gap,
+                        "swift-source-excluded"
+                            | "swift-compiler-failed"
+                            | "swift-dependency-unavailable"
+                            | "swift-xcode-project-unsupported"
+                    ))
         {
             if let Some(incomplete) = row.payload["incomplete"].as_array_mut() {
                 incomplete.push(json!(gap));

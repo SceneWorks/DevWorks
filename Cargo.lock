@@ -1380,6 +1380,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "devworks-swift-pack"
+version = "0.1.0"
+dependencies = [
+ "devworks-adapters",
+ "devworks-core",
+ "devworks-semantic-helper",
+ "ed25519-dalek",
+ "libloading",
+ "serde",
+ "serde_json",
+ "tempfile",
+]
+
+[[package]]
 name = "devworks-test-support"
 version = "0.1.0"
 dependencies = [

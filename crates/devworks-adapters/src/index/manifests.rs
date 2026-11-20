@@ -15,6 +15,11 @@
 //! manifests' relationships point at that node exactly. The retained repository-level source of
 //! `CONTAINS_PROJECT` (and of a manifest without a package) is the manifest's file node here, with
 //! `scope: repository`.
+mod swift_semantic;
+pub use swift_semantic::{
+    SwiftDependency, SwiftPackageLayout, SwiftTargetLayout, swift_package_layout,
+};
+
 use devworks_core::ports::indexing::{
     EdgeTarget, ExtractFault, ExtractedEdge, ExtractedNode, FileExtract, LanguageInfo,
     LanguageMode, Resolution, Span,

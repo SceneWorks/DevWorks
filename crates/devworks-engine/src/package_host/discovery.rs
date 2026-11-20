@@ -7,7 +7,7 @@ use devworks_core::fingerprint::sha256_hex;
 use devworks_core::locks::LockExt;
 use devworks_core::ports::packages::{
     IndexTransport, IndexVerifier, MAX_INDEX_BYTES, RuntimeCache, RuntimeExecutable,
-    RuntimeObservation, dotnet,
+    RuntimeObservation, dotnet, swift,
 };
 use devworks_core::ports::process::ProcessSpec;
 use devworks_core::ports::storage::{ReadOptions, read_snapshot};
@@ -233,13 +233,61 @@ impl PackageHost {
         } else {
             argv.push("--version".to_owned());
         }
-        let mut spec = ProcessSpec::new(&argv).expect("argv");
+        let text = match self.probe_command(&argv, env, None, runtime) {
+            Ok(text) => text,
+            Err(reason) => return RuntimeObservation::Missing(reason),
+        };
+        let current = RuntimeExecutable::inspect(&program).ok();
+        if current != launch_identity {
+            return RuntimeObservation::Missing("the runtime changed during its probe".into());
+        }
+        if runtime == "node"
+            && let Some((version, binary)) = probed_node(&text)
+        {
+            *executable = Some(binary);
+            return RuntimeObservation::Found(version);
+        }
+        let version = if list_sdks {
+            text.lines()
+                .filter_map(|line| semver::Version::parse(line.split_whitespace().next()?).ok())
+                .max()
+                .map(|version| version.to_string())
+        } else if runtime == "swift" {
+            text.split_once("Swift version ")
+                .and_then(|(_, actual)| parse_version(actual))
+                .or_else(|| parse_version(&text))
+        } else {
+            parse_version(&text)
+        };
+        match version {
+            Some(version) if runtime == "node" && version.starts_with("24.") => {
+                RuntimeObservation::Missing("Node 24 did not identify its executable".into())
+            }
+            Some(version) => {
+                *executable = current;
+                RuntimeObservation::Found(version)
+            }
+            None => {
+                RuntimeObservation::Missing(format!("the `{runtime}` probe printed no version"))
+            }
+        }
+    }
+
+    fn probe_command(
+        &self,
+        argv: &[String],
+        env: Vec<(String, String)>,
+        cwd: Option<PathBuf>,
+        runtime: &str,
+    ) -> Result<String, String> {
+        let mut spec = ProcessSpec::new(argv).expect("argv");
         spec.clear_env = true;
+        spec.cwd = cwd;
         spec.env = env;
         spec.capture_output = true;
         // No probe is launched once shutdown began (its snapshot of owned trees may be taken).
         if self.is_stopping() {
-            return RuntimeObservation::Missing("the host is stopping".into());
+            return Err("the host is stopping".into());
         }
         let ctx = self.host_ctx();
         let policy = LaunchPolicy {
@@ -258,7 +306,7 @@ impl PackageHost {
             &policy,
         ) {
             Ok(o) => o,
-            Err(_) => return RuntimeObservation::Missing("not found".into()),
+            Err(_) => return Err("not found".into()),
         };
         // Launch may have been in progress when shutdown took its process snapshot.
         // Once launch returns it is registered: either that snapshot owns it, or we stop
@@ -267,7 +315,7 @@ impl PackageHost {
             let _ = self
                 .supervisor
                 .cancel(&owned, Duration::ZERO, Duration::from_millis(500));
-            return RuntimeObservation::Missing("the host is stopping".into());
+            return Err("the host is stopping".into());
         }
         let out = Arc::new(Mutex::new(Vec::new()));
         let mut readers = Vec::new();
@@ -292,56 +340,82 @@ impl PackageHost {
             let _ = r.join();
         }
         if finished.is_none() {
-            return RuntimeObservation::Missing(format!(
+            return Err(format!(
                 "`{runtime}` did not answer within {} ms",
                 timeout.as_millis()
             ));
         }
         let text = String::from_utf8_lossy(&out.locked()).into_owned();
-        match finished {
+        if matches!(
+            finished,
             Some(devworks_core::services::process::StopOutcome::Reaped {
                 exit_code: Some(0),
                 ..
-            }) => {
-                let current = RuntimeExecutable::inspect(&program).ok();
-                if current != launch_identity {
-                    return RuntimeObservation::Missing(
-                        "the runtime changed during its probe".into(),
-                    );
-                }
-                if runtime == "node"
-                    && let Some((version, binary)) = probed_node(&text)
-                {
-                    *executable = Some(binary);
-                    return RuntimeObservation::Found(version);
-                }
-                let version = if list_sdks {
-                    text.lines()
-                        .filter_map(|line| {
-                            semver::Version::parse(line.split_whitespace().next()?).ok()
-                        })
-                        .max()
-                        .map(|version| version.to_string())
-                } else {
-                    parse_version(&text)
-                };
-                match version {
-                    Some(version) if runtime == "node" && version.starts_with("24.") => {
-                        RuntimeObservation::Missing(
-                            "Node 24 did not identify its executable".into(),
-                        )
-                    }
-                    Some(version) => {
-                        *executable = current;
-                        RuntimeObservation::Found(version)
-                    }
-                    None => RuntimeObservation::Missing(format!(
-                        "the `{runtime}` probe printed no version"
-                    )),
-                }
-            }
-            _ => RuntimeObservation::Missing(format!("`{runtime}` version probe failed")),
+            })
+        ) {
+            return Ok(text);
         }
+        let message = text.to_ascii_lowercase();
+        if runtime == swift::SDK_RUNTIME {
+            if message.contains("license") || message.contains("first launch") {
+                return Err("swift-xcode-initialization-required".into());
+            }
+            return Err("swift-xcode-discovery-failed".into());
+        }
+        Err(format!("`{runtime}` version probe failed"))
+    }
+
+    fn swift_sdk(&self) -> Result<swift::Runtime, String> {
+        if !cfg!(all(target_os = "macos", target_arch = "aarch64")) {
+            return Err("unsupported-swift-pack-target".into());
+        }
+        if ["DEVELOPER_DIR", "TOOLCHAINS"]
+            .iter()
+            .any(|key| std::env::var_os(key).is_some_and(|value| !value.is_empty()))
+        {
+            return Err("swift-custom-toolchain-unqualified".into());
+        }
+        let probe = |parts: &[&str]| {
+            self.probe_command(
+                &parts
+                    .iter()
+                    .map(|part| (*part).to_owned())
+                    .collect::<Vec<_>>(),
+                Vec::new(),
+                Some(PathBuf::from("/")),
+                swift::SDK_RUNTIME,
+            )
+        };
+        let frontend = probe(&[
+            "/usr/bin/xcrun",
+            "--sdk",
+            "macosx",
+            "--find",
+            "swift-frontend",
+        ])?;
+        let frontend = Path::new(frontend.trim());
+        let developer = frontend.ancestors().nth(5);
+        if !frontend.is_absolute()
+            || !developer.is_some_and(|root| {
+                frontend == root.join("Toolchains/XcodeDefault.xctoolchain/usr/bin/swift-frontend")
+                    && root
+                        .parent()
+                        .is_some_and(|parent| parent.ends_with("Contents"))
+            })
+        {
+            return Err("swift-full-xcode-required".into());
+        }
+        let sdk = probe(&["/usr/bin/xcrun", "--sdk", "macosx", "--show-sdk-path"])?;
+        let identity =
+            RuntimeExecutable::inspect(frontend).map_err(|_| "swift-xcode-assets-unavailable")?;
+        let target = probe(&[
+            frontend.to_str().ok_or("swift-xcode-assets-unavailable")?,
+            "-print-target-info",
+        ])?;
+        if RuntimeExecutable::inspect(frontend).ok().as_ref() != Some(&identity) {
+            return Err("swift-runtime-changed".into());
+        }
+        swift::Runtime::detect(frontend, Path::new(sdk.trim()), &target).map_err(str::to_owned)
     }
 
     /// Probes every known and declared runtime, refreshes the cache and announces any
@@ -353,7 +427,7 @@ impl PackageHost {
         let mut seen = BTreeMap::new();
         let mut executables = BTreeMap::new();
         for r in self.declared_runtimes() {
-            if r == dotnet::SDK_RUNTIME {
+            if r == dotnet::SDK_RUNTIME || r == swift::SDK_RUNTIME {
                 continue;
             }
             if self.is_stopping() {
@@ -380,7 +454,24 @@ impl PackageHost {
             None => RuntimeObservation::Missing(dotnet::SDK_UNAVAILABLE.into()),
         };
         seen.insert(dotnet::SDK_RUNTIME.into(), sdk);
-        ports.cache.set_probed(seen.clone(), executables);
+        let (sdk, swift) = match executables.contains_key("swift").then(|| self.swift_sdk()) {
+            Some(Ok(runtime)) => (
+                RuntimeObservation::Found(swift::VERSION.into()),
+                Some(runtime),
+            ),
+            Some(Err(reason)) => (RuntimeObservation::Missing(reason), None),
+            None => (
+                RuntimeObservation::Missing("swift-toolchain-unavailable".into()),
+                None,
+            ),
+        };
+        seen.insert(swift::SDK_RUNTIME.into(), sdk);
+        if self.is_stopping() {
+            return seen;
+        }
+        ports
+            .cache
+            .set_probed_with_swift(seen.clone(), executables, swift);
         let _ = self.service.observe_now("RuntimeProbe");
         seen
     }

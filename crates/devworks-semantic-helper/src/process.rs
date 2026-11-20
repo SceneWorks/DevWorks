@@ -1,5 +1,5 @@
 //! Resource limits and cleanup for a compiler in the helper's own process group.
-use std::process::{Child, Command, Stdio};
+use std::process::{Child, Command, ExitStatus, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
@@ -188,21 +188,44 @@ pub fn run(
     cancelled: &AtomicBool,
     failure: &'static str,
 ) -> Result<(), Failure> {
-    budget(deadline, cancelled, memory)?;
+    if run_checked(command, deadline, cancelled, failure, || Ok(()))?.success() {
+        Ok(())
+    } else {
+        Err(Failure::stop(failure))
+    }
+}
+
+/// Run an owned child with an additional bounded observer. A reaped exit status is available
+/// to a producer that isolates ordinary compiler diagnostics to one workspace target.
+pub fn run_checked(
+    command: &mut Command,
+    deadline: Instant,
+    cancelled: &AtomicBool,
+    failure: &'static str,
+    mut observe: impl FnMut() -> Result<(), Failure>,
+) -> Result<ExitStatus, Failure> {
+    let mut check = || {
+        budget(deadline, cancelled, memory)?;
+        observe()
+    };
+    check()?;
     let mut child = command.stdin(Stdio::null()).spawn().map_err(|_| failure)?;
     let result = loop {
         match child.try_wait() {
-            Ok(Some(status)) if status.success() => break Ok(()),
-            Ok(Some(_)) | Err(_) => break Err(Failure::stop(failure)),
+            Ok(Some(status)) => break Ok(status),
+            Err(_) => break Err(Failure::stop(failure)),
             Ok(None) => {}
         }
-        if let Err(error) = budget(deadline, cancelled, memory) {
+        if let Err(error) = check() {
             break Err(error);
         }
         std::thread::sleep(SAMPLE);
     };
     stop_compiler_children(&mut child);
-    result
+    result.and_then(|status| {
+        observe()?;
+        Ok(status)
+    })
 }
 
 #[cfg(test)]
