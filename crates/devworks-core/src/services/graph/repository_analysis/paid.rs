@@ -256,6 +256,10 @@ impl Paid<'_> {
             if !seen.insert(repository.as_str()) {
                 continue;
             }
+            if seen.len() > usize::from(run.intent.batch_limit).min(32) {
+                report.gaps.push("SynthesisBatchLimit".into());
+                break;
+            }
             let view = &project.subject.view;
             let (prompt, inputs, partial) =
                 modeling::synthesis_prompt(repository, &projects.completed, links.as_ref())?;

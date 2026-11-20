@@ -126,6 +126,7 @@ pub fn queue_service() -> queue::QueueService {
         Arc::new(maintenance::QueueHook),
         Arc::new(workspace_archive::QueueHook),
         Arc::new(documents::indexing::QueueHook),
+        Arc::new(graph::repository_analysis::QueueHook),
     ])
 }
 

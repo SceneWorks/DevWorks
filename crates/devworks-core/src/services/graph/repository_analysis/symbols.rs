@@ -19,6 +19,20 @@ const DEFINITION_KINDS: &[&str] = &[
     "Enum",
     "Struct",
     "Namespace",
+    "Module",
+    "Trait",
+    "Protocol",
+    "Type",
+    "TypeAlias",
+    "Union",
+    "Field",
+    "StaticField",
+    "StaticProperty",
+    "Constant",
+    "StaticMethod",
+    "AbstractMethod",
+    "TraitMethod",
+    "Symbol",
 ];
 
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
@@ -260,6 +274,10 @@ fn supported(node: &GraphNode) -> Vec<Symbol> {
         definitions.extend(aliases.iter().filter_map(npm));
     }
     definitions
+}
+
+pub(super) fn has_export(node: &GraphNode) -> bool {
+    DEFINITION_KINDS.contains(&node.node.kind.as_str()) && !supported(node).is_empty()
 }
 
 #[cfg(test)]

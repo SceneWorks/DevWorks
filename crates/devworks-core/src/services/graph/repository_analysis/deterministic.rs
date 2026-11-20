@@ -39,6 +39,7 @@ pub(super) struct Deterministic<'a> {
     pub phases: &'a PhaseStore,
     pub index: &'a IndexEnv,
     pub advisory: Option<&'a Feed>,
+    pub history_gate: &'a vitals::HistoryGate,
     pub cancellation: &'a Cancellation,
 }
 
@@ -113,7 +114,8 @@ impl Deterministic<'_> {
         let computed_at = self.index.now();
         match phase {
             AnalysisPhase::Links => {
-                if run.intent.command == AnalysisCommand::Community
+                if (run.intent.command == AnalysisCommand::Community
+                    || claim.context.principal_kind() == crate::context::PrincipalKind::Schedule)
                     && let Some(existing) = self.exact_links(claim, run)?
                 {
                     return Ok(ResultDocument::Links(existing));
@@ -166,8 +168,14 @@ impl Deterministic<'_> {
                 let stopped = || {
                     self.cancellation.is_cancelled() || started.elapsed() >= Duration::from_secs(30)
                 };
-                let history =
-                    vitals::history_reads(claim, self.index, inputs, computed_at, &stopped)?;
+                let history = vitals::history_reads(
+                    claim,
+                    self.index,
+                    inputs,
+                    self.history_gate,
+                    computed_at,
+                    &stopped,
+                )?;
                 let result = read_snapshot(store, &snapshots, |read| {
                     Ok((|| {
                         let (_, selected) = claim.run(read)?;

@@ -5,7 +5,7 @@ use crate::fingerprint::sha256_hex;
 use crate::ports::IdKind;
 use crate::ports::storage::{
     GraphScope, GraphUnavailableRepository, GraphViewBinding, GraphViewWitness, IndexRead,
-    ReadSnapshot, StoredAnalysisRun, StoredGraphReadPin, WriteTransaction,
+    ReadSnapshot, StoredAnalysisRun, StoredGitWorktree, StoredGraphReadPin, WriteTransaction,
 };
 use crate::protocol::data::{DataScope, ViewSelection};
 use crate::protocol::records::AnalysisViewBinding;
@@ -59,7 +59,9 @@ impl Selection {
                 Refusal::new(DomainErrorCode::PermissionDenied, "workspace_scope", None).into(),
             );
         }
-        scope::owned(read, ctx)?;
+        let owned = scope::owned(read, ctx)
+            .map_err(hide_view_identity)?
+            .filter(|tree| &tree.owner == ctx.principal());
         if let ViewSelection::Pinned { pin_id } = requested {
             let pin = read.graph().graph_pin(pin_id)?.ok_or_else(unavailable)?;
             lease::check_pin(&pin, ctx, data_scope, now).map_err(hide_view_identity)?;
@@ -74,6 +76,7 @@ impl Selection {
                 scope::authorize(read, ctx, data_scope, &missing.repository_id)
                     .map_err(hide_view_identity)?;
             }
+            check_worktree_layers(&layers, owned.as_ref())?;
             return Self::capture(
                 read,
                 data_scope,
@@ -86,15 +89,29 @@ impl Selection {
         let resolved = if let ViewSelection::Published { repository_ids } = requested {
             let mut layers = Vec::new();
             let mut unavailable = Vec::new();
+            let mut seen = std::collections::BTreeSet::new();
             for repository in repository_ids {
+                if !seen.insert(repository.as_str()) {
+                    return Err(Refusal::new(
+                        DomainErrorCode::InvalidArgument,
+                        "analysis_repositories",
+                        None,
+                    )
+                    .into());
+                }
                 scope::authorize(read, ctx, data_scope, repository).map_err(hide_view_identity)?;
                 if let Some(pointer) = read.indexing().published(repository)? {
-                    layers.push(
-                        scope::exact(read, ctx, data_scope, &pointer.view_id, now)
-                            .map_err(hide_view_identity)?,
-                    );
+                    match scope::exact(read, ctx, data_scope, &pointer.view_id, now) {
+                        Ok(view) => layers.push(view),
+                        Err(Failure::Refused(error))
+                            if error.code == DomainErrorCode::ViewUnavailable =>
+                        {
+                            unavailable.push((repository.clone(), "ViewUnavailableAtSelection"));
+                        }
+                        Err(error) => return Err(hide_view_identity(error)),
+                    }
                 } else {
-                    unavailable.push((repository.clone(), "RepositoryNotIndexed"));
+                    unavailable.push((repository.clone(), "NotIndexedAtSelection"));
                 }
             }
             scope::Resolved {
@@ -105,6 +122,7 @@ impl Selection {
             scope::resolve(read, ctx, data_scope, Some(requested), now, None)
                 .map_err(hide_view_identity)?
         };
+        check_worktree_layers(&resolved.layers, owned.as_ref())?;
         let witnesses = resolved
             .layers
             .iter()
@@ -265,6 +283,7 @@ impl Selection {
         tx: &mut dyn WriteTransaction,
         ctx: &InvocationContext,
     ) -> Result<(), Failure> {
+        validate_worktree_in(tx, ctx, &self.views)?;
         scope::validate_in(
             tx,
             ctx,
@@ -360,24 +379,7 @@ impl Selection {
         run: &StoredAnalysisRun,
         now: i64,
     ) -> Result<(), Failure> {
-        if lease::scope_digest(scope) != lease::scope_digest(&run.intent.scope)
-            || run.owner.restore_epoch != ctx.restore_epoch().get()
-        {
-            return Err(unavailable());
-        }
-        for view in &run.intent.views {
-            scope::authorize(read, ctx, scope, &view.repository_id).map_err(hide_view_identity)?;
-            if let Some(worktree) = view.snapshot.worktree_id.as_ref() {
-                let bound = scope::owned(read, ctx)?.ok_or_else(unavailable)?;
-                if &bound.id != worktree || bound.repository_id != view.repository_id {
-                    return Err(unavailable());
-                }
-            }
-        }
-        for missing in &run.intent.unavailable {
-            scope::authorize(read, ctx, scope, &missing.repository_id)
-                .map_err(hide_view_identity)?;
-        }
+        Self::check_saved_authority(read, ctx, scope, run)?;
         if run
             .intent
             .witnesses
@@ -389,9 +391,139 @@ impl Selection {
         Ok(())
     }
 
+    pub(super) fn check_saved_authority(
+        read: &dyn ReadSnapshot,
+        ctx: &InvocationContext,
+        scope: &DataScope,
+        run: &StoredAnalysisRun,
+    ) -> Result<(), Failure> {
+        if lease::scope_digest(scope) != lease::scope_digest(&run.intent.scope)
+            || run.owner.restore_epoch != ctx.restore_epoch().get()
+        {
+            return Err(unavailable());
+        }
+        for view in &run.intent.views {
+            scope::authorize(read, ctx, scope, &view.repository_id).map_err(hide_view_identity)?;
+            if let Some(worktree) = view.snapshot.worktree_id.as_ref() {
+                let bound = scope::owned(read, ctx)?.ok_or_else(unavailable)?;
+                if &bound.id != worktree
+                    || bound.repository_id != view.repository_id
+                    || &bound.owner != ctx.principal()
+                {
+                    return Err(unavailable());
+                }
+            }
+        }
+        for missing in &run.intent.unavailable {
+            scope::authorize(read, ctx, scope, &missing.repository_id)
+                .map_err(hide_view_identity)?;
+        }
+        Ok(())
+    }
+
+    pub(super) fn validate_saved_authority_in(
+        tx: &mut dyn WriteTransaction,
+        ctx: &InvocationContext,
+        run: &StoredAnalysisRun,
+    ) -> Result<(), Failure> {
+        if ctx.restore_epoch().get() != tx.store().restore_epoch
+            || run.owner.restore_epoch != tx.store().restore_epoch
+        {
+            return Err(unavailable());
+        }
+        validate_worktree_in(tx, ctx, &run.intent.views)?;
+        let members = match &run.intent.scope {
+            DataScope::Workspace if ctx.project_id().is_none() => None,
+            DataScope::Workspace => return Err(unavailable()),
+            DataScope::Project { project_id } => {
+                crate::services::projects::visible_project(tx.projects(), ctx, project_id)
+                    .map_err(hide_view_identity)?;
+                Some(tx.projects().members(project_id)?)
+            }
+        };
+        for repository in run
+            .intent
+            .views
+            .iter()
+            .map(|view| &view.repository_id)
+            .chain(
+                run.intent
+                    .unavailable
+                    .iter()
+                    .map(|view| &view.repository_id),
+            )
+        {
+            crate::services::projects::visible_repository(tx.projects(), ctx, repository)
+                .map_err(hide_view_identity)?;
+            if members
+                .as_ref()
+                .is_some_and(|members| !members.contains(repository))
+            {
+                return Err(unavailable());
+            }
+        }
+        Ok(())
+    }
+
     pub(super) fn witnesses(&self) -> &[GraphViewWitness] {
         &self.witnesses
     }
+}
+
+fn check_worktree_layers(
+    layers: &[ViewLayers],
+    owned: Option<&StoredGitWorktree>,
+) -> Result<(), Failure> {
+    for layer in layers {
+        let snapshot = model::snapshot(&layer.view).map_err(hide_view_identity)?;
+        if let Some(worktree) = &snapshot.worktree_id
+            && owned.is_none_or(|tree| {
+                &tree.id != worktree || tree.repository_id != snapshot.repository_id
+            })
+        {
+            return Err(unavailable());
+        }
+    }
+    Ok(())
+}
+
+pub(super) fn validate_worktree_in(
+    tx: &mut dyn WriteTransaction,
+    ctx: &InvocationContext,
+    views: &[AnalysisViewBinding],
+) -> Result<(), Failure> {
+    for view in views {
+        let Some(id) = &view.snapshot.worktree_id else {
+            continue;
+        };
+        let bound = ctx
+            .worktree()
+            .filter(|bound| bound.id() == id && bound.repository_id() == &view.repository_id)
+            .ok_or_else(unavailable)?;
+        let tree = tx.git().git_worktree(id)?.ok_or_else(unavailable)?;
+        let work = tx.work().work(bound.work_id())?.ok_or_else(unavailable)?;
+        if tree.removed
+            || &tree.owner != ctx.principal()
+            || tree.repository_id != view.repository_id
+            || tree.work_id != *bound.work_id()
+            || tree.ownership_revision != bound.ownership_revision()
+            || ctx.project_id() != Some(&work.project_id)
+            || !ctx.root_id().is_some_and(|root| {
+                root.0 == work.id || work.parent_feature_id.as_ref() == Some(&root.0)
+            })
+            || !tx
+                .work()
+                .work_repositories(&work.id)?
+                .contains(&view.repository_id)
+            || !tx
+                .projects()
+                .members(&work.project_id)?
+                .contains(&view.repository_id)
+        {
+            return Err(unavailable());
+        }
+    }
+    Ok(())
 }
 
 pub(super) fn digest(value: &serde_json::Value) -> String {
@@ -413,5 +545,56 @@ fn hide_view_identity(error: Failure) -> Failure {
             unavailable()
         }
         other => other,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ports::storage::StoredView;
+    use crate::protocol::ActorId;
+
+    #[test]
+    fn exact_worktree_view_requires_matching_owned_capture() {
+        let id = |name| Id::new(name).unwrap();
+        let repo = id("repo");
+        let baseline = id("baseline");
+        let own_capture = id("own-capture");
+        let oid = "a".repeat(40);
+        let overlay = ViewLayers {
+            view: StoredView {
+                view_id: id("captured-view"),
+                repository_id: repo.clone(),
+                view_digest: "b".repeat(64),
+                baseline_id: baseline.clone(),
+                branch_id: None,
+                worktree_id: Some(id("tree-layer")),
+                coverage: json!({"commit": oid, "worktreeId": own_capture, "captureDigest": "c".repeat(64)}),
+            },
+            layers: vec![id("tree-layer"), baseline],
+        };
+        let mut owner = StoredGitWorktree {
+            id: id("a-different-capture"),
+            repository_id: repo,
+            work_id: id("work"),
+            owner: ActorId(id("agent")),
+            ownership_revision: 1,
+            owner_root_id: None,
+            owner_assignment_id: None,
+            registered_root_id: id("local-root"),
+            path: "test-source".into(),
+            branch: "test".into(),
+            head: model::snapshot(&overlay.view).unwrap().head,
+            revision: 1,
+            removed: false,
+            location: None,
+            pending_operation_id: None,
+            last_operation_id: None,
+            last_result: None,
+        };
+        assert!(check_worktree_layers(std::slice::from_ref(&overlay), None).is_err());
+        assert!(check_worktree_layers(std::slice::from_ref(&overlay), Some(&owner)).is_err());
+        owner.id = own_capture;
+        assert!(check_worktree_layers(&[overlay], Some(&owner)).is_ok());
     }
 }

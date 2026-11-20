@@ -308,7 +308,7 @@ fn admit(
     Ok(())
 }
 
-fn supersede(tx: &mut dyn WriteTransaction, mut prior: StoredAnalysisRun) -> Result<(), Failure> {
+fn supersede(tx: &mut dyn WriteTransaction, prior: StoredAnalysisRun) -> Result<(), Failure> {
     let Some(operation) = tx.operations().operation(&prior.active_operation)? else {
         return Ok(());
     };
@@ -323,25 +323,6 @@ fn supersede(tx: &mut dyn WriteTransaction, mut prior: StoredAnalysisRun) -> Res
         return Ok(());
     }
     tx.queue().cancel(&delivery.id)?;
-    tx.operations().transition(
-        &operation.id,
-        operation.revision,
-        None,
-        OperationState::CancelledBeforeDispatch,
-        Some(json!({"cause":"SupersededByIndexPublication"})),
-    )?;
-    let expected = prior.revision;
-    prior.revision += 1;
-    prior.state = OperationState::CancelledBeforeDispatch;
-    prior.updated_at_ms = tx.now_ms();
-    for phase in &mut prior.phases {
-        phase.state = OperationState::CancelledBeforeDispatch;
-        phase.diagnostic = Some("SupersededByIndexPublication".into());
-    }
-    if let Some(pin) = tx.graph().graph_pin(&prior.pin_id)? {
-        tx.graph()
-            .retire_graph_pin(&pin.id, &pin.owner_namespace, pin.revision)?;
-    }
-    tx.analysis().update_analysis_run(&prior, expected)?;
+    super::commands::cancelled(tx, prior, "SupersededByIndexPublication")?;
     Ok(())
 }

@@ -20,7 +20,7 @@ mod symbols;
 mod vitals;
 mod work;
 
-pub use commands::CONSUMER;
+pub use commands::{CONSUMER, QueueHook};
 pub use modeling::{
     AnalysisModel, AnalysisModelInput, MAX_OUTPUT_TOKENS, Observation as ModelObservation,
     ProviderAnalysis,

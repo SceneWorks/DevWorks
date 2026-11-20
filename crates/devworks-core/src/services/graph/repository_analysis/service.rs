@@ -62,6 +62,7 @@ pub struct AnalysisService {
     advisory: Option<Feed>,
     model: OnceLock<Arc<dyn AnalysisModel>>,
     retention_cursor: Mutex<Option<AnalysisRunPosition>>,
+    history_gate: super::vitals::HistoryGate,
 }
 
 impl AnalysisService {
@@ -85,6 +86,7 @@ impl AnalysisService {
             advisory: network.map(|(resolver, transport)| Feed::new(resolver, transport)),
             model: OnceLock::new(),
             retention_cursor: Mutex::new(None),
+            history_gate: super::vitals::HistoryGate::default(),
         }
     }
 
@@ -127,6 +129,7 @@ impl AnalysisService {
             phases: &self.phases,
             index: env,
             advisory: self.advisory.as_ref(),
+            history_gate: &self.history_gate,
             cancellation,
         };
 
@@ -457,15 +460,13 @@ pub fn dispatch_binding_in(
     {
         return Ok(false);
     }
-    if let Some(owner) = &run.owner.worktree
-        && tx.git().git_worktree(&owner.id)?.is_none_or(|tree| {
-            tree.removed
-                || tree.repository_id != owner.repository
-                || tree.work_id != owner.work
-                || tree.ownership_revision != owner.ownership_revision
-        })
-    {
-        return Ok(false);
+    let context = work
+        .context(&tx.store().store_id)
+        .map_err(Failure::into_storage)?;
+    match selection::validate_worktree_in(tx, &context, &run.intent.views) {
+        Ok(()) => {}
+        Err(Failure::Refused(_)) => return Ok(false),
+        Err(Failure::Storage(error)) => return Err(error),
     }
     let members = match &run.intent.scope {
         crate::protocol::data::DataScope::Workspace => None,
@@ -573,8 +574,8 @@ pub fn authorize_model_request(
             || original.session.as_ref() == ctx.session_id()))
 }
 
-fn completion(command: AnalysisCommand, value: AnalysisRecord) -> Result<Value, Failure> {
-    let result = match command {
+pub(super) fn operation_result(command: AnalysisCommand, value: AnalysisRecord) -> OperationResult {
+    match command {
         AnalysisCommand::LinkAndDetect | AnalysisCommand::IndexPublished => {
             OperationResult::AnalysisLinkAndDetect { value }
         }
@@ -582,8 +583,11 @@ fn completion(command: AnalysisCommand, value: AnalysisRecord) -> Result<Value, 
         AnalysisCommand::Reanalyze => OperationResult::AnalysisReanalyze { value },
         AnalysisCommand::ProcessBatch => OperationResult::AnalysisProcessBatch { value },
         AnalysisCommand::Synthesize => OperationResult::AnalysisSynthesize { value },
-    };
-    serde_json::to_value(result)
+    }
+}
+
+fn completion(command: AnalysisCommand, value: AnalysisRecord) -> Result<Value, Failure> {
+    serde_json::to_value(operation_result(command, value))
         .map_err(|_| StorageError::InvalidRecord("analysis completion is invalid".into()).into())
 }
 

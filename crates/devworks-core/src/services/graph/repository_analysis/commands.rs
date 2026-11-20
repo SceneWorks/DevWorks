@@ -24,6 +24,65 @@ const MAX_ACTIVE_MODEL_RUNS: usize = 32;
 
 pub(super) struct Commands;
 
+pub struct QueueHook;
+
+impl crate::services::queue::ConsumerHook for QueueHook {
+    fn consumer(&self) -> &'static str {
+        CONSUMER
+    }
+
+    fn cancelled(
+        &self,
+        tx: &mut dyn WriteTransaction,
+        entry: &QueueEntry,
+    ) -> Result<(), StorageError> {
+        let Some(operation_id) = &entry.operation_id else {
+            return Ok(());
+        };
+        let operation = tx
+            .operations()
+            .operation(operation_id)?
+            .ok_or(StorageError::Busy)?;
+        let work = super::work::Work::from_operation(&operation).map_err(Failure::into_storage)?;
+        let run = tx
+            .analysis()
+            .analysis_run(&work.run_id)?
+            .ok_or(StorageError::Busy)?;
+        if run.active_operation == *operation_id
+            && operation.state == OperationState::CancelledBeforeDispatch
+        {
+            cancelled(tx, run, "CancelledBeforeDispatch")?;
+        }
+        Ok(())
+    }
+}
+
+pub(super) fn cancelled(
+    tx: &mut dyn WriteTransaction,
+    mut run: StoredAnalysisRun,
+    reason: &str,
+) -> Result<(), StorageError> {
+    if run.terminal() {
+        return Ok(());
+    }
+    let revision = run.revision;
+    run.revision += 1;
+    run.state = OperationState::CancelledBeforeDispatch;
+    run.updated_at_ms = tx.now_ms();
+    for phase in &mut run.phases {
+        if phase.state != OperationState::ObservedComplete {
+            phase.state = OperationState::CancelledBeforeDispatch;
+            phase.diagnostic = Some(reason.into());
+            phase.finished_at_ms = Some(run.updated_at_ms);
+        }
+    }
+    if let Some(pin) = tx.graph().graph_pin(&run.pin_id)? {
+        tx.graph()
+            .retire_graph_pin(&pin.id, &pin.owner_namespace, pin.revision)?;
+    }
+    tx.analysis().update_analysis_run(&run, revision)
+}
+
 struct Request<'a> {
     kind: AnalysisCommand,
     scope: &'a DataScope,
@@ -152,6 +211,11 @@ impl CommandHandler for Commands {
                 if selection.views.is_empty() {
                     return Err(selection::unavailable());
                 }
+                if request.kind == AnalysisCommand::Synthesize
+                    && (selection.views.len() != 1 || !selection.unavailable.is_empty())
+                {
+                    return Err(invalid("synthesis_repository"));
+                }
                 if selection.views.len() + selection.unavailable.len()
                     > selection::MAX_COMMAND_REPOSITORIES
                 {
@@ -266,6 +330,46 @@ fn admit(
         }
     }
 
+    if ctx.principal_kind() == crate::context::PrincipalKind::Host
+        && ctx.principal() == &tx.store().host_actor
+        && matches!(
+            request.kind,
+            AnalysisCommand::Community | AnalysisCommand::LinkAndDetect
+        )
+        && let Some(prior) = previous.iter().find(|run| {
+            run.intent.node_ids == request.nodes
+                && !matches!(
+                    run.state,
+                    OperationState::Failed | OperationState::CancelledBeforeDispatch
+                )
+                && request.phases().iter().all(|required| {
+                    run.phases.iter().any(|phase| {
+                        phase.phase == *required
+                            && !matches!(
+                                phase.state,
+                                OperationState::Failed | OperationState::CancelledBeforeDispatch
+                            )
+                    })
+                })
+        })
+    {
+        let phase = request
+            .phases()
+            .last()
+            .and_then(|wanted| prior.phases.iter().find(|phase| phase.phase == *wanted));
+        let observation = super::observation::Observation {
+            selected,
+            run: Some(prior),
+            phase,
+            gaps: &[],
+        };
+        let report = phase.and_then(|phase| phase.report.clone());
+        let value = observation.record(request.kind.key(), report, observation.wire())?;
+        return Ok(DomainDecision::NoChange {
+            result: super::service::operation_result(request.kind, value),
+        });
+    }
+
     let prerequisite = if request.kind == AnalysisCommand::Synthesize {
         Some(
             previous
@@ -373,6 +477,27 @@ fn resume(
         || run.intent.options_digest != request.options_digest()
     {
         return Err(selection::unavailable());
+    }
+    if !run.terminal()
+        && let Some(op) = tx.operations().operation(&run.active_operation)?
+    {
+        match op.state {
+            OperationState::CancelledBeforeDispatch => {
+                cancelled(tx, run.clone(), "CancelledBeforeDispatch")?;
+                run = tx
+                    .analysis()
+                    .analysis_run(id)?
+                    .ok_or_else(selection::unavailable)?;
+            }
+            OperationState::Failed => {
+                let revision = run.revision;
+                run.revision += 1;
+                run.state = OperationState::Failed;
+                run.updated_at_ms = tx.now_ms();
+                tx.analysis().update_analysis_run(&run, revision)?;
+            }
+            _ => {}
+        }
     }
     // Existing dispatcher work remains authoritative for in-flight or uncertain effects.
     if !matches!(

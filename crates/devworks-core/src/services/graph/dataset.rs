@@ -63,7 +63,7 @@ pub(super) fn edges(
 ) -> Result<Edges, Failure> {
     let mut linked = Vec::new();
     let mut unmapped = Vec::new();
-    scan::edges(read, scope, layers, kinds, budget, |edge, budget| {
+    scan::composed_edges(read, scope, layers, kinds, budget, |edge, budget| {
         let raw = match &edge {
             Ok(edge) => &edge.raw,
             Err(unmapped) => &unmapped.raw,
@@ -93,10 +93,6 @@ pub(super) fn edges(
         }
         Ok(true)
     })?;
-    let derived = super::repository_analysis::links::graph_edges(
-        read, scope, layers, kinds, budget, &linked,
-    )?;
-    linked.extend(derived);
     Ok(Edges { linked, unmapped })
 }
 

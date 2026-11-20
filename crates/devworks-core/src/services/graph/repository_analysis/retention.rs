@@ -147,13 +147,7 @@ fn prunable(tx: &mut dyn WriteTransaction, run: &StoredAnalysisRun) -> Result<bo
             !newer
                 .iter()
                 .take_while(|candidate| candidate.id != run.id)
-                .any(|candidate| {
-                    candidate.phases.iter().any(|phase| {
-                        phase.phase.key() == *kind
-                            && phase.state == OperationState::ObservedComplete
-                            && phase.report.is_some()
-                    })
-                })
+                .any(|candidate| replacement(candidate, run, kind))
         }) {
             return Ok(false);
         }
@@ -179,11 +173,7 @@ fn prunable(tx: &mut dyn WriteTransaction, run: &StoredAnalysisRun) -> Result<bo
         let mut retained = false;
         for candidate in &prior {
             if now.saturating_sub(candidate.updated_at_ms) >= WINDOW
-                || !candidate.phases.iter().any(|phase| {
-                    phase.phase.key() == kind
-                        && phase.state == OperationState::ObservedComplete
-                        && phase.report.is_some()
-                })
+                || !replacement(candidate, run, kind)
             {
                 continue;
             }
@@ -201,6 +191,16 @@ fn prunable(tx: &mut dyn WriteTransaction, run: &StoredAnalysisRun) -> Result<bo
         }
     }
     Ok(true)
+}
+
+fn replacement(candidate: &StoredAnalysisRun, original: &StoredAnalysisRun, kind: &str) -> bool {
+    (!matches!(kind, "links" | "communities")
+        || candidate.intent.node_ids == original.intent.node_ids)
+        && candidate.phases.iter().any(|phase| {
+            phase.phase.key() == kind
+                && phase.state == OperationState::ObservedComplete
+                && phase.report.is_some()
+        })
 }
 
 fn snapshot_key(run: &StoredAnalysisRun) -> String {
