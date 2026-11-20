@@ -1,6 +1,8 @@
 use super::{
     DocxError, DocxLimits, WordBody, WordCell, WordCoverageIssue, WordLink, WordLinkTarget,
     WordMerge, WordParagraph,
+    fields::{self, MAX_CODE_BYTES},
+    numbering::Numbering,
     opc::{self, Relationships, Target},
     styles::{ParagraphStyle, Styles, number},
     xml::{self, Element, REL, REL_STRICT, WORD, WORD_STRICT, Xml},
@@ -27,6 +29,7 @@ enum Frame {
     Paragraph,
     Run,
     Text,
+    FieldCode,
     ParagraphProperties,
     ListProperties,
     RowProperties,
@@ -59,10 +62,16 @@ struct Table {
     vertical: BTreeMap<(u32, u32), Id>,
 }
 
+struct FieldCapture {
+    code: Option<String>,
+    reading: bool,
+}
+
 struct Reader<'a, 'scope> {
     source: &'a ExtractionInput<'scope>,
     relations: &'a Relationships,
     styles: &'a Styles,
+    numbering: &'a Numbering,
     limits: &'a DocxLimits,
     control: &'a ExtractionControl<'scope>,
     body: WordBody,
@@ -77,6 +86,7 @@ struct Reader<'a, 'scope> {
     paragraph_count: u32,
     blocks: usize,
     links: usize,
+    fields: Vec<FieldCapture>,
     normalized_bytes: usize,
     headings: Arc<[Heading]>,
 }
@@ -86,14 +96,15 @@ pub(super) fn read(
     part: &str,
     source: &ExtractionInput<'_>,
     relations: &Relationships,
-    styles: &Styles,
+    styles: (&Styles, &Numbering),
     limits: &DocxLimits,
     control: &ExtractionControl<'_>,
 ) -> Result<WordBody, DocxError> {
     let mut reader = Reader {
         source,
         relations,
-        styles,
+        styles: styles.0,
+        numbering: styles.1,
         limits,
         control,
         body: WordBody {
@@ -113,6 +124,7 @@ pub(super) fn read(
         paragraph_count: 0,
         blocks: 0,
         links: 0,
+        fields: Vec::new(),
         normalized_bytes: 0,
         headings: Arc::from([]),
     };
@@ -121,6 +133,12 @@ pub(super) fn read(
     })?;
     if !reader.seen_body {
         return Err(DocxError::InvalidBody);
+    }
+    if !reader.fields.is_empty() {
+        reader
+            .body
+            .coverage_issues
+            .insert(WordCoverageIssue::FieldCode);
     }
     reader
         .body
@@ -137,11 +155,30 @@ impl Reader<'_, '_> {
                 self.frames.push(frame);
             }
             Xml::Text(text) if self.frames.last() == Some(&Frame::Text) => {
-                self.paragraph
-                    .as_mut()
-                    .ok_or(DocxError::InvalidBody)?
-                    .text
-                    .push_str(&text);
+                if self.fields.iter().all(|field| !field.reading) {
+                    self.paragraph
+                        .as_mut()
+                        .ok_or(DocxError::InvalidBody)?
+                        .text
+                        .push_str(&text);
+                }
+            }
+            Xml::Text(text) if self.frames.last() == Some(&Frame::FieldCode) => {
+                if let Some(field) = self.fields.last_mut()
+                    && field.reading
+                    && let Some(code) = &mut field.code
+                {
+                    if code.len() + text.len() <= MAX_CODE_BYTES {
+                        code.push_str(&text);
+                    } else {
+                        field.code = None;
+                    }
+                }
+            }
+            Xml::Text(text)
+                if self.frames.last() != Some(&Frame::Skip) && !text.trim().is_empty() =>
+            {
+                return Err(DocxError::InvalidBody);
             }
             Xml::End => match self.frames.pop().ok_or(DocxError::InvalidBody)? {
                 Frame::Paragraph => self.finish_paragraph()?,
@@ -205,7 +242,7 @@ impl Reader<'_, '_> {
         if parent == Skip {
             return Ok(Skip);
         }
-        if parent == Text {
+        if matches!(parent, Text | FieldCode) {
             return Err(invalid);
         }
         if name.ns != self.word {
@@ -278,10 +315,21 @@ impl Reader<'_, '_> {
                 self.cell_property(&element)?;
                 Skip
             }
-            (Paragraph, "hyperlink") => {
+            (Paragraph | Hyperlink, "hyperlink") => {
                 self.link(&element)?;
                 Hyperlink
             }
+            (Paragraph | Hyperlink, "fldSimple") => {
+                if let Some(code) = element.attr(self.word, "instr") {
+                    self.field_link(Some(code))?;
+                }
+                Wrapper
+            }
+            (Run, "fldChar") => {
+                self.field_marker(element.attr(self.word, "fldCharType"))?;
+                Skip
+            }
+            (Run, "instrText") => FieldCode,
             (Paragraph | Hyperlink, "r") => Run,
             (Run, "t") => Text,
             (Run, "tab" | "ptab" | "br" | "cr" | "noBreakHyphen" | "softHyphen") => {
@@ -291,12 +339,12 @@ impl Reader<'_, '_> {
                     "noBreakHyphen" => '\u{2011}',
                     _ => '\u{00ad}',
                 };
-                self.paragraph.as_mut().ok_or(invalid)?.text.push(scalar);
+                if self.fields.iter().all(|field| !field.reading) {
+                    self.paragraph.as_mut().ok_or(invalid)?.text.push(scalar);
+                }
                 Skip
             }
-            (_, "sdt" | "sdtContent" | "smartTag" | "customXml" | "fldSimple" | "dir" | "bdo") => {
-                Wrapper
-            }
+            (_, "sdt" | "sdtContent" | "smartTag" | "customXml" | "dir" | "bdo") => Wrapper,
             (_, "ins" | "moveTo") => {
                 self.body
                     .coverage_issues
@@ -354,15 +402,65 @@ impl Reader<'_, '_> {
             (None, Some(anchor)) => WordLinkTarget::Bookmark(anchor.to_owned()),
             (None, None) => return Ok(()),
         };
+        self.push_link(WordLink {
+            target,
+            anchor: anchor.map(str::to_owned),
+        })
+    }
+
+    fn push_link(&mut self, link: WordLink) -> Result<(), DocxError> {
         let paragraph = self.paragraph.as_mut().ok_or(DocxError::InvalidBody)?;
         if self.links >= self.limits.extraction.blocks {
             return Err(DocxError::StructureLimit);
         }
         self.links += 1;
-        paragraph.hyperlinks.push(WordLink {
-            target,
-            anchor: anchor.map(str::to_owned),
-        });
+        paragraph.hyperlinks.push(link);
+        Ok(())
+    }
+
+    fn field_marker(&mut self, marker: Option<&str>) -> Result<(), DocxError> {
+        match marker {
+            Some("begin") if self.fields.len() < self.limits.xml_depth => {
+                self.fields.push(FieldCapture {
+                    reading: true,
+                    code: Some(String::new()),
+                });
+            }
+            Some("begin") => return Err(DocxError::StructureLimit),
+            Some("separate") if self.fields.last().is_some_and(|field| field.reading) => {
+                let field = self.fields.last_mut().expect("guarded above");
+                field.reading = false;
+                let code = field.code.take();
+                if self.fields.iter().all(|field| !field.reading) {
+                    self.field_link(code.as_deref())?;
+                }
+            }
+            Some("end") if !self.fields.is_empty() => {
+                self.fields.pop();
+            }
+            _ => {
+                self.body
+                    .coverage_issues
+                    .insert(WordCoverageIssue::FieldCode);
+            }
+        }
+        Ok(())
+    }
+
+    fn field_link(&mut self, code: Option<&str>) -> Result<(), DocxError> {
+        let link = code
+            .filter(|code| code.len() <= MAX_CODE_BYTES)
+            .ok_or(())
+            .and_then(fields::hyperlink);
+        match link {
+            Ok(Some(link)) => self.push_link(link)?,
+            Ok(None) => {}
+            Err(()) => {
+                self.body
+                    .coverage_issues
+                    .insert(WordCoverageIssue::FieldCode);
+            }
+        }
         Ok(())
     }
 
@@ -459,9 +557,12 @@ impl Reader<'_, '_> {
         let remaining = ceiling.normalized_bytes - self.normalized_bytes;
         let text = normalize_text(&paragraph.text, remaining, self.control)?;
         self.normalized_bytes += text.len();
-        let (heading_level, list) =
-            self.styles
-                .effective(&paragraph.properties, self.limits.xml_depth, self.control)?;
+        let (heading_level, list) = self.styles.effective(
+            &paragraph.properties,
+            self.numbering,
+            self.limits.xml_depth,
+            self.control,
+        )?;
         if let Some(level) = heading_level {
             let mut path: Vec<Heading> = self
                 .headings

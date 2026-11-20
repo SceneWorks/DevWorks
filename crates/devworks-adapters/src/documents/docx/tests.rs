@@ -36,8 +36,10 @@ fn content_types(main_type: &str) -> String {
         r#"<Types xmlns="{}">
       <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
       <Default Extension="xml" ContentType="application/xml"/>
+      <Default Extension="xlsm" ContentType="application/vnd.ms-excel.sheet.macroEnabled.12"/>
       <Override PartName="/docs/main.xml" ContentType="{main_type}"/>
       <Override PartName="/docs/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml"/>
+      <Override PartName="/docs/numbering.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.numbering+xml"/>
     </Types>"#,
         xml::TYPES
     )
@@ -64,6 +66,9 @@ fn bundle(main: &[u8], main_type: &str, root_target: &str, extra: &[(&str, &[u8]
         r#"<w:styles xmlns:w="{WORD}">
       <w:style w:type="paragraph" w:styleId="Base"><w:pPr><w:outlineLvl w:val="1"/></w:pPr></w:style>
       <w:style w:type="paragraph" w:styleId="Custom"><w:basedOn w:val="Base"/></w:style>
+      <w:style w:type="paragraph" w:styleId="SectionItem"><w:pPr>
+        <w:numPr><w:ilvl w:val="1"/><w:numId w:val="42"/></w:numPr>
+      </w:pPr></w:style>
     </w:styles>"#
     );
     let types = content_types(main_type);
@@ -73,16 +78,26 @@ fn bundle(main: &[u8], main_type: &str, root_target: &str, extra: &[(&str, &[u8]
     let main_rels = relationships(&format!(
         r#"
        <Relationship Id="style" Type="{REL}/styles" Target="./styles.xml"/>
+       <Relationship Id="numbering" Type="{REL}/numbering" Target="numbering.xml"/>
        <Relationship Id="link" Type="{REL}/hyperlink" Target="file:///fixture/inert-link" TargetMode="External"/>
        <Relationship Id="web" Type="{REL}/hyperlink" Target="https://example.invalid/a?x=1&amp;y=2" TargetMode="External"/>
     "#
     ));
+    let numbering = format!(
+        r#"<w:numbering xmlns:w="{WORD}">
+      <w:abstractNum w:abstractNumId="10">
+        <w:lvl w:ilvl="3"><w:pStyle w:val="SectionItem"/></w:lvl>
+      </w:abstractNum>
+      <w:num w:numId="42"><w:abstractNumId w:val="10"/></w:num>
+    </w:numbering>"#
+    );
     let mut parts = vec![
         ("[Content_Types].xml", types.as_bytes()),
         ("_rels/.rels", root.as_bytes()),
         ("docs/main.xml", main),
         ("docs/_rels/main.xml.rels", main_rels.as_bytes()),
         ("docs/styles.xml", styles.as_bytes()),
+        ("docs/numbering.xml", numbering.as_bytes()),
     ];
     parts.extend_from_slice(extra);
     archive(&parts)
@@ -348,6 +363,15 @@ fn malformed_namespace_unsafe_name_and_invalid_manifest_are_typed() {
         run(&bytes("/docs/main.xml", "application/xml", &[])).unwrap_err(),
         InvalidContentTypes
     );
+    assert_eq!(
+        run(&bytes(
+            "/docs/main.xml",
+            MAIN_TYPE,
+            &[("aux.xml", b"<a/>"), ("aux.xml/child.xml", b"<b/>")]
+        ))
+        .unwrap_err(),
+        UnsafePartName,
+    );
     let foreign = document("<w:p/>", "urn:not-word");
     assert_eq!(
         run(&bundle(
@@ -378,6 +402,17 @@ fn malformed_namespace_unsafe_name_and_invalid_manifest_are_typed() {
         run(&bundle(dtd.as_bytes(), MAIN_TYPE, "/docs/main.xml", &[])).unwrap_err(),
         ForbiddenXml
     );
+    let late_decl = format!("<!-- before --><?xml version=\"1.0\"?>{good}");
+    assert_eq!(
+        run(&bundle(
+            late_decl.as_bytes(),
+            MAIN_TYPE,
+            "/docs/main.xml",
+            &[]
+        ))
+        .unwrap_err(),
+        MalformedXml,
+    );
     let mut truncated = bytes("/docs/main.xml", MAIN_TYPE, &[]);
     truncated.truncate(truncated.len() - 1);
     assert_eq!(run(&truncated).unwrap_err(), MalformedPackage);
@@ -397,6 +432,20 @@ fn encrypted_legacy_and_macro_packages_do_not_return_passages() {
         .unwrap();
     let encrypted = file.into_inner().into_inner();
     assert_eq!(run(&encrypted).unwrap_err(), Encrypted);
+
+    let polls = AtomicUsize::new(0);
+    let cancel = || polls.fetch_add(1, Ordering::Relaxed) == 2;
+    assert_eq!(
+        extraction(
+            &DocxExtractor::default(),
+            &encrypted,
+            DOCX_MEDIA,
+            "v1",
+            &cancel
+        )
+        .unwrap_err(),
+        Extraction(ExtractionError::Cancelled),
+    );
 
     let mut file = cfb::CompoundFile::create(Cursor::new(Vec::new())).unwrap();
     file.create_stream("/WordDocument")
@@ -492,4 +541,125 @@ fn cancellation_interrupts_native_part_and_xml_work() {
         DocxError::Extraction(ExtractionError::Cancelled)
     );
     assert!(calls.load(Ordering::Relaxed) >= 301);
+}
+
+#[test]
+fn repository_requirements_document_uses_the_same_native_body_reader() {
+    let bytes = include_bytes!("../../../../../docs/planning/devworks-requirements.docx");
+    let result = run(bytes).unwrap();
+    assert_eq!(result.part, "word/document.xml");
+    assert!(result.paragraphs.len() > 100);
+    assert!(result.cells.len() > 25);
+    assert!(result.paragraphs.iter().any(|p| p.heading_level.is_some()));
+    assert!(result.paragraphs.iter().any(|p| !p.hyperlinks.is_empty()));
+    assert!(
+        result
+            .paragraphs
+            .iter()
+            .flat_map(|p| &p.blocks)
+            .any(|block| block.text.contains("DevWorks"))
+    );
+    assert!(
+        result
+            .paragraphs
+            .iter()
+            .flat_map(|p| &p.blocks)
+            .all(|block| {
+                block.citation.validate().is_ok()
+                    && block.text.len() <= ExtractionLimits::default().chunk_bytes
+            })
+    );
+}
+
+#[test]
+fn inherited_numbering_and_nested_hyperlinks_keep_word_semantics() {
+    let bytes = body(
+        r#"
+      <w:p><w:pPr><w:pStyle w:val="SectionItem"/></w:pPr>
+        <w:hyperlink r:id="link"><w:r><w:t>outer </w:t></w:r>
+          <w:hyperlink r:id="web"><w:r><w:t>inner</w:t></w:r></w:hyperlink>
+        </w:hyperlink>
+      </w:p>
+    "#,
+    );
+    let result = run(&bytes).unwrap();
+    let paragraph = &result.paragraphs[0];
+    assert_eq!(
+        paragraph.list,
+        Some(WordList {
+            numbering_id: 42,
+            level: 3
+        })
+    );
+    assert_eq!(paragraph.blocks[0].text, "outer inner");
+    assert_eq!(paragraph.hyperlinks.len(), 2);
+    assert_eq!(
+        paragraph.hyperlinks[1].target,
+        WordLinkTarget::External("https://example.invalid/a?x=1&y=2".into())
+    );
+}
+
+#[test]
+fn word_fields_preserve_cached_label_and_inert_link_target() {
+    let bytes = body(
+        r#"
+      <w:p><w:fldSimple w:instr=' HYPERLINK "https://example.invalid/simple" \l "reading spot" '>
+        <w:r><w:t>cached simple</w:t></w:r>
+      </w:fldSimple></w:p>
+      <w:p><w:r><w:fldChar w:fldCharType="begin"/></w:r>
+        <w:r><w:instrText> HY</w:instrText></w:r>
+        <w:r><w:instrText>PERLINK "file:///fixture/complex docx"</w:instrText></w:r>
+        <w:r><w:fldChar w:fldCharType="separate"/></w:r>
+        <w:r><w:t>cached complex</w:t></w:r>
+        <w:r><w:fldChar w:fldCharType="end"/></w:r>
+      </w:p>
+    "#,
+    );
+    let result = run(&bytes).unwrap();
+    assert!(result.coverage_issues.is_empty());
+    assert_eq!(result.paragraphs[0].blocks[0].text, "cached simple");
+    assert_eq!(result.paragraphs[1].blocks[0].text, "cached complex");
+    assert_eq!(
+        result.paragraphs[0].hyperlinks[0],
+        WordLink {
+            target: WordLinkTarget::External("https://example.invalid/simple".into()),
+            anchor: Some("reading spot".into()),
+        },
+    );
+    assert_eq!(
+        result.paragraphs[1].hyperlinks[0].target,
+        WordLinkTarget::External("file:///fixture/complex docx".into()),
+    );
+}
+
+#[test]
+fn inert_macro_enabled_embedded_package_does_not_mask_the_word_body() {
+    let main = document(
+        "<w:p><w:r><w:t>document body</w:t><w:object/></w:r></w:p>",
+        WORD,
+    );
+    let bytes = bundle(
+        main.as_bytes(),
+        MAIN_TYPE,
+        "/docs/main.xml",
+        &[("docs/embeddings/sheet.xlsm", b"opaque embedded package")],
+    );
+    let result = run(&bytes).unwrap();
+    assert_eq!(result.paragraphs[0].blocks[0].text, "document body");
+    assert_eq!(
+        result.coverage_issues,
+        BTreeSet::from([WordCoverageIssue::EmbeddedObject])
+    );
+}
+
+#[test]
+fn zip_directory_count_must_cover_the_entire_validated_directory() {
+    let mut bytes = body("<w:p/>");
+    let footer = bytes.len() - 22;
+    assert_eq!(&bytes[footer..footer + 4], b"PK\x05\x06");
+    let original = u16::from_le_bytes(bytes[footer + 10..footer + 12].try_into().unwrap());
+    let reduced = (original - 1).to_le_bytes();
+    bytes[footer + 8..footer + 10].copy_from_slice(&reduced);
+    bytes[footer + 10..footer + 12].copy_from_slice(&reduced);
+    assert_eq!(run(&bytes).unwrap_err(), DocxError::MalformedPackage);
 }

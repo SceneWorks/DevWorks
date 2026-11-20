@@ -1,5 +1,6 @@
 use super::{
     DocxError, DocxLimits, WordList,
+    numbering::Numbering,
     xml::{self, Element, WORD, WORD_STRICT, Xml},
 };
 use devworks_core::services::documents::extraction::ExtractionControl;
@@ -50,12 +51,13 @@ impl Styles {
     pub(super) fn effective(
         &self,
         paragraph: &ParagraphStyle,
+        definitions: &Numbering,
         steps: usize,
         control: &ExtractionControl<'_>,
     ) -> Result<(Option<u8>, Option<WordList>), DocxError> {
         let mut outline = paragraph.outline;
         let mut numbering = paragraph.number;
-        let mut level = paragraph.list_level;
+        let mut chain = Vec::new();
         let mut style_id = paragraph.name.as_deref();
         let mut visited = BTreeSet::new();
         while let Some(id) = style_id {
@@ -63,10 +65,10 @@ impl Styles {
             if visited.len() == steps || !visited.insert(id) {
                 return Err(DocxError::InvalidStyles);
             }
+            chain.push(id);
             let Some(style) = self.0.get(id) else { break };
             outline = outline.or(style.properties.outline);
             numbering = numbering.or(style.properties.number);
-            level = level.or(style.properties.list_level);
             style_id = style.parent.as_deref();
         }
         let heading = match outline {
@@ -78,7 +80,14 @@ impl Styles {
             .filter(|number| *number != 0)
             .map(|numbering_id| WordList {
                 numbering_id,
-                level: level.unwrap_or_default(),
+                level: paragraph
+                    .list_level
+                    .or_else(|| {
+                        chain
+                            .iter()
+                            .find_map(|style| definitions.level_for(numbering_id, style))
+                    })
+                    .unwrap_or_default(),
             });
         Ok((heading, list))
     }

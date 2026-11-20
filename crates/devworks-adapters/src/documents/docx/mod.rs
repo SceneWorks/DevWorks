@@ -1,5 +1,7 @@
 //! Bounded WordprocessingML extraction, with no external relationship resolution.
 mod body;
+mod fields;
+mod numbering;
 mod opc;
 mod package;
 mod styles;
@@ -51,6 +53,7 @@ pub enum DocxError {
     InvalidRelationships,
     InvalidBody,
     InvalidStyles,
+    InvalidNumbering,
     UnsafePartName,
     DuplicatePart,
     MissingPart,
@@ -77,6 +80,7 @@ pub enum WordCoverageIssue {
     AlternateContent,
     Drawing,
     RevisionMarkup,
+    FieldCode,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -183,13 +187,18 @@ impl DocxExtractor {
         } else {
             styles::Styles::default()
         };
+        let numbering = if let Some(name) = opc::numbering_part(&manifest, &relations)? {
+            numbering::read(&package.read(name, control)?, &self.limits, control)?
+        } else {
+            numbering::Numbering::default()
+        };
         let xml = package.read(part, control)?;
         let result = body::read(
             &xml,
             part,
             &source,
             &relations,
-            &styles,
+            (&styles, &numbering),
             &self.limits,
             control,
         )?;

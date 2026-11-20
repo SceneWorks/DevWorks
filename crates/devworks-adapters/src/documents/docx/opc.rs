@@ -39,7 +39,11 @@ impl Manifest {
                         })
                         .ok_or(Bad)?
                         .to_ascii_lowercase();
-                    if media.contains("macroenabled") || media.contains("vbaproject") {
+                    if matches!(
+                        media.as_str(),
+                        "application/vnd.ms-office.vbaproject"
+                            | "application/vnd.ms-word.vbadata+xml"
+                    ) {
                         return Err(DocxError::UnsupportedVariant);
                     }
                     let replaced = match element.name.local {
@@ -152,6 +156,12 @@ pub(super) fn read_relationships(
                     .attr("", "Target")
                     .filter(|target| !target.is_empty() && target.len() <= 4096)
                     .ok_or(Bad)?;
+                if kind.eq_ignore_ascii_case(
+                    "http://schemas.microsoft.com/office/2006/relationships/vbaProject",
+                ) || is_kind(kind, "vbaProject")
+                {
+                    return Err(DocxError::UnsupportedVariant);
+                }
                 let target = match row.attr("", "TargetMode") {
                     Some("External") => Target::External(target.to_owned()),
                     None | Some("Internal") => Target::Internal(resolve_part(source, target)?),
@@ -213,6 +223,16 @@ pub(super) fn main_part<'a>(
     root: &'a Relationships,
 ) -> Result<&'a str, DocxError> {
     let name = unique_internal(root, "officeDocument")?.ok_or(DocxError::MissingPart)?;
+    if matches!(
+        manifest.media(name),
+        Some(
+            "application/vnd.ms-word.document.macroenabled.main+xml"
+                | "application/vnd.ms-word.template.macroenabledtemplate.main+xml"
+                | "application/vnd.openxmlformats-officedocument.wordprocessingml.template.main+xml"
+        )
+    ) {
+        return Err(DocxError::UnsupportedVariant);
+    }
     manifest.expected(name, MAIN)?;
     Ok(name)
 }
@@ -224,6 +244,20 @@ pub(super) fn styles_part<'a>(
     let name = unique_internal(main, "styles")?;
     if let Some(name) = name {
         manifest.expected(name, STYLES)?;
+    }
+    Ok(name)
+}
+
+pub(super) fn numbering_part<'a>(
+    manifest: &Manifest,
+    main: &'a Relationships,
+) -> Result<Option<&'a str>, DocxError> {
+    let name = unique_internal(main, "numbering")?;
+    if let Some(name) = name {
+        manifest.expected(
+            name,
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.numbering+xml",
+        )?;
     }
     Ok(name)
 }

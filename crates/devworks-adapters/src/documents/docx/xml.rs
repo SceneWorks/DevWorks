@@ -64,12 +64,13 @@ pub(super) fn walk(
     let mut reader = NsReader::from_str(&decoded);
     reader.config_mut().expand_empty_elements = true;
     reader.config_mut().check_comments = true;
-    let mut declaration = false;
+    let mut at_start = true;
     let mut depth = 0usize;
     let mut root_seen = false;
     loop {
         control.check()?;
         let event = reader.read_event().map_err(|_| Bad)?;
+        let first = std::mem::replace(&mut at_start, false);
         match event {
             Event::Start(start) => {
                 if depth == 0 && std::mem::replace(&mut root_seen, true) {
@@ -111,10 +112,7 @@ pub(super) fn walk(
                 if depth == 0 {
                     return Err(Bad);
                 }
-                visit(
-                    depth,
-                    Xml::End(resolve(reader.resolver(), end.name(), false)?),
-                )?;
+                visit(depth, Xml::End)?;
                 depth -= 1;
             }
             Event::Text(text) => {
@@ -145,8 +143,7 @@ pub(super) fn walk(
             }
             Event::Eof if root_seen && depth == 0 => return control.check().map_err(Into::into),
             Event::DocType(_) => return Err(DocxError::ForbiddenXml),
-            Event::Decl(decl) if !root_seen && !declaration => {
-                declaration = true;
+            Event::Decl(decl) if first => {
                 if decl.version().map_err(|_| Bad)?.as_ref() != b"1.0" {
                     return Err(Bad);
                 }

@@ -1,21 +1,22 @@
 //! OPC parts are opened by canonical package name through a bounded in-memory ZIP reader.
 use super::{DocxError, DocxLimits};
-use devworks_core::services::documents::extraction::ExtractionControl;
+use devworks_core::services::documents::extraction::{ExtractionControl, ExtractionError};
 use std::{
     collections::{BTreeMap, BTreeSet},
     io::{self, Cursor, Read, Seek, SeekFrom},
 };
 use zip::{
-    CompressionMethod, ZipArchive,
-    read::{ArchiveOffset, Config},
+    CompressionMethod, ZipReadOptions,
+    read::{ArchiveOffset, Config, ZipFileEntry},
+    unstable::read::ZipIterable,
 };
 
 const OLE_MAGIC: &[u8] = b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1";
 const END: &[u8] = b"PK\x05\x06";
 
 pub(super) struct Package<'a> {
-    archive: ZipArchive<Cursor<&'a [u8]>>,
-    pub(super) names: BTreeMap<String, usize>,
+    bytes: &'a [u8],
+    pub(super) names: BTreeMap<String, Option<ZipFileEntry<'static>>>,
     remaining: usize,
     part_bytes: usize,
 }
@@ -33,30 +34,21 @@ impl<'a> Package<'a> {
         if !data.starts_with(b"PK\x03\x04") {
             return Err(DocxError::MalformedPackage);
         }
-        let (count, directory) = directory_shape(data, limits.parts)?;
-        let mut archive = ZipArchive::with_config(
-            Config {
-                archive_offset: ArchiveOffset::Known(0),
-            },
-            Cursor::new(data),
-        )
-        .map_err(|_| DocxError::MalformedPackage)?;
+        let (count, directory, end) = directory_shape(data, limits.parts)?;
+        let mut zip_reader = ControlledCursor::new(data, control);
+        let entries = bounded_entries(&mut zip_reader, count, directory, end);
+        if let Some(error) = zip_reader.stopped {
+            return Err(error.into());
+        }
+        let entries = entries?;
         control.check()?;
-        if archive.has_duplicate_names() {
-            return Err(DocxError::DuplicatePart);
-        }
-        if archive.len() != count || archive.central_directory_start() != directory as u64 {
-            return Err(DocxError::MalformedPackage);
-        }
 
         let mut names = BTreeMap::new();
         let mut seen = BTreeSet::new();
+        let mut ranges = Vec::with_capacity(count);
         let mut declared = 0u64;
-        for index in 0..count {
+        for entry in entries {
             control.check()?;
-            let entry = archive
-                .by_index_data(index)
-                .map_err(|_| DocxError::MalformedPackage)?;
             if entry.encrypted() {
                 return Err(DocxError::Encrypted);
             }
@@ -69,13 +61,14 @@ impl<'a> Package<'a> {
             ) {
                 return Err(DocxError::UnsupportedCompression);
             }
-            check_local_header(
+            let end = check_local_header(
                 &data[..directory],
                 entry.header_start(),
                 entry.name_raw(),
                 entry.compression(),
                 entry.compressed_size(),
             )?;
+            ranges.push((entry.header_start(), end));
             let raw =
                 std::str::from_utf8(entry.name_raw()).map_err(|_| DocxError::UnsafePartName)?;
             let name = part_name(if entry.is_dir() {
@@ -98,21 +91,25 @@ impl<'a> Package<'a> {
             if declared > limits.expanded_bytes as u64 {
                 return Err(DocxError::ExpandedLimit);
             }
-            if name.ends_with("vbaproject.bin") {
-                return Err(DocxError::UnsupportedVariant);
-            }
             if !entry.is_dir() {
-                names.insert(name, index);
+                names.insert(name, Some(entry));
             }
         }
-        if archive
-            .has_overlapping_entries()
-            .map_err(|_| DocxError::MalformedPackage)?
-        {
+        for name in names.keys() {
+            control.check()?;
+            if name
+                .match_indices('/')
+                .any(|(index, _)| names.contains_key(&name[..index]))
+            {
+                return Err(DocxError::UnsafePartName);
+            }
+        }
+        ranges.sort_unstable();
+        if ranges.windows(2).any(|pair| pair[0].1 > pair[1].0) {
             return Err(DocxError::MalformedPackage);
         }
         Ok(Self {
-            archive,
+            bytes: data,
             names,
             remaining: limits.expanded_bytes,
             part_bytes: limits.part_bytes,
@@ -124,10 +121,15 @@ impl<'a> Package<'a> {
         name: &str,
         control: &ExtractionControl<'_>,
     ) -> Result<Vec<u8>, DocxError> {
-        let index = *self.names.get(name).ok_or(DocxError::MissingPart)?;
-        let mut file = self
-            .archive
-            .by_index(index)
+        // Each logical part is read once. Consumers share the parsed result for repeated refs.
+        let entry: ZipFileEntry<'_> = self
+            .names
+            .get_mut(name)
+            .and_then(Option::take)
+            .ok_or(DocxError::MissingPart)?;
+        let mut cursor = Cursor::new(self.bytes);
+        let mut file = entry
+            .with_reader(&mut cursor, ZipReadOptions::default())
             .map_err(|_| DocxError::MalformedPackage)?;
         let declared = file.size() as usize;
         let mut bytes = Vec::new();
@@ -163,13 +165,60 @@ impl<'a> Package<'a> {
     }
 }
 
+// The iterator discovers ZIP footers without allocating a directory index. Only collect from
+// the unique, bounded directory already checked against the physical end of the file.
+fn bounded_entries(
+    reader: &mut ControlledCursor<'_, '_>,
+    count: usize,
+    directory: usize,
+    end: usize,
+) -> Result<Vec<ZipFileEntry<'static>>, DocxError> {
+    use DocxError::MalformedPackage as Bad;
+    let bytes = *reader.cursor.get_ref();
+    let mut zip = ZipIterable::try_new(
+        reader,
+        Config {
+            archive_offset: ArchiveOffset::Known(0),
+        },
+    )
+    .map_err(|_| Bad)?;
+    if zip.len() != count {
+        return Err(Bad);
+    }
+    let mut expected = directory;
+    let mut entries = Vec::with_capacity(count);
+    for entry in zip.files().map_err(|_| Bad)? {
+        let entry = entry.map_err(|_| Bad)?;
+        if entry.central_header_start() != expected as u64 {
+            return Err(Bad);
+        }
+        let header = bytes
+            .get(expected..end)
+            .filter(|header| header.len() >= 46)
+            .ok_or(Bad)?;
+        let variable: usize = [28, 30, 32]
+            .into_iter()
+            .map(|field| usize::from(u16_at(header, field)))
+            .sum();
+        expected += 46 + variable;
+        if expected > end {
+            return Err(Bad);
+        }
+        entries.push(entry);
+    }
+    if expected != end {
+        return Err(Bad);
+    }
+    Ok(entries)
+}
+
 fn check_local_header(
     package: &[u8],
     offset: u64,
     name: &[u8],
     method: CompressionMethod,
     compressed_bytes: u64,
-) -> Result<(), DocxError> {
+) -> Result<u64, DocxError> {
     use DocxError::MalformedPackage as Bad;
     let start = usize::try_from(offset).map_err(|_| Bad)?;
     let header = package
@@ -200,20 +249,21 @@ fn check_local_header(
     {
         return Err(Bad);
     }
-    Ok(())
+    Ok((start + payload) as u64 + compressed_bytes)
 }
 
 fn classify_compound(
     bytes: &[u8],
     control: &ExtractionControl<'_>,
 ) -> Result<DocxError, DocxError> {
-    let opened = cfb::CompoundFile::open_strict(ControlledCursor {
-        cursor: Cursor::new(bytes),
-        control,
-    });
+    let mut reader = ControlledCursor::new(bytes, control);
+    let opened = cfb::CompoundFile::open_strict(&mut reader)
+        .map(|file| file.is_stream("/EncryptedPackage") && file.is_stream("/EncryptionInfo"));
+    if let Some(error) = reader.stopped {
+        return Err(error.into());
+    }
     control.check()?;
-    let file = opened.map_err(|_| DocxError::MalformedPackage)?;
-    let encrypted = file.is_stream("/EncryptedPackage") && file.is_stream("/EncryptionInfo");
+    let encrypted = opened.map_err(|_| DocxError::MalformedPackage)?;
     Ok(if encrypted {
         DocxError::Encrypted
     } else {
@@ -224,29 +274,44 @@ fn classify_compound(
 struct ControlledCursor<'a, 'b> {
     cursor: Cursor<&'a [u8]>,
     control: &'a ExtractionControl<'b>,
+    stopped: Option<ExtractionError>,
+}
+
+impl<'a, 'b> ControlledCursor<'a, 'b> {
+    fn new(bytes: &'a [u8], control: &'a ExtractionControl<'b>) -> Self {
+        Self {
+            cursor: Cursor::new(bytes),
+            control,
+            stopped: None,
+        }
+    }
+
+    fn check(&mut self) -> io::Result<()> {
+        if self.stopped.is_none() {
+            self.stopped = self.control.check().err();
+        }
+        self.stopped
+            .map_or(Ok(()), |_| Err(io::Error::other("extraction interrupted")))
+    }
 }
 
 impl Read for ControlledCursor<'_, '_> {
     fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
-        self.control
-            .check()
-            .map_err(|_| io::Error::other("stopped"))?;
+        self.check()?;
         self.cursor.read(buffer)
     }
 }
 
 impl Seek for ControlledCursor<'_, '_> {
     fn seek(&mut self, position: SeekFrom) -> io::Result<u64> {
-        self.control
-            .check()
-            .map_err(|_| io::Error::other("stopped"))?;
+        self.check()?;
         self.cursor.seek(position)
     }
 }
 
 // ZIP writes its end record after the central directory. Bound the declared part count before
 // zip allocates central-directory state, and bind its chosen directory to the same record.
-fn directory_shape(bytes: &[u8], max_parts: usize) -> Result<(usize, usize), DocxError> {
+fn directory_shape(bytes: &[u8], max_parts: usize) -> Result<(usize, usize, usize), DocxError> {
     use DocxError::MalformedPackage as Bad;
     let minimum = bytes.len().saturating_sub(22 + usize::from(u16::MAX));
     let last = bytes.len().checked_sub(22).ok_or(Bad)?;
@@ -307,7 +372,7 @@ fn directory_shape(bytes: &[u8], max_parts: usize) -> Result<(usize, usize), Doc
     if count == 0 || size < count * 46 || start.checked_add(size) != Some(directory_end as u64) {
         return Err(Bad);
     }
-    Ok((count as usize, start as usize))
+    Ok((count as usize, start as usize, directory_end))
 }
 
 fn u16_at(bytes: &[u8], at: usize) -> u16 {
