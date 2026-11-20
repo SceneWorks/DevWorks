@@ -147,21 +147,19 @@ pub fn parse_version(output: &str) -> Option<String> {
     None
 }
 
-#[derive(serde::Deserialize)]
-struct NodeProbe {
-    version: String,
-    executable: PathBuf,
-}
-
 /// Follow a version manager to the provider's executable while its normal environment is
 /// present. The package later starts that exact binary with a cleared environment.
 fn probed_node(output: &str) -> Option<(String, RuntimeExecutable)> {
-    let report: NodeProbe = output
-        .lines()
-        .rev()
-        .find_map(|line| serde_json::from_str(line).ok())?;
-    let version = parse_version(&report.version)?;
-    let executable = RuntimeExecutable::inspect(&report.executable).ok()?;
+    let report = output.lines().rev().find_map(|line| {
+        let value = serde_json::from_str::<serde_json::Value>(line).ok()?;
+        (value.get("version").is_some() && value.get("executable").is_some()).then_some(value)
+    })?;
+    let version = parse_version(report["version"].as_str()?)?;
+    let program = Path::new(report["executable"].as_str()?);
+    if !program.is_absolute() {
+        return None;
+    }
+    let executable = RuntimeExecutable::inspect(program).ok()?;
     Some((version, executable))
 }
 
@@ -191,8 +189,8 @@ impl PackageHost {
         out
     }
 
-    /// Probes one runtime: `<runtime> --version` as an owned process, bounded by
-    /// [`super::HostConfig::runtime_timeout`].
+    /// Probes one runtime with an owned process. Node also reports its executable behind any
+    /// version-manager shim. Each probe is bounded by [`super::HostConfig::runtime_timeout`].
     fn probe(
         &self,
         runtime: &str,
