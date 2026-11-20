@@ -659,6 +659,9 @@ fn usage_report(
 }
 
 fn money(amount: i64) -> Money {
+    if amount == 0 {
+        return Money("0".into());
+    }
     Money(format!("{}.{:06}", amount / 1_000_000, amount % 1_000_000))
 }
 

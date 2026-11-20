@@ -145,6 +145,7 @@ fn explicit_and_pooled_decisions_share_native_transport_replay_and_accounting() 
         assert_eq!(result.model_id, id("decision-b"));
         assert_eq!(result.output.value.0["answers"]["category"]["choice"], "code");
         assert_eq!(result.usage.items.0[0].input_tokens.get(), 7);
+        assert_eq!(result.usage.items.0[0].amount_usd.as_ref().unwrap().0, "0");
         assert_eq!(accepted(&app, &caller, &explicit), op);
         assert_eq!(read(f.store.as_ref(), |read| read.router().decision_pool_cursor()), None);
 

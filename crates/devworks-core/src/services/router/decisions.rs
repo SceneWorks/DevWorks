@@ -21,7 +21,7 @@ use serde_json::{Value, json};
 use std::sync::Arc;
 
 pub const OPERATION: &str = "router.decide";
-pub const CONSUMER: &str = "router.systemone";
+pub const CONSUMER: &str = "systemone-decisions";
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Candidate {
