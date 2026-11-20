@@ -119,7 +119,7 @@ getrandom = "=0.3.4"
 # Native desktop capture and input. Wayland is reported unsupported until an input path can be
 # qualified as well as capture; X11, macOS and Windows are probed separately at runtime.
 enigo = { version = "=0.6.1", default-features = false, features = ["x11rb"] }
-image = { version = "=0.25.10", default-features = false, features = ["png"] }
+image = { version = "=0.25.10", default-features = false, features = ["png", "jpeg", "gif", "webp"] }
 
 [target.'cfg(any(target_os = "macos", target_os = "windows"))'.dependencies]
 xcap = { version = "=0.9.8", default-features = false }

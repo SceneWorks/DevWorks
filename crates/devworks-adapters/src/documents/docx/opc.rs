@@ -92,7 +92,7 @@ impl Manifest {
         Ok(manifest)
     }
 
-    fn media(&self, name: &str) -> Option<&str> {
+    pub(super) fn media(&self, name: &str) -> Option<&str> {
         self.overrides
             .get(name)
             .or_else(|| {

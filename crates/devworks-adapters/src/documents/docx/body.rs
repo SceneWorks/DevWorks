@@ -1,6 +1,6 @@
 use super::{
     DocxError, DocxLimits, WordBody, WordCell, WordCoverageIssue, WordLink, WordLinkTarget,
-    WordMerge, WordParagraph,
+    WordMerge, WordParagraph, WordStoryKind,
     fields::{self, MAX_CODE_BYTES},
     numbering::Numbering,
     opc::{self, Relationships, Target},
@@ -68,6 +68,7 @@ struct FieldCapture {
 }
 
 struct Reader<'a, 'scope> {
+    kind: WordStoryKind,
     source: &'a ExtractionInput<'scope>,
     relations: &'a Relationships,
     styles: &'a Styles,
@@ -93,14 +94,16 @@ struct Reader<'a, 'scope> {
 
 pub(super) fn read(
     bytes: &[u8],
-    part: &str,
+    part: (&str, WordStoryKind),
     source: &ExtractionInput<'_>,
     relations: &Relationships,
     styles: (&Styles, &Numbering),
     limits: &DocxLimits,
     control: &ExtractionControl<'_>,
 ) -> Result<WordBody, DocxError> {
+    let (part, kind) = part;
     let mut reader = Reader {
+        kind,
         source,
         relations,
         styles: styles.0,
@@ -112,6 +115,7 @@ pub(super) fn read(
             paragraphs: Vec::new(),
             cells: Vec::new(),
             coverage_issues: Default::default(),
+            normalized_bytes: 0,
         },
         word: WORD,
         frames: Vec::new(),
@@ -144,6 +148,7 @@ pub(super) fn read(
         .body
         .cells
         .sort_by_key(|cell| (cell.table, cell.row, cell.column));
+    reader.body.normalized_bytes = reader.normalized_bytes;
     Ok(reader.body)
 }
 
@@ -208,18 +213,46 @@ impl Reader<'_, '_> {
                 WORD_STRICT => WORD_STRICT,
                 _ => return Err(invalid),
             };
-            return if name.local == "document" {
-                Ok(Document)
-            } else {
-                Err(invalid)
-            };
+            if name.local != self.kind.root() {
+                return Err(invalid);
+            }
+            if self.kind == WordStoryKind::Main {
+                return Ok(Document);
+            }
+            self.inside_body = true;
+            self.seen_body = true;
+            return Ok(Body);
         }
-        if depth == 2 && name.is(self.word, "body") {
+        if depth == 2 && self.kind == WordStoryKind::Main && name.is(self.word, "body") {
             if std::mem::replace(&mut self.seen_body, true) {
                 return Err(invalid);
             }
             self.inside_body = true;
             return Ok(Body);
+        }
+        if depth == 2
+            && let Some(expected) = self.kind.entry_element()
+        {
+            if name.ns != self.word {
+                return Ok(Skip);
+            }
+            if name.local != expected {
+                return Err(invalid);
+            }
+            self.headings = Arc::from([]);
+            if !self.fields.is_empty() {
+                self.fields.clear();
+                self.body
+                    .coverage_issues
+                    .insert(WordCoverageIssue::FieldCode);
+            }
+            let separator = matches!(
+                self.kind,
+                WordStoryKind::Footnotes | WordStoryKind::Endnotes
+            ) && element
+                .attr(self.word, "type")
+                .is_some_and(|kind| kind != "normal");
+            return Ok(if separator { Skip } else { Wrapper });
         }
         if !self.inside_body {
             return Ok(Skip);

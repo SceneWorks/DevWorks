@@ -120,17 +120,19 @@ fn extraction(
     edition: &str,
     cancelled: &(dyn Fn() -> bool + Send + Sync),
 ) -> Result<WordBody, DocxError> {
-    engine.extract(
-        ExtractionInput {
-            version: &version(bytes, media, edition),
-            revision: &Revision::new(7).unwrap(),
-            bytes,
-        },
-        &ExtractionControl {
-            deadline: Instant::now() + Duration::from_secs(30),
-            cancelled,
-        },
-    )
+    engine
+        .extract(
+            ExtractionInput {
+                version: &version(bytes, media, edition),
+                revision: &Revision::new(7).unwrap(),
+                bytes,
+            },
+            &ExtractionControl {
+                deadline: Instant::now() + Duration::from_secs(30),
+                cancelled,
+            },
+        )
+        .map(|document| document.body)
 }
 
 fn run(bytes: &[u8]) -> Result<WordBody, DocxError> {
@@ -316,10 +318,7 @@ fn tracked_or_unsupported_source_keeps_original_paragraph_numbers() {
     assert_eq!(result.paragraphs[0].blocks[0].text, "inserted");
     assert_eq!(
         result.coverage_issues,
-        BTreeSet::from([
-            WordCoverageIssue::EmbeddedObject,
-            WordCoverageIssue::RevisionMarkup,
-        ])
+        BTreeSet::from([WordCoverageIssue::EmbeddedObject,])
     );
 }
 
@@ -663,3 +662,6 @@ fn zip_directory_count_must_cover_the_entire_validated_directory() {
     bytes[footer + 10..footer + 12].copy_from_slice(&reduced);
     assert_eq!(run(&bytes).unwrap_err(), DocxError::MalformedPackage);
 }
+
+#[path = "stories_tests.rs"]
+mod stories;

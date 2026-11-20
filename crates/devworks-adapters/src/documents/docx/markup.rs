@@ -1,0 +1,480 @@
+//! Source annotations and relationships are kept separate from final-view passage text.
+use super::{
+    DocxError, DocxLimits, WordBody, WordCoverageIssue, WordEdit, WordEditKind, WordEntry,
+    WordPoint, WordReference, WordReferenceKind, WordStoryKind,
+    xml::{self, Element, REL, REL_STRICT, WORD, WORD_STRICT, Xml},
+};
+use devworks_core::services::documents::extraction::{ExtractionControl, normalize_text};
+use std::collections::{BTreeMap, BTreeSet};
+
+#[derive(Default)]
+pub(super) struct Markup {
+    pub entries: Vec<WordEntry>,
+    pub references: Vec<WordReference>,
+    pub edits: Vec<WordEdit>,
+    pub images: Vec<ImageRef>,
+    pub issues: BTreeSet<WordCoverageIssue>,
+}
+
+pub(super) struct ImageRef {
+    pub relationship: String,
+    pub source: WordPoint,
+}
+
+struct Edit {
+    depth: usize,
+    record: WordEdit,
+}
+
+struct Picture {
+    depth: usize,
+    addressed: bool,
+}
+
+struct Scanner<'a> {
+    kind: WordStoryKind,
+    body: &'a WordBody,
+    limits: &'a mut DocxLimits,
+    control: &'a ExtractionControl<'a>,
+    output: Markup,
+    word: &'static str,
+    inside_body: bool,
+    paragraph: u32,
+    paragraph_stack: Vec<(usize, u32)>,
+    section: u32,
+    section_depth: Option<usize>,
+    section_links: BTreeMap<(WordStoryKind, String), String>,
+    section_explicit: BTreeSet<(WordStoryKind, String)>,
+    suppressed: Option<usize>,
+    entry: Option<WordEntry>,
+    edits: Vec<Edit>,
+    pictures: Vec<Picture>,
+    edit_text_depth: Option<usize>,
+    raw_edit_bytes: usize,
+}
+
+pub(super) fn read(
+    raw: &[u8],
+    kind: WordStoryKind,
+    body: &WordBody,
+    limits: &mut DocxLimits,
+    control: &ExtractionControl<'_>,
+) -> Result<Markup, DocxError> {
+    let mut reader = Scanner {
+        kind,
+        body,
+        limits,
+        control,
+        output: Markup::default(),
+        word: WORD,
+        inside_body: false,
+        paragraph: 0,
+        paragraph_stack: Vec::new(),
+        section: 0,
+        section_depth: None,
+        section_links: BTreeMap::new(),
+        section_explicit: BTreeSet::new(),
+        suppressed: None,
+        entry: None,
+        edits: Vec::new(),
+        pictures: Vec::new(),
+        edit_text_depth: None,
+        raw_edit_bytes: 0,
+    };
+    xml::walk(
+        raw,
+        reader.limits.xml_depth,
+        control,
+        |depth, node| match node {
+            Xml::Start(element) => reader.start(depth, &element),
+            Xml::End => reader.end(depth),
+            Xml::Text(text) => reader.text(&text),
+        },
+    )?;
+    reader.output.entries.sort_by_key(|entry| entry.id);
+    if reader
+        .output
+        .entries
+        .windows(2)
+        .any(|pair| pair[0].id == pair[1].id)
+    {
+        return Err(DocxError::InvalidBody);
+    }
+    Ok(reader.output)
+}
+
+impl Scanner<'_> {
+    fn start(&mut self, depth: usize, element: &Element<'_>) -> Result<(), DocxError> {
+        let name = element.name;
+        if depth == 1 {
+            self.word = match name.ns {
+                WORD => WORD,
+                WORD_STRICT => WORD_STRICT,
+                _ => return Err(DocxError::InvalidBody),
+            };
+            self.inside_body = self.kind != WordStoryKind::Main;
+            return Ok(());
+        }
+        if depth == 2 && name.is(self.word, "body") && self.kind == WordStoryKind::Main {
+            self.inside_body = true;
+            return Ok(());
+        }
+        if !self.inside_body {
+            return Ok(());
+        }
+
+        if name.is(self.word, "p") {
+            self.paragraph += 1;
+            self.paragraph_stack.push((depth, self.paragraph));
+            if let Some(entry) = &mut self.entry {
+                entry.first_paragraph.get_or_insert(self.paragraph);
+                entry.last_paragraph = Some(self.paragraph);
+            }
+            for edit in &mut self.edits {
+                edit.record.source.paragraph.get_or_insert(self.paragraph);
+                edit.record.last_paragraph = Some(self.paragraph);
+            }
+        }
+        if self.suppressed.is_some() {
+            return Ok(());
+        }
+        if !self.hidden_from_final_text()
+            && let Some(picture) = self.pictures.last_mut()
+        {
+            let drawing = matches!(
+                name.ns,
+                "http://schemas.openxmlformats.org/drawingml/2006/main"
+                    | "http://purl.oclc.org/ooxml/drawingml/main"
+            );
+            let vml = name.ns == "urn:schemas-microsoft-com:vml";
+            if (drawing && name.local == "blip") || (vml && name.local == "imagedata") {
+                picture.addressed = true;
+                let external = element
+                    .attr(REL, "link")
+                    .or_else(|| element.attr(REL_STRICT, "link"))
+                    .is_some();
+                if external {
+                    self.output.issues.insert(WordCoverageIssue::ExternalImage);
+                }
+                let field = if vml { "id" } else { "embed" };
+                if let Some(id) = relationship(element, field)? {
+                    self.consume_record()?;
+                    self.output.images.push(ImageRef {
+                        relationship: id,
+                        source: self.point(),
+                    });
+                } else if !external {
+                    self.output
+                        .issues
+                        .insert(WordCoverageIssue::UnsupportedImage);
+                }
+            }
+        }
+        if name.ns != self.word {
+            if name.is(
+                "http://schemas.openxmlformats.org/markup-compatibility/2006",
+                "AlternateContent",
+            ) {
+                self.suppressed = Some(depth);
+            }
+            return Ok(());
+        }
+
+        if depth == 2 && self.kind.entry_element() == Some(name.local) {
+            let separator = matches!(
+                self.kind,
+                WordStoryKind::Footnotes | WordStoryKind::Endnotes
+            ) && element
+                .attr(self.word, "type")
+                .is_some_and(|kind| kind != "normal");
+            if separator {
+                self.suppressed = Some(depth);
+            } else {
+                self.consume_record()?;
+                self.entry = Some(WordEntry {
+                    id: id(element, self.word)?,
+                    first_paragraph: None,
+                    last_paragraph: None,
+                    author: bounded(element.attr(self.word, "author"), 512)?,
+                    date: bounded(element.attr(self.word, "date"), 128)?,
+                    referenced: false,
+                });
+            }
+            return Ok(());
+        }
+
+        match name.local {
+            "drawing" | "pict"
+                if self.paragraph_stack.last().is_some() && !self.hidden_from_final_text() =>
+            {
+                self.pictures.push(Picture {
+                    depth,
+                    addressed: false,
+                });
+            }
+            "txbxContent" | "object" | "altChunk" | "subDoc" => {
+                self.suppressed = Some(depth);
+                if name.local == "txbxContent" {
+                    self.output.issues.insert(WordCoverageIssue::TextBox);
+                }
+            }
+            "ins" | "del" | "moveTo" | "moveFrom" | "pPrChange" | "rPrChange" | "tblPrChange"
+            | "trPrChange" | "tcPrChange" | "sectPrChange" => {
+                self.consume_record()?;
+                let kind = match name.local {
+                    "ins" => WordEditKind::Insertion,
+                    "del" => WordEditKind::Deletion,
+                    "moveTo" => WordEditKind::MoveIn,
+                    "moveFrom" => WordEditKind::MoveOut,
+                    _ => WordEditKind::Properties,
+                };
+                let source = self.point();
+                self.edits.push(Edit {
+                    depth,
+                    record: WordEdit {
+                        last_paragraph: source.paragraph,
+                        source,
+                        kind,
+                        id: element
+                            .attr(self.word, "id")
+                            .map(|id| id.parse::<i32>())
+                            .transpose()
+                            .map_err(|_| DocxError::InvalidBody)?,
+                        author: bounded(element.attr(self.word, "author"), 512)?,
+                        date: bounded(element.attr(self.word, "date"), 128)?,
+                        text: String::new(),
+                    },
+                });
+            }
+            "cellIns"
+            | "cellDel"
+            | "cellMerge"
+            | "numberingChange"
+            | "customXmlInsRangeStart"
+            | "customXmlDelRangeStart"
+            | "customXmlMoveFromRangeStart"
+            | "customXmlMoveToRangeStart" => {
+                self.output
+                    .issues
+                    .insert(WordCoverageIssue::UnsupportedRevision);
+            }
+            "t" | "delText" if !self.edits.is_empty() => self.edit_text_depth = Some(depth),
+            "tab" | "br" | "cr" if !self.edits.is_empty() => {
+                self.append_edit_text(if name.local == "tab" { "\t" } else { "\n" })?;
+            }
+            "sectPr" if self.kind == WordStoryKind::Main && self.edits.is_empty() => {
+                self.section += 1;
+                self.section_depth = Some(depth);
+                self.section_explicit.clear();
+            }
+            _ => {}
+        }
+
+        if self.hidden_from_final_text() {
+            return Ok(());
+        }
+        let reference = match name.local {
+            "footnoteReference" => WordReferenceKind::Footnote(id(element, self.word)?),
+            "endnoteReference" => WordReferenceKind::Endnote(id(element, self.word)?),
+            "commentRangeStart" => WordReferenceKind::CommentStart(id(element, self.word)?),
+            "commentRangeEnd" => WordReferenceKind::CommentEnd(id(element, self.word)?),
+            "commentReference" => WordReferenceKind::CommentMark(id(element, self.word)?),
+            "headerReference" | "footerReference" if self.section_depth == depth.checked_sub(1) => {
+                let variant = element
+                    .attr(self.word, "type")
+                    .filter(|mode| matches!(*mode, "default" | "first" | "even"))
+                    .ok_or(DocxError::InvalidBody)?
+                    .to_owned();
+                let relationship =
+                    relationship(element, "id")?.ok_or(DocxError::InvalidRelationships)?;
+                let kind = if name.local == "headerReference" {
+                    WordStoryKind::Header
+                } else {
+                    WordStoryKind::Footer
+                };
+                let key = (kind, variant.clone());
+                if !self.section_explicit.insert(key.clone()) {
+                    return Err(DocxError::InvalidBody);
+                }
+                self.section_links.insert(key, relationship.clone());
+                section_reference(kind, self.section, variant, relationship, false)
+            }
+            _ => return Ok(()),
+        };
+        self.consume_record()?;
+        self.output.references.push(WordReference {
+            source: self.point(),
+            kind: reference,
+            target_part: None,
+        });
+        Ok(())
+    }
+
+    fn end(&mut self, depth: usize) -> Result<(), DocxError> {
+        if self
+            .paragraph_stack
+            .last()
+            .is_some_and(|point| point.0 == depth)
+        {
+            self.paragraph_stack.pop();
+        }
+        if self.edit_text_depth == Some(depth) {
+            self.edit_text_depth = None;
+        }
+        if self.suppressed == Some(depth) {
+            self.suppressed = None;
+        }
+        if self.section_depth == Some(depth) {
+            self.section_depth = None;
+            let inherited: Vec<_> = self
+                .section_links
+                .iter()
+                .filter(|(key, _)| !self.section_explicit.contains(*key))
+                .map(|((kind, variant), relation)| {
+                    section_reference(*kind, self.section, variant.clone(), relation.clone(), true)
+                })
+                .collect();
+            for kind in inherited {
+                self.consume_record()?;
+                self.output.references.push(WordReference {
+                    source: self.point(),
+                    kind,
+                    target_part: None,
+                });
+            }
+        }
+        if self
+            .pictures
+            .last()
+            .is_some_and(|picture| picture.depth == depth)
+        {
+            let picture = self.pictures.pop().expect("checked depth");
+            if !picture.addressed {
+                self.output
+                    .issues
+                    .insert(WordCoverageIssue::UnsupportedImage);
+            }
+        }
+        if self.edits.last().is_some_and(|edit| edit.depth == depth) {
+            let mut edit = self.edits.pop().expect("checked depth").record;
+            let kept = normalize_text(
+                &edit.text,
+                self.limits.extraction.normalized_bytes,
+                self.control,
+            )?;
+            self.limits.extraction.normalized_bytes -= kept.len();
+            edit.text = kept;
+            self.output.edits.push(edit);
+        }
+        if depth == 2 {
+            if let Some(entry) = self.entry.take() {
+                self.output.entries.push(entry);
+            }
+            if self.kind == WordStoryKind::Main {
+                self.inside_body = false;
+            }
+        }
+        Ok(())
+    }
+
+    fn hidden_from_final_text(&self) -> bool {
+        self.edits.iter().any(|edit| {
+            matches!(
+                edit.record.kind,
+                WordEditKind::Deletion | WordEditKind::MoveOut | WordEditKind::Properties
+            )
+        })
+    }
+
+    fn text(&mut self, text: &str) -> Result<(), DocxError> {
+        if self.edit_text_depth.is_some() && self.suppressed.is_none() {
+            self.append_edit_text(text)?;
+        }
+        Ok(())
+    }
+
+    fn append_edit_text(&mut self, text: &str) -> Result<(), DocxError> {
+        let added = self.edits.len() * text.len();
+        self.raw_edit_bytes += added;
+        if self.raw_edit_bytes > self.limits.part_bytes {
+            return Err(DocxError::StructureLimit);
+        }
+        for edit in &mut self.edits {
+            edit.record.text.push_str(text);
+        }
+        Ok(())
+    }
+
+    fn point(&self) -> WordPoint {
+        let paragraph = self.paragraph_stack.last().map(|location| location.1);
+        let cell = paragraph.and_then(|number| {
+            self.body
+                .paragraphs
+                .binary_search_by_key(&number, |item| item.number)
+                .ok()
+                .and_then(|index| self.body.paragraphs[index].cell.clone())
+        });
+        WordPoint {
+            part: self.body.part.clone(),
+            paragraph,
+            cell,
+        }
+    }
+
+    fn consume_record(&mut self) -> Result<(), DocxError> {
+        self.limits.extraction.blocks = self
+            .limits
+            .extraction
+            .blocks
+            .checked_sub(1)
+            .ok_or(DocxError::StructureLimit)?;
+        Ok(())
+    }
+}
+
+fn section_reference(
+    kind: WordStoryKind,
+    section: u32,
+    variant: String,
+    relationship: String,
+    inherited: bool,
+) -> WordReferenceKind {
+    if kind == WordStoryKind::Header {
+        WordReferenceKind::Header {
+            section,
+            variant,
+            relationship,
+            inherited,
+        }
+    } else {
+        WordReferenceKind::Footer {
+            section,
+            variant,
+            relationship,
+            inherited,
+        }
+    }
+}
+
+fn relationship(element: &Element<'_>, attribute: &str) -> Result<Option<String>, DocxError> {
+    bounded(
+        element
+            .attr(REL, attribute)
+            .or_else(|| element.attr(REL_STRICT, attribute)),
+        128,
+    )
+}
+
+fn bounded(value: Option<&str>, maximum: usize) -> Result<Option<String>, DocxError> {
+    match value {
+        Some(value) if value.is_empty() || value.len() > maximum => Err(DocxError::InvalidBody),
+        value => Ok(value.map(str::to_owned)),
+    }
+}
+
+fn id(element: &Element<'_>, word: &str) -> Result<i32, DocxError> {
+    element
+        .attr(word, "id")
+        .and_then(|id| id.parse().ok())
+        .ok_or(DocxError::InvalidBody)
+}
