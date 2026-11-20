@@ -59,8 +59,11 @@ type Definitions = Vec<(String, String, String, Option<String>)>;
 /// Migration 64 adds retrieval preferences and three per-version document index tables. The
 /// document lineage propagates from the managed artifact version to its extraction and text.
 /// Explicit version tombstones remove derived rows, and project purge classifies each row.
+/// Migration 65 adds a published lexical row per extracted block. It is classified through
+/// that block's retained version. FTS5 segments follow the projection and are maintained
+/// by the virtual table when a canonical lexical row changes.
 pub(super) const REVIEWED_SCHEMA_SHA256: &str =
-    "1906abd376b620b7e8ce02918c41eb1d822e701cc03d52f1f3f8151c51fbb70b";
+    "ed6751494e3e1781868c0166312d0ffa4e30725e54b1fd5ee4818fd100f1cbd4";
 
 fn definitions(conn: &Connection) -> Result<Definitions, StorageError> {
     let mut statement = db(conn.prepare(

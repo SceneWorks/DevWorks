@@ -312,7 +312,7 @@ impl<'a> Viewer<'a> {
     }
     /// The workspace-level audience of what `owner` owns: the owner itself, the user, the host
     /// and the unconfined workspace coordinator.
-    fn sees_owned(&self, owner: Option<&crate::protocol::ActorId>) -> bool {
+    pub(crate) fn sees_owned(&self, owner: Option<&crate::protocol::ActorId>) -> bool {
         matches!(
             self.ctx.principal_kind(),
             PrincipalKind::Human | PrincipalKind::Host

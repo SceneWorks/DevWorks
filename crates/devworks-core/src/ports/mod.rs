@@ -260,6 +260,15 @@ pub struct QueryAnswer {
     pub stamp: ReadStamp,
     pub result: OperationResult,
 }
+/// Rechecks an answer's domain-specific authority and provenance on the gateway's publication
+/// snapshot. The check must not materialize unselected content.
+pub type QueryPublicationCheck = fn(
+    &InvocationContext,
+    &AdmittedQuery,
+    &QueryAnswer,
+    &dyn ReadSnapshot,
+) -> Result<bool, StorageError>;
+
 /// Read use cases publish against one read snapshot. Queries never mint grants, clear blockers
 /// or claim work. Owner-admitted auxiliary inference may reserve and account its actual
 /// configured budget during external preparation; it cannot mutate the queried business state.
@@ -268,6 +277,10 @@ pub trait QueryHandler: Send + Sync {
     /// gateway can only tighten the host's read deadline with this hint; it never replaces
     /// cancellation or allows a handler to extend a host bound.
     fn read_deadline_ms(&self, _query: &AdmittedQuery) -> Option<i64> {
+        None
+    }
+    /// Domain references such as document shares can change independently of participant grants.
+    fn publication_check(&self, _query: &AdmittedQuery) -> Option<QueryPublicationCheck> {
         None
     }
     /// Bounded external preparation of an admitted, currently authorized query, outside any read

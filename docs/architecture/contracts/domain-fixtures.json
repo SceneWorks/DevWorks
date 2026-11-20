@@ -952,6 +952,13 @@
     "schemaValid": true
   },
   {
+    "id": "input-documents.resolve_citation-Query",
+    "entry": "domain-request.r11",
+    "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"documents.resolve_citation\",\"citation\":{\"source\":{\"kind\":\"Managed\",\"version\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"8\",\"mediaType\":\"text/plain\"},\"extractionRevision\":\"1\"},\"blockId\":\"block-a\",\"contentDigest\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\",\"locator\":{\"kind\":\"Text\",\"firstLine\":1,\"lastLine\":1}}},\"schemaRevision\":11}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
     "id": "input-documents.index-Command",
     "entry": "domain-request",
     "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"documents.index\",\"documentId\":\"id-a\",\"versionId\":\"id-a\",\"expectedRevision\":\"1\"}}",
@@ -3223,6 +3230,13 @@
     "id": "result-documents.list",
     "entry": "operation-result",
     "raw": "{\"kind\":\"documents.list\",\"value\":{\"items\":[],\"hasMore\":false}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "result-documents.resolve_citation",
+    "entry": "operation-result.r11",
+    "raw": "{\"kind\":\"documents.resolve_citation\",\"value\":{\"citation\":{\"source\":{\"kind\":\"Managed\",\"version\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"8\",\"mediaType\":\"text/plain\"},\"extractionRevision\":\"1\"},\"blockId\":\"block-a\",\"contentDigest\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\",\"locator\":{\"kind\":\"Text\",\"firstLine\":1,\"lastLine\":1}},\"text\":\"fixture\"}}",
     "typedValid": true,
     "schemaValid": true
   },
@@ -9534,42 +9548,42 @@
     "schemaValid": true
   },
   {
-    "id": "r3-preview-source-13-1362",
+    "id": "r3-preview-source-13-1364",
     "entry": "domain-request.r3",
     "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"knowledge.diagnostics\",\"scope\":{\"kind\":\"Workspace\"},\"sourceLabel\":\"test-run.json\"},\"schemaRevision\":3}",
     "typedValid": true,
     "schemaValid": true
   },
   {
-    "id": "r3-delete-source-13-1362",
+    "id": "r3-delete-source-13-1364",
     "entry": "domain-request.r3",
     "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"knowledge.delete_by_source\",\"scope\":{\"kind\":\"Workspace\"},\"expectedScopeRevision\":\"1\",\"previewDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"sourceLabel\":\"test-run.json\"},\"schemaRevision\":3}",
     "typedValid": true,
     "schemaValid": true
   },
   {
-    "id": "r3-preview-source-15-1364",
+    "id": "r3-preview-source-15-1366",
     "entry": "domain-request.r3",
     "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"knowledge.diagnostics\",\"scope\":{\"kind\":\"Workspace\"},\"sourceLabel\":\" r\\u00e9sum\\u00e9 source \"},\"schemaRevision\":3}",
     "typedValid": true,
     "schemaValid": true
   },
   {
-    "id": "r3-delete-source-15-1364",
+    "id": "r3-delete-source-15-1366",
     "entry": "domain-request.r3",
     "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"knowledge.delete_by_source\",\"scope\":{\"kind\":\"Workspace\"},\"expectedScopeRevision\":\"1\",\"previewDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"sourceLabel\":\" r\\u00e9sum\\u00e9 source \"},\"schemaRevision\":3}",
     "typedValid": true,
     "schemaValid": true
   },
   {
-    "id": "r3-preview-source-256-1366",
+    "id": "r3-preview-source-256-1368",
     "entry": "domain-request.r3",
     "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"knowledge.diagnostics\",\"scope\":{\"kind\":\"Workspace\"},\"sourceLabel\":\"\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\"},\"schemaRevision\":3}",
     "typedValid": true,
     "schemaValid": true
   },
   {
-    "id": "r3-delete-source-256-1366",
+    "id": "r3-delete-source-256-1368",
     "entry": "domain-request.r3",
     "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"knowledge.delete_by_source\",\"scope\":{\"kind\":\"Workspace\"},\"expectedScopeRevision\":\"1\",\"previewDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"sourceLabel\":\"\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\"},\"schemaRevision\":3}",
     "typedValid": true,

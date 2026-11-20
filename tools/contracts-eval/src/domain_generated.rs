@@ -3512,6 +3512,24 @@ impl Revisioned for DocumentListResult {
 
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ResolvedDocumentCitation {
+    pub citation: Citation,
+    pub text: Text,
+}
+impl Check for ResolvedDocumentCitation {
+    fn check(&self) -> Result<(), String> {
+        self.citation.check()?;
+        self.text.check()?;
+        super::domain_rules::record(
+            "ResolvedDocumentCitation",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct InstructionRecord {
     pub id: Id,
     pub revision: Revision,
@@ -19152,6 +19170,9 @@ pub enum DomainQuery {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         retrieval_enabled: Option<bool>,
     },
+    #[schemars(extend("x-since" = 11))]
+    #[serde(rename = "documents.resolve_citation")]
+    DocumentsResolveCitation { citation: Citation },
     #[serde(rename = "conventions.list")]
     ConventionsList {
         scope: DataScope,
@@ -20121,6 +20142,7 @@ impl DomainQuery {
             Self::DreamingSettings { .. } => "dreaming.settings",
             Self::DreamingInstructions { .. } => "dreaming.instructions",
             Self::DocumentsList { .. } => "documents.list",
+            Self::DocumentsResolveCitation { .. } => "documents.resolve_citation",
             Self::ConventionsList { .. } => "conventions.list",
             Self::ConventionsSearch { .. } => "conventions.search",
             Self::ConventionsResources { .. } => "conventions.resources",
@@ -20728,6 +20750,9 @@ impl Check for DomainQuery {
                 scope.check()?;
                 page.check()?;
                 retrieval_enabled.check()?;
+            }
+            Self::DocumentsResolveCitation { citation } => {
+                citation.check()?;
             }
             Self::ConventionsList {
                 scope,
@@ -21862,6 +21887,9 @@ impl Revisioned for DomainQuery {
                 Err("operation predates its introduction".into())
             }
             Self::AgentsEvents { .. } if revision < 7 => {
+                Err("operation predates its introduction".into())
+            }
+            Self::DocumentsResolveCitation { .. } if revision < 11 => {
                 Err("operation predates its introduction".into())
             }
             Self::AddonsInvocation { .. } if revision < 8 => {
@@ -26788,6 +26816,9 @@ pub enum OperationResult {
     DocumentsImport { value: DocumentResult },
     #[serde(rename = "documents.list")]
     DocumentsList { value: DocumentListResult },
+    #[schemars(extend("x-since" = 11))]
+    #[serde(rename = "documents.resolve_citation")]
+    DocumentsResolveCitation { value: ResolvedDocumentCitation },
     #[serde(rename = "documents.index")]
     DocumentsIndex { value: IndexRunRecord },
     #[serde(rename = "documents.retry")]
@@ -27439,6 +27470,7 @@ impl OperationResult {
             Self::DreamingReview { .. } => "dreaming.review",
             Self::DocumentsImport { .. } => "documents.import",
             Self::DocumentsList { .. } => "documents.list",
+            Self::DocumentsResolveCitation { .. } => "documents.resolve_citation",
             Self::DocumentsIndex { .. } => "documents.index",
             Self::DocumentsRetry { .. } => "documents.retry",
             Self::ConventionsList { .. } => "conventions.list",
@@ -27827,6 +27859,7 @@ impl Check for OperationResult {
             Self::DreamingReview { value } => value.check()?,
             Self::DocumentsImport { value } => value.check()?,
             Self::DocumentsList { value } => value.check()?,
+            Self::DocumentsResolveCitation { value } => value.check()?,
             Self::DocumentsIndex { value } => value.check()?,
             Self::DocumentsRetry { value } => value.check()?,
             Self::ConventionsList { value } => value.check()?,
@@ -28294,6 +28327,9 @@ impl Revisioned for OperationResult {
                 Err("operation result predates its introduction".into())
             }
             Self::AgentsEvents { .. } if revision < 7 => {
+                Err("operation result predates its introduction".into())
+            }
+            Self::DocumentsResolveCitation { .. } if revision < 11 => {
                 Err("operation result predates its introduction".into())
             }
             Self::SkillsSetEnabled { .. } if revision < 8 => {

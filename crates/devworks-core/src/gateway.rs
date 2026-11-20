@@ -364,18 +364,36 @@ impl Gateway<'_> {
         });
         // Publication point: authority that was revoked or narrowed while the answer was being
         // prepared denies the output. Checked on a fresh snapshot, after the answer exists.
-        if matches!(answered, Ok(Some((Ok(_), _))))
-            && (!authorization.fences().is_empty() || !authorization.authority_grants().is_empty())
+        let recheck = handler.publication_check(&admitted);
+        if let Ok(Some((Ok(answer), _))) = &answered
+            && (recheck.is_some()
+                || !authorization.fences().is_empty()
+                || !authorization.authority_grants().is_empty())
         {
-            let holds = read_snapshot(self.store, &ReadOptions::default(), |s| {
-                crate::authority::authorization_holds(s, &authorization)
+            let fresh = if recheck.is_some() {
+                read_options.clone()
+            } else {
+                ReadOptions::default()
+            };
+            let holds = read_snapshot(self.store, &fresh, |s| {
+                if !crate::authority::authorization_holds(s, &authorization)? {
+                    return Ok(false);
+                }
+                recheck.map_or(Ok(true), |check| check(ctx, &admitted, answer, s))
             });
-            if !matches!(holds, Ok(true)) {
-                return Ok(self.query_fault(
-                    admitted.query_id,
-                    DomainErrorCode::PermissionDenied,
-                    RetryAdvice::Never,
-                ));
+            match holds {
+                Ok(true) => {}
+                Err(error) if recheck.is_some() => {
+                    let (code, retry) = storage_fault(&error);
+                    return Ok(self.query_fault(admitted.query_id, code, retry));
+                }
+                _ => {
+                    return Ok(self.query_fault(
+                        admitted.query_id,
+                        DomainErrorCode::PermissionDenied,
+                        RetryAdvice::Never,
+                    ));
+                }
             }
         }
         let reply = match answered {

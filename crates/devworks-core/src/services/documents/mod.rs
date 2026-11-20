@@ -2,13 +2,15 @@
 pub mod extraction;
 pub mod indexing;
 pub mod pdf;
+mod retrieval;
 
 use crate::{
     context::InvocationContext,
     gateway::{AdmittedCommand, AdmittedQuery},
     operations::{OperationInput, documents as ops, indexing as index_ops},
     ports::{
-        CommandHandler, Decided, HandlerFailure, IdKind, IdSource, QueryAnswer, QueryHandler,
+        Clock, CommandHandler, Decided, HandlerFailure, IdKind, IdSource, QueryAnswer,
+        QueryHandler, QueryPublicationCheck,
         storage::{
             ArtifactRead, ArtifactScope, DocumentIndexStage, DocumentListFilter, DocumentRead,
             ListPosition, QueueRead, QueueState, ReadSnapshot, StorageError, StoredArtifact,
@@ -54,6 +56,7 @@ pub const INDEX_OPERATIONS: &[&str] = &[
     "documents.disable_retrieval",
     "documents.remove_index",
 ];
+pub const RETRIEVAL_OPERATIONS: &[&str] = &["documents.search", "documents.resolve_citation"];
 const DETAILS_REVISION: u32 = 10;
 const LISTED_VERSIONS: u16 = 10;
 
@@ -62,14 +65,20 @@ const LISTED_VERSIONS: u16 = 10;
 pub struct DocumentLibrary {
     artifacts: Arc<ArtifactService>,
     ids: Arc<dyn IdSource>,
+    clock: Arc<dyn Clock>,
     indexer: Option<Arc<DocumentIndexer>>,
 }
 
 impl DocumentLibrary {
-    pub fn new(artifacts: Arc<ArtifactService>, ids: Arc<dyn IdSource>) -> Self {
+    pub fn new(
+        artifacts: Arc<ArtifactService>,
+        ids: Arc<dyn IdSource>,
+        clock: Arc<dyn Clock>,
+    ) -> Self {
         Self {
             artifacts,
             ids,
+            clock,
             indexer: None,
         }
     }
@@ -243,6 +252,20 @@ impl DocumentLibrary {
         };
         let details = query.schema_revision().0 >= DETAILS_REVISION;
         let (result, scope_revision) = match input {
+            ops::Input::Search(request) => {
+                let value = retrieval::search(snapshot, ctx, request)?;
+                return Ok(QueryAnswer {
+                    stamp: value.stamp.clone(),
+                    result: OperationResult::DocumentsSearch { value },
+                });
+            }
+            ops::Input::ResolveCitation(request) => {
+                let value = retrieval::resolve(snapshot, ctx, &request.citation)?;
+                return Ok(QueryAnswer {
+                    stamp: retrieval::stamp(snapshot, ctx),
+                    result: OperationResult::DocumentsResolveCitation { value },
+                });
+            }
             ops::Input::List(input) => {
                 let scope = document_scope(snapshot.authority(), ctx, &input.scope)?;
                 if let Some(project) = scope.project() {
@@ -399,6 +422,26 @@ impl CommandHandler for DocumentLibrary {
 }
 
 impl QueryHandler for DocumentLibrary {
+    fn read_deadline_ms(&self, query: &AdmittedQuery) -> Option<i64> {
+        let OperationInput::Documents(ops::Input::Search(request)) = query.input() else {
+            return None;
+        };
+        Some(
+            self.clock
+                .now_ms()
+                .get()
+                .saturating_add(i64::from(request.limits.deadline_ms.clamp(1, 300_000))),
+        )
+    }
+
+    fn publication_check(&self, query: &AdmittedQuery) -> Option<QueryPublicationCheck> {
+        matches!(
+            query.input(),
+            OperationInput::Documents(ops::Input::Search(_) | ops::Input::ResolveCitation(_))
+        )
+        .then_some(retrieval::check_publication)
+    }
+
     fn query(
         &self,
         ctx: &InvocationContext,

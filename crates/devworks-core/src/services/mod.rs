@@ -238,6 +238,9 @@ impl UseCases {
             for operation in documents::INDEX_OPERATIONS {
                 self.register(operation, None, Some(service.clone()));
             }
+            for operation in documents::RETRIEVAL_OPERATIONS {
+                self.register(operation, Some(service.clone()), None);
+            }
             if !self.has_command("indexing.cancel") {
                 self.register("indexing.cancel", None, Some(service));
             }

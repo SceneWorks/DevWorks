@@ -957,7 +957,8 @@ async fn build(composition: Composition, core: CoreServices) -> Result<Engine, B
         ));
         consumers.push(crate::documents::indexing::consumer(indexer.clone()));
         use_cases.with_document_library(Arc::new(
-            DocumentLibrary::new(artifacts.clone(), ids.clone()).with_indexer(indexer),
+            DocumentLibrary::new(artifacts.clone(), ids.clone(), clock.clone())
+                .with_indexer(indexer),
         ))
     } else {
         use_cases

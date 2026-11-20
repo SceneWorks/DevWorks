@@ -6,7 +6,8 @@ use super::{
 };
 use devworks_core::{
     ports::storage::{
-        DocumentCheckpoint, DocumentIndexVersion, DocumentRead, DocumentRepository, StorageError,
+        DocumentCandidate, DocumentCheckpoint, DocumentIndexVersion, DocumentLexicalBatch,
+        DocumentLexicalQuery, DocumentRead, DocumentRepository, StorageError,
     },
     protocol::{Id, Revision},
     services::documents::extraction::ExtractedBlock,
@@ -136,6 +137,77 @@ fn passage(
     .transpose()
 }
 
+fn lexical(
+    conn: &Connection,
+    query: &DocumentLexicalQuery<'_>,
+) -> Result<DocumentLexicalBatch, StorageError> {
+    if query.words.is_empty()
+        || !(1..=500).contains(&query.max_results)
+        || query.max_blocks > 1_000_000
+    {
+        return Err(invalid("document lexical query bounds"));
+    }
+    let exact = query.exact_versions.map(|ids| encode(&ids)).transpose()?;
+    let mut statement = db(conn.prepare_cached(
+        "WITH eligible AS MATERIALIZED (
+           SELECT l.id AS posting, b.id AS block, e.id AS checkpoint, e.version_id,
+                  b.ordinal, i.published_generation AS generation
+             FROM document_lexical_rows l JOIN document_extracted_blocks b ON b.id=l.block_id
+             JOIN document_extractions e ON e.id=b.extraction_id
+             JOIN document_index_versions i ON i.version_id=e.version_id AND i.published_revision=e.revision
+             JOIN artifact_versions v ON v.id=e.version_id
+             JOIN artifacts a ON a.id=v.artifact_id
+             LEFT JOIN document_retrieval_preferences p ON p.artifact_id=a.id
+            WHERE a.state='Live' AND a.retention='Explicit' AND v.deleted_at IS NULL
+              AND json_extract(a.provenance_json,'$.managedDocument')=1
+              AND COALESCE(p.enabled,1)=1
+              AND ((?1 IS NULL AND a.scope_kind='Workspace' AND (?2 IS NULL OR a.owner_actor_id=?2))
+                OR (?1 IS NOT NULL AND (a.current_project_id=?1 OR EXISTS(
+                     SELECT 1 FROM artifact_shares s WHERE s.artifact_id=a.id AND s.project_id=?1))
+                  AND (?2 IS NULL OR a.scope_kind='Workspace' OR a.owner_actor_id IS NULL OR a.owner_actor_id=?2)))
+              AND ((?3 IS NULL AND v.id=a.current_version_id)
+                  OR (?3 IS NOT NULL AND v.id IN (SELECT value FROM json_each(?3))))
+            ORDER BY e.version_id,b.ordinal,b.id LIMIT (?5+1)
+         ), tested AS MATERIALIZED (
+           SELECT * FROM eligible ORDER BY version_id,ordinal,block LIMIT ?5
+         ), ranked AS MATERIALIZED (
+           SELECT e.*,COUNT(*) AS score
+             FROM tested e CROSS JOIN json_each(?4) word
+            WHERE EXISTS(SELECT 1 FROM document_lexical_fts
+                          WHERE rowid=e.posting AND document_lexical_fts MATCH word.value)
+            GROUP BY e.posting
+            ORDER BY score DESC,version_id,ordinal,block LIMIT (?6+1)
+         )
+         SELECT (SELECT COUNT(*) FROM eligible)>?5, r.checkpoint,r.block,r.generation
+           FROM (SELECT 1) LEFT JOIN ranked r ON TRUE
+          ORDER BY r.score DESC,r.version_id,r.ordinal,r.block",
+    ))?;
+    // No global FTS ranking statistics, or passage text, enter the candidate selection.
+    let mut rows = db(statement.query(params![
+        query.scope.project().map(|project| project.0.as_str()),
+        query.owner.map(|actor| actor.0.as_str()),
+        exact,
+        encode(&query.words)?,
+        query.max_blocks,
+        query.max_results,
+    ]))?;
+    let mut batch = DocumentLexicalBatch {
+        candidates: Vec::new(),
+        work_limited: false,
+    };
+    while let Some(row) = db(rows.next())? {
+        batch.work_limited = db(row.get(0))?;
+        if let Some(checkpoint) = db(row.get::<_, Option<String>>(1))? {
+            batch.candidates.push(DocumentCandidate {
+                checkpoint: id_of(checkpoint)?,
+                block: id_of(db(row.get(2))?)?,
+                generation: id_of(db(row.get(3))?)?,
+            });
+        }
+    }
+    Ok(batch)
+}
+
 macro_rules! document_reads {
     ($store:ty) => {
         impl DocumentRead for $store {
@@ -183,6 +255,12 @@ macro_rules! document_reads {
                 block: &Id,
             ) -> Result<Option<ExtractedBlock>, StorageError> {
                 passage(self.conn, checkpoint, block)
+            }
+            fn document_lexical(
+                &self,
+                query: &DocumentLexicalQuery<'_>,
+            ) -> Result<DocumentLexicalBatch, StorageError> {
+                lexical(self.conn, query)
             }
         }
     };

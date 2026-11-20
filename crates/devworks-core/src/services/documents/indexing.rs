@@ -156,7 +156,7 @@ fn version(
         .ok_or(StorageError::ViewUnavailable)
 }
 
-fn same_source(left: &ArtifactRef, right: &ArtifactRef) -> bool {
+pub(super) fn same_source(left: &ArtifactRef, right: &ArtifactRef) -> bool {
     left.artifact_id == right.artifact_id
         && left.version_id == right.version_id
         && left.sha256 == right.sha256

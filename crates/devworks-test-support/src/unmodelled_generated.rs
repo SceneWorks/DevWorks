@@ -6,6 +6,7 @@
 use crate::{Unmodelled, unmodelled};
 use devworks_core::ports::GrantUse;
 use devworks_core::ports::storage::AgentMessageHistoryFilter;
+use devworks_core::ports::storage::ArtifactScope;
 use devworks_core::ports::storage::AttemptFence;
 use devworks_core::ports::storage::ConfigScope;
 use devworks_core::ports::storage::EventRecord;
@@ -891,6 +892,12 @@ impl DocumentRead for Unmodelled {
         unmodelled()
     }
     fn document_passage(&self, _: &Id, _: &Id) -> Result<Option<ExtractedBlock>, StorageError> {
+        unmodelled()
+    }
+    fn document_lexical(
+        &self,
+        _: &DocumentLexicalQuery<'_>,
+    ) -> Result<DocumentLexicalBatch, StorageError> {
         unmodelled()
     }
 }

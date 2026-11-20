@@ -394,6 +394,9 @@ pub enum OperationResult {
     DocumentsDisableRetrieval { value: DocumentResult },
     #[serde(rename = "documents.remove_index")]
     DocumentsRemoveIndex { value: DocumentResult },
+    #[schemars(extend("x-since" = 11))]
+    #[serde(rename = "documents.resolve_citation")]
+    DocumentsResolveCitation { value: ResolvedDocumentCitation },
     #[serde(rename = "artifacts.save")]
     ArtifactsSave { value: ArtifactRecord },
     #[serde(rename = "artifacts.list")]
@@ -992,6 +995,7 @@ impl OperationResult {
             Self::DocumentsRetry { .. } => "documents.retry",
             Self::DocumentsDisableRetrieval { .. } => "documents.disable_retrieval",
             Self::DocumentsRemoveIndex { .. } => "documents.remove_index",
+            Self::DocumentsResolveCitation { .. } => "documents.resolve_citation",
             Self::ArtifactsSave { .. } => "artifacts.save",
             Self::ArtifactsList { .. } => "artifacts.list",
             Self::ArtifactsRead { .. } => "artifacts.read",
@@ -1380,6 +1384,7 @@ impl Check for OperationResult {
             Self::DocumentsRetry { value } => value.check()?,
             Self::DocumentsDisableRetrieval { value } => value.check()?,
             Self::DocumentsRemoveIndex { value } => value.check()?,
+            Self::DocumentsResolveCitation { value } => value.check()?,
             Self::ArtifactsSave { value } => value.check()?,
             Self::ArtifactsList { value } => value.check()?,
             Self::ArtifactsRead { value } => value.check()?,
@@ -1818,6 +1823,9 @@ impl Revisioned for OperationResult {
                 Err("operation result predates its introduction".into())
             }
             Self::SchemasCodeReferences { .. } if revision < 8 => {
+                Err("operation result predates its introduction".into())
+            }
+            Self::DocumentsResolveCitation { .. } if revision < 11 => {
                 Err("operation result predates its introduction".into())
             }
             Self::SkillsSetEnabled { .. } if revision < 8 => {

@@ -1,7 +1,7 @@
 //! Document index metadata and immutable extracted passages. Artifact rows still own the
 //! original bytes, versions and access. A checkpoint is separate from a published index.
-use super::StorageError;
-use crate::protocol::{Id, Revision, data::Coverage};
+use super::{ArtifactScope, StorageError};
+use crate::protocol::{ActorId, Id, Revision, data::Coverage};
 use crate::services::documents::extraction::ExtractedBlock;
 use serde::{Deserialize, Serialize};
 
@@ -44,6 +44,29 @@ pub struct DocumentListFilter {
     pub current_only: bool,
 }
 
+pub struct DocumentLexicalQuery<'a> {
+    pub scope: &'a ArtifactScope,
+    pub owner: Option<&'a ActorId>,
+    /// Exact IDs already validated under the current snapshot, or current versions only.
+    pub exact_versions: Option<&'a [Id]>,
+    /// Safe, quoted FTS queries made from distinct search words.
+    pub words: &'a [String],
+    pub max_blocks: u32,
+    pub max_results: u16,
+}
+
+#[derive(Clone, Debug)]
+pub struct DocumentCandidate {
+    pub checkpoint: Id,
+    pub block: Id,
+    pub generation: Id,
+}
+
+pub struct DocumentLexicalBatch {
+    pub candidates: Vec<DocumentCandidate>,
+    pub work_limited: bool,
+}
+
 pub trait DocumentRead {
     /// Explicit retrieval preference. Live documents default to enabled before their first index.
     fn document_retrieval_enabled(&self, artifact: &Id) -> Result<bool, StorageError>;
@@ -64,6 +87,12 @@ pub trait DocumentRead {
         checkpoint: &Id,
         block: &Id,
     ) -> Result<Option<ExtractedBlock>, StorageError>;
+    /// Filter the authorized, published exact versions before matching and ranking. Return
+    /// identities only. The caller opens selected passages within the same snapshot.
+    fn document_lexical(
+        &self,
+        query: &DocumentLexicalQuery<'_>,
+    ) -> Result<DocumentLexicalBatch, StorageError>;
 }
 
 pub trait DocumentRepository: DocumentRead {

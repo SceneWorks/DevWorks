@@ -1390,6 +1390,13 @@
       "projection": "none",
       "earlierName": "Page"
     },
+    "ResolvedDocumentCitation": {
+      "kind": "record",
+      "fields": {
+        "citation": "Citation",
+        "text": "Text"
+      }
+    },
     "InstructionRecord": {
       "kind": "record",
       "fields": {
@@ -8750,6 +8757,18 @@
       "authority": "Scoped",
       "rules": ""
     },
+    "documents.resolve_citation": {
+      "operation": "documents.resolve_citation",
+      "mode": "Query",
+      "fields": {
+        "citation": "Citation"
+      },
+      "result": "ResolvedDocumentCitation",
+      "effect": "ReadOnly",
+      "authority": "Scoped",
+      "rules": "Resolve a managed citation only under current artifact authority. Require the exact retained version, source digest and length, extraction revision, block identity, locator and passage digest.",
+      "introducedRevision": 11
+    },
     "documents.index": {
       "operation": "documents.index",
       "mode": "Command",
@@ -11627,6 +11646,7 @@
     "documents.move": [1, 10],
     "documents.disable_retrieval": [1, 10],
     "documents.remove_index": [1, 10],
+    "documents.resolve_citation": [11],
     "artifacts.save": [
       1,
       2,
@@ -12807,6 +12827,7 @@
     "documents.import": {"assignmentScope": "project", "nativeExecution": false, "approvalRequired": false, "humanOnly": false},
     "documents.list": {"assignmentScope": "project", "nativeExecution": false, "approvalRequired": false, "humanOnly": false},
     "documents.read": {"assignmentScope": "project", "nativeExecution": false, "approvalRequired": false, "humanOnly": false},
+    "documents.resolve_citation": {"assignmentScope": "project", "nativeExecution": false, "approvalRequired": false, "humanOnly": false},
     "documents.search": {"assignmentScope": "project", "nativeExecution": false, "approvalRequired": false, "humanOnly": false},
     "documents.share": {"assignmentScope": "project", "nativeExecution": false, "approvalRequired": false, "humanOnly": false},
     "documents.move": {"assignmentScope": "project", "nativeExecution": false, "approvalRequired": false, "humanOnly": false},
