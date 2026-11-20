@@ -6,6 +6,7 @@ use devworks_core::ports::{
 use devworks_core::services::artifacts::evidence::Evidence;
 use devworks_core::services::work::model::{PendingPlan, plan_digest};
 use devworks_core::services::work::plan_review::finding_id;
+use tokio::sync::mpsc;
 
 const PLAN: &str = "Acceptance: retain all committed changes if the index is rebuilt.";
 const SOURCE: &str = "fn captured_rebuild_contract() {}";
@@ -39,7 +40,26 @@ impl AuthorityPort for NativeAuthority {
 }
 
 #[derive(Default)]
-struct ReviewWire(Mutex<Vec<Value>>, Option<&'static str>);
+struct ReviewWire {
+    requests: Mutex<Vec<Value>>,
+    concurrent: Option<ConcurrentReview>,
+}
+
+struct ConcurrentReview {
+    opened: mpsc::UnboundedSender<bool>,
+    release: Mutex<std::sync::mpsc::Receiver<()>>,
+}
+
+impl ConcurrentReview {
+    fn open(&self, isolated: bool) {
+        self.opened.send(isolated).unwrap();
+        self.release
+            .lock()
+            .unwrap()
+            .recv_timeout(Duration::from_secs(15))
+            .unwrap();
+    }
+}
 
 impl StreamingHttp for ReviewWire {
     fn open(
@@ -51,11 +71,24 @@ impl StreamingHttp for ReviewWire {
         let payload: Value = serde_json::from_slice(request.body.as_ref().unwrap()).unwrap();
         let body = payload.to_string();
         let isolated = body.contains("reviewedPlanDigest");
-        self.0.lock().unwrap().push(payload.clone());
+        let first = {
+            let mut requests = self.requests.lock().unwrap();
+            let first = !requests
+                .iter()
+                .any(|request| request.to_string().contains("reviewedPlanDigest") == isolated);
+            requests.push(payload.clone());
+            first
+        };
+        if let Some(concurrent) = self.concurrent.as_ref().filter(|_| first) {
+            concurrent.open(isolated);
+        }
         let (delta, finish_reason) = if !isolated {
             (json!({"content": "done"}), "stop")
-        } else if let Some(report) = self.1 {
-            (json!({"content": report}), "stop")
+        } else if self.concurrent.is_some() {
+            (
+                json!({"content": r#"{"needsSource":false,"findings":[{"concern":"The new scope omits recovery.","consequence":"An interrupted change might be lost.","acceptanceCase":"Restart mid-update and recover it."}]}"#}),
+                "stop",
+            )
         } else if !body.contains("Use the allowed exact source views") {
             (
                 json!({"content": "{\"needsSource\":true,\"findings\":[]}"}),
@@ -360,7 +393,7 @@ fn native_plan_review_holds_until_routing_is_repaired_and_reviews_without_planni
             }
         }).await;
         assert!(review("outcome")["reason"].as_str().unwrap().contains("route"), "{:?}", review("outcome"));
-        assert!(wire.0.lock().unwrap().is_empty());
+        assert!(wire.requests.lock().unwrap().is_empty());
         assert_eq!(fx.eligibility(&fx.user, "root", "root-f", "Implementation")["eligible"], false);
         let failed_session = review("session");
 
@@ -382,14 +415,14 @@ fn native_plan_review_holds_until_routing_is_repaired_and_reviews_without_planni
             while review("outcome")["kind"] != "Complete" || fx.live("root-f").is_some() {
                 let outcome = review("outcome");
                 assert!(outcome["kind"] != "Failed" || review("session") == failed_session,
-                    "retry failed: {outcome}; requests: {:?}", wire.0.lock().unwrap());
+                    "retry failed: {outcome}; requests: {:?}", wire.requests.lock().unwrap());
                 tokio::time::sleep(Duration::from_millis(10)).await;
             }
         }).await;
         assert_ne!(review("session"), failed_session);
         assert_eq!(review("outcome")["findings"], 1);
         {
-            let requests = wire.0.lock().unwrap();
+            let requests = wire.requests.lock().unwrap();
             let reviewer: Vec<_> = requests.iter().filter(|r| r.to_string().contains("reviewedPlanDigest")).collect();
             assert_eq!(reviewer.len(), 3, "{reviewer:?}");
             assert!(reviewer[2].to_string().contains(SOURCE));
@@ -490,7 +523,7 @@ fn native_plan_review_holds_until_routing_is_repaired_and_reviews_without_planni
             }
         }).await;
         assert_eq!(review("session"), json!(session));
-        assert_eq!(wire.0.lock().unwrap().iter()
+        assert_eq!(wire.requests.lock().unwrap().iter()
             .filter(|body| body.to_string().contains("reviewedPlanDigest")).count(), 3);
         fx.tx(|_, tx| {
             tx.indexing().publish(&id("review-repository"), &id("review-view-2"), 1)?;
@@ -513,9 +546,12 @@ fn native_pending_review_keeps_current_legacy_work_dispatchable() {
     let _native_case = native_runtime_case();
     let fx = Fx::new();
     runtime().block_on(async {
-        let wire = Arc::new(ReviewWire(Mutex::default(), Some(
-            r#"{"needsSource":false,"findings":[{"concern":"The new scope omits recovery.","consequence":"An interrupted change might be lost.","acceptanceCase":"Restart mid-update and recover it."}]}"#,
-        )));
+        let (opened, mut opened_requests) = mpsc::unbounded_channel();
+        let (release, released) = std::sync::mpsc::channel();
+        let wire = Arc::new(ReviewWire {
+            requests: Mutex::default(),
+            concurrent: Some(ConcurrentReview { opened, release: Mutex::new(released) }),
+        });
         let mut composed = composition_with(
             &fx, None, Arc::new(FakePower::default()),
             Arc::new(NativeAuthority { store: fx.store.clone(), clock: fx.h.clock() }),
@@ -616,14 +652,29 @@ fn native_pending_review_keeps_current_legacy_work_dispatchable() {
         let reviews = || read(&*fx.store, |s| {
             Ok(s.work().readiness(&id("root-f"))?.unwrap().body["planReviews"].clone())
         });
+        let (first, second) = tokio::time::timeout(Duration::from_secs(10), async {
+            (opened_requests.recv().await.unwrap(), opened_requests.recv().await.unwrap())
+        }).await.unwrap_or_else(|_| panic!(
+            "the coordinator and reviewer must both reach the provider: {:?}; {:?}", fx.holds("root-f"), reviews()
+        ));
+        assert_ne!(first, second, "the two requests must be for different roles");
+        let running = reviews();
+        assert_eq!(running.as_array().unwrap().len(), 1, "{running}");
+        assert_eq!(running[0]["planRevision"], 2);
+        assert_eq!(running[0]["outcome"]["kind"], "Running");
+        let active_run = fx.live("root-f").unwrap();
+        let coordinator = fx.inspection("root-f").assignments.into_iter()
+            .find(|assignment| assignment.purpose == AssignmentPurpose::Primary).unwrap();
+        let admission = fx.dispatch(&active_run, Target::Assignment(coordinator.id), ActivationPurpose::Implementation)
+            .expect("approved legacy work can dispatch while the replacement review is in flight");
+        assert_eq!(admission.plan_revision, Some(1));
+        release.send(()).unwrap();
+        release.send(()).unwrap();
         within("The pending independent review completes", async {
             loop {
                 let evidence = reviews();
-                if let Some(attempts) = evidence.as_array() {
-                    assert_eq!(attempts.len(), 1, "repeated scheduling started two reviewers: {evidence}");
-                    assert_ne!(attempts[0]["outcome"]["kind"], "Failed", "{evidence}");
-                    assert_eq!(eligible()["eligible"], true);
-                }
+                assert_eq!(evidence.as_array().unwrap().len(), 1, "{evidence}");
+                assert_ne!(evidence[0]["outcome"]["kind"], "Failed", "{evidence}");
                 if evidence[0]["outcome"]["kind"] == "Complete" {
                     break;
                 }
@@ -636,7 +687,7 @@ fn native_pending_review_keeps_current_legacy_work_dispatchable() {
         assert_eq!(evidence[0]["planDigest"], pending_digest);
         assert_eq!(evidence[0]["outcome"]["findings"], 1);
         {
-            let reviewed = wire.0.lock().unwrap();
+            let reviewed = wire.requests.lock().unwrap();
             let reviewers: Vec<_> = reviewed.iter().filter(|r| r.to_string().contains("reviewedPlanDigest")).collect();
             assert_eq!(reviewers.len(), 1, "{reviewed:?}");
             assert!(reviewers[0].to_string().contains(&pending_digest));
