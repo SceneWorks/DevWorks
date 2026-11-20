@@ -9172,7 +9172,7 @@
             "pointer": "/kind",
             "equals": "documents.import"
           },
-          "resultValueType": "DocumentRecord",
+          "resultValueType": "DocumentResult",
           "queryReplySchema": null,
           "commandReplySchema": "domain-command-reply.schema.json",
           "completionSchema": "operation-completion.schema.json",
@@ -9184,6 +9184,14 @@
               "queryReplySchema": null,
               "commandReplySchema": "domain-command-reply.schema.json",
               "completionSchema": "operation-completion.schema.json"
+            },
+            {
+              "revision": 10,
+              "inputSchema": "domain-request.r8.schema.json",
+              "resultSchema": "operation-result.r10.schema.json",
+              "queryReplySchema": null,
+              "commandReplySchema": "domain-command-reply.r10.schema.json",
+              "completionSchema": "operation-completion.r10.schema.json"
             }
           ],
           "authority": "Scoped",
@@ -9218,7 +9226,7 @@
             "pointer": "/kind",
             "equals": "documents.list"
           },
-          "resultValueType": "Page<DocumentRecord>",
+          "resultValueType": "DocumentListResult",
           "queryReplySchema": "domain-query-reply.schema.json",
           "commandReplySchema": null,
           "completionSchema": null,
@@ -9228,6 +9236,14 @@
               "inputSchema": "domain-request.schema.json",
               "resultSchema": "operation-result.schema.json",
               "queryReplySchema": "domain-query-reply.schema.json",
+              "commandReplySchema": null,
+              "completionSchema": null
+            },
+            {
+              "revision": 10,
+              "inputSchema": "domain-request.r8.schema.json",
+              "resultSchema": "operation-result.r10.schema.json",
+              "queryReplySchema": "domain-query-reply.r10.schema.json",
               "commandReplySchema": null,
               "completionSchema": null
             }
@@ -9264,7 +9280,7 @@
             "pointer": "/kind",
             "equals": "documents.read"
           },
-          "resultValueType": "DocumentRecord",
+          "resultValueType": "DocumentResult",
           "queryReplySchema": "domain-query-reply.schema.json",
           "commandReplySchema": null,
           "completionSchema": null,
@@ -9274,6 +9290,14 @@
               "inputSchema": "artifact-query-request.schema.json",
               "resultSchema": "operation-result.schema.json",
               "queryReplySchema": "domain-query-reply.schema.json",
+              "commandReplySchema": null,
+              "completionSchema": null
+            },
+            {
+              "revision": 10,
+              "inputSchema": "artifact-query-request.r3.schema.json",
+              "resultSchema": "operation-result.r10.schema.json",
+              "queryReplySchema": "domain-query-reply.r10.schema.json",
               "commandReplySchema": null,
               "completionSchema": null
             }
@@ -9353,7 +9377,7 @@
             "pointer": "/kind",
             "equals": "documents.share"
           },
-          "resultValueType": "DocumentRecord",
+          "resultValueType": "DocumentResult",
           "queryReplySchema": null,
           "commandReplySchema": "domain-command-reply.schema.json",
           "completionSchema": "operation-completion.schema.json",
@@ -9365,6 +9389,14 @@
               "queryReplySchema": null,
               "commandReplySchema": "domain-command-reply.schema.json",
               "completionSchema": "operation-completion.schema.json"
+            },
+            {
+              "revision": 10,
+              "inputSchema": "artifact-command-request.r3.schema.json",
+              "resultSchema": "operation-result.r10.schema.json",
+              "queryReplySchema": null,
+              "commandReplySchema": "domain-command-reply.r10.schema.json",
+              "completionSchema": "operation-completion.r10.schema.json"
             }
           ],
           "authority": "Existing host authority contract",
@@ -9399,7 +9431,7 @@
             "pointer": "/kind",
             "equals": "documents.move"
           },
-          "resultValueType": "DocumentRecord",
+          "resultValueType": "DocumentResult",
           "queryReplySchema": null,
           "commandReplySchema": "domain-command-reply.schema.json",
           "completionSchema": "operation-completion.schema.json",
@@ -9411,6 +9443,14 @@
               "queryReplySchema": null,
               "commandReplySchema": "domain-command-reply.schema.json",
               "completionSchema": "operation-completion.schema.json"
+            },
+            {
+              "revision": 10,
+              "inputSchema": "artifact-command-request.r3.schema.json",
+              "resultSchema": "operation-result.r10.schema.json",
+              "queryReplySchema": null,
+              "commandReplySchema": "domain-command-reply.r10.schema.json",
+              "completionSchema": "operation-completion.r10.schema.json"
             }
           ],
           "authority": "Existing host authority contract",

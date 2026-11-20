@@ -49,6 +49,18 @@ impl ArtifactRead for Unmodelled {
     fn versions(&self, _: &Id) -> Result<Vec<StoredVersion>, StorageError> {
         unmodelled()
     }
+    fn version_history(
+        &self,
+        _: &Id,
+        _: Option<i64>,
+        _: bool,
+        _: u16,
+    ) -> Result<Vec<StoredVersion>, StorageError> {
+        unmodelled()
+    }
+    fn retained_version_count(&self, _: &Id) -> Result<i64, StorageError> {
+        unmodelled()
+    }
     fn version_by_operation(&self, _: &OperationId) -> Result<Option<StoredVersion>, StorageError> {
         unmodelled()
     }
@@ -66,6 +78,16 @@ impl ArtifactRead for Unmodelled {
         &self,
         _: Option<&ActorId>,
         _: &[String],
+        _: Option<&ListPosition>,
+        _: u16,
+    ) -> Result<Vec<StoredArtifact>, StorageError> {
+        unmodelled()
+    }
+    fn document_artifacts(
+        &self,
+        _: &ArtifactScope,
+        _: Option<&ActorId>,
+        _: Option<bool>,
         _: Option<&ListPosition>,
         _: u16,
     ) -> Result<Vec<StoredArtifact>, StorageError> {

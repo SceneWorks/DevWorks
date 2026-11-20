@@ -3368,6 +3368,150 @@ impl Check for DocumentRecord {
 
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DocumentDetail {
+    pub id: Id,
+    pub revision: Revision,
+    pub scope_revision: Revision,
+    pub reference_revision: Revision,
+    pub scope: DataScope,
+    pub title: Label,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub current_version: Option<ArtifactRef>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub selected_version: Option<ArtifactRef>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub deleted_selected_version_id: Option<Id>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub deleted_selected_at_ms: Option<Counter>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub deleted_current_version_id: Option<Id>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub deleted_current_at_ms: Option<Counter>,
+    pub retained_versions: Rows<ArtifactRef>,
+    pub retained_version_count: Counter,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub next_version_cursor: Option<Cursor>,
+    pub retrieval_enabled: bool,
+    pub extraction_state: ItemState,
+    pub coverage: Coverage,
+}
+impl Check for DocumentDetail {
+    fn check(&self) -> Result<(), String> {
+        self.id.check()?;
+        self.revision.check()?;
+        self.scope_revision.check()?;
+        self.reference_revision.check()?;
+        self.scope.check()?;
+        self.title.check()?;
+        self.current_version.check()?;
+        self.selected_version.check()?;
+        self.deleted_selected_version_id.check()?;
+        self.deleted_selected_at_ms.check()?;
+        self.deleted_current_version_id.check()?;
+        self.deleted_current_at_ms.check()?;
+        self.retained_versions.check()?;
+        self.retained_version_count.check()?;
+        self.next_version_cursor.check()?;
+        self.retrieval_enabled.check()?;
+        self.extraction_state.check()?;
+        self.coverage.check()?;
+        super::domain_rules::record(
+            "DocumentDetail",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DocumentLibraryPage {
+    pub items: Rows<DocumentDetail>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub next_cursor: Option<Cursor>,
+    pub has_more: bool,
+    pub snapshot_revision: Revision,
+}
+impl Check for DocumentLibraryPage {
+    fn check(&self) -> Result<(), String> {
+        self.items.check()?;
+        self.next_cursor.check()?;
+        self.has_more.check()?;
+        self.snapshot_revision.check()?;
+        super::domain_rules::record(
+            "DocumentLibraryPage",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(untagged)]
+#[schemars(extend("x-earlier" = {"name": "DocumentRecord", "before": 10}))]
+pub enum DocumentResult {
+    #[schemars(extend("x-until" = 10))]
+    Legacy(DocumentRecord),
+    #[schemars(extend("x-since" = 10))]
+    Current(DocumentDetail),
+}
+impl Check for DocumentResult {
+    fn check(&self) -> Result<(), String> {
+        match self {
+            Self::Legacy(value) => value.check(),
+            Self::Current(value) => value.check(),
+        }
+    }
+}
+impl Revisioned for DocumentResult {
+    fn retain_revision(&mut self, _revision: u32) {}
+    fn check_revision(&self, revision: u32) -> Result<(), String> {
+        match self {
+            Self::Legacy(_) if revision >= 10 => {
+                Err("legacy result requires its recorded revision".into())
+            }
+            Self::Current(_) if revision < 10 => {
+                Err("current result cannot be represented at this revision".into())
+            }
+            _ => Ok(()),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(untagged)]
+#[schemars(extend("x-earlier" = {"name": "Page", "before": 10}))]
+pub enum DocumentListResult {
+    #[schemars(extend("x-until" = 10))]
+    Legacy(Page<DocumentRecord>),
+    #[schemars(extend("x-since" = 10))]
+    Current(DocumentLibraryPage),
+}
+impl Check for DocumentListResult {
+    fn check(&self) -> Result<(), String> {
+        match self {
+            Self::Legacy(value) => value.check(),
+            Self::Current(value) => value.check(),
+        }
+    }
+}
+impl Revisioned for DocumentListResult {
+    fn retain_revision(&mut self, _revision: u32) {}
+    fn check_revision(&self, revision: u32) -> Result<(), String> {
+        match self {
+            Self::Legacy(_) if revision >= 10 => {
+                Err("legacy result requires its recorded revision".into())
+            }
+            Self::Current(_) if revision < 10 => {
+                Err("current result cannot be represented at this revision".into())
+            }
+            _ => Ok(()),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct InstructionRecord {
     pub id: Id,
     pub revision: Revision,
@@ -26641,9 +26785,9 @@ pub enum OperationResult {
     #[serde(rename = "dreaming.review")]
     DreamingReview { value: ProposalRecord },
     #[serde(rename = "documents.import")]
-    DocumentsImport { value: DocumentRecord },
+    DocumentsImport { value: DocumentResult },
     #[serde(rename = "documents.list")]
-    DocumentsList { value: Page<DocumentRecord> },
+    DocumentsList { value: DocumentListResult },
     #[serde(rename = "documents.index")]
     DocumentsIndex { value: IndexRunRecord },
     #[serde(rename = "documents.retry")]
@@ -27078,9 +27222,9 @@ pub enum OperationResult {
     #[serde(rename = "indexing.cancel")]
     IndexingCancel { value: IndexRunRecord },
     #[serde(rename = "documents.share")]
-    DocumentsShare { value: DocumentRecord },
+    DocumentsShare { value: DocumentResult },
     #[serde(rename = "documents.move")]
-    DocumentsMove { value: DocumentRecord },
+    DocumentsMove { value: DocumentResult },
     #[serde(rename = "documents.disable_retrieval")]
     DocumentsDisableRetrieval { value: DocumentRecord },
     #[serde(rename = "documents.remove_index")]
@@ -27090,7 +27234,7 @@ pub enum OperationResult {
     #[serde(rename = "artifacts.reference")]
     ArtifactsReference { value: MutationSummary },
     #[serde(rename = "documents.read")]
-    DocumentsRead { value: DocumentRecord },
+    DocumentsRead { value: DocumentResult },
     #[serde(rename = "artifacts.list")]
     ArtifactsList { value: Page<ArtifactRecord> },
     #[serde(rename = "artifacts.read")]
@@ -28002,6 +28146,8 @@ impl Revisioned for OperationResult {
             Self::KnowledgeTaggedLessons { value } => value.retain_revision(revision),
             Self::DreamingInstructions { value } => value.retain_revision(revision),
             Self::DreamingRevert { value } => value.retain_revision(revision),
+            Self::DocumentsImport { value } => value.retain_revision(revision),
+            Self::DocumentsList { value } => value.retain_revision(revision),
             Self::ConventionsList { value } => value.retain_revision(revision),
             Self::ConventionsSearch { value } => value.retain_revision(revision),
             Self::ConventionsResources { value } => value.retain_revision(revision),
@@ -28104,7 +28250,10 @@ impl Revisioned for OperationResult {
             Self::AddonsDisable { value } => value.retain_revision(revision),
             Self::AddonsRollback { value } => value.retain_revision(revision),
             Self::AddonsUninstall { value } => value.retain_revision(revision),
+            Self::DocumentsShare { value } => value.retain_revision(revision),
+            Self::DocumentsMove { value } => value.retain_revision(revision),
             Self::ArtifactsSave { value } => value.retain_revision(revision),
+            Self::DocumentsRead { value } => value.retain_revision(revision),
             Self::ArtifactsList { value } => value.retain_revision(revision),
             Self::ArtifactsRead { value } => value.retain_revision(revision),
             Self::CodeSearch { value } => value.retain_revision(revision),
@@ -28204,6 +28353,8 @@ impl Revisioned for OperationResult {
             }
             Self::NextWorkClaimProjectQueue { value } => value.check_revision(revision),
             Self::NextWorkClaimFeatureTask { value } => value.check_revision(revision),
+            Self::DocumentsImport { value } => value.check_revision(revision),
+            Self::DocumentsList { value } => value.check_revision(revision),
             Self::ConventionsList { value } => value.check_revision(revision),
             Self::ConventionsSearch { value } => value.check_revision(revision),
             Self::ConventionsResources { value } => value.check_revision(revision),
@@ -28226,6 +28377,9 @@ impl Revisioned for OperationResult {
             Self::HelpTopicForScreen { value } => value.check_revision(revision),
             Self::HelpPackageGuides { value } => value.check_revision(revision),
             Self::RepositoriesNodes { value } => value.check_revision(revision),
+            Self::DocumentsShare { value } => value.check_revision(revision),
+            Self::DocumentsMove { value } => value.check_revision(revision),
+            Self::DocumentsRead { value } => value.check_revision(revision),
             Self::CodeSearch { value } => value.check_revision(revision),
             Self::CodeArchitecture { value } => value.check_revision(revision),
             Self::CodeDependency { value } => value.check_revision(revision),

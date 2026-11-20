@@ -1343,6 +1343,53 @@
         "coverage": "Coverage"
       }
     },
+    "DocumentDetail": {
+      "kind": "record",
+      "fields": {
+        "id": "Id",
+        "revision": "Revision",
+        "scope_revision": "Revision",
+        "reference_revision": "Revision",
+        "scope": "DataScope",
+        "title": "Label",
+        "current_version": "?ArtifactRef",
+        "selected_version": "?ArtifactRef",
+        "deleted_selected_version_id": "?Id",
+        "deleted_selected_at_ms": "?Counter",
+        "deleted_current_version_id": "?Id",
+        "deleted_current_at_ms": "?Counter",
+        "retained_versions": "Rows<ArtifactRef>",
+        "retained_version_count": "Counter",
+        "next_version_cursor": "?Cursor",
+        "retrieval_enabled": "bool",
+        "extraction_state": "ItemState",
+        "coverage": "Coverage"
+      }
+    },
+    "DocumentLibraryPage": {
+      "kind": "record",
+      "fields": {
+        "items": "Rows<DocumentDetail>",
+        "next_cursor": "?Cursor",
+        "has_more": "bool",
+        "snapshot_revision": "Revision"
+      }
+    },
+    "DocumentResult": {
+      "kind": "versioned",
+      "legacy": "DocumentRecord",
+      "current": "DocumentDetail",
+      "revision": 10,
+      "projection": "none"
+    },
+    "DocumentListResult": {
+      "kind": "versioned",
+      "legacy": "Page<DocumentRecord>",
+      "current": "DocumentLibraryPage",
+      "revision": 10,
+      "projection": "none",
+      "earlierName": "Page"
+    },
     "InstructionRecord": {
       "kind": "record",
       "fields": {
@@ -8685,7 +8732,7 @@
         "replace_document_id": "?Id",
         "expected_revision": "?Revision"
       },
-      "result": "DocumentRecord",
+      "result": "DocumentResult",
       "effect": "Journaled",
       "authority": "Scoped",
       "rules": "Replacement names target/revision and creates immutable retained version; native PDF/MD/text/DOCX only. Exact source pin, extraction diagnostics and bounded outputs."
@@ -8698,7 +8745,7 @@
         "page": "PageRequest",
         "retrieval_enabled": "?bool"
       },
-      "result": "Page<DocumentRecord>",
+      "result": "DocumentListResult",
       "effect": "Local",
       "authority": "Scoped",
       "rules": ""
@@ -11532,13 +11579,13 @@
     "code.set_trust": "MutationSummary",
     "indexing.refresh_overlay": "IndexRunRecord",
     "indexing.cancel": "IndexRunRecord",
-    "documents.share": "DocumentRecord",
-    "documents.move": "DocumentRecord",
+    "documents.share": "DocumentResult",
+    "documents.move": "DocumentResult",
     "documents.disable_retrieval": "DocumentRecord",
     "documents.remove_index": "DocumentRecord",
     "artifacts.save": "ArtifactRecord",
     "artifacts.reference": "MutationSummary",
-    "documents.read": "DocumentRecord",
+    "documents.read": "DocumentResult",
     "artifacts.list": "Page<ArtifactRecord>",
     "artifacts.read": "ArtifactReadContent",
     "artifacts.preview": "ArtifactPreview",
@@ -11573,6 +11620,11 @@
     "code.repository_dependencies": "GraphPage"
   },
   "schemaRevisions": {
+    "documents.import": [1, 10],
+    "documents.list": [1, 10],
+    "documents.read": [1, 10],
+    "documents.share": [1, 10],
+    "documents.move": [1, 10],
     "artifacts.save": [
       1,
       2,
