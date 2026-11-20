@@ -6,6 +6,7 @@ use devworks_core::ports::{
 use devworks_core::services::artifacts::evidence::Evidence;
 use devworks_core::services::work::model::{PendingPlan, plan_digest};
 use devworks_core::services::work::plan_review::finding_id;
+use tokio::sync::mpsc;
 
 const PLAN: &str = "Acceptance: retain all committed changes if the index is rebuilt.";
 const SOURCE: &str = "fn captured_rebuild_contract() {}";
@@ -39,7 +40,26 @@ impl AuthorityPort for NativeAuthority {
 }
 
 #[derive(Default)]
-struct ReviewWire(Mutex<Vec<Value>>);
+struct ReviewWire {
+    requests: Mutex<Vec<Value>>,
+    concurrent: Option<ConcurrentReview>,
+}
+
+struct ConcurrentReview {
+    opened: mpsc::UnboundedSender<bool>,
+    release: Mutex<std::sync::mpsc::Receiver<()>>,
+}
+
+impl ConcurrentReview {
+    fn open(&self, isolated: bool) {
+        self.opened.send(isolated).unwrap();
+        self.release
+            .lock()
+            .unwrap()
+            .recv_timeout(Duration::from_secs(15))
+            .unwrap();
+    }
+}
 
 impl StreamingHttp for ReviewWire {
     fn open(
@@ -51,9 +71,24 @@ impl StreamingHttp for ReviewWire {
         let payload: Value = serde_json::from_slice(request.body.as_ref().unwrap()).unwrap();
         let body = payload.to_string();
         let isolated = body.contains("reviewedPlanDigest");
-        self.0.lock().unwrap().push(payload.clone());
+        let first = {
+            let mut requests = self.requests.lock().unwrap();
+            let first = !requests
+                .iter()
+                .any(|request| request.to_string().contains("reviewedPlanDigest") == isolated);
+            requests.push(payload.clone());
+            first
+        };
+        if let Some(concurrent) = self.concurrent.as_ref().filter(|_| first) {
+            concurrent.open(isolated);
+        }
         let (delta, finish_reason) = if !isolated {
             (json!({"content": "done"}), "stop")
+        } else if self.concurrent.is_some() {
+            (
+                json!({"content": r#"{"needsSource":false,"findings":[{"concern":"The new scope omits recovery.","consequence":"An interrupted change might be lost.","acceptanceCase":"Restart mid-update and recover it."}]}"#}),
+                "stop",
+            )
         } else if !body.contains("Use the allowed exact source views") {
             (
                 json!({"content": "{\"needsSource\":true,\"findings\":[]}"}),
@@ -358,7 +393,7 @@ fn native_plan_review_holds_until_routing_is_repaired_and_reviews_without_planni
             }
         }).await;
         assert!(review("outcome")["reason"].as_str().unwrap().contains("route"), "{:?}", review("outcome"));
-        assert!(wire.0.lock().unwrap().is_empty());
+        assert!(wire.requests.lock().unwrap().is_empty());
         assert_eq!(fx.eligibility(&fx.user, "root", "root-f", "Implementation")["eligible"], false);
         let failed_session = review("session");
 
@@ -380,14 +415,14 @@ fn native_plan_review_holds_until_routing_is_repaired_and_reviews_without_planni
             while review("outcome")["kind"] != "Complete" || fx.live("root-f").is_some() {
                 let outcome = review("outcome");
                 assert!(outcome["kind"] != "Failed" || review("session") == failed_session,
-                    "retry failed: {outcome}; requests: {:?}", wire.0.lock().unwrap());
+                    "retry failed: {outcome}; requests: {:?}", wire.requests.lock().unwrap());
                 tokio::time::sleep(Duration::from_millis(10)).await;
             }
         }).await;
         assert_ne!(review("session"), failed_session);
         assert_eq!(review("outcome")["findings"], 1);
         {
-            let requests = wire.0.lock().unwrap();
+            let requests = wire.requests.lock().unwrap();
             let reviewer: Vec<_> = requests.iter().filter(|r| r.to_string().contains("reviewedPlanDigest")).collect();
             assert_eq!(reviewer.len(), 3, "{reviewer:?}");
             assert!(reviewer[2].to_string().contains(SOURCE));
@@ -488,12 +523,210 @@ fn native_plan_review_holds_until_routing_is_repaired_and_reviews_without_planni
             }
         }).await;
         assert_eq!(review("session"), json!(session));
-        assert_eq!(wire.0.lock().unwrap().iter()
+        assert_eq!(wire.requests.lock().unwrap().iter()
             .filter(|body| body.to_string().contains("reviewedPlanDigest")).count(), 3);
         fx.tx(|_, tx| {
             tx.indexing().publish(&id("review-repository"), &id("review-view-2"), 1)?;
             Ok(())
         });
         assert_eq!(fx.eligibility(&fx.user, "root", "root-f", "Implementation")["eligible"], false);
+    });
+}
+
+#[test]
+fn native_pending_review_keeps_current_legacy_work_dispatchable() {
+    use devworks_core::ports::storage::StoredReadiness;
+    use devworks_core::protocol::records::PlanDraft;
+    use devworks_core::services::work::{
+        model::{ActivePlan, plan_units},
+        plan_review::next_target,
+        readiness::Assessment,
+    };
+
+    let _native_case = native_runtime_case();
+    let fx = Fx::new();
+    runtime().block_on(async {
+        let (opened, mut opened_requests) = mpsc::unbounded_channel();
+        let (release, released) = std::sync::mpsc::channel();
+        let wire = Arc::new(ReviewWire {
+            requests: Mutex::default(),
+            concurrent: Some(ConcurrentReview { opened, release: Mutex::new(released) }),
+        });
+        let mut composed = composition_with(
+            &fx, None, Arc::new(FakePower::default()),
+            Arc::new(NativeAuthority { store: fx.store.clone(), clock: fx.h.clock() }),
+            Arc::new(FakeHost::default()),
+        );
+        composed.runs.scope = None;
+        composed.application = devworks_engine::ApplicationComposition {
+            connections: Some(devworks_engine::ConnectionPorts {
+                http: Arc::new(devworks_core::ports::http::NoNetwork),
+                secrets: Arc::new(devworks_core::ports::secrets::SessionSecrets::new()),
+                entropy: Arc::new(FixtureEntropy),
+                endpoints: None,
+            }),
+            router: Some(Default::default()),
+            ..Default::default()
+        };
+        composed.config.providers = Some(
+            devworks_engine::providers::driver::ProviderComposition::new(wire.clone()),
+        );
+        let app = Arc::new(boot(composed).await.unwrap());
+        route(&fx, &app);
+        let content = app.artifacts().publish_evidence(
+            &*fx.store,
+            Evidence {
+                scope: ArtifactScope::Project(ProjectId(id("project-a"))),
+                producer: fx.user.principal().clone(),
+                principal_kind: "Human".into(),
+                agent_session: None,
+                root: None,
+                assignment: None,
+                title: "Feature plan".into(),
+                media_type: "text/plain".into(),
+                tags: vec![],
+                source: json!({"kind": "TestPlan"}),
+            },
+            PLAN.as_bytes(), |_, _| Ok(()),
+        ).unwrap().0;
+        let draft = |statement: &str| -> PlanDraft {
+            serde_json::from_value(json!({
+                "content": content, "repositoryIds": [], "acceptance": [], "goals": [],
+                "acceptanceTests": [],
+                "requirements": [{"id":"E1", "statement":statement, "status":"Confirmed", "coveredByTaskIds":[]}],
+            })).unwrap()
+        };
+        let approved = draft("Keep existing rebuild work eligible");
+        let replacement = draft("Add independent recovery scope");
+        let active_digest = plan_digest(&approved);
+        let pending_digest = plan_digest(&replacement);
+        let active_units = plan_units(&approved);
+        let assessment = serde_json::to_value(Assessment {
+            id: id("legacy-assessment"),
+            plan_revision: 1,
+            plan_digest: active_digest.clone(),
+            reviewed_pending: false,
+            units: active_units.clone(),
+            summary: "Current and ready before review rollout".into(),
+            findings: vec![],
+            assessed_by: ActorId(id("user-a")),
+            assessed_at_ms: T0,
+        }).unwrap();
+        let mut active = ActivePlan {
+            digest: active_digest.clone(), draft: approved, plan_revision: 1,
+            proposal_id: id("legacy-plan-proposal"), review_required: false,
+        };
+        let plan = StoredFeaturePlan {
+            feature_id: id("root-f"),
+            revision: 2,
+            approved: Some(serde_json::to_value(&active).unwrap()),
+            approved_by: Some(ActorId(id("user-a"))),
+            approved_at_ms: Some(T0),
+            pending: Some(serde_json::to_value(PendingPlan {
+                draft: replacement, digest: pending_digest.clone(),
+                review_required: true, budget: None,
+            }).unwrap()),
+            pending_revision: Some(2),
+        };
+        fx.tx(move |_, tx| {
+            tx.work().put_feature_plan(&StoredFeaturePlan {
+                revision: 1, pending: None, pending_revision: None, ..plan.clone()
+            }, None)?;
+            tx.work().put_feature_plan(&plan, Some(1))?;
+            tx.work().put_readiness(&StoredReadiness {
+                feature_id: id("root-f"), revision: 1, body: json!({"active": assessment}),
+            }, None)
+        });
+        let eligible = || fx.eligibility(&fx.user, "root", "root-f", "Implementation");
+        assert_eq!(eligible()["eligible"], true);
+        app.runs().install_launcher(Arc::new(AgentLauncher::new(
+            fx.store.clone(), fx.h.ids.clone(), app.agents().clone(),
+            Arc::new(NativeAgentTurnExecutor::new(&app)),
+        ))).unwrap();
+        applied(&app.command(&fx.user, "runs.start", json!({
+            "protocol": PROTOCOL, "requestKey": fx.key(), "command": {
+                "kind": "runs.start", "rootId": "root-f", "expectedWorkRevision": "1",
+                "expectedControlRevision": fx.control("root-f").revision.to_string(),
+            },
+        }).to_string().as_bytes()).unwrap());
+        let reviews = || read(&*fx.store, |s| {
+            Ok(s.work().readiness(&id("root-f"))?.unwrap().body["planReviews"].clone())
+        });
+        let (first, second) = tokio::time::timeout(Duration::from_secs(10), async {
+            (opened_requests.recv().await.unwrap(), opened_requests.recv().await.unwrap())
+        }).await.unwrap_or_else(|_| panic!(
+            "the coordinator and reviewer must both reach the provider: {:?}; {:?}", fx.holds("root-f"), reviews()
+        ));
+        assert_ne!(first, second, "the two requests must be for different roles");
+        let running = reviews();
+        assert_eq!(running.as_array().unwrap().len(), 1, "{running}");
+        assert_eq!(running[0]["planRevision"], 2);
+        assert_eq!(running[0]["outcome"]["kind"], "Running");
+        let active_run = fx.live("root-f").unwrap();
+        let coordinator = fx.inspection("root-f").assignments.into_iter()
+            .find(|assignment| assignment.purpose == AssignmentPurpose::Primary).unwrap();
+        let admission = fx.dispatch(&active_run, Target::Assignment(coordinator.id), ActivationPurpose::Implementation)
+            .expect("approved legacy work can dispatch while the replacement review is in flight");
+        assert_eq!(admission.plan_revision, Some(1));
+        release.send(()).unwrap();
+        release.send(()).unwrap();
+        within("The pending independent review completes", async {
+            loop {
+                let evidence = reviews();
+                assert_eq!(evidence.as_array().unwrap().len(), 1, "{evidence}");
+                assert_ne!(evidence[0]["outcome"]["kind"], "Failed", "{evidence}");
+                if evidence[0]["outcome"]["kind"] == "Complete" {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        }).await;
+        let evidence = reviews();
+        assert_eq!(evidence.as_array().unwrap().len(), 1, "{evidence}");
+        assert_eq!(evidence[0]["planRevision"], 2);
+        assert_eq!(evidence[0]["planDigest"], pending_digest);
+        assert_eq!(evidence[0]["outcome"]["findings"], 1);
+        {
+            let reviewed = wire.requests.lock().unwrap();
+            let reviewers: Vec<_> = reviewed.iter().filter(|r| r.to_string().contains("reviewedPlanDigest")).collect();
+            assert_eq!(reviewers.len(), 1, "{reviewed:?}");
+            assert!(reviewers[0].to_string().contains(&pending_digest));
+        }
+        assert_eq!(eligible()["eligible"], true);
+        let live_plan = read(&*fx.store, |s| s.work().feature_plan(&id("root-f"))).unwrap();
+        assert_eq!(live_plan.approved.unwrap()["digest"], active_digest);
+        assert_eq!(live_plan.pending_revision, Some(2));
+
+        let next = || fx.tx(|_, tx| {
+            Ok(next_target(tx, &id("root-f"), &id("repeat-activation"), 1)?
+                .map(|(target, _)| target.revision))
+        });
+        assert_eq!(next(), None);
+        app.shutdown().await;
+        fx.tx(|_, tx| {
+            let mut ready = tx.work().readiness(&id("root-f"))?.unwrap();
+            let expected = ready.revision;
+            ready.revision += 1;
+            ready.body["active"]["units"] = json!({});
+            tx.work().put_readiness(&ready, Some(expected))
+        });
+        assert_eq!(eligible()["eligible"], false);
+        assert_eq!(next(), Some(1));
+
+        active.review_required = true;
+        fx.tx(move |_, tx| {
+            let mut ready = tx.work().readiness(&id("root-f"))?.unwrap();
+            let expected = ready.revision;
+            ready.revision += 1;
+            ready.body["active"]["units"] = json!(active_units);
+            tx.work().put_readiness(&ready, Some(expected))?;
+            let mut plan = tx.work().feature_plan(&id("root-f"))?.unwrap();
+            let expected = plan.revision;
+            plan.revision += 1;
+            plan.approved = Some(serde_json::to_value(active).unwrap());
+            tx.work().put_feature_plan(&plan, Some(expected))
+        });
+        assert_eq!(eligible()["eligible"], false);
+        assert_eq!(next(), Some(1));
     });
 }
