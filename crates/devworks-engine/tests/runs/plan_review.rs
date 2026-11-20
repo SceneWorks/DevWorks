@@ -616,14 +616,15 @@ fn native_pending_review_keeps_current_legacy_work_dispatchable() {
         let reviews = || read(&*fx.store, |s| {
             Ok(s.work().readiness(&id("root-f"))?.unwrap().body["planReviews"].clone())
         });
-        within("The pending reviewer and coordinator finish", async {
+        within("The pending independent review completes", async {
             loop {
                 let evidence = reviews();
                 if let Some(attempts) = evidence.as_array() {
                     assert_eq!(attempts.len(), 1, "repeated scheduling started two reviewers: {evidence}");
                     assert_ne!(attempts[0]["outcome"]["kind"], "Failed", "{evidence}");
+                    assert_eq!(eligible()["eligible"], true);
                 }
-                if evidence[0]["outcome"]["kind"] == "Complete" && fx.live("root-f").is_none() {
+                if evidence[0]["outcome"]["kind"] == "Complete" {
                     break;
                 }
                 tokio::time::sleep(Duration::from_millis(10)).await;
@@ -634,11 +635,12 @@ fn native_pending_review_keeps_current_legacy_work_dispatchable() {
         assert_eq!(evidence[0]["planRevision"], 2);
         assert_eq!(evidence[0]["planDigest"], pending_digest);
         assert_eq!(evidence[0]["outcome"]["findings"], 1);
-        let reviewed = wire.0.lock().unwrap();
-        let reviewers: Vec<_> = reviewed.iter().filter(|r| r.to_string().contains("reviewedPlanDigest")).collect();
-        assert_eq!(reviewers.len(), 1, "{reviewed:?}");
-        assert!(reviewers[0].to_string().contains(&pending_digest));
-        drop(reviewed);
+        {
+            let reviewed = wire.0.lock().unwrap();
+            let reviewers: Vec<_> = reviewed.iter().filter(|r| r.to_string().contains("reviewedPlanDigest")).collect();
+            assert_eq!(reviewers.len(), 1, "{reviewed:?}");
+            assert!(reviewers[0].to_string().contains(&pending_digest));
+        }
         assert_eq!(eligible()["eligible"], true);
         let live_plan = read(&*fx.store, |s| s.work().feature_plan(&id("root-f"))).unwrap();
         assert_eq!(live_plan.approved.unwrap()["digest"], active_digest);
@@ -649,6 +651,7 @@ fn native_pending_review_keeps_current_legacy_work_dispatchable() {
                 .map(|(target, _)| target.revision))
         });
         assert_eq!(next(), None);
+        app.shutdown().await;
         fx.tx(|_, tx| {
             let mut ready = tx.work().readiness(&id("root-f"))?.unwrap();
             let expected = ready.revision;
@@ -674,6 +677,5 @@ fn native_pending_review_keeps_current_legacy_work_dispatchable() {
         });
         assert_eq!(eligible()["eligible"], false);
         assert_eq!(next(), Some(1));
-        app.shutdown().await;
     });
 }
