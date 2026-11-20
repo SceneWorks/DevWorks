@@ -564,7 +564,10 @@ fn native_swift_pack_reports_input_and_output_bounds_with_structural_fallback() 
     );
     assert_eq!(limited.manifest["packs"], json!([]));
     let nodes = read(&*app.store, |s| s.indexing().nodes(&limited.id, &paths[0]));
-    assert!(nodes.iter().any(|node| node.kind == "Function"));
+    assert!(
+        nodes.iter().any(|node| node.name == "value_0"
+            && node.payload["properties"]["compilerTokenSpan"] != true)
+    );
 
     // Each file stays within its individual cap. Collectively they exceed the batch budget.
     let padding = format!("// {}\n", "a".repeat(400_000));
