@@ -411,7 +411,7 @@ pub(crate) fn visible_in(
     {
         return Ok(false);
     }
-    Ok(match (project, &artifact.scope) {
+    let visible = match (project, &artifact.scope) {
         (None, ArtifactScope::Project(_)) => true,
         (None, ArtifactScope::Workspace) => viewer.sees_owned(artifact.owner.as_ref()),
         (Some(p), ArtifactScope::Project(owner)) => {
@@ -423,7 +423,21 @@ pub(crate) fn visible_in(
             read.shares(&artifact.id)?.contains(p)
                 || read.repository_text_readers(&artifact.id)?.contains(p)
         }
-    })
+    };
+    if visible
+        && artifact.provenance["principalKind"] == "Host"
+        && artifact.provenance["derived"]["kind"] == "ToolResult"
+        && let Some(provenance) = artifact.provenance["derived"].get("documentEvidence")
+    {
+        let evidence = serde_json::from_value::<
+            crate::services::documents::evidence::DocumentEvidence,
+        >(provenance.clone())
+        .map_err(|_| StorageError::InvalidRecord("tool result document evidence".into()))?;
+        if !evidence.visible_to(read, viewer)? {
+            return Ok(false);
+        }
+    }
+    Ok(visible)
 }
 
 /// A skill/role version captured by the host for the instruction owner.

@@ -1,6 +1,7 @@
 //! Exact-version document custody. The artifact repository owns scope, bytes and retention.
 mod activity;
 mod embedding_query;
+pub mod evidence;
 pub mod extraction;
 pub mod indexing;
 pub mod pdf;

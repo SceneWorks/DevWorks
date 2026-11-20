@@ -82,6 +82,11 @@ pub enum ResultBlock {
     Text {
         text: String,
     },
+    /// Keep only an exact handle in the saved context. The encoder reopens the result
+    /// through current artifact and source scope on every provider request.
+    DocumentEvidence {
+        artifact: ArtifactRef,
+    },
     Image {
         artifact: ArtifactRef,
         #[serde(default)]

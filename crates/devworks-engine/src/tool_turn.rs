@@ -6,25 +6,31 @@ use crate::{providers::schemas::RegisteredSchemas, turn_engine::TurnEngine};
 use devworks_core::services::approvals::ApprovalService;
 use devworks_core::{
     admission::{self, Selection},
+    authority::policy::{self, Verdict},
     context::{InvocationContext, PrincipalKind},
     fingerprint::sha256_hex,
     gateway::CommandOutcome,
+    operations::{OperationInput, documents},
     ports::{IdKind, storage::*},
     protocol::{
         ActorId, AttemptId, CONTRACT, CommandReply, Id, OperationId, OperationState, RetryAdvice,
         Revision, StoreId,
+        data::{Citation, DataScope},
         provider::{
             ArtifactRef, CompleteToolCall, NativeBinding, ToolCallKey, ToolOutcome, TranscriptBody,
         },
-        results::{DomainCommandReply, DomainDecision, DomainQueryReply},
+        results::{DomainCommandReply, DomainDecision, DomainQueryReply, OperationResult},
         support::{DomainErrorCode, DomainFault},
     },
     providers::context::{ContentBlock, Message, MessageRole, ProviderContext, ResultBlock},
     registry::{Envelope, Mode, OperationDescriptor, SchemaRevision},
     services::{
         artifacts::{ArtifactService, host::HostArtifactPublication, version_ref},
+        documents::evidence::{CONTEXT_SOURCE_KIND, DocumentEvidence},
         sessions::{
-            transcript::{BatchOutcome, SessionBatch, SessionWriter},
+            transcript::{
+                BatchOutcome, ContextSourceInput, SessionBatch, SessionWriter, SourceDisposition,
+            },
             turn,
         },
     },
@@ -914,9 +920,18 @@ fn continuation_context_at_epoch(
             | ToolOutcome::OperationAccepted {
                 artifacts: refs, ..
             } => {
+                let document =
+                    crate::providers::schemas::builtin_operation(item.call.capability_id.as_str())
+                        .is_some_and(|(operation, _)| {
+                            matches!(operation, "documents.search" | "documents.resolve_citation")
+                        });
                 let mut blocks = Vec::with_capacity(refs.len());
                 for reference in refs {
-                    if reference.media_type.starts_with("image/") {
+                    if document && reference.media_type == "application/json" {
+                        blocks.push(ResultBlock::DocumentEvidence {
+                            artifact: reference,
+                        });
+                    } else if reference.media_type.starts_with("image/") {
                         blocks.push(ResultBlock::Image {
                             artifact: reference,
                             detail: None,
@@ -1776,7 +1791,10 @@ impl ParkedReceive {
                 &session_id,
                 &key,
                 outcome,
-                bytes,
+                ResponsePayload {
+                    bytes,
+                    document: None,
+                },
             )
         })
         .await
@@ -1910,6 +1928,7 @@ pub(crate) fn dispatch_step(
     if cancellation.is_some_and(Cancellation::is_cancelled) {
         return Err(StorageError::Cancelled);
     }
+    let mut document = None;
     let (outcome, bytes) = if call.capability_id.as_str().starts_with("mcp/") {
         let alias = schemas
             .selected_mcp_tools(ctx)?
@@ -2012,6 +2031,7 @@ pub(crate) fn dispatch_step(
                 },
             ) {
                 Ok(reply @ DomainQueryReply::Result { .. }) => {
+                    document = DocumentToolOutput::from_query(descriptor, &raw, &reply)?;
                     completed(serde_json::to_vec(&reply).map_err(invalid)?)
                 }
                 Ok(DomainQueryReply::Rejected { fault, .. }) => {
@@ -2075,8 +2095,101 @@ pub(crate) fn dispatch_step(
             Err(_) => failed("tool_invalid_arguments"),
         }
     };
-    record_response(store, artifacts, ctx, session_id, key, outcome, bytes)
-        .map(DispatchStep::Answered)
+    record_response(
+        store,
+        artifacts,
+        ctx,
+        session_id,
+        key,
+        outcome,
+        ResponsePayload { bytes, document },
+    )
+    .map(DispatchStep::Answered)
+}
+
+struct ResponsePayload {
+    bytes: Option<Vec<u8>>,
+    document: Option<DocumentToolOutput>,
+}
+
+/// Only typed responses from the selected document gateway can become document evidence.
+struct DocumentToolOutput {
+    descriptor: &'static OperationDescriptor,
+    scope: Option<DataScope>,
+    citations: Vec<Citation>,
+}
+
+impl DocumentToolOutput {
+    fn from_query(
+        descriptor: &'static OperationDescriptor,
+        raw: &[u8],
+        reply: &DomainQueryReply,
+    ) -> Result<Option<Self>, StorageError> {
+        let DomainQueryReply::Result { result, .. } = reply else {
+            return Ok(None);
+        };
+        let (scope, citations) = match result {
+            OperationResult::DocumentsSearch { value } => {
+                let decoded = admission::decode(
+                    Selection {
+                        operation: descriptor.name,
+                        mode: Mode::Query,
+                    },
+                    raw,
+                )
+                .map_err(|_| invalid("selected document query lost its scope"))?;
+                let OperationInput::Documents(documents::Input::Search(request)) = decoded.input
+                else {
+                    return Err(invalid("document result does not match the selected query"));
+                };
+                (
+                    Some(request.scope),
+                    value
+                        .passages
+                        .iter()
+                        .map(|passage| passage.citation.clone())
+                        .collect(),
+                )
+            }
+            OperationResult::DocumentsResolveCitation { value } => {
+                (None, vec![value.citation.clone()])
+            }
+            _ => return Ok(None),
+        };
+        Ok(Some(Self {
+            descriptor,
+            scope,
+            citations,
+        }))
+    }
+
+    fn record(
+        &self,
+        tx: &mut dyn WriteTransaction,
+        ctx: &InvocationContext,
+        session: &StoredSession,
+    ) -> Result<Option<DocumentEvidence>, StorageError> {
+        let policy = policy::resolve_policy(tx.configuration(), ctx.project_id())?;
+        let principal = tx.authority().principal(ctx.principal())?;
+        let binding = self
+            .descriptor
+            .binding(Mode::Query)
+            .ok_or_else(|| invalid("missing evidence query binding"))?;
+        if !matches!(
+            policy::registered_tool_visibility(
+                ctx,
+                principal.as_ref(),
+                &policy,
+                self.descriptor,
+                binding,
+                binding.effect,
+            ),
+            Verdict::Allow
+        ) {
+            return Ok(None);
+        }
+        DocumentEvidence::record(tx, ctx, session, self.scope.clone(), &self.citations)
+    }
 }
 
 /// Records the one response of a dispatched call (staging its result bytes as an artifact).
@@ -2087,10 +2200,10 @@ fn record_response(
     session_id: &Id,
     key: &ToolCallKey,
     outcome: ToolOutcome,
-    bytes: Option<Vec<u8>>,
+    payload: ResponsePayload,
 ) -> Result<BatchOutcome, StorageError> {
     let staged =
-        if let Some(bytes) = &bytes {
+        if let Some(bytes) = &payload.bytes {
             Some(artifacts.stage_host_bytes(store, bytes,
             json!({"kind":"ToolResult","sessionId":session_id,"attemptId":key.attempt_id,
                 "nativeCallId":key.native_call_id}))?
@@ -2100,56 +2213,91 @@ fn record_response(
         };
     let staged_for_write = staged.clone();
     let artifacts_for_write = artifacts.clone();
-    let ctx_for_write = ctx.clone();
-    let session_for_write = session_id.clone();
-    let key_for_write = key.clone();
+    let ctx = ctx.clone();
+    let session_id = session_id.clone();
+    let key = key.clone();
     let committed = run_write(store, WriteOptions::settlement(), move |tx| {
         let mut outcome = outcome.clone();
-        if let Some(staged) = &staged_for_write {
-            let session = tx
-                .sessions()
-                .session(&session_for_write)?
-                .ok_or(StorageError::ScopeDenied)?;
+        let session =
+            authorized_session(&mut *tx, &ctx, &session_id, SessionActors::AgentsAndHosts)?;
+        let evidence = payload
+            .document
+            .as_ref()
+            .map(|document| document.record(tx, &ctx, &session))
+            .transpose()?;
+        let mut provenance = json!({"kind":"ToolResult","sessionId":session_id,"call":key});
+        let mut document_source = None;
+        let can_publish = match evidence {
+            Some(None) => {
+                outcome = failed("document_evidence_unavailable").0;
+                false
+            }
+            Some(Some(evidence)) => {
+                provenance["documentEvidence"] = serde_json::to_value(evidence).map_err(invalid)?;
+                true
+            }
+            None => true,
+        };
+        let published = can_publish && staged_for_write.is_some();
+        if let Some(staged) = staged_for_write.as_ref().filter(|_| can_publish) {
             let scope = session
                 .project_id
+                .clone()
                 .map_or(ArtifactScope::Workspace, ArtifactScope::Project);
-            let version = artifacts_for_write.commit_host_bytes_in_scope(tx, staged, HostArtifactPublication {
-                title: "Tool result", media_type: "application/json",
-                provenance: json!({"kind":"ToolResult","sessionId":session_for_write,"call":key_for_write}),
-                scope, owner: ctx_for_write.principal().clone(),
-            })?;
+            let version = artifacts_for_write.commit_host_bytes_in_scope(
+                tx,
+                staged,
+                HostArtifactPublication {
+                    title: "Tool result",
+                    media_type: "application/json",
+                    provenance,
+                    scope,
+                    owner: ctx.principal().clone(),
+                },
+            )?;
+            let reference = version_ref(&version);
+            if payload.document.is_some() {
+                document_source = Some(ContextSourceInput {
+                    source_id: version.artifact_id,
+                    kind: CONTEXT_SOURCE_KIND.into(),
+                    source_revision: version.version_no,
+                    artifact: Some(reference.clone()),
+                    token_estimate: reference.byte_length.get().div_euclid(4),
+                    disposition: SourceDisposition::Included,
+                });
+            }
             match &mut outcome {
                 ToolOutcome::Completed { artifacts }
                 | ToolOutcome::OperationAccepted { artifacts, .. } => {
-                    *artifacts = vec![version_ref(&version)];
+                    *artifacts = vec![reference];
                 }
                 _ => return Err(invalid("tool result artifact without successful outcome")),
             }
         }
-        let session = tx
-            .sessions()
-            .session(&session_for_write)?
-            .ok_or(StorageError::ScopeDenied)?;
         let batch = turn::batch_of(
-            &session_for_write,
+            &session_id,
             tx.new_id(IdKind::TranscriptBatch),
             session.context_epoch,
             session.next_sequence,
             vec![TranscriptBody::ToolResponseRecorded {
-                call: key_for_write.clone(),
+                call: key.clone(),
                 outcome,
             }],
             || tx.new_id(IdKind::TranscriptEntry),
         );
-        match SessionWriter::append_in(tx, &ctx_for_write, &SessionBatch::entries(batch))? {
-            accepted @ (BatchOutcome::Accepted(_) | BatchOutcome::Replayed(_)) => Ok(accepted),
+        let mut batch = SessionBatch::entries(batch);
+        batch.context_sources.extend(document_source);
+        match SessionWriter::append_in(tx, &ctx, &batch)? {
+            accepted @ (BatchOutcome::Accepted(_) | BatchOutcome::Replayed(_)) => {
+                Ok((accepted, published))
+            }
             BatchOutcome::Refused(_) => Err(StorageError::ScopeDenied),
         }
     });
     if let Some(staged) = &staged {
-        artifacts.settle_host_bytes(store, staged, committed.is_ok());
+        artifacts.settle_host_bytes(store, staged, matches!(&committed, Ok((_, true))));
     }
-    committed
+    committed.map(|(outcome, _)| outcome)
 }
 
 fn mark_dispatch_started(
