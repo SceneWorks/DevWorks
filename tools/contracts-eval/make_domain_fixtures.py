@@ -1369,5 +1369,11 @@ claim_skills={**claim_r2,'lesson':{**lesson_record,'skills':[{'instructionId':'s
 for name in ['knowledge.search','knowledge.tagged_lessons']:
  case('r8-result-'+name+'-skills','operation-result.r8',{'kind':name,'value':{'items':[claim_skills],'hasMore':False}})
  case('reject-r2-result-'+name+'-skills','operation-result.r2',{'kind':name,'value':{'items':[claim_skills],'hasMore':False}},False,False)
+# Revision 10 changes document results. Its request shapes still use the existing envelopes.
+for name,mode in [('documents.import','Command'),('documents.list','Query')]:
+ case('r10-input-'+name,'domain-request.r10',{**request(name,mode),'schemaRevision':10})
+case('r10-input-documents.read','artifact-query-request',{**recorded('artifact-query-Read'),'schemaRevision':10})
+for variant,name in [('Share','share'),('Move','move'),('DisableRetrieval','disable_retrieval'),('RemoveIndex','remove_index')]:
+ case('r10-input-documents.'+name,'artifact-command-request',{**recorded('artifact-'+variant),'schemaRevision':10})
 (D/'domain-fixtures.json').write_text(json.dumps(CASES,indent=2)+'\n')
 print(json.dumps({'fixtures':len(CASES),'positive':sum(c['typedValid'] for c in CASES),'negative':sum(not c['typedValid'] for c in CASES),'inputOperationModes':sum(2 if d['mode']=='Hybrid' else 1 for d in OPS.values()),'resultOperations':len(OPS)+len(LEGACY_RESULTS)}))

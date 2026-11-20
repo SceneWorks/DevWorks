@@ -14586,5 +14586,54 @@
     "raw": "{\"kind\":\"knowledge.tagged_lessons\",\"value\":{\"items\":[{\"id\":\"id-a\",\"revision\":\"1\",\"kind\":\"Lesson\",\"subjectId\":\"id-a\",\"predicate\":\"fixture\",\"confidence\":0.5,\"state\":\"Active\",\"evidenceIds\":[],\"tags\":[],\"scope\":{\"kind\":\"Workspace\"},\"value\":\"A retained fact\",\"entryKind\":\"Lesson\",\"lifecycle\":\"Active\",\"origin\":\"User\",\"autonomous\":false,\"authorId\":\"actor-a\",\"createdAtMs\":\"1\",\"updatedAtMs\":\"2\",\"stale\":false,\"lesson\":{\"ruleState\":\"Effective\",\"effect\":\"UserInstruction\",\"effectiveAtMs\":\"5\",\"source\":\"RelayedReview\",\"sourceRef\":\"review-1\",\"quotedWords\":\"Always run fmt\",\"applicability\":{\"activities\":[\"implementing\"],\"paths\":[\"src/lib.rs\"],\"tools\":[],\"repositoryIds\":[]},\"recurrence\":\"1\",\"recurrenceThreshold\":\"3\",\"challenges\":[{\"id\":\"challenge-a\",\"state\":\"Open\",\"reason\":\"Breaks CI\",\"evidenceIds\":[],\"authorId\":\"actor-a\",\"openedAtMs\":\"6\"}],\"addressedBy\":[{\"kind\":\"Test\",\"name\":\"fmt_check\"}],\"deliveredSessions\":\"2\",\"lastDeliveredAtMs\":\"7\",\"skills\":[{\"instructionId\":\"skill-a\",\"name\":\"deploy\",\"revision\":\"2\"}]}}],\"hasMore\":false}}",
     "typedValid": false,
     "schemaValid": false
+  },
+  {
+    "id": "r10-input-documents.import",
+    "entry": "domain-request.r10",
+    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"documents.import\",\"scope\":{\"kind\":\"Workspace\"},\"source\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"8\",\"mediaType\":\"text/plain\"},\"title\":\"fixture\"},\"schemaRevision\":10}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "r10-input-documents.list",
+    "entry": "domain-request.r10",
+    "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"documents.list\",\"scope\":{\"kind\":\"Workspace\"},\"page\":{\"limit\":20}},\"schemaRevision\":10}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "r10-input-documents.read",
+    "entry": "artifact-query-request",
+    "raw": "{\"protocol\":\"1.0-draft.1\",\"queryId\":\"query-artifact\",\"query\":{\"kind\":\"Read\",\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\"},\"limit\":100,\"schemaRevision\":10}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "r10-input-documents.share",
+    "entry": "artifact-command-request",
+    "raw": "{\"protocol\":\"1.0-draft.1\",\"requestKey\":\"artifact-command\",\"command\":{\"kind\":\"Share\",\"artifactId\":\"artifact-a\",\"targetProjectId\":\"project-b\",\"expectedScopeRevision\":\"1\"},\"schemaRevision\":10}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "r10-input-documents.move",
+    "entry": "artifact-command-request",
+    "raw": "{\"protocol\":\"1.0-draft.1\",\"requestKey\":\"artifact-command\",\"command\":{\"kind\":\"Move\",\"artifactId\":\"artifact-a\",\"targetProjectId\":\"project-b\",\"expectedScopeRevision\":\"1\"},\"schemaRevision\":10}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "r10-input-documents.disable_retrieval",
+    "entry": "artifact-command-request",
+    "raw": "{\"protocol\":\"1.0-draft.1\",\"requestKey\":\"artifact-command\",\"command\":{\"kind\":\"DisableRetrieval\",\"artifactId\":\"artifact-a\",\"expectedRevision\":\"1\"},\"schemaRevision\":10}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "r10-input-documents.remove_index",
+    "entry": "artifact-command-request",
+    "raw": "{\"protocol\":\"1.0-draft.1\",\"requestKey\":\"artifact-command\",\"command\":{\"kind\":\"RemoveIndex\",\"artifactId\":\"artifact-a\",\"expectedRevision\":\"1\"},\"schemaRevision\":10}",
+    "typedValid": true,
+    "schemaValid": true
   }
 ]
