@@ -62,7 +62,7 @@ fn definition_owner(item: &Occurrence) -> Option<&Symbol> {
     owner(item, ACCESSOR_OF).or_else(|| owner(item, CHILD_OF))
 }
 
-fn parent_first<'a>(definitions: Vec<&'a Occurrence>) -> Result<Vec<&'a Occurrence>, &'static str> {
+fn parent_first(definitions: Vec<&Occurrence>) -> Result<Vec<&Occurrence>, &'static str> {
     let locals: BTreeMap<_, _> = definitions
         .iter()
         .enumerate()

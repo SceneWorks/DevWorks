@@ -239,10 +239,8 @@ pub(crate) fn prepare_repository(
             let package_roots: Vec<_> = selected
                 .iter()
                 .map(|(unit, _)| unit.key.as_str())
-                .filter_map(|key| {
-                    (key == "Package.swift" || key.ends_with("/Package.swift"))
-                        .then(|| key.strip_suffix("Package.swift").expect("manifest suffix"))
-                })
+                .filter(|key| key.rsplit('/').next() == Some("Package.swift"))
+                .filter_map(|key| key.strip_suffix("Package.swift"))
                 .collect();
             selected.retain(|(unit, language)| {
                 !crate::ports::packages::swift::foreign_input(&unit.key)
