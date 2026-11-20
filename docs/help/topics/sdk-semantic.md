@@ -22,6 +22,8 @@ For configured semantic packages, the indexing worker sends an exact batch of el
 
 If a project disables a semantic package for a repository shared with other projects, the next index build omits that package for the shared repository. Earlier results carry a stale package warning. Structural indexing and other eligible packages can continue.
 
-A repository-aware producer declares `sourceMode: "Repository"`. It receives the full eligible language source and Cargo context for one captured layer, within the repository-mode bounds. The host validates and publishes its results through the normal indexing service. Producers without this field continue to receive file batches.
+A repository-aware producer declares `sourceMode: "Repository"`. It receives the eligible language source and its admitted project context for one captured layer, within the repository-mode bounds. Rust uses Cargo manifests and locks. TypeScript uses its project and package configuration and the related framework files admitted by indexing. The host validates and publishes its results through the normal indexing service. Producers without this field continue to receive file batches.
 
 The DevWorks Rust semantic pack uses the macOS arm64 build of rust-analyzer 1.98.0. It reports Cargo symbols and references for supported snapshots whose dependencies are available offline. Missing prerequisites or a compiler fault appears as a coverage gap.
+
+The DevWorks TypeScript semantic pack uses Node 24 on macOS arm64. Its signed bundle includes the compiler and records JavaScript, TypeScript, local npm workspace, React, Angular, HTTP call, and Tauri relationships from the captured source. Indexing continues with structural results when the pack is disabled or its runtime is missing.

@@ -193,7 +193,13 @@ impl SemanticEnricher for Pack {
         let host = self.host.upgrade().ok_or("the package host stopped")?;
         let mut files = Vec::with_capacity(request.files.len());
         for file in request.files {
-            let text = std::str::from_utf8(file.bytes).map_err(|_| "source is not UTF-8")?;
+            let text = match std::str::from_utf8(file.bytes) {
+                Ok(text) => Some(text),
+                // The compiler reads a template only when a component needs it. Preserve an
+                // unreadable admitted context path without treating it as empty source.
+                Err(_) if self.node.is_some() && file.language == "typescript-context" => None,
+                Err(_) => return Err("source is not UTF-8".into()),
+            };
             files.push(json!({"unit":file.unit,"language":file.language,"sha256":sha256_hex(file.bytes),"text":text}));
         }
         let mut source = json!({"repositoryId":request.repository_id,"commit":request.commit,

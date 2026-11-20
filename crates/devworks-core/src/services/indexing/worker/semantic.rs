@@ -114,17 +114,19 @@ fn typescript_context(key: &str) -> bool {
     let name = key.rsplit('/').next().unwrap_or(key);
     matches!(
         name,
-        "package.json"
-            | "angular.json"
-            | "tauri.conf.json"
-            | "tauri.conf.json5"
-            | "Tauri.toml"
-            | "Cargo.toml"
+        "package.json" | "angular.json" | "pnpm-workspace.yaml"
     ) || name.ends_with(".html")
-        || name.ends_with(".rs")
         || name.starts_with("next.config.")
         || name.starts_with("vite.config.")
         || (name.starts_with("tsconfig") || name.starts_with("jsconfig")) && name.ends_with(".json")
+}
+
+fn typescript_path(key: &str) -> bool {
+    key.len() <= 240
+        && !key.contains([':', '\\'])
+        && !key
+            .split('/')
+            .any(|segment| segment.eq_ignore_ascii_case("node_modules") || segment == ".git")
 }
 
 /// Context files are admitted in the same immutable capture and only for the language
@@ -136,6 +138,9 @@ fn repository_input(descriptor: &PackDescriptor, unit: &PlanUnit) -> Option<&'st
     let typescript = ["typescript", "tsx", "javascript"]
         .iter()
         .any(|language| supports(descriptor, language));
+    if typescript && !typescript_path(&unit.key) {
+        return None;
+    }
     // The frozen Next pass validates these configs together in its auxiliary program.
     let name = unit.key.rsplit('/').next().unwrap_or(&unit.key);
     if typescript && matches!(name, "next.config.mjs" | "next.config.cjs") {

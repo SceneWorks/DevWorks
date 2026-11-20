@@ -173,15 +173,28 @@ export function nativeGraph(
   }
 
   function relationship(edge: PendingEdgeDto): void {
-    const target = unique(edge.targetQN);
     const options = endpoints.get(edge.sourceQN) ?? [];
-    const candidates = options.length === 1 ? options : options.filter(source => source.unit === target?.unit);
-    const anchor = edge.sourceQN === repository ? rootManifest ?? target?.unit : undefined;
-    const source: Endpoint | undefined = candidates.length === 1 ? candidates[0] : anchor
-      ? { unit: anchor, kind: 'File', name: anchor, index: 0 } : undefined;
+    const hint = edge.properties?.extraction_source_file ?? edge.properties?.origin_file;
+    const matches = typeof hint === 'string' ? options.filter(source => source.unit === hint) : [];
+    const sourceCandidates = options.length > 1 && matches.length !== 1
+      ? [...new Set(options.map(source => source.unit))].sort() : undefined;
+    const anchor = edge.sourceQN === repository
+      ? rootManifest ?? unique(edge.targetQN)?.unit : sourceCandidates?.[0];
+    const source: Endpoint | undefined = options.length === 1 ? options[0]
+      : matches.length === 1 ? matches[0]
+      : anchor ? { unit: anchor, kind: 'File', name: anchor, index: 0 } : undefined;
     if (!source) return;
-    const properties: Record<string, unknown> = { ...edge.properties, ...(anchor ? { retained_source_owner: edge.sourceQN } : {}) };
-    const confidence = confidenceOf(properties, target !== undefined);
+
+    // A candidate file only gives the unresolved fact a place in the captured graph.
+    // Target co-location is not evidence of which declaration emitted a call.
+    const target = sourceCandidates ? undefined : unique(edge.targetQN);
+    const properties: Record<string, unknown> = {
+      ...edge.properties,
+      ...(anchor ? { retained_source_owner: edge.sourceQN } : {}),
+      ...(sourceCandidates ? { retained_source_candidates: sourceCandidates, source_resolution: 'unresolved' } : {}),
+      ...(!target ? { compiler_unresolved: true } : {}),
+    };
+    const confidence = sourceCandidates ? 0 : confidenceOf(properties, target !== undefined);
     const inferred = properties.candidate === true || properties.confidence_band === 'medium' ||
       properties.confidence_band === 'low';
     open(source.unit).edges.push({

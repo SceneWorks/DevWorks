@@ -114,7 +114,7 @@ impl Broker<'_> {
                 process_session_id: invocation.process_session_id.clone(),
                 invocation_id: invocation.invocation_id.clone(),
                 invocation_token: invocation.invocation_token.clone(),
-                action_key: wire_id(format!("rust-index-{}", self.sequence))?,
+                action_key: wire_id(format!("semantic-index-{}", self.sequence))?,
                 call,
             },
         };

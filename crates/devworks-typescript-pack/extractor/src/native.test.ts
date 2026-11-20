@@ -50,3 +50,24 @@ test('invalid byte spans and foreign or incomplete compiler output refuse the wh
   assert.throws(() => nativeGraph('demo', new Map(), result), /definition-outside-capture/);
   assert.throws(() => nativeGraph('demo', new Map(), { ...result, complete: false }), /typescript-analysis-incomplete/);
 });
+
+test('colliding source declarations stay unattributed even when one shares the target file', () => {
+  const source = 'function same() {}';
+  const input = new Map([['src/a.ts', Buffer.from(source)], ['a.ts', Buffer.from(source)]]);
+  const node = (filePath: string, qualifiedName: string) => ({
+    label: 'Function', name: qualifiedName, qualifiedName, filePath, startLine: 1, endLine: 1, properties: {},
+  });
+  const result = nativeGraph('test', input, {
+    complete: true, workspacePackages: [], resolvedImports: [], unresolvedImports: [], unresolvedCalls: [],
+    processedFiles: [...input.keys()],
+    nodes: [node('a.ts', 'a.same'), node('src/a.ts', 'a.same'), node('a.ts', 'a.callee')],
+    edges: [{ type: 'CALLS', sourceQN: 'a.same', targetQN: 'a.callee' }],
+  });
+  const edges = result.units.flatMap(unit => unit.edges);
+  assert.equal(edges.length, 1);
+  assert.equal(edges[0].source, 0);
+  assert.deepEqual(edges[0].target, { symbol: 'a.callee' });
+  assert.equal(edges[0].resolution, 'unresolved');
+  assert.equal(edges[0].properties.compiler_unresolved, true);
+  assert.deepEqual(edges[0].properties.retained_source_candidates, ['a.ts', 'src/a.ts']);
+});

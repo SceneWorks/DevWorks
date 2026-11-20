@@ -36,10 +36,10 @@ struct File {
     unit: String,
     language: Language,
     sha256: String,
-    text: String,
+    text: Option<String>,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
 enum Language {
     #[serde(rename = "typescript")]
@@ -81,13 +81,8 @@ fn matches_language(path: &str, language: &Language) -> bool {
         Language::TypeScriptContext => {
             matches!(
                 name,
-                "package.json"
-                    | "angular.json"
-                    | "tauri.conf.json"
-                    | "tauri.conf.json5"
-                    | "Tauri.toml"
-                    | "Cargo.toml"
-            ) || matches!(suffix.as_str(), "html" | "rs")
+                "package.json" | "angular.json" | "pnpm-workspace.yaml"
+            ) || suffix == "html"
                 || name.starts_with("next.config.")
                 || name.starts_with("vite.config.")
                 || (name.starts_with("tsconfig") || name.starts_with("jsconfig"))
@@ -118,11 +113,17 @@ impl Source {
         let mut paths = BTreeSet::new();
         let mut total = 0usize;
         for file in &source.files {
-            total = total.saturating_add(file.text.len());
+            let valid_contents = match &file.text {
+                Some(text) => {
+                    total = total.saturating_add(text.len());
+                    sha256_hex(text.as_bytes()) == file.sha256
+                }
+                None => file.language == Language::TypeScriptContext && hex(&file.sha256, 64),
+            };
             if !source_path(&file.unit)
                 || !matches_language(&file.unit, &file.language)
                 || !paths.insert(file.unit.to_lowercase())
-                || sha256_hex(file.text.as_bytes()) != file.sha256
+                || !valid_contents
             {
                 return Err("invalid-typescript-source");
             }
@@ -133,9 +134,12 @@ impl Source {
         Ok(source)
     }
 
-    pub(crate) fn materialize(&self, root: &Path) -> Result<Vec<&str>, &'static str> {
-        let mut paths = Vec::with_capacity(self.files.len());
+    pub(crate) fn materialize(&self, root: &Path) -> Result<Selection<'_>, &'static str> {
+        let mut included = Vec::with_capacity(self.files.len());
+        let mut readable = Vec::with_capacity(self.files.len());
         for source in &self.files {
+            included.push(source.unit.as_str());
+            let Some(text) = &source.text else { continue };
             use std::io::Write;
             let path = root.join(&source.unit);
             let parent = path.parent().ok_or("invalid-typescript-source")?;
@@ -144,12 +148,17 @@ impl Source {
                 .write(true)
                 .create_new(true)
                 .open(path)
-                .and_then(|mut file| file.write_all(source.text.as_bytes()))
+                .and_then(|mut file| file.write_all(text.as_bytes()))
                 .map_err(|_| "typescript-scratch-write")?;
-            paths.push(source.unit.as_str());
+            readable.push(source.unit.as_str());
         }
-        Ok(paths)
+        Ok(Selection { included, readable })
     }
+}
+
+pub(crate) struct Selection<'a> {
+    pub included: Vec<&'a str>,
+    pub readable: Vec<&'a str>,
 }
 
 #[cfg(test)]

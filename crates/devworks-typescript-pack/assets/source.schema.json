@@ -62,7 +62,10 @@
             "pattern": "^[a-f0-9]{64}$"
           },
           "text": {
-            "type": "string"
+            "type": [
+              "string",
+              "null"
+            ]
           }
         }
       }

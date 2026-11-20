@@ -137,7 +137,7 @@ pub(crate) fn index(
     std::fs::write(
         &request,
         serde_json::to_vec(&serde_json::json!({
-            "repository": source.repository_id, "root": tree, "files": files,
+            "repository": source.repository_id, "root": tree, "files": files.included, "readable": files.readable,
         }))
         .map_err(|_| "invalid-typescript-source")?,
     )

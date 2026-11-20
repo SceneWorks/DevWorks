@@ -114,7 +114,7 @@ pub(super) fn overlay_layer(
     }
 }
 
-pub(super) fn index(app: &App, repository: &Id, operation: &str) {
+pub(super) fn index(app: &App, repository: &Id, operation: &str) -> Id {
     let revision = source_revision(app);
     let frame = json!({
         "protocol":"1.0-draft.1","mode":"Command","requestKey":app.key("semantic-pack-index"),
@@ -122,11 +122,16 @@ pub(super) fn index(app: &App, repository: &Id, operation: &str) {
             "repositoryIds":[repository],"expectedSourceRevision":revision,
             "views":{"kind":"Published","repositoryIds":[repository]}}
     });
-    applied(
+    match applied(
         app.app()
             .command(&app.user, operation, frame.to_string().as_bytes())
             .unwrap(),
-    );
+    ) {
+        OperationResult::IndexingIndex { value } | OperationResult::IndexingReindex { value } => {
+            value.id
+        }
+        response => panic!("unexpected index response: {response:?}"),
+    }
 }
 
 pub(super) fn configure(app: &App, package: &str) {

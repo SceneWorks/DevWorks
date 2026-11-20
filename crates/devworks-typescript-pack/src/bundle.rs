@@ -101,7 +101,8 @@ pub(crate) fn build_from_args() -> Result<(), String> {
     let args: Vec<_> = std::env::args_os().skip(2).map(PathBuf::from).collect();
     let [output, assets, keys @ ..] = args.as_slice() else {
         return Err(
-            "Usage: devworks-rust-pack --bundle <output> <staged-assets> [signing-key-file]".into(),
+            "Usage: devworks-typescript-pack --bundle <output> <staged-assets> [signing-key-file]"
+                .into(),
         );
     };
     if keys.len() > 1 {

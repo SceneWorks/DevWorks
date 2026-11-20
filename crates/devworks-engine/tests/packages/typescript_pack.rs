@@ -13,6 +13,13 @@ fn node_proxy(path: &std::path::Path, body: &str) {
     std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700)).unwrap();
 }
 
+fn use_test_node_proxy(app: &App, proxy: &std::path::Path) {
+    let observed = app.runtimes.observations();
+    let executable = devworks_core::ports::packages::RuntimeExecutable::inspect(proxy).unwrap();
+    app.runtimes
+        .set_probed(observed, [("node".into(), executable)].into());
+}
+
 #[cfg(unix)]
 #[test]
 #[ignore = "native macOS arm64 qualification requires Node 24 and a signed TypeScript bundle"]
@@ -37,6 +44,11 @@ fn native_typescript_pack_indexes_framework_relationships() {
     node_proxy(&proxy, &original);
     app.probe_path = Some(probe.to_str().unwrap().to_owned());
     app.boot();
+    assert_eq!(
+        app.runtimes.executable("node").unwrap().1.program,
+        node.canonicalize().unwrap()
+    );
+    use_test_node_proxy(&app, &proxy);
     configure(&app, PACKAGE);
     let artifact = app.save(&app.user, &std::fs::read(bundle).unwrap());
     package(app.lifecycle(
@@ -79,6 +91,14 @@ fn native_typescript_pack_indexes_framework_relationships() {
             "src/run.ts",
             "import {stableValue} from '@fixture/common'; export function run() { return stableValue(); }\n",
         ),
+        (
+            "src/unbound.ts",
+            "export function caller() { return lookupWithoutImport(); }\n",
+        ),
+        (
+            "src/other.ts",
+            "export function lookupWithoutImport() { return 11; }\n",
+        ),
         ("src/shared.cjs", "module.exports.answer = 42;\n"),
         (
             "src/Child.tsx",
@@ -114,6 +134,7 @@ fn native_typescript_pack_indexes_framework_relationships() {
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(path, text).unwrap();
     }
+    std::fs::write(root.join("src/unrelated.html"), [0xff, 0xfe]).unwrap();
     git(&root, &["init", "-q"]);
     git(&root, &["add", "."]);
     git(&root, &["commit", "-qm", "original"]);
@@ -135,6 +156,13 @@ fn native_typescript_pack_indexes_framework_relationships() {
         panic!("TypeScript fixture discovery failed");
     };
     let repository = value.items.0.first().unwrap().id.clone();
+    let project = devworks_core::protocol::ProjectId(id("project-a"));
+    let member = repository.clone();
+    let project_for_write = project.clone();
+    write(&*app.store, move |tx| {
+        tx.projects().set_members(&project_for_write, &[member])
+    })
+    .unwrap();
     index(&app, &repository, "indexing.index");
     let initial = published(&app, &repository, None);
     assert_eq!(initial.manifest["packs"][0]["id"], PACKAGE, "{initial:?}");
@@ -186,6 +214,17 @@ fn native_typescript_pack_indexes_framework_relationships() {
             "{key}: {observed:?}"
         );
     }
+    let unresolved = edges("src/unbound.ts");
+    assert!(
+        unresolved.iter().any(|edge| {
+            edge.kind == "CALLS"
+                && edge.payload["provenance"]["extractor"] == PACKAGE
+                && edge.payload["targetName"] == "lookupWithoutImport"
+                && edge.payload["resolution"] == "Unresolved"
+                && edge.payload["properties"]["compiler_unresolved"] == true
+        }),
+        "{unresolved:?}"
+    );
     let backend = nodes("src/backend.go");
     assert!(
         backend.iter().any(|node| {
@@ -246,6 +285,26 @@ fn native_typescript_pack_indexes_framework_relationships() {
         assert!(body.contains(expected), "{operation}: {body}");
     }
 
+    let agent = app.agent.clone().with_lineage(Some(project), None, None);
+    let agent_frame = json!({"protocol":"1.0-draft.1","schemaRevision":3,
+        "queryId":app.key("typescript-agent"),"scope":{"kind":"Project","projectId":"project-a"},
+        "view":{"kind":"Published","repositoryIds":[repository]},
+        "query":{"kind":"Path","selection":{"target":{"kind":"Node","nodeId":value.node_id},
+            "direction":"Inbound","depth":3}},
+        "limits":{"maxResults":100,"maxVisited":100000,"deadlineMs":30000}});
+    let agent_reply = app
+        .app()
+        .query(&agent, "code.call_path", agent_frame.to_string().as_bytes())
+        .unwrap();
+    let DomainQueryReply::Result { result, .. } = agent_reply else {
+        panic!("the scoped graph tool refused the TypeScript view: {agent_reply:?}");
+    };
+    assert!(
+        serde_json::to_string(&result)
+            .unwrap()
+            .contains("stableValue")
+    );
+
     let count = invocations(&app, PACKAGE);
     assert_eq!(count, 1);
     index(&app, &repository, "indexing.index");
@@ -275,7 +334,7 @@ fn native_typescript_pack_indexes_framework_relationships() {
 
     // A replaced executable is refused before captured source leaves the helper.
     node_proxy(&proxy, &(original.clone() + "# same-version replacement\n"));
-    index(&app, &repository, "indexing.reindex");
+    let runtime_run = index(&app, &repository, "indexing.reindex");
     let runtime_changed = published(&app, &repository, Some(&reused.id));
     assert_eq!(
         runtime_changed.manifest["packs"],
@@ -283,7 +342,7 @@ fn native_typescript_pack_indexes_framework_relationships() {
         "{runtime_changed:?}"
     );
     let changed_run = read(&*app.store, |snapshot| {
-        snapshot.indexing().latest_run(&repository, None)
+        snapshot.indexing().run(&runtime_run)
     })
     .unwrap();
     assert!(
@@ -395,6 +454,7 @@ fn typescript_crash_child_fixture() {
     let mut app = App::unbooted(harness, Some(proxy.to_str().unwrap().to_owned()), None);
     app.indexing = true;
     app.boot();
+    use_test_node_proxy(&app, &proxy.join("node"));
     configure(&app, PACKAGE);
     let bundle =
         std::env::var_os("DEVWORKS_TYPESCRIPT_PACK_BUNDLE").expect("signed TypeScript bundle");
@@ -576,6 +636,7 @@ fn native_typescript_host_crash_recovers_owned_node_and_index_receipt() {
     assert!(nodes.iter().all(|node| node.name != "priorValue"));
 
     // Removing authority while a second Node process is live must fence the graph write.
+    use_test_node_proxy(&app, &probe.join("node"));
     std::fs::remove_file(&child_marker).unwrap();
     let repo = app.sources.join("crash");
     std::fs::write(
@@ -586,9 +647,20 @@ fn native_typescript_host_crash_recovers_owned_node_and_index_receipt() {
     git(&repo, &["add", "."]);
     git(&repo, &["commit", "-qm", "pending during disable"]);
     std::fs::write(&hold, "").unwrap();
-    index(&app, &repository, "indexing.index");
+    let pending_disable = index(&app, &repository, "indexing.index");
     wait_for(
-        || std::fs::read_to_string(&child_marker).is_ok_and(|marker| marker.lines().count() == 2),
+        || {
+            super::event_intents::drive(&app, Duration::from_millis(25));
+            let run = read(&*app.store, |snapshot| {
+                snapshot.indexing().run(&pending_disable)
+            })
+            .unwrap();
+            assert!(
+                matches!(run.state.as_str(), "Queued" | "Running"),
+                "{run:?}"
+            );
+            std::fs::read_to_string(&child_marker).is_ok_and(|marker| marker.lines().count() == 2)
+        },
         "Node was not live before disable",
     );
     package(app.simple(&app.user, "addons.disable", "Disable", PACKAGE));
