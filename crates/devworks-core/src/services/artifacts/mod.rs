@@ -120,6 +120,7 @@
 pub(crate) mod convention_import;
 mod convention_source;
 pub mod derivation;
+pub(crate) mod documents;
 pub mod evidence;
 pub mod host;
 mod index_source;
@@ -805,7 +806,7 @@ fn event(
         "ArtifactReferenced" | "ArtifactProjectDetached" => {
             (REFERENCES_AGGREGATE, artifact.reference_revision)
         }
-        "ArtifactShared" => (SCOPE_AGGREGATE, artifact.scope_revision),
+        "ArtifactShared" | "ArtifactMoved" => (SCOPE_AGGREGATE, artifact.scope_revision),
         // An export changes no artifact revision: its own aggregate orders by commit.
         "ArtifactExported" => (EXPORT_AGGREGATE, tx.committed_sequence()? + 1),
         _ => (ARTIFACT_AGGREGATE, artifact.revision),

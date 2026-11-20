@@ -1420,8 +1420,8 @@ impl HistoryLog for HandlerTx<'_> {
 // on its own transaction) are refused, so a use case can neither block collection, remove a
 // file, nor create, replace or retire a receipt's reply.
 use crate::ports::storage::{
-    ArtifactLink, ArtifactRead, ArtifactRetention, BlobRecord, BlobState, ListPosition,
-    StoredArtifact, StoredVersion, SubjectKey,
+    ArtifactLink, ArtifactRead, ArtifactRetention, ArtifactScope, BlobRecord, BlobState,
+    ListPosition, StoredArtifact, StoredVersion, SubjectKey,
 };
 use crate::protocol::{OperationId, ProjectId};
 fn artifact_owned() -> StorageError {
@@ -1463,6 +1463,24 @@ impl ArtifactRead for HandlerTx<'_> {
     fn versions(&self, artifact: &Id) -> Result<Vec<StoredVersion>, StorageError> {
         self.inner.borrow_mut().artifacts().versions(artifact)
     }
+    fn version_history(
+        &self,
+        artifact: &Id,
+        before: Option<i64>,
+        live_only: bool,
+        limit: u16,
+    ) -> Result<Vec<StoredVersion>, StorageError> {
+        self.inner
+            .borrow_mut()
+            .artifacts()
+            .version_history(artifact, before, live_only, limit)
+    }
+    fn retained_version_count(&self, artifact: &Id) -> Result<i64, StorageError> {
+        self.inner
+            .borrow_mut()
+            .artifacts()
+            .retained_version_count(artifact)
+    }
     fn version_by_operation(
         &self,
         operation: &OperationId,
@@ -1496,6 +1514,19 @@ impl ArtifactRead for HandlerTx<'_> {
             .borrow_mut()
             .artifacts()
             .list_workspace(owner, tags, after, limit)
+    }
+    fn document_artifacts(
+        &self,
+        scope: &ArtifactScope,
+        actor: Option<&ActorId>,
+        current: Option<bool>,
+        after: Option<&ListPosition>,
+        limit: u16,
+    ) -> Result<Vec<StoredArtifact>, StorageError> {
+        self.inner
+            .borrow_mut()
+            .artifacts()
+            .document_artifacts(scope, actor, current, after, limit)
     }
     fn tags(&self, artifact: &Id) -> Result<Vec<String>, StorageError> {
         self.inner.borrow_mut().artifacts().tags(artifact)

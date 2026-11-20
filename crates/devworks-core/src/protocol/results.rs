@@ -375,17 +375,17 @@ pub enum OperationResult {
     #[serde(rename = "dreaming.review")]
     DreamingReview { value: ProposalRecord },
     #[serde(rename = "documents.import")]
-    DocumentsImport { value: DocumentRecord },
+    DocumentsImport { value: DocumentResult },
     #[serde(rename = "documents.list")]
-    DocumentsList { value: Page<DocumentRecord> },
+    DocumentsList { value: DocumentListResult },
     #[serde(rename = "documents.read")]
-    DocumentsRead { value: DocumentRecord },
+    DocumentsRead { value: DocumentResult },
     #[serde(rename = "documents.search")]
     DocumentsSearch { value: RetrievalPage },
     #[serde(rename = "documents.share")]
-    DocumentsShare { value: DocumentRecord },
+    DocumentsShare { value: DocumentResult },
     #[serde(rename = "documents.move")]
-    DocumentsMove { value: DocumentRecord },
+    DocumentsMove { value: DocumentResult },
     #[serde(rename = "documents.index")]
     DocumentsIndex { value: IndexRunRecord },
     #[serde(rename = "documents.retry")]
@@ -1675,6 +1675,11 @@ impl Revisioned for OperationResult {
             Self::KnowledgeTaggedLessons { value } => value.retain_revision(revision),
             Self::DreamingInstructions { value } => value.retain_revision(revision),
             Self::DreamingRevert { value } => value.retain_revision(revision),
+            Self::DocumentsImport { value } => value.retain_revision(revision),
+            Self::DocumentsList { value } => value.retain_revision(revision),
+            Self::DocumentsRead { value } => value.retain_revision(revision),
+            Self::DocumentsShare { value } => value.retain_revision(revision),
+            Self::DocumentsMove { value } => value.retain_revision(revision),
             Self::ArtifactsSave { value } => value.retain_revision(revision),
             Self::ArtifactsList { value } => value.retain_revision(revision),
             Self::ArtifactsRead { value } => value.retain_revision(revision),
@@ -1872,6 +1877,11 @@ impl Revisioned for OperationResult {
             Self::CodePublishers { value } => value.check_revision(revision),
             Self::CodeSnippet { value } => value.check_revision(revision),
             Self::CodeRepositoryDependencies { value } => value.check_revision(revision),
+            Self::DocumentsImport { value } => value.check_revision(revision),
+            Self::DocumentsList { value } => value.check_revision(revision),
+            Self::DocumentsRead { value } => value.check_revision(revision),
+            Self::DocumentsShare { value } => value.check_revision(revision),
+            Self::DocumentsMove { value } => value.check_revision(revision),
             Self::ConventionsList { value } => value.check_revision(revision),
             Self::ConventionsRead { value } => value.check_revision(revision),
             Self::ConventionsEdit { value } => value.check_revision(revision),

@@ -14,6 +14,7 @@ pub mod conventions;
 pub mod cursor;
 pub mod desktop;
 pub mod diagnostics;
+pub mod documents;
 pub mod effect;
 pub(crate) mod effect_job;
 pub mod evals;
@@ -223,6 +224,14 @@ impl UseCases {
     pub fn with_artifacts(mut self, service: Arc<artifacts::ArtifactService>) -> Self {
         for op in artifacts::OPERATIONS {
             self.register(op, Some(service.clone()), Some(service.clone()));
+        }
+        self
+    }
+
+    /// Attaches the document library handlers to a selected gateway composition.
+    pub fn with_document_library(mut self, service: Arc<documents::DocumentLibrary>) -> Self {
+        for operation in documents::LIBRARY_OPERATIONS {
+            self.register(operation, Some(service.clone()), Some(service.clone()));
         }
         self
     }
