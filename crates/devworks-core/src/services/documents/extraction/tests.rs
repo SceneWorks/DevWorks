@@ -138,7 +138,7 @@ fn overlong_line_chunks_are_utf8_bounded_and_identity_is_exact() {
             ((1, 1), "😀"),
             ((1, 1), "😀\n"),
             ((2, 2), "alpha"),
-            ((3, 3), "end"),
+            ((2, 3), "\nend"),
         ]
     );
 
@@ -195,6 +195,7 @@ fn refusals_have_typed_outcomes_and_return_no_blocks() {
         normalized_bytes: 10,
         chunk_bytes: 4,
         blocks: 2,
+        ..ExtractionLimits::default()
     })
     .unwrap();
     assert_eq!(
@@ -257,5 +258,56 @@ fn cancellation_and_deadline_discard_in_progress_output() {
     assert_eq!(
         extractor.extract(input(), &deadline).unwrap_err(),
         ExtractionError::Deadline
+    );
+}
+
+#[test]
+fn unicode_normalization_preserves_original_markdown_structure() {
+    // GREEK VARIA decomposes canonically to a backtick. It must not create a source fence.
+    let source = "\u{1fef}\u{1fef}\u{1fef}\r\n# e&#x301;\r\nbody".as_bytes();
+    let blocks = extract(&TextExtractor::default(), source, "text/markdown", "v1", 1).unwrap();
+    assert_eq!(blocks.len(), 2);
+    assert_eq!(blocks[0].text, "```\n");
+    assert_eq!(lines(&blocks[1]), (2, 3));
+    assert_eq!(blocks[1].headings[0].title, "é");
+    assert!(blocks[1].text.starts_with("# e&#x301;\n"));
+}
+
+#[test]
+fn markdown_checks_structural_work_before_allocating_the_parser() {
+    let extractor = TextExtractor::with_limits(ExtractionLimits {
+        markdown_markers: 5,
+        ..ExtractionLimits::default()
+    })
+    .unwrap();
+    let dense = b"-\n-\n-\n";
+    assert_eq!(
+        extract(&extractor, dense, "text/markdown", "v1", 1).unwrap_err(),
+        ExtractionError::MarkdownStructureLimit
+    );
+    assert_eq!(
+        extract(&extractor, dense, "text/plain", "v1", 1).unwrap()[0].text,
+        "-\n-\n-\n"
+    );
+    assert!(extract(&extractor, b"-\n-\n-", "text/markdown", "v1", 1).is_ok());
+
+    let checks = AtomicUsize::new(0);
+    let cancel = || checks.fetch_add(1, Ordering::Relaxed) == 1;
+    assert_eq!(
+        check_markdown_work(&"a".repeat(8192), 5, &control(&cancel)).unwrap_err(),
+        ExtractionError::Cancelled
+    );
+}
+
+#[test]
+fn canonical_expansion_cannot_buffer_an_unbounded_nonstarter_run() {
+    // Each COMBINING GREEK DIALYTIKA TONOS decomposes into two nonstarters.
+    let extractor = TextExtractor::default();
+    let at_limit = "\u{0344}".repeat(MAX_CANONICAL_NONSTARTERS / 2);
+    assert!(extract(&extractor, at_limit.as_bytes(), "text/plain", "v1", 1).is_ok());
+    let over_limit = at_limit + "\u{0344}";
+    assert_eq!(
+        extract(&extractor, over_limit.as_bytes(), "text/plain", "v1", 1).unwrap_err(),
+        ExtractionError::UnicodeStructureLimit
     );
 }

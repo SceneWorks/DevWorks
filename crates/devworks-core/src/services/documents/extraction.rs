@@ -12,17 +12,27 @@ use crate::{
 use pulldown_cmark::{Event, Parser, Tag, TagEnd};
 use serde_json::json;
 use std::{borrow::Cow, sync::Arc, time::Instant};
-use unicode_normalization::UnicodeNormalization;
+use unicode_normalization::{
+    UnicodeNormalization,
+    char::{canonical_combining_class, decompose_canonical},
+};
 
 const TEXT_ENGINE: &str = "devworks-text-v1";
 const MAX_HEADING_BYTES: usize = 256;
+const MAX_CANONICAL_NONSTARTERS: usize = 1024;
 
 #[derive(Debug, Clone, Copy)]
 pub struct ExtractionLimits {
+    /// Bytes in the immutable artifact.
     pub input_bytes: usize,
+    /// Bytes in the whole NFC text before splitting.
     pub normalized_bytes: usize,
+    /// UTF-8 bytes per block, including source line endings.
     pub chunk_bytes: usize,
+    /// Maximum returned blocks and maximum top-level headings.
     pub blocks: usize,
+    /// Limit structural markers before CommonMark allocates its block tree.
+    pub markdown_markers: usize,
 }
 
 impl Default for ExtractionLimits {
@@ -32,6 +42,7 @@ impl Default for ExtractionLimits {
             normalized_bytes: 16 * 1024 * 1024,
             chunk_bytes: 4096,
             blocks: 16_384,
+            markdown_markers: 1024 * 1024,
         }
     }
 }
@@ -72,6 +83,8 @@ pub enum ExtractionError {
     InvalidEncoding,
     Empty,
     NormalizedLimit,
+    UnicodeStructureLimit,
+    MarkdownStructureLimit,
     BlockLimit,
 }
 
@@ -126,6 +139,9 @@ impl ExtractedBlock {
     }
 }
 
+/// Extracts bytes the caller has already authorized for the exact managed version.
+/// The caller supplies the extraction revision and must recheck authority and cancellation
+/// at publication. An error, including cancellation or deadline expiry, yields no blocks.
 pub trait DocumentExtractor: Send + Sync {
     fn extract(
         &self,
@@ -136,6 +152,7 @@ pub trait DocumentExtractor: Send + Sync {
 
 /// Extracts UTF-8 and BOM-marked UTF-16. The source survives as inert NFC text with LF line ends.
 /// CommonMark source offsets give the top-level section hierarchy without rendering markup.
+/// Checks cancellation between bounded steps and on both sides of the synchronous parser setup.
 #[derive(Default)]
 pub struct TextExtractor {
     limits: ExtractionLimits,
@@ -151,6 +168,7 @@ impl TextExtractor {
             || limits.normalized_bytes > defaults.normalized_bytes
             || !(4..=defaults.chunk_bytes).contains(&limits.chunk_bytes)
             || !(1..=defaults.blocks).contains(&limits.blocks)
+            || !(1..=defaults.markdown_markers).contains(&limits.markdown_markers)
         {
             return Err(ExtractionError::InvalidLimits);
         }
@@ -188,7 +206,8 @@ impl DocumentExtractor for TextExtractor {
             return Err(Empty);
         }
         let headings = if markdown {
-            markdown_headings(&text, self.limits.blocks, control)?
+            check_markdown_work(&decoded, self.limits.markdown_markers, control)?;
+            markdown_headings(&decoded, self.limits.blocks, control)?
         } else {
             Vec::new()
         };
@@ -214,12 +233,11 @@ fn decode<'a>(
         });
 
     if let Some((rest, from_bytes)) = utf16 {
-        if rest.len() % 2 != 0 {
+        let (units, trailing) = rest.as_chunks::<2>();
+        if !trailing.is_empty() {
             return Err(InvalidEncoding);
         }
-        let units = rest
-            .chunks_exact(2)
-            .map(|pair| from_bytes([pair[0], pair[1]]));
+        let units = units.iter().copied().map(from_bytes);
         let mut decoded = String::new();
         for (index, scalar) in char::decode_utf16(units).enumerate() {
             if index % 4096 == 0 {
@@ -243,6 +261,7 @@ fn normalize(
 ) -> Result<String, ExtractionError> {
     let mut source = decoded.chars().peekable();
     let mut until_check = 0;
+    let mut nonstarters = 0;
     let mut stopped = Ok(());
     let lf = std::iter::from_fn(|| {
         let scalar = source.next()?;
@@ -260,9 +279,27 @@ fn normalize(
         }
         if scalar == '\r' {
             source.next_if_eq(&'\n');
-            return Some('\n');
         }
-        Some(scalar)
+        if scalar.is_ascii() {
+            nonstarters = 0;
+        } else {
+            // NFC buffers an entire nonstarter run before emitting it. Count canonical
+            // decomposition here so expansion cannot exceed the work bound inside NFC.
+            decompose_canonical(scalar, |part| {
+                if canonical_combining_class(part) == 0 {
+                    nonstarters = 0;
+                } else {
+                    nonstarters += 1;
+                    if nonstarters > MAX_CANONICAL_NONSTARTERS {
+                        stopped = Err(ExtractionError::UnicodeStructureLimit);
+                    }
+                }
+            });
+            if stopped.is_err() {
+                return None;
+            }
+        }
+        Some(if scalar == '\r' { '\n' } else { scalar })
     })
     .fuse();
 
@@ -278,16 +315,40 @@ fn normalize(
     Ok(normalized)
 }
 
+// The CommonMark parser builds a synchronous block tree before yielding events. Count all
+// possible ASCII punctuation and line boundaries conservatively before that pass.
+fn check_markdown_work(
+    source: &str,
+    max_markers: usize,
+    control: &ExtractionControl<'_>,
+) -> Result<(), ExtractionError> {
+    let mut markers = 0;
+    for window in source.as_bytes().chunks(4096) {
+        control.check()?;
+        markers += window
+            .iter()
+            .filter(|byte| byte.is_ascii_punctuation() || matches!(byte, b'\n' | b'\r'))
+            .count();
+        if markers > max_markers {
+            return Err(ExtractionError::MarkdownStructureLimit);
+        }
+    }
+    Ok(())
+}
+
 fn markdown_headings(
     text: &str,
     max_headings: usize,
     control: &ExtractionControl<'_>,
-) -> Result<Vec<(usize, Heading)>, ExtractionError> {
+) -> Result<Vec<(u32, Heading)>, ExtractionError> {
     control.check()?;
     let mut headings = Vec::new();
     let mut active: Option<(usize, Heading)> = None;
+    let mut title_clipped = false;
     let mut depth = 0usize;
-    for (event, offsets) in Parser::new(text).into_offset_iter() {
+    let events = Parser::new(text).into_offset_iter();
+    control.check()?;
+    for (event, offsets) in events {
         control.check()?;
         match event {
             Event::Start(tag) => {
@@ -297,6 +358,7 @@ fn markdown_headings(
                     if headings.len() == max_headings {
                         return Err(ExtractionError::BlockLimit);
                     }
+                    title_clipped = false;
                     active = Some((
                         offsets.start,
                         Heading {
@@ -311,20 +373,26 @@ fn markdown_headings(
                 depth -= 1;
                 if depth == 0
                     && matches!(tag, TagEnd::Heading(_))
-                    && let Some(heading) = active.take()
+                    && let Some((offset, mut heading)) = active.take()
                 {
-                    headings.push(heading);
+                    heading.title = heading.title.nfc().collect();
+                    heading
+                        .title
+                        .truncate(heading.title.floor_char_boundary(MAX_HEADING_BYTES));
+                    headings.push((offset, heading));
                 }
             }
             Event::Text(fragment) | Event::Code(fragment) => {
-                if let Some((_, heading)) = &mut active {
+                if !title_clipped && let Some((_, heading)) = &mut active {
                     let remaining = MAX_HEADING_BYTES - heading.title.len();
                     let end = fragment.floor_char_boundary(remaining.min(fragment.len()));
                     heading.title.push_str(&fragment[..end]);
+                    title_clipped = end < fragment.len();
                 }
             }
             Event::SoftBreak | Event::HardBreak => {
-                if let Some((_, heading)) = &mut active
+                if !title_clipped
+                    && let Some((_, heading)) = &mut active
                     && heading.title.len() < MAX_HEADING_BYTES
                 {
                     heading.title.push(' ');
@@ -333,7 +401,44 @@ fn markdown_headings(
             _ => {}
         }
     }
-    Ok(headings)
+    source_heading_lines(text, headings, control)
+}
+
+// The parser sees the original Unicode spelling. NFC can turn non-ASCII scalar values into
+// Markdown punctuation, so its byte offsets must be converted before chunking normalized text.
+fn source_heading_lines(
+    text: &str,
+    headings: Vec<(usize, Heading)>,
+    control: &ExtractionControl<'_>,
+) -> Result<Vec<(u32, Heading)>, ExtractionError> {
+    let mut result = Vec::with_capacity(headings.len());
+    let mut headings = headings.into_iter().peekable();
+    let mut offset = 0;
+    let mut line = 0u32;
+    let mut prior_cr = false;
+    for part in text
+        .as_bytes()
+        .split_inclusive(|byte| matches!(byte, b'\r' | b'\n'))
+    {
+        if headings.peek().is_none() {
+            break;
+        }
+        offset += part.len();
+        if prior_cr && part == b"\n" {
+            prior_cr = false;
+            continue;
+        }
+        prior_cr = part.ends_with(b"\r");
+        line += 1;
+        if line.is_multiple_of(4096) {
+            control.check()?;
+        }
+        if let Some((_, heading)) = headings.next_if(|(start, _)| *start < offset) {
+            result.push((line, heading));
+        }
+    }
+    control.check()?;
+    Ok(result)
 }
 
 struct TextChunker<'a> {
@@ -394,7 +499,7 @@ impl TextChunker<'_> {
 fn chunk_text(
     input: &ExtractionInput<'_>,
     text: &str,
-    headings: Vec<(usize, Heading)>,
+    headings: Vec<(u32, Heading)>,
     limits: &ExtractionLimits,
     control: &ExtractionControl<'_>,
 ) -> Result<Vec<ExtractedBlock>, ExtractionError> {
@@ -408,10 +513,9 @@ fn chunk_text(
         last_line: 0,
     };
     let mut headings = headings.into_iter().peekable();
-    let mut offset = 0;
     for (index, line) in text.split_inclusive('\n').enumerate() {
-        offset += line.len();
-        if let Some((_, next)) = headings.next_if(|(start, _)| *start < offset) {
+        let line_number = index as u32 + 1;
+        if let Some((_, next)) = headings.next_if(|(start, _)| *start == line_number) {
             chunker.flush()?;
             let mut path: Vec<_> = chunker
                 .headings
@@ -422,7 +526,7 @@ fn chunk_text(
             path.push(next);
             chunker.headings = Arc::from(path);
         }
-        chunker.line(line, index as u32 + 1, control)?;
+        chunker.line(line, line_number, control)?;
     }
     chunker.flush()?;
     control.check()?;
