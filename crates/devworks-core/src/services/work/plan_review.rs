@@ -69,6 +69,13 @@ pub(crate) fn current_sources(review: &PlanReview, published: Option<&[Id]>) -> 
     !review.source_phase || published.is_none_or(|views| review.source_views == views)
 }
 
+fn has_review_through(slots: &Slots, revision: i64) -> bool {
+    slots
+        .plan_reviews
+        .iter()
+        .any(|review| review.plan_revision <= revision)
+}
+
 /// Reuse valid reports and in-flight attempts owned by the current launch.
 pub fn next_target(
     tx: &mut dyn WriteTransaction,
@@ -84,7 +91,7 @@ pub fn next_target(
     for target in targets(tx.work(), feature)? {
         if !substantive(&target.draft)
             || (!target.required
-                && slots.plan_reviews.is_empty()
+                && !has_review_through(&slots, target.revision)
                 && slots.active.as_ref().is_some_and(|a| {
                     a.plan_digest == target.digest && a.units == plan_units(&target.draft)
                 }))
@@ -410,10 +417,7 @@ pub(crate) fn review_holds(
         && slots.active.as_ref().is_some_and(|a| {
             a.plan_digest == active.digest && a.units.get(key).is_some_and(|unit| unit == digest)
         })
-        && !slots
-            .plan_reviews
-            .iter()
-            .any(|r| r.plan_revision <= active.plan_revision)
+        && !has_review_through(slots, active.plan_revision)
     {
         return false;
     }

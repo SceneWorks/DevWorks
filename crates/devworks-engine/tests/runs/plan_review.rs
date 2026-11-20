@@ -39,7 +39,7 @@ impl AuthorityPort for NativeAuthority {
 }
 
 #[derive(Default)]
-struct ReviewWire(Mutex<Vec<Value>>);
+struct ReviewWire(Mutex<Vec<Value>>, Option<&'static str>);
 
 impl StreamingHttp for ReviewWire {
     fn open(
@@ -54,6 +54,8 @@ impl StreamingHttp for ReviewWire {
         self.0.lock().unwrap().push(payload.clone());
         let (delta, finish_reason) = if !isolated {
             (json!({"content": "done"}), "stop")
+        } else if let Some(report) = self.1 {
+            (json!({"content": report}), "stop")
         } else if !body.contains("Use the allowed exact source views") {
             (
                 json!({"content": "{\"needsSource\":true,\"findings\":[]}"}),
@@ -495,5 +497,185 @@ fn native_plan_review_holds_until_routing_is_repaired_and_reviews_without_planni
             Ok(())
         });
         assert_eq!(fx.eligibility(&fx.user, "root", "root-f", "Implementation")["eligible"], false);
+    });
+}
+
+#[test]
+fn native_pending_review_keeps_current_legacy_work_dispatchable() {
+    use devworks_core::ports::storage::StoredReadiness;
+    use devworks_core::protocol::records::PlanDraft;
+    use devworks_core::services::work::{
+        model::{ActivePlan, plan_units},
+        plan_review::next_target,
+        readiness::Assessment,
+    };
+
+    let _native_case = native_runtime_case();
+    let fx = Fx::new();
+    runtime().block_on(async {
+        let wire = Arc::new(ReviewWire(Mutex::default(), Some(
+            r#"{"needsSource":false,"findings":[{"concern":"The new scope omits recovery.","consequence":"An interrupted change might be lost.","acceptanceCase":"Restart mid-update and recover it."}]}"#,
+        )));
+        let mut composed = composition_with(
+            &fx, None, Arc::new(FakePower::default()),
+            Arc::new(NativeAuthority { store: fx.store.clone(), clock: fx.h.clock() }),
+            Arc::new(FakeHost::default()),
+        );
+        composed.runs.scope = None;
+        composed.application = devworks_engine::ApplicationComposition {
+            connections: Some(devworks_engine::ConnectionPorts {
+                http: Arc::new(devworks_core::ports::http::NoNetwork),
+                secrets: Arc::new(devworks_core::ports::secrets::SessionSecrets::new()),
+                entropy: Arc::new(FixtureEntropy),
+                endpoints: None,
+            }),
+            router: Some(Default::default()),
+            ..Default::default()
+        };
+        composed.config.providers = Some(
+            devworks_engine::providers::driver::ProviderComposition::new(wire.clone()),
+        );
+        let app = Arc::new(boot(composed).await.unwrap());
+        route(&fx, &app);
+        let content = app.artifacts().publish_evidence(
+            &*fx.store,
+            Evidence {
+                scope: ArtifactScope::Project(ProjectId(id("project-a"))),
+                producer: fx.user.principal().clone(),
+                principal_kind: "Human".into(),
+                agent_session: None,
+                root: None,
+                assignment: None,
+                title: "Feature plan".into(),
+                media_type: "text/plain".into(),
+                tags: vec![],
+                source: json!({"kind": "TestPlan"}),
+            },
+            PLAN.as_bytes(), |_, _| Ok(()),
+        ).unwrap().0;
+        let draft = |statement: &str| -> PlanDraft {
+            serde_json::from_value(json!({
+                "content": content, "repositoryIds": [], "acceptance": [], "goals": [],
+                "acceptanceTests": [],
+                "requirements": [{"id":"E1", "statement":statement, "status":"Confirmed", "coveredByTaskIds":[]}],
+            })).unwrap()
+        };
+        let approved = draft("Keep existing rebuild work eligible");
+        let replacement = draft("Add independent recovery scope");
+        let active_digest = plan_digest(&approved);
+        let pending_digest = plan_digest(&replacement);
+        let active_units = plan_units(&approved);
+        let assessment = serde_json::to_value(Assessment {
+            id: id("legacy-assessment"),
+            plan_revision: 1,
+            plan_digest: active_digest.clone(),
+            reviewed_pending: false,
+            units: active_units.clone(),
+            summary: "Current and ready before review rollout".into(),
+            findings: vec![],
+            assessed_by: ActorId(id("user-a")),
+            assessed_at_ms: T0,
+        }).unwrap();
+        let mut active = ActivePlan {
+            digest: active_digest.clone(), draft: approved, plan_revision: 1,
+            proposal_id: id("legacy-plan-proposal"), review_required: false,
+        };
+        let plan = StoredFeaturePlan {
+            feature_id: id("root-f"),
+            revision: 2,
+            approved: Some(serde_json::to_value(&active).unwrap()),
+            approved_by: Some(ActorId(id("user-a"))),
+            approved_at_ms: Some(T0),
+            pending: Some(serde_json::to_value(PendingPlan {
+                draft: replacement, digest: pending_digest.clone(),
+                review_required: true, budget: None,
+            }).unwrap()),
+            pending_revision: Some(2),
+        };
+        fx.tx(move |_, tx| {
+            tx.work().put_feature_plan(&StoredFeaturePlan {
+                revision: 1, pending: None, pending_revision: None, ..plan.clone()
+            }, None)?;
+            tx.work().put_feature_plan(&plan, Some(1))?;
+            tx.work().put_readiness(&StoredReadiness {
+                feature_id: id("root-f"), revision: 1, body: json!({"active": assessment}),
+            }, None)
+        });
+        let eligible = || fx.eligibility(&fx.user, "root", "root-f", "Implementation");
+        assert_eq!(eligible()["eligible"], true);
+        app.runs().install_launcher(Arc::new(AgentLauncher::new(
+            fx.store.clone(), fx.h.ids.clone(), app.agents().clone(),
+            Arc::new(NativeAgentTurnExecutor::new(&app)),
+        ))).unwrap();
+        applied(&app.command(&fx.user, "runs.start", json!({
+            "protocol": PROTOCOL, "requestKey": fx.key(), "command": {
+                "kind": "runs.start", "rootId": "root-f", "expectedWorkRevision": "1",
+                "expectedControlRevision": fx.control("root-f").revision.to_string(),
+            },
+        }).to_string().as_bytes()).unwrap());
+        let reviews = || read(&*fx.store, |s| {
+            Ok(s.work().readiness(&id("root-f"))?.unwrap().body["planReviews"].clone())
+        });
+        within("The pending independent review completes", async {
+            loop {
+                let evidence = reviews();
+                if let Some(attempts) = evidence.as_array() {
+                    assert_eq!(attempts.len(), 1, "repeated scheduling started two reviewers: {evidence}");
+                    assert_ne!(attempts[0]["outcome"]["kind"], "Failed", "{evidence}");
+                    assert_eq!(eligible()["eligible"], true);
+                }
+                if evidence[0]["outcome"]["kind"] == "Complete" {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        }).await;
+        let evidence = reviews();
+        assert_eq!(evidence.as_array().unwrap().len(), 1, "{evidence}");
+        assert_eq!(evidence[0]["planRevision"], 2);
+        assert_eq!(evidence[0]["planDigest"], pending_digest);
+        assert_eq!(evidence[0]["outcome"]["findings"], 1);
+        {
+            let reviewed = wire.0.lock().unwrap();
+            let reviewers: Vec<_> = reviewed.iter().filter(|r| r.to_string().contains("reviewedPlanDigest")).collect();
+            assert_eq!(reviewers.len(), 1, "{reviewed:?}");
+            assert!(reviewers[0].to_string().contains(&pending_digest));
+        }
+        assert_eq!(eligible()["eligible"], true);
+        let live_plan = read(&*fx.store, |s| s.work().feature_plan(&id("root-f"))).unwrap();
+        assert_eq!(live_plan.approved.unwrap()["digest"], active_digest);
+        assert_eq!(live_plan.pending_revision, Some(2));
+
+        let next = || fx.tx(|_, tx| {
+            Ok(next_target(tx, &id("root-f"), &id("repeat-activation"), 1)?
+                .map(|(target, _)| target.revision))
+        });
+        assert_eq!(next(), None);
+        app.shutdown().await;
+        fx.tx(|_, tx| {
+            let mut ready = tx.work().readiness(&id("root-f"))?.unwrap();
+            let expected = ready.revision;
+            ready.revision += 1;
+            ready.body["active"]["units"] = json!({});
+            tx.work().put_readiness(&ready, Some(expected))
+        });
+        assert_eq!(eligible()["eligible"], false);
+        assert_eq!(next(), Some(1));
+
+        active.review_required = true;
+        fx.tx(move |_, tx| {
+            let mut ready = tx.work().readiness(&id("root-f"))?.unwrap();
+            let expected = ready.revision;
+            ready.revision += 1;
+            ready.body["active"]["units"] = json!(active_units);
+            tx.work().put_readiness(&ready, Some(expected))?;
+            let mut plan = tx.work().feature_plan(&id("root-f"))?.unwrap();
+            let expected = plan.revision;
+            plan.revision += 1;
+            plan.approved = Some(serde_json::to_value(active).unwrap());
+            tx.work().put_feature_plan(&plan, Some(expected))
+        });
+        assert_eq!(eligible()["eligible"], false);
+        assert_eq!(next(), Some(1));
     });
 }
