@@ -313,7 +313,7 @@ fn embedded_rasters_are_statically_bounded_and_bound_to_actual_placements() {
         picture
             .placements
             .iter()
-            .map(|point| point.paragraph)
+            .map(|point| point.source.paragraph)
             .collect::<Vec<_>>(),
         [Some(1), Some(2)]
     );
@@ -321,7 +321,7 @@ fn embedded_rasters_are_statically_bounded_and_bound_to_actual_placements() {
         picture
             .vision_placements
             .iter()
-            .map(|point| point.paragraph)
+            .map(|point| point.source.paragraph)
             .collect::<Vec<_>>(),
         [Some(1)]
     );
@@ -345,4 +345,175 @@ fn embedded_rasters_are_statically_bounded_and_bound_to_actual_placements() {
             WordCoverageIssue::ExternalImage,
         ])
     );
+}
+
+#[test]
+fn structural_deletions_leave_evidence_and_remove_final_view_text() {
+    let main = chapter(
+        r#"
+      <w:tbl>
+        <w:tr><w:trPr><w:del w:id="10" w:author="A"/></w:trPr>
+          <w:tc><w:p><w:r><w:t>removed row</w:t><w:footnoteReference w:id="8"/></w:r></w:p></w:tc>
+        </w:tr>
+        <w:tr>
+          <w:tc><w:tcPr><w:cellDel w:id="11"/></w:tcPr>
+            <w:p><w:r><w:t>removed cell</w:t></w:r></w:p>
+          </w:tc>
+          <w:tc><w:tcPr><w:tcPrChange w:id="12"><w:tcPr/></w:tcPrChange></w:tcPr>
+            <w:p><w:r><w:t>kept cell</w:t></w:r></w:p>
+          </w:tc>
+        </w:tr>
+      </w:tbl>
+      <w:p><w:pPr><w:rPr><w:del w:id="13"/></w:rPr></w:pPr><w:r><w:t>boundary</w:t></w:r></w:p>
+      <w:sectPr><w:sectPrChange w:id="14"><w:sectPr/></w:sectPrChange></w:sectPr>
+    "#,
+    );
+    let bytes = package(&main, "", "", &[]);
+    let doc = run_stories(&bytes, "v1").unwrap();
+    assert_eq!(
+        doc.searchable_blocks()
+            .map(|block| block.text.as_str())
+            .collect::<Vec<_>>(),
+        ["kept cell", "boundary"]
+    );
+    assert!(
+        doc.references.is_empty(),
+        "deleted references are excluded with their row"
+    );
+    let revision = |id| doc.edits.iter().find(|edit| edit.id == Some(id)).unwrap();
+    assert_eq!(revision(10).kind, WordEditKind::Deletion);
+    assert_eq!(revision(10).text, "removed row");
+    assert_eq!(revision(10).source.paragraph, Some(1));
+    assert_eq!(revision(10).last_paragraph, Some(1));
+    assert_eq!(revision(11).text, "removed cell");
+    assert_eq!(revision(11).source.paragraph, Some(2));
+    assert_eq!(revision(12).kind, WordEditKind::Properties);
+    assert!(matches!(revision(12).source.locator(), Some(Locator::Docx {
+        paragraph: 3, table_cell: Some(cell), ..
+    }) if Some(&cell) == doc.body.paragraphs[0].cell.as_ref()));
+    assert_eq!(revision(13).kind, WordEditKind::ParagraphBoundaryDeletion);
+    assert_eq!(revision(13).source.paragraph, Some(4));
+    assert!(revision(14).source.locator().is_none());
+    assert!(
+        doc.coverage_issues
+            .contains(&WordCoverageIssue::UnsupportedRevision)
+    );
+}
+
+#[test]
+fn header_variants_use_document_and_section_activation() {
+    let main = chapter(
+        r#"
+      <w:p><w:pPr><w:sectPr>
+        <w:headerReference w:type="first" r:id="first"/>
+        <w:headerReference w:type="even" r:id="even"/>
+      </w:sectPr></w:pPr><w:r><w:t>body</w:t></w:r></w:p>
+      <w:sectPr><w:titlePg/></w:sectPr>
+    "#,
+    );
+    let types = [
+        ("first.xml", "header"),
+        ("even.xml", "header"),
+        ("settings.xml", "settings"),
+    ].iter().map(|(part, kind)| {
+        format!(r#"<Override PartName="/word/{part}" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.{kind}+xml"/>"#)
+    }).collect::<String>();
+    let rels = format!(
+        r#"
+      <Relationship Id="first" Type="{REL}/header" Target="first.xml"/>
+      <Relationship Id="even" Type="{REL}/header" Target="even.xml"/>
+      <Relationship Id="settings" Type="{REL}/settings" Target="settings.xml"/>
+    "#
+    );
+    let header = |name| {
+        format!(r#"<w:hdr xmlns:w="{WORD}"><w:p><w:r><w:t>{name}</w:t></w:r></w:p></w:hdr>"#)
+    };
+    let first = header("first header");
+    let even = header("even header");
+    for (value, enabled) in [("off", false), ("on", true)] {
+        let settings = format!(
+            r#"<w:settings xmlns:w="{WORD}"><w:evenAndOddHeaders w:val="{value}"/></w:settings>"#
+        );
+        let bytes = package(
+            &main,
+            &rels,
+            &types,
+            &[
+                ("word/first.xml", first.as_bytes()),
+                ("word/even.xml", even.as_bytes()),
+                ("word/settings.xml", settings.as_bytes()),
+            ],
+        );
+        let doc = run_stories(&bytes, "v1").unwrap();
+        assert_eq!(doc.stories.len(), 2);
+        let linked = doc
+            .references
+            .iter()
+            .map(|reference| {
+                let WordReferenceKind::Header {
+                    section,
+                    active,
+                    variant,
+                    inherited,
+                    ..
+                } = &reference.kind
+                else {
+                    panic!("expected header declaration");
+                };
+                (*section, variant.as_str(), *active, *inherited)
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            linked,
+            [
+                (1, "first", false, false),
+                (1, "even", enabled, false),
+                (2, "even", enabled, true),
+                (2, "first", true, true),
+            ]
+        );
+        let passages = doc
+            .searchable_blocks()
+            .map(|block| block.text.as_str())
+            .collect::<Vec<_>>();
+        assert!(passages.contains(&"first header"));
+        assert_eq!(passages.contains(&"even header"), enabled);
+    }
+}
+
+#[test]
+fn cropped_drawing_keeps_asset_provenance_without_routing_hidden_pixels() {
+    let main = chapter(
+        r#"
+      <w:p><w:r><w:drawing><a:blipFill><a:blip r:embed="pic"/><a:srcRect l="50000"/></a:blipFill></w:drawing></w:r>
+        <w:r><w:drawing><a:blipFill><a:blip r:embed="pic"/><a:srcRect l="0"/></a:blipFill></w:drawing></w:r>
+      </w:p>
+    "#,
+    );
+    let png = image_bytes(20, 10, image::ImageFormat::Png);
+    let rels = format!(r#"<Relationship Id="pic" Type="{REL}/image" Target="media/pic.png"/>"#);
+    let bytes = package(&main, &rels, "", &[("word/media/pic.png", png.as_slice())]);
+    let doc = run_stories(&bytes, "v1").unwrap();
+    assert!(
+        doc.coverage_issues
+            .contains(&WordCoverageIssue::UnsupportedImageLayout)
+    );
+    let image = &doc.images[0];
+    assert_eq!(image.original_digest, sha256_hex(&png));
+    assert_eq!(
+        image
+            .placements
+            .iter()
+            .map(|placement| {
+                (
+                    placement.ordinal,
+                    placement.source.paragraph,
+                    placement.rendition_supported,
+                )
+            })
+            .collect::<Vec<_>>(),
+        [(1, Some(1), false), (2, Some(1), true)]
+    );
+    assert_eq!(image.vision_placements.len(), 1);
+    assert_eq!(image.vision_placements[0].ordinal, 2);
 }

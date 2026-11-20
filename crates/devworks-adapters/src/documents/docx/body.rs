@@ -52,6 +52,7 @@ struct TableRow {
     number: u32,
     column: u32,
     horizontal: Option<Id>,
+    deleted: bool,
     next_vertical: BTreeMap<(u32, u32), Id>,
 }
 
@@ -59,6 +60,7 @@ struct Table {
     id: u32,
     row: TableRow,
     cell: Option<WordCell>,
+    deleted_cell: bool,
     vertical: BTreeMap<(u32, u32), Id>,
 }
 
@@ -190,7 +192,9 @@ impl Reader<'_, '_> {
                 Frame::Cell => self.finish_cell()?,
                 Frame::Row => {
                     let table = self.table()?;
-                    table.vertical = std::mem::take(&mut table.row.next_vertical);
+                    if !table.row.deleted {
+                        table.vertical = std::mem::take(&mut table.row.next_vertical);
+                    }
                 }
                 Frame::Table => {
                     self.tables.pop();
@@ -294,6 +298,11 @@ impl Reader<'_, '_> {
             return Ok(Skip);
         }
 
+        if (parent == Row && self.table()?.row.deleted && name.local != "trPr")
+            || (parent == Cell && self.table()?.deleted_cell && name.local != "tcPr")
+        {
+            return Ok(Skip);
+        }
         let frame = match (parent, name.local) {
             (Body | Cell, "p") => {
                 if self.paragraph.is_some() {
@@ -314,6 +323,7 @@ impl Reader<'_, '_> {
                     id: self.table_count,
                     row: TableRow::initial(),
                     cell: None,
+                    deleted_cell: false,
                     vertical: BTreeMap::new(),
                 });
                 Table
@@ -339,6 +349,14 @@ impl Reader<'_, '_> {
             }
             (Row, "trPr") => RowProperties,
             (Cell, "tcPr") => CellProperties,
+            (RowProperties, "del") => {
+                self.table()?.row.deleted = true;
+                Skip
+            }
+            (CellProperties, "cellDel") => {
+                self.table()?.deleted_cell = true;
+                Skip
+            }
             (RowProperties, "gridBefore") => {
                 let column = number(element.attr(self.word, "val").ok_or(invalid)?, 16_384)?;
                 self.table()?.row.column = column;
@@ -518,6 +536,7 @@ impl Reader<'_, '_> {
             format!("{}:{}:{row}:{column}", part.as_str(), table.id).as_bytes(),
         ))
         .expect("SHA256 is an opaque ID");
+        table.deleted_cell = false;
         table.cell = Some(WordCell {
             id,
             enclosing_cell,

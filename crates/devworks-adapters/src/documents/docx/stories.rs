@@ -5,6 +5,7 @@ use super::{
     opc::{self, Manifest, Relationships, Target},
     package::Package,
     styles::Styles,
+    xml::{self, WORD, WORD_STRICT, Xml},
 };
 use devworks_core::{
     fingerprint::sha256_hex,
@@ -98,12 +99,14 @@ pub enum WordReferenceKind {
         variant: String,
         relationship: String,
         inherited: bool,
+        active: bool,
     },
     Footer {
         section: u32,
         variant: String,
         relationship: String,
         inherited: bool,
+        active: bool,
     },
 }
 
@@ -125,6 +128,12 @@ impl WordReferenceKind {
             Self::Footer { relationship, .. } => Some((WordStoryKind::Footer, relationship)),
             _ => None,
         }
+    }
+    fn active_section_reference(&self) -> bool {
+        matches!(
+            self,
+            Self::Header { active: true, .. } | Self::Footer { active: true, .. }
+        )
     }
 }
 
@@ -153,6 +162,8 @@ pub enum WordEditKind {
     MoveIn,
     MoveOut,
     Properties,
+    ParagraphBoundaryInsertion,
+    ParagraphBoundaryDeletion,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -164,6 +175,14 @@ pub struct WordEdit {
     pub author: Option<String>,
     pub date: Option<String>,
     pub text: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct WordImagePlacement {
+    pub source: WordPoint,
+    /// One-based picture occurrence in its part.
+    pub ordinal: u32,
+    pub rendition_supported: bool,
 }
 
 /// Bounded native raster with independent original and payload identity. Payload bytes can be
@@ -178,8 +197,8 @@ pub struct WordImage {
     pub payload: Arc<[u8]>,
     pub width: u32,
     pub height: u32,
-    pub placements: Vec<WordPoint>,
-    pub vision_placements: Vec<WordPoint>,
+    pub placements: Vec<WordImagePlacement>,
+    pub vision_placements: Vec<WordImagePlacement>,
 }
 
 #[derive(Debug)]
@@ -187,12 +206,15 @@ pub struct WordStory {
     pub kind: WordStoryKind,
     pub body: WordBody,
     pub entries: Vec<WordEntry>,
+    pub active: bool,
     searchable_paragraphs: BTreeSet<u32>,
 }
 
 impl WordStory {
     fn is_searchable(&self, paragraph: u32) -> bool {
-        self.kind.entry_element().is_none() || self.searchable_paragraphs.contains(&paragraph)
+        self.active
+            && (self.kind.entry_element().is_none()
+                || self.searchable_paragraphs.contains(&paragraph))
     }
 }
 
@@ -235,11 +257,13 @@ pub(super) fn extract<'a>(
     limits: &DocxLimits,
     control: &ExtractionControl<'_>,
 ) -> Result<WordDocument, DocxError> {
+    let even_headers = even_header_setting(package, manifest, main.1, limits, control)?;
     let mut reader = Reader {
         package,
         manifest,
         source,
         formats,
+        even_headers,
         limits: *limits,
         control,
     };
@@ -258,6 +282,14 @@ pub(super) fn extract<'a>(
     let mut image_refs = BTreeMap::new();
     reader.attach(&mut output, markup, main.1, &mut image_refs)?;
     let targets = story_targets(main.1, &output.references, &mut output.coverage_issues)?;
+    let active_sections: BTreeSet<_> = output
+        .references
+        .iter()
+        .filter(|reference| reference.kind.active_section_reference())
+        .filter_map(|reference| reference.kind.section_relationship())
+        .filter_map(|(kind, id)| section_target(main.1, kind, id))
+        .map(str::to_owned)
+        .collect();
     for (kind, part) in targets {
         control.check()?;
         manifest.expected(&part, &kind.content_type())?;
@@ -270,6 +302,7 @@ pub(super) fn extract<'a>(
             kind,
             body,
             entries,
+            active: kind.entry_element().is_some() || active_sections.contains(&part),
             searchable_paragraphs: BTreeSet::new(),
         };
         if kind == WordStoryKind::Comments {
@@ -289,6 +322,7 @@ struct Reader<'a, 'input, 'clock> {
     manifest: &'a Manifest,
     source: &'a ExtractionInput<'input>,
     formats: (&'a Styles, &'a Numbering),
+    even_headers: bool,
     limits: DocxLimits,
     control: &'a ExtractionControl<'clock>,
 }
@@ -322,7 +356,13 @@ impl Reader<'_, '_, '_> {
                     .sum::<usize>(),
             )
             .ok_or(DocxError::StructureLimit)?;
-        let markup = markup::read(&raw, kind, &body, &mut self.limits, self.control)?;
+        let markup = markup::read(
+            &raw,
+            (kind, self.even_headers),
+            &body,
+            &mut self.limits,
+            self.control,
+        )?;
         if !markup.edits.is_empty() {
             body.coverage_issues
                 .remove(&WordCoverageIssue::RevisionMarkup);
@@ -340,7 +380,7 @@ impl Reader<'_, '_, '_> {
         output: &mut WordDocument,
         markup: markup::Markup,
         relationships: &Relationships,
-        image_refs: &mut BTreeMap<String, Vec<WordPoint>>,
+        image_refs: &mut BTreeMap<String, Vec<WordImagePlacement>>,
     ) -> Result<Vec<WordEntry>, DocxError> {
         output.coverage_issues.extend(markup.issues);
         output.edits.extend(markup.edits);
@@ -353,7 +393,7 @@ impl Reader<'_, '_, '_> {
                         image_refs
                             .entry(part.clone())
                             .or_default()
-                            .push(image.source);
+                            .push(image.placement);
                     }
                     Target::External(_) => {
                         output
@@ -379,7 +419,7 @@ impl Reader<'_, '_, '_> {
     fn resolve_images(
         &mut self,
         output: &mut WordDocument,
-        refs: BTreeMap<String, Vec<WordPoint>>,
+        refs: BTreeMap<String, Vec<WordImagePlacement>>,
     ) -> Result<(), DocxError> {
         let mut remaining = self.limits.expanded_bytes.min(32 * 1024 * 1024);
         for (part, placements) in refs {
@@ -407,7 +447,9 @@ impl Reader<'_, '_, '_> {
             remaining = next;
             let vision_placements = placements
                 .iter()
-                .filter(|point| image_only(output, point))
+                .filter(|placement| {
+                    placement.rendition_supported && image_only(output, &placement.source)
+                })
                 .cloned()
                 .collect();
             output.images.push(WordImage {
@@ -487,7 +529,9 @@ fn resolve_references(
         document
             .stories
             .iter()
-            .filter(|story| matches!(story.kind, WordStoryKind::Header | WordStoryKind::Footer))
+            .filter(|story| {
+                story.active && matches!(story.kind, WordStoryKind::Header | WordStoryKind::Footer)
+            })
             .map(|story| story.body.part.clone()),
     );
     for reference in &mut document.references {
@@ -548,4 +592,44 @@ fn image_only(document: &WordDocument, point: &WordPoint) -> bool {
                     .paragraph
                     .is_some_and(|number| story.is_searchable(number))
         })
+}
+
+fn even_header_setting(
+    package: &mut Package<'_>,
+    manifest: &Manifest,
+    relationships: &Relationships,
+    limits: &DocxLimits,
+    control: &ExtractionControl<'_>,
+) -> Result<bool, DocxError> {
+    let Some(part) = opc::unique_internal(relationships, "settings")? else {
+        return Ok(false);
+    };
+    manifest.expected(
+        part,
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.settings+xml",
+    )?;
+    let raw = package.read(part, control)?;
+    let mut word = WORD;
+    let mut enabled = None;
+    xml::walk(&raw, limits.xml_depth, control, |depth, event| {
+        if let Xml::Start(element) = event {
+            if depth == 1 {
+                word = match element.name.ns {
+                    WORD => WORD,
+                    WORD_STRICT => WORD_STRICT,
+                    _ => return Err(DocxError::InvalidBody),
+                };
+                if element.name.local != "settings" {
+                    return Err(DocxError::InvalidBody);
+                }
+            } else if depth == 2 && element.name.is(word, "evenAndOddHeaders") {
+                if enabled.is_some() {
+                    return Err(DocxError::InvalidBody);
+                }
+                enabled = Some(xml::on_off(element.attr(word, "val"))?);
+            }
+        }
+        Ok(())
+    })?;
+    Ok(enabled.unwrap_or(false))
 }

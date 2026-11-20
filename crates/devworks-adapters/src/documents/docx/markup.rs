@@ -1,7 +1,7 @@
 //! Source annotations and relationships are kept separate from final-view passage text.
 use super::{
     DocxError, DocxLimits, WordBody, WordCoverageIssue, WordEdit, WordEditKind, WordEntry,
-    WordPoint, WordReference, WordReferenceKind, WordStoryKind,
+    WordImagePlacement, WordPoint, WordReference, WordReferenceKind, WordStoryKind,
     xml::{self, Element, REL, REL_STRICT, WORD, WORD_STRICT, Xml},
 };
 use devworks_core::services::documents::extraction::{ExtractionControl, normalize_text};
@@ -18,7 +18,7 @@ pub(super) struct Markup {
 
 pub(super) struct ImageRef {
     pub relationship: String,
-    pub source: WordPoint,
+    pub placement: WordImagePlacement,
 }
 
 struct Edit {
@@ -29,6 +29,21 @@ struct Edit {
 struct Picture {
     depth: usize,
     addressed: bool,
+    supported_layout: bool,
+    refs: Vec<ImageRef>,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ContextElement {
+    Table,
+    TableProperties,
+    Row,
+    RowProperties,
+    Cell,
+    CellProperties,
+    ParagraphProperties,
+    RunProperties,
+    Other,
 }
 
 struct Scanner<'a> {
@@ -41,7 +56,11 @@ struct Scanner<'a> {
     inside_body: bool,
     paragraph: u32,
     paragraph_stack: Vec<(usize, u32)>,
+    context: Vec<ContextElement>,
     section: u32,
+    even_headers: bool,
+    title_page: bool,
+    section_ref_start: usize,
     section_depth: Option<usize>,
     section_links: BTreeMap<(WordStoryKind, String), String>,
     section_explicit: BTreeSet<(WordStoryKind, String)>,
@@ -49,19 +68,20 @@ struct Scanner<'a> {
     entry: Option<WordEntry>,
     edits: Vec<Edit>,
     pictures: Vec<Picture>,
+    image_count: u32,
     edit_text_depth: Option<usize>,
     raw_edit_bytes: usize,
 }
 
 pub(super) fn read(
     raw: &[u8],
-    kind: WordStoryKind,
+    config: (WordStoryKind, bool),
     body: &WordBody,
     limits: &mut DocxLimits,
     control: &ExtractionControl<'_>,
 ) -> Result<Markup, DocxError> {
     let mut reader = Scanner {
-        kind,
+        kind: config.0,
         body,
         limits,
         control,
@@ -70,7 +90,11 @@ pub(super) fn read(
         inside_body: false,
         paragraph: 0,
         paragraph_stack: Vec::new(),
+        context: Vec::new(),
         section: 0,
+        even_headers: config.1,
+        title_page: false,
+        section_ref_start: 0,
         section_depth: None,
         section_links: BTreeMap::new(),
         section_explicit: BTreeSet::new(),
@@ -78,6 +102,7 @@ pub(super) fn read(
         entry: None,
         edits: Vec::new(),
         pictures: Vec::new(),
+        image_count: 0,
         edit_text_depth: None,
         raw_edit_bytes: 0,
     };
@@ -86,8 +111,15 @@ pub(super) fn read(
         reader.limits.xml_depth,
         control,
         |depth, node| match node {
-            Xml::Start(element) => reader.start(depth, &element),
-            Xml::End => reader.end(depth),
+            Xml::Start(element) => {
+                reader.start(depth, &element)?;
+                reader.context.push(context(&element, reader.word));
+                Ok(())
+            }
+            Xml::End => {
+                reader.context.pop();
+                reader.end(depth)
+            }
             Xml::Text(text) => reader.text(&text),
         },
     )?;
@@ -138,37 +170,8 @@ impl Scanner<'_> {
         if self.suppressed.is_some() {
             return Ok(());
         }
-        if !self.hidden_from_final_text()
-            && let Some(picture) = self.pictures.last_mut()
-        {
-            let drawing = matches!(
-                name.ns,
-                "http://schemas.openxmlformats.org/drawingml/2006/main"
-                    | "http://purl.oclc.org/ooxml/drawingml/main"
-            );
-            let vml = name.ns == "urn:schemas-microsoft-com:vml";
-            if (drawing && name.local == "blip") || (vml && name.local == "imagedata") {
-                picture.addressed = true;
-                let external = element
-                    .attr(REL, "link")
-                    .or_else(|| element.attr(REL_STRICT, "link"))
-                    .is_some();
-                if external {
-                    self.output.issues.insert(WordCoverageIssue::ExternalImage);
-                }
-                let field = if vml { "id" } else { "embed" };
-                if let Some(id) = relationship(element, field)? {
-                    self.consume_record()?;
-                    self.output.images.push(ImageRef {
-                        relationship: id,
-                        source: self.point(),
-                    });
-                } else if !external {
-                    self.output
-                        .issues
-                        .insert(WordCoverageIssue::UnsupportedImage);
-                }
-            }
+        if !self.hidden_from_final_text() && !self.pictures.is_empty() {
+            self.picture_node(element)?;
         }
         if name.ns != self.word {
             if name.is(
@@ -210,6 +213,8 @@ impl Scanner<'_> {
                 self.pictures.push(Picture {
                     depth,
                     addressed: false,
+                    supported_layout: name.local == "drawing",
+                    refs: Vec::new(),
                 });
             }
             "txbxContent" | "object" | "altChunk" | "subDoc" => {
@@ -219,36 +224,10 @@ impl Scanner<'_> {
                 }
             }
             "ins" | "del" | "moveTo" | "moveFrom" | "pPrChange" | "rPrChange" | "tblPrChange"
-            | "trPrChange" | "tcPrChange" | "sectPrChange" => {
-                self.consume_record()?;
-                let kind = match name.local {
-                    "ins" => WordEditKind::Insertion,
-                    "del" => WordEditKind::Deletion,
-                    "moveTo" => WordEditKind::MoveIn,
-                    "moveFrom" => WordEditKind::MoveOut,
-                    _ => WordEditKind::Properties,
-                };
-                let source = self.point();
-                self.edits.push(Edit {
-                    depth,
-                    record: WordEdit {
-                        last_paragraph: source.paragraph,
-                        source,
-                        kind,
-                        id: element
-                            .attr(self.word, "id")
-                            .map(|id| id.parse::<i32>())
-                            .transpose()
-                            .map_err(|_| DocxError::InvalidBody)?,
-                        author: bounded(element.attr(self.word, "author"), 512)?,
-                        date: bounded(element.attr(self.word, "date"), 128)?,
-                        text: String::new(),
-                    },
-                });
+            | "trPrChange" | "tcPrChange" | "sectPrChange" | "cellIns" | "cellDel" => {
+                self.start_edit(depth, element)?;
             }
-            "cellIns"
-            | "cellDel"
-            | "cellMerge"
+            "cellMerge"
             | "numberingChange"
             | "customXmlInsRangeStart"
             | "customXmlDelRangeStart"
@@ -266,6 +245,11 @@ impl Scanner<'_> {
                 self.section += 1;
                 self.section_depth = Some(depth);
                 self.section_explicit.clear();
+                self.title_page = false;
+                self.section_ref_start = self.output.references.len();
+            }
+            "titlePg" if self.section_depth == depth.checked_sub(1) => {
+                self.title_page = xml::on_off(element.attr(self.word, "val"))?;
             }
             _ => {}
         }
@@ -342,21 +326,50 @@ impl Scanner<'_> {
                     target_part: None,
                 });
             }
+            for reference in &mut self.output.references[self.section_ref_start..] {
+                match &mut reference.kind {
+                    WordReferenceKind::Header {
+                        variant, active, ..
+                    }
+                    | WordReferenceKind::Footer {
+                        variant, active, ..
+                    } => {
+                        *active = match variant.as_str() {
+                            "first" => self.title_page,
+                            "even" => self.even_headers,
+                            _ => true,
+                        };
+                    }
+                    _ => {}
+                }
+            }
         }
-        if self
-            .pictures
-            .last()
-            .is_some_and(|picture| picture.depth == depth)
-        {
-            let picture = self.pictures.pop().expect("checked depth");
+        if let Some(mut picture) = self.pictures.pop_if(|picture| picture.depth == depth) {
             if !picture.addressed {
                 self.output
                     .issues
                     .insert(WordCoverageIssue::UnsupportedImage);
             }
+            if !picture.refs.is_empty() && (!picture.supported_layout || picture.refs.len() > 1) {
+                self.output
+                    .issues
+                    .insert(WordCoverageIssue::UnsupportedImageLayout);
+                for image in &mut picture.refs {
+                    image.placement.rendition_supported = false;
+                }
+            }
+            self.output.images.extend(picture.refs);
         }
-        if self.edits.last().is_some_and(|edit| edit.depth == depth) {
-            let mut edit = self.edits.pop().expect("checked depth").record;
+        while let Some(edit) = self.edits.pop_if(|edit| edit.depth == depth) {
+            let mut edit = edit.record;
+            if edit.source.paragraph.is_none() {
+                self.output
+                    .issues
+                    .insert(WordCoverageIssue::UnsupportedRevision);
+            }
+            if edit.source.cell.is_none() {
+                edit.source.cell = self.cell_for(edit.source.paragraph);
+            }
             let kept = normalize_text(
                 &edit.text,
                 self.limits.extraction.normalized_bytes,
@@ -377,11 +390,119 @@ impl Scanner<'_> {
         Ok(())
     }
 
+    fn picture_node(&mut self, element: &Element<'_>) -> Result<(), DocxError> {
+        let name = element.name;
+        let drawing = matches!(
+            name.ns,
+            "http://schemas.openxmlformats.org/drawingml/2006/main"
+                | "http://purl.oclc.org/ooxml/drawingml/main"
+        );
+        let vml = name.ns == "urn:schemas-microsoft-com:vml";
+        if layout_requires_rendering(element, drawing, vml) {
+            self.pictures
+                .last_mut()
+                .expect("picture scope")
+                .supported_layout = false;
+        }
+        if !(drawing && name.local == "blip" || vml && name.local == "imagedata") {
+            return Ok(());
+        }
+        self.pictures.last_mut().expect("picture scope").addressed = true;
+        let external = element
+            .attr(REL, "link")
+            .or_else(|| element.attr(REL_STRICT, "link"))
+            .is_some();
+        if external {
+            self.output.issues.insert(WordCoverageIssue::ExternalImage);
+        }
+        let field = if vml { "id" } else { "embed" };
+        if let Some(id) = relationship(element, field)? {
+            self.consume_record()?;
+            self.image_count += 1;
+            let placement = WordImagePlacement {
+                source: self.point(),
+                ordinal: self.image_count,
+                rendition_supported: true,
+            };
+            self.pictures
+                .last_mut()
+                .expect("picture scope")
+                .refs
+                .push(ImageRef {
+                    relationship: id,
+                    placement,
+                });
+        } else if !external {
+            self.output
+                .issues
+                .insert(WordCoverageIssue::UnsupportedImage);
+        }
+        Ok(())
+    }
+
+    fn start_edit(&mut self, depth: usize, element: &Element<'_>) -> Result<(), DocxError> {
+        use ContextElement::*;
+        let mut kind = match element.name.local {
+            "ins" | "cellIns" => WordEditKind::Insertion,
+            "del" | "cellDel" => WordEditKind::Deletion,
+            "moveTo" => WordEditKind::MoveIn,
+            "moveFrom" => WordEditKind::MoveOut,
+            _ => WordEditKind::Properties,
+        };
+        let scope = match (element.name.local, self.context.as_slice()) {
+            ("ins" | "del", [.., Row, RowProperties]) => depth - 2,
+            ("cellIns" | "cellDel", [.., Cell, CellProperties])
+            | ("tblPrChange", [.., Table, TableProperties])
+            | ("trPrChange", [.., Row, RowProperties])
+            | ("tcPrChange", [.., Cell, CellProperties]) => depth - 2,
+            ("ins", [.., ParagraphProperties, RunProperties]) => {
+                kind = WordEditKind::ParagraphBoundaryInsertion;
+                depth
+            }
+            ("del", [.., ParagraphProperties, RunProperties]) => {
+                self.output
+                    .issues
+                    .insert(WordCoverageIssue::UnsupportedRevision);
+                kind = WordEditKind::ParagraphBoundaryDeletion;
+                depth
+            }
+            ("cellIns" | "cellDel", _) => {
+                self.output
+                    .issues
+                    .insert(WordCoverageIssue::UnsupportedRevision);
+                depth
+            }
+            _ => depth,
+        };
+        self.consume_record()?;
+        let source = self.point();
+        if kind == WordEditKind::Properties {
+            self.suppressed = Some(depth);
+        }
+        self.edits.push(Edit {
+            depth: scope,
+            record: WordEdit {
+                last_paragraph: source.paragraph,
+                source,
+                kind,
+                id: element
+                    .attr(self.word, "id")
+                    .map(|id| id.parse::<i32>())
+                    .transpose()
+                    .map_err(|_| DocxError::InvalidBody)?,
+                author: bounded(element.attr(self.word, "author"), 512)?,
+                date: bounded(element.attr(self.word, "date"), 128)?,
+                text: String::new(),
+            },
+        });
+        Ok(())
+    }
+
     fn hidden_from_final_text(&self) -> bool {
         self.edits.iter().any(|edit| {
             matches!(
                 edit.record.kind,
-                WordEditKind::Deletion | WordEditKind::MoveOut | WordEditKind::Properties
+                WordEditKind::Deletion | WordEditKind::MoveOut
             )
         })
     }
@@ -394,12 +515,21 @@ impl Scanner<'_> {
     }
 
     fn append_edit_text(&mut self, text: &str) -> Result<(), DocxError> {
-        let added = self.edits.len() * text.len();
+        let textual = |edit: &&mut Edit| {
+            matches!(
+                edit.record.kind,
+                WordEditKind::Insertion
+                    | WordEditKind::Deletion
+                    | WordEditKind::MoveIn
+                    | WordEditKind::MoveOut
+            )
+        };
+        let added = self.edits.iter_mut().filter(textual).count() * text.len();
         self.raw_edit_bytes += added;
         if self.raw_edit_bytes > self.limits.part_bytes {
             return Err(DocxError::StructureLimit);
         }
-        for edit in &mut self.edits {
+        for edit in self.edits.iter_mut().filter(textual) {
             edit.record.text.push_str(text);
         }
         Ok(())
@@ -407,18 +537,20 @@ impl Scanner<'_> {
 
     fn point(&self) -> WordPoint {
         let paragraph = self.paragraph_stack.last().map(|location| location.1);
-        let cell = paragraph.and_then(|number| {
-            self.body
-                .paragraphs
-                .binary_search_by_key(&number, |item| item.number)
-                .ok()
-                .and_then(|index| self.body.paragraphs[index].cell.clone())
-        });
         WordPoint {
             part: self.body.part.clone(),
             paragraph,
-            cell,
+            cell: self.cell_for(paragraph),
         }
+    }
+
+    fn cell_for(&self, paragraph: Option<u32>) -> Option<devworks_core::protocol::Id> {
+        let index = self
+            .body
+            .paragraphs
+            .binary_search_by_key(&paragraph?, |item| item.number)
+            .ok()?;
+        self.body.paragraphs[index].cell.clone()
     }
 
     fn consume_record(&mut self) -> Result<(), DocxError> {
@@ -429,6 +561,47 @@ impl Scanner<'_> {
             .checked_sub(1)
             .ok_or(DocxError::StructureLimit)?;
         Ok(())
+    }
+}
+
+fn layout_requires_rendering(element: &Element<'_>, drawing: bool, vml: bool) -> bool {
+    let name = element.name;
+    let changes = |fields: &[&str]| {
+        fields.iter().any(|field| {
+            element
+                .attr("", field)
+                .is_some_and(|value| !matches!(value, "0" | "0%" | "false" | "off"))
+        })
+    };
+    if drawing {
+        return match name.local {
+            "srcRect" => changes(&["l", "t", "r", "b"]),
+            "xfrm" => changes(&["rot", "flipH", "flipV"]),
+            "prstGeom" => element
+                .attr("", "prst")
+                .is_some_and(|shape| shape != "rect"),
+            "custGeom" | "tile" | "clrChange" | "duotone" | "alphaMod" | "lum" | "grayscl" => true,
+            _ => false,
+        };
+    }
+    vml || matches!(name.local, "wgp" | "grpSp" | "sp")
+}
+
+fn context(element: &Element<'_>, word: &str) -> ContextElement {
+    use ContextElement::*;
+    if element.name.ns != word {
+        return Other;
+    }
+    match element.name.local {
+        "tbl" => Table,
+        "tblPr" => TableProperties,
+        "tr" => Row,
+        "trPr" => RowProperties,
+        "tc" => Cell,
+        "tcPr" => CellProperties,
+        "pPr" => ParagraphProperties,
+        "rPr" => RunProperties,
+        _ => Other,
     }
 }
 
@@ -445,6 +618,7 @@ fn section_reference(
             variant,
             relationship,
             inherited,
+            active: false,
         }
     } else {
         WordReferenceKind::Footer {
@@ -452,6 +626,7 @@ fn section_reference(
             variant,
             relationship,
             inherited,
+            active: false,
         }
     }
 }

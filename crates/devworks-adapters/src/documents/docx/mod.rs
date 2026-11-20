@@ -18,8 +18,8 @@ use devworks_core::{
 };
 use std::collections::BTreeSet;
 pub use stories::{
-    WordDocument, WordEdit, WordEditKind, WordEntry, WordImage, WordPoint, WordReference,
-    WordReferenceKind, WordStory, WordStoryKind,
+    WordDocument, WordEdit, WordEditKind, WordEntry, WordImage, WordImagePlacement, WordPoint,
+    WordReference, WordReferenceKind, WordStory, WordStoryKind,
 };
 
 const DOCX_MEDIA: &str = "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
@@ -92,6 +92,7 @@ pub enum WordCoverageIssue {
     BrokenStoryReference,
     ExternalImage,
     UnsupportedImage,
+    UnsupportedImageLayout,
     ImageBounds,
     InvalidImage,
 }
