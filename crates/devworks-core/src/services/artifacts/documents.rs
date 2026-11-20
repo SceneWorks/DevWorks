@@ -277,6 +277,11 @@ pub(crate) fn move_document(
         return Ok((artifact, false));
     }
     let previous = artifact.scope.project().cloned();
+    // A stale owner-bound index or replacement frame must conflict after a scope move.
+    artifact.revision = artifact
+        .revision
+        .checked_add(1)
+        .ok_or_else(|| StorageError::InvalidRecord("document revision overflow".into()))?;
     artifact.scope = ArtifactScope::Project(target.clone());
     artifact.owner = None;
     artifact.scope_revision += 1;

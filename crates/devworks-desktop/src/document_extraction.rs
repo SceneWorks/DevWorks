@@ -21,7 +21,7 @@ use devworks_engine::documents::pdf::PdfWorker;
 use std::{collections::BTreeSet, fmt::Debug, path::Path, sync::Arc};
 
 pub struct NativeDocumentProcessor {
-    pdf: PdfWorker,
+    pdf: Option<Arc<PdfWorker>>,
     word: DocxExtractor,
     text: TextExtractor,
 }
@@ -31,11 +31,17 @@ impl NativeDocumentProcessor {
         desktop: &Path,
         process: Arc<dyn ProcessHost>,
     ) -> Result<Self, PdfFailure> {
-        Ok(Self {
-            pdf: PdfWorker::beside_desktop(desktop, process)?,
+        Ok(Self::new(Some(Arc::new(PdfWorker::beside_desktop(
+            desktop, process,
+        )?))))
+    }
+
+    pub(crate) fn new(pdf: Option<Arc<PdfWorker>>) -> Self {
+        Self {
+            pdf,
             word: DocxExtractor::default(),
             text: TextExtractor::default(),
-        })
+        }
     }
 
     fn pdf(
@@ -47,6 +53,8 @@ impl NativeDocumentProcessor {
         let request = ExtractionInput { ..input };
         let result = self
             .pdf
+            .as_ref()
+            .ok_or_else(|| diagnostic("Pdf", PdfFailure::Unavailable))?
             .run(request, PdfOperation::ReadPages, control)
             .map_err(|error| diagnostic("Pdf", error))?;
         let PdfResult::Pages { pages } = result else {
@@ -196,11 +204,15 @@ impl DocumentProcessor for NativeDocumentProcessor {
             let raster = match target {
                 VisionTarget::Pdf { page } => self
                     .pdf
-                    .run(
-                        ExtractionInput { ..input },
-                        PdfOperation::RenderPage(*page),
-                        control,
-                    )
+                    .as_ref()
+                    .ok_or(PdfFailure::Unavailable)
+                    .and_then(|worker| {
+                        worker.run(
+                            ExtractionInput { ..input },
+                            PdfOperation::RenderPage(*page),
+                            control,
+                        )
+                    })
                     .and_then(|result| match result {
                         PdfResult::Raster { raster } => Ok(VisionRaster {
                             png: raster.png,

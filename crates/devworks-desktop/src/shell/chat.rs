@@ -1798,6 +1798,8 @@ impl ChatCtl<'_, '_> {
                         | TaskOutput::PackagePrepared { .. }
                         | TaskOutput::Refreshed
                         | TaskOutput::TextPreview(_)
+                        | TaskOutput::DocumentSource(_)
+                        | TaskOutput::DocumentAccess(_)
                         | TaskOutput::Convention(_)
                         | TaskOutput::Instruction(_)
                         | TaskOutput::McpContent(_)
@@ -1869,6 +1871,8 @@ impl ChatCtl<'_, '_> {
                             | TaskOutput::PackagePrepared { .. }
                             | TaskOutput::Refreshed
                             | TaskOutput::TextPreview(_)
+                            | TaskOutput::DocumentSource(_)
+                            | TaskOutput::DocumentAccess(_)
                             | TaskOutput::Convention(_)
                             | TaskOutput::Instruction(_)
                             | TaskOutput::McpContent(_)

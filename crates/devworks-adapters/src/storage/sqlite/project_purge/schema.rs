@@ -62,8 +62,11 @@ type Definitions = Vec<(String, String, String, Option<String>)>;
 /// Migration 65 adds a published lexical row per extracted block. It is classified through
 /// that block's retained version. FTS5 segments follow the projection and are maintained
 /// by the virtual table when a canonical lexical row changes.
+/// Migration 68 indexes existing embedding preparation rows and keeps the publication time on
+/// the exact document index version. Both tables retain their existing purge policies, so a
+/// retained document keeps its publication time after its previous owner's events are purged.
 pub(super) const REVIEWED_SCHEMA_SHA256: &str =
-    "8bba467faeef424660ff2f705e0ae1f8fd88da503105a45eaa6ef54570f7600a";
+    "3c90e53fca3046cd2120e4356bf2191ea7e5974fb9f0ca63f997e71fc4fdb694";
 
 fn definitions(conn: &Connection) -> Result<Definitions, StorageError> {
     let mut statement = db(conn.prepare(

@@ -4,7 +4,8 @@ use devworks_core::{
     context::InvocationContext,
     ports::{
         storage::{
-            ApplicationStore, AttemptState, Cancellation, ReadOptions, StorageError, read_snapshot,
+            ApplicationStore, AttemptState, Cancellation, ReadOptions, ReadSnapshot, StorageError,
+            read_snapshot,
         },
         usage::{PriceQuery, PriceResolver},
     },
@@ -24,7 +25,7 @@ use devworks_core::{
         },
         prices::CatalogPriceResolver,
         router::{
-            AuxiliaryRequest, InferenceRouter, Purpose, RequestAdmission,
+            AuxiliaryRequest, AuxiliaryRoute, InferenceRouter, Purpose, RequestAdmission,
             accounting::{AttemptSelection, PinFence, ReportCategory},
             choice_of,
         },
@@ -64,6 +65,45 @@ impl NativeVision {
         }
     }
 
+    fn route(
+        &self,
+        ctx: &InvocationContext,
+        read: &dyn ReadSnapshot,
+    ) -> Result<Option<(RouteIntent, AuxiliaryRoute)>, StorageError> {
+        let policy = vision::policy(read.configuration())?;
+        if !policy.enabled || self.providers.upgrade().is_none() {
+            return Ok(None);
+        }
+        let use_pin = policy.models.is_empty();
+        let intents = if use_pin {
+            vec![RouteIntent::Tier {
+                tier: TierName::Low,
+            }]
+        } else {
+            policy
+                .models
+                .into_iter()
+                .map(|model_id| RouteIntent::Model { model_id })
+                .collect()
+        };
+        for intent in intents {
+            let result = self.router.route_auxiliary(
+                read,
+                &AuxiliaryRequest {
+                    purpose: Purpose::Vision,
+                    session_id: ctx.session_id().filter(|_| use_pin).cloned(),
+                    intent: intent.clone(),
+                    effort: EffortName::Default,
+                    required_capabilities: vec!["vision".to_owned()],
+                },
+            )?;
+            if let Ok(route) = result {
+                return Ok(Some((intent, route)));
+            }
+        }
+        Ok(None)
+    }
+
     fn plan(
         &self,
         ctx: &InvocationContext,
@@ -71,43 +111,10 @@ impl NativeVision {
     ) -> Result<Option<NativeInvocation>, StorageError> {
         let info = self.store.info();
         read_snapshot(self.store.as_ref(), &ReadOptions::default(), |read| {
-            let policy = vision::policy(read.configuration())?;
-            if !policy.enabled {
+            let Some((mut intent, route)) = self.route(ctx, read)? else {
                 return Ok(None);
-            }
-            let use_pin = policy.models.is_empty();
-            let intents = if use_pin {
-                vec![RouteIntent::Tier {
-                    tier: TierName::Low,
-                }]
-            } else {
-                policy
-                    .models
-                    .into_iter()
-                    .map(|model_id| RouteIntent::Model { model_id })
-                    .collect()
             };
             let required_capabilities = vec!["vision".to_owned()];
-            let mut selected = None;
-            for intent in intents {
-                let result = self.router.route_auxiliary(
-                    read,
-                    &AuxiliaryRequest {
-                        purpose: Purpose::Vision,
-                        session_id: ctx.session_id().filter(|_| use_pin).cloned(),
-                        intent: intent.clone(),
-                        effort: EffortName::Default,
-                        required_capabilities: required_capabilities.clone(),
-                    },
-                )?;
-                if let Ok(route) = result {
-                    selected = Some((intent, route));
-                    break;
-                }
-            }
-            let Some((mut intent, route)) = selected else {
-                return Ok(None);
-            };
             let owner = match auxiliary::ownership(read, &info, ctx) {
                 Ok(owner) => owner,
                 Err(auxiliary::AuxiliaryError::Unavailable(_)) => return Ok(None),
@@ -352,6 +359,15 @@ impl NativeVision {
 }
 
 impl DocumentVision for NativeVision {
+    fn available_route(
+        &self,
+        context: &InvocationContext,
+        read: &dyn ReadSnapshot,
+    ) -> Result<Option<(Id, Id)>, StorageError> {
+        self.route(context, read)
+            .map(|selected| selected.map(|(_, route)| (route.model_id, route.connection_id)))
+    }
+
     fn execute(
         &self,
         ctx: &InvocationContext,

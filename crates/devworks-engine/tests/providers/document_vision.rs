@@ -1,6 +1,6 @@
 //! Recorded chat transport drives the native document producer and its actual ledger.
 use super::{
-    document_embeddings::{command, import, page, search, sent},
+    document_embeddings::{command, import, inspect_document, page, search, sent},
     *,
 };
 use devworks_core::{
@@ -370,6 +370,30 @@ fn default_vision_publishes_exact_page_and_reuses_the_native_attempt() {
         );
         Ok(())
     });
+    let view = inspect_document(&f, &fixture.cases, &fixture.context, source, 13);
+    let inspection = view.inspection.unwrap();
+    assert_eq!(inspection.vision_status.as_str(), "Available");
+    assert!(inspection.vision_model.is_some());
+    assert!(inspection.vision_connection.is_some());
+    assert_eq!(inspection.vision_occurrences.0.len(), 1);
+    assert_eq!(inspection.vision_occurrences.0[0].location.0, "Page 2");
+    assert_eq!(
+        inspection.vision_occurrences.0[0].status.as_str(),
+        "VisionEvidenceSaved"
+    );
+    let status = view.index_activity.unwrap();
+    assert_eq!(status.stage.as_str(), "Ready");
+    assert_eq!(status.chunk_count.unwrap().get(), 2);
+    assert!(status.indexed_at_ms.is_some());
+    assert_eq!(status.attempts.0.len(), 1);
+    let metered = &status.attempts.0[0];
+    assert_eq!(metered.attempt_id, result.attempt);
+    assert_eq!(metered.purpose.as_str(), "Vision");
+    assert_eq!(metered.provider_model.as_ref().unwrap().0, "fixture-model");
+    assert_eq!(metered.priced_micro_usd.as_ref().unwrap().get(), 4);
+    let legacy_view = inspect_document(&f, &fixture.cases, &fixture.context, source, 10);
+    assert!(legacy_view.index_activity.is_none());
+    assert!(legacy_view.inspection.is_none());
     let (_, raster_provenance) = f
         .artifacts
         .read_exact(
@@ -705,6 +729,17 @@ fn vision_custody_follows_exact_source_and_usage_keeps_original_project() {
     let version = note.current_version.as_ref().unwrap().version_id.clone();
     fixture.index(&f, &note, "documents.index", "purge-vision-evidence");
     fixture.run(&f);
+    let time = inspect_document(
+        &f,
+        &fixture.cases,
+        &fixture.context,
+        note.current_version.as_ref().unwrap(),
+        13,
+    )
+    .index_activity
+    .unwrap()
+    .indexed_at_ms
+    .expect("exact index publication time");
     let unit = write(f.store.as_ref(), move |tx| {
         let direct = tx
             .documents()
@@ -788,7 +823,32 @@ fn vision_custody_follows_exact_source_and_usage_keeps_original_project() {
                 "expectedScopeRevision":shared.scope_revision}
         }),
     );
+    let current_project =
+        fixture
+            .context
+            .clone()
+            .with_lineage(Some(ProjectId(id(OTHER_PROJECT))), None, None);
+    let status = inspect_document(
+        &f,
+        &fixture.cases,
+        &current_project,
+        note.current_version.as_ref().unwrap(),
+        13,
+    )
+    .index_activity
+    .unwrap();
+    assert_eq!(status.chunk_count.unwrap().get(), 2);
+    assert_eq!(status.indexed_at_ms, Some(time));
+    assert!(
+        status.attempts.0.is_empty(),
+        "the former project's usage is not visible here"
+    );
     let former_owner = read(f.store.as_ref(), |r| r.projects().purge_planning(project)).unwrap();
+    owns(
+        &former_owner,
+        "document_index_versions",
+        ProjectPurgeRowAction::Keep,
+    );
     for item in &refs {
         assert_purge_artifact(&former_owner, item, ProjectPurgeRowAction::Keep);
     }

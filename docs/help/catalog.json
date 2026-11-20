@@ -407,7 +407,19 @@
     "file": "topics/documents-retrieval.md",
     "screenIds": [],
     "settingsSections": [],
-    "relatedCapabilityIds": []
+    "relatedCapabilityIds": [
+      "documents.import",
+      "documents.list",
+      "documents.read",
+      "documents.index",
+      "documents.retry",
+      "documents.share",
+      "documents.move",
+      "documents.disable_retrieval",
+      "documents.remove_index",
+      "documents.search",
+      "documents.resolve_citation"
+    ]
   },
   {
     "id": "permissions",

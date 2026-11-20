@@ -193,7 +193,8 @@ def main():
         'prices':'usage', 'graph':'code-exploration', 'instructions':'settings-Instructions',
         'watchers':'watchers', 'agents':'agents', 'conventions':'conventions',
         'schemas':'databases', 'embedding_spaces':'routing-context', 'mcp':'mcp-servers',
-        'process_tools':'process-tools', 'containers':'containers', 'desktop':'desktop-control'
+        'process_tools':'process-tools', 'containers':'containers', 'desktop':'desktop-control',
+        'document_library':'documents-retrieval'
     }
     for owner in re.findall(r'pub fn with_(\w+)\(', services):
         if owner not in owners or owners[owner] not in ids:

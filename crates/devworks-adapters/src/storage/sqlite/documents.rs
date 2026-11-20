@@ -10,7 +10,7 @@ use devworks_core::{
         DocumentIndexVersion, DocumentRankingBatch, DocumentRankingQuery, DocumentRead,
         DocumentRepository, StorageError,
     },
-    protocol::{ActorId, Id, Revision},
+    protocol::{ActorId, Id, ProjectId, Revision},
     services::documents::{
         extraction::ExtractedBlock,
         vision::{VisionTarget, VisionUnit},
@@ -43,7 +43,7 @@ fn retrieval(conn: &Connection, id: &Id) -> Result<bool, StorageError> {
 fn index(conn: &Connection, version: &Id) -> Result<Option<DocumentIndexVersion>, StorageError> {
     let row = db(conn
         .query_row(
-            "SELECT latest_operation,stage,diagnostic,published_generation,published_revision
+            "SELECT latest_operation,stage,diagnostic,published_generation,published_revision,published_at
          FROM document_index_versions WHERE version_id=?1",
             [version.as_str()],
             |row| {
@@ -53,29 +53,33 @@ fn index(conn: &Connection, version: &Id) -> Result<Option<DocumentIndexVersion>
                     row.get::<_, Option<String>>(2)?,
                     row.get::<_, Option<String>>(3)?,
                     row.get::<_, Option<i64>>(4)?,
+                    row.get::<_, Option<i64>>(5)?,
                 ))
             },
         )
         .optional())?;
-    row.map(|(latest, stage, diagnostic, generation, revision)| {
-        let published = match (generation, revision) {
-            (Some(generation), Some(revision)) => Some((
-                id_of(generation)?,
-                Revision::new(revision).map_err(corrupt)?,
-            )),
-            (None, None) => None,
-            _ => return Err(corrupt("document publication binding")),
-        };
-        let stage = serde_json::from_value(Value::String(stage))
-            .map_err(|error| corrupt(error.to_string()))?;
-        Ok(DocumentIndexVersion {
-            version: version.clone(),
-            latest: id_of(latest)?,
-            stage,
-            diagnostic: diagnostic.map(id_of).transpose()?,
-            published,
-        })
-    })
+    row.map(
+        |(latest, stage, diagnostic, generation, revision, published_at_ms)| {
+            let published = match (generation, revision) {
+                (Some(generation), Some(revision)) => Some((
+                    id_of(generation)?,
+                    Revision::new(revision).map_err(corrupt)?,
+                )),
+                (None, None) => None,
+                _ => return Err(corrupt("document publication binding")),
+            };
+            let stage = serde_json::from_value(Value::String(stage))
+                .map_err(|error| corrupt(error.to_string()))?;
+            Ok(DocumentIndexVersion {
+                version: version.clone(),
+                latest: id_of(latest)?,
+                stage,
+                diagnostic: diagnostic.map(id_of).transpose()?,
+                published,
+                published_at_ms,
+            })
+        },
+    )
     .transpose()
 }
 
@@ -366,6 +370,62 @@ macro_rules! document_reads {
             ) -> Result<Option<DocumentIndexVersion>, StorageError> {
                 index(self.conn, version)
             }
+            fn document_vision_occurrences(
+                &self, version: &Id, limit: usize,
+            ) -> Result<Vec<(VisionTarget, Option<VisionUnit>)>, StorageError> {
+                let row: Option<(String, String)> = db(self.conn.query_row(
+                    "SELECT k.extraction_id,k.vision_targets_json FROM document_extraction_keys k
+                     JOIN document_extractions e ON e.id=k.extraction_id
+                     WHERE k.version_id=?1 AND k.identity_key GLOB 'direct:*'
+                     ORDER BY e.revision DESC LIMIT 1",
+                    [version.as_str()],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                ).optional())?;
+                let Some((extraction, encoded)) = row else { return Ok(Vec::new()); };
+                let targets: Vec<VisionTarget> = decode(&encoded)?;
+                let mut units = db(self.conn.prepare_cached(
+                    "SELECT record_json FROM document_vision_units WHERE extraction_id=?1 AND target_id=?2",
+                ))?;
+                targets.into_iter().take(limit).map(|target| {
+                    let unit: Option<String> = db(units.query_row(
+                        params![&extraction, target.id().as_str()],
+                        |row| row.get(0),
+                    ).optional())?;
+                    Ok((target, unit.as_deref().map(decode).transpose()?))
+                }).collect()
+            }
+
+            fn document_version_attempts(
+                &self,
+                version: &Id,
+                project: Option<&ProjectId>,
+                limit: u16,
+            ) -> Result<Vec<Id>, StorageError> {
+                let mut statement = db(self.conn.prepare(
+                    "WITH requests(request_id) AS (
+                        SELECT json_extract(material.provenance_json,'$.derived.requestId')
+                        FROM document_extractions e
+                        JOIN document_vision_units u ON u.extraction_id=e.id
+                        JOIN artifacts material
+                          ON material.id=json_extract(u.record_json,'$.material.context.artifactId')
+                        WHERE e.version_id=?1
+                        UNION
+                        SELECT json_extract(payload_json,'$.requestId') FROM operations
+                        WHERE capability='conventions.embedding_prepare'
+                          AND json_extract(payload_json,'$.origin.kind')='DocumentIndex'
+                          AND json_extract(payload_json,'$.origin.source.versionId')=?1
+                    )
+                    SELECT a.attempt_id FROM requests q JOIN usage_attempts a ON a.request_id=q.request_id
+                    WHERE (?2 IS NULL OR a.project_id=?2)
+                    ORDER BY a.created_at DESC, a.attempt_id DESC LIMIT ?3"
+                ))?;
+                let rows = db(statement.query_map(
+                    params![version.as_str(), project.map(|id| id.0.as_str()), limit],
+                    |row| row.get::<_, String>(0),
+                ))?;
+                rows.map(|row| id_of(db(row)?)).collect()
+            }
+
             fn document_checkpoint(
                 &self,
                 version: &Id,
@@ -677,20 +737,21 @@ impl DocumentRepository for Unit<'_> {
             .unzip();
         db(self.conn.execute(
             "INSERT INTO document_index_versions
-             (version_id,latest_operation,stage,diagnostic,published_generation,published_revision)
-             VALUES (?1,?2,?3,?4,?5,?6)
+             (version_id,latest_operation,stage,diagnostic,published_generation,published_revision,published_at)
+             VALUES (?1,?2,?3,?4,?5,?6,?7)
              ON CONFLICT(version_id) DO UPDATE SET latest_operation=excluded.latest_operation,
              stage=excluded.stage, diagnostic=excluded.diagnostic,
-             published_generation=excluded.published_generation,published_revision=excluded.published_revision",
+             published_generation=excluded.published_generation,published_revision=excluded.published_revision,
+             published_at=excluded.published_at",
             params![index.version.as_str(), index.latest.as_str(), stage.as_str(),
-                index.diagnostic.as_ref().map(Id::as_str), generation, revision],
+                index.diagnostic.as_ref().map(Id::as_str), generation, revision, index.published_at_ms],
         ))?;
         Ok(())
     }
 
     fn remove_document_index(&mut self, artifact: &Id) -> Result<bool, StorageError> {
         let changed = db(self.conn.execute(
-            "UPDATE document_index_versions SET published_generation=NULL,published_revision=NULL,
+            "UPDATE document_index_versions SET published_generation=NULL,published_revision=NULL,published_at=NULL,
              stage='Removed',diagnostic=NULL WHERE stage<>'Removed' AND version_id IN
              (SELECT id FROM artifact_versions WHERE artifact_id=?1 AND deleted_at IS NULL)",
             [artifact.as_str()],

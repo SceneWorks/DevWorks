@@ -1,7 +1,7 @@
 //! Document index metadata and immutable extracted passages. Artifact rows still own the
 //! original bytes, versions and access. A checkpoint is separate from a published index.
 use super::{ArtifactScope, StorageError};
-use crate::protocol::{ActorId, Id, Revision, data::Coverage};
+use crate::protocol::{ActorId, Id, ProjectId, Revision, data::Coverage};
 use crate::services::documents::extraction::ExtractedBlock;
 use crate::services::documents::vision::VisionTarget;
 use crate::services::documents::vision::VisionUnit;
@@ -27,6 +27,7 @@ pub struct DocumentIndexVersion {
     /// The published generation still available for this exact version, even after a failed
     /// replacement attempt. Generation and extraction revision are set or cleared together.
     pub published: Option<(Id, Revision)>,
+    pub published_at_ms: Option<i64>,
 }
 
 #[derive(Clone, Debug)]
@@ -92,6 +93,19 @@ pub trait DocumentRead {
     /// Explicit retrieval preference. Live documents default to enabled before their first index.
     fn document_retrieval_enabled(&self, artifact: &Id) -> Result<bool, StorageError>;
     fn document_index(&self, version: &Id) -> Result<Option<DocumentIndexVersion>, StorageError>;
+    /// Recent exact native scan occurrences and their durable outcomes for a visible version.
+    fn document_vision_occurrences(
+        &self,
+        version: &Id,
+        limit: usize,
+    ) -> Result<Vec<(VisionTarget, Option<VisionUnit>)>, StorageError>;
+    /// Already source-bound vision or embedding attempts in the audience's authorized project.
+    fn document_version_attempts(
+        &self,
+        version: &Id,
+        project: Option<&ProjectId>,
+        limit: u16,
+    ) -> Result<Vec<Id>, StorageError>;
     fn document_checkpoint(
         &self,
         version: &Id,

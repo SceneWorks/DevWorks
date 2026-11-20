@@ -5,6 +5,7 @@ use crate::backend::screen_slot;
 /// The Knowledge requests. The names are persisted (see [`crate::backend::Slot`]).
 #[derive(Clone, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub enum KnowledgeSlot {
+    Documents(crate::documents_ops::DocumentSlot),
     KnowledgeList(u64),
     /// One Knowledge entry with its evidence and history (claim ID).
     KnowledgeRead(String),

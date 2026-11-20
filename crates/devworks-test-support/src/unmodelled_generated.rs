@@ -880,6 +880,21 @@ impl DocumentRead for Unmodelled {
     fn document_index(&self, _: &Id) -> Result<Option<DocumentIndexVersion>, StorageError> {
         unmodelled()
     }
+    fn document_vision_occurrences(
+        &self,
+        _: &Id,
+        _: usize,
+    ) -> Result<Vec<(VisionTarget, Option<VisionUnit>)>, StorageError> {
+        unmodelled()
+    }
+    fn document_version_attempts(
+        &self,
+        _: &Id,
+        _: Option<&ProjectId>,
+        _: u16,
+    ) -> Result<Vec<Id>, StorageError> {
+        unmodelled()
+    }
     fn document_checkpoint(
         &self,
         _: &Id,

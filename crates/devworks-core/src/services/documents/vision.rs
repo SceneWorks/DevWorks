@@ -192,6 +192,15 @@ pub enum VisionExecution {
 
 /// The application composes this only with the existing owned native router and producer.
 pub trait DocumentVision: Send + Sync {
+    /// Read-only route eligibility for the actual current project, without reserving usage.
+    fn available_route(
+        &self,
+        _context: &crate::context::InvocationContext,
+        _read: &dyn crate::ports::storage::ReadSnapshot,
+    ) -> Result<Option<(Id, Id)>, StorageError> {
+        Ok(None)
+    }
+
     fn execute(
         &self,
         context: &crate::context::InvocationContext,
