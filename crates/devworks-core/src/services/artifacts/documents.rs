@@ -50,21 +50,32 @@ pub(crate) fn active_project(
     Ok(())
 }
 
-/// Resolve a managed document in the invocation's current artifact audience.
-pub(crate) fn document(
+pub(crate) fn require_workspace_authority(
+    authority: &dyn AuthorityRead,
+    ctx: &InvocationContext,
+) -> Result<(), Failure> {
+    if authorized_scope(authority, ctx)? != AuthorizedScope::Workspace {
+        return Err(Refusal::new(DomainErrorCode::PermissionDenied, "project", None).into());
+    }
+    Ok(())
+}
+
+/// Resolve even retired document metadata in the invocation's current artifact audience.
+pub(crate) fn read_document(
     read: &dyn ArtifactRead,
     authority: &dyn AuthorityRead,
     ctx: &InvocationContext,
     id: &Id,
 ) -> Result<StoredArtifact, Failure> {
     let viewer = Viewer::resolve(authority, ctx)?;
-    document_for(read, &viewer, id)
+    document_for(read, &viewer, id, true)
 }
 
 pub(crate) fn document_for(
     read: &dyn ArtifactRead,
     viewer: &Viewer<'_>,
     id: &Id,
+    allow_deleted: bool,
 ) -> Result<StoredArtifact, Failure> {
     let project = match &viewer.authorized {
         Some(AuthorizedScope::Project(project)) => Some(project),
@@ -72,7 +83,7 @@ pub(crate) fn document_for(
         None => return Err(StorageError::ScopeDenied.into()),
     };
     if let Some(artifact) = read.artifact(id)?
-        && artifact.state == ArtifactState::Live
+        && (allow_deleted || artifact.state == ArtifactState::Live)
         && is_document(&artifact)
         && visible_in(read, viewer, &artifact, project)?
     {
@@ -117,8 +128,31 @@ pub(crate) fn import_document(
     let original = live_version(tx.artifacts(), &source, &reference.version_id)?;
     if original.blob_digest != String::from(reference.sha256.clone())
         || original.byte_count != reference.byte_length.get()
+        || original.media_type != reference.media_type
     {
         return Err(not_found("artifact_version", &reference.version_id).into());
+    }
+    let format = original
+        .media_type
+        .split(';')
+        .next()
+        .unwrap_or("")
+        .trim()
+        .to_ascii_lowercase();
+    if !matches!(
+        format.as_str(),
+        "text/plain"
+            | "text/markdown"
+            | "text/x-markdown"
+            | "application/pdf"
+            | "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+    ) {
+        return Err(Refusal::new(
+            DomainErrorCode::UnsupportedTarget,
+            "document_format",
+            Some(reference.version_id.clone()),
+        )
+        .into());
     }
     let blob = tx
         .artifacts()
@@ -228,9 +262,7 @@ pub(crate) fn move_document(
     target: &ProjectId,
     expected: &Revision,
 ) -> Result<(StoredArtifact, bool), Failure> {
-    if authorized_scope(tx.authority(), ctx)? != AuthorizedScope::Workspace {
-        return Err(Refusal::new(DomainErrorCode::PermissionDenied, "project", None).into());
-    }
+    require_workspace_authority(tx.authority(), ctx)?;
     if expected.get() != artifact.scope_revision {
         return Err(conflict(
             RevisionDimension::Scope,

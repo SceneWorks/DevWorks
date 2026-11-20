@@ -24,8 +24,8 @@ use crate::{
         artifacts::{
             ArtifactService, Viewer,
             documents::{
-                active_project, document, document_for, document_list, document_scope,
-                import_document, move_document,
+                active_project, document_for, document_list, document_scope, import_document,
+                move_document, read_document, require_workspace_authority,
             },
             version_ref,
         },
@@ -93,6 +93,7 @@ impl DocumentLibrary {
                     return Err(invalid());
                 };
                 let artifact = checked_document(tx, ctx, artifact_id)?;
+                require_workspace_authority(tx.authority(), ctx)?;
                 active_project(tx.projects(), target_project_id)?;
                 let result = self.artifacts.share(
                     tx,
@@ -150,9 +151,10 @@ impl DocumentLibrary {
                 if let Some(project) = scope.project() {
                     active_project(snapshot.projects(), project)?;
                 }
-                let scope_key = scope
-                    .project()
-                    .map_or("workspace", |project| project.0.as_str());
+                let scope_key = match &scope {
+                    ArtifactScope::Workspace => "Workspace".to_owned(),
+                    ArtifactScope::Project(project) => format!("Project:{}", project.0.as_str()),
+                };
                 let sequence = snapshot
                     .stamp()
                     .read_stamp(ctx.policy_revision().clone(), rev(1))
@@ -163,7 +165,8 @@ impl DocumentLibrary {
                     ctx,
                     "documents.list",
                     &[
-                        scope_key,
+                        &scope_key,
+                        &query.schema_revision().0.to_string(),
                         &format!("{:?}", input.retrieval_enabled),
                         ctx.policy_revision().as_str(),
                     ],
@@ -229,7 +232,7 @@ impl DocumentLibrary {
                     return Err(invalid());
                 };
                 let artifact =
-                    document(snapshot.artifacts(), snapshot.authority(), ctx, artifact_id)?;
+                    read_document(snapshot.artifacts(), snapshot.authority(), ctx, artifact_id)?;
                 let selected = snapshot
                     .artifacts()
                     .version(version_id)?
@@ -266,13 +269,16 @@ impl DocumentLibrary {
                         request.limit,
                     )?)
                 } else {
-                    if !selected.live() || request.cursor.is_some() {
+                    if request.cursor.is_some() {
+                        return Err(StorageError::CursorExpired.into());
+                    }
+                    if !selected.live() {
                         return Err(unavailable(version_id).into());
                     }
                     DocumentResult::Legacy(legacy(detail(
                         snapshot.artifacts(),
                         &artifact,
-                        None,
+                        Some(&selected),
                         None,
                         None,
                         500,
@@ -330,7 +336,7 @@ fn checked_document(
     // The writer's repositories share one transaction, so check the scope before reading the
     // artifact with the same authority check used by the query path.
     let viewer = Viewer::resolve(tx.authority(), ctx)?;
-    document_for(tx.artifacts(), &viewer, id)
+    document_for(tx.artifacts(), &viewer, id, false)
 }
 
 fn document_result(
@@ -425,6 +431,18 @@ fn detail(
 }
 
 fn legacy(detail: DocumentDetail) -> Result<DocumentRecord, Failure> {
+    let mut retained_versions = detail.retained_versions;
+    if let Some(selected) = detail.selected_version
+        && !retained_versions
+            .0
+            .iter()
+            .any(|version| version.version_id == selected.version_id)
+    {
+        if retained_versions.0.len() == 500 {
+            retained_versions.0.pop();
+        }
+        retained_versions.0.push(selected);
+    }
     Ok(DocumentRecord {
         current_version: detail
             .current_version
@@ -433,7 +451,7 @@ fn legacy(detail: DocumentDetail) -> Result<DocumentRecord, Failure> {
         revision: detail.revision,
         scope: detail.scope,
         title: detail.title,
-        retained_versions: detail.retained_versions,
+        retained_versions,
         retrieval_enabled: detail.retrieval_enabled,
         extraction_state: detail.extraction_state,
         coverage: detail.coverage,
